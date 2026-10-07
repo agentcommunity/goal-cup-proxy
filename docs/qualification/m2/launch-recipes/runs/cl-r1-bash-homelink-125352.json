@@ -1,0 +1,434 @@
+{
+ "run_id": "cl-r1-bash-homelink-125352",
+ "harness": "claude",
+ "variant": "bash",
+ "proxy": false,
+ "started_utc": "2026-09-27T12:53:56.197Z",
+ "duration_s": 5.28,
+ "exit_code": 0,
+ "timed_out": false,
+ "timeout_s": 300,
+ "spawn_error": null,
+ "executable": "/Users/team/.local/bin/claude",
+ "executable_realpath": "/Users/team/.local/share/claude/versions/2.1.283",
+ "executable_sha256": "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
+ "argv_template": [
+  "/Users/team/.local/bin/claude",
+  "-p",
+  "--model",
+  "haiku",
+  "--effort",
+  "low",
+  "--permission-mode",
+  "acceptEdits",
+  "--permission-prompts",
+  "none",
+  "--session-id",
+  "09e9e17d-955e-46b2-9d6b-5a79baf5496c",
+  "--output-format",
+  "json",
+  "--strict-mcp-config",
+  "--mcp-config",
+  "{\"mcpServers\":{}}",
+  "--allowedTools",
+  "Bash",
+  "--",
+  "<GOAL>"
+ ],
+ "argc": 21,
+ "cwd": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-r1-bash-homelink-125352/ws",
+ "stdin": "/dev/null",
+ "env_names": [
+  "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS",
+  "CLAUDE_CONFIG_DIR",
+  "DISABLE_AUTOUPDATER",
+  "ENABLE_CLAUDEAI_MCP_SERVERS",
+  "HOME",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "TMPDIR",
+  "USER"
+ ],
+ "home": "per-run dir with Library/Keychains linked to the real one",
+ "env_values_nonsecret": {
+  "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS": "1",
+  "CLAUDE_CONFIG_DIR": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude",
+  "DISABLE_AUTOUPDATER": "1",
+  "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+  "HOME": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-r1-bash-homelink-125352/home",
+  "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+  "SHELL": "/bin/zsh"
+ },
+ "exec_bytes": {
+  "strings": 1041,
+  "strings_plus_pointers": 1305
+ },
+ "session_id_preassigned": "09e9e17d-955e-46b2-9d6b-5a79baf5496c",
+ "oracle": {
+  "ws_entries": [
+   "t02-claude-sh125352.txt"
+  ],
+  "outside_entries": [],
+  "fake_home_entries_after": [
+   "Library",
+   "Library/Keychains"
+  ],
+  "exists": true,
+  "size": 18,
+  "sha256": "ea93727af38d27dd25890f745df45c9f303b60e385d1db114de348e8390fb217",
+  "bytes_repr": "b'delivered-sh125352'",
+  "exact": true,
+  "exact_plus_lf": false,
+  "birth_after_spawn": true,
+  "birth_iso": "2026-09-27T12:53:59.598Z"
+ },
+ "appwide_scope": {
+  "claude_default_projects_hits": 0
+ },
+ "scoped": [
+  "mcp_off"
+ ],
+ "home_link": true,
+ "codex_trust_override": false,
+ "allow_tools": [
+  "Bash"
+ ],
+ "side_effects": {
+  "appwide_changes": [
+   {
+    "path": "~/.claude/projects/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/subagents/agent-a62a312dd695dec49.jsonl",
+    "change": "modified",
+    "dir": false,
+    "size": 495993,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/.claude/projects/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/subagents/agent-a774b224f7c2c6e9e.jsonl",
+    "change": "modified",
+    "dir": false,
+    "size": 505028,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/.claude/projects/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/subagents/agent-aa4219191055b5906.jsonl",
+    "change": "modified",
+    "dir": false,
+    "size": 438001,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/.claude/projects/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/subagents/agent-abc78d6cb8dc20458.jsonl",
+    "change": "modified",
+    "dir": false,
+    "size": 669660,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/.claude/projects/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/tool-results",
+    "change": "modified",
+    "dir": true,
+    "size": 384,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/.claude/projects/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/tool-results/bxnjsap9s.txt",
+    "change": "created",
+    "dir": false,
+    "size": 31217,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/Library/Application Support/Claude/Cache/Cache_Data/b80b3e14c083d154_0",
+    "change": "modified",
+    "dir": false,
+    "size": -1,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/Library/Application Support/Claude/DawnGraphiteCache/data_1",
+    "change": "modified",
+    "dir": false,
+    "size": -1,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/Library/Application Support/Claude/DawnWebGPUCache/data_1",
+    "change": "modified",
+    "dir": false,
+    "size": -1,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/Library/Application Support/Claude/GPUCache/data_1",
+    "change": "modified",
+    "dir": false,
+    "size": -1,
+    "attributed_to": "unattributed"
+   }
+  ],
+  "isolated_home_changes": [
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude",
+    "change": "modified",
+    "dir": true,
+    "size": 672,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/.claude.json",
+    "change": "modified",
+    "dir": false,
+    "size": 65295,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/backups",
+    "change": "modified",
+    "dir": true,
+    "size": 224,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/backups/.claude.json.backup.1790241226744",
+    "change": "deleted",
+    "dir": false,
+    "size": 64398,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/backups/.claude.json.backup.1790513637368",
+    "change": "created",
+    "dir": false,
+    "size": 65295,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/plugins/synced/<uuid>_<uuid>",
+    "change": "modified",
+    "dir": true,
+    "size": 224,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/plugins/synced/<uuid>_<uuid>/.last-complete-round",
+    "change": "modified",
+    "dir": false,
+    "size": 37,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/plugins/synced/<uuid>_<uuid>/manifest.json",
+    "change": "modified",
+    "dir": false,
+    "size": 520,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/projects",
+    "change": "modified",
+    "dir": true,
+    "size": 608,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/projects/-private-tmp-claude-501--Users-team-dev-PROJECTS-AgentCommunity-goal-cup-9758e5ce-5876-46aa-b761-95082645ba2c-scratchpad-m2-t02-cl-r1-bash-homelink-125352-ws",
+    "change": "created",
+    "dir": true,
+    "size": 128,
+    "attributed_to": "run"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/projects/-private-tmp-claude-501--Users-team-dev-PROJECTS-AgentCommunity-goal-cup-9758e5ce-5876-46aa-b761-95082645ba2c-scratchpad-m2-t02-cl-r1-bash-homelink-125352-ws/09e9e17d-955e-46b2-9d6b-5a79baf5496c.jsonl",
+    "change": "created",
+    "dir": false,
+    "size": 176194,
+    "attributed_to": "run"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/projects/-private-tmp-claude-501--Users-team-dev-PROJECTS-AgentCommunity-goal-cup-9758e5ce-5876-46aa-b761-95082645ba2c-scratchpad-m2-t02-cl-r1-bash-homelink-125352-ws/memory",
+    "change": "created",
+    "dir": true,
+    "size": 64,
+    "attributed_to": "run"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/session-env",
+    "change": "modified",
+    "dir": true,
+    "size": 320,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/session-env/09e9e17d-955e-46b2-9d6b-5a79baf5496c",
+    "change": "created",
+    "dir": true,
+    "size": 64,
+    "attributed_to": "run"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/sessions",
+    "change": "modified",
+    "dir": true,
+    "size": 64,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/shell-snapshots",
+    "change": "modified",
+    "dir": true,
+    "size": 160,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/skills/synced/<uuid>_<uuid>",
+    "change": "modified",
+    "dir": true,
+    "size": 384,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/skills/synced/<uuid>_<uuid>/.last-complete-round",
+    "change": "modified",
+    "dir": false,
+    "size": 44,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/skills/synced/<uuid>_<uuid>/manifest.json",
+    "change": "modified",
+    "dir": false,
+    "size": 6501,
+    "attributed_to": "unattributed"
+   }
+  ],
+  "lock_names_seen_during_run": {
+   "~/.local/state/claude/locks": [],
+   "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-r1-bash-homelink-125352/home/.local/state/claude/locks": []
+  },
+  "new_shell_snapshots": [
+   {
+    "name": "snapshot-zsh-1790513639578-ob3put.sh",
+    "size": 4038,
+    "alias_lines": 0,
+    "function_defs": 3,
+    "still_present_after_exit": false
+   }
+  ]
+ },
+ "goal": {
+  "bytes": 301,
+  "sha256": "e463044080e3a9af22015e763a2a6cbe97cc47b93cf5f22296419b36ee6e4faf",
+  "lines": 4,
+  "starts_with_dash": true,
+  "has_tab": false,
+  "has_double_space": false,
+  "non_ascii": false,
+  "text": "-T02 shell probe sh125352.\nUse the Bash tool (not the Write tool) to run exactly this one command in the current working directory:\nprintf '%s' 'delivered-sh125352' > t02-claude-sh125352.txt\nDo not create or modify anything else and do not ask questions. Then reply with the single word done and stop."
+ },
+ "stdout_summary": {
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 2,
+  "session_id": "09e9e17d-955e-46b2-9d6b-5a79baf5496c",
+  "result": "done",
+  "model_usage_keys": [
+   "claude-haiku-4-5-20251001"
+  ],
+  "permission_denials": [],
+  "stop_reason": "end_turn",
+  "duration_ms": 3553
+ },
+ "stderr_bytes": 0,
+ "native": [
+  {
+   "path_rel_home": "projects/-private-tmp-claude-501--Users-team-dev-PROJECTS-AgentCommunity-goal-cup-9758e5ce-5876-46aa-b761-95082645ba2c-scratchpad-m2-t02-cl-r1-bash-homelink-125352-ws/09e9e17d-955e-46b2-9d6b-5a79baf5496c.jsonl",
+   "first_seen_after_spawn_s": 1.037,
+   "size": 176194,
+   "sha256": "29ffe051c0312b818a05d6d32bb551efd300424a78d46437389ce1b9eea1d6d8",
+   "record_types": {
+    "queue-operation": 2,
+    "user": 2,
+    "attachment": 13,
+    "atis-latch": 3,
+    "last-prompt": 3,
+    "assistant": 4,
+    "cost-state": 1
+   },
+   "user_messages": [
+    {
+     "line": 3,
+     "is_goal": true,
+     "len": 301,
+     "isMeta": null,
+     "head": "<GOAL>"
+    }
+   ],
+   "goal_exact_by_record": [
+    {
+     "line": 1,
+     "type": "queue-operation",
+     "exact": 1,
+     "substring": 1,
+     "isMeta": null,
+     "promptSource": null,
+     "origin": null
+    },
+    {
+     "line": 3,
+     "type": "user",
+     "exact": 1,
+     "substring": 1,
+     "isMeta": null,
+     "promptSource": "sdk",
+     "origin": null
+    }
+   ],
+   "goal_exact_total": 2,
+   "goal_substring_total": 2,
+   "real_home_refs": {
+    "/Users/team/.agents": 0,
+    "/Users/team/.claude/": 0,
+    "/Users/team/.codex/": 0,
+    "/Users/team/.zshrc": 0
+   },
+   "models": [
+    "claude-haiku-4-5-20251001"
+   ],
+   "session_ids": [
+    "09e9e17d-955e-46b2-9d6b-5a79baf5496c"
+   ],
+   "cwds": [
+    "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-r1-bash-homelink-125352/ws"
+   ],
+   "versions": [
+    "2.1.283"
+   ],
+   "mcp_servers": [],
+   "mcp_tool_count": 0,
+   "attachment_types": {
+    "environment": 1,
+    "model": 1,
+    "deferred_tools_delta": 1,
+    "agent_listing_delta": 1,
+    "skill_listing": 1,
+    "total_tokens_reminder": 2,
+    "session_context": 1,
+    "date": 1,
+    "credential_org": 1,
+    "remote_session_change": 1,
+    "prompt_snapshot": 2
+   },
+   "tool_calls": [
+    {
+     "line": 19,
+     "name": "Bash",
+     "id": "toolu_011N3kodnXF8hQNf5gn9QrpT",
+     "input": "{\"command\": \"printf '%s' 'delivered-sh125352' > t02-claude-sh125352.txt\", \"description\": \"Write probe file\"}"
+    }
+   ],
+   "tool_results": 1
+  }
+ ]
+}

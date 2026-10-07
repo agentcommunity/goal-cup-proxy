@@ -1,0 +1,641 @@
+# Expected `goalcup-verify --capture-integrity` verdicts for the committed v5 corpus.
+# Read tests/v5_corpus.rs before editing: an expectation changes only in a pull request that
+# carries a docs/DECISIONS.md row (D43 ruling 7). Adding a case is always allowed.
+#
+# Per case: `exit`, `integrity` and the exact `findings`, plus the report fields that say what
+# the reader understood (`sealed`, `anchor`, `key_source`, `validated_records`, `validated_head`,
+# `gap_count`, `coverage_incomplete`, `torn_tail`, `terminal_kind`, `verified_ack`). A case with
+# `[case.record_counts]` also pins the `--research-json` count of every validated record kind.
+# `dev_key = true` supplies the test signer's public key, as `--dev-key`.
+
+[[case]]
+# A G-2-shaped synthetic vertical: goal, launch, a wire exchange and a native snapshot, never sealed.
+name = "unsealed-vertical"
+path = "unsealed-vertical"
+exit = 1
+integrity = "incomplete"
+findings = ["chain_unsealed"]
+sealed = false
+anchor = "local_only"
+key_source = "none"
+validated_records = 19
+validated_head = "fc3e5a8d7d4e7d1e46d0f55d39d46ba7b9a759555b7cd90f5ce7dc1bd85227f7"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "none"
+verified_ack = false
+[case.record_counts]
+"connection.close.complete" = 1
+"connection.open" = 1
+"end.complete" = 4
+"launch" = 1
+"open.goal" = 1
+"open.native" = 1
+"open.wire_request" = 1
+"open.wire_response" = 1
+"producer_closed" = 3
+"segment" = 4
+
+[[case]]
+# A Launch written before S1: neither new field.
+name = "sealed-old-launch"
+path = "sealed-old-launch"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 7
+validated_head = "5141fc4084328f31a1fc927e8082d4d733f1ec845ab0a16b05a7d8f447763cab"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"end.complete" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"producer_closed" = 1
+"segment" = 1
+
+[[case]]
+# A Launch with a usable run key and a directory digest.
+name = "sealed-new-launch"
+path = "sealed-new-launch"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 7
+validated_head = "514fb048d0ee72274ee49a5e5585497fdb0fd779e0b72135d97d45ad3b5c5f24"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"end.complete" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"producer_closed" = 1
+"segment" = 1
+
+[[case]]
+# Only run_public_key: the shape a v5 capture entry writes before S4a.
+name = "sealed-key-only"
+path = "sealed-key-only"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 7
+validated_head = "ea68783301d5f20769320ed76d72b80f6768db1cd93b5992e39ba484c1becb96"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"end.complete" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"producer_closed" = 1
+"segment" = 1
+
+[[case]]
+# Only connector_dir_sha256.
+name = "sealed-digest-only"
+path = "sealed-digest-only"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 7
+validated_head = "cceb1f3a9d5fcdd0333913e3c706d35f8fbe8709fba77d1f2e659de41c80a287"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"end.complete" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"producer_closed" = 1
+"segment" = 1
+
+[[case]]
+# The Hermes row shape: chat-completions wire exchange plus an unhinted native snapshot. The chat-completions decoder reads the wire stream; no decoder reads the snapshot. Pinned here are the reader's record counts, which a decoder cannot change.
+name = "sealed-hermes-capture-only"
+path = "sealed-hermes-capture-only"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 20
+validated_head = "3214e57a16889a13f8da99a6f09063acf67f1fe5ae337478fa97a5510689bd41"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"connection.close.complete" = 1
+"connection.open" = 1
+"end.complete" = 4
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"open.native" = 1
+"open.wire_request" = 1
+"open.wire_response" = 1
+"producer_closed" = 3
+"segment" = 4
+
+[[case]]
+# run_public_key is 64 characters that are not hex.
+name = "launch-key-not-hex"
+path = "launch-key-not-hex"
+exit = 2
+integrity = "invalid"
+findings = ["record_field_invalid", "launch_missing"]
+sealed = false
+anchor = "local_only"
+key_source = "none"
+validated_records = 5
+validated_head = "3bddd4449a409bc3d1f0ff7c3d7b635b79a41531cfd52792580e808d32683722"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "none"
+verified_ack = false
+
+[[case]]
+# A real key spelled in uppercase: the record is canonical lowercase.
+name = "launch-key-uppercase"
+path = "launch-key-uppercase"
+exit = 2
+integrity = "invalid"
+findings = ["record_field_invalid", "launch_missing"]
+sealed = false
+anchor = "local_only"
+key_source = "none"
+validated_records = 5
+validated_head = "3bddd4449a409bc3d1f0ff7c3d7b635b79a41531cfd52792580e808d32683722"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "none"
+verified_ack = false
+
+[[case]]
+# The identity point, a weak key, is not a usable run key.
+name = "launch-key-weak-point"
+path = "launch-key-weak-point"
+exit = 2
+integrity = "invalid"
+findings = ["record_field_invalid", "launch_missing"]
+sealed = false
+anchor = "local_only"
+key_source = "none"
+validated_records = 5
+validated_head = "3bddd4449a409bc3d1f0ff7c3d7b635b79a41531cfd52792580e808d32683722"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "none"
+verified_ack = false
+
+[[case]]
+# connector_dir_sha256 in uppercase.
+name = "launch-digest-uppercase"
+path = "launch-digest-uppercase"
+exit = 2
+integrity = "invalid"
+findings = ["record_field_invalid", "launch_missing"]
+sealed = false
+anchor = "local_only"
+key_source = "none"
+validated_records = 5
+validated_head = "3bddd4449a409bc3d1f0ff7c3d7b635b79a41531cfd52792580e808d32683722"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "none"
+verified_ack = false
+
+[[case]]
+# connector_dir_sha256 of 62 hex characters.
+name = "launch-digest-short"
+path = "launch-digest-short"
+exit = 2
+integrity = "invalid"
+findings = ["record_field_invalid", "launch_missing"]
+sealed = false
+anchor = "local_only"
+key_source = "none"
+validated_records = 5
+validated_head = "3bddd4449a409bc3d1f0ff7c3d7b635b79a41531cfd52792580e808d32683722"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "none"
+verified_ack = false
+
+[[case]]
+# An explicit null is not a spelling of absence: the line is not its own serialization.
+name = "launch-key-explicit-null"
+path = "launch-key-explicit-null"
+exit = 2
+integrity = "invalid"
+findings = ["record_not_canonical", "launch_missing"]
+sealed = false
+anchor = "local_only"
+key_source = "none"
+validated_records = 5
+validated_head = "3bddd4449a409bc3d1f0ff7c3d7b635b79a41531cfd52792580e808d32683722"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "none"
+verified_ack = false
+
+[[case]]
+# A stream-less Gap and an Assistance record: coverage is incomplete, never clean.
+name = "sealed-gap-and-assistance"
+path = "sealed-gap-and-assistance"
+exit = 1
+integrity = "incomplete"
+findings = ["gap_recorded"]
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 9
+validated_head = "6e6232b88494ff09b4908a1e79440c534dba924b91b459447ff9c41ec1b7319c"
+gap_count = 1
+coverage_incomplete = true
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"assistance" = 1
+"end.complete" = 1
+"gap.queue_full" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"producer_closed" = 1
+"segment" = 1
+
+[[case]]
+# A wire producer lost mid-exchange and replaced by a Recovery: incomplete.
+name = "sealed-recovery"
+path = "sealed-recovery"
+exit = 1
+integrity = "incomplete"
+findings = ["producer_recovered"]
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 17
+validated_head = "73b1fac730c8fbed257e9af10fe32099ac2d5c5720f8815d8adbd79934012fbb"
+gap_count = 0
+coverage_incomplete = true
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"connection.close.complete" = 1
+"connection.open" = 2
+"end.complete" = 2
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"open.wire_request" = 2
+"producer_closed" = 2
+"recovery.ingest_lost" = 1
+"segment" = 3
+
+[[case]]
+# A WebSocket session: upgrade, ws_client and ws_server message streams, close.
+name = "sealed-websocket"
+path = "sealed-websocket"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 17
+validated_head = "cd22e875de8274379d28b8805a75b764d163c420b12aa2f93d9db8087e2ad3d3"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"connection.close.complete" = 1
+"connection.open" = 1
+"connection.upgraded_web_socket" = 1
+"end.complete" = 3
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"open.ws_client" = 1
+"open.ws_server" = 1
+"producer_closed" = 2
+"segment" = 3
+
+[[case]]
+# A stream that ends Interrupted.
+name = "sealed-end-interrupted"
+path = "sealed-end-interrupted"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 13
+validated_head = "25e23d654d660c26c371e134da643e096c9c52de411e0ae0fccede96e67ef0d6"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"connection.close.complete" = 1
+"connection.open" = 1
+"end.complete" = 1
+"end.interrupted" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"open.wire_request" = 1
+"producer_closed" = 2
+"segment" = 2
+
+[[case]]
+# A stream that ends DecodeError.
+name = "sealed-end-decode-error"
+path = "sealed-end-decode-error"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 13
+validated_head = "f00ecb40bcb80bb760267ab7e2e2464f4b9f860d9a50c10bef5ef90980c19f71"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"connection.close.complete" = 1
+"connection.open" = 1
+"end.complete" = 1
+"end.decode_error" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"open.wire_request" = 1
+"producer_closed" = 2
+"segment" = 2
+
+[[case]]
+# A Claude Launch carrying the paired allowed_tool_rule and process_handoff_digest.
+name = "sealed-claude-allowance"
+path = "sealed-claude-allowance"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 7
+validated_head = "da52a335179b88c3d779df7398de8fd34b5b4ab2c228e69b0ef147f1abaee0ec"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"end.complete" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"producer_closed" = 1
+"segment" = 1
+
+[[case]]
+# A seal and baseline that list files and an exclusion.
+name = "sealed-with-files"
+path = "sealed-with-files"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 7
+validated_head = "3614294651c35e4f89e30d07e0b457fd53bff868552e0982ffb6d61848bd43a4"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"end.complete" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"producer_closed" = 1
+"segment" = 1
+
+[[case]]
+# LocalFinish whose termination is AlreadyStopped.
+name = "sealed-termination-already-stopped"
+path = "sealed-termination-already-stopped"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 7
+validated_head = "bd2f52cf0084aae25579941a827e171c4bc5ea7ed80642db666af71fd5fc0018"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"end.complete" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"producer_closed" = 1
+"segment" = 1
+
+[[case]]
+# LocalFinish whose termination is Unresolved.
+name = "sealed-termination-unresolved"
+path = "sealed-termination-unresolved"
+exit = 0
+integrity = "valid"
+findings = []
+sealed = true
+anchor = "local_only"
+key_source = "none"
+validated_records = 7
+validated_head = "a8aa1299525771f8325e978a729b37ff55eb5ac8d19259d06d705efec902c8be"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "local_finish"
+verified_ack = false
+[case.record_counts]
+"end.complete" = 1
+"launch" = 1
+"local_finish" = 1
+"open.goal" = 1
+"producer_closed" = 1
+"segment" = 1
+
+[[case]]
+# A start receipt, a signed acknowledgement and a signed finalization, verified under a supplied server key: anchor signed.
+name = "signed-receipt-ack-finalization"
+path = "signed-receipt-ack-finalization"
+exit = 0
+dev_key = true
+integrity = "valid"
+findings = ["server_key_unpinned"]
+sealed = true
+anchor = "signed"
+key_source = "supplied"
+validated_records = 21
+validated_head = "7c3073308f4c5086bdd3870cce9ad69a53e5bc0c428a77fa2641addb7c96f036"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "signed_finalization"
+verified_ack = true
+[case.record_counts]
+"connection.close.complete" = 1
+"connection.open" = 1
+"end.complete" = 4
+"launch" = 1
+"open.goal" = 1
+"open.native" = 1
+"open.wire_request" = 1
+"open.wire_response" = 1
+"producer_closed" = 3
+"segment" = 4
+
+[[case]]
+# The same trace without the server key: the receipt and ack are unverifiable, so the trace is invalid.
+name = "signed-receipt-ack-unkeyed"
+path = "signed-receipt-ack-finalization"
+exit = 2
+integrity = "invalid"
+findings = ["receipt_key_not_accepted", "ack_signature_unverified"]
+sealed = false
+anchor = "local_only"
+key_source = "none"
+validated_records = 21
+validated_head = "7c3073308f4c5086bdd3870cce9ad69a53e5bc0c428a77fa2641addb7c96f036"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "none"
+verified_ack = false
+
+[[case]]
+# Launch run_public_key equals the receipt's run key.
+name = "signed-receipt-key-agrees"
+path = "signed-receipt-key-agrees"
+exit = 0
+dev_key = true
+integrity = "valid"
+findings = ["server_key_unpinned"]
+sealed = true
+anchor = "signed"
+key_source = "supplied"
+validated_records = 21
+validated_head = "14cae01d595a471e16925dcedf718242f1fbad9e14d00400699e183c53ab970b"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "signed_finalization"
+verified_ack = true
+[case.record_counts]
+"connection.close.complete" = 1
+"connection.open" = 1
+"end.complete" = 4
+"launch" = 1
+"open.goal" = 1
+"open.native" = 1
+"open.wire_request" = 1
+"open.wire_response" = 1
+"producer_closed" = 3
+"segment" = 4
+
+[[case]]
+# Launch run_public_key differs from the receipt's run key.
+name = "signed-receipt-key-mismatch"
+path = "signed-receipt-key-mismatch"
+exit = 2
+dev_key = true
+integrity = "invalid"
+findings = ["record_field_invalid", "server_key_unpinned"]
+sealed = false
+anchor = "local_only"
+key_source = "supplied"
+validated_records = 5
+validated_head = "3bddd4449a409bc3d1f0ff7c3d7b635b79a41531cfd52792580e808d32683722"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = false
+terminal_kind = "none"
+verified_ack = false
+
+[[case]]
+# A real trace plus the front of a line with no newline: a torn tail is invalid and kept.
+name = "torn-tail"
+path = "torn-tail"
+exit = 2
+integrity = "invalid"
+findings = ["torn_tail"]
+sealed = false
+anchor = "local_only"
+key_source = "none"
+validated_records = 6
+validated_head = "303d417bae12b6e6eb04fac6a98362a89e343599abeac950e38aea4a3f995411"
+gap_count = 0
+coverage_incomplete = false
+torn_tail = true
+terminal_kind = "none"
+verified_ack = false
+
+[[case]]
+# A committed pre-v5 trace: this mode has no usable report for it.
+name = "legacy-pre-v5-trace"
+path = "../compliant"
+exit = 3

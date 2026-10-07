@@ -1,0 +1,24 @@
+# local harness installs and their isolated homes (never synced)
+harnesses/*
+!harnesses/install.sh
+!harnesses/README.md
+# local daemon instances: isolated homes, artifacts and configs for a run.
+# Same shape as harnesses/* above, and for the same reason -- these trees hold
+# real harness auth.json credentials and captured traces. Never synced.
+/dev/
+/qual/
+/v4/
+# spike artifacts (raw traces may contain secrets)
+spikes/*/out/
+# rust
+target/
+# os / editor
+.DS_Store
+.env
+__pycache__/
+.worktrees/
+.superpowers/
+
+# M2 wire/PTY spike capture data: hundreds of MB of raw bodies, archived outside git.
+# The digest of the archive is recorded in spikes/wire-pty/REPORT.md.
+spikes/wire-pty/out/

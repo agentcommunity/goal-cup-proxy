@@ -1,0 +1,54 @@
+{
+ "kind": "m2-e01-sanitized-excerpts",
+ "method": "sanitize.py (driver evidence) then spikes/redact.py then eye review",
+ "removed": [
+  "base/developer instructions",
+  "tool schemas",
+  "environment context",
+  "system prompt",
+  "request metadata",
+  "attachments (session_context/credential_org)",
+  "account/org/device ids",
+  "uuids and provider ids -> placeholders",
+  "run paths -> <run>"
+ ],
+ "files": {
+  "codex-native-excerpt.jsonl": {
+   "sha256": "67d3fcbb3cb64d48bfb3cf911919562f6661e567a4525b1679119be040617cf3",
+   "records": 14,
+   "run": "codex-20260928T032110Z",
+   "source": "CODEX_HOME/sessions/.../rollout-2026-09-28T10-21-13-<uuid>.jsonl",
+   "source_sha256": "aaabf074aa9e125481711edd7c303c1819d6d7b16c96fe2a073d9836a58fd5f1",
+   "source_bytes": 65914
+  },
+  "codex-wire-excerpt.jsonl": {
+   "sha256": "1688491de4e122bd212b8dea1d00da094bc705cccbeb6865a98e8853270eb82f",
+   "records": 13,
+   "run": "codex-20260928T032110Z",
+   "source": "trace/chain.jsonl ws_client/ws_server segments (retained, T04-redacted)",
+   "chain_sha256": "8344bcb765127762a764259872a3c400f417921d2ada94308aaf0d427475c330"
+  },
+  "claude-native-excerpt.jsonl": {
+   "sha256": "e3b8071bf869fa38447b77b4ea3cfea05daea897ce8c4614718b41bf33b7786d",
+   "records": 7,
+   "run": "claude-20260928T032648Z",
+   "source": "CLAUDE_CONFIG_DIR/projects/<run-slug>/<uuid>.jsonl",
+   "source_sha256": "c97cfc1628d34fd61c1afa60486d1c956f9e3d55f44e09e85315b31ef9faa02d",
+   "source_bytes": 177329
+  },
+  "claude-wire-excerpt.jsonl": {
+   "sha256": "0df5f1a7c80494fde006c9bfe728674d306364990a333d4a0c3cbe6444ad8fdd",
+   "records": 4,
+   "run": "claude-20260928T032648Z",
+   "source": "trace/chain.jsonl wire_request/wire_response segments (retained, T04-redacted)",
+   "chain_sha256": "bb20b7c6ddeba4cc3a7e5215eee769ccd83719044b7df25b407ed9d7fc4bdacf"
+  }
+ },
+ "checks": {
+  "redact_py": "0 redactions on every file (spikes/redact.py; output byte-identical)",
+  "needle_scan": "0 hits for the e-mail, organization, account and device identifier values extracted from the raw native originals",
+  "patterns": "0 '@', 0 UUID-shaped strings, 0 'sk-', 0 'Bearer', 0 home-directory paths, 0 proxy credentials",
+  "eye_review": "every record read; the Claude SSE input_json_delta fragments keep the shared run path /Users/Shared/goalcup-m2-e01/<run> split across deltas (not personal data)"
+ },
+ "originals": "spikes/m2-first-release/out/early/live/ (git-ignored; raw chains, native copies, stdout/stderr, listings)"
+}

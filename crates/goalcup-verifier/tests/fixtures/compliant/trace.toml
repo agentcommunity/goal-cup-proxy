@@ -1,0 +1,13 @@
+connector = "claude-code-cli"
+entry_id = "compliant-0001"
+workspace = "/ws/compliant-0001"
+tracked_sessions = ["compliant-session-0001"]
+harness_version = "2.1.259"
+connector_manifest = "manifest.toml"
+chain = "chain.jsonl"
+receipt = "receipt.json"
+baseline = "baseline.json"
+acks = "acks.jsonl"
+seal = "seal.json"
+server_public_key = "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
+expected_reread = false

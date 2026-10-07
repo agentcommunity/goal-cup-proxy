@@ -1,0 +1,172 @@
+{
+ "run_id": "cl-pos-probe-120740",
+ "harness": "claude",
+ "variant": "positive",
+ "proxy": true,
+ "started_utc": "2026-09-27T12:07:40.830Z",
+ "duration_s": 180.554,
+ "exit_code": 143,
+ "timed_out": true,
+ "timeout_s": 180,
+ "spawn_error": null,
+ "executable": "/Users/team/.local/bin/claude",
+ "executable_realpath": "/Users/team/.local/share/claude/versions/2.1.283",
+ "executable_sha256": "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
+ "argv_template": [
+  "/Users/team/.local/bin/claude",
+  "-p",
+  "--model",
+  "haiku",
+  "--effort",
+  "low",
+  "--permission-mode",
+  "acceptEdits",
+  "--permission-prompts",
+  "none",
+  "--session-id",
+  "b2015cca-45a7-444b-be8c-c7e0212f4513",
+  "--output-format",
+  "json",
+  "--",
+  "<GOAL>"
+ ],
+ "argc": 16,
+ "cwd": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-pos-probe-120740/ws",
+ "stdin": "/dev/null",
+ "env_names": [
+  "CLAUDE_CONFIG_DIR",
+  "DISABLE_AUTOUPDATER",
+  "HOME",
+  "HTTPS_PROXY",
+  "LOGNAME",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_PROXY",
+  "PATH",
+  "SHELL",
+  "TMPDIR",
+  "USER",
+  "https_proxy",
+  "no_proxy"
+ ],
+ "home": "real user HOME",
+ "env_values_nonsecret": {
+  "CLAUDE_CONFIG_DIR": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude",
+  "DISABLE_AUTOUPDATER": "1",
+  "HTTPS_PROXY": "http://127.0.0.1:58375",
+  "NODE_EXTRA_CA_CERTS": "/Users/team/dev/worktrees/goal-cup/m2-t02-launch/spikes/claude-code-cli/out/m2-t02/cl-pos-probe-120740/probe/ca.pem",
+  "NO_PROXY": "127.0.0.1,localhost",
+  "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+  "SHELL": "/bin/zsh",
+  "https_proxy": "http://127.0.0.1:58375",
+  "no_proxy": "127.0.0.1,localhost"
+ },
+ "exec_bytes": {
+  "strings": 1257,
+  "strings_plus_pointers": 1505
+ },
+ "session_id_preassigned": "b2015cca-45a7-444b-be8c-c7e0212f4513",
+ "oracle": {
+  "ws_entries": [],
+  "outside_entries": [],
+  "exists": false
+ },
+ "appwide_scope": {
+  "claude_default_projects_hits": 0
+ },
+ "goal": {
+  "bytes": 544,
+  "sha256": "c561a6e59b595df30df86386ca2886d806386245bed1800b9198b2ef18bc7e0e",
+  "lines": 6,
+  "starts_with_dash": true,
+  "has_tab": true,
+  "has_double_space": true,
+  "non_ascii": true,
+  "text": "-leading dash on purpose: T02 goal-delivery probe q120740.\nThis line has  two  double  spaces, a tab here:\t<-, and one UTF-8 word: naïve.\n   This line starts with three spaces and ends with a space. \nTask: create exactly one new file named t02-claude-q120740.txt in the current working directory. Its entire content must be exactly: delivered-q120740\nWrite it with a real tool call (no trailing newline if you can). Do not create or modify anything else and do not ask questions.\nWhen the file exists, reply with the single word done and stop."
+ },
+ "stdout_summary": {
+  "parse": "not-json",
+  "len": 0,
+  "head": ""
+ },
+ "stderr_bytes": 0,
+ "native": [
+  {
+   "path_rel_home": "projects/-private-tmp-claude-501--Users-team-dev-PROJECTS-AgentCommunity-goal-cup-9758e5ce-5876-46aa-b761-95082645ba2c-scratchpad-m2-t02-cl-pos-probe-120740-ws/b2015cca-45a7-444b-be8c-c7e0212f4513.jsonl",
+   "first_seen_after_spawn_s": 0.349,
+   "size": 70181,
+   "sha256": "170b5f727a7adef5c386a475cd059704a8d60bffd4dd62907c7780ccd70672a1",
+   "record_types": {
+    "queue-operation": 2,
+    "user": 1,
+    "attachment": 11,
+    "atis-latch": 2,
+    "last-prompt": 2,
+    "system": 7,
+    "cost-state": 1
+   },
+   "user_messages": [
+    {
+     "line": 3,
+     "is_goal": true,
+     "len": 544,
+     "isMeta": null,
+     "head": "<GOAL>"
+    }
+   ],
+   "goal_exact_by_record": [
+    {
+     "line": 1,
+     "type": "queue-operation",
+     "exact": 1,
+     "substring": 1,
+     "isMeta": null,
+     "promptSource": null,
+     "origin": null
+    },
+    {
+     "line": 3,
+     "type": "user",
+     "exact": 1,
+     "substring": 1,
+     "isMeta": null,
+     "promptSource": "sdk",
+     "origin": null
+    }
+   ],
+   "goal_exact_total": 2,
+   "goal_substring_total": 2,
+   "real_home_refs": {
+    "/Users/team/.agents": 0,
+    "/Users/team/.claude/": 0,
+    "/Users/team/.codex/": 0,
+    "/Users/team/.zshrc": 0
+   },
+   "models": [],
+   "session_ids": [
+    "b2015cca-45a7-444b-be8c-c7e0212f4513"
+   ],
+   "cwds": [
+    "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-pos-probe-120740/ws"
+   ],
+   "versions": [
+    "2.1.283"
+   ],
+   "tool_calls": [],
+   "tool_results": []
+  }
+ ],
+ "wire_summary": {
+  "tunnels": {},
+  "mitm_hosts": {},
+  "client_tls_fail": 1,
+  "errors": 32,
+  "http": [],
+  "ws_open": [],
+  "model_requests": [],
+  "plain_http_refused": 0
+ },
+ "probe": {
+  "binary_sha256": "0fc3d047bc414d6e86f718b22af170d598cab87dbd9a51bd84ca46024a5b5452",
+  "listen": "127.0.0.1 (ephemeral port)"
+ }
+}

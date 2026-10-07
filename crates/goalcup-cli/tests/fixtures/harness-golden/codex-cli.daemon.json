@@ -1,0 +1,25 @@
+{
+  "connector": "codex-cli",
+  "launched_with_a_native_scope": {
+    "gaps_after_launch": [],
+    "launch_allowed_tool_rule": null,
+    "launch_connector_dir_sha256": "07c225a3f7067e026e456fe8a16694d483684736e7ab49da0d5fa3e1c981d4cf",
+    "launch_process_handoff_digest": null,
+    "launch_profile_digest_is_sha256_of_harness_toml": true,
+    "launch_profile_id": "codex-cli",
+    "native_binary_admitted_into_the_process_handoff": "codex",
+    "native_scope_in_launch_request": "test-session"
+  },
+  "launched_without_a_native_scope": {
+    "gaps_after_launch": [
+      "streamless:SourceChanged"
+    ],
+    "launch_allowed_tool_rule": null,
+    "launch_connector_dir_sha256": "07c225a3f7067e026e456fe8a16694d483684736e7ab49da0d5fa3e1c981d4cf",
+    "launch_process_handoff_digest": null,
+    "launch_profile_digest_is_sha256_of_harness_toml": true,
+    "launch_profile_id": "codex-cli",
+    "native_binary_admitted_into_the_process_handoff": "codex",
+    "native_scope_in_launch_request": null
+  }
+}

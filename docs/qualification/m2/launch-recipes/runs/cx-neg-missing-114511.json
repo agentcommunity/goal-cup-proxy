@@ -1,0 +1,84 @@
+{
+ "run_id": "cx-neg-missing-114511",
+ "harness": "codex",
+ "variant": "missing",
+ "proxy": false,
+ "started_utc": "2026-09-27T11:45:11.609Z",
+ "duration_s": 0.149,
+ "exit_code": 1,
+ "timed_out": false,
+ "timeout_s": 600,
+ "spawn_error": null,
+ "executable": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/node/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+ "executable_realpath": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/node/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+ "executable_sha256": "a29d9e86eef88cbbd69f97ce8c590b1d0a287c8f77424f5eef226b883d7eaa22",
+ "argv_template": [
+  "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/node/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+  "exec",
+  "--json",
+  "-m",
+  "gpt-5.6-luna",
+  "-c",
+  "model_reasoning_effort=\"low\"",
+  "-c",
+  "approval_policy=\"never\"",
+  "-c",
+  "check_for_update_on_startup=false",
+  "-s",
+  "workspace-write",
+  "--skip-git-repo-check",
+  "-C",
+  "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cx-neg-missing-114511/ws"
+ ],
+ "argc": 16,
+ "cwd": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cx-neg-missing-114511/ws",
+ "stdin": "/dev/null",
+ "env_names": [
+  "CODEX_HOME",
+  "HOME",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "TMPDIR",
+  "USER"
+ ],
+ "home": "real user HOME (run predates the runner's home field)",
+ "env_values_nonsecret": {
+  "CODEX_HOME": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/codex",
+  "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+  "SHELL": "/bin/zsh"
+ },
+ "exec_bytes": {
+  "strings": 722,
+  "strings_plus_pointers": 922
+ },
+ "session_id_preassigned": null,
+ "oracle": {
+  "ws_entries": [],
+  "outside_entries": []
+ },
+ "appwide_scope": {
+  "codex_default_sessions_hits": 0
+ },
+ "goal": {
+  "bytes": 0,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "lines": 0,
+  "starts_with_dash": false,
+  "has_tab": false,
+  "has_double_space": false,
+  "non_ascii": false,
+  "text": ""
+ },
+ "stdout_summary": {
+  "events": [],
+  "thread_id": null,
+  "items": [],
+  "final_agent_message": null,
+  "errors": [],
+  "len": 0,
+  "head_if_not_json": ""
+ },
+ "stderr_bytes": 59,
+ "native": []
+}

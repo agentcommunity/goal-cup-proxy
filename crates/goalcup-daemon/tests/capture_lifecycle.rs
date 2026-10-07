@@ -1,0 +1,2482 @@
+//! Protocol-v5 local capture through the real daemon and its control API: creation with a
+//! physically reserved chain and no server, the one-shot goal, the launch record, and the
+//! signed status projection.
+//!
+//! macOS only: the chain reservation is qualified on APFS alone and refuses everywhere else,
+//! so every entry here is created on the temporary directory's APFS volume.
+
+#![cfg(target_os = "macos")]
+
+mod capture_lifecycle_support;
+mod support;
+#[path = "support/table_lock.rs"]
+mod table_lock;
+
+use capture_lifecycle_support::{
+    Child, RESERVE, Rig, Wire, controlled_native_rig, descriptors_on, dev_connectors, fresh_id,
+    launch_request, local_finishes, native_rig,
+};
+use goalcup_protocol::capture::{
+    AnalysisState, AnchorState, CaptureMeta, CaptureRecord, CaptureSource, CaptureState,
+    ConnectionEvent, ConnectionOutcome, DeliveryState, EndReason, FrameEvent, GapReason, RunState,
+    StreamKey, WireIdentity, is_capture_id,
+};
+#[cfg(feature = "v1-compat")]
+use goalcup_protocol::control::CaptureSealRequest;
+use goalcup_protocol::control::{
+    CaptureFinishReport, CaptureWorkspaceInfo, LocalSealOutcome, ProxyCounters, ResumeRequest,
+    SUFFIX_CAPTURE_GOAL, SUFFIX_RESUME, SUFFIX_RESUME_PREVIEW, SUFFIX_SEAL, SUFFIX_STATUS,
+    SignedStatus, entry_route,
+};
+use goalcup_protocol::envelope::EventBody;
+use goalcup_protocol::provenance::TerminationOutcomeV1;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+
+/// A key the shared redaction policy recognises (`aws_access_key`).
+const PLANTED_SECRET: &str = "AKIAIOSFODNN7EXAMPLE";
+
+/// Every directory and file below `root`, with file bytes, so a refusal cannot hide an empty
+/// directory creation or a rewrite that happened to preserve the set of path names.
+fn tree_inventory(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, current: &Path, inventory: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for child in std::fs::read_dir(current).expect("the snapshot root reads") {
+            let child = child.expect("a snapshot directory entry reads");
+            let path = child.path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("the walk stays below its root")
+                .to_path_buf();
+            let metadata = std::fs::symlink_metadata(&path).expect("snapshot metadata reads");
+            if metadata.is_dir() {
+                inventory.insert(relative, b"directory".to_vec());
+                visit(root, &path, inventory);
+            } else if metadata.is_file() {
+                let mut value = b"file\0".to_vec();
+                value.extend(std::fs::read(&path).expect("snapshot file reads"));
+                inventory.insert(relative, value);
+            } else {
+                panic!("the capture fixture contains an unexpected object: {path:?}");
+            }
+        }
+    }
+
+    let mut inventory = BTreeMap::new();
+    visit(root, root, &mut inventory);
+    inventory
+}
+
+fn assert_error_identity(response: &support::Response, expected_message: &str) {
+    assert_eq!(response.status(), 409, "{}", response.body());
+    let body: goalcup_protocol::control::ErrorBody = response
+        .json()
+        .expect("the refusal has the complete control-error shape");
+    assert_eq!(body.error.code, "conflict");
+    assert_eq!(body.error.message, expected_message);
+    assert_eq!(body.error.detail, serde_json::json!({ "code": "conflict" }));
+}
+
+#[derive(Debug, PartialEq)]
+struct ReopenedCaptureSnapshot {
+    row: goalcup_daemon::registry::Entry,
+    chain: Vec<u8>,
+    artifacts: BTreeMap<PathBuf, Vec<u8>>,
+    workspace: BTreeMap<PathBuf, Vec<u8>>,
+}
+
+fn reopened_capture_snapshot(rig: &Rig, entry_id: &str) -> ReopenedCaptureSnapshot {
+    let row = rig
+        .daemon
+        .registry()
+        .get(entry_id)
+        .expect("the registry reads")
+        .expect("the capture row exists");
+    ReopenedCaptureSnapshot {
+        chain: std::fs::read(row.trace_dir.join(goalcup_protocol::export::CHAIN_FILE))
+            .expect("the chain reads"),
+        artifacts: tree_inventory(&row.artifact_dir),
+        workspace: tree_inventory(&row.workspace),
+        row,
+    }
+}
+
+#[tokio::test]
+async fn local_capture_create_needs_no_server_config() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+
+    assert_eq!(
+        info.reserved_bytes, RESERVE,
+        "the requested bytes are reserved"
+    );
+    assert!(info.ingest_addr.ip().is_loopback());
+    assert!(is_capture_id(&info.producer_id));
+    assert!(info.ingest_secret.len() >= 32);
+    assert!(
+        !format!("{info:?}").contains(&info.ingest_secret),
+        "the ingest secret never reaches Debug output"
+    );
+
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    let status = rig.status(&info.entry_id).await;
+    status
+        .verify_with(&info.run_public_key)
+        .expect("the status verifies against the run key the create call returned");
+
+    // Every cadence the daemon runs, once: none of them reaches a capture entry.
+    // The V1 cadences exist only in a `v1-compat` build (D42); a default daemon has none to run.
+    #[cfg(feature = "v1-compat")]
+    {
+        rig.daemon.tick().await.expect("a tick");
+        rig.daemon.pump_all().await.expect("a pump");
+        rig.daemon.refresh_statuses().expect("a status pass");
+    }
+    let trace = rig.trace_dir(&info.entry_id);
+    assert!(!trace.join("receipt.json").exists(), "no receipt exists");
+    assert_eq!(
+        rig.upload_dials(),
+        0,
+        "nothing ever connects to the configured upload URL"
+    );
+}
+
+#[tokio::test]
+async fn v5_capture_uses_real_inline_chain_without_redb() {
+    let rig = Rig::start().await;
+    let info = rig.created("claude-code-cli").await;
+
+    let chain = rig.chain(&info.entry_id);
+    assert_eq!(chain.len(), 1, "the baseline is the only record");
+    assert_eq!(chain[0].protocol_version, 5);
+    let EventBody::Baseline {
+        manifest_sha256,
+        file_count,
+    } = &chain[0].body
+    else {
+        panic!("seq 0 is the baseline, found {:?}", chain[0].body);
+    };
+    let trace = rig.trace_dir(&info.entry_id);
+    let baseline = std::fs::read(trace.join("baseline.json")).expect("baseline.json");
+    assert_eq!(*manifest_sha256, hex::encode(Sha256::digest(&baseline)));
+    assert_eq!(*file_count, 0, "a fresh workspace is empty");
+    assert!(
+        !rig.artifact_dir(&info.entry_id)
+            .join("buffer.redb")
+            .exists(),
+        "a v5 entry keeps no redb payload buffer"
+    );
+
+    let file = std::fs::metadata(trace.join("chain.jsonl")).unwrap();
+    assert!(
+        file.blocks() * 512 >= RESERVE,
+        "the chain file itself holds the reservation"
+    );
+    let storage = rig
+        .status(&info.entry_id)
+        .await
+        .payload
+        .capture
+        .unwrap()
+        .storage;
+    assert_eq!(storage.quota_bytes, RESERVE);
+    assert_eq!(storage.reserved_bytes, RESERVE);
+    assert_eq!(storage.used_bytes, file.len());
+    let durable = storage.durable.expect("the baseline is synced");
+    assert_eq!((durable.seq, durable.chain_bytes), (0, file.len()));
+}
+
+#[tokio::test]
+async fn goal_sync_failure_prevents_preflight_success() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    // The retained writer keeps appending to the moved file, and its flush refuses because
+    // the chain's name no longer names that file: a real sync failure.
+    let trace = rig.trace_dir(&info.entry_id);
+    std::fs::rename(trace.join("chain.jsonl"), trace.join("moved.jsonl")).unwrap();
+
+    let failed = rig.goal(&info.entry_id, b"write hello.txt").await;
+    assert_eq!(failed.status(), 500, "{}", failed.body());
+    assert!(
+        failed.json::<StreamKey>().is_err(),
+        "no goal stream is handed out"
+    );
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(capture.capture, CaptureState::Failed);
+    assert_eq!(capture.storage.durable.map(|d| d.seq), Some(0));
+
+    let again = rig.goal(&info.entry_id, b"write hello.txt").await;
+    assert_eq!(
+        again.status(),
+        409,
+        "a failed goal is not retried: {}",
+        again.body()
+    );
+}
+
+#[tokio::test]
+async fn accepted_goal_cannot_be_replaced() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let goal = format!("Fix the build. The key {PLANTED_SECRET} is for the deploy step.");
+    let key = rig.goal_accepted(&info.entry_id, goal.as_bytes()).await;
+    assert!(is_capture_id(&key.producer));
+    assert_ne!(
+        key.producer, info.producer_id,
+        "the goal has its own producer"
+    );
+
+    let second = rig.goal(&info.entry_id, b"a different goal").await;
+    assert_eq!(second.status(), 409, "{}", second.body());
+
+    let records = rig.records(&info.entry_id);
+    let opens: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            CaptureRecord::Open { stream, source, .. } => Some((stream.clone(), *source)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(opens, vec![(key.clone(), CaptureSource::Goal)]);
+    let mut retained = Vec::new();
+    for record in &records {
+        if let CaptureRecord::Segment {
+            stream, data_b64, ..
+        } = record
+        {
+            assert_eq!(stream, &key);
+            use base64::Engine as _;
+            retained.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(data_b64)
+                    .unwrap(),
+            );
+        }
+    }
+    let retained = String::from_utf8(retained).unwrap();
+    assert!(retained.starts_with("Fix the build. The key "));
+    assert!(!retained.contains(PLANTED_SECRET), "the goal is redacted");
+    assert!(
+        matches!(
+            records.iter().rev().nth(1),
+            Some(CaptureRecord::End { stream, reason: EndReason::Complete, .. }) if *stream == key
+        ),
+        "the goal stream ends complete, before its producer's close"
+    );
+    let raw = std::fs::read_to_string(rig.trace_dir(&info.entry_id).join("chain.jsonl")).unwrap();
+    assert!(!raw.contains(PLANTED_SECRET));
+    assert!(
+        !raw.contains("a different goal"),
+        "the refused goal left nothing"
+    );
+}
+
+#[tokio::test]
+async fn the_launch_record_names_the_goal_and_the_harness_profile() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let after_goal = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    let goal_frontier = after_goal
+        .storage
+        .durable
+        .clone()
+        .expect("the goal is synced");
+    assert_eq!(goal_frontier.chain_bytes, after_goal.storage.used_bytes);
+
+    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    let records = rig.records(&info.entry_id);
+    let Some(CaptureRecord::Launch {
+        goal_stream,
+        profile_id,
+        profile_digest,
+        recorder_revision,
+        allowed_tool_rule,
+        process_handoff_digest,
+        run_public_key,
+        connector_dir_sha256,
+        ..
+    }) = records
+        .iter()
+        .find(|record| matches!(record, CaptureRecord::Launch { .. }))
+    else {
+        panic!("the launch is chained");
+    };
+    assert_eq!(goal_stream, &goal);
+    assert_eq!(profile_id, "codex-cli");
+    let harness =
+        std::fs::read(support::shipped_connector_dir("codex-cli").join("harness.toml")).unwrap();
+    assert_eq!(*profile_digest, hex::encode(Sha256::digest(&harness)));
+    assert!(!recorder_revision.is_empty());
+    assert_eq!(allowed_tool_rule, &None);
+    assert_eq!(process_handoff_digest, &None);
+    // Contract S1: the daemon writes the key it minted at create, canonical lowercase hex.
+    // `connector_dir_sha256` is forwarded from the entry row and names the exact loaded
+    // connector directory bytes.
+    assert_eq!(
+        run_public_key.as_deref(),
+        Some(info.run_public_key.as_str())
+    );
+    assert_eq!(
+        connector_dir_sha256.as_deref(),
+        goalcup_protocol::pins::pinned_connector_dir_sha256("codex-cli")
+    );
+
+    let after_launch = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert!(after_launch.storage.used_bytes > goal_frontier.chain_bytes);
+}
+
+#[tokio::test]
+async fn a_claude_launch_records_only_the_verified_registered_allowance() {
+    let rig = Rig::start().await;
+    let info = rig.created("claude-code-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"private goal").await;
+    let harness = Child::sleeping();
+    let mut registration = harness.registration(info.process_generation);
+    // Child::registration is Codex-shaped; Claude's pinned process-group profile has no
+    // native_binary hint.
+    registration.handle.native_binary = None;
+    registration.handle.argv = vec![
+        "--permission-mode".into(),
+        "acceptEdits".into(),
+        "--permission-prompts".into(),
+        "none".into(),
+        "--allowedTools".into(),
+        "Bash(python3 demo.py *)".into(),
+        "--".into(),
+        "<goal>".into(),
+    ];
+    let registered = rig.register(&info.entry_id, &registration).await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    assert_eq!(
+        rig.launch(&info.entry_id, &launch_request(&goal))
+            .await
+            .status(),
+        204
+    );
+    let records = rig.records(&info.entry_id);
+    let launch = records
+        .iter()
+        .find_map(|record| match record {
+            CaptureRecord::Launch {
+                allowed_tool_rule,
+                process_handoff_digest,
+                profile_digest,
+                ..
+            } => Some((allowed_tool_rule, process_handoff_digest, profile_digest)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(launch.0.as_deref(), Some("Bash(python3 demo.py *)"));
+    assert_eq!(
+        launch.1.as_deref(),
+        Some(
+            registration
+                .canonical_handle_digest(&info.entry_id)
+                .as_str()
+        )
+    );
+    assert!(
+        rig.daemon
+            .registry()
+            .is_exact_accepted_process_replay(&info.entry_id, &registration)
+            .unwrap(),
+        "the persisted handoff still matches the registered process and its digest"
+    );
+    assert_ne!(launch.1.as_deref(), Some(launch.2.as_str()));
+}
+
+#[tokio::test]
+async fn a_misplaced_registered_allowance_refuses_before_launch_append() {
+    let rig = Rig::start().await;
+    let info = rig.created("claude-code-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"private goal").await;
+    let harness = Child::sleeping();
+    let mut registration = harness.registration(info.process_generation);
+    registration.handle.native_binary = None;
+    registration.handle.argv = vec![
+        "--allowedTools".into(),
+        "Bash(python3 demo.py *)".into(),
+        "extra".into(),
+        "--".into(),
+        "<goal>".into(),
+    ];
+    let registered = rig.register(&info.entry_id, &registration).await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    assert_eq!(
+        rig.launch(&info.entry_id, &launch_request(&goal))
+            .await
+            .status(),
+        409
+    );
+    assert!(
+        !rig.records(&info.entry_id)
+            .iter()
+            .any(|record| matches!(record, CaptureRecord::Launch { .. }))
+    );
+}
+
+#[tokio::test]
+async fn a_short_registered_allowance_refuses_without_a_launch_or_panic() {
+    let rig = Rig::start().await;
+    let info = rig.created("claude-code-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"private goal").await;
+    let harness = Child::sleeping();
+    let mut registration = harness.registration(info.process_generation);
+    registration.handle.native_binary = None;
+    registration.handle.argv = vec!["--allowedTools".into()];
+    let registered = rig.register(&info.entry_id, &registration).await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    assert_eq!(
+        rig.launch(&info.entry_id, &launch_request(&goal))
+            .await
+            .status(),
+        409
+    );
+    assert!(
+        !rig.records(&info.entry_id)
+            .iter()
+            .any(|record| matches!(record, CaptureRecord::Launch { .. }))
+    );
+}
+
+#[tokio::test]
+async fn a_default_launch_does_not_revalidate_an_unrelated_stored_digest() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"private goal").await;
+    let harness = Child::sleeping();
+    let registration = harness.registration(info.process_generation);
+    assert_eq!(
+        rig.register(&info.entry_id, &registration).await.status(),
+        204
+    );
+    let registry = rig.daemon.registry();
+    let mut row: serde_json::Value =
+        serde_json::from_slice(&registry.raw_json_for_test(&info.entry_id).unwrap().unwrap())
+            .unwrap();
+    row["process_handoff_digest"] = serde_json::json!("0".repeat(64));
+    registry
+        .replace_raw_json_for_test(&info.entry_id, &serde_json::to_vec(&row).unwrap())
+        .unwrap();
+    assert_eq!(
+        rig.launch(&info.entry_id, &launch_request(&goal))
+            .await
+            .status(),
+        204
+    );
+    let records = rig.records(&info.entry_id);
+    let launch = records
+        .iter()
+        .find(|record| matches!(record, CaptureRecord::Launch { .. }))
+        .unwrap();
+    assert!(matches!(
+        launch,
+        CaptureRecord::Launch {
+            allowed_tool_rule: None,
+            process_handoff_digest: None,
+            ..
+        }
+    ));
+}
+
+/// The stream-less gaps chained after the entry's Launch, by reason.
+fn gaps_after_launch(records: &[CaptureRecord]) -> Vec<GapReason> {
+    let launch = position(records, |r| matches!(r, CaptureRecord::Launch { .. }));
+    records[launch + 1..]
+        .iter()
+        .filter_map(|record| match record {
+            CaptureRecord::Gap {
+                stream: None,
+                reason,
+                lost_bytes: None,
+                ..
+            } => Some(*reason),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A shipped family declares one required scoped source; no scope records one gap.
+/// V1 supplemental stores add no gaps. A controlled family retains run-HOME capture.
+#[tokio::test]
+async fn a_launch_marks_each_store_it_does_not_read() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let mut request = launch_request(&goal);
+    request.native_scope = None;
+    let launched = rig.launch(&info.entry_id, &request).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    let stores = 1;
+    assert_eq!(
+        gaps_after_launch(&rig.records(&info.entry_id)),
+        vec![GapReason::SourceChanged; stores]
+    );
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(capture.gap_count, stores as u64);
+    assert_eq!(capture.capture, CaptureState::Incomplete);
+
+    let (rig, _native, _connectors) = native_rig().await;
+    let info = rig.created("capture-dev").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    assert_eq!(gaps_after_launch(&rig.records(&info.entry_id)), vec![]);
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(capture.gap_count, 0);
+    assert_eq!(capture.capture, CaptureState::Recording);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_scope_excludes_other_runs_files() {
+    use base64::Engine as _;
+    for (profile, directory, own_name, other_name) in [
+        (
+            "codex-cli",
+            "sessions/2026/09/30",
+            "rollout-now-test-session.jsonl",
+            "rollout-now-foreign.jsonl",
+        ),
+        (
+            "claude-code-cli",
+            "projects/workspace",
+            "test-session.jsonl",
+            "foreign.jsonl",
+        ),
+    ] {
+        let rig = Rig::start().await;
+        let native = rig.root.join("config-home").join(directory);
+        std::fs::create_dir_all(&native).unwrap();
+        std::fs::write(native.join(own_name), b"own session\n").unwrap();
+        std::fs::write(
+            native.join(other_name),
+            b"foreign session must never persist\n",
+        )
+        .unwrap();
+        // V1 supplemental store content must also remain outside this capture.
+        std::fs::write(
+            rig.root.join("config-home/history.jsonl"),
+            b"foreign history\n",
+        )
+        .unwrap();
+        let info = rig.created(profile).await;
+        let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+        let request = launch_request(&goal);
+        assert_eq!(rig.launch(&info.entry_id, &request).await.status(), 204);
+        rig.records_when(&info.entry_id, |records| native_producer(records).is_some())
+            .await;
+        // A retried Launch neither appends another Launch nor rebinds to a foreign scope.
+        let mut retry = request.clone();
+        retry.native_scope = Some("foreign".into());
+        assert_eq!(rig.launch(&info.entry_id, &retry).await.status(), 204);
+        assert_eq!(rig.seal(&info.entry_id, None).await.status(), 200);
+        let records = rig.records(&info.entry_id);
+        let native_opens: Vec<_> = records
+            .iter()
+            .filter_map(|record| match record {
+                CaptureRecord::Open {
+                    stream,
+                    source: CaptureSource::Native,
+                    metadata,
+                    ..
+                } => Some((stream, &metadata.label)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(native_opens.len(), 1, "{records:?}");
+        assert!(
+            native_opens[0].1.contains(own_name),
+            "{:?}",
+            native_opens[0]
+        );
+        let retained: Vec<u8> = records
+            .iter()
+            .filter_map(|record| match record {
+                CaptureRecord::Segment {
+                    stream, data_b64, ..
+                } if stream == native_opens[0].0 => Some(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(data_b64)
+                        .unwrap(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(retained, b"own session\n");
+        assert_eq!(gaps_after_launch(&records), vec![]);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|r| matches!(r, CaptureRecord::Launch { .. }))
+                .count(),
+            1
+        );
+    }
+}
+
+/// Incident H-17: a refusal test that points `config_home` into the live `HOME` must never
+/// run against it. On source that has regressed (or not yet gained) a refusal, the daemon
+/// ACCEPTS `$HOME/.hermes` and its native capture creates `$HOME/.hermes/sessions`: the first
+/// RED run of the Hermes `.hermes` refusal did exactly that, in the participant's real home.
+///
+/// So the refusals run in a CHILD of this test binary whose `HOME` is a private temporary
+/// directory (the pattern `shipped_connectors::the_child_half_of_the_connectors_dir_fallback`
+/// uses). Whatever a regressed daemon creates, it creates there. This parent only starts the
+/// child, and brackets it with a guard on the real home: the same three app-wide harness
+/// directories must exist, or not, exactly as before.
+#[test]
+fn refused_native_roots_run_under_a_private_home_and_never_touch_the_real_one() {
+    let real = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let app_wide = |home: &Option<std::path::PathBuf>| {
+        [".hermes", ".codex", ".claude"].map(|name| {
+            home.as_ref()
+                .map(|h| std::fs::symlink_metadata(h.join(name)).is_ok())
+        })
+    };
+    let before = app_wide(&real);
+    let private = tempfile::tempdir().expect("a private home");
+    let private_home = private.path().canonicalize().expect("a resolvable home");
+    assert_ne!(Some(private_home.clone()), real.clone());
+
+    let out = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "--exact",
+            CHILD_TEST,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("HOME", &private_home)
+        .env(PRIVATE_HOME_ENV, &private_home)
+        .output()
+        .expect("the child runs");
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // The guard comes first: even a failing child must not have reached the real home.
+    assert_eq!(
+        app_wide(&real),
+        before,
+        "the real HOME's app-wide harness directories changed while the child ran"
+    );
+    assert!(out.status.success(), "the child failed:\n{printed}");
+    assert!(
+        printed.contains("1 passed"),
+        "the child did not run its one test:\n{printed}"
+    );
+    // And nothing was created in the private home either: a refusal creates nothing.
+    for name in [".hermes", ".codex", ".claude"] {
+        assert!(
+            !private_home.join(name).exists(),
+            "the refusals created {name} in the private home"
+        );
+    }
+}
+
+const CHILD_TEST: &str = "refused_native_roots_child_half";
+const PRIVATE_HOME_ENV: &str = "GOALCUP_TEST_PRIVATE_HOME";
+
+/// Run only by [`refused_native_roots_run_under_a_private_home_and_never_touch_the_real_one`].
+/// It refuses to run against any other `HOME`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "run by its parent, with a private HOME"]
+async fn refused_native_roots_child_half() {
+    let Some(private) = std::env::var_os(PRIVATE_HOME_ENV) else {
+        println!("${PRIVATE_HOME_ENV} is unset: this case is run by its parent, not alone.");
+        return;
+    };
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+    assert_eq!(
+        home,
+        std::path::PathBuf::from(private),
+        "the child's HOME is the parent's private directory, and nothing else"
+    );
+    assert!(
+        home.starts_with(std::env::temp_dir().canonicalize().unwrap())
+            || home.starts_with("/private/var")
+            || home.starts_with("/var"),
+        "{} is not a temporary directory",
+        home.display()
+    );
+    let rig = Rig::start().await;
+    let link = rig.root.join("home-link");
+    std::os::unix::fs::symlink(&home, &link).unwrap();
+    for config_home in [
+        home.clone(),
+        home.join(".codex"),
+        home.join(".claude/nested"),
+        link.join(".codex/nested"),
+        link.join(".claude"),
+        home.join(".hermes"),
+        home.join(".hermes/profiles/nested"),
+        link.join(".hermes"),
+        std::path::PathBuf::from("relative"),
+    ] {
+        let workspace = rig.workspace("refused-native-root");
+        let mut request = rig.request("codex-cli", &workspace, RESERVE);
+        request.config_home = config_home.display().to_string();
+        let response = rig.create_request(&request).await;
+        assert!(
+            matches!(response.status(), 400 | 409),
+            "{}: {}",
+            config_home.display(),
+            response.body()
+        );
+        assert!(!workspace.exists());
+        assert!(
+            std::fs::read_dir(rig.config.artifact_root.join("artifacts"))
+                .map_or(true, |mut dir| dir.next().is_none())
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_scope_unavailable_records_named_gap() {
+    for scope in [None, Some("../foreign"), Some(""), Some("bad.scope")] {
+        for profile in ["codex-cli", "claude-code-cli"] {
+            let rig = Rig::start().await;
+            let info = rig.created(profile).await;
+            let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+            let mut request = launch_request(&goal);
+            request.native_scope = scope.map(str::to_owned);
+            assert_eq!(rig.launch(&info.entry_id, &request).await.status(), 204);
+            assert_eq!(rig.seal(&info.entry_id, None).await.status(), 200);
+            let records = rig.records(&info.entry_id);
+            assert_eq!(gaps_after_launch(&records), vec![GapReason::SourceChanged]);
+            assert!(native_producer(&records).is_none());
+            assert_eq!(local_finishes(&records), 1);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scoped_native_source_never_opened_is_a_gap() {
+    for vanished in [false, true] {
+        let rig = Rig::start().await;
+        let source = rig
+            .root
+            .join("config-home/sessions/2026/09/30/rollout-now-test-session.jsonl");
+        let info = rig.created("codex-cli").await;
+        let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+        assert_eq!(
+            rig.launch(&info.entry_id, &launch_request(&goal))
+                .await
+                .status(),
+            204
+        );
+        if vanished {
+            std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+            std::fs::write(&source, b"own native bytes\n").unwrap();
+            rig.records_when(&info.entry_id, |records| native_producer(records).is_some())
+                .await;
+            std::fs::remove_file(&source).unwrap();
+        }
+        assert_eq!(rig.seal(&info.entry_id, None).await.status(), 200);
+        let records = rig.records(&info.entry_id);
+        assert_eq!(gaps_after_launch(&records), vec![GapReason::SourceChanged]);
+        assert_eq!(local_finishes(&records), 1);
+    }
+    // A fixed source root that disappears after create cannot be constructed at Launch.
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    std::fs::remove_dir(rig.root.join("config-home/sessions")).unwrap();
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(rig.seal(&info.entry_id, None).await.status(), 200);
+    assert_eq!(
+        gaps_after_launch(&rig.records(&info.entry_id)),
+        vec![GapReason::SourceChanged]
+    );
+}
+
+#[tokio::test]
+async fn local_capture_status_has_no_signed_duration() {
+    let (rig, _native, _connectors) = native_rig().await;
+    let info = rig.created("capture-dev").await;
+    let created = rig.status(&info.entry_id).await;
+    created.verify_with(&info.run_public_key).unwrap();
+    let payload = &created.payload;
+    assert_eq!(payload.entry_id, info.entry_id);
+    assert_eq!(payload.deadline_at, None);
+    assert_eq!(payload.seconds_remaining, None);
+    assert_eq!(payload.started_at, None);
+    assert_eq!(payload.sealed_at, None);
+    assert!(!payload.detail.contains("synced"), "{}", payload.detail);
+    let capture = payload
+        .capture
+        .clone()
+        .expect("a v5 status carries its capture");
+    assert_eq!(capture.run, RunState::Starting);
+    assert_eq!(capture.capture, CaptureState::Starting);
+    assert_eq!(capture.delivery, DeliveryState::LocalOnly);
+    assert_eq!(capture.anchor, AnchorState::LocalOnly);
+    assert_eq!(capture.analysis, AnalysisState::NotRun);
+    assert_eq!(capture.gap_count, 0);
+    assert!(!capture.assistance_observed);
+
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    let launched = rig.status(&info.entry_id).await;
+    launched.verify_with(&info.run_public_key).unwrap();
+    let capture = launched.payload.capture.unwrap();
+    assert_eq!(capture.run, RunState::Running);
+    assert_eq!(capture.capture, CaptureState::Recording);
+    assert_eq!(launched.payload.deadline_at, None);
+    assert_eq!(launched.payload.seconds_remaining, None);
+}
+
+#[tokio::test]
+async fn status_carries_the_entrys_own_admission_counts() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let fresh = rig.status(&info.entry_id).await.payload;
+    assert_eq!(
+        (fresh.producers_consumed, fresh.admissions_refused),
+        (Some(0), Some(0))
+    );
+
+    // Refused before authentication: a listener-wide count, not this entry's.
+    let mut wrong = info.clone();
+    wrong.ingest_secret = "not-the-secret-not-the-secret-not-the-secret".to_string();
+    tokio::task::spawn_blocking(move || Wire::connect(&wrong, &fresh_id()).hang_up())
+        .await
+        .unwrap();
+    let after_wrong = rig.status(&info.entry_id).await.payload;
+    assert_eq!(
+        (
+            after_wrong.producers_consumed,
+            after_wrong.admissions_refused
+        ),
+        (Some(0), Some(0))
+    );
+
+    // Authenticated: the entry consumed the producer ID, and its owner admitted the epoch.
+    let wired = info.clone();
+    tokio::task::spawn_blocking(move || Wire::connect(&wired, &wired.producer_id).hang_up())
+        .await
+        .unwrap();
+    let after_right = rig.status(&info.entry_id).await.payload;
+    assert_eq!(
+        (
+            after_right.producers_consumed,
+            after_right.admissions_refused
+        ),
+        (Some(1), Some(0))
+    );
+}
+
+#[tokio::test]
+async fn both_shipped_manifests_compile_at_preflight() {
+    let rig = Rig::start().await;
+    for profile in ["codex-cli", "claude-code-cli"] {
+        let info = rig.created(profile).await;
+        assert_eq!(info.reserved_bytes, RESERVE, "{profile}");
+    }
+
+    // A connector whose carried pattern has no streaming recognizer: the daemon refuses the
+    // capture before it reserves, creates or authorizes anything.
+    let connectors = dev_connectors(|harness| {
+        let start = harness.find("[redaction]").unwrap();
+        let end = harness[start..].find("[[capture.hosts]]").unwrap() + start;
+        harness.replace_range(
+            start..end,
+            "[redaction]\nextra_patterns = [{ kind = \"custom\", regex = \"custom-[0-9]{8}\" }]\n\n",
+        );
+    });
+    let dir = connectors.path().to_path_buf();
+    let dev_rig = Rig::start_with(move |config| config.connectors_dir = dir).await;
+
+    let workspace = dev_rig.workspace("refused");
+    let refused = dev_rig.create("capture-dev", &workspace, RESERVE).await;
+    assert_eq!(refused.status(), 422, "{}", refused.body());
+    assert!(
+        refused.body().contains("preflight_failed"),
+        "{}",
+        refused.body()
+    );
+    assert!(
+        refused.body().contains("custom"),
+        "the refusal names the pattern's kind"
+    );
+    assert!(
+        !workspace.exists(),
+        "a refused capture creates no workspace"
+    );
+    let artifacts = dev_rig.config.artifact_root.join("artifacts");
+    assert!(
+        std::fs::read_dir(&artifacts).map_or(true, |mut dir| dir.next().is_none()),
+        "a refused capture leaves no entry artifacts"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_never_rebuilds_a_capture_row_as_a_legacy_runtime() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let mut launch = launch_request(&goal);
+    // This fixture isolates reopen behavior: no native producer is bound.
+    launch.native_scope = None;
+    rig.launch(&info.entry_id, &launch).await;
+    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+    let before = std::fs::read(&chain).unwrap();
+    let records_before = rig.records(&info.entry_id).len();
+
+    let rig = rig.restart().await;
+    // Reopened for status and seal: the Launch appended before the stop is durable.
+    let reopened = rig.status(&info.entry_id).await;
+    reopened.verify_with(&info.run_public_key).unwrap();
+    let capture = reopened.payload.capture.unwrap();
+    assert_eq!(capture.run, RunState::Running);
+    // No producer was live at the stop, as after a crash, so the stop chained nothing. The
+    // reopened entry admits nothing, and its one stream-less gap says so, beside the launch's
+    // one required-source gap for the unavailable native scope.
+    let unread = 1;
+    assert_eq!(capture.gap_count, unread + 1);
+    assert_eq!(capture.capture, CaptureState::Incomplete);
+    let after = std::fs::read(&chain).unwrap();
+    assert_eq!(
+        capture.storage.durable.map(|d| d.chain_bytes),
+        Some(after.len() as u64)
+    );
+    let listed = rig.daemon.entries().unwrap();
+    assert!(listed.iter().any(|e| e.entry_id == info.entry_id));
+    let cycles = rig.daemon.cycle_errors();
+    assert_eq!(
+        (cycles.tick, cycles.last),
+        (0, None),
+        "nothing failed to rebuild"
+    );
+    // The reopen gap is the one record the restart adds: no legacy restart record.
+    assert!(after.starts_with(&before));
+    let records = rig.records(&info.entry_id);
+    assert_eq!(records.len(), records_before + 1);
+    assert!(matches!(
+        records.last(),
+        Some(CaptureRecord::Gap {
+            stream: None,
+            reason: GapReason::IngestLost,
+            ..
+        })
+    ));
+}
+
+/// A harness registered before its launch is recorded is already running: when the daemon
+/// goes away in between, as a crash would, the reopened entry chains that loss too.
+#[tokio::test]
+async fn a_registered_run_reopened_before_its_launch_chains_the_loss() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let harness = Child::sleeping();
+    let registered = rig
+        .register(
+            &info.entry_id,
+            &harness.registration(info.process_generation),
+        )
+        .await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+
+    let rig = rig.restart().await;
+    let records = rig.records(&info.entry_id);
+    assert!(
+        matches!(
+            records.last(),
+            Some(CaptureRecord::Gap {
+                stream: None,
+                reason: GapReason::IngestLost,
+                ..
+            })
+        ),
+        "{records:#?}"
+    );
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(capture.gap_count, 1);
+    assert_eq!(capture.capture, CaptureState::Incomplete);
+}
+
+/// Reopening retains exactly enough authority to report and seal. Neither an unfinished entry
+/// that has no goal nor one whose goal was already recorded may regain any creation-time
+/// mutation authority after the daemon restarts.
+#[tokio::test]
+async fn a_reopened_capture_accepts_only_status_and_seal() {
+    let rig = Rig::start().await;
+    let pre_goal = rig.created("codex-cli").await;
+    let post_goal = rig.created("codex-cli").await;
+    let goal = rig
+        .goal_accepted(&post_goal.entry_id, b"write hello.txt")
+        .await;
+    let child = Child::sleeping();
+    let registration = child.registration(pre_goal.process_generation);
+
+    let rig = rig.restart().await;
+    let pre_goal_snapshot = reopened_capture_snapshot(&rig, &pre_goal.entry_id);
+    let post_goal_snapshot = reopened_capture_snapshot(&rig, &post_goal.entry_id);
+
+    let assert_unchanged = || {
+        assert_eq!(
+            reopened_capture_snapshot(&rig, &pre_goal.entry_id),
+            pre_goal_snapshot,
+            "the pre-goal capture changed"
+        );
+        assert_eq!(
+            reopened_capture_snapshot(&rig, &post_goal.entry_id),
+            post_goal_snapshot,
+            "the post-goal capture changed"
+        );
+    };
+    let recovered_conflict = |entry_id: &str| {
+        format!("conflict: entry {entry_id} is a recovered capture restricted to status and seal")
+    };
+    let resume_conflict = format!(
+        "conflict: entry {} is a v5 capture entry, and a capture entry cannot be resumed: seal it instead",
+        post_goal.entry_id
+    );
+
+    let response = rig.goal(&pre_goal.entry_id, b"a late goal").await;
+    assert_error_identity(&response, &recovered_conflict(&pre_goal.entry_id));
+    assert_unchanged();
+
+    let response = rig.register(&pre_goal.entry_id, &registration).await;
+    assert_error_identity(&response, &recovered_conflict(&pre_goal.entry_id));
+    assert_unchanged();
+
+    let response = rig
+        .launch(&post_goal.entry_id, &launch_request(&goal))
+        .await;
+    assert_error_identity(&response, &recovered_conflict(&post_goal.entry_id));
+    assert_unchanged();
+
+    let response = rig.abandon(&pre_goal.entry_id).await;
+    assert_error_identity(&response, &recovered_conflict(&pre_goal.entry_id));
+    assert_unchanged();
+
+    let response = rig
+        .client
+        .post_body(
+            &entry_route(&post_goal.entry_id, SUFFIX_RESUME),
+            &ResumeRequest {
+                expected_generation: post_goal.process_generation,
+            },
+        )
+        .await;
+    assert_error_identity(&response, &resume_conflict);
+    assert_unchanged();
+
+    let response = rig
+        .client
+        .get(&entry_route(&post_goal.entry_id, SUFFIX_RESUME_PREVIEW))
+        .await;
+    assert_error_identity(&response, &resume_conflict);
+    assert_unchanged();
+
+    rig.status(&pre_goal.entry_id)
+        .await
+        .verify_with(&pre_goal.run_public_key)
+        .expect("the pre-goal recovered status verifies");
+    rig.status(&post_goal.entry_id)
+        .await
+        .verify_with(&post_goal.run_public_key)
+        .expect("the post-goal recovered status verifies");
+    assert_unchanged();
+
+    let post_goal_chain_before = rig.chain(&post_goal.entry_id);
+    let sealed = rig.seal(&post_goal.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let report: CaptureFinishReport = sealed.json().expect("the local finish report");
+    let post_goal_chain_after = rig.chain(&post_goal.entry_id);
+    let post_goal_chain_bytes_after = std::fs::read(
+        rig.trace_dir(&post_goal.entry_id)
+            .join(goalcup_protocol::export::CHAIN_FILE),
+    )
+    .expect("the sealed chain bytes read");
+    assert!(
+        post_goal_chain_bytes_after.starts_with(&post_goal_snapshot.chain),
+        "seal appends after the exact recovered chain bytes"
+    );
+    assert_eq!(
+        post_goal_chain_after.len(),
+        post_goal_chain_before.len() + 1,
+        "a v5 local finish appends exactly one terminal envelope"
+    );
+    assert_eq!(
+        &post_goal_chain_after[..post_goal_chain_before.len()],
+        post_goal_chain_before.as_slice(),
+        "seal leaves every pre-terminal envelope byte-for-byte represented by the same value"
+    );
+    let terminal = post_goal_chain_after
+        .last()
+        .expect("the LocalFinish is the terminal envelope");
+    let previous = post_goal_chain_before
+        .last()
+        .expect("the recovered chain has its baseline and goal");
+    let EventBody::Capture {
+        record:
+            CaptureRecord::LocalFinish {
+                seal_manifest_sha256,
+                ..
+            },
+    } = &terminal.body
+    else {
+        panic!("the only suffix envelope is LocalFinish: {terminal:#?}");
+    };
+    assert!(
+        !post_goal_chain_after[post_goal_chain_before.len()..]
+            .iter()
+            .any(|envelope| matches!(envelope.body, EventBody::Seal { .. })),
+        "EventBody::Seal belongs to the legacy V1 seal path, not v5 LocalFinish"
+    );
+    assert_eq!(terminal.link.seq, previous.link.seq + 1);
+    assert_eq!(terminal.link.prev, previous.link.hash);
+    assert_eq!(
+        terminal.link.hash,
+        terminal
+            .expected_hash(&previous.link.hash)
+            .expect("the terminal envelope hashes")
+    );
+    assert_eq!(report.terminal_seq, Some(terminal.link.seq));
+    let seal_path = rig.trace_dir(&post_goal.entry_id).join("seal.json");
+    let seal_bytes = std::fs::read(&seal_path).expect("seal publishes its terminal manifest");
+    assert_eq!(
+        seal_manifest_sha256,
+        &hex::encode(Sha256::digest(&seal_bytes)),
+        "LocalFinish binds the exact seal.json bytes"
+    );
+    let sealed_status = rig.status(&post_goal.entry_id).await;
+    sealed_status
+        .verify_with(&post_goal.run_public_key)
+        .expect("the sealed recovered status verifies");
+    let post_seal_row = rig
+        .daemon
+        .registry()
+        .get(&post_goal.entry_id)
+        .expect("the registry reads after seal")
+        .expect("the sealed capture row remains");
+    assert_eq!(post_seal_row.sealed_at, sealed_status.payload.sealed_at);
+    let mut expected_post_seal_row = post_goal_snapshot.row.clone();
+    expected_post_seal_row.sealed_at = post_seal_row.sealed_at.clone();
+    let expected_capture = expected_post_seal_row
+        .capture
+        .as_mut()
+        .expect("the expected row is a capture");
+    expected_capture.finished = Some(report.clone());
+    expected_capture.sealed_status = Some(
+        sealed_status
+            .payload
+            .capture
+            .clone()
+            .expect("the sealed status carries capture state"),
+    );
+    assert_eq!(
+        post_seal_row, expected_post_seal_row,
+        "seal changes only sealed_at, the finish report, and the retained sealed status"
+    );
+    assert_eq!(
+        tree_inventory(&post_goal_snapshot.row.workspace),
+        post_goal_snapshot.workspace,
+        "seal only inventories the workspace"
+    );
+    let mut before_artifacts = post_goal_snapshot.artifacts.clone();
+    let mut after_artifacts = tree_inventory(&post_goal_snapshot.row.artifact_dir);
+    assert!(
+        after_artifacts
+            .remove(&PathBuf::from("trace/seal.json"))
+            .is_some(),
+        "seal.json is the one new artifact"
+    );
+    before_artifacts.remove(&PathBuf::from("trace/chain.jsonl"));
+    after_artifacts.remove(&PathBuf::from("trace/chain.jsonl"));
+    assert_eq!(
+        after_artifacts, before_artifacts,
+        "seal changes only chain.jsonl and adds seal.json"
+    );
+    assert_eq!(
+        reopened_capture_snapshot(&rig, &pre_goal.entry_id),
+        pre_goal_snapshot,
+        "sealing the other recovered capture changes nothing here"
+    );
+}
+
+#[tokio::test]
+async fn an_unreservable_chain_refuses_creation_and_leaves_nothing() {
+    let rig = Rig::start().await;
+    let workspace = rig.workspace("too-big");
+    let refused = rig.create("codex-cli", &workspace, 1 << 60).await;
+    assert_eq!(refused.status(), 422, "{}", refused.body());
+    assert!(refused.body().contains("reserve"), "{}", refused.body());
+    assert!(!workspace.exists(), "no workspace is left behind");
+    let artifacts = rig.config.artifact_root.join("artifacts");
+    assert!(
+        std::fs::read_dir(&artifacts).map_or(true, |mut dir| dir.next().is_none()),
+        "no entry artifacts are left behind"
+    );
+    let retried = rig.create("codex-cli", &workspace, RESERVE).await;
+    assert_eq!(
+        retried.status(),
+        200,
+        "the same workspace is free: {}",
+        retried.body()
+    );
+}
+
+#[tokio::test]
+async fn the_goal_producer_is_closed_inside_the_goal_sync() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let key = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let records = rig.records(&info.entry_id);
+    let closed: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            CaptureRecord::ProducerClosed {
+                producer,
+                final_seq,
+                ..
+            } => Some((producer.clone(), *final_seq)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        closed,
+        vec![(key.producer.clone(), Some(2))],
+        "Open, Bytes and End are the goal producer's sequences 0, 1 and 2"
+    );
+    assert!(matches!(
+        records.last(),
+        Some(CaptureRecord::ProducerClosed { .. })
+    ));
+    let chain = rig.chain(&info.entry_id);
+    let durable = rig
+        .status(&info.entry_id)
+        .await
+        .payload
+        .capture
+        .unwrap()
+        .storage
+        .durable;
+    assert_eq!(
+        durable.map(|d| d.seq),
+        Some(chain.len() as u64 - 1),
+        "the close is inside the sync that precedes the key"
+    );
+}
+
+#[tokio::test]
+async fn create_refuses_a_relative_run_home() {
+    let rig = Rig::start().await;
+    let workspace = rig.workspace("relative-home");
+    let mut request = rig.request("codex-cli", &workspace, RESERVE);
+    request.run_home = "relative/home".to_string();
+    let refused = rig.create_request(&request).await;
+    assert_eq!(refused.status(), 400, "{}", refused.body());
+    assert!(!workspace.exists());
+}
+
+#[tokio::test]
+async fn a_capture_process_registers_once_before_its_launch() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    assert_eq!(info.process_generation, 1);
+    let harness = Child::sleeping();
+    let registration = harness.registration(info.process_generation);
+
+    let registered = rig.register(&info.entry_id, &registration).await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    let replayed = rig.register(&info.entry_id, &registration).await;
+    assert_eq!(replayed.status(), 204, "an exact replay is acknowledged");
+    let decoy = Child::sleeping();
+    let second = rig
+        .register(&info.entry_id, &decoy.registration(info.process_generation))
+        .await;
+    assert_eq!(second.status(), 409, "{}", second.body());
+    let row = rig.daemon.registry().get(&info.entry_id).unwrap().unwrap();
+    assert_eq!(
+        row.last_process.map(|handle| handle.pid),
+        Some(harness.0.id())
+    );
+
+    // After the launch is recorded no process is admitted, even one never offered before.
+    let late = rig.created("codex-cli").await;
+    let goal = rig.goal_accepted(&late.entry_id, b"write hello.txt").await;
+    let launched = rig.launch(&late.entry_id, &launch_request(&goal)).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    let after = rig
+        .register(
+            &late.entry_id,
+            &harness.registration(late.process_generation),
+        )
+        .await;
+    assert_eq!(after.status(), 409, "{}", after.body());
+    let row = rig.daemon.registry().get(&late.entry_id).unwrap().unwrap();
+    assert_eq!(row.last_process, None);
+}
+
+#[tokio::test]
+async fn abandon_before_launch_leaves_nothing_and_later_is_refused() {
+    let rig = Rig::start().await;
+    let workspace = rig.workspace("abandoned");
+    let created = rig.create("codex-cli", &workspace, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+
+    let abandoned = rig.abandon(&info.entry_id).await;
+    assert_eq!(abandoned.status(), 204, "{}", abandoned.body());
+    assert!(
+        !rig.artifact_dir(&info.entry_id).exists(),
+        "the reserved chain is gone"
+    );
+    assert!(rig.daemon.registry().get(&info.entry_id).unwrap().is_none());
+    assert!(!workspace.exists(), "the still-empty workspace is gone");
+    let status = rig
+        .client
+        .get_no_token(&entry_route(&info.entry_id, SUFFIX_STATUS))
+        .await;
+    assert_eq!(status.status(), 404, "{}", status.body());
+    assert_eq!(rig.goal(&info.entry_id, b"again").await.status(), 404);
+    let again = rig.create("codex-cli", &workspace, RESERVE).await;
+    assert_eq!(
+        again.status(),
+        200,
+        "the workspace is free: {}",
+        again.body()
+    );
+
+    let launched = rig.created("codex-cli").await;
+    let goal = rig
+        .goal_accepted(&launched.entry_id, b"write hello.txt")
+        .await;
+    rig.launch(&launched.entry_id, &launch_request(&goal)).await;
+    let refused = rig.abandon(&launched.entry_id).await;
+    assert_eq!(refused.status(), 409, "{}", refused.body());
+    assert!(refused.body().contains("seal"), "{}", refused.body());
+    assert!(
+        rig.trace_dir(&launched.entry_id)
+            .join("chain.jsonl")
+            .exists()
+    );
+
+    let owned = rig.created("codex-cli").await;
+    let harness = Child::sleeping();
+    let registered = rig
+        .register(
+            &owned.entry_id,
+            &harness.registration(owned.process_generation),
+        )
+        .await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    let refused = rig.abandon(&owned.entry_id).await;
+    assert_eq!(
+        refused.status(),
+        409,
+        "a registered harness is sealed: {}",
+        refused.body()
+    );
+}
+
+#[tokio::test]
+async fn goal_limits_are_refused_before_the_one_shot_and_never_echoed() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let route = entry_route(&info.entry_id, SUFFIX_CAPTURE_GOAL);
+    let marker = "NEVER-ECHOED";
+    let mut not_utf8 = vec![0xff, 0xfe];
+    not_utf8.extend_from_slice(marker.as_bytes());
+    for (case, bytes) in [
+        ("empty", Vec::new()),
+        (
+            "over the goal bound",
+            vec![b'a'; goalcup_protocol::capture::MAX_GOAL_BYTES + 1],
+        ),
+        ("not UTF-8", not_utf8),
+    ] {
+        let refused = rig.goal(&info.entry_id, &bytes).await;
+        assert_eq!(refused.status(), 400, "{case}: {}", refused.body());
+        assert!(
+            !refused.body().contains(marker),
+            "{case}: {}",
+            refused.body()
+        );
+    }
+    let malformed = rig
+        .client
+        .post_body(
+            &route,
+            &serde_json::json!({ "bytes": [1], "extra": marker }),
+        )
+        .await;
+    assert_eq!(malformed.status(), 400, "{}", malformed.body());
+    assert!(!malformed.body().contains(marker), "{}", malformed.body());
+    let oversized = rig
+        .client
+        .post_body(
+            &route,
+            &serde_json::json!({ "bytes": vec![1u8; goalcup_protocol::capture::MAX_INGEST_FRAME_BYTES / 2] }),
+        )
+        .await;
+    assert_eq!(oversized.status(), 400, "{}", oversized.body());
+
+    rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+}
+
+#[tokio::test]
+async fn launch_refusals() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let unknown = StreamKey {
+        producer: fresh_id(),
+        stream: 1,
+    };
+    let early = rig.launch(&info.entry_id, &launch_request(&unknown)).await;
+    assert_eq!(early.status(), 409, "no goal yet: {}", early.body());
+
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let wrong = rig.launch(&info.entry_id, &launch_request(&unknown)).await;
+    assert_eq!(wrong.status(), 409, "another stream: {}", wrong.body());
+    let mut control = launch_request(&goal);
+    control.continuation = "exec\nsecond line".to_string();
+    let malformed = rig.launch(&info.entry_id, &control).await;
+    assert_eq!(malformed.status(), 400, "{}", malformed.body());
+    let mut long = launch_request(&goal);
+    long.harness_version = "9".repeat(goalcup_protocol::capture::MAX_METADATA_STRING_BYTES + 1);
+    assert_eq!(rig.launch(&info.entry_id, &long).await.status(), 400);
+
+    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    let again = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(again.status(), 204, "idempotent launch: {}", again.body());
+    let launches = rig
+        .records(&info.entry_id)
+        .iter()
+        .filter(|record| matches!(record, CaptureRecord::Launch { .. }))
+        .count();
+    assert_eq!(launches, 1);
+}
+
+fn connection(id: &str, event: ConnectionEvent) -> FrameEvent {
+    FrameEvent::Connection {
+        connection: id.to_string(),
+        event,
+    }
+}
+
+fn opened(already_open: bool) -> ConnectionEvent {
+    ConnectionEvent::Open {
+        alpn: None,
+        already_open,
+    }
+}
+
+fn request_open(connection: &str) -> FrameEvent {
+    FrameEvent::Open {
+        source: CaptureSource::WireRequest,
+        metadata: CaptureMeta {
+            wire: Some(WireIdentity {
+                connection: connection.to_string(),
+                exchange: 1,
+                message_index: None,
+            }),
+            label: "request".to_string(),
+            protocol_hint: None,
+            method: Some("POST".to_string()),
+            host: Some("api.example.test".to_string()),
+            path: Some("/v1/responses".to_string()),
+            status: None,
+            content_type: Some("application/json".to_string()),
+        },
+    }
+}
+
+fn bytes(data: &[u8]) -> FrameEvent {
+    FrameEvent::Bytes {
+        offset: 0,
+        data: data.to_vec(),
+    }
+}
+
+/// A wire exchange that ends cleanly: Connection, Open, Bytes, End, Connection close.
+fn clean_exchange(wire: &mut Wire, id: &str) {
+    wire.send(0, connection(id, opened(false)));
+    wire.send(1, request_open(id));
+    wire.send(1, bytes(br#"{"input":"hello"}"#));
+    wire.send(
+        1,
+        FrameEvent::End {
+            reason: EndReason::Complete,
+        },
+    );
+    let close = ConnectionEvent::Close {
+        outcome: ConnectionOutcome::Complete,
+    };
+    wire.send(0, connection(id, close));
+}
+
+/// One epoch of `info`'s own producer: a clean exchange, then its close.
+async fn clean_epoch(info: &CaptureWorkspaceInfo) {
+    let wired = info.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut wire = Wire::connect(&wired, &wired.producer_id);
+        clean_exchange(&mut wire, &fresh_id());
+        wire.close();
+    })
+    .await
+    .unwrap();
+}
+
+fn closed_by(records: &[CaptureRecord], producer: &str) -> Option<Option<u64>> {
+    records.iter().find_map(|record| match record {
+        CaptureRecord::ProducerClosed {
+            producer: p,
+            final_seq,
+            ..
+        } if p == producer => Some(*final_seq),
+        _ => None,
+    })
+}
+
+fn position(records: &[CaptureRecord], matches: impl Fn(&CaptureRecord) -> bool) -> usize {
+    records
+        .iter()
+        .position(matches)
+        .expect("the record is in the chain")
+}
+
+fn names_producer(record: &CaptureRecord, producer: &str) -> bool {
+    match record {
+        CaptureRecord::Open { stream, .. }
+        | CaptureRecord::Segment { stream, .. }
+        | CaptureRecord::End { stream, .. }
+        | CaptureRecord::Gap {
+            stream: Some(stream),
+            ..
+        } => stream.producer == producer,
+        CaptureRecord::Connection { producer: p, .. }
+        | CaptureRecord::ProducerClosed { producer: p, .. } => p == producer,
+        _ => false,
+    }
+}
+
+fn wire_gap(records: &[CaptureRecord], producer: &str, reason: GapReason) -> bool {
+    records.iter().any(|record| {
+        matches!(record, CaptureRecord::Gap { stream: Some(s), reason: r, .. }
+            if s.producer == producer && *r == reason)
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wire_native_and_goal_share_one_chain() {
+    let (rig, native_dir, _connectors) = native_rig().await;
+    let info = rig.created("capture-dev").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    std::fs::write(
+        native_dir.join("rollout-fixture-test-session.jsonl"),
+        b"{\"type\":\"native\"}\n",
+    )
+    .unwrap();
+    clean_epoch(&info).await;
+
+    let producer = info.producer_id.clone();
+    let native = |record: &CaptureRecord| {
+        matches!(
+            record,
+            CaptureRecord::Open {
+                source: CaptureSource::Native,
+                ..
+            }
+        )
+    };
+    let records = rig
+        .records_when(&info.entry_id, |records| {
+            closed_by(records, &producer).is_some() && records.iter().any(native)
+        })
+        .await;
+    let sources: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            CaptureRecord::Open {
+                source, metadata, ..
+            } => Some((*source, metadata.protocol_hint.clone())),
+            _ => None,
+        })
+        .collect();
+    for expected in [
+        (CaptureSource::Goal, None),
+        (CaptureSource::WireRequest, None),
+        (CaptureSource::Native, Some("codex-jsonl".to_string())),
+    ] {
+        assert!(sources.contains(&expected), "{expected:?} in {sources:?}");
+    }
+    let status = rig.status(&info.entry_id).await.payload;
+    assert_eq!(
+        (status.producers_consumed, status.admissions_refused),
+        (Some(1), Some(0))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn producer_close_after_all_frames_is_clean() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    clean_epoch(&info).await;
+    let producer = info.producer_id.clone();
+    let records = rig
+        .records_when(&info.entry_id, |records| {
+            closed_by(records, &producer).is_some()
+        })
+        .await;
+    // Connection 0, Open 1, Bytes 2, End 3, Connection close 4.
+    assert_eq!(closed_by(&records, &producer), Some(Some(4)));
+    let closes = records
+        .iter()
+        .filter(|record| names_producer(record, &producer))
+        .filter(|record| matches!(record, CaptureRecord::ProducerClosed { .. }))
+        .count();
+    assert_eq!(closes, 1);
+    assert!(
+        !records
+            .iter()
+            .any(|r| matches!(r, CaptureRecord::Gap { .. }))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn eof_without_producer_close_marks_unknown_tail() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let wired = info.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut wire = Wire::connect(&wired, &wired.producer_id);
+        let id = fresh_id();
+        wire.send(0, connection(&id, opened(false)));
+        wire.send(1, request_open(&id));
+        wire.send(1, bytes(b"partial"));
+        wire.hang_up();
+    })
+    .await
+    .unwrap();
+    let producer = info.producer_id.clone();
+    let records = rig
+        .records_when(&info.entry_id, |records| {
+            wire_gap(records, &producer, GapReason::IngestLost)
+        })
+        .await;
+    assert_eq!(
+        closed_by(&records, &producer),
+        None,
+        "EOF is never a clean close"
+    );
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(capture.capture, CaptureState::Incomplete);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_cannot_hide_missing_sequence() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let wired = info.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut wire = Wire::connect(&wired, &wired.producer_id);
+        clean_exchange(&mut wire, &fresh_id());
+        // Frames 0..=4 were sent; a Close claiming 6 would hide two that never arrived.
+        wire.close_claiming(Some(6));
+    })
+    .await
+    .unwrap();
+    let producer = info.producer_id.clone();
+    let records = rig
+        .records_when(&info.entry_id, |records| {
+            records
+                .iter()
+                .any(|record| matches!(record, CaptureRecord::Gap { stream: None, .. }))
+        })
+        .await;
+    assert_eq!(closed_by(&records, &producer), None);
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(capture.capture, CaptureState::Incomplete);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recorder_recovery_preserves_gap_without_assistance() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let fresh = fresh_id();
+    let (wired, recovered) = (info.clone(), fresh.clone());
+    tokio::task::spawn_blocking(move || {
+        let id = fresh_id();
+        let mut lost = Wire::connect(&wired, &wired.producer_id);
+        lost.send(0, connection(&id, opened(false)));
+        lost.send(1, request_open(&id));
+        lost.send(1, bytes(b"half a request"));
+        lost.hang_up();
+        let mut wire = Wire::connect(&wired, &recovered);
+        let recovery = FrameEvent::Recovery {
+            previous_producer: wired.producer_id.clone(),
+            reason: GapReason::IngestLost,
+        };
+        wire.send(0, recovery);
+        wire.send(0, connection(&id, opened(true)));
+        wire.close();
+    })
+    .await
+    .unwrap();
+    let records = rig
+        .records_when(&info.entry_id, |records| {
+            closed_by(records, &fresh).is_some()
+        })
+        .await;
+    let lost_gap = position(
+        &records,
+        |record| matches!(record, CaptureRecord::Gap { stream: Some(s), .. } if s.producer == info.producer_id),
+    );
+    let recovery = position(
+        &records,
+        |record| matches!(record, CaptureRecord::Recovery { producer, .. } if *producer == fresh),
+    );
+    assert!(
+        lost_gap < recovery,
+        "the old epoch's loss precedes its Recovery"
+    );
+    assert!(
+        !records
+            .iter()
+            .any(|r| matches!(r, CaptureRecord::Assistance { .. }))
+    );
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert!(!capture.assistance_observed);
+    assert_eq!(capture.capture, CaptureState::Incomplete, "the gap stays");
+}
+
+/// The native producer's stream key, once its Open is chained.
+fn native_producer(records: &[CaptureRecord]) -> Option<String> {
+    records.iter().find_map(|record| match record {
+        CaptureRecord::Open {
+            stream,
+            source: CaptureSource::Native,
+            ..
+        } => Some(stream.producer.clone()),
+        _ => None,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn orphan_lineage_recovery_interrupts_superseded_redactors() {
+    let (rig, native_dir, _connectors) = native_rig().await;
+    let info = rig.created("capture-dev").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    let session = native_dir.join("rollout-fixture-test-session.jsonl");
+    std::fs::write(&session, b"{\"type\":\"native\"}\n").unwrap();
+    let id = fresh_id();
+    // P holds an undecided secret prefix in its redactor and stays connected.
+    let (wired, lineage) = (info.clone(), id.clone());
+    let p = tokio::task::spawn_blocking(move || {
+        let mut wire = Wire::connect(&wired, &wired.producer_id);
+        wire.send(0, connection(&lineage, opened(false)));
+        wire.send(1, request_open(&lineage));
+        wire.send(1, bytes(b"authorization sk-ant-"));
+        wire
+    })
+    .await
+    .unwrap();
+    let producer = info.producer_id.clone();
+    let records = rig
+        .records_when(&info.entry_id, |records| {
+            native_producer(records).is_some()
+                && records.iter().any(|record| {
+                    matches!(record, CaptureRecord::Open { stream, .. } if stream.producer == producer)
+                })
+        })
+        .await;
+    let native = native_producer(&records).unwrap();
+    // Q is admitted and lost before its first frame; R's Recovery names Q.
+    let (q, r) = (fresh_id(), fresh_id());
+    let (wired, orphan, fresh) = (info.clone(), q.clone(), r.clone());
+    tokio::task::spawn_blocking(move || {
+        Wire::connect(&wired, &orphan).hang_up();
+        let mut wire = Wire::connect(&wired, &fresh);
+        let recovery = FrameEvent::Recovery {
+            previous_producer: orphan,
+            reason: GapReason::IngestLost,
+        };
+        wire.send(0, recovery);
+        wire.send(0, connection(&id, opened(true)));
+        wire.close();
+        p.hang_up();
+    })
+    .await
+    .unwrap();
+    let is_recovery = |record: &CaptureRecord| matches!(record, CaptureRecord::Recovery { producer, .. } if *producer == r);
+    rig.records_when(&info.entry_id, |records| closed_by(records, &r).is_some())
+        .await;
+    // The native producer is not wire: the Recovery does not supersede it, and it goes on.
+    let mut more = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&session)
+        .unwrap();
+    std::io::Write::write_all(&mut more, b"{\"type\":\"native\",\"n\":2}\n").unwrap();
+    let native_after = |records: &[CaptureRecord]| {
+        records.iter().position(is_recovery).is_some_and(|at| {
+            records[at..].iter().any(|record| {
+                matches!(record, CaptureRecord::Segment { stream, .. } if stream.producer == native)
+            })
+        })
+    };
+    rig.records_when(&info.entry_id, native_after).await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+
+    let records = rig.records(&info.entry_id);
+    let recovery = position(&records, is_recovery);
+    let superseded = position(
+        &records,
+        |record| matches!(record, CaptureRecord::Gap { stream: Some(s), .. } if s.producer == producer),
+    );
+    assert!(
+        superseded < recovery,
+        "P's redactor is interrupted before the Recovery that supersedes it"
+    );
+    assert!(
+        !records[recovery..]
+            .iter()
+            .any(|record| names_producer(record, &producer)),
+        "nothing of a superseded producer follows its Recovery"
+    );
+    let raw = std::fs::read_to_string(rig.trace_dir(&info.entry_id).join("chain.jsonl")).unwrap();
+    assert!(
+        !raw.contains("sk-ant-"),
+        "the held prefix is discarded, never released"
+    );
+    assert!(
+        !records.iter().any(|record| {
+            matches!(record, CaptureRecord::Gap { stream: Some(s), .. } if s.producer == native)
+        }),
+        "the native producer lost nothing"
+    );
+    let closed = position(
+        &records,
+        |record| matches!(record, CaptureRecord::ProducerClosed { producer, .. } if *producer == native),
+    );
+    let finish = position(&records, |r| matches!(r, CaptureRecord::LocalFinish { .. }));
+    assert!(
+        closed < finish,
+        "the native producer closes cleanly at the finish"
+    );
+}
+
+#[tokio::test]
+async fn proxy_counters_become_streamless_gaps() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let counters = ProxyCounters {
+        tunneled_fail_open: 1,
+        opaque_fallbacks: 2,
+        capture_table_full: 3,
+        cut_unsettled: 0,
+        unterminated: 4,
+        sink_refusals: 5,
+    };
+    let finished = rig.seal(&info.entry_id, Some(counters)).await;
+    assert_eq!(finished.status(), 200, "{}", finished.body());
+    let records = rig.records(&info.entry_id);
+    assert!(matches!(
+        records.last(),
+        Some(CaptureRecord::LocalFinish { .. })
+    ));
+    let gaps: Vec<_> = records
+        .into_iter()
+        .filter_map(|record| match record {
+            CaptureRecord::Gap {
+                stream: None,
+                reason,
+                lost_bytes: None,
+                ..
+            } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        gaps,
+        vec![
+            GapReason::DecodeFailed,
+            GapReason::DecodeFailed,
+            GapReason::LimitExceeded,
+            GapReason::ShutdownDeadline,
+        ],
+        "one per non-zero counter; sink refusals are chained already"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_finish_without_service_is_complete() {
+    let (rig, _native, _connectors) = native_rig().await;
+    let info = rig.created("capture-dev").await;
+    let harness = Child::sleeping();
+    let registered = rig
+        .register(
+            &info.entry_id,
+            &harness.registration(info.process_generation),
+        )
+        .await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    clean_epoch(&info).await;
+
+    let sealed = rig
+        .seal(&info.entry_id, Some(ProxyCounters::default()))
+        .await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let report: CaptureFinishReport = sealed.json().unwrap();
+    assert_eq!(report.seal, LocalSealOutcome::SealWritten);
+    assert!(
+        matches!(report.termination, TerminationOutcomeV1::Confirmed { .. }),
+        "{:?}",
+        report.termination
+    );
+    let records = rig.records(&info.entry_id);
+    assert!(closed_by(&records, &info.producer_id).is_some());
+    assert_eq!(local_finishes(&records), 1);
+    assert!(matches!(
+        records.last(),
+        Some(CaptureRecord::LocalFinish { .. })
+    ));
+    assert_eq!(
+        report.terminal_seq,
+        Some(rig.chain(&info.entry_id).len() as u64 - 1)
+    );
+    let trace = rig.trace_dir(&info.entry_id);
+    assert!(trace.join("seal.json").exists());
+    assert!(!trace.join("receipt.json").exists());
+    assert_eq!(rig.upload_dials(), 0, "no server is ever asked");
+    let status = rig.status(&info.entry_id).await;
+    status.verify_with(&info.run_public_key).unwrap();
+    let capture = status.payload.capture.unwrap();
+    assert_eq!(capture.run, RunState::Sealed);
+    assert_eq!(
+        capture.capture,
+        CaptureState::Recording,
+        "no gap was recorded"
+    );
+    assert_eq!(status.payload.seconds_remaining, None);
+    assert_eq!(status.payload.deadline_at, None);
+}
+
+#[tokio::test]
+async fn local_finish_binds_actual_seal_manifest() {
+    let rig = Rig::start().await;
+    let workspace = rig.workspace("work");
+    let info: CaptureWorkspaceInfo = rig
+        .create("codex-cli", &workspace, RESERVE)
+        .await
+        .json()
+        .unwrap();
+    std::fs::write(workspace.join("hello.txt"), b"hello\n").unwrap();
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let seal = std::fs::read(rig.trace_dir(&info.entry_id).join("seal.json")).unwrap();
+    let manifest: goalcup_protocol::seal::SealManifest = serde_json::from_slice(&seal).unwrap();
+    let file = manifest
+        .files
+        .iter()
+        .find(|f| f.path == "hello.txt")
+        .expect("the file the run wrote is sealed");
+    assert_eq!(file.sha256, hex::encode(Sha256::digest(b"hello\n")));
+    let Some(CaptureRecord::LocalFinish {
+        seal_manifest_sha256,
+        ..
+    }) = rig.records(&info.entry_id).pop()
+    else {
+        panic!("the chain ends with the local finish");
+    };
+    assert_eq!(seal_manifest_sha256, hex::encode(Sha256::digest(&seal)));
+
+    // The finished entry keeps its seal: a late goal and an abandon are both refused.
+    let late = rig.goal(&info.entry_id, b"write hello.txt").await;
+    assert_eq!(late.status(), 409, "{}", late.body());
+    let abandoned = rig.abandon(&info.entry_id).await;
+    assert_eq!(abandoned.status(), 409, "{}", abandoned.body());
+    let kept = std::fs::read(rig.trace_dir(&info.entry_id).join("seal.json")).unwrap();
+    assert_eq!(kept, seal);
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_ne!(
+        capture.capture,
+        CaptureState::Failed,
+        "the chain is as the finish left it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn finish_closes_capture_before_terminal() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let wired = info.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut wire = Wire::connect(&wired, &wired.producer_id);
+        let id = fresh_id();
+        wire.send(0, connection(&id, opened(false)));
+        wire.send(1, request_open(&id));
+        wire.send(1, bytes(b"cut off"));
+        wire.hang_up();
+    })
+    .await
+    .unwrap();
+    // The legacy seal, with no capture request, is refused before anything happens.
+    let bare = rig
+        .client
+        .post(&entry_route(&info.entry_id, SUFFIX_SEAL))
+        .await;
+    assert_eq!(bare.status(), 400, "{}", bare.body());
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let records = rig.records(&info.entry_id);
+    let finish = position(&records, |r| matches!(r, CaptureRecord::LocalFinish { .. }));
+    assert_eq!(finish, records.len() - 1);
+    assert!(
+        wire_gap(&records[..finish], &info.producer_id, GapReason::IngestLost),
+        "the lost producer's gap is chained before the terminal"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn late_frame_cannot_append_after_local_finish() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+    let before = std::fs::read(&chain).unwrap();
+    // The receiver refuses the late handshake and closes the socket before reading a frame;
+    // `hang_up` returns once it has.
+    let wired = info.clone();
+    tokio::task::spawn_blocking(move || Wire::connect(&wired, &fresh_id()).hang_up())
+        .await
+        .unwrap();
+    let status = rig.status(&info.entry_id).await.payload;
+    assert_eq!(
+        status.producers_consumed, None,
+        "the finished entry holds no ingest grant"
+    );
+    assert_eq!(
+        std::fs::read(&chain).unwrap(),
+        before,
+        "the chain is closed"
+    );
+}
+
+#[tokio::test]
+async fn closed_restart_keeps_capture_status_signed() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    rig.seal(&info.entry_id, None).await;
+    let rig = rig.restart().await;
+    let status = rig.status(&info.entry_id).await;
+    status.verify_with(&info.run_public_key).unwrap();
+    assert!(status.payload.sealed_at.is_some());
+    assert_eq!(status.payload.seconds_remaining, None);
+    assert_eq!(status.payload.capture.unwrap().run, RunState::Sealed);
+    assert!(
+        rig.daemon
+            .entries()
+            .unwrap()
+            .iter()
+            .any(|e| e.entry_id == info.entry_id)
+    );
+}
+
+#[tokio::test]
+async fn restart_preserves_local_terminal_without_receipt() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let first: CaptureFinishReport = rig.seal(&info.entry_id, None).await.json().unwrap();
+    let rig = rig.restart().await;
+    let again = rig.seal(&info.entry_id, None).await;
+    assert_eq!(again.status(), 200, "{}", again.body());
+    let again: CaptureFinishReport = again.json().unwrap();
+    assert_eq!(again, first, "a retry observes the committed finish");
+    assert_eq!(local_finishes(&rig.records(&info.entry_id)), 1);
+    assert!(!rig.trace_dir(&info.entry_id).join("receipt.json").exists());
+}
+
+/// Once its seal is written the entry lets go of its chain: the daemon holds no descriptor on
+/// it, and the entry still answers status, a retried seal and its refusals.
+#[tokio::test]
+async fn a_sealed_entry_lets_go_of_its_chain() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+    assert!(descriptors_on(&chain) > 0, "a live entry writes its chain");
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let report: CaptureFinishReport = sealed.json().unwrap();
+    assert_eq!(report.seal, LocalSealOutcome::SealWritten);
+
+    assert_eq!(descriptors_on(&chain), 0, "the finished chain is closed");
+    let status = rig.status(&info.entry_id).await;
+    status.verify_with(&info.run_public_key).unwrap();
+    assert_eq!(status.payload.capture.unwrap().run, RunState::Sealed);
+    let again: CaptureFinishReport = rig.seal(&info.entry_id, None).await.json().unwrap();
+    assert_eq!(again, report);
+    let late = rig.goal(&info.entry_id, b"write hello.txt").await;
+    assert_eq!(late.status(), 409, "{}", late.body());
+    assert!(
+        rig.daemon
+            .entries()
+            .unwrap()
+            .iter()
+            .any(|e| e.entry_id == info.entry_id && e.sealed_at.is_some())
+    );
+}
+
+/// A restart does not reopen sealed chains: each sealed entry's status is the one its finish
+/// recorded, even over a chain damaged since, which a reopen would refuse, and the daemon
+/// holds no descriptor on any of them.
+#[tokio::test]
+async fn a_restart_leaves_sealed_chains_unopened() {
+    let rig = Rig::start().await;
+    let mut sealed = Vec::new();
+    for _ in 0..3 {
+        let info = rig.created("codex-cli").await;
+        let counters = ProxyCounters {
+            capture_table_full: 1,
+            ..ProxyCounters::default()
+        };
+        let finished = rig.seal(&info.entry_id, Some(counters)).await;
+        assert_eq!(finished.status(), 200, "{}", finished.body());
+        let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+        assert_eq!(capture.gap_count, 1);
+        let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+        let mut torn = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&chain)
+            .unwrap();
+        std::io::Write::write_all(&mut torn, b"{\"protocol_version\":5,").unwrap();
+        sealed.push((info, capture, chain));
+    }
+
+    let rig = rig.restart().await;
+    for (info, before, chain) in &sealed {
+        assert_eq!(descriptors_on(chain), 0, "{}", info.entry_id);
+        let status = rig.status(&info.entry_id).await;
+        status.verify_with(&info.run_public_key).unwrap();
+        assert_eq!(status.payload.capture.as_ref(), Some(before));
+    }
+    let cycles = rig.daemon.cycle_errors();
+    assert_eq!(
+        (cycles.tick, cycles.last),
+        (0, None),
+        "nothing was reopened"
+    );
+    let listed = rig.daemon.entries().unwrap();
+    assert_eq!(listed.len(), sealed.len());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restart_keeps_the_gap_history_through_the_seal() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    // A producer is live, with a stream open, when the daemon stops: the stop cuts it.
+    let wired = info.clone();
+    let live = tokio::task::spawn_blocking(move || {
+        let mut wire = Wire::connect(&wired, &wired.producer_id);
+        let id = fresh_id();
+        wire.send(0, connection(&id, opened(false)));
+        wire.send(1, request_open(&id));
+        wire
+    })
+    .await
+    .unwrap();
+    let producer = info.producer_id.clone();
+    rig.records_when(&info.entry_id, |records| {
+        records
+            .iter()
+            .any(|record| names_producer(record, &producer))
+    })
+    .await;
+    let rig = rig.restart().await;
+    tokio::task::spawn_blocking(move || live.hang_up())
+        .await
+        .unwrap();
+    let chained = rig
+        .records(&info.entry_id)
+        .iter()
+        .filter(|record| matches!(record, CaptureRecord::Gap { .. }))
+        .count() as u64;
+    assert!(chained >= 1, "the stop chained the cut producer's loss");
+
+    let reopened = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(reopened.gap_count, chained);
+    assert_eq!(reopened.capture, CaptureState::Incomplete);
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let report: CaptureFinishReport = sealed.json().unwrap();
+    assert_eq!(report.seal, LocalSealOutcome::SealWritten);
+    let finished = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(finished.run, RunState::Sealed);
+    assert_eq!(finished.gap_count, chained);
+    assert_eq!(finished.capture, CaptureState::Incomplete);
+}
+
+#[tokio::test]
+async fn a_failed_local_finish_is_reported_and_never_reads_finished() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    // `seal.json` is created absent-only: a file already at its name fails the local finish
+    // after its terminal record is chained.
+    std::fs::write(rig.trace_dir(&info.entry_id).join("seal.json"), b"{}").unwrap();
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let report: CaptureFinishReport = sealed.json().unwrap();
+    assert_eq!(report.seal, LocalSealOutcome::SealWriteFailed);
+    let again: CaptureFinishReport = rig.seal(&info.entry_id, None).await.json().unwrap();
+    assert_eq!(
+        again, report,
+        "the failure is answered again, never retried"
+    );
+
+    let failed = |status: SignedStatus| {
+        let capture = status.payload.capture.unwrap();
+        assert_eq!(capture.capture, CaptureState::Failed);
+        assert_ne!(capture.run, RunState::Sealed);
+        assert!(
+            !status.payload.detail.contains("finished"),
+            "{}",
+            status.payload.detail
+        );
+    };
+    failed(rig.status(&info.entry_id).await);
+    let rig = rig.restart().await;
+    failed(rig.status(&info.entry_id).await);
+}
+
+#[tokio::test]
+async fn torn_tail_cannot_resume() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+    let mut torn = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&chain)
+        .unwrap();
+    std::io::Write::write_all(&mut torn, b"{\"protocol_version\":5,").unwrap();
+    let resume = rig
+        .client
+        .post_body(
+            &entry_route(&info.entry_id, SUFFIX_RESUME),
+            &ResumeRequest {
+                expected_generation: 1,
+            },
+        )
+        .await;
+    let preview = rig
+        .client
+        .get(&entry_route(&info.entry_id, SUFFIX_RESUME_PREVIEW))
+        .await;
+    for refused in [resume, preview] {
+        assert_eq!(refused.status(), 409, "{}", refused.body());
+        assert!(
+            refused.body().contains("cannot be resumed"),
+            "{}",
+            refused.body()
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unknown_session_still_captures_and_finishes_locally() {
+    let (rig, native_dir, _connectors) = controlled_native_rig().await;
+    let info = rig.created("capture-dev").await;
+    // No session or thread identity is ever given to the daemon.
+    std::fs::write(native_dir.join("unknown.jsonl"), b"{\"type\":\"native\"}\n").unwrap();
+    rig.records_when(&info.entry_id, |records| native_producer(records).is_some())
+        .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let records = rig.records(&info.entry_id);
+    let native = native_producer(&records).unwrap();
+    let closed = position(
+        &records,
+        |r| matches!(r, CaptureRecord::ProducerClosed { producer, .. } if *producer == native),
+    );
+    let finish = position(&records, |r| matches!(r, CaptureRecord::LocalFinish { .. }));
+    assert!(closed < finish, "native capture closes before the terminal");
+}
+
+#[cfg(feature = "v1-compat")]
+#[tokio::test]
+async fn a_capture_seal_request_never_seals_a_legacy_entry() {
+    let h = support::control_harness().await;
+    let route = entry_route(&h.entry_id, SUFFIX_SEAL);
+    let refused = h
+        .post_body(
+            &route,
+            &CaptureSealRequest {
+                proxy: None,
+                remaining_finish_ms: None,
+                native_scope: None,
+            },
+        )
+        .await;
+    assert_eq!(refused.status(), 400, "{}", refused.body());
+    assert!(
+        h.daemon
+            .registry()
+            .get(&h.entry_id)
+            .unwrap()
+            .unwrap()
+            .sealed_at
+            .is_none()
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// D42: what a default daemon does with V1 rows already in its registry. The `v1-compat` build
+// recovers them instead, so these two are default-build facts.
+
+/// A V1 (non-capture) row with the given state, chain head and acknowledgement watermark.
+#[cfg(not(feature = "v1-compat"))]
+fn plant_v1_row(
+    registry: &goalcup_daemon::registry::Registry,
+    root: &std::path::Path,
+    id: &str,
+    state: goalcup_daemon::registry::EntryState,
+    chain_seq: Option<u64>,
+    last_ack_seq: Option<u64>,
+) {
+    let mut entry = support::entry_in(
+        registry,
+        root,
+        id,
+        "claude-code-cli",
+        &root.join("workspaces").join(id).display().to_string(),
+    );
+    entry.state = state;
+    entry.chain_seq = chain_seq;
+    entry.last_ack_seq = last_ack_seq;
+    registry.put(&entry).expect("the V1 row is stored");
+}
+
+#[cfg(not(feature = "v1-compat"))]
+#[tokio::test]
+async fn a_sealed_v1_row_does_not_block_a_default_daemon_and_a_capture_entry_beside_it_finishes() {
+    let (rig, _native, _connectors) = native_rig().await;
+    let info = rig.created("capture-dev").await;
+    let harness = Child::sleeping();
+    let registered = rig
+        .register(
+            &info.entry_id,
+            &harness.registration(info.process_generation),
+        )
+        .await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    let root = rig.root.clone();
+    let rig = rig
+        .restart_planting(|registry| {
+            use goalcup_daemon::registry::EntryState;
+            plant_v1_row(
+                registry,
+                &root,
+                "v1-sealed",
+                EntryState::Sealed,
+                Some(7),
+                Some(7),
+            );
+            plant_v1_row(
+                registry,
+                &root,
+                "v1-refused",
+                EntryState::Refused,
+                None,
+                None,
+            );
+        })
+        .await
+        .expect("inert V1 rows leave a default daemon free to start");
+
+    // The capture entry reopens and seals exactly as it would beside no V1 row at all.
+    let sealed = rig
+        .seal(&info.entry_id, Some(ProxyCounters::default()))
+        .await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let report: CaptureFinishReport = sealed.json().unwrap();
+    assert_eq!(report.seal, LocalSealOutcome::SealWritten);
+    assert!(rig.trace_dir(&info.entry_id).join("seal.json").exists());
+    let status = rig.status(&info.entry_id).await;
+    status.verify_with(&info.run_public_key).unwrap();
+    assert_eq!(status.payload.capture.unwrap().run, RunState::Sealed);
+    // The V1 rows are inert evidence: this build neither lists nor changes them.
+    assert!(
+        rig.daemon
+            .entries()
+            .unwrap()
+            .iter()
+            .all(|e| e.entry_id != "v1-sealed")
+    );
+}
+
+#[cfg(not(feature = "v1-compat"))]
+#[tokio::test]
+async fn a_v1_row_that_owes_work_is_refused_by_a_default_daemon_with_a_remedy_that_clears_it() {
+    use goalcup_daemon::registry::EntryState;
+    // Each of these is work only the V1 runtime can do.
+    let cases: [(&str, EntryState, Option<u64>, Option<u64>); 3] = [
+        ("unsealed", EntryState::Started, None, None),
+        (
+            "drain short of the head",
+            EntryState::Sealed,
+            Some(9),
+            Some(4),
+        ),
+        ("sealing", EntryState::Sealing, Some(2), Some(2)),
+    ];
+    for (what, state, chain_seq, last_ack_seq) in cases {
+        let rig = Rig::start().await;
+        let root = rig.root.clone();
+        let refused = rig
+            .restart_planting(|registry| {
+                plant_v1_row(registry, &root, "v1-owing", state, chain_seq, last_ack_seq);
+            })
+            .await;
+        let message = match refused {
+            Ok(_) => panic!("{what}: a V1 row owing work was accepted"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            message.contains("v1-owing"),
+            "{what}: names the row: {message}"
+        );
+        assert!(
+            message.contains("sealed and fully acknowledged")
+                && message.contains("`v1-compat`")
+                && message.contains("artifact_root"),
+            "{what}: says what clears it: {message}"
+        );
+    }
+}
+
+/// A default daemon has no V1 cadence to run, and the foreground binary relies on `run_forever`
+/// never returning: the only way out is a signal.
+#[cfg(not(feature = "v1-compat"))]
+#[tokio::test]
+async fn a_default_daemons_loop_stays_pending() {
+    let rig = Rig::start().await;
+    let ended = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        rig.daemon.run_forever(),
+    )
+    .await;
+    assert!(ended.is_err(), "run_forever returned: {ended:?}");
+}

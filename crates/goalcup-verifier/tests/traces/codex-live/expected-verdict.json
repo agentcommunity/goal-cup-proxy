@@ -1,0 +1,67 @@
+{
+  "_note": "THE LIVE CODEX RUN (2026-09-08, dogfood rerun 3; entry `e80de7b29ab3d2021`, recorded on build cb838ec). These are the daemon's own exported bytes: Codex CLI 0.153.0 in its TUI under a per-run `CODEX_HOME`, one typed goal, an `exec`/`apply_patch` that added `hello.py`, the harness quit, `goalcup resume` relaunched it on the BOUND thread, `keep going`, and `goalcup seal`. Nothing was scrubbed and no line of it was written by hand. It is the Codex twin of `opencode-live/`: the fixture that measures the CAPTURE rather than the reader, because the three M0 fixtures are transcripts a spike scraped after the fact.",
+  "_why_it_is_here": "Dogfood fix 7, finding 1. This run FAILED before the fix, on `unexplained_seal_file` for the one file it wrote. `connectors/codex-cli/manifest.toml` classes `exec` as both a write and a shell tool — correctly, since Codex has one tool and its argument text carries either a shell command or the `apply_patch` DSL — and `attribution.rs` branched `if is_shell { shell rule } else { write rule }`, so `patch_target_paths`, written for this exact payload, was unreachable on every real Codex capture. `hello.py` is `traced` to `exec` here, which is the fix asserted on real bytes rather than on a constructed manifest.",
+  "_why_flag_and_not_pass": "One finding stands: `placeholder_server_key`. This run's receipt and acknowledgements were signed by the M1 placeholder anchor whose private seed is published in this repository, which is what a development run has and what `goalcup-verify --dev` suppresses. Under `--dev` this trace is `pass` with an EMPTY review queue, which `tests/end_to_end.rs` asserts beside the strict reading. V1-V12 all pass.",
+  "_the_manifest_here_is_a_copy": "Like `opencode-live/` and unlike the three M0 descriptors, this trace carries the manifest bytes the daemon EXPORTED, because the start receipt binds their digest. They are byte-identical to `connectors/codex-cli/manifest.toml` today. A later change to that file makes `manifest_pin` read `altered` here and adds `manifest_not_pinned`: that is the fixture saying, correctly, that the rules moved after the run. Re-record it rather than editing it.",
+  "parser_census": {
+    "token_usage_record": 5,
+    "world_state": 1
+  },
+  "overall": "flag",
+  "exit_code": 1,
+  "human_message_count": 2,
+  "first_human_message": "Create hello.py that prints hello world, then stop.",
+  "tokens": {
+    "by_model": [
+      {
+        "model": "gpt-6-astra",
+        "prompt": 97739,
+        "completion": 257,
+        "cached": 88960
+      }
+    ],
+    "totals": {
+      "prompt": 97739,
+      "completion": 257,
+      "cached": 88960
+    }
+  },
+  "checks": {
+    "V1": "pass",
+    "V2": "pass",
+    "V3": "pass",
+    "V4": "pass",
+    "V5": "pass",
+    "V6": "pass",
+    "V7": "pass",
+    "V8": "pass",
+    "V9": "pass",
+    "V10": "pass",
+    "V11": "pass",
+    "V12": "pass",
+    "V13": "flag"
+  },
+  "finding_codes": [
+    "placeholder_server_key"
+  ],
+  "must_name": [
+    "keep going",
+    "hello.py",
+    "gpt-6-astra",
+    "turn_id+order"
+  ],
+  "must_not_contain": [
+    "unexplained_seal_file",
+    "read_only_attribution",
+    "second_root_thread",
+    "foreign_session",
+    "tracked_session_count",
+    "duplicate_pairing",
+    "text_divergence",
+    "partition_violation",
+    "store_rewritten",
+    "ack_chain_mismatch",
+    "no_anchor",
+    "no_event_stream"
+  ]
+}

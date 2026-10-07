@@ -1,0 +1,33 @@
+//! Capture analysis for protocol-v5 traces: bounded integrity reading, versioned decoders
+//! that turn retained capture records into source-referenced observations, and the private
+//! research report that streams them.
+//!
+//! This is a separate route from the legacy whole-trace pipeline in the crate root, which
+//! keeps refusing protocol v5. The stable decoder contract is [`api::DecoderV1`]; a
+//! [`registry::DecoderRegistry`] holds the decoders, a [`session::DecodeSession`] runs them
+//! over records, and [`report`] writes the result as NDJSON.
+
+/// The Anthropic Messages decoder.
+pub mod anthropic;
+/// Shared facts and the Decoder v1 contract.
+pub mod api;
+/// The OpenAI Chat Completions decoder.
+pub mod chat;
+/// Bounded producer identity and recovery supersession shared by reader and session.
+mod lineage;
+/// Native-transcript decoders.
+pub mod native;
+/// The OpenAI Responses decoder.
+pub mod openai;
+/// The bounded facts a decode keeps about the records it read.
+pub mod operations;
+/// The bounded capture-integrity reader.
+pub mod reader;
+/// Which decoders a decode runs.
+pub mod registry;
+/// The private streaming research report.
+pub mod report;
+/// One decode of one trace, with per-decoder isolation.
+pub mod session;
+/// Shared plumbing of the wire decoders: segment assembler, SSE framer, field helpers.
+mod wire;

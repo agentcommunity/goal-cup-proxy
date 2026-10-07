@@ -1,0 +1,623 @@
+//! M2 capture contracts: the bounded representation of recorder observations, the
+//! synchronous submission seam and storage accounting, and the status projection.
+//!
+//! This module defines data, one trait and pure bound checks. It performs no I/O, redaction,
+//! persistence or interpretation (D3): producers submit frames, the daemon sanitizes and
+//! appends them as [`CaptureRecord`]s inside protocol-v5 envelopes, and the verifier reads
+//! them later. Nothing here enables capture at runtime.
+//!
+//! Every wire type rejects unknown fields. Enums with fields are internally tagged by `kind`
+//! and every enum variant is `snake_case`, so the JSON layout is the one frozen by
+//! `crates/goalcup-protocol/tests/m2_contract.rs`.
+
+use serde::{Deserialize, Serialize};
+
+// Contract S1 (F6): the status projection and the upload bound moved out of this record module,
+// which the v5 freeze covers, into `capture_status` and `chunk`. These re-exports keep every
+// existing `capture::` import path working until S5 fixes the import sites and deletes them.
+#[doc(hidden)]
+pub use crate::capture_status::{
+    AnalysisState, AnchorState, CaptureState, CaptureStorage, DeliveryState, DurableFrontier,
+    M2Status, RunState,
+};
+#[doc(hidden)]
+pub use crate::chunk::MAX_UPLOAD_BYTES;
+
+/// The protocol version whose envelopes may carry [`CaptureRecord`]s. The legacy default,
+/// [`crate::PROTOCOL_VERSION`], stays 4: v5 is selected explicitly, never by default.
+pub const M2_PROTOCOL_VERSION: u32 = 5;
+
+/// Bound on one source chunk and, separately, on one sanitized segment's bytes.
+pub const MAX_SEGMENT_BYTES: usize = 64 * 1024;
+/// Launch resource bound on the decoded goal.
+pub const MAX_GOAL_BYTES: usize = 64 * 1024;
+/// One complete serialized envelope, including JSON and its trailing newline.
+pub const MAX_ENVELOPE_BYTES: usize = 128 * 1024;
+/// One encoded ingest frame body, checked against its length prefix before allocation.
+pub const MAX_INGEST_FRAME_BYTES: usize = 512 * 1024;
+/// Aggregate capture queue memory, controls included.
+pub const MAX_CAPTURE_QUEUE_BYTES: usize = 8 * 1024 * 1024;
+/// Default serialized chain-byte reservation per entry.
+pub const DEFAULT_CAPTURE_RESERVE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+/// Terminal allowance: part of, not additional to, the reservation.
+pub const TERMINAL_RESERVE_BYTES: u64 = 1024 * 1024;
+/// Simultaneously open payload streams per entry.
+pub const MAX_OPEN_STREAMS: usize = 128;
+/// Active captured connections per entry.
+pub const MAX_OPEN_CONNECTIONS: usize = 128;
+/// Distinct producers per entry, completed epochs included.
+pub const MAX_PRODUCERS: usize = 128;
+/// Each metadata string is at most 1 KiB.
+pub const MAX_METADATA_STRING_BYTES: usize = 1024;
+/// All metadata strings of one stream total at most 8 KiB.
+pub const MAX_METADATA_BYTES: usize = 8 * 1024;
+/// The separate first handshake object `{"entry_id","producer","token"}` is at most 1 KiB.
+pub const MAX_HANDSHAKE_BYTES: usize = 1024;
+
+/// One payload stream: a producer epoch and its producer-local counter. Stream zero is
+/// reserved for [`FrameEvent::Connection`], [`FrameEvent::Recovery`] and
+/// [`FrameEvent::Loss`] controls.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamKey {
+    pub producer: String,
+    pub stream: u64,
+}
+
+/// One observation instant. `mono_ns` is comparable only with another value of the same
+/// `clock_id`; see [`CaptureTime::mono_elapsed_ns`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureTime {
+    pub wall: String,
+    pub mono_ns: u64,
+    pub clock_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureSource {
+    WireRequest,
+    WireResponse,
+    WsClient,
+    WsServer,
+    Native,
+    Goal,
+}
+
+/// Recorder transport identity of a wire stream. Provider IDs never substitute for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WireIdentity {
+    pub connection: String,
+    pub exchange: u64,
+    pub message_index: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionOutcome {
+    Complete,
+    Interrupted,
+    TransportError,
+}
+
+/// Decoded through [`ConnectionEventWire`] so that the fieldless `UpgradedWebSocket` rejects
+/// unknown fields too: serde's internally tagged *unit* variants ignore `deny_unknown_fields`.
+/// The serialized layout is the derived one, unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", from = "ConnectionEventWire")]
+pub enum ConnectionEvent {
+    Open {
+        alpn: Option<String>,
+        already_open: bool,
+    },
+    UpgradedWebSocket,
+    Close {
+        outcome: ConnectionOutcome,
+    },
+}
+
+/// The strict decoding mirror of [`ConnectionEvent`]: identical JSON, with the fieldless
+/// variant written as an empty struct variant so `deny_unknown_fields` applies to it.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ConnectionEventWire {
+    Open {
+        alpn: Option<String>,
+        already_open: bool,
+    },
+    UpgradedWebSocket {},
+    Close {
+        outcome: ConnectionOutcome,
+    },
+}
+
+impl From<ConnectionEventWire> for ConnectionEvent {
+    fn from(wire: ConnectionEventWire) -> Self {
+        match wire {
+            ConnectionEventWire::Open { alpn, already_open } => {
+                ConnectionEvent::Open { alpn, already_open }
+            }
+            ConnectionEventWire::UpgradedWebSocket {} => ConnectionEvent::UpgradedWebSocket,
+            ConnectionEventWire::Close { outcome } => ConnectionEvent::Close { outcome },
+        }
+    }
+}
+
+/// The whitelisted, sanitized metadata of one stream. `path` never carries a query or
+/// fragment; there are no headers, cookies or arbitrary maps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureMeta {
+    pub wire: Option<WireIdentity>,
+    pub label: String,
+    pub protocol_hint: Option<String>,
+    pub method: Option<String>,
+    pub host: Option<String>,
+    pub path: Option<String>,
+    pub status: Option<u16>,
+    pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndReason {
+    Complete,
+    Interrupted,
+    DecodeError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GapReason {
+    QueueFull,
+    IngestLost,
+    ProducerLost,
+    StorageFull,
+    StorageIo,
+    UnsupportedEncoding,
+    DecodeFailed,
+    SourceChanged,
+    LimitExceeded,
+    ShutdownDeadline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FrameEvent {
+    Connection {
+        connection: String,
+        event: ConnectionEvent,
+    },
+    Recovery {
+        previous_producer: String,
+        reason: GapReason,
+    },
+    /// The producer relayed something it did not capture, outside any payload stream: a
+    /// fail-open tunnel or opaque fallback (`DecodeFailed`), a full capture table
+    /// (`LimitExceeded`), a connection cut while unsettled (`ShutdownDeadline`). Stream zero.
+    /// The daemon records it as a stream-less gap on the producer's own clock.
+    Loss {
+        reason: GapReason,
+    },
+    Open {
+        source: CaptureSource,
+        metadata: CaptureMeta,
+    },
+    Bytes {
+        offset: u64,
+        data: Vec<u8>,
+    },
+    End {
+        reason: EndReason,
+    },
+    Gap {
+        reason: GapReason,
+        lost_bytes: Option<u64>,
+    },
+}
+
+/// One producer observation. `seq` starts at zero and increments across all of that
+/// producer's frames, controls included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureFrame {
+    pub stream: StreamKey,
+    pub seq: u64,
+    pub observed: CaptureTime,
+    pub event: FrameEvent,
+}
+
+/// One retained, sanitized observation: the body of an [`crate::envelope::EventBody::Capture`]
+/// in a protocol-v5 envelope. `LocalFinish` is reserved to the export's terminal writer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CaptureRecord {
+    ProducerClosed {
+        producer: String,
+        observed: CaptureTime,
+        final_seq: Option<u64>,
+    },
+    Connection {
+        producer: String,
+        connection: String,
+        observed: CaptureTime,
+        event: ConnectionEvent,
+    },
+    Recovery {
+        previous_producer: String,
+        producer: String,
+        observed: CaptureTime,
+        reason: GapReason,
+    },
+    Open {
+        stream: StreamKey,
+        observed: CaptureTime,
+        source: CaptureSource,
+        metadata: CaptureMeta,
+    },
+    Segment {
+        stream: StreamKey,
+        part: u64,
+        source_offset: u64,
+        source_len: u64,
+        first: CaptureTime,
+        last: CaptureTime,
+        data_b64: String,
+        audit: crate::redaction::RedactionAudit,
+    },
+    End {
+        stream: StreamKey,
+        observed: CaptureTime,
+        reason: EndReason,
+    },
+    Gap {
+        stream: Option<StreamKey>,
+        observed: CaptureTime,
+        reason: GapReason,
+        lost_bytes: Option<u64>,
+    },
+    Launch {
+        observed: CaptureTime,
+        goal_stream: StreamKey,
+        profile_id: String,
+        profile_digest: String,
+        harness_version: String,
+        recorder_revision: String,
+        continuation: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        allowed_tool_rule: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        process_handoff_digest: Option<String>,
+        /// The entry's per-run Ed25519 public key, 64 lowercase hex. Written by the daemon
+        /// from the key it minted at create; never supplied by the CLI. Absent in traces
+        /// written before contract S1, and valid forever in v5.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_public_key: Option<String>,
+        /// `connector_dir_sha256` of the connector directory the launch read, 64 lowercase
+        /// hex. Compared by a server against its allowlist; never interpreted by the reader.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connector_dir_sha256: Option<String>,
+    },
+    Assistance {
+        observed: CaptureTime,
+        action: String,
+    },
+    LocalFinish {
+        observed: CaptureTime,
+        reason: String,
+        termination: crate::provenance::TerminationOutcomeV1,
+        seal_manifest_sha256: String,
+    },
+}
+
+/// The single bounded command-text allowance admitted for a Claude M2 launch.
+/// This validates the launch claim's shape; Claude remains the policy authority.
+pub fn is_claude_capture_allowed_tool_rule(rule: &str) -> bool {
+    let Some(name) = rule
+        .strip_prefix("Bash(python3 ")
+        .and_then(|s| s.strip_suffix(".py *)"))
+    else {
+        return false;
+    };
+    name.len() <= 64
+        && name
+            .as_bytes()
+            .first()
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Synchronous admission of one frame or close. `Queued` is volatile acceptance only: never
+/// durability, never a receiver acknowledgement.
+///
+/// An in-process result, not a wire type: it is never serialized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitResult {
+    Queued,
+    Disabled(GapReason),
+}
+
+/// Synchronous admission of a producer epoch. `Ready` permits that ID; `Pending` keeps it
+/// across polls of one attempt; `RetryFresh` retires it (a handshake may have reached the
+/// receiver); `Disabled` is a locally known terminal failure.
+///
+/// An in-process result, not a wire type: it is never serialized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EpochAdmission {
+    Ready,
+    Pending,
+    RetryFresh,
+    Disabled(GapReason),
+}
+
+/// The one submission seam shared by the IPC sender and the direct component sink.
+/// Every method is synchronous and bounded and never waits on disk or network.
+pub trait CaptureSink: Send + Sync {
+    fn try_submit(&self, frame: CaptureFrame) -> SubmitResult;
+    fn try_begin_epoch(&self, producer: &str) -> EpochAdmission;
+    fn try_close_epoch(&self, producer: &str, final_seq: Option<u64>) -> SubmitResult;
+}
+
+/// One length-prefixed item on an authenticated ingest connection after its handshake.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+// The shared interface fixes `Frame(CaptureFrame)`; boxing it would change that interface.
+#[allow(clippy::large_enum_variant)]
+pub enum IngestMessage {
+    Frame(CaptureFrame),
+    Close {
+        producer: String,
+        final_seq: Option<u64>,
+    },
+}
+
+/// Why a capture value breaks a bound or representation rule. Messages name fields
+/// and sizes only; they never echo the rejected content.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CaptureLimitError {
+    #[error("{field} is {len} bytes, over the {limit}-byte limit")]
+    TooLong {
+        field: &'static str,
+        len: usize,
+        limit: usize,
+    },
+    #[error("capture metadata totals {len} bytes, over the {limit}-byte aggregate limit")]
+    MetadataTooLarge { len: usize, limit: usize },
+    #[error("{field}: {reason}")]
+    Invalid {
+        field: &'static str,
+        reason: &'static str,
+    },
+    #[error("ingest item declares {len} bytes, over the {limit}-byte limit")]
+    FrameTooLarge { len: usize, limit: usize },
+    #[error("ingest item is not a valid capture message")]
+    Malformed,
+}
+
+fn invalid(field: &'static str, reason: &'static str) -> CaptureLimitError {
+    CaptureLimitError::Invalid { field, reason }
+}
+
+/// A fresh random 128-bit identifier: exactly 32 lowercase hex digits.
+pub fn is_capture_id(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn check_id(field: &'static str, value: &str) -> Result<(), CaptureLimitError> {
+    if is_capture_id(value) {
+        Ok(())
+    } else {
+        Err(invalid(field, "must be 32 lowercase hex digits"))
+    }
+}
+
+/// A bounded display string: at most [`MAX_METADATA_STRING_BYTES`] and no control bytes.
+/// Returns its length.
+pub fn check_text(field: &'static str, value: &str) -> Result<usize, CaptureLimitError> {
+    if value.len() > MAX_METADATA_STRING_BYTES {
+        return Err(CaptureLimitError::TooLong {
+            field,
+            len: value.len(),
+            limit: MAX_METADATA_STRING_BYTES,
+        });
+    }
+    if value.bytes().any(|b| b.is_ascii_control()) {
+        return Err(invalid(field, "must not contain control characters"));
+    }
+    Ok(value.len())
+}
+
+impl CaptureTime {
+    /// Elapsed monotonic nanoseconds from `self` to `later`, only when both name the same
+    /// clock. Two clocks are never subtracted: `None` rather than a meaningless difference,
+    /// and `None` when `later` precedes `self`.
+    pub fn mono_elapsed_ns(&self, later: &CaptureTime) -> Option<u64> {
+        if self.clock_id != later.clock_id {
+            return None;
+        }
+        later.mono_ns.checked_sub(self.mono_ns)
+    }
+
+    pub fn validate(&self) -> Result<(), CaptureLimitError> {
+        crate::provenance::Rfc3339Utc::try_from(self.wall.as_str())
+            .map_err(|_| invalid("observed.wall", "must be RFC 3339 UTC ending in Z"))?;
+        if self.clock_id.is_empty() {
+            return Err(invalid("observed.clock_id", "must not be empty"));
+        }
+        check_text("observed.clock_id", &self.clock_id).map(|_| ())
+    }
+}
+
+impl CaptureMeta {
+    /// Checks every metadata bound by length alone, before anything is serialized.
+    pub fn validate(&self) -> Result<(), CaptureLimitError> {
+        let mut total = check_text("metadata.label", &self.label)?;
+        for (field, value) in [
+            ("metadata.protocol_hint", &self.protocol_hint),
+            ("metadata.method", &self.method),
+            ("metadata.host", &self.host),
+            ("metadata.path", &self.path),
+            ("metadata.content_type", &self.content_type),
+        ] {
+            if let Some(value) = value {
+                total += check_text(field, value)?;
+            }
+        }
+        if let Some(wire) = &self.wire {
+            check_id("metadata.wire.connection", &wire.connection)?;
+            total += wire.connection.len();
+        }
+        if total > MAX_METADATA_BYTES {
+            return Err(CaptureLimitError::MetadataTooLarge {
+                len: total,
+                limit: MAX_METADATA_BYTES,
+            });
+        }
+        if self
+            .path
+            .as_deref()
+            .is_some_and(|path| path.contains(['?', '#']))
+        {
+            return Err(invalid("metadata.path", "must exclude query and fragment"));
+        }
+        Ok(())
+    }
+
+    /// Wire streams carry a [`WireIdentity`]; HTTP bodies have no message index, WebSocket
+    /// messages always do; native and goal streams carry none.
+    fn validate_for(&self, source: CaptureSource) -> Result<(), CaptureLimitError> {
+        self.validate()?;
+        let index = self.wire.as_ref().map(|wire| wire.message_index.is_some());
+        match (source, index) {
+            (CaptureSource::WireRequest | CaptureSource::WireResponse, Some(false))
+            | (CaptureSource::WsClient | CaptureSource::WsServer, Some(true))
+            | (CaptureSource::Native | CaptureSource::Goal, None) => Ok(()),
+            _ => Err(invalid(
+                "metadata.wire",
+                "does not match the stream source (HTTP: no message index, WebSocket: one, native/goal: no wire)",
+            )),
+        }
+    }
+}
+
+impl ConnectionEvent {
+    fn validate(&self) -> Result<(), CaptureLimitError> {
+        match self {
+            ConnectionEvent::Open {
+                alpn: Some(alpn), ..
+            } if alpn != "http/1.1" => Err(invalid("event.alpn", "must be absent or http/1.1")),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl CaptureFrame {
+    /// Checks this frame's own bounds and stream-zero rule. Sequence and stream-state
+    /// transitions depend on the producer's history and belong to the receiver.
+    pub fn validate(&self) -> Result<(), CaptureLimitError> {
+        check_id("stream.producer", &self.stream.producer)?;
+        self.observed.validate()?;
+        let control = matches!(
+            self.event,
+            FrameEvent::Connection { .. } | FrameEvent::Recovery { .. } | FrameEvent::Loss { .. }
+        );
+        if control != (self.stream.stream == 0) {
+            return Err(invalid(
+                "stream.stream",
+                "stream zero is reserved for, and required by, connection, recovery and loss controls",
+            ));
+        }
+        match &self.event {
+            FrameEvent::Connection { connection, event } => {
+                check_id("event.connection", connection)?;
+                event.validate()
+            }
+            FrameEvent::Recovery {
+                previous_producer, ..
+            } => {
+                check_id("event.previous_producer", previous_producer)?;
+                if *previous_producer == self.stream.producer {
+                    return Err(invalid(
+                        "event.previous_producer",
+                        "a recovery names a different, earlier producer",
+                    ));
+                }
+                Ok(())
+            }
+            FrameEvent::Open { source, metadata } => metadata.validate_for(*source),
+            FrameEvent::Bytes { offset, data } => {
+                if data.len() > MAX_SEGMENT_BYTES {
+                    return Err(CaptureLimitError::TooLong {
+                        field: "event.data",
+                        len: data.len(),
+                        limit: MAX_SEGMENT_BYTES,
+                    });
+                }
+                offset
+                    .checked_add(data.len() as u64)
+                    .map(|_| ())
+                    .ok_or_else(|| invalid("event.offset", "offset plus length overflows"))
+            }
+            FrameEvent::Loss { .. } | FrameEvent::End { .. } | FrameEvent::Gap { .. } => Ok(()),
+        }
+    }
+}
+
+impl IngestMessage {
+    pub fn validate(&self) -> Result<(), CaptureLimitError> {
+        match self {
+            IngestMessage::Frame(frame) => frame.validate(),
+            IngestMessage::Close { producer, .. } => check_id("close.producer", producer),
+        }
+    }
+}
+
+/// The body length a big-endian `u32` prefix declares, refused above `limit` before any
+/// body byte is allocated. Use [`MAX_HANDSHAKE_BYTES`] for the handshake and
+/// [`MAX_INGEST_FRAME_BYTES`] for every item after it.
+pub fn checked_frame_len(prefix: [u8; 4], limit: usize) -> Result<usize, CaptureLimitError> {
+    let len = u32::from_be_bytes(prefix) as usize;
+    if len > limit {
+        return Err(CaptureLimitError::FrameTooLarge { len, limit });
+    }
+    Ok(len)
+}
+
+/// `u32` big-endian length plus compact JSON of a validated message. The message is
+/// validated first, so a value over any bound is refused before it is serialized.
+pub fn encode_ingest_message(message: &IngestMessage) -> Result<Vec<u8>, CaptureLimitError> {
+    message.validate()?;
+    let body = serde_json::to_vec(message).map_err(|_| CaptureLimitError::Malformed)?;
+    if body.len() > MAX_INGEST_FRAME_BYTES {
+        return Err(CaptureLimitError::FrameTooLarge {
+            len: body.len(),
+            limit: MAX_INGEST_FRAME_BYTES,
+        });
+    }
+    let mut framed = Vec::with_capacity(4 + body.len());
+    framed.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    framed.extend_from_slice(&body);
+    Ok(framed)
+}
+
+/// Decode one ingest body (the bytes after its prefix): bounded, unknown fields refused,
+/// then validated. The error never carries any of the input.
+pub fn decode_ingest_message(body: &[u8]) -> Result<IngestMessage, CaptureLimitError> {
+    if body.len() > MAX_INGEST_FRAME_BYTES {
+        return Err(CaptureLimitError::FrameTooLarge {
+            len: body.len(),
+            limit: MAX_INGEST_FRAME_BYTES,
+        });
+    }
+    let message: IngestMessage =
+        serde_json::from_slice(body).map_err(|_| CaptureLimitError::Malformed)?;
+    message.validate()?;
+    Ok(message)
+}

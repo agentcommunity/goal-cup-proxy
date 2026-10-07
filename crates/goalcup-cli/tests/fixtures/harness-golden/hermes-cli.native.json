@@ -1,0 +1,47 @@
+{
+  "connector": {
+    "family": "hermes",
+    "id": "hermes-cli"
+  },
+  "family_defers_its_scope": true,
+  "kill": {
+    "grace_seconds": 10,
+    "native_binary": null,
+    "strategy": "process_group"
+  },
+  "native_plan": {
+    "controlled": [],
+    "initial_binding": "Deferred",
+    "scoped": {
+      "form": "Snapshot",
+      "hint": null,
+      "name": "session",
+      "pattern": "session_{id}.json",
+      "root": "<CONFIG_HOME>/sessions",
+      "scope_id": null
+    },
+    "unread_stores": 0
+  },
+  "native_plan_as_an_unknown_family": {
+    "controlled": [],
+    "initial_binding": "NotRequired",
+    "scoped": null,
+    "unread_stores": 0
+  },
+  "not_directly_pinned": {
+    "Daemon::family_defers_its_scope": "pinned as `family_defers_its_scope` above (the same `binds` read); the connector-directory lookup around it is not",
+    "registered_tool_allowance connector_id == claude-code-cli": "private, needs a registered verified process"
+  },
+  "shipped_source_row": {
+    "binds": "Deferred",
+    "spec": {
+      "form": "Snapshot",
+      "hint": null,
+      "name": "session",
+      "pattern": "session_{id}.json",
+      "root": "<CONFIG_HOME>/sessions",
+      "scope_id": null
+    }
+  },
+  "v1_stores_as_the_native_plan_sees_them": []
+}

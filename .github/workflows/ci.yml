@@ -1,0 +1,54 @@
+# Light CI: a Linux smoke check for pull requests into `main`, deliberately small. It is NOT the
+# gate. The gate is the four commands in README.md ("The gate"), run by hand on macOS together
+# with the ignored real-daemon suite. See README.md and docs/OPERATING.md ("CI").
+#
+# Why it's this small (the owner's rule is that CI stays lean; do not add heavy jobs):
+# - Runner minutes cost something on every pull request, and a Linux run proves little about a
+#   macOS-targeted recorder.
+# - It runs only for pull requests into `main` (or `v1/trunk`, the maintainers' V1 line, which
+#   does not exist in a fresh public repository), pushes to `v1/trunk`, or a manual start.
+#   Other branches never trigger it.
+# - It runs only when something under crates/ or connectors/, the Cargo files,
+#   rust-toolchain.toml or this file changes. Docs-only commits cost nothing.
+# - It skips the goalcup-daemon and goalcup-cli test suites. They spawn real process trees,
+#   and on a 2-core Linux runner they hang or kill the VM (docs/OPERATING.md, "CI").
+#   Linux is best-effort and untested as a platform (README.md, "Build"), not a supported claim.
+# - It holds no secrets and runs with a read-only token, so a pull request from a fork can run
+#   it. Keep it that way: never use `pull_request_target`, and never pass a secret to a step.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [v1/trunk, main]
+    paths: [crates/**, connectors/**, Cargo.toml, Cargo.lock, rust-toolchain.toml, .github/workflows/ci.yml]
+  push:
+    branches: [v1/trunk]
+    paths: [crates/**, connectors/**, Cargo.toml, Cargo.lock, rust-toolchain.toml, .github/workflows/ci.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # A fresh runner never reuses incremental artifacts; they only eat disk.
+      CARGO_INCREMENTAL: 0
+    steps:
+      # Build scripts and tests run PR code; keep the token out of .git/config.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - run: cargo fmt --all --check
+      # The shipped, test-hooks-off build, which clippy --all-targets does not compile. It also
+      # puts the binaries on disk that goalcup-devserver's api_gate test drives.
+      - run: cargo build --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli

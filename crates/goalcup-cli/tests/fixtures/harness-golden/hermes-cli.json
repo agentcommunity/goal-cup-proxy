@@ -1,0 +1,1136 @@
+{
+  "allowance_refusals": [
+    {
+      "args": "profile_args",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(python3 demo.py *)"
+    },
+    {
+      "args": "profile_args",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(python3 ../x.py *)"
+    },
+    {
+      "args": "profile_args",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(python3 demo.py)"
+    },
+    {
+      "args": "profile_args",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(*)"
+    },
+    {
+      "args": "profile_args",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": ""
+    },
+    {
+      "args": "profile_args_with_allowedtools",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(python3 demo.py *)"
+    },
+    {
+      "args": "profile_args_with_allowedtools",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(python3 ../x.py *)"
+    },
+    {
+      "args": "profile_args_with_allowedtools",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(python3 demo.py)"
+    },
+    {
+      "args": "profile_args_with_allowedtools",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(*)"
+    },
+    {
+      "args": "profile_args_with_allowedtools",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": ""
+    },
+    {
+      "args": "profile_args_without_separator",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(python3 demo.py *)"
+    },
+    {
+      "args": "profile_args_without_separator",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(python3 ../x.py *)"
+    },
+    {
+      "args": "profile_args_without_separator",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(python3 demo.py)"
+    },
+    {
+      "args": "profile_args_without_separator",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": "Bash(*)"
+    },
+    {
+      "args": "profile_args_without_separator",
+      "refusal": "only the pinned claude-code-cli profile may carry one",
+      "rule": ""
+    }
+  ],
+  "argv_deny": [
+    {
+      "arg": "--remote",
+      "for_family": null,
+      "generic": "runs the session somewhere else"
+    },
+    {
+      "arg": "--remote=host",
+      "for_family": null,
+      "generic": "runs the session somewhere else"
+    },
+    {
+      "arg": "remote",
+      "for_family": null,
+      "generic": "runs the session somewhere else"
+    },
+    {
+      "arg": "REMOTE",
+      "for_family": null,
+      "generic": "runs the session somewhere else"
+    },
+    {
+      "arg": "remote-control",
+      "for_family": null,
+      "generic": "hands the session to a remote controller"
+    },
+    {
+      "arg": "cloud",
+      "for_family": null,
+      "generic": "runs the session somewhere else"
+    },
+    {
+      "arg": "--oss",
+      "for_family": null,
+      "generic": "switches to another model provider"
+    },
+    {
+      "arg": "--local-provider",
+      "for_family": null,
+      "generic": "switches to another model provider"
+    },
+    {
+      "arg": "--ephemeral",
+      "for_family": null,
+      "generic": "turns the native session store off"
+    },
+    {
+      "arg": "--no-session-persistence",
+      "for_family": null,
+      "generic": "turns the native session store off"
+    },
+    {
+      "arg": "--settings",
+      "for_family": null,
+      "generic": "loads settings from outside the profile, which can set any of this list"
+    },
+    {
+      "arg": "--settings=/x.json",
+      "for_family": null,
+      "generic": "loads settings from outside the profile, which can set any of this list"
+    },
+    {
+      "arg": "--profile",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": "loads a configuration profile from outside the capture profile"
+    },
+    {
+      "arg": "--profile=work",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": "loads a configuration profile from outside the capture profile"
+    },
+    {
+      "arg": "--plugin-dir",
+      "for_family": null,
+      "generic": "loads plugin code into the harness"
+    },
+    {
+      "arg": "--base-url=http://x",
+      "for_family": null,
+      "generic": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "--base_url",
+      "for_family": null,
+      "generic": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "openai_base_url=http://x",
+      "for_family": null,
+      "generic": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "ANTHROPIC_BASE_URL=http://x",
+      "for_family": null,
+      "generic": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "{\"baseUrl\":\"http://x\"}",
+      "for_family": null,
+      "generic": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "--api-url=http://x",
+      "for_family": null,
+      "generic": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "--endpoint=http://x",
+      "for_family": null,
+      "generic": "redirects an endpoint (D1)"
+    },
+    {
+      "arg": "--model-provider=x",
+      "for_family": null,
+      "generic": "switches to another model provider"
+    },
+    {
+      "arg": "--bedrock",
+      "for_family": null,
+      "generic": "switches to another model provider"
+    },
+    {
+      "arg": "--vertex",
+      "for_family": null,
+      "generic": "switches to another model provider"
+    },
+    {
+      "arg": "--foundry",
+      "for_family": null,
+      "generic": "switches to another model provider"
+    },
+    {
+      "arg": "profile=x",
+      "for_family": null,
+      "generic": "selects a configuration profile from outside the capture profile"
+    },
+    {
+      "arg": "--api-key=k",
+      "for_family": null,
+      "generic": "carries a provider credential"
+    },
+    {
+      "arg": "--auth-token=k",
+      "for_family": null,
+      "generic": "carries a provider credential"
+    },
+    {
+      "arg": "Authorization: Bearer k",
+      "for_family": null,
+      "generic": "carries a provider credential"
+    },
+    {
+      "arg": "--credential=k",
+      "for_family": null,
+      "generic": "carries a provider credential"
+    },
+    {
+      "arg": "--proxy=http://x",
+      "for_family": null,
+      "generic": "sets a proxy the capture launch does not own"
+    },
+    {
+      "arg": "--cacert=x",
+      "for_family": null,
+      "generic": "changes which certificates the harness trusts"
+    },
+    {
+      "arg": "--ca-bundle=x",
+      "for_family": null,
+      "generic": "changes which certificates the harness trusts"
+    },
+    {
+      "arg": "--certfile=x",
+      "for_family": null,
+      "generic": "changes which certificates the harness trusts"
+    },
+    {
+      "arg": "--reject-unauthorized=false",
+      "for_family": null,
+      "generic": "turns certificate verification off"
+    },
+    {
+      "arg": "--otel-exporter=x",
+      "for_family": null,
+      "generic": "exports telemetry somewhere the capture does not see"
+    },
+    {
+      "arg": "DYLD_INSERT_LIBRARIES=x",
+      "for_family": null,
+      "generic": "injects code into the harness"
+    },
+    {
+      "arg": "LD_PRELOAD=x",
+      "for_family": null,
+      "generic": "injects code into the harness"
+    },
+    {
+      "arg": "--node-options=--require",
+      "for_family": null,
+      "generic": "injects code into the harness"
+    },
+    {
+      "arg": "--bun-options=x",
+      "for_family": null,
+      "generic": "injects code into the harness"
+    },
+    {
+      "arg": "-Q",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-p",
+      "for_family": "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)",
+      "generic": null
+    },
+    {
+      "arg": "-pwork",
+      "for_family": "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)",
+      "generic": null
+    },
+    {
+      "arg": "-p=work",
+      "for_family": "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)",
+      "generic": null
+    },
+    {
+      "arg": "-h",
+      "for_family": "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)",
+      "generic": null
+    },
+    {
+      "arg": "-Qh",
+      "for_family": "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)",
+      "generic": null
+    },
+    {
+      "arg": "-Qp",
+      "for_family": "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)",
+      "generic": null
+    },
+    {
+      "arg": "-Qpfoo",
+      "for_family": "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)",
+      "generic": null
+    },
+    {
+      "arg": "-Qmfoo",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-Qmph",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-m",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-z",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-t",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-r",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-s",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-q",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-c",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-C",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "-",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "chat",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "exec",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--json",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--provider",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--model",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--model=x",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--query",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--query=hello",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--prof",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--profil",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--p",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--pro",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--tu",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--tui",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--cli",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--cl",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--c",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--hel",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--help",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--he",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--h",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--help=x",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--tui=x",
+      "for_family": "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)",
+      "generic": null
+    },
+    {
+      "arg": "--ta",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--permission-mode",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--session-id",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--output-format",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--strict-mcp-config",
+      "for_family": null,
+      "generic": null
+    },
+    {
+      "arg": "--skip-git-repo-check",
+      "for_family": null,
+      "generic": null
+    }
+  ],
+  "ca": {
+    "ca_env": [
+      {
+        "mode": "replaces_roots_for_one_family",
+        "name": "HERMES_CA_BUNDLE",
+        "value_in_plan": "<TMP>/proxy-ca.pem"
+      }
+    ],
+    "extends_roots_list": [
+      "CODEX_CA_CERTIFICATE",
+      "NODE_EXTRA_CA_CERTS"
+    ],
+    "replaces_roots_by_family": [
+      [
+        "hermes",
+        "HERMES_CA_BUNDLE"
+      ]
+    ]
+  },
+  "capture_profile": {
+    "args": [
+      "chat",
+      "-Q",
+      "--provider",
+      "deepseek",
+      "--model",
+      "deepseek-v4-flash"
+    ],
+    "auth_hosts": [],
+    "automatic_goal": true,
+    "ca_env": [
+      "HERMES_CA_BUNDLE"
+    ],
+    "config_home": "per_run",
+    "continuation": "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null",
+    "credential_env": "DEEPSEEK_API_KEY",
+    "env": {
+      "TERMINAL_HOME_MODE": "profile"
+    },
+    "executable": {
+      "sha256": "0444572f0bce8a805473fbcaa431beed399818528758b454fbf24825a51be325",
+      "version": "0.19.0"
+    },
+    "goal_flag": "--query",
+    "home": "empty",
+    "hosts": [
+      {
+        "evidence_paths": [
+          "/v1/chat/completions"
+        ],
+        "host": "api.deepseek.com",
+        "prefix_paths": [],
+        "protocol_hint": "openai-chat-completions"
+      }
+    ]
+  },
+  "connector": {
+    "capture_only": true,
+    "family": "hermes",
+    "files_dir": [
+      {
+        "bytes": 62,
+        "name": ".update_check",
+        "sha256": "dcfb6cfc5df1a9d6fcdc45647d39ebe7068e5075ba7589085d8a7d8e681c441b"
+      },
+      {
+        "bytes": 94,
+        "name": "auth.json",
+        "sha256": "4f91563bdf8e30e3023507aa8d209e32dd052a041374f1fddaf9e820ade5702e"
+      },
+      {
+        "bytes": 1026,
+        "name": "config.yaml",
+        "sha256": "7b8f737d6ed2fa838cf259cf47c9b98308dd1f380f8271d84170e553a870579e"
+      }
+    ],
+    "id": "hermes-cli",
+    "launch_home_env": "HERMES_HOME",
+    "launch_program": "hermes",
+    "validate_capture": "ok",
+    "validates": "ok"
+  },
+  "credential": {
+    "allowed_names": [
+      "DEEPSEEK_API_KEY"
+    ],
+    "child_secret_from_env": {
+      "bad_characters": "error:exit1",
+      "empty": "error:exit1",
+      "quote": "error:exit1",
+      "too_short": "error:exit1",
+      "unset": "error:exit1",
+      "well_formed": "secret:DEEPSEEK_API_KEY"
+    },
+    "credential_env": "DEEPSEEK_API_KEY"
+  },
+  "env_deny": [
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "HOME"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "home"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "PATH"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "USER"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "LOGNAME"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "TMPDIR"
+    },
+    {
+      "denied": null,
+      "name": "SHELL"
+    },
+    {
+      "denied": null,
+      "name": "LANG"
+    },
+    {
+      "denied": null,
+      "name": "TERM"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "EDITOR"
+    },
+    {
+      "denied": null,
+      "name": "CI"
+    },
+    {
+      "denied": null,
+      "name": "DISABLE_AUTOUPDATER"
+    },
+    {
+      "denied": null,
+      "name": "ENABLE_CLAUDEAI_MCP_SERVERS"
+    },
+    {
+      "denied": null,
+      "name": "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS"
+    },
+    {
+      "denied": null,
+      "name": "TERMINAL_HOME_MODE"
+    },
+    {
+      "denied": null,
+      "name": "CODEX_HOME"
+    },
+    {
+      "denied": null,
+      "name": "codex_home"
+    },
+    {
+      "denied": null,
+      "name": "CLAUDE_CONFIG_DIR"
+    },
+    {
+      "denied": null,
+      "name": "claude_config_dir"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "HERMES_HOME"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "hermes_home"
+    },
+    {
+      "denied": null,
+      "name": "WORKLOAD_HOME"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "OPENAI_BASE_URL"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "ANTHROPIC_BASE_URL"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "CODEX_BASE_URL"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "FOO_API_URL"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "MY_ENDPOINT"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "HTTPS_PROXY"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "https_proxy"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "HTTP_PROXY"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "ALL_PROXY"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "NO_PROXY"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "PROXY"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "GITHUB_TOKEN"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "MY_SECRET"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "DB_PASSWORD"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "X_CREDENTIAL"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "OPENAI_API_KEY"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "DEEPSEEK_API_KEY"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "APIKEY_X"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "SOME_KEY"
+    },
+    {
+      "denied": null,
+      "name": "KEYBOARD"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "AUTH_URL"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "SSH_AUTH_SOCK"
+    },
+    {
+      "denied": "switches to another model provider",
+      "name": "MODEL_PROVIDER"
+    },
+    {
+      "denied": "switches to another model provider",
+      "name": "LLM_PROVIDER"
+    },
+    {
+      "denied": "changes certificate trust: a CA variable belongs in `capture.ca_env`, not `capture.env`",
+      "name": "CODEX_CA_CERTIFICATE"
+    },
+    {
+      "denied": "changes certificate trust: a CA variable belongs in `capture.ca_env`, not `capture.env`",
+      "name": "NODE_EXTRA_CA_CERTS"
+    },
+    {
+      "denied": "changes certificate trust, which no capture profile sets",
+      "name": "SSL_CERT_FILE"
+    },
+    {
+      "denied": "changes certificate trust, which no capture profile sets",
+      "name": "SSL_CERT_DIR"
+    },
+    {
+      "denied": "changes certificate trust, which no capture profile sets",
+      "name": "CURL_CA_BUNDLE"
+    },
+    {
+      "denied": "changes certificate trust, which no capture profile sets",
+      "name": "REQUESTS_CA_BUNDLE"
+    },
+    {
+      "denied": "changes certificate trust: a CA variable belongs in `capture.ca_env`, not `capture.env`",
+      "name": "HERMES_CA_BUNDLE"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "NODE_TLS_REJECT_UNAUTHORIZED"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "NODE_OPTIONS"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "NODE_PATH"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "BUN_OPTIONS"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "BASH_ENV"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "ENV"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "ZDOTDIR"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PYTHONSTARTUP"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PYTHONPATH"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PYTHONHOME"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PYTHONUSERBASE"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PERL5OPT"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "RUBYOPT"
+    },
+    {
+      "denied": "configures the model provider",
+      "name": "ANTHROPIC_MODEL"
+    },
+    {
+      "denied": "configures the model provider",
+      "name": "OPENAI_ORG_ID"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "AZURE_X"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "AWS_REGION"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "GOOGLE_X"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "GCLOUD_X"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "VERTEX_X"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "CLOUD_ML_X"
+    },
+    {
+      "denied": "switches to another model provider",
+      "name": "CLAUDE_CODE_USE_BEDROCK"
+    },
+    {
+      "denied": "exports telemetry somewhere the capture does not see",
+      "name": "OTEL_X"
+    },
+    {
+      "denied": "injects code into the harness",
+      "name": "DYLD_X"
+    },
+    {
+      "denied": "injects code into the harness",
+      "name": "LD_X"
+    },
+    {
+      "denied": "injects code into the harness",
+      "name": "LD_LIBRARY_PATH"
+    },
+    {
+      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "name": "HERMES_X"
+    },
+    {
+      "denied": "relocates the configuration and state of every tool child (XDG_* is not part of schema 1)",
+      "name": "XDG_CONFIG_HOME"
+    },
+    {
+      "denied": "relocates the configuration and state of every tool child (XDG_* is not part of schema 1)",
+      "name": "XDG_DATA_HOME"
+    },
+    {
+      "denied": "configures git, whose environment can name a command, a pager, an editor or a config to run",
+      "name": "GIT_CONFIG_GLOBAL"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "GIT_SSH_COMMAND"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "GIT_ASKPASS"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "JAVA_TOOL_OPTIONS"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PERL5LIB"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "RUBYLIB"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PROMPT_COMMAND"
+    },
+    {
+      "denied": "reconfigures npm, which can redirect registries and run commands",
+      "name": "npm_config_prefix"
+    },
+    {
+      "denied": "is the tracker's own namespace, and a harness is delivery-agnostic",
+      "name": "GOALCUP_X"
+    },
+    {
+      "denied": null,
+      "name": "FOO"
+    }
+  ],
+  "goal_placement_for_an_option_shaped_goal": {
+    "argv_len": 7,
+    "goal_index": 6,
+    "goal_prefix": 8,
+    "tail": [
+      "deepseek-v4-flash",
+      "--query=--profile evil -p x"
+    ]
+  },
+  "home": {
+    "dir_name": "hermes",
+    "kind": "per_run",
+    "returned_under_run_dir": true,
+    "tree": [
+      {
+        "mode": "0700",
+        "path": ".",
+        "type": "dir"
+      },
+      {
+        "bytes": 62,
+        "mode": "0600",
+        "path": ".update_check",
+        "sha256": "dcfb6cfc5df1a9d6fcdc45647d39ebe7068e5075ba7589085d8a7d8e681c441b",
+        "type": "file"
+      },
+      {
+        "bytes": 94,
+        "mode": "0600",
+        "path": "auth.json",
+        "sha256": "4f91563bdf8e30e3023507aa8d209e32dd052a041374f1fddaf9e820ade5702e",
+        "type": "file"
+      },
+      {
+        "bytes": 1026,
+        "mode": "0600",
+        "path": "config.yaml",
+        "sha256": "7b8f737d6ed2fa838cf259cf47c9b98308dd1f380f8271d84170e553a870579e",
+        "type": "file"
+      },
+      {
+        "mode": "0700",
+        "path": "home",
+        "type": "dir"
+      }
+    ]
+  },
+  "plan": {
+    "argv": [
+      "chat",
+      "-Q",
+      "--provider",
+      "deepseek",
+      "--model",
+      "deepseek-v4-flash",
+      "--query=write result.txt"
+    ],
+    "capture": {
+      "goal_index": 6,
+      "goal_prefix": 8
+    },
+    "cwd": "<TMP>/workspace",
+    "env_base_keys": [],
+    "env_remove": [],
+    "env_set": {
+      "HERMES_CA_BUNDLE": "<TMP>/proxy-ca.pem",
+      "HERMES_HOME": "<TMP>/harness-home",
+      "HOME": "<TMP>/run-home",
+      "HTTPS_PROXY": "<PROXY_URL>",
+      "LOGNAME": "participant",
+      "NO_PROXY": "127.0.0.1,localhost",
+      "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+      "TERMINAL_HOME_MODE": "profile",
+      "TMPDIR": "/private/tmp/participant-tmp/",
+      "USER": "participant",
+      "https_proxy": "<PROXY_URL>",
+      "no_proxy": "127.0.0.1,localhost"
+    },
+    "kill": {
+      "grace_seconds": 10,
+      "native_binary": null,
+      "strategy": "process_group"
+    },
+    "mode": "Server",
+    "program": "<TMP>/bin/fake-harness"
+  },
+  "plan_with_claude_tool_allowance": {
+    "refused": "exit1"
+  },
+  "redaction": {
+    "extra_patterns": []
+  },
+  "streams": {
+    "decision": "MarkedAndScanned",
+    "pipes": {
+      "stderr": true,
+      "stdout": true
+    }
+  },
+  "termination": {
+    "kill": {
+      "grace_seconds": 10,
+      "native_binary": null,
+      "strategy": "process_group"
+    },
+    "registered_handle": {
+      "argv": [
+        "chat",
+        "-Q",
+        "--provider",
+        "deepseek",
+        "--model",
+        "deepseek-v4-flash",
+        "--query=<goal>"
+      ],
+      "env_keys": [
+        "HERMES_CA_BUNDLE",
+        "HERMES_HOME",
+        "HOME",
+        "HTTPS_PROXY",
+        "LOGNAME",
+        "NO_PROXY",
+        "PATH",
+        "TERMINAL_HOME_MODE",
+        "TMPDIR",
+        "USER",
+        "https_proxy",
+        "no_proxy"
+      ],
+      "grace_seconds": 10,
+      "has_process_start": true,
+      "home_seed": false,
+      "native_binary": null,
+      "native_pid_found": false,
+      "pgid_is_pid": false,
+      "program": "<TMP>/bin/fake-harness",
+      "strategy": "process_group"
+    }
+  }
+}

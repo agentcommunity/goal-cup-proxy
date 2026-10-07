@@ -1,0 +1,66 @@
+# Claude Code 2.1.283, capture profile (T14; D38, D39). Recipe: docs/qualification/m2/launch-recipes.md §8.
+schema_version = 1
+id = "claude-code-cli"
+
+[capture]
+auth_hosts = ["platform.claude.com"]
+continuation = "none: claude -p one turn, acceptEdits, permission prompts denied, stdin /dev/null"
+args = [
+  "-p",
+  "--model", "haiku",
+  "--effort", "low",
+  "--permission-mode", "acceptEdits",
+  "--permission-prompts", "none",
+  "--session-id", "{session_id}",
+  "--output-format", "json",
+  "--strict-mcp-config",
+  "--mcp-config", '{{"mcpServers":{{}}}}',
+  "--",
+]
+
+[capture.executable]
+program = "claude"
+version = "2.1.283"
+sha256 = "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e"
+
+[capture.env]
+SHELL = "/bin/zsh"
+DISABLE_AUTOUPDATER = "1"
+ENABLE_CLAUDEAI_MCP_SERVERS = "false"
+CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS = "1"
+
+# D38: HOME holds only Library/Keychains; CLAUDE_CONFIG_DIR is the shared isolated dir.
+[capture.home]
+run_home = "keychain_link"
+config_home = "shared"
+env = "CLAUDE_CONFIG_DIR"
+real_dirs = ["{user_home}/.claude"]
+
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+[capture.identity]
+source = "preassigned"
+binding = "at_launch"
+
+[[capture.native]]
+name = "main"
+root = "{config_home}/projects"
+pattern = "*/{id}.jsonl"
+form = "append_only"
+protocol_hint = "claude-code-jsonl"
+
+[capture.termination]
+strategy = "process_group"
+grace_seconds = 10
+
+[redaction]
+extra_patterns = [
+  { kind = "anthropic_billing_header", regex = 'x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+' },
+]
+
+[[capture.hosts]]
+host = "api.anthropic.com"
+evidence_paths = ["/v1/messages"]
+protocol_hint = "anthropic-messages"

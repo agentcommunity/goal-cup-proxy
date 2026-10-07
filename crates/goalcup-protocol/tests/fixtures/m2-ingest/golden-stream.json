@@ -1,0 +1,118 @@
+{
+  "description": "C2 ingest golden (M2 T00): one length-framed handshake, then length-framed IngestMessage items. Every item, the handshake included, is a big-endian u32 body length followed by compact JSON; the handshake body is at most 1 KiB, every later body at most MAX_INGEST_FRAME_BYTES. The token is synthetic. golden-stream.hex holds the exact bytes, one framed item per line.",
+  "handshake": {
+    "entry_id": "entry-m2-0001",
+    "producer": "7a3f9c21d4e58b06a1c2d3e4f5061728",
+    "token": "synthetic-launch-token-0000000000000000000000000000000000000000"
+  },
+  "messages": [
+    {
+      "event": {
+        "connection": "5e1f0a2b3c4d5e6f708192a3b4c5d6e7",
+        "event": {
+          "alpn": "http/1.1",
+          "already_open": false,
+          "kind": "open"
+        },
+        "kind": "connection"
+      },
+      "kind": "frame",
+      "observed": {
+        "clock_id": "7a3f9c21d4e58b06a1c2d3e4f5061728",
+        "mono_ns": 100,
+        "wall": "2026-09-27T10:00:00.100Z"
+      },
+      "seq": 0,
+      "stream": {
+        "producer": "7a3f9c21d4e58b06a1c2d3e4f5061728",
+        "stream": 0
+      }
+    },
+    {
+      "event": {
+        "kind": "open",
+        "metadata": {
+          "content_type": "application/json",
+          "host": "api.example.test",
+          "label": "POST /v1/responses",
+          "method": "POST",
+          "path": "/v1/responses",
+          "protocol_hint": "openai-responses",
+          "status": null,
+          "wire": {
+            "connection": "5e1f0a2b3c4d5e6f708192a3b4c5d6e7",
+            "exchange": 1,
+            "message_index": null
+          }
+        },
+        "source": "wire_request"
+      },
+      "kind": "frame",
+      "observed": {
+        "clock_id": "7a3f9c21d4e58b06a1c2d3e4f5061728",
+        "mono_ns": 200,
+        "wall": "2026-09-27T10:00:00.100Z"
+      },
+      "seq": 1,
+      "stream": {
+        "producer": "7a3f9c21d4e58b06a1c2d3e4f5061728",
+        "stream": 1
+      }
+    },
+    {
+      "event": {
+        "data": [
+          123,
+          34,
+          105,
+          110,
+          112,
+          117,
+          116,
+          34,
+          58,
+          34,
+          104,
+          105,
+          34,
+          125
+        ],
+        "kind": "bytes",
+        "offset": 0
+      },
+      "kind": "frame",
+      "observed": {
+        "clock_id": "7a3f9c21d4e58b06a1c2d3e4f5061728",
+        "mono_ns": 300,
+        "wall": "2026-09-27T10:00:00.100Z"
+      },
+      "seq": 2,
+      "stream": {
+        "producer": "7a3f9c21d4e58b06a1c2d3e4f5061728",
+        "stream": 1
+      }
+    },
+    {
+      "event": {
+        "kind": "end",
+        "reason": "complete"
+      },
+      "kind": "frame",
+      "observed": {
+        "clock_id": "7a3f9c21d4e58b06a1c2d3e4f5061728",
+        "mono_ns": 400,
+        "wall": "2026-09-27T10:00:00.100Z"
+      },
+      "seq": 3,
+      "stream": {
+        "producer": "7a3f9c21d4e58b06a1c2d3e4f5061728",
+        "stream": 1
+      }
+    },
+    {
+      "final_seq": 3,
+      "kind": "close",
+      "producer": "7a3f9c21d4e58b06a1c2d3e4f5061728"
+    }
+  ]
+}

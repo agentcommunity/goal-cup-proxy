@@ -1,0 +1,389 @@
+# Codex CLI, launch mode. Measured `full` in DECISIONS D23.
+# Values from spikes/codex-cli/REPORT.md (spike 2, codex-cli 0.153.0).
+id = "codex-cli"
+family = "codex"
+tier = "full"
+tested_version_range = "=0.153.0"
+# D2/V8: the exec-family id spaces are disjoint (`exec-<uuid>` on leg 2, `call_<id>` on
+# leg 1), so the join is turn plus order. The `collaboration*` tools do share `call_` ids
+# across both legs — measured, see Task 7 — which is exactly why the join must not be by id.
+join_key = "turn_id+order"
+unsafe_cursors = []
+heartbeat_seconds = 60
+# `config_dir` is CODEX_HOME for this run. D9: a lockless resume becomes a new thread.
+#
+# The lock is the PER-THREAD FILE, not the directory around it (dogfood C4). Codex makes
+# `thread-writer-locks/` at startup and never removes it, and it drops `.coordination.lock`
+# — 0 bytes, no holder, `lsof` empty — inside it and leaves that behind too. Both survive a
+# clean `/quit`, so a rule that read the directory refused every resume of a run that had
+# ended properly: the participant was told to clear "the residue of a hard kill" over a file
+# the harness leaves after a normal exit, and had to `rm` it by hand on every leg. What
+# Codex actually holds while a thread is open is `thread-writer-locks/<thread id>.lock`,
+# which spike 2 measured from both sides — orphaned processes kept it after a `kill -9` of
+# the npm wrapper (M0 §2.5, the silent-degrade case this rule exists for), and a clean
+# SIGTERM removed it.
+#
+# `{session_id}` is the BOUND thread, which is what the daemon renders. This machine's own
+# record still names the id the daemon minted until a first resume writes the bound one
+# back, so on a FIRST resume the CLI's pre-POST check looks at a name no harness made and
+# finds nothing; the daemon's own check, which the POST runs, renders the bound id and
+# refuses. What that one case loses is the pid in the message, not the refusal.
+lock_paths = ["{config_dir}/thread-writer-locks/{session_id}.lock"]
+# `{config_dir}/config.toml` is NOT here any more (dogfood C2/C5): the tracker writes it
+# itself now, so it is a `hook_install[]` file, watched and restored like the other two the
+# tracker renders. A manifest naming one file on both lists is refused, and rightly — the
+# lists mean opposite things.
+config_allowlist = [
+  "{config_dir}/hooks.json",
+  "{config_dir}/requirements.toml",
+]
+workspace_exclusions = [".codex", ".git"]
+archive_sources = []
+
+[detection]
+binary = "codex"
+version_command = "codex --version"
+
+[arming]
+signal = "SessionStart"                      # with cwd == the workspace
+timeout_seconds = 300
+recipe = "launch with --dangerously-bypass-hook-trust or managed hooks in requirements.toml"
+
+[start_signal]
+required = true                              # untrusted hooks are skipped in silence
+
+[blocking]
+capability = "blocking"
+response_shape = "decision_block"
+blocked_persists_at = ["{config_dir}/history.jsonl"]
+
+[kill]
+strategy = "native_pid"                      # D22: kill -9 on the npm wrapper killed the wrapper only
+native_binary = "codex"
+grace_seconds = 10
+
+# D11 / B-3, corrected 2026-09-04 (review, task-11): the parser emits the *raw* tool
+# names Codex's `exec`-as-JS-macro convention actually uses (`exec`, `spawn_agent`,
+# `wait_agent`), never the classic `shell`/`apply_patch` function-call names this file
+# declared before — so the write set was silently empty on every real capture. `exec` is
+# both a write and a shell-class call (its argument text embeds the shell command or the
+# `apply_patch` DSL as a JS-source string); `apply_patch` is kept as a non-shell write
+# name for a future Codex version that calls it directly rather than through `exec`.
+[tool_classes]
+write = ["exec", "apply_patch"]
+shell = ["exec"]
+
+# R8 sentence 2 / D10. Spike 3 P3 measured exactly this: a standalone Codex session,
+# unpinned, working inside a tracked workspace.
+[[foreign_scan]]
+harness = "codex-cli"
+path_glob = "{home}/.codex/sessions/*/*/*/rollout-*.jsonl"
+directory_field = "payload.cwd"
+# `payload.session_id` and NOT `payload.id` (dogfood C1, measured 2026-09-07 on the first
+# Codex run that got past the sign-in screen). This connector's OWN `foreign_scan` entry is
+# also where `EntryRuntime::session_of` reads the session of every leg-1 record, and the
+# arming gate keeps the LAST one it saw. On a Codex rollout the two fields are not the same
+# thing: `session_meta` opens the file carrying both, equal, and the THREAD id — but every
+# `response_item` that follows carries `payload.id` alone, and it is the id of that ITEM.
+# So the run bound `msg_01a07bba-2414-7483-9d9f-dce7c114f4a8`, a turn, as the session of a
+# thread that was `01a07bb9-2737-7f41-a8d5-3f190683772f` — the id the rollout FILENAME
+# carries, `session_index.jsonl` and `history.jsonl` agree on, and all eight hook posts send
+# as `payload.session_id`.
+#
+# Nothing downstream recovers. `goalcup resume` renders `codex resume msg_…`, Codex answers
+# "No saved session found with ID …" and exits 1; the tracked-session gate then matches no
+# record, so `tracked_sessions` names a turn, V1 reports `goal_missing`, and V4 reports the
+# real thread as a `foreign_session` and a `second_root_thread`. This is dogfood O14 —
+# already fixed once for OpenCode, where `data.info.id` was the same mistake — in codex-cli.
+#
+# `payload.session_id` resolves on `session_meta` and on `token_usage_record`, and on
+# nothing else in the file; the records between them fall back to `session_of`'s per-file
+# memo, which the opening `session_meta` taught. The foreign scan reads only a file's FIRST
+# record, where the two fields are equal, so it reads the same value it always did.
+session_id_field = "payload.session_id"
+
+[[foreign_scan]]
+harness = "claude-code-cli"
+path_glob = "{home}/.claude/projects/*/*.jsonl"
+directory_field = "cwd"
+session_id_field = "sessionId"
+reader = { kind = "file_first_identity" }
+
+# MF-5: spike 2 measured plan_type, credit balance and quota fifteen times in a ten-minute
+# session. D26 strips them before publication; these strip them before they are uploaded.
+#
+# Every pattern here puts the VALUE in capture group 1, which is the span the daemon
+# replaces (`Pattern::span_group`). The key, the colon and the field's own quotes stay, so
+# a record one of these fires on is still JSON — and it has to be, because these fields ride
+# in the same `token_count` event as the token totals V11 reports, and the verifier parses
+# redacted bytes. Matching the whole field instead unparsed the record and took the totals
+# with the plan.
+[redaction]
+extra_patterns = [
+  # The whole `rate_limits` object, braces included, is the span: the operator's plan,
+  # credits, quota and reset time all live inside it. The regex crate has no recursion, so
+  # the nesting is spelled out — a flat object, one level in, and one more, which covers
+  # the `{"primary": {…}, "secondary": {…}}` shape and the flat `_scrubbed` object the
+  # fixtures carry. An object nested deeper than that does not match at all, which leaks
+  # rather than corrupts; there is a note in the Task 7 report.
+  #
+  # An object cannot be replaced by a bare marker and stay a JSON value, so the daemon
+  # quotes this one: `"rate_limits": "<redacted:codex_rate_limits:…>"`. The field changes
+  # type, which a reader can see; it does not stop being a field.
+  { kind = "codex_rate_limits", regex = '"rate_limits"\s*:\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})' },
+  # A string value, so group 1 is its interior and the quotes around it are the record's
+  # own: `"plan_type":"<redacted:codex_plan_type:…>"`.
+  { kind = "codex_plan_type", regex = '"plan_type"\s*:\s*"([^"\\]+)"' },
+  # The credit balance MF-5 names beside plan_type. The spike measured it inside
+  # `rate_limits`, where it may be a number or a string, so group 1 is the whole value
+  # token either way — the quoted form with its quotes, the bare form without — and the
+  # daemon supplies the marker's quotes when the value had none.
+  { kind = "codex_credits_remaining", regex = '"credits_remaining"\s*:\s*("[^"\\]*"|[^,}\s]+)' },
+]
+
+# Dogfood O9, 2026-09-07. `CODEX_HOME` is the per-run home the daemon mints, and Codex keeps
+# its credential in `$CODEX_HOME/auth.json` — so a fresh entry meets the sign-in screen on a
+# machine whose participant signed in months ago, which is exactly where the first live Codex
+# run stopped (spikes/codex-cli/NOTES.md §1 records the same thing about the isolated home).
+#
+# So the one file is copied WHOLE, verbatim, mode 0600, out of the participant's own
+# `~/.codex` into the directory the tracker created for this run. It is the participant's own
+# credential, on their own machine, in a directory made for their own run: it is never
+# uploaded, never chained, and no trace names it. Nothing is written back to `~/.codex` —
+# `home_seed` has no field that could ask for that.
+#
+# The alternative, for a participant who would rather the tracker did not touch it: sign in
+# against this run's own home instead, with `CODEX_HOME=<entry home> codex login`, and this
+# section copies nothing (an `auth.json` already in the per-run home is left as it is). A
+# missing one is a line on screen, not a refusal.
+[home_seed]
+from_dir = "{home}/.codex"
+files = ["auth.json"]
+
+[launch]
+# Values line by line from spikes/codex-cli/run.sh. TUI only (extended persistence);
+# -C is the working root; the trust bypass is process-scoped, which is why it is an
+# argv flag and not a config write (D21).
+mode = "tui"
+program = "codex"
+args = ["--enable", "hooks", "-C", "{workspace}", "-s", "workspace-write",
+        "-a", "on-request", "--dangerously-bypass-hook-trust"]
+home_env = "CODEX_HOME"
+env_remove = ["OPENAI_BASE_URL", "CODEX_BASE_URL", "OPENAI_API_KEY"]
+banned_args = ["--ephemeral", "--remote", "exec", "queue", "fork", "remote-control"]
+
+[launch.env]
+CODEX_HOME = "{harness_home}"
+GOALCUP_RECV = "{receiver_http}"
+GOALCUP_TOKEN = "{receiver_token}"
+
+[resume]
+args = ["resume", "{session_id}", "--enable", "hooks", "-C", "{workspace}",
+        "-s", "workspace-write", "-a", "on-request", "--dangerously-bypass-hook-trust"]
+session_arg_style = "positional"
+
+[preflight]
+banned_env = ["CODEX_BASE_URL", "OPENAI_BASE_URL"]
+required_paths = ["{harness_home}"]
+free_ports = []
+
+[[hook_install]]
+path = ".codex/hooks.json"
+template = "hooks.json"
+scope = "workspace"
+restore_invalidates_trust = true             # D6: Codex trust is per-hook-hash
+
+[[hook_install]]
+path = ".codex/hooks/hook-post.sh"
+template = "hook-post.sh"
+scope = "workspace"
+mode = 493                                   # 0o755 — TOML has no octal literal
+pin_hash_as = "hooks_sha256"                 # R9: the shim reports the hooks.json hash
+
+# Dogfood C2, 2026-09-07. Codex 0.153.0 asks "Do you trust the contents of this directory?"
+# for the workspace, defaulting to a pre-selected "1. Yes, continue", and it gates the very
+# thing this connector needs: "Trusting the directory allows project-local config, HOOKS,
+# and exec policies to load." `--dangerously-bypass-hook-trust` does not suppress it — it
+# bypasses the per-hook-hash trust, which is a different question. Unanswered, no
+# `SessionStart` ever fires and the run dies at the 300 s arming gate, which is what
+# happened to entry e1e4d1f76eb323ad2. It is the Codex twin of the Claude Code trust
+# question DOGFOOD.md §1 already seeds away.
+#
+# Answering it writes exactly these two lines into `$CODEX_HOME/config.toml`, so the tracker
+# writes them first, into the home it made for this run. **Never `~/.codex`**: `config_dir`
+# is the per-run `CODEX_HOME` and nothing here can name the participant's own.
+#
+# It must come LAST in this list. `workspace::prepare` pins the shim's peer hash to the
+# first entry that declares no `pin_hash_as`, so an entry ahead of `hooks.json` would make
+# the shim report this file's digest instead of the hook config's.
+#
+# Measured on the isolated 0.153.0 with a fresh `CODEX_HOME` (fix 5): Codex starts with this
+# file already present, parses it without complaint and leaves it byte-identical — same
+# digest, same mtime. What that measurement could NOT reach, because the scratch home has no
+# credential and stops at the sign-in screen, is the trust question itself and the
+# `[tui.model_availability_nux]` table Codex wrote beside the trust lines on the live run.
+#
+# `harness_owned = true` is the answer to that table, and it is why this file is the one
+# `hook_install[]` entry the tracker does not guard. The table is keyed by the model slug the
+# account resolves at launch, which no manifest can pre-write because nothing knows it in
+# advance; and a guarded file is restored, so Codex would write its counter, the watch would
+# wipe it, and Codex would write it again on the very next launch — one `config_deviation`
+# and one `unattributed_config_change` Fail PER LAUNCH, on every honest run, for the life of
+# this connector. The restore would also re-show the tip modal, and a modal has already eaten
+# a submit Enter and cost entry e968829d7fbf2f2db. So the tracker writes this file only when
+# the home does not already hold one — the same "left as it is" rule `[home_seed]` applies to
+# `auth.json` in this same directory — and then leaves it alone for the rest of the run.
+#
+# Nothing this gave up was ever here: the hooks are the two `workspace`-scoped entries above,
+# watched, restored, and hash-pinned into the shim, so hooks removed or a receiver URL
+# changed still chain a deviation and still Fail V9 exactly as before. What it opens is one
+# bounded blind spot — an unwatched `config.toml` a participant can edit mid-run without
+# chaining an event — and that is written down in `docs/CHEAT-CHECKLIST.md`, where the thing
+# that catches it is the silence it produces: no leg-2 post for a prompt the rollout recorded
+# is an unwitnessed message at V2, a flag at V3, and the arming gate refusing.
+#
+# The file also carries `check_for_update_on_startup = false` (dogfood C3). Codex 0.153.0
+# opens an "Update available!" selector whose DEFAULT item runs `npm install -g @openai/codex`
+# on Enter, inside the tracked run: on the rerun's first leg-2 attempt it fired, printed
+# `Updating Codex via npm install -g @openai/codex…`, met `npm error EEXIST` and took the
+# harness down with `exit status: 1`. Nothing was installed that time, and the tracker cannot
+# stop a keystroke — but it can stop the modal, and this is Codex's own key for it. Measured
+# A/B on the isolated 0.153.0, two launches per home so the check's cache is warm: without the
+# key the home gets a `version.json` (`latest_version 0.153.4`) and the modal appears on the
+# second launch; with it, no `version.json` is ever written and no modal appears. The tracker
+# does not change which binary the run uses; it stops the run being asked to.
+#
+# It carries one more suppression, `[tui] hide_rate_limit_model_nudge = true`, for the second
+# modal of the same class: Lane Q0 measured "Approaching rate limits · Switch to
+# gpt-5.6-luna?" appear mid-run on 2026-09-15 and swallow a whole typed turn — the text and
+# its Enter were taken by the selector, the model was switched, and the session never received
+# the prompt. That is worse than the update modal, which at least failed loudly: this one
+# leaves a run that looks ordinary and is missing a turn the participant typed. The key was
+# verified present in the pinned 0.153.0 binary's `[tui]` table rather than taken from
+# documentation. Its two siblings there, `hide_gpt5_1_migration_prompt` and
+# `"hide_gpt-5.1-codex-max_migration_prompt"`, are set too: each is a migration modal of the
+# same class, the owner approved silencing them in principle, and both keys were likewise
+# verified present in the pinned 0.153.0 binary's `[tui]` table. The second sibling's key
+# must be quoted in `config.toml` — it contains dots, and an unquoted dotted TOML key builds
+# nested tables instead of a flat key, which this parser would accept and silently ignore.
+[[hook_install]]
+path = "config.toml"
+template = "config.toml"
+scope = "harness_home"
+restore_invalidates_trust = false            # hook trust is per-hook-hash; this is not it
+harness_owned = true                         # Codex's own file: write if absent, never watch
+
+[version]
+self_updating = false
+sample_interval_seconds = 300
+record_field = "session_meta.cli_version"    # frozen at thread creation; sample separately
+
+[normalisation]
+trailing_newline = true
+
+[receiver]
+token_field = "X-GoalCup-Token"
+
+[[store]]
+name = "rollout"
+mode = "jsonl"
+path_template = "{config_dir}/sessions/{yyyy}/{mm}/{dd}/rollout-*.jsonl"
+# gap-free per file, contiguous across a resume
+cursor = { type = "ordinal", column = "payload.ordinal" }
+partition_key = "session_meta.cwd"           # D20: the name V10 reports
+# …and the strategy the daemon runs: the file's FIRST session_meta decides for the
+# whole file. The subagent rollout's second session_meta is the parent's, verbatim.
+partition = { strategy = "file_first_record", select_path = "type", select_value = "session_meta", value_path = "payload.cwd" }
+subagent_path_template = "{config_dir}/sessions/{yyyy}/{mm}/{dd}/rollout-*.jsonl"
+
+# D2 / spike 2 A7: `history.jsonl` is the ONLY place the hook-blocked 4,100-character
+# prompt survives for the tracked thread, so the verifier reads it (fidelity N6) even
+# though it is not a rollout and carries no `session_meta`.
+[[store]]
+name = "history"
+mode = "jsonl"
+path_template = "{config_dir}/history.jsonl"
+cursor = { type = "inode_offset", column = "offset" }
+partition_key = "session_id"
+# A `direct` partition compares a THREAD id, not a path: the daemon must seed this
+# partitioner with `entry.session_id` when the session binds, not with the workspace
+# (M1b Task 17 / fidelity M2). Seeding it with a path discards every record.
+partition = { strategy = "direct", path = "session_id" }
+
+[human_rule]
+id = "codex-role-user-in-tracked-thread"
+byte_exact_field = "prompt"
+leg2_event = "UserPromptSubmit"
+pair_key = "turn_id"
+scoping = [
+  "first_session_meta_is_tracked",           # the subagent file's 2nd session_meta is the parent's
+  "not_subagent_thread_source",
+  "directory_equals_workspace",
+]
+positive = []                                 # no positive marker exists on 0.153; exclusion-driven
+# `queue`, `fork` and `remote-control` are banned argv but were never MEASURED as capture
+# channels (spike 2 open items). When one is, its exclusion id belongs here, exactly as
+# OpenCode's shell endpoint does.
+reportable_exclusions = []
+
+[[human_rule.exclusions]]
+id = "environment-context"
+rule = { match = "text_prefix", prefix = "<environment_context>" }
+
+[[human_rule.exclusions]]
+id = "recommended-plugins"
+rule = { match = "text_prefix", prefix = "<recommended_plugins>" }
+
+[[human_rule.exclusions]]
+id = "agents-md-instructions"
+rule = { match = "text_prefix", prefix = "# AGENTS.md instructions for " }
+
+[[human_rule.exclusions]]
+id = "model-switch"
+rule = { match = "text_prefix", prefix = "<model_switch>" }
+
+[[human_rule.exclusions]]
+id = "collaboration-mode"
+rule = { match = "text_prefix", prefix = "<collaboration_mode>" }
+
+# `source` is the provenance of the SILENCE policy, which this spike measured.
+# `hot_disable` is a different observation — whether the harness re-reads its hook config
+# mid-run — which no M0 spike probed, so it carries its own provenance below.
+[[hook_silence_policy]]
+event = "SessionStart"
+policy = "conditional"
+reason = "fires at the first prompt, not at launch (spike 2 Surprise 7, M0 §2.7)"
+hot_disable = "restart"
+hot_disable_source = "assumed"
+hot_disable_note = "spike 2 never ran the probe: REPORT.md says the hot-reload probe in NOTES.md §2 was never run, and its open-verification list still asks whether hooks reload mid-session when hooks.json changes"
+source = "measured"
+measured_on = "2026-09-03"
+
+[[hook_silence_policy]]
+event = "UserPromptSubmit"
+policy = "never_silent"
+hot_disable = "restart"
+hot_disable_source = "assumed"
+hot_disable_note = "spike 2 never ran the probe: REPORT.md says the hot-reload probe in NOTES.md §2 was never run, and its open-verification list still asks whether hooks reload mid-session when hooks.json changes"
+source = "measured"
+measured_on = "2026-09-03"
+
+[[hook_silence_policy]]
+event = "PermissionRequest"
+policy = "conditional"
+reason = "permission_mode default never asked"
+hot_disable = "restart"
+hot_disable_source = "assumed"
+hot_disable_note = "spike 2 never ran the probe: REPORT.md says the hot-reload probe in NOTES.md §2 was never run, and its open-verification list still asks whether hooks reload mid-session when hooks.json changes"
+source = "measured"
+measured_on = "2026-09-03"
+
+[[hook_silence_policy]]
+event = "SessionEnd"
+policy = "conditional"
+reason = "a hard kill produces none (A5)"
+hot_disable = "restart"
+hot_disable_source = "assumed"
+hot_disable_note = "spike 2 never ran the probe: REPORT.md says the hot-reload probe in NOTES.md §2 was never run, and its open-verification list still asks whether hooks reload mid-session when hooks.json changes"
+source = "measured"
+measured_on = "2026-09-03"

@@ -1,0 +1,105 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/goalcup-cli",
+    "crates/goalcup-daemon",
+    "crates/goalcup-devserver",
+    "crates/goalcup-mcp",
+    "crates/goalcup-platform",
+    "crates/goalcup-protocol",
+    "crates/goalcup-verifier",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "Apache-2.0"
+# 1.89: `std::fs::File::try_lock` (goalcup-cli resume.rs) needs it; locked dependencies need 1.88
+# (`time`, `rcgen`, the `icu_*` crates). Clippy's incompatible_msrv lint enforces this; a 1.89
+# toolchain build itself is not run here.
+rust-version = "1.89"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+ed25519-dalek = "2"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3"
+# The CLI's control-API client (`goalcup-cli`, M1c Task 7). A blocking HTTP/1.1 client and
+# nothing more. `default-features = false` here is the FLOOR, not the whole story: it drops
+# ureq's rustls stack and its gzip decoder, and each crate that needs more turns it back on
+# by name. `goalcup-cli` does, for `goalcup auth` alone — that one client crosses the
+# network, and its own manifest says why the `tls` feature is on there and nowhere else.
+# What this line buys is that a crate speaking only to 127.0.0.1 links no TLS at all.
+#
+# 2026-09-06, M1c Task 16: this comment used to end "a TLS implementation linked into a
+# binary that refuses every non-loopback URL is a dependency nothing can reach", which
+# stopped being true the moment `goalcup auth` was written. A comment describing a property
+# the tree no longer has is worse than none: a reader auditing the supply chain would have
+# concluded no crate here links rustls, and one does.
+ureq = { version = "2", default-features = false }
+# `goalcup ui`, and nothing else: one call that hands a loopback URL to the participant's
+# browser. The alternative was a per-platform `Command` — `open`, `xdg-open`, `start` —
+# spelled out in this tree, which is this crate with a maintenance burden attached.
+open = "5"
+# The entry registry and the write-ahead buffer. Two databases, not one, so
+# the registry survives a corrupted buffer.
+redb = "2"
+# The write-ahead buffer's per-run encryption (R12), through `age::scrypt` passphrase
+# recipients. `default-features = false` is the whole feature set this tree wants: no
+# `armor` (the buffer is bytes in a database, never text a human pastes), no `async`, no
+# `ssh`, no `plugin`, and above all no `cli-common` — that feature pulls in a terminal
+# prompt for a passphrase, and this daemon's passphrase is `RunKeys.buffer_key_hex`,
+# which no human ever types and no terminal ever sees.
+age = { version = "0.11", default-features = false }
+# `statvfs`, and nothing else: the free-space floor `Buffer::free_bytes` reports so the
+# daemon can reach `HealthState::DiskPressure` before an append fails with an opaque
+# database error (MF-10). std has no free-space call, and `df` would be a process spawn
+# on a health cadence.
+libc = "0.2"
+# `OsRng` for the three per-run secrets in `RunKeys`.
+rand = "0.8"
+# The SQLite tailer. `bundled` so the daemon reads a harness database through the SQLite
+# it was built against rather than whatever the participant's machine happens to ship:
+# a tracker whose reader differs per machine cannot claim to have read the same rows.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# The redaction pattern set (`goalcup-daemon/src/redact.rs`). R10's set is regular
+# expressions and nothing else; `regex` is the only crate in this tree that compiles one,
+# and the connector manifests carry participant-visible `extra_patterns[]` written in its
+# syntax.
+regex = "1"
+# A SQLite BLOB — and a TEXT column that is not valid UTF-8 — reaches the chain as base64,
+# which is what the M0 stub measured and what the committed fixtures hold.
+base64 = "0.22"
+# The hook receiver, the control endpoint and the dev-only signer. One TCP listener per
+# surface, loopback only; `default-features = false` because this tree wants none of
+# axum's optional extractors and, in particular, none of its `tracing` integration.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# The runtime under those listeners. No `fs`: filesystem I/O is `std::fs` on the polling
+# thread, which is the only thread allowed to touch a participant's disk.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
+# M2 recorder. The recording proxy is `goalcup-cli`'s `proxy` module (run in-process by
+# `goalcup start --goal-file`); nothing below is linked by the daemon. TLS termination and upstream
+# TLS use rustls with the `ring` provider only: `default-features = false` keeps the aws-lc
+# provider and its C build out of the tree, and `ring` is the provider ureq's `tls` links.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# The per-launch, process-scoped CA and its leaf certificates. `pem` writes the one CA file a
+# harness is pointed at through its own process-scoped variable; never system trust.
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+# Validation roots for the proxy's upstream (client-side) TLS.
+webpki-roots = "1"
+# The `Sec-WebSocket-Accept` derivation (RFC 6455 section 4.2.2: SHA-1 of the key plus a fixed
+# GUID, base64) in `proxy::http`. The proxy parses WebSocket frames itself, never buffering a
+# whole message, so no WebSocket library is linked.
+sha1 = "0.11"
+# HTTP content decoding and permessage-deflate, on the pure-Rust `miniz_oxide` backend only.
+# Its fixed 15-bit window is the strategy the proxy uses; the zlib-only window-size
+# constructors do not exist in this build and must not be called.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Tests only: parse the certificates the proxy mints.
+x509-parser = "0.18"

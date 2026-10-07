@@ -1,0 +1,66 @@
+# Hermes Agent 0.19.0, capture only (D40, D41). Provenance: docs/qualification/m2-hermes-readiness.md.
+schema_version = 1
+id = "hermes-cli"
+
+[capture]
+# hermes chat -Q --provider deepseek --model deepseek-v4-flash --query=<goal>
+args = ["chat", "-Q", "--provider", "deepseek", "--model", "deepseek-v4-flash"]
+goal_flag = "--query"
+continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
+
+[capture.executable]
+program = "hermes"
+version = "0.19.0"
+sha256 = "0444572f0bce8a805473fbcaa431beed399818528758b454fbf24825a51be325"
+
+[capture.env]
+TERMINAL_HOME_MODE = "profile"
+
+[capture.home]
+run_home = "empty"
+config_home = "per_run"
+env = "HERMES_HOME"
+per_run_dir = "hermes"
+dirs = ["home"]
+real_dirs = ["{user_home}/.hermes"]
+seed = [
+  { file = "config.yaml" },
+  { file = "auth.json" },
+  { file = ".update_check" },
+]
+
+[capture.credential]
+env = "DEEPSEEK_API_KEY"
+
+[capture.ca]
+env = ["HERMES_CA_BUNDLE"]
+mode = "replace"
+
+[capture.identity]
+source = "stderr_line"
+binding = "deferred"
+prefix = "session_id: "
+grammar = "timestamp-hex"
+
+# Only the run's own snapshot; never a request_dump_* file (D41). No decoder yet.
+[[capture.native]]
+name = "session"
+root = "{config_home}/sessions"
+pattern = "session_{id}.json"
+form = "snapshot"
+
+# Hermes scans raw argv for -p/--profile, --tui, --cli and -h before argparse, which abbreviates.
+[capture.argv_guard]
+long = ["profile", "tui", "cli", "help"]
+short = ["p", "h"]
+short_with_value = ["p", "z", "m", "t", "r", "s", "q", "c"]
+long_abbreviations = true
+
+[capture.termination]
+strategy = "process_group"
+grace_seconds = 10
+
+[[capture.hosts]]
+host = "api.deepseek.com"
+evidence_paths = ["/v1/chat/completions"]
+protocol_hint = "openai-chat-completions"

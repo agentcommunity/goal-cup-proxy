@@ -1,0 +1,80 @@
+{
+ "run_id": "cl-neg-missing-120526",
+ "harness": "claude",
+ "variant": "missing",
+ "proxy": false,
+ "started_utc": "2026-09-27T12:05:26.143Z",
+ "duration_s": 1.699,
+ "exit_code": 1,
+ "timed_out": false,
+ "timeout_s": 180,
+ "spawn_error": null,
+ "executable": "/Users/team/.local/bin/claude",
+ "executable_realpath": "/Users/team/.local/share/claude/versions/2.1.283",
+ "executable_sha256": "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
+ "argv_template": [
+  "/Users/team/.local/bin/claude",
+  "-p",
+  "--model",
+  "haiku",
+  "--effort",
+  "low",
+  "--permission-mode",
+  "acceptEdits",
+  "--permission-prompts",
+  "none",
+  "--session-id",
+  "05da53a2-6acb-4687-ae32-100edff80fdb",
+  "--output-format",
+  "json"
+ ],
+ "argc": 14,
+ "cwd": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-neg-missing-120526/ws",
+ "stdin": "/dev/null",
+ "env_names": [
+  "CLAUDE_CONFIG_DIR",
+  "DISABLE_AUTOUPDATER",
+  "HOME",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "TMPDIR",
+  "USER"
+ ],
+ "home": "real user HOME",
+ "env_values_nonsecret": {
+  "CLAUDE_CONFIG_DIR": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude",
+  "DISABLE_AUTOUPDATER": "1",
+  "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+  "SHELL": "/bin/zsh"
+ },
+ "exec_bytes": {
+  "strings": 445,
+  "strings_plus_pointers": 637
+ },
+ "session_id_preassigned": "05da53a2-6acb-4687-ae32-100edff80fdb",
+ "oracle": {
+  "ws_entries": [],
+  "outside_entries": []
+ },
+ "appwide_scope": {
+  "claude_default_projects_hits": 0
+ },
+ "goal": {
+  "bytes": 0,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "lines": 0,
+  "starts_with_dash": false,
+  "has_tab": false,
+  "has_double_space": false,
+  "non_ascii": false,
+  "text": ""
+ },
+ "stdout_summary": {
+  "parse": "not-json",
+  "len": 0,
+  "head": ""
+ },
+ "stderr_bytes": 321,
+ "native": []
+}

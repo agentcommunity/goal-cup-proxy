@@ -1,0 +1,137 @@
+{
+  "description": "goal-cup capture spike 3 (codex-app, attach mode). Folder-scoped: every hook event POSTs its raw stdin payload to the stub receiver on 127.0.0.1:7777 at /<EventName>. /Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z is replaced with the absolute workspace path by run.sh. Identical to spike 2's file except for this description and the substituted path, so a hash difference between the two spikes is only the shim path.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh SessionStart",
+            "statusMessage": "goal-cup capture: SessionStart"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh UserPromptSubmit",
+            "statusMessage": "goal-cup capture: UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh PreToolUse",
+            "statusMessage": "goal-cup capture: PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh PermissionRequest",
+            "statusMessage": "goal-cup capture: PermissionRequest"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh PostToolUse",
+            "statusMessage": "goal-cup capture: PostToolUse"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh SubagentStart",
+            "statusMessage": "goal-cup capture: SubagentStart"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh SubagentStop",
+            "statusMessage": "goal-cup capture: SubagentStop"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh PreCompact",
+            "statusMessage": "goal-cup capture: PreCompact"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh PostCompact",
+            "statusMessage": "goal-cup capture: PostCompact"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh Stop",
+            "statusMessage": "goal-cup capture: Stop"
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh Interrupt",
+            "statusMessage": "goal-cup capture: Interrupt"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/team/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks/hook-post.sh SessionEnd",
+            "statusMessage": "goal-cup capture: SessionEnd"
+          }
+        ]
+      }
+    ]
+  }
+}

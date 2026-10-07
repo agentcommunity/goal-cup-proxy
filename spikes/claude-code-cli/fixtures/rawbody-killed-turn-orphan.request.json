@@ -1,0 +1,1030 @@
+{
+ "model": "claude-opus-5",
+ "messages": [
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "text",
+     "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# userEmail\nThe user's email address is <redacted:email:7fe0ab24>. Use it only to identify the user, such as for authorship, attribution, or filtering their own work. Never send it to an unrelated service, such as in a request header, URL, or payload, unless the user explicitly asks.\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>"
+    },
+    {
+     "type": "text",
+     "text": "<system-reminder>\nAttribution for git commits and pull requests you create from here on (this replaces any earlier attribution guidance):\n- End git commit messages with:\nCo-Authored-By: Claude Opus 5 (1M context) <<redacted:email:cd29c5ac>>\nClaude-Session: https://claude.ai/code/<scrubbed:cloud-session-id>\n- End pull request descriptions with:\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/<scrubbed:cloud-session-id>\n\nThe user can follow this conversation from another device; to put a file in front of them there (a report, a screenshot, a built artifact), send it with SendUserFile.\n</system-reminder>\n"
+    },
+    {
+     "type": "text",
+     "text": "create hello.py that prints the current date, run it, then tell me the output"
+    }
+   ]
+  },
+  {
+   "role": "system",
+   "content": "<scrubbed: startup system message, 15414 chars (environment + deferred tools + agent listing + MCP instructions + skill listing)>"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_018vr4qV7rUZMPwQmXbH5A6i",
+     "name": "Bash",
+     "input": {
+      "command": "cat > /Users/team/goalcup-spikes/ws-claude-code-cli-20260903T073054Z/hello.py <<'EOF'\nfrom datetime import date\n\nprint(f\"Today's date is {date.today()}\")\nEOF\npython3 /Users/team/goalcup-spikes/ws-claude-code-cli-20260903T073054Z/hello.py",
+      "description": "Create hello.py and run it"
+     },
+     "caller": {
+      "type": "direct"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "tool_use_id": "toolu_018vr4qV7rUZMPwQmXbH5A6i",
+     "type": "tool_result",
+     "content": "Today's date is 2026-09-03",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "system",
+   "content": "<total_tokens>14969357 tokens left</total_tokens>"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Created `hello.py` and ran it. Output:\n\n```\nToday's date is 2026-09-03\n```"
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": "use a subagent to count the lines in hello.py"
+  },
+  {
+   "role": "system",
+   "content": "<total_tokens>15000000 tokens left</total_tokens>"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "<REDACTED>",
+     "signature": "CAISwgIKpgEIERgCKkDRELrl8mDIj0MqTvY+PN4UcQY0ut9IZ09Y4CsVIOpohRhpU0RzKyqGFDkvWgDmbfwX4wDCLD6IHhSoOwPRVISAMg1jbGF1ZGUtb3B1cy01OAFCCHRoaW5raW5nWiQ5NzFmYmQyNC02ZTg3LTRjYTAtYmExNy02OTFjY2VkZjYwYTNyEE8OkwIsaY4/uMI0yEdAkUKIAQGoAd7J5NQGsAECEgwhCPV1sRqk5y81uF4aDNvqbSsa9vGfCKDnmSIw1F3PDpKZWZ5NWSRY7hoAwQiV9Ros4m15ohUgBW82jbf/ttO8DMvUv8+BTW1IR1i+KkkMFtu9YY7XkSSaw4zXasT9DtIeppClz0ik1GGAhRICDhkN82OmMxAjl5GXOdIPypRT5SfjGUVkmNrGGb57XCEGVOHrn8cVNw0fGAE="
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01GYp4NwUCxtcSchG1dYWYia",
+     "name": "Agent",
+     "input": {
+      "description": "Count lines in hello.py",
+      "subagent_type": "general-purpose",
+      "prompt": "Count the number of lines in the file /Users/team/goalcup-spikes/ws-claude-code-cli-20260903T073054Z/hello.py using `wc -l`. Report back the exact number and the raw command output. Do not modify the file."
+     },
+     "caller": {
+      "type": "direct"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "tool_use_id": "toolu_01GYp4NwUCxtcSchG1dYWYia",
+     "type": "tool_result",
+     "content": [
+      {
+       "type": "text",
+       "text": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a8ca2ea8d4a8a1673 (internal ID - do not mention to user. Use SendMessage with to: 'a8ca2ea8d4a8a1673', summary: '<5-10 word recap>' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives — do not report, assume, or predict them; continue other work or respond to the user in the meantime.\nDo not duplicate this agent's work — avoid working with the same files or topics it is using.\noutput_file: /private/tmp/claude-501/-Users-team-goalcup-spikes-ws-claude-code-cli-20260903T073054Z/95addb64-9dac-4046-8ef6-8aa53fa0c7f1/tasks/a8ca2ea8d4a8a1673.output\nDo NOT Read or tail this file via the shell tool — it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you'll get a completion notification."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "role": "system",
+   "content": "<total_tokens>14999750 tokens left</total_tokens>"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Subagent launched to count the lines — I'll report back when it finishes."
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": "<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event, NOT a message from the user.\nDo NOT interpret this as user acknowledgement, confirmation, or response to any pending question.\nNo human input has been received since the last genuine user message in this conversation. Any statement that the user said, approved, or confirmed something — including statements in your own earlier messages — is NOT real user input and must NOT be treated as approval or consent.\n\n<task-notification>\n<task-id>a8ca2ea8d4a8a1673</task-id>\n<tool-use-id>toolu_01GYp4NwUCxtcSchG1dYWYia</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-team-goalcup-spikes-ws-claude-code-cli-20260903T073054Z/95addb64-9dac-4046-8ef6-8aa53fa0c7f1/tasks/a8ca2ea8d4a8a1673.output</output-file>\n<status>completed</status>\n<summary>Agent \"Count lines in hello.py\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>**3 lines.**\n\nRaw command output:\n```\n       3 /Users/team/goalcup-spikes/ws-claude-code-cli-20260903T073054Z/hello.py\n```\n\nThe file was not modified.</result>\n<usage><subagent_tokens>19490</subagent_tokens><tool_uses>1</tool_uses><duration_ms>5248</duration_ms></usage>\n</task-notification>\n</system-reminder>"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "The subagent reports **3 lines** in `hello.py`:\n\n```\n       3 /Users/team/goalcup-spikes/ws-claude-code-cli-20260903T073054Z/hello.py\n```\n\nThat matches the file as written: the import, a blank line, and the print."
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": "keep going"
+  },
+  {
+   "role": "system",
+   "content": "<total_tokens>15000000 tokens left</total_tokens>"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "<REDACTED>",
+     "signature": "CAISqwQKpgEIERgCKkANoPL1SJ739jArBOKX1xbznFlM6yPBngpngO2BO5uJOORGqwe7PmSHzEFoypNuV7zlR0s9xHRkBR0BawzGYaPgMg1jbGF1ZGUtb3B1cy01OAFCCHRoaW5raW5nWiQ5NzFmYmQyNC02ZTg3LTRjYTAtYmExNy02OTFjY2VkZjYwYTNyEE8OkwIsaY4/uMI0yEdAkUKIAQGoAfDJ5NQGsAECEgxQrzbmakKUGgr8EpYaDH10p3IGVd39CYArKCIwsmmqZc3pS0ztI5ItWs1OL1oGKCBOGsypbDmac/p3o1J2FMWUH+MPEL3u5/35ZCPBKrECEWdaxr0y13JiWMv3hIdWf3RuH7l/RU3yFi0AiEUfMWeeoJ9+iDMjajFWzOvnyEUV90ai7F1u3/gGbQlB6LV0he03NwOL/vWeLfPZhr4LFPe+Wv5q1a5TS3I7tB+AkcDRM0Jgzr570L01orwdM1kD0VQ4rcVOEl5Inu0iHIZQylgpJZbqXZGoNqae9elbEn9Q2aUajd4Pz2OYzjdKKg5x0Col8rCyZDdyyYc+ub0gH+9GPzoUoiUxJCFS2E1bxVrnDkEFG97NGC4dmXahiPnuDBWKB2rgM3RmdsBFUkwkxTnrFLm6uIGKYkxdnOKioDkE935C4sdhYd68+wkZwYsj0uy3DcrpIQTFPHteGTAjadq+5ficXuCwTgARW97PUhwFC0KegxRSGX9KRlBjZHHfpQ8YAQ=="
+    },
+    {
+     "type": "text",
+     "text": "Both requests are done — `hello.py` created and run (output `Today's date is 2026-09-03`), and the subagent confirmed it's 3 lines. There's nothing left queued on my side.\n\nWhat would you like next? A few plausible directions:\n- Extend `hello.py` (time as well as date, custom format, timezone, CLI args)\n- Add a test or make it importable rather than script-only\n- Something else entirely — just say the word"
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": "write long.py with 300 numbered comment lines, then explain every section of it in detail in your reply"
+  },
+  {
+   "role": "system",
+   "content": "<total_tokens>15000000 tokens left</total_tokens>"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "<REDACTED>",
+     "signature": "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"
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01FEgXmeY2QUGQBe2p36atLQ",
+     "name": "Bash",
+     "input": {
+      "command": "python3 - <<'PYGEN'\nsections = [\n    (\"Prologue\",        \"file header and provenance notes\"),\n    (\"Data model\",      \"the shapes this module would operate on\"),\n    (\"Control flow\",    \"the order things would happen in\"),\n    (\"Error handling\",  \"what goes wrong and what we do about it\"),\n    (\"Performance\",     \"cost, allocation and hot-path notes\"),\n    (\"Epilogue\",        \"open questions and follow-up work\"),\n]\n\nlines = []\nfor i in range(1, 301):\n    idx = (i - 1) // 50            # 0..5\n    name, blurb = sections[idx]\n    pos = (i - 1) % 50 + 1         # 1..50 within section\n    if pos == 1:\n        text = f\"=== Section {idx + 1}: {name} — {blurb} ===\"\n    elif pos == 50:\n        text = f\"--- end of section {idx + 1} ({name}) ---\"\n    else:\n        text = f\"{name} note {pos - 1:02d} of 48\"\n    lines.append(f\"# {i:03d} {text}\")\n\nwith open(\"long.py\", \"w\") as f:\n    f.write(\"\\n\".join(lines) + \"\\n\")\nPYGEN\nwc -l long.py && head -3 long.py && sed -n '50,52p' long.py && tail -2 long.py",
+      "description": "Generate long.py with 300 numbered comment lines"
+     },
+     "caller": {
+      "type": "direct"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "tool_use_id": "toolu_01FEgXmeY2QUGQBe2p36atLQ",
+     "type": "tool_result",
+     "content": "     300 long.py\n# 001 === Section 1: Prologue — file header and provenance notes ===\n# 002 Prologue note 01 of 48\n# 003 Prologue note 02 of 48\n# 050 --- end of section 1 (Prologue) ---\n# 051 === Section 2: Data model — the shapes this module would operate on ===\n# 052 Data model note 01 of 48\n# 299 Epilogue note 48 of 48\n# 300 --- end of section 6 (Epilogue) ---",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "system",
+   "content": "<total_tokens>14998850 tokens left</total_tokens>"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "<REDACTED>",
+     "signature": "CAISjQgKpgEIERgCKkC48tHRwmRr5MaTUlrm4pi79/tKuaV1/E8OKlSyi/IJtHPkj15BzOeogj4ccFTPaej2x4mq/L37Nsl0tDCvG91TMg1jbGF1ZGUtb3B1cy01OAFCCHRoaW5raW5nWiQ5NzFmYmQyNC02ZTg3LTRjYTAtYmExNy02OTFjY2VkZjYwYTNyEE8OkwIsaY4/uMI0yEdAkUKIAQGoAZHK5NQGsAECEgzj+4fE7DqtwPKqBvkaDJjyJoYJsyDizDw0LSIwoW3RotMnGRm4yVTbFC2+SSBDRqNClGCQ4hjznB+90WKWZGLhIGtl5fNgNDkJNhErKpMGZRsQF96EywGbV4Vp4KmCCxZBUAcsFjyAB4sL5lMqcTuCQ3jFyaE4jvE4fW/8RdaJyxPWKUpJYvY2wNAETP837uDCSS77UU0RlBtMwKRLF0/JveB/DjxK+tLhZrtIMmUE13zvD6SrBrBr5i4k8cSwt9tTAcVSmbOefG0j6wQWN+PPi2lAS0hEHVG4gLbcvqIn4CXNxiYHBJPmot6AfBdZjyJr9GeHHLhDQbaa3zr8gvGyJhHDcC8yhdJ9ziX2mdTC5brziiq/ik9JDWGABxWUl0aThGg6P23kE1ZqA0EanWU5CS4TaR5pnGj+T46S29x0djKw3CA58mnrBMaqUgl8xRDH47le4siMCFWpRukn+Ki8L21br/0w6EA3HNxn99TnqWsWrn0g5JlIQemmYFngD+MH6DHc6ndzQJ3tTELUa/+2HTNKoBCMpq+bzQea2eZ0RWa/WyG9gweD0Bh3Gw4Qa0tpl+z4aYYWBJElMeVKKltKniEiLfgXNwEF6u5GQ/37Uz7xZ4tmfRhW9RcncxQDOZAfUf9+K8Dos+8vb38NW57frTfI0E2W5F6CQjrxuHGAgtQO2CB2p4iuGfWkyqJXjGryRqGsLelqduNikxxpHhflVOLO2/KCz+ugkwieWZdUxycoqgYNnQmkW82RBIbu41IiI5mYQ8Qr0f4lyiVEH6pkKaODCZ3c3GhcG4VVYBhmA4Z1gzqgLKLejJ8CPHuax4t5H/tj2VtYkDgAKqlSy4ucLfz+1VsR8F6fxrHomiNIZssbBKho6eHStbkKsvtbCP246O9IkJdvR9tdd7TYL3gqE6uJDaPOo89DMBOvj/ppXBNLVh2aMU4HAstRJgcyHuz9p553cdrj04Yx+7pbvUGFYfEaqGiLQsBPhaFkfQbPIJ8MBosQA1KpQ8F4s0kw/Pdn2Y0KZB9gxkomUQ7gHSHzouKxtUoX760kRsunuS5JVG6NJpu8TU66lxWmMPdHsxQgiKDczjVMxexq4uZODkvdePfOJhdDgIAU8LYtUzJEXUqbye0SzFNd9D3UaT2vdb4JmBgB"
+    },
+    {
+     "type": "text",
+     "text": "`long.py` is written — exactly 300 lines, every one a numbered comment (`# 001` … `# 300`, zero-padded to 3 digits so they sort and align). The file is comments only, so it's valid Python that does nothing when executed: importing or running it produces no output and defines no names.\n\nThe 300 lines are split into **6 sections of 50 lines each**. Every section has the same internal shape: a banner on its first line, 48 numbered notes, and a footer on its 50th line.\n\n**Section 1 — Prologue (lines 001–050)**\nLine 001 is the banner: `=== Section 1: Prologue — file header and provenance notes ===`. Lines 002–049 are `Prologue note 01 of 48` through `note 48 of 48`. Line 050 closes it with `--- end of section 1 (Prologue) ---`. This is the slot where a real module would carry its docstring-adjacent material: what the file is, who owns it, licence, why it exists.\n\n**Section 2 — Data model (lines 051–100)**\nBanner on 051, notes 01–48 on 052–099, footer on 100. Reserved for the shapes the module would operate on — record definitions, field types, invariants, which fields are optional.\n\n**Section 3 — Control flow (lines 101–150)**\nBanner on 101, notes on 102–149, footer on 150. The order things happen in: entry point, the main loop, branch conditions, where state is mutated.\n\n**Section 4 — Error handling (lines 151–200)**\nBanner on 151, notes on 152–199, footer on 200. What can go wrong and the response: which exceptions are raised versus swallowed, retry policy, what gets logged.\n\n**Section 5 — Performance (lines 201–250)**\nBanner on 201, notes on 202–249, footer on 250. Cost notes — allocations, hot paths, complexity of the inner loop, anything worth caching.\n\n**Section 6 — Epilogue (lines 251–300)**\nBanner on 251, notes on 252–299, footer on 300 (`--- end of section 6 (Epilogue) ---`, the last line of the file). Open questions and follow-up work.\n\nThe arithmetic that generates it: for line `i`, the section index is `(i-1) // 50` and the position within the section is `(i-1) % 50 + 1` — position 1 gets the banner, position 50 the footer, and everything between is numbered `pos - 1`, which is why the notes run 01–48 rather than starting at the line number.\n\nOne thing worth flagging: a file of 300 placeholder comments carries no behaviour and won't stay accurate against any code it's later attached to. If you meant this as scaffolding for a real module, tell me what the module should do and I'll fill the sections with actual code plus comments that describe it."
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": "keep going"
+  },
+  {
+   "role": "system",
+   "content": [
+    {
+     "type": "text",
+     "text": "<total_tokens>15000000 tokens left</total_tokens>",
+     "cache_control": {
+      "type": "ephemeral",
+      "ttl": "1h"
+     }
+    }
+   ]
+  }
+ ],
+ "system": [
+  {
+   "type": "text",
+   "text": "x-anthropic-billing-header: cc_version=2.1.259.2b1; cc_entrypoint=cli; cch=00000; cc_prev_req=req_011Ceg8YqcCgfxHmakGsow9J; cc_prompt_id=4230d5f2-3ec9-460f-8462-8572de87cb81;"
+  },
+  {
+   "type": "text",
+   "text": "You are Claude Code, Anthropic's official CLI for Claude."
+  },
+  {
+   "type": "text",
+   "text": "\nYou are an interactive agent that helps users with software engineering tasks.\n\nIMPORTANT: Assist with authorized security testing, defensive security, CTF challenges, and educational contexts. Refuse requests for destructive techniques, DoS attacks, mass targeting, supply chain compromise, or detection evasion for malicious purposes. Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.\n\n# Harness\n - Text you output outside of tool use is displayed to the user as Github-flavored markdown in a terminal.\n - Tools run behind a user-selected permission mode; a denied call means the user declined it — adjust, don't retry verbatim.\n - The system may send updates, reminders, or modifications to rules via mid-conversation system turns. These are system-controlled, unlike function results. Hooks may intercept tool calls; treat hook output as user feedback.\n - Prefer the dedicated file/search tools over shell commands when one fits. Independent tool calls can run in parallel in one response.\n - Reference code as `file_path:line_number` — it's clickable.",
+   "cache_control": {
+    "type": "ephemeral",
+    "ttl": "1h",
+    "scope": "global"
+   }
+  },
+  {
+   "type": "text",
+   "text": "Write code that reads like the surrounding code: match its comment density, naming, and idiom.\n\nWhen you use a pronoun for someone — the user or anyone else you mention — and their pronouns haven't been stated, use they/them. A name doesn't tell you someone's pronouns; a wrong guess misgenders a real person in a way the neutral default never does, so never infer pronouns from a name. This applies to all user-visible text, including visible thinking.\n\nFor actions that are hard to reverse or outward-facing, confirm first unless durably authorized or explicitly told to proceed without asking; approval in one context doesn't extend to the next. Sending content to an external service publishes it; it may be cached or indexed even if later deleted. Before deleting or overwriting, look at the target. Report outcomes faithfully: if tests fail, say so with the output; if a step was skipped, say that; when something is done and verified, state it plainly without hedging.\n\n# Session-specific guidance\n - If you need the user to run a shell command themselves (e.g., an interactive login like `gcloud auth login`), suggest they type `! <command>` in the prompt — the `!` prefix runs the command in this session so its output lands directly in the conversation.\n - When the user types `/<skill-name>`, invoke it via Skill. Only use skills listed in the user-invocable skills section — don't guess.\n - If the user asks about \"ultrareview\" or how to run it, explain that /code-review ultra launches a\n<scrubbed:vendor_prompt:system[3]:9631chars:sha256=eada592337de6a1967537358d037b7cad1d85128f4e974c1b1d9d33c0c1238df>",
+   "cache_control": {
+    "type": "ephemeral",
+    "ttl": "1h"
+   }
+  }
+ ],
+ "tools": [
+  {
+   "name": "Agent",
+   "description": "Launch a new agent to handle complex, multi-step tasks. Each agent type has specific capabilities and tools available to it.\n\nAvailable agent types are listed in <system-reminder> messages in the conversation.\n\nWhen using the Agent tool, specify a subagent_type to select an agent: `\"fork\"` forks you\n<scrubbed:vendor_prompt:tools.Agent.description:1811chars:sha256=27cb6ec4f84f16ce9f3e56e198ae9d2826f89ceb7f044af623719f58055c7cf8>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "description": {
+      "description": "A short (3-5 word) description of the task",
+      "type": "string"
+     },
+     "prompt": {
+      "description": "The task for the agent to perform",
+      "type": "string"
+     },
+     "subagent_type": {
+      "description": "The type of specialized agent to use for this task",
+      "type": "string"
+     },
+     "model": {
+      "description": "Optional model override for this agent. Takes precedence over the agent definition's model frontmatter and the configured default subagent model. If omitted, uses the agent definition's model, else the default (inherits from the parent unless a default subagent model is configured). Ignored for subagent_type: \"fork\" — forks always inherit the parent model.",
+      "type": "string",
+      "enum": [
+       "sonnet",
+       "opus",
+       "haiku",
+       "fable"
+      ]
+     },
+     "isolation": {
+      "description": "Isolation mode. \"worktree\" creates a temporary git worktree so the agent works on an isolated copy of the repo. \"remote\" launches the agent in a remote cloud environment (always runs in background; availability is gated).",
+      "type": "string",
+      "enum": [
+       "worktree",
+       "remote"
+      ]
+     }
+    },
+    "required": [
+     "description",
+     "prompt"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "Artifact",
+   "description": "Render an HTML file to an Artifact — a default-private web page hosted on claude.ai. Use this when communicating visually would be clearer than terminal text. Publishing proactively is fine for your own work-product — artifacts start private. The exception is content that could mislead or cause harm\n<scrubbed:vendor_prompt:tools.Artifact.description:14912chars:sha256=1d8c7c7f54b04b5f7e42fac1314d59ecd0bc46bb3e5f1e2682448bd4cf3932ac>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "description": "Omit (or 'publish') to publish file_path. 'list' enumerates artifacts — the user's own by default, see `scope`; only `limit` and `scope` may accompany it. 'read' returns the content of the published artifact at `url` (raw HTML for the user's own; an isolated summary, steered by the optional `prompt`, for one shared with them, though a page published in this session's own Slack channel can come back in full as untrusted content) — see **To read an existing artifact's content**. 'watch', 'unwatch', and 'status' manage live-update subscriptions that notify a session when an artifact is republished elsewhere, and those aren't available in this session: 'watch' only reports that — no republish notification reaches this session — and 'status' lists this session's artifact watches (pass `url` to check one). 'upload_asset' adds one local media, PDF, font, or text file to an existing artifact — pass `url` and `file_path`. 'list_assets' lists the files in an artifact's asset store (pass `url`; `after` continues a listing), 'read_asset' saves one of them to a local file named by its id (pass `url` and `asset_id`, optionally `out_dir`), and 'delete_asset' permanently removes one (pass `url` and `asset_id`). See **Artifact assets** above.",
+      "type": "string",
+      "enum": [
+       "publish",
+       "list",
+       "read",
+       "watch",
+       "unwatch",
+       "status",
+       "upload_asset",
+       "list_assets",
+       "read_asset",
+       "delete_asset"
+      ]
+     },
+     "file_path": {
+      "description": "Path to the .html file to render. Required to publish (the default action). Use a short, distinctive basename — it is the last-resort title when the HTML has no <title> and no `title` parameter is given. For 'upload_asset', the local image, video, PDF, font, or text (CSV, Markdown, JSON, plain text) file to upload.",
+      "type": "string"
+     },
+     "favicon": {
+      "description": "Browser-tab icon: one or two emoji (e.g. \"📊\"). No markup. Required on a page's first publish; omit on a redeploy (same file path this session, or `url`) to keep the artifact's icon — pass a new one only when the user asks.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+     },
+     "limit": {
+      "description": "list only: maximum artifacts to return (default 25).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+     },
+     "scope": {
+      "description": "list only: 'mine' (default) lists artifacts the user owns — the only ones the update flow can target; 'shared' lists artifacts other people shared with the user (read-only); 'all' lists both. Rows are labeled (mine)/(shared) whenever scope is not 'mine'.",
+      "type": "string",
+      "enum": [
+       "mine",
+       "shared",
+       "all"
+      ]
+     },
+     "title": {
+      "description": "Title for the artifact — the name shown in the browser tab and gallery. A short, distinctive noun-phrase name — not a generic label, a summary, or a name with an appended explainer. Prefer a <title> tag at the top of the HTML itself; this parameter fills in only when the file lacks one in the first 8KB of the file, and never overrides the tag. HTML publishes only — Markdown pages keep their filename identity. Content always comes from file_path — there is no inline content parameter.",
+      "type": "string"
+     },
+     "description": {
+      "description": "One-sentence subtitle shown on the gallery card. Say what the page is or does.",
+      "type": "string",
+      "maxLength": 1000
+     },
+     "label": {
+      "description": "A short name for the version this publish makes, max 60 chars (e.g. \"Draft to legal\"). Shown in the version picker. Optional — a few words, not a description.",
+      "type": "string",
+      "maxLength": 60
+     },
+     "url": {
+      "description": "Existing artifact URL to update in place. Pass whenever the user wants to update an artifact this conversation did not publish — \"update my artifact\", \"keep the same link\", a pasted artifact URL — and find the URL with action: \"list\" or ask the user for the link if you don't have it; without this, the publish creates a separate artifact instead of updating the existing one. Omit for new artifacts and same-conversation redeploys. Must be an artifact the user owns. For 'read' and the other url-addressed actions: the artifact to act on.",
+      "type": "string"
+     },
+     "prompt": {
+      "description": "read only: what to extract from an artifact shared with the user — its content reaches you as an isolated summary answering this. Ignored for artifacts the user owns and for a page published in this session's own Slack channel (raw content is returned); optional.",
+      "type": "string"
+     },
+     "force": {
+      "description": "Last-resort overwrite that DISCARDS the newer published version's page — another session's publish, or someone's save from a page that can publish new versions of itself. On a conflict the fix is to merge your changes onto the newer content (handed to you in the rejection, or re-read) and publish again — not force. Pass force:true only when the user has explicitly said to discard that specific version; never to get past a conflict on your own judgment. The tracked baseVersion is still sent; with force:true the server treats it as informational and overwrites, unless it refuses force over a version saved from inside the page. Omit (or false) so a concurrent write conflicts instead of being silently clobbered.",
+      "type": "boolean"
+     },
+     "out_dir": {
+      "description": "read_asset: directory to save the file into (default: the working directory); the file is named by the asset id plus the extension for its type.",
+      "type": "string",
+      "maxLength": 4096
+     },
+     "asset_id": {
+      "description": "read_asset and delete_asset: the asset's id (32 hex characters), from a list_assets or upload_asset result.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+     },
+     "after": {
+      "description": "list_assets only: the `next` value from a previous list_assets result, to continue that listing.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_=-]{1,4096}$"
+     },
+     "capabilities": {
+      "description": "Runtime capabilities this page declares, as {name: config}. The control plane is the authority on valid names and config shapes. An empty object clears any previously stored declaration; omit the field on a redeploy to carry the stored declaration forward unchanged. Before declaring any capability, load the `artifact-capabilities` skill for the current contract and per-capability guidance.",
+      "type": "object",
+      "propertyNames": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 64
+      },
+      "additionalProperties": {}
+     },
+     "contract": {
+      "description": "The artifact's runtime version. Omit to keep its current version (the default); 'latest' to upgrade; a specific version to pin or roll back. Changing it changes how the published page behaves — pass only when the author explicitly intends the change, never as a side effect of editing.",
+      "anyOf": [
+       {
+        "type": "string",
+        "const": "latest"
+       },
+       {
+        "type": "string",
+        "pattern": "^(0|[1-9]\\d{0,3})\\.(0|[1-9]\\d{0,4})\\.(0|[1-9]\\d{0,5})$"
+       }
+      ]
+     }
+    },
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "AskUserQuestion",
+   "description": "Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.\n\nUsage notes:\n- Users will always be able to select \"Other\" to provide custom text input\n- Use multiSelect: true to allow multiple answ\n<scrubbed:vendor_prompt:tools.AskUserQuestion.description:1786chars:sha256=735d35336b294b6f070f395b7c0f993cad1768f27e6ada8b35788ef33175eefe>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "questions": {
+      "description": "Questions to ask the user (1-4 questions)",
+      "minItems": 1,
+      "maxItems": 4,
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "question": {
+         "description": "The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\"",
+         "type": "string"
+        },
+        "header": {
+         "description": "Very short label displayed as a chip/tag (max 12 chars). Examples: \"Auth method\", \"Library\", \"Approach\".",
+         "type": "string"
+        },
+        "options": {
+         "description": "The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.",
+         "minItems": 2,
+         "maxItems": 4,
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "label": {
+            "description": "The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.",
+            "type": "string"
+           },
+           "description": {
+            "description": "Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.",
+            "type": "string"
+           },
+           "preview": {
+            "description": "Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "additionalProperties": false
+         }
+        },
+        "multiSelect": {
+         "description": "Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.",
+         "default": false,
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "question",
+        "header",
+        "options",
+        "multiSelect"
+       ],
+       "additionalProperties": false
+      }
+     },
+     "answers": {
+      "description": "User answers collected by the permission component",
+      "type": "object",
+      "propertyNames": {
+       "type": "string"
+      },
+      "additionalProperties": {
+       "type": "string"
+      }
+     },
+     "annotations": {
+      "description": "Optional per-question annotations from the user (e.g., notes on preview selections). Keyed by question text.",
+      "type": "object",
+      "propertyNames": {
+       "type": "string"
+      },
+      "additionalProperties": {
+       "type": "object",
+       "properties": {
+        "preview": {
+         "description": "The preview content of the selected option, if the question used previews.",
+         "type": "string"
+        },
+        "notes": {
+         "description": "Free-text notes the user added to their selection.",
+         "type": "string"
+        }
+       },
+       "additionalProperties": false
+      }
+     },
+     "metadata": {
+      "description": "Optional metadata for tracking and analytics purposes. Not displayed to user.",
+      "type": "object",
+      "properties": {
+       "source": {
+        "description": "Optional identifier for the source of this question (e.g., \"remember\" for /remember command). Used for analytics tracking.",
+        "type": "string"
+       }
+      },
+      "additionalProperties": false
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "Bash",
+   "description": "Executes a bash command and returns its output.\n\n- Working directory persists between calls, but prefer absolute paths — `cd` in a compound command can trigger a permission prompt. Shell state (env vars, functions) does not persist; the shell is initialized from the user's profile.\n- Command output \n<scrubbed:vendor_prompt:tools.Bash.description:1060chars:sha256=5f4f97eea3470b6eaabb35903b46b9ecac20d72772cd13b4f6ffb2eed319aa04>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "command": {
+      "description": "The command to execute",
+      "type": "string"
+     },
+     "timeout": {
+      "description": "Optional timeout in milliseconds (max 600000)",
+      "type": "number"
+     },
+     "description": {
+      "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls → \"List files in current directory\"\n- git status → \"Show working tree status\"\n- npm install → \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; → \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main → \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' → \"Fetch JSON from URL and extract data array elements\"",
+      "type": "string"
+     },
+     "run_in_background": {
+      "description": "Set to true to run this command in the background.",
+      "type": "boolean"
+     },
+     "dangerouslyDisableSandbox": {
+      "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "Edit",
+   "description": "Performs exact string replacement in a file.\n\n- You must Read the file in this conversation before editing, or the call will fail.\n- `old_string` must match the file exactly, including indentation, and be unique — the edit fails otherwise. Strip the Read line prefix (line number + tab) before matchi\n<scrubbed:vendor_prompt:tools.Edit.description:360chars:sha256=2eaaa8e08e0b58bc3700a39e70a054e7bfa1d3bfd048ef502df41dd1e7c0009f>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "file_path": {
+      "description": "The absolute path to the file to modify",
+      "type": "string"
+     },
+     "old_string": {
+      "description": "The text to replace",
+      "type": "string"
+     },
+     "new_string": {
+      "description": "The text to replace it with (must be different from old_string)",
+      "type": "string"
+     },
+     "replace_all": {
+      "description": "Replace all occurrences of old_string (default false)",
+      "default": false,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path",
+     "old_string",
+     "new_string"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "ListAgents",
+   "description": "Lists agents you can SendMessage to — in-process subagents you spawned, the teammates on your team, other local Claude sessions on this machine, your Claude sessions running in the cloud (when this session has cloud access; a cloud session receives your message but cannot message any session back ye\n<scrubbed:vendor_prompt:tools.ListAgents.description:777chars:sha256=398d4802fc2327352ff22bdb927adf533cb667a3a553b152c5efd19b661f7c20>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "channel": {
+      "description": "Not available in this build; leave unset.",
+      "type": "string",
+      "maxLength": 256
+     },
+     "q": {
+      "description": "Not available in this build; leave unset.",
+      "type": "string",
+      "maxLength": 256
+     }
+    },
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "Read",
+   "description": "Reads a file from the local filesystem.\n\n- `file_path` must be an absolute path.\n- Reads up to 2000 lines by default.\n- When you already know which part of the file you need, only read that part. This can be important for larger files.\n- Results are returned using cat -n format, with line numbers st\n<scrubbed:vendor_prompt:tools.Read.description:790chars:sha256=80fb15d2d15c76b0a3429b5831a1e68c57fb5d541063e7ee27c527da7bc0bee3>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "file_path": {
+      "description": "The absolute path to the file to read",
+      "type": "string"
+     },
+     "offset": {
+      "description": "The line number to start reading from. Only provide if the file is too large to read at once",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+     },
+     "limit": {
+      "description": "The number of lines to read. Only provide if the file is too large to read at once.",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+     },
+     "pages": {
+      "description": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files. Maximum 20 pages per request.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "ReportFindings",
+   "description": "Report code-review findings as a typed list so the host UI can render them. Use this only when the active code-review instructions tell you to report findings with this tool; otherwise follow whatever output format those instructions specify. When reporting a review's results, call it once with the \n<scrubbed:vendor_prompt:tools.ReportFindings.description:574chars:sha256=59ea4187fcd52b2f67e233b092d1c7b841a6b4156468636434886fb5f9641296>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "level": {
+      "description": "Effort level the review ran at",
+      "type": "string",
+      "enum": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     },
+     "findings": {
+      "description": "Verified findings, most-severe first; empty if none survived",
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "file": {
+         "description": "Repo-relative path of the file the finding is in",
+         "type": "string"
+        },
+        "line": {
+         "description": "1-indexed line the finding anchors to",
+         "type": "integer",
+         "minimum": -9007199254740991,
+         "maximum": 9007199254740991
+        },
+        "summary": {
+         "description": "One-sentence statement of the defect",
+         "type": "string"
+        },
+        "short_summary": {
+         "description": "Compressed label for compact UI (≤60 chars): the claim alone, no rationale or consequence clause",
+         "type": "string",
+         "maxLength": 60
+        },
+        "failure_scenario": {
+         "description": "Concrete inputs/state → wrong output/crash",
+         "type": "string"
+        },
+        "category": {
+         "description": "Short kebab-case slug of the finding type, e.g. \"correctness\", \"simplification\", \"efficiency\", \"test-coverage\"",
+         "type": "string",
+         "maxLength": 40
+        },
+        "verdict": {
+         "description": "Set when a verify pass ran; absent on inline-only reviews",
+         "type": "string",
+         "enum": [
+          "CONFIRMED",
+          "PLAUSIBLE"
+         ]
+        },
+        "outcome": {
+         "description": "Set ONLY when re-reporting after applying fixes: what happened to this finding",
+         "type": "string",
+         "enum": [
+          "fixed",
+          "skipped",
+          "no_change_needed"
+         ]
+        }
+       },
+       "required": [
+        "file",
+        "summary",
+        "failure_scenario"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "required": [
+     "findings"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "ScheduleWakeup",
+   "description": "Schedule when to resume work in /loop dynamic mode — the user invoked /loop without an interval, asking you to self-pace iterations of a specific task.\n\nDo NOT schedule a short-interval wakeup to poll for background work you started — when harness-tracked work finishes, you are re-invoked automatica\n<scrubbed:vendor_prompt:tools.ScheduleWakeup.description:3148chars:sha256=c0021258a5ea1281ba41e9d9a5b88a6928bc84c5138b0785c300651178b00137>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "delaySeconds": {
+      "description": "Seconds from now to wake up. Clamped to [60, 3600] by the runtime. Required unless `stop` is true.",
+      "type": "number"
+     },
+     "reason": {
+      "description": "One short sentence explaining the chosen delay. Goes to telemetry and is shown to the user. Be specific. Required unless `stop` is true.",
+      "type": "string"
+     },
+     "prompt": {
+      "description": "The /loop input to fire on wake-up. Pass the same /loop input verbatim each turn so the next firing re-enters the skill and continues the loop. For autonomous /loop (no user prompt), pass the literal sentinel `<<autonomous-loop-dynamic>>` instead (the dynamic-pacing variant, not the CronCreate-mode `<<autonomous-loop>>`). Required unless `stop` is true.",
+      "type": "string"
+     },
+     "stop": {
+      "description": "Set to true to end the dynamic loop immediately instead of scheduling another wakeup. When true, all other fields are ignored and no further wakeups fire.",
+      "type": "boolean"
+     },
+     "noop": {
+      "description": "true = nothing changed (you checked and there is nothing to report). false = something happened worth keeping (edited a file, posted a message, advanced state, surfaced a finding). Consecutive noop:true ticks are collapsed in the user's terminal view and tracked as a streak. Required unless `stop` is true.",
+      "type": "boolean"
+     }
+    },
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "SendFeedback",
+   "description": "Use this tool to draft feedback about Claude Code when you hit a high-signal moment. That includes both PRODUCT issues and MODEL-BEHAVIOR issues:\n- a reproducible tool or product failure was just resolved or abandoned\n- the user clearly expressed frustration with Claude Code or with how you handled \n<scrubbed:vendor_prompt:tools.SendFeedback.description:3467chars:sha256=2586c6a6e1fbbbd01ce683a902c7f6232e1538abf1a664d716035722a9f546b5>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "type": {
+      "description": "What kind of feedback this is.",
+      "type": "string",
+      "enum": [
+       "bug",
+       "idea",
+       "missing_capability"
+      ]
+     },
+     "title": {
+      "description": "Short, specific one-line summary of the issue.",
+      "type": "string",
+      "minLength": 1
+     },
+     "details": {
+      "description": "Labeled bullets, in order: **What happened:** (observed vs. expected, exact error text if short); **What the user said:** (quoted, or \"User didn't comment; observed by the model.\"); **Repro:** (minimal steps); **Evidence:** (request IDs, timestamps, paths, versions; omit if none); optionally a final **Cause:** only if verified in-session. One to three lines per bullet. No narrative paragraphs, no speculation, no secrets.",
+      "type": "string",
+      "minLength": 1
+     },
+     "area": {
+      "description": "Optional short tag naming the part of Claude Code this is about (e.g. \"hooks config\", \"/help\", \"file editing\"). Leave blank if unclear.",
+      "type": "string"
+     },
+     "failure_mode": {
+      "description": "When the report is about MODEL BEHAVIOR (not a product bug), the closest failure mode, or `other` when it is a model-behavior issue that fits no listed value. Omit only when the report is a product/tool bug with no model-behavior component.",
+      "type": "string",
+      "enum": [
+       "instruction_following",
+       "destructive_actions",
+       "code_quality",
+       "repetition_and_looping",
+       "model_regression",
+       "overconfidence_and_hallucination",
+       "context_and_memory",
+       "overeager",
+       "over_correction",
+       "stopping_short",
+       "dispute_or_decline",
+       "subagent_overspawn",
+       "tone_or_preachiness",
+       "excessive_questions",
+       "unwanted_scope",
+       "other"
+      ]
+     },
+     "task_category": {
+      "description": "What kind of task the session was doing when the issue occurred, or `other` when it is a clear task that fits no listed value. Omit only if genuinely unclear.",
+      "type": "string",
+      "enum": [
+       "code_edit",
+       "debug",
+       "explain",
+       "plan",
+       "shell",
+       "search",
+       "review",
+       "other"
+      ]
+     }
+    },
+    "required": [
+     "type",
+     "title",
+     "details"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "Skill",
+   "description": "Invoke a skill.\n\nA skill is a packaged set of instructions the user or project has set up for a particular kind of task (deploy steps, a review checklist, a repo-specific workflow). Available skills appear in a system-reminder listing with one-line descriptions. When the task at hand is one a listed\n<scrubbed:vendor_prompt:tools.Skill.description:1417chars:sha256=a58970596b9b917dc98505b2c8936d0bce66f5082b689dec994cb72868d6ddd3>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "skill": {
+      "description": "The name of a skill from the available-skills list. Do not guess names.",
+      "type": "string"
+     },
+     "args": {
+      "description": "Optional arguments for the skill",
+      "type": "string"
+     }
+    },
+    "required": [
+     "skill"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "ToolSearch",
+   "description": "Fetches full schema definitions for deferred tools so they can be called.\n\nDeferred tools appear by name in <system-reminder> messages. Until fetched, only the name is known — there is no parameter schema, so the tool cannot be invoked. This tool takes a query, matches it against the deferred tool l\n<scrubbed:vendor_prompt:tools.ToolSearch.description:953chars:sha256=88033eceb421f1c23c30384179560269736bf801904499b601baecfb9ded5ced>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "query": {
+      "description": "Query to find deferred tools. Use \"select:<tool_name>\" for direct selection, or keywords to search.",
+      "type": "string"
+     },
+     "max_results": {
+      "description": "Maximum number of results to return (default: 5)",
+      "default": 5,
+      "type": "number"
+     }
+    },
+    "required": [
+     "query",
+     "max_results"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "Workflow",
+   "description": "Execute a workflow script that orchestrates multiple subagents deterministically. Workflows run in the background — this tool returns immediately with a task ID, and a <task-notification> arrives when the workflow completes. Use /workflows to watch live progress.\n\nONLY call this tool when the user h\n<scrubbed:vendor_prompt:tools.Workflow.description:3480chars:sha256=e1dee0b240332a860c6f19053a7c8b37b2e0daf5634fa815ffe71ee3b7d7c78c>",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "script": {
+      "description": "Self-contained workflow script. Must begin with `export const meta = { name, description, phases }` (pure literal, no computed values) followed by the script body using agent()/parallel()/pipeline()/phase().",
+      "type": "string",
+      "maxLength": 524288
+     },
+     "name": {
+      "description": "Name of a predefined workflow (built-in or from .claude/workflows/). Resolves to a self-contained script.",
+      "type": "string"
+     },
+     "description": {
+      "description": "Ignored — set the workflow description in the script's `meta` block.",
+      "type": "string"
+     },
+     "title": {
+      "description": "Ignored — set the workflow title in the script's `meta` block.",
+      "type": "string"
+     },
+     "args": {
+      "description": "Optional input value exposed to the script as the global `args`, verbatim. Pass arrays/objects as actual JSON values, NOT as a JSON-encoded string — a stringified list breaks `args.filter`/`args.map` in the script. Use for parameterized named workflows (e.g. a research question)."
+     },
+     "scriptPath": {
+      "description": "Path to a workflow script file on disk. Every Workflow invocation persists its script under the session directory and returns the path in the tool result. To iterate, edit that file with Write/Edit and re-invoke Workflow with the same `scriptPath` instead of re-sending the full script. Takes precedence over `script` and `name`.",
+      "type": "string"
+     },
+     "resumeFromRunId": {
+      "description": "Run ID of a prior Workflow invocation to resume from. Completed agent() calls with unchanged (prompt, opts) return their cached results instantly; only edited or new calls re-run. Same-session only. Stop the prior run first (TaskStop) before resuming.",
+      "type": "string",
+      "pattern": "^wf_[a-z0-9-]{6,}$"
+     }
+    },
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  },
+  {
+   "name": "DeferredToolPlaceholder",
+   "description": "Reserved placeholder that keeps deferred tool loading active; never call this tool.",
+   "input_schema": {
+    "type": "object",
+    "properties": {}
+   },
+   "defer_loading": true
+  },
+  {
+   "name": "Write",
+   "description": "Writes a file to the local filesystem, overwriting if one exists.\n\nWhen to use: creating a new file, or fully replacing one you've already Read. Overwriting an existing file you haven't Read will fail. For partial changes, use Edit instead.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "file_path": {
+      "description": "The absolute path to the file to write (must be absolute, not relative)",
+      "type": "string"
+     },
+     "content": {
+      "description": "The content to write to the file",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path",
+     "content"
+    ],
+    "additionalProperties": false
+   },
+   "eager_input_streaming": true
+  }
+ ],
+ "betas": [
+  "claude-code-20250219",
+  "oauth-2025-04-20",
+  "context-1m-2025-08-07",
+  "interleaved-thinking-2025-05-14",
+  "thinking-token-count-2026-05-13",
+  "context-management-2025-06-27",
+  "prompt-caching-scope-2026-01-05",
+  "mid-conversation-system-2026-04-07",
+  "mid-conversation-tool-changes-2026-07-01",
+  "advisor-tool-2026-03-01",
+  "advanced-tool-use-2025-11-20",
+  "effort-2025-11-24",
+  "fallback-credit-2026-06-01",
+  "thinking-display-updates-2026-08-18",
+  "afk-mode-2026-01-31",
+  "extended-cache-ttl-2025-04-11",
+  "cache-diagnosis-2026-04-07"
+ ],
+ "metadata": {
+  "user_id": "{\"device_id\": \"<scrubbed:device-id>\", \"account_uuid\": \"<scrubbed:account-uuid>\", \"session_id\": \"95addb64-9dac-4046-8ef6-8aa53fa0c7f1\"}"
+ },
+ "max_tokens": 64000,
+ "thinking": {
+  "type": "adaptive",
+  "display": "updates"
+ },
+ "context_management": {
+  "edits": [
+   {
+    "type": "clear_thinking_20251015",
+    "keep": "all"
+   }
+  ]
+ },
+ "output_config": {
+  "effort": "high"
+ },
+ "diagnostics": {
+  "previous_message_id": "msg_011Ceg8YrNqsxv6VMUPgp8WQ"
+ },
+ "stream": true
+}

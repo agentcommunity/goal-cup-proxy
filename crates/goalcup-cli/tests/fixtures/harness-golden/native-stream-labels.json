@@ -1,0 +1,26 @@
+{
+  "claude-code-cli": [
+    {
+      "label": "main:a-slug/test-session.jsonl#g1",
+      "protocol_hint": "claude-code-jsonl"
+    }
+  ],
+  "codex-cli": [
+    {
+      "label": "rollout:2026/09/30/rollout-fixture-test-session.jsonl#g1",
+      "protocol_hint": "codex-jsonl"
+    }
+  ],
+  "hermes-cli": [
+    {
+      "label": "session:session_20260930_141500_a1b2c3.json#g1",
+      "protocol_hint": null
+    }
+  ],
+  "m2-controlled-workload": [
+    {
+      "label": "workload:native/unknown.jsonl#g1",
+      "protocol_hint": null
+    }
+  ]
+}

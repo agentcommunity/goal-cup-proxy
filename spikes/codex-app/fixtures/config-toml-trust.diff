@@ -1,0 +1,36 @@
+# ~/.codex/config.toml across the MAIN RUN only: witness 2026-09-03T08:14:07Z (before the
+# human looked for a hooks UI) vs witness 2026-09-03T08:36:41Z (end of the main run, taken
+# just before probe P3). sha256 c41b4421... -> cfb6a96b.... Paths rewritten to $HOME.
+# Probe P3's separate change is in config-toml-cli-trust.diff. The full file is NOT
+# committed: it holds the operator's MCP server commands, URLs and env blocks.
+--- spikes/codex-app/out/run-20260903T081322Z/exception/config.toml.witness-before-ui-trust.20260903T081407Z	2026-09-03 15:14:07
++++ spikes/codex-app/out/run-20260903T081322Z/exception/config.toml.witness-before-cli-trust.20260903T083641Z	2026-09-03 15:36:41
+@@ -13,7 +13,6 @@
+ source = "$HOME/.codex/.tmp/bundled-marketplaces/openai-bundled"
+ 
+ [marketplaces.openai-primary-runtime]
+-last_updated = "2026-08-27T09:07:12Z"
+ source_type = "local"
+ source = "$HOME/.cache/codex-runtimes/codex-primary-runtime/plugins/openai-primary-runtime"
+ 
+@@ -101,6 +100,9 @@
+ [projects."$HOME/dev/PROJECTS/AgentCommunity/DAILY_runs"]
+ trust_level = "trusted"
+ 
++[projects."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z"]
++trust_level = "trusted"
++
+ [features]
+ memories = true
+ goals = true
+@@ -156,8 +158,8 @@
+ NODE_REPL_INSTRUCTIONS_USE_CASE_CHROME = "Control the Chrome browser in conjunction with the Chrome Plugin. Prefer this method of controlling Chrome over alternatives (such as Computer Use) unless the user explicitly mentions an alternative."
+ NODE_REPL_INSTRUCTIONS_USE_CASE_COMPUTER_USE = "Control desktop apps on macOS through Computer Use."
+ BROWSER_USE_CODEX_APP_BUILD_FLAVOR = "prod"
+-BROWSER_USE_CODEX_APP_VERSION = "26.825.31414"
+-NODE_REPL_TRUSTED_SERVICES = '{"browser":"$HOME/.codex/plugins/cache/openai-bundled/browser/26.825.31414/scripts/browser-service.mjs","sky":"@oai/sky/service"}'
++BROWSER_USE_CODEX_APP_VERSION = "26.825.41651"
++NODE_REPL_TRUSTED_SERVICES = '{"browser":"$HOME/.codex/plugins/cache/openai-bundled/browser/26.825.41651/scripts/browser-service.mjs","sky":"@oai/sky/service"}'
+ CODEX_CLI_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex"
+ 
+ [mcp_servers.computer-use]

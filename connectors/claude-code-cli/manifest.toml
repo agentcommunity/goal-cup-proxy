@@ -1,0 +1,247 @@
+# Claude Code CLI, launch mode. Measured `full` in DECISIONS D23.
+# Every value below comes from spikes/claude-code-cli/REPORT.md (spike 4, CLI 2.1.259).
+id = "claude-code-cli"
+family = "claude-code"
+tier = "full"
+tested_version_range = ">=2.1.259"          # D12: the resume-after-kill leg needs the 2.1.259 fix
+join_key = "prompt_id"                       # both legs stamp it; see A2
+unsafe_cursors = []
+lock_paths = []
+heartbeat_seconds = 60                       # B-5: proof of life, so downtime is evidence
+# App-wide files the daemon did NOT write and must never restore: it baselines them and
+# reports a deviation (R9, D21). `{home}` is the participant's REAL home — these are the
+# files a per-run pin deliberately does not cover.
+config_allowlist = [
+  "{home}/.claude/settings.json",
+  "{home}/.claude/settings.local.json",
+  "{home}/.claude/managed-settings.json",
+]
+workspace_exclusions = [".claude", ".git"]
+archive_sources = []
+
+[detection]
+binary = "claude"
+version_command = "claude --version"
+
+[arming]
+signal = "launch+first_transcript_record"   # D16: `http` SessionStart never dispatches
+timeout_seconds = 120
+
+[kill]
+strategy = "process_group"
+grace_seconds = 10
+
+# D11 / B-3: the tools that can create or modify a file. Attribution considers only these,
+# so a `Read`, a `Grep` or a `Glob` naming a path never explains a sealed file.
+[tool_classes]
+write = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
+shell = ["Bash"]                             # matched against the command text, not argv JSON
+
+# R8 sentence 2 / D10: an UNPINNED installation under the participant's real home is where
+# a second session working in a bound workspace lands (spike 4 A9, spike 3 P3).
+[[foreign_scan]]
+harness = "claude-code-cli"
+path_glob = "{home}/.claude/projects/*/*.jsonl"
+directory_field = "cwd"
+session_id_field = "sessionId"
+reader = { kind = "file_first_identity" }
+
+# …and the detector spike 4 A9 actually MEASURED: the second `claude` it ran shared this
+# run's CLAUDE_CONFIG_DIR, so it left "a 19-record transcript under a second project slug
+# (`-Users-team-goalcup-spikes-a9-other`)" inside the per-run config dir, and zero raw
+# bodies. "The verifier should enumerate slugs, not just the tracked
+# one" — spikes/claude-code-cli/REPORT.md lines 238-252.
+[[foreign_scan]]
+harness = "claude-code-cli"
+path_glob = "{config_dir}/projects/*/*.jsonl"
+directory_field = "cwd"
+session_id_field = "sessionId"
+reader = { kind = "file_first_identity" }
+root = "own_config_dir"
+
+# `payload.id` here and `payload.session_id` in `connectors/codex-cli/manifest.toml`, and
+# the difference is deliberate (dogfood C1, review M2). A FOREIGN scan reads a file's FIRST
+# record, where a Codex rollout's `session_meta` carries both fields equal to the thread —
+# so either name answers the only question this entry asks, "whose session is that file".
+# The codex connector's own entry is also what `EntryRuntime::session_of` reads for EVERY
+# leg-1 record, and after the opening record `payload.id` is the ITEM's id, which is why
+# that one had to move. Left as it is because changing it would re-pin this connector for
+# no measured gain; the reason belongs beside the field rather than only in the other file.
+[[foreign_scan]]
+harness = "codex-cli"
+path_glob = "{home}/.codex/sessions/*/*/*/rollout-*.jsonl"
+directory_field = "payload.cwd"
+session_id_field = "payload.id"
+
+# MF-5: the ten shared patterns miss the billing block that rides in every raw API body.
+[redaction]
+extra_patterns = [
+  { kind = "anthropic_billing_header", regex = 'x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+' },
+]
+
+# Dogfood D1 (2026-09-07). `CLAUDE_CONFIG_DIR = {harness_home}` gives every run a FRESH
+# configuration directory, and Claude Code keeps its first-run state in `<config
+# dir>/.claude.json`: with none of these keys it shows the theme picker and then "Select
+# login method" — on a machine whose participant has been signed in for months. The OAuth
+# token itself lives in the login keychain and is shared across config dirs, so copying
+# `oauthAccount` is what makes the fresh home a signed-in one.
+#
+# This is a READ of an app-wide file and never a write. D21 is the list of app-wide WRITES
+# the tracker permits, each with a reversal procedure; nothing here writes one byte outside
+# `{harness_home}`, and `goalcup start` says on screen which file it read and which keys it
+# copied. `{home}/.claude.json` is Claude Code's default location; the second candidate is
+# where a participant who exports `CLAUDE_CONFIG_DIR` for their own daily use keeps it.
+[home_seed]
+from = ["{home}/.claude.json", "{home}/.claude/.claude.json"]
+to = ".claude.json"
+# Without these two the run meets an onboarding screen, so `goalcup start` refuses rather
+# than launching into one.
+required = ["hasCompletedOnboarding", "oauthAccount"]
+keys = [
+  "hasCompletedOnboarding",
+  "lastOnboardingVersion",
+  "theme",
+  "oauthAccount",
+  "userID",
+  "firstStartTime",
+  "firstStartVersion",
+  "installMethod",
+  "autoUpdates",
+  "numStartups",
+  # Dogfood fix 6 (2026-09-08). TWO MORE first-run prompts, met on the first full Claude
+  # Code loop once the keys above had cleared the theme picker and the login wall. Both are
+  # per-`CLAUDE_CONFIG_DIR` state, so a fresh entry meets them however long the participant
+  # has been answering them on their own machine, and the key names below were measured in
+  # a real `~/.claude.json` (2.1.259):
+  #
+  #   "Try the new fullscreen renderer? 1. Yes, try it / 2. Not now" — silenced by
+  #     `fullscreenUpsellSeenCount`, the number of times Claude Code has shown that upsell,
+  #     and only once that count has reached 3 (measured in the 2.1.259 binary): below
+  #     that the prompt still appears, copied count and all, and answering it is harmless
+  #     apart from restarting the UI in-process mid-run.
+  #
+  #   "Claude in Chrome extension detected … No, keep browser tools off / Yes, use my
+  #     browser" — silenced by `claudeInChromeDefaultEnabled` being DEFINED at all (the
+  #     binary skips the offer once a decision is recorded, whichever way);
+  #     `hasCompletedClaudeInChromeOnboarding` and `cachedChromeExtensionInstalled` carry
+  #     the state that goes with that answer. This key is also the feature's ON/OFF
+  #     switch: a participant who answered "Yes, use my browser" runs their tracked entry
+  #     with browser tools attached to their own Chrome. That is their decision, not the
+  #     tracker's — the tracker copies it and records it; the transcript records every
+  #     tool call it leads to.
+  #
+  # The second one is why this is a fix and not a tidy-up: it ATE the typed message. The
+  # driver typed a turn, the modal took the keystrokes, no message was delivered at all,
+  # and the harness exited 0 with the transcript unchanged — a run that looks clean and
+  # holds nothing.
+  #
+  # Copied and never invented, like every key above it. A participant who has met neither
+  # prompt has none of these four in their file, the seed writes none of them, and their
+  # run is exactly the run it is today.
+  "fullscreenUpsellSeenCount",
+  "hasCompletedClaudeInChromeOnboarding",
+  "claudeInChromeDefaultEnabled",
+  "cachedChromeExtensionInstalled",
+]
+# The SECOND first-run screen, measured on 2026-09-07 once the keys above had removed the
+# first two: "Quick safety check: Is this a project you created or one you trust?", whose
+# default answer is `No, exit`. It is asked per PROJECT, so no key copied out of the
+# participant's file can answer it — the workspace is a path that did not exist when that
+# file was written. spikes/claude-code-cli/NOTES.md §4.7 named it beside the theme picker.
+#
+# The tracker created that directory itself, empty, for this run and this run alone (R3),
+# so it is the one directory whose trust question the tracker can answer without speaking
+# for anybody. Written only for THIS entry's workspace, only into the per-run home.
+trust_field = "projects"
+trust_keys = ["hasTrustDialogAccepted"]
+
+[launch]
+# Values line by line from spikes/claude-code-cli/run.sh.
+mode = "tui"
+program = "claude"
+args = ["--settings", "{artifact_root}/settings-launch.json", "--session-id", "{session_id}"]
+home_env = "CLAUDE_CONFIG_DIR"
+# RULES.md "During the run": these switch capture off or redirect the model.
+env_remove = [
+  "ANTHROPIC_BASE_URL", "ANTHROPIC_API_URL", "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_SKIP_PROMPT_HISTORY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+]
+banned_args = ["--no-session-persistence", "--print", "-p"]
+
+[launch.env]
+CLAUDE_CONFIG_DIR = "{harness_home}"
+CLAUDE_CODE_ENABLE_TELEMETRY = "1"
+OTEL_LOG_RAW_API_BODIES = "file:{artifact_root}/raw-bodies"
+OTEL_LOG_USER_PROMPTS = "1"
+OTEL_LOG_TOOL_DETAILS = "1"
+OTEL_LOG_ASSISTANT_RESPONSES = "1"
+
+[launch.status_line]
+settings_key = "statusLine"
+command_template = "cat {status_line_path}"
+
+[resume]
+# spike 4 resume.sh: --session-id creates, --resume selects; never both.
+args = ["--settings", "{artifact_root}/settings-launch.json", "--resume", "{session_id}"]
+session_arg_style = "flag"
+
+[preflight]
+banned_env = ["CLAUDE_CODE_SKIP_PROMPT_HISTORY", "ANTHROPIC_BASE_URL"]
+required_paths = ["{harness_home}", "{artifact_root}/raw-bodies"]
+free_ports = []
+
+# The daemon renders and writes this file (R3): the process-scoped `--settings` payload,
+# which carries the status line and lives in the artifact root, where the agent cannot
+# enumerate it.
+[[hook_install]]
+path = "settings-launch.json"
+template = "settings-launch.json"
+scope = "artifact_root"
+mode = 384                                   # 0o600, the only mode the retained artifact-root writer takes
+
+[version]
+self_updating = false
+sample_interval_seconds = 300
+record_field = "version"                     # every transcript record carries it; cc_version is finer
+
+[normalisation]
+trailing_newline = true
+
+[[store]]
+name = "main"
+mode = "jsonl"
+# `config_dir` is CLAUDE_CONFIG_DIR for this run, resolved by the daemon before rendering.
+path_template = "{config_dir}/projects/{slug}/{session_id}.jsonl"
+# M0 §2.8: timestamps inside the file are out of order, so read in append order.
+cursor = { type = "inode_offset", column = "offset" }
+subagent_path_template = "{config_dir}/projects/{slug}/{session_id}/subagents/agent-*.jsonl"
+spill_path_template = "{config_dir}/projects/{slug}/{session_id}/tool-results/"
+# D20: no partition_key, and the manifest says why rather than leaving the loader to guess.
+# Spike 4 A9 measured that CLAUDE_CONFIG_DIR is a process-scoped pin: the per-run config
+# dir this path is rooted at holds this run's sessions and nothing else, so there are no
+# foreign rows in it to separate. The foreign session A9 did find is a SECOND SLUG beside
+# this one under the same config dir — a sibling directory, not a row in this file — and
+# it, like an unpinned installation under the participant's real home, is covered by
+# `foreign_scan[]` rather than by a partition key.
+unpartitioned_reason = "spike 4 A9: the config dir is a per-run process-scoped pin, so this file holds no foreign rows; an unpinned installation is covered by foreign_scan[]"
+
+[[store]]
+name = "raw_bodies"
+mode = "dir"
+path_template = "{artifact_root}/raw-bodies/"
+cursor = { type = "inode_offset", column = "offset" }
+# D20: the tracker created this directory and OTEL_LOG_RAW_API_BODIES points one process
+# at it. Nothing else writes here, so there is nothing to partition against.
+unpartitioned_reason = "the daemon creates the raw-bodies directory under the artifact root and pins one process at it, so every byte in it is this run's"
+
+[human_rule]
+id = "claude-code-origin-human"
+byte_exact_field = "prompt"
+leg2_event = "UserPromptSubmit"
+pair_key = "prompt_id"
+scoping = ["not_subagent_thread_source", "directory_equals_workspace"]
+
+positive = [
+  { match = "field_equals", field = "origin.kind", value = "human" },
+  { match = "field_equals", field = "promptSource", value = "typed" },
+]

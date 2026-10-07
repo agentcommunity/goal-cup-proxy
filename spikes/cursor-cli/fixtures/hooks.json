@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "sessionEnd": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "beforeSubmitPrompt": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 20, "failClosed": true }],
+    "afterAgentThought": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "afterAgentResponse": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "preToolUse": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "postToolUse": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "postToolUseFailure": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "beforeShellExecution": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "afterShellExecution": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "beforeMCPExecution": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "afterMCPExecution": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "beforeReadFile": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "afterFileEdit": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "subagentStart": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "subagentStop": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "preCompact": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }],
+    "stop": [{ "command": "/Users/team/goalcup-spikes/ws-cursor-20260903T125448Z/.cursor/hooks/goalcup-hook.py", "timeout": 15 }]
+  }
+}

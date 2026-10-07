@@ -1,0 +1,680 @@
+{
+  "case": "m0-codex-cli",
+  "excluded_verdict_fields": [
+    "verifier_version"
+  ],
+  "inputs": {
+    "history-excerpt.jsonl": "900823778bbb4040460543e86eb2996d547511c686938c2bf547c729c9ad0c2c",
+    "hooks.jsonl": "334d72982ed71e55c49b55b70a9d8893dd1a61de8c4f9065a7019ce72518a8a8",
+    "manifest.toml": "276cb20b6ade953de8bbea6721b360fccf30b4fe29e773ed53c56b5a6b4f1db6",
+    "rollout-main-01a06614.jsonl": "04441b2e0d18be764df692d1445c5b421fbe8fee6285834b6cad653e89238c1a",
+    "rollout-subagent-01a06615.jsonl": "e3bd02af1960b1c73ff43db8447db73d30f2f28441aca8eb57bd8347d2dcb7e9",
+    "trace.toml": "c374fef66e79beac54028904c4eca5f1076ab247273548c79b84c27955e23d6f",
+    "wrong-cwd-01a06616-excerpt.jsonl": "103fa336d0306cf46a663187759a2d358254917c93aa5e89418c711b56dd88a6"
+  },
+  "protocol_versions": [],
+  "trust_fixture": "goalcup-v0.1.0-pins",
+  "verdict": {
+    "checks": [
+      {
+        "findings": [
+          {
+            "code": "goal_recovered",
+            "evidence": [
+              {
+                "note": "leg-1 record for the goal",
+                "seq": 6,
+                "sha256": "1a4cef4657eae0b5ce001b6569303fee58e09c5404457c95b07fd5bec56c73b6",
+                "store": "rollout-main"
+              }
+            ],
+            "message": "goal recovered, 1243 characters (unwitnessed: no leg-2 post corroborates it): <environment_context>\n  <cwd>/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/sp",
+            "severity": "pass"
+          }
+        ],
+        "id": "V1",
+        "title": "original prompt recovered and within 4,000 characters",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "not_keep_going",
+            "evidence": [
+              {
+                "note": "leg-2 post index 2",
+                "seq": 9,
+                "sha256": "095d8a323578a9472f62c262e17918b55b5c3850c9d8729f545757e69e1ede67",
+                "store": "rollout-main"
+              }
+            ],
+            "message": "message 1 is `create hello.py that prints the current date, run it, then tell me the output`, not `keep going`",
+            "severity": "fail"
+          },
+          {
+            "code": "not_keep_going",
+            "evidence": [
+              {
+                "note": "leg-2 post index 16",
+                "seq": 49,
+                "sha256": "436bc58b718d943c04d8633530da0b9df129544c02dc2fc27fb0cdf0e085ff38",
+                "store": "rollout-main"
+              }
+            ],
+            "message": "message 2 is `use a subagent to count the lines in hello.py`, not `keep going`",
+            "severity": "fail"
+          },
+          {
+            "code": "not_keep_going",
+            "evidence": [
+              {
+                "note": "leg-2 post index 26",
+                "seq": 77,
+                "sha256": "9689da56eeaba82d6f931c642ff5c44d00b5b6f7d2c2a161c2d9378c8c6eb2d7",
+                "store": "rollout-main"
+              }
+            ],
+            "message": "message 3 is `going`, not `keep going`",
+            "severity": "fail"
+          },
+          {
+            "code": "not_keep_going",
+            "evidence": [
+              {
+                "note": "leg-2 post index 33",
+                "seq": 116,
+                "sha256": "19030447a614e4a73f70bc8ffb4e0bf86e77e8eab8bf89edfa52c22a0a31e4df",
+                "store": "rollout-main"
+              }
+            ],
+            "message": "message 6 is `what is 2 + 2?`, not `keep going`",
+            "severity": "fail"
+          },
+          {
+            "code": "not_keep_going",
+            "evidence": [
+              {
+                "note": "leg-2 post index 36",
+                "seq": 132,
+                "sha256": "c8993df9b4d08c0a12901794cbf25bc3d93742a1ae01665056bde9df9da50a07",
+                "store": "rollout-main"
+              }
+            ],
+            "message": "message 7 is `also add a README`, not `keep going`",
+            "severity": "fail"
+          }
+        ],
+        "id": "V2",
+        "title": "every human message after the goal equals `keep going`",
+        "verdict": "fail"
+      },
+      {
+        "findings": [
+          {
+            "code": "leg1_without_leg2_post",
+            "evidence": [
+              {
+                "note": "no leg-2 post with this pair key",
+                "seq": 6,
+                "store": "rollout-main"
+              }
+            ],
+            "message": "leg-1 user-slot record `<environment_context>\n  <cwd>/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/sp` has no corroborating post (not counted as a human message; V2 decides its severity)",
+            "severity": "flag"
+          },
+          {
+            "code": "leg2_without_leg1_record",
+            "message": "leg-2 post 35 (`OVERLENGTH-TEST-A7 xxxxxxxxxxxxxxxxxxxxx`) has no leg-1 record; a blocking hook refused it, and the harness kept its text",
+            "severity": "flag"
+          },
+          {
+            "code": "cross_leg_identifiers_mismatch",
+            "message": "turn `01a06614-bd07-7892-abce-d9315bbd4511`: 3 leg-1 tool call(s), 6 leg-2 tool call(s) — the turn+order join expects equal counts per turn",
+            "severity": "flag"
+          },
+          {
+            "code": "cross_leg_identifiers",
+            "message": "9 leg-1 tool id(s), 12 leg-2 tool id(s), 2 shared; the join declared by the manifest is `turn_id+order`",
+            "severity": "pass"
+          }
+        ],
+        "id": "V3",
+        "title": "the two legs agree on every human message",
+        "verdict": "flag"
+      },
+      {
+        "findings": [
+          {
+            "code": "one_tracked_session",
+            "message": "one tracked session: 01a06614-8f11-79a1-abb9-0b0f45b7f104",
+            "severity": "pass"
+          },
+          {
+            "code": "foreign_session",
+            "evidence": [
+              {
+                "note": "declared foreign in trace.toml — a fixture declaration, not a live detection; this path exists only for the M0 fixtures",
+                "store": "wrong-cwd-01a06616"
+              }
+            ],
+            "message": "store `wrong-cwd-01a06616` holds a session the tracker never armed; its rows must not enter the chain (D20)",
+            "severity": "flag"
+          },
+          {
+            "code": "resume",
+            "message": "1 resume(s) recorded: resume",
+            "severity": "pass"
+          }
+        ],
+        "id": "V4",
+        "title": "session continuity: fresh start, resumes, no second root, no foreign session",
+        "verdict": "flag"
+      },
+      {
+        "findings": [
+          {
+            "code": "model_changed",
+            "message": "models observed, in order of first appearance: gpt-5.6-sol -> gpt-5.6-luna",
+            "severity": "pass"
+          },
+          {
+            "code": "no_version_drift",
+            "message": "no version change recorded; harness reported as 0.153.0 against tested range `=0.153.0`",
+            "severity": "pass"
+          }
+        ],
+        "id": "V5",
+        "title": "model identity and changes reported",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "user_slot_excluded",
+            "evidence": [
+              {
+                "note": "first_session_meta_is_tracked",
+                "seq": 5,
+                "store": "rollout-subagent"
+              },
+              {
+                "note": "first_session_meta_is_tracked",
+                "seq": 8,
+                "store": "rollout-subagent"
+              },
+              {
+                "note": "first_session_meta_is_tracked",
+                "seq": 17,
+                "store": "rollout-subagent"
+              }
+            ],
+            "message": "3 record(s) excluded as `first_session_meta_is_tracked`",
+            "severity": "pass"
+          },
+          {
+            "code": "user_slot_excluded",
+            "evidence": [
+              {
+                "note": "not_subagent_thread_source",
+                "seq": 5,
+                "store": "rollout-subagent"
+              },
+              {
+                "note": "not_subagent_thread_source",
+                "seq": 8,
+                "store": "rollout-subagent"
+              },
+              {
+                "note": "not_subagent_thread_source",
+                "seq": 17,
+                "store": "rollout-subagent"
+              }
+            ],
+            "message": "3 record(s) excluded as `not_subagent_thread_source`",
+            "severity": "pass"
+          }
+        ],
+        "id": "V6",
+        "title": "harness-authored user-slot content is classified, not counted",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "normalisation_applied",
+            "message": "exactly one trailing newline was stripped; comparison uses field `prompt`",
+            "severity": "pass"
+          }
+        ],
+        "id": "V7",
+        "title": "exactly one trailing newline stripped before comparison",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "join_key_agrees",
+            "message": "manifest and parser agree on the join key: turn_id+order",
+            "severity": "pass"
+          },
+          {
+            "code": "turn_tool_call_count_mismatch",
+            "message": "turn `01a06614-bd07-7892-abce-d9315bbd4511`: 3 leg-1 tool call(s), 6 leg-2 tool call(s)",
+            "severity": "flag"
+          }
+        ],
+        "id": "V8",
+        "title": "request and response pairing, and the declared join key",
+        "verdict": "flag"
+      },
+      {
+        "findings": [
+          {
+            "code": "no_event_stream",
+            "message": "no daemon event stream in this trace; config-deviation and store-rewrite reconciliation cannot be verified here (unverifiable, not clean)",
+            "severity": "flag"
+          }
+        ],
+        "id": "V9",
+        "title": "hook-config change events reconciled",
+        "verdict": "flag"
+      },
+      {
+        "findings": [
+          {
+            "code": "partition_violation",
+            "evidence": [
+              {
+                "note": "partition field does not match the tracked session",
+                "seq": 6,
+                "sha256": "926271d83af82a0ef0fcae18548c61f52922285c1ef0fa0e8700db304b19dd77",
+                "store": "history"
+              }
+            ],
+            "message": "store `history` record seq 6 carries `session_id` = `01a06616-7b3c-7a93-b031-e913ac0ad676`, not one of the tracked session(s) (D20)",
+            "severity": "fail"
+          },
+          {
+            "code": "partition_violation",
+            "evidence": [
+              {
+                "note": "partition field does not match the tracked session",
+                "seq": 7,
+                "sha256": "36c734b3776a7e701edcfdf92c92b712d67d25612f65e6c02d4d151a791b00d5",
+                "store": "history"
+              }
+            ],
+            "message": "store `history` record seq 7 carries `session_id` = `01a06616-7b3c-7a93-b031-e913ac0ad676`, not one of the tracked session(s) (D20)",
+            "severity": "fail"
+          },
+          {
+            "code": "partition_violation",
+            "evidence": [
+              {
+                "note": "partition field does not match the tracked session",
+                "seq": 8,
+                "sha256": "79c533cdc7c5de9430be955f6f09f0c7b08d7ebe5904f2a8d1480f641c7ddf97",
+                "store": "history"
+              }
+            ],
+            "message": "store `history` record seq 8 carries `session_id` = `01a06616-7b3c-7a93-b031-e913ac0ad676`, not one of the tracked session(s) (D20)",
+            "severity": "fail"
+          },
+          {
+            "code": "foreign_records_present",
+            "evidence": [
+              {
+                "note": "declared foreign in trace.toml — a fixture declaration, not a live detection",
+                "store": "wrong-cwd-01a06616"
+              }
+            ],
+            "message": "store `wrong-cwd-01a06616` is declared foreign; its records must be discarded before hashing (D20)",
+            "severity": "pass"
+          },
+          {
+            "code": "unattributable_store",
+            "evidence": [
+              {
+                "note": "no teaching record",
+                "seq": 1,
+                "sha256": "a447d88502e297fa9c215f9f943974855ac153b356f20e966205dce32bae6be2",
+                "store": "wrong-cwd-01a06616"
+              }
+            ],
+            "message": "this connector keys a file on its first `session_meta`, and store `wrong-cwd-01a06616` has none, so the file has no key: its records belong to no session that can be established from its own bytes. They are loaded and chained as evidence and attributed to nothing",
+            "severity": "flag"
+          }
+        ],
+        "id": "V10",
+        "title": "no record fails its store's partition key",
+        "verdict": "fail"
+      },
+      {
+        "findings": [
+          {
+            "code": "token_summary",
+            "message": "gpt-5.6-luna: prompt=148751 completion=572 cached=119552; gpt-5.6-sol: prompt=263462 completion=1165 cached=224768",
+            "severity": "pass"
+          },
+          {
+            "code": "stripped",
+            "message": "fields dropped before publication: rate_limits (policy: rate_limits, plan_type, credit, quota, cost)",
+            "severity": "pass"
+          }
+        ],
+        "id": "V11",
+        "title": "derived token summary with plan, credit and billing stripped",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "no_anchor",
+            "message": "this trace carries 0 acknowledgements, so no part of the chain is anchored to a value the participant did not produce; the chain recomputing cleanly says only that it is self-consistent",
+            "severity": "flag"
+          }
+        ],
+        "id": "V12",
+        "title": "server acknowledgements reconciled against the chain",
+        "verdict": "flag"
+      },
+      {
+        "findings": [
+          {
+            "code": "manifest_not_pinned",
+            "evidence": [
+              {
+                "note": "the manifest this run was judged by",
+                "sha256": "276cb20b6ade953de8bbea6721b360fccf30b4fe29e773ed53c56b5a6b4f1db6",
+                "store": "manifest"
+              }
+            ],
+            "message": "the connector manifest this run was judged by is not the one this build pins: the pin is ae9ea6e7cc929b63374536c89f79962428df8d52b2a7d11a6996f9dad9479027, and the file `trace.toml` named hashes to 276cb20b6ade953de8bbea6721b360fccf30b4fe29e773ed53c56b5a6b4f1db6. the manifest supplies the human rule, the exclusion catalogue and the tool classes, so a participant free to write it is free to write the rule that excludes their own steering messages — which V2 then has nothing to fail",
+            "severity": "fail"
+          },
+          {
+            "code": "legacy_trace",
+            "message": "this descriptor declares [[leg1]] stores and no chain, so it predates the daemon's start receipt and carries none to check; the binding statements this check makes are about a document the capture never had",
+            "severity": "pass"
+          }
+        ],
+        "id": "V13",
+        "title": "the trace is bound to a server-signed start and closes at the run's deadline",
+        "verdict": "fail"
+      }
+    ],
+    "connector_id": "codex-cli",
+    "connector_manifest_sha256": "276cb20b6ade953de8bbea6721b360fccf30b4fe29e773ed53c56b5a6b4f1db6",
+    "dev": false,
+    "entry_id": "m0-spike2",
+    "gaps": [],
+    "harness_version": "0.153.0",
+    "human_messages": [
+      {
+        "index": 1,
+        "leg1_seq": 9,
+        "leg1_sha256": "095d8a323578a9472f62c262e17918b55b5c3850c9d8729f545757e69e1ede67",
+        "leg1_store": "rollout-main",
+        "leg2_index": 2,
+        "text": "create hello.py that prints the current date, run it, then tell me the output"
+      },
+      {
+        "index": 2,
+        "leg1_seq": 49,
+        "leg1_sha256": "436bc58b718d943c04d8633530da0b9df129544c02dc2fc27fb0cdf0e085ff38",
+        "leg1_store": "rollout-main",
+        "leg2_index": 16,
+        "text": "use a subagent to count the lines in hello.py"
+      },
+      {
+        "index": 3,
+        "leg1_seq": 77,
+        "leg1_sha256": "9689da56eeaba82d6f931c642ff5c44d00b5b6f7d2c2a161c2d9378c8c6eb2d7",
+        "leg1_store": "rollout-main",
+        "leg2_index": 26,
+        "text": "going"
+      },
+      {
+        "index": 4,
+        "leg1_seq": 87,
+        "leg1_sha256": "156c9a13ebfbaa2679053eaf95946c78cc524e09c45ca3c8b2fc036c3b18282e",
+        "leg1_store": "rollout-main",
+        "leg2_index": 28,
+        "text": "keep going"
+      },
+      {
+        "index": 5,
+        "leg1_seq": 99,
+        "leg1_sha256": "faf71eefa94f927602519e1d370c45810ecd81b37409ecdef748239d142b74fe",
+        "leg1_store": "rollout-main",
+        "leg2_index": 30,
+        "text": "keep going"
+      },
+      {
+        "index": 6,
+        "leg1_seq": 116,
+        "leg1_sha256": "19030447a614e4a73f70bc8ffb4e0bf86e77e8eab8bf89edfa52c22a0a31e4df",
+        "leg1_store": "rollout-main",
+        "leg2_index": 33,
+        "text": "what is 2 + 2?"
+      },
+      {
+        "index": 7,
+        "leg1_seq": 132,
+        "leg1_sha256": "c8993df9b4d08c0a12901794cbf25bc3d93742a1ae01665056bde9df9da50a07",
+        "leg1_store": "rollout-main",
+        "leg2_index": 36,
+        "text": "also add a README"
+      }
+    ],
+    "key_source": "none",
+    "manifest_pin": "altered",
+    "overall": "fail",
+    "parser_census": {
+      "inter_agent_communication_metadata": 2,
+      "session_meta": 1,
+      "token_usage_record": 17,
+      "world_state": 9
+    },
+    "review_queue": [
+      {
+        "code": "not_keep_going",
+        "evidence": [
+          {
+            "note": "leg-2 post index 2",
+            "seq": 9,
+            "sha256": "095d8a323578a9472f62c262e17918b55b5c3850c9d8729f545757e69e1ede67",
+            "store": "rollout-main"
+          }
+        ],
+        "message": "message 1 is `create hello.py that prints the current date, run it, then tell me the output`, not `keep going`",
+        "severity": "fail"
+      },
+      {
+        "code": "not_keep_going",
+        "evidence": [
+          {
+            "note": "leg-2 post index 16",
+            "seq": 49,
+            "sha256": "436bc58b718d943c04d8633530da0b9df129544c02dc2fc27fb0cdf0e085ff38",
+            "store": "rollout-main"
+          }
+        ],
+        "message": "message 2 is `use a subagent to count the lines in hello.py`, not `keep going`",
+        "severity": "fail"
+      },
+      {
+        "code": "not_keep_going",
+        "evidence": [
+          {
+            "note": "leg-2 post index 26",
+            "seq": 77,
+            "sha256": "9689da56eeaba82d6f931c642ff5c44d00b5b6f7d2c2a161c2d9378c8c6eb2d7",
+            "store": "rollout-main"
+          }
+        ],
+        "message": "message 3 is `going`, not `keep going`",
+        "severity": "fail"
+      },
+      {
+        "code": "not_keep_going",
+        "evidence": [
+          {
+            "note": "leg-2 post index 33",
+            "seq": 116,
+            "sha256": "19030447a614e4a73f70bc8ffb4e0bf86e77e8eab8bf89edfa52c22a0a31e4df",
+            "store": "rollout-main"
+          }
+        ],
+        "message": "message 6 is `what is 2 + 2?`, not `keep going`",
+        "severity": "fail"
+      },
+      {
+        "code": "not_keep_going",
+        "evidence": [
+          {
+            "note": "leg-2 post index 36",
+            "seq": 132,
+            "sha256": "c8993df9b4d08c0a12901794cbf25bc3d93742a1ae01665056bde9df9da50a07",
+            "store": "rollout-main"
+          }
+        ],
+        "message": "message 7 is `also add a README`, not `keep going`",
+        "severity": "fail"
+      },
+      {
+        "code": "leg1_without_leg2_post",
+        "evidence": [
+          {
+            "note": "no leg-2 post with this pair key",
+            "seq": 6,
+            "store": "rollout-main"
+          }
+        ],
+        "message": "leg-1 user-slot record `<environment_context>\n  <cwd>/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/sp` has no corroborating post (not counted as a human message; V2 decides its severity)",
+        "severity": "flag"
+      },
+      {
+        "code": "leg2_without_leg1_record",
+        "message": "leg-2 post 35 (`OVERLENGTH-TEST-A7 xxxxxxxxxxxxxxxxxxxxx`) has no leg-1 record; a blocking hook refused it, and the harness kept its text",
+        "severity": "flag"
+      },
+      {
+        "code": "cross_leg_identifiers_mismatch",
+        "message": "turn `01a06614-bd07-7892-abce-d9315bbd4511`: 3 leg-1 tool call(s), 6 leg-2 tool call(s) — the turn+order join expects equal counts per turn",
+        "severity": "flag"
+      },
+      {
+        "code": "foreign_session",
+        "evidence": [
+          {
+            "note": "declared foreign in trace.toml — a fixture declaration, not a live detection; this path exists only for the M0 fixtures",
+            "store": "wrong-cwd-01a06616"
+          }
+        ],
+        "message": "store `wrong-cwd-01a06616` holds a session the tracker never armed; its rows must not enter the chain (D20)",
+        "severity": "flag"
+      },
+      {
+        "code": "turn_tool_call_count_mismatch",
+        "message": "turn `01a06614-bd07-7892-abce-d9315bbd4511`: 3 leg-1 tool call(s), 6 leg-2 tool call(s)",
+        "severity": "flag"
+      },
+      {
+        "code": "no_event_stream",
+        "message": "no daemon event stream in this trace; config-deviation and store-rewrite reconciliation cannot be verified here (unverifiable, not clean)",
+        "severity": "flag"
+      },
+      {
+        "code": "partition_violation",
+        "evidence": [
+          {
+            "note": "partition field does not match the tracked session",
+            "seq": 6,
+            "sha256": "926271d83af82a0ef0fcae18548c61f52922285c1ef0fa0e8700db304b19dd77",
+            "store": "history"
+          }
+        ],
+        "message": "store `history` record seq 6 carries `session_id` = `01a06616-7b3c-7a93-b031-e913ac0ad676`, not one of the tracked session(s) (D20)",
+        "severity": "fail"
+      },
+      {
+        "code": "partition_violation",
+        "evidence": [
+          {
+            "note": "partition field does not match the tracked session",
+            "seq": 7,
+            "sha256": "36c734b3776a7e701edcfdf92c92b712d67d25612f65e6c02d4d151a791b00d5",
+            "store": "history"
+          }
+        ],
+        "message": "store `history` record seq 7 carries `session_id` = `01a06616-7b3c-7a93-b031-e913ac0ad676`, not one of the tracked session(s) (D20)",
+        "severity": "fail"
+      },
+      {
+        "code": "partition_violation",
+        "evidence": [
+          {
+            "note": "partition field does not match the tracked session",
+            "seq": 8,
+            "sha256": "79c533cdc7c5de9430be955f6f09f0c7b08d7ebe5904f2a8d1480f641c7ddf97",
+            "store": "history"
+          }
+        ],
+        "message": "store `history` record seq 8 carries `session_id` = `01a06616-7b3c-7a93-b031-e913ac0ad676`, not one of the tracked session(s) (D20)",
+        "severity": "fail"
+      },
+      {
+        "code": "unattributable_store",
+        "evidence": [
+          {
+            "note": "no teaching record",
+            "seq": 1,
+            "sha256": "a447d88502e297fa9c215f9f943974855ac153b356f20e966205dce32bae6be2",
+            "store": "wrong-cwd-01a06616"
+          }
+        ],
+        "message": "this connector keys a file on its first `session_meta`, and store `wrong-cwd-01a06616` has none, so the file has no key: its records belong to no session that can be established from its own bytes. They are loaded and chained as evidence and attributed to nothing",
+        "severity": "flag"
+      },
+      {
+        "code": "no_anchor",
+        "message": "this trace carries 0 acknowledgements, so no part of the chain is anchored to a value the participant did not produce; the chain recomputing cleanly says only that it is self-consistent",
+        "severity": "flag"
+      },
+      {
+        "code": "manifest_not_pinned",
+        "evidence": [
+          {
+            "note": "the manifest this run was judged by",
+            "sha256": "276cb20b6ade953de8bbea6721b360fccf30b4fe29e773ed53c56b5a6b4f1db6",
+            "store": "manifest"
+          }
+        ],
+        "message": "the connector manifest this run was judged by is not the one this build pins: the pin is ae9ea6e7cc929b63374536c89f79962428df8d52b2a7d11a6996f9dad9479027, and the file `trace.toml` named hashes to 276cb20b6ade953de8bbea6721b360fccf30b4fe29e773ed53c56b5a6b4f1db6. the manifest supplies the human rule, the exclusion catalogue and the tool classes, so a participant free to write it is free to write the rule that excludes their own steering messages — which V2 then has nothing to fail",
+        "severity": "fail"
+      }
+    ],
+    "schema_version": "ATIF-v1.8",
+    "seal_attribution": [],
+    "tokens": {
+      "by_model": [
+        {
+          "cached": 119552,
+          "completion": 572,
+          "model": "gpt-5.6-luna",
+          "prompt": 148751
+        },
+        {
+          "cached": 224768,
+          "completion": 1165,
+          "model": "gpt-5.6-sol",
+          "prompt": 263462
+        }
+      ],
+      "stripped": [
+        "rate_limits"
+      ]
+    }
+  }
+}

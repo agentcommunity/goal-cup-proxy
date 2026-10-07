@@ -1,0 +1,1536 @@
+//! `HttpDaemonClient` over one transport, and the mock every command test runs against.
+//!
+//! The two halves of this file test two different things on purpose. The bearer rule, the
+//! wire codes and the body shape are properties of a REQUEST, so they are asserted against a
+//! real socket. The mock holds no headers and models none; what it is for is call order, a
+//! signature a test can pin a key against, and a start signal that can be withheld or
+//! delayed.
+//!
+//! The `busy` retry is asserted on BOTH, which is the point of where it lives: it is
+//! `retry::retry_busy`, above the trait, so the same helper covers a command driven by the
+//! wire client and a command driven by the mock.
+
+mod support;
+
+use goalcup_cli::CliError;
+use goalcup_cli::daemon::{
+    CALL_TIMEOUT, HttpDaemonClient, MockDaemonClient, PROCESS_HANDOFF_CALL_TIMEOUT,
+    SLOW_CALL_TIMEOUT, long_poll_read_timeout,
+};
+use goalcup_cli::retry::{
+    BUSY_ATTEMPTS, BUSY_BACKOFF, BUSY_BUDGET, retry_busy, retry_busy_process_classified,
+    retry_busy_within,
+};
+use goalcup_protocol::control::{
+    self, ControlError, DaemonClient, SUFFIX_RESUME_PREVIEW, SUFFIX_SEAL, SUFFIX_STATUS,
+    entry_route, is_public_route,
+};
+use goalcup_protocol::manifest::KillStrategy;
+use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
+use std::time::{Duration, Instant};
+
+fn process_registration() -> ProcessRegistration {
+    ProcessRegistration {
+        generation: 7,
+        handle: ProcessHandle {
+            pid: 1234,
+            pgid: None,
+            native_pid: None,
+            native_binary: None,
+            native_process_start: None,
+            process_start: None,
+            strategy: KillStrategy::NativePid,
+            grace_seconds: 5,
+            launched_at: "2026-09-11T00:00:00Z".to_string(),
+            program: "/usr/bin/true".to_string(),
+            argv: vec!["true".to_string()],
+            env_keys: Vec::new(),
+            home_seed: None,
+        },
+    }
+}
+
+#[test]
+fn process_registration_accepts_only_a_bare_204_with_one_matching_version_header() {
+    let version = goalcup_protocol::control::CONTROL_API_VERSION.to_string();
+    let cases = [
+        ("missing header", 204, Vec::new(), Vec::new()),
+        (
+            "duplicate header",
+            204,
+            vec![
+                ("x-goalcup-control-version".to_string(), version.clone()),
+                ("x-goalcup-control-version".to_string(), version.clone()),
+            ],
+            Vec::new(),
+        ),
+        (
+            "wrong header",
+            204,
+            vec![("x-goalcup-control-version".to_string(), "999".to_string())],
+            Vec::new(),
+        ),
+        (
+            "204 JSON null body",
+            204,
+            vec![("x-goalcup-control-version".to_string(), version.clone())],
+            b"null".to_vec(),
+        ),
+        (
+            "204 whitespace body",
+            204,
+            vec![("x-goalcup-control-version".to_string(), version.clone())],
+            b" \t\r\n".to_vec(),
+        ),
+        (
+            "200 json body",
+            200,
+            vec![("x-goalcup-control-version".to_string(), version.clone())],
+            b"{}".to_vec(),
+        ),
+        (
+            "another 2xx",
+            201,
+            vec![("x-goalcup-control-version".to_string(), version.clone())],
+            Vec::new(),
+        ),
+    ];
+
+    for (name, status, headers, body) in cases {
+        let srv = support::raw_response_daemon(status, headers, body);
+        let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+        let failure = client
+            .register_process_with_admission("e1", &process_registration())
+            .expect_err("{name} is not a process acknowledgement");
+        assert!(
+            failure.may_have_been_admitted(),
+            "{name} cannot prove the daemon did not admit the process"
+        );
+    }
+
+    let srv = support::raw_response_daemon(
+        204,
+        vec![("x-goalcup-control-version".to_string(), version)],
+        Vec::new(),
+    );
+    let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+    let result = client.register_process_with_admission("e1", &process_registration());
+    assert!(
+        result.is_ok(),
+        "a contract 204 must acknowledge: {result:?}"
+    );
+}
+
+#[test]
+fn a_chunked_204_process_reply_is_not_a_bare_acknowledgement() {
+    let srv = support::raw_chunked_response_daemon(
+        204,
+        vec![(
+            "x-goalcup-control-version".to_string(),
+            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
+        )],
+        b"null".to_vec(),
+    );
+    let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
+
+    let failure = client
+        .register_process_with_admission("e1", &process_registration())
+        .expect_err("a Transfer-Encoding response is not a bare 204 acknowledgement");
+    assert!(
+        failure.may_have_been_admitted(),
+        "ureq hides 204 chunk bytes, so their presence cannot prove no admission"
+    );
+    assert_eq!(
+        srv.last().1.as_deref(),
+        Some("Bearer control-token"),
+        "the raw protected route received the normal control bearer"
+    );
+}
+
+#[test]
+fn process_registration_treats_truncated_and_non_json_replies_as_ambiguous() {
+    let registration = process_registration();
+    let client = HttpDaemonClient::new(support::truncated_daemon().base(), "t".into()).unwrap();
+    let failure = client
+        .register_process_with_admission("e1", &registration)
+        .expect_err("a truncated acknowledgement is not proof of rejection");
+    assert!(failure.may_have_been_admitted());
+    assert!(matches!(failure.into_error(), ControlError::Malformed(_)));
+
+    let srv = support::raw_response_daemon(
+        200,
+        vec![(
+            "x-goalcup-control-version".to_string(),
+            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
+        )],
+        b"not json".to_vec(),
+    );
+    let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+    let failure = client
+        .register_process_with_admission("e1", &registration)
+        .expect_err("a malformed acknowledgement is not proof of rejection");
+    assert!(failure.may_have_been_admitted());
+    assert!(matches!(failure.into_error(), ControlError::Malformed(_)));
+}
+
+#[test]
+fn a_framed_400_malformed_process_refusal_is_not_admission_ambiguous() {
+    for (status, code) in [
+        (400, "malformed"),
+        (401, "unauthorized"),
+        (404, "not_found"),
+        (422, "preflight_failed"),
+    ] {
+        let srv = support::raw_response_daemon(
+            status,
+            vec![(
+                "x-goalcup-control-version".to_string(),
+                goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
+            )],
+            format!(r#"{{"error":{{"code":"{code}","message":"route refusal"}}}}"#).into_bytes(),
+        );
+        let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
+
+        let failure = retry_busy_process_classified(|| {
+            client.register_process_with_admission("e1", &process_registration())
+        })
+        .expect_err("a daemon-side validation refusal is surfaced");
+
+        assert_eq!(
+            failure.error.code(),
+            code,
+            "the framed {status} body survives"
+        );
+        assert!(
+            !failure.may_have_been_admitted,
+            "a framed authenticated {status} means the daemon rejected the registration before admission"
+        );
+        assert_eq!(
+            srv.last().1.as_deref(),
+            Some("Bearer control-token"),
+            "the protected {status} route received the control bearer"
+        );
+    }
+}
+
+#[test]
+fn an_explicit_post_prepare_error_is_ambiguous_even_if_its_status_regresses_to_4xx() {
+    let srv = support::raw_response_daemon(
+        409,
+        vec![(
+            "x-goalcup-control-version".to_string(),
+            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
+        )],
+        br#"{"error":{"code":"process_admission_uncertain","message":"Prepared was durable before reconciliation failed"}}"#.to_vec(),
+    );
+    let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
+
+    let failure = client
+        .register_process_with_admission("e1", &process_registration())
+        .expect_err("post-Prepare failure never proves refusal");
+    assert!(
+        failure.may_have_been_admitted(),
+        "the explicit admission boundary outranks a generic structured 4xx"
+    );
+}
+
+#[test]
+fn a_framed_pre_admission_busy_process_refusal_is_definite() {
+    let srv = support::raw_response_daemon(
+        409,
+        vec![(
+            "x-goalcup-control-version".to_string(),
+            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
+        )],
+        br#"{"error":{"code":"busy","message":"the entry was held before process admission"}}"#
+            .to_vec(),
+    );
+    let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
+
+    let failure = client
+        .register_process_with_admission("e1", &process_registration())
+        .expect_err("pre-admission busy is retryable and proves this attempt made no mutation");
+    assert!(!failure.may_have_been_admitted());
+    assert!(matches!(failure.into_error(), ControlError::Busy(_)));
+}
+
+#[test]
+fn a_framed_post_prepare_busy_process_response_remains_possibly_admitted() {
+    let srv = support::raw_response_daemon(
+        409,
+        vec![(
+            "x-goalcup-control-version".to_string(),
+            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
+        )],
+        br#"{"error":{"code":"process_admission_busy","message":"the exact Prepared request is waiting for its runtime"}}"#.to_vec(),
+    );
+    let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
+
+    let failure = client
+        .register_process_with_admission("e1", &process_registration())
+        .expect_err("Prepared busy is retryable but cannot prove the body absent");
+    assert!(failure.may_have_been_admitted());
+    assert!(matches!(
+        failure.into_error(),
+        ControlError::ProcessAdmissionBusy(_)
+    ));
+}
+
+#[test]
+fn a_framed_3xx_process_reply_is_not_a_definite_refusal() {
+    for status in [302, 307] {
+        let srv = support::raw_response_daemon(
+            status,
+            vec![(
+                "x-goalcup-control-version".to_string(),
+                goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
+            )],
+            br#"{"error":{"code":"malformed","message":"redirected process route"}}"#.to_vec(),
+        );
+        let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
+
+        let failure = retry_busy_process_classified(|| {
+            client.register_process_with_admission("e1", &process_registration())
+        })
+        .expect_err("a non-4xx response cannot prove the process was refused");
+
+        assert!(
+            failure.may_have_been_admitted,
+            "a framed {status} is not an authenticated daemon refusal"
+        );
+        assert_eq!(
+            srv.last().1.as_deref(),
+            Some("Bearer control-token"),
+            "the protected {status} route received the control bearer"
+        );
+    }
+}
+
+#[test]
+fn the_bearer_follows_is_public_route_on_the_raw_path_in_both_directions() {
+    // A recording listener that answers 200 and remembers every Authorization header.
+    let srv = support::recording_daemon();
+    let c = HttpDaemonClient::new(srv.base(), "control-token".into()).expect("a loopback base");
+    let entry = "e1";
+
+    let _ = c.status(entry);
+    let (path, auth) = srv.last();
+    assert_eq!(path, entry_route(entry, SUFFIX_STATUS));
+    assert!(is_public_route(&path));
+    assert_eq!(auth, None, "the status route is public: no bearer, ever");
+
+    let _ = c.entries();
+    let (path, auth) = srv.last();
+    assert_eq!(path, control::ROUTE_ENTRIES);
+    assert_eq!(auth.as_deref(), Some("Bearer control-token"));
+
+    let _ = c.seal(entry);
+    let (path, auth) = srv.last();
+    assert_eq!(path, entry_route(entry, SUFFIX_SEAL));
+    assert!(auth.is_some(), "every mutating route keeps the token");
+
+    let _ = c.resume_preview(entry);
+    let (path, auth) = srv.last();
+    assert_eq!(path, entry_route(entry, SUFFIX_RESUME_PREVIEW));
+    assert_eq!(srv.last_method(), "GET", "preview is never a resume POST");
+    assert!(
+        auth.is_some(),
+        "the preview pins require the control bearer"
+    );
+
+    let _ = c.wait_start_signal(entry, Duration::from_millis(50));
+    let (path, auth) = srv.last();
+    assert!(
+        path.starts_with(
+            &control::start_signal_route(entry, Duration::from_millis(50))
+                .split('?')
+                .next()
+                .unwrap()
+                .to_string()
+        )
+    );
+    assert!(
+        path.contains("timeout_ms=50"),
+        "the long-poll deadline is on the wire"
+    );
+    assert!(auth.is_some());
+
+    // The client asks about the string it is about to send, never a rewritten one.
+    let source = include_str!("../src/daemon/mod.rs");
+    assert!(
+        source.contains("is_public_route(path)"),
+        "the RAW path, per the M1a carry-forward"
+    );
+    assert!(!source.contains("unix"), "one transport");
+}
+
+#[test]
+fn a_daemon_that_is_not_there_is_unreachable_and_a_wire_code_survives_the_wire() {
+    let c =
+        HttpDaemonClient::new("http://127.0.0.1:1".into(), "t".into()).expect("a loopback base");
+    assert!(matches!(c.health(), Err(ControlError::Unreachable(_))));
+
+    let srv = support::erroring_daemon(409, "conflict", "already sealed at 2026-09-05T00:00:00Z");
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    match c.seal("e1") {
+        Err(ControlError::Conflict(m)) => assert!(m.contains("already sealed")),
+        other => panic!("the wire codes must survive the wire: {other:?}"),
+    }
+    let srv = support::erroring_daemon(500, "brand_new_code", "x");
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    assert!(
+        matches!(c.seal("e1"), Err(ControlError::Internal(_))),
+        "an unrecognised code becomes Internal, never a silent success"
+    );
+}
+
+/// `busy` and `conflict` share `409` and mean the opposite things. The retry that tells them
+/// apart is `retry::retry_busy`, one layer above the transport, and this is it over the
+/// wire.
+#[test]
+fn a_busy_409_is_retried_by_the_helper_and_a_conflict_409_is_not() {
+    // Answers 409/`busy` once, then 200.
+    let srv = support::recording_daemon_busy_once();
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    retry_busy(|| c.arm("e1")).expect("a busy daemon is a daemon to ask again");
+    assert_eq!(
+        srv.attempts(),
+        2,
+        "bounded: one retry was enough, and it was taken"
+    );
+
+    let srv = support::erroring_daemon(409, "conflict", "already sealed");
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    assert!(matches!(
+        retry_busy(|| c.seal("e1")),
+        Err(ControlError::Conflict(_))
+    ));
+    assert_eq!(srv.attempts(), 1, "a conflict is reported, never retried");
+}
+
+/// The other end of the same bound: a daemon that answers `busy` and goes on answering it
+/// is reported as busy rather than asked forever.
+#[test]
+fn a_daemon_that_stays_busy_is_reported_after_a_bounded_number_of_attempts() {
+    let srv = support::erroring_daemon(409, "busy", "an upload is holding this entry");
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    assert!(matches!(
+        retry_busy(|| c.arm("e1")),
+        Err(ControlError::Busy(_))
+    ));
+    assert_eq!(
+        srv.attempts(),
+        BUSY_ATTEMPTS,
+        "bounded, and the bound is the one the helper names"
+    );
+}
+
+/// The transport sends one request and reports what came back. The retry
+/// is above the trait, which is the only place a command driven by the MOCK can meet it.
+#[test]
+fn the_transport_itself_never_retries_anything() {
+    let srv = support::erroring_daemon(409, "busy", "an upload is holding this entry");
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    assert!(matches!(c.arm("e1"), Err(ControlError::Busy(_))));
+    assert_eq!(
+        srv.attempts(),
+        1,
+        "one call on the client, one request on the wire"
+    );
+
+    let source = include_str!("../src/daemon/mod.rs");
+    assert!(
+        !source.contains("thread::sleep"),
+        "nothing in the transport waits to try again"
+    );
+    assert_eq!(
+        source.matches("SLOW_CALL_TIMEOUT)").count(),
+        1,
+        "the five-minute deadline is the seal's and only the seal's: every other route is \
+         inside the retry helper's budget"
+    );
+}
+
+/// `/process` is the one mutating route whose caller has a separate, short, end-to-end retry
+/// policy. Keep its request deadline separate from the generic 30-second control deadline:
+/// the retry arithmetic is only truthful while this exact call site stays on the 2-second
+/// route limit.
+#[test]
+fn the_process_handoff_selects_its_bounded_transport_timeout() {
+    assert_eq!(PROCESS_HANDOFF_CALL_TIMEOUT, Duration::from_secs(2));
+
+    let source = include_str!("../src/daemon/mod.rs");
+    let (_, after_register) = source
+        .split_once("fn register_process")
+        .expect("the process-handoff transport implementation");
+    let (register, _) = after_register
+        .split_once("fn health")
+        .expect("the next transport route after process registration");
+    assert!(
+        register.contains("PROCESS_HANDOFF_CALL_TIMEOUT"),
+        "register_process keeps the timeout that retry::PROCESS_BUSY_BUDGET reserves"
+    );
+    assert!(
+        !register.contains("\n            CALL_TIMEOUT,"),
+        "register_process never falls back to the 30-second generic route timeout"
+    );
+}
+
+/// A command is written against the trait and tested against the mock, so the retry has to
+/// work there — `busy_once` then success, one call to the helper, and the fake counting both
+/// attempts. That a resume retries a busy once is testable because of this test's shape, not
+/// the wire one's.
+#[test]
+fn the_helper_retries_a_busy_through_the_mock_the_commands_are_driven_by() {
+    let tmp = tempfile::tempdir().unwrap();
+    let m = MockDaemonClient::armed_ok(tmp.path(), "claude-code-cli");
+    let info = m.info();
+
+    m.busy_once("resume");
+    let request = goalcup_protocol::control::ResumeRequest {
+        expected_generation: info.process_generation,
+    };
+    let resumed = retry_busy(|| m.resume(&info.entry_id, &request))
+        .expect("one busy, asked again, and answered");
+
+    assert_eq!(resumed.entry_id, info.entry_id);
+    assert_eq!(
+        m.calls().iter().filter(|call| *call == "resume").count(),
+        2,
+        "the mock's own record of the attempts: the same retry the wire client gets, \
+         because both are reached through the trait"
+    );
+
+    // And the other `409` is still never retried, on this side of the seam too.
+    m.seal(&info.entry_id).expect("the first seal");
+    assert!(matches!(
+        retry_busy(|| m.seal(&info.entry_id)),
+        Err(ControlError::Conflict(_))
+    ));
+    assert_eq!(
+        m.calls().iter().filter(|call| *call == "seal").count(),
+        2,
+        "one seal, one conflict, and no third ask"
+    );
+}
+
+/// Attempts alone are not a bound. Three attempts against a route with a
+/// five-minute deadline is a quarter of an hour of held terminal, so the helper carries a
+/// wall clock too — two ordinary calls, never the slow one.
+#[test]
+fn the_helper_stops_at_its_wall_clock_budget_and_not_only_at_its_attempt_count() {
+    assert_eq!(BUSY_BUDGET, CALL_TIMEOUT * 2, "two ordinary calls");
+    assert!(
+        BUSY_BUDGET < SLOW_CALL_TIMEOUT,
+        "the budget is written in the NORMAL call timeout: a single slow call outlasts the \
+         whole of a retried one, which is why the slow route stays outside this helper"
+    );
+    assert!(BUSY_BUDGET < BUSY_ATTEMPTS as u32 * SLOW_CALL_TIMEOUT);
+
+    // A budget already spent. Nothing sleeps and nothing is asked twice — asserted on a
+    // closure rather than a socket so the timing is the helper's and nothing else's.
+    let mut asked = 0usize;
+    let began = Instant::now();
+    let answered: Result<(), ControlError> = retry_busy_within(Duration::ZERO, || {
+        asked += 1;
+        Err(ControlError::Busy("an upload is holding this entry".into()))
+    });
+    match answered {
+        Err(ControlError::Busy(said)) => assert!(
+            said.contains("upload"),
+            "the daemon's own words survive the budget"
+        ),
+        other => panic!("a spent budget surfaces the busy: {other:?}"),
+    }
+    assert_eq!(asked, 1, "the budget was gone before the second ask");
+    assert!(
+        began.elapsed() < BUSY_BACKOFF,
+        "a backoff that would end past the budget is not taken at all"
+    );
+
+    // The same over the wire, counted by the server.
+    let srv = support::erroring_daemon(409, "busy", "an upload is holding this entry");
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    assert!(matches!(
+        retry_busy_within(Duration::ZERO, || c.arm("e1")),
+        Err(ControlError::Busy(_))
+    ));
+    assert_eq!(srv.attempts(), 1);
+}
+
+/// The bearer goes to this machine or it does not go. `from_config_dir` reaches that by
+/// building the base itself; a caller that hands one over meets it in `new`.
+#[test]
+fn a_base_that_is_not_loopback_is_refused_before_any_request_is_made() {
+    let token = "a-control-token-that-must-never-be-quoted";
+    for base in [
+        "http://10.0.0.7:53310",
+        "http://example.com:53310",
+        // A name that resolves back today is still a name, and this process is not what
+        // resolves it.
+        "http://localhost:53310",
+        // A host whose PREFIX is a loopback literal, which a string comparison would have
+        // taken for one.
+        "http://127.0.0.1.example.com:53310",
+        "https://127.0.0.1:53310",
+    ] {
+        match HttpDaemonClient::new(base.to_string(), token.into()) {
+            Err(CliError::Refused(said)) => {
+                assert!(said.contains(base), "the refusal names the base: {said}");
+                assert!(!said.contains(token), "and never the token: {said}");
+            }
+            Err(other) => panic!("{base} is a refusal the participant can fix: {other:?}"),
+            Ok(_) => panic!("{base} is not this machine"),
+        }
+    }
+    for base in [
+        "http://127.0.0.1:53310",
+        // The whole of 127.0.0.0/8 is loopback, and `IpAddr::is_loopback` is the rule.
+        "http://127.0.0.5:53310",
+        "http://[::1]:53310",
+    ] {
+        assert!(
+            HttpDaemonClient::new(base.to_string(), "t".into()).is_ok(),
+            "{base} is this machine"
+        );
+    }
+}
+
+/// A daemon that answered badly is not a daemon that is not there. `Unreachable` is the
+/// sentence a participant acts on by restarting a daemon — which, here, was answering.
+#[test]
+fn a_body_that_stopped_early_or_is_not_utf8_is_malformed_and_not_unreachable() {
+    let srv = support::truncated_daemon();
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    match c.entries() {
+        Err(ControlError::Malformed(_)) => {}
+        other => panic!("a body that stopped early is malformed: {other:?}"),
+    }
+
+    let srv = support::non_utf8_daemon();
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    match c.entries() {
+        Err(ControlError::Malformed(_)) => {}
+        other => panic!("a body that is not UTF-8 is malformed: {other:?}"),
+    }
+}
+
+/// A fifty-millisecond poll waits about the time it asked for and not a thirty-second read
+/// deadline: the transport never raises the caller's own interval to `CALL_TIMEOUT`, and the
+/// bound is the caller's.
+#[test]
+fn a_short_long_poll_waits_the_short_time_it_asked_for() {
+    let asked = Duration::from_millis(50);
+    let waited = long_poll_read_timeout(asked);
+    assert!(
+        waited > asked,
+        "the daemon answers at its own deadline and the slack is what keeps the transport \
+         from giving up first"
+    );
+    assert!(
+        waited < CALL_TIMEOUT,
+        "and it is never raised to the ordinary call deadline: {waited:?}"
+    );
+    let long = Duration::from_secs(600);
+    assert!(
+        long_poll_read_timeout(long) > long && long_poll_read_timeout(long) < long * 2,
+        "a long poll is still bounded, by the caller's own interval plus the slack"
+    );
+}
+
+/// The body is `opts` alone. The daemon parses a bare `WorkspaceOpts` and
+/// answers `malformed` to anything else, and its `harness` argument is dead on the wire.
+#[test]
+fn create_workspace_puts_the_bare_workspace_opts_on_the_wire() {
+    let srv = support::recording_daemon();
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
+    let _ = c.create_workspace("claude-code-cli", &support::workspace_opts());
+    let (path, _) = srv.last();
+    assert_eq!(path, goalcup_protocol::control::ROUTE_WORKSPACES);
+    let body: serde_json::Value = serde_json::from_str(&srv.last_body().unwrap()).unwrap();
+    assert!(
+        body.get("harness").is_none() && body.get("opts").is_none(),
+        "the body is a WorkspaceOpts, not {{harness, opts}}"
+    );
+    assert_eq!(body["connector_id"], "claude-code-cli");
+}
+
+/// `from_config_dir` reads the daemon's own six-field document — the field names are only
+/// checked at runtime, so the fixture below is written as the daemon writes it and the
+/// round trip is proved by the request that comes out the other side carrying that file's
+/// token.
+#[test]
+fn from_config_dir_round_trips_the_daemons_six_field_control_file() {
+    let srv = support::recording_daemon();
+    let cfg = support::empty_cfg();
+    let port = srv
+        .base()
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
+        .expect("the recording daemon's port");
+    let document = serde_json::json!({
+        "control_api_version": goalcup_protocol::control::CONTROL_API_VERSION,
+        "daemon_version": "0.1.0",
+        "address": format!("127.0.0.1:{port}"),
+        "port": port,
+        "receiver_address": format!("127.0.0.1:{}", port + 1),
+        "token": "the-token-in-the-file",
+    });
+    std::fs::write(
+        cfg.join("control.json"),
+        serde_json::to_string(&document).unwrap(),
+    )
+    .unwrap();
+
+    let c = HttpDaemonClient::from_config_dir(&cfg).expect("the daemon's own control.json");
+    let _ = c.entries();
+    let (path, auth) = srv.last();
+    assert_eq!(path, goalcup_protocol::control::ROUTE_ENTRIES);
+    assert_eq!(
+        auth.as_deref(),
+        Some("Bearer the-token-in-the-file"),
+        "the port and the token both came from the file"
+    );
+}
+
+/// A V2 daemon cannot enforce the current control contract. Refuse its control file before any
+/// cache or mutating-route work can pair the stale binaries.
+#[test]
+fn from_config_dir_refuses_a_v2_control_file_before_any_request() {
+    let cfg = support::empty_cfg();
+    std::fs::write(
+        cfg.join("control.json"),
+        r#"{"control_api_version":2,"daemon_version":"v2","address":"127.0.0.1:1","port":1,"receiver_address":"127.0.0.1:2","token":"old-v2-token"}"#,
+    )
+    .unwrap();
+
+    let error = HttpDaemonClient::from_config_dir(&cfg)
+        .expect_err("the current CLI must not pair with a V2 daemon");
+    let current = format!("this goalcup speaks {}", control::CONTROL_API_VERSION);
+    assert!(
+        error.to_string().contains("speaks control API version 2")
+            && error.to_string().contains(&current),
+        "the refusal identifies the incompatible pair without contacting the route: {error}"
+    );
+}
+
+/// The bearer is the one secret this client holds, and every refusal it raises is printed
+/// by `main.rs` and read by `goalcup doctor`.
+#[test]
+fn no_refusal_this_client_raises_ever_carries_the_control_token() {
+    let token = "a-control-token-that-must-never-be-quoted";
+
+    let mut said = Vec::new();
+    let unreachable =
+        HttpDaemonClient::new("http://127.0.0.1:1".into(), token.into()).expect("a loopback base");
+    said.push(format!("{:?}", unreachable.health()));
+    said.push(format!("{:?}", unreachable));
+
+    let srv = support::erroring_daemon(401, "unauthorized", "this route needs the control token");
+    let refused = HttpDaemonClient::new(srv.base(), token.into()).expect("a loopback base");
+    said.push(format!("{:?}", refused.entries()));
+    if let Err(e) = refused.entries() {
+        said.push(e.to_string());
+    }
+
+    // A `200` this client cannot read as the type the route promises.
+    let srv = support::recording_daemon();
+    let unreadable = HttpDaemonClient::new(srv.base(), token.into()).expect("a loopback base");
+    said.push(format!("{:?}", unreadable.entries()));
+
+    // A `200` larger than the client's cap.
+    let srv = support::oversized_daemon(goalcup_cli::daemon::MAX_RESPONSE_BYTES as usize + 64);
+    let oversized = HttpDaemonClient::new(srv.base(), token.into()).expect("a loopback base");
+    match oversized.entries() {
+        Err(e) => {
+            said.push(e.to_string());
+            said.push(format!("{e:?}"));
+        }
+        Ok(_) => panic!("a body over the cap is refused, not read"),
+    }
+
+    for text in said {
+        assert!(
+            !text.contains(token),
+            "the control token reached a message a participant can read: {text}"
+        );
+    }
+}
+
+#[test]
+fn the_mock_records_the_call_order_and_signs_with_the_key_it_publishes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let m = MockDaemonClient::armed_ok(tmp.path(), "claude-code-cli");
+    let info = m
+        .create_workspace("claude-code-cli", &support::workspace_opts())
+        .unwrap();
+    m.arm(&info.entry_id).unwrap();
+    let signed = m.status(&info.entry_id).unwrap();
+    assert!(signed.verify_with(&info.run_public_key).is_ok());
+    assert!(
+        signed.verify_with(&"aa".repeat(32)).is_err(),
+        "the key is pinned by the caller; the document's own field is a label"
+    );
+    assert_eq!(m.calls(), vec!["create_workspace", "arm", "status"]);
+    assert_eq!(
+        m.run_public_key(),
+        info.run_public_key,
+        "the key a test pins is the key the mock signs with, or nothing below means \
+         anything"
+    );
+    // The bearer/public split is a WIRE property and is asserted on the wire, in the
+    // first test in this file. The mock holds no headers and claims none.
+}
+
+/// Delayed, then withheld — that order and not the other one. `set_signal_delay` sets a
+/// delay and nothing else: a hook that quietly re-armed a gate `withhold_signal` had shut
+/// would make a test's answer depend on the order its two hooks were called in.
+#[test]
+fn a_delayed_signal_arrives_and_a_withheld_one_times_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let m = MockDaemonClient::armed_ok(tmp.path(), "codex-cli");
+
+    m.set_signal_delay(Duration::from_millis(10));
+    let s = m.wait_start_signal("e1", Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        s.signal,
+        support::connector("codex-cli").manifest.arming.signal
+    );
+    assert_eq!(s.source, "leg1", "the daemon only ever says leg1");
+
+    m.withhold_signal();
+    match m.wait_start_signal("e1", Duration::from_millis(20)) {
+        Err(ControlError::ArmingTimeout { detail }) => assert!(!detail.is_empty()),
+        other => panic!("a withheld signal is an ArmingTimeout: {other:?}"),
+    }
+    match m.wait_start_signal("e1", Duration::from_secs(2)) {
+        Err(ControlError::ArmingTimeout { .. }) => {}
+        other => panic!("and the delay already set did not re-open it: {other:?}"),
+    }
+}
+
+/// The mock's hooks, exercised once here so a method a command test reaches for is a method
+/// that already exists and already behaves.
+#[test]
+fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
+    let tmp = tempfile::tempdir().unwrap();
+    let m = MockDaemonClient::armed_ok(tmp.path(), "claude-code-cli");
+    let info = m.info();
+
+    // One `busy`, then the call goes through, and the mock counts both.
+    m.busy_once("arm");
+    assert!(matches!(m.arm(&info.entry_id), Err(ControlError::Busy(_))));
+    assert!(m.arm(&info.entry_id).is_ok(), "one busy, and then success");
+
+    // An arbitrary refusal, once.
+    m.fail_next("seal", ControlError::NotFound("no such entry".into()));
+    assert!(matches!(
+        m.seal(&info.entry_id),
+        Err(ControlError::NotFound(_))
+    ));
+
+    // The daemon's own plain words reach the terminal, and the counters the page
+    // shows only in JSON are readable here.
+    assert!(!m.status_detail().is_empty());
+    m.set_cycle_error("upload", "the upload is behind");
+    m.set_posts_dropped(3);
+    let signed = m.status(&info.entry_id).unwrap();
+    assert_eq!(signed.payload.cycles.upload, 1);
+    assert_eq!(
+        signed.payload.cycles.last.as_deref(),
+        Some("the upload is behind")
+    );
+    assert_eq!(signed.payload.posts_dropped, 3);
+    assert!(
+        signed.verify_with(&info.run_public_key).is_ok(),
+        "a hook that edits the payload re-signs it"
+    );
+
+    // The fourth arming state, which is not a timeout.
+    m.set_arming_refused("the tracker never saw your harness start in this folder");
+    let signed = m.status(&info.entry_id).unwrap();
+    assert_eq!(signed.payload.arming, control::ArmingState::Refused);
+    assert!(signed.payload.detail.contains("never saw"));
+
+    // The one way to reach the "did not verify" path.
+    m.tamper_status_payload();
+    let signed = m.status(&info.entry_id).unwrap();
+    assert!(
+        signed.verify_with(&info.run_public_key).is_err(),
+        "the payload changed and the signature did not"
+    );
+
+    // The relaunch is handed over, and the entry cache can follow it.
+    let handle = goalcup_protocol::process::ProcessHandle {
+        pid: 4242,
+        pgid: Some(4242),
+        native_pid: None,
+        native_binary: None,
+        native_process_start: None,
+        process_start: None,
+        strategy: goalcup_protocol::manifest::KillStrategy::ProcessGroup,
+        grace_seconds: 5,
+        launched_at: support::NOW.to_string(),
+        program: "/usr/bin/true".to_string(),
+        argv: vec!["true".to_string()],
+        env_keys: vec!["GOALCUP_RECEIVER_TOKEN".to_string()],
+        home_seed: None,
+    };
+    assert_eq!(m.last_registered_pid(), None);
+    m.register_process(
+        &info.entry_id,
+        &goalcup_protocol::process::ProcessRegistration {
+            generation: info.process_generation,
+            handle: handle.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(m.last_registered_pid(), Some(4242));
+    m.set_last_process_pid(777);
+    assert_eq!(
+        m.resume_info().last_process.map(|p| p.pid),
+        Some(777),
+        "a resume reports the process the previous launch left behind"
+    );
+    assert_eq!(
+        m.resume(
+            &info.entry_id,
+            &goalcup_protocol::control::ResumeRequest {
+                expected_generation: info.process_generation,
+            },
+        )
+        .unwrap()
+        .entry_id,
+        info.entry_id
+    );
+    assert_eq!(
+        m.resume_preview(&info.entry_id).unwrap().entry_id,
+        info.entry_id,
+        "the mock exposes the same dedicated preview method as the wire client"
+    );
+
+    // What the CLI abandoned, and why.
+    m.abandon(&info.entry_id, "the arming window closed")
+        .unwrap();
+    assert_eq!(
+        m.abandoned(),
+        vec![(
+            info.entry_id.clone(),
+            "the arming window closed".to_string()
+        )]
+    );
+
+    // The options the command actually sent.
+    assert_eq!(
+        m.last_workspace_opts().connector_id,
+        "no create_workspace call was made on this mock",
+        "nothing was created on this mock, and the sentinel says so rather than \
+         inventing an options document"
+    );
+    let opts = support::workspace_opts();
+    m.create_workspace("claude-code-cli", &opts).unwrap();
+    assert_eq!(m.last_workspace_opts(), opts);
+    assert_eq!(m.entry_count(), 1);
+
+    // The seal, once, and the mirror that disagrees with the workspace.
+    m.make_sealed_manifest_differ_on("README.md");
+    let control::SealResponse::Legacy(sealed) = m.seal(&info.entry_id).unwrap() else {
+        panic!("the legacy mock seal must return the historical manifest arm");
+    };
+    assert!(sealed.files.iter().any(|f| f.path == "README.md"));
+    assert!(
+        matches!(m.seal(&info.entry_id), Err(ControlError::Conflict(_))),
+        "a second seal is a conflict, and a conflict is never retried"
+    );
+    m.seal_once_then_conflict();
+    assert!(m.seal(&info.entry_id).is_ok(), "the seal was re-armed once");
+
+    // The rest of the trait, so no command test is the first to call one of these.
+    assert_eq!(
+        m.health().unwrap().control_api_version,
+        control::CONTROL_API_VERSION
+    );
+    assert_eq!(m.current_entry().unwrap(), Some(info.entry_id.clone()));
+    // Zero, and it was one before the seal above: `GET /v0/entries` is the daemon's LIVE map and
+    // a sealed entry is evicted from it, while the signed status route keeps answering for
+    // that entry out of the frozen cache — so the mock's `seal` evicts too. A mock that still
+    // listed a sealed run could not show the one disagreement `goalcup entries` exists to
+    // explain.
+    assert_eq!(m.entries().unwrap().len(), 0);
+    assert_eq!(MockDaemonClient::signing_key().to_bytes(), [9u8; 32]);
+}
+
+// ---------------------------------------------------------------- the capture seal
+
+fn capture_request(remaining_ms: u64) -> control::CaptureSealRequest {
+    control::CaptureSealRequest {
+        proxy: None,
+        remaining_finish_ms: Some(remaining_ms),
+        native_scope: None,
+    }
+}
+
+#[test]
+fn capture_seal_classifies_only_busy_unauthorized_and_refused_connection_as_not_admitted() {
+    use control::CaptureSealError;
+    let timeout = Duration::from_secs(5);
+
+    for (status, code, message) in [(409, "busy", "held"), (401, "unauthorized", "no")] {
+        let srv = support::erroring_daemon(status, code, message);
+        let c = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+        let failure = c
+            .seal_capture("e1", &capture_request(5_000), timeout)
+            .expect_err("a refusal");
+        assert!(
+            failure.not_admitted(),
+            "{code} comes before the handler: {failure:?}"
+        );
+        assert_eq!(failure.into_error().code(), code);
+    }
+
+    // A connection the daemon never accepted: nothing was written.
+    let c = HttpDaemonClient::new("http://127.0.0.1:1".into(), "t".into()).unwrap();
+    let failure = c
+        .seal_capture("e1", &capture_request(5_000), timeout)
+        .expect_err("nothing listens");
+    assert!(
+        matches!(
+            failure,
+            CaptureSealError::NotAdmitted(ControlError::Unreachable(_))
+        ),
+        "{failure:?}"
+    );
+}
+
+// ---------------------------------------------------------------- H-14: a finish after a restart
+
+/// A control.json for a daemon at `base`, as a restarted daemon writes it: a new port and a new
+/// token over the same configuration directory.
+fn write_control_file(cfg: &std::path::Path, base: &str, token: &str) {
+    let port: u16 = base.rsplit(':').next().unwrap().parse().unwrap();
+    let document = serde_json::json!({
+        "control_api_version": control::CONTROL_API_VERSION,
+        "daemon_version": "0.1.0",
+        "address": format!("127.0.0.1:{port}"),
+        "port": port,
+        "receiver_address": format!("127.0.0.1:{}", port + 1),
+        "token": token,
+    });
+    std::fs::write(
+        cfg.join("control.json"),
+        serde_json::to_string(&document).unwrap(),
+    )
+    .unwrap();
+}
+
+/// What a restarted daemon answers a capture seal with.
+fn finished_daemon() -> support::RecordingDaemon {
+    let report = control::CaptureFinishReport {
+        entry_id: "e1".to_string(),
+        trace_dir: "/x/trace".to_string(),
+        termination: goalcup_protocol::provenance::TerminationOutcomeV1::AlreadyStopped {
+            checked_at: goalcup_protocol::provenance::Rfc3339Utc::try_from("2026-10-02T00:00:00Z")
+                .unwrap(),
+        },
+        terminal_seq: Some(3),
+        seal: control::LocalSealOutcome::SealWritten,
+    };
+    support::raw_response_daemon(
+        200,
+        vec![(
+            "x-goalcup-control-version".to_string(),
+            control::CONTROL_API_VERSION.to_string(),
+        )],
+        serde_json::to_vec(&report).unwrap(),
+    )
+}
+
+/// H-14: the launcher's control client is built once, before the run, and the daemon's token is
+/// minted per start. A daemon restarted between the launch and the finish is at another port or
+/// behind another token; the finish re-reads control.json once and asks again, but only when the
+/// first attempt was refused before the finish began (`unauthorized`, a connection never
+/// accepted), so it can never replay a finish that may have been admitted.
+#[test]
+fn a_finish_after_a_daemon_restart_rereads_control_json_once() {
+    let timeout = Duration::from_secs(5);
+    let request = capture_request(5_000);
+    for (what, stale) in [
+        (
+            "a token re-minted",
+            support::erroring_daemon(401, "unauthorized", "no").base(),
+        ),
+        ("a port nobody listens on", "http://127.0.0.1:1".to_string()),
+    ] {
+        let cfg = support::empty_cfg();
+        let restarted = finished_daemon();
+        write_control_file(&cfg, &restarted.base(), "the-new-token");
+        let first = HttpDaemonClient::new(stale, "the-old-token".into()).unwrap();
+        let mut fresh = None;
+        let report = goalcup_cli::daemon::seal_capture_following_restart(
+            &first,
+            &mut fresh,
+            Some(&cfg),
+            "e1",
+            &request,
+            timeout,
+        )
+        .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        assert_eq!(report.entry_id, "e1", "{what}");
+        assert_eq!(restarted.attempts(), 1, "{what}");
+        let (path, auth) = restarted.last();
+        assert_eq!(path, entry_route("e1", SUFFIX_SEAL), "{what}");
+        assert_eq!(auth.as_deref(), Some("Bearer the-new-token"), "{what}");
+        assert!(fresh.is_some(), "{what}: the rebuilt client is kept");
+
+        // The next attempt goes straight to the rebuilt client.
+        let again = goalcup_cli::daemon::seal_capture_following_restart(
+            &first,
+            &mut fresh,
+            Some(&cfg),
+            "e1",
+            &request,
+            timeout,
+        );
+        assert!(again.is_ok(), "{what}: {again:?}");
+        assert_eq!(restarted.attempts(), 2, "{what}");
+    }
+}
+
+/// Only a refusal before the finish began is asked again; everything else is the answer.
+#[test]
+fn a_finish_is_not_replayed_on_a_restarted_daemon_unless_it_was_never_admitted() {
+    use control::CaptureSealError;
+    let timeout = Duration::from_secs(5);
+    let request = capture_request(5_000);
+    let cfg = support::empty_cfg();
+    let restarted = finished_daemon();
+    write_control_file(&cfg, &restarted.base(), "the-new-token");
+
+    // A busy entry, and every answer from inside the finish, are returned as they came.
+    for (status, code) in [
+        (409, "busy"),
+        (500, "internal"),
+        (404, "not_found"),
+        (409, "finish_deadline"),
+    ] {
+        let stale = support::erroring_daemon(status, code, "x");
+        let first = HttpDaemonClient::new(stale.base(), "t".into()).unwrap();
+        let mut fresh = None;
+        let failure = goalcup_cli::daemon::seal_capture_following_restart(
+            &first,
+            &mut fresh,
+            Some(&cfg),
+            "e1",
+            &request,
+            timeout,
+        )
+        .expect_err(code);
+        assert_eq!(
+            failure.not_admitted(),
+            code == "busy",
+            "{code}: {failure:?}"
+        );
+        assert_eq!(failure.into_error().code(), code);
+        assert!(fresh.is_none(), "{code}");
+    }
+    assert_eq!(restarted.attempts(), 0, "no finish was replayed");
+
+    // No control.json to re-read, or no reconnection asked for: the first failure stands.
+    let dead = HttpDaemonClient::new("http://127.0.0.1:1".into(), "t".into()).unwrap();
+    for cfg in [Some(support::empty_cfg()), None] {
+        let mut fresh = None;
+        let failure = goalcup_cli::daemon::seal_capture_following_restart(
+            &dead,
+            &mut fresh,
+            cfg.as_deref(),
+            "e1",
+            &request,
+            timeout,
+        )
+        .expect_err("nobody to ask");
+        assert!(
+            matches!(
+                failure,
+                CaptureSealError::NotAdmitted(ControlError::Unreachable(_))
+            ),
+            "{failure:?}"
+        );
+        assert!(fresh.is_none());
+    }
+}
+
+#[test]
+fn handler_400_and_404_and_read_timeout_as_maybe_admitted() {
+    use control::CaptureSealError;
+    let timeout = Duration::from_secs(5);
+
+    // The handler's own 400, a 404 that can follow the owner's stop, a conflict, and an
+    // internal error are all answers from inside the finish, or may be.
+    for (status, code) in [
+        (400, "malformed"),
+        (404, "not_found"),
+        (409, "conflict"),
+        (500, "internal"),
+        (409, "finish_deadline"),
+    ] {
+        let srv = support::erroring_daemon(status, code, "x");
+        let c = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+        let failure = c
+            .seal_capture("e1", &capture_request(5_000), timeout)
+            .expect_err("a refusal");
+        assert!(
+            matches!(failure, CaptureSealError::MaybeAdmitted(_)),
+            "{code}: {failure:?}"
+        );
+        assert_eq!(failure.into_error().code(), code);
+    }
+
+    // A daemon that accepted and never answered: the read timeout is ambiguous.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let held = std::thread::spawn(move || {
+        let held = listener.accept();
+        std::thread::sleep(Duration::from_millis(1_500));
+        drop(held);
+    });
+    let c = HttpDaemonClient::new(base, "t".into()).unwrap();
+    let began = Instant::now();
+    let failure = c
+        .seal_capture("e1", &capture_request(5_000), Duration::from_millis(300))
+        .expect_err("no answer");
+    assert!(
+        began.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        began.elapsed()
+    );
+    assert!(
+        matches!(
+            failure,
+            CaptureSealError::MaybeAdmitted(ControlError::Unreachable(_))
+        ),
+        "{failure:?}"
+    );
+    held.join().unwrap();
+}
+
+#[test]
+fn commit_stage_expiry_is_finish_deadline_not_busy_and_not_replayed() {
+    use control::CaptureSealError;
+    let srv = support::erroring_daemon(409, "finish_deadline", "local_finish");
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+    let failure = goalcup_cli::retry::retry_capture_seal(
+        Instant::now() + Duration::from_secs(10),
+        |remaining| {
+            c.seal_capture(
+                "e1",
+                &capture_request(remaining.as_millis() as u64),
+                Duration::from_secs(5),
+            )
+        },
+    )
+    .expect_err("a refusal");
+    assert_eq!(srv.attempts(), 1, "an expired finish is never replayed");
+    assert!(
+        matches!(
+            failure,
+            CaptureSealError::MaybeAdmitted(ControlError::FinishDeadline(ref stage))
+                if stage == "local_finish"
+        ),
+        "{failure:?}"
+    );
+}
+
+#[test]
+fn the_capture_seal_carries_its_remaining_budget_and_its_own_read_timeout() {
+    let srv = support::recording_daemon();
+    let c = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+    // `{}` is not a finish report: the call fails to parse, which is fine; what went OUT is
+    // the assertion.
+    let _ = c.seal_capture("e1", &capture_request(8_123), Duration::from_secs(5));
+    let body = srv.last_body().expect("a body");
+    assert!(body.contains("\"remaining_finish_ms\":8123"), "{body}");
+    assert_eq!(
+        srv.last().0,
+        entry_route("e1", SUFFIX_SEAL),
+        "the same seal route as the legacy call"
+    );
+
+    // remaining + termination allowance + the connect slack, all from existing constants.
+    assert_eq!(
+        goalcup_cli::daemon::capture_seal_read_timeout(
+            Duration::from_secs(8),
+            goalcup_protocol::process::termination_bound(0)
+        ),
+        Duration::from_millis(8_000 + 4_250 + 2_000)
+    );
+    assert_eq!(
+        goalcup_cli::daemon::capture_seal_read_timeout(
+            Duration::from_secs(10),
+            goalcup_protocol::process::termination_bound(10)
+        ),
+        Duration::from_millis(10_000 + 24_250 + 2_000)
+    );
+}
+
+/// ¶3: the launcher's deadline is taken immediately before `proxy.stop()`: nothing between.
+#[test]
+fn finish_takes_its_deadline_immediately_before_proxy_stop() {
+    let source = include_str!("../src/commands/start.rs");
+    // The one deadline is the budget constant, taken in the call sites that wait the harness.
+    assert!(
+        source.contains("LOCAL_CAPTURE_FINISH_BUDGET"),
+        "the launcher's finish budget is the protocol constant"
+    );
+    assert!(
+        !source.contains("const CAPTURE_FINISH"),
+        "the CLI's own 10-second constant is gone"
+    );
+    // The proxy's own stop is bounded by the drain share, measured from its call.
+    assert!(
+        source.contains("LOCAL_CAPTURE_FINISH_BUDGET - FINISH_COMMIT_RESERVE"),
+        "the proxy's shutdown deadline is the drain share"
+    );
+    // `finish` begins by stopping the proxy against the deadline its caller took: no statement
+    // between the destructuring of `proxied` and `proxy.stop()`.
+    let (_, finish) = source
+        .split_once("\nfn finish(")
+        .expect("the launcher's finish");
+    let (_, after_destructure) = finish
+        .split_once("} = proxied;")
+        .expect("finish takes its proxy apart");
+    let next = after_destructure.trim_start();
+    assert!(
+        next.starts_with("let stopped = runtime.block_on(proxy.stop());"),
+        "nothing runs between the deadline and the proxy's stop: {}",
+        &next[..next.len().min(120)]
+    );
+    // And the deadline is the statement immediately before every call that finishes: nothing
+    // but the binding of the call's result sits between them.
+    let take = "Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;";
+    let mut calls = 0;
+    // rustfmt wraps a call with many arguments; the order of the statements is the point.
+    let flat = source
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("( ", "(");
+    for call in flat.match_indices("finish(client, ") {
+        calls += 1;
+        let before = &flat[..call.0];
+        let taken = before
+            .rfind(take)
+            .expect("a finish call is preceded by its deadline");
+        let between = before[taken + take.len()..].trim();
+        assert!(
+            between.is_empty()
+                || (between.starts_with("let ")
+                    && !between.contains(';')
+                    && !between.contains('{')),
+            "a statement runs between the deadline and a finish call: {between:?}"
+        );
+    }
+    // The run's own finish, an entry whose harness never ran (`finish_unlaunched`), and a
+    // launch that found the entry sealed (`end_sealed_launch`).
+    assert_eq!(calls, 3, "the launcher's three finishing statements");
+}
+
+/// The pause points (CONTRACTS.md, C6 local finish budget) exist only under `test-support`: a shipped build has the no-op
+/// below the gated definition, and nothing in it reads the environment variable.
+#[test]
+fn pause_points_exist_only_under_test_support() {
+    let source = include_str!("../src/commands/start.rs");
+    let gated = "#[cfg(feature = \"test-support\")]\nfn pause_at(point: &'static str) {";
+    let shipped = "#[cfg(not(feature = \"test-support\"))]\n#[inline(always)]\nfn pause_at(_point: &'static str) {}";
+    let (before, rest) = source
+        .split_once(gated)
+        .expect("the pause point's test-support definition");
+    let (body, after) = rest
+        .split_once(shipped)
+        .expect("the shipped build's empty pause point");
+    // Mentioned in the definition's own doc comment (`///`) and read once in its body; nowhere
+    // else.
+    for line in before
+        .lines()
+        .filter(|l| l.contains("GOALCUP_TEST_PAUSE_DIR"))
+    {
+        assert!(line.trim_start().starts_with("///"), "{line}");
+    }
+    assert_eq!(body.matches("GOALCUP_TEST_PAUSE_DIR").count(), 1);
+    assert!(
+        !after.contains("GOALCUP_TEST_PAUSE_DIR"),
+        "no other code reads the pause directory"
+    );
+    // The one use is a call of the one function, unconditional.
+    assert!(source.contains("pause_at(\"capture-finish-started\")"));
+}
+
+/// The marker wait is after the proxy's stop and before the seal request,
+/// it ends before the drain share does (amendment c), and a standalone seal carries no scope.
+#[test]
+fn the_marker_wait_follows_the_proxy_stop_and_leaves_the_daemon_a_native_read() {
+    let start = include_str!("../src/commands/start.rs");
+    let (_, rest) = start.split_once("\nfn finish(").expect("the finish");
+    let body = rest.split("\n}\n").next().expect("its body");
+    let at = |needle: &str| {
+        body.find(needle)
+            .unwrap_or_else(|| panic!("`finish` has no {needle}"))
+    };
+    assert!(at("proxy.stop()") < at("marker_until("));
+    assert!(at("marker_until(") < at("seal_locally("));
+    assert!(body.contains("marker_wait_end(deadline)"));
+    assert_eq!(body.matches("marker_until(").count(), 1);
+    // The wait's end is the commit reserve and the daemon's native minimum before the deadline.
+    let tee = include_str!("../src/capture_tee.rs");
+    assert!(tee.contains(".checked_sub(FINISH_COMMIT_RESERVE + NATIVE_FINISH_MIN)"));
+    // The standalone seal (`goalcup seal`) sends neither counters nor a scope.
+    let seal = include_str!("../src/commands/seal.rs");
+    assert!(
+        seal.contains(
+            "finish_locally(client, entry_id, None, None, deadline, allowance, None, out)"
+        ),
+        "a standalone seal passes no counters and no native scope"
+    );
+    // And the only other caller is the launcher's own finish, whose scope is the one read.
+    assert_eq!(
+        start
+            .matches("crate::commands::seal::seal_locally(")
+            .count(),
+        1
+    );
+}
+
+/// The only places this crate starts a process are the launch module's
+/// one command builder (which the ordinary spawn and the gate both run) and the version probe,
+/// which refuses a capture-only connector before it spawns. The child-only credential is set on
+/// the one builder, so a third site would be a third place a key could be forgotten or leaked.
+#[test]
+fn the_only_command_sites_are_the_launch_builder_and_the_probe() {
+    fn sites(dir: &std::path::Path, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sites(&path, found);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                // The test module of `key_scan.rs` makes a FIFO with `mkfifo`; it is test code.
+                let shipped = text.split("#[cfg(test)]").next().unwrap();
+                for (n, line) in shipped.lines().enumerate() {
+                    if line.contains("Command::new(") && !line.trim_start().starts_with("//") {
+                        found.push(format!(
+                            "{}:{}",
+                            path.file_name().unwrap().to_string_lossy(),
+                            n + 1
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    sites(
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut found,
+    );
+    found.sort();
+    let files: Vec<&str> = found.iter().map(|f| f.split(':').next().unwrap()).collect();
+    assert_eq!(files, ["launch.rs", "probe.rs"], "{found:?}");
+}
+
+/// D40 (CONTRACTS.md, C6 capture spawn gate): every capture child is spawned only through the pre-exec gate, whatever
+/// pipes or child-only secret it carries, and is released only after its registration. A scan
+/// of the one function that launches a capture run and of the launch module's spawners.
+#[test]
+fn capture_children_spawn_only_through_the_gate() {
+    let start = include_str!("../src/commands/start.rs");
+    // The capture launch is its phase functions, which run in the order they are written:
+    // `capture` through `finish_and_scan`, up to the note a run that never finished leaves.
+    let (_, rest) = start
+        .split_once("\nfn capture(")
+        .expect("the capture launch");
+    let (body, _) = rest
+        .split_once("\n/// A run that ended before its finish")
+        .expect("the end of the capture phases");
+    let flat_body = body
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("( ", "(")
+        .replace(", )", ")");
+    let body = body.to_string();
+    for banned in [
+        "spawn(",
+        "spawn_stdio(",
+        "spawn_scoped_capture",
+        "spawn_marked_capture",
+        "kill_registered(",
+        "kill(",
+        "Command::new",
+    ] {
+        assert!(
+            !body.contains(banned),
+            "`capture` reaches the harness without the gate: {banned}"
+        );
+    }
+    let at = |needle: &str| {
+        body.find(needle)
+            .unwrap_or_else(|| panic!("`capture` has no {needle}"))
+    };
+    // The order is the gate's: forked and parked, handle, durable registration, an exact-path
+    // executable recheck, only then release.
+    assert!(at("spawn_gated(") < at("gated_handle("));
+    assert!(at("gated_handle(") < at("register_process_with_admission("));
+    assert!(at("register_process_with_admission(") < at("recheck_pinned_executable("));
+    assert!(at("recheck_pinned_executable(") < at("gated.release()"));
+    // A failed registration aborts the gate; it never reaches the release.
+    let (failed, _) = body
+        .split_once("gated.release()")
+        .expect("the release is the next step");
+    assert!(
+        failed.matches("gated.abort();").count() >= 3,
+        "a failed handle, registration, or executable recheck aborts the gate"
+    );
+    // A released child is never given back to a spawner: the schema-selected identity tee
+    // only takes its stdout and its already-loaded rule.
+    let scoped_tee = "tee_scoped_capture_with_rule(&mut spawned, rule)";
+    assert_eq!(
+        body.matches(scoped_tee).count(),
+        1,
+        "the gated capture has one authoritative schema-selected identity tee"
+    );
+    let marked_tee =
+        "tee_marked_capture_with_rule(&mut spawned, prep.secret.as_ref(), marker_rule)";
+    assert_eq!(
+        body.matches(marked_tee).count(),
+        1,
+        "the gated capture has one authoritative schema-selected marked tee"
+    );
+    let stderr_tee = "tee_stderr_capture_with_rule(&mut spawned, rule)";
+    assert_eq!(
+        body.matches(stderr_tee).count(),
+        1,
+        "the gated capture has one authoritative schema-selected stderr tee"
+    );
+    for tee in [scoped_tee, marked_tee, stderr_tee] {
+        assert!(at("gated.release()") < at(tee));
+    }
+    // The child-only credential rides on the gate itself and nowhere else.
+    assert!(flat_body.contains(
+        "spawn_gated(&plan, prep.streams.pipes(), GATE_READY_WITHIN, prep.secret.as_ref())"
+    ));
+
+    // And the spawners the launch module still has are the ungated ordinary one and the gate.
+    let launch = include_str!("../src/launch.rs");
+    for gone in [
+        "fn spawn_scoped_capture",
+        "fn spawn_marked_capture",
+        "fn spawn_stdio",
+    ] {
+        assert!(!launch.contains(gone), "{gone} is gone");
+    }
+    assert_eq!(
+        launch.matches("command.spawn()").count(),
+        2,
+        "the ordinary spawn and the gate's one spawning thread"
+    );
+}

@@ -1,0 +1,187 @@
+artifact root : /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/spikes/hermes/out/run-20260903T122253Z
+workspace     : /Users/team/goalcup-spikes/ws-hermes-20260903T122253Z
+leg1 records  : 531
+hook posts    : 112
+db rows       : sessions=6 messages=41 usage=9 delegations=1
+schema_version: [22]  (expect [22])
+leg1 by src   : {'log': 477, 'schema': 1, 'meta': 2, 'messages': 35, 'sessions': 3, 'usage': 6, 'delegation': 6, 'delegations': 1}
+hooks by path : {'/goalcup.loaded': 2, '/on_session_start': 3, '/pre_llm_call': 9, '/pre_api_request': 17, '/post_api_request': 15, '/pre_tool_call': 12, '/post_tool_call': 12, '/transform_tool_result': 11, '/transform_terminal_output': 3, '/pre_verify': 2, '/transform_llm_output': 7, '/post_llm_call': 7, '/on_session_end': 8, '/subagent_start': 1, '/subagent_stop': 1, '/goalcup.violation': 1, '/on_session_finalize': 1}
+probe sessions excluded from A2/A5/A6/A11 (PROTOCOL step 13, run after the tailer stopped): ['20260903_193028_9dd041', '20260903_193034_9cb830', '20260903_193042_50c7d9']
+sessions with cwd == workspace: 2
+    20260903_192332_f9340a  source='cli' model='gpt-5.6-sol' parent=None msgs=29 api_calls=13 rewinds=0 end='cli_close'
+    20260903_192401_b59759  source='cli' model='gpt-5.6-sol' parent='20260903_192332_f9340a' msgs=4 api_calls=2 rewinds=0 end='agent_close'
+
+========================================================================
+0. Shim loaded (row-7 unknown: do project plugins load with HERMES_ENABLE_PROJECT_PLUGINS?)
+========================================================================
+  goalcup.loaded  key='goalcup-tracker' source='project' path='/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z/.hermes/plugins/goalcup-tracker'
+                  env={'HERMES_HOME': '/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/hermes', 'HERMES_ENABLE_PROJECT_PLUGINS': '1', 'HERMES_SAFE_MODE': None, 'HERMES_IGNORE_USER_CONFIG': None, 'HERMES_IGNORE_RULES': None, 'HERMES_PLUGIN_PAYLOAD_MAX_CHARS': None, 'HERMES_ACCEPT_HOOKS': None, 'HERMES_YOLO_MODE': None, 'GOALCUP_RUN': 'run-20260903T122253Z'}
+                  argv=['/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/uv-bin/hermes', 'chat', '--cli', '--source', 'cli', '-m', 'gpt-5.6-sol', '--provider', 'openai-codex']
+  goalcup.loaded  key='goalcup-tracker' source='project' path='/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z/.hermes/plugins/goalcup-tracker'
+                  env={'HERMES_HOME': '/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/hermes', 'HERMES_ENABLE_PROJECT_PLUGINS': '1', 'HERMES_SAFE_MODE': None, 'HERMES_IGNORE_USER_CONFIG': None, 'HERMES_IGNORE_RULES': None, 'HERMES_PLUGIN_PAYLOAD_MAX_CHARS': None, 'HERMES_ACCEPT_HOOKS': None, 'HERMES_YOLO_MODE': None, 'GOALCUP_RUN': 'run-20260903T122253Z'}
+                  argv=['/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/uv-bin/hermes', 'chat', '--cli', '--source', 'cli', '--resume', '20260903_192332_f9340a', '-m', 'gpt-5.6-sol', '--provider', 'openai-codex']
+  $HERMES_HOME/config.yaml lists goalcup-tracker: True
+  (both gates are required: the env var makes ./.hermes/plugins discoverable,
+   plugins.enabled is what actually loads it -- plugins.py:1357 + :1454)
+  -> shim loaded: PASS  (2 startup post(s); expect >=2 (initial launch + resume))
+
+========================================================================
+A1. Goal text byte-exact in leg 1 and identical bytes in leg 2
+========================================================================
+  leg1 records containing the goal verbatim: 2  (srcs: ['log', 'messages'])
+  leg2 pre_llm_call posts with user_message == goal (byte-equal): 1
+  leg2 pre_api_request posts whose request_messages carry the goal verbatim: 15
+  state.db rows with content == goal: 1
+  -> A1: PASS  (same bytes on both legs)
+
+========================================================================
+A2. Human-message list; no harness-authored user-slot content classified as human
+========================================================================
+  user-role rows in workspace sessions: 9  human=9  harness/inactive=0
+    HUMAN  id=1 sess=20260903_192332_f9340a len=77 'create hello.py that prints the current date, run it, then t'
+    HUMAN  id=7 sess=20260903_192332_f9340a len=45 'use a subagent to count the lines in hello.py'
+    HUMAN  id=10 sess=20260903_192401_b59759 len=226 'Count the number of lines in /Users/team/goalcup-spikes/ws-h'
+    HUMAN  id=14 sess=20260903_192332_f9340a len=10 'keep going'
+    HUMAN  id=19 sess=20260903_192332_f9340a len=103 'write long.py with 300 numbered comment lines, then explain '
+    HUMAN  id=22 sess=20260903_192332_f9340a len=10 'keep going'
+    HUMAN  id=24 sess=20260903_192332_f9340a len=19 'what model are you?'   api_content differs (+129 chars)
+    HUMAN  id=26 sess=20260903_192332_f9340a len=4100 'OVERLENGTH-TEST-A7 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+    HUMAN  id=28 sess=20260903_192332_f9340a len=17 'also add a README'
+  human rows with no matching pre_llm_call.user_message: 0
+  rows where api_content != content (ephemeral injection into the wire bytes): 1
+    id=24 role=user content=19 api_content=148
+    script 'create hello.py that prints the current date, run ': 1 occurrence(s)
+    script 'use a subagent to count the lines in hello.py': 1 occurrence(s)
+    script 'keep going': 2 occurrence(s)
+    script 'also add a README': 1 occurrence(s)
+  -> A2: manual  (compare the HUMAN list above against PROTOCOL.md step by step)
+
+========================================================================
+A3. Tool call/result pairing; the result the model saw; spill location
+========================================================================
+  leg2 tool calls: 9  unpaired: 0 []
+  state.db assistant tool_calls: 8  tool result rows: 8
+  calls with no result row: 0 []
+  post_tool_call.result != stored row content: 0
+  hook_outputs/ spill files captured: 0  (pre_llm_call context spill; tools/hook_output_spill.py)
+  -> A3: PASS
+
+========================================================================
+A4. Subagent transcript exists with a parent link
+========================================================================
+  leg2 subagent_start=1 subagent_stop=1
+    start parent='20260903_192332_f9340a' child='20260903_192401_b59759' role='leaf' goal='Count the number of lines in /Users/team/goalcup-spikes/ws-h'
+  state.db child sessions linked to a workspace session: 1
+    child 20260903_192401_b59759 parent_fk='20260903_192332_f9340a' _delegate_from='20260903_192332_f9340a' source='cli' model='gpt-5.6-sol' messages=4
+  cache/delegation/live files captured: 6
+  async_delegations rows: 1
+  -> A4: PASS  (Hermes' subagent is delegate_task; children get their own session row + full history)
+
+========================================================================
+A5. Stop, kill, resume: same store, fresh-vs-resume visible, hooks fire again
+========================================================================
+  goalcup.loaded posts (one per process start): 2
+  on_session_start posts: 3  (fires ONLY for a brand-new session, not on continuation -- agent/conversation_loop.py:386)
+  on_session_end=8 on_session_finalize=1 on_session_reset=0
+  resumed session id (from resume.sh): '20260903_192332_f9340a'
+    that session has 29 rows, ids 1..33, ended_at=1788438599.837376, end_reason='cli_close'
+    APPEND check: the resume must add rows to THIS id, not create a new one.
+  distinct root (non-delegate) sessions with cwd == workspace: 1 (1 = the resume appended; 2 = it forked)
+  sessions.rewind_count values: [0, 0]  (non-zero = a rewind happened)
+  -> A5: manual  (read the two numbers above against PROTOCOL.md step 7)
+
+========================================================================
+A6. Model identity per API call (hooks) and per session (DB); mid-run switch
+========================================================================
+  pre_api_request (model, provider, base_url, api_mode) -> calls:
+    ('gpt-5.6-sol', 'openai-codex', 'https://chatgpt.com/backend-api/codex', 'codex_responses') -> 12
+    ('gpt-5.6-luna', 'openai-codex', 'https://chatgpt.com/backend-api/codex', 'codex_responses') -> 5
+  post_api_request.response_model (server-reported): {'gpt-5.6-sol': 10, 'gpt-5.6-luna': 5}
+  state.db sessions.model:
+    20260903_192332_f9340a -> 'gpt-5.6-sol' billing='openai-codex'/'codex_responses'
+    20260903_192401_b59759 -> 'gpt-5.6-sol' billing='openai-codex'/'subscription_included'
+  session_model_usage rows (the ONLY in-DB record of a /model switch; `messages` has no model column):
+    20260903_192332_f9340a model='gpt-5.6-sol' provider='openai-codex' task='' calls=8 first=1788438224.512833 last=1788438350.08526
+    20260903_192332_f9340a model='gpt-5.6-sol' provider='auto' task='title_generation' calls=1 first=1788438235.376696 last=1788438235.376696
+    20260903_192401_b59759 model='gpt-5.6-sol' provider='openai-codex' task='' calls=2 first=1788438245.00898 last=1788438251.0939689
+    20260903_192332_f9340a model='gpt-5.6-luna' provider='openai-codex' task='' calls=5 first=1788438369.067585 last=1788438395.4625762
+  -> A6: PASS  (2 distinct model(s) in session_model_usage; expect >=2 after the mid-run switch)
+
+========================================================================
+A7. Over-length message: blocked, or recorded as a violation
+========================================================================
+  Hermes 0.19.0 has NO user-message rejection surface.
+    pre_llm_call returns are only concatenated into plugin_user_context and
+    appended to the user message (agent/turn_context.py:693-741).
+    pre_gateway_dispatch {'action':'skip'} exists but fires only on the
+    gateway path (gateway/run.py:10009), never in the CLI.
+    pre_tool_call CAN block, but that gates tools, not the human's message.
+  => A7 for Hermes = RECORDED, not blocked.
+  /goalcup.violation posts: 1
+    kind='over_length_user_message' len=4100 action='recorded_only' reason='prompt exceeds 4000 characters'
+  state.db rows >= 4000 chars: 1 ([4100])
+  rows byte-equal to over-length.txt: 1
+  -> A7: PASS  (recorded (the only outcome Hermes allows))
+
+========================================================================
+A8. Disallowed message present and classifiable
+========================================================================
+  human rows containing 'also add a README': 1
+    id=28 sess=20260903_192332_f9340a active=1 'also add a README'
+  -> A8: PASS  (classifiable as human by the same rule as the goal, so the verifier can flag it against the allow-list)
+
+========================================================================
+A9. Hooks fired only for the workspace session
+========================================================================
+  hook posts by session_id: {'20260903_192332_f9340a': 81, '20260903_192401_b59759': 12}
+  posts for sessions NOT in the workspace and NOT its delegate children: {}
+  other cwds present in state.db (the A9 parallel session should be here): ['/Users/team/goalcup-spikes/hermes-a9-other']
+  NOTE: the parallel session shares the SAME state.db (one store per
+  HERMES_HOME), so leg 1 sees it. A9 is a statement about leg 2 only.
+  -> A9: PASS  (no leg-2 post from the parallel folder)
+
+========================================================================
+A10. Nothing app-wide was modified
+========================================================================
+  A10: PASS - no app-wide Hermes file changed
+  Documented, intentional change to the ISOLATED home only:
+    $HERMES_HOME/config.yaml gained plugins.enabled: [goalcup-tracker]
+    (+ a timestamped .goalcup-*.bak). This CANNOT be folder-scoped in 0.19.0:
+    hermes_cli/config.py:751 pins the config path to $HERMES_HOME/config.yaml
+    and plugins.py:1454 gates every standalone plugin on plugins.enabled.
+  -> A10: PASS
+
+========================================================================
+A11. Tailing kept up: no missing rows, hash chain continuous
+========================================================================
+  leg1 records=531  hash-chain breaks=0
+  file replacement/truncation events: 0 []
+  (excluded 6 probe rows written after the tailer stopped: [36, 37, 38, 39, 40, 41])
+  messages.id tailed=35 final=35
+  rows in the final store the tailer never saw: 0 []
+  rows the tailer saw that are GONE from the final store (hard delete / prune): 0 []
+  AUTOINCREMENT gaps in the final store: 0 []  (gaps = deletion evidence, weak but real)
+  rows MUTATED after insert (rewind / in-place compaction / persist override): 0 []
+  -> A11: PASS
+
+========================================================================
+P. Cheap probes P1-P3 (PROTOCOL.md) -- verdicts to fill in from their roots
+========================================================================
+  P1  -z / --oneshot persists: hook posts=8  paths={'/goalcup.loaded': 1, '/on_session_start': 1, '/pre_llm_call': 1, '/pre_api_request': 1, '/post_api_request': 1, '/transform_llm_output': 1, '/post_llm_call': 1, '/on_session_end': 1}
+      new session rows: see /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/spikes/hermes/out/run-20260903T122253Z/probe-z/sessions-after.txt
+  P2  --oneshot alias / usage-file: hook posts=8  paths={'/goalcup.loaded': 1, '/on_session_start': 1, '/pre_llm_call': 1, '/pre_api_request': 1, '/post_api_request': 1, '/transform_llm_output': 1, '/post_llm_call': 1, '/on_session_end': 1}
+      new session rows: see /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/spikes/hermes/out/run-20260903T122253Z/probe-oneshot/sessions-after.txt
+  P3  --safe-mode skips plugins: hook posts=0  paths={}
+      new session rows: see /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/spikes/hermes/out/run-20260903T122253Z/probe-safe-mode/sessions-after.txt
+
+  Expected from source (NOTES.md):
+    P1/P2: -z and --oneshot are the SAME flag (hermes_cli/_parser.py:103).
+           hermes_cli/oneshot.py:297 builds a real SessionDB() and
+           agent.close() calls end_session(), so the run DOES persist and
+           plugins DO load. Expect hook posts + one new sessions row.
+    P3:    --safe-mode sets HERMES_SAFE_MODE=1 (main.py:13056) and
+           discover_and_load() returns before scanning (plugins.py:1288).
+           Expect ZERO hook posts and still a new sessions row = a capture
+           bypass that leaves a trace only in leg 1.
+
+Done. Fill in spikes/hermes/REPORT.md from this output.

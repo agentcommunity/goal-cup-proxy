@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>/goal Cup — tracker status</title>
+<style>
+  :root { color-scheme: light dark; --fg: #111; --bg: #fafaf8; --muted: #666; --line: #ddd; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #eee; --bg: #16161a; --muted: #999; --line: #333; } }
+  body { margin: 0; padding: 2rem 1.25rem; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.1rem; letter-spacing: .02em; margin: 0 0 1.5rem; }
+  .entry { border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+  .state { font-size: 1.05rem; margin: 0 0 .75rem; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem; margin: 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .recipe { margin-top: .75rem; padding: .6rem .8rem; border-left: 3px solid var(--line); color: var(--muted); }
+  .stale { margin-top: .75rem; color: var(--muted); }
+  footer { margin-top: 2rem; color: var(--muted); font-size: .85rem; }
+  footer a { color: inherit; }
+  ul.sponsors { list-style: none; padding: 0; margin: .4rem 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>/goal Cup tracker</h1>
+  <div id="entries">Loading…</div>
+  <footer>
+    <p>Run by <a href="https://agentcommunity.org">Agent Community</a>.</p>
+    <p>Sponsors</p>
+    <!--
+      The sponsor list is INSIDE this file, as markup rather than as a fetch. It used to be
+      its own asset route, which made a page whose whole promise is "loads nothing" depend
+      on a second route being up; D25 asks for one file, and this is it.
+    -->
+    <ul class="sponsors">
+      <li>Agent Community — host</li>
+    </ul>
+    <p id="stamp"></p>
+  </footer>
+</main>
+<script>
+// Everything below builds nodes and sets textContent; nothing interpolates a served
+// string into markup, because the daemon's document is JSON and this page is not a
+// template engine.
+function text(v) { return document.createTextNode(String(v)); }
+function row(dl, label, value) {
+  const dt = document.createElement("dt"); dt.appendChild(text(label));
+  const dd = document.createElement("dd"); dd.appendChild(text(value));
+  dl.appendChild(dt); dl.appendChild(dd);
+}
+function remaining(seconds) {
+  if (seconds === null || seconds === undefined) return "not started";
+  if (seconds <= 0) return "time is up";
+  // The last 59 seconds are their own sentence, not "0h 0m" — the same rule
+  // `status::write_status_line` follows, so the page and the terminal agree.
+  if (seconds < 60) return "<1m";
+  const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60);
+  return h + "h " + m + "m";
+}
+// The entry comes from this page's own query string, which `WorkspaceInfo.status_url`
+// sets (`/v0/ui?entry=entry-0001`).
+//
+// There is deliberately no fallback to the daemon's "which entry is current" route: that
+// one requires the control bearer token, this page runs in the participant's browser and
+// has none, and the entry list is a directory of their workspaces rather than this page's
+// business.
+const entryId = new URLSearchParams(location.search).get("entry");
+// The one threshold: a document older than this is reported as stale rather than as
+// fresh. It is `control::STALE_AFTER_SECONDS`, and the CLI and the MCP server read the
+// same number, so no two surfaces tell the participant different stories.
+const STALE_AFTER_SECONDS = 120;
+function render(signed) {
+  const host = document.getElementById("entries");
+  host.textContent = "";
+  const e = signed && signed.payload;
+  if (!e) {
+    host.appendChild(text("No entry is running here. Run `goalcup start` to create one."));
+    document.getElementById("stamp").textContent = "";
+    return;
+  }
+  const box = document.createElement("div"); box.className = "entry";
+  const p = document.createElement("p"); p.className = "state";
+  if (e.capture) {
+    p.appendChild(text("M2 capture details are unavailable in this page. Run `goalcup status` for capture health."));
+    box.appendChild(p);
+    host.appendChild(box);
+    document.getElementById("stamp").textContent =
+      "Signed status written " + signed.cached_at + ".";
+    return;
+  }
+  p.appendChild(text(e.detail)); box.appendChild(p);
+  const dl = document.createElement("dl");
+  row(dl, "Harness", e.connector_id);
+  row(dl, "Folder", e.workspace);
+  row(dl, "Arming", e.arming);
+  row(dl, "Health", e.health);
+  row(dl, "Time remaining", remaining(e.seconds_remaining));
+  row(dl, "Events uploaded", e.events_uploaded);
+  row(dl, "Waiting to upload", e.events_pending);
+  row(dl, "Last sync", e.last_sync_at || "never");
+  // What the daemon's own four timers lost. It rides on every status document and had no
+  // surface at all until now: this crate has no logger by ruling, so a run whose ticks are
+  // failing has to say so here or nowhere. Silent while all four are zero — a healthy run
+  // must not carry a row of noughts it never needs to read.
+  const c = e.cycles;
+  if (c) {
+    const errors = c.tick + c.upload + c.status + c.deadline;
+    if (errors > 0) {
+      row(dl, "Tracker errors", errors);
+      if (c.last) { row(dl, "Last error", c.last); }
+    }
+  }
+  box.appendChild(dl);
+  if (e.arming_recipe) {
+    const r = document.createElement("p"); r.className = "recipe";
+    r.appendChild(text(e.arming_recipe)); box.appendChild(r);
+  }
+  const age = (Date.now() - Date.parse(signed.cached_at)) / 1000;
+  if (isFinite(age) && age > STALE_AFTER_SECONDS) {
+    const s = document.createElement("p"); s.className = "stale";
+    s.appendChild(text("This is a stale reading: the tracker has not written a new one for "
+                       + Math.floor(age) + " seconds."));
+    box.appendChild(s);
+  }
+  host.appendChild(box);
+  document.getElementById("stamp").textContent =
+    "Signed status written " + signed.cached_at + ". Verify it with `goalcup status --json`.";
+}
+async function poll() {
+  if (!entryId) {
+    document.getElementById("entries").textContent =
+      "Open this page with `goalcup ui`, or add ?entry=<entry-id> to the address.";
+    return;
+  }
+  try {
+    const r = await fetch(`/v0/entries/${encodeURIComponent(entryId)}/status`,
+                          { cache: "no-store" });
+    if (r.status === 404) { render(null); return; }
+    render(await r.json());
+  } catch (err) {
+    document.getElementById("entries").textContent =
+      "The tracker is not answering on this port. It may have stopped.";
+  }
+}
+poll();
+if (entryId) { setInterval(poll, 5000); }
+</script>
+</body>
+</html>

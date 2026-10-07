@@ -1,0 +1,33 @@
+name: goalcup-tracker
+version: 0.1.0
+description: >-
+  goal-cup capture spike 7 shim. Posts every plugin hook payload verbatim to the
+  stub receiver on 127.0.0.1:7777. Records only; registers no tools and changes
+  no agent behaviour.
+author: goal-cup
+kind: standalone
+provides_tools: []
+provides_hooks:
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - pre_llm_call
+  - post_llm_call
+  - transform_llm_output
+  - pre_tool_call
+  - post_tool_call
+  - transform_tool_result
+  - transform_terminal_output
+  - pre_verify
+  - on_session_start
+  - on_session_end
+  - on_session_finalize
+  - on_session_reset
+  - subagent_start
+  - subagent_stop
+  - pre_gateway_dispatch
+  - pre_approval_request
+  - post_approval_response
+  - kanban_task_claimed
+  - kanban_task_completed
+  - kanban_task_blocked

@@ -1,0 +1,47 @@
+[package]
+name = "goalcup-devserver"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Compiles the tests that drive the V1 workspace daemon end to end (`dev_key`, `roundtrip_verify`):
+# they need the daemon's `v1-compat` runtime (D42). Off by default, like the daemon's own.
+[features]
+v1-compat = ["goalcup-daemon/v1-compat"]
+
+[dependencies]
+goalcup-protocol = { path = "../goalcup-protocol" }
+serde.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+# The one crate in this tree that holds a SERVER key. `ed25519-dalek` is a library
+# dependency and not a dev one because `accept_chunk` signs on the shipped path:
+# `AckCheckpoint` has `signing_bytes` and no `sign`, so the signing happens here.
+ed25519-dalek.workspace = true
+# `--addr`, `--key-seed`, `--print-key`.
+clap.workspace = true
+# The transport. Loopback TCP, started in-process by the tests that need a server to talk
+# to, so nothing in this crate needs a spawned binary to be exercised.
+axum.workspace = true
+tokio.workspace = true
+
+# Tests only.
+#   goalcup-verifier — D3. This crate is the ONE place allowed to depend on the verifier,
+#     and only here, in the dev list, so nothing it links reaches the daemon binary. It is
+#     what makes `tests/dev_key.rs` and the round trip expressible: a trace this
+#     server signed, read back by the verifier that judges a real one.
+#   tempfile — a trace is bytes in a directory, so a test that verifies one writes it.
+[dev-dependencies]
+goalcup-verifier = { path = "../goalcup-verifier" }
+# The devserver's tests read and write JSON; its own source does not.
+serde_json.workspace = true
+tempfile.workspace = true
+
+# The round trip drives the shipped daemon and hands what it wrote to the
+# verifier. `test-hooks` is deliberately enabled only in this DEV dependency: its fixture
+# builds still use `workspace::prepare`, while the shipped daemon has no lexical
+# artifact-root writer.
+goalcup-daemon = { path = "../goalcup-daemon", features = ["test-hooks"] }
+

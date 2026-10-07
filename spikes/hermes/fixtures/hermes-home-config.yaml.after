@@ -1,0 +1,7 @@
+onboarding:
+  seen:
+    openclaw_residue_cleanup: true
+plugins:
+  enabled:
+  - goalcup-tracker
+  disabled: []

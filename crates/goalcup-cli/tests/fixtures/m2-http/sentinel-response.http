@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Set-Cookie: s=SENTINEL-SETCOOKIE-1111; HttpOnly
+X-Request-Signature: SENTINEL-RESPONSE-HEADER-2222
+Content-Type: application/json
+Content-Length: 2
+

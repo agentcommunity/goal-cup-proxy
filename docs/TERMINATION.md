@@ -1,0 +1,194 @@
+# Termination: the contract
+
+What `crates/goalcup-daemon/src/terminate/` promises at seal, and what it does not. Read this
+instead of the module. The daemon kills, not the CLI (D22); `Confirmed` is bounded to the owned
+set (D30). Code: `terminate_with` in `mod.rs`; guard, ordering and fail-closed reports in
+`authority.rs`; the macOS singleton path in `darwin.rs`; the seal mapping in `runtime/seal.rs`.
+
+## Outcomes (`TerminationOutcomeV1`)
+
+| Outcome | It claims | It does not claim |
+|---|---|---|
+| `AlreadyStopped` | `liveness(root)` was false before any signal; nothing was signalled. | Anything about descendants. A wrapper's native child may be running (the D30 pre-call escape). |
+| `Confirmed` | The report had `observed_gone`, a non-empty `targeted`, an empty `still_alive`, no cap hit, and a second by-number sweep 250 ms later (`RECONFIRM_DELAY_MS`) found none of `targeted` alive. | Atomic delivery (`all_gone`), or anything about the residual windows below. |
+| `Unresolved` | `ProcessAuthorityUnavailable`: `ps` could not be asked, the guard refused the root, the root was lost mid-chase, `¬observed_gone`, empty `targeted`, or a group handle. `RequestFailed`: `wrapper_unsafe` or another error. `ProcessStillRunning`: `still_alive` non-empty, cap hit, or the reconfirm found one alive. `UnsupportedPlatform`: not unix. | That the harness is running: only `ProcessStillRunning` says so. `ConfirmationTimedOut` is declared and never produced. |
+
+## The three anchors (`sweep_anchor`, sound only after a first signal)
+
+| Anchor | When | What a poll does |
+|---|---|---|
+| `Rooted(table)` | The guard says the root is live with its recorded creation identity and argv, and a fresh snapshot lists it. | Adopts newcomers (below) from the root and from every live identity-verified member; authorises a signal against the root's ppid tree **or** a live member's (`Owned`). |
+| `Closed(table)` | The root is not in the table (it exited), or was live at the guard and absent one read later, including an exit between the guard's own two reads (`liveness` live, then no creation identity: the guard asks `liveness` again and reads "no longer live" as an exit). | Adopts from every targeted member alive with its recorded creation identity, never from the root; authorises a signal against a live member's ppid tree alone, so an orphaned member and what it forks are still SIGKILLed; a live pid ours by nothing returns `containment_unverified`. |
+| `Lost` | The guard refused the root (a *different* creation identity, or no readable identity on a root that is still live, or a renamed argv) or `/bin/ps` could not be spawned. | Nothing may be claimed; the call returns `containment_unverified` at once. |
+
+Under every anchor a targeted pid is asked **by number with its recorded creation identity**, never
+by lineage — the phase gate, the SIGKILL selection, the forkers adoption walks from, `still_alive` —
+so an orphan alive is followed; a recycled number cannot pass; no captured identity over-reports.
+
+## The five report claims (`TerminationReport`)
+
+- `targeted`: every pid signalled, in signal order, root last. **Not** the owned set: a process
+  never seen in a walked snapshot is not here, and the report cannot speak for it.
+- `observed_gone`: the escalation ran under a root re-authenticated at every step, the walk was
+  never capped, the last by-number, creation-identity-checked sweep found none of `targeted`
+  alive, and on macOS every witnessed fork was paid for by an adoption from its forker (below).
+  **Not** that delivery was atomic with authorisation; **not** that nothing outside `targeted`
+  is alive (see the windows); **never true for a group handle**.
+- `all_gone`: `observed_gone` and every delivery was instance-bound (a Linux pidfd). **Never
+  true on macOS**, for the singleton included. It adds atomicity to `observed_gone` and nothing
+  about the tree.
+- `harness_unverified`: the daemon could not keep the root's identity (the guard refused, the
+  root was lost mid-chase, `ps` failed), or the handle led a process group — always, by design,
+  because `ProcInfo` carries no pgid and a group cannot be enumerated. **Not** "the root is
+  gone"; **not** a capped walk. `all_gone` is never true beside it.
+- `walk_cap_exceeded`: the signed `process_walk` budget refused a target, so `targeted` is not
+  the whole owned set and no sweep over it may call the tree gone. **Not** a loss of authority:
+  the root was kept; the seal records `ProcessStillRunning`.
+- Also: `still_alive` is what the last by-number sweep found among `targeted` — empty beside
+  `harness_unverified` when the fail-closed return took no sweep, and never a process that was
+  not targeted; `survived_term`/`killed` name who outlived the grace and who got SIGKILL;
+  `guard_degraded` says the handle carried no argv, so only the creation identity was checked.
+
+## The ordering rule
+
+`members_deepest_first`: the owned set below the root, **deepest level first, the native binary
+hoisted only within its own depth, the root excluded and signalled last** (phase B). Each phase
+is its own grace and kill sweep. Why: a parent is never ended before the children under it, so
+nothing is orphaned out of the ppid walk by this daemon's own signal (D1); and while any
+non-root member is owned — an orphan alive included — the root is unsignalled, so every phase-A
+sweep is `Rooted` and the anchor closes only when the owned set is `{root}`.
+
+## The adoption rule
+
+Every poll, `newcomers` below the root (while live) **and below every targeted member alive with
+its recorded creation identity** are signalled and tracked (witness attached first, on macOS);
+each newcomer's ppid is the forker that adoption pays for. Under `Closed` the members alone are
+walked; the root's own exit no longer ends adoption. Ceiling `MAX_TARGETED` = 4096 (`process_walk` tightens).
+
+## The duration bound
+
+`2 × (grace_seconds + KILL_SWEEP_TIMEOUT_MS)` — one grace and one 2 s kill sweep per phase —
+plus 50 ms poll granularity and the `ps` spawns, plus the seal's 250 ms reconfirm. A tree that
+dies at once ends at the first clear poll; a member ignoring SIGTERM costs the full grace.
+
+## The residual windows, per platform (stated, not solved)
+
+**Both.** A process that had already left the root's ppid walk when the call began is outside
+the owned set and never claimed (D30). A group handle is never confirmed. Closed by the fix wave
+(scenarios green in `tests/terminate_sim.rs`): F7 (the orphaned ignorer is SIGKILLed by identity and
+named), F8 (an orphan alive holds the phase-A gate; `Closed` adopts from live members, the root's
+own exit included), F9 and the root unwitnessed in phase A (both below).
+
+**Hermes** (M6, connector `hermes-cli`). Hermes starts its tool processes with
+`start_new_session=True` (`tools/environments/local.py:1388`, hermes-agent 0.19.0), so each is a
+session leader of its own. A tool process the run left behind is outside the root's ppid walk once
+its parent is gone, and is the D30 residual above: `Confirmed` covers the owned set only and never
+claims it. The connector's `[kill]` section says the same in a comment.
+
+**Linux** (pidfd-bound signals, no fork witness). A child forked and orphaned inside one poll
+interval — forker forks and exits between two snapshots — is in no snapshot under a live
+parent and no ppid walk can see it; the M0 §2.5 respawn, when the handler forks and exits
+within 50 ms, is this. The property runner allows exactly this set (`same_poll_orphans`).
+
+**macOS** (numeric `kill`, kqueue witness per member from the root down, attached before phase
+A; audit token for the singleton). Each witness is read twice a poll — before the snapshot and
+after the adoption — and a fork it reports is paid only by an adoption from that member in the
+poll it was read (or the next, for the second read; a forker dead by then leaves it unpaid).
+So a one-poll fork-and-exit is refused whatever the member forked before, and a reaction to
+this daemon's own signal always lands in a strict window. **The residual:** the kernel gives
+one bit per read, so two forks by one member inside one read window — the first child adopted,
+the second's line gone from the table before the next snapshot (a grandchild forked and
+orphaned) — are one paid bit. A handler that runs a subprocess which exits before the next
+snapshot is refused (a fork nothing adopted): fail-closed. `all_gone` is never true. The
+singleton path proves one process's death and cannot see a descendant reparented before it attached.
+
+## The launcher's ending of a child it just released (D40, outside this contract)
+
+`goalcup start --goal-file` parks its capture child before `exec` until the daemon has durably
+registered it, then releases it (CONTRACTS.md, "Amendment 2026-10-02 (C6 capture spawn gate, H-10
+4b)"). A seal that lands between the registration and the release cannot signal a child that is
+still parked: the daemon's guard finds a command line that is not the harness's and binds
+`Unresolved(ProcessAuthorityUnavailable)`. The launcher, which sees the entry sealed right after
+the release, therefore ends its own just-released child (`released_child.rs`): SIGTERM native-first,
+the connector's grace, SIGKILL, inside `termination_bound(grace)`.
+
+That ending is **not a `TerminationOutcomeV1`**, is never chained into the seal and is only
+printed: the seal is already committed and the trace says what the daemon observed. It claims
+nothing about descendants other than the root and a re-resolved native child, and a native binary
+that was never observed (or a root that left alone while the connector names one) is reported
+`NativeUnverified`, never `Ended`. The refusal line it ends with says nothing is running only for
+`Ended` and `AlreadyGone`; otherwise it says the harness may still be running.
+
+The residuals, both needing two faults and both ending the same way (a harness running on a sealed
+entry that names its exact instance; a later `goalcup seal` answers the committed report and
+signals nothing): a CLI crash between the release and its status look, with a seal that raced in;
+and the same raced seal with the CLI alive, when the launcher's status read after the release and
+the one after the `Launch` error are both unreadable (a status that cannot be read never ends the
+child). The look after the `Launch` error can come after Codex's native-scope wait of up to
+120 s, and each read may take the 30 s `CALL_TIMEOUT`. Separately, if a parked child's
+acknowledgement arrives after the 5 s gate timeout and the child `exec`s before the gate closes,
+the launcher SIGKILLs it without grace: a harness that ran for milliseconds (CONTRACTS.md, gate
+amendment ¶5(f)).
+
+## The invariant (quoted verbatim from `tests/terminate_sim.rs`; keep the two identical)
+
+```text
+Let B be every pid born under the root during the call (ground truth), O ⊆ B the owned
+set (B minus what had left the root's ppid walk before the call, D30), A the pids alive
+at return, K the kills sent, R the report.
+I1  R.observed_gone ⟹ A ∩ O ⊆ W, where W is the platform's stated residual window
+    (Linux: same-poll orphans; macOS: ∅).
+I2  R.observed_gone ⟹ A ∩ R.targeted = ∅.
+I3  every k ∈ K names a pid ≥ 2 that was ours when sent, with SIGTERM or SIGKILL only;
+    every killpg names a group of ours under a live leader.
+I4  ps could not be asked at any point ⟹ ¬R.observed_gone ∧ R.harness_unverified
+    (an Err result satisfies this vacuously).
+I5  handle.pgid = root ∧ root exited ∧ R.observed_gone ⟹ every group member exited
+    before the root.
+I6  every process dies within k polls of its first SIGTERM and nothing forks ⟹
+    R.targeted = B ∧ A ∩ B = ∅ ∧ R.still_alive = ∅, and, unless handle.pgid = root,
+    R.observed_gone.
+```
+
+The runner is un-ignored: with F7, F8 and F9 closed it passes 5000 cases by default and 50 000
+with `GOALCUP_SIM_CASES=50000 GOALCUP_SIM_ALL=1` reporting no seeds.
+
+**Provenance note (2026-09-19):** the 5000-case default run is covered by the committed gate
+log (`docs/qualification/2026-09-17-gate.md`). The 50 000-case figure is **not backed by any
+committed artifact** in this repository — it is a remembered result. Either re-run it at the pin
+and file the output beside the gate log, or drop the number. Do not cite it as evidence until
+one of those happens.
+
+## OPEN: an owner ruling, not a defect — how wide is Linux's `W`?
+
+Stated as a question on purpose. Nothing below changes the contract; the contract changes only
+when the owner rules.
+
+The measurement: a wrapper that forks a child and then exits without waiting for it leaves that
+child in no snapshot under a live parent, so no ppid walk can see it — and on Linux there is no
+fork witness to pay for it. A report over that tree can therefore come back `observed_gone`, and
+`Confirmed` can stand, while the orphan is still running. This is **inside `W` as written
+above**, so `I1` is not violated and the implementation is behaving as documented.
+
+It has been measured twice, independently: `docs/qualification/2026-09-16-review.md` (5/5
+reproductions, and its §"seal.rs gate" recording that `Confirmed` *would be returned*), and
+again on 2026-09-18 while the CI death was being diagnosed —
+`docs/qualification/2026-09-18-f0-linux-residual.md`.
+
+**The question is whether the phrase "same-poll orphan" honestly conveys the reach of that
+window.** The argument that it does not: a same-poll orphan sounds like an unlucky race inside a
+50 ms poll, but `fork()` immediately followed by `exit()` is two syscalls apart with nothing
+enforcing a gap, so *every* wrapper of the shape "hand off to a child and leave" lands in the
+window *every time*. This repository already has a name and a fixture for that shape and calls
+it "the ordinary shape — a launcher whose session is a child."
+
+**The three answers available to the owner**, none of which this document may pick for them:
+
+1. Say plainly, here, that on Linux `Confirmed` excludes fork-and-leave wrappers — widening the
+   stated limitation without changing code.
+2. Rule that the residual is acceptable as worded and close it, recording why.
+3. Treat it as a V1.1 gate: require a fork witness on Linux (pidfd or a `PTRACE_O_TRACEFORK`
+   equivalent) before Linux is ever claimed as a qualified row.
+
+**This is not a V1 blocker.** Linux is not a V1 row; V1 claims one macOS target, where the
+kqueue witness closes this. It is a correctness-of-documentation issue now and a gate later.

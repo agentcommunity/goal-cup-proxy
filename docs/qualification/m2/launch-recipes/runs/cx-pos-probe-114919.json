@@ -1,0 +1,218 @@
+{
+ "run_id": "cx-pos-probe-114919",
+ "harness": "codex",
+ "variant": "positive",
+ "proxy": true,
+ "started_utc": "2026-09-27T11:49:20.056Z",
+ "duration_s": 600.031,
+ "exit_code": -15,
+ "timed_out": true,
+ "timeout_s": 600,
+ "spawn_error": null,
+ "executable": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/node/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+ "executable_realpath": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/node/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+ "executable_sha256": "a29d9e86eef88cbbd69f97ce8c590b1d0a287c8f77424f5eef226b883d7eaa22",
+ "argv_template": [
+  "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/node/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+  "exec",
+  "--json",
+  "-m",
+  "gpt-5.6-luna",
+  "-c",
+  "model_reasoning_effort=\"low\"",
+  "-c",
+  "approval_policy=\"never\"",
+  "-c",
+  "check_for_update_on_startup=false",
+  "-s",
+  "workspace-write",
+  "--skip-git-repo-check",
+  "-C",
+  "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cx-pos-probe-114919/ws",
+  "--",
+  "<GOAL>"
+ ],
+ "argc": 18,
+ "cwd": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cx-pos-probe-114919/ws",
+ "stdin": "/dev/null",
+ "env_names": [
+  "CODEX_CA_CERTIFICATE",
+  "CODEX_HOME",
+  "HOME",
+  "HTTPS_PROXY",
+  "LOGNAME",
+  "NO_PROXY",
+  "PATH",
+  "SHELL",
+  "TMPDIR",
+  "USER",
+  "https_proxy",
+  "no_proxy"
+ ],
+ "home": "per-run empty dir",
+ "env_values_nonsecret": {
+  "CODEX_CA_CERTIFICATE": "/Users/team/dev/worktrees/goal-cup/m2-t02-launch/spikes/codex-cli/out/m2-t02/cx-pos-probe-114919/probe/ca.pem",
+  "CODEX_HOME": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/codex",
+  "HOME": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cx-pos-probe-114919/home",
+  "HTTPS_PROXY": "http://127.0.0.1:53367",
+  "NO_PROXY": "127.0.0.1,localhost",
+  "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+  "SHELL": "/bin/zsh",
+  "https_proxy": "http://127.0.0.1:53367",
+  "no_proxy": "127.0.0.1,localhost"
+ },
+ "exec_bytes": {
+  "strings": 1667,
+  "strings_plus_pointers": 1923
+ },
+ "session_id_preassigned": null,
+ "oracle": {
+  "ws_entries": [],
+  "outside_entries": [],
+  "fake_home_entries_after": [],
+  "exists": false
+ },
+ "appwide_scope": {
+  "codex_default_sessions_hits": 0
+ },
+ "goal": {
+  "bytes": 543,
+  "sha256": "9997a1b5d02c54285001fcb2f5eb5bc0ad28649d62711311411dac6644048e99",
+  "lines": 6,
+  "starts_with_dash": true,
+  "has_tab": true,
+  "has_double_space": true,
+  "non_ascii": true,
+  "text": "-leading dash on purpose: T02 goal-delivery probe q114919.\nThis line has  two  double  spaces, a tab here:\t<-, and one UTF-8 word: naïve.\n   This line starts with three spaces and ends with a space. \nTask: create exactly one new file named t02-codex-q114919.txt in the current working directory. Its entire content must be exactly: delivered-q114919\nWrite it with a real tool call (no trailing newline if you can). Do not create or modify anything else and do not ask questions.\nWhen the file exists, reply with the single word done and stop."
+ },
+ "stdout_summary": {
+  "events": [
+   "thread.started",
+   "turn.started",
+   "error",
+   "error",
+   "error",
+   "error",
+   "item.completed",
+   "error",
+   "error",
+   "error"
+  ],
+  "thread_id": "01a0e2b2-bfa7-70c2-95ea-539154a245fc",
+  "items": [
+   {
+    "type": "error"
+   }
+  ],
+  "final_agent_message": null,
+  "errors": [
+   "{\"type\": \"error\", \"message\": \"Reconnecting... 2/5 (request timed out)\"}",
+   "{\"type\": \"error\", \"message\": \"Reconnecting... 3/5 (request timed out)\"}",
+   "{\"type\": \"error\", \"message\": \"Reconnecting... 4/5 (request timed out)\"}",
+   "{\"type\": \"error\", \"message\": \"Reconnecting... 5/5 (request timed out)\"}",
+   "{\"type\": \"error\", \"message\": \"Reconnecting... 1/5 (stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses))\"}",
+   "{\"type\": \"error\", \"message\": \"Reconnecting... 2/5 (stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses))\"}",
+   "{\"type\": \"error\", \"message\": \"Reconnecting... 3/5 (stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses))\"}"
+  ],
+  "len": 1030,
+  "head_if_not_json": null
+ },
+ "stderr_bytes": 1395,
+ "native": [
+  {
+   "path_rel_home": "sessions/2026/09/27/rollout-2026-09-27T18-49-20-01a0e2b2-bfa7-70c2-95ea-539154a245fc.jsonl",
+   "first_seen_after_spawn_s": 0.512,
+   "size": 35585,
+   "sha256": "4dcf6bfb3da385bd4b04da5c53d552bdada574a309582b9aa76e1fc5fc1f25f1",
+   "record_types": {
+    "session_meta:None": 1,
+    "event_msg:task_started": 1,
+    "response_item:message": 3,
+    "world_state:None": 1,
+    "turn_context:None": 1,
+    "event_msg:item_completed": 1
+   },
+   "user_messages": [
+    {
+     "line": 4,
+     "source": "response_item",
+     "is_goal": false,
+     "len": 1591,
+     "head": "<environment_context>\n  <cwd>/private/tmp/claude-501/-Users-team-dev-PROJECTS-Ag...(+1511)"
+    },
+    {
+     "line": 7,
+     "source": "response_item",
+     "is_goal": true,
+     "len": 543,
+     "head": "<GOAL>"
+    }
+   ],
+   "goal_exact_by_record": [
+    {
+     "line": 7,
+     "kind": "response_item:message",
+     "role": "user",
+     "exact": 1,
+     "substring": 1
+    },
+    {
+     "line": 8,
+     "kind": "event_msg:item_completed",
+     "role": null,
+     "exact": 1,
+     "substring": 1
+    }
+   ],
+   "goal_exact_total": 2,
+   "goal_substring_total": 2,
+   "real_home_refs": {
+    "/Users/team/.agents": 0,
+    "/Users/team/.claude/": 0,
+    "/Users/team/.codex/": 0,
+    "/Users/team/.zshrc": 0
+   },
+   "session_meta": {
+    "id": "01a0e2b2-bfa7-70c2-95ea-539154a245fc",
+    "cwd": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cx-pos-probe-114919/ws",
+    "cli_version": "0.153.0",
+    "originator": "codex_exec",
+    "source": "exec",
+    "model_provider": "openai",
+    "timestamp": "2026-09-27T11:49:20.426Z"
+   },
+   "turn_context": [
+    {
+     "model": "gpt-5.6-luna",
+     "effort": "low",
+     "approval_policy": "never",
+     "sandbox_policy": {
+      "type": "workspace-write",
+      "network_access": false,
+      "exclude_tmpdir_env_var": false,
+      "exclude_slash_tmp": false
+     },
+     "cwd": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cx-pos-probe-114919/ws"
+    }
+   ],
+   "tool_calls": [],
+   "tool_outputs": []
+  }
+ ],
+ "wire_summary": {
+  "tunnels": {
+   "ab.chatgpt.com:443": 1
+  },
+  "mitm_hosts": {},
+  "client_tls_fail": 0,
+  "errors": 43,
+  "http": [],
+  "ws_open": [],
+  "model_requests": [],
+  "plain_http_refused": 0
+ },
+ "probe": {
+  "binary_sha256": "0fc3d047bc414d6e86f718b22af170d598cab87dbd9a51bd84ca46024a5b5452",
+  "listen": "127.0.0.1 (ephemeral port)"
+ }
+}

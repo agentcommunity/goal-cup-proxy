@@ -1,0 +1,21 @@
+{
+  "id": "goalcup-v0.1.0-pins",
+  "description": "Fixture-owned trust for the frozen M2 legacy baseline. The manifest and directory pin tables are the generated tables of tag v0.1.0 (commit 7f0123444ae67c68f09b5e30cbfcc5960344103a), the build the 2026-09-21 v4 journeys were qualified against. They are copied here once and never regenerated: scripts/pin-manifests.sh does not read or write this file.",
+  "source_commit": "7f0123444ae67c68f09b5e30cbfcc5960344103a",
+  "manifest_pins": [
+    ["claude-code-cli", "e55b0dc45fd6dc758db386238ecdf4633be5868929144302e738811fa56ea1e1"],
+    ["codex-cli", "ae9ea6e7cc929b63374536c89f79962428df8d52b2a7d11a6996f9dad9479027"],
+    ["opencode", "82c01719ced288bf62bbe75237178919848e0cfd7b7e84fa15e5c30a94a948ed"]
+  ],
+  "directory_pins": [
+    ["claude-code-cli", "3c639690cbf0bcae2bf675c9fd3e7a08be759c69065b7ac793d5ccaa23d819c1"],
+    ["codex-cli", "1a3c7b104e1f9aec74e0b3402b6c402188aed0ef5571c17a4bae82de7256dd38"],
+    ["opencode", "f60c7d1c930c0b14c23994fae2427c4227d99443e10aa773e8caace1bc000ca2"]
+  ],
+  "key_policy": {
+    "description": "Not injected: the baseline runs with this build's compiled SERVER_PUBLIC_KEYS allowlist and records it here. Descriptor keys are honoured only when allowlisted (allow_descriptor_key=false) and no key is supplied (extra_server_keys=[]). A change to the compiled allowlist fails the baseline loudly instead of silently re-judging historical anchors.",
+    "server_public_keys": ["6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"],
+    "allow_descriptor_key": false,
+    "extra_server_keys": []
+  }
+}

@@ -1,0 +1,151 @@
+{
+ "run_id": "cl-r1-neg-missing-final-125419",
+ "harness": "claude",
+ "variant": "missing",
+ "proxy": false,
+ "started_utc": "2026-09-27T12:54:29.448Z",
+ "duration_s": 0.824,
+ "exit_code": 1,
+ "timed_out": false,
+ "timeout_s": 120,
+ "spawn_error": null,
+ "executable": "/Users/team/.local/bin/claude",
+ "executable_realpath": "/Users/team/.local/share/claude/versions/2.1.283",
+ "executable_sha256": "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
+ "argv_template": [
+  "/Users/team/.local/bin/claude",
+  "-p",
+  "--model",
+  "haiku",
+  "--effort",
+  "low",
+  "--permission-mode",
+  "acceptEdits",
+  "--permission-prompts",
+  "none",
+  "--session-id",
+  "09ad0c77-7461-4a82-8dc0-773314ea4af9",
+  "--output-format",
+  "json",
+  "--strict-mcp-config",
+  "--mcp-config",
+  "{\"mcpServers\":{}}"
+ ],
+ "argc": 17,
+ "cwd": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-r1-neg-missing-final-125419/ws",
+ "stdin": "/dev/null",
+ "env_names": [
+  "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS",
+  "CLAUDE_CONFIG_DIR",
+  "DISABLE_AUTOUPDATER",
+  "ENABLE_CLAUDEAI_MCP_SERVERS",
+  "HOME",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "TMPDIR",
+  "USER"
+ ],
+ "home": "per-run dir with Library/Keychains linked to the real one",
+ "env_values_nonsecret": {
+  "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS": "1",
+  "CLAUDE_CONFIG_DIR": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude",
+  "DISABLE_AUTOUPDATER": "1",
+  "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+  "HOME": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-r1-neg-missing-final-125419/home",
+  "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+  "SHELL": "/bin/zsh"
+ },
+ "exec_bytes": {
+  "strings": 720,
+  "strings_plus_pointers": 952
+ },
+ "session_id_preassigned": "09ad0c77-7461-4a82-8dc0-773314ea4af9",
+ "oracle": {
+  "ws_entries": [],
+  "outside_entries": [],
+  "fake_home_entries_after": [
+   "Library",
+   "Library/Keychains"
+  ]
+ },
+ "appwide_scope": {
+  "claude_default_projects_hits": 0
+ },
+ "scoped": [
+  "mcp_off"
+ ],
+ "home_link": true,
+ "codex_trust_override": false,
+ "allow_tools": [],
+ "side_effects": {
+  "appwide_changes": [
+   {
+    "path": "~/.claude/projects/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/subagents/agent-a62a312dd695dec49.jsonl",
+    "change": "modified",
+    "dir": false,
+    "size": 615756,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/.claude/projects/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/subagents/agent-abc78d6cb8dc20458.jsonl",
+    "change": "modified",
+    "dir": false,
+    "size": 766965,
+    "attributed_to": "unattributed"
+   }
+  ],
+  "isolated_home_changes": [
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/plugins/synced/<uuid>_<uuid>",
+    "change": "modified",
+    "dir": true,
+    "size": 224,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/plugins/synced/<uuid>_<uuid>/.last-complete-round",
+    "change": "modified",
+    "dir": false,
+    "size": 37,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/plugins/synced/<uuid>_<uuid>/manifest.json",
+    "change": "modified",
+    "dir": false,
+    "size": 520,
+    "attributed_to": "unattributed"
+   },
+   {
+    "path": "~/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude/sessions",
+    "change": "modified",
+    "dir": true,
+    "size": 64,
+    "attributed_to": "unattributed"
+   }
+  ],
+  "lock_names_seen_during_run": {
+   "~/.local/state/claude/locks": [],
+   "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-r1-neg-missing-final-125419/home/.local/state/claude/locks": []
+  },
+  "new_shell_snapshots": []
+ },
+ "goal": {
+  "bytes": 0,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "lines": 0,
+  "starts_with_dash": false,
+  "has_tab": false,
+  "has_double_space": false,
+  "non_ascii": false,
+  "text": ""
+ },
+ "stdout_summary": {
+  "parse": "not-json",
+  "len": 0,
+  "head": ""
+ },
+ "stderr_bytes": 94,
+ "native": []
+}

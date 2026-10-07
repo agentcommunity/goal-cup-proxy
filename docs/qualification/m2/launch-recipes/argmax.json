@@ -1,0 +1,49 @@
+{
+ "getconf_ARG_MAX": 1048576,
+ "codex": {
+  "recipe_env_names": [
+   "CODEX_CA_CERTIFICATE",
+   "CODEX_HOME",
+   "HOME",
+   "HTTPS_PROXY",
+   "LOGNAME",
+   "NO_PROXY",
+   "PATH",
+   "SHELL",
+   "TMPDIR",
+   "USER",
+   "https_proxy",
+   "no_proxy"
+  ],
+  "env_plus_argv_without_goal_bytes": 1328,
+  "with_64KiB_goal_strings": 66608,
+  "with_64KiB_goal_strings_plus_pointers": 66864,
+  "exec_64KiB_ok": true,
+  "max_single_goal_arg_accepted": 1047248,
+  "headroom_after_64KiB_goal": 981712
+ },
+ "claude": {
+  "recipe_env_names": [
+   "CLAUDE_CONFIG_DIR",
+   "DISABLE_AUTOUPDATER",
+   "HOME",
+   "HTTPS_PROXY",
+   "LOGNAME",
+   "NODE_EXTRA_CA_CERTS",
+   "NO_PROXY",
+   "PATH",
+   "SHELL",
+   "TMPDIR",
+   "USER",
+   "https_proxy",
+   "no_proxy"
+  ],
+  "env_plus_argv_without_goal_bytes": 1054,
+  "with_64KiB_goal_strings": 66342,
+  "with_64KiB_goal_strings_plus_pointers": 66590,
+  "exec_64KiB_ok": true,
+  "max_single_goal_arg_accepted": 1047522,
+  "headroom_after_64KiB_goal": 981986
+ },
+ "nul_in_arg": "refused before spawn by the launcher: ValueError: embedded null byte"
+}

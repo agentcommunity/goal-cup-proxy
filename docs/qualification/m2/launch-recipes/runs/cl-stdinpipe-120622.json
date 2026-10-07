@@ -1,0 +1,175 @@
+{
+ "run_id": "cl-stdinpipe-120622",
+ "harness": "claude",
+ "variant": "stdinpipe",
+ "proxy": false,
+ "started_utc": "2026-09-27T12:06:22.950Z",
+ "duration_s": 6.743,
+ "exit_code": 0,
+ "timed_out": false,
+ "timeout_s": 600,
+ "spawn_error": null,
+ "executable": "/Users/team/.local/bin/claude",
+ "executable_realpath": "/Users/team/.local/share/claude/versions/2.1.283",
+ "executable_sha256": "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
+ "argv_template": [
+  "/Users/team/.local/bin/claude",
+  "-p",
+  "--model",
+  "haiku",
+  "--effort",
+  "low",
+  "--permission-mode",
+  "acceptEdits",
+  "--permission-prompts",
+  "none",
+  "--session-id",
+  "b3e630cd-682e-4573-8a6a-23a629a41ca9",
+  "--output-format",
+  "json",
+  "--",
+  "<GOAL>"
+ ],
+ "argc": 16,
+ "cwd": "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-stdinpipe-120622/ws",
+ "stdin": "pipe:'T02-STDIN-SENTINEL cl-stdinpipe-120622\\n'",
+ "env_names": [
+  "CLAUDE_CONFIG_DIR",
+  "DISABLE_AUTOUPDATER",
+  "HOME",
+  "LOGNAME",
+  "PATH",
+  "SHELL",
+  "TMPDIR",
+  "USER"
+ ],
+ "home": "real user HOME",
+ "env_values_nonsecret": {
+  "CLAUDE_CONFIG_DIR": "/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/claude",
+  "DISABLE_AUTOUPDATER": "1",
+  "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+  "SHELL": "/bin/zsh"
+ },
+ "exec_bytes": {
+  "strings": 993,
+  "strings_plus_pointers": 1201
+ },
+ "session_id_preassigned": "b3e630cd-682e-4573-8a6a-23a629a41ca9",
+ "oracle": {
+  "ws_entries": [
+   "t02-claude-s120622.txt"
+  ],
+  "outside_entries": [],
+  "exists": true,
+  "size": 17,
+  "sha256": "224380b39820e0452633797626ab3265233c2deada00e9cf373c4d52ded5a710",
+  "bytes_repr": "b'delivered-s120622'",
+  "exact": true,
+  "exact_plus_lf": false,
+  "birth_after_spawn": true,
+  "birth_iso": "2026-09-27T12:06:27.154Z"
+ },
+ "appwide_scope": {
+  "claude_default_projects_hits": 0
+ },
+ "goal": {
+  "bytes": 544,
+  "sha256": "f25dd663393c69f475599552f7d214ca71415e05a62f8a98aa8484314f98fc1c",
+  "lines": 6,
+  "starts_with_dash": true,
+  "has_tab": true,
+  "has_double_space": true,
+  "non_ascii": true,
+  "text": "-leading dash on purpose: T02 goal-delivery probe s120622.\nThis line has  two  double  spaces, a tab here:\t<-, and one UTF-8 word: naïve.\n   This line starts with three spaces and ends with a space. \nTask: create exactly one new file named t02-claude-s120622.txt in the current working directory. Its entire content must be exactly: delivered-s120622\nWrite it with a real tool call (no trailing newline if you can). Do not create or modify anything else and do not ask questions.\nWhen the file exists, reply with the single word done and stop."
+ },
+ "stdout_summary": {
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 2,
+  "session_id": "b3e630cd-682e-4573-8a6a-23a629a41ca9",
+  "result": "done",
+  "model_usage_keys": [
+   "claude-haiku-4-5-20251001"
+  ],
+  "permission_denials": [],
+  "stop_reason": "end_turn",
+  "duration_ms": 5962
+ },
+ "stderr_bytes": 0,
+ "native": [
+  {
+   "path_rel_home": "projects/-private-tmp-claude-501--Users-team-dev-PROJECTS-AgentCommunity-goal-cup-9758e5ce-5876-46aa-b761-95082645ba2c-scratchpad-m2-t02-cl-stdinpipe-120622-ws/b3e630cd-682e-4573-8a6a-23a629a41ca9.jsonl",
+   "first_seen_after_spawn_s": 0.355,
+   "size": 193845,
+   "sha256": "605b217ded79ec8ebbf032339b4ffaaee7c5ba1d35082965e58f27ace74395c4",
+   "record_types": {
+    "queue-operation": 2,
+    "user": 2,
+    "attachment": 16,
+    "atis-latch": 3,
+    "last-prompt": 3,
+    "assistant": 4,
+    "cost-state": 1
+   },
+   "user_messages": [
+    {
+     "line": 3,
+     "is_goal": false,
+     "len": 584,
+     "isMeta": null,
+     "head": "-leading dash on purpose: T02 goal-delivery probe s120622.\nThis line has  two  d...(+503)"
+    }
+   ],
+   "goal_exact_by_record": [
+    {
+     "line": 1,
+     "type": "queue-operation",
+     "exact": 0,
+     "substring": 1,
+     "isMeta": null,
+     "promptSource": null,
+     "origin": null
+    },
+    {
+     "line": 3,
+     "type": "user",
+     "exact": 0,
+     "substring": 1,
+     "isMeta": null,
+     "promptSource": "sdk",
+     "origin": null
+    }
+   ],
+   "goal_exact_total": 0,
+   "goal_substring_total": 2,
+   "real_home_refs": {
+    "/Users/team/.agents": 0,
+    "/Users/team/.claude/": 0,
+    "/Users/team/.codex/": 0,
+    "/Users/team/.zshrc": 0
+   },
+   "models": [
+    "claude-haiku-4-5-20251001"
+   ],
+   "session_ids": [
+    "b3e630cd-682e-4573-8a6a-23a629a41ca9"
+   ],
+   "cwds": [
+    "/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-stdinpipe-120622/ws"
+   ],
+   "versions": [
+    "2.1.283"
+   ],
+   "tool_calls": [
+    {
+     "line": 19,
+     "name": "Write",
+     "id": "toolu_01BgHZ7WjdB3KZXhiGe9sqRB",
+     "input": "{\"file_path\": \"/private/tmp/claude-501/-Users-team-dev-PROJECTS-AgentCommunity-goal-cup/9758e5ce-5876-46aa-b761-95082645ba2c/scratchpad/m2-t02/cl-stdinpipe-120622/ws/t02-claude-s120622.txt\", \"content\": \"delivered-s120622\"}"
+    }
+   ],
+   "tool_results": 1
+  }
+ ]
+}

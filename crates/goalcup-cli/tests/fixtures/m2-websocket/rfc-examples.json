@@ -1,0 +1,111 @@
+{
+  "about": "Synthetic byte examples transcribed from the text of RFC 6455 section 5.7 and RFC 7692 sections 7.2.3.1-7.2.3.5. No captured traffic. Each frame lists its wire bytes and the fields they encode; 'messages' is the decoded message text the RFC states.",
+  "examples": [
+    {
+      "name": "rfc6455-5.7-single-frame-unmasked-text",
+      "side": "server",
+      "extensions": null,
+      "frames": [
+        { "hex": "810548656c6c6f", "fin": true, "rsv1": false, "opcode": 1, "mask": null, "payload_hex": "48656c6c6f" }
+      ],
+      "messages": ["Hello"]
+    },
+    {
+      "name": "rfc6455-5.7-single-frame-masked-text",
+      "side": "client",
+      "extensions": null,
+      "frames": [
+        { "hex": "818537fa213d7f9f4d5158", "fin": true, "rsv1": false, "opcode": 1, "mask": "37fa213d", "payload_hex": "48656c6c6f" }
+      ],
+      "messages": ["Hello"]
+    },
+    {
+      "name": "rfc6455-5.7-fragmented-unmasked-text",
+      "side": "server",
+      "extensions": null,
+      "frames": [
+        { "hex": "010348656c", "fin": false, "rsv1": false, "opcode": 1, "mask": null, "payload_hex": "48656c" },
+        { "hex": "80026c6f", "fin": true, "rsv1": false, "opcode": 0, "mask": null, "payload_hex": "6c6f" }
+      ],
+      "messages": ["Hello"]
+    },
+    {
+      "name": "rfc6455-5.7-unmasked-ping",
+      "side": "server",
+      "extensions": null,
+      "frames": [
+        { "hex": "890548656c6c6f", "fin": true, "rsv1": false, "opcode": 9, "mask": null, "payload_hex": "48656c6c6f" }
+      ],
+      "messages": []
+    },
+    {
+      "name": "rfc6455-5.7-masked-pong",
+      "side": "client",
+      "extensions": null,
+      "frames": [
+        { "hex": "8a8537fa213d7f9f4d5158", "fin": true, "rsv1": false, "opcode": 10, "mask": "37fa213d", "payload_hex": "48656c6c6f" }
+      ],
+      "messages": []
+    },
+    {
+      "name": "rfc7692-7.2.3.1-compressed-text",
+      "side": "server",
+      "extensions": "permessage-deflate",
+      "frames": [
+        { "hex": "c107f248cdc9c90700", "fin": true, "rsv1": true, "opcode": 1, "mask": null, "payload_hex": "f248cdc9c90700" }
+      ],
+      "messages": ["Hello"]
+    },
+    {
+      "name": "rfc7692-7.2.3.1-fragmented-compressed-text",
+      "side": "server",
+      "extensions": "permessage-deflate",
+      "frames": [
+        { "hex": "4103f248cd", "fin": false, "rsv1": true, "opcode": 1, "mask": null, "payload_hex": "f248cd" },
+        { "hex": "8004c9c90700", "fin": true, "rsv1": false, "opcode": 0, "mask": null, "payload_hex": "c9c90700" }
+      ],
+      "messages": ["Hello"]
+    },
+    {
+      "name": "rfc7692-7.2.3.2-sharing-lz77-sliding-window",
+      "side": "server",
+      "extensions": "permessage-deflate",
+      "frames": [
+        { "hex": "c107f248cdc9c90700", "fin": true, "rsv1": true, "opcode": 1, "mask": null, "payload_hex": "f248cdc9c90700" },
+        { "hex": "c105f200110000", "fin": true, "rsv1": true, "opcode": 1, "mask": null, "payload_hex": "f200110000" }
+      ],
+      "messages": ["Hello", "Hello"]
+    },
+    {
+      "name": "rfc7692-7.2.3.3-deflate-block-with-no-compression",
+      "side": "server",
+      "extensions": "permessage-deflate",
+      "frames": [
+        { "hex": "c10b000500faff48656c6c6f00", "fin": true, "rsv1": true, "opcode": 1, "mask": null, "payload_hex": "000500faff48656c6c6f00" }
+      ],
+      "messages": ["Hello"]
+    },
+    {
+      "name": "rfc7692-7.2.3.4-deflate-block-with-bfinal-set",
+      "side": "server",
+      "extensions": "permessage-deflate",
+      "frames": [
+        { "hex": "c108f348cdc9c9070000", "fin": true, "rsv1": true, "opcode": 1, "mask": null, "payload_hex": "f348cdc9c9070000" }
+      ],
+      "messages": ["Hello"]
+    },
+    {
+      "name": "rfc7692-7.2.3.5-two-deflate-blocks-in-one-message",
+      "side": "server",
+      "extensions": "permessage-deflate",
+      "frames": [
+        { "hex": "c10df24805000000ffffcac9c90700", "fin": true, "rsv1": true, "opcode": 1, "mask": null, "payload_hex": "f24805000000ffffcac9c90700" }
+      ],
+      "messages": ["Hello"]
+    }
+  ],
+  "headers": [
+    { "name": "rfc6455-5.7-256-bytes-binary-unmasked", "hex": "827e0100", "opcode": 2, "payload_len": 256 },
+    { "name": "rfc6455-5.7-64kib-binary-unmasked", "hex": "827f0000000000010000", "opcode": 2, "payload_len": 65536 }
+  ]
+}

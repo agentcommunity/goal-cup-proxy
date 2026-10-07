@@ -1,0 +1,183 @@
+artifact root : /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/spikes/openclaw/out/run-20260903T122119Z
+workspace     : /Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z
+leg1 records  : 229
+hook posts    : 454
+store rows    : transcript_events=77 session_nodes=2 session_windows=2 trajectory=127 archives=1 rewrite_watermarks=2
+leg1 by src   : {'nodes': 2, 'windows': 2, 'transcript': 96, 'runtime': 127, 'archives': 1, 'spill': 1}
+hooks by path : {'/plugin.loaded': 7, '/gateway_start': 2, '/plugin.tick': 353, '/session_start': 2, '/before_agent_run': 16, '/llm_input': 15, '/before_tool_call': 12, '/after_tool_call': 12, '/agent_end': 15, '/llm_output': 14, '/subagent_spawned': 1, '/session_end': 2, '/subagent_ended': 1, '/before_agent_run.decision': 1, '/gateway_stop': 1}
+entry types   : {'session': 2, 'model_change': 2, 'thinking_level_change': 2, 'custom': 17, 'message': 51, 'custom_message': 1, 'leaf': 2}
+
+========================================================================
+0. Shim loaded (row-8 unknown: do project plugins load with the opt-in?)
+========================================================================
+  plugin.loaded  pid=40835 stateDir='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw' configPath='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw/openclaw.json' cwd='/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z' node=v26.8.1
+  plugin.loaded  pid=40835 stateDir='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw' configPath='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw/openclaw.json' cwd='/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z' node=v26.8.1
+  plugin.loaded  pid=40835 stateDir='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw' configPath='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw/openclaw.json' cwd='/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z' node=v26.8.1
+  plugin.loaded  pid=43895 stateDir='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw' configPath='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw/openclaw.json' cwd='/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z' node=v26.8.1
+  plugin.loaded  pid=43895 stateDir='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw' configPath='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw/openclaw.json' cwd='/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z' node=v26.8.1
+  plugin.loaded  pid=43895 stateDir='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw' configPath='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw/openclaw.json' cwd='/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z' node=v26.8.1
+  plugin.loaded  pid=43895 stateDir='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw' configPath='/Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/home/openclaw/openclaw.json' cwd='/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z' node=v26.8.1
+  armed launch pin contained plugins.load.paths: True
+  (run.sh --no-load-path re-arms with workspace discovery only; comparing the two runs is what answers the unknown)
+  -> shim loaded: PASS  (7 plugin.loaded post(s); expect >=2 (first launch + post-kill restart))
+
+========================================================================
+A1. Goal text byte-exact in leg 1 and identical bytes in leg 2
+========================================================================
+  leg1 records containing the goal verbatim: 40  (srcs: ['runtime', 'transcript'])
+  transcript_events user messages whose text == goal exactly: 1
+  leg2 before_agent_run posts with prompt == goal (byte-equal): 1
+  leg2 llm_input posts with prompt == goal (byte-equal)      : 0
+  -> A1: PASS  (same bytes on both legs)
+
+========================================================================
+A2. Human-message list; no harness-authored user-slot content classified as human
+========================================================================
+  user messages: 16  human=14  harness/other=2
+  provenance.kind histogram over user messages: {'<absent>': 14, 'inter_session': 1, 'internal_system': 1}
+  ROW-8 UNKNOWN: '<absent>' here means plain TUI/CLI input is NOT stamped provenance.kind=external_user. That is what the source predicts (chat-send-handler only sets provenance from the admin-scoped systemInputProvenance).
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=4 len=77  'create hello.py that prints the current date, run it, then tell me the'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=11 len=45  'use a subagent to count the lines in hello.py'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=21 len=10  'keep going'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=24 len=119  'run this exact shell command: python3 -c "print(\\"A\\"*200000)"  -- the'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=29 len=103  'write long.py with 300 numbered comment lines, then explain every sect'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=34 len=104  'write long2.py with 300 numbered comment lines, then explain every sec'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=43 len=10  'keep going'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=46 len=27  '/model openai/gpt-5.6-terra'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=52 len=19  'what model are you?'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=55 len=127  'Your message could not be sent: Blocked by the goal-cup tracker: messa'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=57 len=17  'also add a README'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=64 len=14  'what is 2 + 2?'
+    HUMAN  sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=67 len=14  'what is 3 + 3?'
+    HUMAN  sid=3fdb5814-d259-4df3-b77e-c1038028a36e seq=4 len=9  'say hello'
+    NOT    sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=18 kind='inter_session' sourceTool='subagent_announce' len=778  '[Subagent Context] Every subagent spawned from this session '
+    NOT    sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=36 kind='internal_system' sourceTool='main_session_restart_recovery' len=327  '[System] Your previous turn was interrupted by a gateway res'
+  user messages carrying the [Inter-session message] prefix: 0
+  custom_message entries (model-visible, harness-authored): 1
+    script 'create hello.py that prints the current date, run ': 1 occurrence(s)
+    script 'use a subagent to count the lines in hello.py': 1 occurrence(s)
+    script 'keep going': 2 occurrence(s)
+    script 'also add a README': 1 occurrence(s)
+  -> A2: manual  (compare the HUMAN list above against PROTOCOL.md step by step)
+
+========================================================================
+A3. Tool call/result pairing; truncation of what is on disk
+========================================================================
+  tool calls: 11   tool results: 11
+  calls without a result: 0   results without a call: 0
+  persisted tool results carrying a truncation marker: 1
+    TRUNCATED-ON-DISK toolCallId=call_15S9nAvnNatkk8UR1DMfDGk4|fc_0302e7bc98f16d19016a996753ecec87d0875d9ae3bf58e0ae tool='exec' chars=64000 markers=['more characters truncated']
+  gateway log lines mentioning [tool-result-truncation]: 0
+  transcript_rewrite_watermarks rows (targeted rewrites happened): 2
+  toolCallIds seen on both legs: 11; on-disk materially shorter than the after_tool_call result: 11
+    SHRUNK toolCallId=call_mHrplqeCdqeEdKzv4dqCsBs3|fc_0448cea245c438ff016a9966c6ead087d0a7dd32e799eaaa8e hook_json_chars=524 disk_text_chars=95
+    SHRUNK toolCallId=call_sukp1GxY2QyPvvMN9KJW5lZA|fc_0448cea245c438ff016a9966cbe0d887d09a4c618ba924489b hook_json_chars=522 disk_text_chars=125
+    SHRUNK toolCallId=call_vlvJ0wJDLeeK3cEc6MfrRAXM|fc_018734f08f0e0211016a9966ed625087d0ab8c7694f5105233 hook_json_chars=1707 disk_text_chars=812
+    SHRUNK toolCallId=call_35SmqbPjsW7VJmVSkz67Pegg|fc_018734f08f0e0211016a9966f3f6e887d0bd2579e90257f997 hook_json_chars=606 disk_text_chars=271
+    SHRUNK toolCallId=call_15S9nAvnNatkk8UR1DMfDGk4|fc_0302e7bc98f16d19016a996753ecec87d0875d9ae3bf58e0ae hook_json_chars=208282 disk_text_chars=64000
+    SHRUNK toolCallId=call_XPnEQu3PMSctg59DWRmy5N7t|fc_0ed7406f2f5d50c9016a9967823ab887d08ab0b313c4a7821b hook_json_chars=1376 disk_text_chars=540
+    SHRUNK toolCallId=call_pshlzfV8hfBXddxBeK0aeixw|fc_024d1d9bb9448f16016a9967e754f487d09932347e0cc7511f hook_json_chars=452 disk_text_chars=87
+    SHRUNK toolCallId=call_503Xoei8CGnIm7KegUoFkDTU|fc_024d1d9bb9448f16016a9967ee480087d0a1bed336fe54b897 hook_json_chars=1544 disk_text_chars=624
+    SHRUNK toolCallId=call_P88wQiVvTFKNB9NfLHWSQatk|fc_03f040f0f567e6fd016a9968589ef487d0b918abd20d444b14 hook_json_chars=2540 disk_text_chars=1004
+    SHRUNK toolCallId=call_l3UUKnWSAdcyaASXjNwcl9xw|fc_079a51dbb935caa7016a9968a40cac87d0a8cf599426363c21 hook_json_chars=1646 disk_text_chars=97
+  -> A3: PASS  (ROW-8 UNKNOWN: any TRUNCATED-ON-DISK / SHRUNK / watermark row above means the on-disk tool result is NOT the untruncated one)
+
+========================================================================
+A4. Subagent transcript with a parent link
+========================================================================
+  subagent_spawned childSessionKey='agent:main:subagent:ee45a6f8-caa6-47fe-afda-2a06c2d9aa19' resolvedProvider='openai' resolvedModel='openai/gpt-5.6-sol'
+  subagent_announce completion reports in the parent transcript: 1
+  -> A4: FAIL  (0 child session(s))
+
+========================================================================
+A5. Stop, hard kill of the Gateway, resume
+========================================================================
+  plugin.loaded timestamps: [1788438151.877086, 1788438151.8773172, 1788438268.992185, 1788438495.6141639, 1788438495.614472, 1788438811.191915, 1788438811.192108]
+  session_key='agent:main:main' generations=1
+    session_id=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 reason=None previous=None model=openai/gpt-5.6-terra harness='openclaw' events=70
+  session_key='agent:main:parallel-a9' generations=1
+    session_id=3fdb5814-d259-4df3-b77e-c1038028a36e reason=None previous=None model=openai/gpt-5.6-sol harness='openclaw' events=7
+  session_keys before the resume: 1; after: 2; new keys: ['agent:main:parallel-a9']
+    session_id=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 rows before=35 after=70 (APPENDED)
+  hook posts after the restart: 453 ({'/plugin.loaded': 6, '/gateway_start': 2, '/plugin.tick': 353, '/session_start': 2, '/before_agent_run': 16, '/llm_input': 15, '/before_tool_call': 12, '/after_tool_call': 12, '/agent_end': 15, '/llm_output': 14, '/subagent_spawned': 1, '/session_end': 2, '/subagent_ended': 1, '/before_agent_run.decision': 1, '/gateway_stop': 1})
+  -> A5: PASS  (7 gateway starts, 1 main session key(s))
+
+========================================================================
+A6. Model identity per assistant message; the mid-run switch
+========================================================================
+  provider='openai' model='gpt-5.6-sol' responseModel='gpt-5.6-sol' api='openai-chatgpt-responses'  x18
+  provider='openai' model='gpt-5.6-terra' responseModel='gpt-5.6-terra' api='openai-chatgpt-responses'  x6
+  assistant messages missing provider or model: 0
+  model_change sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=1 provider='openai' modelId='gpt-5.6-sol'
+  model_change sid=3fdb5814-d259-4df3-b77e-c1038028a36e seq=1 provider='openai' modelId='gpt-5.6-sol'
+  leg2 llm_output resolvedRef/harnessId: {('openai/gpt-5.6-sol', 'openclaw'): 11, ('openai/gpt-5.6-terra', 'openclaw'): 3}
+  -> A6: PASS  (2 model_change entr(ies), 2 distinct model tuple(s))
+
+========================================================================
+A7. Over-length message blocked by the hook
+========================================================================
+  before_agent_run posts: 16; with promptLength > 4000: 1
+    promptLength=4100 sessionKey='agent:main:main' trigger='user'
+  block decision: enforced=True reason='prompt exceeds 4000 characters' promptLength=4100
+  over-length text present in transcript_events: 0 row(s) []
+  -> A7: PASS  (blocked before the turn started and never persisted)
+
+========================================================================
+A8. The disallowed message is present and classifiable
+========================================================================
+  'also add a README' sid=70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9 seq=57 classified_human=True
+  leg2 before_agent_run posts carrying it: 0
+  -> A8: PASS  (1 occurrence(s))
+
+========================================================================
+A9. Folder scoping: did a parallel session elsewhere produce posts?
+========================================================================
+  ctx.workspaceDir over all hook posts: {'/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z': 63, None: 31}
+  ctx.sessionKey over all hook posts  : {None: 5, 'agent:main:main': 76, 'agent:main:subagent:ee45a6f8-caa6-47fe-afda-2a06c2d9aa19': 7, 'agent:main:parallel-a9': 6}
+  hook posts whose ctx.workspaceDir is NOT the spike workspace: 0
+  EXPECTED RESULT, and the reason this row is different from spikes 4/5: the shim is
+  loaded into the GATEWAY PROCESS, not into a per-folder agent. A second TUI opened
+  against the same Gateway from another directory shares that process, so posts are
+  likely. Folder scoping here means 'the config lives in the workspace', not 'the
+  hook only fires for the workspace'. Record whichever way it lands.
+  -> A9: manual  (0 foreign-workspace post(s))
+
+========================================================================
+A10. Nothing app-wide was modified
+========================================================================
+  A10: PASS - no app-wide OpenClaw file changed
+  full diff: /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/spikes/openclaw/out/run-20260903T122119Z/a10-diff.txt
+  -> A10: PASS  (see a10-diff.txt)
+  Changes the tracker itself makes inside the ISOLATED state dir (expected, listed):
+    openclaw.json                                   written by run.sh (the launch pin)
+    agents/<id>/agent/openclaw-agent.sqlite(+wal/shm) created by the Gateway
+    state/openclaw.sqlite                           created by the Gateway (auth store)
+    logs/*.log                                      Gateway file logs
+
+========================================================================
+A11. Tailing kept up: chain continuity, per-session seq contiguity, no missing rows
+========================================================================
+  leg1 records: 229  chain breaks: 0  file replaced/truncated events: 0
+  transcript rows tailed live: 82; in the final store: 77
+  in the final store but never tailed: 3 [('70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9', 18), ('70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9', 19), ('70e23cc9-a9d3-4dae-85ba-f84bb3dd74a9', 20)]
+  tailed but gone from the final store (rewritten/reclaimed): 8 [('f9aa2955-faa3-4317-bc4a-c1807eec8112', 0), ('f9aa2955-faa3-4317-bc4a-c1807eec8112', 1), ('f9aa2955-faa3-4317-bc4a-c1807eec8112', 2), ('f9aa2955-faa3-4317-bc4a-c1807eec8112', 3), ('f9aa2955-faa3-4317-bc4a-c1807eec8112', 4)]
+  per-session seq gaps in transcript_events: none
+  session_transcript_archives rows (a generation was reclaimed): 1
+  -> A11: FAIL  (0 chain break(s), 3 missing row(s), 0 gapped session(s))
+
+========================================================================
+9. Hot-reload probe (row-8 unknown: does plugins.entries.<id>.enabled=false stop it?)
+========================================================================
+  plugin.tick posts: 353
+  max gap between ticks: 26.29s; gaps > 20s: [(168, 26.29)]
+  openclaw.json unchanged during the run (probe not performed, or reverted)
+  llm_input posts: 15  first=1788438207.850343 last=1788438846.098102
+  Reading: source is ambiguous. dist/config-reload-plan says prefix `plugins` is
+  kind:'hot' with action reload-plugins (no restart), while the config schema text
+  for plugins.entries.*.enabled says '(restart required)'. The run decides it:
+    ticks stop  + llm_input stops -> the module was torn down; hot-disable is real
+    ticks continue + llm_input stops -> hooks unregistered, timer survived
+    both continue -> hot-disable did NOT take effect; a restart is required
+  -> hot-reload probe: manual  (353 tick(s))
+
+done.

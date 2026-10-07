@@ -1,0 +1,39 @@
+### probe-z
+probe        : z
+argv         : /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/uv-bin/hermes -z say the word probe-z and nothing else -m gpt-5.6-sol --provider openai-codex --usage-file /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/spikes/hermes/out/run-20260903T122253Z/probe-z/usage.json
+exit code    : 0
+sessions before: 3
+sessions after : 4
+hook posts     : 8
+
+-- sessions-after (newest 3) --
+20260903_193028_9dd041|cli|/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z|gpt-5.6-sol|2|1|1788438628.46115|1788438630.66084|agent_close
+20260903_192641_c22283|cli|/Users/team/goalcup-spikes/hermes-a9-other|gpt-5.6-sol|2|1|1788438408.32081|1788438458.11977|cli_close
+20260903_192401_b59759|cli|/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z|gpt-5.6-sol|4|2|1788438241.61525|1788438251.10021|agent_close
+
+### probe-oneshot
+probe        : oneshot
+argv         : /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/uv-bin/hermes --oneshot say the word probe-oneshot and nothing else -m gpt-5.6-sol --provider openai-codex
+exit code    : 0
+sessions before: 4
+sessions after : 5
+hook posts     : 8
+
+-- sessions-after (newest 3) --
+20260903_193034_9cb830|cli|/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z|gpt-5.6-sol|2|1|1788438635.09775|1788438637.47276|agent_close
+20260903_193028_9dd041|cli|/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z|gpt-5.6-sol|2|1|1788438628.46115|1788438630.66084|agent_close
+20260903_192641_c22283|cli|/Users/team/goalcup-spikes/hermes-a9-other|gpt-5.6-sol|2|1|1788438408.32081|1788438458.11977|cli_close
+
+### probe-safe-mode
+probe        : safe-mode
+argv         : /Users/team/dev/PROJECTS/AgentCommunity/goal-cup/harnesses/uv-bin/hermes chat --cli --safe-mode -q say the word probe-safe and nothing else -m gpt-5.6-sol --provider openai-codex
+exit code    : 0
+sessions before: 5
+sessions after : 6
+hook posts     : 0
+
+-- sessions-after (newest 3) --
+20260903_193042_50c7d9|cli|/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z|gpt-5.6-sol|2|1|1788438642.70036||
+20260903_193034_9cb830|cli|/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z|gpt-5.6-sol|2|1|1788438635.09775|1788438637.47276|agent_close
+20260903_193028_9dd041|cli|/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z|gpt-5.6-sol|2|1|1788438628.46115|1788438630.66084|agent_close
+

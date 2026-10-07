@@ -1,0 +1,72 @@
+[
+ {
+  "fixture": "hooks-leg2.jsonl",
+  "field": "llm_input.event.systemPrompt",
+  "kind": "replaced by length+sha256 marker",
+  "occurrences": 15,
+  "original_bytes_total": 577764
+ },
+ {
+  "fixture": "hooks-leg2.jsonl",
+  "field": "llm_input.event.historyMessages",
+  "kind": "replaced by one length+sha256 marker",
+  "occurrences": 12,
+  "original_bytes_total": 886922
+ },
+ {
+  "fixture": "hooks-leg2.jsonl",
+  "field": "llm_input.event.tools",
+  "kind": "replaced by one length+sha256 marker",
+  "occurrences": 15,
+  "original_bytes_total": 0
+ },
+ {
+  "fixture": "hooks-leg2.jsonl",
+  "field": "after_tool_call.event.result.details.aggregated",
+  "kind": "replaced by length+sha256 marker",
+  "occurrences": 1,
+  "original_bytes_total": 199999
+ },
+ {
+  "fixture": "hooks-leg2.jsonl",
+  "field": "/plugin.tick posts",
+  "kind": "dropped, first and last kept",
+  "occurrences": 351,
+  "original_bytes_total": 0
+ },
+ {
+  "fixture": "hook-after-tool-call-truncation.json",
+  "field": "result.details.aggregated",
+  "kind": "replaced by length+sha256 marker",
+  "occurrences": 1,
+  "original_bytes_total": 199999
+ },
+ {
+  "fixture": "leg1-capture.jsonl",
+  "field": "src=runtime records",
+  "kind": "dropped (trajectory ledger, 127 rows, 656 KB)",
+  "occurrences": 127,
+  "original_bytes_total": 0
+ },
+ {
+  "fixture": "leg1-capture.jsonl",
+  "field": "spill .b64 (subagent archive)",
+  "kind": "replaced by marker; decompressed copy is subagent-archive.jsonl",
+  "occurrences": 1,
+  "original_bytes_total": 2180
+ },
+ {
+  "fixture": "hooks-leg2.jsonl",
+  "field": "before_agent_run.event.messages + .systemPrompt",
+  "kind": "replaced by length+sha256 marker",
+  "occurrences": 29,
+  "original_bytes_total": 1613291
+ },
+ {
+  "fixture": "hooks-leg2.jsonl",
+  "field": "agent_end.event.messages",
+  "kind": "replaced by length+sha256 marker",
+  "occurrences": 15,
+  "original_bytes_total": 1392111
+ }
+]

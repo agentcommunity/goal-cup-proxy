@@ -1,0 +1,74 @@
+[
+ {
+  "kind": "third_party_skill_body",
+  "file": "hooks.jsonl",
+  "chars": 3866,
+  "sha256_8": "bbdbd1ec"
+ },
+ {
+  "kind": "third_party_skill_body",
+  "file": "hooks.jsonl",
+  "chars": 5405,
+  "sha256_8": "316e2938"
+ },
+ {
+  "kind": "system_prompt_tail_with_host_skill",
+  "file": "leg1-store-blobs-main.jsonl",
+  "chars": 30724,
+  "sha256_8": "52e31cff"
+ },
+ {
+  "kind": "third_party_skill_body",
+  "file": "leg1-store-blobs-main.jsonl",
+  "chars": 3929,
+  "sha256_8": "37cf4ccd"
+ },
+ {
+  "kind": "third_party_skill_body",
+  "file": "leg1-store-blobs-main.jsonl",
+  "chars": 3929,
+  "sha256_8": "37cf4ccd"
+ },
+ {
+  "kind": "third_party_skill_body",
+  "file": "leg1-store-blobs-main.jsonl",
+  "chars": 3866,
+  "sha256_8": "bbdbd1ec"
+ },
+ {
+  "kind": "third_party_skill_body",
+  "file": "leg1-store-blobs-main.jsonl",
+  "chars": 5482,
+  "sha256_8": "5a4425b5"
+ },
+ {
+  "kind": "third_party_skill_body",
+  "file": "leg1-store-blobs-main.jsonl",
+  "chars": 5482,
+  "sha256_8": "5a4425b5"
+ },
+ {
+  "kind": "third_party_skill_body",
+  "file": "leg1-store-blobs-main.jsonl",
+  "chars": 5405,
+  "sha256_8": "316e2938"
+ },
+ {
+  "kind": "blob_encryption_key",
+  "file": "leg1-store-meta.jsonl",
+  "chars": 64,
+  "sha256_8": "93ba2594"
+ },
+ {
+  "kind": "blob_encryption_key",
+  "file": "leg1-store-meta.jsonl",
+  "chars": 64,
+  "sha256_8": "cca8e8c6"
+ },
+ {
+  "kind": "blob_encryption_key",
+  "file": "leg1-store-meta.jsonl",
+  "chars": 64,
+  "sha256_8": "b800915d"
+ }
+]

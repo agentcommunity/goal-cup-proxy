@@ -1,0 +1,49 @@
+# ~/.codex/config.toml: witness taken 2026-09-03T08:36:41Z (before the human ran the
+# standalone Codex CLI 0.153.0 in the workspace and trusted the 12 hooks with /hooks)
+# vs the same file after. Paths rewritten to $HOME. sha256 cfb6a96b… -> 534befa1….
+# The write is append-only, made by Codex's own trust UI, and contains no secret:
+# every added value is a sha256 of a hook definition. The full file is NOT committed.
+--- spikes/codex-app/out/run-20260903T081322Z/exception/config.toml.witness-before-cli-trust.20260903T083641Z	2026-09-03 15:36:41
++++ $HOME/.codex/config.toml	2026-09-03 15:37:44
+@@ -170,3 +170,41 @@
+ 
+ [shell_environment_policy.set]
+ NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "323bc3e687e17d7e377238d9f4c69111c4d0e6219103b6316d8c52082489533b"
++
++[hooks.state]
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:pre_tool_use:0:0"]
++trusted_hash = "sha256:09f153e63e029cb90b1cd1a79ca13384d9e1ed89192ea22d21188722f919ef3d"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:permission_request:0:0"]
++trusted_hash = "sha256:3ab0cc11870d5ebd6c8d6d2ec713d53715b309a8ce4f6e82063e9630cd4e5276"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:post_tool_use:0:0"]
++trusted_hash = "sha256:0bc3d81ed2cb90a2056b9ae85c755d8b734713193cefe3d703874b0f390be2f6"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:pre_compact:0:0"]
++trusted_hash = "sha256:bbadc2c2fbdcc45e9d1d0c03bbe1eda46735b29c7f971615433457c94a5677cf"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:post_compact:0:0"]
++trusted_hash = "sha256:3d7467810101a2132b8a895890aacd62b8f1d49c87fe39b708037c1756af3af3"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:session_start:0:0"]
++trusted_hash = "sha256:35a528c703985280923c4dfc613b8edb1385132716b7d2005864258dca96cf53"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:session_end:0:0"]
++trusted_hash = "sha256:f9e46bd9d58ae4acf317c4ed88b2b9829cb682f2afa35a4351bec828b441a436"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:user_prompt_submit:0:0"]
++trusted_hash = "sha256:272e1edb1725b580ba9f17afc3227e6db58f2e2c3790e4711aa99f8e7365de96"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:subagent_start:0:0"]
++trusted_hash = "sha256:27d098b62ae1e69f30787af92e16ef2f5b44a13dd03c8087299fc7a04300ab53"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:subagent_stop:0:0"]
++trusted_hash = "sha256:a578425c0eb173a1f77f41620cf1b510d0dcf250aca96bc8ccd7a9e5c58a1373"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:stop:0:0"]
++trusted_hash = "sha256:15dd9a6ed9f8d03b3b9d264aceda84112881f89b653d14f5ef6a2bd501bd9302"
++
++[hooks.state."$HOME/goalcup-spikes/ws-codex-app-20260903T081322Z/.codex/hooks.json:interrupt:0:0"]
++trusted_hash = "sha256:9958148e13103b53b30515e7bd0e7ee8e47b2ff6bff52271bf19bacbb0ad76a3"

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for the assisted macOS launchd USER agent that supervises `goalcup-daemon`.
+
+  This file is never installed as-is: `install-assisted.sh` substitutes the six
+  __GOALCUP_*__ placeholders below for the chosen prefix and label and writes the result to
+  `~/Library/LaunchAgents/<label>.plist`, which is what makes it a *user* agent (launchd
+  bootstraps it into `gui/<uid>`, with no root privilege and no system-wide LaunchDaemon).
+
+  This is supervision, not installation of a service in the V1.1 sense: KeepAlive restarts
+  the process only if it crashes (`Crashed`), so a daemon that refuses its configuration
+  (exit 1) stays down instead of restarting forever, and at least ThrottleInterval (10)
+  seconds pass between launches. RunAtLoad starts it once the agent is loaded, which is at
+  every login until the agent is uninstalled. Nothing here signs, notarizes, or elevates
+  anything. Uninstalling removes this file and unloads the agent; it never touches the
+  artifact tree the daemon wrote to.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>__GOALCUP_LABEL__</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__GOALCUP_DAEMON_BIN__</string>
+		<string>--config</string>
+		<string>__GOALCUP_CONFIG_FILE__</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>Crashed</key>
+		<true/>
+	</dict>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>__GOALCUP_LOG_DIR__/daemon.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__GOALCUP_LOG_DIR__/daemon.err.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>GOALCUP_CONNECTORS_DIR</key>
+		<string>__GOALCUP_CONNECTORS_DIR__</string>
+	</dict>
+</dict>
+</plist>

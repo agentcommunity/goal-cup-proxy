@@ -1,0 +1,15 @@
+{
+  "entry_id": "entry-0007",
+  "connector_id": "claude-code",
+  "run_public_key": "fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618",
+  "workspace": "/Users/p/goalcup/entry-0007",
+  "artifact_root": "/Users/p/.config/goalcup/artifacts/entry-0007",
+  "harness_home": "/Users/p/goalcup/entry-0007/.claude",
+  "session_id": "session-0007",
+  "last_pid": 4242,
+  "workspace_relative": [
+    ".claude/settings.json"
+  ],
+  "status_url": "http://127.0.0.1:8765/v0/ui?entry=entry-0007",
+  "created_at": "2026-09-05T00:00:00Z"
+}

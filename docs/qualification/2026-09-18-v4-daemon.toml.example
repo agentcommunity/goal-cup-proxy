@@ -1,0 +1,33 @@
+# Every path below is a placeholder: replace /Users/you with your own home directory.
+artifact_root = "/Users/you/goalcup-v4/artifacts"
+connectors_dir = "/Users/you/src/goal-cup/connectors"
+config_dir = "/Users/you/goalcup-v4/cfg"
+workspace_parent = "/Users/you/goalcup-v4/workspaces"
+control_addr = "127.0.0.1:7797"
+upload_url = "http://127.0.0.1:7799"
+server_public_key = "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
+
+[event]
+t0 = "2026-09-17T00:00:00Z"
+start_window_closes_at = "2026-09-25T00:00:00Z"
+rules_version = "rules-2026-09-17"
+
+[receipt_binding]
+mode = "workspace_submission"
+questionnaire_version = "goal-cup-2026-v1"
+submission_profile = "workspace_snapshot_v1"
+
+[receipt_binding.limit_profile]
+id = "goal-cup-v1-matrix"
+
+[receipt_binding.effective_limits]
+object_count = 4096
+total_bytes = 1073741824
+pre_cutoff_drain = 5000
+process_walk = 64
+
+[receipt_binding.capture_limits]
+version = 1
+namespace_nodes = 8192
+inventory_bytes = 8388608
+manifest_bytes = 8388608

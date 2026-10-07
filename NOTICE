@@ -1,0 +1,15 @@
+Goal Cup
+Copyright 2026 AgentCommunity
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party material
+
+- Rust dependencies are fetched from crates.io under their own licences, all permissive;
+  Cargo.lock lists the exact versions. Notices that a binary distribution must carry are not
+  yet collected: generate them before the first binary release.
+- The directories spikes/*/fixtures hold redacted captures of third-party coding-agent tools
+  (Claude Code, Codex, Cursor, Hermes Agent, OpenCode, OpenClaw and others) made to test the
+  recorder. Vendor system prompts and tool descriptions are trimmed to a short prefix with the
+  original length and SHA-256 (see each fixtures README). Names and any remaining quoted text
+  belong to their owners and stay under their owners' terms.

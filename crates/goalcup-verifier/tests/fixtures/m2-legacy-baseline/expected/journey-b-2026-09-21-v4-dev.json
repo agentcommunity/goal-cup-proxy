@@ -1,0 +1,381 @@
+{
+  "case": "journey-b-2026-09-21-v4-dev",
+  "excluded_verdict_fields": [
+    "verifier_version"
+  ],
+  "inputs": {
+    ".submission-capture-v1/capture.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".submission-capture-v1/copy.json": "fddb41363abcb7a5ec35e3abadcd300a9ceabfbeba826611ae0aea0b7e5f2f1e",
+    ".submission-capture-v1/inventory.json": "0bc7e713a9f8dd6739ece39e6f20fda74d7f40b4256fdd558d111c7673ad89ff",
+    ".submission-capture-v1/manifest-planned.json": "c667503368fad831c7d6862f667db735ee9cb1260ac2bb9e4558238957b2b056",
+    ".submission-capture-v1/objects-verified.json": "1d6f1a510e6ed639df4c4e16c977ae2a1857818caa434a55dd4dac67d53cee2c",
+    ".submission-capture-v1/owner.json": "ef8c936e815f0469dacb745c2086ea2b523dfd35d63c9ec7322c39e3854cbe02",
+    ".submission-capture-v1/promoted.json": "d3cda92aa586c8f91aa8b7876eb7390e65011be794e142bb3e78a050837d1ffe",
+    ".submission-capture-v1/resolution.json": "692247033e18bcee4ee0707bbcb21b46af2c5c978434809b834e2bad1b4247b9",
+    ".submission-capture-v1/stage.json": "94b5535b9d6082f0f7fc5b589073d30c6c94fcd33056bbc9a2835761a35fa5f6",
+    ".submission-capture-v1/staged-verified.json": "6ea50b57e4989e7fafdc40e7e35f11334872d8d43364e963d25a9c61ac6086fc",
+    "acks.jsonl": "fdd16d846fe3918fedac50c410031fda1f12fb6a58fc81abf080991719f26cfd",
+    "baseline.json": "b20bd2107940992969f86ee3c8e167258ab4b334019c5249233af54483e35688",
+    "chain.jsonl": "e31c39402afa7bd4c4ddb603b37c1ebe38cd8010e47246edab258c974d28ce03",
+    "manifest.toml": "ae9ea6e7cc929b63374536c89f79962428df8d52b2a7d11a6996f9dad9479027",
+    "receipt.json": "b99e908a262587053e23c2b2966e64d8d7a06f6a22c2e1c9ab5112d892289784",
+    "submission/manifest.json": "3a3519fb9893d7843859bf8bc1bca721b21cd8b907ffdff6cd423c7c156daaee",
+    "submission/objects/sha256/5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+    "trace.toml": "abc1eddec2c25225afb913843223f4b74ba3b39f4525ce660c6310c396054206"
+  },
+  "protocol_versions": [
+    4
+  ],
+  "trust_fixture": "goalcup-v0.1.0-pins",
+  "verdict": {
+    "carried_settings": [
+      {
+        "connector": "codex-cli",
+        "files": [
+          {
+            "bytes": 4197,
+            "name": "auth.json"
+          }
+        ],
+        "files_kept": [],
+        "files_missing": [],
+        "from": "{home}/.codex",
+        "handoff_generation": 1,
+        "handoff_request_digest": "aa4683ef516fb582de23690636414050fcb61ac6011d07676e3da876a7e83726",
+        "keys": [],
+        "keys_unchanged": [],
+        "written": []
+      },
+      {
+        "connector": "codex-cli",
+        "files": [],
+        "files_kept": [
+          "auth.json"
+        ],
+        "files_missing": [],
+        "from": "{home}/.codex",
+        "handoff_generation": 2,
+        "handoff_request_digest": "ae7f795dce2cfafbda09d3ddb8ee2c39330c765c99288cd1a984f3c5fafd61f0",
+        "keys": [],
+        "keys_unchanged": [],
+        "written": []
+      }
+    ],
+    "checks": [
+      {
+        "findings": [
+          {
+            "code": "goal_recovered",
+            "evidence": [
+              {
+                "note": "leg-1 record for the goal",
+                "seq": 12,
+                "sha256": "ce43da2ea466716f56662066ea45c1ef01f668d3ed698b89ee56e9ed21af2cf2",
+                "store": "rollout"
+              }
+            ],
+            "message": "goal recovered, 1156 characters (unwitnessed: no leg-2 post corroborates it): <environment_context>\n  <cwd>/Users/team/dev/goalcup-v1-2026-09-21/prefix/var/wo",
+            "severity": "pass"
+          }
+        ],
+        "id": "V1",
+        "title": "original prompt recovered and within 4,000 characters",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "not_keep_going",
+            "evidence": [
+              {
+                "note": "leg-2 post index 1",
+                "seq": 17,
+                "sha256": "ffaaf5422b907a0c9902bd7c3eb5a9ae4422523d8e6272e7bf93d34d41c6acb7",
+                "store": "rollout"
+              }
+            ],
+            "message": "message 1 is `Create hello.txt containing the word hello, then run `wc -c hello.txt` and tell `, not `keep going`",
+            "severity": "fail"
+          }
+        ],
+        "id": "V2",
+        "title": "every human message after the goal equals `keep going`",
+        "verdict": "fail"
+      },
+      {
+        "findings": [
+          {
+            "code": "leg1_without_leg2_post",
+            "evidence": [
+              {
+                "note": "no leg-2 post with this pair key",
+                "seq": 12,
+                "store": "rollout"
+              }
+            ],
+            "message": "leg-1 user-slot record `<environment_context>\n  <cwd>/Users/team/dev/goalcup-v1-2026-09-21/prefix/var/wo` has no corroborating post (not counted as a human message; V2 decides its severity)",
+            "severity": "flag"
+          },
+          {
+            "code": "cross_leg_identifiers",
+            "message": "5 leg-1 tool id(s), 5 leg-2 tool id(s), 0 shared; the join declared by the manifest is `turn_id+order`",
+            "severity": "pass"
+          }
+        ],
+        "id": "V3",
+        "title": "the two legs agree on every human message",
+        "verdict": "flag"
+      },
+      {
+        "findings": [
+          {
+            "code": "one_tracked_session",
+            "message": "one tracked session: 01a0c3e5-2a75-7a83-8fbd-6f452c5c435c",
+            "severity": "pass"
+          },
+          {
+            "code": "resume",
+            "message": "1 resume(s) recorded: resume",
+            "severity": "pass"
+          }
+        ],
+        "id": "V4",
+        "title": "session continuity: fresh start, resumes, no second root, no foreign session",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "single_model",
+            "message": "one model throughout: gpt-5.6-luna",
+            "severity": "pass"
+          },
+          {
+            "code": "no_version_drift",
+            "message": "no version change recorded; harness reported as 0.153.0 against tested range `=0.153.0`",
+            "severity": "pass"
+          }
+        ],
+        "id": "V5",
+        "title": "model identity and changes reported",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "no_harness_authored_user_slot",
+            "message": "no harness-authored user-slot content in this trace",
+            "severity": "pass"
+          }
+        ],
+        "id": "V6",
+        "title": "harness-authored user-slot content is classified, not counted",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "normalisation_applied",
+            "message": "exactly one trailing newline was stripped; comparison uses field `prompt`",
+            "severity": "pass"
+          }
+        ],
+        "id": "V7",
+        "title": "exactly one trailing newline stripped before comparison",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "join_key_agrees",
+            "message": "manifest and parser agree on the join key: turn_id+order",
+            "severity": "pass"
+          }
+        ],
+        "id": "V8",
+        "title": "request and response pairing, and the declared join key",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "no_config_deviation",
+            "message": "no tracker config file deviated and no store was truncated or replaced during the capture",
+            "severity": "pass"
+          }
+        ],
+        "id": "V9",
+        "title": "hook-config change events reconciled",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "partitioned",
+            "message": "every record satisfies its partition key",
+            "severity": "pass"
+          }
+        ],
+        "id": "V10",
+        "title": "no record fails its store's partition key",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "token_summary",
+            "message": "gpt-5.6-luna: prompt=145335 completion=918 cached=120064",
+            "severity": "pass"
+          },
+          {
+            "code": "stripped",
+            "message": "fields dropped before publication: rate_limits (policy: rate_limits, plan_type, credit, quota, cost)",
+            "severity": "pass"
+          }
+        ],
+        "id": "V11",
+        "title": "derived token summary with plan, credit and billing stripped",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "anchors_checked",
+            "message": "10 acknowledgement(s) reconciled, 10 verified, 0 mismatches; highest anchored sequence 105",
+            "severity": "pass"
+          },
+          {
+            "code": "anchor_timeline",
+            "message": "the server saw this chain 10 time(s) it can be held to: first at 2026-09-21T12:16:49Z, last at 2026-09-21T12:18:45Z; the longest span with no verified acknowledgement is 28s, of which 0s is after the last one and before the run ended",
+            "severity": "pass"
+          }
+        ],
+        "id": "V12",
+        "title": "server acknowledgements reconciled against the chain",
+        "verdict": "pass"
+      },
+      {
+        "findings": [
+          {
+            "code": "placeholder_server_key",
+            "evidence": [
+              {
+                "note": "key source: pinned, and the key is the M1 placeholder",
+                "store": "server key"
+              }
+            ],
+            "message": "the key that verified this trace's server signatures is the M1 placeholder anchor, whose private seed is published in this repository so the fixtures can sign with it. Anybody can mint a receipt or an acknowledgement under it, so a `key_source` of `pinned` says only that the signature matched a key everyone holds. Replacing the placeholder with the real organiser key is the release gate before any entry is judged. Reported at Pass because this run was made with `--dev`, where the placeholder is the expected anchor — the sentence stays in the document so a reader can tell this verdict from a strict one",
+            "severity": "pass"
+          },
+          {
+            "code": "pre_start_records",
+            "evidence": [
+              {
+                "note": "recorded 2026-09-21T12:16:37Z, before the start",
+                "seq": 8,
+                "store": "rollout"
+              },
+              {
+                "note": "recorded 2026-09-21T12:16:38Z, before the start",
+                "seq": 16,
+                "store": "hooks"
+              }
+            ],
+            "message": "9 record(s) and post(s) sit in the 300s arming window below `started_at` (2026-09-21T12:16:39Z). This is what a run arming itself looks like: the connector's arming signal is the harness's own first output, so the records that CAUSE the start receipt to be requested are chained before the request goes out. They carry no work — the baseline the receipt witnessed is seq 0, below all of them — so they are counted here rather than failed",
+            "severity": "pass"
+          },
+          {
+            "code": "binding_checked",
+            "message": "the receipt binds this trace's entry, connector, workspace, session and connector manifest to a start the participant did not sign, and dates the run [2026-09-21T12:16:39Z, 2026-09-21T13:16:39Z] against the declared deadline",
+            "severity": "pass"
+          }
+        ],
+        "id": "V13",
+        "title": "the trace is bound to a server-signed start and closes at the run's deadline",
+        "verdict": "pass"
+      }
+    ],
+    "connector_id": "codex-cli",
+    "connector_manifest_sha256": "ae9ea6e7cc929b63374536c89f79962428df8d52b2a7d11a6996f9dad9479027",
+    "dev": true,
+    "entry_id": "eb037918c8d3994d4",
+    "gaps": [],
+    "harness_version": "0.153.0",
+    "human_messages": [
+      {
+        "index": 1,
+        "leg1_seq": 17,
+        "leg1_sha256": "ffaaf5422b907a0c9902bd7c3eb5a9ae4422523d8e6272e7bf93d34d41c6acb7",
+        "leg1_store": "rollout",
+        "leg2_index": 1,
+        "text": "Create hello.txt containing the word hello, then run `wc -c hello.txt` and tell me the count."
+      },
+      {
+        "index": 2,
+        "leg1_seq": 93,
+        "leg1_sha256": "aa6f0580e4a1f7a3754f784a5fdf5659b121dc9410b9a883ce70aa8ad5027879",
+        "leg1_store": "rollout",
+        "leg2_index": 15,
+        "text": "keep going"
+      }
+    ],
+    "key_source": "pinned",
+    "manifest_pin": "pinned",
+    "overall": "fail",
+    "parser_census": {
+      "token_usage_record": 7,
+      "world_state": 1
+    },
+    "review_queue": [
+      {
+        "code": "not_keep_going",
+        "evidence": [
+          {
+            "note": "leg-2 post index 1",
+            "seq": 17,
+            "sha256": "ffaaf5422b907a0c9902bd7c3eb5a9ae4422523d8e6272e7bf93d34d41c6acb7",
+            "store": "rollout"
+          }
+        ],
+        "message": "message 1 is `Create hello.txt containing the word hello, then run `wc -c hello.txt` and tell `, not `keep going`",
+        "severity": "fail"
+      },
+      {
+        "code": "leg1_without_leg2_post",
+        "evidence": [
+          {
+            "note": "no leg-2 post with this pair key",
+            "seq": 12,
+            "store": "rollout"
+          }
+        ],
+        "message": "leg-1 user-slot record `<environment_context>\n  <cwd>/Users/team/dev/goalcup-v1-2026-09-21/prefix/var/wo` has no corroborating post (not counted as a human message; V2 decides its severity)",
+        "severity": "flag"
+      }
+    ],
+    "schema_version": "ATIF-v1.8",
+    "seal_attribution": [
+      {
+        "attribution": {
+          "call_id": "call_1y3ytZoMVr0tSImciSBy4lnV",
+          "kind": "traced",
+          "tool": "exec"
+        },
+        "path": "hello.txt"
+      }
+    ],
+    "tokens": {
+      "by_model": [
+        {
+          "cached": 120064,
+          "completion": 918,
+          "model": "gpt-5.6-luna",
+          "prompt": 145335
+        }
+      ],
+      "stripped": [
+        "rate_limits"
+      ]
+    }
+  }
+}

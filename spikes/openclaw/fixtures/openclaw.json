@@ -1,0 +1,87 @@
+// goal-cup capture spike 8 -- OpenClaw launch pin. TEMPLATE.
+//
+// openclaw.json is parsed as JSON5 (docs/gateway/configuration.md: "OpenClaw reads an
+// optional JSON5 config"), so these comments are legal and survive into the rendered file.
+//
+// run.sh substitutes /Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z and 18789 and writes the result to
+//   $OPENCLAW_STATE_DIR/openclaw.json  ==  harnesses/home/openclaw/openclaw.json
+// It is NEVER written to ~/.openclaw. OPENCLAW_STATE_DIR is the documented state-dir
+// override (src/config/paths.ts resolveStateDir) and the config path defaults to
+// <stateDir>/openclaw.json (resolveConfigPathCandidate), so this whole file is
+// state-dir scoped -- a launch pin, not app-wide config. run.sh also exports
+// OPENCLAW_CONFIG_PATH explicitly so the resolution cannot drift.
+//
+// The human adds exactly one thing to this file: the provider credential block
+// (PROTOCOL.md step 0). Everything else here is written by the tracker.
+{
+  gateway: {
+    mode: "local", // required, else "Gateway start blocked: set gateway.mode=local"
+    bind: "loopback", // never leaves the box
+    port: 18789, // research file: default Gateway WS/HTTP port 18789
+    auth: { mode: "token" }, // token supplied via OPENCLAW_GATEWAY_TOKEN / --token
+    controlUi: { enabled: false }, // one input surface only: the TUI
+  },
+
+  agents: {
+    defaults: {
+      // The Gateway loads workspace-scoped plugins and hooks from its STARTUP workspace,
+      // not from the CLI's cwd, so this must point at the spike workspace.
+      workspace: "/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z",
+      // ---- PROTOCOL.md step 0: the provider block, added by the human ----------------
+      // Subscription auth: one OpenAI OAuth (ChatGPT) profile in the isolated auth store
+      // (<stateDir>/state/openclaw.sqlite). No API key, no base URL, no proxy.
+      //
+      // agentRuntime.id: "openclaw" is REQUIRED, not cosmetic. docs/providers/openai.md
+      // "Implicit agent runtime": with runtime policy unset/auto an exact official ChatGPT
+      // HTTPS route may implicitly select the bundled Codex app-server runtime, and
+      // docs/harness-research/openclaw.md lists "Codex/Claude-CLI runtimes inside OpenClaw"
+      // as UNOBSERVABLE (OpenClaw keeps only a transcript mirror). Pinning "openclaw" keeps
+      // a Codex-eligible route on the native embedded runtime, which is the one this spike
+      // measures. Route summary row: `openai/gpt-5.6-sol` + agentRuntime.id "openclaw" ->
+      // "OpenClaw embedded runtime, internal Codex-auth transport | Selected openai OAuth profile".
+      model: { primary: "openai/gpt-5.6-sol" },
+      models: {
+        "openai/gpt-5.6-sol":   { agentRuntime: { id: "openclaw" } },
+        "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } },
+        "openai/gpt-5.5":       { agentRuntime: { id: "openclaw" } },
+      },
+    },
+  },
+
+  plugins: {
+    enabled: true,
+    load: {
+      // Highest discovery precedence ("config-selected"), so the copy that loads is
+      // unambiguous. Without this the same directory would still be found through the
+      // workspace root <workspace>/.openclaw/extensions -- that is the row-8 question
+      // and PROTOCOL.md step 10 re-runs the arm without this pin to answer it.
+      paths: ["/Users/team/goalcup-spikes/ws-openclaw-20260903T122119Z/.openclaw/extensions/goalcup-capture"],
+    },
+    entries: {
+      "goalcup-capture": {
+        enabled: true,
+        hooks: {
+          // Non-bundled plugins need this for llm_input / llm_output / before_agent_run /
+          // agent_end. Without it the shim loads and stays silent.
+          allowConversationAccess: true,
+          allowPromptInjection: false, // the shim must never mutate a prompt
+          timeoutMs: 8000,
+        },
+      },
+    },
+  },
+
+  hooks: {
+    enabled: false, // HTTP hook ingress (POST /hooks/agent) is an injection surface
+    internal: { enabled: false }, // internal HOOK.md hooks are a different system; unused here
+  },
+
+  session: {
+    maintenance: {
+      mode: "warn", // never delete transcript rows during a run
+      maxDiskBytes: false,
+    },
+  },
+
+  logging: { level: "info" },
+}

@@ -1,0 +1,2784 @@
+{
+ "deliverables": {
+  "limitations_file": "LIMITATIONS.md",
+  "limitations_min_bytes": 200,
+  "tests_command": [
+   "python3",
+   "-m",
+   "unittest",
+   "discover",
+   "-s",
+   "tests"
+  ],
+  "tests_min": 3
+ },
+ "export": {
+  "canonical_sha256": "9f342d7e84f2192a76e1faf7bc4f94d13169544dca61ee668657799187e88828",
+  "count": 216,
+  "rows": [
+   {
+    "id": "DOC-0001",
+    "source": "articles/a-001.md:1",
+    "title": "Zeasdrous Starsheanpea Vesethferk Pigith Deaskor",
+    "tokens": 170
+   },
+   {
+    "id": "DOC-0002",
+    "source": "articles/a-002.md:1",
+    "title": "Moskakles Trontrairdar Thoththul Gonthudourk Fustoun",
+    "tokens": 209
+   },
+   {
+    "id": "DOC-0003",
+    "source": "articles/a-003.md:1",
+    "title": "Naisneark Raimdork Kilnibal Thulvo",
+    "tokens": 65
+   },
+   {
+    "id": "DOC-0004",
+    "source": "articles/a-004.md:1",
+    "title": "Trainbri Fendnaim Brorveal",
+    "tokens": 230
+   },
+   {
+    "id": "DOC-0005",
+    "source": "articles/a-005.md:1",
+    "title": "Shemraimrend Mourvoun Tailfo",
+    "tokens": 152
+   },
+   {
+    "id": "DOC-0006",
+    "source": "articles/a-006.md:1",
+    "title": "Dramsal Dorktral Daltru Shimpea Nunddrend Noushourk",
+    "tokens": 53
+   },
+   {
+    "id": "DOC-0007",
+    "source": "articles/a-007.md:1",
+    "title": "Thaindnu Goumpamain Toundvu Pelstomo Stothtaind Lilgundrim",
+    "tokens": 105
+   },
+   {
+    "id": "DOC-0008",
+    "source": "articles/a-008.md:1",
+    "title": "Vaisneth Culaind Tairfas Rofai Treanoth",
+    "tokens": 88
+   },
+   {
+    "id": "DOC-0009",
+    "source": "articles/a-009.md:1",
+    "title": "Fulmound Vathmeark Bairsti Dresthair Kilnibal Taiser",
+    "tokens": 200
+   },
+   {
+    "id": "DOC-0010",
+    "source": "articles/a-010.md:1",
+    "title": "Kolbaim Somumtand Disur",
+    "tokens": 159
+   },
+   {
+    "id": "DOC-0011",
+    "source": "articles/a-011.md:1",
+    "title": "Painrur Bairkurk Zothvurk Zeamtren Purkthea Drethmous",
+    "tokens": 189
+   },
+   {
+    "id": "DOC-0012",
+    "source": "articles/a-012.md:1",
+    "title": "Kezealpean Trerbrourk Sutis Nealthambark",
+    "tokens": 100
+   },
+   {
+    "id": "DOC-0013",
+    "source": "articles/a-013.md:1",
+    "title": "Gormeathbair Deathdroum Zerkeacen",
+    "tokens": 145
+   },
+   {
+    "id": "DOC-0014",
+    "source": "articles/a-014.md:1",
+    "title": "Noumgoufouth Thufeda Traispo",
+    "tokens": 184
+   },
+   {
+    "id": "DOC-0015",
+    "source": "articles/a-015.md:1",
+    "title": "Fethstark Pergomcith Baibearrun Koltreand Zothgoun Shimpea",
+    "tokens": 98
+   },
+   {
+    "id": "DOC-0016",
+    "source": "articles/a-016.md:1",
+    "title": "Pelstomo Seadoursith Zethurkkland",
+    "tokens": 224
+   },
+   {
+    "id": "DOC-0017",
+    "source": "articles/a-017.md:1",
+    "title": "Zourkcea Ritrour Vesethferk Nogurksun Voundbarkrel Tairfas",
+    "tokens": 108
+   },
+   {
+    "id": "DOC-0018",
+    "source": "articles/a-018.md:1",
+    "title": "Purkthea Cothrurzind Brosvand Cidrind Maisboul Vesethferk",
+    "tokens": 83
+   },
+   {
+    "id": "DOC-0019",
+    "source": "articles/a-019.md:1",
+    "title": "Shondtrudar Merksteath Cailanzork",
+    "tokens": 159
+   },
+   {
+    "id": "DOC-0020",
+    "source": "articles/a-020.md:1",
+    "title": "Lantern Bethbain Zothdreas Porktethbas Ralin Gaszen Pelstomo",
+    "tokens": 192
+   },
+   {
+    "id": "DOC-0021",
+    "source": "articles/a-021.md:1",
+    "title": "Kaiskletaind Trerbrourk Gemtul Druthrark Voundbarkrel",
+    "tokens": 36
+   },
+   {
+    "id": "DOC-0022",
+    "source": "articles/a-022.md:1",
+    "title": "Shumzaim Tremklal Taiser Fustoun",
+    "tokens": 114
+   },
+   {
+    "id": "DOC-0023",
+    "source": "articles/a-023.md:1",
+    "title": "Fondir Sirros Drindreshes Shaithbrisro Nadeamvoth Pandren",
+    "tokens": 158
+   },
+   {
+    "id": "DOC-0024",
+    "source": "articles/a-024.md:1",
+    "title": "Pithbrazer Bethdral Dorkstalzim Zeamtren Thaindcourk",
+    "tokens": 118
+   },
+   {
+    "id": "DOC-0025",
+    "source": "articles/a-025.md:1",
+    "title": "Culaind Turkrousvoul Teardreabel",
+    "tokens": 60
+   },
+   {
+    "id": "DOC-0026",
+    "source": "articles/a-026.md:1",
+    "title": "Zousrear Peboupend Lendtiltail Teardreabel Tashounketh",
+    "tokens": 116
+   },
+   {
+    "id": "DOC-0027",
+    "source": "articles/a-027.md:1",
+    "title": "Nondgimkaim Klalnai Nusposkend Treamlous Gailves",
+    "tokens": 58
+   },
+   {
+    "id": "DOC-0028",
+    "source": "articles/a-028.md:1",
+    "title": "Tuzus Stothtaind Thuklainlund Pithbrazer Brosvand",
+    "tokens": 119
+   },
+   {
+    "id": "DOC-0029",
+    "source": "articles/a-029.md:1",
+    "title": "Moundraszail Zathkim Kousnushourk Maithfeand Bendvozu",
+    "tokens": 200
+   },
+   {
+    "id": "DOC-0030",
+    "source": "articles/a-030.md:1",
+    "title": "Brodunnul Lurkrinddas Ralin Pemmendcos Daltru",
+    "tokens": 33
+   },
+   {
+    "id": "DOC-0031",
+    "source": "articles/a-031.md:1",
+    "title": "Steklon Ceandner Melstesmour Zethurkkland Bothfin Bairmurk",
+    "tokens": 216
+   },
+   {
+    "id": "DOC-0032",
+    "source": "articles/a-032.md:1",
+    "title": "Traithgeal Steathshuva Culaind",
+    "tokens": 129
+   },
+   {
+    "id": "DOC-0033",
+    "source": "articles/a-033.md:1",
+    "title": "Stairpobrun Noushourk Sherkmoth",
+    "tokens": 172
+   },
+   {
+    "id": "DOC-0034",
+    "source": "articles/a-034.md:1",
+    "title": "Markloum Shimpea Gundfarstark",
+    "tokens": 244
+   },
+   {
+    "id": "DOC-0035",
+    "source": "articles/a-035.md:1",
+    "title": "Rothbairnel Moskakles Culaind Gemtul Pomthais Brunshirk",
+    "tokens": 183
+   },
+   {
+    "id": "DOC-0036",
+    "source": "articles/a-036.md:1",
+    "title": "Learksor Burkshildrai Kolbaim",
+    "tokens": 65
+   },
+   {
+    "id": "DOC-0037",
+    "source": "articles/a-037.md:1",
+    "title": "Trilkluth Dramsal Bamnairk Treamlous Burkdamnais Soulstand",
+    "tokens": 88
+   },
+   {
+    "id": "DOC-0038",
+    "source": "articles/a-038.md:1",
+    "title": "Kesdrur Learksor Klourkna Vuklaland Fendnaim Vairtream",
+    "tokens": 89
+   },
+   {
+    "id": "DOC-0039",
+    "source": "articles/a-039.md:1",
+    "title": "Coundmousvem Nimsteam Drekourdou Tairfas Klenrothoun Shemraimrend",
+    "tokens": 50
+   },
+   {
+    "id": "DOC-0040",
+    "source": "articles/a-040.md:1",
+    "title": "Furnendlous Nunddrend Thineaklom",
+    "tokens": 89
+   },
+   {
+    "id": "DOC-0041",
+    "source": "articles/a-041.md:1",
+    "title": "Pomthais Zousrear Stemsteasmou Firktrourk",
+    "tokens": 137
+   },
+   {
+    "id": "DOC-0042",
+    "source": "articles/a-042.md:1",
+    "title": "Brorveal Gageam Tropikair Narkkom Lirnas Tukle",
+    "tokens": 100
+   },
+   {
+    "id": "DOC-0043",
+    "source": "articles/a-043.md:1",
+    "title": "Pukambren Drindreshes Baibearrun Digaithzes Tunta",
+    "tokens": 201
+   },
+   {
+    "id": "DOC-0044",
+    "source": "articles/a-044.md:1",
+    "title": "Trairnoupam Tortrourk Sholdrour Taiser",
+    "tokens": 66
+   },
+   {
+    "id": "DOC-0045",
+    "source": "articles/a-045.md:1",
+    "title": "Toundrarnel Gaizin Thillin",
+    "tokens": 151
+   },
+   {
+    "id": "DOC-0046",
+    "source": "articles/a-046.md:1",
+    "title": "Vaslos Totondtan Trouthbound",
+    "tokens": 123
+   },
+   {
+    "id": "DOC-0047",
+    "source": "articles/a-047.md:1",
+    "title": "Thaindcourk Zourkcea Treantrel Drindsta Thumaind Pithbrazer",
+    "tokens": 73
+   },
+   {
+    "id": "DOC-0048",
+    "source": "articles/a-048.md:1",
+    "title": "Teardreabel Brorveal Gaizin Patrounzair",
+    "tokens": 101
+   },
+   {
+    "id": "DOC-0049",
+    "source": "articles/a-049.md:1",
+    "title": "Cerlam Nathbror Gageam Ferknom",
+    "tokens": 107
+   },
+   {
+    "id": "DOC-0050",
+    "source": "articles/a-050.md:1",
+    "title": "Tarka Thifoudol Vendfoul Pomthais Shurklou",
+    "tokens": 69
+   },
+   {
+    "id": "DOC-0051",
+    "source": "articles/a-051.md:1",
+    "title": "Lispaigark Brunshirk Pergomcith Nondgimkaim",
+    "tokens": 214
+   },
+   {
+    "id": "DOC-0052",
+    "source": "articles/a-052.md:1",
+    "title": "Fithboul Thoththul Dorkstalzim",
+    "tokens": 161
+   },
+   {
+    "id": "DOC-0053",
+    "source": "articles/a-053.md:1",
+    "title": "Bairdraim Kodinfith Norktos",
+    "tokens": 134
+   },
+   {
+    "id": "DOC-0054",
+    "source": "articles/a-054.md:1",
+    "title": "Drunlarlous Ceandner Brunddrabren Nadeamvoth Digaithzes",
+    "tokens": 100
+   },
+   {
+    "id": "DOC-0055",
+    "source": "articles/a-055.md:1",
+    "title": "Paisguth Rofai Curkkos Caikleth Zothgoun Bendvozu",
+    "tokens": 220
+   },
+   {
+    "id": "DOC-0056",
+    "source": "articles/a-056.md:1",
+    "title": "Fondir Bairdraim Rifirkstir Gesstol Brodunnul Toundvu",
+    "tokens": 175
+   },
+   {
+    "id": "DOC-0057",
+    "source": "articles/a-057.md:1",
+    "title": "Kerkbrourk Lurkrinddas Founnamnath Tarka Loulal",
+    "tokens": 59
+   },
+   {
+    "id": "DOC-0058",
+    "source": "articles/a-058.md:1",
+    "title": "Goumpamain Zousrear Gundfarstark",
+    "tokens": 184
+   },
+   {
+    "id": "DOC-0059",
+    "source": "articles/a-059.md:1",
+    "title": "Tunta Thillin Painrur Digaithzes Soulstand",
+    "tokens": 86
+   },
+   {
+    "id": "DOC-0060",
+    "source": "articles/a-060.md:1",
+    "title": "Nimsteam Fithboul Pomthais Bethbain",
+    "tokens": 134
+   },
+   {
+    "id": "DOC-0061",
+    "source": "articles/a-061.md:1",
+    "title": "Brulgesto Lundvalvai Loulal Daltru Kolbaim",
+    "tokens": 142
+   },
+   {
+    "id": "DOC-0062",
+    "source": "articles/a-062.md:1",
+    "title": "Bethbain Culaind Lusterk Breasshend Sarzem Bairkurk",
+    "tokens": 128
+   },
+   {
+    "id": "DOC-0063",
+    "source": "articles/a-063.md:1",
+    "title": "Kodinfith Theanzind Markdrourrin Kalstes",
+    "tokens": 154
+   },
+   {
+    "id": "DOC-0064",
+    "source": "articles/a-064.md:1",
+    "title": "Klalnai Stothtaind Brousenbail Gosstourk",
+    "tokens": 96
+   },
+   {
+    "id": "DOC-0065",
+    "source": "articles/a-065.md:1",
+    "title": "Seadoursith Disur Nurkrandrim",
+    "tokens": 104
+   },
+   {
+    "id": "DOC-0066",
+    "source": "articles/a-066.md:1",
+    "title": "Brumnoum Shurklou Semthounthor Lindpo Lusterk",
+    "tokens": 82
+   },
+   {
+    "id": "DOC-0067",
+    "source": "articles/a-067.md:1",
+    "title": "Dreasklealai Porktethbas Gonthudourk Brunddrabren",
+    "tokens": 190
+   },
+   {
+    "id": "DOC-0068",
+    "source": "articles/a-068.md:1",
+    "title": "Nulon Porkzemmais Touthfon",
+    "tokens": 114
+   },
+   {
+    "id": "DOC-0069",
+    "source": "articles/a-069.md:1",
+    "title": "Tindlal Lembrem Gourkzou",
+    "tokens": 219
+   },
+   {
+    "id": "DOC-0070",
+    "source": "articles/a-070.md:1",
+    "title": "Thailsentrom Tuzus Nurkrandrim Bendbroul Stemsteasmou",
+    "tokens": 121
+   },
+   {
+    "id": "DOC-0071",
+    "source": "articles/a-071.md:1",
+    "title": "Thifoudol Traispo Rairrum Moumso",
+    "tokens": 147
+   },
+   {
+    "id": "DOC-0072",
+    "source": "articles/a-072.md:1",
+    "title": "Thufeda Vairtream Cegol",
+    "tokens": 162
+   },
+   {
+    "id": "DOC-0073",
+    "source": "articles/a-073.md:1",
+    "title": "Neszunnil Vaslos Thaindnu Sholdrour Bairsti Kepusklus",
+    "tokens": 173
+   },
+   {
+    "id": "DOC-0074",
+    "source": "articles/a-074.md:1",
+    "title": "Loldour Dendfaith Thaindnu Nadeamvoth Nairlurk Nathbror",
+    "tokens": 49
+   },
+   {
+    "id": "DOC-0075",
+    "source": "articles/a-075.md:1",
+    "title": "Bamnairk Culaind Theanzind Drilurklas Curkkos Treamlous",
+    "tokens": 144
+   },
+   {
+    "id": "DOC-0076",
+    "source": "articles/a-076.md:1",
+    "title": "Rendnealbath Vasstarper Stothtaind Brousenbail",
+    "tokens": 123
+   },
+   {
+    "id": "DOC-0077",
+    "source": "articles/a-077.md:1",
+    "title": "Treasnerk Tuzus Trainnorol Dairkdis Bromrean Sholdrour",
+    "tokens": 162
+   },
+   {
+    "id": "DOC-0078",
+    "source": "articles/a-078.md:1",
+    "title": "Dorktral Gothstu Trainbri",
+    "tokens": 88
+   },
+   {
+    "id": "DOC-0079",
+    "source": "articles/a-079.md:1",
+    "title": "Sholdrour Gothstu Founnamnath",
+    "tokens": 90
+   },
+   {
+    "id": "DOC-0080",
+    "source": "articles/a-080.md:1",
+    "title": "Furnendlous Rouscor Nealthambark",
+    "tokens": 91
+   },
+   {
+    "id": "DOC-0081",
+    "source": "articles/a-081.md:1",
+    "title": "Ferknom Nainolleam Pathmul",
+    "tokens": 126
+   },
+   {
+    "id": "DOC-0082",
+    "source": "articles/a-082.md:1",
+    "title": "Vaisnilbrin Treapear Droszidruth Fosvor Zalrilma",
+    "tokens": 196
+   },
+   {
+    "id": "DOC-0083",
+    "source": "articles/a-083.md:1",
+    "title": "Darburk Stareamaim Tindlal Digaithzes Cealzer Rothbairnel",
+    "tokens": 61
+   },
+   {
+    "id": "DOC-0084",
+    "source": "articles/a-084.md:1",
+    "title": "Kepusklus Thaindnu Drolgear",
+    "tokens": 49
+   },
+   {
+    "id": "DOC-0085",
+    "source": "articles/a-085.md:1",
+    "title": "Thupoun Nimsteam Sirthain",
+    "tokens": 127
+   },
+   {
+    "id": "DOC-0086",
+    "source": "articles/a-086.md:1",
+    "title": "Vairtream Kestouthval Dreasthom Rairklus",
+    "tokens": 167
+   },
+   {
+    "id": "DOC-0087",
+    "source": "articles/a-087.md:1",
+    "title": "Kestouthval Semthounthor Rothbairnel",
+    "tokens": 138
+   },
+   {
+    "id": "DOC-0088",
+    "source": "articles/a-088.md:1",
+    "title": "Painreal Steathshuva Kepusklus",
+    "tokens": 112
+   },
+   {
+    "id": "DOC-0089",
+    "source": "articles/a-089.md:1",
+    "title": "Ceandtrai Bairsti Digaithzes Drekourdou Stushean Gaszen",
+    "tokens": 235
+   },
+   {
+    "id": "DOC-0090",
+    "source": "articles/a-090.md:1",
+    "title": "Peboupend Durkceth Lendtiltail",
+    "tokens": 183
+   },
+   {
+    "id": "DOC-0091",
+    "source": "articles/archive/field-notes.md:1",
+    "title": "Lantern Quarry Report",
+    "tokens": 67
+   },
+   {
+    "id": "DOC-0092",
+    "source": "articles/archive/a-092.md:1",
+    "title": "Theanzind Rearsaim Bendbroul Painrur Porkzemmais",
+    "tokens": 114
+   },
+   {
+    "id": "DOC-0093",
+    "source": "articles/archive/a-093.md:1",
+    "title": "Fealvundnund Deanga Kolbaim",
+    "tokens": 106
+   },
+   {
+    "id": "DOC-0094",
+    "source": "articles/archive/a-094.md:1",
+    "title": "Drethmous Traithroth Trilkluth Fethstark Thaindnu",
+    "tokens": 109
+   },
+   {
+    "id": "DOC-0095",
+    "source": "articles/archive/a-095.md:1",
+    "title": "Stemsteasmou Briltrearkca Zethurkkland",
+    "tokens": 113
+   },
+   {
+    "id": "DOC-0100",
+    "source": "misc/big.md:1",
+    "title": "Vulmam Seasnemdark Ceazirk Bealgifal Realso",
+    "tokens": 319597
+   },
+   {
+    "id": "REC-0001",
+    "source": "records/r-01.jsonl:1",
+    "title": "Kilmoun Kasea Breasshend",
+    "tokens": 67
+   },
+   {
+    "id": "REC-0002",
+    "source": "records/r-01.jsonl:2",
+    "title": "Lilgundrim Brorveal Zousrear Sherkmoth",
+    "tokens": 39
+   },
+   {
+    "id": "REC-0003",
+    "source": "records/r-01.jsonl:3",
+    "title": "Caikleth Theanzind Founnamnath Lembrem",
+    "tokens": 28
+   },
+   {
+    "id": "REC-0004",
+    "source": "records/r-01.jsonl:4",
+    "title": "Memkasthus Bairsti Purkthea",
+    "tokens": 56
+   },
+   {
+    "id": "REC-0005",
+    "source": "records/r-01.jsonl:5",
+    "title": "Storlaimvair Rouscor Vairtream",
+    "tokens": 61
+   },
+   {
+    "id": "REC-0006",
+    "source": "records/r-01.jsonl:6",
+    "title": "Vedous Trerbrourk Zumpound Nogurksun",
+    "tokens": 63
+   },
+   {
+    "id": "REC-0007",
+    "source": "records/r-01.jsonl:7",
+    "title": "Zergand Shinea Kalstes",
+    "tokens": 26
+   },
+   {
+    "id": "REC-0008",
+    "source": "records/r-01.jsonl:8",
+    "title": "Geashe Mourvoun Traithroth",
+    "tokens": 64
+   },
+   {
+    "id": "REC-0009",
+    "source": "records/r-01.jsonl:9",
+    "title": "Thumaind Laisma Shealbemvis Brulgesto Vasstarper Stothtaind",
+    "tokens": 27
+   },
+   {
+    "id": "REC-0010",
+    "source": "records/r-01.jsonl:10",
+    "title": "Klourkna Zaimrol Peboupend Drindreshes Tortrourk Dorktral",
+    "tokens": 82
+   },
+   {
+    "id": "REC-0011",
+    "source": "records/r-01.jsonl:11",
+    "title": "Memkasthus Fougotrath Seadoursith Ferknom",
+    "tokens": 105
+   },
+   {
+    "id": "REC-0012",
+    "source": "records/r-01.jsonl:12",
+    "title": "Pathmul Veaththegil Stairgai Cetuth Koutraim Lirnas",
+    "tokens": 34
+   },
+   {
+    "id": "REC-0013",
+    "source": "records/r-01.jsonl:13",
+    "title": "Balsoscai Thaimtailtun Furnendlous",
+    "tokens": 66
+   },
+   {
+    "id": "REC-0014",
+    "source": "records/r-01.jsonl:14",
+    "title": "Tearkidu Vipund Troulbim",
+    "tokens": 42
+   },
+   {
+    "id": "REC-0015",
+    "source": "records/r-01.jsonl:15",
+    "title": "Nusposkend Pathmul Gundfarstark Stothtaind",
+    "tokens": 41
+   },
+   {
+    "id": "REC-0016",
+    "source": "records/r-01.jsonl:16",
+    "title": "Kilnibal Rathvuth Feasdolzou",
+    "tokens": 33
+   },
+   {
+    "id": "REC-0017",
+    "source": "records/r-01.jsonl:17",
+    "title": "Favaitaim Thufeda Durkceth Tropikair",
+    "tokens": 38
+   },
+   {
+    "id": "REC-0018",
+    "source": "records/r-01.jsonl:18",
+    "title": "Maisstandlis Drondlounbem Ranmo",
+    "tokens": 68
+   },
+   {
+    "id": "REC-0019",
+    "source": "records/r-01.jsonl:19",
+    "title": "Loldour Zethurkkland Draisbri Brulgesto Bairdraim Shimpea",
+    "tokens": 29
+   },
+   {
+    "id": "REC-0020",
+    "source": "records/r-01.jsonl:20",
+    "title": "Thithmurun Thirsorend Dirnandol",
+    "tokens": 48
+   },
+   {
+    "id": "REC-0021",
+    "source": "records/r-01.jsonl:21",
+    "title": "Vesethferk Lundtea Noushourk Brunshirk Lundtea",
+    "tokens": 58
+   },
+   {
+    "id": "REC-0022",
+    "source": "records/r-01.jsonl:22",
+    "title": "Stairpobrun Vipund Narteatrourk",
+    "tokens": 57
+   },
+   {
+    "id": "REC-0023",
+    "source": "records/r-01.jsonl:23",
+    "title": "Loulal Fabrearktrun Toundvu Deanga",
+    "tokens": 48
+   },
+   {
+    "id": "REC-0024",
+    "source": "records/r-01.jsonl:24",
+    "title": "Feadroris Pandren Zousrear Censeadair Thaindnu",
+    "tokens": 34
+   },
+   {
+    "id": "REC-0025",
+    "source": "records/r-01.jsonl:25",
+    "title": "Kalstes Klovendzam Vorcommork",
+    "tokens": 69
+   },
+   {
+    "id": "REC-0026",
+    "source": "records/r-01.jsonl:26",
+    "title": "Brosvand Vasstarper Vaslos Trairnoupam Klarbolgeark",
+    "tokens": 83
+   },
+   {
+    "id": "REC-0027",
+    "source": "records/r-01.jsonl:27",
+    "title": "Dufomlu Tindlal Tuzus",
+    "tokens": 41
+   },
+   {
+    "id": "REC-0028",
+    "source": "records/r-01.jsonl:28",
+    "title": "Peboupend Drindreshes Rarkpirk Pourceanvour Censeadair",
+    "tokens": 50
+   },
+   {
+    "id": "REC-0029",
+    "source": "records/r-01.jsonl:29",
+    "title": "Pergomcith Rosthul Vipund Shoulbronai Farir",
+    "tokens": 61
+   },
+   {
+    "id": "REC-0030",
+    "source": "records/r-01.jsonl:30",
+    "title": "Stengutrel Founnamnath Rearsaim",
+    "tokens": 26
+   },
+   {
+    "id": "REC-0031",
+    "source": "records/r-02.jsonl:1",
+    "title": "Kezealpean Tukle Zeamtren Stothtaind Treamlous Bendbroul",
+    "tokens": 57
+   },
+   {
+    "id": "REC-0032",
+    "source": "records/r-02.jsonl:2",
+    "title": "Kestouthval Bamnairk Daldirreal Breasshend Leadroulsou Klendgalo",
+    "tokens": 25
+   },
+   {
+    "id": "REC-0033",
+    "source": "records/r-02.jsonl:3",
+    "title": "Brousenbail Rarkpirk Zeamtren Vathmeark",
+    "tokens": 77
+   },
+   {
+    "id": "REC-0034",
+    "source": "records/r-02.jsonl:4",
+    "title": "Nainshurk Rendnealbath Lendtiltail",
+    "tokens": 39
+   },
+   {
+    "id": "REC-0035",
+    "source": "records/r-02.jsonl:5",
+    "title": "Rearsaim Fithboul Kilnibal Kezealpean",
+    "tokens": 24
+   },
+   {
+    "id": "REC-0036",
+    "source": "records/r-02.jsonl:6",
+    "title": "Rivund Londgathbes Stengutrel",
+    "tokens": 77
+   },
+   {
+    "id": "REC-0037",
+    "source": "records/r-02.jsonl:8",
+    "title": "Thufeda Steathshuva Goumpamain",
+    "tokens": 20
+   },
+   {
+    "id": "REC-0038",
+    "source": "records/r-02.jsonl:9",
+    "title": "Bendvozu Thufeda Bendbroul",
+    "tokens": 75
+   },
+   {
+    "id": "REC-0039",
+    "source": "records/r-02.jsonl:10",
+    "title": "Gesstol Gounpean Treapear",
+    "tokens": 44
+   },
+   {
+    "id": "REC-0040",
+    "source": "records/r-02.jsonl:11",
+    "title": "Vairtream Stairgai Burkdamnais",
+    "tokens": 15
+   },
+   {
+    "id": "REC-0041",
+    "source": "records/r-02.jsonl:13",
+    "title": "Tunke Kousnushourk Drindreshes Fondir Tailfo Gundfarstark",
+    "tokens": 54
+   },
+   {
+    "id": "REC-0042",
+    "source": "records/r-02.jsonl:14",
+    "title": "Sirthain Pomthais Rethshaind",
+    "tokens": 32
+   },
+   {
+    "id": "REC-0043",
+    "source": "records/r-02.jsonl:15",
+    "title": "Naicanbrairk Lurkrinddas Treapear Klouncaildea Cegol",
+    "tokens": 51
+   },
+   {
+    "id": "REC-0044",
+    "source": "records/r-02.jsonl:16",
+    "title": "Bethdral Sheamzelto Dairkdis Klenrothoun Bamnairk",
+    "tokens": 66
+   },
+   {
+    "id": "REC-0045",
+    "source": "records/r-02.jsonl:17",
+    "title": "Porkzemmais Briltrearkca Shealbemvis Bethdral",
+    "tokens": 60
+   },
+   {
+    "id": "REC-0046",
+    "source": "records/r-02.jsonl:18",
+    "title": "Sairdon Raimdork Rairklus",
+    "tokens": 24
+   },
+   {
+    "id": "REC-0047",
+    "source": "records/r-02.jsonl:19",
+    "title": "Rikel Tuzus Tortrourk Bairkurk",
+    "tokens": 49
+   },
+   {
+    "id": "REC-0048",
+    "source": "records/r-02.jsonl:20",
+    "title": "Ceandtrai Brodunnul Nogurksun Trilkluth",
+    "tokens": 78
+   },
+   {
+    "id": "REC-0049",
+    "source": "records/r-02.jsonl:21",
+    "title": "Vairdaipail Tailfo Beasthain Tarka Nulon",
+    "tokens": 78
+   },
+   {
+    "id": "REC-0050",
+    "source": "records/r-02.jsonl:22",
+    "title": "Louthcil Lundvalvai Druthrark",
+    "tokens": 23
+   },
+   {
+    "id": "REC-0051",
+    "source": "records/r-02.jsonl:23",
+    "title": "Druthrark Beasthain Dreasthom Beaslothbou Thirsorend Tindlal",
+    "tokens": 20
+   },
+   {
+    "id": "REC-0052",
+    "source": "records/r-02.jsonl:24",
+    "title": "Traithroth Gormeathbair Shaithbrisro",
+    "tokens": 92
+   },
+   {
+    "id": "REC-0053",
+    "source": "records/r-02.jsonl:25",
+    "title": "Zergand Bethbain Brorveal Bairethnear",
+    "tokens": 42
+   },
+   {
+    "id": "REC-0054",
+    "source": "records/r-02.jsonl:26",
+    "title": "Zudreath Lirnas Zathkim",
+    "tokens": 34
+   },
+   {
+    "id": "REC-0055",
+    "source": "records/r-02.jsonl:27",
+    "title": "Furnendlous Dairkdis Rathvuth Beaslothbou",
+    "tokens": 30
+   },
+   {
+    "id": "REC-0056",
+    "source": "records/r-02.jsonl:28",
+    "title": "Rairrum Pourceanvour Loulal Censeadair Briltrearkca Painrur",
+    "tokens": 80
+   },
+   {
+    "id": "REC-0057",
+    "source": "records/r-02.jsonl:29",
+    "title": "Merksteath Gaizin Sirros",
+    "tokens": 22
+   },
+   {
+    "id": "REC-0058",
+    "source": "records/r-02.jsonl:30",
+    "title": "Shemraimrend Nafou Trainnorol",
+    "tokens": 90
+   },
+   {
+    "id": "REC-0059",
+    "source": "records/r-02.jsonl:31",
+    "title": "Boshodea Gageam Troulbim Pergomcith Dreasthom",
+    "tokens": 30
+   },
+   {
+    "id": "REC-0060",
+    "source": "records/r-02.jsonl:32",
+    "title": "Sairdon Lirnas Stemsteasmou Bethdral Sheamzelto",
+    "tokens": 71
+   },
+   {
+    "id": "REC-0061",
+    "source": "records/r-03.jsonl:1",
+    "title": "Sholdrour Moumso Teardreabel",
+    "tokens": 57
+   },
+   {
+    "id": "REC-0062",
+    "source": "records/r-03.jsonl:2",
+    "title": "Nairlurk Zumpound Deastound",
+    "tokens": 71
+   },
+   {
+    "id": "REC-0063",
+    "source": "records/r-03.jsonl:3",
+    "title": "Tortrourk Gaizin Rarkpirk",
+    "tokens": 70
+   },
+   {
+    "id": "REC-0064",
+    "source": "records/r-03.jsonl:4",
+    "title": "Vaisnilbrin Vairtream Sinddal Dreasthom",
+    "tokens": 73
+   },
+   {
+    "id": "REC-0065",
+    "source": "records/r-03.jsonl:6",
+    "title": "Markdrourrin Brousenbail Rofai Shealbemvis",
+    "tokens": 49
+   },
+   {
+    "id": "REC-0066",
+    "source": "records/r-03.jsonl:7",
+    "title": "Loulal Fealvundnund Stushean Bendvozu Brulgesto Teardreabel",
+    "tokens": 39
+   },
+   {
+    "id": "REC-0067",
+    "source": "records/r-03.jsonl:8",
+    "title": "Painrur Tearkidu Stushean",
+    "tokens": 34
+   },
+   {
+    "id": "REC-0068",
+    "source": "records/r-03.jsonl:10",
+    "title": "Cidrind Soupirgou Shemraimrend Shonklerk Dilcemsti",
+    "tokens": 24
+   },
+   {
+    "id": "REC-0069",
+    "source": "records/r-03.jsonl:11",
+    "title": "Lembrem Shaithgeam Deanga Londgathbes",
+    "tokens": 57
+   },
+   {
+    "id": "REC-0070",
+    "source": "records/r-03.jsonl:12",
+    "title": "Thoththul Ceandtrai Vathmeark Zothvurk",
+    "tokens": 31
+   },
+   {
+    "id": "REC-0071",
+    "source": "records/r-03.jsonl:13",
+    "title": "Favaitaim Visteteas Daldirreal",
+    "tokens": 39
+   },
+   {
+    "id": "REC-0072",
+    "source": "records/r-03.jsonl:14",
+    "title": "Gormeathbair Starsheanpea Steklon Brosvand",
+    "tokens": 73
+   },
+   {
+    "id": "REC-0073",
+    "source": "records/r-03.jsonl:15",
+    "title": "Disur Tearkidu Tortrourk Thaindnu Fosvor Carkgaisan",
+    "tokens": 62
+   },
+   {
+    "id": "REC-0074",
+    "source": "records/r-03.jsonl:17",
+    "title": "Bendvozu Zathkim Drodraifan Vaibol Lesheanai",
+    "tokens": 37
+   },
+   {
+    "id": "REC-0075",
+    "source": "records/r-03.jsonl:18",
+    "title": "Kilnibal Kestouthval Zathkim",
+    "tokens": 30
+   },
+   {
+    "id": "REC-0076",
+    "source": "records/r-03.jsonl:19",
+    "title": "Shimpea Sirthain Fustoun Saindvorkbes Vendfoul Taisnothtrar",
+    "tokens": 38
+   },
+   {
+    "id": "REC-0077",
+    "source": "records/r-03.jsonl:20",
+    "title": "Drodraifan Bairethnear Stounfum",
+    "tokens": 91
+   },
+   {
+    "id": "REC-0078",
+    "source": "records/r-03.jsonl:21",
+    "title": "Cothrurzind Maisboul Digaithzes",
+    "tokens": 25
+   },
+   {
+    "id": "REC-0079",
+    "source": "records/r-03.jsonl:22",
+    "title": "Painreal Tuzus Sompaim Lusterk",
+    "tokens": 95
+   },
+   {
+    "id": "REC-0080",
+    "source": "records/r-03.jsonl:23",
+    "title": "Cegol Sheamzelto Bethbain Nulon Lirnas Pomthais",
+    "tokens": 52
+   },
+   {
+    "id": "REC-0081",
+    "source": "records/r-03.jsonl:24",
+    "title": "Curdroth Dairkdis Veaththegil Koltreand Drindreshes Drondlounbem",
+    "tokens": 37
+   },
+   {
+    "id": "REC-0082",
+    "source": "records/r-03.jsonl:25",
+    "title": "Gesstol Rendnealbath Zothdreas",
+    "tokens": 36
+   },
+   {
+    "id": "REC-0083",
+    "source": "records/r-03.jsonl:26",
+    "title": "Norktos Sethsa Darburk",
+    "tokens": 50
+   },
+   {
+    "id": "REC-0084",
+    "source": "records/r-03.jsonl:27",
+    "title": "Stushean Seadoursith Toundrarnel",
+    "tokens": 36
+   },
+   {
+    "id": "REC-0085",
+    "source": "records/r-03.jsonl:28",
+    "title": "Gothstu Shemraimrend Gageam Lusterk",
+    "tokens": 58
+   },
+   {
+    "id": "REC-0086",
+    "source": "records/r-03.jsonl:29",
+    "title": "Steklon Favaitaim Stemsteasmou Druthrark Starsheanpea Fougotrath",
+    "tokens": 34
+   },
+   {
+    "id": "REC-0087",
+    "source": "records/r-03.jsonl:30",
+    "title": "Trilkluth Fosvor Brosvand Drondlounbem",
+    "tokens": 57
+   },
+   {
+    "id": "REC-0088",
+    "source": "records/r-03.jsonl:31",
+    "title": "Kezealpean Fosvor Lindpo Lispaigark",
+    "tokens": 38
+   },
+   {
+    "id": "REC-0089",
+    "source": "records/r-03.jsonl:32",
+    "title": "Nusposkend Vorcommork Geashe Thondbes Lurpul",
+    "tokens": 25
+   },
+   {
+    "id": "REC-0090",
+    "source": "records/r-03.jsonl:33",
+    "title": "Porktethbas Merksteath Painrur Thithmurun Learksor",
+    "tokens": 74
+   },
+   {
+    "id": "REC-0091",
+    "source": "records/r-04.jsonl:1",
+    "title": "Shaithbrisro Nusposkend Thailsentrom Zourkcea Dribrous",
+    "tokens": 44
+   },
+   {
+    "id": "REC-0092",
+    "source": "records/r-04.jsonl:2",
+    "title": "Pithbrazer Themboumnen Thumaind",
+    "tokens": 54
+   },
+   {
+    "id": "REC-0093",
+    "source": "records/r-04.jsonl:4",
+    "title": "Learksor Noushourk Gosstourk Lusterk Brosvand",
+    "tokens": 40
+   },
+   {
+    "id": "REC-0094",
+    "source": "records/r-04.jsonl:5",
+    "title": "Nulon Dirnandol Thufeda",
+    "tokens": 90
+   },
+   {
+    "id": "REC-0095",
+    "source": "records/r-04.jsonl:6",
+    "title": "Porkzim Trouthbound Drondlounbem",
+    "tokens": 58
+   },
+   {
+    "id": "REC-0096",
+    "source": "records/r-04.jsonl:7",
+    "title": "Rathvuth Kestouthval Narkklerkge Bairsti",
+    "tokens": 52
+   },
+   {
+    "id": "REC-0097",
+    "source": "records/r-04.jsonl:8",
+    "title": "Markdrourrin Tarka Trainnorol Nondgimkaim Drindreshes",
+    "tokens": 40
+   },
+   {
+    "id": "REC-0098",
+    "source": "records/r-04.jsonl:9",
+    "title": "Zalrilma Noumgoufouth Deastound Zathkim",
+    "tokens": 34
+   },
+   {
+    "id": "REC-0099",
+    "source": "records/r-04.jsonl:10",
+    "title": "Noushourk Narteatrourk Sholdrour",
+    "tokens": 31
+   },
+   {
+    "id": "REC-0100",
+    "source": "records/r-04.jsonl:11",
+    "title": "Vipund Trainnorol Zathkim Klovendzam",
+    "tokens": 56
+   },
+   {
+    "id": "REC-0101",
+    "source": "records/r-04.jsonl:12",
+    "title": "Curkkos Raimdork Noushourk Saindpaind",
+    "tokens": 91
+   },
+   {
+    "id": "REC-0102",
+    "source": "records/r-04.jsonl:13",
+    "title": "Lirnas Genbouthstea Kezealpean",
+    "tokens": 79
+   },
+   {
+    "id": "REC-0103",
+    "source": "records/r-04.jsonl:14",
+    "title": "Vorcommork Nusposkend Sirthain Stounfum Learksor Porkzim",
+    "tokens": 99
+   },
+   {
+    "id": "REC-0104",
+    "source": "records/r-04.jsonl:15",
+    "title": "Naisneark Kestouthval Sutis Kodinfith",
+    "tokens": 39
+   },
+   {
+    "id": "REC-0105",
+    "source": "records/r-04.jsonl:16",
+    "title": "Loulal Bairethnear Lusterk Barkfeath Curdroth Stareamaim",
+    "tokens": 48
+   },
+   {
+    "id": "REC-0106",
+    "source": "records/r-04.jsonl:17",
+    "title": "Kestouthval Peboupend Maithfeand Lesheanai Goumpamain Gundfarstark",
+    "tokens": 62
+   },
+   {
+    "id": "REC-0107",
+    "source": "records/r-04.jsonl:18",
+    "title": "Mearkpoul Lispaigark Vipund Beaslothbou",
+    "tokens": 60
+   },
+   {
+    "id": "REC-0108",
+    "source": "records/r-04.jsonl:19",
+    "title": "Dairkdis Shinea Mourvoun",
+    "tokens": 22
+   },
+   {
+    "id": "REC-0109",
+    "source": "records/r-04.jsonl:21",
+    "title": "Lesheanai Zountreazem Dondzus Pelstomo",
+    "tokens": 92
+   },
+   {
+    "id": "REC-0110",
+    "source": "records/r-04.jsonl:22",
+    "title": "Dairshir Drisdren Brosvand",
+    "tokens": 44
+   },
+   {
+    "id": "REC-0111",
+    "source": "records/r-04.jsonl:23",
+    "title": "Rendnealbath Learksor Kestouthval",
+    "tokens": 62
+   },
+   {
+    "id": "REC-0112",
+    "source": "records/r-04.jsonl:24",
+    "title": "Stemsteasmou Nogurksun Pourceanvour Teardreabel Stothtaind",
+    "tokens": 42
+   },
+   {
+    "id": "REC-0113",
+    "source": "records/r-04.jsonl:26",
+    "title": "Veaththegil Lundvalvai Tunke",
+    "tokens": 30
+   },
+   {
+    "id": "REC-0114",
+    "source": "records/r-04.jsonl:27",
+    "title": "Tortrourk Voundbarkrel Trairnoupam Bamnairk Rifirkstir",
+    "tokens": 22
+   },
+   {
+    "id": "REC-0115",
+    "source": "records/r-04.jsonl:28",
+    "title": "Paike Curdroth Kezealpean",
+    "tokens": 74
+   },
+   {
+    "id": "REC-0116",
+    "source": "records/r-04.jsonl:29",
+    "title": "Nondgimkaim Tunke Fulmound Kesdrur Brulgesto",
+    "tokens": 48
+   },
+   {
+    "id": "REC-0117",
+    "source": "records/r-04.jsonl:30",
+    "title": "Doulfaimpi Gothstu Curdroth Trairaisbu Lilgundrim Gaizin",
+    "tokens": 48
+   },
+   {
+    "id": "REC-0118",
+    "source": "records/r-04.jsonl:31",
+    "title": "Nimsteam Doulfaimpi Dilcemsti Pithbrazer Beaslothbou Zalrilma",
+    "tokens": 70
+   },
+   {
+    "id": "REC-0119",
+    "source": "records/r-04.jsonl:32",
+    "title": "Painrur Loldour Steklon Cetuth Stothtaind Klovendzam",
+    "tokens": 24
+   },
+   {
+    "id": "REC-0120",
+    "source": "records/r-04.jsonl:33",
+    "title": "Thoththul Traithgeal Starsheanpea Thuklainlund Nogurksun",
+    "tokens": 57
+   }
+  ]
+ },
+ "generator": "spikes/m2-first-release/e02/early-corpus.py",
+ "goal": {
+  "bytes": 842,
+  "file": "docs/qualification/m2-early-goal.txt",
+  "sha256": "bc9de96c619a2f414934a8469553b1e09cd94dcdafd3a7a36e6f9fe1bfed153f"
+ },
+ "heldout_queries": [
+  {
+   "expected": [
+    {
+     "id": "DOC-0001",
+     "score": 1,
+     "source": "articles/a-001.md:1",
+     "title": "Zeasdrous Starsheanpea Vesethferk Pigith Deaskor"
+    },
+    {
+     "id": "REC-0047",
+     "score": 1,
+     "source": "records/r-02.jsonl:19",
+     "title": "Rikel Tuzus Tortrourk Bairkurk"
+    },
+    {
+     "id": "REC-0080",
+     "score": 1,
+     "source": "records/r-03.jsonl:23",
+     "title": "Cegol Sheamzelto Bethbain Nulon Lirnas Pomthais"
+    },
+    {
+     "id": "REC-0115",
+     "score": 1,
+     "source": "records/r-04.jsonl:28",
+     "title": "Paike Curdroth Kezealpean"
+    }
+   ],
+   "limit": null,
+   "name": "h01",
+   "terms": [
+    "tirksaikil"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0033",
+     "score": 1,
+     "source": "articles/a-033.md:1",
+     "title": "Stairpobrun Noushourk Sherkmoth"
+    },
+    {
+     "id": "DOC-0080",
+     "score": 1,
+     "source": "articles/a-080.md:1",
+     "title": "Furnendlous Rouscor Nealthambark"
+    }
+   ],
+   "limit": null,
+   "name": "h02",
+   "terms": [
+    "memresbous"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0068",
+     "score": 2,
+     "source": "articles/a-068.md:1",
+     "title": "Nulon Porkzemmais Touthfon"
+    },
+    {
+     "id": "DOC-0086",
+     "score": 2,
+     "source": "articles/a-086.md:1",
+     "title": "Vairtream Kestouthval Dreasthom Rairklus"
+    },
+    {
+     "id": "DOC-0002",
+     "score": 1,
+     "source": "articles/a-002.md:1",
+     "title": "Moskakles Trontrairdar Thoththul Gonthudourk Fustoun"
+    },
+    {
+     "id": "DOC-0029",
+     "score": 1,
+     "source": "articles/a-029.md:1",
+     "title": "Moundraszail Zathkim Kousnushourk Maithfeand Bendvozu"
+    },
+    {
+     "id": "DOC-0038",
+     "score": 1,
+     "source": "articles/a-038.md:1",
+     "title": "Kesdrur Learksor Klourkna Vuklaland Fendnaim Vairtream"
+    },
+    {
+     "id": "DOC-0040",
+     "score": 1,
+     "source": "articles/a-040.md:1",
+     "title": "Furnendlous Nunddrend Thineaklom"
+    },
+    {
+     "id": "DOC-0051",
+     "score": 1,
+     "source": "articles/a-051.md:1",
+     "title": "Lispaigark Brunshirk Pergomcith Nondgimkaim"
+    },
+    {
+     "id": "DOC-0056",
+     "score": 1,
+     "source": "articles/a-056.md:1",
+     "title": "Fondir Bairdraim Rifirkstir Gesstol Brodunnul Toundvu"
+    },
+    {
+     "id": "DOC-0067",
+     "score": 1,
+     "source": "articles/a-067.md:1",
+     "title": "Dreasklealai Porktethbas Gonthudourk Brunddrabren"
+    },
+    {
+     "id": "DOC-0070",
+     "score": 1,
+     "source": "articles/a-070.md:1",
+     "title": "Thailsentrom Tuzus Nurkrandrim Bendbroul Stemsteasmou"
+    }
+   ],
+   "limit": null,
+   "name": "h03",
+   "terms": [
+    "filtha"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0068",
+     "score": 2,
+     "source": "articles/a-068.md:1",
+     "title": "Nulon Porkzemmais Touthfon"
+    },
+    {
+     "id": "DOC-0004",
+     "score": 1,
+     "source": "articles/a-004.md:1",
+     "title": "Trainbri Fendnaim Brorveal"
+    },
+    {
+     "id": "DOC-0020",
+     "score": 1,
+     "source": "articles/a-020.md:1",
+     "title": "Lantern Bethbain Zothdreas Porktethbas Ralin Gaszen Pelstomo"
+    },
+    {
+     "id": "DOC-0022",
+     "score": 1,
+     "source": "articles/a-022.md:1",
+     "title": "Shumzaim Tremklal Taiser Fustoun"
+    },
+    {
+     "id": "DOC-0035",
+     "score": 1,
+     "source": "articles/a-035.md:1",
+     "title": "Rothbairnel Moskakles Culaind Gemtul Pomthais Brunshirk"
+    },
+    {
+     "id": "DOC-0041",
+     "score": 1,
+     "source": "articles/a-041.md:1",
+     "title": "Pomthais Zousrear Stemsteasmou Firktrourk"
+    },
+    {
+     "id": "DOC-0045",
+     "score": 1,
+     "source": "articles/a-045.md:1",
+     "title": "Toundrarnel Gaizin Thillin"
+    },
+    {
+     "id": "DOC-0052",
+     "score": 1,
+     "source": "articles/a-052.md:1",
+     "title": "Fithboul Thoththul Dorkstalzim"
+    },
+    {
+     "id": "DOC-0059",
+     "score": 1,
+     "source": "articles/a-059.md:1",
+     "title": "Tunta Thillin Painrur Digaithzes Soulstand"
+    },
+    {
+     "id": "DOC-0073",
+     "score": 1,
+     "source": "articles/a-073.md:1",
+     "title": "Neszunnil Vaslos Thaindnu Sholdrour Bairsti Kepusklus"
+    }
+   ],
+   "limit": null,
+   "name": "h04",
+   "terms": [
+    "nainshurk"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0002",
+     "score": 1,
+     "source": "articles/a-002.md:1",
+     "title": "Moskakles Trontrairdar Thoththul Gonthudourk Fustoun"
+    },
+    {
+     "id": "DOC-0055",
+     "score": 1,
+     "source": "articles/a-055.md:1",
+     "title": "Paisguth Rofai Curkkos Caikleth Zothgoun Bendvozu"
+    },
+    {
+     "id": "DOC-0064",
+     "score": 1,
+     "source": "articles/a-064.md:1",
+     "title": "Klalnai Stothtaind Brousenbail Gosstourk"
+    },
+    {
+     "id": "REC-0038",
+     "score": 1,
+     "source": "records/r-02.jsonl:9",
+     "title": "Bendvozu Thufeda Bendbroul"
+    },
+    {
+     "id": "REC-0048",
+     "score": 1,
+     "source": "records/r-02.jsonl:20",
+     "title": "Ceandtrai Brodunnul Nogurksun Trilkluth"
+    },
+    {
+     "id": "REC-0054",
+     "score": 1,
+     "source": "records/r-02.jsonl:26",
+     "title": "Zudreath Lirnas Zathkim"
+    },
+    {
+     "id": "REC-0087",
+     "score": 1,
+     "source": "records/r-03.jsonl:30",
+     "title": "Trilkluth Fosvor Brosvand Drondlounbem"
+    }
+   ],
+   "limit": null,
+   "name": "h05",
+   "terms": [
+    "peasbo"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "REC-0056",
+     "score": 2,
+     "source": "records/r-02.jsonl:28",
+     "title": "Rairrum Pourceanvour Loulal Censeadair Briltrearkca Painrur"
+    },
+    {
+     "id": "DOC-0024",
+     "score": 1,
+     "source": "articles/a-024.md:1",
+     "title": "Pithbrazer Bethdral Dorkstalzim Zeamtren Thaindcourk"
+    },
+    {
+     "id": "DOC-0028",
+     "score": 1,
+     "source": "articles/a-028.md:1",
+     "title": "Tuzus Stothtaind Thuklainlund Pithbrazer Brosvand"
+    },
+    {
+     "id": "DOC-0029",
+     "score": 1,
+     "source": "articles/a-029.md:1",
+     "title": "Moundraszail Zathkim Kousnushourk Maithfeand Bendvozu"
+    },
+    {
+     "id": "DOC-0031",
+     "score": 1,
+     "source": "articles/a-031.md:1",
+     "title": "Steklon Ceandner Melstesmour Zethurkkland Bothfin Bairmurk"
+    },
+    {
+     "id": "DOC-0058",
+     "score": 1,
+     "source": "articles/a-058.md:1",
+     "title": "Goumpamain Zousrear Gundfarstark"
+    },
+    {
+     "id": "DOC-0070",
+     "score": 1,
+     "source": "articles/a-070.md:1",
+     "title": "Thailsentrom Tuzus Nurkrandrim Bendbroul Stemsteasmou"
+    },
+    {
+     "id": "DOC-0072",
+     "score": 1,
+     "source": "articles/a-072.md:1",
+     "title": "Thufeda Vairtream Cegol"
+    },
+    {
+     "id": "DOC-0073",
+     "score": 1,
+     "source": "articles/a-073.md:1",
+     "title": "Neszunnil Vaslos Thaindnu Sholdrour Bairsti Kepusklus"
+    },
+    {
+     "id": "DOC-0090",
+     "score": 1,
+     "source": "articles/a-090.md:1",
+     "title": "Peboupend Durkceth Lendtiltail"
+    }
+   ],
+   "limit": null,
+   "name": "h06",
+   "terms": [
+    "thailsentrom"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0020",
+     "score": 4,
+     "source": "articles/a-020.md:1",
+     "title": "Lantern Bethbain Zothdreas Porktethbas Ralin Gaszen Pelstomo"
+    },
+    {
+     "id": "DOC-0023",
+     "score": 3,
+     "source": "articles/a-023.md:1",
+     "title": "Fondir Sirros Drindreshes Shaithbrisro Nadeamvoth Pandren"
+    },
+    {
+     "id": "DOC-0031",
+     "score": 3,
+     "source": "articles/a-031.md:1",
+     "title": "Steklon Ceandner Melstesmour Zethurkkland Bothfin Bairmurk"
+    },
+    {
+     "id": "DOC-0095",
+     "score": 3,
+     "source": "articles/archive/a-095.md:1",
+     "title": "Stemsteasmou Briltrearkca Zethurkkland"
+    },
+    {
+     "id": "DOC-0011",
+     "score": 2,
+     "source": "articles/a-011.md:1",
+     "title": "Painrur Bairkurk Zothvurk Zeamtren Purkthea Drethmous"
+    },
+    {
+     "id": "DOC-0014",
+     "score": 2,
+     "source": "articles/a-014.md:1",
+     "title": "Noumgoufouth Thufeda Traispo"
+    },
+    {
+     "id": "DOC-0042",
+     "score": 2,
+     "source": "articles/a-042.md:1",
+     "title": "Brorveal Gageam Tropikair Narkkom Lirnas Tukle"
+    },
+    {
+     "id": "DOC-0069",
+     "score": 2,
+     "source": "articles/a-069.md:1",
+     "title": "Tindlal Lembrem Gourkzou"
+    },
+    {
+     "id": "DOC-0075",
+     "score": 2,
+     "source": "articles/a-075.md:1",
+     "title": "Bamnairk Culaind Theanzind Drilurklas Curkkos Treamlous"
+    },
+    {
+     "id": "DOC-0084",
+     "score": 2,
+     "source": "articles/a-084.md:1",
+     "title": "Kepusklus Thaindnu Drolgear"
+    }
+   ],
+   "limit": null,
+   "name": "h07",
+   "terms": [
+    "brunshirk",
+    "ritrour"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0004",
+     "score": 4,
+     "source": "articles/a-004.md:1",
+     "title": "Trainbri Fendnaim Brorveal"
+    },
+    {
+     "id": "DOC-0073",
+     "score": 4,
+     "source": "articles/a-073.md:1",
+     "title": "Neszunnil Vaslos Thaindnu Sholdrour Bairsti Kepusklus"
+    },
+    {
+     "id": "REC-0004",
+     "score": 3,
+     "source": "records/r-01.jsonl:4",
+     "title": "Memkasthus Bairsti Purkthea"
+    },
+    {
+     "id": "REC-0058",
+     "score": 3,
+     "source": "records/r-02.jsonl:30",
+     "title": "Shemraimrend Nafou Trainnorol"
+    },
+    {
+     "id": "DOC-0011",
+     "score": 2,
+     "source": "articles/a-011.md:1",
+     "title": "Painrur Bairkurk Zothvurk Zeamtren Purkthea Drethmous"
+    },
+    {
+     "id": "DOC-0024",
+     "score": 2,
+     "source": "articles/a-024.md:1",
+     "title": "Pithbrazer Bethdral Dorkstalzim Zeamtren Thaindcourk"
+    },
+    {
+     "id": "DOC-0031",
+     "score": 2,
+     "source": "articles/a-031.md:1",
+     "title": "Steklon Ceandner Melstesmour Zethurkkland Bothfin Bairmurk"
+    },
+    {
+     "id": "DOC-0041",
+     "score": 2,
+     "source": "articles/a-041.md:1",
+     "title": "Pomthais Zousrear Stemsteasmou Firktrourk"
+    },
+    {
+     "id": "DOC-0058",
+     "score": 2,
+     "source": "articles/a-058.md:1",
+     "title": "Goumpamain Zousrear Gundfarstark"
+    },
+    {
+     "id": "REC-0049",
+     "score": 2,
+     "source": "records/r-02.jsonl:21",
+     "title": "Vairdaipail Tailfo Beasthain Tarka Nulon"
+    }
+   ],
+   "limit": null,
+   "name": "h08",
+   "terms": [
+    "zothdreas",
+    "thaimtailtun"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0010",
+     "score": 4,
+     "source": "articles/a-010.md:1",
+     "title": "Kolbaim Somumtand Disur"
+    },
+    {
+     "id": "DOC-0007",
+     "score": 3,
+     "source": "articles/a-007.md:1",
+     "title": "Thaindnu Goumpamain Toundvu Pelstomo Stothtaind Lilgundrim"
+    },
+    {
+     "id": "DOC-0014",
+     "score": 3,
+     "source": "articles/a-014.md:1",
+     "title": "Noumgoufouth Thufeda Traispo"
+    },
+    {
+     "id": "REC-0055",
+     "score": 3,
+     "source": "records/r-02.jsonl:27",
+     "title": "Furnendlous Dairkdis Rathvuth Beaslothbou"
+    },
+    {
+     "id": "DOC-0019",
+     "score": 2,
+     "source": "articles/a-019.md:1",
+     "title": "Shondtrudar Merksteath Cailanzork"
+    },
+    {
+     "id": "DOC-0085",
+     "score": 2,
+     "source": "articles/a-085.md:1",
+     "title": "Thupoun Nimsteam Sirthain"
+    },
+    {
+     "id": "REC-0057",
+     "score": 2,
+     "source": "records/r-02.jsonl:29",
+     "title": "Merksteath Gaizin Sirros"
+    },
+    {
+     "id": "REC-0072",
+     "score": 2,
+     "source": "records/r-03.jsonl:14",
+     "title": "Gormeathbair Starsheanpea Steklon Brosvand"
+    }
+   ],
+   "limit": null,
+   "name": "h09",
+   "terms": [
+    "thufeda",
+    "markdrourrin"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0001",
+     "score": 3,
+     "source": "articles/a-001.md:1",
+     "title": "Zeasdrous Starsheanpea Vesethferk Pigith Deaskor"
+    },
+    {
+     "id": "DOC-0004",
+     "score": 3,
+     "source": "articles/a-004.md:1",
+     "title": "Trainbri Fendnaim Brorveal"
+    },
+    {
+     "id": "DOC-0060",
+     "score": 3,
+     "source": "articles/a-060.md:1",
+     "title": "Nimsteam Fithboul Pomthais Bethbain"
+    },
+    {
+     "id": "DOC-0080",
+     "score": 3,
+     "source": "articles/a-080.md:1",
+     "title": "Furnendlous Rouscor Nealthambark"
+    },
+    {
+     "id": "DOC-0023",
+     "score": 2,
+     "source": "articles/a-023.md:1",
+     "title": "Fondir Sirros Drindreshes Shaithbrisro Nadeamvoth Pandren"
+    },
+    {
+     "id": "DOC-0026",
+     "score": 2,
+     "source": "articles/a-026.md:1",
+     "title": "Zousrear Peboupend Lendtiltail Teardreabel Tashounketh"
+    },
+    {
+     "id": "DOC-0090",
+     "score": 2,
+     "source": "articles/a-090.md:1",
+     "title": "Peboupend Durkceth Lendtiltail"
+    },
+    {
+     "id": "REC-0007",
+     "score": 2,
+     "source": "records/r-01.jsonl:7",
+     "title": "Zergand Shinea Kalstes"
+    },
+    {
+     "id": "REC-0036",
+     "score": 2,
+     "source": "records/r-02.jsonl:6",
+     "title": "Rivund Londgathbes Stengutrel"
+    },
+    {
+     "id": "REC-0052",
+     "score": 2,
+     "source": "records/r-02.jsonl:24",
+     "title": "Traithroth Gormeathbair Shaithbrisro"
+    }
+   ],
+   "limit": null,
+   "name": "h10",
+   "terms": [
+    "gerksti",
+    "shealbemvis"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0034",
+     "score": 5,
+     "source": "articles/a-034.md:1",
+     "title": "Markloum Shimpea Gundfarstark"
+    },
+    {
+     "id": "DOC-0031",
+     "score": 4,
+     "source": "articles/a-031.md:1",
+     "title": "Steklon Ceandner Melstesmour Zethurkkland Bothfin Bairmurk"
+    },
+    {
+     "id": "DOC-0001",
+     "score": 3,
+     "source": "articles/a-001.md:1",
+     "title": "Zeasdrous Starsheanpea Vesethferk Pigith Deaskor"
+    }
+   ],
+   "limit": null,
+   "name": "h11",
+   "terms": [
+    "bairdraim",
+    "bairkurk",
+    "bairmurk"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0003",
+     "score": 1,
+     "source": "articles/a-003.md:1",
+     "title": "Naisneark Raimdork Kilnibal Thulvo"
+    },
+    {
+     "id": "DOC-0027",
+     "score": 1,
+     "source": "articles/a-027.md:1",
+     "title": "Nondgimkaim Klalnai Nusposkend Treamlous Gailves"
+    },
+    {
+     "id": "REC-0008",
+     "score": 1,
+     "source": "records/r-01.jsonl:8",
+     "title": "Geashe Mourvoun Traithroth"
+    },
+    {
+     "id": "REC-0077",
+     "score": 1,
+     "source": "records/r-03.jsonl:20",
+     "title": "Drodraifan Bairethnear Stounfum"
+    }
+   ],
+   "limit": null,
+   "name": "h12",
+   "terms": [
+    "meridian"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0007",
+     "score": 2,
+     "source": "articles/a-007.md:1",
+     "title": "Thaindnu Goumpamain Toundvu Pelstomo Stothtaind Lilgundrim"
+    },
+    {
+     "id": "DOC-0033",
+     "score": 2,
+     "source": "articles/a-033.md:1",
+     "title": "Stairpobrun Noushourk Sherkmoth"
+    },
+    {
+     "id": "DOC-0050",
+     "score": 2,
+     "source": "articles/a-050.md:1",
+     "title": "Tarka Thifoudol Vendfoul Pomthais Shurklou"
+    },
+    {
+     "id": "DOC-0061",
+     "score": 2,
+     "source": "articles/a-061.md:1",
+     "title": "Brulgesto Lundvalvai Loulal Daltru Kolbaim"
+    }
+   ],
+   "limit": null,
+   "name": "h13",
+   "terms": [
+    "sea-wall"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0015",
+     "score": 1,
+     "source": "articles/a-015.md:1",
+     "title": "Fethstark Pergomcith Baibearrun Koltreand Zothgoun Shimpea"
+    },
+    {
+     "id": "DOC-0044",
+     "score": 1,
+     "source": "articles/a-044.md:1",
+     "title": "Trairnoupam Tortrourk Sholdrour Taiser"
+    },
+    {
+     "id": "DOC-0090",
+     "score": 1,
+     "source": "articles/a-090.md:1",
+     "title": "Peboupend Durkceth Lendtiltail"
+    },
+    {
+     "id": "REC-0055",
+     "score": 1,
+     "source": "records/r-02.jsonl:27",
+     "title": "Furnendlous Dairkdis Rathvuth Beaslothbou"
+    }
+   ],
+   "limit": null,
+   "name": "h14",
+   "terms": [
+    "2031"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0100",
+     "score": 1,
+     "source": "misc/big.md:1",
+     "title": "Vulmam Seasnemdark Ceazirk Bealgifal Realso"
+    }
+   ],
+   "limit": null,
+   "name": "h15",
+   "terms": [
+    "zenithal"
+   ]
+  },
+  {
+   "expected": [],
+   "limit": null,
+   "name": "h16",
+   "terms": [
+    "hyperion"
+   ]
+  },
+  {
+   "expected": [],
+   "limit": null,
+   "name": "h17",
+   "terms": [
+    "obsidian"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0020",
+     "score": 1,
+     "source": "articles/a-020.md:1",
+     "title": "Lantern Bethbain Zothdreas Porktethbas Ralin Gaszen Pelstomo"
+    },
+    {
+     "id": "DOC-0091",
+     "score": 1,
+     "source": "articles/archive/field-notes.md:1",
+     "title": "Lantern Quarry Report"
+    },
+    {
+     "id": "REC-0101",
+     "score": 1,
+     "source": "records/r-04.jsonl:12",
+     "title": "Curkkos Raimdork Noushourk Saindpaind"
+    }
+   ],
+   "limit": null,
+   "name": "h18",
+   "terms": [
+    "Lantern,"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0035",
+     "score": 3,
+     "source": "articles/a-035.md:1",
+     "title": "Rothbairnel Moskakles Culaind Gemtul Pomthais Brunshirk"
+    },
+    {
+     "id": "DOC-0069",
+     "score": 3,
+     "source": "articles/a-069.md:1",
+     "title": "Tindlal Lembrem Gourkzou"
+    },
+    {
+     "id": "DOC-0005",
+     "score": 2,
+     "source": "articles/a-005.md:1",
+     "title": "Shemraimrend Mourvoun Tailfo"
+    }
+   ],
+   "limit": 3,
+   "name": "h19",
+   "terms": [
+    "thithmurun"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0011",
+     "score": 3,
+     "source": "articles/a-011.md:1",
+     "title": "Painrur Bairkurk Zothvurk Zeamtren Purkthea Drethmous"
+    },
+    {
+     "id": "DOC-0090",
+     "score": 3,
+     "source": "articles/a-090.md:1",
+     "title": "Peboupend Durkceth Lendtiltail"
+    },
+    {
+     "id": "DOC-0015",
+     "score": 2,
+     "source": "articles/a-015.md:1",
+     "title": "Fethstark Pergomcith Baibearrun Koltreand Zothgoun Shimpea"
+    },
+    {
+     "id": "DOC-0048",
+     "score": 2,
+     "source": "articles/a-048.md:1",
+     "title": "Teardreabel Brorveal Gaizin Patrounzair"
+    },
+    {
+     "id": "DOC-0051",
+     "score": 2,
+     "source": "articles/a-051.md:1",
+     "title": "Lispaigark Brunshirk Pergomcith Nondgimkaim"
+    },
+    {
+     "id": "DOC-0056",
+     "score": 2,
+     "source": "articles/a-056.md:1",
+     "title": "Fondir Bairdraim Rifirkstir Gesstol Brodunnul Toundvu"
+    },
+    {
+     "id": "REC-0013",
+     "score": 2,
+     "source": "records/r-01.jsonl:13",
+     "title": "Balsoscai Thaimtailtun Furnendlous"
+    },
+    {
+     "id": "REC-0052",
+     "score": 2,
+     "source": "records/r-02.jsonl:24",
+     "title": "Traithroth Gormeathbair Shaithbrisro"
+    },
+    {
+     "id": "REC-0063",
+     "score": 2,
+     "source": "records/r-03.jsonl:3",
+     "title": "Tortrourk Gaizin Rarkpirk"
+    },
+    {
+     "id": "DOC-0004",
+     "score": 1,
+     "source": "articles/a-004.md:1",
+     "title": "Trainbri Fendnaim Brorveal"
+    }
+   ],
+   "limit": null,
+   "name": "h20",
+   "terms": [
+    "purkthea",
+    "PURKTHEA"
+   ]
+  }
+ ],
+ "ingest": {
+  "accepted": 216,
+  "rejected": [
+   {
+    "reason": "duplicate_id",
+    "source": "articles/archive/a-042-copy.md"
+   },
+   {
+    "reason": "empty",
+    "source": "misc/empty.md"
+   },
+   {
+    "reason": "too_large",
+    "source": "misc/huge.md"
+   },
+   {
+    "reason": "invalid_utf8",
+    "source": "misc/latin1.md"
+   },
+   {
+    "reason": "missing_field",
+    "source": "misc/no-id.md"
+   },
+   {
+    "reason": "missing_field",
+    "source": "misc/no-title.md"
+   },
+   {
+    "reason": "unsupported_type",
+    "source": "misc/readme.txt"
+   },
+   {
+    "reason": "empty",
+    "source": "records/empty.jsonl"
+   },
+   {
+    "reason": "missing_field",
+    "source": "records/r-02.jsonl:12"
+   },
+   {
+    "reason": "malformed_json",
+    "source": "records/r-02.jsonl:7"
+   },
+   {
+    "reason": "missing_field",
+    "source": "records/r-03.jsonl:16"
+   },
+   {
+    "reason": "missing_field",
+    "source": "records/r-03.jsonl:5"
+   },
+   {
+    "reason": "duplicate_id",
+    "source": "records/r-04.jsonl:20"
+   },
+   {
+    "reason": "malformed_json",
+    "source": "records/r-04.jsonl:25"
+   },
+   {
+    "reason": "duplicate_id",
+    "source": "records/r-04.jsonl:3"
+   }
+  ]
+ },
+ "outcome_classes": {
+  "complete": "ingest exact; public 10/10; held-out >= 18/20; export exact; tests exit 0 with >= 3 tests run; LIMITATIONS.md >= 200 bytes",
+  "none": "no catalog.py, or ingest does not exit 0",
+  "partial": "catalog.py exists and ingest exits 0, but not complete"
+ },
+ "public_queries": [
+  {
+   "expected": [
+    {
+     "id": "DOC-0035",
+     "score": 1,
+     "source": "articles/a-035.md:1",
+     "title": "Rothbairnel Moskakles Culaind Gemtul Pomthais Brunshirk"
+    },
+    {
+     "id": "DOC-0045",
+     "score": 1,
+     "source": "articles/a-045.md:1",
+     "title": "Toundrarnel Gaizin Thillin"
+    },
+    {
+     "id": "DOC-0082",
+     "score": 1,
+     "source": "articles/a-082.md:1",
+     "title": "Vaisnilbrin Treapear Droszidruth Fosvor Zalrilma"
+    },
+    {
+     "id": "DOC-0085",
+     "score": 1,
+     "source": "articles/a-085.md:1",
+     "title": "Thupoun Nimsteam Sirthain"
+    },
+    {
+     "id": "DOC-0086",
+     "score": 1,
+     "source": "articles/a-086.md:1",
+     "title": "Vairtream Kestouthval Dreasthom Rairklus"
+    },
+    {
+     "id": "DOC-0090",
+     "score": 1,
+     "source": "articles/a-090.md:1",
+     "title": "Peboupend Durkceth Lendtiltail"
+    },
+    {
+     "id": "REC-0030",
+     "score": 1,
+     "source": "records/r-01.jsonl:30",
+     "title": "Stengutrel Founnamnath Rearsaim"
+    },
+    {
+     "id": "REC-0037",
+     "score": 1,
+     "source": "records/r-02.jsonl:8",
+     "title": "Thufeda Steathshuva Goumpamain"
+    },
+    {
+     "id": "REC-0049",
+     "score": 1,
+     "source": "records/r-02.jsonl:21",
+     "title": "Vairdaipail Tailfo Beasthain Tarka Nulon"
+    },
+    {
+     "id": "REC-0072",
+     "score": 1,
+     "source": "records/r-03.jsonl:14",
+     "title": "Gormeathbair Starsheanpea Steklon Brosvand"
+    }
+   ],
+   "limit": null,
+   "name": "p01",
+   "terms": [
+    "bithbourgur"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0004",
+     "score": 1,
+     "source": "articles/a-004.md:1",
+     "title": "Trainbri Fendnaim Brorveal"
+    },
+    {
+     "id": "DOC-0013",
+     "score": 1,
+     "source": "articles/a-013.md:1",
+     "title": "Gormeathbair Deathdroum Zerkeacen"
+    },
+    {
+     "id": "DOC-0057",
+     "score": 1,
+     "source": "articles/a-057.md:1",
+     "title": "Kerkbrourk Lurkrinddas Founnamnath Tarka Loulal"
+    },
+    {
+     "id": "DOC-0065",
+     "score": 1,
+     "source": "articles/a-065.md:1",
+     "title": "Seadoursith Disur Nurkrandrim"
+    },
+    {
+     "id": "REC-0102",
+     "score": 1,
+     "source": "records/r-04.jsonl:13",
+     "title": "Lirnas Genbouthstea Kezealpean"
+    }
+   ],
+   "limit": null,
+   "name": "p02",
+   "terms": [
+    "thousbondlus"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0014",
+     "score": 2,
+     "source": "articles/a-014.md:1",
+     "title": "Noumgoufouth Thufeda Traispo"
+    },
+    {
+     "id": "DOC-0034",
+     "score": 1,
+     "source": "articles/a-034.md:1",
+     "title": "Markloum Shimpea Gundfarstark"
+    },
+    {
+     "id": "DOC-0036",
+     "score": 1,
+     "source": "articles/a-036.md:1",
+     "title": "Learksor Burkshildrai Kolbaim"
+    },
+    {
+     "id": "DOC-0043",
+     "score": 1,
+     "source": "articles/a-043.md:1",
+     "title": "Pukambren Drindreshes Baibearrun Digaithzes Tunta"
+    },
+    {
+     "id": "DOC-0068",
+     "score": 1,
+     "source": "articles/a-068.md:1",
+     "title": "Nulon Porkzemmais Touthfon"
+    },
+    {
+     "id": "DOC-0071",
+     "score": 1,
+     "source": "articles/a-071.md:1",
+     "title": "Thifoudol Traispo Rairrum Moumso"
+    },
+    {
+     "id": "DOC-0077",
+     "score": 1,
+     "source": "articles/a-077.md:1",
+     "title": "Treasnerk Tuzus Trainnorol Dairkdis Bromrean Sholdrour"
+    },
+    {
+     "id": "REC-0011",
+     "score": 1,
+     "source": "records/r-01.jsonl:11",
+     "title": "Memkasthus Fougotrath Seadoursith Ferknom"
+    },
+    {
+     "id": "REC-0041",
+     "score": 1,
+     "source": "records/r-02.jsonl:13",
+     "title": "Tunke Kousnushourk Drindreshes Fondir Tailfo Gundfarstark"
+    },
+    {
+     "id": "REC-0083",
+     "score": 1,
+     "source": "records/r-03.jsonl:26",
+     "title": "Norktos Sethsa Darburk"
+    }
+   ],
+   "limit": null,
+   "name": "p03",
+   "terms": [
+    "traispo"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0004",
+     "score": 1,
+     "source": "articles/a-004.md:1",
+     "title": "Trainbri Fendnaim Brorveal"
+    },
+    {
+     "id": "DOC-0040",
+     "score": 1,
+     "source": "articles/a-040.md:1",
+     "title": "Furnendlous Nunddrend Thineaklom"
+    },
+    {
+     "id": "DOC-0055",
+     "score": 1,
+     "source": "articles/a-055.md:1",
+     "title": "Paisguth Rofai Curkkos Caikleth Zothgoun Bendvozu"
+    },
+    {
+     "id": "DOC-0060",
+     "score": 1,
+     "source": "articles/a-060.md:1",
+     "title": "Nimsteam Fithboul Pomthais Bethbain"
+    },
+    {
+     "id": "DOC-0076",
+     "score": 1,
+     "source": "articles/a-076.md:1",
+     "title": "Rendnealbath Vasstarper Stothtaind Brousenbail"
+    },
+    {
+     "id": "DOC-0077",
+     "score": 1,
+     "source": "articles/a-077.md:1",
+     "title": "Treasnerk Tuzus Trainnorol Dairkdis Bromrean Sholdrour"
+    },
+    {
+     "id": "DOC-0081",
+     "score": 1,
+     "source": "articles/a-081.md:1",
+     "title": "Ferknom Nainolleam Pathmul"
+    },
+    {
+     "id": "DOC-0083",
+     "score": 1,
+     "source": "articles/a-083.md:1",
+     "title": "Darburk Stareamaim Tindlal Digaithzes Cealzer Rothbairnel"
+    },
+    {
+     "id": "REC-0035",
+     "score": 1,
+     "source": "records/r-02.jsonl:5",
+     "title": "Rearsaim Fithboul Kilnibal Kezealpean"
+    },
+    {
+     "id": "REC-0052",
+     "score": 1,
+     "source": "records/r-02.jsonl:24",
+     "title": "Traithroth Gormeathbair Shaithbrisro"
+    }
+   ],
+   "limit": null,
+   "name": "p04",
+   "terms": [
+    "reaneath"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0062",
+     "score": 2,
+     "source": "articles/a-062.md:1",
+     "title": "Bethbain Culaind Lusterk Breasshend Sarzem Bairkurk"
+    },
+    {
+     "id": "DOC-0002",
+     "score": 1,
+     "source": "articles/a-002.md:1",
+     "title": "Moskakles Trontrairdar Thoththul Gonthudourk Fustoun"
+    },
+    {
+     "id": "DOC-0038",
+     "score": 1,
+     "source": "articles/a-038.md:1",
+     "title": "Kesdrur Learksor Klourkna Vuklaland Fendnaim Vairtream"
+    },
+    {
+     "id": "DOC-0041",
+     "score": 1,
+     "source": "articles/a-041.md:1",
+     "title": "Pomthais Zousrear Stemsteasmou Firktrourk"
+    },
+    {
+     "id": "DOC-0073",
+     "score": 1,
+     "source": "articles/a-073.md:1",
+     "title": "Neszunnil Vaslos Thaindnu Sholdrour Bairsti Kepusklus"
+    },
+    {
+     "id": "DOC-0076",
+     "score": 1,
+     "source": "articles/a-076.md:1",
+     "title": "Rendnealbath Vasstarper Stothtaind Brousenbail"
+    },
+    {
+     "id": "REC-0001",
+     "score": 1,
+     "source": "records/r-01.jsonl:1",
+     "title": "Kilmoun Kasea Breasshend"
+    }
+   ],
+   "limit": null,
+   "name": "p05",
+   "terms": [
+    "vuklaland"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0013",
+     "score": 3,
+     "source": "articles/a-013.md:1",
+     "title": "Gormeathbair Deathdroum Zerkeacen"
+    },
+    {
+     "id": "DOC-0051",
+     "score": 3,
+     "source": "articles/a-051.md:1",
+     "title": "Lispaigark Brunshirk Pergomcith Nondgimkaim"
+    },
+    {
+     "id": "DOC-0055",
+     "score": 3,
+     "source": "articles/a-055.md:1",
+     "title": "Paisguth Rofai Curkkos Caikleth Zothgoun Bendvozu"
+    },
+    {
+     "id": "DOC-0056",
+     "score": 3,
+     "source": "articles/a-056.md:1",
+     "title": "Fondir Bairdraim Rifirkstir Gesstol Brodunnul Toundvu"
+    },
+    {
+     "id": "DOC-0026",
+     "score": 2,
+     "source": "articles/a-026.md:1",
+     "title": "Zousrear Peboupend Lendtiltail Teardreabel Tashounketh"
+    },
+    {
+     "id": "DOC-0068",
+     "score": 2,
+     "source": "articles/a-068.md:1",
+     "title": "Nulon Porkzemmais Touthfon"
+    },
+    {
+     "id": "DOC-0070",
+     "score": 2,
+     "source": "articles/a-070.md:1",
+     "title": "Thailsentrom Tuzus Nurkrandrim Bendbroul Stemsteasmou"
+    },
+    {
+     "id": "DOC-0075",
+     "score": 2,
+     "source": "articles/a-075.md:1",
+     "title": "Bamnairk Culaind Theanzind Drilurklas Curkkos Treamlous"
+    },
+    {
+     "id": "DOC-0080",
+     "score": 2,
+     "source": "articles/a-080.md:1",
+     "title": "Furnendlous Rouscor Nealthambark"
+    },
+    {
+     "id": "REC-0026",
+     "score": 2,
+     "source": "records/r-01.jsonl:26",
+     "title": "Brosvand Vasstarper Vaslos Trairnoupam Klarbolgeark"
+    }
+   ],
+   "limit": null,
+   "name": "p06",
+   "terms": [
+    "brosvand",
+    "tashounketh"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0019",
+     "score": 4,
+     "source": "articles/a-019.md:1",
+     "title": "Shondtrudar Merksteath Cailanzork"
+    },
+    {
+     "id": "DOC-0051",
+     "score": 3,
+     "source": "articles/a-051.md:1",
+     "title": "Lispaigark Brunshirk Pergomcith Nondgimkaim"
+    },
+    {
+     "id": "DOC-0041",
+     "score": 2,
+     "source": "articles/a-041.md:1",
+     "title": "Pomthais Zousrear Stemsteasmou Firktrourk"
+    },
+    {
+     "id": "DOC-0050",
+     "score": 2,
+     "source": "articles/a-050.md:1",
+     "title": "Tarka Thifoudol Vendfoul Pomthais Shurklou"
+    },
+    {
+     "id": "DOC-0063",
+     "score": 2,
+     "source": "articles/a-063.md:1",
+     "title": "Kodinfith Theanzind Markdrourrin Kalstes"
+    }
+   ],
+   "limit": null,
+   "name": "p07",
+   "terms": [
+    "taindrand",
+    "seadoursith"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0069",
+     "score": 4,
+     "source": "articles/a-069.md:1",
+     "title": "Tindlal Lembrem Gourkzou"
+    },
+    {
+     "id": "DOC-0005",
+     "score": 3,
+     "source": "articles/a-005.md:1",
+     "title": "Shemraimrend Mourvoun Tailfo"
+    },
+    {
+     "id": "DOC-0067",
+     "score": 3,
+     "source": "articles/a-067.md:1",
+     "title": "Dreasklealai Porktethbas Gonthudourk Brunddrabren"
+    },
+    {
+     "id": "DOC-0004",
+     "score": 2,
+     "source": "articles/a-004.md:1",
+     "title": "Trainbri Fendnaim Brorveal"
+    },
+    {
+     "id": "DOC-0016",
+     "score": 2,
+     "source": "articles/a-016.md:1",
+     "title": "Pelstomo Seadoursith Zethurkkland"
+    },
+    {
+     "id": "DOC-0019",
+     "score": 2,
+     "source": "articles/a-019.md:1",
+     "title": "Shondtrudar Merksteath Cailanzork"
+    },
+    {
+     "id": "DOC-0061",
+     "score": 2,
+     "source": "articles/a-061.md:1",
+     "title": "Brulgesto Lundvalvai Loulal Daltru Kolbaim"
+    },
+    {
+     "id": "DOC-0062",
+     "score": 2,
+     "source": "articles/a-062.md:1",
+     "title": "Bethbain Culaind Lusterk Breasshend Sarzem Bairkurk"
+    },
+    {
+     "id": "DOC-0094",
+     "score": 2,
+     "source": "articles/archive/a-094.md:1",
+     "title": "Drethmous Traithroth Trilkluth Fethstark Thaindnu"
+    },
+    {
+     "id": "REC-0026",
+     "score": 2,
+     "source": "records/r-01.jsonl:26",
+     "title": "Brosvand Vasstarper Vaslos Trairnoupam Klarbolgeark"
+    }
+   ],
+   "limit": null,
+   "name": "p08",
+   "terms": [
+    "deanga",
+    "pelstomo"
+   ]
+  },
+  {
+   "expected": [
+    {
+     "id": "DOC-0069",
+     "score": 4,
+     "source": "articles/a-069.md:1",
+     "title": "Tindlal Lembrem Gourkzou"
+    },
+    {
+     "id": "DOC-0009",
+     "score": 3,
+     "source": "articles/a-009.md:1",
+     "title": "Fulmound Vathmeark Bairsti Dresthair Kilnibal Taiser"
+    },
+    {
+     "id": "DOC-0023",
+     "score": 3,
+     "source": "articles/a-023.md:1",
+     "title": "Fondir Sirros Drindreshes Shaithbrisro Nadeamvoth Pandren"
+    }
+   ],
+   "limit": 3,
+   "name": "p09",
+   "terms": [
+    "noushourk"
+   ]
+  },
+  {
+   "expected": [],
+   "limit": null,
+   "name": "p10",
+   "terms": [
+    "nonexistentterm"
+   ]
+  }
+ ],
+ "schema": "e02-early-criteria/1",
+ "seed": {
+  "bytes": 8610195,
+  "files": 110,
+  "tree_sha256": "11627784e90017b00e736e8c5b703773bc3ca7ba2b270c07a87d51020d41ef9c"
+ },
+ "spec_id": "e02-catalogue-spec",
+ "toolchain": {
+  "python": "/usr/bin/python3",
+  "stdlib_only": true,
+  "version": "Python 3.9.6"
+ }
+}

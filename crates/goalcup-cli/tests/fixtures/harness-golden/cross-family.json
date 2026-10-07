@@ -1,0 +1,2049 @@
+{
+  "argv_guard_by_family": {
+    "claude-code": [
+      [
+        "--remote",
+        null
+      ],
+      [
+        "--remote=host",
+        null
+      ],
+      [
+        "remote",
+        null
+      ],
+      [
+        "REMOTE",
+        null
+      ],
+      [
+        "remote-control",
+        null
+      ],
+      [
+        "cloud",
+        null
+      ],
+      [
+        "--oss",
+        null
+      ],
+      [
+        "--local-provider",
+        null
+      ],
+      [
+        "--ephemeral",
+        null
+      ],
+      [
+        "--no-session-persistence",
+        null
+      ],
+      [
+        "--settings",
+        null
+      ],
+      [
+        "--settings=/x.json",
+        null
+      ],
+      [
+        "--profile",
+        null
+      ],
+      [
+        "--profile=work",
+        null
+      ],
+      [
+        "--plugin-dir",
+        null
+      ],
+      [
+        "--base-url=http://x",
+        null
+      ],
+      [
+        "--base_url",
+        null
+      ],
+      [
+        "openai_base_url=http://x",
+        null
+      ],
+      [
+        "ANTHROPIC_BASE_URL=http://x",
+        null
+      ],
+      [
+        "{\"baseUrl\":\"http://x\"}",
+        null
+      ],
+      [
+        "--api-url=http://x",
+        null
+      ],
+      [
+        "--endpoint=http://x",
+        null
+      ],
+      [
+        "--model-provider=x",
+        null
+      ],
+      [
+        "--bedrock",
+        null
+      ],
+      [
+        "--vertex",
+        null
+      ],
+      [
+        "--foundry",
+        null
+      ],
+      [
+        "profile=x",
+        null
+      ],
+      [
+        "--api-key=k",
+        null
+      ],
+      [
+        "--auth-token=k",
+        null
+      ],
+      [
+        "Authorization: Bearer k",
+        null
+      ],
+      [
+        "--credential=k",
+        null
+      ],
+      [
+        "--proxy=http://x",
+        null
+      ],
+      [
+        "--cacert=x",
+        null
+      ],
+      [
+        "--ca-bundle=x",
+        null
+      ],
+      [
+        "--certfile=x",
+        null
+      ],
+      [
+        "--reject-unauthorized=false",
+        null
+      ],
+      [
+        "--otel-exporter=x",
+        null
+      ],
+      [
+        "DYLD_INSERT_LIBRARIES=x",
+        null
+      ],
+      [
+        "LD_PRELOAD=x",
+        null
+      ],
+      [
+        "--node-options=--require",
+        null
+      ],
+      [
+        "--bun-options=x",
+        null
+      ],
+      [
+        "-Q",
+        null
+      ],
+      [
+        "-p",
+        null
+      ],
+      [
+        "-pwork",
+        null
+      ],
+      [
+        "-p=work",
+        null
+      ],
+      [
+        "-h",
+        null
+      ],
+      [
+        "-Qh",
+        null
+      ],
+      [
+        "-Qp",
+        null
+      ],
+      [
+        "-Qpfoo",
+        null
+      ],
+      [
+        "-Qmfoo",
+        null
+      ],
+      [
+        "-Qmph",
+        null
+      ],
+      [
+        "-m",
+        null
+      ],
+      [
+        "-z",
+        null
+      ],
+      [
+        "-t",
+        null
+      ],
+      [
+        "-r",
+        null
+      ],
+      [
+        "-s",
+        null
+      ],
+      [
+        "-q",
+        null
+      ],
+      [
+        "-c",
+        null
+      ],
+      [
+        "-C",
+        null
+      ],
+      [
+        "-",
+        null
+      ],
+      [
+        "--",
+        null
+      ],
+      [
+        "chat",
+        null
+      ],
+      [
+        "exec",
+        null
+      ],
+      [
+        "--json",
+        null
+      ],
+      [
+        "--provider",
+        null
+      ],
+      [
+        "--model",
+        null
+      ],
+      [
+        "--model=x",
+        null
+      ],
+      [
+        "--query",
+        null
+      ],
+      [
+        "--query=hello",
+        null
+      ],
+      [
+        "--prof",
+        null
+      ],
+      [
+        "--profil",
+        null
+      ],
+      [
+        "--p",
+        null
+      ],
+      [
+        "--pro",
+        null
+      ],
+      [
+        "--tu",
+        null
+      ],
+      [
+        "--tui",
+        null
+      ],
+      [
+        "--cli",
+        null
+      ],
+      [
+        "--cl",
+        null
+      ],
+      [
+        "--c",
+        null
+      ],
+      [
+        "--hel",
+        null
+      ],
+      [
+        "--help",
+        null
+      ],
+      [
+        "--he",
+        null
+      ],
+      [
+        "--h",
+        null
+      ],
+      [
+        "--help=x",
+        null
+      ],
+      [
+        "--tui=x",
+        null
+      ],
+      [
+        "--ta",
+        null
+      ],
+      [
+        "--permission-mode",
+        null
+      ],
+      [
+        "--session-id",
+        null
+      ],
+      [
+        "--output-format",
+        null
+      ],
+      [
+        "--strict-mcp-config",
+        null
+      ],
+      [
+        "--skip-git-repo-check",
+        null
+      ]
+    ],
+    "codex": [
+      [
+        "--remote",
+        null
+      ],
+      [
+        "--remote=host",
+        null
+      ],
+      [
+        "remote",
+        null
+      ],
+      [
+        "REMOTE",
+        null
+      ],
+      [
+        "remote-control",
+        null
+      ],
+      [
+        "cloud",
+        null
+      ],
+      [
+        "--oss",
+        null
+      ],
+      [
+        "--local-provider",
+        null
+      ],
+      [
+        "--ephemeral",
+        null
+      ],
+      [
+        "--no-session-persistence",
+        null
+      ],
+      [
+        "--settings",
+        null
+      ],
+      [
+        "--settings=/x.json",
+        null
+      ],
+      [
+        "--profile",
+        null
+      ],
+      [
+        "--profile=work",
+        null
+      ],
+      [
+        "--plugin-dir",
+        null
+      ],
+      [
+        "--base-url=http://x",
+        null
+      ],
+      [
+        "--base_url",
+        null
+      ],
+      [
+        "openai_base_url=http://x",
+        null
+      ],
+      [
+        "ANTHROPIC_BASE_URL=http://x",
+        null
+      ],
+      [
+        "{\"baseUrl\":\"http://x\"}",
+        null
+      ],
+      [
+        "--api-url=http://x",
+        null
+      ],
+      [
+        "--endpoint=http://x",
+        null
+      ],
+      [
+        "--model-provider=x",
+        null
+      ],
+      [
+        "--bedrock",
+        null
+      ],
+      [
+        "--vertex",
+        null
+      ],
+      [
+        "--foundry",
+        null
+      ],
+      [
+        "profile=x",
+        null
+      ],
+      [
+        "--api-key=k",
+        null
+      ],
+      [
+        "--auth-token=k",
+        null
+      ],
+      [
+        "Authorization: Bearer k",
+        null
+      ],
+      [
+        "--credential=k",
+        null
+      ],
+      [
+        "--proxy=http://x",
+        null
+      ],
+      [
+        "--cacert=x",
+        null
+      ],
+      [
+        "--ca-bundle=x",
+        null
+      ],
+      [
+        "--certfile=x",
+        null
+      ],
+      [
+        "--reject-unauthorized=false",
+        null
+      ],
+      [
+        "--otel-exporter=x",
+        null
+      ],
+      [
+        "DYLD_INSERT_LIBRARIES=x",
+        null
+      ],
+      [
+        "LD_PRELOAD=x",
+        null
+      ],
+      [
+        "--node-options=--require",
+        null
+      ],
+      [
+        "--bun-options=x",
+        null
+      ],
+      [
+        "-Q",
+        null
+      ],
+      [
+        "-p",
+        null
+      ],
+      [
+        "-pwork",
+        null
+      ],
+      [
+        "-p=work",
+        null
+      ],
+      [
+        "-h",
+        null
+      ],
+      [
+        "-Qh",
+        null
+      ],
+      [
+        "-Qp",
+        null
+      ],
+      [
+        "-Qpfoo",
+        null
+      ],
+      [
+        "-Qmfoo",
+        null
+      ],
+      [
+        "-Qmph",
+        null
+      ],
+      [
+        "-m",
+        null
+      ],
+      [
+        "-z",
+        null
+      ],
+      [
+        "-t",
+        null
+      ],
+      [
+        "-r",
+        null
+      ],
+      [
+        "-s",
+        null
+      ],
+      [
+        "-q",
+        null
+      ],
+      [
+        "-c",
+        null
+      ],
+      [
+        "-C",
+        null
+      ],
+      [
+        "-",
+        null
+      ],
+      [
+        "--",
+        null
+      ],
+      [
+        "chat",
+        null
+      ],
+      [
+        "exec",
+        null
+      ],
+      [
+        "--json",
+        null
+      ],
+      [
+        "--provider",
+        null
+      ],
+      [
+        "--model",
+        null
+      ],
+      [
+        "--model=x",
+        null
+      ],
+      [
+        "--query",
+        null
+      ],
+      [
+        "--query=hello",
+        null
+      ],
+      [
+        "--prof",
+        null
+      ],
+      [
+        "--profil",
+        null
+      ],
+      [
+        "--p",
+        null
+      ],
+      [
+        "--pro",
+        null
+      ],
+      [
+        "--tu",
+        null
+      ],
+      [
+        "--tui",
+        null
+      ],
+      [
+        "--cli",
+        null
+      ],
+      [
+        "--cl",
+        null
+      ],
+      [
+        "--c",
+        null
+      ],
+      [
+        "--hel",
+        null
+      ],
+      [
+        "--help",
+        null
+      ],
+      [
+        "--he",
+        null
+      ],
+      [
+        "--h",
+        null
+      ],
+      [
+        "--help=x",
+        null
+      ],
+      [
+        "--tui=x",
+        null
+      ],
+      [
+        "--ta",
+        null
+      ],
+      [
+        "--permission-mode",
+        null
+      ],
+      [
+        "--session-id",
+        null
+      ],
+      [
+        "--output-format",
+        null
+      ],
+      [
+        "--strict-mcp-config",
+        null
+      ],
+      [
+        "--skip-git-repo-check",
+        null
+      ]
+    ],
+    "controlled-workload": [
+      [
+        "--remote",
+        null
+      ],
+      [
+        "--remote=host",
+        null
+      ],
+      [
+        "remote",
+        null
+      ],
+      [
+        "REMOTE",
+        null
+      ],
+      [
+        "remote-control",
+        null
+      ],
+      [
+        "cloud",
+        null
+      ],
+      [
+        "--oss",
+        null
+      ],
+      [
+        "--local-provider",
+        null
+      ],
+      [
+        "--ephemeral",
+        null
+      ],
+      [
+        "--no-session-persistence",
+        null
+      ],
+      [
+        "--settings",
+        null
+      ],
+      [
+        "--settings=/x.json",
+        null
+      ],
+      [
+        "--profile",
+        null
+      ],
+      [
+        "--profile=work",
+        null
+      ],
+      [
+        "--plugin-dir",
+        null
+      ],
+      [
+        "--base-url=http://x",
+        null
+      ],
+      [
+        "--base_url",
+        null
+      ],
+      [
+        "openai_base_url=http://x",
+        null
+      ],
+      [
+        "ANTHROPIC_BASE_URL=http://x",
+        null
+      ],
+      [
+        "{\"baseUrl\":\"http://x\"}",
+        null
+      ],
+      [
+        "--api-url=http://x",
+        null
+      ],
+      [
+        "--endpoint=http://x",
+        null
+      ],
+      [
+        "--model-provider=x",
+        null
+      ],
+      [
+        "--bedrock",
+        null
+      ],
+      [
+        "--vertex",
+        null
+      ],
+      [
+        "--foundry",
+        null
+      ],
+      [
+        "profile=x",
+        null
+      ],
+      [
+        "--api-key=k",
+        null
+      ],
+      [
+        "--auth-token=k",
+        null
+      ],
+      [
+        "Authorization: Bearer k",
+        null
+      ],
+      [
+        "--credential=k",
+        null
+      ],
+      [
+        "--proxy=http://x",
+        null
+      ],
+      [
+        "--cacert=x",
+        null
+      ],
+      [
+        "--ca-bundle=x",
+        null
+      ],
+      [
+        "--certfile=x",
+        null
+      ],
+      [
+        "--reject-unauthorized=false",
+        null
+      ],
+      [
+        "--otel-exporter=x",
+        null
+      ],
+      [
+        "DYLD_INSERT_LIBRARIES=x",
+        null
+      ],
+      [
+        "LD_PRELOAD=x",
+        null
+      ],
+      [
+        "--node-options=--require",
+        null
+      ],
+      [
+        "--bun-options=x",
+        null
+      ],
+      [
+        "-Q",
+        null
+      ],
+      [
+        "-p",
+        null
+      ],
+      [
+        "-pwork",
+        null
+      ],
+      [
+        "-p=work",
+        null
+      ],
+      [
+        "-h",
+        null
+      ],
+      [
+        "-Qh",
+        null
+      ],
+      [
+        "-Qp",
+        null
+      ],
+      [
+        "-Qpfoo",
+        null
+      ],
+      [
+        "-Qmfoo",
+        null
+      ],
+      [
+        "-Qmph",
+        null
+      ],
+      [
+        "-m",
+        null
+      ],
+      [
+        "-z",
+        null
+      ],
+      [
+        "-t",
+        null
+      ],
+      [
+        "-r",
+        null
+      ],
+      [
+        "-s",
+        null
+      ],
+      [
+        "-q",
+        null
+      ],
+      [
+        "-c",
+        null
+      ],
+      [
+        "-C",
+        null
+      ],
+      [
+        "-",
+        null
+      ],
+      [
+        "--",
+        null
+      ],
+      [
+        "chat",
+        null
+      ],
+      [
+        "exec",
+        null
+      ],
+      [
+        "--json",
+        null
+      ],
+      [
+        "--provider",
+        null
+      ],
+      [
+        "--model",
+        null
+      ],
+      [
+        "--model=x",
+        null
+      ],
+      [
+        "--query",
+        null
+      ],
+      [
+        "--query=hello",
+        null
+      ],
+      [
+        "--prof",
+        null
+      ],
+      [
+        "--profil",
+        null
+      ],
+      [
+        "--p",
+        null
+      ],
+      [
+        "--pro",
+        null
+      ],
+      [
+        "--tu",
+        null
+      ],
+      [
+        "--tui",
+        null
+      ],
+      [
+        "--cli",
+        null
+      ],
+      [
+        "--cl",
+        null
+      ],
+      [
+        "--c",
+        null
+      ],
+      [
+        "--hel",
+        null
+      ],
+      [
+        "--help",
+        null
+      ],
+      [
+        "--he",
+        null
+      ],
+      [
+        "--h",
+        null
+      ],
+      [
+        "--help=x",
+        null
+      ],
+      [
+        "--tui=x",
+        null
+      ],
+      [
+        "--ta",
+        null
+      ],
+      [
+        "--permission-mode",
+        null
+      ],
+      [
+        "--session-id",
+        null
+      ],
+      [
+        "--output-format",
+        null
+      ],
+      [
+        "--strict-mcp-config",
+        null
+      ],
+      [
+        "--skip-git-repo-check",
+        null
+      ]
+    ],
+    "hermes": [
+      [
+        "--remote",
+        null
+      ],
+      [
+        "--remote=host",
+        null
+      ],
+      [
+        "remote",
+        null
+      ],
+      [
+        "REMOTE",
+        null
+      ],
+      [
+        "remote-control",
+        null
+      ],
+      [
+        "cloud",
+        null
+      ],
+      [
+        "--oss",
+        null
+      ],
+      [
+        "--local-provider",
+        null
+      ],
+      [
+        "--ephemeral",
+        null
+      ],
+      [
+        "--no-session-persistence",
+        null
+      ],
+      [
+        "--settings",
+        null
+      ],
+      [
+        "--settings=/x.json",
+        null
+      ],
+      [
+        "--profile",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--profile=work",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--plugin-dir",
+        null
+      ],
+      [
+        "--base-url=http://x",
+        null
+      ],
+      [
+        "--base_url",
+        null
+      ],
+      [
+        "openai_base_url=http://x",
+        null
+      ],
+      [
+        "ANTHROPIC_BASE_URL=http://x",
+        null
+      ],
+      [
+        "{\"baseUrl\":\"http://x\"}",
+        null
+      ],
+      [
+        "--api-url=http://x",
+        null
+      ],
+      [
+        "--endpoint=http://x",
+        null
+      ],
+      [
+        "--model-provider=x",
+        null
+      ],
+      [
+        "--bedrock",
+        null
+      ],
+      [
+        "--vertex",
+        null
+      ],
+      [
+        "--foundry",
+        null
+      ],
+      [
+        "profile=x",
+        null
+      ],
+      [
+        "--api-key=k",
+        null
+      ],
+      [
+        "--auth-token=k",
+        null
+      ],
+      [
+        "Authorization: Bearer k",
+        null
+      ],
+      [
+        "--credential=k",
+        null
+      ],
+      [
+        "--proxy=http://x",
+        null
+      ],
+      [
+        "--cacert=x",
+        null
+      ],
+      [
+        "--ca-bundle=x",
+        null
+      ],
+      [
+        "--certfile=x",
+        null
+      ],
+      [
+        "--reject-unauthorized=false",
+        null
+      ],
+      [
+        "--otel-exporter=x",
+        null
+      ],
+      [
+        "DYLD_INSERT_LIBRARIES=x",
+        null
+      ],
+      [
+        "LD_PRELOAD=x",
+        null
+      ],
+      [
+        "--node-options=--require",
+        null
+      ],
+      [
+        "--bun-options=x",
+        null
+      ],
+      [
+        "-Q",
+        null
+      ],
+      [
+        "-p",
+        "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)"
+      ],
+      [
+        "-pwork",
+        "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)"
+      ],
+      [
+        "-p=work",
+        "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)"
+      ],
+      [
+        "-h",
+        "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)"
+      ],
+      [
+        "-Qh",
+        "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)"
+      ],
+      [
+        "-Qp",
+        "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)"
+      ],
+      [
+        "-Qpfoo",
+        "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)"
+      ],
+      [
+        "-Qmfoo",
+        null
+      ],
+      [
+        "-Qmph",
+        null
+      ],
+      [
+        "-m",
+        null
+      ],
+      [
+        "-z",
+        null
+      ],
+      [
+        "-t",
+        null
+      ],
+      [
+        "-r",
+        null
+      ],
+      [
+        "-s",
+        null
+      ],
+      [
+        "-q",
+        null
+      ],
+      [
+        "-c",
+        null
+      ],
+      [
+        "-C",
+        null
+      ],
+      [
+        "-",
+        null
+      ],
+      [
+        "--",
+        null
+      ],
+      [
+        "chat",
+        null
+      ],
+      [
+        "exec",
+        null
+      ],
+      [
+        "--json",
+        null
+      ],
+      [
+        "--provider",
+        null
+      ],
+      [
+        "--model",
+        null
+      ],
+      [
+        "--model=x",
+        null
+      ],
+      [
+        "--query",
+        null
+      ],
+      [
+        "--query=hello",
+        null
+      ],
+      [
+        "--prof",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--profil",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--p",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--pro",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--tu",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--tui",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--cli",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--cl",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--c",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--hel",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--help",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--he",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--h",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--help=x",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--tui=x",
+        "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
+      ],
+      [
+        "--ta",
+        null
+      ],
+      [
+        "--permission-mode",
+        null
+      ],
+      [
+        "--session-id",
+        null
+      ],
+      [
+        "--output-format",
+        null
+      ],
+      [
+        "--strict-mcp-config",
+        null
+      ],
+      [
+        "--skip-git-repo-check",
+        null
+      ]
+    ],
+    "opencode": [
+      [
+        "--remote",
+        null
+      ],
+      [
+        "--remote=host",
+        null
+      ],
+      [
+        "remote",
+        null
+      ],
+      [
+        "REMOTE",
+        null
+      ],
+      [
+        "remote-control",
+        null
+      ],
+      [
+        "cloud",
+        null
+      ],
+      [
+        "--oss",
+        null
+      ],
+      [
+        "--local-provider",
+        null
+      ],
+      [
+        "--ephemeral",
+        null
+      ],
+      [
+        "--no-session-persistence",
+        null
+      ],
+      [
+        "--settings",
+        null
+      ],
+      [
+        "--settings=/x.json",
+        null
+      ],
+      [
+        "--profile",
+        null
+      ],
+      [
+        "--profile=work",
+        null
+      ],
+      [
+        "--plugin-dir",
+        null
+      ],
+      [
+        "--base-url=http://x",
+        null
+      ],
+      [
+        "--base_url",
+        null
+      ],
+      [
+        "openai_base_url=http://x",
+        null
+      ],
+      [
+        "ANTHROPIC_BASE_URL=http://x",
+        null
+      ],
+      [
+        "{\"baseUrl\":\"http://x\"}",
+        null
+      ],
+      [
+        "--api-url=http://x",
+        null
+      ],
+      [
+        "--endpoint=http://x",
+        null
+      ],
+      [
+        "--model-provider=x",
+        null
+      ],
+      [
+        "--bedrock",
+        null
+      ],
+      [
+        "--vertex",
+        null
+      ],
+      [
+        "--foundry",
+        null
+      ],
+      [
+        "profile=x",
+        null
+      ],
+      [
+        "--api-key=k",
+        null
+      ],
+      [
+        "--auth-token=k",
+        null
+      ],
+      [
+        "Authorization: Bearer k",
+        null
+      ],
+      [
+        "--credential=k",
+        null
+      ],
+      [
+        "--proxy=http://x",
+        null
+      ],
+      [
+        "--cacert=x",
+        null
+      ],
+      [
+        "--ca-bundle=x",
+        null
+      ],
+      [
+        "--certfile=x",
+        null
+      ],
+      [
+        "--reject-unauthorized=false",
+        null
+      ],
+      [
+        "--otel-exporter=x",
+        null
+      ],
+      [
+        "DYLD_INSERT_LIBRARIES=x",
+        null
+      ],
+      [
+        "LD_PRELOAD=x",
+        null
+      ],
+      [
+        "--node-options=--require",
+        null
+      ],
+      [
+        "--bun-options=x",
+        null
+      ],
+      [
+        "-Q",
+        null
+      ],
+      [
+        "-p",
+        null
+      ],
+      [
+        "-pwork",
+        null
+      ],
+      [
+        "-p=work",
+        null
+      ],
+      [
+        "-h",
+        null
+      ],
+      [
+        "-Qh",
+        null
+      ],
+      [
+        "-Qp",
+        null
+      ],
+      [
+        "-Qpfoo",
+        null
+      ],
+      [
+        "-Qmfoo",
+        null
+      ],
+      [
+        "-Qmph",
+        null
+      ],
+      [
+        "-m",
+        null
+      ],
+      [
+        "-z",
+        null
+      ],
+      [
+        "-t",
+        null
+      ],
+      [
+        "-r",
+        null
+      ],
+      [
+        "-s",
+        null
+      ],
+      [
+        "-q",
+        null
+      ],
+      [
+        "-c",
+        null
+      ],
+      [
+        "-C",
+        null
+      ],
+      [
+        "-",
+        null
+      ],
+      [
+        "--",
+        null
+      ],
+      [
+        "chat",
+        null
+      ],
+      [
+        "exec",
+        null
+      ],
+      [
+        "--json",
+        null
+      ],
+      [
+        "--provider",
+        null
+      ],
+      [
+        "--model",
+        null
+      ],
+      [
+        "--model=x",
+        null
+      ],
+      [
+        "--query",
+        null
+      ],
+      [
+        "--query=hello",
+        null
+      ],
+      [
+        "--prof",
+        null
+      ],
+      [
+        "--profil",
+        null
+      ],
+      [
+        "--p",
+        null
+      ],
+      [
+        "--pro",
+        null
+      ],
+      [
+        "--tu",
+        null
+      ],
+      [
+        "--tui",
+        null
+      ],
+      [
+        "--cli",
+        null
+      ],
+      [
+        "--cl",
+        null
+      ],
+      [
+        "--c",
+        null
+      ],
+      [
+        "--hel",
+        null
+      ],
+      [
+        "--help",
+        null
+      ],
+      [
+        "--he",
+        null
+      ],
+      [
+        "--h",
+        null
+      ],
+      [
+        "--help=x",
+        null
+      ],
+      [
+        "--tui=x",
+        null
+      ],
+      [
+        "--ta",
+        null
+      ],
+      [
+        "--permission-mode",
+        null
+      ],
+      [
+        "--session-id",
+        null
+      ],
+      [
+        "--output-format",
+        null
+      ],
+      [
+        "--strict-mcp-config",
+        null
+      ],
+      [
+        "--skip-git-repo-check",
+        null
+      ]
+    ]
+  },
+  "argv_in_recipe_by_family": {
+    "claude-code": {
+      "--prof": "ok",
+      "--profile=x": "refused:capture.args",
+      "--query=x": "ok",
+      "--tui": "ok",
+      "-Q": "ok",
+      "-Qh": "ok",
+      "-p": "ok"
+    },
+    "codex": {
+      "--prof": "ok",
+      "--profile=x": "refused:capture.args",
+      "--query=x": "ok",
+      "--tui": "ok",
+      "-Q": "ok",
+      "-Qh": "ok",
+      "-p": "ok"
+    },
+    "controlled-workload": {
+      "--prof": "ok",
+      "--profile=x": "refused:capture.args",
+      "--query=x": "ok",
+      "--tui": "ok",
+      "-Q": "ok",
+      "-Qh": "ok",
+      "-p": "ok"
+    },
+    "hermes": {
+      "--prof": "refused:capture.args",
+      "--profile=x": "refused:capture.args",
+      "--query=x": "ok",
+      "--tui": "refused:capture.args",
+      "-Q": "ok",
+      "-Qh": "refused:capture.args",
+      "-p": "refused:capture.args"
+    },
+    "opencode": {
+      "--prof": "ok",
+      "--profile=x": "refused:capture.args",
+      "--query=x": "ok",
+      "--tui": "ok",
+      "-Q": "ok",
+      "-Qh": "ok",
+      "-p": "ok"
+    }
+  },
+  "base_manifest": {
+    "baseline": "ok",
+    "family": "codex",
+    "id": "codex-cli"
+  },
+  "ca_env_by_family": {
+    "claude-code": {
+      "codex_ca": "ok",
+      "duplicate": "refused:capture.ca_env",
+      "empty_name": "refused:capture.ca_env",
+      "hermes_ca": "refused:capture.ca_env",
+      "measured_and_replacing": "refused:capture.ca_env",
+      "node_extra_ca": "ok",
+      "none": "refused:capture.ca_env",
+      "requests_ca_bundle": "refused:capture.ca_env",
+      "ssl_cert_file": "refused:capture.ca_env",
+      "two": "ok"
+    },
+    "codex": {
+      "codex_ca": "ok",
+      "duplicate": "refused:capture.ca_env",
+      "empty_name": "refused:capture.ca_env",
+      "hermes_ca": "refused:capture.ca_env",
+      "measured_and_replacing": "refused:capture.ca_env",
+      "node_extra_ca": "ok",
+      "none": "refused:capture.ca_env",
+      "requests_ca_bundle": "refused:capture.ca_env",
+      "ssl_cert_file": "refused:capture.ca_env",
+      "two": "ok"
+    },
+    "controlled-workload": {
+      "codex_ca": "ok",
+      "duplicate": "refused:capture.ca_env",
+      "empty_name": "refused:capture.ca_env",
+      "hermes_ca": "refused:capture.ca_env",
+      "measured_and_replacing": "refused:capture.ca_env",
+      "node_extra_ca": "ok",
+      "none": "refused:capture.ca_env",
+      "requests_ca_bundle": "refused:capture.ca_env",
+      "ssl_cert_file": "refused:capture.ca_env",
+      "two": "ok"
+    },
+    "hermes": {
+      "codex_ca": "ok",
+      "duplicate": "refused:capture.ca_env",
+      "empty_name": "refused:capture.ca_env",
+      "hermes_ca": "ok",
+      "measured_and_replacing": "ok",
+      "node_extra_ca": "ok",
+      "none": "refused:capture.ca_env",
+      "requests_ca_bundle": "refused:capture.ca_env",
+      "ssl_cert_file": "refused:capture.ca_env",
+      "two": "ok"
+    },
+    "opencode": {
+      "codex_ca": "ok",
+      "duplicate": "refused:capture.ca_env",
+      "empty_name": "refused:capture.ca_env",
+      "hermes_ca": "refused:capture.ca_env",
+      "measured_and_replacing": "refused:capture.ca_env",
+      "node_extra_ca": "ok",
+      "none": "refused:capture.ca_env",
+      "requests_ca_bundle": "refused:capture.ca_env",
+      "ssl_cert_file": "refused:capture.ca_env",
+      "two": "ok"
+    }
+  },
+  "capture_streams_by_family": {
+    "claude-code": {
+      "credential": {
+        "decision": "MarkedAndScanned",
+        "pipes": {
+          "stderr": true,
+          "stdout": true
+        }
+      },
+      "no_credential": {
+        "decision": "PreassignedSession",
+        "pipes": {
+          "stderr": false,
+          "stdout": false
+        }
+      }
+    },
+    "codex": {
+      "credential": {
+        "decision": "MarkedAndScanned",
+        "pipes": {
+          "stderr": true,
+          "stdout": true
+        }
+      },
+      "no_credential": {
+        "decision": "CodexStdout",
+        "pipes": {
+          "stderr": false,
+          "stdout": true
+        }
+      }
+    },
+    "controlled-workload": {
+      "credential": {
+        "decision": "MarkedAndScanned",
+        "pipes": {
+          "stderr": true,
+          "stdout": true
+        }
+      },
+      "no_credential": {
+        "decision": "Inherit",
+        "pipes": {
+          "stderr": false,
+          "stdout": false
+        }
+      }
+    },
+    "hermes": {
+      "credential": {
+        "decision": "MarkedAndScanned",
+        "pipes": {
+          "stderr": true,
+          "stdout": true
+        }
+      },
+      "no_credential": {
+        "decision": "MarkedAndScanned",
+        "pipes": {
+          "stderr": true,
+          "stdout": true
+        }
+      }
+    },
+    "opencode": {
+      "credential": {
+        "decision": "MarkedAndScanned",
+        "pipes": {
+          "stderr": true,
+          "stdout": true
+        }
+      },
+      "no_credential": {
+        "decision": "Inherit",
+        "pipes": {
+          "stderr": false,
+          "stdout": false
+        }
+      }
+    }
+  },
+  "credential_by_family": {
+    "claude-code": {
+      "deepseek": "ok",
+      "empty": "refused:capture.credential_env",
+      "none": "ok",
+      "openai": "refused:capture.credential_env"
+    },
+    "codex": {
+      "deepseek": "refused:capture.credential_env",
+      "empty": "refused:capture.credential_env",
+      "none": "ok",
+      "openai": "refused:capture.credential_env"
+    },
+    "controlled-workload": {
+      "deepseek": "ok",
+      "empty": "refused:capture.credential_env",
+      "none": "ok",
+      "openai": "refused:capture.credential_env"
+    },
+    "hermes": {
+      "deepseek": "ok",
+      "empty": "refused:capture.credential_env",
+      "none": "ok",
+      "openai": "refused:capture.credential_env"
+    },
+    "opencode": {
+      "deepseek": "ok",
+      "empty": "refused:capture.credential_env",
+      "none": "ok",
+      "openai": "refused:capture.credential_env"
+    }
+  },
+  "families": [
+    "codex",
+    "claude-code",
+    "hermes",
+    "controlled-workload",
+    "opencode"
+  ]
+}

@@ -1,0 +1,66 @@
+[
+  {
+    "case": "compliant-v1",
+    "description": "Generated compliant fixture: a v1 chain with receipt, acknowledgements, baseline and seal, and its own manifest copy.",
+    "source": "crates/goalcup-verifier/tests/fixtures/compliant",
+    "materialize": "directory",
+    "frozen_manifest": null,
+    "options": { "dev_mode": false, "allow_descriptor_key": false, "extra_server_keys": [] }
+  },
+  {
+    "case": "adversarial-v1",
+    "description": "Generated adversarial fixture: a v1 chain whose descriptor names the live claude-code-cli connector manifest, frozen here at 19a52ea.",
+    "source": "crates/goalcup-verifier/tests/fixtures/adversarial",
+    "materialize": "descriptor",
+    "frozen_manifest": "frozen-connectors/claude-code-cli.manifest.toml",
+    "options": { "dev_mode": false, "allow_descriptor_key": false, "extra_server_keys": [] }
+  },
+  {
+    "case": "codex-live-v1",
+    "description": "Dogfood Codex capture: a v1 chain with its own manifest copy, receipt, acknowledgements, baseline and seal.",
+    "source": "crates/goalcup-verifier/tests/traces/codex-live",
+    "materialize": "directory",
+    "frozen_manifest": null,
+    "options": { "dev_mode": false, "allow_descriptor_key": false, "extra_server_keys": [] }
+  },
+  {
+    "case": "m0-claude-code-cli",
+    "description": "M0 spike trace: file-declared legs, no chain and therefore no protocol version; its descriptor names the live claude-code-cli manifest, frozen here at 19a52ea.",
+    "source": "crates/goalcup-verifier/tests/traces/claude-code-cli",
+    "materialize": "descriptor",
+    "frozen_manifest": "frozen-connectors/claude-code-cli.manifest.toml",
+    "options": { "dev_mode": false, "allow_descriptor_key": false, "extra_server_keys": [] }
+  },
+  {
+    "case": "m0-codex-cli",
+    "description": "M0 spike trace: file-declared legs, no chain and therefore no protocol version; its descriptor names the live codex-cli manifest, frozen here at 19a52ea.",
+    "source": "crates/goalcup-verifier/tests/traces/codex-cli",
+    "materialize": "descriptor",
+    "frozen_manifest": "frozen-connectors/codex-cli.manifest.toml",
+    "options": { "dev_mode": false, "allow_descriptor_key": false, "extra_server_keys": [] }
+  },
+  {
+    "case": "journey-a-2026-09-21-v4-dev",
+    "description": "2026-09-21 V1 qualification Journey A (docs/qualification/2026-09-21-v1-evidence.md, criterion 4b): a v4 chain with a signed deadline finalization and a retained workspace submission, verified with --dev as the ledger did.",
+    "source": "docs/qualification/2026-09-21-v1-evidence/journeyA-trace",
+    "materialize": "directory",
+    "frozen_manifest": null,
+    "options": { "dev_mode": true, "allow_descriptor_key": false, "extra_server_keys": [] }
+  },
+  {
+    "case": "journey-a-2026-09-21-v4-strict",
+    "description": "The same Journey A trace under the default strict options.",
+    "source": "docs/qualification/2026-09-21-v1-evidence/journeyA-trace",
+    "materialize": "directory",
+    "frozen_manifest": null,
+    "options": { "dev_mode": false, "allow_descriptor_key": false, "extra_server_keys": [] }
+  },
+  {
+    "case": "journey-b-2026-09-21-v4-dev",
+    "description": "2026-09-21 V1 qualification Journey B (criteria 4a and 5): a v4 chain across a daemon kill -9 and a resume, manual finish, verified with --dev as the ledger did.",
+    "source": "docs/qualification/2026-09-21-v1-evidence/journeyB-trace",
+    "materialize": "directory",
+    "frozen_manifest": null,
+    "options": { "dev_mode": true, "allow_descriptor_key": false, "extra_server_keys": [] }
+  }
+]

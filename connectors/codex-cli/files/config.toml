@@ -1,0 +1,30 @@
+check_for_update_on_startup = false
+
+# The second turn-eating modal, measured live by Lane Q0 on 2026-09-15: "Approaching rate
+# limits · Switch to gpt-5.6-luna?" appeared mid-run and swallowed an entire typed turn —
+# the text and its Enter went into the selector, the model was switched, and the prompt was
+# never delivered to the session at all. A run can be judged on a turn the participant typed
+# and the harness never received, which is the same class of silent corruption the update
+# modal caused for entry e968829d7fbf2f2db, and is why this is not left to luck on a
+# qualifying journey. The key is Codex's own, verified present in the pinned 0.153.0 binary's
+# `[tui]` table beside `model_availability_nux` rather than taken from documentation.
+#
+# Two siblings live in that same table and are set here too, same owner decision as the
+# nudge above: a migration modal of the same class eats a typed turn, and firing during a
+# qualifying journey invalidates it, so this is not left to luck. Both keys were verified
+# present in the pinned 0.153.0 binary's own `[tui]` table. The second key MUST be quoted:
+# it contains dots (`gpt-5.1-codex-max`), and an unquoted dotted key in TOML builds nested
+# tables instead of a flat key, which an unknown-key-tolerant parser would accept in
+# silence and do nothing — so the quoting is verified by parsing the file, not assumed.
+[tui]
+hide_rate_limit_model_nudge = true
+hide_gpt5_1_migration_prompt = true
+"hide_gpt-5.1-codex-max_migration_prompt" = true
+
+# A TOML basic string, so a workspace path holding a `"` or a `\` would render a file Codex
+# cannot parse — the loudest possible failure for the one file that exists to be read in
+# silence. Unreachable on the paths the tracker makes (`<parent>/<entry id>`), and a literal
+# `'…'` string would refuse the backslash case rather than mis-render it, which is the fix
+# the day a connector lets a participant name their own workspace directory (review M7).
+[projects."{workspace}"]
+trust_level = "trusted"

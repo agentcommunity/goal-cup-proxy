@@ -1,0 +1,293 @@
+goalcup-verify: --dev is set, so a connector manifest this build does not pin is a Flag rather than a Fail and the placeholder-server-key Flag is suppressed; this run proves nothing about which rules judged the entry, nor about who signed its start
+{
+  "verifier_version": "0.1.0",
+  "schema_version": "ATIF-v1.8",
+  "connector_id": "codex-cli",
+  "connector_manifest_sha256": "ae9ea6e7cc929b63374536c89f79962428df8d52b2a7d11a6996f9dad9479027",
+  "manifest_pin": "pinned",
+  "entry_id": "e430f7eb156b19834",
+  "harness_version": "0.153.0",
+  "key_source": "pinned",
+  "dev": true,
+  "overall": "pass",
+  "human_messages": [
+    {
+      "index": 0,
+      "text": "Create notes.txt with a line of text, then run `sleep 600 &` and tell me you started it.",
+      "leg1_store": "rollout",
+      "leg1_seq": 17,
+      "leg1_sha256": "57864a1634a9c874ff7a0f14e85205f33fcf2543df828e3d17ec5780ff81bc22",
+      "leg2_index": 1
+    }
+  ],
+  "checks": [
+    {
+      "id": "V1",
+      "title": "original prompt recovered and within 4,000 characters",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "goal_recovered",
+          "severity": "pass",
+          "message": "goal recovered, 88 characters: Create notes.txt with a line of text, then run `sleep 600 &` and tell me you sta",
+          "evidence": [
+            {
+              "store": "rollout",
+              "seq": 17,
+              "sha256": "57864a1634a9c874ff7a0f14e85205f33fcf2543df828e3d17ec5780ff81bc22",
+              "note": "leg-1 record for the goal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "V2",
+      "title": "every human message after the goal equals `keep going`",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "all_keep_going",
+          "severity": "pass",
+          "message": "0 message(s) after the goal, all `keep going`"
+        }
+      ]
+    },
+    {
+      "id": "V3",
+      "title": "the two legs agree on every human message",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "cross_leg_identifiers",
+          "severity": "pass",
+          "message": "8 leg-1 tool id(s), 8 leg-2 tool id(s), 0 shared; the join declared by the manifest is `turn_id+order`"
+        }
+      ]
+    },
+    {
+      "id": "V4",
+      "title": "session continuity: fresh start, resumes, no second root, no foreign session",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "one_tracked_session",
+          "severity": "pass",
+          "message": "one tracked session: 01a0c3dc-edda-7151-a659-066f3804efa8"
+        },
+        {
+          "code": "no_resume_marker",
+          "severity": "pass",
+          "message": "codex-cli leaves no durable resume marker; gap classification is the only instrument (D9)"
+        }
+      ]
+    },
+    {
+      "id": "V5",
+      "title": "model identity and changes reported",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "single_model",
+          "severity": "pass",
+          "message": "one model throughout: gpt-5.6-luna"
+        },
+        {
+          "code": "no_version_drift",
+          "severity": "pass",
+          "message": "no version change recorded; harness reported as 0.153.0 against tested range `=0.153.0`"
+        }
+      ]
+    },
+    {
+      "id": "V6",
+      "title": "harness-authored user-slot content is classified, not counted",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "user_slot_excluded",
+          "severity": "pass",
+          "message": "1 record(s) excluded as `environment-context`",
+          "evidence": [
+            {
+              "store": "rollout",
+              "seq": 12,
+              "note": "environment-context"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "V7",
+      "title": "exactly one trailing newline stripped before comparison",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "normalisation_applied",
+          "severity": "pass",
+          "message": "exactly one trailing newline was stripped; comparison uses field `prompt`"
+        }
+      ]
+    },
+    {
+      "id": "V8",
+      "title": "request and response pairing, and the declared join key",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "join_key_agrees",
+          "severity": "pass",
+          "message": "manifest and parser agree on the join key: turn_id+order"
+        }
+      ]
+    },
+    {
+      "id": "V9",
+      "title": "hook-config change events reconciled",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "no_config_deviation",
+          "severity": "pass",
+          "message": "no tracker config file deviated and no store was truncated or replaced during the capture"
+        }
+      ]
+    },
+    {
+      "id": "V10",
+      "title": "no record fails its store's partition key",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "partitioned",
+          "severity": "pass",
+          "message": "every record satisfies its partition key"
+        }
+      ]
+    },
+    {
+      "id": "V11",
+      "title": "derived token summary with plan, credit and billing stripped",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "token_summary",
+          "severity": "pass",
+          "message": "gpt-5.6-luna: prompt=195295 completion=1278 cached=165632"
+        },
+        {
+          "code": "stripped",
+          "severity": "pass",
+          "message": "fields dropped before publication: rate_limits (policy: rate_limits, plan_type, credit, quota, cost)"
+        }
+      ]
+    },
+    {
+      "id": "V12",
+      "title": "server acknowledgements reconciled against the chain",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "anchors_checked",
+          "severity": "pass",
+          "message": "17 acknowledgement(s) reconciled, 17 verified, 0 mismatches; highest anchored sequence 109"
+        },
+        {
+          "code": "anchor_timeline",
+          "severity": "pass",
+          "message": "the server saw this chain 17 time(s) it can be held to: first at 2026-09-21T12:08:20Z, last at 2026-09-21T12:12:53Z; the longest span with no verified acknowledgement is 59s, of which 0s is after the last one and before the run ended"
+        }
+      ]
+    },
+    {
+      "id": "V13",
+      "title": "the trace is bound to a server-signed start and closes at the run's deadline",
+      "verdict": "pass",
+      "findings": [
+        {
+          "code": "placeholder_server_key",
+          "severity": "pass",
+          "message": "the key that verified this trace's server signatures is the M1 placeholder anchor, whose private seed is published in this repository so the fixtures can sign with it. Anybody can mint a receipt or an acknowledgement under it, so a `key_source` of `pinned` says only that the signature matched a key everyone holds. Replacing the placeholder with the real organiser key is the release gate before any entry is judged. Reported at Pass because this run was made with `--dev`, where the placeholder is the expected anchor — the sentence stays in the document so a reader can tell this verdict from a strict one",
+          "evidence": [
+            {
+              "store": "server key",
+              "note": "key source: pinned, and the key is the M1 placeholder"
+            }
+          ]
+        },
+        {
+          "code": "pre_start_records",
+          "severity": "pass",
+          "message": "3 record(s) and post(s) sit in the 300s arming window below `started_at` (2026-09-21T12:07:51Z). This is what a run arming itself looks like: the connector's arming signal is the harness's own first output, so the records that CAUSE the start receipt to be requested are chained before the request goes out. They carry no work — the baseline the receipt witnessed is seq 0, below all of them — so they are counted here rather than failed",
+          "evidence": [
+            {
+              "store": "rollout",
+              "seq": 8,
+              "note": "recorded 2026-09-21T12:07:50Z, before the start"
+            },
+            {
+              "store": "history",
+              "seq": 10,
+              "note": "recorded 2026-09-21T12:07:50Z, before the start"
+            }
+          ]
+        },
+        {
+          "code": "binding_checked",
+          "severity": "pass",
+          "message": "the receipt binds this trace's entry, connector, workspace, session and connector manifest to a start the participant did not sign, and dates the run [2026-09-21T12:07:51Z, 2026-09-21T12:12:51Z] against the declared deadline"
+        }
+      ]
+    }
+  ],
+  "review_queue": [],
+  "gaps": [],
+  "seal_attribution": [
+    {
+      "path": "notes.txt",
+      "attribution": {
+        "kind": "traced",
+        "call_id": "call_yGG0ctMGguGobytxuC3FOVXz",
+        "tool": "exec"
+      }
+    }
+  ],
+  "tokens": {
+    "by_model": [
+      {
+        "model": "gpt-5.6-luna",
+        "prompt": 195295,
+        "completion": 1278,
+        "cached": 165632
+      }
+    ],
+    "stripped": [
+      "rate_limits"
+    ]
+  },
+  "parser_census": {
+    "token_usage_record": 9,
+    "world_state": 1
+  },
+  "carried_settings": [
+    {
+      "handoff_generation": 1,
+      "handoff_request_digest": "4d90e5c83690a82b99c37633dffa3c357d9d0e2132bd8e1219006d264310d965",
+      "connector": "codex-cli",
+      "from": "{home}/.codex",
+      "keys": [],
+      "keys_unchanged": [],
+      "written": [],
+      "files": [
+        {
+          "name": "auth.json",
+          "bytes": 4197
+        }
+      ],
+      "files_kept": [],
+      "files_missing": []
+    }
+  ]
+}
+goalcup-verify: codex-cli pass

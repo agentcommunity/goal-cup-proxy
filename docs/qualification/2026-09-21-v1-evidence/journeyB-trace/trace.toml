@@ -1,0 +1,12 @@
+connector = "codex-cli"
+entry_id = "eb037918c8d3994d4"
+workspace = "/Users/team/dev/goalcup-v1-2026-09-21/prefix/var/workspaces/eb037918c8d3994d4"
+tracked_sessions = ["01a0c3e5-2a75-7a83-8fbd-6f452c5c435c"]
+harness_version = "0.153.0"
+connector_manifest = "manifest.toml"
+chain = "chain.jsonl"
+receipt = "receipt.json"
+baseline = "baseline.json"
+acks = "acks.jsonl"
+server_public_key = "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
+expected_reread = false

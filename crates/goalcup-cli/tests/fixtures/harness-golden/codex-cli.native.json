@@ -1,0 +1,60 @@
+{
+  "connector": {
+    "family": "codex",
+    "id": "codex-cli"
+  },
+  "family_defers_its_scope": false,
+  "kill": {
+    "grace_seconds": 10,
+    "native_binary": "codex",
+    "strategy": "native_pid"
+  },
+  "native_plan": {
+    "controlled": [],
+    "initial_binding": "AtLaunch",
+    "scoped": {
+      "form": "AppendOnly",
+      "hint": "codex-jsonl",
+      "name": "rollout",
+      "pattern": "*/*/*/rollout-*-{id}.jsonl",
+      "root": "<CONFIG_HOME>/sessions",
+      "scope_id": null
+    },
+    "unread_stores": 0
+  },
+  "native_plan_as_an_unknown_family": {
+    "controlled": [],
+    "initial_binding": "NotRequired",
+    "scoped": null,
+    "unread_stores": 2
+  },
+  "not_directly_pinned": {
+    "Daemon::family_defers_its_scope": "pinned as `family_defers_its_scope` above (the same `binds` read); the connector-directory lookup around it is not",
+    "registered_tool_allowance connector_id == claude-code-cli": "private, needs a registered verified process"
+  },
+  "shipped_source_row": {
+    "binds": "AtLaunch",
+    "spec": {
+      "form": "AppendOnly",
+      "hint": "codex-jsonl",
+      "name": "rollout",
+      "pattern": "*/*/*/rollout-*-{id}.jsonl",
+      "root": "<CONFIG_HOME>/sessions",
+      "scope_id": null
+    }
+  },
+  "v1_stores_as_the_native_plan_sees_them": [
+    {
+      "hint_for_family": "codex-jsonl",
+      "mode": "jsonl",
+      "name": "rollout",
+      "path_template": "{config_dir}/sessions/{yyyy}/{mm}/{dd}/rollout-*.jsonl"
+    },
+    {
+      "hint_for_family": "codex-jsonl",
+      "mode": "jsonl",
+      "name": "history",
+      "path_template": "{config_dir}/history.jsonl"
+    }
+  ]
+}

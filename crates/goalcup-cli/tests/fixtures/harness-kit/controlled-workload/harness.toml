@@ -1,0 +1,35 @@
+schema_version = 1
+id = "kit-controlled-workload"
+
+[capture]
+args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "--"]
+continuation = "one offline echo and one run-owned native file"
+
+[capture.executable]
+program = "python3"
+version = "@PYTHON3_VERSION@"
+sha256 = "@PYTHON3_SHA256@"
+
+[capture.home]
+run_home = "empty"
+config_home = "shared"
+env = "KITCONTROLLED_HOME"
+real_dirs = ["{user_home}/.codex", "{user_home}/.claude", "{user_home}/.hermes"]
+
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+[capture.identity]
+source = "none"
+
+[[capture.native]]
+name = "controlled"
+root = "{run_home}"
+pattern = "native/controlled.jsonl"
+form = "append_only"
+
+[[capture.hosts]]
+host = "api.e00.localhost"
+evidence_paths = ["/v1/echo"]
+protocol_hint = "kit-controlled-wire"

@@ -1,0 +1,51 @@
+{
+  "controlled_workload_fixture": "m2-controlled-workload",
+  "rows": [
+    {
+      "capture_only": false,
+      "dir": "claude-code-cli",
+      "dir_digest_matches_its_pin": true,
+      "family": "claude-code",
+      "has_capture_profile": true,
+      "has_pinned_dir_digest": true,
+      "id": "claude-code-cli",
+      "manifest_files": [
+        "manifest.toml"
+      ]
+    },
+    {
+      "capture_only": false,
+      "dir": "codex-cli",
+      "dir_digest_matches_its_pin": true,
+      "family": "codex",
+      "has_capture_profile": true,
+      "has_pinned_dir_digest": true,
+      "id": "codex-cli",
+      "manifest_files": [
+        "manifest.toml"
+      ]
+    },
+    {
+      "capture_only": true,
+      "dir": "hermes-cli",
+      "dir_digest_matches_its_pin": true,
+      "family": "hermes",
+      "has_capture_profile": true,
+      "has_pinned_dir_digest": true,
+      "id": "hermes-cli",
+      "manifest_files": [
+        "manifest.toml"
+      ]
+    }
+  ],
+  "shipped": [
+    "claude-code-cli",
+    "codex-cli",
+    "hermes-cli"
+  ],
+  "the_test_lists_that_hard_code_ids": [
+    "codex-cli",
+    "claude-code-cli",
+    "hermes-cli"
+  ]
+}

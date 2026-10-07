@@ -1,0 +1,1 @@
+{"entry_id":"entry-v5-corpus","sealed_at":"2026-10-02T12:00:00Z","workspace":"/ws","files":[{"path":"src/a.rs","bytes":12,"sha256":"abababababababababababababababababababababababababababababababab"},{"path":"src/z.rs","bytes":3,"sha256":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}],"excluded":["target"]}

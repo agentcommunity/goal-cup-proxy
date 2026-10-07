@@ -1,0 +1,12 @@
+entry e430f7eb156b19834 (codex-cli)
+  published 1s ago (2026-09-21T12:13:49Z)
+  arming: started
+  health: sealed — This entry is sealed. Nothing more will be recorded, and what was recorded is on disk beside the chain.
+  workspace: /Users/team/dev/goalcup-v1-2026-09-21/prefix/var/workspaces/e430f7eb156b19834
+  session: 01a0c3dc-edda-7151-a659-066f3804efa8
+  harness: 0.153.0
+  started: 2026-09-21T12:07:51Z
+  sealed: 2026-09-21T12:12:53Z — the chain is closed.
+  events: 110 uploaded, 0 pending
+  last sync: 2026-09-21T12:12:53Z
+  round dates: not configured (fallback) — t0 2026-09-21T12:06:52Z and the close at 2026-09-21T12:12:51Z are this entry's own timeline standing in for an organiser's.

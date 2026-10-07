@@ -1,0 +1,104 @@
+[package]
+name = "goalcup-daemon"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Dev-only feature: off by default and never enabled by a shipped build. It is turned on for
+# this crate's integration tests through the self dev-dependency below, because they are
+# separate crates and do not see `cfg(test)` here.
+# `grep -rn 'feature = "test-hooks"' src/` is the list of what it gates.
+#
+# The shipped build compiles without the feature, and `cargo build --offline` (no features)
+# is step zero of the gate in README.md precisely so that stays true: every other gate
+# command builds dev-dependencies, which turn this feature on for the whole package.
+[features]
+test-hooks = []
+# The V1 / v4 transcript-and-hook product path (D42): the workspace routes, the per-entry
+# runtime with its tailers, the encrypted write-ahead buffer, the SQLite reader, the uploader
+# and the receipt client. Off by default; the default build is the M2 local-capture daemon only.
+# The code stays so the server phase can reuse its upload, receipt and acknowledgement pieces and
+# so the V1 path does not rot: the by-hand gate builds and tests both configurations (README.md).
+v1-compat = ["dep:rusqlite", "dep:age"]
+
+[dependencies]
+goalcup-protocol = { path = "../goalcup-protocol" }
+goalcup-platform = { path = "../goalcup-platform" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+# The entry registry (`src/registry.rs`). Its own database, separate from the capture
+# buffer, so a corrupted buffer still leaves the daemon able to say what it was running.
+redb.workspace = true
+# `OsRng`, for the three per-run secrets `RunKeys::generate` mints.
+rand.workspace = true
+# `RunKeys` hands out an `ed25519_dalek::SigningKey` and the hex verifying key that
+# `SignedStatus::verify_with` and `Chunk::verify` are pinned against.
+ed25519-dalek.workspace = true
+hex.workspace = true
+# `workspace::sha256_hex` and the streaming digest the seal walk takes over a
+# workspace file. The protocol crate hashes its own bytes; this crate hashes the
+# participant's, and a crate cannot borrow another's private hasher.
+sha2.workspace = true
+# The SQLite tailer (`src/tailer/sqlite.rs`), read-only and WAL-safe.
+rusqlite = { workspace = true, optional = true }
+# Blob and non-UTF-8 columns in the SQLite tailer (`v1-compat`), and the stream redactor
+# (`src/redact/stream.rs`), which a default build uses.
+base64.workspace = true
+
+# The loopback control API (`src/control/`). `default-features = false` in the workspace:
+# none of axum's optional extractors and, in particular, none of its `tracing` integration —
+# the control listener handles the CLI's bearer and a crate that can log a request cannot
+# promise it never logged one.
+axum.workspace = true
+# The runtime under that listener. No `fs`: filesystem I/O is `std::fs` on the polling
+# thread, which is the only thread allowed to touch a participant's disk.
+# `io-util` and `sync` for the capture ingest listener (`src/ingest.rs`): length-framed
+# reads from an authenticated local socket and bounded in-process queues.
+tokio = { workspace = true, features = ["io-util", "sync"] }
+
+# `--config`, `--foreground`, `--print-addresses` on the foreground binary
+# (`src/bin/goalcup-daemon.rs`). A library dependency because a `[[bin]]` inside this
+# package shares the package's dependency list; nothing in `src/*.rs` links it.
+clap.workspace = true
+
+# The write-ahead buffer's per-run encryption (`src/buffer.rs`). One `age` file per
+# envelope under an `age::scrypt` passphrase recipient whose passphrase is the run's
+# `RunKeys.buffer_key_hex`, so a torn write costs one record rather than the run. What it
+# buys is confidentiality against a third party who takes the laptop; it is not integrity
+# against the participant, and the integrity anchor is the server's acknowledgements.
+age = { workspace = true, optional = true }
+
+# The shared redaction pattern set and the connector's `extra_patterns[]` (`src/redact.rs`).
+# `regex::bytes`, because a record's bytes are what is redacted and a JSONL line the
+# harness wrote is not guaranteed to be valid UTF-8.
+regex.workspace = true
+
+# `Buffer::free_bytes`: one `statvfs` call on the volume the buffer sits on, so the daemon
+# reaches `HealthState::DiskPressure` before an append fails. Unix only, and the
+# call returns `None` elsewhere rather than a guess — hence the target-gated dependency.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# Tests only.
+#   tempfile — every integration test that touches disk builds its tree in a tempdir:
+#     nothing in the 32 top-level `tests/*.rs` files writes outside one.
+[dev-dependencies]
+# This crate, back to itself, with `test-hooks` on: a `tests/*.rs` file links the library
+# as an ordinary dependency, so this is the only way to hand the integration tests a
+# feature the shipped build does not carry.
+goalcup-daemon = { path = ".", features = ["test-hooks"] }
+# The terminal-publication regressions read the exact offline interface participants' agents
+# use, rather than treating a hand-parsed cache file as a substitute for goalcup-mcp.
+goalcup-mcp = { path = "../goalcup-mcp" }
+tempfile.workspace = true
+# `tests/arming_receipt.rs` needs a server that actually signs a start receipt, so
+# `ReceiptClient` is exercised against the real router rather than against a stub that
+# would agree with whatever the client sent. A dev dependency and nothing else (D3): the
+# devserver holds a server key and must not link into the shipped daemon binary.
+goalcup-devserver = { path = "../goalcup-devserver" }
+# `tests/tailers.rs` (`v1-compat` only) builds the SQLite fixture itself, in a tempdir with the
+# optional `rusqlite` dependency above. A tailer test never reads a participant's real database.

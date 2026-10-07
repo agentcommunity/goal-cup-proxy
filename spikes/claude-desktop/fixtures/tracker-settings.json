@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "disableAllHooks": false,
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/SessionStart",
+            "headers": {
+              "X-GoalCup-Event": "SessionStart",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/UserPromptSubmit",
+            "headers": {
+              "X-GoalCup-Event": "UserPromptSubmit",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/UserPromptExpansion",
+            "headers": {
+              "X-GoalCup-Event": "UserPromptExpansion",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/PreToolUse",
+            "headers": {
+              "X-GoalCup-Event": "PreToolUse",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/PostToolUse",
+            "headers": {
+              "X-GoalCup-Event": "PostToolUse",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/PostToolUseFailure",
+            "headers": {
+              "X-GoalCup-Event": "PostToolUseFailure",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/SubagentStart",
+            "headers": {
+              "X-GoalCup-Event": "SubagentStart",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/SubagentStop",
+            "headers": {
+              "X-GoalCup-Event": "SubagentStop",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/PreCompact",
+            "headers": {
+              "X-GoalCup-Event": "PreCompact",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/PostCompact",
+            "headers": {
+              "X-GoalCup-Event": "PostCompact",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "PreModelSwitch": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/PreModelSwitch",
+            "headers": {
+              "X-GoalCup-Event": "PreModelSwitch",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/PostModelSwitch",
+            "headers": {
+              "X-GoalCup-Event": "PostModelSwitch",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/ConfigChange",
+            "headers": {
+              "X-GoalCup-Event": "ConfigChange",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/PermissionRequest",
+            "headers": {
+              "X-GoalCup-Event": "PermissionRequest",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/Stop",
+            "headers": {
+              "X-GoalCup-Event": "Stop",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/SessionEnd",
+            "headers": {
+              "X-GoalCup-Event": "SessionEnd",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 2,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7777/Notification",
+            "headers": {
+              "X-GoalCup-Event": "Notification",
+              "X-GoalCup-Spike": "claude-desktop"
+            },
+            "timeout": 5,
+            "statusMessage": "goal-cup tracker"
+          }
+        ]
+      }
+    ]
+  }
+}

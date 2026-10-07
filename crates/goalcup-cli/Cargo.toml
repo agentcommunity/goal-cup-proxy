@@ -1,0 +1,141 @@
+[package]
+name = "goalcup-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Off by default and never enabled by a shipped build. It exists for the same reason the
+# daemon's `test-hooks` does: this crate's integration tests are separate crates and do not
+# see `cfg(test)` in this one, so a fake this crate must be able to hand them has no other
+# way to be reachable. Enabled for those tests through the self dev-dependency below and
+# nowhere else.
+#
+# Every `feature = "test-support"` item is a fake or a seam that tests need and no
+# participant runs: `MockDaemonClient` (`src/daemon/`), the Ctrl-C test seams
+# (`src/arming.rs`) and the home-seed replacement hooks (`src/home_seed.rs`).
+#
+# The shipped build compiles without the feature, and `cargo build --offline` (no features)
+# is step zero of the gate precisely so that stays true: every other gate command builds
+# dev-dependencies, which turn this feature ON for the whole package.
+[features]
+test-support = ["dep:ed25519-dalek"]
+# The V1 / v4 transcript-and-hook product path (D42). Off by default: the default build is the
+# M2 local-capture product only (`goalcup start --goal-file`, `status`, `entries`, `seal`,
+# `doctor`). With the feature on, `goalcup auth`, `resume`, `ui` and a plain `goalcup start`
+# are compiled back in, and so are the pieces only they use: the device-code client (the one
+# reason `ureq` links TLS), the browser opener and the template-variable renderer. The code is
+# kept so the server phase can reuse its sign-in client and the V1 path does not rot; the
+# by-hand gate builds and tests both configurations (README.md).
+v1-compat = ["dep:open", "ureq/tls"]
+
+[dependencies]
+goalcup-platform = { path = "../goalcup-platform" }
+goalcup-protocol = { path = "../goalcup-protocol" }
+# The one exit code this CLI relays rather than chooses (`relay_verdict`). A library
+# dependency and not a dev one: the relay is shipped behaviour, not a test's.
+goalcup-verifier = { path = "../goalcup-verifier" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The seal's mirror walk (`src/seal.rs`) streams each file in 64 KiB chunks, the way the
+# daemon's `workspace::measure` does, so two walks over one tree agree and a large file is
+# never held whole. Already in this crate's graph through `goalcup-verifier`.
+sha2.workspace = true
+# The eight-command tree (`src/main.rs`).
+clap.workspace = true
+# Two clients in one crate, and they do not have the same threat model.
+#
+# The control API is loopback cleartext, which is why the workspace declares
+# ureq with `default-features = false`: no gzip decoder, and no TLS stack pulled in for a
+# request to 127.0.0.1.
+#
+# `goalcup auth` is the other one, and it crosses the network. It sends the device code in
+# a request header and reads a grant back, so `tls` is turned ON here — ureq 2.12's
+# rustls 0.23 (ring) plus webpki-roots. Without it ureq answers an `https://` URL with
+# "unknown scheme", which reads to a participant as a server that is down rather than as a
+# binary that cannot speak to it. `commands::auth` refuses a non-loopback `http://` before
+# any request is made, so the feature is what makes the only remaining path — `https://` —
+# actually work.
+#
+# `gzip` stays off: nothing this CLI talks to is asked for a compressed body.
+#
+# The `tls` feature is switched on by `v1-compat` alone (see `[features]`): without the V1 path
+# this crate links no TLS for ureq, only the loopback client.
+ureq.workspace = true
+# `goalcup ui`: one call that hands a loopback URL to the participant's browser. V1 path only.
+open = { workspace = true, optional = true }
+# `MockDaemonClient` and nothing else, which is why it is `optional` and why the only
+# feature that turns it on is `test-support` above.
+#
+# The mock signs its `SignedStatus` with a fixed `[9u8; 32]` seed so a test can pin the run
+# key it publishes; that is a SIGNING key, and nothing this CLI ships ever signs anything.
+# The CLI's own half of the same protocol is `SignedStatus::verify_with`, which lives in
+# `goalcup-protocol` and links this crate's verifying half through that crate — so the
+# shipped binary still checks signatures and still declares no signature dependency of its
+# own. Already a workspace dependency and already in the graph through `goalcup-protocol`,
+# so this adds a new user of a crate that is compiled either way and never a new crate.
+ed25519-dalek = { workspace = true, optional = true }
+# The M2 recording proxy (`src/proxy/`). The shared seam
+# (`proxy::api`) needs tokio's `AsyncRead`/`AsyncWrite` and the relay leaves need `io-util`
+# and `sync`; `net`, `time`, `rt-multi-thread` and `macros` come from the workspace line.
+# Still no `fs`: the proxy never touches a participant's disk through tokio.
+tokio = { workspace = true, features = ["io-util", "sync"] }
+# TLS termination toward the harness and upstream TLS toward the provider (ring provider
+# only), the per-launch CA and leaf certificates, and the upstream validation roots.
+rustls.workspace = true
+tokio-rustls.workspace = true
+rcgen.workspace = true
+webpki-roots.workspace = true
+# `sha1`: the WebSocket accept-key derivation only (`proxy::http`). `flate2`: content
+# decoding and permessage-deflate.
+sha1.workspace = true
+flate2.workspace = true
+# Fresh random 128-bit producer and connection identifiers (`proxy::api::CaptureEmitter`).
+# The workspace version the daemon already links, so no new crate.
+rand.workspace = true
+# The key-fragment scan decodes each trace stream's base64 segments (`src/key_scan.rs`). The
+# workspace version the daemon and the verifier already link, so no new crate.
+base64.workspace = true
+
+# `killpg` at the version probe's deadline (`preflight/probe.rs`): `process_group(0)` puts the
+# harness in a group of its own, and a helper it backgrounded is only reachable by
+# signalling that whole group — `Child::kill` alone reaches the direct child and leaves
+# the helper running. Already a workspace dependency, already compiled for the daemon
+# (`crates/goalcup-daemon/Cargo.toml`, which calls `libc::killpg` the same way in
+# `terminate.rs`), so this crate adds no new dependency to the graph, only a new user of
+# one already in it. Unix only, same as the probe's own `process_group(0)`.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# Tests only.
+#   tempfile — every test in this crate that touches disk builds its tree in a tempdir.
+[dev-dependencies]
+# This crate, back to itself, with `test-support` on: a `tests/*.rs` file links the library
+# as an ordinary dependency, so this is the only way to hand the integration tests a
+# feature the shipped build does not carry.
+goalcup-cli = { path = ".", features = ["test-support"] }
+tempfile.workspace = true
+# M2 proxy tests only: parse minted certificates.
+x509-parser.workspace = true
+# Tests only, and the one dependency in this file that exists to prove a property rather
+# than to provide one.
+#
+# `src/seal.rs` mirrors `goalcup_daemon::workspace::list_workspace`. Everything else in this
+# tree checks that mirror against a fixture, which proves the mirror agrees with a document
+# somebody typed — not that it agrees with the walker it mirrors. `tests/seal_scan.rs` runs
+# BOTH walkers over one tree and asserts `compare` yields nothing, which is the property the
+# self-check is for and the only way to hold the two implementations together as they change.
+#
+# The shipped binary links none of it: `cargo build --offline` builds no dev-dependency, and
+# `grep -rn goalcup_daemon crates/goalcup-cli/src/` is empty — `tests/seal_scan.rs` asserts
+# both of those in `the_cli_binary_links_no_daemon`. There is no cycle: `goalcup-daemon`
+# depends on `goalcup-protocol`, itself and `goalcup-devserver`, and on nothing here.
+# `test-hooks`: `m2_ipc_compose` drives hook-gated daemon items (`IngestEntry::wait_outcome`), so
+# a narrow `-p goalcup-cli` test build needs the feature without the workspace's unification.
+goalcup-daemon = { path = "../goalcup-daemon", features = ["test-hooks"] }
+
+[[bin]]
+name = "goalcup"
+path = "src/main.rs"

@@ -1,0 +1,10 @@
+POST /v1/responses?sig=SENTINEL-QUERY-SIG-7f3a&api_key=SENTINEL-QUERY-KEY-2b1c#SENTINEL-FRAGMENT-9e8d HTTP/1.1
+Host: api.example.test
+Authorization: Bearer SENTINEL-AUTH-1b2c3d
+Cookie: session=SENTINEL-COOKIE-9d8e7f; theme=dark
+X-Api-Key: SENTINEL-APIKEY-5a6b7c
+X-Goog-Api-Key: SENTINEL-UNKNOWN-3c4d5e
+Proxy-Authorization: Basic SENTINEL-PROXY-0e0f10
+Content-Type: application/json; charset=SENTINEL-PARAM-4455
+Content-Length: 2
+
