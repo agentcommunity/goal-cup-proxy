@@ -155,12 +155,21 @@ same rule.)
 
 ### CI
 
-`.github/workflows/ci.yml` is a Linux smoke check, **not the gate**. It runs `cargo fmt
---check`, `cargo build`, `cargo clippy -D warnings`, and `cargo test` for every crate except
-`goalcup-daemon` and `goalcup-cli`, in one job with a 20-minute timeout. It triggers only for
-pull requests into `v1/trunk` or `main`, pushes to `v1/trunk`, and manual starts, and only
-when something under `crates/` or `connectors/`, the Cargo files, `rust-toolchain.toml` or the
-workflow itself changes. Agent branches and docs-only commits never start it.
+`.github/workflows/ci.yml` is a Linux smoke check, **not the gate**. Its one job, `check`
+(workflow `ci`), runs on `ubuntu-24.04` with a 20-minute timeout for every pull request into
+`main` or `v1/trunk`, every push to those branches, and manual starts. There is no path filter,
+so every such pull request gets a completed `check` that branch protection can require. Agent
+branches never start it.
+
+The job's `scope` step runs `scripts/ci-scope.py` on the event's two commits (the pull
+request's base and head, or the push's before and after). Its output, `rust=false`, skips the
+Rust smoke only when every changed path is Markdown under `docs/`, Markdown at the repository
+root, or `.github/PULL_REQUEST_TEMPLATE.md`. Any other path, a deleted or renamed code path, a
+new branch, a manual start, or a comparison that fails gives `rust=true`. Every run then runs
+the `test_ci_scope.py` and `test_check_links.py` suites and `scripts/check-links.py --root .`.
+When `rust=true` it also runs `cargo build --workspace`, `cargo fmt --all --check`, `cargo
+clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace --exclude
+goalcup-daemon --exclude goalcup-cli`, in that order. A failure in any step fails the job.
 
 Every runner minute costs something on every pull request. Keep this file small:
 

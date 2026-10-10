@@ -1,15 +1,17 @@
-# Light CI: a Linux smoke check for pull requests into `main`, deliberately small. It is NOT the
-# gate. The gate is the four commands in README.md ("The gate"), run by hand on macOS together
-# with the ignored real-daemon suite. See README.md and docs/OPERATING.md ("CI").
+# Light CI: one Linux job, deliberately small. It is NOT the gate. The gate is the four commands
+# in README.md ("The gate"), run by hand on macOS together with the ignored real-daemon suite.
+# See README.md and docs/OPERATING.md ("CI").
 #
 # Why it's this small (the owner's rule is that CI stays lean; do not add heavy jobs):
 # - Runner minutes cost something on every pull request, and a Linux run proves little about a
 #   macOS-targeted recorder.
-# - It runs only for pull requests into `main` (or `v1/trunk`, the maintainers' V1 line, which
-#   does not exist in a fresh public repository), pushes to `v1/trunk`, or a manual start.
-#   Other branches never trigger it.
-# - It runs only when something under crates/ or connectors/, the Cargo files,
-#   rust-toolchain.toml or this file changes. Docs-only commits cost nothing.
+# - It runs for pull requests into `main` or `v1/trunk` (the maintainers' V1 line, which does
+#   not exist in a fresh public repository), pushes to those branches, or a manual start. There
+#   is no path filter, so every pull request gets a completed `check` that can be required.
+# - The `scope` step decides whether the Rust smoke runs (scripts/ci-scope.py). Only a change
+#   made entirely of Markdown under docs/, root Markdown or the pull request template skips it.
+#   Anything else, an unknown or failed comparison, or a manual start runs it. The scope tests
+#   and the link checker run on every event; a failure in any step fails the job.
 # - It skips the goalcup-daemon and goalcup-cli test suites. They spawn real process trees,
 #   and on a 2-core Linux runner they hang or kill the VM (docs/OPERATING.md, "CI").
 #   Linux is best-effort and untested as a platform (README.md, "Build"), not a supported claim.
@@ -20,11 +22,9 @@ name: ci
 
 on:
   pull_request:
-    branches: [v1/trunk, main]
-    paths: [crates/**, connectors/**, Cargo.toml, Cargo.lock, rust-toolchain.toml, .github/workflows/ci.yml]
+    branches: [main, v1/trunk]
   push:
-    branches: [v1/trunk]
-    paths: [crates/**, connectors/**, Cargo.toml, Cargo.lock, rust-toolchain.toml, .github/workflows/ci.yml]
+    branches: [main, v1/trunk]
   workflow_dispatch:
 
 concurrency:
@@ -34,21 +34,54 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   check:
+    name: check
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       # A fresh runner never reuses incremental artifacts; they only eat disk.
       CARGO_INCREMENTAL: 0
     steps:
-      # Build scripts and tests run PR code; keep the token out of .git/config.
+      # Build scripts and tests run PR code; keep the token out of .git/config. Full history so
+      # the scope step can compare the event's two commits.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - run: cargo fmt --all --check
-      # The shipped, test-hooks-off build, which clippy --all-targets does not compile. It also
-      # puts the binaries on disk that goalcup-devserver's api_gate test drives.
-      - run: cargo build --workspace
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli
+          fetch-depth: 0
+      # Event values reach the shell only as quoted environment variables. A manual start, or an
+      # empty, all-zero or unknown commit, runs the Rust smoke.
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            result=rust=true
+          else
+            result="$(python3 scripts/ci-scope.py --base "$BASE_SHA" --head "$HEAD_SHA")"
+          fi
+          case "$result" in
+            rust=true|rust=false) ;;
+            *) echo "::error::unexpected ci-scope output: $result"; exit 1 ;;
+          esac
+          echo "$result"
+          echo "$result" >> "$GITHUB_OUTPUT"
+      - run: python3 -m unittest discover -s scripts -p 'test_ci_scope.py' -v
+      - run: python3 -m unittest discover -s scripts -p 'test_check_links.py'
+      - run: python3 scripts/check-links.py --root .
+      # Build first, as in the gate (README.md, "The gate"): the shipped, test-hooks-off build,
+      # which clippy --all-targets does not compile. It also puts the binaries on disk that
+      # goalcup-devserver's api_gate test drives.
+      - if: steps.scope.outputs.rust == 'true'
+        run: cargo build --workspace
+      - if: steps.scope.outputs.rust == 'true'
+        run: cargo fmt --all --check
+      - if: steps.scope.outputs.rust == 'true'
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - if: steps.scope.outputs.rust == 'true'
+        run: cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli
