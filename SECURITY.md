@@ -14,9 +14,9 @@ publication, signature, notarization or qualification.
 
 Do not open a public issue.
 
-1. Email goalhack@agentcommunity.org. This route works today.
-2. GitHub private vulnerability reporting (Security tab, "Report a vulnerability") is being
-   enabled on this repository; use it once the button appears.
+1. Email goalhack@agentcommunity.org.
+2. GitHub private vulnerability reporting (Security tab, "Report a vulnerability") was not
+   enabled when last read (2026-10-10); use it once the button appears.
 
 Say what you ran, what you expected, and what happened. Never attach a real trace, key or
 harness transcript: they contain prompts and credentials. A synthetic reproduction is enough.

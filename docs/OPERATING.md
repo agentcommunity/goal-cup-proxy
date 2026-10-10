@@ -30,9 +30,9 @@ install, one capture run) is in [../README.md](../README.md).
 v0.5.0 is published as source only
 ([cleanup record](qualification/v0.5.1-public-release-cleanup.md)). No downloadable binary,
 installer, staged bundle, registry publication, signature, notarization or qualification exists.
-Built binaries print `0.1.0`: the package version stays unchanged until v0.6.0. The source
+Built binaries print `0.1.0`: the package version is independent of source release tags. The source
 contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
-`hermes-cli`. The separate macOS packaging allowlist (`m2-pilot` in
+`hermes-cli`. The separate private macOS packaging allowlist (`m2-pilot` in
 [packaging/README.md](../packaging/README.md)) stages only Codex and Claude, copying each selected
 directory whole, including seeds and its retained V1 `manifest.toml`. A source pin is not
 evidence of package inclusion. macOS is the only measured platform. Linux builds, but a

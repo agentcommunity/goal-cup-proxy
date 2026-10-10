@@ -13,17 +13,17 @@ goal, not a claim about this code.
 Where the project stands, what is measured and what is open: [STATUS.md](STATUS.md). The ticket
 list is [LEDGER.md](LEDGER.md).
 
-v0.5.0 is published as source only, with no attached files: see the
-[v0.5.0 release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0) and
-[the v0.5.1 cleanup record](docs/qualification/v0.5.1-public-release-cleanup.md). There is no
-downloadable binary, installer, staged bundle, registry publication, signature, notarization or
-qualification. Built binaries print `0.1.0`: the package version stays unchanged until v0.6.0.
-The source has exactly three pinned schema-1 connector directories: `codex-cli`,
-`claude-code-cli` and `hermes-cli` (capture-only). The separate macOS packaging allowlist
+v0.5.0 is published as source only, with no attached files: see the [v0.5.0
+release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0) and [the v0.5.1
+cleanup record](docs/qualification/v0.5.1-public-release-cleanup.md). There is no downloadable
+binary, installer, staged bundle, registry publication, signature, notarization or qualification.
+Built binaries print `0.1.0`: the package version is independent of source release tags. The source
+has exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
+`hermes-cli` (capture-only). The separate private `m2-pilot` macOS packaging allowlist
 ([packaging/README.md](packaging/README.md)) selects only Codex and Claude; a source pin does not
 prove package inclusion. Short rows are measured; long runs are not qualified (records:
-[docs/qualification/README.md](docs/qualification/README.md)). The earlier V1 line (tag `v0.1.0`)
-is private history, not in this repository. Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md).
+[docs/qualification/README.md](docs/qualification/README.md)). `v1/trunk` and its `v0.1.0` tag are
+private; V1 code here builds only with `v1-compat`. Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## Build
 
@@ -190,7 +190,7 @@ tests, never to build or run the gate. Source `harnesses/env.sh` before any real
 Harness connectors are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md) and
 [docs/HARNESS-ONBOARDING.md](docs/HARNESS-ONBOARDING.md). Commits are signed off (DCO,
 `git commit -s`). Report security issues to goalhack@agentcommunity.org, never in a public issue;
-GitHub private vulnerability reporting is being enabled ([SECURITY.md](SECURITY.md)). Everyone
+GitHub private vulnerability reporting is not yet enabled ([SECURITY.md](SECURITY.md)). Everyone
 taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License

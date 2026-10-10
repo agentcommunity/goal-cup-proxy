@@ -1,25 +1,24 @@
 # STATUS: where Goal Cup stands
 
-Updated: 2026-10-10. v0.5.0 is published as source only: the
-[v0.5.0 release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0) has no
-attached files, and its tag, commit and tree are in
-[the v0.5.1 cleanup record](docs/qualification/v0.5.1-public-release-cleanup.md). Built binaries
-print `0.1.0`: the package version stays unchanged until v0.6.0. Commit hashes and branch names
-cited here refer to private development history not included in this repository. Tickets:
+Updated: 2026-10-10. v0.5.0 is published as source only: the [v0.5.0
+release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0) has no attached
+files, and its tag, commit and tree are in [the v0.5.1 cleanup
+record](docs/qualification/v0.5.1-public-release-cleanup.md). Built binaries print `0.1.0`: the
+package version is independent of source release tags. Commit hashes and branch names cited here
+refer to private development history not included in this repository. Tickets:
 [LEDGER.md](LEDGER.md). How the parts fit: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The words:
 [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## What m2 is
 
-`m2/wire` is the M2 recorder line. A participant runs `goalcup start --goal-file` and a coding
-agent works inside an isolated home while the tracker records the native and wire legs into one
+`m2/wire` is the M2 recorder line. A participant runs `goalcup start --goal-file` and a coding agent
+works inside an isolated home while the tracker records the native and wire legs into one
 hash-linked v5 chain. Delivery is LocalOnly: no server, receipt or acknowledgement. v0.5.0 is
-source-only: the tree has three connector directories and the separate macOS packaging allowlist
-selects/stages two. There is no downloadable binary or installer artifact, staged
-bundle, registry publication, signing, notarization or qualification claim; a future Homebrew
-installer is a separate later packaging track. The same-UID
-local-attacker residual remains out of scope. The pilot is private, unsigned and not released.
-Nothing is qualified.
+source-only: the tree has three connector directories and the separate private `m2-pilot` macOS
+packaging allowlist selects/stages two. There is no downloadable binary or installer artifact,
+staged bundle, registry publication, signing, notarization or qualification claim; a future Homebrew
+installer is a separate later packaging track. The same-UID local-attacker residual remains out of
+scope. The pilot is private, unsigned and not released. Nothing is qualified.
 
 The phrase `two connector profiles` is not a connector-count claim: a profile is one connector
 manifest's `[capture]` table, while the pilot selects/stages two connectors.

@@ -193,7 +193,8 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 ## 4. Open source readiness (c4 review; verdict: not ready)
 
 - 🟠 **OS-01** `[OS]` Public repo cut: v0.5.0 is the single parentless commit `d2b3206`, an
-  allowlist copy; the private repo stays private. The in-tree fixture scrub (vendor prompts,
+  allowlist copy; development history is kept in a
+  separate private repository. The in-tree fixture scrub (vendor prompts,
   re-pinned digests) is not evidenced here.
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#source-release).
 - 🟠 **OS-02** `[OS]` Personal data. OS-02a (prose) done `04ec186`. Decided 2026-09-29: accept the
@@ -203,14 +204,14 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 - 🟠 **OS-04** `[OS]` `docs/RULES.md` corrections. OS-04a done `04ec186`; OS-04b
   (`docs/TRACKER-CONTRACT.md` from the shipped tree) after T23. c4-C3.
 - ⬜ **OS-05** `[D]`/`[next]` The V1 README walkthrough and `real_daemon_end_to_end` wait for hook
-  posts this branch never receives. Re-execute the walkthrough on the T23 tree before any push.
+  posts this branch never receives. Re-execute the walkthrough on the T23 tree.
   `real_daemon_end_to_end` now compiles only with `v1-compat` (D42); run it with the command in
   OPERATING, after building the `v1-compat` workspace binaries.
 - ✅ **OS-06** `[OS]` Allowlist copy published as public v0.5.0 (`d2b3206`). c4-I2/I3.
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#source-release).
 - 🟠 **OS-07** `[OS]` SECURITY, CONTRIBUTING, CODE_OF_CONDUCT, NOTICE, the PR template and
   CODEOWNERS exist (`70bdb05f`). Read 2026-10-10: private vulnerability reporting `enabled:false`,
-  no DCO check observed, `main` protection not evidenced; the email route works. c4-I4/I5/I6.
+  no DCO check observed, `main` protection not evidenced; reports go to the email in SECURITY. c4-I4/I5/I6.
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#public-checks-and-settings).
 - ⬜ **OS-08** `[next]` Re-state that `m2_native_observations` fixtures passed redaction in the
   scrub notes before the public cut. c4-M10.
@@ -262,7 +263,8 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   dependency-fetch boundary, build/test commands and results, without the private worktree or its
   `target/`, saying whether the dependency cache was warm. Evidence not yet linked.
 - ✅ **OS-25** `v0.5.0` published 2026-10-10 as source only at public `d2b3206`, no attached files;
-  no binary or qualification. [Record](docs/qualification/v0.5.1-public-release-cleanup.md).
+  no binary or qualification. Published before OS-23/OS-24 closed, with no exact-head gate (no
+  check runs on `d2b3206`). [Record](docs/qualification/v0.5.1-public-release-cleanup.md).
 - ⬜ **OS-26** `[post-tag]` Remainder of C2: 0600 status mirrors, missing daemon SAFETY comments
   and `clippy::undocumented_unsafe_blocks`. Starts after Seam-D and Seam-FM; does not block
   `v0.5.0`.
