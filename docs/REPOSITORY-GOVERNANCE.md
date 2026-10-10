@@ -20,20 +20,27 @@ observed value (settings, app IDs, check URLs). This guide holds the policy and 
 - One approving review. Paths in [`.github/CODEOWNERS`](../.github/CODEOWNERS) also need a code
   owner's approval. A new push dismisses earlier approvals. All review conversations are resolved
   before merging.
-- GitHub never lets an author approve their own PR, so a reviewer is always someone else.
+- GitHub never lets an author approve their own PR, so a reviewer is always someone else
+  (see the single-maintainer exception below).
 - Signed (GPG or SSH) commits are not required. That is a different feature from DCO sign-off.
 
-`check` can only be required once the `ci` workflow on `main` runs for every PR, docs-only ones
-included. A path-filtered workflow leaves a docs-only PR waiting on an "Expected" check forever.
-Require `check` only after the unfiltered workflow is on `main` and has been observed on a PR.
+The `ci` workflow in this branch has no path filter: every PR gets a completed `check`, and a
+docs-only PR finishes it quickly with the Rust smoke skipped. On v0.5.0 `main` the workflow is
+still path-filtered until this workflow merges, and a filtered workflow leaves a docs-only PR
+waiting on an "Expected" check forever. Require `check` only after the unfiltered workflow is
+on `main` and has been observed on a PR.
+
+On a first-time contributor's fork PR, `check` may show pending until a maintainer approves the
+workflow run. That is GitHub's default for Actions on fork PRs; approve it after reading the
+diff for workflow or script changes.
 
 ## Code owners
 
-Every owned path in CODEOWNERS is owned by `@nembal`. Read from the plan baseline of 2026-10-10:
-`@nembal` has admin on this repository (this session could not read the permission API; re-read
-it with the commands below before applying settings). A code owner needs write access, or GitHub
-ignores the line; `codeowners/errors` must return no errors. Add a team or a second owner only
-when that account exists and has write access.
+Every owned path in CODEOWNERS is owned by `@nembal`, expected to have admin on this repository.
+Unverified: re-read `collaborators/nembal/permission` before applying settings; the observed
+value goes in the evidence record. A code owner needs write access, or GitHub ignores the line;
+`codeowners/errors` must return no errors. Add a team or a second owner only when that account
+exists and has write access.
 
 ## Temporary single-maintainer exception
 
@@ -42,8 +49,8 @@ maintainer's PR, so the repository admin role is a bypass actor on the `main` ru
 bypass mode `pull_request`:
 
 - a maintainer still opens a PR and the checks still run, but may merge it without a second
-  approval or code-owner review. The bypass also covers required checks, so a maintainer merges
-  only with `check` and `DCO` passing;
+  approval or code-owner review. Bypass means GitHub does not enforce the required checks for a
+  bypassing maintainer either; by policy a maintainer merges only with `check` and `DCO` passing;
 - direct pushes, force pushes and deletion of `main` stay blocked for everyone;
 - outside PRs get no exception: they need the PR, `check`, `DCO` and a code owner's approval.
 
@@ -53,9 +60,12 @@ second reviewer; say so in the PR. GitHub lists bypassed merges in the ruleset's
 When a second maintainer with write access exists, remove the bypass actor (set
 `bypass_actors` to `[]`), read the ruleset back, record it, and update this section.
 
-If rulesets cannot be used, the fallback is classic branch protection with
-`enforce_admins: false` (payload below). It is broader: an admin can then also push to `main`
-directly. When a second maintainer exists, switch it to `enforce_admins: true`.
+Use either the ruleset or classic branch protection on `main`, not both. They stack and the
+stricter rule wins, so leftover classic protection would cancel the ruleset bypass. When applying
+the ruleset, remove classic protection or align it. If rulesets cannot be used, the fallback is
+classic branch protection alone with `enforce_admins: false` (payload below). It is broader: an
+admin can then also push to `main` directly. When a second maintainer exists, switch it to
+`enforce_admins: true`.
 
 ## DCO App
 
@@ -66,7 +76,8 @@ directly. When a second maintainer exists, switch it to `enforce_admins: true`.
 - Exemptions in the app's documented defaults: merge commits and commits authored by bot
   accounts are not checked. Remediation commits are off. Confirm these against the installed
   version and record what was observed.
-- A user with write access can mark a failing DCO check as passed. That override is never
+- A user with write access can mark a failing DCO check as passed (confirm on the installed
+  app that this option exists and what it records). That override is never
   ordinary remediation. Use it only when the app misreads a sign-off that is present and correct
   for the author, and leave a PR comment saying why. Never use it to accept a missing human
   sign-off; the author fixes the commit instead.
@@ -86,6 +97,8 @@ gh api repos/agentcommunity/goal-cup-tracer/private-vulnerability-reporting
 
 1. Read the current state (read-only). A 404 for protection means absent, not passing. Keep any
    stricter setting that already exists; stop and ask if another maintainer's policy conflicts.
+   If classic protection exists, it must be removed or aligned when the ruleset is applied
+   (see the single-maintainer exception above): the two must not both be active.
 
    ```
    gh api repos/agentcommunity/goal-cup-tracer/actions/permissions
@@ -112,14 +125,18 @@ gh api repos/agentcommunity/goal-cup-tracer/private-vulnerability-reporting
    placeholder.** The placeholders are deliberately invalid JSON so that a forgotten one fails.
    `grep -n OBSERVED_ "$RULESET_PAYLOAD"` must print nothing.
 
-4. Apply: `gh api --method POST repos/agentcommunity/goal-cup-tracer/rulesets --input
-   "$RULESET_PAYLOAD"` (fallback: `gh api --method PUT
-   repos/agentcommunity/goal-cup-tracer/branches/main/protection --input "$PROTECTION_PAYLOAD"`).
+4. Apply one of the two, never both: `gh api --method POST
+   repos/agentcommunity/goal-cup-tracer/rulesets --input "$RULESET_PAYLOAD"`, then remove or align
+   any classic protection; or, only if rulesets cannot be used, `gh api --method PUT
+   repos/agentcommunity/goal-cup-tracer/branches/main/protection --input "$PROTECTION_PAYLOAD"`.
+   Keep the `id` from the POST response as `RULESET_ID` (or read it from the list call).
 
-5. Read back and compare field by field with the payload:
+5. Read back and compare field by field with the payload. The list call returns summaries
+   without `rules` or `bypass_actors`; the call by ID returns the full ruleset:
 
    ```
    gh api repos/agentcommunity/goal-cup-tracer/rulesets
+   gh api "repos/agentcommunity/goal-cup-tracer/rulesets/$RULESET_ID"
    gh api repos/agentcommunity/goal-cup-tracer/rules/branches/main
    gh api repos/agentcommunity/goal-cup-tracer/branches/main/protection
    gh api repos/agentcommunity/goal-cup-tracer/codeowners/errors

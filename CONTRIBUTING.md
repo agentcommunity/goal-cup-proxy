@@ -71,9 +71,12 @@ exits, test counts, platform and Rust version in the PR.
 ## Checks on your pull request
 
 Two checks are expected on a pull request: `check` (the `ci` workflow's one Linux job) and
-`DCO` (the GitHub DCO App). Whether each one runs and is required today is recorded in
-[REPOSITORY-GOVERNANCE](docs/REPOSITORY-GOVERNANCE.md); until its read-back is recorded, a
-maintainer checks sign-off and the gate by hand.
+`DCO` (the GitHub DCO App). Observed runs and whether each one is required today are recorded in
+the [v0.5.1 evidence record](docs/qualification/v0.5.1-public-release-cleanup.md) and the Status
+line of [REPOSITORY-GOVERNANCE](docs/REPOSITORY-GOVERNANCE.md); until a read-back is recorded, a
+maintainer checks sign-off and the gate by hand. On your first fork PR, `check` may show pending
+until a maintainer approves the workflow run; that is GitHub's default for first-time
+contributors.
 
 `check` is a Linux smoke, not the gate. It skips the `goalcup-daemon` and `goalcup-cli` test
 suites (they spawn real process trees and hang small runners), so a green `check` does not run
@@ -121,8 +124,8 @@ prove provider access, package publication, a release, or a qualified live harne
 kit is "synthetic tested"; a qualified claim needs a maintainer's live row and its own record.
 A new connector must use an admitted schema-1 policy row and identity pair. A new policy row
 (CA, credential, identity, native-store form or interpreter) is a separately reviewed core PR
-with a DECISIONS row. A semantic decoder is a separately reviewed verifier PR. Do not add `.rs`
-files to an ordinary data-only connector PR.
+with a `docs/DECISIONS.md` row. A semantic decoder is a separately reviewed verifier PR. Do not
+add `.rs` files to an ordinary data-only connector PR.
 
 Record exact executable version and SHA-256 only when the source or an official artifact proves
 them. Package provenance, a published package, a release, or qualification is UNKNOWN unless its
@@ -138,7 +141,7 @@ fixture with `spikes/redact.py`.
 
 ## Maintainer-owned files
 
-`STATUS.md`, `LEDGER.md` and `DECISIONS.md` are maintainer-owned state trackers. Do not edit
+`STATUS.md`, `LEDGER.md` and `docs/DECISIONS.md` are maintainer-owned state trackers. Do not edit
 them in an outside PR: they conflict on every merge. Put proposed text in the PR description and
 a maintainer lands it.
 
