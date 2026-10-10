@@ -1,20 +1,21 @@
 # STATUS: where Goal Cup stands
 
-Updated: 2026-10-07. The merged integration head is `cc52f967` (full hash
-`cc52f967f40e1f3e6aba8f52a7f3572df26d242f`). The tested integration head is `9fc730e6`
-(full hash `9fc730e6b4631700b400f347835de147cd528dbe`). The five S8 documentation merges after
-that test are merged evidence, not a new whole-tree gate. Tickets:
+Updated: 2026-10-10. v0.5.0 is published as source only: the
+[v0.5.0 release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0) has no
+attached files, and its tag, commit and tree are in
+[the v0.5.1 cleanup record](docs/qualification/v0.5.1-public-release-cleanup.md). Built binaries
+print `0.1.0`: the package version stays unchanged until v0.6.0. Commit hashes and branch names
+cited here refer to private development history not included in this repository. Tickets:
 [LEDGER.md](LEDGER.md). How the parts fit: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The words:
-[docs/GLOSSARY.md](docs/GLOSSARY.md). No public-repository push, cut publication or tag is
-authorized.
+[docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## What m2 is
 
 `m2/wire` is the M2 recorder line. A participant runs `goalcup start --goal-file` and a coding
 agent works inside an isolated home while the tracker records the native and wire legs into one
-hash-linked v5 chain. Delivery is LocalOnly: no server, receipt or acknowledgement. The approved
-v0.5 medium is source-only: the tree has three connector directories and the private pilot has
-two selected/staged connectors. There is no downloadable binary or installer artifact, staged
+hash-linked v5 chain. Delivery is LocalOnly: no server, receipt or acknowledgement. v0.5.0 is
+source-only: the tree has three connector directories and the separate macOS packaging allowlist
+selects/stages two. There is no downloadable binary or installer artifact, staged
 bundle, registry publication, signing, notarization or qualification claim; a future Homebrew
 installer is a separate later packaging track. The same-UID
 local-attacker residual remains out of scope. The pilot is private, unsigned and not released.
@@ -88,32 +89,26 @@ The cause of the upstream-connect failures on those rows is UNKNOWN.
 By LEDGER ID. No eight-hour, 168-hour, production, public or acknowledged-delivery claim exists.
 
 - **Qualification:** T25 (rest), T26, T27, T28.
-- **v0.5 pre-tag foundations:** C1, OS-14 through OS-21 and S-08/OS-15 are merged. W1 covers
-  code through the tested head above; S8 documentation has focused evidence but awaits Step11's
-  exact-head whole-tree gate.
-- **v0.5 cut and proof:** OS-22 cut-link repair, OS-23 outsider Gemini, OS-24 fresh clone, then
-  OS-25 exact-head evidence and explicit owner GO.
-- **Explicitly post-tag:** OS-12, OS-13, OS-26, OS-27, OS-28 and OS-29 (remove the default
-  build's retained V1 manifests parsing dependency), plus H-28 and H-29. They remain ticketed work
-  but do not block `v0.5.0`.
+- **v0.5 foundations:** C1, OS-14 through OS-21 and S-08/OS-15 are merged. W1 covers code
+  through private head `9fc730e6`; the later S8 documentation merges had focused evidence only.
+- **v0.5 cut and proof:** the public cut (OS-01, OS-06), its link check (OS-22) and the source
+  release (OS-25) are recorded. OS-23 outsider Gemini and OS-24 fresh clone: evidence not yet
+  linked. OS-07 settings are incomplete (private vulnerability reporting off, no DCO check seen).
+- **Deferred after `v0.5.0`:** OS-12, OS-13, OS-26, OS-27, OS-28 and OS-29 (remove the default
+  build's retained V1 manifests parsing dependency), plus H-28 and H-29.
 - **Other open work:** H-11, H-12, H-04, F-16, H-18, H-20 through H-26 and older OS tickets remain
   unless their own evidence closes them; this boundary does not silently mark them done.
 
 ## Gate
 
-The W1 full gate is **PASS** on exact tested integration head `9fc730e6` (full hash
-`9fc730e6b4631700b400f347835de147cd528dbe`): 22 commands, no timing waivers and all exits zero.
-Default workspace tests: 2,300 passed, 0 failed, 40 ignored. `v1-compat` workspace tests:
-3,038 passed, 0 failed, 43 ignored. The failure and crash campaigns passed 6/6 and 12/12;
-the default synthetic set passed 8/8 and the v1 real-daemon set 3/3. Evidence is local, not in git:
-`target/v05-wave1-9fc730e6b463/gate-summary.md` in the `m2-wire` worktree. This records the gate
-only; it does not claim a tag, release, publication or live qualification.
+The last recorded whole-tree gate is W1, **PASS** on private integration head `9fc730e6`, before
+the public cut. It does not validate public commit `d2b3206` or v0.5.1, and no whole-tree gate
+result for `d2b3206` is linked here. W1 counts and identities, and the v0.5.1 local results, are in
+[the cleanup record](docs/qualification/v0.5.1-public-release-cleanup.md#local-validation).
 
-For v0.5, every lane keeps focused failing-first/acceptance proof and independent review. The
-integrator runs V -> D -> C once on each whole-wave head. A timing failure seen only under load is
-rerun alone; only an isolated reproduction blocks. After the final cut proofs, the exact proposed tag
-head needs current evidence. No push, public cut publication or `v0.5.0` tag occurs without the
-owner's explicit GO.
+Every lane keeps focused failing-first/acceptance proof and independent review. The integrator
+runs V -> D -> C once on each whole-wave head. A timing failure seen only under load is rerun
+alone; only an isolated reproduction blocks.
 
 ## V1 on `v1/trunk`
 

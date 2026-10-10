@@ -1,6 +1,6 @@
 # Operating the tracker
 
-Updated: 2026-10-07
+Updated: 2026-10-10
 
 How do I build, configure and run the binaries in full detail: the daemon config, the CLI flags
 and exit codes, the development walkthrough, the MCP server, the verifier, the committed traces,
@@ -27,12 +27,17 @@ install, one capture run) is in [../README.md](../README.md).
 
 ## Current M2 operating boundary
 
-The draft v0.5 line is a planned source-only candidate pending owner approval. No downloadable
-binary, installer, staged bundle, registry publication, signature, notarization or qualification
-exists. The source and OSS cut contain exactly three pinned schema-1 connector directories:
-`codex-cli`, `claude-code-cli` and `hermes-cli`. The current private `m2-pilot` package allowlist
-stages only Codex and Claude, copying each selected directory whole, including seeds and its
-retained V1 `manifest.toml`. A source pin is not evidence of package inclusion.
+v0.5.0 is published as source only
+([cleanup record](qualification/v0.5.1-public-release-cleanup.md)). No downloadable binary,
+installer, staged bundle, registry publication, signature, notarization or qualification exists.
+Built binaries print `0.1.0`: the package version stays unchanged until v0.6.0. The source
+contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
+`hermes-cli`. The separate macOS packaging allowlist (`m2-pilot` in
+[packaging/README.md](../packaging/README.md)) stages only Codex and Claude, copying each selected
+directory whole, including seeds and its retained V1 `manifest.toml`. A source pin is not
+evidence of package inclusion. macOS is the only measured platform. Linux builds, but a
+`goalcup start` capture is refused there: the chain's disk reservation is implemented only for
+macOS APFS.
 
 Connector discovery checks `$GOALCUP_CONNECTORS_DIR`, `<exe>/../share/goalcup/connectors`, then
 `<exe>/../../connectors`. It considers immediate child directories with a regular `harness.toml`,
@@ -47,7 +52,7 @@ unfinished v5 capture has status/seal-only authority; other authenticated mutato
 side effects, and an unfinished launched capture receives one `IngestLost` gap.
 
 The default build excludes V1 execution but still parses the retained Codex and Claude
-`manifest.toml` files at startup. Full removal is post-tag ticket OS-29 and is not complete. The
+`manifest.toml` files at startup. Full removal is ticket OS-29 and is not complete. The
 schema-1 synthetic contract kit covers exactly four cases: `controlled-workload` (no identity,
 append-only), `synthetic-preassigned` (launch identity, append-only), `synthetic-stderr-token`
 (deferred identity, append-only), and `synthetic-stdout-json` (launch identity, two snapshot

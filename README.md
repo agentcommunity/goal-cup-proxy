@@ -1,6 +1,6 @@
 # goal-cup
 
-How do I build, gate, install and run the tracker? For contributors and agents. Updated: 2026-10-07.
+How do I build, gate, install and run the tracker? For contributors and agents. Updated: 2026-10-10.
 
 **Goal Cup** is an open-source tracker that records what a coding agent actually did during a run.
 It captures the harness's own session files (the native leg) and its model traffic (the wire leg)
@@ -13,16 +13,17 @@ goal, not a claim about this code.
 Where the project stands, what is measured and what is open: [STATUS.md](STATUS.md). The ticket
 list is [LEDGER.md](LEDGER.md).
 
-The draft v0.5 line is a planned source-only candidate pending owner approval. It has no tag or
-public cut and no downloadable binary, installer, staged bundle, registry publication, signature,
-notarization or qualification. The source and OSS cut contain exactly three pinned schema-1
-connector directories: `codex-cli`, `claude-code-cli` and `hermes-cli` (capture-only). The current
-private `m2-pilot` staging allowlist selects only `codex-cli` and `claude-code-cli`; a source pin
-does not prove package inclusion. Short rows have been measured, but long runs are not qualified.
-The first live Hermes row is
-[docs/qualification/m2-hermes-reference-row.md](docs/qualification/m2-hermes-reference-row.md);
-every other record is indexed in [docs/qualification/README.md](docs/qualification/README.md).
-`v1/trunk` holds the V1 line, tagged `v0.1.0`. Terms are in [docs/GLOSSARY.md](docs/GLOSSARY.md).
+v0.5.0 is published as source only, with no attached files: see the
+[v0.5.0 release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0) and
+[the v0.5.1 cleanup record](docs/qualification/v0.5.1-public-release-cleanup.md). There is no
+downloadable binary, installer, staged bundle, registry publication, signature, notarization or
+qualification. Built binaries print `0.1.0`: the package version stays unchanged until v0.6.0.
+The source has exactly three pinned schema-1 connector directories: `codex-cli`,
+`claude-code-cli` and `hermes-cli` (capture-only). The separate macOS packaging allowlist
+([packaging/README.md](packaging/README.md)) selects only Codex and Claude; a source pin does not
+prove package inclusion. Short rows are measured; long runs are not qualified (records:
+[docs/qualification/README.md](docs/qualification/README.md)). The earlier V1 line (tag `v0.1.0`)
+is private history, not in this repository. Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## Build
 
@@ -31,19 +32,18 @@ Prerequisites:
 - **Rust 1.89 or later** (edition 2024, `let` chains). `rust-toolchain.toml` asks for `stable`.
 - **A supported platform.** macOS is supported and is the only measured target. Linux is
   best-effort and untested: the workspace builds and a small CI smoke check runs there, but the
-  daemon and CLI test suites are not run on Linux (they spawn process trees and hang small
-  machines). Windows is planned; its code stubs say "not yet supported" and
+  daemon and CLI test suites are not run there (they spawn process trees and hang small machines)
+  and a `goalcup start` capture is refused, because the chain's disk reservation is implemented
+  only for macOS APFS. Windows is planned; its code stubs say "not yet supported" and
   `goalcup-platform` refuses to compile on it today.
 - **A C compiler** (`ring` compiles C and assembly; a `v1-compat` build also compiles the bundled
   SQLite that `rusqlite` carries).
 - **`shasum` or `sha256sum`**, because a test runs `scripts/pin-manifests.sh --print`, and
   **`python3`** if you change `connectors/` and regenerate the pins.
 
-Plain `cargo build` works: cargo fetches the locked dependencies the first time. Maintainers
-also run `cargo fetch --locked` once and then add `--offline` to every command, so that nothing
-can fetch during a build or test. That is an optional convention, not a requirement; if you use
-it, fetch first, because `--offline` on an empty cache fails. `cargo fmt` reads no registry and
-takes no `--offline` flag. Never create a `.cargo/config.toml`.
+Plain `cargo build` works: cargo fetches the locked dependencies the first time. The optional
+maintainer `--offline` convention is under [the gate](#the-gate); `cargo fmt` reads no registry
+and takes no `--offline` flag. Never create a `.cargo/config.toml`.
 
 ```
 cargo build
@@ -61,8 +61,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Maintainer variant: add `--offline` to the three cargo commands that take it, after a
-`cargo fetch --locked`.
+Maintainer variant: add `--offline` to the three cargo commands that take it, after one
+`cargo fetch --locked`, so that nothing can fetch; `--offline` on an empty cache fails.
 
 `cargo build` is step zero and is not redundant: the other three build dev-dependencies, which
 turn on `goalcup-daemon`'s `test-hooks` feature, so none of them compiles the shipped,
@@ -73,11 +73,10 @@ smoke check are in [docs/OPERATING.md](docs/OPERATING.md#building-and-verifying)
 The V1/v4 transcript-and-hook product path compiles only with the `v1-compat` feature, off by
 default (D42). The four commands above gate the default build, which is the M2 capture product.
 The default build still parses the retained `manifest.toml` compatibility files in the Codex and
-Claude connector directories at startup; removing that parser dependency is post-tag ticket
-OS-29, not completed work.
-Any change under `crates/goalcup-{daemon,cli,devserver}`, or to code those crates share with V1
-(`registry.rs`, `status.rs`, `runtime/mod.rs`, the control handlers), also passes the second block,
-which enables the daemon, CLI and devserver feature together:
+Claude connector directories at startup; removing that parser dependency is ticket OS-29, not
+completed work. Any change under `crates/goalcup-{daemon,cli,devserver}`, or to code those crates
+share with V1 (`registry.rs`, `status.rs`, `runtime/mod.rs`, the control handlers), also passes
+the second block, which enables the daemon, CLI and devserver feature together:
 
 ```
 cargo build --workspace --features v1-compat
@@ -108,23 +107,21 @@ export PATH="$PWD/target/release:$PATH"
 export GOALCUP_CONNECTORS_DIR="$PWD/connectors"
 ```
 
-`GOALCUP_CONNECTORS_DIR` matters only for a binary copied off the build tree: `goalcup` discovers
-immediate child directories with a regular `harness.toml` there, then under
-`<exe dir>/../share/goalcup/connectors`, then at `<exe dir>/../../connectors`. Connector directories
-are pinned; edit one only with `sh scripts/pin-manifests.sh` in the same commit. The private macOS
-staging and assisted-install tooling is documented in [packaging/README.md](packaging/README.md);
-its existence is not a released installer or staged artifact. The assisted install adds a
-persistent launchd user agent that restarts after a crash and at every login;
-`uninstall-assisted.sh` removes it.
+`GOALCUP_CONNECTORS_DIR` matters only for a binary copied off the build tree; the discovery order
+is in [docs/OPERATING.md](docs/OPERATING.md#current-m2-operating-boundary). Connector directories
+are pinned; edit one only with `sh scripts/pin-manifests.sh` in the same commit. The macOS staging
+and assisted-install tooling in [packaging/README.md](packaging/README.md) is not a released
+installer or staged artifact. The assisted install adds a persistent launchd user agent that
+restarts after a crash and at every login; `uninstall-assisted.sh` removes it.
 
 ## Run a capture
 
 A capture run records one headless harness session for one goal through the recording proxy. Every
 run gets a fresh `HOME`; Codex and Claude use isolated shared `CODEX_HOME`/`CLAUDE_CONFIG_DIR`
 (Claude's run home has the checked Keychains link), while Hermes gets a per-run `HERMES_HOME` seeded
-only with declared files. It
-needs a running daemon (`goalcup-daemon --config <FILE>`), and `GOALCUP_CONFIG_DIR` must name the
-directory the daemon's `config_dir` names. A LocalOnly daemon needs five keys and no server:
+only with declared files. It needs a running daemon (`goalcup-daemon --config <FILE>`), and
+`GOALCUP_CONFIG_DIR` must name the directory the daemon's `config_dir` names. A LocalOnly daemon
+needs five keys and no server:
 
 ```toml
 artifact_root    = "<install>/var/artifacts"
@@ -134,9 +131,8 @@ workspace_parent = "<install>/var/workspaces"
 control_addr     = "127.0.0.1:0"
 ```
 
-Omit `upload_url` and `server_public_key` together; the daemon then admits only local v5
-entries. Every other key and the V1 server flow are in
-[docs/OPERATING.md](docs/OPERATING.md#running-the-daemon).
+Omit `upload_url` and `server_public_key` together; the daemon then admits only local v5 entries.
+Every other key and the V1 server flow are in [OPERATING](docs/OPERATING.md#running-the-daemon).
 
 Put the goal in a text file in a directory of its own, outside any repository: the run's
 directory is created beside it. Then:
@@ -193,8 +189,8 @@ tests, never to build or run the gate. Source `harnesses/env.sh` before any real
 
 Harness connectors are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md) and
 [docs/HARNESS-ONBOARDING.md](docs/HARNESS-ONBOARDING.md). Commits are signed off (DCO,
-`git commit -s`). Security reports go through GitHub private vulnerability reporting or
-goalhack@agentcommunity.org, never a public issue: see [SECURITY.md](SECURITY.md). Everyone
+`git commit -s`). Report security issues to goalhack@agentcommunity.org, never in a public issue;
+GitHub private vulnerability reporting is being enabled ([SECURITY.md](SECURITY.md)). Everyone
 taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
