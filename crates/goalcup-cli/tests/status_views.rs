@@ -29,6 +29,7 @@ use goalcup_cli::commands::{
     entries::entries_with,
     status::{render_status, status_with},
 };
+#[cfg(target_os = "macos")]
 use goalcup_protocol::capture_status::AnchorState;
 use goalcup_protocol::control::{self, DaemonClient, STALE_AFTER_SECONDS};
 use goalcup_protocol::events::HealthState;

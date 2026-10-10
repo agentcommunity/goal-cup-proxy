@@ -7,9 +7,11 @@
 
 use goalcup_cli::CliError;
 use goalcup_cli::per_run_home::{
-    create_per_run_home, icloud_folder_synced, icloud_folder_synced_with,
-    refuse_inside_git_work_tree, refuse_synced_folder, refuse_synced_folder_probing,
-    refuse_synced_folder_under,
+    create_per_run_home, icloud_folder_synced, refuse_inside_git_work_tree, refuse_synced_folder,
+};
+#[cfg(target_os = "macos")]
+use goalcup_cli::per_run_home::{
+    icloud_folder_synced_with, refuse_synced_folder_probing, refuse_synced_folder_under,
 };
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
