@@ -8,12 +8,13 @@ verify. This file is for agents (Claude Code, Codex, others) and people.
 [`skills/adding-a-capture-harness`](skills/adding-a-capture-harness/SKILL.md) and
 [`docs/HARNESS-ONBOARDING.md`](docs/HARNESS-ONBOARDING.md). Treat STATUS and LEDGER as
 maintainer-owned: put proposed edits to them in your PR description.
-Updated: 2026-10-04.
+Updated: 2026-10-10.
 
 ## Read in this order
 
 1. [`STATUS.md`](STATUS.md): where things are, on one screen.
-2. [`LEDGER.md`](LEDGER.md): the open tickets by ID. Change a ticket in the same commit as the work.
+2. [`LEDGER.md`](LEDGER.md): the open tickets by ID. Change a ticket in the same commit as the work
+   (maintainers).
 3. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how the parts fit.
 4. [`docs/DECISIONS.md`](docs/DECISIONS.md): read the index; treat the entries as constraints.
 5. [`README.md`](README.md): build, the four-command gate, run.
@@ -64,8 +65,9 @@ Updated: 2026-10-04.
   live in the verifier. No rule logic in the daemon, and the daemon never depends on the verifier
   (D3). Keep the daemon small; it is the signed, hard-to-change piece.
 - **Isolation.** Harnesses for testing live under `harnesses/` with their own homes
-  (`harnesses/home/<harness>/`). Source `harnesses/env.sh` first. Never point a test at the real
-  `~/.claude`, `~/.codex` or similar. If a harness cannot be scoped, say so; do not work around it.
+  (`harnesses/home/<harness>/`). Run `harnesses/install.sh`, then source the `env.sh` it writes.
+  Never point a test at the real `~/.claude`, `~/.codex` or similar. If a harness cannot be
+  scoped, say so; do not work around it.
 - **Secrets.** Spike artifacts land in `spikes/<harness>/out/`, which is git-ignored, because raw
   transcripts hold keys and tokens. A committed fixture goes through `spikes/redact.py` first and
   is reviewed by eye.

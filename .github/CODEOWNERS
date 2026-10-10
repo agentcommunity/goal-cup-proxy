@@ -2,8 +2,8 @@
 # machine that uses a merged build. Pins are regenerated in the same PR, so they do not protect
 # against a malicious merge. Review is the control. See SECURITY.md.
 #
-# PLACEHOLDER: @nembal is the maintainer's handle. Replace it with the owning GitHub user or
-# team (for example @agentcommunity/maintainers) when the public repository is created.
+# @nembal is the maintainer and holds admin on this repository. How code-owner review is
+# enforced, and the temporary single-maintainer exception: docs/REPOSITORY-GOVERNANCE.md.
 
 /connectors/                                        @nembal
 /crates/goalcup-protocol/src/manifest.rs            @nembal
