@@ -36,9 +36,16 @@ Contributions are accepted under the [Apache License 2.0](LICENSE) and need a
 must match the commit author. A pull request with an unsigned commit is not merged.
 
 Forgot the sign-off? If it is your latest commit and you have not pushed it yet, run
-`git commit --amend --no-edit --signoff`. For a commit you already pushed, or several commits,
-follow the instructions on the failing DCO check's details page. Only rewrite and force-push
-your own fork branch, never someone else's.
+`git commit --amend --no-edit --signoff`. For unsigned commits already pushed to your own fork
+branch, sign off every commit on it and update the branch:
+
+```
+git fetch upstream
+git rebase --signoff upstream/main
+git push --force-with-lease
+```
+
+Only rewrite and force-push your own fork branch, never someone else's.
 
 ## The gate
 
@@ -68,15 +75,19 @@ cargo test --workspace --features v1-compat
 Plain cargo works; `--offline` is an optional maintainer convention. Report the exact command
 exits, test counts, platform and Rust version in the PR.
 
+On Linux, run CI's form `cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli`
+instead of the last test command and say so in the PR; a maintainer runs the full gate on macOS.
+
 ## Checks on your pull request
 
-Two checks are expected on a pull request: `check` (the `ci` workflow's one Linux job) and
+Two checks will be required on a pull request: `check` (the `ci` workflow's one Linux job) and
 `DCO` (the GitHub DCO App). Observed runs and whether each one is required today are recorded in
 the [v0.5.1 evidence record](docs/qualification/v0.5.1-public-release-cleanup.md) and the Status
 line of [REPOSITORY-GOVERNANCE](docs/REPOSITORY-GOVERNANCE.md); until a read-back is recorded, a
 maintainer checks sign-off and the gate by hand. On your first fork PR, `check` may show pending
 until a maintainer approves the workflow run; that is GitHub's default for first-time
-contributors.
+contributors. Required checks are strict: to update your branch, merge upstream `main` into it
+(or rebase your own branch on it) and push.
 
 `check` is a Linux smoke, not the gate. It skips the `goalcup-daemon` and `goalcup-cli` test
 suites (they spawn real process trees and hang small runners), so a green `check` does not run
@@ -97,7 +108,8 @@ A common data-only harness PR contains:
 - the pin diff produced by `sh scripts/pin-manifests.sh` (see the note below);
 - a readiness record under `docs/qualification/m2-<name>-readiness.md` and, when a maintainer
   has run a real row, links to that row's qualification evidence (a source edit alone is not
-  qualification);
+  qualification); add the record as one row of the
+  [qualification index](docs/qualification/README.md) in the same PR;
 - a new generic harness-kit fixture case under
   `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` containing `harness.toml`, `stand-in.py`
   and `expect.toml` (plus only reviewed declared seeds) for this connector;
@@ -109,7 +121,9 @@ A common data-only harness PR contains:
 
 The harness kit test (`harness_contract_kit`) is macOS-only. On Linux it compiles to zero tests,
 so a Linux "pass" proves nothing about your connector; say so if you have no Mac, and a
-maintainer runs it.
+maintainer runs it. A maintainer acknowledges a connector PR within 7 days; that is not a promise
+to merge or qualify it
+([HARNESS-ONBOARDING, section 5](docs/HARNESS-ONBOARDING.md#5-prepare-a-contribution)).
 
 Pin note: for a new schema-1 connector the script changes exactly one line of
 `crates/goalcup-protocol/pins/connector-dirs.txt`. Editing `codex-cli` or `claude-code-cli`,

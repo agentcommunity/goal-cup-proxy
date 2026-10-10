@@ -71,7 +71,7 @@ malicious merge, because a connector PR regenerates them. Every connector change
 reviewed by a code owner against the checklist in
 [docs/CONNECTOR-CONTRIBUTING.md](docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr), and
 an unreviewed build must not be run. The source tree contains exactly three pinned
-schema-1 directories (`codex-cli`, `claude-code-cli`, `hermes-cli`). The `m2-pilot` macOS
+schema-1 directories (`codex-cli`, `claude-code-cli`, `hermes-cli`). The private `m2-pilot` macOS
 package allowlist selects only Codex and Claude and copies each selected directory whole, including
 seeds and its retained V1 `manifest.toml`; a source pin does not prove package inclusion. Default
 builds exclude V1 execution but still parse those two compatibility manifests at startup. Full

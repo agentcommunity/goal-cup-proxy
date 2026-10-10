@@ -24,11 +24,9 @@ observed value (settings, app IDs, check URLs). This guide holds the policy and 
   (see the single-maintainer exception below).
 - Signed (GPG or SSH) commits are not required. That is a different feature from DCO sign-off.
 
-The `ci` workflow in this branch has no path filter: every PR gets a completed `check`, and a
-docs-only PR finishes it quickly with the Rust smoke skipped. On v0.5.0 `main` the workflow is
-still path-filtered until this workflow merges, and a filtered workflow leaves a docs-only PR
-waiting on an "Expected" check forever. Require `check` only after the unfiltered workflow is
-on `main` and has been observed on a PR.
+Since v0.5.1 the `ci` workflow has no path filter, so `check` runs on every pull request; a
+docs-only PR finishes it quickly with the Rust smoke skipped. Require `check` only after it has
+been observed on a PR: a required check that never reports leaves a PR waiting forever.
 
 On a first-time contributor's fork PR, `check` may show pending until a maintainer approves the
 workflow run. That is GitHub's default for Actions on fork PRs; approve it after reading the
@@ -61,7 +59,7 @@ When a second maintainer with write access exists, remove the bypass actor (set
 `bypass_actors` to `[]`), read the ruleset back, record it, and update this section.
 
 Use either the ruleset or classic branch protection on `main`, not both. They stack and the
-stricter rule wins, so leftover classic protection would cancel the ruleset bypass. When applying
+stricter rule wins, so leftover classic protection can override the ruleset bypass. When applying
 the ruleset, remove classic protection or align it. If rulesets cannot be used, the fallback is
 classic branch protection alone with `enforce_admins: false` (payload below). It is broader: an
 admin can then also push to `main` directly. When a second maintainer exists, switch it to
@@ -108,8 +106,8 @@ gh api repos/agentcommunity/goal-cup-tracer/private-vulnerability-reporting
    gh api repos/agentcommunity/goal-cup-tracer/collaborators/nembal/permission
    ```
 
-2. With the unfiltered `ci` workflow on `main` and the DCO App installed, open or pick a PR and
-   read the producing app of each check:
+2. With the unfiltered `ci` workflow on `main` and the DCO App installed, open or pick a PR, set
+   `PR_NUMBER` to its number (for example `PR_NUMBER=12`), and read each check's producing app:
 
    ```
    PR_HEAD=$(gh pr view "$PR_NUMBER" --repo agentcommunity/goal-cup-tracer \
@@ -120,7 +118,8 @@ gh api repos/agentcommunity/goal-cup-tracer/private-vulnerability-reporting
 
    Take `check` from the `github-actions` app and the DCO context from the `dco` app.
 
-3. Copy the payload below to a local file outside the repository and replace every `OBSERVED_*`
+3. Copy the payload below to a local file outside the repository, set `RULESET_PAYLOAD` to that
+   path (for example `RULESET_PAYLOAD=$HOME/main-ruleset.json`), and replace every `OBSERVED_*`
    placeholder with the value read in steps 1 and 2. **Never send a payload that still contains a
    placeholder.** The placeholders are deliberately invalid JSON so that a forgotten one fails.
    `grep -n OBSERVED_ "$RULESET_PAYLOAD"` must print nothing.
@@ -130,6 +129,7 @@ gh api repos/agentcommunity/goal-cup-tracer/private-vulnerability-reporting
    any classic protection; or, only if rulesets cannot be used, `gh api --method PUT
    repos/agentcommunity/goal-cup-tracer/branches/main/protection --input "$PROTECTION_PAYLOAD"`.
    Keep the `id` from the POST response as `RULESET_ID` (or read it from the list call).
+   For the fallback, set `PROTECTION_PAYLOAD` to a filled local copy of its payload, as in step 3.
 
 5. Read back and compare field by field with the payload. The list call returns summaries
    without `rules` or `bypass_actors`; the call by ID returns the full ruleset:

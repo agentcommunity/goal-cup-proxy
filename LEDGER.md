@@ -209,9 +209,9 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   OPERATING, after building the `v1-compat` workspace binaries.
 - ✅ **OS-06** `[OS]` Allowlist copy published as public v0.5.0 (`d2b3206`). c4-I2/I3.
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#source-release).
-- 🟠 **OS-07** `[OS]` SECURITY, CONTRIBUTING, CODE_OF_CONDUCT, NOTICE, the PR template and
-  CODEOWNERS exist (`70bdb05f`). Read 2026-10-10: private vulnerability reporting `enabled:false`,
-  no DCO check observed, `main` protection not evidenced; reports go to the email in SECURITY. c4-I4/I5/I6.
+- 🟠 **OS-07** `[OS]` SECURITY, CONTRIBUTING, CODE_OF_CONDUCT, NOTICE, the PR template and CODEOWNERS
+  exist (`70bdb05f`); c4-I4/I5/I6. Read 2026-10-10: private vulnerability reporting `enabled:false`,
+  no DCO check observed, `main` protection not evidenced; reports go to the email in SECURITY.
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#public-checks-and-settings).
 - ⬜ **OS-08** `[next]` Re-state that `m2_native_observations` fixtures passed redaction in the
   scrub notes before the public cut. c4-M10.
