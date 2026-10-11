@@ -92,7 +92,8 @@ By LEDGER ID. No eight-hour, 168-hour, production, public or acknowledged-delive
   through private head `9fc730e6`; the later S8 documentation merges had focused evidence only.
 - **v0.5 cut and proof:** the public cut (OS-01, OS-06), its link check (OS-22) and the source
   release (OS-25) are recorded. OS-23 outsider Gemini and OS-24 fresh clone: evidence not yet
-  linked. OS-07 settings are incomplete (private vulnerability reporting off, no ruleset applied).
+  linked. The v0.5.1 cleanup merged as `328ffa9`; OS-07 settings are applied
+  ([record](docs/qualification/v0.5.1-public-release-cleanup.md#public-checks-and-settings)).
 - **Deferred after `v0.5.0`:** OS-12, OS-13, OS-26, OS-27, OS-28 and OS-29 (remove the default
   build's retained V1 manifests parsing dependency), plus H-28 and H-29.
 - **Other open work:** H-11, H-12, H-04, F-16, H-18, H-20 through H-26 and older OS tickets remain
