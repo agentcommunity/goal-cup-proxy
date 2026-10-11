@@ -11,6 +11,22 @@ record, `docs/qualification/m2-amp-readiness.md` (on branch `claude/v060-amp-rea
 on this branch). The rows cited below are rows of that record's "Mapping to Goal Cup policy"
 table and its "Core changes Amp would need" list.
 
+| # | Change | Readiness item | Status on `claude/v060-amp-core-prep` |
+|---|---|---|---|
+| 1 | Refuse `*_URL` env names | core change 1 | implemented |
+| 2 | Admit `AMP_API_KEY` | core change 2 | implemented; DECISIONS row proposed |
+| 3 | Kit credential support | core change 3 | implemented; macOS kit not run |
+| 4 | Credential with `stdout_json` identity | core change 5 | implemented; D43 amendment proposed |
+| - | Private `TMPDIR` per capture launch | core change 4 | not started (optional hardening) |
+| - | Settings seed under the run home | core change 6 | not started (only if needed) |
+| - | Key fingerprint file, native store | core change 7 | owner decisions, below |
+
+Each numbered change is one commit on this branch, meant to be reviewed as its own pull request,
+smallest first. Changes 1, 2 and 4 were built test first: the new tests failed before the
+change and passed after it. Change 3 is test code for the macOS-only kit, so it could only be
+type-checked here. On this Linux host the macOS-only suites (the harness-contract kit, the
+end-to-end and Hermes offline-key tests) were not run.
+
 ## 1. Refuse `*_URL` env names as endpoints
 
 - **What.** `env_name_denied` in
@@ -149,3 +165,35 @@ Proposed text, not in force:
 > holding a fragment is withheld and fails the row. Key scanning and identity are no longer
 > separate tees on stdout; they share one. Evidence: `credential_stdout_identity.rs`, kit case
 > `synthetic-credential-stdout-json`.
+
+## Owner decisions that remain
+
+These are not code changes this branch can make. Each needs the owner's ruling, and most need
+the live probe first.
+
+- **Key fingerprint file.** Amp writes `$HOME/.local/share/amp/.legacy-state-owner.json` with
+  an `identityKey` that is a deterministic function of the access token (readiness row
+  "Key-derived file"). D41 and the plan forbid persisting a key fingerprint. The key-fragment
+  scan cannot see it: it matches fragments and the SHA-256 prefix, and this derivation is
+  UNKNOWN. Options:
+  - (a) find an Amp setting or seed that stops the write, proven byte for byte as D41 did for
+    Hermes;
+  - (b) amend D41 to confine the file to the uncommitted per-run directory and exclude it from
+    any retained artifact, with a native pattern that cannot match it;
+  - (c) treat Amp as blocked until Amp stops writing it.
+- **No local own-session store.** If the live probe finds that Amp keeps its sessions only on
+  its server, schema 1 has no fit, because it requires exactly one `[[capture.native]]` row. The
+  readiness record lists the options: (a) stop, Amp stays blocked; (b) a core PR and DECISIONS
+  row admitting a connector with no native row, at a wire-only or capture-only claim, whose wire
+  leg is Amp's own protocol to `ampcode.com` with no decoder; (c) a new server-relay harness
+  design. A wrapper that writes a native file from stdout or an export stays forbidden. Change 4
+  makes a stdout identity possible; it does not make stdout native capture.
+- **Managed settings.** Amp reads machine-wide `/etc/ampcode/managed-settings.json` (macOS:
+  under `Application Support/ampcode`, full path UNKNOWN) and fetches workspace settings and
+  plugins from its server. Goal Cup cannot isolate either. The owner rules whether a row must
+  record their presence (metadata only), refuse to start when the machine-wide file exists, or
+  disclose them as residuals.
+- **Token grammar.** Change 2 assumes Amp tokens fit 20 to 256 bytes of `[A-Za-z0-9_-]`. The
+  live probe must confirm it before the proposed DECISIONS row is accepted.
+- **Identity carrier.** Change 4 matters only if the live probe shows the stdout `init` event
+  arrives before the first model request and names the session a native file is scoped by.
