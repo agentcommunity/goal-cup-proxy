@@ -47,9 +47,10 @@ side effects, and an unfinished launched capture receives one `IngestLost` gap.
 
 The V1 execution path was removed (D48; the `v0.5.0` tag keeps it). The build still parses the
 retained Codex and Claude `manifest.toml` files at startup. Full removal is ticket OS-29 and is not
-complete. The schema-1 synthetic contract kit covers exactly four cases: `controlled-workload` (no
+complete. The schema-1 synthetic contract kit covers exactly five cases: `controlled-workload` (no
 identity, append-only), `synthetic-preassigned` (launch identity, append-only),
-`synthetic-stderr-token` (deferred identity, append-only), and `synthetic-stdout-json` (launch
+`synthetic-stderr-token` (deferred identity, append-only), `synthetic-credential-stderr` (the same
+with an invented child-only `DEEPSEEK_API_KEY` and a clean key scan), and `synthetic-stdout-json` (launch
 identity, two snapshot generations). All require `--dev` and exclude a wrong-id decoy where
 applicable.
 

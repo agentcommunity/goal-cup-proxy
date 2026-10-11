@@ -69,12 +69,15 @@ cargo build
 cargo test -p goalcup-cli --test harness_contract_kit
 ```
 
-On macOS the current baseline suite runs four synthetic stand-ins, each with `harness.toml`,
-`stand-in.py` and `expect.toml`; a connector PR adds a fifth (new) fixture case for its own path:
+On macOS the current baseline suite runs five synthetic stand-ins, each with `harness.toml`,
+`stand-in.py` and `expect.toml`; a connector PR adds a new fixture case for its own path:
 
 - `controlled-workload`: no identity binding and an append-only native file;
 - `synthetic-preassigned`: launch-assigned identity and `{id}`-scoped append-only file;
 - `synthetic-stderr-token`: deferred `stderr_line` identity and append-only file;
+- `synthetic-credential-stderr`: the same with a credential. Its `expect.toml` names
+  `credential_env`; the runner hands an invented value through the child-secret path, then
+  checks the stand-in received it and that no fragment is in the trace, run directory or output;
 - `synthetic-stdout-json`: launch-assigned `stdout_json` identity and a snapshot, including a
   seeded file and argv guard.
 

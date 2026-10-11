@@ -67,3 +67,32 @@ Proposed text, not in force:
 > renames the variable.
 > **Evidence.** `docs/qualification/m2-amp-readiness.md` (static: Amp help text names
 > `AMP_API_KEY` as an access token that takes precedence over stored credentials).
+
+## 3. Teach the generic kit a credential
+
+- **What.** A kit case may name `credential_env` in `expect.toml`. The runner in
+  [harness_contract_kit.rs](../../crates/goalcup-cli/tests/harness_contract_kit.rs) then sets
+  that variable in `goalcup start`'s own environment to an invented value (`KIT_CREDENTIAL`), so
+  the launcher's existing child-secret path hands it to the stand-in. After the run it checks
+  that the stand-in received exactly that value (the stand-in writes a prefixed SHA-256 to its
+  marker, outside the run directory, which is not a key-scan form), that the launcher reported
+  `key scan: clean`, and that the key scan finds no fragment in the sealed trace or the run
+  directory and the forwarded stdout and stderr hold none. A new case,
+  `synthetic-credential-stderr`, uses the admitted `DEEPSEEK_API_KEY` with `stderr_line`
+  identity, so it is testable before any Amp policy lands.
+- **Why.** Readiness row "Synthetic kit for a credential profile": the kit had no credential
+  field and supplied no synthetic key, so a keyed connector case could not run.
+- **Files.** `harness_contract_kit.rs`; the new case under
+  `crates/goalcup-cli/tests/fixtures/harness-kit/synthetic-credential-stderr/`; the kit case
+  lists in [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md), [OPERATING](../OPERATING.md),
+  [ARCHITECTURE](../ARCHITECTURE.md) and the
+  [harness skill](../../skills/adding-a-capture-harness/SKILL.md).
+- **Tests.** The existing `every_kit_case_seals_and_matches_expectations` and
+  `every_kit_case_requires_the_dev_door` pick the case up from its directory. The kit is
+  macOS-only and was **not run** here. On Linux it was type-checked with
+  `cargo clippy -p goalcup-cli --tests --target aarch64-apple-darwin -- -D warnings`, the new
+  `harness.toml` was validated as `Origin::Dev` by a throwaway test, and the stand-in's no-key
+  branch exits 3 before touching its marker.
+- **Risk.** Low; test-only. The first macOS run is the real proof. If the key scan or the
+  credential path behaves differently on macOS, the case fails rather than passing silently.
+- **Status.** Implemented on this branch; not yet run on macOS.
