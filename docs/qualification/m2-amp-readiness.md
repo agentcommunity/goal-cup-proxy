@@ -12,7 +12,8 @@ Updated: 2026-10-11.
 - Probe host: Linux x86_64, glibc, key-free. Goal Cup source `6befa1f` (public
   `goal-cup-tracer`). No credential existed, was requested, read or printed. No authenticated
   request was made; every Amp process ran in a network namespace with no route out.
-- Raw output: `/tmp/claude-0/amp-probe/` (local, not in git): `raw/`, `tarballs/`, `x/`
+- Raw output (local, not in git; the plan names `spikes/amp/out/`, this probe used a temp dir):
+  `/tmp/claude-0/amp-probe/`: `raw/`, `tarballs/`, `x/`
   (extracted packages), `pkg/` (npm prefix), `static/strings.txt`, `scripts/`, one directory per
   probe run.
 
@@ -108,7 +109,7 @@ Source: [capture_policy.rs](../../crates/goalcup-protocol/src/capture_policy.rs)
 | `NODE_EXTRA_CA_CERTS` | admitted extend row | fits by static reading; live UNKNOWN |
 | Proxy-only HTTP/1.1 with WebSocket relay | the proxy offers ALPN `http/1.1` only and relays an upgraded WebSocket | UNKNOWN until live |
 | Own-session native store | schema 1 needs one `append_only` or `snapshot` source; stdout JSON is not native capture | blocked (UNKNOWN, likely absent) |
-| Key fingerprint on disk | D41 forbids persisting credential values or fingerprints; the key-fragment scan matches fragments, not a derived hash | blocked pending a decision |
+| Key fingerprint on disk | no Amp rule yet; D41 is the Hermes precedent (a seed stops Hermes writing `secret_fingerprint`), and evidence records never keep key values or fingerprints; the key-fragment scan matches fragments, not a derived hash | blocked pending a decision |
 | Machine-wide managed settings and server-pushed settings/plugins | no Goal Cup control over `/etc/ampcode` or `ampcode.com` account state | residual; must be disclosed or ruled out |
 | Bun addon reused from `TMPDIR` | capture launch passes the launcher's `TMPDIR` through `CAPTURE_IDENTITY_ENV` | residual (same-UID substitution) |
 | Interactive login on no key | Goal Cup refuses a launch with no key before spawning, so the login flow is not reached; on a revoked key the stdout login text would precede any JSON | fits; revoked-key path UNKNOWN |
@@ -153,7 +154,8 @@ private `HOME` (and no inherited `XDG_*`), a private `TMPDIR`, an empty workspac
 work tree, no `AGENTS.md` or `.amp`, the forward proxy and its CA, and a watchdog.
 
 1. **Identity of the install.** On each claimed Mac architecture run
-   `npm install --prefix <private> @sourcegraph/amp@0.0.1791676897-g77c125`. Record `npm view` integrity, the canonical path of
+   `npm install --prefix <private> @sourcegraph/amp@0.0.1791676897-g77c125`.
+   Record `npm view` integrity, the canonical path of
    `node_modules/.bin/amp`, `amp --version`, and SHA-256 of `@ampcode/cli/bin/amp`; compare with
    the darwin payload hashes above. Re-hash after every later step.
 2. **Machine state.** Record whether `/Library/Application Support/ampcode/` (and any
@@ -204,7 +206,21 @@ updater effect in execute mode.
 **BLOCKED.** Downstream Tasks 2 and 3 stay closed until the live probe replaces every UNKNOWN in
 transport, native storage/scope, auth and identity, and the owner rules on the key-fingerprint
 file. If the live probe finds no local own-session store, Amp is BLOCKED unsupported under schema
-1, and only a separately scoped core design could change that.
+1.
+
+### Owner decision if there is no local store
+
+The docs disagree today: [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md) names a "wire-only
+partial; no own-session claim" outcome, while [CONNECTOR-SCHEMA](../CONNECTOR-SCHEMA.md) requires
+exactly one `[[capture.native]]` row. The options:
+
+- **(a) Stop.** Amp stays BLOCKED unsupported and the v0.6.0 Amp milestone is blocked.
+- **(b) Admit a connector with no native row.** A core PR plus a DECISIONS row, at the wire-only
+  partial or capture-only claim. Amp's wire leg is its own protocol to `ampcode.com` (WebSocket
+  or SSE, possibly CBOR; UNKNOWN), not a provider API, so (b) also needs that transport to pass
+  the proxy and gives no provider semantics or own-session claim until an Amp decoder exists.
+- **(c) A server-relay harness design.** A new core design for harnesses whose sessions live on
+  a vendor server. Larger than (b).
 
 ## Handoff record
 
