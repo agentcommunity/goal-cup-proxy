@@ -1,0 +1,63 @@
+# Template for crates/goalcup-cli/tests/fixtures/harness-kit/<HARNESS_ID>/harness.toml.
+# A kit case mirrors the connector's home, identity and native shape, but runs a Python
+# stand-in against the kit's own offline upstream. Keep every @NAME@ token exactly: the kit
+# runner replaces them before loading (python3 hash and version, stand-in path, marker path,
+# upstream port and test id). Replace every <PLACEHOLDER>.
+
+schema_version = 1
+# The case runs as an unpinned dev connector, which refuses a pinned id: never use the
+# connector's own id here. Convention: kit-<HARNESS_ID>. expect.toml `id` must match.
+id = "kit-<HARNESS_ID>"
+
+[capture]
+# Keep the first six items. Identity "preassigned": insert "{session_id}" before "--"
+# (the stand-in reads it as argv[4]). The kit always places the goal after "--".
+args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "--"]
+continuation = "one offline echo and one native file for <HARNESS_ID>"
+
+[capture.executable]
+program = "python3"                     # the kit hashes /usr/bin/python3; keep these three
+version = "@PYTHON3_VERSION@"
+sha256 = "@PYTHON3_SHA256@"
+
+# Copy from the connector: run_home, config_home, per_run_dir, dirs, seed, real_dirs.
+# home.env may be the connector's own variable; the stand-in reads it to find the config home.
+# Seeds: copy the connector's files/ tree into this case's files/ (reviewed, no secrets).
+[capture.home]
+run_home = "empty"
+config_home = "<per_run|shared>"
+env = "<HARNESS>_HOME"
+per_run_dir = "<harness>-home"          # delete for "shared"
+# dirs = ["<dir>"]                      # per_run only, as in the connector
+# seed = [{ file = "<file>" }]          # per_run only; the file goes in this case's files/
+real_dirs = ["{user_home}/.<harness>"]
+
+# The kit cannot inject a provider key: leave out [capture.credential] even when the
+# connector has one, and say so in the PR (decision-table.md, credential rows).
+
+# Any CA registry row works; the stand-in reads the file this variable names.
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+# Copy [capture.identity] from the connector unchanged.
+[capture.identity]
+source = "<IDENTITY_SOURCE>"
+# binding = "<at_launch|deferred>"
+
+# Copy the connector's native row: same root shape, pattern shape and form. Use a kit hint
+# that no decoder knows, so the case can assert "capture-only".
+[[capture.native]]
+name = "<session>"
+root = "{config_home}/<sessions>"
+pattern = "<session-{id}.jsonl>"
+form = "<append_only|snapshot>"
+protocol_hint = "kit-<HARNESS_ID>-native"  # append_only only; delete for snapshot
+
+# Copy [capture.argv_guard] from the connector if it has one.
+
+# Fixed: the kit's offline upstream serves only this host and path.
+[[capture.hosts]]
+host = "api.e00.localhost"
+evidence_paths = ["/v1/echo"]
+protocol_hint = "kit-<HARNESS_ID>-wire"

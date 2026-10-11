@@ -1,0 +1,47 @@
+# Template for crates/goalcup-cli/tests/fixtures/harness-kit/<HARNESS_ID>/expect.toml.
+# Format (parse_expect in crates/goalcup-cli/tests/harness_contract_kit.rs):
+# - one `key = "value"` per line; the value is a JSON string ("\n" and "\"" escapes work);
+# - `#` starts a comment ANYWHERE on a line, even inside quotes: no value may contain `#`;
+# - an optional key may be left out or set to "" (both mean absent);
+# - a missing required key fails the case with "expect.toml has no <key>".
+
+# Required. Equals harness.toml `id` (kit-<HARNESS_ID>); the runner stages the case there.
+id = "kit-<HARNESS_ID>"
+# Required. "none", "preassigned", "stdout_json" or "stderr_line"; equals harness.toml.
+identity_source = "<IDENTITY_SOURCE>"
+# Required. "none" (only with source "none"), "at_launch" or "deferred"; equals harness.toml.
+identity_binding = "<none|at_launch|deferred>"
+# stdout_json and stderr_line: the id the stand-in prints (SESSION_ID in stand-in.py); the
+# start output must contain it. Ignored for preassigned (minted) and none.
+identity_id = "<toy_case_42>"
+# Required. The [[capture.native]] `name`.
+native_source = "<session>"
+# Required. The native file's path relative to the native root. `{id}` is replaced by the
+# identity (minted, printed or none), so "session-{id}.jsonl" works for every source.
+native_path = "<session-{id}.jsonl>"
+# Required. "append_only" or "snapshot"; equals harness.toml.
+native_form = "<append_only|snapshot>"
+# Required. Exact bytes of the first native generation. append_only: everything the
+# stand-in appended. snapshot: the first full file it wrote.
+native_g1 = "<{\"message\":\"first\"}\n{\"message\":\"second\"}\n>"
+# Optional. snapshot only: the second full file. The case then expects exactly two streams.
+native_g2 = ""
+# Optional pair, for patterns with {id}: a wrong-id file the stand-in writes, matched as a
+# path suffix under the run directory. Its bytes must equal the text and it must NOT be
+# captured. The template stand-in writes NATIVE_DIR/NATIVE_NAME with {id} = "wrong_id" and
+# the DECOY text. Leave both "" when the pattern has no {id}.
+native_decoy_path = "<sessions/session-wrong_id.jsonl>"
+native_decoy_text = "<{\"message\":\"decoy\"}\n>"
+# Required. Fixed by the kit's upstream.
+wire_host = "api.e00.localhost"
+wire_path = "/v1/echo"
+# Required, non-empty. The exact request body (BODY in stand-in.py). The upstream echoes it,
+# so wire_response is the same bytes.
+wire_request = "kit <HARNESS_ID> echo"
+wire_response = "kit <HARNESS_ID> echo"
+# Required. A protocol_hint from harness.toml (native or host) that no decoder accepts; the
+# case asserts the verifier reports it as capture-only.
+capture_only_hint = "kit-<HARNESS_ID>-wire"
+# Optional. Read only by the synthetic-stdout-json mode test; leave both "".
+seed_path = ""
+dirs = ""

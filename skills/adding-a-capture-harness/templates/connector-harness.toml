@@ -1,0 +1,109 @@
+# Template for connectors/<HARNESS_ID>/harness.toml (connector schema 1).
+# Copy: mkdir -p connectors/<HARNESS_ID> && cp <this file> connectors/<HARNESS_ID>/harness.toml
+# Replace every <PLACEHOLDER>. Delete the options you do not use. Comment lines are optional
+# (they are pinned bytes too); keep one first-line provenance comment like the shipped ones:
+# <Harness name> <VERSION>, capture only. Provenance: docs/qualification/m2-<NAME>-readiness.md.
+# Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: decision-table.md next to this file.
+# No non-comment line may contain the tracker's name (rule F7).
+
+schema_version = 1                      # always 1
+id = "<HARNESS_ID>"                     # must equal the folder name; ^[a-z][a-z0-9-]{1,47}$
+
+[capture]
+# Headless argv WITHOUT the program and WITHOUT the goal. Templates allowed in values:
+# {workspace}, {port}, {session_id} (only with identity "preassigned"). No absolute paths.
+# Goal placement, pick ONE:
+#   A) end args with "--": the goal is appended as the next single argument;
+#   B) set goal_flag: the goal is passed as --flag=<goal>, and args must NOT end in "--".
+args = ["<SUBCOMMAND>", "<FLAG>", "--"]
+# goal_flag = "--<LONG-OPTION>"         # option B only
+# One line: how the run continues unattended (or "none: ..."), e.g. one turn, stdin /dev/null.
+continuation = "none: <HOW ONE HEADLESS TURN RUNS>"
+# Sign-in/token-refresh hosts, tunnelled opaquely and never recorded. Delete if none.
+# auth_hosts = ["<AUTH_HOST>"]
+
+[capture.executable]
+program = "<PROGRAM>"                   # bare name on PATH; not an interpreter (python3, node, sh)
+version = "<VERSION>"                   # the number only ("1.2.3", not "toy 1.2.3"); ^[0-9]
+sha256 = "<SHA256_OF_CANONICAL_FILE>"   # 64 lowercase hex of the symlink-resolved regular file
+
+# Child-only extra variables. Delete the table if none. No endpoint, proxy, credential,
+# provider, XDG_*, GIT_*, CA or *_COMMAND/*PAGER names; no value with "/" "~" "$" or "://".
+# SHELL is the one path value allowed: "/bin/zsh", "/bin/bash" or "/bin/sh".
+[capture.env]
+# <HARNESS>_DISABLE_UPDATES = "1"
+
+[capture.home]
+run_home = "empty"                      # "empty", or "keychain_link" (macOS keychain only)
+# "per_run": a fresh config home per run (needed for seeds, dirs and any credential).
+# "shared": one isolated config home reused across serialized runs; no seeds or dirs.
+config_home = "per_run"
+env = "<HARNESS>_HOME"                  # own home var: ^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$
+per_run_dir = "<harness>-home"          # per_run only; folder name below the run home
+dirs = []                               # per_run only; relative dirs created mode 0700
+real_dirs = ["{user_home}/.<harness>"]  # the participant's real state dirs (never written)
+# Seeds: files copied from connectors/<HARNESS_ID>/files/<file> into the config home.
+# per_run only. No credential, URL or user data. mode is "0600" (default) or "0400".
+seed = []
+# seed = [{ file = "config.yaml" }, { file = "settings.json", mode = "0400" }]
+
+# Only if the harness needs a provider key. Closed list: DEEPSEEK_API_KEY. Requires identity
+# stderr_line + deferred and config_home = "per_run". Any other name is a core PR.
+# [capture.credential]
+# env = "DEEPSEEK_API_KEY"
+
+[capture.ca]
+# One to two names from the CA registry, all with the same mode:
+# CODEX_CA_CERTIFICATE (extend), NODE_EXTRA_CA_CERTS (extend), HERMES_CA_BUNDLE (replace).
+env = ["<CA_VARIABLE>"]
+mode = "<extend|replace>"
+
+[capture.identity]
+# Pick ONE block. The four admitted pairs are the whole list.
+# 1) No session id. Native root must be {run_home}/... or a per-run {config_home}/...:
+# source = "none"
+# 2) The tracker mints the id and passes it in args via {session_id}:
+# source = "preassigned"
+# binding = "at_launch"
+# 3) The harness prints a JSON line on stdout before any model text:
+# source = "stdout_json"
+# binding = "at_launch"
+# match_field = "<type>"                # dot path to a field that marks the start event
+# match_value = "<session.started>"     # its value
+# id_field = "<session.id>"             # dot path to the session id
+# 4) The harness prints "<prefix><id>" on stderr:
+# source = "stderr_line"
+# binding = "deferred"
+# prefix = "<session_id: >"             # 1-32 printable ASCII bytes
+# grammar = "<token|timestamp-hex>"     # token: [A-Za-z0-9_-]{1,128}
+source = "<IDENTITY_SOURCE>"
+
+# Exactly one own-session native store. Never a request dump, credential or seed file.
+[[capture.native]]
+name = "<session>"                      # label in the chain; [A-Za-z0-9._-]{1,64}
+root = "{config_home}/<sessions>"       # {config_home} or {run_home}, plus relative parts
+pattern = "<session-{id}.jsonl>"        # {id} exactly once unless identity is "none"; no **
+form = "<append_only|snapshot>"         # JSONL appended in place, or a file rewritten whole
+# protocol_hint = "<harness-jsonl>"     # append_only only; an unknown hint means capture-only
+
+# Only if the harness pre-scans argv for options it acts on (see the Hermes connector).
+# [capture.argv_guard]
+# long = ["profile"]
+# short = ["p"]
+# short_with_value = []
+# long_abbreviations = false
+
+[capture.termination]
+strategy = "process_group"              # or "native_pid" with native_binary = "<binary>"
+grace_seconds = 10                      # 1-60
+
+# Only rows from the four core recognizers (copied byte for byte). Delete if none.
+# [redaction]
+# extra_patterns = [{ kind = "<harness>_plan_type", regex = '"plan_type"\s*:\s*"([^"\\]+)"' }]
+
+# One to 16 intercepted model hosts. Each needs at least one recorded path.
+[[capture.hosts]]
+host = "<api.provider.example>"         # lowercase DNS name; no scheme, port or wildcard
+evidence_paths = ["</v1/chat/completions>"]
+# prefix_paths = ["/v1/"]               # path prefixes; "/" alone is refused
+protocol_hint = "<openai-chat-completions>"

@@ -4,10 +4,10 @@ Goal Cup records what a coding agent actually did during a run: a tracker that c
 agent's own session files and its model traffic into a sealed, hash-linked chain that anyone can
 verify. This file is for agents (Claude Code, Codex, others) and people.
 
-**Adding a harness?** Read [CONTRIBUTING.md](CONTRIBUTING.md), then
-[`skills/adding-a-capture-harness`](skills/adding-a-capture-harness/SKILL.md) and
-[`docs/HARNESS-ONBOARDING.md`](docs/HARNESS-ONBOARDING.md). Treat STATUS and LEDGER as
-maintainer-owned: put proposed edits to them in your PR description.
+**Adding a harness?** Follow
+[`skills/adding-a-capture-harness/SKILL.md`](skills/adding-a-capture-harness/SKILL.md), the one
+ordered checklist with commands, expected output and STOP points; it links everything else.
+Treat STATUS and LEDGER as maintainer-owned: put proposed edits to them in your PR description.
 Updated: 2026-10-11.
 
 ## Read in this order
@@ -26,8 +26,8 @@ Updated: 2026-10-11.
 - [`docs/TERMINATION.md`](docs/TERMINATION.md): what finish and kill claim.
 - [`docs/CHEAT-CHECKLIST.md`](docs/CHEAT-CHECKLIST.md): read before trusting a Pass.
 - [`docs/HARNESS-ONBOARDING.md`](docs/HARNESS-ONBOARDING.md): adding a harness.
-- [`skills/adding-a-capture-harness`](skills/adding-a-capture-harness/SKILL.md): the phase order
-  and gates for a new capture harness or decoder.
+- [`skills/adding-a-capture-harness`](skills/adding-a-capture-harness/SKILL.md): the entry point
+  for a new harness: checklist, templates, core-PR decision table and `check-connector.sh`.
 - [`docs/qualification/README.md`](docs/qualification/README.md): which record proves what.
 - [`docs/CONTRACTS.md`](docs/CONTRACTS.md): the M2 interface contracts C1 to C6.
 - [`docs/DOCS-STANDARD.md`](docs/DOCS-STANDARD.md): read before editing any doc.

@@ -73,7 +73,7 @@ the harness kit. Maintainers re-run the gate, and the kit for a connector PR, on
 
 ## Adding a harness
 
-Start with [adding-a-capture-harness](skills/adding-a-capture-harness/SKILL.md),
+Start with the step-by-step [entry point](skills/adding-a-capture-harness/SKILL.md), then
 [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), and the connector procedure in
 [CONNECTOR-CONTRIBUTING](docs/CONNECTOR-CONTRIBUTING.md). The source tree currently has three
 connector directories and three pins: `codex-cli`, `claude-code-cli` and `hermes-cli`.
