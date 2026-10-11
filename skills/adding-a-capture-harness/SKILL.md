@@ -86,6 +86,12 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
     native shape with a Python stand-in, uses id `kit-<id>`, and copies any seeds into
     `$k/files/`. The kit cannot inject a key: leave a credential out and say so in the PR.
     Check: `grep -nE '^[^#]*<[^>]+>' $k/harness.toml $k/expect.toml`. Expect: no output.
+    The stand-in itself stops with `replace the placeholder in <NAME>` while one is left.
+    Check that `BODY` in `stand-in.py` equals `wire_request` in `expect.toml`:
+    ```
+    grep -hE '^(BODY|wire_request) = b?"' $k/stand-in.py $k/expect.toml | cut -d\" -f2 | uniq -c
+    ```
+    Expect: one line, `2` and then the body.
 11. **Run the one-command check.** `sh scripts/check-connector.sh <id>`.
     Expect on macOS: last line `check-connector: <id>: 6 passed, 0 failed, 0 skipped`.
     Elsewhere the kit cannot run: add `--allow-no-kit`, expect

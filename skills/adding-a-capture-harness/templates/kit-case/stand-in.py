@@ -37,6 +37,12 @@ SECOND = '{"message":"second"}\n'   # snapshot: native_g2
 DECOY = '{"message":"decoy"}\n'     # written to the wrong-id file when the pattern has {id}
 # ---- end EDIT -----------------------------------------------------------------------------
 
+# Fail loudly while a template placeholder such as <HARNESS_ID> is left in the EDIT block.
+for _name in ("BODY", "CA_ENV", "IDENTITY", "SESSION_ID", "STDERR_PREFIX", "MATCH_FIELD",
+              "MATCH_VALUE", "ID_FIELD", "NATIVE_BASE_ENV", "NATIVE_DIR", "NATIVE_NAME",
+              "NATIVE_FORM", "FIRST", "SECOND", "DECOY"):
+    assert "<" not in str(globals()[_name]), "stand-in.py: replace the placeholder in " + _name
+
 HOST = "api.e00.localhost"  # fixed: the kit's offline upstream
 PATH = "/v1/echo"           # fixed: the path that echoes the body
 

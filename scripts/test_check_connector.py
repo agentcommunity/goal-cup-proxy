@@ -198,6 +198,35 @@ class CheckConnectorTest(unittest.TestCase):
         )
         self.assertNotIn("WARNING", inside.stdout)
 
+    def test_a_relative_target_dir_is_resolved_against_the_repo_root(self) -> None:
+        inside = self.run_script("--allow-no-kit", "toy-cli", CARGO_TARGET_DIR="target")
+        self.assertNotIn("WARNING", inside.stdout)
+        (Path(self.tmp.name) / "shared").mkdir()
+        outside = self.run_script("--allow-no-kit", "toy-cli", CARGO_TARGET_DIR="../shared")
+        self.assertIn("WARNING: CARGO_TARGET_DIR=../shared", outside.stdout)
+        missing = self.run_script("--allow-no-kit", "toy-cli", CARGO_TARGET_DIR="../nowhere")
+        self.assertIn("WARNING: CARGO_TARGET_DIR=../nowhere", missing.stdout)
+
+    def test_template_placeholders_left_fail_the_files_step(self) -> None:
+        kit = self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli"
+        write(
+            kit / "stand-in.py",
+            "'''Copy to harness-kit/<HARNESS_ID>/stand-in.py.'''\n"
+            "# ---- EDIT ----\n"
+            'BODY = b"kit <HARNESS_ID> echo"  # expect.toml wire_request\n'
+            "# ---- end EDIT ----\n"
+            'HOST = "a"  # <not a placeholder>\n',
+        )
+        write(kit / "expect.toml", '# <comment>\nid = "kit-<HARNESS_ID>"\n')
+        result = self.run_script("--allow-no-kit", "toy-cli")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("FAIL files (template placeholders left)", result.stdout)
+        self.assertIn("stand-in.py:3:BODY", result.stdout)
+        self.assertIn('expect.toml:2:id = "kit-<HARNESS_ID>"', result.stdout)
+        self.assertNotIn("stand-in.py:1:", result.stdout)
+        self.assertNotIn("<comment>", result.stdout)
+        self.assertTrue(any("harness_conformance" in c for c in self.cargo_calls()))
+
     def test_a_missing_kit_case_fails_but_the_rest_still_runs(self) -> None:
         shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")
         result = self.run_script("--allow-no-kit", "toy-cli")
@@ -217,6 +246,7 @@ class CheckConnectorTest(unittest.TestCase):
         result = self.run_script("--allow-no-kit", "toy-cli", FAKE_PIN_LINE=f"hermes-cli {HEX}")
         self.assertEqual(result.returncode, 1)
         self.assertIn("other connectors changed: hermes-cli", result.stdout)
+        self.assertIn(f"run `git checkout -- {PINS}` to undo", result.stdout)
 
 
 class CiScopeTest(unittest.TestCase):

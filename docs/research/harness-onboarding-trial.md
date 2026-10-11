@@ -13,9 +13,8 @@ onboarding docs. Updated: 2026-10-11.
   symlink on `PATH`, hashed as the pinned executable and never launched by any test. Identity
   `stderr_line`/`deferred`, per-run `TOY_HOME` with one seed, one append-only JSONL native
   file, `NODE_EXTRA_CA_CERTS`, no credential.
-- Platform: Linux x86_64, cargo 1.97.0. Source: branch `claude/v060-agent-onboarding` on base
-  `ee06d18`. A throwaway worktree (local, not in git) was created with
-  `git worktree add /tmp/claude-0/toy-trial HEAD` for each run and removed afterwards.
+- Platform: Linux x86_64, cargo 1.97.0. Source: the onboarding docs before the fixes below.
+  Each run used a throwaway worktree under a temp directory, removed afterwards.
 
 ## Final run (trial 3)
 
@@ -37,9 +36,10 @@ Step numbers are the skill's. Step 2 was skipped: the harness is made up.
 - 10: kit templates copied to `harness-kit/toy-cli/` and edited per their comments. The
   placeholder grep printed nothing.
 - 11: `sh scripts/check-connector.sh --allow-no-kit toy-cli` ended `4 passed, 1 failed,
-  1 skipped`; the one failure was `loader-script.json`. After applying `2b3def2` (the Linux
-  loader fix on `claude/v060-portability`) it ended `5 passed, 0 failed, 1 skipped`, exit 0.
-- 12: in trial 2, with `2b3def2`: `cargo build`, `cargo fmt --all --check`, clippy and
+  1 skipped`; the one failure was `loader-script.json`. With the pending Linux loader-golden fix
+  (BSD `stat` in `scripts/with-deepseek-key.sh`) applied, it ended `5 passed, 0 failed,
+  1 skipped`, exit 0.
+- 12: in trial 2, with that fix applied: `cargo build`, `cargo fmt --all --check`, clippy and
   `cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli` all exit 0.
 - 14: `git status --short` showed exactly the files step 14 lists.
 
@@ -81,7 +81,8 @@ Trial 1 found 1 to 9, trial 2 found 10 and 11, and trial 3 found none.
   on macOS. A Linux contributor's PR lacks them, so a maintainer regenerates them.
 - The macOS-only `goalcup-cli` and `goalcup-daemon` suites did not run with a fifth connector.
   Whether any of them assumes exactly three is UNKNOWN.
-- Until `2b3def2` lands, Linux shows the `loader-script.json` golden failure on every tree.
+- Until the pending Linux loader-golden fix (BSD `stat` in `scripts/with-deepseek-key.sh`)
+  lands, Linux shows the `loader-script.json` golden failure on every tree.
 - The `*.native.json` files under `harness-golden/` are written and read by no test.
 - A credential connector cannot have a complete kit case, because the kit injects no key
   (decision table, row 3).

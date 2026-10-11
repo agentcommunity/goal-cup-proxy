@@ -4,7 +4,8 @@
 # (they are pinned bytes too); keep one first-line provenance comment like the shipped ones:
 # <Harness name> <VERSION>, capture only. Provenance: docs/qualification/m2-<NAME>-readiness.md.
 # Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: decision-table.md next to this file.
-# No non-comment line may contain the tracker's name (rule F7).
+# No argument, goal flag, env key or value, host or auth host may name the tracker
+# (docs/CONNECTOR-SCHEMA.md, "Cross-field rules", rule 10).
 
 schema_version = 1                      # always 1
 id = "<HARNESS_ID>"                     # must equal the folder name; ^[a-z][a-z0-9-]{1,47}$
@@ -59,7 +60,7 @@ env = ["<CA_VARIABLE>"]
 mode = "<extend|replace>"
 
 [capture.identity]
-# Pick ONE block. The four admitted pairs are the whole list.
+# Uncomment exactly one block. The four admitted pairs are the whole list.
 # 1) No session id. Native root must be {run_home}/... or a per-run {config_home}/...:
 # source = "none"
 # 2) The tracker mints the id and passes it in args via {session_id}:
@@ -76,7 +77,6 @@ mode = "<extend|replace>"
 # binding = "deferred"
 # prefix = "<session_id: >"             # 1-32 printable ASCII bytes
 # grammar = "<token|timestamp-hex>"     # token: [A-Za-z0-9_-]{1,128}
-source = "<IDENTITY_SOURCE>"
 
 # Exactly one own-session native store. Never a request dump, credential or seed file.
 [[capture.native]]

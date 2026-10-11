@@ -6,8 +6,9 @@
 #
 # Steps, in order (all run, so one report shows every problem):
 #   1. files: the kit case crates/goalcup-cli/tests/fixtures/harness-kit/<id>/ holds
-#      harness.toml, stand-in.py and expect.toml. A missing connectors/<id>/harness.toml is
-#      a usage error (exit 2) before anything runs.
+#      harness.toml, stand-in.py and expect.toml, and no template placeholder is left: no
+#      `<...>` outside comments in the three TOML files, no `<` in the stand-in's EDIT block.
+#      A missing connectors/<id>/harness.toml is a usage error (exit 2) before anything runs.
 #   2. pins: `sh scripts/pin-manifests.sh`, then the pin diff against HEAD is printed. It fails
 #      when the diff touches another connector's line; a new or changed line for <id> is
 #      expected and must be committed with the connector.
@@ -35,7 +36,7 @@ for arg in "$@"; do
   case $arg in
     --allow-no-kit) allow_no_kit=yes ;;
     -h | --help)
-      sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     -*)
@@ -75,9 +76,26 @@ fi
 # One target directory per checkout: cargo does not put the checkout path in a workspace
 # crate's build hash, so a CARGO_TARGET_DIR shared with another checkout can run that
 # checkout's test binaries, which then read and write the other checkout's files.
+# Cargo resolves a relative CARGO_TARGET_DIR against its working directory, which is the repo
+# root here. A target-dir set in a cargo config file is not detected.
 if [ -n "${CARGO_TARGET_DIR:-}" ]; then
-  case $CARGO_TARGET_DIR in
-    "$PWD"/*) ;;
+  target=$CARGO_TARGET_DIR
+  case $target in
+    /*) ;;
+    *) target=$PWD/$target ;;
+  esac
+  # Resolve symlinks and `..` when the directory exists; a missing one with `..` warns.
+  if [ -d "$target" ]; then
+    target=$(cd "$target" && pwd -P)
+  fi
+  here=$(pwd -P)
+  case $target in
+    */../* | */..) inside=no ;;
+    "$PWD" | "$PWD"/* | "$here" | "$here"/*) inside=yes ;;
+    *) inside=no ;;
+  esac
+  case $inside in
+    yes) ;;
     *)
       echo "check-connector: WARNING: CARGO_TARGET_DIR=$CARGO_TARGET_DIR is outside this checkout;"
       echo "  if another checkout or worktree uses it too, results may come from that checkout"
@@ -103,7 +121,18 @@ for f in "$kit/harness.toml" "$kit/stand-in.py" "$kit/expect.toml"; do
   [ -f "$f" ] || missing="$missing $f"
 done
 if [ -z "$missing" ]; then
-  pass "files"
+  # Placeholders left from the templates, for example the stand-in's b"kit <HARNESS_ID> echo".
+  left=$(grep -nE '^[^#]*<[^>]+>' "connectors/$id/harness.toml" "$kit/harness.toml" \
+    "$kit/expect.toml"
+    awk '/^# ---- EDIT/ { e = 1 } /^# ---- end EDIT/ { e = 0 }
+      e && /^[^#]*</ { print FILENAME ":" FNR ":" $0 }' "$kit/stand-in.py")
+  if [ -z "$left" ]; then
+    pass "files"
+  else
+    echo "template placeholders left:"
+    echo "$left"
+    fail "files (template placeholders left)"
+  fi
 else
   echo "missing:$missing"
   echo "copy the templates in skills/adding-a-capture-harness/templates/ (see SKILL.md)"
@@ -128,6 +157,9 @@ if sh scripts/pin-manifests.sh; then
       grep -v -x -F -- "$id" | sort -u | tr '\n' ' ')
     if [ -n "$others" ]; then
       echo "the pin diff also changes: $others"
+      # shellcheck disable=SC2086
+      changed=$(git diff --name-only HEAD -- $pins | tr '\n' ' ')
+      echo "pin files were regenerated in place; run \`git checkout -- ${changed% }\` to undo"
       fail "pins (other connectors changed: $others)"
     else
       echo "pin changes above are for '$id' only: commit them with the connector"

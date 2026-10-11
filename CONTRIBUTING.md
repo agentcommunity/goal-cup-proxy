@@ -84,6 +84,9 @@ A common data-only harness PR contains:
 
 - `connectors/<id>/harness.toml` and its reviewed `files/**` seed data;
 - the pin diff produced by `sh scripts/pin-manifests.sh` (see the note below);
+- the regenerated golden JSON in `crates/goalcup-cli/tests/fixtures/harness-golden/`: the new
+  `<id>.json` and the changed `enumeration.json` and `redaction-extra-patterns.json`; on macOS
+  also `<id>.daemon.json` and `native-stream-labels.json`;
 - a readiness record under `docs/qualification/m2-<name>-readiness.md` and, when a maintainer
   has run a real row, links to that row's qualification evidence (a source edit alone is not
   qualification); add the record as one row of the

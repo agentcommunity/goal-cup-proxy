@@ -24,7 +24,8 @@ native_form = "<append_only|snapshot>"
 # Required. Exact bytes of the first native generation. append_only: everything the
 # stand-in appended. snapshot: the first full file it wrote.
 native_g1 = "<{\"message\":\"first\"}\n{\"message\":\"second\"}\n>"
-# Optional. snapshot only: the second full file. The case then expects exactly two streams.
+# append_only: leave "". snapshot: required with the template stand-in, which writes a SECOND
+# full file (SECOND in stand-in.py); the case then expects exactly two streams.
 native_g2 = ""
 # Optional pair, for patterns with {id}: a wrong-id file the stand-in writes, matched as a
 # path suffix under the run directory. Its bytes must equal the text and it must NOT be

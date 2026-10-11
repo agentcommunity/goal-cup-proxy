@@ -18,7 +18,7 @@ when policy moves). Never spell around a rule.
 |---|---|---|---|
 | 1 | Credential name | no key variable, or exactly `DEEPSEEK_API_KEY` | core PR |
 | 2 | Credential with identity | `stderr_line` + `deferred` identity and a per-run home | core PR |
-| 3 | Credential in the kit | the connector has no credential | note in PR |
+| 3 | Credential in the kit | no credential | note in PR (maintainer tests on macOS) |
 | 4 | Identity pair | one of the four admitted pairs | core PR |
 | 5 | Home variable | `home.env` is `<WORD>_HOME` or `<WORD>_CONFIG_DIR` | core PR |
 | 6 | XDG | the harness falls back to `$HOME` and needs no XDG seed | core PR |
@@ -35,8 +35,9 @@ when policy moves). Never spell around a rule.
    `[capture.credential]` table.
 2. A credential with `stdout_json`, `preassigned` or `none` identity is refused: one tee per
    stream cannot both scan for key fragments and read the identity.
-3. The kit runner injects no key and `expect.toml` has no credential key. Leave the credential
-   out of the kit case, say so in the PR, and a maintainer decides.
+3. Today the kit runner injects no key and `expect.toml` has no credential key. Leave the
+   credential out of the kit case, say so in the PR, and a maintainer tests the harness on
+   macOS. A core change that lets a kit case declare a credential is prepared but not landed.
 4. Admitted pairs: `none` (no binding); `preassigned` + `at_launch` (id passed in `args` as
    `{session_id}`); `stdout_json` + `at_launch`; `stderr_line` + `deferred` with grammar
    `token` (`[A-Za-z0-9_-]{1,128}`) or `timestamp-hex`. Any other carrier needs a kit case too.
@@ -62,12 +63,14 @@ when policy moves). Never spell around a rule.
 
 ## Worked example: Amp
 
-The Amp record is BLOCKED. It is `docs/qualification/m2-amp-readiness.md` on branch
-`claude/v060-amp-readiness`. The rows it hits:
+Amp is a coding agent CLI, installed from npm, that talks to Amp's own server. It is BLOCKED at
+step 3. Its readiness record will live at docs/qualification/m2-amp-readiness.md. The rows it
+hits, and why:
 
 - **1, credential name**: Amp reads `AMP_API_KEY`. Core PR.
 - **2, credential with identity**: the likely carrier is a stdout JSON init event. Core PR.
-- **3, kit**: no kit case can carry the key. Core PR to teach the kit a credential.
+- **3, kit**: today no kit case can carry the key, so the PR notes it and a maintainer tests
+  on macOS. The prepared core change that adds kit credential support would close this row.
 - **9, one native row**: no local own-session file was found; sessions appear to live on Amp's
   server. Core decision, possibly no schema-1 fit.
 - **11, endpoint names**: `AMP_URL` redirects the server but passes the name rule. Never set
