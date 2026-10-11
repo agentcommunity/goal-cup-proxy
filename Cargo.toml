@@ -14,10 +14,10 @@ members = [
 edition = "2024"
 version = "0.1.0"
 license = "Apache-2.0"
-# 1.89: `std::fs::File::try_lock` (goalcup-cli resume.rs) needs it; locked dependencies need 1.88
-# (`time`, `rcgen`, the `icu_*` crates). Clippy's incompatible_msrv lint enforces this; a 1.89
-# toolchain build itself is not run here.
-rust-version = "1.89"
+# 1.99: the latest stable release when v0.5.1 was cut (owner decision 2026-10-11). The code needs
+# less (`File::try_lock`, atomic `try_update`); locked dependencies need 1.88. Clippy's
+# incompatible_msrv lint enforces this.
+rust-version = "1.99"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

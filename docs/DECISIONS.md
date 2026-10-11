@@ -48,11 +48,12 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D39 | Headless launches, ported patterns, Codex home | in force (m2) | [entry](#d39-m2-headless-capture-launches-ported-extra-redaction-patterns-shared-isolated-codex-home) |
 | D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2) | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
 | D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2) | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
-| D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2) | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
+| D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
 | D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2) | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
-| D44 | OpenCode native = read-only own-session SQLite snapshot; public repo goal-cup-tracer | in force (m2) | [entry](#d44-m2-opencodes-native-leg-is-a-read-only-snapshot-of-its-own-sessions-rows-the-public-repo-is-goal-cup-tracer) |
+| D44 | OpenCode native = read-only own-session SQLite snapshot; public repo goal-cup-tracer | in force (m2); DCO clause amended by D47 | [entry](#d44-m2-opencodes-native-leg-is-a-read-only-snapshot-of-its-own-sessions-rows-the-public-repo-is-goal-cup-tracer) |
 | D45 | Integrity exit judges the record, not the run: interrupted, undecoded and unconfirmed-stop runs stay exit 0 | in force (m2) | [entry](#d45-m2-the-integrity-exit-judges-the-record-not-the-run) |
 | D46 | Capture creation binds the CLI and daemon to identical connector bytes | in force (m2) | [entry](#d46-m2-capture-creation-binds-both-local-halves-to-identical-connector-bytes) |
+| D47 | No DCO sign-off; a human answers for each PR | in force (m2) | [entry](#d47-m2-no-dco-sign-off) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1013,7 +1014,8 @@ Task 5/H-11 designs and the H-11 APFS probe).**
   cases need no Rust edit; a genuinely new capability (e.g. a SQLite native store) is a separate core
   PR, reviewed on its own.
 - **Contributions.** Anyone may send harness PRs; connectors are trusted code, so maintainer review
-  is required (CODEOWNERS) against a reviewer checklist. Contributors sign off with DCO.
+  is required (CODEOWNERS) against a reviewer checklist. Contributors sign off with DCO
+  (amended by [D47](#d47-m2-no-dco-sign-off): no sign-off is required).
 - **Publication.** The public repo is a fresh allowlist copy, not this history. Internal plans,
   handoffs, reviews, dogfood logs and spike reports stay internal; `CONTRACTS.md` moves to `docs/`.
 - **Legal and contact.** Apache-2.0, copyright AgentCommunity. Security reports via GitHub private
@@ -1100,7 +1102,7 @@ its own).
 - **Public repository.** The open-source copy goes to `agentcommunity/goal-cup-tracer` (created
   private and empty on 2026-10-05), filled from `scripts/oss-cut.py` with no history; the existing
   private `agentcommunity/goal-cup` keeps the full history. Outside PRs require DCO sign-off,
-  enforced by the GitHub DCO app.
+  enforced by the GitHub DCO app (amended by [D47](#d47-m2-no-dco-sign-off): neither applies).
 
 ---
 
@@ -1141,6 +1143,17 @@ that load and before entry allocation or any capture write. A mismatch is the pa
 This changes `CONTROL_API_VERSION` from 4 to 5 only. It does not change the frozen v5 chain,
 `M2_PROTOCOL_VERSION`, or the meaning of `Launch.connector_dir_sha256`: a successful create keeps
 the daemon's authoritative digest on the entry and the daemon writes that value at launch.
+
+---
+
+## D47. **(M2)** No DCO sign-off.
+
+**Decision (maintainer, 2026-10-11).** Amends the DCO clauses of D42 and D44. Goal Cup
+contributions are mostly written with coding agents, so a per-commit `Signed-off-by` either
+certifies a diff nobody read or fails a check the agent forgot. Contributions are accepted under
+Apache-2.0 section 5. The person who opens a PR states in it that they read the whole diff and
+discloses AI assistance; code-owner review on `main` stays. The `main` ruleset requires `check`
+only and the DCO App is not installed. A `Signed-off-by` line is allowed but not checked.
 
 ---
 

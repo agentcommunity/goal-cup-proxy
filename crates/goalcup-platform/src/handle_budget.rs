@@ -26,7 +26,7 @@ impl NativeHandleBudgetV1 {
     /// Reserve one handle before attempting its native acquisition.
     pub fn reserve_scratch(&self) -> Result<NativeHandlePermitV1, HandleBudgetError> {
         self.live
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |live| {
                 (live < MAX_GIT_LIVE_HANDLES_V1).then_some(live + 1)
             })
             .map_err(|_| HandleBudgetError::Exhausted)?;

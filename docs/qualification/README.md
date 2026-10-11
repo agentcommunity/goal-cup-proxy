@@ -1,7 +1,7 @@
 # Qualification records
 
 Which evidence record proves what, on which source, and is it still current? For anyone about to
-trust a Pass or cite a measurement. Updated: 2026-10-02.
+trust a Pass or cite a measurement. Updated: 2026-10-10.
 
 A record is a measurement tied to an exact source, binary and harness identity. Bodies are not
 rewritten: a failed row stays as it was and a newer row says what it supersedes. Numbers live in
@@ -30,6 +30,7 @@ State values: **current** (describes this branch), **historical** (true when wri
 | [m2-h10-finish-and-spawn-gate.md](m2-h10-finish-and-spawn-gate.md) (H-10 4c, done) | 2026-10-02 | `m2/wire`, `cfed3b09`..`5a170e38`, merged `c20d9e92` | one finish budget; pre-exec spawn gate | real-binary rows PASS; substitutions and residuals declared | current |
 | [m2-hermes-readiness.md](m2-hermes-readiness.md) | 2026-10-01, updated 10-02 | `hermes-agent==0.19.0` (source only) | frozen identity, launch, session, snapshot and transport contract | source-only contract; runtime gates covered by row 1 | current |
 | [m2-hermes-reference-row.md](m2-hermes-reference-row.md) | 2026-10-02 | `m2/wire` `8e1d8344` | Hermes on DeepSeek, one live row, capture-only | PASS, sealed complete LocalOnly capture; clean key scan | current |
+| [v0.5.1-public-release-cleanup.md](v0.5.1-public-release-cleanup.md) | 2026-10-10 | public v0.5.0 `d2b3206`, candidate `880a5ae` | release truth, CI scope, outsider contribution review, Linux gate | Linux build, fmt, clippy and CI tests exit 0; macOS gate and full Linux tests NOT RUN | current |
 
 M2 launch recipes and the early experiments describe how Codex and Claude start. For adding a
 harness read [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md); for the run recipe read

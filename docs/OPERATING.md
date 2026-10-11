@@ -1,6 +1,6 @@
 # Operating the tracker
 
-Updated: 2026-10-07
+Updated: 2026-10-11
 
 How do I build, configure and run the binaries in full detail: the daemon config, the CLI flags
 and exit codes, the development walkthrough, the MCP server, the verifier, the committed traces,
@@ -27,12 +27,17 @@ install, one capture run) is in [../README.md](../README.md).
 
 ## Current M2 operating boundary
 
-The draft v0.5 line is a planned source-only candidate pending owner approval. No downloadable
-binary, installer, staged bundle, registry publication, signature, notarization or qualification
-exists. The source and OSS cut contain exactly three pinned schema-1 connector directories:
-`codex-cli`, `claude-code-cli` and `hermes-cli`. The current private `m2-pilot` package allowlist
-stages only Codex and Claude, copying each selected directory whole, including seeds and its
-retained V1 `manifest.toml`. A source pin is not evidence of package inclusion.
+v0.5.0 is published as source only
+([cleanup record](qualification/v0.5.1-public-release-cleanup.md)). No downloadable binary,
+installer, staged bundle, registry publication, signature, notarization or qualification exists.
+Built binaries print `0.1.0`: the package version is independent of source release tags. The source
+contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
+`hermes-cli`. The separate private macOS packaging allowlist (`m2-pilot` in
+[packaging/README.md](../packaging/README.md)) stages only Codex and Claude, copying each selected
+directory whole, including seeds and its retained V1 `manifest.toml`. A source pin is not
+evidence of package inclusion. macOS is the only measured platform. Linux builds, but a
+`goalcup start` capture is refused there: the chain's disk reservation is implemented only for
+macOS APFS.
 
 Connector discovery checks `$GOALCUP_CONNECTORS_DIR`, `<exe>/../share/goalcup/connectors`, then
 `<exe>/../../connectors`. It considers immediate child directories with a regular `harness.toml`,
@@ -47,7 +52,7 @@ unfinished v5 capture has status/seal-only authority; other authenticated mutato
 side effects, and an unfinished launched capture receives one `IngestLost` gap.
 
 The default build excludes V1 execution but still parses the retained Codex and Claude
-`manifest.toml` files at startup. Full removal is post-tag ticket OS-29 and is not complete. The
+`manifest.toml` files at startup. Full removal is ticket OS-29 and is not complete. The
 schema-1 synthetic contract kit covers exactly four cases: `controlled-workload` (no identity,
 append-only), `synthetic-preassigned` (launch identity, append-only), `synthetic-stderr-token`
 (deferred identity, append-only), and `synthetic-stdout-json` (launch identity, two snapshot
@@ -57,11 +62,10 @@ generations). All require `--dev` and exclude a wrong-id decoy where applicable.
 
 Prerequisites:
 
-- **Rust 1.89 or later.** The workspace is edition 2024 (`Cargo.toml`), which needs 1.85. It
-  also uses `let` chains (for example in `crates/goalcup-cli/src/browser.rs`), and the locked
-  dependencies `time` and `rcgen` declare 1.88, which is the highest any of them declares.
-  Development uses 1.98.0; no older release has been tried. `rust-toolchain.toml` asks for
-  `stable`.
+- **Rust 1.99 or later.** `Cargo.toml` sets `rust-version = "1.99"`, the latest stable release
+  when v0.5.1 was cut. The code itself needs less: edition 2024 needs 1.85, it uses `let` chains
+  (for example in `crates/goalcup-cli/src/browser.rs`), and the locked dependencies declare at
+  most 1.88. Development and CI use 1.99.0. `rust-toolchain.toml` asks for `stable`.
 - **macOS or Linux.** `goalcup-platform` refuses to compile on anything else
   (`crates/goalcup-platform/src/lib.rs`). The V1 claim is one macOS target; Linux is a
   smoke check (see CI below).
@@ -150,12 +154,21 @@ same rule.)
 
 ### CI
 
-`.github/workflows/ci.yml` is a Linux smoke check, **not the gate**. It runs `cargo fmt
---check`, `cargo build`, `cargo clippy -D warnings`, and `cargo test` for every crate except
-`goalcup-daemon` and `goalcup-cli`, in one job with a 20-minute timeout. It triggers only for
-pull requests into `v1/trunk` or `main`, pushes to `v1/trunk`, and manual starts, and only
-when something under `crates/` or `connectors/`, the Cargo files, `rust-toolchain.toml` or the
-workflow itself changes. Agent branches and docs-only commits never start it.
+`.github/workflows/ci.yml` is a Linux smoke check, **not the gate**. Its one job, `check`
+(workflow `ci`), runs on `ubuntu-24.04` with a 20-minute timeout for every pull request into
+`main` or `v1/trunk`, every push to those branches, and manual starts. There is no path filter,
+so every such pull request gets a completed `check` that branch protection can require. Agent
+branches never start it.
+
+The job's `scope` step runs `scripts/ci-scope.py` on the event's two commits (the pull
+request's base and head, or the push's before and after). Its output, `rust=false`, skips the
+Rust smoke only when every changed path is Markdown under `docs/`, Markdown at the repository
+root, or `.github/PULL_REQUEST_TEMPLATE.md`. Any other path, a deleted or renamed code path, a
+new branch, a manual start, or a comparison that fails gives `rust=true`. Every run then runs
+the `test_ci_scope.py` and `test_check_links.py` suites and `scripts/check-links.py --root .`.
+When `rust=true` it also runs `cargo build --workspace`, `cargo fmt --all --check`, `cargo
+clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace --exclude
+goalcup-daemon --exclude goalcup-cli`, in that order. A failure in any step fails the job.
 
 Every runner minute costs something on every pull request. Keep this file small:
 

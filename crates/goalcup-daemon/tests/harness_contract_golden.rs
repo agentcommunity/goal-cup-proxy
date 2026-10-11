@@ -39,10 +39,12 @@ use goalcup_protocol::harness::HarnessManifest;
 use goalcup_protocol::manifest::RedactionPattern;
 use redaction::{P1, Producer, daemon_time};
 use serde_json::{Value, json};
+#[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 const SHIPPED: [&str; 3] = ["codex-cli", "claude-code-cli", "hermes-cli"];
+#[cfg(target_os = "macos")]
 const CONTROLLED: &str = "m2-controlled-workload";
 
 fn golden_dir() -> PathBuf {

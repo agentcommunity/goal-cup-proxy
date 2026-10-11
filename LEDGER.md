@@ -1,9 +1,11 @@
 # LEDGER: M2 work tracker
 
-Updated: 2026-10-07.
+Updated: 2026-10-11.
 
 The ticket list for `m2/wire`: what exists, what is broken, what comes next. One line per
 ticket: status, ID, phase tag, SHA, a pointer. Where things stand overall: [STATUS.md](STATUS.md).
+Commit hashes and branch names cited here refer to private development history not included in
+this repository.
 The long bodies of the 2026-10-02 ledger are the private historical record discussed here.
 The supporting private historical record is intentionally omitted from this public OSS cut.
 
@@ -190,9 +192,11 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 
 ## 4. Open source readiness (c4 review; verdict: not ready)
 
-- ⬜ **OS-01** `[OS]` Decided 2026-09-29: a fresh one-root public repo is cut later from the reviewed
-  T23 tree by allowlist copy; this repo stays private. In-tree fixture scrub (vendor prompts,
-  re-pinned digests) runs after T23.
+- 🟠 **OS-01** `[OS]` Public repo cut: v0.5.0 is the single parentless commit `d2b3206`, an
+  allowlist copy; development history is kept in a
+  separate private repository. The in-tree fixture scrub (vendor prompts,
+  re-pinned digests) is not evidenced here.
+  [Record](docs/qualification/v0.5.1-public-release-cleanup.md#source-release).
 - 🟠 **OS-02** `[OS]` Personal data. OS-02a (prose) done `04ec186`. Decided 2026-09-29: accept the
   generic home path in hash-pinned fixtures, scrub prose only, and drop the obsolete private
   project identity residue.
@@ -200,14 +204,15 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 - 🟠 **OS-04** `[OS]` `docs/RULES.md` corrections. OS-04a done `04ec186`; OS-04b
   (`docs/TRACKER-CONTRACT.md` from the shipped tree) after T23. c4-C3.
 - ⬜ **OS-05** `[D]`/`[next]` The V1 README walkthrough and `real_daemon_end_to_end` wait for hook
-  posts this branch never receives. Re-execute the walkthrough on the T23 tree before any push.
+  posts this branch never receives. Re-execute the walkthrough on the T23 tree.
   `real_daemon_end_to_end` now compiles only with `v1-compat` (D42); run it with the command in
   OPERATING, after building the `v1-compat` workspace binaries.
-- ⬜ **OS-06** `[OS]` Decided 2026-09-29: allowlist copy into the fresh public repo; nothing is
-  deleted here (273 markdown files, `docs/superpowers/` is 63 % of the lines). c4-I2/I3.
-- ✅ **OS-07** SECURITY, CONTRIBUTING, CODE_OF_CONDUCT, NOTICE, the PR template and CODEOWNERS exist
-  (`70bdb05f`, 2026-10-04). GitHub private vulnerability reporting is enabled on the public repo at
-  the cut. c4-I4/I5/I6.
+- ✅ **OS-06** `[OS]` Allowlist copy published as public v0.5.0 (`d2b3206`). c4-I2/I3.
+  [Record](docs/qualification/v0.5.1-public-release-cleanup.md#source-release).
+- 🟠 **OS-07** `[OS]` SECURITY, CONTRIBUTING, CODE_OF_CONDUCT, NOTICE, the PR template and CODEOWNERS
+  exist (`70bdb05f`); c4-I4/I5/I6. Read 2026-10-10: private vulnerability reporting `enabled:false`,
+  `main` protection not evidenced; reports go to the email in SECURITY. No DCO check, by D47.
+  [Record](docs/qualification/v0.5.1-public-release-cleanup.md#public-checks-and-settings).
 - ⬜ **OS-08** `[next]` Re-state that `m2_native_observations` fixtures passed redaction in the
   scrub notes before the public cut. c4-M10.
 - ⬜ **OS-09** `[next]` Decided 2026-09-29: keep `goalcup-git` in the tree, exclude it from the
@@ -249,19 +254,17 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 - ✅ **OS-21** S8 schema, contributor, architecture/security, governance and package guidance
   merged as `2ec63430`, `14843a91`, `2ac5e7ec`, `bc789f7d` and `cc52f967`; focused evidence
   passed. The exact-head whole-tree gate remains Step11; these merges are not the tested W1 head.
-- ⬜ **OS-22** `[pre-tag]` OSS-cut link repair. Generate the exact OS-01/OS-06 allowlist cut after
-  OS-21, fix the 32 links that break only in that cut, regenerate it and record a zero-broken-link
-  result.
-- ⬜ **OS-23** `[pre-tag]` Outsider Gemini proof. An independent outsider agent enters through only
-  the shipped skill for the Gemini scenario; it may follow the repo-relative sources that skill
-  names, but receives no hidden maintainer context. Record the exact outcome; any source/doc fix
-  becomes a reviewed wave and the affected proof repeats.
-- ⬜ **OS-24** `[pre-tag]` Fresh-clone proof of the exact proposed OSS cut. Record source identity,
-  link check, dependency-fetch boundary, build/test commands and results; do not reuse the private
-  worktree or its `target/`, and say whether the dependency cache was warm.
-- ❓ **OS-25** `[pre-tag]` `v0.5.0` authorization. The approved medium is source-only: there is
-  no binary, installer, package, signing, notarization or publication claim; a future Homebrew
-  installer is a separate later packaging track. OS-23/OS-24, exact-head gate and owner GO remain.
+- ✅ **OS-22** OSS-cut link repair: 0 broken links on the exact public v0.5.0 tree (`d2b3206`).
+  [Record](docs/qualification/v0.5.1-public-release-cleanup.md#local-validation).
+- ⬜ **OS-23** `[OS]` Outsider Gemini proof: an outsider agent enters through only the shipped
+  skill for the Gemini scenario and the sources it names, with no hidden maintainer context; any
+  fix becomes a reviewed wave and the proof repeats. Evidence not yet linked.
+- ⬜ **OS-24** `[OS]` Fresh-clone proof of the public cut: source identity, link check,
+  dependency-fetch boundary, build/test commands and results, without the private worktree or its
+  `target/`, saying whether the dependency cache was warm. Evidence not yet linked.
+- ✅ **OS-25** `v0.5.0` published 2026-10-10 as source only at public `d2b3206`, no attached files;
+  no binary or qualification. Published before OS-23/OS-24 closed, with no exact-head gate (no
+  check runs on `d2b3206`). [Record](docs/qualification/v0.5.1-public-release-cleanup.md).
 - ⬜ **OS-26** `[post-tag]` Remainder of C2: 0600 status mirrors, missing daemon SAFETY comments
   and `clippy::undocumented_unsafe_blocks`. Starts after Seam-D and Seam-FM; does not block
   `v0.5.0`.
@@ -279,7 +282,9 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 
 - ⬜ **H-01** `[next]` Decided 2026-09-29: the user deletes `/tmp/test.db` (left by the E02 Claude run).
 - ⬜ **H-02** `[next]` Decided 2026-09-29: push only after reviewed T23 with the walkthrough
-  re-executed, into the fresh public repository (OS-01). "Ask before pushing." Nothing is pushed.
+  re-executed, into the fresh public repository (OS-01). Source is published; the walkthrough
+  re-execution (OS-05) stays open.
+  [Record](docs/qualification/v0.5.1-public-release-cleanup.md#source-release).
 - ✅ **H-03** `[next]` Done 2026-10-02, merged `23756d71`, independently reviewed APPROVED. Five causes:
   four test/fixture defects (native-pid rename guess, 400 ms Busy poll, verify before ack, inherited
   zombie) made deterministic (`e81fed7b`, `93777d1f`, `f5287bfb`, `7e029c27`, `a6300169`) and one

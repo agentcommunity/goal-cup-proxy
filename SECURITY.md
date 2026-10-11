@@ -1,21 +1,22 @@
 # Security policy
 
 How do I report a vulnerability, and what does this tool do on my machine? For anyone who runs
-the tracker or reviews a change to it. Updated: 2026-10-07.
+the tracker or reviews a change to it. Updated: 2026-10-10.
 
 ## Supported versions
 
-The draft v0.5 line is a planned source-only candidate pending owner approval. There is no stable
-release, downloadable binary or installer, staged bundle, registry publication, signature,
-notarization or qualification.
+v0.5.0 is published as source only
+([release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0), no attached
+files). There is no stable release, downloadable binary or installer, staged bundle, registry
+publication, signature, notarization or qualification.
 
 ## Reporting a vulnerability
 
 Do not open a public issue.
 
-1. Use GitHub private vulnerability reporting on this repository (Security tab, "Report a
-   vulnerability"), or
-2. email goalhack@agentcommunity.org.
+1. Email goalhack@agentcommunity.org.
+2. GitHub private vulnerability reporting (Security tab, "Report a vulnerability") was not
+   enabled when last read (2026-10-10); use it once the button appears.
 
 Say what you ran, what you expected, and what happened. Never attach a real trace, key or
 harness transcript: they contain prompts and credentials. A synthetic reproduction is enough.
@@ -69,12 +70,12 @@ surface. The manifest pin tables detect tampering after a build; they do not def
 malicious merge, because a connector PR regenerates them. Every connector change is therefore
 reviewed by a code owner against the checklist in
 [docs/CONNECTOR-CONTRIBUTING.md](docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr), and
-an unreviewed build must not be run. The source tree and OSS cut contain exactly three pinned
-schema-1 directories (`codex-cli`, `claude-code-cli`, `hermes-cli`). The private `m2-pilot`
+an unreviewed build must not be run. The source tree contains exactly three pinned
+schema-1 directories (`codex-cli`, `claude-code-cli`, `hermes-cli`). The private `m2-pilot` macOS
 package allowlist selects only Codex and Claude and copies each selected directory whole, including
 seeds and its retained V1 `manifest.toml`; a source pin does not prove package inclusion. Default
 builds exclude V1 execution but still parse those two compatibility manifests at startup. Full
-removal is deferred to post-tag ticket OS-29.
+removal is deferred to ticket OS-29.
 
 ## Guarantees the code aims to keep
 

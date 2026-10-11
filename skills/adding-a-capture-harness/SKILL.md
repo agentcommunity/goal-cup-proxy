@@ -47,7 +47,7 @@ live qualification, package publication or release claim.
    or real key.
 5. **Review.** Run the [connector checklist](../../docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr)
    over every field and seed. Confirm redaction, private homes, no base URL, exact executable
-   evidence, one intended pin diff and DCO. A decoder is a separate verifier PR; capture-only is
+   evidence and one intended pin diff. A decoder is a separate verifier PR; capture-only is
    an honest claim when bytes are retained but semantics are unknown.
 6. **Live row.** A maintainer may run one exact candidate with their own subscription or key; the
    contributor never opens the key file. Follow [tiny real row](../../docs/CONNECTOR-CONTRIBUTING.md#tiny-real-row)
