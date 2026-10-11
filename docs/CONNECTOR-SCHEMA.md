@@ -152,7 +152,7 @@ rules are refused.
 
 | Field | Required/default | Contract |
 |---|---|---|
-| `capture.credential.env` | required when the optional table exists | Closed registry: `DEEPSEEK_API_KEY`. |
+| `capture.credential.env` | required when the optional table exists | Closed registry: `DEEPSEEK_API_KEY`, `AMP_API_KEY`. The value: 20 to 256 bytes of `[A-Za-z0-9_-]`. |
 | `capture.ca.env` | required | 1–2 unique names from the CA registry. |
 | `capture.ca.mode` | required | Closed values: `extend`, `replace`; every name must have this mode in the registry. |
 

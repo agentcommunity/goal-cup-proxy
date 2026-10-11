@@ -628,7 +628,8 @@
   },
   "credential": {
     "allowed_names": [
-      "DEEPSEEK_API_KEY"
+      "DEEPSEEK_API_KEY",
+      "AMP_API_KEY"
     ],
     "child_secret_from_env": {
       "bad_characters": "none",

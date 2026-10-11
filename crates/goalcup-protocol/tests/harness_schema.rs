@@ -630,6 +630,7 @@ fn the_credential_name_is_a_closed_list() {
         "ANTHROPIC_API_KEY",
         "MY_KEY",
         "deepseek_api_key",
+        "amp_api_key",
     ] {
         let mut t = hermes();
         set(&mut t, &["capture", "credential"], "env", name);
@@ -639,7 +640,36 @@ fn the_credential_name_is_a_closed_list() {
             &["not one of the provider credential variables"],
         );
     }
-    assert_eq!(CREDENTIAL_ENV, ["DEEPSEEK_API_KEY"]);
+    assert_eq!(CREDENTIAL_ENV, ["DEEPSEEK_API_KEY", "AMP_API_KEY"]);
+}
+
+#[test]
+fn amp_credential_is_admitted_only_in_credential_field() {
+    // The Hermes fixture already has a per-run home and `stderr_line` identity, so the name is
+    // the only change.
+    let mut t = hermes();
+    set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
+    admitted(&t, PINNED);
+    // The same name as a manifest env pin is a credential in a manifest, which is never allowed.
+    let mut t = codex();
+    set(&mut t, &["capture", "env"], "AMP_API_KEY", "x");
+    refused(
+        &t,
+        PINNED,
+        &[
+            "capture.env",
+            "AMP_API_KEY",
+            "would carry a credential, and a manifest never does",
+        ],
+    );
+    // Admitting the name does not lift the identity or home rules for it.
+    let mut t = with_credential(codex(), true);
+    set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
+    refused(&t, PINNED, &["credential", "`stdout_json`"]);
+    let mut t = hermes();
+    set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
+    set(&mut t, &["capture", "home"], "config_home", "shared");
+    refused(&t, PINNED, &["per_run", "key-fragment scan"]);
 }
 
 #[test]
