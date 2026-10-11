@@ -1048,11 +1048,6 @@ pub fn plain_words(health: HealthState, arming: GateState, started: bool) -> Str
                  creates."
                     .to_string()
             }
-            GateState::Refused(RefusalReason::HarnessHomeOccupied) => {
-                "Another tracked session is already using this harness. Finish or seal it before \
-                 starting a new entry."
-                    .to_string()
-            }
             _ => "Not recording yet. Open your harness in the folder the tracker created; the \
                   clock starts when you type your goal."
                 .to_string(),

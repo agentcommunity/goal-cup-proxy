@@ -338,7 +338,7 @@ The three tools:
 | Tool | Answers |
 |---|---|
 | `goalcup_event_status` | The round's timeline as the last signed document carries it: `t0`, when the start window closes, when publication closes, the rules version — and `source`, which says `config` when an organiser set those dates on this machine and `fallback` when the fields are this entry's own timeline standing in for a round nobody configured. |
-| `goalcup_run_status` | How one run is doing: arming state, health, seconds remaining, when the tracker last synced, and whether that document is stale. Takes an optional `entry_id` and defaults to the most recently started run. `arming: "refused"` means the gate will never arm, which is the one state an agent must not sit and wait through. |
+| `goalcup_run_status` | How one run is doing: arming state, health, seconds remaining, when the tracker last synced, and whether that document is stale. Takes an optional `entry_id` and defaults to the most recently started run. `arming: "refused"` appears only in a status a pre-D48 (`v0.5.0`) daemon wrote; a capture entry has no arming gate (D48). |
 | `goalcup_entries` | Every run this machine holds a **verified** status document for. `unverified` counts the cached documents that did not check out and are therefore not in the list. |
 
 `crates/goalcup-mcp/SKILL.md` is the description an agent is given, and it carries the tool
@@ -431,14 +431,14 @@ These are source integrity allowlists, not package manifests:
   templates under `files/` included. The manifest digest cannot see an edited seed file, so the
   loader hashes each connector directory and refuses a pinned connector whose bytes moved, and a
   v5 entry binds the digest at create and in `Launch.connector_dir_sha256`. On a V1 (v4) trace,
-  V13 reads the digest back from the start receipt the V1 daemon wrote (deleted by D48), and
-  **only out of a receipt whose signature verified**; otherwise a participant could self-sign a
-  receipt naming the pinned digest and buy silence: `connector_dir_unpinned` (Fail, and
-  Pass-level under `--dev`) when the claim is not in this table, `connector_dir_unbound`
-  (Flag) when a verified receipt carries no claim at all. A trace whose receipt did not verify,
-  or that carries none, gets no directory finding: `receipt_invalid`, `receipt_unverified`,
-  `receipt_missing` or `legacy_trace` is already the larger statement. `goalcup doctor` runs the
-  CLI's own copy of the same comparison over the CLI's own installation.
+  V13 reads the digest back from the start receipt the V1 daemon wrote (that daemon path was deleted
+  by D48), and **only out of a receipt whose signature verified**; otherwise a participant could
+  self-sign a receipt naming the pinned digest and buy silence: `connector_dir_unpinned` (Fail, and
+  Pass-level under `--dev`) when the claim is not in this table, `connector_dir_unbound` (Flag) when
+  a verified receipt carries no claim at all. A trace whose receipt did not verify, or that carries
+  none, gets no directory finding: `receipt_invalid`, `receipt_unverified`, `receipt_missing` or
+  `legacy_trace` is already the larger statement. `goalcup doctor` runs the CLI's own copy of the
+  same comparison over the CLI's own installation.
 
 Both tables use declared connector ids; schema 1 uses `harness.toml`, while the compatibility table
 uses `manifest.toml`. Run it in the same commit as any change

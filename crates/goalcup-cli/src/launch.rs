@@ -1140,7 +1140,7 @@ pub fn shell_line(p: &LaunchPlan) -> String {
     if !withheld.is_empty() {
         out.push_str(&format!(
             "\n# {} is pinned by this launch and is withheld here — a pasted line will not \
-             record. Run `goalcup start`, or `goalcup resume` for a run that already exists.",
+             record. Run `goalcup start`.",
             withheld.join(", ")
         ));
     }

@@ -107,7 +107,8 @@ x509-parser.workspace = true
 # The shipped binary links none of it: `cargo build --offline` builds no dev-dependency, and
 # `grep -rn goalcup_daemon crates/goalcup-cli/src/` is empty — `tests/seal_scan.rs` asserts
 # both of those in `the_cli_binary_links_no_daemon`. There is no cycle: `goalcup-daemon`
-# depends on `goalcup-protocol`, itself and `goalcup-devserver`, and on nothing here.
+# depends on `goalcup-protocol` and `goalcup-platform`, its dev-dependencies are itself,
+# `goalcup-mcp` and `goalcup-devserver`, and none of them depends on this crate.
 # `test-hooks`: `m2_ipc_compose` drives hook-gated daemon items (`IngestEntry::wait_outcome`), so
 # a narrow `-p goalcup-cli` test build needs the feature without the workspace's unification.
 goalcup-daemon = { path = "../goalcup-daemon", features = ["test-hooks"] }

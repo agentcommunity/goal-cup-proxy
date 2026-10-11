@@ -249,42 +249,11 @@ pub fn workspace_opts() -> control::WorkspaceOpts {
 
 // ------------------------------------------------------------------ a start, mocked
 
-/// A mock holding one armed entry for `id`, and `tmp` made into a configuration directory:
-/// a `grant.json` at `0600` and an `entries/` beside it.
+/// A mock holding one armed entry for `id`, with `tmp` as its configuration directory.
 ///
-/// No command reads the grant since D48 removed `goalcup auth`. The helper still writes it,
-/// through `config::write_secret_file`, and it is an obviously fake grant: the token says so.
+/// It writes no `grant.json`: nothing has read one since D48 removed `goalcup auth`.
 pub fn mock_armed(tmp: &tempfile::TempDir, id: &str) -> goalcup_cli::daemon::MockDaemonClient {
-    write_grant(tmp.path());
     goalcup_cli::daemon::MockDaemonClient::armed_ok(tmp.path(), id)
-}
-
-/// The bearer [`write_grant`] puts on disk, named so a test can grep a stream for it.
-///
-/// One spelling, in the place that writes it, rather than the literal at each call site.
-pub const GRANT_TOKEN: &str = "test-grant";
-
-/// The grant `mock_armed` leaves behind, as the removed `goalcup auth` would have written it.
-pub fn write_grant(cfg: &Path) {
-    // The document the removed `goalcup auth` wrote (D48), spelled out so this helper builds.
-    let grant = serde_json::json!({
-        "server": "https://example.invalid",
-        "grant_token": GRANT_TOKEN,
-        "subject": "a test",
-        "email_verified": true,
-        "scopes": ["entry:create"],
-        "expires_at": "2027-01-01T00:00:00Z",
-        "stored_at": NOW,
-    });
-    let bytes = match serde_json::to_vec_pretty(&grant) {
-        Ok(bytes) => bytes,
-        Err(e) => panic!("the test grant: {e}"),
-    };
-    if let Err(e) =
-        goalcup_cli::config::write_secret_file(&goalcup_cli::config::grant_path(cfg), &bytes)
-    {
-        panic!("the test grant under {}: {e}", cfg.display());
-    }
 }
 
 /// `tmp` as a configuration directory that already holds the record one `goalcup start`

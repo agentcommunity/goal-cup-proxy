@@ -63,33 +63,13 @@ pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// What `goalcup-daemon --version` prints.
 pub const DAEMON_VERSION_TEXT: &str = env!("CARGO_PKG_VERSION");
 
-/// The most bytes the V1 tailer read from one file in one poll. D48 removed the tailer and
-/// left this and the bounds below published. A poll that hit this cap carried what it read,
-/// and the rest waited for the next poll. Bounded memory is a constraint on the whole daemon,
-/// so no store reader ever holds a whole file.
-///
-/// Hitting this cap chains no notice: `TailNoticeKind::OversizeFile` belongs to the whole-file
-/// cap [`MAX_FILE_BYTES`], where bytes are genuinely dropped, and a poll at this cap drops
-/// nothing — it reads the rest a moment later.
-///
-/// **One byte above [`MAX_LINE_BYTES`], written as that sum rather than as a round number.**
-/// A line is overlong above the line cap (both comparisons in the V1 `jsonl.rs` were `>`), but a
-/// line at the cap still needs its newline to be a line, so the poll window needs one byte of
-/// headroom. With the two constants equal, a whole window would hold the bytes and not the
-/// newline, and an exactly-1 MiB line would be discarded as `OverlongLine`.
-pub const MAX_POLL_BYTES: u64 = MAX_LINE_BYTES + 1;
-
-/// The per-line cap, distinct from the per-poll cap: a single line longer than this is
-/// discarded and reported as `TailNotice::OverlongLine`. A line and a poll are different
-/// bounds, so each has its own constant.
+/// The per-line cap: a single line longer than this is discarded and reported as
+/// `TailNotice::OverlongLine`.
 pub const MAX_LINE_BYTES: u64 = 1 << 20;
 
 /// The largest whole-file capture the daemon will take in one piece — a config file it
 /// baselines or restores, never a transcript it tails.
 pub const MAX_FILE_BYTES: u64 = 8 << 20;
-
-/// The most rows the V1 tailer read from one SQLite store in one poll.
-pub const MAX_POLL_ROWS: usize = 512;
 
 /// Wall-clock seconds since the epoch, fractional. Used for intervals and for the
 /// daemon's own bookkeeping; anything that reaches a chained envelope goes through

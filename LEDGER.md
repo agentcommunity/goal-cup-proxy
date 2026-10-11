@@ -265,8 +265,12 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   rename. Starts after every other post-tag lane; changes no frozen record shape.
 - ⬜ **OS-29** `[post-tag]` Remove the build's retained V1 manifests parsing dependency. This does
   not block source-only `v0.5.0`.
-- ✅ **OS-30** D48 (owner, 2026-10-11): the `v1-compat` path, its features, tests and the
-  `open`, `rusqlite` and `age` dependencies are deleted; the devserver crate stays.
+- ✅ **OS-30** D48 (owner, 2026-10-11): the `v1-compat` path, its tests, fixtures and
+  `open`/`rusqlite`/`age` deps are deleted; docs describe the capture path; devserver stays.
+- ⬜ **OS-31** `[post-tag]` D48 follow-up: move `ENTRY_WINDOW_SECONDS`, `DEV_SERVER_SEED` and
+  `dev_server_public_key_hex` out of `goalcup-devserver`, drop the daemon's dev-dependency on it
+  (tests use it only for a placeholder key), consider deleting the crate, and remove the V1-only
+  registry functions D48 lists under "Kept" with their tests.
 
 ---
 

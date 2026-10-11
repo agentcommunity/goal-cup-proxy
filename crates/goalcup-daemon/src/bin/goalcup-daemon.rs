@@ -40,9 +40,10 @@ use std::process::ExitCode;
 // has to describe the program.
 /// The capture daemon.
 ///
-/// Records one entry per tracked run: it prepares the workspace, tails what the harness
-/// writes, redacts it, chains and signs it, uploads it, serves the loopback control API, and seals at the deadline or when asked. It runs in the foreground
-/// under whatever started it and configures itself from one file.
+/// Records one entry per tracked run: it prepares the workspace, records the run's ingest
+/// and native capture into a signed chain, serves the loopback control API, and seals when
+/// asked. It runs in the foreground under whatever started it and configures itself from
+/// one file.
 ///
 /// README.md's "Running the daemon" carries an example of that file, the exit codes, and
 /// what `--print-addresses` answers.

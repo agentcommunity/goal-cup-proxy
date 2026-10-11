@@ -300,8 +300,8 @@ fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
     }
     // The CLI raises no rung-4 site of its own since D48 removed the V1 arming wait and the
     // `resume` gates: rung 4 reaches a participant only as the daemon's `arming_timeout`,
-    // which `CliError::exit_code` maps. A new site is a new gate; say which in `lib.rs`'s
-    // ladder, in `AFTER_HELP`, and here.
+    // which `CliError::exit_code` maps and only a pre-D48 daemon sends. A new site is a new
+    // gate; say which in `lib.rs`'s ladder, in `AFTER_HELP`, and here.
     assert!(sites.is_empty(), "an unexpected rung-4 site: {sites:#?}");
 }
 

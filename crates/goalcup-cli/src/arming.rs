@@ -26,26 +26,17 @@
 //! `Watch` told the two moments apart until D48 removed it; the readers left are
 //! `goalcup start`'s abandon window and the busy backoffs in `retry.rs`.
 
-/// What the gate said, in the three answers it has.
-///
-/// **`Refused` is not a timeout.** `ArmingState` has a fourth state (`refused`, on the wire)
-/// for a gate that will never arm (`goalcup_daemon::arming::RefusalReason`). A participant
-/// told to wait longer for a state that cannot change would open a session that runs blind:
-/// a session opened before arming is never recorded.
+/// What the gate said. One answer is left.
 ///
 /// [`GateOutcome::NotRequired`] is every connector's ordinary case and not an absence of a
 /// gate: the launch plus the first transcript record is the start, and the daemon is
-/// already watching for it.
+/// already watching for it. The V1 gate's other two answers, `Refused` (a settled
+/// `refused` on the wire, exit 4) and `Interrupted` (a Ctrl-C inside the abandon window),
+/// went with the V1 gate reads (D48).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateOutcome {
-    /// The daemon has settled that this gate will not arm, in its own words. Exit 4.
-    Refused(String),
     /// Nothing to wait for: the first transcript record arms the entry.
     NotRequired,
-    /// The gate was asked about while this process was being stopped, inside the abandon
-    /// window. Rung 1: nothing refused this run, the participant stopped it. Only the V1
-    /// gate's `Watch` answered this, and D48 removed it.
-    Interrupted,
 }
 
 // ------------------------------------------------------------------ Ctrl-C

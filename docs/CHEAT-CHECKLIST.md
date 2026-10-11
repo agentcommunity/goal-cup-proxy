@@ -106,7 +106,7 @@ from this tree; the files they name are at the `v0.5.0` tag. They are kept short
 wording is in git (`git show f8621f99:docs/CHEAT-CHECKLIST.md`).
 
 - **SQLite in-place UPDATE or DELETE is unwitnessed** (OpenCode tailer pages by rowid;
-  `crates/goalcup-daemon/src/tailer/sqlite.rs`). OpenCode has no connector on m2.
+  `crates/goalcup-daemon/src/tailer/sqlite.rs` at `v0.5.0`). OpenCode has no connector on m2.
 - **App-wide config changed while no daemon runs is not reported.** The baseline is re-hashed at
   daemon start; the chain shows a `DaemonRestart` marking the window.
 - **The pinned server key is the published placeholder** until V1.1; `goalcup-verify` reports

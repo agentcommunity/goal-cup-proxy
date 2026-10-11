@@ -413,52 +413,17 @@ pub fn render_tracker_files(
     roots: &Roots,
     optional: bool,
 ) -> Result<Installation, DaemonError> {
-    rendered(manifest, connector_dir, vars, roots, optional, true, None)
+    rendered(manifest, connector_dir, vars, roots, optional, None)
 }
 
-/// `render_tracker_files` with the writes left out: the same two passes over the same
-/// templates, answering the same [`Installation`], and touching no file at all.
-///
-/// The one caller was the V1 daemon's startup rehydration, which D48 removed; nothing in
-/// this tree calls it now. A restarted V1 daemon had to hand its per-entry runtime the
-/// bytes the tracker rendered at launch (the config watch compared against them and
-/// restored from them, and [`exclusion_union`] is built from their paths), and the registry
-/// keeps no copy of them. Rendering them again from the shipped templates and the entry's
-/// own variables is how they came back.
-///
-/// **It must not write.** The writing variant is the tracker installing its files; this
-/// one runs on a daemon whose entry has been live for hours, and a write here would put
-/// back a file the agent had changed before the watch had a chance to report that it did —
-/// the deviation would be undone and never chained, which the config watch exists to
-/// prevent.
-///
-/// The bytes are identical to the first render wherever the variables are: every one of
-/// them is on the entry's registry row or is a constant. The two
-/// that are not — `{session_id}`, which is the id minted for the launch rather than the one
-/// the run later bound, and `{server_port}`, which no row records — are supplied as the
-/// bound session and as empty. No shipped connector template uses either, and a connector
-/// that did would meet the difference as an ordinary `ConfigDeviation` on the first poll
-/// after a restart rather than as a silent one.
-pub fn rerender_tracker_files(
-    manifest: &ConnectorManifest,
-    connector_dir: &Path,
-    vars: &TemplateVars,
-    roots: &Roots,
-    optional: bool,
-) -> Result<Installation, DaemonError> {
-    rendered(manifest, connector_dir, vars, roots, optional, false, None)
-}
-
-/// The two passes both public renderers share. `write` is the only difference between
-/// them, and it is a parameter rather than a second copy of the loop so the bytes a
-/// restart rebuilds cannot drift from the bytes a launch installed.
+/// The render pass both callers share: the fixture renderer and fresh setup. A restart
+/// re-render without writes was its other caller until D48 removed it.
 fn rendered(
     manifest: &ConnectorManifest,
     connector_dir: &Path,
     vars: &TemplateVars,
     roots: &Roots,
     optional: bool,
-    write: bool,
     artifact: Option<&EntryArtifactRoot>,
 ) -> Result<Installation, DaemonError> {
     let mut done = Installation::default();
@@ -485,7 +450,7 @@ fn rendered(
         // Write-if-absent, for the one kind of entry that asks for it: the file belongs to
         // the harness, so a home that already holds one keeps it byte for byte.
         let found = spec.harness_owned && absolute_path.exists();
-        if write && !found && spec.scope != InstallScope::Workspace {
+        if !found && spec.scope != InstallScope::Workspace {
             write_non_workspace_file(
                 artifact,
                 spec.scope,
@@ -912,7 +877,7 @@ fn prepare_inner(
     // live bearer on disk for a run that never starts. So every refusal is asked here, and
     // `create_workspace` asks it again below for the caller that comes in directly.
     check_workspace_available(roots)?;
-    let files = rendered(manifest, connector_dir, vars, roots, false, true, artifact)?;
+    let files = rendered(manifest, connector_dir, vars, roots, false, artifact)?;
 
     let excluded = exclusion_union(manifest, &files);
     let mut created = create_workspace(roots, entry_id, &files, &excluded)?;

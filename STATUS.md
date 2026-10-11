@@ -94,11 +94,10 @@ By LEDGER ID. No eight-hour, 168-hour, production, public or acknowledged-delive
   release (OS-25) are recorded. OS-23 outsider Gemini and OS-24 fresh clone: evidence not yet
   linked. The v0.5.1 cleanup is merged and OS-07 settings are applied
   ([record](docs/qualification/v0.5.1-public-release-cleanup.md#applied-2026-10-11)).
-- **Deferred after `v0.5.0`:** OS-12, OS-13, OS-26, OS-27, OS-28 and OS-29 (remove the build's
-  retained V1 manifests parsing dependency), plus H-28 and H-29.
+- **Deferred after `v0.5.0`:** OS-12, OS-13, OS-26, OS-27, OS-28, OS-29 (remove the build's
+  retained V1 manifests parsing dependency), OS-31 (D48 devserver follow-up), H-28 and H-29.
 - **Other open work:** H-11, H-12, H-04, F-16, H-18, H-20 through H-24, H-26 and older OS
-  tickets remain unless their own evidence closes them; this boundary does not silently mark them
-  done.
+  tickets stay open until their own evidence closes them.
 
 ## Gate
 
