@@ -4,10 +4,10 @@ How is `main` of `agentcommunity/goal-cup-tracer` protected, and how does a main
 check those settings? For maintainers and for contributors who want to know what a PR must pass.
 Updated: 2026-10-11.
 
-**Status: proposed, not yet applied; read-back pending.** Nothing below is installed until its
-read-back is recorded in the
-[v0.5.1 evidence record](qualification/v0.5.1-public-release-cleanup.md), which holds every
-observed value (settings, app IDs, check URLs). This guide holds the policy and the procedure.
+**Status: applied 2026-10-11.** The read-backs are in the
+[v0.5.1 evidence record](qualification/v0.5.1-public-release-cleanup.md#applied-2026-10-11),
+which holds every observed value (settings, app IDs, check URLs). This guide holds the policy
+and the procedure.
 
 ## Policy for `main`
 
@@ -34,11 +34,10 @@ diff for workflow or script changes.
 
 ## Code owners
 
-Every owned path in CODEOWNERS is owned by `@nembal`, expected to have admin on this repository.
-Unverified: re-read `collaborators/nembal/permission` before applying settings; the observed
-value goes in the evidence record. A code owner needs write access, or GitHub ignores the line;
-`codeowners/errors` must return no errors. Add a team or a second owner only when that account
-exists and has write access.
+Every owned path in CODEOWNERS is owned by `@nembal`, who has admin on this repository (read back
+2026-10-11 in the evidence record; re-read it before changing settings). A code owner needs write
+access, or GitHub ignores the line; `codeowners/errors` must return no errors. Add a team or a
+second owner only when that account exists and has write access.
 
 ## Temporary single-maintainer exception
 
@@ -130,7 +129,7 @@ gh api repos/agentcommunity/goal-cup-tracer/private-vulnerability-reporting
    Status line above. A PR that GitHub shows as blocked until `check` passes and a code owner
    approves is the proof that the rules work; settings alone are not.
 
-## Proposed ruleset payload
+## Ruleset payload (applied)
 
 `OBSERVED_ADMIN_ROLE_ID` is the built-in repository admin role ID (expected `5`; confirm it in a
 ruleset read-back). `OBSERVED_ACTIONS_ID` is the GitHub Actions app ID from step 2.

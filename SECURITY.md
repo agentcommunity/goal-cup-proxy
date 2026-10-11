@@ -1,7 +1,7 @@
 # Security policy
 
 How do I report a vulnerability, and what does this tool do on my machine? For anyone who runs
-the tracker or reviews a change to it. Updated: 2026-10-10.
+the tracker or reviews a change to it. Updated: 2026-10-11.
 
 ## Supported versions
 
@@ -15,8 +15,7 @@ publication, signature, notarization or qualification.
 Do not open a public issue.
 
 1. Email goalhack@agentcommunity.org.
-2. GitHub private vulnerability reporting (Security tab, "Report a vulnerability") was not
-   enabled when last read (2026-10-10); use it once the button appears.
+2. Or use GitHub private vulnerability reporting: the Security tab, "Report a vulnerability".
 
 Say what you ran, what you expected, and what happened. Never attach a real trace, key or
 harness transcript: they contain prompts and credentials. A synthetic reproduction is enough.

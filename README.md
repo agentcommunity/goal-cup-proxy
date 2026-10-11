@@ -190,7 +190,7 @@ tests, never to build or run the gate. Source `harnesses/env.sh` before any real
 Harness connectors are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md) and
 [docs/HARNESS-ONBOARDING.md](docs/HARNESS-ONBOARDING.md). No DCO sign-off is needed; a human
 reads and answers for each PR. Security issues go to goalhack@agentcommunity.org, never a public
-issue; GitHub private vulnerability reporting is not yet enabled ([SECURITY.md](SECURITY.md)).
+issue, or use GitHub private vulnerability reporting ([SECURITY.md](SECURITY.md)).
 Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License

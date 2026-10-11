@@ -68,14 +68,13 @@ instead of the last test command and say so in the PR; a maintainer runs the ful
 
 ## Checks on your pull request
 
-One check will be required on a pull request: `check` (the `ci` workflow's one Linux job).
-Observed runs and whether it is required today are recorded in the
-[v0.5.1 evidence record](docs/qualification/v0.5.1-public-release-cleanup.md) and the Status
-line of [REPOSITORY-GOVERNANCE](docs/REPOSITORY-GOVERNANCE.md); until a read-back is recorded, a
-maintainer checks the gate by hand. On your first fork PR, `check` may show pending
-until a maintainer approves the workflow run; that is GitHub's default for first-time
-contributors. Required checks are strict: to update your branch, merge upstream `main` into it
-(or rebase your own branch on it) and push.
+One check is required on a pull request to `main`: `check` (the `ci` workflow's one Linux job), and
+a code owner must approve. The rules are in [REPOSITORY-GOVERNANCE](docs/REPOSITORY-GOVERNANCE.md)
+and the read-back in the [v0.5.1 evidence
+record](docs/qualification/v0.5.1-public-release-cleanup.md#applied-2026-10-11). On your first fork
+PR, `check` may show pending until a maintainer approves the workflow run; that is GitHub's default
+for first-time contributors. Required checks are strict: to update your branch, merge upstream
+`main` into it (or rebase your own branch on it) and push.
 
 `check` is a Linux smoke, not the gate. It skips the `goalcup-daemon` and `goalcup-cli` test
 suites (they spawn real process trees and hang small runners), so a green `check` does not run
