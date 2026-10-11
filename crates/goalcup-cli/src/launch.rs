@@ -19,7 +19,7 @@
 //! not what happened to be exported in the shell that ran `spawn`.
 //!
 //! The subtraction happens at two moments and both are here. [`scrubbed_env`] takes the D23
-//! denylist out of the parent environment (anything ending `_BASE_URL`, anything ending
+//! denylist out of the parent environment (anything ending `_URL`, anything ending
 //! `_PROXY`, and a bare `PROXY`) before a plan is built from it, which is the same rule
 //! [`crate::preflight::probe_env`] applies to the one child the preflight spawns. Then
 //! [`LaunchPlan::env_remove`] takes the connector's own names out on top. A plan builder
@@ -359,7 +359,8 @@ pub fn launched_at_now() -> String {
 ///
 /// Removed, by name, in either case:
 ///
-/// * anything ending `_BASE_URL` — `ANTHROPIC_BASE_URL`, `CODEX_BASE_URL`, `OPENAI_BASE_URL`;
+/// * anything ending `_URL` — `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `AMP_URL`, the same
+///   name rule the capture policy applies to `[capture.env]`;
 /// * anything ending `_PROXY` (`HTTPS_PROXY`, `http_proxy`, `ALL_PROXY`), and a bare `PROXY`.
 ///
 /// The same set [`crate::preflight::probe_env`] removes, for the same reason and stated in
@@ -385,7 +386,7 @@ pub fn scrubbed_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> 
 /// widens one copy.
 pub(crate) fn is_denied(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();
-    upper.ends_with("_BASE_URL") || upper.ends_with("_PROXY") || upper == "PROXY"
+    upper.ends_with("_URL") || upper.ends_with("_PROXY") || upper == "PROXY"
 }
 
 /// A recipe that names `{server_port}` may not be launched on an empty one.

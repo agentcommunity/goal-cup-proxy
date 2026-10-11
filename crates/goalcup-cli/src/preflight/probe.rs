@@ -340,7 +340,7 @@ fn first_line(text: &str) -> Option<String> {
 /// removed is everything that could point the harness at a different server or a different
 /// recording of the answer:
 ///
-/// * anything ending `_BASE_URL` — `ANTHROPIC_BASE_URL`, `CODEX_BASE_URL`, `OPENAI_BASE_URL`;
+/// * anything ending `_URL` — `ANTHROPIC_BASE_URL`, `CODEX_BASE_URL`, `AMP_URL`;
 /// * anything ending `_PROXY`, in either case (`HTTPS_PROXY`, `http_proxy`, `ALL_PROXY`);
 /// * every variable this connector's own `preflight.banned_env` names, because a probe run
 ///   under a variable the run itself refuses is a measurement of a machine nobody will run on.
