@@ -349,15 +349,19 @@ fn tee_marked_capture_to_with_rule(
             "the harness's stdout and stderr were not both piped".into(),
         ));
     };
+    // One matcher per reader: stdout's tee, stderr's tee, and the stdout identity matcher,
+    // which must not bind an id holding a fragment of the key.
     let matchers = match secret {
         Some(secret) => {
             let make = || FragmentMatcher::new(secret.expose());
-            match (make(), make()) {
-                (Ok(a), Ok(b)) => (Some(a), Some(b)),
-                (Err(e), _) | (_, Err(e)) => return Err(fail(spawned, "key scan", e.to_string())),
+            match (make(), make(), make()) {
+                (Ok(a), Ok(b), Ok(c)) => (Some(a), Some(b), Some(c)),
+                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+                    return Err(fail(spawned, "key scan", e.to_string()));
+                }
             }
         }
-        None => (None, None),
+        None => (None, None, None),
     };
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
@@ -372,7 +376,10 @@ fn tee_marked_capture_to_with_rule(
     let (stdout, scope): (Box<dyn Read + Send>, _) = match stdout_rule {
         Some(rule) => {
             let (sender, scope) = std::sync::mpsc::channel();
-            let scan = StdoutIdentityScan::new(rule, sender);
+            let mut scan = StdoutIdentityScan::new(rule, sender);
+            if let Some(matcher) = matchers.2 {
+                scan = scan.with_key_scan(matcher, Arc::clone(&hit));
+            }
             (
                 Box::new(IdentityReader::new(stdout, scan)),
                 Some(CaptureStdout::scope_only(scope)),

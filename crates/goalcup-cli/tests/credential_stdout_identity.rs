@@ -24,9 +24,22 @@ const WITHHELD: &str = "[goalcup: output withheld: a fragment of the provider ke
 
 /// The child: an init event first, then either a clean line or the key it was handed, echoed
 /// the way a harness might on an auth error. The key comes from its environment, never argv.
+/// The `*-id` branches put the key in the init event's `session_id` instead: whole, as a
+/// fragment inside a longer id, or whole but spelled entirely in JSON `\u` escapes so the line
+/// itself holds no scan form and only the decoded id does.
 const CHILD: &str = r#"
 import json, os, sys
-print(json.dumps({"type": "system", "subtype": "init", "session_id": sys.argv[1]}), flush=True)
+key = os.environ["DEEPSEEK_API_KEY"]
+session = {
+    "key-id": key,
+    "fragment-id": "sess-" + key[-8:] + "-0001",
+}.get(sys.argv[2], sys.argv[1])
+if sys.argv[2] == "escaped-id":
+    escaped = "".join("\\u%04x" % ord(c) for c in key)
+    print('{"type": "system", "subtype": "init", "session_id": "' + escaped + '"}', flush=True)
+else:
+    print(json.dumps({"type": "system", "subtype": "init", "session_id": session}), flush=True)
+del key
 if sys.argv[2] == "echo":
     print("Invalid API key: " + os.environ["DEEPSEEK_API_KEY"], flush=True)
 else:
@@ -182,4 +195,40 @@ fn a_key_echoed_on_stdout_is_a_hit_and_withheld_while_the_identity_still_binds()
         );
     }
     assert!(run.out.contains(WITHHELD), "{}", run.out);
+}
+
+/// A key the child put in the init event's `session_id` is never bound as the identity (the
+/// daemon would write it into the chain as the scope), is never forwarded, and is a key hit.
+fn assert_key_in_the_identity_is_refused(branch: &str) {
+    let run = run(branch);
+    assert_eq!(
+        run.scope, None,
+        "{branch}: an identity holding a fragment of the key was bound"
+    );
+    assert!(
+        run.key_hit,
+        "{branch}: a fragment of the key in the identity event is a hit, which fails the row"
+    );
+    let n = KEY.len();
+    for form in [KEY, &KEY[..8], &KEY[n - 8..]] {
+        assert!(
+            !run.out.contains(form) && !run.err.contains(form),
+            "{branch}: a fragment of the key was forwarded"
+        );
+    }
+}
+
+#[test]
+fn an_init_event_whose_session_id_is_the_key_binds_nothing_and_is_a_hit() {
+    assert_key_in_the_identity_is_refused("key-id");
+}
+
+#[test]
+fn an_init_event_whose_session_id_holds_a_key_fragment_binds_nothing_and_is_a_hit() {
+    assert_key_in_the_identity_is_refused("fragment-id");
+}
+
+#[test]
+fn an_init_event_whose_escaped_session_id_decodes_to_the_key_binds_nothing_and_is_a_hit() {
+    assert_key_in_the_identity_is_refused("escaped-id");
 }

@@ -1574,6 +1574,13 @@ pub fn stdout_tee_with_rule(
 /// at most 1 MiB, at most 64 of them, until the first event whose `match_field` is
 /// `match_value`. It sends exactly one message: that event's `id_field` (or `None` when the id
 /// is unusable), or `None` when the line budget or the stream ends first.
+///
+/// For a keyed launch it also holds a key-fragment matcher of its own ([`Self::with_key_scan`]).
+/// The id it sends is what the daemon writes into the chain as the scope, so a matching event
+/// whose line or decoded id holds any key-scan form is not bound: it sends `None`, the same
+/// unbound path an unusable id takes, and records a key hit, which fails the row. The line
+/// buffer is overwritten before it is cleared and when the matcher is dropped, as the tee's own
+/// buffer is.
 pub(crate) struct StdoutIdentityScan {
     rule: StdoutJsonRule,
     sender: std::sync::mpsc::Sender<Option<String>>,
@@ -1581,6 +1588,10 @@ pub(crate) struct StdoutIdentityScan {
     overlong: bool,
     scanning: bool,
     complete_lines: usize,
+    key_scan: Option<(
+        crate::key_scan::FragmentMatcher,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    )>,
 }
 
 impl StdoutIdentityScan {
@@ -1598,7 +1609,38 @@ impl StdoutIdentityScan {
             overlong: false,
             scanning: true,
             complete_lines: 0,
+            key_scan: None,
         }
+    }
+
+    /// Refuse to bind an id that holds a fragment of the launch's key, and set `hit` when a
+    /// matching event held one.
+    pub(crate) fn with_key_scan(
+        mut self,
+        matcher: crate::key_scan::FragmentMatcher,
+        hit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.key_scan = Some((matcher, hit));
+        self
+    }
+
+    /// Overwrite the held line, then empty it.
+    fn clear_line(&mut self) {
+        crate::key_scan::wipe(&mut self.line);
+        self.line.clear();
+    }
+
+    /// The id to send for a matching event: `None` when it is unusable, and `None` with a key
+    /// hit recorded when the line or the id holds a fragment of the key.
+    fn bound_id(&self, id: Option<&str>) -> Option<String> {
+        if let Some((matcher, hit)) = &self.key_scan
+            && (matcher.contains(&self.line)
+                || id.is_some_and(|id| matcher.contains(id.as_bytes())))
+        {
+            hit.store(true, std::sync::atomic::Ordering::Release);
+            return None;
+        }
+        id.map(str::to_owned)
     }
 
     pub(crate) fn feed(&mut self, bytes: &[u8]) {
@@ -1613,15 +1655,14 @@ impl StdoutIdentityScan {
                     && json_path(&event, &self.rule.match_field).and_then(|v| v.as_str())
                         == Some(self.rule.match_value.as_str())
                 {
-                    let id = json_path(&event, &self.rule.id_field)
-                        .and_then(|v| v.as_str())
-                        .map(str::to_owned);
+                    let id = self
+                        .bound_id(json_path(&event, &self.rule.id_field).and_then(|v| v.as_str()));
                     let _ = self.sender.send(id);
                     self.scanning = false;
-                    self.line.clear();
+                    self.clear_line();
                     return;
                 }
-                self.line.clear();
+                self.clear_line();
                 self.overlong = false;
                 if self.complete_lines == Self::LINE_COUNT_LIMIT {
                     let _ = self.sender.send(None);
@@ -1630,7 +1671,7 @@ impl StdoutIdentityScan {
                 }
             } else if !self.overlong {
                 if self.line.len() == Self::LINE_LIMIT {
-                    self.line.clear();
+                    self.clear_line();
                     self.overlong = true;
                 } else {
                     self.line.push(byte);
@@ -1651,6 +1692,7 @@ impl StdoutIdentityScan {
 impl Drop for StdoutIdentityScan {
     fn drop(&mut self) {
         self.end();
+        self.clear_line();
     }
 }
 
