@@ -117,8 +117,9 @@ portable interface (existing or missing), the smallest next step, and the risk t
     `JobObjectBasicProcessIdList`, end with `TerminateJobObject`. A job contains every descendant
     unless breakaway is allowed, so the orphan window does not exist. The graceful step is
     `CTRL_BREAK_EVENT` to a new process group, or none; UNKNOWN which harnesses honour it.
-- **v5 freeze risk.** None. `TerminationOutcomeV1` already has `JobObjectClose`,
-  `GracefulRequest` and `UnsupportedPlatform`. `ProcessHandle.process_start` is an opaque string
+- **v5 freeze risk.** None. `TerminationMethodV1` already has `JobObjectClose` and
+  `GracefulRequest`, and `TerminationFailureV1` already has `UnsupportedPlatform` (both in
+  `goalcup-protocol` `provenance.rs`). `ProcessHandle.process_start` is an opaque string
   that only reaches a record through `process_handoff_digest`, so a Windows identity format
   (creation time plus pid) changes a value, not a shape.
 
@@ -298,8 +299,10 @@ portable interface (existing or missing), the smallest next step, and the risk t
   `m2_cli_lifecycle.rs`, `m2_hermes_lifecycle.rs`, `m2_synthetic_vertical.rs`; in
   `goalcup-daemon/tests` `capture_deferred_scope.rs`, `capture_finish_budget.rs`,
   `capture_harness_load.rs`, `capture_lifecycle.rs`. Item-level macOS gates in
-  `capture_reserved_storage.rs`, `status_views.rs`, `harness_contract_golden.rs`,
-  `hermes_per_run_home.rs` and `process_kill.rs`. CI: `.github/workflows/ci.yml`, one
+  `goalcup-protocol/tests/capture_reserved_storage.rs`, in `goalcup-cli/tests`
+  `status_views.rs` and `hermes_per_run_home.rs`, and in `goalcup-daemon/tests`
+  `harness_contract_golden.rs` (the only one of the three `harness_contract_golden.rs` files
+  with macOS gates) and `process_kill.rs`. CI: `.github/workflows/ci.yml`, one
   `ubuntu-24.04` job that skips the daemon and CLI suites.
 - **Assumption.** The capture tests are macOS-only because of seam 1, not because of their own
   logic. The CI is lean by owner rule ([OPERATING, CI](../OPERATING.md#ci)): no matrix, no
@@ -373,18 +376,25 @@ new macOS-only assumptions:
 
 ### Rules for new code
 
-1. No new `cfg(target_os = "macos")` outside `goalcup-platform`, `goalcup-protocol` `process`,
-   `terminate` and `per_run_home`. Every platform `cfg` has an explicit other arm that refuses
+1. No new `cfg(target_os = "macos")` in non-test code outside `goalcup-platform`,
+   `goalcup-protocol` `process`, `terminate` and `per_run_home` (test gates follow rule 7).
+   Every platform `cfg` has an explicit other arm that refuses
    by name; never a silent no-op or an unprotected fallback.
 2. Platform calls go through the existing seams: `goalcup-platform` capabilities for files,
    `ProcessOs` for processes. New code adds no direct `kill`, `/bin/ps` or `libc` file calls.
-3. No absolute tool paths (`/bin/zsh`, `/opt/homebrew`, `/usr/local`) in code or connectors
-   beyond `SHELL_VALUES` and `CAPTURE_PATH`. Executables are resolved and pinned by hash.
+3. No absolute harness or install locations (`/bin/zsh`, `/opt/homebrew`, `/usr/local`) in
+   code or connectors beyond `SHELL_VALUES` and `CAPTURE_PATH`. Harness executables are
+   resolved and pinned by hash. Absolute system-tool paths used to stop PATH substitution
+   (`/bin/ps`, `/bin/sh -p`, `/usr/bin/stat`) are fine.
 4. Paths stay `Path` and `OsStr` until a record needs text; records use `/` via the existing
    normalization. Config and state locations come from `config_dir_with`, never `~/Library`.
 5. Shell scripts are POSIX `sh` and run under both dash and bash, with no BSD-only or GNU-only
-   flags (`stat -f`, `sed -i`, `date -j`, `readlink -f`). Anything longer than a wrapper is
-   Python or Rust.
+   flags (`stat -f`, `sed -i`, `date -j`, `readlink -f`), unless every dialect's form is tried
+   by absolute path and its output is validated before use. Existing users: the key loader
+   `scripts/with-deepseek-key.sh` tries `stat -f %Lp` and `stat -c %a` and accepts only octal
+   digits; the macOS-only `packaging/macos/uninstall-assisted.sh` runs `stat -f '%u'` and
+   refuses unless it equals `id -u`, but does not yet use an absolute path. Anything longer
+   than a wrapper is Python or Rust.
 6. The daemon does not learn who supervises it: no `launchctl`, `systemctl` or service API.
 7. A macOS-only test says which seam makes it so in its `cfg` comment, so the gate can be
    widened when that seam lands.

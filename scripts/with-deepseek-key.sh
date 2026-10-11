@@ -67,7 +67,7 @@ shift 3
 check_rest "$@"
 command -v goalcup >/dev/null 2>&1 || refuse "goalcup is not on PATH"
 
-# The one external command, before the key is anywhere: the file's mode. BSD stat (macOS) prints
+# The only external commands, before the key is anywhere: the file's mode. BSD stat (macOS) prints
 # the permission bits with `-f %Lp`; GNU stat (Linux) reads `-f` as "file system" and prints
 # something else, so each form's output counts only if that form succeeded and printed octal
 # digits alone. Absolute paths only, so no PATH entry or function can stand in for stat. Any
