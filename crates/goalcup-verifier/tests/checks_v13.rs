@@ -1711,8 +1711,30 @@ fn the_pin_script_and_the_protocol_function_compute_the_same_digest() {
         );
         seen += 1;
     }
-    assert_eq!(seen, 3, "one line per connector folder, got {printed:?}");
-    assert_eq!(manifests, 2, "two retained V1 manifests, got {printed:?}");
+    // Counted from the tree, so a new connector folder needs no edit here; the floor of
+    // shipped connectors is `harness_conformance`'s.
+    let folders: Vec<_> = std::fs::read_dir(root.join("connectors"))
+        .expect("the connectors directory")
+        .map(|entry| entry.expect("a connectors entry").path())
+        .filter(|path| path.is_dir())
+        .collect();
+    let legacy = folders
+        .iter()
+        .filter(|dir| dir.join("manifest.toml").is_file())
+        .count();
+    assert!(
+        seen >= 3,
+        "at least the three shipped connectors, got {printed:?}"
+    );
+    assert_eq!(
+        seen,
+        folders.len(),
+        "one line per connector folder, got {printed:?}"
+    );
+    assert_eq!(
+        manifests, legacy,
+        "one manifest digest per V1 manifest, got {printed:?}"
+    );
 }
 
 /// Everything under `from`, copied into `to`. Regular files and directories only, which is
