@@ -54,35 +54,47 @@ fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../goalcup-cli/tests/fixtures/harness-golden")
 }
 
-fn check_golden(name: &str, value: &Value) {
+/// How `value` differs from the committed file `name`, or `None` when they match exactly;
+/// with the regenerate switch on it writes the file and reports no difference.
+fn golden_mismatch(name: &str, value: &Value) -> Option<String> {
     let text = format!("{}\n", serde_json::to_string_pretty(value).unwrap());
     let path = golden_dir().join(name);
     if std::env::var("GOALCUP_REGEN_HARNESS_GOLDEN").is_ok_and(|v| v == "1") {
         std::fs::create_dir_all(golden_dir()).unwrap();
         std::fs::write(&path, &text).unwrap();
-        return;
+        return None;
     }
-    let want = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "{} is missing ({e}); generate it with GOALCUP_REGEN_HARNESS_GOLDEN=1",
-            path.display()
-        )
-    });
-    if text != want {
-        let (n, (got, exp)) = text
-            .lines()
-            .zip(want.lines())
-            .enumerate()
-            .find(|(_, (a, b))| a != b)
-            .unwrap_or((
-                text.lines().count().min(want.lines().count()),
-                ("<end>", "<end>"),
+    let want = match std::fs::read_to_string(&path) {
+        Ok(want) => want,
+        Err(e) => {
+            return Some(format!(
+                "{} is missing ({e}); generate it with GOALCUP_REGEN_HARNESS_GOLDEN=1",
+                path.display()
             ));
-        panic!(
-            "{name} differs from what the code now produces; first difference at line {}:\n  \
-             golden: {exp}\n  actual: {got}\n(GOALCUP_REGEN_HARNESS_GOLDEN=1 rewrites it)",
-            n + 1
-        );
+        }
+    };
+    if text == want {
+        return None;
+    }
+    let (n, (got, exp)) = text
+        .lines()
+        .zip(want.lines())
+        .enumerate()
+        .find(|(_, (a, b))| a != b)
+        .unwrap_or((
+            text.lines().count().min(want.lines().count()),
+            ("<end>", "<end>"),
+        ));
+    Some(format!(
+        "{name} differs from what the code now produces; first difference at line {}:\n  \
+         golden: {exp}\n  actual: {got}\n(GOALCUP_REGEN_HARNESS_GOLDEN=1 rewrites it)",
+        n + 1
+    ))
+}
+
+fn check_golden(name: &str, value: &Value) {
+    if let Some(mismatch) = golden_mismatch(name, value) {
+        panic!("{mismatch}");
     }
 }
 
@@ -472,18 +484,28 @@ mod live {
         let dir = connectors();
         let path = dir.path().to_path_buf();
         let rig = Rig::start_with(move |config| config.connectors_dir = path).await;
+        // Every differing connector is reported together, not just the first.
+        let mut checked = 0;
+        let mut mismatches = Vec::new();
         for id in shipped_ids().iter().map(String::as_str).chain([CONTROLLED]) {
             let with_scope = entry(&rig, id, Some("test-session")).await;
             let without_scope = entry(&rig, id, None).await;
             let name = format!("{id}.daemon.json");
-            check_golden(
+            checked += 1;
+            mismatches.extend(golden_mismatch(
                 &name,
                 &json!({
                     "connector": id,
                     "launched_with_a_native_scope": with_scope,
                     "launched_without_a_native_scope": without_scope,
                 }),
-            );
+            ));
         }
+        assert!(
+            mismatches.is_empty(),
+            "{} of {checked} golden(s) differ:\n{}",
+            mismatches.len(),
+            mismatches.join("\n")
+        );
     }
 }

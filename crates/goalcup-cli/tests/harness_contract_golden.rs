@@ -46,15 +46,15 @@ use goalcup_cli::CliError;
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::key_scan::FragmentMatcher;
 use goalcup_cli::launch::{
-    LaunchPlan, ScopeMarker, StreamPlan, allowance_refusal, build_capture_launch,
-    child_secret_for_harness, handle, spawn, stdout_tee, tee_marked,
+    LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, allowance_refusal,
+    build_capture_launch, child_secret_for_harness, handle, spawn, stdout_tee, tee_marked,
 };
 use goalcup_cli::per_run_home::create_per_run_home;
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
     CA_REGISTRY, CREDENTIAL_ENV, CaMode, EnvContext, capture_arg_denied, env_key_denied,
 };
-use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, IdentitySource, Origin};
+use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, Origin};
 use goalcup_protocol::manifest::ConnectorManifest;
 use m2_profile_support as s;
 use serde_json::{Value, json};
@@ -91,38 +91,66 @@ fn regenerating() -> bool {
     std::env::var("GOALCUP_REGEN_HARNESS_GOLDEN").is_ok_and(|v| v == "1")
 }
 
-/// Compare `value` with the committed file `name`, exactly; or write it when the regenerate
-/// switch is on.
-fn check_golden(name: &str, value: &Value) {
+/// How `value` differs from the committed file `name`, or `None` when they match exactly;
+/// with the regenerate switch on it writes the file and reports no difference.
+fn golden_mismatch(name: &str, value: &Value) -> Option<String> {
     let text = format!("{}\n", serde_json::to_string_pretty(value).unwrap());
     let path = golden_dir().join(name);
     if regenerating() {
         std::fs::create_dir_all(golden_dir()).unwrap();
         std::fs::write(&path, &text).unwrap();
-        return;
+        return None;
     }
-    let want = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "{} is missing ({e}); generate it with GOALCUP_REGEN_HARNESS_GOLDEN=1",
-            path.display()
-        )
-    });
-    if text != want {
-        let (n, (got, exp)) = text
-            .lines()
-            .zip(want.lines())
-            .enumerate()
-            .find(|(_, (a, b))| a != b)
-            .unwrap_or((
-                text.lines().count().min(want.lines().count()),
-                ("<end>", "<end>"),
+    let want = match std::fs::read_to_string(&path) {
+        Ok(want) => want,
+        Err(e) => {
+            return Some(format!(
+                "{} is missing ({e}); generate it with GOALCUP_REGEN_HARNESS_GOLDEN=1",
+                path.display()
             ));
-        panic!(
-            "{name} differs from what the code now produces; first difference at line {}:\n  \
-             golden: {exp}\n  actual: {got}\n(GOALCUP_REGEN_HARNESS_GOLDEN=1 rewrites it)",
-            n + 1
-        );
+        }
+    };
+    if text == want {
+        return None;
     }
+    let (n, (got, exp)) = text
+        .lines()
+        .zip(want.lines())
+        .enumerate()
+        .find(|(_, (a, b))| a != b)
+        .unwrap_or((
+            text.lines().count().min(want.lines().count()),
+            ("<end>", "<end>"),
+        ));
+    Some(format!(
+        "{name} differs from what the code now produces; first difference at line {}:\n  \
+         golden: {exp}\n  actual: {got}\n(GOALCUP_REGEN_HARNESS_GOLDEN=1 rewrites it)",
+        n + 1
+    ))
+}
+
+/// Compare `value` with the committed file `name`, exactly; or write it when the regenerate
+/// switch is on.
+fn check_golden(name: &str, value: &Value) {
+    if let Some(mismatch) = golden_mismatch(name, value) {
+        panic!("{mismatch}");
+    }
+}
+
+/// [`check_golden`] over every `(name, value)` pair, reporting every mismatch together rather
+/// than stopping at the first.
+fn check_goldens(goldens: &[(String, Value)]) {
+    let mismatches: Vec<String> = goldens
+        .iter()
+        .filter_map(|(name, value)| golden_mismatch(name, value))
+        .collect();
+    assert!(
+        mismatches.is_empty(),
+        "{} of {} golden(s) differ:\n{}",
+        mismatches.len(),
+        goldens.len(),
+        mismatches.join("\n")
+    );
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -533,18 +561,27 @@ fn legacy(c: &HarnessConnector) -> Legacy {
     }
 }
 
-/// The stream decision of one connector, from the launcher's own `StreamPlan` over its
-/// profile: a key scan pipes both streams, otherwise the identity source decides.
+/// The stream decision of one connector, named from the launcher's own plan over its profile:
+/// the `StreamPlan` stream uses and the `LaunchScope`. A key scan pipes both streams; otherwise
+/// the stream that carries the identity and when the native store binds name the decision.
 fn connector_streams_json(p: &CaptureSpec) -> Value {
     let plan = StreamPlan::for_spec(p).expect("a validated profile has a stream plan");
+    let scope = LaunchScope::for_spec(p).expect("a validated profile has a launch scope");
     let decision = if plan.scan_for_key {
         "MarkedAndScanned"
     } else {
-        match p.identity.source {
-            IdentitySource::StdoutJson => "CodexStdout",
-            IdentitySource::StderrLine => "MarkedStderr",
-            IdentitySource::Preassigned => "PreassignedSession",
-            _ => "Inherit",
+        match (&plan.stdout, &plan.stderr, scope) {
+            (StdoutUse::IdentityJson(_), StderrUse::Inherit, LaunchScope::FromStdout) => {
+                "CodexStdout"
+            }
+            (StdoutUse::Inherit, StderrUse::IdentityLine(_), LaunchScope::AtFinish) => {
+                "MarkedStderr"
+            }
+            (StdoutUse::Inherit, StderrUse::Inherit, LaunchScope::Preassigned) => {
+                "PreassignedSession"
+            }
+            (StdoutUse::Inherit, StderrUse::Inherit, LaunchScope::None) => "Inherit",
+            other => panic!("a launcher plan this golden does not name: {other:?}"),
         }
     };
     let pipes = plan.pipes();
@@ -887,16 +924,24 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
     })
 }
 
+/// Every per-connector golden for the connectors directory `root`: one `(<id>.json, value)` per
+/// connector it holds, in discovery order.
+fn goldens(root: &Path) -> Vec<(String, Value)> {
+    connector_ids(root)
+        .into_iter()
+        .map(|id| {
+            let c = goalcup_cli::connector::load_harness(root, &id, false)
+                .unwrap_or_else(|e| panic!("{id}: {e}"));
+            (format!("{id}.json"), connector_golden(&c))
+        })
+        .collect()
+}
+
 /// One `<id>.json` per connector the directory holds: a new folder under `connectors/` gets its
-/// golden from the regenerate switch, with no edit here.
+/// golden from the regenerate switch, with no edit here. Every differing connector is reported.
 #[test]
 fn every_shipped_connector_capture_behaviour_is_pinned() {
-    let root = s::connectors_dir();
-    for id in pinned_connector_ids(&root) {
-        let c = goalcup_cli::connector::load_harness(&root, &id, false)
-            .unwrap_or_else(|e| panic!("{id}: {e}"));
-        check_golden(&format!("{id}.json"), &connector_golden(&c));
-    }
+    check_goldens(&goldens(&s::connectors_dir()));
 }
 
 #[test]
@@ -1583,11 +1628,6 @@ fn connector_ids(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The connectors that get a per-connector golden: every one the directory holds.
-fn pinned_connector_ids(root: &Path) -> Vec<String> {
-    connector_ids(root)
-}
-
 /// `enumeration.json` for the connectors directory `root`.
 fn enumeration(root: &Path) -> Value {
     let ids = connector_ids(root);
@@ -1621,6 +1661,9 @@ fn the_shipped_connector_enumeration_is_pinned() {
 
 /// The id of the synthetic connector the data-only proof adds.
 const EXTRA: &str = "synthetic-extra-cli";
+
+/// A folder with no `harness.toml` the data-only proof adds, which is not a connector.
+const STRAY: &str = "notes-not-a-connector";
 
 /// A connectors directory holding a copy of every shipped connector, one synthetic schema-1
 /// connector in the shape of the kit's stderr-token fixture (with a program that is not an
@@ -1671,17 +1714,23 @@ fn connectors_plus_one() -> tempfile::TempDir {
     let extra = tmp.path().join(EXTRA);
     std::fs::create_dir(&extra).unwrap();
     std::fs::write(extra.join("harness.toml"), text).unwrap();
-    std::fs::create_dir(tmp.path().join("notes-not-a-connector")).unwrap();
+    std::fs::create_dir(tmp.path().join(STRAY)).unwrap();
     tmp
 }
 
-/// Adding a schema-1 connector is data only: the enumeration, the per-connector golden list and
-/// every derived field follow the directory, the shipped rows do not move, and the new
-/// connector renders. Only the regenerated JSON changes in such a PR, never this file.
+/// Adding a schema-1 connector is data only. The same bodies the real tests pin the repo with,
+/// [`goldens`] and [`enumeration`], run over a copy of `connectors/` plus one synthetic folder
+/// and one stray folder: the synthetic connector gets its `<id>.json` with the derived fields,
+/// its enumeration row, and the stray folder gets neither, while the shipped rows do not move.
+/// Only the regenerated JSON changes in such a PR, never this file.
 #[test]
 fn a_new_schema1_connector_needs_no_edit_to_this_file() {
     let tmp = connectors_plus_one();
     let root = tmp.path();
+    assert!(
+        root.join(STRAY).is_dir(),
+        "the temp tree holds the stray folder"
+    );
     let mut want = connector_ids(&s::connectors_dir());
     want.push(EXTRA.to_string());
     want.sort();
@@ -1693,35 +1742,49 @@ fn a_new_schema1_connector_needs_no_edit_to_this_file() {
             gaps.push(format!("{what}: got {got}, want {want}"));
         }
     };
-    expect("the enumeration", json!(connector_ids(root)), json!(want));
-    expect(
-        "the per-connector goldens",
-        json!(pinned_connector_ids(root)),
-        json!(want),
-    );
 
-    let extra = goalcup_cli::connector::load_harness(root, EXTRA, false).expect("it loads");
-    let golden = connector_golden(&extra);
+    // The per-connector goldens, from the body that pins the repo.
+    let plus_goldens = goldens(root);
+    expect(
+        "the per-connector golden files",
+        json!(plus_goldens.iter().map(|(n, _)| n).collect::<Vec<_>>()),
+        json!(
+            want.iter()
+                .map(|id| format!("{id}.json"))
+                .collect::<Vec<_>>()
+        ),
+    );
+    let extra_file = format!("{EXTRA}.json");
+    let extra = plus_goldens
+        .iter()
+        .find(|(n, _)| *n == extra_file)
+        .map(|(_, v)| v.clone())
+        .unwrap_or(Value::Null);
+    expect(
+        "the new connector's id",
+        extra["connector"]["id"].clone(),
+        json!(EXTRA),
+    );
     expect(
         "family (no V1 manifest: the program)",
-        golden["connector"]["family"].clone(),
+        extra["connector"]["family"].clone(),
         json!("synthtool"),
     );
     expect(
         "capture_only (no V1 manifest)",
-        golden["connector"]["capture_only"].clone(),
+        extra["connector"]["capture_only"].clone(),
         json!(true),
     );
     expect(
         "streams (from the stderr_line identity)",
-        golden["streams"].clone(),
+        extra["streams"].clone(),
         json!({"decision": "MarkedStderr", "pipes": {"stdout": false, "stderr": true}}),
     );
 
-    // The rows of the shipped connectors do not move when a folder is added.
+    // The enumeration, from the body that pins the repo.
     let real = enumeration(&s::connectors_dir());
-    let plus = std::panic::catch_unwind(|| enumeration(root))
-        .unwrap_or_else(|_| json!({"rows": [], "error": "the enumeration panicked"}));
+    let plus = enumeration(root);
+    expect("the enumeration", plus["shipped"].clone(), json!(want));
     let rows = plus["rows"].as_array().unwrap();
     for row in real["rows"].as_array().unwrap() {
         expect(
@@ -1730,12 +1793,27 @@ fn a_new_schema1_connector_needs_no_edit_to_this_file() {
             json!(true),
         );
     }
-    let row = rows.iter().find(|r| r["id"] == EXTRA);
+    let row = rows.iter().find(|r| r["dir"] == EXTRA);
     expect(
         "the new connector's row",
-        row.map(|r| json!([r["family"], r["capture_only"], r["has_pinned_dir_digest"]]))
-            .unwrap_or(Value::Null),
-        json!(["synthtool", true, false]),
+        row.map(|r| {
+            json!([
+                r["id"],
+                r["family"],
+                r["capture_only"],
+                r["has_pinned_dir_digest"]
+            ])
+        })
+        .unwrap_or(Value::Null),
+        json!([EXTRA, "synthtool", true, false]),
+    );
+    expect(
+        "the stray folder in the enumeration",
+        json!(
+            plus["shipped"].as_array().unwrap().contains(&json!(STRAY))
+                || rows.iter().any(|r| r["dir"] == STRAY)
+        ),
+        json!(false),
     );
     assert!(
         gaps.is_empty(),
