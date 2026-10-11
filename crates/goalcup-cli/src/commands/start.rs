@@ -28,7 +28,7 @@ use crate::entries::{EntryRecord, remove_entry, write_entry};
 use crate::key_scan::FragmentMatcher;
 use crate::launch::{
     CaptureStderr, LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan,
-    child_secret_for_harness, gated_handle, spawn_gated, tee_marked_capture_with_rule,
+    child_secret_for_harness, gated_handle, spawn_gated, tee_marked_capture_with_identity,
     tee_scoped_capture_with_rule, tee_stderr_capture_with_rule,
 };
 use crate::preflight::Level;
@@ -551,7 +551,8 @@ struct Gate {
 
 /// The tees on a released child's streams.
 struct Tees {
-    /// Codex's stdout tee, which also reads the thread id.
+    /// Codex's stdout tee, which also reads the thread id. For a keyed `stdout_json` child it
+    /// is the scope half of the marked tee, which reads stdout once for both jobs.
     stdout: Option<crate::launch::CaptureStdout>,
     /// Hermes' two tees, which also scan and read the session marker.
     marked: Option<CaptureStderr>,
@@ -945,15 +946,9 @@ fn register_and_release<'a>(
     // its frames with under its own ID.
     let mut spawned_at = crate::proxy::metadata::capture_time();
     spawned_at.clock_id = forked.info.producer_id.clone();
-    let stdout = if let StdoutUse::IdentityJson(rule) = prep.streams.stdout.clone() {
-        match tee_scoped_capture_with_rule(&mut spawned, rule) {
-            Ok(stdout) => Some(stdout),
-            // The tee ended the child it could not forward; it is registered, so the seal
-            // answers for it.
-            Err(e) => return Err(forked.unlaunched(e, out)),
-        }
-    } else {
-        None
+    let stdout_rule = match prep.streams.stdout.clone() {
+        StdoutUse::IdentityJson(rule) => Some(rule),
+        StdoutUse::Inherit | StdoutUse::Forward => None,
     };
     // Hermes: both streams forwarded verbatim and scanned for key fragments, stderr read for
     // the session marker (the late scope of the finish).
@@ -961,18 +956,36 @@ fn register_and_release<'a>(
         StderrUse::IdentityLine(rule) => Some(rule),
         StderrUse::Inherit | StderrUse::Forward => None,
     };
-    let marked = if prep.streams.scan_for_key {
-        match tee_marked_capture_with_rule(&mut spawned, prep.secret.as_ref(), marker_rule) {
-            Ok(tee) => Some(tee),
-            Err(e) => return Err(forked.unlaunched(e, out)),
-        }
-    } else if let Some(rule) = marker_rule {
-        match tee_stderr_capture_with_rule(&mut spawned, rule) {
-            Ok(tee) => Some(tee),
+    let (stdout, marked) = if prep.streams.scan_for_key {
+        // A keyed child: both streams scanned, and a stdout JSON identity, if any, read by the
+        // same stdout reader (one tee per stream).
+        match tee_marked_capture_with_identity(
+            &mut spawned,
+            prep.secret.as_ref(),
+            stdout_rule,
+            marker_rule,
+        ) {
+            Ok((stdout, tee)) => (stdout, Some(tee)),
+            // The tee ended the child it could not forward; it is registered, so the seal
+            // answers for it.
             Err(e) => return Err(forked.unlaunched(e, out)),
         }
     } else {
-        None
+        let stdout = match stdout_rule {
+            Some(rule) => match tee_scoped_capture_with_rule(&mut spawned, rule) {
+                Ok(stdout) => Some(stdout),
+                Err(e) => return Err(forked.unlaunched(e, out)),
+            },
+            None => None,
+        };
+        let marked = match marker_rule {
+            Some(rule) => match tee_stderr_capture_with_rule(&mut spawned, rule) {
+                Ok(tee) => Some(tee),
+                Err(e) => return Err(forked.unlaunched(e, out)),
+            },
+            None => None,
+        };
+        (stdout, marked)
     };
     // The tees hold what they need; nothing after this reads the key from here.
     drop(prep.secret.take());

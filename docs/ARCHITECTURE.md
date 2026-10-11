@@ -183,10 +183,10 @@ residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`): [checklist](C
 - Every run gets a fresh `HOME`. Codex and Claude use shared isolated config homes (Claude adds the
   checked Keychains link); Hermes uses a seeded per-run `HERMES_HOME`, child-only
   `DEEPSEEK_API_KEY`, replace-mode `HERMES_CA_BUNDLE`, deferred identity and a fail-closed key scan.
-- The five synthetic contract-kit cases are `controlled-workload` (no identity, append-only),
-  `synthetic-preassigned` (launch identity), `synthetic-stderr-token` and its keyed twin
-  `synthetic-credential-stderr` (deferred identity), and `synthetic-stdout-json` (two snapshots).
-  Each requires `--dev`; wrong-id decoys appear only in the four identity-bearing cases, not `controlled-workload`.
+- The six synthetic contract-kit cases are `controlled-workload` (no identity, append-only),
+  `synthetic-preassigned` (launch identity), `synthetic-stderr-token` (deferred identity) and
+  `synthetic-stdout-json` (two snapshots), the last two each with a keyed `synthetic-credential-*`
+  twin. Each requires `--dev`; wrong-id decoys appear in all but `controlled-workload`.
 - Directory pins and the two transitional V1-manifest pins come from `pin-manifests.sh`; executables
   carry version/SHA-256 pins. Same-UID executable and non-atomic connector-namespace races remain
   accepted residuals; see [SECURITY](../SECURITY.md).

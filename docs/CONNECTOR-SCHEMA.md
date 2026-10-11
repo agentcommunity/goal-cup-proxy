@@ -186,7 +186,7 @@ DECISIONS change, not a connector field value.
 | Source | Binding | Credential |
 |---|---|---|
 | `preassigned` | `at_launch` | refused |
-| `stdout_json` | `at_launch` | refused |
+| `stdout_json` | `at_launch` | admitted, and requires `config_home = "per_run"` |
 | `stderr_line` | `deferred` | admitted, and requires `config_home = "per_run"` |
 | `none` | absent | refused |
 
@@ -285,7 +285,9 @@ In addition to the local rules above, all of these apply:
 
 1. `preassigned` requires `{session_id}` in `capture.args`. `{session_id}` anywhere in `args` or
    an environment value requires `preassigned`.
-2. A credential requires `stderr_line` plus `deferred` identity and a `per_run` config home.
+2. A credential requires `stderr_line` plus `deferred`, or `stdout_json` plus `at_launch`,
+   identity and a `per_run` config home. One stdout reader feeds the key-fragment scan and the
+   `stdout_json` identity matcher.
 3. `capture.home.seed`, `dirs` and an explicit `per_run_dir` require `config_home = "per_run"`.
 4. With `identity.source = "none"`, the native root must be `{run_home}/...`, or
    `{config_home}/...` with a per-run config home. A shared unscoped source could read another

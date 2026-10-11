@@ -32,7 +32,10 @@
 
 use crate::CliError;
 use crate::key_scan::FragmentMatcher;
-use crate::launch::{ChildSecret, Spawned, StderrLineRule};
+use crate::launch::{
+    CaptureStdout, ChildSecret, IdentityReader, Spawned, StderrLineRule, StdoutIdentityScan,
+    StdoutJsonRule,
+};
 use goalcup_protocol::control::FINISH_COMMIT_RESERVE;
 use goalcup_protocol::harness::IdGrammar;
 use std::io::{Read, Write};
@@ -224,7 +227,55 @@ pub fn tee_marked_capture_with_rule(
     secret: Option<&ChildSecret>,
     rule: Option<StderrLineRule>,
 ) -> Result<CaptureStderr, CliError> {
-    tee_marked_capture_to_with_rule(spawned, secret, std::io::stdout(), std::io::stderr(), rule)
+    tee_marked_capture_to_with_rule(
+        spawned,
+        secret,
+        std::io::stdout(),
+        std::io::stderr(),
+        None,
+        rule,
+    )
+    .map(|(_, tee)| tee)
+}
+
+/// Tee and key-scan both piped streams, and read the manifest's stdout JSON identity from the
+/// same stdout reader the key scan reads (a keyed `stdout_json` profile). Without a stdout
+/// rule this is [`tee_marked_capture_with_rule`] and the first value is `None`. The returned
+/// [`CaptureStdout`] carries the scope only; [`CaptureStderr::finish`] reports both streams'
+/// end, and [`CaptureStderr::key_hit`] covers both.
+pub fn tee_marked_capture_with_identity(
+    spawned: &mut Spawned,
+    secret: Option<&ChildSecret>,
+    stdout_rule: Option<StdoutJsonRule>,
+    stderr_rule: Option<StderrLineRule>,
+) -> Result<(Option<CaptureStdout>, CaptureStderr), CliError> {
+    tee_marked_capture_to_with_rule(
+        spawned,
+        secret,
+        std::io::stdout(),
+        std::io::stderr(),
+        stdout_rule,
+        stderr_rule,
+    )
+}
+
+/// [`tee_marked_capture_with_identity`] with the two destinations named, for tests.
+pub fn tee_marked_capture_with_identity_to(
+    spawned: &mut Spawned,
+    secret: Option<&ChildSecret>,
+    stdout_rule: Option<StdoutJsonRule>,
+    stderr_rule: Option<StderrLineRule>,
+    stdout_to: impl Write + Send + 'static,
+    stderr_to: impl Write + Send + 'static,
+) -> Result<(Option<CaptureStdout>, CaptureStderr), CliError> {
+    tee_marked_capture_to_with_rule(
+        spawned,
+        secret,
+        stdout_to,
+        stderr_to,
+        stdout_rule,
+        stderr_rule,
+    )
 }
 
 /// Take and forward only stderr while reading its manifest identity rule. This is the valid
@@ -260,11 +311,13 @@ pub fn tee_marked_capture_to(
         secret,
         stdout_to,
         stderr_to,
+        None,
         Some(StderrLineRule {
             prefix: "session_id: ".into(),
             grammar: IdGrammar::TimestampHex,
         }),
     )
+    .map(|(_, tee)| tee)
 }
 
 fn tee_marked_capture_to_with_rule(
@@ -272,8 +325,9 @@ fn tee_marked_capture_to_with_rule(
     secret: Option<&ChildSecret>,
     stdout_to: impl Write + Send + 'static,
     stderr_to: impl Write + Send + 'static,
+    stdout_rule: Option<StdoutJsonRule>,
     rule: Option<StderrLineRule>,
-) -> Result<CaptureStderr, CliError> {
+) -> Result<(Option<CaptureStdout>, CaptureStderr), CliError> {
     // A second, deliberate `Child::kill` on a child the gate released, beside `tee_scoped_capture`'s:
     // a tee that cannot forward ends the registered child it could not forward, and the seal that
     // follows answers for it (the termination sweep matches strings, so this is named here).
@@ -313,6 +367,19 @@ fn tee_marked_capture_to_with_rule(
         changed: Condvar::new(),
     });
     let hit = Arc::new(AtomicBool::new(false));
+    // One reader of stdout: with a stdout identity rule, what it reads is fed to the identity
+    // matcher first, then scanned for key fragments and forwarded by the same tee.
+    let (stdout, scope): (Box<dyn Read + Send>, _) = match stdout_rule {
+        Some(rule) => {
+            let (sender, scope) = std::sync::mpsc::channel();
+            let scan = StdoutIdentityScan::new(rule, sender);
+            (
+                Box::new(IdentityReader::new(stdout, scan)),
+                Some(CaptureStdout::scope_only(scope)),
+            )
+        }
+        None => (Box::new(stdout), None),
+    };
     if let Err(e) = spawn_tee(
         "capture-stdout",
         stdout,
@@ -336,7 +403,7 @@ fn tee_marked_capture_to_with_rule(
         // The stdout tee ends with the child.
         return Err(fail(spawned, "stderr", e.to_string()));
     }
-    Ok(CaptureStderr { shared, hit })
+    Ok((scope, CaptureStderr { shared, hit }))
 }
 
 fn spawn_tee(

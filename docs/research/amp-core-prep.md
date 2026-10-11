@@ -96,3 +96,56 @@ Proposed text, not in force:
 - **Risk.** Low; test-only. The first macOS run is the real proof. If the key scan or the
   credential path behaves differently on macOS, the case fails rather than passing silently.
 - **Status.** Implemented on this branch; not yet run on macOS.
+
+## 4. Credential with `stdout_json` identity
+
+- **What.** One stdout reader now feeds both the key-fragment scan and the `stdout_json`
+  identity matcher, and `check_cross_field` admits a credential with `stdout_json` identity. It
+  still requires `config_home = "per_run"`, so the run-directory scan covers the config home.
+  - [launch.rs](../../crates/goalcup-cli/src/launch.rs): the identity line matcher moves out
+    of `stdout_tee_with_rule` into `StdoutIdentityScan` (same bounds: 64 complete lines of at
+    most 1 MiB, one message). `IdentityReader` wraps a stdout pipe and feeds every read to it
+    before handing the bytes on. `CaptureStdout` may be scope-only (`scope_only`), when the
+    marked tee reports the stream's end.
+  - [capture_tee.rs](../../crates/goalcup-cli/src/capture_tee.rs): the private two-stream tee
+    takes an optional `StdoutJsonRule`; with one, its stdout tee reads through `IdentityReader`.
+    New `tee_marked_capture_with_identity` (and `_to`, for tests) returns the scope receiver and
+    the usual `CaptureStderr`, whose `finish` and `key_hit` cover both streams.
+  - [start.rs](../../crates/goalcup-cli/src/commands/start.rs) `register_and_release`: a keyed
+    child always goes through that one call; an unkeyed child keeps the separate stdout scope
+    tee and stderr tee. `StreamPlan` and `LaunchScope` are unchanged.
+  - [harness.rs](../../crates/goalcup-protocol/src/harness.rs) `check_cross_field`: the
+    `stdout_json` refusal for a credential is removed.
+- **Behaviour.** The identity is read when bytes are read, before the key scan decides whether
+  to forward them, so a stdout echo of the key is still withheld (`[goalcup: output withheld:
+  ...]`), sets the live hit, and fails the row through the existing key verdict. The identity
+  still binds the native scope. No v5 record, control API or verifier change.
+- **Why.** Readiness row "Credential with `stdout_json` identity": Amp documents a stdout
+  `system`/`init` event with `session_id` as its identity carrier. Needed only if the owner's
+  live probe confirms that carrier.
+- **Tests.** `harness_schema.rs`:
+  `a_credential_with_stdout_json_identity_is_admitted_with_a_per_run_home` (replaces the refusal
+  test; a shared home is still refused). New
+  [credential_stdout_identity.rs](../../crates/goalcup-cli/tests/credential_stdout_identity.rs),
+  Linux-runnable: a Python child with the synthetic key prints an Amp-shaped init event; clean
+  output is forwarded byte for byte with the identity bound, and a stdout key echo is a hit and
+  withheld while the identity still binds. `daemon_client.rs`'s gate sweep names the new call. A
+  macOS kit case, `synthetic-credential-stdout-json`, drives the whole `goalcup start` path
+  (not run here).
+- **Risk.** Medium. It changes the launcher's tee wiring for keyed children, the one area D41
+  depends on. Hermes's path (keyed, `stderr_line`) now goes through the new call with no stdout
+  rule, which is the old code path. The kit, the end-to-end tests and the Hermes offline-key
+  test are macOS-only and were not run here.
+- **Status.** Implemented on this branch; macOS runs pending.
+
+### Proposed amendment to D43 ruling 3 (maintainers own DECISIONS.md)
+
+Proposed text, not in force:
+
+> **D43 ruling 3, amended (proposed, 2026-10-11).** A credential requires a per-run config home
+> and either `stderr_line` + `deferred` or `stdout_json` + `at_launch` identity; `preassigned`
+> and `none` stay refused. For a keyed `stdout_json` profile one stdout reader feeds both the
+> key-fragment scan and the identity matcher: the identity is read as bytes arrive, and output
+> holding a fragment is withheld and fails the row. Key scanning and identity are no longer
+> separate tees on stdout; they share one. Evidence: `credential_stdout_identity.rs`, kit case
+> `synthetic-credential-stdout-json`.

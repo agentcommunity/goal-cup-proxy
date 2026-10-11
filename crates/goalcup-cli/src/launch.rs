@@ -133,6 +133,7 @@ use std::process::{Child, Command};
 /// module's interface (D40, D41).
 pub use crate::capture_tee::{
     CaptureStderr, ScopeMarker, tee_marked, tee_marked_capture, tee_marked_capture_to,
+    tee_marked_capture_with_identity, tee_marked_capture_with_identity_to,
     tee_marked_capture_with_rule, tee_marked_with_rule, tee_stderr_capture_with_rule,
 };
 /// The ending of a child this process just released lives in its own file, which the
@@ -1413,16 +1414,28 @@ fn build_command(p: &LaunchPlan, pipes: Pipes, secret: Option<&ChildSecret>) -> 
 /// completion after EOF and all forwarding. Waiting for completion never joins the thread.
 pub struct CaptureStdout {
     pub scope: std::sync::mpsc::Receiver<Option<String>>,
-    completed: std::sync::mpsc::Receiver<std::io::Result<()>>,
+    /// `None` when stdout is read by the key-scanning tee, whose [`CaptureStderr::finish`]
+    /// reports its completion.
+    completed: Option<std::sync::mpsc::Receiver<std::io::Result<()>>>,
 }
 
 impl CaptureStdout {
+    /// The scope half alone, for a stdout the key-scanning tee reads and completes.
+    pub(crate) fn scope_only(scope: std::sync::mpsc::Receiver<Option<String>>) -> Self {
+        Self {
+            scope,
+            completed: None,
+        }
+    }
+
     /// `true` confirms completion; `false` is explicit deadline expiry. A descendant may
-    /// hold stdout open, or destination back-pressure may still hold the final bytes.
+    /// hold stdout open, or destination back-pressure may still hold the final bytes. A
+    /// scope-only receiver answers `true`: the key-scanning tee reports the stream's end.
     pub fn finish(&self, deadline: std::time::Instant) -> std::io::Result<bool> {
-        match self
-            .completed
-            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        let Some(completed) = &self.completed else {
+            return Ok(true);
+        };
+        match completed.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
         {
             Ok(result) => result.map(|()| true),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(false),
@@ -1464,7 +1477,10 @@ pub fn tee_capture_stdout_with_rule(
             let result = stdout_tee_with_rule(reader, writer, sender, &rule);
             let _ = done.send(result);
         })?;
-    Ok(CaptureStdout { scope, completed })
+    Ok(CaptureStdout {
+        scope,
+        completed: Some(completed),
+    })
 }
 
 /// Codex's scope binding uses stdout without changing a byte of participant output.
@@ -1534,12 +1550,7 @@ pub fn stdout_tee_with_rule(
     sender: std::sync::mpsc::Sender<Option<String>>,
     rule: &StdoutJsonRule,
 ) -> std::io::Result<()> {
-    const LINE_LIMIT: usize = 1024 * 1024;
-    const LINE_COUNT_LIMIT: usize = 64;
-    let mut line = Vec::new();
-    let mut overlong = false;
-    let mut scanning = true;
-    let mut complete_lines = 0usize;
+    let mut scan = StdoutIdentityScan::new(rule.clone(), sender);
     let mut forwarding = true;
     let mut buf = [0u8; 64 * 1024];
     let result = loop {
@@ -1550,48 +1561,123 @@ pub fn stdout_tee_with_rule(
             Err(e) => break Err(e),
         };
         // Announce the scope before a participant's stdout back-pressure can delay Launch.
-        if scanning {
-            for &byte in &buf[..n] {
-                if byte == b'\n' {
-                    complete_lines += 1;
-                    if !overlong
-                        && let Ok(event) = serde_json::from_slice::<serde_json::Value>(&line)
-                        && json_path(&event, &rule.match_field).and_then(|v| v.as_str())
-                            == Some(rule.match_value.as_str())
-                    {
-                        let id = json_path(&event, &rule.id_field)
-                            .and_then(|v| v.as_str())
-                            .map(str::to_owned);
-                        let _ = sender.send(id);
-                        scanning = false;
-                        line.clear();
-                        break;
-                    }
-                    line.clear();
-                    overlong = false;
-                    if complete_lines == LINE_COUNT_LIMIT {
-                        let _ = sender.send(None);
-                        scanning = false;
-                        break;
-                    }
-                } else if !overlong {
-                    if line.len() == LINE_LIMIT {
-                        line.clear();
-                        overlong = true;
-                    } else {
-                        line.push(byte);
-                    }
-                }
-            }
-        }
+        scan.feed(&buf[..n]);
         if forwarding && (writer.write_all(&buf[..n]).is_err() || writer.flush().is_err()) {
             forwarding = false;
         }
     };
-    if scanning {
-        let _ = sender.send(None);
-    }
+    scan.end();
     result
+}
+
+/// The stdout JSON identity matcher, fed every byte one stdout reader reads: complete lines of
+/// at most 1 MiB, at most 64 of them, until the first event whose `match_field` is
+/// `match_value`. It sends exactly one message: that event's `id_field` (or `None` when the id
+/// is unusable), or `None` when the line budget or the stream ends first.
+pub(crate) struct StdoutIdentityScan {
+    rule: StdoutJsonRule,
+    sender: std::sync::mpsc::Sender<Option<String>>,
+    line: Vec<u8>,
+    overlong: bool,
+    scanning: bool,
+    complete_lines: usize,
+}
+
+impl StdoutIdentityScan {
+    const LINE_LIMIT: usize = 1024 * 1024;
+    const LINE_COUNT_LIMIT: usize = 64;
+
+    pub(crate) fn new(
+        rule: StdoutJsonRule,
+        sender: std::sync::mpsc::Sender<Option<String>>,
+    ) -> Self {
+        Self {
+            rule,
+            sender,
+            line: Vec::new(),
+            overlong: false,
+            scanning: true,
+            complete_lines: 0,
+        }
+    }
+
+    pub(crate) fn feed(&mut self, bytes: &[u8]) {
+        if !self.scanning {
+            return;
+        }
+        for &byte in bytes {
+            if byte == b'\n' {
+                self.complete_lines += 1;
+                if !self.overlong
+                    && let Ok(event) = serde_json::from_slice::<serde_json::Value>(&self.line)
+                    && json_path(&event, &self.rule.match_field).and_then(|v| v.as_str())
+                        == Some(self.rule.match_value.as_str())
+                {
+                    let id = json_path(&event, &self.rule.id_field)
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned);
+                    let _ = self.sender.send(id);
+                    self.scanning = false;
+                    self.line.clear();
+                    return;
+                }
+                self.line.clear();
+                self.overlong = false;
+                if self.complete_lines == Self::LINE_COUNT_LIMIT {
+                    let _ = self.sender.send(None);
+                    self.scanning = false;
+                    return;
+                }
+            } else if !self.overlong {
+                if self.line.len() == Self::LINE_LIMIT {
+                    self.line.clear();
+                    self.overlong = true;
+                } else {
+                    self.line.push(byte);
+                }
+            }
+        }
+    }
+
+    /// The stream ended (or its reader failed) before a matching event: say so, once.
+    pub(crate) fn end(&mut self) {
+        if self.scanning {
+            let _ = self.sender.send(None);
+            self.scanning = false;
+        }
+    }
+}
+
+impl Drop for StdoutIdentityScan {
+    fn drop(&mut self) {
+        self.end();
+    }
+}
+
+/// A stdout reader that feeds what it reads to a [`StdoutIdentityScan`] before handing it on,
+/// so the key-scanning tee and the identity matcher share one reader of one pipe. The identity
+/// is seen when the bytes are read, before the tee decides whether to forward them.
+pub(crate) struct IdentityReader<R> {
+    inner: R,
+    scan: StdoutIdentityScan,
+}
+
+impl<R> IdentityReader<R> {
+    pub(crate) fn new(inner: R, scan: StdoutIdentityScan) -> Self {
+        Self { inner, scan }
+    }
+}
+
+impl<R: std::io::Read> std::io::Read for IdentityReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n == 0 {
+            self.scan.end();
+        } else {
+            self.scan.feed(&buf[..n]);
+        }
+        Ok(n)
+    }
 }
 
 fn json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {

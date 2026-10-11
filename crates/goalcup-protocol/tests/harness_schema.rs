@@ -608,11 +608,14 @@ fn a_credential_with_no_identity_is_refused() {
 }
 
 #[test]
-fn a_credential_with_stdout_json_identity_is_refused() {
+fn a_credential_with_stdout_json_identity_is_admitted_with_a_per_run_home() {
+    // One stdout reader feeds both the key-fragment scan and the identity matcher, so the pair
+    // is admitted; the key-fragment scan still needs the run directory to hold the config home.
+    admitted(&with_credential(codex(), true), PINNED);
     refused(
-        &with_credential(codex(), true),
+        &with_credential(codex(), false),
         PINNED,
-        &["credential", "`stdout_json`", "one tee per stream"],
+        &["per_run", "key-fragment scan", "D41"],
     );
 }
 
@@ -663,9 +666,9 @@ fn amp_credential_is_admitted_only_in_credential_field() {
         ],
     );
     // Admitting the name does not lift the identity or home rules for it.
-    let mut t = with_credential(codex(), true);
+    let mut t = with_credential(claude(), true);
     set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
-    refused(&t, PINNED, &["credential", "`stdout_json`"]);
+    refused(&t, PINNED, &["credential", "`preassigned`"]);
     let mut t = hermes();
     set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
     set(&mut t, &["capture", "home"], "config_home", "shared");

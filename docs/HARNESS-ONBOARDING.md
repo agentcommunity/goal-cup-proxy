@@ -69,7 +69,7 @@ cargo build
 cargo test -p goalcup-cli --test harness_contract_kit
 ```
 
-On macOS the current baseline suite runs five synthetic stand-ins, each with `harness.toml`,
+On macOS the current baseline suite runs six synthetic stand-ins, each with `harness.toml`,
 `stand-in.py` and `expect.toml`; a connector PR adds a new fixture case for its own path:
 
 - `controlled-workload`: no identity binding and an append-only native file;
@@ -79,7 +79,9 @@ On macOS the current baseline suite runs five synthetic stand-ins, each with `ha
   `credential_env`; the runner hands an invented value through the child-secret path, then
   checks the stand-in received it and that no fragment is in the trace, run directory or output;
 - `synthetic-stdout-json`: launch-assigned `stdout_json` identity and a snapshot, including a
-  seeded file and argv guard.
+  seeded file and argv guard;
+- `synthetic-credential-stdout-json`: a keyed `stdout_json` case; one stdout reader binds the
+  identity and scans for the key.
 
 The kit uses a test-owned proxy, `Origin::Dev`, private homes and Python stand-ins. It does not
 read a participant home, provider credential or package registry. A passing kit proves only
