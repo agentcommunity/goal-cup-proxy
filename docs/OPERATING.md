@@ -422,23 +422,23 @@ It recomputes the schema-1 whole-directory pin table and the transitional V1-man
 These are source integrity allowlists, not package manifests:
 
 * `CONNECTOR_MANIFEST_SHA256S`, in `crates/goalcup-verifier/src/lib.rs` — exactly the retained
-  Codex and Claude `manifest.toml` digests. This is what the V1 arming receipt claims and what V13's
-  `manifest_not_pinned` compares, because the `manifest.toml` a trace carries is the only
+  Codex and Claude `manifest.toml` digests. This is what the V1 arming receipt claimed and what
+  V13's `manifest_not_pinned` compares, because the `manifest.toml` a trace carries is the only
   byte of a connector a verifier can **recompute** after the fact.
 * `CONNECTOR_DIR_SHA256S`, built from the data file `crates/goalcup-protocol/pins/connector-dirs.txt`
   by `crates/goalcup-protocol/src/pins.rs` (a malformed file does not compile) and re-exported
   from the verifier — exactly the Codex, Claude and Hermes whole-directory digests, with seeds and
-  templates under `files/` included. The manifest digest cannot see an edited template, and the daemon renders those
-  templates and then guards them, so the daemon hashes its own connectors directory at
-  workspace creation, refuses a pinned connector whose bytes moved, and **claims the digest
-  on the start receipt**. V13 reads it back there, and **only out of a receipt whose
-  signature verified** — otherwise a participant could self-sign a receipt naming the pinned
-  digest and buy silence: `connector_dir_unpinned` (Fail, and Pass-level under `--dev`) when
-  the claim is not in this table, `connector_dir_unbound` (Flag) when a verified receipt
-  carries no claim at all. A trace whose receipt did not verify, or that carries none, gets
-  no directory finding — `receipt_invalid`, `receipt_unverified`, `receipt_missing` or
-  `legacy_trace` is already the larger statement. `goalcup doctor` runs the CLI's own copy of
-  the same comparison over the CLI's own installation.
+  templates under `files/` included. The manifest digest cannot see an edited seed file, so the
+  loader hashes each connector directory and refuses a pinned connector whose bytes moved, and a
+  v5 entry binds the digest at create and in `Launch.connector_dir_sha256`. On a V1 (v4) trace,
+  V13 reads the digest back from the start receipt the V1 daemon wrote (deleted by D48), and
+  **only out of a receipt whose signature verified**; otherwise a participant could self-sign a
+  receipt naming the pinned digest and buy silence: `connector_dir_unpinned` (Fail, and
+  Pass-level under `--dev`) when the claim is not in this table, `connector_dir_unbound`
+  (Flag) when a verified receipt carries no claim at all. A trace whose receipt did not verify,
+  or that carries none, gets no directory finding: `receipt_invalid`, `receipt_unverified`,
+  `receipt_missing` or `legacy_trace` is already the larger statement. `goalcup doctor` runs the
+  CLI's own copy of the same comparison over the CLI's own installation.
 
 Both tables use declared connector ids; schema 1 uses `harness.toml`, while the compatibility table
 uses `manifest.toml`. Run it in the same commit as any change

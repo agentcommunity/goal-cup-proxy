@@ -14,12 +14,12 @@ pub struct TemplateVars(pub BTreeMap<String, String>);
 
 /// Prints every key, and every value except a `*_token` one, which prints `<redacted>`.
 ///
-/// The map holds `receiver_token` by construction — `goalcup-cli`'s `vars::build` puts this
-/// run's live bearer token in it so a launch recipe can render `{receiver_token}` — and a
-/// derived `Debug` would put that token into whatever a `{:?}` on a launch failure reaches:
-/// a terminal, a log file, an issue report. Redacting on the type is the only place the
-/// guarantee holds for every caller; a wrapper at one call site is a guarantee that lasts
-/// until the second call site.
+/// The map can hold `receiver_token` (the V1 `vars::build` in `goalcup-cli`, removed by D48,
+/// put this run's live bearer token in it so a launch recipe could render
+/// `{receiver_token}`), and a derived `Debug` would put such a token into whatever a `{:?}`
+/// on a launch failure reaches: a terminal, a log file, an issue report. Redacting on the
+/// type is the only place the guarantee holds for every caller; a wrapper at one call site
+/// is a guarantee that lasts until the second call site.
 ///
 /// The key is never redacted and no other value is touched, so a `{:?}` still says which
 /// variables were supplied and what the rest of them rendered to — which is the whole

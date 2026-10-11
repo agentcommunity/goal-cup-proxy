@@ -1,10 +1,9 @@
 //! Fixtures shared by the integration tests in this crate; it is compiled into every test
 //! binary that declares `mod support`.
 //!
-//! What is here directly: a registry with one entry, the shipped manifests, a devserver
-//! behind a recording proxy, and the `TrackerFile` builder the config-watch tests start from. The bigger
-//! harnesses are the submodules — [`entry`] (one `EntryRuntime`, driven by hand), [`daemon`]
-//! (the process-level object), [`control`] (its control listener and a client) and
+//! What is here directly: a registry with one entry, the shipped manifests, a devserver on a
+//! loopback socket and a daemon config file. The bigger harnesses are the submodules:
+//! [`daemon`] (the process-level object), [`control`] (its control listener and a client) and
 //! [`status`] (a status document and the reader that checks its signature).
 
 #![allow(dead_code)]
@@ -23,8 +22,8 @@ pub use control::*;
 // The process-group escape helper (re-exec this test binary as a hard-linked `codex`
 // under a pre-`main` role dispatch). Unix-only, matching `process_kill.rs`'s own gate;
 // `process_kill.rs` itself pulls this file in directly via `#[path = "support/tree.rs"]`
-// rather than through this module, so its binary does not also link `mock_server`'s axum
-// and tokio for a file that spawns `sh` and `sleep`.
+// rather than through this module, so its binary does not also link the devserver
+// fixture's axum and tokio for a file that spawns `sh` and `sleep`.
 #[cfg(unix)]
 pub mod tree;
 // Re-exported so a test says `support::inputs()`; the
@@ -142,8 +141,9 @@ pub fn write(path: &std::path::Path, bytes: &[u8]) {
 // A configuration file on disk, for the tests that drive the binary.
 // ---------------------------------------------------------------------------------------
 
-/// [`write_config`] with the last word on the text, so a test can write a config the
-/// daemon must refuse without a second copy of the valid one.
+/// Write a valid `DaemonConfig` under `root`, with `edit` given the last word on the text,
+/// so a test can write a config the daemon must refuse without a second copy of the valid
+/// one. The control address is port 0: the OS picks, and the binary prints what it got.
 pub fn write_config_with(
     root: &std::path::Path,
     edit: impl FnOnce(String) -> String,

@@ -24,9 +24,6 @@
 //!   home or credentials.
 //! * A wait is on a condition, not a duration: [`PATIENCE`] is a ceiling reached only when
 //!   the condition cannot come true, and a wait that gives up names what it waited for.
-//!   [`never_appears`] is the one negative wait, and its window is a fixed three seconds.
-//! * The interrupt flag is process-global, so the tests that meet it hold
-//!   [`one_interrupt_at_a_time`].
 //!
 //! `dead_code` is allowed throughout: every test binary in this directory compiles all of
 //! this file, and no single one uses all of it.
@@ -252,14 +249,11 @@ pub fn workspace_opts() -> control::WorkspaceOpts {
 
 // ------------------------------------------------------------------ a start, mocked
 
-/// A mock holding one armed entry for `id`, and `tmp` made into a configuration directory a
-/// `goalcup start` can run against: a `grant.json` at `0600` and an `entries/` beside it.
+/// A mock holding one armed entry for `id`, and `tmp` made into a configuration directory:
+/// a `grant.json` at `0600` and an `entries/` beside it.
 ///
-/// The grant is written because `start_with`'s first refusal is a machine that has never run
-/// `goalcup auth`, and every caller of this helper hands `tmp.path()` over as the
-/// configuration directory. It is an obviously fake grant — the token says so — and it is
-/// written through `config::write_secret_file`, which is the same path `goalcup auth` takes,
-/// so a test that asserts nothing world-readable was written sees the real thing.
+/// No command reads the grant since D48 removed `goalcup auth`. The helper still writes it,
+/// through `config::write_secret_file`, and it is an obviously fake grant: the token says so.
 pub fn mock_armed(tmp: &tempfile::TempDir, id: &str) -> goalcup_cli::daemon::MockDaemonClient {
     write_grant(tmp.path());
     goalcup_cli::daemon::MockDaemonClient::armed_ok(tmp.path(), id)
@@ -270,11 +264,7 @@ pub fn mock_armed(tmp: &tempfile::TempDir, id: &str) -> goalcup_cli::daemon::Moc
 /// One spelling, in the place that writes it, rather than the literal at each call site.
 pub const GRANT_TOKEN: &str = "test-grant";
 
-/// The grant `mock_armed` leaves behind, as `goalcup auth` would have written it.
-///
-/// `goalcup start`'s first refusal is a machine that has never run `goalcup auth`, and a
-/// test that drives the `goalcup` BINARY against a real daemon needs the same grant
-/// `mock_armed` writes, without a mock beside it.
+/// The grant `mock_armed` leaves behind, as the removed `goalcup auth` would have written it.
 pub fn write_grant(cfg: &Path) {
     // The document the removed `goalcup auth` wrote (D48), spelled out so this helper builds.
     let grant = serde_json::json!({
@@ -355,9 +345,8 @@ pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
 /// The same, for `connector_id`.
 ///
 /// [`cfg_with_entry`] writes `claude-code-cli` because `WorkspaceInfo` carries no connector
-/// id. `goalcup resume` reads the field — it is how the command knows which manifest holds
-/// the `lock_paths[]` and the `[resume]` recipe — so the two-line rewrite is written once,
-/// here, instead of at each call site.
+/// id, so the two-line rewrite a test of another connector needs is written once, here,
+/// instead of at each call site.
 pub fn set_cached_connector(cfg: &Path, entry_id: &str, connector_id: &str) {
     let mut record = match goalcup_cli::entries::read_entry(cfg, entry_id) {
         Ok(record) => record,
@@ -935,56 +924,11 @@ pub fn artifact_snapshot(root: &Path) -> Vec<(String, String)> {
     out
 }
 
-// ------------------------------------------------------------------ the real daemon
-//
-// Everything in this section exists for `tests/real_daemon_end_to_end.rs`, the one test in
-// this crate that drives the SHIPPED BINARIES rather than a client in this process.
-//
-// The plumbing is deliberately close to `crates/goalcup-devserver/tests/support/gate.rs`,
-// which does the same job for the daemon's own gates, and is a second copy rather than a
-// shared module: the two crates cannot see each other's test trees, and neither may take a
-// dependency to reach one.
-
-/// The capture facts a resume test can observe without printing the captured payload.
-///
-/// `resume_markers` and `resume_records` are deliberately separate from the two aggregate
-/// counters. A replay of the first launch can grow the transcript count, but the complete
-/// five-marker identity pattern across four resume-bearing leg-1 records is evidence the
-/// harness's resume invocation reached the transcript tailer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CaptureCounts {
-    leg1_records: usize,
-    leg2_posts: usize,
-    resume_markers: usize,
-    resume_records: usize,
-}
-
-impl CaptureCounts {
-    fn has_resumed_batch_since(self, before: Self, records: usize, posts: usize) -> bool {
-        self.leg1_records >= before.leg1_records.saturating_add(records)
-            && self.leg2_posts >= before.leg2_posts.saturating_add(posts)
-            && self.resume_markers >= before.resume_markers.saturating_add(records)
-            && self.resume_records >= before.resume_records.saturating_add(RESUME_BEARING_RECORDS)
-    }
-}
-
-const RESUME_BEARING_RECORDS: usize = 4;
-
-// V4 workspace-submission process fixtures for `tests/finish_matrix.rs`, the whole-flow fault
-// matrix.
-//
-// Modelled closely on `crates/goalcup-devserver/tests/support/gate.rs`'s
-// `Devserver::start_workspace` / `write_workspace_submission_config` (this crate's tests
-// cannot see that file, so this is a second copy, not a shared one), and on this file's own
-// `spawn_daemon` / `DaemonProcess`, made RESTART-capable: [`spawn_workspace_daemon`] is
-// called once to start and again, against the same [`WorkspaceDaemonConfig`], to restart
-// after a kill.
+// ------------------------------------------------------------------ waiting on a cadence
 
 /// Wait for one of the daemon's own cadences to produce a fact, and answer it. A condition,
-/// never a duration, for the reason
-/// `crates/goalcup-devserver/tests/support/gate.rs::wait_for` gives: the daemon runs its own
-/// loop in another process, and a `sleep` long enough to be reliable on a loaded machine is a
-/// test that costs that long every time it passes.
+/// never a duration: the daemon runs its own loop, and a `sleep` long enough to be reliable
+/// on a loaded machine is a test that costs that long every time it passes.
 pub fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
     let deadline = Instant::now() + PATIENCE;
     loop {
@@ -996,57 +940,5 @@ pub fn wait_for<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
             "waited {PATIENCE:?} for {what} and it did not happen"
         );
         std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-#[cfg(test)]
-mod capture_counts_tests {
-    use super::CaptureCounts;
-
-    #[test]
-    fn a_duplicate_batch_is_not_a_resumed_capture_without_resume_transcript_records() {
-        let first_launch = CaptureCounts {
-            leg1_records: 5,
-            leg2_posts: 0,
-            resume_markers: 0,
-            resume_records: 0,
-        };
-        let replayed_first_launch = CaptureCounts {
-            leg1_records: 10,
-            leg2_posts: 0,
-            resume_markers: 0,
-            resume_records: 0,
-        };
-        let one_resume_record_and_four_replays = CaptureCounts {
-            leg1_records: 10,
-            leg2_posts: 0,
-            resume_markers: 1,
-            resume_records: 1,
-        };
-        let three_resume_records_and_two_replays = CaptureCounts {
-            leg1_records: 10,
-            leg2_posts: 0,
-            resume_markers: 5,
-            resume_records: 3,
-        };
-        let resumed_launch = CaptureCounts {
-            resume_markers: 5,
-            resume_records: 4,
-            ..replayed_first_launch
-        };
-
-        assert!(
-            !replayed_first_launch.has_resumed_batch_since(first_launch, 5, 0),
-            "a replay can grow the aggregate transcript count but cannot prove a resumed harness ran"
-        );
-        assert!(
-            !one_resume_record_and_four_replays.has_resumed_batch_since(first_launch, 5, 0),
-            "one resume-marked record plus four replays cannot prove a complete resume batch"
-        );
-        assert!(
-            !three_resume_records_and_two_replays.has_resumed_batch_since(first_launch, 5, 0),
-            "three resume-bearing records plus two replays cannot prove a complete resume batch"
-        );
-        assert!(resumed_launch.has_resumed_batch_since(first_launch, 5, 0));
     }
 }

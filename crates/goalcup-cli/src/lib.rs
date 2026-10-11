@@ -134,15 +134,13 @@ impl CliError {
 /// and does not re-derive it, so the two can never disagree about what a `Fail` is. A verdict
 /// is the one thing that exits with rung 2.
 ///
-/// **The one number this CLI reports that it did not choose, and the one mode it is
-/// reported from.** A verdict's `Flag` is `1`, and so is [`CliError::Refused`] — the same
-/// number for "your entry has a flag on it" and for "this machine could not run the check".
-/// They do not collide, because they are never reachable from the same invocation:
-/// `goalcup doctor --verify <dir>` runs no check of its own and reports the verdict's
-/// 0/1/2 (and `3` when the trace could not be read, which is where `goalcup-verify`'s own
-/// `main` lands); every other invocation of every command reports the ladder above, where
-/// `2` does not exist. `goalcup doctor --help` states the split, and
-/// [`crate::commands::doctor`] is the only caller of this function.
+/// **The one number this CLI would report that it did not choose.** A verdict's `Flag` is
+/// `1`, and so is [`CliError::Refused`]: the same number for "your entry has a flag on it"
+/// and for "this machine could not run the check".
+/// They do not collide, because no invocation reaches both: the one mode that relayed a
+/// verdict, the V1 `goalcup doctor --verify <dir>`, was removed by D48, and no command calls
+/// this function now. Every invocation of every command reports the ladder above, where `2`
+/// does not exist, and `goalcup doctor --help` points at `goalcup-verify` for a verdict.
 ///
 /// A verdict code outside a `u8` is not reachable — [`goalcup_verifier::Verdict::exit_code`]
 /// is a three-armed match over `Severity` — and the saturating conversion is here so this

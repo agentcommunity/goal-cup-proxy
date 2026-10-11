@@ -36,12 +36,12 @@ use std::path::{Path, PathBuf};
 
 /// The participant's real home, out of an environment map.
 ///
-/// One rule for both callers. `goalcup start` is handed the environment its preflight asks
-/// its questions of; `goalcup resume` reads this process's own. An exported-but-empty
-/// `$HOME` counts as unset for the reason [`crate::config`] gives: it is what a shell script
-/// that meant to compute a path and computed nothing leaves behind, and joining a seed
-/// candidate onto it would read a file out of the working directory — which during a run is
-/// the participant's repository.
+/// One rule for every caller. `goalcup start` is handed the environment its preflight asks
+/// its questions of; the V1 `goalcup resume` (removed by D48) read this process's own. An
+/// exported-but-empty `$HOME` counts as unset for the reason [`crate::config`] gives: it is
+/// what a shell script that meant to compute a path and computed nothing leaves behind, and
+/// joining a seed candidate onto it would read a file out of the working directory, which
+/// during a run is the participant's repository.
 pub fn home_from(env: &std::collections::BTreeMap<String, String>) -> Result<PathBuf, CliError> {
     match env.get("HOME").filter(|h| !h.is_empty()) {
         Some(home) => Ok(PathBuf::from(home)),

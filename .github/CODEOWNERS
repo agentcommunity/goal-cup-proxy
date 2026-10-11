@@ -34,7 +34,6 @@
 /crates/goalcup-cli/src/proxy/                      @nembal
 /crates/goalcup-cli/src/launch.rs                   @nembal
 /crates/goalcup-cli/src/per_run_home.rs             @nembal
-/crates/goalcup-cli/src/home_seed.rs                @nembal
 /crates/goalcup-cli/src/commands/start.rs           @nembal
 /crates/goalcup-cli/src/key_scan.rs                 @nembal
 /crates/goalcup-cli/src/capture_tee.rs              @nembal

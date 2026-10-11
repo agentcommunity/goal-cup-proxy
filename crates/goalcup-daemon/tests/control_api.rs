@@ -1294,7 +1294,7 @@ async fn a_connector_edited_on_disk_is_seen_without_restarting_the_daemon() {
 /// (the stub never reads the id). `resume` and `resume-preview` are the exception: they refuse
 /// a capture entry as a capture entry.
 #[tokio::test]
-async fn a_default_build_answers_every_v1_route_with_the_stub_behind_the_bearer() {
+async fn every_v1_route_answers_with_the_stub_behind_the_bearer() {
     let h = support::capture_control_harness().await;
     let entry = h.entry_id.clone();
     let routes: [(&str, String); 5] = [

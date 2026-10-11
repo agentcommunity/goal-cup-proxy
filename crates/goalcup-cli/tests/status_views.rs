@@ -1,25 +1,9 @@
-//! The three participant surfaces over one signed document: `goalcup status`, `goalcup
-//! entries` and `goalcup ui`.
-//!
-//! # Two seams
-//!
-//! `ui_with` takes the configuration directory: nothing reachable from a `DaemonClient`
-//! carries a status URL — `StatusPayload` does not have one, `EntrySummary` does not have
-//! one, and the only struct that does — `WorkspaceInfo` — comes back from
-//! `create_workspace`, which is not a thing a `goalcup ui` may call. The URL a `goalcup
-//! start` pinned is in the entry cache, so this command reads it from there, the way
-//! `status` reads the run key from there, and `cfg` is how it is told where that is. It is
-//! the same seam and the same reason: `ui` is a fresh process and `start` is long gone.
+//! The two participant surfaces over one signed document: `goalcup status` and `goalcup
+//! entries`. The third, `goalcup ui`, left with D48.
 //!
 //! The source sweeps use `support::walk("crates/goalcup-cli/src")` because `walk` walks
 //! `<repo_root>/<rel>` and `<repo_root>/src` does not exist — a sweep over it would assert
 //! nothing at all.
-//!
-//! The fixtures carry a `status_url` that is the page: `control/handlers.rs` builds
-//! `http://<control addr>/v0/ui?entry=<id>`, with the id in the query, because
-//! `/v0/entries/current` is authenticated and a browser has no token. `goalcup ui` opens
-//! that string byte for byte, so a fixture holding the signed status ROUTE instead would
-//! make this file's whole point vacuous.
 
 mod support;
 

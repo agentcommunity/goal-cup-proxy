@@ -816,7 +816,7 @@ impl RunKeys {
 
 /// What one seal left behind, kept on the entry so a restarted daemon can read it.
 ///
-/// [`crate::runtime::SealReport`] is the live answer `Daemon::seal_entry` hands its caller;
+/// The V1 seal's live answer (`runtime::SealReport`, removed by D48) went to its caller;
 /// this is the durable half. A daemon killed between `write_seal` and `terminate` leaves a
 /// sealed entry with its harness still running and nothing in memory saying so, and the next
 /// process has to be able to finish the job: it reaps the survivor and writes what that
@@ -837,7 +837,7 @@ pub struct SealOutcome {
     /// The guard refused the registered pid, so nothing in the tree was signalled by number
     /// and neither this seal nor any later reader of this row may say the harness is gone.
     ///
-    /// The durable half of [`crate::runtime::SealReport::harness_unverified`], and what
+    /// The durable half of the V1 `SealReport::harness_unverified` (removed by D48), and what
     /// `StatusPayload::harness_unverified` is built from. `#[serde(default)]` because rows
     /// written before this field existed are read by this build, and `false` is what they
     /// meant: a field they did not have claimed nothing.
@@ -901,8 +901,9 @@ pub struct Entry {
     /// Not a second copy of `manifest_sha256`: that one covers `manifest.toml`, the file a
     /// trace carries; this one covers the hook bodies under `files/` beside it, which no
     /// trace carries and which are what the daemon renders, records as the expected config,
-    /// and then guards. Held on the row rather than recomputed in `bind_start` so the
-    /// receipt names the bytes the workspace was actually built from.
+    /// and then guards. Held on the row rather than recomputed at start binding (the V1
+    /// `bind_start`, removed by D48) so the receipt names the bytes the workspace was
+    /// actually built from.
     ///
     /// `#[serde(default)]`, so a row written before this field existed still reads: the
     /// registry is a file that outlives an upgrade, and an entry a daemon cannot open is a
@@ -1159,9 +1160,9 @@ pub(crate) fn validate_foreign_pending(entry: &Entry) -> Result<(), DaemonError>
 /// The non-receipt path identity of the runtime that requested a start receipt.
 ///
 /// Captured from the runtime's [`Entry`] before the outbound request, then compared with
-/// the row re-read inside [`Registry::commit_start`]. These paths do not belong in the
-/// signed receipt, but a receipt built from one trace must never be installed after the
-/// same entry id is replaced with another artifact or trace directory.
+/// the row re-read inside the V1 `Registry::commit_start` (removed by D48). These paths do
+/// not belong in the signed receipt, but a receipt built from one trace must never be
+/// installed after the same entry id is replaced with another artifact or trace directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartPathIdentity {
     artifact_dir: PathBuf,
@@ -1703,13 +1704,14 @@ impl Registry {
     /// end state, and a refusal that unwinds twice must not turn into a second failure.
     ///
     /// **The check has to be in the transaction.** Reading `started_at` off the runtime's
-    /// in-memory mirror and removing the row later would race `bind_start`, which commits a
-    /// start from a receipt round trip that holds the runtime out of its slot for up to
-    /// `NETWORK_TIMEOUT`: a start committed between the read and the removal would take the
-    /// row with it, and the control API's file removal that follows `remove_dir_all`s the
-    /// artifact directory: `chain.jsonl`, `baseline.json` and `receipt.json` of a run with a
-    /// signed server receipt. redb serialises write transactions, so a check on the row the
-    /// same transaction removes is a check the winner of that race cannot pass twice.
+    /// in-memory mirror and removing the row later would race the V1 `bind_start` (removed by
+    /// D48), which committed a start from a receipt round trip that held the runtime out of
+    /// its slot for up to `NETWORK_TIMEOUT`: a start committed between the read and the
+    /// removal would take the row with it, and the control API's file removal that follows
+    /// `remove_dir_all`s the artifact directory: `chain.jsonl`, `baseline.json` and
+    /// `receipt.json` of a run with a signed server receipt. redb serialises write
+    /// transactions, so a check on the row the same transaction removes is a check the
+    /// winner of that race cannot pass twice.
     ///
     /// The caller removes files only after this returns `Ok` — the row is the tombstone,
     /// and evidence outlives a directory entry.
@@ -2403,10 +2405,10 @@ impl Registry {
     /// Store a start receipt **after** it verifies against the key this build pins.
     ///
     /// This compatibility helper is limited to legacy receipt-only rows. Bound receipts
-    /// must use [`Registry::commit_start`] so the receipt and start state are one durable
-    /// transition. `verify_with` compares the document's own key to the pinned one first,
-    /// so a receipt a participant signed themselves is refused before any cryptography
-    /// runs, and a refusal writes nothing at all.
+    /// went through the V1 `Registry::commit_start` (removed by D48), so the receipt and
+    /// start state were one durable transition. `verify_with` compares the document's own
+    /// key to the pinned one first, so a receipt a participant signed themselves is refused
+    /// before any cryptography runs, and a refusal writes nothing at all.
     ///
     /// Test-only: no shipped caller remains, so a shipped daemon does not compile it.
     #[cfg(any(test, feature = "test-hooks"))]
@@ -2521,8 +2523,8 @@ fn holds_only(dir: &Path, file_name: &std::ffi::OsStr) -> Result<bool, DaemonErr
 /// Tighten a path to exactly `mode`. A no-op off unix, where this process cannot express
 /// "owner only" in the same terms.
 ///
-/// `pub(crate)` because [`crate::buffer::Buffer`] owns a second owner-only file and needs
-/// the same repair on open. One spelling of "owner only" in this crate, not two.
+/// `pub(crate)` so any second owner-only file in this crate takes the same repair on open.
+/// The V1 buffer was one until D48 removed it. One spelling of "owner only", not two.
 #[cfg(unix)]
 pub(crate) fn restrict(path: &Path, mode: u32) -> Result<(), DaemonError> {
     use std::os::unix::fs::PermissionsExt;

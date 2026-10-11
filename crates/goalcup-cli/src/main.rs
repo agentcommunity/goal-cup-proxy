@@ -320,15 +320,15 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
 /// `control.json` describes.
 ///
 /// The default entry is the newest run **started from this machine**, the same default
-/// `goalcup status` and `goalcup resume` take and for the same reason: the workspace to scan
-/// and the tracker's own file list to scan it against are in the record this machine wrote,
-/// and no other process holds them.
+/// `goalcup status` takes and for the same reason: the workspace to scan and the tracker's
+/// own file list to scan it against are in the record this machine wrote, and no other
+/// process holds them.
 ///
 /// **The client is built even for `--dry-run`.** The dry run makes no call — `seal_with`
 /// never reaches the daemon on that path, and `tests/seal_scan.rs` asserts it — but this
-/// function resolves the same three things whichever way the run goes, exactly as `resume`
-/// above does. A `--dry-run` on a machine with no daemon therefore refuses at rung 1 naming
-/// `control.json`, which is the answer every other command gives from that file.
+/// function resolves the same three things whichever way the run goes. A `--dry-run` on a
+/// machine with no daemon therefore refuses at rung 1 naming `control.json`, which is the
+/// answer every other command gives from that file.
 fn seal(entry: Option<String>, dry_run: bool) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
@@ -339,7 +339,7 @@ fn seal(entry: Option<String>, dry_run: bool) -> Result<(), CliError> {
     //
     // A real seal keeps the old order, and deliberately: its first need is a daemon, so a
     // machine with none is told about `control.json` rather than about which entry it failed
-    // to name — the same first answer `goalcup start`, `resume` and `doctor` give.
+    // to name, the same first answer `goalcup start` and `doctor` give.
     if dry_run {
         let entry_id = resolve_entry(&cfg, entry)?;
         return commands::seal::dry_run_with(&connectors, &cfg, &entry_id, &mut std::io::stdout());

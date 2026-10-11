@@ -207,19 +207,16 @@ fn every_variant_lands_on_a_rung_and_no_variant_lands_on_two() {
 
 /// Rung 4 is a GATE's, and this enumerates every site in `src/` that raises one.
 ///
-/// `goalcup resume`'s lock gate raises `CliError::Gate` too, from two places, so a sweep of
-/// only the refusals `goalcup start` can raise would miss them, and `--help`, `lib.rs` and
-/// README would come to say three different things about one number.
+/// D48 removed the V1 arming wait and the `goalcup resume` lock gate, so the CLI raises no
+/// rung-4 site of its own. A sweep of only the refusals `goalcup start` can raise would miss
+/// a new site elsewhere, and `--help`, `lib.rs` and README would come to say three different
+/// things about one number.
 ///
-/// So the sweep is over the whole of `src/`, in the shape of
-/// `start_launch.rs`'s `retry_busy` walk: every `CliError::Gate(` construction, wherever it
-/// sits, has to be one of the three gates. A sixth site is not forbidden — it is a decision,
-/// and this test is where the decision has to be written down before it ships, beside the
-/// ladder in `lib.rs` and the sentence in `--help`.
-///
-/// The end-to-end halves are `tests/start_arming.rs`, where the arming gate is driven
-/// against a mock that can withhold a signal, and `tests/resume_locks.rs`, where the lock
-/// gate is driven against real files on disk.
+/// So the sweep is over the whole of `src/`, in the shape of `start_launch.rs`'s
+/// `retry_busy` walk: every `CliError::Gate(` construction, wherever it sits, is reported. A
+/// new site is not forbidden. It is a decision, and this test is where the decision has to
+/// be written down before it ships, beside the ladder in `lib.rs` and the sentence in
+/// `--help`.
 #[test]
 fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
     assert_eq!(
@@ -261,10 +258,9 @@ fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
             "a document this CLI could not parse",
             CliError::Internal("not written yet".into()),
         ),
-        // The same fact `goalcup seal` puts on rung 1, so `goalcup resume` puts it
-        // there too. A daemon still holding an entry after the retry is spent has decided
-        // nothing about this run, and one fact on two rungs is a number no script can
-        // branch on.
+        // The same fact `goalcup seal` puts on rung 1. A daemon still holding an entry after
+        // the retry is spent has decided nothing about this run, and one fact on two rungs
+        // is a number no script can branch on.
         (
             "a tracker still busy when the retry is spent",
             CliError::Refused("still busy after 3 attempts".into()),
@@ -375,12 +371,11 @@ fn version_and_help_print_on_stdout_and_exit_zero() {
 /// wrote the command" is not.
 ///
 /// **`--dry-run` is in the list on purpose.** It makes no call — `tests/seal_scan.rs` counts
-/// the mock's calls and finds none. A real seal resolves the client before the entry, the
-/// same order `goalcup resume` takes, because its first need is a daemon; a `--dry-run`
-/// resolves neither a client nor anything else the tracker owns, and the second half of this
-/// test is that difference. Everything past it — the scan, the self-check, the trace
-/// directory and the printed verifier line — is driven against the in-process mock in
-/// `tests/seal_scan.rs`.
+/// the mock's calls and finds none. A real seal resolves the client before the entry, because
+/// its first need is a daemon; a `--dry-run` resolves neither a client nor anything else the
+/// tracker owns, and the second half of this test is that difference. Everything past it (the
+/// scan, the self-check, the trace directory and the printed verifier line) is driven against
+/// the in-process mock in `tests/seal_scan.rs`.
 #[test]
 fn seal_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
     let cfg = support::empty_cfg();
@@ -561,18 +556,15 @@ fn start_and_doctor_skip_a_non_utf8_environment_pair_through_the_real_binary() {
     }
 }
 
-/// The default build has no verify mode (D42): `goalcup doctor` offers neither `--verify` nor
-/// the development flags, and its footer names only the exit codes a default build can leave under.
-/// The top-level footer no longer claims 2 is unreachable for a reason that is false.
+/// `goalcup doctor` has no verify mode (D48): it offers neither `--verify` nor the development
+/// flags, and its footer names only the exit codes this binary can leave under. The top-level
+/// footer no longer claims 2 is unreachable for a reason that is false.
 #[test]
-fn the_default_doctor_has_no_verify_mode_and_the_help_footers_say_so() {
+fn doctor_has_no_verify_mode_and_the_help_footers_say_so() {
     let out = goalcup().args(["doctor", "--help"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).unwrap();
-    assert!(
-        !text.contains("--verify"),
-        "no verify flag in a default build: {text}"
-    );
+    assert!(!text.contains("--verify"), "no verify flag (D48): {text}");
     let refused = goalcup()
         .args(["doctor", "--verify", "somewhere"])
         .output()
@@ -586,7 +578,7 @@ fn the_default_doctor_has_no_verify_mode_and_the_help_footers_say_so() {
     let top = String::from_utf8(top.stdout).unwrap();
     assert!(
         top.contains("2 is never this binary's, and neither is 4"),
-        "the default footer names 2 and 4 as V1-only: {top}"
+        "the footer names 2 and 4 as V1-only: {top}"
     );
     assert!(
         top.contains("goalcup-verify --capture-integrity"),
@@ -678,9 +670,9 @@ fn doctor_json_is_one_parseable_document_on_stdout_through_the_binary() {
 // The binary is the M2 capture CLI: five commands, and the removed V1 ones refuse by name
 // instead of vanishing into a clap usage error.
 
-/// The commands a default build lists, in order, and nothing else.
+/// The commands `goalcup --help` lists, in order, and nothing else.
 #[test]
-fn a_default_build_lists_the_five_capture_commands_and_nothing_else() {
+fn goalcup_lists_the_five_capture_commands_and_nothing_else() {
     for flag in ["-h", "--help"] {
         let out = goalcup().arg(flag).output().unwrap();
         assert!(out.status.success());
@@ -713,7 +705,7 @@ fn a_default_build_lists_the_five_capture_commands_and_nothing_else() {
 /// `auth`, `resume` and `ui` are hidden stubs: a refusal, rung 1, naming the removal (D48),
 /// written before any daemon or configuration is looked at.
 #[test]
-fn a_default_build_refuses_each_v1_command_by_name_and_never_panics() {
+fn goalcup_refuses_each_v1_command_by_name_and_never_panics() {
     let cfg = support::empty_cfg();
     for args in [
         vec!["auth"],
@@ -751,10 +743,10 @@ fn a_default_build_refuses_each_v1_command_by_name_and_never_panics() {
     }
 }
 
-/// A default `goalcup start` names its goal: the V1 path's flags are not in `--help`, and
-/// leaving `--goal-file` out is a usage error that says so.
+/// `goalcup start` names its goal: the V1 path's flags are not in `--help`, and leaving
+/// `--goal-file` out is a usage error that says so.
 #[test]
-fn a_default_start_requires_a_goal_file_and_offers_no_v1_flags() {
+fn goalcup_start_requires_a_goal_file_and_offers_no_v1_flags() {
     let out = goalcup().args(["start", "--help"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).unwrap();

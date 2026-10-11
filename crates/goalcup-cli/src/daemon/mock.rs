@@ -209,8 +209,9 @@ impl MockDaemonClient {
             // The page, with the entry id in the query, which is what
             // `goalcup_daemon::control::handlers` builds: `/v0/entries/current` is
             // authenticated and a browser has no token, so the daemon tells the page which
-            // entry it is looking at. `goalcup ui` opens this string byte for byte, so it must
-            // not be the signed status route, which no daemon puts on this field.
+            // entry it is looking at. The V1 `goalcup ui` (removed by D48) opened this string
+            // byte for byte, so it must not be the signed status route, which no daemon puts
+            // on this field.
             status_url: format!(
                 "http://127.0.0.1:53310{}?entry={entry_id}",
                 control::ROUTE_UI

@@ -13,8 +13,8 @@ use goalcup_daemon::terminate::terminate;
 use goalcup_protocol::manifest::KillStrategy;
 
 // The process-group escape helper, included directly by file path rather than through
-// `tests/support/mod.rs` — that module's `pub mod mock_server` pulls axum and tokio into
-// every binary that names it, which is exactly what `mod support` below already avoids.
+// `tests/support/mod.rs`: that module's devserver fixture pulls axum and tokio into every
+// binary that names it, which is exactly what `mod support` below already avoids.
 // `tests/support/mod.rs` also declares `pub mod tree;` (cfg(unix)) so any other test binary
 // that already pays for the full `support` module can reach the same file as
 // `support::tree`; this is the same source either way, just reached without the toll.

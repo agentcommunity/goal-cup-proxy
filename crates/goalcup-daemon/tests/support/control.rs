@@ -383,13 +383,13 @@ pub async fn capture_control_harness() -> CaptureControlHarness {
 /// [`empty_control_harness`] restarted over the same tree: a second daemon, rehydrating
 /// whatever rows the first one left.
 ///
-/// The started-entry harness has [`restart_control`]; this one is for the case of a
-/// registry row in the shape an older daemon wrote it, taken up by the current daemon.
-/// That row can only be planted after a create and can only be rehydrated by a restart, so
-/// the fixture has to be the empty one.
+/// This one is for the case of a registry row in the shape an older daemon wrote it, taken
+/// up by the current daemon. That row can only be planted after a create and can only be
+/// rehydrated by a restart, so the fixture has to be the empty one.
 ///
-/// The bearer is re-read for [`restart_control`]'s reason: `Daemon::start` mints a fresh
-/// control token every time and writes it into `control.json`.
+/// The bearer is re-read because `Daemon::start` mints a fresh control token every time and
+/// writes it into `control.json`; a harness holding the old one would get a `401` from every
+/// authenticated route.
 pub async fn restart_empty_control(h: EmptyControlHarness) -> EmptyControlHarness {
     restart_empty_control_planting(h, |_| {})
         .await

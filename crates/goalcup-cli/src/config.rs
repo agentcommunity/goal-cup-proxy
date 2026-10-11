@@ -15,7 +15,7 @@
 //! | Path | Written by | Held here |
 //! |---|---|---|
 //! | `control.json` | the daemon | [`read_control_file`] reads it; the CLI never writes it |
-//! | `grant.json` | `goalcup auth` | [`grant_path`], at mode 0600 |
+//! | `grant.json` | the V1 `goalcup auth` (removed by D48) | [`grant_path`], at mode 0600 |
 //! | `entries/` | the CLI | one record per entry `goalcup start` created |
 
 use crate::CliError;
@@ -39,7 +39,8 @@ pub const DEFAULT_CONFIG_DIR_NAME: &str = "goalcup";
 /// daemon's: `crates/goalcup-daemon/src/control/file.rs`.
 pub const CONTROL_FILE_NAME: &str = "control.json";
 
-/// The grant `goalcup auth` stores. A secret, so it is written by [`write_secret_file`].
+/// The grant the V1 `goalcup auth` stored (D48 removed it). A secret, so it is written by
+/// [`write_secret_file`].
 pub const GRANT_FILE_NAME: &str = "grant.json";
 
 /// The most of `control.json` [`read_control_file`] will read.
@@ -175,7 +176,7 @@ fn non_empty_var(name: &str) -> Option<String> {
 
 // ------------------------------------------------------------------ the paths in it
 
-/// `<cfg>/grant.json` — the grant `goalcup auth` stored.
+/// `<cfg>/grant.json`, the grant the V1 `goalcup auth` stored.
 pub fn grant_path(cfg: &Path) -> PathBuf {
     cfg.join(GRANT_FILE_NAME)
 }

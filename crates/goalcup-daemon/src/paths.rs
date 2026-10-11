@@ -40,7 +40,7 @@ pub struct PathVars {
     pub artifact_root: PathBuf,
     /// Known only once the session is bound; until then `{session_id}` renders as `*`,
     /// which the glob expander then matches against every session file. That is what a
-    /// tailer wants before the session binds, and it is deliberately not an empty string:
+    /// store reader wants before the session binds, and it is deliberately not an empty string:
     /// an empty segment would name a file that cannot exist and match nothing, silently.
     pub session_id: Option<String>,
     /// `(yyyy, mm, dd)` for the date-partitioned tree Codex writes. Passed in rather than
@@ -65,8 +65,9 @@ impl PathVars {
     ///
     /// The one constructor, so [`PathVars::workspace_canonical`] can be a field rather than
     /// a filesystem call every render answers differently. A caller that wants a variant of
-    /// an existing `PathVars` — [`crate::foreign`]'s undated one — clones and overwrites the
-    /// fields it means to change, which keeps the canonical spelling the original resolved.
+    /// an existing `PathVars` (the V1 foreign scan's undated one, before D48 removed it)
+    /// clones and overwrites the fields it means to change, which keeps the canonical
+    /// spelling the original resolved.
     pub fn new(
         workspace: PathBuf,
         home: PathBuf,
@@ -76,7 +77,7 @@ impl PathVars {
         date: (String, String, String),
     ) -> PathVars {
         // The fallback is the raw path, which is what a workspace that does not exist yet
-        // has to render as — and what `EntryRuntime::new` makes of its own copy.
+        // has to render as.
         let workspace_canonical =
             std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         PathVars {
@@ -101,10 +102,10 @@ impl PathVars {
     /// zero.
     ///
     /// Resolved here, in the one place both tokens are read, rather than left to each construction
-    /// site: `EntryRuntime::new` already canonicalises its own copy for the partitioner
-    /// (`partition::tracked_for`'s byte-exact contract), and two answers to how the workspace is
-    /// spelled is the defect itself. A site that canonicalises before building its `PathVars` makes
-    /// this a no-op; one that does not is still correct.
+    /// site: the V1 per-entry runtime canonicalised its own copy for its partitioner (both
+    /// removed by D48), and two answers to how the workspace is spelled is the defect itself.
+    /// A site that canonicalises before building its `PathVars` makes this a no-op; one that
+    /// does not is still correct.
     ///
     /// **Resolved once, at construction, and never re-derived.** `std::fs::canonicalize` is
     /// fallible, and calling it fresh on every render would make the answer depend on when it is
@@ -238,8 +239,9 @@ pub enum ForeignGlobResult {
     Unavailable(ForeignScanUnavailableReason),
 }
 
-/// The foreign-scan variant of [`expand_globs`]. It keeps ordinary tailer behavior intact
-/// while making every discovery failure and the cap visible to the coverage event.
+/// The foreign-scan variant of [`expand_globs`]. It keeps ordinary glob behavior intact
+/// while making every discovery failure and the cap visible to the coverage event. Its V1
+/// foreign-scan caller was removed by D48; only this module's tests call it now.
 pub fn expand_foreign_glob(pattern: &str, max_paths: usize) -> ForeignGlobResult {
     let path = Path::new(pattern);
     let mut frontier = Vec::new();
@@ -555,8 +557,8 @@ mod tests {
              cannot avoid once the directory is gone"
         );
 
-        // A clone agrees, which is the property `EntryRuntime` needs: it clones its own
-        // `vars` freely, and two clones disagreeing about the one workspace they both name
+        // A clone agrees, which is the property a caller that clones its `vars` freely
+        // needs: two clones disagreeing about the one workspace they both name
         // would be the same defect one instance disagreeing with itself over time is.
         assert_eq!(
             vars.clone().workspace_canonical(),

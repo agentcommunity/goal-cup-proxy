@@ -161,8 +161,8 @@ pub struct TrackerFile {
     pub restore_invalidates_trust: bool,
     /// `hook_install[].harness_owned`, carried here because the two things it decides
     /// happen in two crates: [`rendered`] writes this file only when it is not already
-    /// there, and [`crate::configwatch::ConfigWatch::new`] leaves it off the watch
-    /// entirely. See `goalcup_protocol::manifest::HookInstall::harness_owned` for why a
+    /// there, and the V1 config watch (removed by D48) left it off the watch entirely.
+    /// See `goalcup_protocol::manifest::HookInstall::harness_owned` for why a
     /// connector asks for it.
     ///
     /// It is not a third state of `restore_invalidates_trust`: an unwatched file is never
@@ -184,8 +184,8 @@ impl Installation {
     /// The installation a caller already holding the rendered files describes.
     ///
     /// **The one derivation of `workspace_relative`.** `render_tracker_files` finishes
-    /// here, and so does a runtime rebuilding its exclusion union from the files it was
-    /// handed (`EntryRuntime::new`), so the list the seal excludes and the list the public
+    /// here, as did the V1 per-entry runtime rebuilding its exclusion union from the files
+    /// it was handed (removed by D48), so the list the seal excludes and the list the public
     /// entry discloses cannot come apart. A second `filter(scope == Workspace)` written
     /// somewhere else is how the union becomes a subset.
     pub fn from_files(files: Vec<TrackerFile>) -> Installation {
@@ -419,12 +419,12 @@ pub fn render_tracker_files(
 /// `render_tracker_files` with the writes left out: the same two passes over the same
 /// templates, answering the same [`Installation`], and touching no file at all.
 ///
-/// The one caller is `Daemon`'s startup rehydration. A restarted daemon has to hand
-/// [`crate::runtime::EntryRuntime::new`] the bytes the tracker rendered at launch — the
-/// config watch compares against them and restores from them, and
-/// [`exclusion_union`] is built from their paths — and the registry keeps no copy of them.
-/// Rendering them again from the shipped templates and the entry's own variables is how
-/// they come back.
+/// The one caller was the V1 daemon's startup rehydration, which D48 removed; nothing in
+/// this tree calls it now. A restarted V1 daemon had to hand its per-entry runtime the
+/// bytes the tracker rendered at launch (the config watch compared against them and
+/// restored from them, and [`exclusion_union`] is built from their paths), and the registry
+/// keeps no copy of them. Rendering them again from the shipped templates and the entry's
+/// own variables is how they came back.
 ///
 /// **It must not write.** The writing variant is the tracker installing its files; this
 /// one runs on a daemon whose entry has been live for hours, and a write here would put

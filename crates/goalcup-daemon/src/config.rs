@@ -37,7 +37,8 @@ pub struct DaemonConfig {
     /// Where signed chunks go. **Loopback cleartext, or refused**: nothing in this build
     /// terminates TLS, so `validate()` refuses `https` by name and refuses `http` to any host
     /// but 127.0.0.0/8, `localhost` or `[::1]`.
-    /// The rule itself lives on `receipt::split_url`, which is what actually connects.
+    /// The rule itself lived on the V1 `receipt::split_url`, which connected; D48 removed it,
+    /// so nothing in this tree connects to this URL now.
     /// Omit this and `server_public_key` together for a service-free v5 installation.
     #[serde(default)]
     pub upload_url: String,

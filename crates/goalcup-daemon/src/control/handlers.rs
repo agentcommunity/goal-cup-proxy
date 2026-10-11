@@ -397,13 +397,14 @@ fn is_capture_row(state: &ControlState, id: &str) -> Result<bool, DaemonError> {
 ///
 /// An empty `argv` is not refused. `terminate`'s guard has two halves — the pid's age and
 /// the program `ps` names among its arguments — and a handle with no argv leaves only the
-/// first; the tree already carries that case as `SealReport::guard_degraded`, which reports
+/// first; the tree already carries that case as `TerminationReport::guard_degraded`, which reports
 /// the weaker guard rather than pretending the launch never happened.
 ///
 /// **A second registration is a `409` while a handle stands**, raised inside
 /// `Daemon::register_process`: the handle is what `harness_alive` measures and what the
-/// seal terminates, so a decoy posted on the loopback would redirect both. A resume is what
-/// clears it — see [`resume_entry`] — and the relaunched harness then registers once.
+/// seal terminates, so a decoy posted on the loopback would redirect both. Only the V1
+/// resume cleared it, and D48 removed that: a capture entry cannot be resumed, so its
+/// harness registers once.
 pub(super) async fn register_process(
     State(state): State<ControlState>,
     Path(id): Path<String>,

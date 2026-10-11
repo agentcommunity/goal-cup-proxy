@@ -8,7 +8,7 @@ mod support;
 // ------------------------------------------------------------- the command
 
 #[test]
-fn the_shared_entry_retry_is_wired_only_to_the_nine_safe_runtime_routes() {
+fn the_shared_entry_retry_is_wired_only_to_the_abandon_route_in_start() {
     let mut inventory = std::collections::BTreeMap::<String, usize>::new();
     let source_root = support::repo_root().join("crates/goalcup-cli/src");
     for path in support::walk("crates/goalcup-cli/src") {

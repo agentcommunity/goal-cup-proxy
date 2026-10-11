@@ -189,9 +189,8 @@ fn start_new_event_binary() -> (RunningServer, String) {
         }
     });
     let addr = rx
-        // Match the real-binary gate allowance in `tests/support/gate.rs`: a listener line
-        // can take more than ten seconds; the receipt assertions begin only after the child
-        // reports the bound socket.
+        // A listener line from the real binary can take more than ten seconds; the receipt
+        // assertions begin only after the child reports the bound socket.
         .recv_timeout(std::time::Duration::from_secs(60))
         .unwrap_or_else(|e| {
             let status = server.child.try_wait().ok().flatten();

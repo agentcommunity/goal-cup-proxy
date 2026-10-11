@@ -3,8 +3,8 @@
 //!
 //! The status document is `goalcup_protocol::control::StatusPayload` — the daemon defines
 //! no second shape — so the fixture builds that type and nothing else. `health_status.rs`
-//! reads all of it; `entry_lifecycle.rs` and `control_api.rs` read the
-//! payload half, which is why it lives here rather than inline in one test file.
+//! reads all of it; `control_api.rs` reads the payload half, which is why it lives here
+//! rather than inline in one test file.
 
 use goalcup_daemon::arming::GateState;
 use goalcup_daemon::health::{HealthInputs, HealthPolicy};

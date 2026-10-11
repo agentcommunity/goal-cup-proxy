@@ -245,10 +245,8 @@ fn capture_words(snapshot: &M2Status) -> &'static str {
 /// A reader is not asked to work any of that out: [`StatusPayload::event_status_source`] is
 /// `fallback` on exactly the documents this built.
 ///
-/// **This is the one definition, and `EntryRuntime::new` holds a copy of it.** The copy is
-/// the value a runtime carries until a construction site calls
-/// [`crate::runtime::EntryRuntime::set_event_status`], which `control::build_entry` does
-/// unconditionally. The two agree, and `tests/event_status.rs` is what proves they do.
+/// **This is the one definition.** The V1 per-entry runtime held a copy of it, and D48
+/// removed that runtime with its tests, so every caller left is in this module.
 pub fn fallback_event_status(entry: &Entry) -> EventStatus {
     EventStatus {
         t0: entry.created_at.clone(),
@@ -266,7 +264,7 @@ pub fn fallback_event_status(entry: &Entry) -> EventStatus {
 /// `publication_closes_at` is taken from the entry in every case: it is the deadline the
 /// receipt fixed, and that is immutable. A caller that restated a stored
 /// `publication_closes_at` verbatim would regress it to `created_at`, because `deadline_at`
-/// is `None` until `commit_start` sets it — later than the round is resolved.
+/// is `None` until a start receipt sets it, which is later than the round is resolved.
 pub fn event_status_from(entry: &Entry, configured: Option<&EventStatus>) -> EventStatus {
     let fallback = fallback_event_status(entry);
     match configured {
@@ -296,7 +294,7 @@ pub fn event_status_for(entry: &Entry, configured: Option<&EventConfig>) -> Even
 ///
 /// Derived rather than carried. `EventStatus` is the only channel between the construction
 /// site that knows the answer and the document, and it is a `goalcup-protocol` struct built
-/// by a literal in `runtime.rs`; a fifth field on it would be a field that literal does not
+/// by the literals in this module; a fifth field on it would be a field those literals do not
 /// set. So the three fields `[event]` supplies are compared against what the fallback would
 /// have put there, on `created_at` and `DAEMON_VERSION`, both of which are fixed for the life
 /// of the entry — `publication_closes_at` is deliberately not compared, because the deadline
@@ -326,7 +324,7 @@ pub fn sign_payload(
     Ok(SignedStatus::sign(payload, cached_at, key)?)
 }
 
-/// Re-publish a capture-closed row without reconstructing tailers or parsing the current
+/// Re-publish a capture-closed row without reconstructing a runtime or parsing the current
 /// connector manifest. This is the only status path for an evicted sealed drain and an
 /// unreconciled sealing quarantine; both facts are already durable in the registry.
 pub fn compose_capture_closed(entry: &Entry, now: f64) -> Result<SignedStatus, DaemonError> {
@@ -977,8 +975,8 @@ pub fn summary(entry: &Entry, arming: GateState, health: HealthState) -> EntrySu
 /// The health state in plain words. No enum names, no jargon, and every line says what — if
 /// anything — the participant should do about it.
 ///
-/// `started` is `Entry::started_at.is_some()` — the entry's own row, and the same question
-/// [`crate::runtime::Daemon::evict_if_drained`] asks. Reading `arming != Started` instead
+/// `started` is `Entry::started_at.is_some()`, the entry's own row and the same question
+/// the V1 drain eviction asked before D48 removed it. Reading `arming != Started` instead
 /// would disagree on exactly one entry — one that started, sealed, and whose gate was
 /// rebuilt `pending` by a daemon restart — and that entry would read "sealed, never
 /// started — nothing to upload" over a run with a chain full of records. `started_at` is

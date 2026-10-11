@@ -305,7 +305,7 @@ fn an_upload_url_that_is_not_http_is_refused_by_name() {
 #[test]
 fn the_optional_event_section_is_absent_complete_and_in_order() {
     // Absent is the normal case: no round configured, and the status document falls back to
-    // the entry's own timeline while saying that it has (`tests/event_status.rs`).
+    // the entry's own timeline while saying that it has.
     let none = DaemonConfig::from_toml_str(&base("")).unwrap();
     assert!(none.event.is_none());
 

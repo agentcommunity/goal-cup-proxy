@@ -1,13 +1,14 @@
 //! The launch recipe, rendered: the exact argv, the exact environment delta, the exact
 //! working directory — and the handle the daemon finishes the job with (D22).
 //!
-//! # `plan()` is pure, and that is what makes `--print-launch` real
+//! # Building a plan is pure
 //!
-//! [`plan`] takes a manifest, a variable map, a directory and the environment the child will
-//! start from, and returns a [`LaunchPlan`]. It spawns nothing, reads no environment variable
-//! of its own and touches no disk. That is what lets `goalcup start --print-launch` print the
-//! line a participant would run without running it, and what lets every pin in this file be
-//! tested on a machine with no harness installed.
+//! [`build_capture_launch`] takes a connector, a variable map, a directory and the
+//! environment the child will start from, and returns a [`LaunchPlan`]. It spawns nothing,
+//! reads no environment variable of its own and touches no disk. That is what lets every pin
+//! in this file be tested on a machine with no harness installed. The V1 builder `plan` was
+//! pure the same way, which is what let the V1 `goalcup start --print-launch` print a line
+//! without running it; D48 removed both.
 //!
 //! # The environment is subtraction, never addition
 //!
@@ -18,12 +19,13 @@
 //! not what happened to be exported in the shell that ran `spawn`.
 //!
 //! The subtraction happens at two moments and both are here. [`scrubbed_env`] takes the D23
-//! denylist out of the parent environment — anything ending `_BASE_URL`, anything ending
-//! `_PROXY`, and a bare `PROXY` — before [`plan`] ever sees it, which is the same rule
+//! denylist out of the parent environment (anything ending `_BASE_URL`, anything ending
+//! `_PROXY`, and a bare `PROXY`) before a plan is built from it, which is the same rule
 //! [`crate::preflight::probe_env`] applies to the one child the preflight spawns. Then
-//! [`LaunchPlan::env_remove`] takes the connector's own names out on top. `plan` stays pure
-//! by taking the already-scrubbed map as an argument: reading `std::env` here would put the
-//! participant's whole environment inside the function `--print-launch` calls.
+//! [`LaunchPlan::env_remove`] takes the connector's own names out on top. A plan builder
+//! stays pure by taking the already-scrubbed map as an argument: reading `std::env` there
+//! would put the participant's whole environment inside a function that only describes a
+//! launch.
 //!
 //! Both removals and not either alone. `preflight.banned_env` refuses a start under one of
 //! these variables and the launch strips it anyway, because "refused" is a message a
@@ -44,9 +46,9 @@
 //! (D38, D39). Its environment is built from nothing rather than subtracted, and it pins
 //! the passive **loopback** recording proxy through process-scoped `HTTPS_PROXY` — the M2
 //! reservation AGENTS.md names — plus the profile's process-scoped CA variable. It still
-//! never sets a model base URL, and [`plan`] above is unchanged by it. Headless as it is, its
-//! child stays in the launcher's process group: the daemon never confirms a group ended
-//! (D30), and there a Ctrl-C typed at the terminal reaches it.
+//! never sets a model base URL. Headless as it is, its child stays in the launcher's
+//! process group: the daemon never confirms a group ended (D30), and there a Ctrl-C typed
+//! at the terminal reaches it.
 //!
 //! # The three modes differ in exactly one place
 //!
@@ -65,9 +67,9 @@
 //! empty one, whatever the launch mode: `--port ""` is a harness started on nothing, and the
 //! daemon reserving no port is a bug worth naming.
 //!
-//! [`LaunchMode::AttachOnly`] builds no plan at all. Attach mode arms the folder and the
-//! participant opens a session in it; there is no argv, so [`plan`] refuses rather than
-//! inventing one.
+//! [`LaunchMode::AttachOnly`] builds no plan at all. In V1, attach mode armed the folder and
+//! the participant opened a session in it; there was no argv, so the V1 `plan` refused it
+//! rather than inventing one. A capture plan is always [`LaunchMode::Server`].
 //!
 //! # `handle()` is separate from `spawn()`
 //!
@@ -99,7 +101,7 @@
 //! that hole**: it exits when the TUI exits, and the run has 167 more hours to go. What it
 //! owes the daemon is enough recorded truth to make the continuing check possible, and that
 //! truth is three fields on [`ProcessHandle`] — `program`, `argv` and `env_keys`. The daemon's
-//! `EntryRuntime::same_process` compares a live command line against them; `env_keys` is
+//! `terminate::same_process` compares a live command line against them; `env_keys` is
 //! names only and never values, because a process's environment is not portably readable
 //! after the fact and because one of those values is this run's bearer token.
 //!
@@ -165,8 +167,8 @@ pub struct LaunchPlan {
     pub cwd: PathBuf,
     pub mode: LaunchMode,
     pub kill: Kill,
-    /// Set only by [`build_capture_launch`]: a headless capture launch. `None` on every plan
-    /// [`plan`] builds, whose behaviour is unchanged by this field.
+    /// Set by [`build_capture_launch`], the one builder left: a headless capture launch. The
+    /// V1 `plan`, removed by D48, left it `None`.
     pub capture: Option<HeadlessCapture>,
 }
 
@@ -323,10 +325,11 @@ impl fmt::Debug for Keys<'_> {
 /// not receive it, which is the same thing that happens to every other variable this launch
 /// does not carry across, and it is visible on the plan rather than silent.
 ///
-/// Here rather than inside one command, because `goalcup start` and `goalcup resume` both
-/// build a plan from it and a relaunch that read the environment a different
-/// way would be exactly the difference between a run's two halves that this module exists to
-/// prevent. It is not called by [`plan`], which stays pure by taking the map as an argument.
+/// Here rather than inside one command, because every command that builds a plan has to read
+/// the environment the same way. The V1 `goalcup resume` (removed by D48) built one too, and
+/// a relaunch that read the environment a different way would have been exactly the
+/// difference between a run's two halves that this module exists to prevent. It is not
+/// called by [`build_capture_launch`], which stays pure by taking the map as an argument.
 pub fn process_env() -> BTreeMap<String, String> {
     std::env::vars_os()
         .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
@@ -407,8 +410,9 @@ fn needs_a_port_it_has(
     if !named {
         return Ok(());
     }
-    // `vars::build` renders an unreserved port as the empty string deliberately, so that
-    // this refusal can exist rather than a number being invented there.
+    // The V1 `vars::build` (removed by D48) rendered an unreserved port as the empty string
+    // deliberately, so that this refusal could exist rather than a number being invented
+    // there. A map with no `server_port` at all reads the same.
     if v.get("server_port").unwrap_or("").is_empty() {
         return Err(CliError::Refused(format!(
             "`{id}`'s launch recipe renders `{PORT}`, and no port was reserved for this \
@@ -1066,17 +1070,18 @@ fn owns_its_group(mode: LaunchMode) -> bool {
     match mode {
         LaunchMode::Tui => false,
         LaunchMode::Server => true,
-        // Unreachable through `plan`, which refuses this mode. Answered rather than
-        // panicked, because a `match` that cannot fail is worth more than an arm that can.
+        // Unreachable: a capture plan is always `Server`, and the V1 `plan` refused this
+        // mode. Answered rather than panicked, because a `match` that cannot fail is worth
+        // more than an arm that can.
         LaunchMode::AttachOnly => false,
     }
 }
 
-/// The line `--print-launch` prints.
+/// The launch as one shell line, the form the V1 `--print-launch` printed (D48 removed it).
 ///
-/// Shell-quoted, because this one *is* shell-bound: `vars` hands out byte-exact values and
-/// says quoting belongs to whoever gives the string to something that parses it, and this
-/// is that place. The spawned child is not affected — [`spawn`] passes each element to
+/// Shell-quoted, because this one *is* shell-bound: template values are byte-exact, quoting
+/// belongs to whoever gives the string to something that parses it, and this is that
+/// place. The spawned child is not affected: [`spawn`] passes each element to
 /// `Command::arg` and no shell sees it at all.
 ///
 /// **A `*_TOKEN` pin is withheld, and the line says so instead of standing in for it.**
@@ -1741,11 +1746,10 @@ fn build_handle(
         // process's environment is not portably readable after the fact anyway — what the
         // daemon can check is that a pinned key is still there.
         env_keys: p.env_set.keys().cloned().collect(),
-        // Filled in by the caller and never here: the seeding happened
-        // before the spawn, in the command that ran it, and this function is handed a child
-        // and a launch plan rather than the connector's `[home_seed]`. A command that seeded
-        // assigns its record onto the handle before `register_process`; one that did not
-        // leaves this `None`.
+        // Never filled in here: this function is handed a child and a launch plan rather
+        // than a connector's `[home_seed]`. A capture launch seeds nothing and the daemon
+        // refuses a capture registration that carries a seed record, so this stays `None`.
+        // The V1 seeding that set it was removed by D48.
         home_seed: None,
     })
 }

@@ -109,17 +109,16 @@ pub struct EntryRecord {
     pub run_public_key: String,
     pub workspace: String,
     pub artifact_root: String,
-    /// `harness_home`, `session_id` and `last_pid` are here because `goalcup resume` runs
-    /// `check_locks` before it posts the resume — the daemon refuses a held lock itself and
-    /// returns an error carrying no findings, so the CLI must be able to resolve
-    /// `{config_dir}`/`{home}`/`{workspace}` and ask whether the holder is still alive from
-    /// its own record. None of the three is a secret.
+    /// `harness_home`, `session_id` and `last_pid` are here because the V1 `goalcup resume`
+    /// (removed by D48) ran `check_locks` before it posted the resume: the daemon refuses a
+    /// held lock itself and returns an error carrying no findings, so the CLI had to be able
+    /// to resolve `{config_dir}`/`{home}`/`{workspace}` and ask whether the holder was still
+    /// alive from its own record. None of the three is a secret.
     pub harness_home: String,
     pub session_id: String,
     /// The pid of the last `ProcessHandle` this CLI registered — written after
-    /// `register_process` by `goalcup start` and rewritten by `goalcup resume` after its
-    /// own. `None` until something has been spawned, which is every attach-mode run and
-    /// every `--print-launch`.
+    /// `register_process` by `goalcup start` (and, in V1, rewritten by `goalcup resume` after
+    /// its own). `None` until something has been spawned.
     pub last_pid: Option<u32>,
     /// The daemon's own list, kept so `goalcup seal` can build the exclusion set after
     /// `start` has exited.

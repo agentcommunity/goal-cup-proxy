@@ -1,20 +1,5 @@
-//! A real [`Daemon`], one `claude-code-cli` entry inside it, one file
-//! the agent wrote and one live child process for the seal to end.
-//!
-//! Where `support::entry` builds a single [`EntryRuntime`] and drives it by hand, this
-//! builds the process-level object: the registry the daemon opened, the two loopback
-//! listeners it bound, and the entry map it routes by workspace. Nothing here sleeps and
-//! nothing waits on a background task — `Daemon::seal_entry` and `Daemon::seal_due_entries`
-//! are synchronous, and the one clock they read is the wall clock, which is why the
-//! deadline is moved in the registry rather than by waiting for one.
-//!
-//! # The connector is `claude-code-cli`, and that is not arbitrary
-//!
-//! The seal's exclusion union is the assertion this harness exists for, and Claude is the
-//! connector whose tracker writes a file into the workspace (`.claude/settings.json`).
-//! Codex writes none, so a codex entry could not tell "the union the daemon applied" apart
-//! from "the connector's `workspace_exclusions[]`" — which is exactly the subset the protocol
-//! refuses.
+//! The daemon's own configuration for a run rooted in a temporary directory, and a stand-in
+//! for the harness process the CLI launched, with the process handle that names it.
 
 #![allow(dead_code)]
 

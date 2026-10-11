@@ -341,8 +341,8 @@ impl DevServer {
     /// `--key-seed <hex>`: sign with some other 32-byte seed. The ONLY code path in this
     /// crate that touches a key the verifier does not pin, and the only reason a caller
     /// ever needs `--dev-key` / `extra_server_keys`. A run signed this way records
-    /// `key_source: "supplied"` and V13 raises `server_key_unpinned` — by design, and
-    /// exercised once in `dev_key.rs` so the unpinned path is not merely asserted in prose.
+    /// `key_source: "supplied"` and V13 raises `server_key_unpinned`, by design. The V1
+    /// `tests/dev_key.rs` exercised that path until D48 removed it with the V1 tests.
     pub fn with_seed(seed: [u8; 32]) -> DevServer {
         DevServer::from_key(SigningKey::from_bytes(&seed), ReceiptAuthority::Legacy)
     }

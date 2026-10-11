@@ -76,7 +76,7 @@ still parses the retained `manifest.toml` compatibility files in the Codex and C
 directories at startup; removing that parser dependency is ticket OS-29, not completed work.
 
 Narrower runs use the same runner, for example `cargo test -p goalcup-daemon`. Add
-`--test <file>` for one integration file. **CLI and devserver tests spawn the sibling
+`--test <file>` for one integration file. **CLI tests spawn the sibling
 `target/debug/goalcup-daemon`**, so run `cargo build --workspace` before a narrow
 `-p goalcup-cli` run.
 

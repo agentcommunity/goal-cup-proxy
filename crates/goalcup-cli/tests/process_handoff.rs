@@ -72,10 +72,8 @@ fn this_crate_never_terminates_anything() {
     // child's native descendant bound by creation identity, never anything recorded, and
     // `goalcup_daemon::terminate` stays the only terminator of a recorded run.
     //
-    // The `start.rs` exemption stays ONE file, which is why `commands::start::kill` is `pub(crate)`:
-    // `goalcup resume` reaches the same state — a relaunched harness the daemon would not
-    // accept — and calls that function rather than growing a second copy of the group walk
-    // in `commands/resume.rs`, which this sweep would then have had to exempt as well.
+    // The `start.rs` exemption stays ONE file: a second file that signals a launched harness
+    // would have to be exempted here as well, by name.
     //
     // A NEW file that signals is still caught, which is the whole point of the sweep.
     //

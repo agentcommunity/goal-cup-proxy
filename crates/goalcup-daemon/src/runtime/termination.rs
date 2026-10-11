@@ -16,7 +16,7 @@ use goalcup_protocol::provenance::{
 };
 
 /// End `handle`'s tree, walking at most `walk_cap` processes, and say what the measurement
-/// established: `Confirmed` exactly as [`terminate_for_finalization`] defines it,
+/// established: `Confirmed` exactly as the module doc above defines it,
 /// `AlreadyStopped` only after asking, and `Unresolved` for everything else.
 #[cfg(unix)]
 pub(super) fn terminate_handle(

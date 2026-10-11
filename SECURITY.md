@@ -72,9 +72,9 @@ reviewed by a code owner against the checklist in
 an unreviewed build must not be run. The source tree contains exactly three pinned
 schema-1 directories (`codex-cli`, `claude-code-cli`, `hermes-cli`). The private `m2-pilot` macOS
 package allowlist selects only Codex and Claude and copies each selected directory whole, including
-seeds and its retained V1 `manifest.toml`; a source pin does not prove package inclusion. Default
-builds exclude V1 execution but still parse those two compatibility manifests at startup. Full
-removal is deferred to ticket OS-29.
+seeds and its retained V1 `manifest.toml`; a source pin does not prove package inclusion. The
+build has no V1 execution path (D48) but still parses those two compatibility manifests at
+startup. Full removal is deferred to ticket OS-29.
 
 ## Guarantees the code aims to keep
 

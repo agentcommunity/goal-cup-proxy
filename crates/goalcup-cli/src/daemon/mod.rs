@@ -524,8 +524,7 @@ pub fn seal_capture_following_restart(
 /// The response body, up to [`MAX_RESPONSE_BYTES`], or a refusal naming the cap.
 ///
 /// One byte past the cap, so a body exactly at it still reads and anything larger is caught
-/// having read the cap and no more — the shape `config::read_control_file` and
-/// `commands::auth` both use.
+/// having read the cap and no more: the shape `config::read_control_file` also uses.
 fn read_bounded(url: &str, response: ureq::Response) -> Result<String, ControlError> {
     use std::io::Read;
 

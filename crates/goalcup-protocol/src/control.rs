@@ -91,7 +91,7 @@ pub const SUFFIX_ABANDON: &str = "abandon";
 /// See [`SUFFIX_ARM`].
 pub const SUFFIX_RESUME: &str = "resume";
 
-/// See [`SUFFIX_ARM`]. The read-only launch-pin answer for `resume --print-launch`.
+/// See [`SUFFIX_ARM`]. The read-only launch-pin answer the V1 `resume --print-launch` read.
 pub const SUFFIX_RESUME_PREVIEW: &str = "resume-preview";
 
 /// See [`SUFFIX_ARM`].
@@ -269,7 +269,8 @@ pub struct WorkspaceOpts {
     /// looks: a daemon that honoured this in good faith would turn a participant's number
     /// into the run's window.
     pub deadline_hours: u32,
-    /// The grant `goalcup auth` stored. The daemon exchanges it with the server.
+    /// The grant the V1 `goalcup auth` stored (D48 removed the command). The V1 daemon
+    /// exchanged it with the server.
     pub grant_token: String,
     /// Third and last step of the arming-timeout precedence chain documented on
     /// `manifest::Arming`: manifest default, daemon-config override, CLI flag. `None`
@@ -297,7 +298,7 @@ pub struct WorkspaceOpts {
 /// Every field as a derive would print it, except `grant_token`, which prints
 /// `<redacted>`. `WorkspaceOpts` reaches the daemon's request log and is interpolated
 /// into `ControlError::PreflightFailed`; a `{:?}` that carried the grant would hand a
-/// reader the credential `goalcup auth` stored, which is the one that exchanges for
+/// reader the credential the V1 `goalcup auth` stored, which is the one that exchanges for
 /// everything else.
 impl std::fmt::Debug for WorkspaceOpts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -817,7 +818,8 @@ pub struct ResumeInfo {
     pub last_process: Option<ProcessHandle>,
 }
 
-/// The immutable launch pins a `goalcup resume --print-launch` needs.
+/// The immutable launch pins the V1 `goalcup resume --print-launch` needed. D48 removed
+/// that command, and the daemon now refuses the preview route.
 ///
 /// Unlike [`ResumeInfo`], obtaining this answer does not poll the capture receiver or
 /// clear the registered process handle. Keep it deliberately limited to the seven values a

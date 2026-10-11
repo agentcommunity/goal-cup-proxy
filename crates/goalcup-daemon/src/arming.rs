@@ -19,8 +19,9 @@
 //!
 //! # The four live states are `control::ArmingState`
 //!
-//! The gate, the control API, the status page and `goalcup status` name them identically,
-//! so there is one vocabulary rather than a translation table. [`GateState::Refused`]
+//! The gate, the control API and `goalcup status` name them identically (as the V1 status
+//! page, removed by D48, did), so there is one vocabulary rather than a translation table.
+//! [`GateState::Refused`]
 //! carries a [`RefusalReason`] the wire's `ArmingState::Refused` does not — `detail` is
 //! still the sentence for a human reader; the wire variant is what lets a machine reader
 //! tell "will never arm" apart from "still pending". The entry the gate
@@ -31,9 +32,10 @@
 //! The goal-length gate keys on `EntryState::Armed | StartSignalSeen` — the states before
 //! `started_at` exists — so an entry carrying a `started_at` under a pre-goal state would
 //! have the goal-length rule applied to every later prompt of the run. The registry side of
-//! that pairing is [`crate::receipt::record_start`], which writes both in one transaction
-//! and asserts it; this side is [`ArmingGate::mark_started`], which is the only way into
-//! [`GateState::Started`] and refuses unless both facts are in.
+//! that pairing was the V1 start-receipt writer (`receipt::record_start`, removed by D48),
+//! which wrote both in one transaction and asserted it; this side is
+//! [`ArmingGate::mark_started`], which is the only way into [`GateState::Started`] and
+//! refuses unless both facts are in.
 
 use crate::DaemonError;
 use goalcup_protocol::control::ArmingState;
@@ -48,7 +50,8 @@ pub enum RefusalReason {
     /// The window closed without the declared signal arriving at all.
     StartSignalMissing,
     /// The harness home already holds a session working in a tracked workspace.
-    /// Raised by [`crate::foreign::pre_arm_scan`], before an entry is armed at all.
+    /// Raised by the V1 pre-arm scan, before an entry was armed at all. D48 removed that
+    /// scan, so nothing in this tree raises it now.
     HarnessHomeOccupied,
 }
 
@@ -104,9 +107,10 @@ pub struct ArmingGate {
     /// **The provenance of the corroboration.** The chained sequence number of the leg-1
     /// record that corroborated, and the session it belongs to. Held because a gate that could
     /// only say "a record arrived" produces a `started_at` that nothing in the chain points back
-    /// at, and because [`crate::receipt::record_start`] takes the receipt's `session_id` from
-    /// here rather than from a caller's argument: the session the run is recorded under is the
-    /// one the daemon watched a record arrive in, not one a caller named.
+    /// at, and because the V1 start-receipt writer (`receipt::record_start`, removed by D48)
+    /// took the receipt's `session_id` from here rather than from a caller's argument: the
+    /// session the run is recorded under is the one the daemon watched a record arrive in,
+    /// not one a caller named.
     leg1_seq: Option<u64>,
     session_id: Option<String>,
 }
@@ -146,12 +150,12 @@ impl ArmingGate {
     /// run this daemon started is exactly right and on a run a previous daemon started is a lie
     /// the arming timeout then acts on: `armed_at` is hours ago, the state says `Armed`, and the
     /// first [`ArmingGate::tick`] after a restart would refuse a run that has been recording all
-    /// along. The row is the durable half of this gate — `start_signal_at` and `session_id` are
-    /// copied onto it by [`crate::receipt::record_start`] — so a rebuilt gate is told what it
-    /// already knew.
+    /// along. The row is the durable half of this gate (the V1 start-receipt writer,
+    /// `receipt::record_start`, copied `start_signal_at` and `session_id` onto it before D48
+    /// removed it), so a rebuilt gate is told what it already knew.
     ///
     /// **It is not a second way to start a run.** `started` comes from the row's `started_at`,
-    /// which only `record_start` writes and only after [`ArmingGate::mark_started`] allowed it;
+    /// which only that writer wrote and only after [`ArmingGate::mark_started`] allowed it;
     /// nothing here can stamp one.
     ///
     /// **`signal_source` and `leg1_at` are recovered, not invented.** No row records either.
@@ -209,8 +213,8 @@ impl ArmingGate {
     /// The session the latest corroborating leg-1 record belongs to, and the chained
     /// sequence number it was linked at. `None` until a leg-1 record has arrived.
     ///
-    /// This is what the start receipt's `session_id` claim is built from
-    /// ([`crate::receipt::record_start`]). A caller cannot supply one instead: the run is
+    /// This is what the start receipt's `session_id` claim was built from by the V1
+    /// start-receipt writer, which D48 removed. A caller cannot supply one instead: the run is
     /// recorded under the session the daemon watched write.
     pub fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
@@ -290,9 +294,9 @@ impl ArmingGate {
     /// Move to [`GateState::Started`]. The only way in, and it refuses unless both facts
     /// are in — so a caller cannot stamp a `started_at` the gate would not have allowed.
     ///
-    /// Paired with [`crate::receipt::record_start`], which writes `started_at`,
-    /// `deadline_at` and `EntryState::Started` in one registry transaction. The
-    /// length gate reads the entry's state, so the two must move together.
+    /// Paired with the V1 start-receipt writer (`receipt::record_start`, removed by D48),
+    /// which wrote `started_at`, `deadline_at` and `EntryState::Started` in one registry
+    /// transaction. The length gate reads the entry's state, so the two must move together.
     pub fn mark_started(&mut self) -> Result<(), DaemonError> {
         if !self.may_stamp_started() {
             return Err(DaemonError::Refused(format!(

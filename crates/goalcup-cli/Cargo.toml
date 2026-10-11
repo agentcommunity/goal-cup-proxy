@@ -13,8 +13,8 @@ publish = false
 # nowhere else.
 #
 # Every `feature = "test-support"` item is a fake or a seam that tests need and no
-# participant runs: `MockDaemonClient` (`src/daemon/`), the Ctrl-C test seams
-# (`src/arming.rs`) and the home-seed replacement hooks (`src/home_seed.rs`).
+# participant runs: `MockDaemonClient` (`src/daemon/`) and the Ctrl-C test seams
+# (`src/arming.rs`).
 #
 # The shipped build compiles without the feature, and `cargo build --offline` (no features)
 # is step zero of the gate precisely so that stays true: every other gate command builds
@@ -25,8 +25,9 @@ test-support = ["dep:ed25519-dalek"]
 [dependencies]
 goalcup-platform = { path = "../goalcup-platform" }
 goalcup-protocol = { path = "../goalcup-protocol" }
-# The one exit code this CLI relays rather than chooses (`relay_verdict`). A library
-# dependency and not a dev one: the relay is shipped behaviour, not a test's.
+# The key-fragment scan and `goalcup doctor` read capture traces through the verifier's
+# reader and decoder registry, and the one exit code this CLI would relay rather than
+# choose (`relay_verdict`) is its `Verdict`'s. A library dependency and not a dev one.
 goalcup-verifier = { path = "../goalcup-verifier" }
 serde.workspace = true
 serde_json.workspace = true
@@ -35,7 +36,7 @@ thiserror.workspace = true
 # daemon's `workspace::measure` does, so two walks over one tree agree and a large file is
 # never held whole. Already in this crate's graph through `goalcup-verifier`.
 sha2.workspace = true
-# The eight-command tree (`src/main.rs`).
+# The five-command tree (`src/main.rs`).
 clap.workspace = true
 # The control API client. It is loopback cleartext, which is why the workspace declares ureq
 # with `default-features = false`: no gzip decoder, and no TLS stack pulled in for a request to
@@ -78,8 +79,8 @@ base64.workspace = true
 # harness in a group of its own, and a helper it backgrounded is only reachable by
 # signalling that whole group — `Child::kill` alone reaches the direct child and leaves
 # the helper running. Already a workspace dependency, already compiled for the daemon
-# (`crates/goalcup-daemon/Cargo.toml`, which calls `libc::killpg` the same way in
-# `terminate.rs`), so this crate adds no new dependency to the graph, only a new user of
+# (`crates/goalcup-daemon/Cargo.toml`, which calls `killpg` the same way under
+# `src/terminate/`), so this crate adds no new dependency to the graph, only a new user of
 # one already in it. Unix only, same as the probe's own `process_group(0)`.
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

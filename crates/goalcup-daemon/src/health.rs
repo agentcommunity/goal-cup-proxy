@@ -20,8 +20,8 @@
 //!
 //! Every time-dependent comparison here reads `inputs.now`, and this module never calls
 //! [`crate::now_unix`]. That is what lets a test ask the same inputs about two moments,
-//! and what lets `EntryRuntime::poll_once_at` evaluate a whole tick at one clock rather
-//! than at slightly different ones.
+//! and what let the V1 per-entry poll (removed by D48) evaluate a whole tick at one clock
+//! rather than at slightly different ones.
 
 use crate::arming::GateState;
 use goalcup_protocol::events::HealthState;
@@ -245,9 +245,9 @@ pub fn evaluate(inputs: &HealthInputs, policy: &HealthPolicy) -> HealthReport {
     }
     // **The two latches, at the bottom.** `version_changed` and `tracker_restarted` are the
     // only inputs in this list that are set once and never cleared for the rest of the run:
-    // `EntryRuntime` stamps `tracker_restarted` when it finds a chain at startup and
-    // `version_changed` when it samples a new harness build, and neither has an event that
-    // un-sets it.
+    // the V1 per-entry runtime (removed by D48) stamped `tracker_restarted` when it found a
+    // chain at startup and `version_changed` when it sampled a new harness build, and neither
+    // has an event that un-sets it.
     //
     // A rung above the live signals would therefore not report a condition, it would freeze the
     // surface: after one daemon restart the participant would see `TrackerInterrupted` forever,

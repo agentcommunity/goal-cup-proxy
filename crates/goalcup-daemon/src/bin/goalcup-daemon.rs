@@ -18,22 +18,16 @@
 //!   server key is the published placeholder, the one line that says so — plus one warning
 //!   for each existing configured root whose group or other permission bits are set.
 //! * **A signal seals nothing, and it does not merely drop either.** SIGTERM and SIGINT
-//!   end the process through [`Daemon::stop`] — the listener down, every in-flight seal
-//!   awaited, every redb file lock released — but they do not end the entry. An entry has
-//!   exactly two endings — the participant's early finish through the control API, and the
-//!   automatic seal at `deadline_at` — and a signal is neither. A daemon that sealed on
-//!   SIGTERM would turn "the laptop rebooted" into "the run is over", which is precisely the
-//!   failure D9 exists to prevent: a closed laptop is the normal path, and the entry is
-//!   resumed when the daemon comes back.
+//!   end the process through [`Daemon::stop`] (the listener down, every in-flight seal
+//!   awaited, every redb file lock released), but they do not end the entry. A capture entry
+//!   ends when the participant's seal asks for it through the control API, and a signal is
+//!   not that. A daemon that sealed on SIGTERM would turn "the laptop rebooted" into "the run
+//!   is over", which is precisely the failure D9 exists to prevent.
 //!
-//! **The current poll finishes.** [`Daemon::tick`] does its filesystem work inside
-//! `with_entry`, which is a synchronous closure around [`goalcup_daemon::runtime::
-//! EntryRuntime::poll_once_at`]: a future cannot be cancelled inside code that never
-//! awaits. So a signal arriving mid-tick can only take effect at one of the loop's real
-//! await points — the receipt request in `bind_start`, or an upload in `pump_all` — and
-//! both are idempotent on the far side (`ReceiptRequest` is refused twice, a chunk is
-//! answered with the acknowledgement it already earned). The chain and the write-ahead
-//! buffer are durable per envelope, so nothing in flight is evidence that was lost.
+//! **There is no poll to finish.** [`Daemon::run_forever`] drives nothing: a capture entry's
+//! work is done by its ingest and control calls, and D48 removed the V1 tick with its
+//! receipt requests and uploads. The chain is durable per envelope, so nothing in flight is
+//! evidence that was lost.
 
 use clap::Parser;
 use goalcup_daemon::config::DaemonConfig;

@@ -1,7 +1,9 @@
 # Dogfood checklist — the first real run on a real machine
 
 > **V1 checklist (hook-leg era, 2026-10-02).** On `m2/wire` real-harness rows are recorded in
-> [docs/qualification/](qualification/README.md); this file describes the V1 path on `v1/trunk`.
+> [docs/qualification/](qualification/README.md); this file describes the V1 path on `v1/trunk`,
+> which [D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree) deleted here (the `v0.5.0` tag
+> keeps it).
 
 The build proves itself with fake harnesses. These are the things only a real harness on a
 real machine can prove, in the order to try them. Each item says what to run, what to look

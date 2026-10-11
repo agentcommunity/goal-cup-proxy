@@ -1,7 +1,7 @@
 # Architecture
 
-How do the parts of the M2 recorder fit, and where is each guarantee tested? For agents and contributors working
-on `m2/wire`. Updated: 2026-10-11. Interfaces are normative in [CONTRACTS]; words follow the [glossary](GLOSSARY.md).
+How do the M2 recorder's parts fit, and where is each guarantee tested? For contributors on
+`m2/wire`. Updated: 2026-10-11. Normative interfaces: [CONTRACTS]; terms: [glossary](GLOSSARY.md).
 
 ## 1. Scope
 
@@ -9,10 +9,9 @@ on `m2/wire`. Updated: 2026-10-11. Interfaces are normative in [CONTRACTS]; word
   traffic (wire leg) and its own session file (native leg) go into one protocol-v5 chain, sealed
   locally. Scope: [D37](DECISIONS.md#d37-m2-autonomous-runs-research-evidence-and-open-contributions);
   constraints D36–D41 are in [DECISIONS](DECISIONS.md).
-- **Status:** the draft v0.5 line is a planned source-only candidate pending owner approval. A
-  private unsigned staged three-binary pilot candidate exists. No downloadable, public or released
-  binary, installer artifact or staged-bundle claim is made, nor any registry publication, signing,
-  notarization or qualification claim. [Evidence](qualification/README.md).
+- **Status:** v0.5.0 is published as source only; a private unsigned staged three-binary pilot
+  candidate exists. No downloadable binary, installer, staged bundle, registry publication,
+  signing, notarization or qualification claim is made. [Evidence](qualification/README.md).
 - **V1** lives on `v1/trunk` with the hook leg and thirteen checks; those are outside M2.
   [Current V1 status](../STATUS.md#v1-on-v1trunk).
 
@@ -29,7 +28,7 @@ non-member `goalcup-git`; the public OSS cut omits it ([LEDGER OS-09](../LEDGER.
 | `goalcup-daemon` | `goalcup-daemon` | protocol, platform | itself, mcp, devserver |
 | `goalcup-cli` | `goalcup` | protocol, verifier, platform | itself, daemon |
 | `goalcup-mcp` | `goalcup-mcp` | protocol, platform | none |
-| `goalcup-devserver` | dev only | protocol | verifier, daemon |
+| `goalcup-devserver` | dev only | protocol | verifier |
 
 The rule ([D3](DECISIONS.md)): **the daemon never links the verifier; the CLI never links the
 daemon**. Both hold for `[dependencies]`; dev-dependencies cross them for tests only. The CLI
@@ -39,10 +38,9 @@ and `the_shipped_binary_links_no_daemon` ([seal_scan.rs](../crates/goalcup-cli/t
 
 ### One feature set: the capture product
 
-The build is M2. D48 deleted the V1 execution path that D42 had put behind `v1-compat`; the
-`v0.5.0` tag keeps it. Startup still parses the retained Codex and Claude `manifest.toml` files;
-full removal is post-tag OS-29. The daemon opens a registry written by either line and refuses
-only V1 rows that still owe work.
+The build is M2: D48 deleted the V1 execution path (behind `v1-compat` since D42); the `v0.5.0`
+tag keeps it. Startup still parses the retained Codex and Claude `manifest.toml` files until OS-29.
+The daemon opens a registry written by either line and refuses only V1 rows that still owe work.
 
 ## 3. Roles
 
@@ -56,10 +54,9 @@ only V1 rows that still owe work.
 | MCP | Three read-only tools: `goalcup_event_status`, `goalcup_run_status`, `goalcup_entries` | [goalcup-mcp](../crates/goalcup-mcp/src/lib.rs) |
 | Devserver | Development-only signer of receipts and ACKs; the local pilot uses none | [goalcup-devserver](../crates/goalcup-devserver/src/lib.rs) |
 
-`goalcup` has five commands (`start --goal-file`, `status`, `entries`, `seal`, `doctor`);
-`auth`, `ui` and `resume` are hidden stubs that refuse, naming D48. Control API v5
-requires the version on mutating requests and binds create to the daemon's connector-directory
-digest. A v5 entry cannot `resume` ([C5 amendments][cont]). The V1 path is not M2 ([C5], D42, D48).
+`goalcup` has five commands (`start --goal-file`, `status`, `entries`, `seal`, `doctor`); `auth`,
+`ui` and `resume` are hidden stubs naming D48 ([C5 amendments][cont]: a v5 entry cannot resume).
+Control API v5 requires the version on mutating requests; create binds the directory digest.
 
 The open protocol-hint grammar validates metadata only. `DecoderRegistry::builtin()` and each
 decoder's `accepts` decide which retained formats are decoded. The wire decoders share framing,
@@ -69,7 +66,6 @@ accounting and D45 close classification; Anthropic keeps its provider-specific s
 
 On M2 the legs are **native + wire**; the V1 hook leg is deleted (D2 note in
 [DECISIONS](DECISIONS.md)). Neither leg erases a gap in the other.
-The supporting private historical record is intentionally omitted from this public OSS cut.
 
 | | Wire leg | Native leg |
 |---|---|---|
@@ -129,10 +125,9 @@ wire classes; explicit rejection of invalid mixed-source producers is H-29.
 **Freeze.** v5 records freeze at the `v0.5.0` tag: after it any new record field, optional or
 not, is v6, because a released verifier must keep reading every v5 trace and every record denies
 unknown fields. `FrameEvent` is governed by `CONTROL_API_VERSION`; receipt, ack and chunk files
-carry their own domain tags; the reader corpus
-`crates/goalcup-verifier/tests/fixtures/v5-corpus/` is the guard; a server refuses an unknown
-`protocol_version` with `client_newer`. Rule: [CONTRACTS](CONTRACTS.md) ("The v5 format freeze").
-The status projection lives in `capture_status.rs`, outside the freeze.
+carry their own domain tags; the reader corpus `crates/goalcup-verifier/tests/fixtures/v5-corpus/`
+is the guard; a server refuses an unknown `protocol_version` with `client_newer`. Rule:
+[CONTRACTS](CONTRACTS.md) ("The v5 format freeze"); `capture_status.rs` is outside it.
 
 **Integrity exits** ([reader.rs][rdr] `exit_code`): **0** valid, sealed, coverage complete;
 **1** incomplete (a gap, unsealed, a Recovery, no Launch, a missing manifest); **2** invalid,
@@ -141,8 +136,7 @@ report. Research output: [m2-report-format.md](research/m2-report-format.md).
 
 Integrity, anchor, key-source and terminal status facts are typed Rust values. The full research
 summary is assembled JSON, not one typed Rust document. Typed names may be idiomatic while their
-serialized words remain pinned by research-report schema 1. OS-15's `run.connector` is only a
-`Pinned` / `Dev/unpinned` / absent presentation and never changes integrity.
+serialized words remain pinned by research-report schema 1.
 
 ## 7. The proxy
 
@@ -176,8 +170,7 @@ disk** ([redact/stream.rs][rs]; rules in [redact.rs](../crates/goalcup-daemon/sr
 **fails closed**: from the earliest undecided byte everything is replaced, up to the next safe
 record terminator or the stream's end. Below the bound, output equals whole-stream redaction
 whatever the chunking. A connector regex without a pinned recognizer is refused. Best effort;
-residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`) are in the
-[CHEAT-CHECKLIST](CHEAT-CHECKLIST.md).
+residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`): [checklist](CHEAT-CHECKLIST.md).
 
 ## 9. Connectors, homes, pins and the contract kit
 
@@ -196,7 +189,7 @@ residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`) are in the
   Each requires `--dev`; wrong-id decoys appear only in the three identity-bearing cases, not `controlled-workload`.
 - Directory pins and the two transitional V1-manifest pins come from `pin-manifests.sh`; executables
   carry version/SHA-256 pins. Same-UID executable and non-atomic connector-namespace races remain
-  accepted residuals; see [SECURITY](../SECURITY.md). Hermes remains refused by every V1 path.
+  accepted residuals; see [SECURITY](../SECURITY.md).
 
 ## 10. Where each guarantee is tested
 
@@ -217,8 +210,8 @@ Test paths are under `crates/`. Records are under [qualification/](qualification
 | TLS and CONNECT, HTTP and WebSocket relay | `goalcup-cli/tests/m2_tls_connect.rs`, `goalcup-cli/tests/m2_http_relay.rs`, `goalcup-cli/tests/m2_websocket_relay.rs` | [E00](qualification/m2-component-capture.md) |
 | Frozen wire contracts; connector pins | `goalcup-protocol/tests/m2_contract.rs`, `goalcup-protocol/tests/harness_schema.rs`, `goalcup-protocol/tests/harness_loader.rs`, `goalcup-protocol/tests/harness_conformance.rs`, `goalcup-protocol/tests/connector_pins.rs` | none |
 | v5 create, goal, launch, status through the daemon | `goalcup-daemon/tests/capture_lifecycle.rs` | [T23][synth] |
-| Profile launch, executable pin, env refusals | `goalcup-cli/tests/m2_profile_launch.rs` | [T02](qualification/m2/launch-recipes.md) |
-| Capture-only refused on every V1 path | `goalcup-protocol/tests/capture_only.rs`, `goalcup-cli/tests/capture_only_refusal.rs`, `goalcup-verifier/tests/m2_hermes_capture_only.rs` | [Hermes row][hrow] |
+| Profile launch, executable pin, env refusals | `goalcup-cli/tests/harness_launch_plan.rs`, `goalcup-cli/tests/start_launch.rs` | [T02](qualification/m2/launch-recipes.md) |
+| Recorded V1 `capture_only` keys ignored; Hermes row decoded by exact hint | `goalcup-cli/tests/capture_only_refusal.rs`, `goalcup-verifier/tests/m2_hermes_capture_only.rs` | [Hermes row][hrow] |
 | Hermes key child-only, private home, key scan | `goalcup-cli/tests/hermes_child_secret.rs`, `goalcup-cli/tests/hermes_per_run_home.rs`, `goalcup-cli/tests/key_scan.rs`, `goalcup-cli/tests/key_scan_run.rs`, `goalcup-cli/tests/capture_stderr_tee.rs`, `goalcup-cli/tests/loader_script.rs`, `goalcup-cli/tests/m2_hermes_lifecycle.rs`, `goalcup-cli/tests/hermes_offline_key.rs` | [Hermes row][hrow] |
 | Crash, torn tail, restart | `goalcup-cli/tests/capture_crash_campaign.rs` | [T25 crash](qualification/m2-crash-campaign.md) |
 | Whole vertical on a synthetic workload | `goalcup-cli/tests/m2_synthetic_vertical.rs` | [T23][synth] |
@@ -233,9 +226,8 @@ aggregate unique totals, continuous process/workspace/binary surveys, PTY/input 
 desktop/Windows/Linux qualification, public publishing, and production service operation.
 Optional signed M2 upload/anchoring and rich browser/MCP presentation are post-pilot packets with
 their own gates. Basic existing hashes/signatures remain; new evidence-comparison machinery can
-follow a recorder that works.
-The supporting private historical record is intentionally omitted from this public OSS cut.
-Operating the binaries: [OPERATING](OPERATING.md).
+follow a recorder that works. The supporting private historical record is intentionally omitted
+from this public OSS cut. Operating the binaries: [OPERATING](OPERATING.md).
 
 [CONTRACTS]: CONTRACTS.md
 [C1]: CONTRACTS.md#c1-limits-and-representation-t00
