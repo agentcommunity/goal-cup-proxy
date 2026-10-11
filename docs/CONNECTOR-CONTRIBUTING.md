@@ -4,7 +4,7 @@ How do I submit and review a schema-1 connector, and what evidence supports its 
 contributor or agent adding harness data. Start with [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)
 for the worksheet and phase gate; this file owns the connector checklist and tiny-row procedure.
 Evidence records are indexed in [qualification/README](qualification/README.md). Updated:
-2026-10-07.
+2026-10-11.
 
 A connector launches and captures a harness. Its `harness.toml` is data: it declares the launch,
 isolated home, provider/auth hosts and paths, protocol hints, native source and redaction
@@ -36,6 +36,11 @@ A common data-only PR carries exactly these concerns:
 5. Evidence that the current baseline harness-kit suite passes. Build the workspace first, then
    run `cargo test -p goalcup-cli --test harness_contract_kit`; the four existing baseline cases
    are listed separately below.
+6. The regenerated harness goldens. The tests read the connector list from `connectors/`, so
+   they need no edit. On macOS, run
+   `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test harness_contract_golden`
+   and the same with `-p goalcup-daemon`, then commit the JSON diff under
+   `crates/goalcup-cli/tests/fixtures/harness-golden/`: the new `<id>.json` and the new rows.
 
 After a connector edit, also run `cargo test -p goalcup-protocol --test harness_conformance
 --test connector_pins`; these checks cover the schema and the generated directory pin. The
@@ -110,8 +115,10 @@ refuses many invalid values, but validation is not a substitute for review.
    out of homes, logs, records and evidence.
 9. Check identity: source matches the measured carrier, `stderr_line` grammar is exact, and
    `stdout_json` start fields precede model text and escape model text inside events.
-10. Re-run `sh scripts/pin-manifests.sh` and confirm one intended pin-line diff. Run the generic
-    kit after a workspace build. A policy row or decoder belongs in its own reviewed PR.
+10. Re-run `sh scripts/pin-manifests.sh` and confirm one intended pin-line diff. Confirm the
+    harness-golden diff only adds the new connector and changes no other connector's values.
+    Run the generic kit after a workspace build. A policy row or decoder belongs in its own
+    reviewed PR.
 
 ## Tiny real row
 

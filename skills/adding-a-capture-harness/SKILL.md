@@ -8,7 +8,8 @@ description: Use when adding or supporting a CLI coding-agent harness in Goal Cu
 ## Overview
 
 A normal harness contribution is data-only: a schema-1 `harness.toml`, reviewed seeds, one
-regenerated connector-directory pin, readiness evidence and the generic offline harness kit.
+regenerated connector-directory pin, regenerated harness goldens, readiness evidence and the
+generic offline harness kit.
 Policy rows and semantic decoders are separate reviewed changes. A synthetic kit pass is not a
 live qualification, package publication or release claim.
 
@@ -35,6 +36,10 @@ live qualification, package publication or release claim.
    Use only admitted policy rows and identity pairs. A new CA, credential, identity, native-store
    form or interpreter is a separate core PR with a DECISIONS row. Do not add `.rs` files here.
    Run `cargo test -p goalcup-protocol --test harness_conformance --test connector_pins`.
+   Then regenerate the harness goldens on macOS (the tests read `connectors/`, so no test edit):
+   `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test harness_contract_golden`,
+   then the same with `-p goalcup-daemon`. Commit the JSON diff; it must change no other
+   connector's values.
 4. **Prove the generic kit offline.** Build first, then run on macOS:
    ```
    cargo build

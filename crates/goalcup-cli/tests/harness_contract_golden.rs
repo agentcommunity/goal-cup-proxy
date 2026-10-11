@@ -24,6 +24,12 @@
 //! * the loader script (`loader-script.json`) and the connector enumeration
 //!   (`enumeration.json`).
 //!
+//! The connector list is the `connectors/` directory, discovered by the rule the loaders use,
+//! and every per-connector field is derived from the connector's own files. Adding a schema-1
+//! connector folder therefore needs no edit here: regenerate, and review the new `<id>.json`
+//! and the `enumeration.json` diff in the same PR
+//! (`a_new_schema1_connector_needs_no_edit_to_this_file` proves it).
+//!
 //! Values are synthetic. Only run-specific paths are normalised (the test's temporary
 //! directory becomes `<TMP>`, the loopback proxy URL becomes `<PROXY_URL>`); everything else is
 //! what the code produced. Nothing here reads or writes a harness home, and nothing sets a
@@ -40,15 +46,16 @@ use goalcup_cli::CliError;
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::key_scan::FragmentMatcher;
 use goalcup_cli::launch::{
-    LaunchPlan, ScopeMarker, allowance_refusal, build_capture_launch, child_secret_for_harness,
-    handle, spawn, stdout_tee, tee_marked,
+    LaunchPlan, ScopeMarker, StreamPlan, allowance_refusal, build_capture_launch,
+    child_secret_for_harness, handle, spawn, stdout_tee, tee_marked,
 };
 use goalcup_cli::per_run_home::create_per_run_home;
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
     CA_REGISTRY, CREDENTIAL_ENV, CaMode, EnvContext, capture_arg_denied, env_key_denied,
 };
-use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, Origin};
+use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, IdentitySource, Origin};
+use goalcup_protocol::manifest::ConnectorManifest;
 use m2_profile_support as s;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -59,8 +66,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The shipped capture connectors, and the controlled test workload.
-const SHIPPED: [&str; 3] = ["codex-cli", "claude-code-cli", "hermes-cli"];
+/// The controlled test workload: a fixture of this file, never a folder under `connectors/`.
 const CONTROLLED: &str = "m2-controlled-workload";
 /// Every family string a manifest of this tree can carry, and one nobody ships.
 const FAMILIES: [&str; 5] = [
@@ -161,6 +167,15 @@ fn controlled_connector() -> (HarnessConnector, tempfile::TempDir) {
     (c, dir)
 }
 
+/// The validation origin of a subject: the controlled workload loads only as `Dev`.
+fn origin_of(id: &str) -> Origin {
+    if id == CONTROLLED {
+        Origin::Dev
+    } else {
+        Origin::Pinned
+    }
+}
+
 /// The connector as it ships (for the declared profile).
 fn declared(id: &str) -> Subject {
     if id == CONTROLLED {
@@ -179,19 +194,19 @@ fn declared(id: &str) -> Subject {
 /// The connector with its executable pin naming `exe`, as the launch tests use it.
 fn repinned(id: &str, exe: &Path) -> Subject {
     let mut subject = declared(id);
-    subject.connector.loaded.manifest.capture.executable.sha256 = s::sha256_of(exe);
-    let origin = if id == CONTROLLED {
-        Origin::Dev
-    } else {
-        Origin::Pinned
-    };
+    subject.connector = repin(&subject.connector, exe);
     subject
-        .connector
-        .loaded
+}
+
+/// A copy of `c` whose executable pin names `exe`: the only change.
+fn repin(c: &HarnessConnector, exe: &Path) -> HarnessConnector {
+    let mut c = c.clone();
+    c.loaded.manifest.capture.executable.sha256 = s::sha256_of(exe);
+    c.loaded
         .manifest
-        .validate(origin)
+        .validate(origin_of(&c.loaded.manifest.id))
         .expect("still valid");
-    subject
+    c
 }
 
 fn profile(c: &HarnessConnector) -> &CaptureSpec {
@@ -485,14 +500,58 @@ fn streams_json(family: &str, credential: Option<&str>) -> Value {
     })
 }
 
-fn legacy_family(id: &str) -> &'static str {
-    match id {
-        "codex-cli" => "codex",
-        "claude-code-cli" => "claude-code",
-        "hermes-cli" => "hermes",
-        CONTROLLED => "controlled-workload",
-        _ => "opencode",
+/// The V1-era fields the golden shape still carries for one connector, derived from its files
+/// and never from its id, so a new folder needs no edit here.
+struct Legacy {
+    family: String,
+    capture_only: bool,
+}
+
+/// A connector that ships a V1 `manifest.toml` takes its `family` from it and is a launch-mode
+/// connector. One without (schema 1 only) is capture only, and its family is its program. The
+/// controlled workload is this file's own fixture, not a folder under `connectors/`.
+fn legacy(c: &HarnessConnector) -> Legacy {
+    if c.loaded.manifest.id == CONTROLLED {
+        return Legacy {
+            family: "controlled-workload".to_string(),
+            capture_only: false,
+        };
     }
+    let v1 = c.dir.join("manifest.toml");
+    match std::fs::read_to_string(&v1) {
+        Ok(text) => Legacy {
+            family: ConnectorManifest::from_toml_str(&text)
+                .unwrap_or_else(|e| panic!("{}: {e}", v1.display()))
+                .family,
+            capture_only: false,
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Legacy {
+            family: profile(c).executable.program.clone(),
+            capture_only: true,
+        },
+        Err(e) => panic!("{}: {e}", v1.display()),
+    }
+}
+
+/// The stream decision of one connector, from the launcher's own `StreamPlan` over its
+/// profile: a key scan pipes both streams, otherwise the identity source decides.
+fn connector_streams_json(p: &CaptureSpec) -> Value {
+    let plan = StreamPlan::for_spec(p).expect("a validated profile has a stream plan");
+    let decision = if plan.scan_for_key {
+        "MarkedAndScanned"
+    } else {
+        match p.identity.source {
+            IdentitySource::StdoutJson => "CodexStdout",
+            IdentitySource::StderrLine => "MarkedStderr",
+            IdentitySource::Preassigned => "PreassignedSession",
+            _ => "Inherit",
+        }
+    };
+    let pipes = plan.pipes();
+    json!({
+        "decision": decision,
+        "pipes": {"stdout": pipes.stdout, "stderr": pipes.stderr},
+    })
 }
 
 /// The schema-1 fields projected into the historical golden shape. The golden bytes remain a
@@ -668,16 +727,16 @@ fn termination_json(m: &HarnessManifest) -> Value {
     })
 }
 
-fn connector_golden(id: &str) -> Value {
-    let declared_subject = declared(id);
-    let dc = &declared_subject.connector;
+/// Everything `<id>.json` pins for the connector `dc`, as loaded from its directory.
+fn connector_golden(dc: &HarnessConnector) -> Value {
+    let id = dc.loaded.manifest.id.as_str();
     let dp = profile(dc);
 
     // The plan, built against a fake executable pinned in place of the measured one.
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
-    let subject = repinned(id, &exe);
-    let c = &subject.connector;
+    let repinned = repin(dc, &exe);
+    let c = &repinned;
     let pinned = s::pinned(c, &exe);
     let proxy = s::proxy_url();
     let parent = s::parent_env();
@@ -791,18 +850,14 @@ fn connector_golden(id: &str) -> Value {
         .map(|name| json!({"name": name, "denied": legacy_env_refusal(name, home_env)}))
         .collect();
 
-    let family = legacy_family(&dc.loaded.manifest.id);
-    let origin = if id == CONTROLLED {
-        Origin::Dev
-    } else {
-        Origin::Pinned
-    };
+    let legacy = legacy(dc);
+    let origin = origin_of(id);
 
     json!({
         "connector": {
             "id": dc.loaded.manifest.id,
-            "family": family,
-            "capture_only": id == "hermes-cli",
+            "family": legacy.family,
+            "capture_only": legacy.capture_only,
             "launch_program": dp.executable.program,
             "launch_home_env": dp.home.env,
             "validates": verdict(dc.loaded.manifest.validate(origin)),
@@ -813,10 +868,7 @@ fn connector_golden(id: &str) -> Value {
         "plan": plan_json(&l, &plan),
         "goal_placement_for_an_option_shaped_goal": placement,
         "plan_with_claude_tool_allowance": allowance_plan,
-        "streams": streams_json(
-            family,
-            dp.credential.as_ref().map(|c| c.env.as_str()),
-        ),
+        "streams": connector_streams_json(dp),
         "home": home,
         "ca": ca_json(&l, dp, &plan),
         "credential": credential_json(dp),
@@ -835,24 +887,25 @@ fn connector_golden(id: &str) -> Value {
     })
 }
 
+/// One `<id>.json` per connector the directory holds: a new folder under `connectors/` gets its
+/// golden from the regenerate switch, with no edit here.
 #[test]
-fn codex_cli_capture_behaviour_is_pinned() {
-    check_golden("codex-cli.json", &connector_golden("codex-cli"));
-}
-
-#[test]
-fn claude_code_cli_capture_behaviour_is_pinned() {
-    check_golden("claude-code-cli.json", &connector_golden("claude-code-cli"));
-}
-
-#[test]
-fn hermes_cli_capture_behaviour_is_pinned() {
-    check_golden("hermes-cli.json", &connector_golden("hermes-cli"));
+fn every_shipped_connector_capture_behaviour_is_pinned() {
+    let root = s::connectors_dir();
+    for id in pinned_connector_ids(&root) {
+        let c = goalcup_cli::connector::load_harness(&root, &id, false)
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+        check_golden(&format!("{id}.json"), &connector_golden(&c));
+    }
 }
 
 #[test]
 fn the_controlled_workload_capture_behaviour_is_pinned() {
-    check_golden("m2-controlled-workload.json", &connector_golden(CONTROLLED));
+    let subject = declared(CONTROLLED);
+    check_golden(
+        "m2-controlled-workload.json",
+        &connector_golden(&subject.connector),
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1520,37 +1573,174 @@ fn the_deepseek_loader_script_behaviour_is_pinned() {
 // The connectors this tree ships.
 // ---------------------------------------------------------------------------------------
 
-#[test]
-fn the_shipped_connector_enumeration_is_pinned() {
-    let dir = s::connectors_dir();
-    let mut ids: Vec<String> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|e| e.unwrap())
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.file_name().into_string().unwrap())
-        .collect();
-    ids.sort();
+/// The schema-1 connector folders under `root`, by the rule `goalcup start` and the daemon
+/// discover them with: real directories holding a `harness.toml`, sorted.
+fn connector_ids(root: &Path) -> Vec<String> {
+    goalcup_protocol::harness::discover_connector_dirs(root)
+        .unwrap_or_else(|e| panic!("{}: {e}", root.display()))
+        .iter()
+        .map(|d| d.file_name().unwrap().to_str().unwrap().to_string())
+        .collect()
+}
+
+/// The connectors that get a per-connector golden: every one the directory holds.
+fn pinned_connector_ids(root: &Path) -> Vec<String> {
+    connector_ids(root)
+}
+
+/// `enumeration.json` for the connectors directory `root`.
+fn enumeration(root: &Path) -> Value {
+    let ids = connector_ids(root);
     let mut rows = Vec::new();
     for id in &ids {
-        let c = s::shipped(id);
+        let c = goalcup_cli::connector::load_harness(root, id, false)
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+        let legacy = legacy(&c);
         rows.push(json!({
             "dir": id,
             "id": c.loaded.manifest.id,
-            "family": legacy_family(id),
+            "family": legacy.family,
             "has_capture_profile": true,
-            "capture_only": id == "hermes-cli",
+            "capture_only": legacy.capture_only,
             "has_pinned_dir_digest": goalcup_protocol::pins::pinned_connector_dir_sha256(id).is_some(),
             "dir_digest_matches_its_pin": goalcup_protocol::pins::connector_dir_is_pinned(id, &c.loaded.connector_dir_sha256),
             "manifest_files": ["manifest.toml"],
         }));
     }
-    check_golden(
-        "enumeration.json",
-        &json!({
-            "shipped": ids,
-            "the_test_lists_that_hard_code_ids": SHIPPED,
-            "controlled_workload_fixture": CONTROLLED,
-            "rows": rows,
-        }),
+    json!({
+        "shipped": ids,
+        "controlled_workload_fixture": CONTROLLED,
+        "rows": rows,
+    })
+}
+
+#[test]
+fn the_shipped_connector_enumeration_is_pinned() {
+    check_golden("enumeration.json", &enumeration(&s::connectors_dir()));
+}
+
+/// The id of the synthetic connector the data-only proof adds.
+const EXTRA: &str = "synthetic-extra-cli";
+
+/// A connectors directory holding a copy of every shipped connector, one synthetic schema-1
+/// connector in the shape of the kit's stderr-token fixture (with a program that is not an
+/// interpreter, so it validates as `Origin::Pinned`), and one folder with no `harness.toml`.
+fn connectors_plus_one() -> tempfile::TempDir {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap() {
+            let e = e.unwrap();
+            let dest = to.join(e.file_name());
+            if e.file_type().unwrap().is_dir() {
+                copy(&e.path(), &dest);
+            } else {
+                std::fs::copy(e.path(), &dest).unwrap();
+            }
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let real = s::connectors_dir();
+    for e in std::fs::read_dir(&real).unwrap() {
+        let e = e.unwrap();
+        if e.file_type().unwrap().is_dir() {
+            copy(&e.path(), &tmp.path().join(e.file_name()));
+        }
+    }
+    let kit = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/harness-kit/synthetic-stderr-token/harness.toml");
+    let mut text = std::fs::read_to_string(kit).unwrap();
+    for (from, to) in [
+        (
+            "id = \"kit-synthetic-stderr-token\"",
+            format!("id = \"{EXTRA}\""),
+        ),
+        (
+            "args = [\"-I\", \"-S\", \"@STAND_IN@\", \"@PORT@\", \"@TEST_ID@\", \"@MARKER@\", \"--\"]",
+            "args = [\"run\", \"--\"]".to_string(),
+        ),
+        (
+            "program = \"python3\"",
+            "program = \"synthtool\"".to_string(),
+        ),
+        ("@PYTHON3_VERSION@", "1.0.0".to_string()),
+        ("@PYTHON3_SHA256@", "cd".repeat(32)),
+    ] {
+        assert!(text.contains(from), "{from} is not in the kit fixture");
+        text = text.replace(from, &to);
+    }
+    let extra = tmp.path().join(EXTRA);
+    std::fs::create_dir(&extra).unwrap();
+    std::fs::write(extra.join("harness.toml"), text).unwrap();
+    std::fs::create_dir(tmp.path().join("notes-not-a-connector")).unwrap();
+    tmp
+}
+
+/// Adding a schema-1 connector is data only: the enumeration, the per-connector golden list and
+/// every derived field follow the directory, the shipped rows do not move, and the new
+/// connector renders. Only the regenerated JSON changes in such a PR, never this file.
+#[test]
+fn a_new_schema1_connector_needs_no_edit_to_this_file() {
+    let tmp = connectors_plus_one();
+    let root = tmp.path();
+    let mut want = connector_ids(&s::connectors_dir());
+    want.push(EXTRA.to_string());
+    want.sort();
+
+    // Every gap at once, so a failure names all of them.
+    let mut gaps: Vec<String> = Vec::new();
+    let mut expect = |what: &str, got: Value, want: Value| {
+        if got != want {
+            gaps.push(format!("{what}: got {got}, want {want}"));
+        }
+    };
+    expect("the enumeration", json!(connector_ids(root)), json!(want));
+    expect(
+        "the per-connector goldens",
+        json!(pinned_connector_ids(root)),
+        json!(want),
+    );
+
+    let extra = goalcup_cli::connector::load_harness(root, EXTRA, false).expect("it loads");
+    let golden = connector_golden(&extra);
+    expect(
+        "family (no V1 manifest: the program)",
+        golden["connector"]["family"].clone(),
+        json!("synthtool"),
+    );
+    expect(
+        "capture_only (no V1 manifest)",
+        golden["connector"]["capture_only"].clone(),
+        json!(true),
+    );
+    expect(
+        "streams (from the stderr_line identity)",
+        golden["streams"].clone(),
+        json!({"decision": "MarkedStderr", "pipes": {"stdout": false, "stderr": true}}),
+    );
+
+    // The rows of the shipped connectors do not move when a folder is added.
+    let real = enumeration(&s::connectors_dir());
+    let plus = std::panic::catch_unwind(|| enumeration(root))
+        .unwrap_or_else(|_| json!({"rows": [], "error": "the enumeration panicked"}));
+    let rows = plus["rows"].as_array().unwrap();
+    for row in real["rows"].as_array().unwrap() {
+        expect(
+            &format!("shipped row {}", row["id"]),
+            json!(rows.contains(row)),
+            json!(true),
+        );
+    }
+    let row = rows.iter().find(|r| r["id"] == EXTRA);
+    expect(
+        "the new connector's row",
+        row.map(|r| json!([r["family"], r["capture_only"], r["has_pinned_dir_digest"]]))
+            .unwrap_or(Value::Null),
+        json!(["synthtool", true, false]),
+    );
+    assert!(
+        gaps.is_empty(),
+        "{} gap(s):\n{}",
+        gaps.len(),
+        gaps.join("\n")
     );
 }
