@@ -23,8 +23,6 @@
 
 mod support;
 
-#[cfg(feature = "v1-compat")]
-use goalcup_cli::commands::ui::ui_with;
 use goalcup_cli::commands::{
     entries::entries_with,
     status::{render_status, status_with},
@@ -37,8 +35,6 @@ use goalcup_protocol::provenance::{
     PreCutoffDrainOutcomeV1, Rfc3339Utc, Sha256Digest, TerminationFailureV1, TerminationOutcomeV1,
 };
 use goalcup_protocol::submission::{SubmissionCapturedV1, SubmissionOutcomeV1};
-#[cfg(feature = "v1-compat")]
-use std::cell::RefCell;
 use std::path::PathBuf;
 
 /// A configuration directory holding one record for `info`'s run, with `entry_id` and
@@ -469,82 +465,12 @@ fn staleness_is_the_shared_constant_and_never_a_literal() {
     let mut out = Vec::new();
     let _ = status_with(&m, &cfg, Some(&info.entry_id), false, &later, &mut out);
     assert!(String::from_utf8(out).unwrap().contains("offline"));
-    for f in [
-        "src/commands/status.rs",
-        "src/commands/entries.rs",
-        "src/commands/ui.rs",
-    ] {
+    for f in ["src/commands/status.rs", "src/commands/entries.rs"] {
         assert!(
             !std::fs::read_to_string(f).unwrap().contains("120"),
-            "{f}: one threshold, three readers, no literal"
+            "{f}: one threshold, two readers, no literal"
         );
     }
-}
-
-#[cfg(feature = "v1-compat")]
-#[test]
-fn ui_opens_the_string_the_daemon_gave_and_builds_no_url() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    let cfg = support::cfg_with_entry(tmp.path(), &info);
-    let seen = RefCell::new(Vec::<String>::new());
-    let opener = |u: &str| -> std::io::Result<()> {
-        seen.borrow_mut().push(u.to_string());
-        Ok(())
-    };
-
-    ui_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        &opener,
-        &mut Vec::new(),
-    )
-    .unwrap();
-    // `from_ref` and not `&[url.clone()]`, which clippy refuses under `-D warnings`: one
-    // opened URL, and it is that string.
-    assert_eq!(
-        seen.borrow().as_slice(),
-        std::slice::from_ref(&info.status_url)
-    );
-    assert!(info.status_url.contains("/v0/ui") && info.status_url.contains("?entry="));
-
-    // With no entry, it resolves one through the authenticated route and opens THAT entry's URL.
-    seen.borrow_mut().clear();
-    ui_with(&m, &cfg, None, false, &opener, &mut Vec::new()).unwrap();
-    assert!(m.calls().contains(&"current_entry".to_string()));
-    assert_eq!(seen.borrow()[0], info.status_url);
-
-    // --print opens nothing.
-    seen.borrow_mut().clear();
-    let mut out = Vec::new();
-    ui_with(&m, &cfg, Some(&info.entry_id), true, &opener, &mut out).unwrap();
-    assert!(seen.borrow().is_empty());
-    assert!(String::from_utf8(out).unwrap().contains(&info.status_url));
-
-    // An entry this machine has no record of has no URL either, and nothing is opened for
-    // it: the cache is where a `goalcup start` left the string, and this command builds none.
-    seen.borrow_mut().clear();
-    let err = ui_with(
-        &m,
-        &support::empty_cfg(),
-        Some(&info.entry_id),
-        false,
-        &opener,
-        &mut Vec::new(),
-    )
-    .unwrap_err();
-    assert_eq!(err.exit_code(), 1);
-    assert!(seen.borrow().is_empty(), "nothing was opened");
-
-    // The page is bundled once, by the half that serves it (D25).
-    assert!(
-        !std::path::Path::new("assets").exists(),
-        "this crate ships no status page"
-    );
-    assert!(std::path::Path::new("../goalcup-daemon/assets/status.html").exists());
 }
 
 #[test]
@@ -589,79 +515,6 @@ fn entries_lists_one_line_per_entry_and_json_is_an_array_and_no_command_notifies
         );
     }
     assert!(!std::path::Path::new("src/notify.rs").exists());
-}
-
-/// The cached `status_url` is checked before it is handed to `open::that`. It is a string
-/// off the participant's own disk, written by a `goalcup start` that believed whatever
-/// answered on the control port — so an edited record, or a rogue process that bound the port
-/// first, could choose what this command opens. `open::that` follows an `https://` to the
-/// network.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn ui_refuses_a_cached_url_that_is_not_a_loopback_page_and_opens_the_daemons_own_shape() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    let seen = RefCell::new(Vec::<String>::new());
-    let opener = |u: &str| -> std::io::Result<()> {
-        seen.borrow_mut().push(u.to_string());
-        Ok(())
-    };
-
-    for bad in [
-        "https://evil.example/v0/ui?entry=entry-mock-0001",
-        "http://10.0.0.1:1/v0/ui?entry=entry-mock-0001",
-        // No port is not the daemon's shape either: it is listening on one it chose.
-        "http://127.0.0.1/v0/ui?entry=entry-mock-0001",
-        // Userinfo that reads like a loopback host in front of one that is not.
-        "http://127.0.0.1@evil.example:8080/v0/ui",
-        "file:///etc/passwd",
-    ] {
-        let tmp = tempfile::tempdir().unwrap();
-        let cfg = cfg_with_edited_record(&tmp, &info, &info.entry_id, bad);
-        seen.borrow_mut().clear();
-        let mut out = Vec::new();
-        let err = ui_with(&m, &cfg, Some(&info.entry_id), false, &opener, &mut out).unwrap_err();
-        assert_eq!(err.exit_code(), 1, "{bad}");
-        assert!(
-            format!("{err}").contains(bad),
-            "the refusal names it: {bad}"
-        );
-        assert!(seen.borrow().is_empty(), "nothing was opened for {bad}");
-        // `--print` is guarded too: a URL this command will not open is not one it hands
-        // over as the page for the run either. The refusal prints it, so nothing is hidden.
-        let err = ui_with(
-            &m,
-            &cfg,
-            Some(&info.entry_id),
-            true,
-            &opener,
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert_eq!(err.exit_code(), 1, "{bad}");
-    }
-
-    // The shape the daemon actually builds, and the two other spellings of this machine.
-    for good in [
-        info.status_url.clone(),
-        "http://localhost:53310/v0/ui?entry=entry-mock-0001".to_string(),
-        "http://[::1]:53310/v0/ui?entry=entry-mock-0001".to_string(),
-    ] {
-        let tmp = tempfile::tempdir().unwrap();
-        let cfg = cfg_with_edited_record(&tmp, &info, &info.entry_id, &good);
-        seen.borrow_mut().clear();
-        ui_with(
-            &m,
-            &cfg,
-            Some(&info.entry_id),
-            false,
-            &opener,
-            &mut Vec::new(),
-        )
-        .unwrap();
-        assert_eq!(seen.borrow().as_slice(), std::slice::from_ref(&good));
-    }
 }
 
 /// The daemon's own strings reach a terminal through one function, and a control character

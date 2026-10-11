@@ -330,19 +330,6 @@ impl DaemonConfig {
         !self.upload_url.is_empty() && !self.server_public_key.is_empty()
     }
 
-    #[cfg(feature = "v1-compat")]
-    pub(crate) fn require_service(&self) -> Result<(), DaemonError> {
-        if self.has_service() {
-            Ok(())
-        } else {
-            Err(DaemonError::Refused(
-                "legacy entries require upload_url and server_public_key; restore the existing \
-                 service pair before creating or recovering them"
-                    .to_string(),
-            ))
-        }
-    }
-
     /// The one stderr line the daemon prints at startup when `server_public_key` is the
     /// published placeholder, or `None` for any other key (and for none at all).
     ///
@@ -486,20 +473,6 @@ impl DaemonConfig {
                     event.t0, event.start_window_closes_at
                 )));
             }
-        }
-
-        // The same rule the receipt client applies rather than a second reading of it: cleartext
-        // only to loopback, and `https` refused by name because nothing in this build terminates
-        // TLS. Applied at load, so a machine configured to ship a run's evidence over a network in
-        // the clear is told before the run rather than after it.
-        //
-        // The receipt client is the V1/server path's (D42), compiled with `v1-compat`; a default
-        // build has no network client at all and keeps only the shape check above.
-        #[cfg(feature = "v1-compat")]
-        if self.has_service() {
-            crate::receipt::split_url(&self.upload_url).map_err(|e| {
-                DaemonError::Config(format!("upload_url {:?}: {e}", self.upload_url))
-            })?;
         }
 
         Ok(())

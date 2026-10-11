@@ -33,8 +33,7 @@ best-effort until it is tested and Windows is planned (D42); neither has a bundl
 
 There is one profile, `m2-pilot`, and it is the default. The earlier `release` and
 `foundation` profiles are gone: `release` required a `goalcup-publisher` binary no crate ever
-defined, and `foundation` bundled the V1 path that now compiles only with the `v1-compat`
-feature (D42).
+defined, and `foundation` bundled the V1 path, which D48 deleted.
 
 The staged layout:
 
@@ -88,9 +87,8 @@ checks the candidate labels,
 exact host target, source SHA, three-binary allowlist and both schema profile hashes before it
 writes the disposable tracker prefix.
 
-To stage manually, build the three binaries from the candidate source with default features
-(never `--features v1-compat`: `package-release.py` refuses a daemon that reports `+v1-compat`),
-then provide the exact revision and target:
+To stage manually, build the three binaries from the candidate source, then provide the exact
+revision and target:
 
 ```sh
 cargo build --release --offline -p goalcup-cli -p goalcup-daemon -p goalcup-verifier

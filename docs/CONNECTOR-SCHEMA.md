@@ -2,7 +2,7 @@
 
 What may `connectors/<id>/harness.toml` contain? This is the public field and validation
 reference for harness authors and reviewers.
-Updated: 2026-10-07.
+Updated: 2026-10-11.
 
 The executable authority is
 [`harness.rs`](../crates/goalcup-protocol/src/harness.rs). Its
@@ -314,7 +314,7 @@ The walk captures and hashes the same `harness.toml` and seed bytes the loader p
 writes. A connector directory may contain only:
 
 - `harness.toml`;
-- a retained `manifest.toml` for the `v1-compat` path;
+- a retained `manifest.toml` (parsed at startup until OS-29; its V1 path was deleted by D48);
 - `files/<path>` named by `capture.home.seed`; and
 - for a retained V1 manifest, `files/<path>` named by its `hook_install.template` rows.
 

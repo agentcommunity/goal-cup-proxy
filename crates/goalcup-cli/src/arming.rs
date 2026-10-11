@@ -48,15 +48,6 @@ pub enum GateOutcome {
     Interrupted,
 }
 
-// What the gate says to a participant (the daemon's settled-refusal reports, the foreground
-// and beside-the-harness watchers) is the V1 path's alone (D42) and lives in `arming/gate.rs`,
-// compiled with `v1-compat`. `GateOutcome` stays here because a local capture run reports
-// `NotRequired` in the same `StartOutcome`.
-#[cfg(feature = "v1-compat")]
-mod gate;
-#[cfg(feature = "v1-compat")]
-pub use gate::*;
-
 // ------------------------------------------------------------------ Ctrl-C
 
 /// Set by the `SIGINT` handler and read by everything inside the abandon window.

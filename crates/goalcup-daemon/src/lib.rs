@@ -9,21 +9,11 @@
 //! them and extends none of them.
 
 pub mod arming;
-#[cfg(feature = "v1-compat")]
-pub mod buffer;
-#[cfg(feature = "v1-compat")]
-pub mod chain_writer;
 pub mod config;
-#[cfg(feature = "v1-compat")]
-pub mod configwatch;
 /// The control API's server side: the state its handlers share, the one authentication
 /// rule — `control::is_public_route` on the raw request path — the `control.json` the CLI
 /// reads to find this daemon, and the router around all three.
 pub mod control;
-#[cfg(feature = "v1-compat")]
-pub mod cursor;
-#[cfg(feature = "v1-compat")]
-pub mod foreign;
 /// The file mechanics every writer in this crate shares: a mode, a private atomic
 /// write through a fresh `O_EXCL` temp file, and the startup sweep for what a killed write
 /// left behind. Crate-private: it is plumbing, not a surface the CLI or the verifier has any
@@ -31,19 +21,12 @@ pub mod foreign;
 mod fsutil;
 /// The five judgements of D17, as health state names.
 pub mod health;
-/// The heartbeat timer: proof of life on a fixed cadence, off the caller's clock.
-#[cfg(feature = "v1-compat")]
-pub mod heartbeat;
 /// The authenticated, bounded capture ingest listener.
 pub mod ingest;
 /// Bounded, scoped native byte capture.
 pub mod manifests;
 pub mod native_capture;
-#[cfg(feature = "v1-compat")]
-pub mod partition;
 pub mod paths;
-#[cfg(feature = "v1-compat")]
-pub mod receipt;
 pub mod redact;
 pub mod registry;
 /// One entry's runtime — the ordered poll, the notices, the heartbeat and the chained
@@ -55,14 +38,8 @@ pub mod registry;
 pub mod runtime;
 /// Building, signing and mirroring the signed status document (D25).
 pub mod status;
-/// Immutable workspace-submission capture: byte retention, not rule
-/// interpretation. The verifier owns every judgement about the retained manifest.
-#[cfg(feature = "v1-compat")]
-pub mod submission;
 mod submission_types;
 pub use submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};
-#[cfg(feature = "v1-compat")]
-pub mod tailer;
 /// Terminating the harness process tree at seal (D22).
 ///
 /// Unix only, like `goalcup_protocol::process`, which owns the discovery half. A module
@@ -70,12 +47,6 @@ pub mod tailer;
 /// designed for behind a call that looks available.
 #[cfg(unix)]
 pub mod terminate;
-/// The bundled status page and the per-entry cache it is served beside (D25).
-#[cfg(feature = "v1-compat")]
-pub mod ui;
-/// The uploader: signed chunks out, verified acknowledgements in.
-#[cfg(feature = "v1-compat")]
-pub mod upload;
 pub mod workspace;
 
 // The immutable-submission writer is a daemon API. Re-export its daemon-owned request and
@@ -84,24 +55,12 @@ pub mod workspace;
 pub use goalcup_platform::handle_budget::NativeHandleBudgetV1;
 pub use goalcup_platform::sourcecap::SourceDir;
 pub use goalcup_platform::tracecap::{EntryArtifactRoot, TraceDir};
-#[cfg(feature = "v1-compat")]
-pub use submission::{
-    SubmissionRequestV1, capture_submission, prepare_source_journal, readback_submission,
-    recover_submission,
-};
 
 /// This build's version, for `trace.toml` and for the `VersionChange` the daemon chains
 /// when it observes its own binary change under a running entry.
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// What `goalcup-daemon --version` prints: the version, plus the semver build metadata
-/// `+v1-compat` when the V1 runtime is compiled in (D42). The CLI's test support checks it against
-/// its own feature set, and the packaging tool refuses a bundle whose daemon carries it, so a
-/// binary left over from the other configuration fails loudly instead of masking a regression.
-#[cfg(feature = "v1-compat")]
-pub const DAEMON_VERSION_TEXT: &str = concat!(env!("CARGO_PKG_VERSION"), "+v1-compat");
-/// See the `v1-compat` constant of the same name.
-#[cfg(not(feature = "v1-compat"))]
+/// What `goalcup-daemon --version` prints.
 pub const DAEMON_VERSION_TEXT: &str = env!("CARGO_PKG_VERSION");
 
 /// The most bytes the tailer reads from one file in one poll. A poll that hits this cap

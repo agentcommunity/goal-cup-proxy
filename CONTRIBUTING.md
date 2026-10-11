@@ -51,15 +51,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-A change under `crates/goalcup-{daemon,cli,devserver}`, or to code those crates share with V1,
-also passes the `v1-compat` gate from the [README](README.md#the-gate), again build first:
-
-```
-cargo build --workspace --features v1-compat
-cargo clippy --workspace --all-targets --features v1-compat -- -D warnings
-cargo test --workspace --features v1-compat
-```
-
 Plain cargo works; `--offline` is an optional maintainer convention. Report the exact command
 exits, test counts, platform and Rust version in the PR.
 

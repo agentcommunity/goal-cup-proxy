@@ -1,8 +1,9 @@
 //! How a harness's process tree is ended and what the measurement is allowed to claim, plus the
 //! monotone finalization clock every durable timestamp reads.
 //!
-//! This is the one termination path a local capture finish uses (`capture::finish`), and it is
-//! shared with the V1 workspace finalizer (`seal`, `v1-compat` only), so it lives in neither.
+//! This is the one termination path a local capture finish uses (`capture::finish`). It lives
+//! beside that module rather than in it because the V1 workspace finalizer shared it until
+//! D48 removed that finalizer.
 //! `Confirmed` means exactly what [`crate::terminate`] and `docs/TERMINATION.md` say it means.
 
 use super::Daemon;

@@ -91,10 +91,6 @@ pub use file::{
 };
 pub(crate) use goalcup_protocol::constant_time::constant_time_eq;
 pub use handlers::AbandonRequest;
-#[cfg(feature = "v1-compat")]
-pub use handlers::MAX_START_SIGNAL_WAIT_MS;
-#[cfg(feature = "v1-compat")]
-pub(crate) use handlers::{participant_home, shipped_connector, today, tracker_vars};
 pub use router::{
     ControlListener, ENTRY_SUFFIXES, MAX_CONTROL_BODY_BYTES, QUERY_TIMEOUT_MS, SUFFIX_ABANDON,
     SUFFIX_ARM, SUFFIX_PROCESS, SUFFIX_PROCESS_CANCEL, SUFFIX_RESUME, SUFFIX_RESUME_PREVIEW,

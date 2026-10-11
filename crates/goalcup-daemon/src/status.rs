@@ -25,7 +25,7 @@ use crate::arming::{GateState, RefusalReason};
 use crate::config::EventConfig;
 use crate::registry::{Entry, EntryState};
 use ed25519_dalek::SigningKey;
-#[cfg(any(test, feature = "test-hooks", feature = "v1-compat"))]
+#[cfg(any(test, feature = "test-hooks"))]
 use goalcup_platform::tracecap::ArtifactRoot;
 use goalcup_platform::tracecap::EntryArtifactRoot;
 use goalcup_protocol::capture::{CaptureState, M2Status, RunState};
@@ -710,7 +710,7 @@ pub fn invalidate_terminal_views(
     invalidate_terminal_views_with_root(entry, config_dir, &root)
 }
 
-#[cfg(any(test, feature = "test-hooks", feature = "v1-compat"))]
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn invalidate_terminal_views_with_root(
     entry: &Entry,
     config_dir: &Path,
@@ -771,17 +771,6 @@ fn invalidate_terminal_views_locked(
     }
 }
 
-#[cfg(feature = "v1-compat")]
-pub(crate) fn replace_terminal_views_with_root(
-    signed: &SignedStatus,
-    entry: &Entry,
-    config_dir: &Path,
-    artifact_root: &ArtifactRoot,
-) -> Result<(), DaemonError> {
-    let artifact = acquire_terminal_artifact(entry, artifact_root)?;
-    replace_terminal_views_with_artifact(signed, entry, config_dir, &artifact)
-}
-
 /// Attempt every terminal cache view in isolation after invalidation. A per-entry failure
 /// cannot suppress a latest replacement.  Every terminal status-line removal and replacement
 /// stays beneath the owner that observed the refusal.
@@ -810,7 +799,7 @@ pub fn replace_terminal_views_with_artifact(
     }
 }
 
-#[cfg(any(test, feature = "test-hooks", feature = "v1-compat"))]
+#[cfg(any(test, feature = "test-hooks"))]
 fn acquire_terminal_artifact(
     entry: &Entry,
     artifact_root: &ArtifactRoot,

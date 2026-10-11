@@ -16,12 +16,6 @@ publish = false
 # command builds dev-dependencies, which turn this feature on for the whole package.
 [features]
 test-hooks = []
-# The V1 / v4 transcript-and-hook product path (D42): the workspace routes, the per-entry
-# runtime with its tailers, the encrypted write-ahead buffer, the SQLite reader, the uploader
-# and the receipt client. Off by default; the default build is the M2 local-capture daemon only.
-# The code stays so the server phase can reuse its upload, receipt and acknowledgement pieces and
-# so the V1 path does not rot: the by-hand gate builds and tests both configurations (README.md).
-v1-compat = ["dep:rusqlite", "dep:age"]
 
 [dependencies]
 goalcup-protocol = { path = "../goalcup-protocol" }
@@ -43,10 +37,7 @@ hex.workspace = true
 # workspace file. The protocol crate hashes its own bytes; this crate hashes the
 # participant's, and a crate cannot borrow another's private hasher.
 sha2.workspace = true
-# The SQLite tailer (`src/tailer/sqlite.rs`), read-only and WAL-safe.
-rusqlite = { workspace = true, optional = true }
-# Blob and non-UTF-8 columns in the SQLite tailer (`v1-compat`), and the stream redactor
-# (`src/redact/stream.rs`), which a default build uses.
+# The stream redactor (`src/redact/stream.rs`).
 base64.workspace = true
 
 # The loopback control API (`src/control/`). `default-features = false` in the workspace:
@@ -64,13 +55,6 @@ tokio = { workspace = true, features = ["io-util", "sync"] }
 # (`src/bin/goalcup-daemon.rs`). A library dependency because a `[[bin]]` inside this
 # package shares the package's dependency list; nothing in `src/*.rs` links it.
 clap.workspace = true
-
-# The write-ahead buffer's per-run encryption (`src/buffer.rs`). One `age` file per
-# envelope under an `age::scrypt` passphrase recipient whose passphrase is the run's
-# `RunKeys.buffer_key_hex`, so a torn write costs one record rather than the run. What it
-# buys is confidentiality against a third party who takes the laptop; it is not integrity
-# against the participant, and the integrity anchor is the server's acknowledgements.
-age = { workspace = true, optional = true }
 
 # The shared redaction pattern set and the connector's `extra_patterns[]` (`src/redact.rs`).
 # `regex::bytes`, because a record's bytes are what is redacted and a JSONL line the
@@ -100,5 +84,3 @@ tempfile.workspace = true
 # would agree with whatever the client sent. A dev dependency and nothing else (D3): the
 # devserver holds a server key and must not link into the shipped daemon binary.
 goalcup-devserver = { path = "../goalcup-devserver" }
-# `tests/tailers.rs` (`v1-compat` only) builds the SQLite fixture itself, in a tempdir with the
-# optional `rusqlite` dependency above. A tailer test never reads a participant's real database.

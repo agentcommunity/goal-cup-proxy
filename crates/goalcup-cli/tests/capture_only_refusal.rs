@@ -118,12 +118,6 @@ fn opts(harness: Option<&str>) -> DoctorOptions {
     DoctorOptions {
         json: false,
         harness: harness.map(str::to_string),
-        #[cfg(feature = "v1-compat")]
-        verify: None,
-        #[cfg(feature = "v1-compat")]
-        verify_with_dev: false,
-        #[cfg(feature = "v1-compat")]
-        verify_dev_key: vec![],
     }
 }
 

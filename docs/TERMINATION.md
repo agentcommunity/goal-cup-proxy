@@ -3,7 +3,8 @@
 What `crates/goalcup-daemon/src/terminate/` promises at seal, and what it does not. Read this
 instead of the module. The daemon kills, not the CLI (D22); `Confirmed` is bounded to the owned
 set (D30). Code: `terminate_with` in `mod.rs`; guard, ordering and fail-closed reports in
-`authority.rs`; the macOS singleton path in `darwin.rs`; the seal mapping in `runtime/seal.rs`.
+`authority.rs`; the macOS singleton path in `darwin.rs`; the capture finish in
+`runtime/termination.rs`.
 
 ## Outcomes (`TerminationOutcomeV1`)
 

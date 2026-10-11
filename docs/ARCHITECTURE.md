@@ -1,7 +1,7 @@
 # Architecture
 
 How do the parts of the M2 recorder fit, and where is each guarantee tested? For agents and contributors working
-on `m2/wire`. Updated: 2026-10-07. Interfaces are normative in [CONTRACTS]; words follow the [glossary](GLOSSARY.md).
+on `m2/wire`. Updated: 2026-10-11. Interfaces are normative in [CONTRACTS]; words follow the [glossary](GLOSSARY.md).
 
 ## 1. Scope
 
@@ -37,15 +37,12 @@ links the verifier on purpose. Checked by `the_structural_bans_hold_at_the_depen
 ([dependency_bans.rs](../crates/goalcup-cli/tests/dependency_bans.rs), `cargo tree`)
 and `the_shipped_binary_links_no_daemon` ([seal_scan.rs](../crates/goalcup-cli/tests/seal_scan.rs)).
 
-### Feature sets: the capture product and the `v1-compat` path
+### One feature set: the capture product
 
-The default build is M2. D42 puts V1 execution behind off-by-default `v1-compat`; startup still parses the
-retained Codex and Claude `manifest.toml` files. Full removal is post-tag OS-29. A default daemon opens either
-registry and refuses only V1 rows that still owe work.
-
-V1-only code belongs in gated modules, shared V1 halves in one gated child with a default stand-in,
-and V1 state in one field; avoid function-body `cfg`. Existing hotspots move under OS-12; until then,
-shared changes pass both feature-set gates in [README](../README.md#the-gate).
+The build is M2. D48 deleted the V1 execution path that D42 had put behind `v1-compat`; the
+`v0.5.0` tag keeps it. Startup still parses the retained Codex and Claude `manifest.toml` files;
+full removal is post-tag OS-29. The daemon opens a registry written by either line and refuses
+only V1 rows that still owe work.
 
 ## 3. Roles
 
@@ -55,14 +52,14 @@ shared changes pass both feature-set gates in [README](../README.md#the-gate).
 | `goalcup seal` | Standalone v5 finish of an entry | [commands/seal.rs](../crates/goalcup-cli/src/commands/seal.rs) |
 | Proxy | Loopback CONNECT proxy; relays bytes unchanged, tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Ingest, per-producer redaction, chain append, native capture, finish, termination | [runtime/capture/][rc] |
-| Verifier | v5 integrity reader and research report with five built-in decoders (two native: `codex-native`, `claude-code-native`; three wire: `openai-responses`, `anthropic-messages`, `openai-chat-completions`); V1 thirteen checks for v4 traces (ungated library; `doctor --verify` relays them only in a `v1-compat` build) | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
+| Verifier | v5 integrity reader and research report with five built-in decoders (two native: `codex-native`, `claude-code-native`; three wire: `openai-responses`, `anthropic-messages`, `openai-chat-completions`); V1 thirteen checks for v4 traces (library and `goalcup-verify`; no CLI relay since D48) | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | MCP | Three read-only tools: `goalcup_event_status`, `goalcup_run_status`, `goalcup_entries` | [goalcup-mcp](../crates/goalcup-mcp/src/lib.rs) |
 | Devserver | Development-only signer of receipts and ACKs; the local pilot uses none | [goalcup-devserver](../crates/goalcup-devserver/src/lib.rs) |
 
-`goalcup` has five commands by default (`start --goal-file`, `status`, `entries`, `seal`,
-`doctor`); `auth`, `ui`, `resume` and a plain `start` exist only with `v1-compat`. Control API v5
+`goalcup` has five commands (`start --goal-file`, `status`, `entries`, `seal`, `doctor`);
+`auth`, `ui` and `resume` are hidden stubs that refuse, naming D48. Control API v5
 requires the version on mutating requests and binds create to the daemon's connector-directory
-digest. A v5 entry cannot `resume` ([C5 amendments][cont]). The V1 path is not M2 ([C5], D42).
+digest. A v5 entry cannot `resume` ([C5 amendments][cont]). The V1 path is not M2 ([C5], D42, D48).
 
 The open protocol-hint grammar validates metadata only. `DecoderRegistry::builtin()` and each
 decoder's `accepts` decide which retained formats are decoded. The wire decoders share framing,
@@ -108,7 +105,7 @@ every other authenticated mutator refuses before side effects, and a launched en
 
 | Concept | What it is | Pointer |
 |---|---|---|
-| Chain | `chain.jsonl`: append-only, hash-linked, byte-canonical v5 envelopes; one writer per entry | [writer.rs](../crates/goalcup-daemon/src/runtime/capture/writer.rs), [chain_writer.rs](../crates/goalcup-daemon/src/chain_writer.rs), [C1] |
+| Chain | `chain.jsonl`: append-only, hash-linked, byte-canonical v5 envelopes; one writer per entry | [writer.rs](../crates/goalcup-daemon/src/runtime/capture/writer.rs), [C1] |
 | Producer, epoch, stream | A frame sender; one admitted lifetime; one payload sequence. Stream 0 carries `Connection`, `Recovery`, `Loss` | [C1], [C2], [sink.rs](../crates/goalcup-daemon/src/runtime/capture/sink.rs) |
 | Records | `Open`, `Segment` (redacted; base64 after redaction), `End`, `Gap`, `Connection`, `Recovery`, `ProducerClosed`, `Launch`, `Assistance`, `LocalFinish` | [capture.rs](../crates/goalcup-protocol/src/capture.rs) |
 | Gap | A chained statement of loss with a `GapReason`; the trace is then incomplete, never clean | [D9](DECISIONS.md), [C1] |

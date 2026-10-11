@@ -1,5 +1,4 @@
-//! D3 at the dependency level, in both feature sets. Split out of `real_daemon_end_to_end.rs`,
-//! which is wholly a V1 run and compiles only with `v1-compat` (D42).
+//! D3 at the dependency level.
 
 mod support;
 

@@ -165,7 +165,7 @@ pub fn dev_server_signing_key() -> SigningKey {
     SigningKey::from_bytes(&DEV_SERVER_SEED)
 }
 
-/// Equal to `goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY`, asserted in `dev_key.rs`.
+/// Equal to `goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY`, asserted in `placeholder_seed.rs`.
 pub fn dev_server_public_key_hex() -> String {
     hex::encode(dev_server_signing_key().verifying_key().to_bytes())
 }

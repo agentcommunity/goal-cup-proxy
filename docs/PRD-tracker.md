@@ -172,8 +172,10 @@ Three sections the list above folded into prose are first-class tables of their 
   **Plus one adversarial fixture set**, built deterministically from the Claude Code fixture and committed under `crates/goalcup-verifier/tests/fixtures/adversarial/`: a chain whose prefix was rewritten below the last acknowledgement, a truncated store, a planted file explained only by a read call, and a heartbeat hole. `goalcup-verify` must produce exactly four findings on it — `ack_chain_mismatch`, `store_rewritten`, `unexplained_seal_file` and a dirty gap. The three M0 sets exercise the human rule; this one exercises the tamper evidence, which is the other half of what `VISION.md` promises and which no M0 fixture reaches, because they carry no acknowledgements and no seal.
 
 **V1 foundation — historical on `m2/wire`.** The short Codex CLI/macOS lifecycle and immutable
-workspace artifact below describe the V1 `v1/trunk` line, not current M2 work. [D42](DECISIONS.md#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs)
-keeps that V1/v4 path behind `v1-compat`, off by default and outside the v0.5 public surface.
+workspace artifact below describe the V1 `v1/trunk` line, not current M2 work.
+[D42](DECISIONS.md#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs)
+kept that V1/v4 path behind `v1-compat`, off by default;
+[D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree) deleted it, and the `v0.5.0` tag keeps it.
 Current M2 scope and status are recorded in the [public architecture](ARCHITECTURE.md#1-scope) and
 [STATUS](../STATUS.md#what-m2-is).
 

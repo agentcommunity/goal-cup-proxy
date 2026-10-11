@@ -1,36 +1,25 @@
 //! The daemon's snapshot of the installed connector manifests, loaded from exactly the bytes in
 //! the accepted connector-directory hash stream.
 //!
-//! A local capture daemon needs this map to look up a connector's profile; the V1 path also
-//! compiles each manifest's `foreign_scan` declarations from the same bytes
-//! (`foreign::compile_declarations`, `v1-compat` only). A default daemon therefore no longer
-//! validates `foreign_scan` declarations at load (D42); no shipped capture connector needs them.
+//! A local capture daemon needs this map to look up a connector's profile. It does not validate
+//! `foreign_scan` declarations at load: the V1 compiler that read them was removed (D48), and no
+//! shipped capture connector needs them.
 
 use crate::DaemonError;
 use goalcup_protocol::manifest::{ConnectorManifest, connector_dir_sha256_with_manifest};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// One daemon-owned snapshot of the manifest map, and — with `v1-compat` — the scan
-/// declarations compiled from the same pinned byte streams.
+/// One daemon-owned snapshot of the manifest map.
 #[derive(Debug, Clone)]
 pub struct TrustedManifests {
     manifests: std::sync::Arc<BTreeMap<String, ConnectorManifest>>,
-    #[cfg(feature = "v1-compat")]
-    pub(crate) declarations: std::sync::Arc<Vec<crate::foreign::TrustedForeignScan>>,
 }
 
-/// One installed connector as loaded. The directory name and the two digests are read by the V1
-/// foreign-scan compiler alone, so only a `v1-compat` build keeps them.
+/// One installed connector as loaded.
 #[derive(Debug)]
 pub(crate) struct LoadedManifest {
-    #[cfg(feature = "v1-compat")]
-    pub(crate) directory_name: String,
     pub(crate) manifest: ConnectorManifest,
-    #[cfg(feature = "v1-compat")]
-    pub(crate) directory_sha256: String,
-    #[cfg(feature = "v1-compat")]
-    pub(crate) manifest_sha256: String,
 }
 
 impl TrustedManifests {
@@ -54,14 +43,11 @@ impl TrustedManifests {
             if !kind.is_dir() || !entry.path().join("manifest.toml").is_file() {
                 continue;
             }
-            // Checked in both builds: a name that is not UTF-8 is not a connector this daemon
-            // can name.
-            #[cfg_attr(not(feature = "v1-compat"), allow(unused_variables))]
-            let directory_name = entry.file_name().into_string().map_err(|_| {
+            // A name that is not UTF-8 is not a connector this daemon can name.
+            entry.file_name().into_string().map_err(|_| {
                 DaemonError::Config("a connector directory name is not UTF-8".into())
             })?;
-            #[cfg_attr(not(feature = "v1-compat"), allow(unused_variables))]
-            let (directory_sha256, manifest_bytes) =
+            let (_directory_sha256, manifest_bytes) =
                 connector_dir_sha256_with_manifest(&entry.path())?;
             let manifest_text = std::str::from_utf8(&manifest_bytes).map_err(|_| {
                 DaemonError::Config(format!(
@@ -73,15 +59,7 @@ impl TrustedManifests {
                 DaemonError::Config(format!("{}/manifest.toml: {error}", entry.path().display()))
             })?;
             let id = manifest.id.clone();
-            let row = LoadedManifest {
-                #[cfg(feature = "v1-compat")]
-                directory_name,
-                manifest,
-                #[cfg(feature = "v1-compat")]
-                directory_sha256,
-                #[cfg(feature = "v1-compat")]
-                manifest_sha256: crate::workspace::sha256_hex(&manifest_bytes),
-            };
+            let row = LoadedManifest { manifest };
             if loaded.insert(id.clone(), row).is_some() {
                 return Err(DaemonError::Config(format!(
                     "more than one installed connector declares id `{id}`"
@@ -89,16 +67,12 @@ impl TrustedManifests {
             }
         }
 
-        #[cfg(feature = "v1-compat")]
-        let declarations = crate::foreign::compile_declarations(&loaded)?;
         let manifests = loaded
             .into_iter()
             .map(|(id, row)| (id, row.manifest))
             .collect();
         Ok(Self {
             manifests: std::sync::Arc::new(manifests),
-            #[cfg(feature = "v1-compat")]
-            declarations: std::sync::Arc::new(declarations),
         })
     }
 

@@ -48,12 +48,13 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D39 | Headless launches, ported patterns, Codex home | in force (m2) | [entry](#d39-m2-headless-capture-launches-ported-extra-redaction-patterns-shared-isolated-codex-home) |
 | D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2) | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
 | D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2) | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
-| D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
+| D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47; V1-path clause replaced by D48 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
 | D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2) | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
 | D44 | OpenCode native = read-only own-session SQLite snapshot; public repo goal-cup-tracer | in force (m2); DCO clause amended by D47 | [entry](#d44-m2-opencodes-native-leg-is-a-read-only-snapshot-of-its-own-sessions-rows-the-public-repo-is-goal-cup-tracer) |
 | D45 | Integrity exit judges the record, not the run: interrupted, undecoded and unconfirmed-stop runs stay exit 0 | in force (m2) | [entry](#d45-m2-the-integrity-exit-judges-the-record-not-the-run) |
 | D46 | Capture creation binds the CLI and daemon to identical connector bytes | in force (m2) | [entry](#d46-m2-capture-creation-binds-both-local-halves-to-identical-connector-bytes) |
 | D47 | No DCO sign-off; a human answers for each PR | in force (m2) | [entry](#d47-m2-no-dco-sign-off) |
+| D48 | The V1 path and its `v1-compat` feature leave the tree; history keeps them | in force (m2) | [entry](#d48-m2-the-v1-path-leaves-the-tree) · LEDGER OS-30 |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1008,6 +1009,8 @@ Task 5/H-11 designs and the H-11 APFS probe).**
 - **V1 path.** The v4/V1 transcript-and-hook product path stays in the repo but compiles only with a
   `v1-compat` cargo feature, off by default. It is not public surface for v0.5. Its upload, receipt,
   acknowledgement and sign-in pieces are reused by the server phase; the rest is deleted later.
+  (Replaced by [D48](#d48-m2-the-v1-path-leaves-the-tree): the whole path is deleted, and git
+  history and the `v0.5.0` tag keep it.)
 - **Harness contract.** A harness is data: its connector manifest declares the native source and
   form, the session-identity source, seed files, credential variable and CA variable, under a
   `schema_version`. The v5 evidence format is frozen for v0.x (a breaking change means v6). Common
@@ -1154,6 +1157,28 @@ certifies a diff nobody read or fails a check the agent forgot. Contributions ar
 Apache-2.0 section 5. The person who opens a PR states in it that they read the whole diff and
 discloses AI assistance; code-owner review on `main` stays. The `main` ruleset requires `check`
 only and the DCO App is not installed. A `Signed-off-by` line is allowed but not checked.
+
+## D48. **(M2)** The V1 path leaves the tree.
+
+**Decision (owner, Balazs Nemethi, 2026-10-11).** Replaces D42's V1-path clause. The V1/v4
+transcript-and-hook path that compiled only with the `v1-compat` cargo feature is deleted, with
+its upload, receipt, acknowledgement and sign-in pieces. D42 kept those pieces for a later server
+phase; git history and the `v0.5.0` tag preserve them, so a server phase starts from there and
+not from dead code in the tree.
+
+- **Gone.** The `v1-compat` features of `goalcup-cli`, `goalcup-daemon` and `goalcup-devserver`;
+  every item they gated; the V1-only tests (`real_daemon_end_to_end` among them) and their
+  support files; the optional `open`, `rusqlite` and `age` dependencies; the second gate block in
+  README and CONTRIBUTING.
+- **Kept.** Default-build behaviour. The hidden `auth`, `ui` and `resume` commands and the V1
+  control routes still refuse, now naming D48. The daemon still refuses a registry whose V1 rows
+  owe work. The control API types, the V1 `manifest.toml` parsing (OS-29) and the verifier's V1
+  checks are unchanged.
+- **`goalcup-devserver` stays** for now. No shipped binary links it, but the default test suite
+  still does, and code comments cite its constants. Moving what those need and possibly removing
+  the crate is a separate follow-up.
+
+**Evidence.** LEDGER OS-30; the pull request that lands it carries the gate results.
 
 ---
 

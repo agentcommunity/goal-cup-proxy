@@ -23,7 +23,8 @@ has exactly three pinned schema-1 connector directories: `codex-cli`, `claude-co
 ([packaging/README.md](packaging/README.md)) selects only Codex and Claude; a source pin does not
 prove package inclusion. Short rows are measured; long runs are not qualified (records:
 [docs/qualification/README.md](docs/qualification/README.md)). `v1/trunk` and its `v0.1.0` tag are
-private; V1 code here builds only with `v1-compat`. Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md).
+private; the V1 code that v0.5.0 kept behind `v1-compat` was removed (D48) and lives on in the
+`v0.5.0` tag. Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## Build
 
@@ -36,8 +37,7 @@ Prerequisites:
   and a `goalcup start` capture is refused, because the chain's disk reservation is implemented
   only for macOS APFS. Windows is planned; its code stubs say "not yet supported" and
   `goalcup-platform` refuses to compile on it today.
-- **A C compiler** (`ring` compiles C and assembly; a `v1-compat` build also compiles the bundled
-  SQLite that `rusqlite` carries).
+- **A C compiler** (`ring` compiles C and assembly).
 - **`shasum` or `sha256sum`**, because a test runs `scripts/pin-manifests.sh --print`, and
   **`python3`** if you change `connectors/` and regenerate the pins.
 
@@ -70,30 +70,15 @@ turn on `goalcup-daemon`'s `test-hooks` feature, so none of them compiles the sh
 [STATUS.md](STATUS.md); this file carries no count. Ignored tests, the by-hand suites and the CI
 smoke check are in [docs/OPERATING.md](docs/OPERATING.md#building-and-verifying).
 
-The V1/v4 transcript-and-hook product path compiles only with the `v1-compat` feature, off by
-default (D42). The four commands above gate the default build, which is the M2 capture product.
-The default build still parses the retained `manifest.toml` compatibility files in the Codex and
-Claude connector directories at startup; removing that parser dependency is ticket OS-29, not
-completed work. Any change under `crates/goalcup-{daemon,cli,devserver}`, or to code those crates
-share with V1 (`registry.rs`, `status.rs`, `runtime/mod.rs`, the control handlers), also passes
-the second block, which enables the daemon, CLI and devserver feature together:
-
-```
-cargo build --workspace --features v1-compat
-cargo clippy --workspace --all-targets --features v1-compat -- -D warnings
-cargo test --workspace --features v1-compat
-```
-
-The first line is step zero for the same reason as above: it is the only command that compiles
-the `v1-compat` library with `test-hooks` off.
+The four commands gate the M2 capture product, which is the whole build: the V1/v4
+transcript-and-hook path was removed (D48), so there is no second feature set to gate. The build
+still parses the retained `manifest.toml` compatibility files in the Codex and Claude connector
+directories at startup; removing that parser dependency is ticket OS-29, not completed work.
 
 Narrower runs use the same runner, for example `cargo test -p goalcup-daemon`. Add
 `--test <file>` for one integration file. **CLI and devserver tests spawn the sibling
-`target/debug/goalcup-daemon`**, whichever feature set built it last, so build the workspace for
-the matching feature set before a narrow `-p goalcup-cli` run: `cargo build --workspace` for the
-default tests, `cargo build --workspace --features v1-compat` for the others. The CLI tests check
-`goalcup-daemon --version` (a `v1-compat` build says `+v1-compat`) and stop with the command to
-run when the binary does not match.
+`target/debug/goalcup-daemon`**, so run `cargo build --workspace` before a narrow
+`-p goalcup-cli` run.
 
 ## Run from source or stage a private candidate
 
@@ -131,8 +116,8 @@ workspace_parent = "<install>/var/workspaces"
 control_addr     = "127.0.0.1:0"
 ```
 
-Omit `upload_url` and `server_public_key` together; the daemon then admits only local v5 entries.
-Every other key and the V1 server flow are in [OPERATING](docs/OPERATING.md#running-the-daemon).
+Omit `upload_url` and `server_public_key`: the daemon admits only local v5 entries (D48).
+Every other key is in [OPERATING](docs/OPERATING.md#running-the-daemon).
 
 Put the goal in a text file in a directory of its own, outside any repository: the run's
 directory is created beside it. Then:

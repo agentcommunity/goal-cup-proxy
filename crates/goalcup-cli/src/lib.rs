@@ -1,27 +1,17 @@
 //! `goalcup` — the participant's command line.
 //!
-//! The sub-commands (five by default; `v1-compat` adds `auth`, `ui` and `resume`) live in
-//! [`commands`]; the tracker's own configuration directory
+//! The five sub-commands live in [`commands`]; the tracker's own configuration directory
 //! and the documents in it live in [`config`]; the shipped connector manifests and the
 //! release-hash allowlist over them live in [`connector`], and the version grammar those
 //! manifests declare their tested range in lives in [`version`]; the one client that speaks
 //! the daemon's control API — one transport, one auth rule, and no retry of its own —
 //! lives in [`daemon`], with the one `busy` retry every command wraps its calls in in
-//! [`retry`]; the one gate every URL this CLI hands to a browser passes — one rule for a
-//! daemon page, one for a device-flow URI, and four call sites — lives in `browser` (a `v1-compat` module); the
-//! eight template variables a launch recipe renders against, built from
-//! nothing but what that API answered, live in [`vars`], and the launch those variables
-//! render — the argv, the environment delta, the three launch modes and the D22 process
-//! hand-off — lives in [`launch`], with the one read of the participant's own harness
-//! configuration that keeps a per-run home from being a first-run one in [`home_seed`];
-//! the pins one `goalcup start` leaves behind for the
-//! processes that come after it, the run public key among them, live in [`entries`], and
-//! D16's arming gate — what it can answer, the two modes it is met in, the words it refuses
-//! in and the Ctrl-C handler that unmakes an entry nobody is going to use — lives in
-//! [`arming`]; the self-check `goalcup seal` holds up beside the manifest the daemon
-//! recorded — the one exclusion function, the walk, the difference report and the name of
-//! the directory the daemon exported the trace into — lives in [`seal`]; the number every
-//! one of them leaves under lives here, in
+//! [`retry`]; the launch — the argv, the environment delta and the D22 process hand-off —
+//! lives in [`launch`]; the pins one `goalcup start` leaves behind for the processes that
+//! come after it, the run public key among them, live in [`entries`], and the arming answer
+//! and the Ctrl-C handler that unmakes an entry nobody is going to use live in [`arming`];
+//! the self-check `goalcup seal` holds up beside the manifest the daemon recorded lives in
+//! [`seal`]; the number every one of them leaves under lives here, in
 //! [`CliError::exit_code`], and nowhere else.
 //!
 //! # The exit ladder
@@ -29,25 +19,21 @@
 //! | Exit | Meaning |
 //! |---|---|
 //! | 0 | The command did what it was asked. |
-//! | 1 | Refused, and the participant can fix it: no daemon, no grant, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. |
+//! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. |
 //! | 2 | **Never produced by this CLI.** It is a `Fail` verdict, relayed unchanged from `goalcup-verify` by [`relay_verdict`]. |
 //! | 3 | The CLI could not do its job: a file it could not read, a response it could not parse. |
-//! | 4 | **A gate said no.** Three gates raise it and nothing else does: D16's arming gate (the daemon has settled that this entry will never arm); `goalcup resume`'s harness-lock gate (a declared lock path still on disk, seen by either side); and its local-resume gate (another local CLI holds that entry's OS lock). |
+//! | 4 | **A gate said no.** Only the daemon's `arming_timeout` maps here, and no capture-run path raises it: the V1 arming and `goalcup resume` gates were removed (D48). |
 //!
 //! [`CliError::exit_code`] is the only place a command decides its number, and `main.rs` is
 //! the only place an `ExitCode` is built.
 
 pub mod arming;
-#[cfg(feature = "v1-compat")]
-pub mod browser;
 pub mod capture_tee;
 pub mod commands;
 pub mod config;
 pub mod connector;
 pub mod daemon;
 pub mod entries;
-#[cfg(feature = "v1-compat")]
-pub mod home_seed;
 pub mod key_scan;
 pub mod launch;
 pub mod per_run_home;
@@ -56,8 +42,6 @@ pub mod proxy;
 mod released_child;
 pub mod retry;
 pub mod seal;
-#[cfg(feature = "v1-compat")]
-pub mod vars;
 pub mod version;
 
 use goalcup_protocol::ProtocolError;
@@ -113,16 +97,13 @@ impl CliError {
             CliError::Refused(_) => 1,
             CliError::Gate(_) => 4,
             CliError::Control(e) => match e {
-                // A gate the daemon reported directly: the arming window closing. The gates
-                // `resume` raises never reach this match: `commands::resume::translate` turns
-                // its `409` into a `CliError::Gate` above, with the daemon's own sentence on it.
+                // A gate the daemon reported directly: the arming window closing.
                 ControlError::ArmingTimeout { .. } => 4,
-                // Actionable: start the daemon, name an entry that exists, run `auth` again,
-                // pick a connector this build ships, install the matching build, wait and
-                // retry. `PreflightFailed` is raised before an entry exists and asks for a
-                // matching build, not an arming step. `Busy` is here on every command,
-                // `resume` included: a daemon holding an entry has decided nothing about
-                // this run.
+                // Actionable: start the daemon, name an entry that exists, pick a connector
+                // this build ships, install the matching build, wait and retry.
+                // `PreflightFailed` is raised before an entry exists and asks for a matching
+                // build, not an arming step. `Busy` is here on every command: a daemon
+                // holding an entry has decided nothing about this run.
                 ControlError::Unreachable(_)
                 | ControlError::NotFound(_)
                 | ControlError::Conflict(_)

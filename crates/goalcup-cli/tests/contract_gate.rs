@@ -38,101 +38,6 @@ fn the_exit_ladder_reserves_two_for_a_verdict_and_gives_a_gate_four() {
     }
 }
 
-#[cfg(feature = "v1-compat")]
-#[test]
-fn help_lists_eight_subcommands_and_points_verification_at_the_one_binary() {
-    let out = goalcup().arg("--help").output().unwrap();
-    assert!(out.status.success());
-    let text = String::from_utf8(out.stdout).unwrap();
-    for cmd in [
-        "auth", "start", "status", "entries", "ui", "resume", "seal", "doctor",
-    ] {
-        assert!(text.contains(cmd), "--help must list {cmd}");
-    }
-    // One verifier binary. `goalcup verify` is not a sub-command.
-    let bad = goalcup().arg("verify").output().unwrap();
-    assert!(!bad.status.success(), "`goalcup verify` must not exist");
-    assert!(
-        text.contains("goalcup-verify"),
-        "--help says where verification lives"
-    );
-}
-
-/// **Exactly** eight, in both helps.
-///
-/// The count matters as much as the membership: clap ships a built-in `help` sub-command
-/// that appears in this list looking exactly like one this tree decided to ship, and a
-/// ninth line here is either that or a `verify` somebody put back.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn the_commands_block_holds_the_eight_and_nothing_else_under_either_help() {
-    for flag in ["-h", "--help"] {
-        let out = goalcup().arg(flag).output().unwrap();
-        let text = String::from_utf8(out.stdout).unwrap();
-        let listed: Vec<String> = text
-            .lines()
-            .skip_while(|l| l.trim() != "Commands:")
-            .skip(1)
-            .take_while(|l| !l.trim().is_empty())
-            .filter_map(|l| l.split_whitespace().next().map(str::to_string))
-            .collect();
-        assert_eq!(
-            listed,
-            [
-                "auth", "start", "status", "entries", "ui", "resume", "seal", "doctor"
-            ],
-            "`goalcup {flag}` lists the eight and nothing else"
-        );
-        // The line pointing at the one verifier binary survives the SHORT help too, which
-        // is the one a reader who is lost actually runs.
-        assert!(
-            text.contains("goalcup-verify"),
-            "`goalcup {flag}` says where verification lives"
-        );
-    }
-}
-
-/// The exit ladder is under BOTH helps, and rung 4 names every gate.
-///
-/// Rung 4 is this tree's own invention and the one a participant actually meets, so `--help`
-/// documents it. Every gate is named here, so a help text that drops one fails rather than
-/// misleading a participant whose resume left under a number `--help` says belongs to a
-/// harness that never armed.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn the_exit_ladder_is_under_both_helps_and_names_every_gate() {
-    for flag in ["-h", "--help"] {
-        let out = goalcup().arg(flag).output().unwrap();
-        let text = String::from_utf8(out.stdout).unwrap();
-        assert!(
-            text.contains("Exit codes:"),
-            "`goalcup {flag}` carries the ladder"
-        );
-        for rung in ["0", "1", "3", "4"] {
-            assert!(
-                text.contains(rung),
-                "`goalcup {flag}` names rung {rung}: {text}"
-            );
-        }
-        assert!(
-            text.contains("ARMING GATE"),
-            "and says what 4 is, which is the one a participant meets: {text}"
-        );
-        assert!(
-            text.contains("lock gate") && text.contains("goalcup resume"),
-            "and names the harness-lock gate on that rung: {text}"
-        );
-        assert!(
-            text.contains("local-resume gate"),
-            "and names the local serialization gate on that rung: {text}"
-        );
-        assert!(
-            text.contains("2 is never this binary's"),
-            "and that 2 is the verifier's and not this one's: {text}"
-        );
-    }
-}
-
 /// Every secret this CLI writes is readable by its owner and by nobody else.
 ///
 /// The assertion is on the group and other bits alone. `write_secret_file` opens with
@@ -397,24 +302,11 @@ fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
             sites.push((file, n + 1, trimmed.to_string()));
         }
     }
-    let by_file = |name: &str| sites.iter().filter(|(f, _, _)| f.ends_with(name)).count();
-    assert_eq!(
-        by_file("src/commands/start.rs"),
-        1,
-        "the arming gate: a gate the daemon settled. {sites:#?}"
-    );
-    assert_eq!(
-        by_file("src/commands/resume.rs"),
-        3,
-        "the two harness-lock sites plus the local-resume serialization gate. \
-         {sites:#?}"
-    );
-    assert_eq!(
-        sites.len(),
-        4,
-        "a fifth site is a fourth gate, and rung 4 has three — say which it is in `lib.rs`'s \
-         ladder, in `AFTER_HELP`, and here: {sites:#?}"
-    );
+    // The CLI raises no rung-4 site of its own since D48 removed the V1 arming wait and the
+    // `resume` gates: rung 4 reaches a participant only as the daemon's `arming_timeout`,
+    // which `CliError::exit_code` maps. A new site is a new gate; say which in `lib.rs`'s
+    // ladder, in `AFTER_HELP`, and here.
+    assert!(sites.is_empty(), "an unexpected rung-4 site: {sites:#?}");
 }
 
 /// A verdict `goalcup-verify` produced, relayed with its own number unchanged — including
@@ -563,14 +455,8 @@ fn the_three_participant_surfaces_are_no_longer_stubs_and_no_daemon_is_rung_one(
     let expected = goalcup_cli::config::control_path(&cfg)
         .display()
         .to_string();
-    // `ui` is the V1 path's (D42): it is a command only in a `v1-compat` build.
-    let commands = {
-        #[allow(unused_mut)]
-        let mut commands = vec![vec!["status"], vec!["status", "--json"], vec!["entries"]];
-        #[cfg(feature = "v1-compat")]
-        commands.extend([vec!["ui"], vec!["ui", "--print"]]);
-        commands
-    };
+    // `ui` was the V1 path's, removed by D48: it is a hidden stub that refuses.
+    let commands = vec![vec!["status"], vec!["status", "--json"], vec!["entries"]];
     for args in commands {
         let out = goalcup()
             .args(&args)
@@ -596,143 +482,6 @@ fn the_three_participant_surfaces_are_no_longer_stubs_and_no_daemon_is_rung_one(
             "`goalcup {args:?}` printed nothing before it refused"
         );
     }
-}
-
-/// `goalcup resume` is wired to a real command, and the first thing it needs is a daemon.
-///
-/// Rung 1, naming `control.json` — the same answer the four commands above give from the
-/// same file, and deliberately **not** the rung a held lock leaves under. Everything past
-/// this first refusal — the pre-POST lock check, the ordered five steps, the relaunch and
-/// the hand-off — is driven against the in-process mock in `tests/resume_locks.rs`, where a
-/// test can assert what was spawned without a daemon or a harness on the machine that runs
-/// it.
-///
-/// The bare form and the flagged form both, because `--print-launch` here does not stop
-/// before the daemon the way `goalcup start --print-launch` does: the entry it resumes
-/// already exists, so there is nothing to preview without asking the tracker.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn resume_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
-    let cfg = support::empty_cfg();
-    let expected = goalcup_cli::config::control_path(&cfg)
-        .display()
-        .to_string();
-    for args in [
-        vec!["resume"],
-        vec!["resume", "entry-0000"],
-        vec!["resume", "--print-launch", "--no-open"],
-    ] {
-        let out = goalcup()
-            .args(&args)
-            .env_clear()
-            .envs(support::clean_env())
-            .env("GOALCUP_CONFIG_DIR", &cfg)
-            .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
-            .output()
-            .unwrap();
-        assert_eq!(
-            out.status.code(),
-            Some(1),
-            "`goalcup {args:?}` with no daemon is a refusal the participant can fix, not a \
-             stub's rung 3"
-        );
-        let said = String::from_utf8_lossy(&out.stderr).to_string();
-        assert!(
-            said.starts_with("goalcup: ") && said.contains(&expected),
-            "and it names where the daemon's file would have been: {said:?}"
-        );
-        assert!(
-            String::from_utf8_lossy(&out.stdout).is_empty(),
-            "`goalcup {args:?}` printed nothing before it refused"
-        );
-    }
-}
-
-/// `goalcup auth` is wired to a real command, and a run that was told nothing leaves under
-/// rung 1 saying what to set.
-///
-/// The environment is cleared to `PATH` alone (`support::clean_env`): a developer with
-/// `$GOALCUP_SERVER` exported would otherwise run this test against whatever that names,
-/// which is a network call from a contract test and an answer about their machine.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn auth_is_no_longer_a_stub_and_a_missing_server_is_a_refusal_the_participant_can_fix() {
-    let cfg = support::empty_cfg();
-    let out = goalcup()
-        .arg("auth")
-        .env_clear()
-        .envs(support::clean_env())
-        .env("GOALCUP_CONFIG_DIR", &cfg)
-        .output()
-        .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "a command that was not told where the server is is rung 1, not a stub's rung 3"
-    );
-    let said = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(
-        said.starts_with("goalcup: ") && said.contains(goalcup_cli::commands::auth::SERVER_ENV),
-        "`goalcup auth` names the variable that fixes it: {said:?}"
-    );
-    assert!(
-        goalcup_cli::commands::auth::load_grant(&cfg)
-            .unwrap()
-            .is_none(),
-        "a refused `goalcup auth` stores nothing"
-    );
-}
-
-/// `goalcup start` is wired to a real command, and neither of the two ways it refuses before
-/// it can do anything leaves under a verdict's number.
-///
-/// A machine with no daemon is rung 1 naming `control.json` — the same answer `goalcup
-/// doctor` gives, from the same file — and a command line that named no harness is a clap
-/// usage error, which this binary lands on 1 rather than on clap's own 2 (see
-/// `a_usage_error_never_leaves_under_a_verdicts_number`). Nothing here reaches the daemon:
-/// the whole of `goalcup start` past that point is driven against the in-process mock in
-/// `tests/start_launch.rs`, where a test can assert what was created without a daemon on the
-/// machine that runs it.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn start_with_no_daemon_is_rung_one_and_a_start_without_a_harness_is_a_usage_error() {
-    let cfg = support::empty_cfg();
-    let out = goalcup()
-        .args(["start", "--harness", "claude-code-cli"])
-        .env_clear()
-        .envs(support::clean_env())
-        .env("GOALCUP_CONFIG_DIR", &cfg)
-        .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
-        .output()
-        .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "no daemon is a refusal the participant can fix, not a stub's rung 3"
-    );
-    let said = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(
-        said.starts_with("goalcup: ")
-            && said.contains(
-                &goalcup_cli::config::control_path(&cfg)
-                    .display()
-                    .to_string()
-            ),
-        "and it names where the daemon's file would have been: {said:?}"
-    );
-
-    let out = goalcup()
-        .arg("start")
-        .env_clear()
-        .envs(support::clean_env())
-        .env("GOALCUP_CONFIG_DIR", &cfg)
-        .output()
-        .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "`goalcup start` with no --harness is a usage error, and a usage error is never a 2"
-    );
 }
 
 /// "No daemon is rung 1" **through the binary**.
@@ -812,33 +561,9 @@ fn start_and_doctor_skip_a_non_utf8_environment_pair_through_the_real_binary() {
     }
 }
 
-/// `goalcup doctor --help` states the exit codes of BOTH its modes.
-///
-/// The two ladders overlap at 1 — a verdict's `Flag` and this CLI's `Refused` — and they do
-/// not collide only because `--verify` runs no check of its own. A reader who cannot see
-/// that in `--help` will reverse-engineer it from one run and get it wrong.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn doctor_help_says_which_ladder_each_of_its_two_modes_leaves_under() {
-    let out = goalcup().args(["doctor", "--help"]).output().unwrap();
-    assert!(out.status.success());
-    let text = String::from_utf8(out.stdout).unwrap();
-    for said in ["--verify", "exit code", "verdict"] {
-        assert!(
-            text.to_lowercase().contains(&said.to_lowercase()),
-            "`goalcup doctor --help` must say {said:?}: {text}"
-        );
-    }
-    assert!(
-        text.contains("--verify-with-dev") && text.contains("--verify-dev-key"),
-        "and it names the two development flags: {text}"
-    );
-}
-
 /// The default build has no verify mode (D42): `goalcup doctor` offers neither `--verify` nor
 /// the development flags, and its footer names only the exit codes a default build can leave under.
 /// The top-level footer no longer claims 2 is unreachable for a reason that is false.
-#[cfg(not(feature = "v1-compat"))]
 #[test]
 fn the_default_doctor_has_no_verify_mode_and_the_help_footers_say_so() {
     let out = goalcup().args(["doctor", "--help"]).output().unwrap();
@@ -948,61 +673,12 @@ fn doctor_json_is_one_parseable_document_on_stdout_through_the_binary() {
     );
 }
 
-/// `goalcup start` has no `--hours`, and `--help` does not offer one.
-///
-/// No code under `goalcup-daemon/src/` reads `WorkspaceOpts.deadline_hours`, and the deadline
-/// a run is stamped with is the daemon's own `ENTRY_WINDOW_SECONDS` — 604 800, the same week
-/// `DEFAULT_DEADLINE_HOURS` names. A flag whose number is silently replaced is worse than no
-/// flag, and the 168 hours is a rule rather than a preference.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn start_offers_no_deadline_flag_because_the_window_is_a_rule() {
-    let out = goalcup().args(["start", "--help"]).output().unwrap();
-    assert!(out.status.success());
-    let text = String::from_utf8(out.stdout).unwrap();
-    assert!(
-        !text.contains("--hours"),
-        "`goalcup start --help` must not offer a deadline: {text}"
-    );
-    // The flags that ARE the participant's, so this test fails on a help that lost the lot
-    // rather than passing because the block moved.
-    for flag in [
-        "--harness",
-        "--attach",
-        "--print-launch",
-        "--no-open",
-        "--dev",
-        "--goal-file",
-        "--capture-reserve-bytes",
-    ] {
-        assert!(
-            text.contains(flag),
-            "`goalcup start --help` must list {flag}"
-        );
-    }
-    let refused = goalcup()
-        .args(["start", "--harness", "codex-cli", "--hours", "24"])
-        .output()
-        .unwrap();
-    assert!(
-        !refused.status.success(),
-        "a flag this build does not have is a usage error and never a silently ignored one"
-    );
-    assert!(
-        String::from_utf8(refused.stderr)
-            .unwrap()
-            .contains("--hours"),
-        "and clap names it"
-    );
-}
-
-// ------------------------------------------------------------------ the default build (D42)
+// ------------------------------------------------------------------ the capture CLI (D48)
 //
-// Without `v1-compat` the binary is the M2 capture CLI: five commands, and the V1 ones refuse by
-// name instead of vanishing into a clap usage error.
+// The binary is the M2 capture CLI: five commands, and the removed V1 ones refuse by name
+// instead of vanishing into a clap usage error.
 
 /// The commands a default build lists, in order, and nothing else.
-#[cfg(not(feature = "v1-compat"))]
 #[test]
 fn a_default_build_lists_the_five_capture_commands_and_nothing_else() {
     for flag in ["-h", "--help"] {
@@ -1026,17 +702,16 @@ fn a_default_build_lists_the_five_capture_commands_and_nothing_else() {
             "`goalcup {flag}` says where verification lives and carries the ladder: {text}"
         );
         assert!(
-            text.contains("v1-compat"),
-            "and says that the other rungs belong to the V1 path: {text}"
+            text.contains("D48") && text.contains("v0.5.0"),
+            "and says that the other rungs belonged to the removed V1 path: {text}"
         );
     }
     let bad = goalcup().arg("verify").output().unwrap();
     assert!(!bad.status.success(), "`goalcup verify` must not exist");
 }
 
-/// `auth`, `resume` and `ui` are hidden stubs in a default build: a refusal, rung 1, naming
-/// the feature, written before any daemon or configuration is looked at.
-#[cfg(not(feature = "v1-compat"))]
+/// `auth`, `resume` and `ui` are hidden stubs: a refusal, rung 1, naming the removal (D48),
+/// written before any daemon or configuration is looked at.
 #[test]
 fn a_default_build_refuses_each_v1_command_by_name_and_never_panics() {
     let cfg = support::empty_cfg();
@@ -1061,7 +736,7 @@ fn a_default_build_refuses_each_v1_command_by_name_and_never_panics() {
         assert!(
             said.starts_with("goalcup: ")
                 && said.contains(&format!("`goalcup {}`", args[0]))
-                && said.contains("v1-compat")
+                && said.contains("D48")
                 && said.contains("--goal-file"),
             "`goalcup {args:?}` says what it is and how to get a capture run: {said:?}"
         );
@@ -1078,7 +753,6 @@ fn a_default_build_refuses_each_v1_command_by_name_and_never_panics() {
 
 /// A default `goalcup start` names its goal: the V1 path's flags are not in `--help`, and
 /// leaving `--goal-file` out is a usage error that says so.
-#[cfg(not(feature = "v1-compat"))]
 #[test]
 fn a_default_start_requires_a_goal_file_and_offers_no_v1_flags() {
     let out = goalcup().args(["start", "--help"]).output().unwrap();

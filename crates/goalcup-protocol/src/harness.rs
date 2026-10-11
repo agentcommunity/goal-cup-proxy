@@ -7,8 +7,8 @@
 //! refusal table names. The trust tables it checks against are in [`crate::capture_policy`]; a
 //! manifest can only be checked against them, never widen them.
 //!
-//! "Schema 1" is this file's format; the V1 manifest is the legacy `manifest.toml` that only
-//! `v1-compat` reads. They are different files. The CLI and the daemon load a connector through
+//! "Schema 1" is this file's format; the V1 manifest is the legacy `manifest.toml`, whose V1
+//! path D48 removed. They are different files. The CLI and the daemon load a connector through
 //! [`load_dir`], the one loader all three callers share; S4a and S4b move them onto it.
 //!
 //! # Parsing

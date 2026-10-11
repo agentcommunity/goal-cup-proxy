@@ -114,8 +114,6 @@
 //! name and cannot see `Child::kill`, so those sites are listed here.
 
 use crate::CliError;
-#[cfg(feature = "v1-compat")]
-use crate::connector::Connector;
 use crate::connector::HarnessConnector;
 use crate::proxy::connect::PROXY_USERNAME;
 use goalcup_protocol::capture::MAX_GOAL_BYTES;
@@ -139,19 +137,6 @@ pub use crate::capture_tee::{
 /// "this crate never terminates anything" sweep exempts by name; it is part of this module's
 /// interface (D40, the root ruling).
 pub use crate::released_child::{ReleasedChildEnd, end_released_child};
-
-/// Which of a connector's two recipes is being rendered.
-///
-/// The two differ only in which `args` list they read: `[launch] args` starts a session and
-/// `[resume] args` selects one. They are two lists and not one with a flag appended because
-/// `--session-id` creates and `--resume` selects, and a launch carrying both is a launch
-/// Claude Code refuses.
-#[cfg(feature = "v1-compat")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaunchKind {
-    Start,
-    Resume,
-}
 
 /// Everything a launch is, decided before anything is spawned.
 ///
@@ -399,151 +384,6 @@ pub(crate) fn is_denied(key: &str) -> bool {
     upper.ends_with("_BASE_URL") || upper.ends_with("_PROXY") || upper == "PROXY"
 }
 
-/// Why a manifest may not pin `key` in a V1 `[launch.env]`, or `None`: everything the capture
-/// launch refuses ([`goalcup_protocol::capture_policy::env_key_denied`]: endpoints, proxies,
-/// credentials, providers, certificate trust, code injection, `OTEL_*`, `DYLD_*`), except the
-/// connector's own harness home, the one telemetry switch a V1 launch turns on and the four
-/// `OTEL_LOG_*` content switches that make the harness write its own raw bodies to disk. Any other
-/// `OTEL_*` name (`OTEL_EXPORTER_*`, `OTEL_LOGS_EXPORTER`, an unlisted `OTEL_LOG_*`) stays refused.
-#[cfg(feature = "v1-compat")]
-pub(crate) fn launch_env_pin_denied(key: &str, home_env: Option<&str>) -> Option<&'static str> {
-    /// The switches the shipped Claude manifest pins, and nothing else.
-    const ALLOWED: [&str; 5] = [
-        "CLAUDE_CODE_ENABLE_TELEMETRY",
-        "OTEL_LOG_RAW_API_BODIES",
-        "OTEL_LOG_USER_PROMPTS",
-        "OTEL_LOG_TOOL_DETAILS",
-        "OTEL_LOG_ASSISTANT_RESPONSES",
-    ];
-    if ALLOWED.iter().any(|name| name.eq_ignore_ascii_case(key))
-        || home_env.is_some_and(|h| h.eq_ignore_ascii_case(key))
-    {
-        return None;
-    }
-    goalcup_protocol::capture_policy::env_key_denied(
-        key,
-        goalcup_protocol::capture_policy::EnvContext::CaptureEnv,
-    )
-}
-
-/// The exact argv, the exact environment and the exact working directory, with nothing
-/// spawned.
-///
-/// `env` is the environment the child starts from and it is expected to have been through
-/// [`scrubbed_env`] already — that is what keeps this function pure, and the caller is
-/// `goalcup start`, which scrubs its own.
-///
-/// Refusals, and the rungs they leave under:
-///
-/// * the connector is [`LaunchMode::AttachOnly`] — [`CliError::Internal`], rung 3. The
-///   caller checks the mode and prints the arming recipe; reaching here is this CLI's bug
-///   and not something a participant does differently next time.
-/// * a template names a variable the tracker does not supply — [`CliError::Protocol`],
-///   rung 3, naming it. That is [`render`]'s own refusal, relayed: a launch that wrote an
-///   unrendered placeholder into a child's environment is the failure this is for.
-/// * the recipe needs `{server_port}` and it rendered empty — [`CliError::Refused`], rung 1,
-///   naming the token.
-/// * the rendered argv contains a banned argument — [`CliError::Refused`], rung 1, naming
-///   the argument.
-/// * `[launch.env]` pins a name D23's denylist covers — [`CliError::Refused`], rung 1,
-///   naming the connector and the variable. See [`is_denied`], and the comment at the loop.
-#[cfg(feature = "v1-compat")]
-pub fn plan(
-    c: &Connector,
-    v: &TemplateVars,
-    workspace: &Path,
-    kind: LaunchKind,
-    env: &BTreeMap<String, String>,
-) -> Result<LaunchPlan, CliError> {
-    let launch = &c.manifest.launch;
-    if launch.mode == LaunchMode::AttachOnly {
-        return Err(CliError::Internal(format!(
-            "`{}` is an attach-only connector: the folder is armed and the participant \
-             opens a session in it, so there is no launch to plan",
-            c.manifest.id
-        )));
-    }
-
-    let templates: &[String] = match kind {
-        LaunchKind::Start => &launch.args,
-        LaunchKind::Resume => &c.manifest.resume.args,
-    };
-    let mut argv = Vec::with_capacity(templates.len());
-    for t in templates {
-        argv.push(render(t, v)?);
-    }
-    let mut env_set = BTreeMap::new();
-    for (k, t) in &launch.env {
-        // D23's denylist, on the set side. [`scrubbed_env`] takes these out of the inherited
-        // environment, and [`spawn`] applies `env_set` after `env_remove` — so a manifest
-        // pinning `ANTHROPIC_BASE_URL` in `[launch.env]` would beat both the scrub and the
-        // removal list. `--dev` admits a manifest this build does not pin, which is the run
-        // where that matters most.
-        //
-        // A refusal (rung 1) and never a silent drop: a harness launched with the variable
-        // quietly missing is a run whose recipe did not do what it says, and the fix is a
-        // manifest that does not pin it.
-        if is_denied(k) {
-            return Err(CliError::Refused(format!(
-                "`{}`'s `[launch.env]` pins `{k}`, and this tool never sets a model base URL \
-                 or a proxy on a harness — not under `--dev` either (D1, D23). A run whose \
-                 harness talked to something other than the model provider is not the run \
-                 its trace describes. Nothing was launched.",
-                c.manifest.id
-            )));
-        }
-        // The capture launch's own deny policy (D39), applied to what a manifest pins here
-        // too: a telemetry exporter, `NODE_OPTIONS`, `DYLD_*` and the rest are as able to move
-        // a run's content off the machine from a V1 launch as from a capture one.
-        if let Some(why) = launch_env_pin_denied(k, launch.home_env.as_deref()) {
-            return Err(CliError::Refused(format!(
-                "`{}`'s `[launch.env]` pins `{k}`, which {why}. A V1 launch pins only the \
-                 harness home, the telemetry switches and the `OTEL_LOG_*` content switches. \
-                 Nothing was launched.",
-                c.manifest.id
-            )));
-        }
-        env_set.insert(k.clone(), render(t, v)?);
-    }
-
-    // Before the banned-args guard, because a recipe that cannot run at all is a different
-    // conversation from a recipe carrying an argument the rules forbid.
-    needs_a_port_it_has(templates, &launch.env, v, &c.manifest.id)?;
-    no_banned_argument(&argv, &launch.banned_args, &c.manifest.id)?;
-
-    Ok(LaunchPlan {
-        program: launch.program.clone(),
-        argv,
-        env_set,
-        env_remove: env_remove_for(c),
-        // Scrubbed by the caller, not here: a `plan` that reached for `std::env` would be a
-        // `--print-launch` that depended on the shell it was typed in.
-        env_base: env.clone(),
-        cwd: workspace.to_path_buf(),
-        mode: launch.mode,
-        kill: c.manifest.kill.clone(),
-        capture: None,
-    })
-}
-
-/// The connector's `launch.env_remove`, in manifest order, followed by every
-/// `preflight.banned_env` name it does not already carry.
-///
-/// The union and not either list alone. The two are the same rule at two moments — the
-/// preflight refuses a start under one of these variables, the launch strips it from the
-/// child — and the shipped connectors already agree. A connector whose author remembered
-/// one list and not the other gets the safe behaviour rather than a hole.
-#[cfg(feature = "v1-compat")]
-fn env_remove_for(c: &Connector) -> Vec<String> {
-    let mut out = c.manifest.launch.env_remove.clone();
-    for k in &c.manifest.preflight.banned_env {
-        if !out.contains(k) {
-            out.push(k.clone());
-        }
-    }
-    out
-}
-
 /// A recipe that names `{server_port}` may not be launched on an empty one.
 ///
 /// The check is on the templates rather than on the rendered strings, because an empty
@@ -575,25 +415,6 @@ fn needs_a_port_it_has(
              entry: the port is empty, so the harness would be started on nothing. Nothing \
              is launched."
         )));
-    }
-    Ok(())
-}
-
-/// `launch.banned_args`, matched against the **rendered** argv, whole argument by whole
-/// argument.
-///
-/// Whole arguments and never substrings: `--pure` is refused and `--purely-cosmetic` is
-/// not. A substring match would refuse arguments no rule names, which is how a guard stops
-/// being believed.
-#[cfg(feature = "v1-compat")]
-fn no_banned_argument(argv: &[String], banned: &[String], id: &str) -> Result<(), CliError> {
-    for a in argv {
-        if banned.iter().any(|b| b == a) {
-            return Err(CliError::Refused(format!(
-                "`{a}` is on `{id}`'s banned-argument list (RULES.md), and it is in the argv \
-                 this launch would run. Nothing is spawned."
-            )));
-        }
     }
     Ok(())
 }
@@ -2363,45 +2184,4 @@ impl GatedSpawn {
         ))
     }
     pub fn abort(self) {}
-}
-
-#[cfg(all(test, feature = "v1-compat"))]
-mod launch_env_pin_tests {
-    use super::launch_env_pin_denied;
-
-    #[test]
-    fn the_shipped_pins_pass() {
-        for (key, home) in [
-            ("CLAUDE_CONFIG_DIR", "CLAUDE_CONFIG_DIR"),
-            ("CODEX_HOME", "CODEX_HOME"),
-            ("CLAUDE_CODE_ENABLE_TELEMETRY", "CLAUDE_CONFIG_DIR"),
-            ("OTEL_LOG_RAW_API_BODIES", "CLAUDE_CONFIG_DIR"),
-            ("OTEL_LOG_USER_PROMPTS", "CLAUDE_CONFIG_DIR"),
-            ("OTEL_LOG_TOOL_DETAILS", "CLAUDE_CONFIG_DIR"),
-            ("OTEL_LOG_ASSISTANT_RESPONSES", "CLAUDE_CONFIG_DIR"),
-        ] {
-            assert_eq!(launch_env_pin_denied(key, Some(home)), None, "{key}");
-        }
-    }
-
-    #[test]
-    fn exporters_injection_and_trust_are_refused() {
-        for key in [
-            "OTEL_LOGS_EXPORTER",
-            "OTEL_EXPORTER_OTLP_ENDPOINT",
-            "OTEL_LOG_ENDPOINT",
-            "otel_traces_exporter",
-            "NODE_OPTIONS",
-            "DYLD_INSERT_LIBRARIES",
-            "LD_PRELOAD",
-            "NODE_TLS_REJECT_UNAUTHORIZED",
-            "HTTPS_PROXY",
-            "ANTHROPIC_BASE_URL",
-        ] {
-            assert!(
-                launch_env_pin_denied(key, Some("CLAUDE_CONFIG_DIR")).is_some(),
-                "{key} must be refused"
-            );
-        }
-    }
 }

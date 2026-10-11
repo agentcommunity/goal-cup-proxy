@@ -294,47 +294,6 @@ fn an_upload_url_that_is_not_http_is_refused_by_name() {
     }
 }
 
-/// Nothing in this build speaks TLS, so an `upload_url` is either
-/// loopback — where cleartext never leaves the machine — or a promise the daemon cannot
-/// keep. `https` is refused by name and told where TLS lands, rather than being accepted
-/// and then downgraded to plaintext by the client that has to connect to it.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn an_upload_url_is_loopback_cleartext_or_it_is_refused() {
-    for good in [
-        "http://127.0.0.1:9000",
-        "http://127.9.9.9:9000/api",
-        "http://localhost:9000",
-        "http://[::1]:9000",
-    ] {
-        DaemonConfig::from_toml_str(&base("").replace("http://127.0.0.1:9000", good))
-            .unwrap()
-            .validate()
-            .unwrap_or_else(|e| panic!("{good} is loopback and must load: {e}"));
-    }
-
-    let e = DaemonConfig::from_toml_str(
-        &base("").replace("http://127.0.0.1:9000", "http://events.example.invalid/v1"),
-    )
-    .unwrap()
-    .validate()
-    .expect_err("cleartext off this machine is refused")
-    .to_string();
-    assert!(e.contains("upload_url") && e.contains("loopback"), "{e}");
-
-    let e = DaemonConfig::from_toml_str(
-        &base("").replace("http://127.0.0.1:9000", "https://events.example.invalid/v1"),
-    )
-    .unwrap()
-    .validate()
-    .expect_err("this build has no TLS")
-    .to_string();
-    assert!(
-        e.contains("upload_url") && e.contains("M4"),
-        "the refusal names where TLS lands: {e}"
-    );
-}
-
 /// The `[event]` section is optional, complete, readable, and in order.
 ///
 /// The daemon signs these three fields with the run key, and an agent is told
@@ -407,7 +366,8 @@ fn the_optional_event_section_is_absent_complete_and_in_order() {
 /// The example is the first thing anybody configuring this daemon copies, so the block is
 /// checked by the code it configures rather than by a reader: `artifact_root` must not sit
 /// inside `config_dir` — `config_dir` is what the CLI and the MCP server read, and neither
-/// may see a capture buffer — and `server_public_key` must be a key `validate()` accepts.
+/// may see a capture buffer — and the block is LocalOnly: no `upload_url`, no
+/// `server_public_key` (the V1 uploader that read them was removed by D48).
 ///
 /// The paths are rewritten into a tempdir before the parse, and only their `/Users/you`
 /// prefix is: the block's own nesting — artifact root beside the config dir, workspace
@@ -456,44 +416,10 @@ fn the_operating_guide_s_example_configuration_is_one_this_build_accepts() {
         c.config_dir.display()
     );
 
-    // And the key is the published placeholder, spelled out, so the block is copy-pastable
-    // against `goalcup-devserver` and so the release gate has something to grep for.
-    assert_eq!(
-        c.server_public_key,
-        goalcup_devserver::dev_server_public_key_hex(),
-        "docs/OPERATING.md's example must pin the devserver's published placeholder key"
-    );
-
-    // The second configuration in that file, which is the one a reader actually runs.
-    //
-    // The guide carries a development walkthrough that
-    // writes its own `dev/daemon.toml` with a heredoc, and that walkthrough is executed as
-    // written, so it is parsed here too — `$PWD` rewritten the way `/Users/you` is, and
-    // for the same reason: the nesting is what is being asserted.
-    let heredoc = text
-        .split_once("cat > dev/daemon.toml <<EOF\n")
-        .map(|(_, rest)| rest)
-        .and_then(|rest| rest.split_once("\nEOF"))
-        .map(|(block, _)| block)
-        .expect(
-            "docs/OPERATING.md's development walkthrough writes dev/daemon.toml with a heredoc",
-        );
-    let dev = DaemonConfig::from_toml_str(&heredoc.replace("$PWD", &root)).unwrap_or_else(|e| {
-        panic!("docs/OPERATING.md's development configuration does not parse: {e}")
-    });
-    dev.validate().unwrap_or_else(|e| {
-        panic!("docs/OPERATING.md's development configuration does not validate: {e}")
-    });
+    // LocalOnly: the service pair is omitted, as the guide tells a reader to do.
     assert!(
-        !dev.artifact_root.starts_with(&dev.config_dir),
-        "the walkthrough's artifact_root {} sits inside its config_dir {}",
-        dev.artifact_root.display(),
-        dev.config_dir.display()
-    );
-    assert_eq!(
-        dev.server_public_key,
-        goalcup_devserver::dev_server_public_key_hex(),
-        "the walkthrough uploads to `goalcup-devserver`, so it pins that server's key"
+        c.upload_url.is_empty() && c.server_public_key.is_empty(),
+        "docs/OPERATING.md's example must be LocalOnly"
     );
 }
 

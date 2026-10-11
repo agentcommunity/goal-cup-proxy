@@ -132,24 +132,6 @@ fn the_codex_recipe_matches_what_the_spike_actually_ran() {
     }
 }
 
-#[cfg(feature = "v1-compat")]
-#[test]
-fn every_template_var_a_manifest_uses_is_one_this_crate_supplies() {
-    // `vars::SUPPLIED` itself, not a copy of it. This test asks whether every shipped
-    // manifest draws its variables from the list the CLI actually fills, and a local copy
-    // answers a different question: it would keep passing after `src/vars.rs` dropped a name
-    // the manifests still use. The list's own contents are pinned literally, once, in
-    // `tests/vars_launch.rs`.
-    for id in ["claude-code-cli", "codex-cli"] {
-        for used in load(id).manifest.template_vars_used() {
-            assert!(
-                goalcup_cli::vars::SUPPLIED.contains(&used.as_str()),
-                "{id} uses unknown var {{{used}}}"
-            );
-        }
-    }
-}
-
 #[test]
 fn the_version_range_grammar_is_d12s_two_operators_and_compares_numerically() {
     let r = VersionRange::parse(">=2.1.259").unwrap();

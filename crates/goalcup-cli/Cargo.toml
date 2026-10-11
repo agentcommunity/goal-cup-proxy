@@ -21,14 +21,6 @@ publish = false
 # dev-dependencies, which turn this feature ON for the whole package.
 [features]
 test-support = ["dep:ed25519-dalek"]
-# The V1 / v4 transcript-and-hook product path (D42). Off by default: the default build is the
-# M2 local-capture product only (`goalcup start --goal-file`, `status`, `entries`, `seal`,
-# `doctor`). With the feature on, `goalcup auth`, `resume`, `ui` and a plain `goalcup start`
-# are compiled back in, and so are the pieces only they use: the device-code client (the one
-# reason `ureq` links TLS), the browser opener and the template-variable renderer. The code is
-# kept so the server phase can reuse its sign-in client and the V1 path does not rot; the
-# by-hand gate builds and tests both configurations (README.md).
-v1-compat = ["dep:open", "ureq/tls"]
 
 [dependencies]
 goalcup-platform = { path = "../goalcup-platform" }
@@ -45,27 +37,10 @@ thiserror.workspace = true
 sha2.workspace = true
 # The eight-command tree (`src/main.rs`).
 clap.workspace = true
-# Two clients in one crate, and they do not have the same threat model.
-#
-# The control API is loopback cleartext, which is why the workspace declares
-# ureq with `default-features = false`: no gzip decoder, and no TLS stack pulled in for a
-# request to 127.0.0.1.
-#
-# `goalcup auth` is the other one, and it crosses the network. It sends the device code in
-# a request header and reads a grant back, so `tls` is turned ON here — ureq 2.12's
-# rustls 0.23 (ring) plus webpki-roots. Without it ureq answers an `https://` URL with
-# "unknown scheme", which reads to a participant as a server that is down rather than as a
-# binary that cannot speak to it. `commands::auth` refuses a non-loopback `http://` before
-# any request is made, so the feature is what makes the only remaining path — `https://` —
-# actually work.
-#
-# `gzip` stays off: nothing this CLI talks to is asked for a compressed body.
-#
-# The `tls` feature is switched on by `v1-compat` alone (see `[features]`): without the V1 path
-# this crate links no TLS for ureq, only the loopback client.
+# The control API client. It is loopback cleartext, which is why the workspace declares ureq
+# with `default-features = false`: no gzip decoder, and no TLS stack pulled in for a request to
+# 127.0.0.1.
 ureq.workspace = true
-# `goalcup ui`: one call that hands a loopback URL to the participant's browser. V1 path only.
-open = { workspace = true, optional = true }
 # `MockDaemonClient` and nothing else, which is why it is `optional` and why the only
 # feature that turns it on is `test-support` above.
 #

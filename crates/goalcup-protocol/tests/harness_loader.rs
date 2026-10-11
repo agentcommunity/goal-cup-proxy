@@ -241,7 +241,7 @@ fn any_retained_v1_manifest_is_bounded_by_its_declared_id_and_templates() {
     // A matching recorded V1 identity with no template allowance is accepted and ignored.
     load_dir(tmp.path(), Origin::Pinned).expect("the matching recorded V1 identity is bounded");
     // A recorded matching V1 manifest is accepted without a compiled connector-id table; its
-    // declared id and templates are the authority retained for v1-compat.
+    // declared id and templates are the retained authority (OS-29).
     let tmp = tempfile::tempdir().unwrap();
     let text = fixture_text("codex-cli").replace("id = \"codex-cli\"", "id = \"brand-new-cli\"");
     std::fs::write(tmp.path().join("harness.toml"), text).unwrap();
