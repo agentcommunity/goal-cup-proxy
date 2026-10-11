@@ -444,6 +444,12 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
             return Some(why);
         }
     }
+    // Any other `*_URL` names a server (Amp reads `AMP_URL`, m2-amp-readiness). The value rule
+    // already refuses `://`; this refuses the name too. It comes last, so a name another rule
+    // refuses (`AUTH_URL`, `GOALCUP_UPLOAD_URL`, `PIP_INDEX_URL`) keeps its more specific reason.
+    if upper.ends_with("_URL") {
+        return Some("redirects an endpoint (D1)");
+    }
     None
 }
 

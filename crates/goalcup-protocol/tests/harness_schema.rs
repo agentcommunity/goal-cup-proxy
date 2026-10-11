@@ -1922,6 +1922,36 @@ fn id_and_env_shape() {
 }
 
 #[test]
+fn a_url_named_variable_is_refused_as_an_endpoint() {
+    // Amp reads `AMP_URL` as its server (m2-amp-readiness). Only the value rule (`://`) stopped
+    // it; the name is now refused too, as is any other `*_URL` that has no earlier reason.
+    for name in ["AMP_URL", "amp_url", "SERVER_URL", "HARNESS_URL"] {
+        assert_eq!(
+            env_key_denied(name, EnvContext::CaptureEnv),
+            Some("redirects an endpoint (D1)"),
+            "{name}"
+        );
+        let mut t = codex();
+        set(&mut t, &["capture", "env"], name, "x");
+        refused(
+            &t,
+            PINNED,
+            &["capture.env", name, "redirects an endpoint (D1)"],
+        );
+    }
+    // An earlier, more specific reason still wins, so the pinned golden reasons do not move.
+    assert_eq!(
+        env_key_denied("AUTH_URL", EnvContext::CaptureEnv),
+        Some("would carry a credential, and a manifest never does")
+    );
+    // A name that only contains `URL` is not an endpoint name.
+    assert_eq!(
+        env_key_denied("URLENCODE_MODE", EnvContext::CaptureEnv),
+        None
+    );
+}
+
+#[test]
 fn the_startup_file_helper_is_case_insensitive_and_component_aware() {
     assert!(startup_file_problem(".ZshRC").is_some());
     assert!(startup_file_problem("a/b/.gitconfig").is_some());
