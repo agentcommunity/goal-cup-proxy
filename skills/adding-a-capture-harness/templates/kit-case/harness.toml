@@ -32,8 +32,12 @@ per_run_dir = "<harness>-home"          # delete for "shared"
 # seed = [{ file = "<file>" }]          # per_run only; the file goes in this case's files/
 real_dirs = ["{user_home}/.<harness>"]
 
-# The kit cannot inject a provider key: leave out [capture.credential] even when the
-# connector has one, and say so in the PR (decision-table.md, credential rows).
+# A keyed connector: copy its [capture.credential] here and name the same variable as
+# credential_env in expect.toml. The kit hands the stand-in an invented key; the stand-in
+# must write the marker as synthetic-credential-stderr/stand-in.py does (decision-table.md,
+# credential rows). Leave it out for a connector with no credential.
+# [capture.credential]
+# env = "<CREDENTIAL_ENV>"
 
 # Any CA registry row works; the stand-in reads the file this variable names.
 [capture.ca]

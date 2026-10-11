@@ -94,7 +94,7 @@ A common data-only harness PR contains:
 - a new generic harness-kit fixture case under
   `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` containing `harness.toml`, `stand-in.py`
   and `expect.toml` (plus only reviewed declared seeds) for this connector;
-- evidence that the current baseline harness kit passed on macOS after a workspace build (the four
+- evidence that the current baseline harness kit passed on macOS after a workspace build (the six
   baseline cases plus the new connector case):
   `cargo build`, then `cargo test -p goalcup-cli --test harness_contract_kit`.
 - the focused schema and generated-pin checks:
@@ -113,10 +113,12 @@ which still keep a V1 `manifest.toml`, also changes their line in
 Commit what the script writes; never hand-edit or hand-merge either file.
 
 The current baseline kit cases are `controlled-workload`, `synthetic-preassigned`,
-`synthetic-stderr-token` and `synthetic-stdout-json`; the new connector fixture is an additional
-case, not a replacement. All use stand-ins, a test-owned proxy and private homes; they do not
-prove provider access, package publication, a release, or a qualified live harness. A passing
-kit is "synthetic tested"; a qualified claim needs a maintainer's live row and its own record.
+`synthetic-stderr-token`, `synthetic-credential-stderr`, `synthetic-stdout-json` and
+`synthetic-credential-stdout-json` (a keyed case names `credential_env` in `expect.toml`); the
+new connector fixture is an additional case, not a replacement. All use stand-ins, a test-owned
+proxy and private homes; they do not prove provider access, package publication, a release, or
+a qualified live harness. A passing kit is "synthetic tested"; a qualified claim needs a
+maintainer's live row and its own record.
 A new connector must use an admitted schema-1 policy row and identity pair. A new policy row
 (CA, credential, identity, native-store form or interpreter) is a separately reviewed core PR
 with a `docs/DECISIONS.md` row. A semantic decoder is a separately reviewed verifier PR. Do not

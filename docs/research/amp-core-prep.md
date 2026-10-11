@@ -50,6 +50,12 @@ end-to-end and Hermes offline-key tests) were not run.
   name another rule already refuses (`AUTH_URL`, `GOALCUP_UPLOAD_URL`, `PIP_INDEX_URL`) keeps its
   reason, and the pinned harness goldens do not move. A future harness that needs a harmless
   `*_URL` switch would need a core change.
+- **The CLI's D23 predicate.** `is_denied` in [launch.rs](../../crates/goalcup-cli/src/launch.rs),
+  which `scrubbed_env` and `probe_env` use to strip inherited variables, is widened the same way
+  (`*_URL`, was `*_BASE_URL`). `scrubbed_env` serves only the V1 launch, but `probe_env` runs in
+  the default build: `goalcup doctor` probes a V1 manifest's harness version through it. Test:
+  `the_version_probe_runs_the_harness_with_no_base_url_and_no_proxy_in_its_environment` in
+  `preflight_doctor.rs` now plants `AMP_URL`.
 - **Status.** Implemented on this branch.
 
 ## 2. Admit `AMP_API_KEY` as a credential
@@ -57,8 +63,8 @@ end-to-end and Hermes offline-key tests) were not run.
 - **What.** `CREDENTIAL_ENV` gains `AMP_API_KEY`. The value grammar is unchanged and shared:
   `child_secret_named` in [launch.rs](../../crates/goalcup-cli/src/launch.rs) accepts 20 to 256
   bytes of `[A-Za-z0-9_-]` for every credential name. Under `capture.env` the name stays refused
-  ("would carry a credential"). A credential still requires a per-run config home and
-  `stderr_line` identity.
+  ("would carry a credential"). A credential always requires a per-run config home, and an
+  identity of `stderr_line` or, with change 4 (D50), `stdout_json` + `at_launch`.
 - **Why.** Readiness row "`AMP_API_KEY`": only `DEEPSEEK_API_KEY` was admitted.
 - **Files.** `capture_policy.rs`; the four harness goldens' `allowed_names`
   (`crates/goalcup-cli/tests/fixtures/harness-golden/*.json`);
@@ -132,12 +138,13 @@ in force. This change must not merge until the owner approves it.
   - [launch.rs](../../crates/goalcup-cli/src/launch.rs): the identity line matcher moves out
     of `stdout_tee_with_rule` into `StdoutIdentityScan` (same bounds: 64 complete lines of at
     most 1 MiB, one message). `IdentityReader` wraps a stdout pipe and feeds every read to it
-    before handing the bytes on. `CaptureStdout` may be scope-only (`scope_only`), when the
-    marked tee reports the stream's end.
+    before handing the bytes on. `CaptureStdout` is unchanged: it is always a waitable tee.
   - [capture_tee.rs](../../crates/goalcup-cli/src/capture_tee.rs): the private two-stream tee
     takes an optional `StdoutJsonRule`; with one, its stdout tee reads through `IdentityReader`.
-    New `tee_marked_capture_with_identity` (and `_to`, for tests) returns the scope receiver and
-    the usual `CaptureStderr`, whose `finish` and `key_hit` cover both streams.
+    New `tee_marked_capture_with_identity` (and `_to`, for tests) returns the bare scope
+    receiver (`ScopeReceiver`, not a `CaptureStdout`, so it cannot be mistaken for a tee to wait
+    on) and the usual `CaptureStderr`, whose `finish` and `key_hit` cover both streams. It builds
+    the identity matcher's own key matcher only when there is a stdout rule.
   - [start.rs](../../crates/goalcup-cli/src/commands/start.rs) `register_and_release`: a keyed
     child always goes through that one call; an unkeyed child keeps the separate stdout scope
     tee and stderr tee. `StreamPlan` and `LaunchScope` are unchanged.
@@ -149,8 +156,9 @@ in force. This change must not merge until the owner approves it.
   still binds the native scope. The bound id is written into the chain as the scope, so for a
   keyed launch the identity matcher holds its own key-fragment matcher: when the matching
   event's line or decoded id holds any key-scan form, it binds nothing (the unbound path an
-  unusable id takes) and records a key hit. Its line buffer is overwritten before each clear and
-  on drop, as the tee's own buffer is. No v5 record, control API or verifier change.
+  unusable id takes) and records a key hit. For a keyed launch its line buffer is overwritten
+  before each clear and on drop, as the tee's own buffer is; an unkeyed scan just clears it.
+  No v5 record, control API or verifier change.
 - **Why.** Readiness row "Credential with `stdout_json` identity": Amp documents a stdout
   `system`/`init` event with `session_id` as its identity carrier. Needed only if the owner's
   live probe confirms that carrier.

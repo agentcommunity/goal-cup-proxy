@@ -46,3 +46,7 @@ capture_only_hint = "kit-<HARNESS_ID>-wire"
 # Optional. Read only by the synthetic-stdout-json mode test; leave both "".
 seed_path = ""
 dirs = ""
+# Optional. A keyed case: the [capture.credential] env of harness.toml (DEEPSEEK_API_KEY, or
+# AMP_API_KEY under the proposed D49). The runner sets it to an invented key and checks the
+# stand-in's marker and that no fragment of the key leaks. Leave "" for no credential.
+credential_env = ""

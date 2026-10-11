@@ -117,7 +117,7 @@ the pin, schema, golden and kit checks below in one command.
   the same with `-p goalcup-daemon`. The JSON diff under
   `crates/goalcup-cli/tests/fixtures/harness-golden/` is in the PR: new files and rows for the
   new connector, and no change to another connector's values.
-- [ ] The workspace build ran before `harness_contract_kit`; all discovered cases passed (the four
+- [ ] The workspace build ran before `harness_contract_kit`; all discovered cases passed (the six
   baseline cases plus the new connector case).
 - [ ] Readiness evidence names source revision, candidate path/version/hash, transport/native/
   isolation/auth/identity facts and remaining unknown semantics without secrets.
@@ -160,7 +160,7 @@ Connector directory pin; harness-contract schema:
 Transport hosts/paths/version/body; native storage/form/scope:
 Isolation roots (metadata only); auth variable names and lifecycle:
 Identity source/binding and crosscheck; semantic decoder or UNKNOWN:
-Generic kit command, build/test exits and all discovered case results (four baseline plus the new
+Generic kit command, build/test exits and all discovered case results (six baseline plus the new
 connector case):
 Real-row ENTRY/RUN_DIR/TRACE and start/status/integrity/research/checker exits (if any):
 Independent result bytes and hash (if any):
