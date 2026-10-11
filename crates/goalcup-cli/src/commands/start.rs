@@ -1342,6 +1342,10 @@ fn file_identity(metadata: &std::fs::Metadata) -> FileIdentity {
     FileIdentity {
         device: metadata.dev(),
         inode: metadata.ino(),
+        #[allow(
+            clippy::unnecessary_cast,
+            reason = "mode_t is u16 on macOS; the cast widens there even though it is a no-op on Linux glibc"
+        )]
         kind: metadata.mode() & libc::S_IFMT as u32,
     }
 }

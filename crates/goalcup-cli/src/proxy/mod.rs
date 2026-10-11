@@ -1095,7 +1095,7 @@ impl<'a> CloseGuard<'a> {
     ) -> Option<Self> {
         counters
             .intercepted_open
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |open| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |open| {
                 (open < MAX_OPEN_CONNECTIONS as u64).then_some(open + 1)
             })
             .ok()?;

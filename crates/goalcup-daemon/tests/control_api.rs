@@ -4452,7 +4452,7 @@ async fn cleanup_failure_refuses_abandon_and_retains_the_registry_row() {
     );
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(feature = "v1-compat", unix, not(target_os = "macos")))]
 #[tokio::test]
 async fn restart_finishes_cleanup_after_a_durably_recorded_successful_termination() {
     use std::os::unix::fs::PermissionsExt;

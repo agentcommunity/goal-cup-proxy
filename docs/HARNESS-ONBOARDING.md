@@ -3,7 +3,7 @@
 How does a contributor establish a truthful schema-1 connector claim? For a fresh contributor
 or agent preparing harness data. This guide separates connector data, policy, native capture and
 semantic decoding; [CONNECTOR-CONTRIBUTING](CONNECTOR-CONTRIBUTING.md) owns the reviewer checklist
-and real-row procedure. Updated: 2026-10-07.
+and real-row procedure. Updated: 2026-10-11.
 
 Read [CONTRIBUTING](../CONTRIBUTING.md), [STATUS](../STATUS.md), [GLOSSARY](GLOSSARY.md), and
 DECISIONS D1, D40, D41, D42 and D43 first. The source tree currently has exactly three connector
@@ -108,7 +108,8 @@ policy change, not a connector-data shortcut.
   isolation/auth/identity facts and remaining unknown semantics without secrets.
 - [ ] If a maintainer ran a real row, the PR links the exact record; otherwise claim only
   synthetic tested. Do not edit STATUS, LEDGER or DECISIONS in an outside PR.
-- [ ] DCO sign-off and the connector reviewer checklist are complete.
+- [ ] A human read the whole diff, AI assistance is disclosed, and the connector reviewer
+  checklist is complete.
 
 Anyone may send a connector PR. A maintainer reviews trusted connector data and acknowledges a
 PR within 7 days; acknowledgement is not a promise to merge or qualify it. An outside contributor
