@@ -143,10 +143,12 @@ fn run(branch: &str) -> Run {
         err.clone(),
     )
     .unwrap();
-    let stdout = stdout.expect("an identity rule yields a scope receiver");
-    let scope = wait_native_scope(&mut spawned.child, &stdout.scope, Instant::now() + PATIENCE);
+    // The keyed case yields the bare scope receiver: the marked tee alone reports the end of
+    // both streams, so there is no second, always-finished stdout tee to wait on.
+    let receiver: std::sync::mpsc::Receiver<Option<String>> =
+        stdout.expect("an identity rule yields a scope receiver");
+    let scope = wait_native_scope(&mut spawned.child, &receiver, Instant::now() + PATIENCE);
     spawned.child.wait().unwrap();
-    assert!(stdout.finish(Instant::now() + PATIENCE).unwrap());
     assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
     Run {
         scope,

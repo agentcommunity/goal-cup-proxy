@@ -132,8 +132,8 @@ use std::process::{Child, Command};
 /// The tees of a Hermes capture child's streams live in their own file; they are part of this
 /// module's interface (D40, D41).
 pub use crate::capture_tee::{
-    CaptureStderr, ScopeMarker, tee_marked, tee_marked_capture, tee_marked_capture_to,
-    tee_marked_capture_with_identity, tee_marked_capture_with_identity_to,
+    CaptureStderr, ScopeMarker, ScopeReceiver, tee_marked, tee_marked_capture,
+    tee_marked_capture_to, tee_marked_capture_with_identity, tee_marked_capture_with_identity_to,
     tee_marked_capture_with_rule, tee_marked_with_rule, tee_stderr_capture_with_rule,
 };
 /// The ending of a child this process just released lives in its own file, which the
@@ -1412,30 +1412,20 @@ fn build_command(p: &LaunchPlan, pipes: Pipes, secret: Option<&ChildSecret>) -> 
 
 /// The two bounded messages from a capture stdout tee: its one scope identity and its
 /// completion after EOF and all forwarding. Waiting for completion never joins the thread.
+/// A keyed `stdout_json` launch has no such tee: its stdout is read by the key-scanning tee,
+/// which hands back only the scope receiver and reports the stream's end itself.
 pub struct CaptureStdout {
     pub scope: std::sync::mpsc::Receiver<Option<String>>,
-    /// `None` when stdout is read by the key-scanning tee, whose [`CaptureStderr::finish`]
-    /// reports its completion.
-    completed: Option<std::sync::mpsc::Receiver<std::io::Result<()>>>,
+    completed: std::sync::mpsc::Receiver<std::io::Result<()>>,
 }
 
 impl CaptureStdout {
-    /// The scope half alone, for a stdout the key-scanning tee reads and completes.
-    pub(crate) fn scope_only(scope: std::sync::mpsc::Receiver<Option<String>>) -> Self {
-        Self {
-            scope,
-            completed: None,
-        }
-    }
-
     /// `true` confirms completion; `false` is explicit deadline expiry. A descendant may
-    /// hold stdout open, or destination back-pressure may still hold the final bytes. A
-    /// scope-only receiver answers `true`: the key-scanning tee reports the stream's end.
+    /// hold stdout open, or destination back-pressure may still hold the final bytes.
     pub fn finish(&self, deadline: std::time::Instant) -> std::io::Result<bool> {
-        let Some(completed) = &self.completed else {
-            return Ok(true);
-        };
-        match completed.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        match self
+            .completed
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
         {
             Ok(result) => result.map(|()| true),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(false),
@@ -1477,10 +1467,7 @@ pub fn tee_capture_stdout_with_rule(
             let result = stdout_tee_with_rule(reader, writer, sender, &rule);
             let _ = done.send(result);
         })?;
-    Ok(CaptureStdout {
-        scope,
-        completed: Some(completed),
-    })
+    Ok(CaptureStdout { scope, completed })
 }
 
 /// Codex's scope binding uses stdout without changing a byte of participant output.
@@ -1624,9 +1611,12 @@ impl StdoutIdentityScan {
         self
     }
 
-    /// Overwrite the held line, then empty it.
+    /// Empty the held line, overwriting it first when this scan holds key material (a keyed
+    /// launch's line may hold a fragment of the key).
     fn clear_line(&mut self) {
-        crate::key_scan::wipe(&mut self.line);
+        if self.key_scan.is_some() {
+            crate::key_scan::wipe(&mut self.line);
+        }
         self.line.clear();
     }
 

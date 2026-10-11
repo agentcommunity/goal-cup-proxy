@@ -33,8 +33,7 @@
 use crate::CliError;
 use crate::key_scan::FragmentMatcher;
 use crate::launch::{
-    CaptureStdout, ChildSecret, IdentityReader, Spawned, StderrLineRule, StdoutIdentityScan,
-    StdoutJsonRule,
+    ChildSecret, IdentityReader, Spawned, StderrLineRule, StdoutIdentityScan, StdoutJsonRule,
 };
 use goalcup_protocol::control::FINISH_COMMIT_RESERVE;
 use goalcup_protocol::harness::IdGrammar;
@@ -42,6 +41,10 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Instant;
+
+/// The one scope message of a stdout JSON identity read by the key-scanning tee: the bound id,
+/// or `None`. Not a waitable tee: [`CaptureStderr::finish`] reports the stream's end.
+pub type ScopeReceiver = std::sync::mpsc::Receiver<Option<String>>;
 
 /// The longest stderr line looked at for the marker.
 pub const LINE_LIMIT: usize = 4096;
@@ -240,15 +243,16 @@ pub fn tee_marked_capture_with_rule(
 
 /// Tee and key-scan both piped streams, and read the manifest's stdout JSON identity from the
 /// same stdout reader the key scan reads (a keyed `stdout_json` profile). Without a stdout
-/// rule this is [`tee_marked_capture_with_rule`] and the first value is `None`. The returned
-/// [`CaptureStdout`] carries the scope only; [`CaptureStderr::finish`] reports both streams'
-/// end, and [`CaptureStderr::key_hit`] covers both.
+/// rule this is [`tee_marked_capture_with_rule`] and the first value is `None`. The first value
+/// is the bare scope receiver, not a [`crate::launch::CaptureStdout`]: there is no separate stdout tee to wait
+/// on. [`CaptureStderr::finish`] reports both streams' end, and [`CaptureStderr::key_hit`]
+/// covers both.
 pub fn tee_marked_capture_with_identity(
     spawned: &mut Spawned,
     secret: Option<&ChildSecret>,
     stdout_rule: Option<StdoutJsonRule>,
     stderr_rule: Option<StderrLineRule>,
-) -> Result<(Option<CaptureStdout>, CaptureStderr), CliError> {
+) -> Result<(Option<ScopeReceiver>, CaptureStderr), CliError> {
     tee_marked_capture_to_with_rule(
         spawned,
         secret,
@@ -267,7 +271,7 @@ pub fn tee_marked_capture_with_identity_to(
     stderr_rule: Option<StderrLineRule>,
     stdout_to: impl Write + Send + 'static,
     stderr_to: impl Write + Send + 'static,
-) -> Result<(Option<CaptureStdout>, CaptureStderr), CliError> {
+) -> Result<(Option<ScopeReceiver>, CaptureStderr), CliError> {
     tee_marked_capture_to_with_rule(
         spawned,
         secret,
@@ -327,7 +331,7 @@ fn tee_marked_capture_to_with_rule(
     stderr_to: impl Write + Send + 'static,
     stdout_rule: Option<StdoutJsonRule>,
     rule: Option<StderrLineRule>,
-) -> Result<(Option<CaptureStdout>, CaptureStderr), CliError> {
+) -> Result<(Option<ScopeReceiver>, CaptureStderr), CliError> {
     // A second, deliberate `Child::kill` on a child the gate released, beside `tee_scoped_capture`'s:
     // a tee that cannot forward ends the registered child it could not forward, and the seal that
     // follows answers for it (the termination sweep matches strings, so this is named here).
@@ -349,19 +353,22 @@ fn tee_marked_capture_to_with_rule(
             "the harness's stdout and stderr were not both piped".into(),
         ));
     };
-    // One matcher per reader: stdout's tee, stderr's tee, and the stdout identity matcher,
-    // which must not bind an id holding a fragment of the key.
-    let matchers = match secret {
-        Some(secret) => {
-            let make = || FragmentMatcher::new(secret.expose());
-            match (make(), make(), make()) {
-                (Ok(a), Ok(b), Ok(c)) => (Some(a), Some(b), Some(c)),
-                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
-                    return Err(fail(spawned, "key scan", e.to_string()));
-                }
-            }
+    // One matcher per reader: stdout's tee, stderr's tee, and, only with a stdout identity
+    // rule, the identity matcher, which must not bind an id holding a fragment of the key.
+    let make = |secret: Option<&ChildSecret>| {
+        secret
+            .map(|secret| FragmentMatcher::new(secret.expose()))
+            .transpose()
+    };
+    let matchers = match (
+        make(secret),
+        make(secret),
+        make(stdout_rule.as_ref().and(secret)),
+    ) {
+        (Ok(a), Ok(b), Ok(c)) => (a, b, c),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+            return Err(fail(spawned, "key scan", e.to_string()));
         }
-        None => (None, None, None),
     };
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
@@ -380,10 +387,7 @@ fn tee_marked_capture_to_with_rule(
             if let Some(matcher) = matchers.2 {
                 scan = scan.with_key_scan(matcher, Arc::clone(&hit));
             }
-            (
-                Box::new(IdentityReader::new(stdout, scan)),
-                Some(CaptureStdout::scope_only(scope)),
-            )
+            (Box::new(IdentityReader::new(stdout, scan)), Some(scope))
         }
         None => (Box::new(stdout), None),
     };
