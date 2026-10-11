@@ -103,8 +103,8 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
     order, with Linux's documented exclusions if you are not on macOS.
 13. **Review your own PR** against the
     [reviewer checklist](../../docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr): every
-    field and seed, no base URL, no secrets, one intended pin line, DCO sign-off.
-14. **Open the PR** (one commit is fine, signed off) holding exactly: `connectors/<id>/`, the
+    field and seed, no base URL, no secrets, one intended pin line.
+14. **Open the PR** (one commit is fine; no sign-off needed, D47) holding exactly: `connectors/<id>/`, the
     one new line in `connector-dirs.txt`, the golden JSON from step 9, the kit case from step
     10, the readiness record and its index row. Check with `git status --short`. In the PR
     body ([CONTRIBUTING](../../CONTRIBUTING.md#adding-a-harness)) paste the step 11 summary
