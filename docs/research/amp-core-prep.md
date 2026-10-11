@@ -14,15 +14,15 @@ table and its "Core changes Amp would need" list.
 | # | Change | Readiness item | Status on `claude/v060-amp-core-prep` |
 |---|---|---|---|
 | 1 | Refuse `*_URL` env names | core change 1 | implemented |
-| 2 | Admit `AMP_API_KEY` | core change 2 | implemented; needs D47 approved |
+| 2 | Admit `AMP_API_KEY` | core change 2 | implemented; needs D49 approved |
 | 3 | Kit credential support | core change 3 | implemented; macOS kit not run |
-| 4 | Credential with `stdout_json` identity | core change 5 | implemented; needs D48 approved |
+| 4 | Credential with `stdout_json` identity | core change 5 | implemented; needs D50 approved |
 | - | Private `TMPDIR` per capture launch | core change 4 | not started (optional hardening) |
 | - | Settings seed under the run home | core change 6 | not started (only if needed) |
 | - | Key fingerprint file, native store | core change 7 | owner decisions, below |
 
 **Merge gate.** Changes 2 and 4 contradict D43 ruling 3 as in force. Their DECISIONS entries are
-in [DECISIONS](../DECISIONS.md) itself as proposals, D47 (admit `AMP_API_KEY`) and D48 (amend D43
+in [DECISIONS](../DECISIONS.md) itself as proposals, D49 (admit `AMP_API_KEY`) and D50 (amend D43
 ruling 3 for credential + `stdout_json` via one stdout reader), each marked "Status: Proposed,
 owner approval required before merge." The code commits for changes 2 and 4 must not merge
 until the owner approves those entries, and any pull request carrying them carries the entries
@@ -76,7 +76,7 @@ end-to-end and Hermes offline-key tests) were not run.
 
 ### DECISIONS entry
 
-Proposed as [D47](../DECISIONS.md#d47-m2-proposed-admit-amp_api_key-as-a-child-credential), not
+Proposed as [D49](../DECISIONS.md#d49-m2-proposed-admit-amp_api_key-as-a-child-credential), not
 in force. This change must not merge until the owner approves it.
 
 ## 3. Teach the generic kit a credential
@@ -174,7 +174,7 @@ in force. This change must not merge until the owner approves it.
 ### DECISIONS entry
 
 Proposed as
-[D48](../DECISIONS.md#d48-m2-proposed-amend-d43-ruling-3-for-stdout_json-identity), an
+[D50](../DECISIONS.md#d50-m2-proposed-amend-d43-ruling-3-for-stdout_json-identity), an
 amendment to D43 ruling 3, not in force. This change must not merge until the owner approves it.
 
 ## Owner decisions that remain
@@ -205,6 +205,6 @@ the live probe first.
   record their presence (metadata only), refuse to start when the machine-wide file exists, or
   disclose them as residuals.
 - **Token grammar.** Change 2 assumes Amp tokens fit 20 to 256 bytes of `[A-Za-z0-9_-]`. The
-  live probe must confirm it before D47 is approved.
+  live probe must confirm it before D49 is approved.
 - **Identity carrier.** Change 4 matters only if the live probe shows the stdout `init` event
   arrives before the first model request and names the session a native file is scoped by.
