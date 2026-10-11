@@ -55,6 +55,8 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D46 | Capture creation binds the CLI and daemon to identical connector bytes | in force (m2) | [entry](#d46-m2-capture-creation-binds-both-local-halves-to-identical-connector-bytes) |
 | D47 | No DCO sign-off; a human answers for each PR | in force (m2) | [entry](#d47-m2-no-dco-sign-off) |
 | D48 | The V1 path and its `v1-compat` feature leave the tree; history keeps them | in force (m2) | [entry](#d48-m2-the-v1-path-leaves-the-tree) · LEDGER OS-30 |
+| D49 | Admit `AMP_API_KEY` as a child credential | Proposed | [entry](#d49-m2-proposed-admit-amp_api_key-as-a-child-credential) |
+| D50 | D43 ruling 3: credential + `stdout_json` via one stdout reader | Proposed | [entry](#d50-m2-proposed-amend-d43-ruling-3-for-stdout_json-identity) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1203,6 +1205,61 @@ not from dead code in the tree.
   the crate is a separate follow-up (OS-31).
 
 **Evidence.** LEDGER OS-30; the pull request that lands it carries the gate results.
+
+---
+
+## D49. **(M2)** Proposed: admit `AMP_API_KEY` as a child credential.
+
+**Status: Proposed, owner approval required before merge.** Not in force. The code that admits
+the name (`claude/v060-amp-core-prep`, "admit AMP_API_KEY as a child-only credential") must not
+merge until the owner approves this entry.
+
+**Decision (proposed, 2026-10-11).** `AMP_API_KEY` joins `capture_policy::CREDENTIAL_ENV` beside
+`DEEPSEEK_API_KEY`. This amends D43 ruling 3's closed list; the list stays closed. The token is
+handed to the harness child only, through the existing child-secret seam, under the shared
+grammar of 20 to 256 bytes of `[A-Za-z0-9_-]`. It is never a manifest value: under `capture.env`
+the name is refused. D43's pairing rules are unchanged (a credential needs a per-run config home
+and an identity pair D43 admits, with D50 if it is approved). D41's key-fragment scan applies to
+the token unchanged. This entry admits a name only. It admits no Amp connector, and the owner
+rules separately on Amp's on-disk key fingerprint (`.legacy-state-owner.json`).
+
+**Reconsider when** the owner's live probe shows a token outside the shared grammar, or Amp
+renames the variable.
+
+**Evidence.** `docs/qualification/m2-amp-readiness.md` (branch `claude/v060-amp-readiness`;
+static: Amp's help text names `AMP_API_KEY` as an access token that takes precedence over stored
+credentials); [amp-core-prep](research/amp-core-prep.md), change 2.
+
+---
+
+## D50. **(M2)** Proposed: amend D43 ruling 3 for `stdout_json` identity.
+
+**Status: Proposed, owner approval required before merge.** Not in force. D43 ruling 3 as in
+force refuses a credential with `stdout_json` identity and keeps key scanning and identity
+separate. The code that admits the pair (`claude/v060-amp-core-prep`, "admit a credential with
+stdout_json identity via one stdout reader") contradicts that ruling and must not merge until the
+owner approves this entry.
+
+**Decision (proposed, 2026-10-11).** D43 ruling 3's pairing sentence becomes: a credential
+requires a per-run config home and either `stderr_line` + `deferred` or `stdout_json` +
+`at_launch` identity; `preassigned` and `none` stay refused.
+- **One stdout reader.** For a keyed `stdout_json` profile one reader of the child's stdout feeds
+  both the key-fragment scan and the identity matcher. The identity is read as bytes arrive,
+  before the scan decides whether to forward them. Output holding a fragment is withheld, sets
+  the live key hit and fails the row, as D41 already requires. Key scanning and identity share
+  that one reader on stdout instead of being separate.
+- **A key-bearing identity is not bound.** The identity matcher holds its own key-fragment
+  matcher. When the matching event's line or its decoded id holds any key-scan form, no identity
+  is bound (the same unbound path as an unusable id) and a key hit is recorded. The bound id is
+  written into the chain as the scope, so it can never carry a fragment of the key.
+- The per-run config home stays required, so the run-directory scan covers the config home.
+
+No v5 record, control API or verifier change.
+
+**Reconsider when** a keyed harness needs `preassigned` or `none` identity (as D43 already says).
+
+**Evidence.** `crates/goalcup-cli/tests/credential_stdout_identity.rs` (Linux); kit case
+`synthetic-credential-stdout-json` (macOS); [amp-core-prep](research/amp-core-prep.md), change 4.
 
 ---
 

@@ -14,12 +14,20 @@ table and its "Core changes Amp would need" list.
 | # | Change | Readiness item | Status on `claude/v060-amp-core-prep` |
 |---|---|---|---|
 | 1 | Refuse `*_URL` env names | core change 1 | implemented |
-| 2 | Admit `AMP_API_KEY` | core change 2 | implemented; DECISIONS row proposed |
+| 2 | Admit `AMP_API_KEY` | core change 2 | implemented; needs D47 approved |
 | 3 | Kit credential support | core change 3 | implemented; macOS kit not run |
-| 4 | Credential with `stdout_json` identity | core change 5 | implemented; D43 amendment proposed |
+| 4 | Credential with `stdout_json` identity | core change 5 | implemented; needs D48 approved |
 | - | Private `TMPDIR` per capture launch | core change 4 | not started (optional hardening) |
 | - | Settings seed under the run home | core change 6 | not started (only if needed) |
 | - | Key fingerprint file, native store | core change 7 | owner decisions, below |
+
+**Merge gate.** Changes 2 and 4 contradict D43 ruling 3 as in force. Their DECISIONS entries are
+in [DECISIONS](../DECISIONS.md) itself as proposals, D47 (admit `AMP_API_KEY`) and D48 (amend D43
+ruling 3 for credential + `stdout_json` via one stdout reader), each marked "Status: Proposed,
+owner approval required before merge." The code commits for changes 2 and 4 must not merge
+until the owner approves those entries, and any pull request carrying them carries the entries
+too. Change 3's `synthetic-credential-stdout-json` kit case depends on change 4 and waits with
+it.
 
 Each numbered change is one commit on this branch, meant to be reviewed as its own pull request,
 smallest first. Changes 1, 2 and 4 were built test first: the new tests failed before the
@@ -66,39 +74,42 @@ end-to-end and Hermes offline-key tests) were not run.
   `--harness amp-cli`, which does not exist.
 - **Status.** Implemented on this branch.
 
-### Proposed DECISIONS row (maintainers own DECISIONS.md)
+### DECISIONS entry
 
-Proposed text, not in force:
-
-> **D47. (M2) Amp access token admitted as a child credential.**
-> **Decision (proposed, 2026-10-11).** `AMP_API_KEY` joins `capture_policy::CREDENTIAL_ENV`
-> beside `DEEPSEEK_API_KEY` (amends D43 ruling 3's closed list; the list stays closed). It is
-> handed to the harness child only, through the existing child-secret seam, under the shared
-> grammar of 20 to 256 bytes of `[A-Za-z0-9_-]`. It is never a manifest value: under
-> `capture.env` the name is refused. D43's pairing rules are unchanged: a credential needs a
-> per-run config home and the identity pairs D43 admits. D41's key-fragment scan applies to the
-> token unchanged. This row admits a name only; it admits no Amp connector, and the owner rules
-> separately on Amp's on-disk key fingerprint (`.legacy-state-owner.json`).
-> **Reconsider when** the owner's live probe shows a token outside the shared grammar, or Amp
-> renames the variable.
-> **Evidence.** `docs/qualification/m2-amp-readiness.md` (static: Amp help text names
-> `AMP_API_KEY` as an access token that takes precedence over stored credentials).
+Proposed as [D47](../DECISIONS.md#d47-m2-proposed-admit-amp_api_key-as-a-child-credential), not
+in force. This change must not merge until the owner approves it.
 
 ## 3. Teach the generic kit a credential
 
 - **What.** A kit case may name `credential_env` in `expect.toml`. The runner in
   [harness_contract_kit.rs](../../crates/goalcup-cli/tests/harness_contract_kit.rs) then sets
-  that variable in `goalcup start`'s own environment to an invented value (`KIT_CREDENTIAL`), so
-  the launcher's existing child-secret path hands it to the stand-in. After the run it checks
-  that the stand-in received exactly that value (the stand-in writes a prefixed SHA-256 to its
-  marker, outside the run directory, which is not a key-scan form), that the launcher reported
+  that variable in `goalcup start`'s own environment to an invented value (`KIT_CREDENTIAL`,
+  shared through `tests/support/mod.rs`), so the launcher's existing child-secret path hands it
+  to the stand-in. After the run it checks that the stand-in received exactly that value, that
+  the launcher reported
   `key scan: clean`, and that the key scan finds no fragment in the sealed trace or the run
   directory and the forwarded stdout and stderr hold none. A new case,
   `synthetic-credential-stderr`, uses the admitted `DEEPSEEK_API_KEY` with `stderr_line`
   identity, so it is testable before any Amp policy lands.
+- **The marker.** The stand-in proves which value it received by writing the SHA-256 of
+  `kit-marker:` + the value to its marker, outside the run directory. That is a salted SHA-256
+  of an invented key: it is not a key-scan form (the scan's form is the SHA-256 of the bare
+  value), so it proves delivery without planting a fragment. It is safe only because the key is
+  invented. Never reuse the scheme with a real key: a salted digest of a real key is a key
+  fingerprint, which D41 forbids persisting.
+- **No collisions.** The daemon writes the case id into the sealed chain, so the credential's
+  key-scan forms must appear in no case id or fixture. The first invented value began with
+  `kit-synt`, which every `kit-synthetic-*` id holds, so both keyed cases would have failed their
+  own key scan. The value is now a random-looking token with no such overlap, and
+  [harness_kit_credential.rs](../../crates/goalcup-cli/tests/harness_kit_credential.rs), which
+  runs on Linux too, asserts that no key-scan form of it (first or last eight bytes, masks, the
+  window rule, the SHA-256 prefix and their base64 renderings) occurs in any file or directory
+  name under `tests/fixtures/harness-kit/` or in `connectors/`, and that the marker digest is
+  not one either.
 - **Why.** Readiness row "Synthetic kit for a credential profile": the kit had no credential
   field and supplied no synthetic key, so a keyed connector case could not run.
-- **Files.** `harness_contract_kit.rs`; the new case under
+- **Files.** `harness_contract_kit.rs`, `harness_kit_credential.rs`, `tests/support/mod.rs`;
+  the new case under
   `crates/goalcup-cli/tests/fixtures/harness-kit/synthetic-credential-stderr/`; the kit case
   lists in [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md), [OPERATING](../OPERATING.md),
   [ARCHITECTURE](../ARCHITECTURE.md) and the
@@ -135,7 +146,11 @@ Proposed text, not in force:
 - **Behaviour.** The identity is read when bytes are read, before the key scan decides whether
   to forward them, so a stdout echo of the key is still withheld (`[goalcup: output withheld:
   ...]`), sets the live hit, and fails the row through the existing key verdict. The identity
-  still binds the native scope. No v5 record, control API or verifier change.
+  still binds the native scope. The bound id is written into the chain as the scope, so for a
+  keyed launch the identity matcher holds its own key-fragment matcher: when the matching
+  event's line or decoded id holds any key-scan form, it binds nothing (the unbound path an
+  unusable id takes) and records a key hit. Its line buffer is overwritten before each clear and
+  on drop, as the tee's own buffer is. No v5 record, control API or verifier change.
 - **Why.** Readiness row "Credential with `stdout_json` identity": Amp documents a stdout
   `system`/`init` event with `session_id` as its identity carrier. Needed only if the owner's
   live probe confirms that carrier.
@@ -145,7 +160,9 @@ Proposed text, not in force:
   [credential_stdout_identity.rs](../../crates/goalcup-cli/tests/credential_stdout_identity.rs),
   Linux-runnable: a Python child with the synthetic key prints an Amp-shaped init event; clean
   output is forwarded byte for byte with the identity bound, and a stdout key echo is a hit and
-  withheld while the identity still binds. `daemon_client.rs`'s gate sweep names the new call. A
+  withheld while the identity still binds. An init event whose `session_id` is the key, holds
+  its last eight bytes, or spells the key in JSON `\u` escapes binds nothing, is a key hit, and
+  forwards no fragment. `daemon_client.rs`'s gate sweep names the new call. A
   macOS kit case, `synthetic-credential-stdout-json`, drives the whole `goalcup start` path
   (not run here).
 - **Risk.** Medium. It changes the launcher's tee wiring for keyed children, the one area D41
@@ -154,17 +171,11 @@ Proposed text, not in force:
   test are macOS-only and were not run here.
 - **Status.** Implemented on this branch; macOS runs pending.
 
-### Proposed amendment to D43 ruling 3 (maintainers own DECISIONS.md)
+### DECISIONS entry
 
-Proposed text, not in force:
-
-> **D43 ruling 3, amended (proposed, 2026-10-11).** A credential requires a per-run config home
-> and either `stderr_line` + `deferred` or `stdout_json` + `at_launch` identity; `preassigned`
-> and `none` stay refused. For a keyed `stdout_json` profile one stdout reader feeds both the
-> key-fragment scan and the identity matcher: the identity is read as bytes arrive, and output
-> holding a fragment is withheld and fails the row. Key scanning and identity are no longer
-> separate tees on stdout; they share one. Evidence: `credential_stdout_identity.rs`, kit case
-> `synthetic-credential-stdout-json`.
+Proposed as
+[D48](../DECISIONS.md#d48-m2-proposed-amend-d43-ruling-3-for-stdout_json-identity), an
+amendment to D43 ruling 3, not in force. This change must not merge until the owner approves it.
 
 ## Owner decisions that remain
 
@@ -194,6 +205,6 @@ the live probe first.
   record their presence (metadata only), refuse to start when the machine-wide file exists, or
   disclose them as residuals.
 - **Token grammar.** Change 2 assumes Amp tokens fit 20 to 256 bytes of `[A-Za-z0-9_-]`. The
-  live probe must confirm it before the proposed DECISIONS row is accepted.
+  live probe must confirm it before D47 is approved.
 - **Identity carrier.** Change 4 matters only if the live probe shows the stdout `init` event
   arrives before the first model request and names the session a native file is scoped by.
