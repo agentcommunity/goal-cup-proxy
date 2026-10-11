@@ -210,7 +210,7 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 - ✅ **OS-06** `[OS]` Allowlist copy published as public v0.5.0 (`d2b3206`). c4-I2/I3.
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#source-release).
 - ✅ **OS-07** `[OS]` Private reporting on, `main` ruleset requires `check` (2026-10-11), no DCO.
-  [Record](docs/qualification/v0.5.1-public-release-cleanup.md#public-checks-and-settings).
+  [Record](docs/qualification/v0.5.1-public-release-cleanup.md#applied-2026-10-11).
 - ⬜ **OS-08** `[next]` Re-state that `m2_native_observations` fixtures passed redaction in the
   scrub notes before the public cut. c4-M10.
 - ⬜ **OS-09** `[next]` Decided 2026-09-29: keep `goalcup-git` in the tree, exclude it from the
