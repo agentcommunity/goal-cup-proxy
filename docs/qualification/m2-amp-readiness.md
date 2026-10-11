@@ -7,6 +7,9 @@ Updated: 2026-10-11.
 - Status: **BLOCKED**. Transport, native storage/scope, auth lifecycle and identity binding are
   UNKNOWN or measured unsupported (see [Readiness verdict](#readiness-verdict)). No
   `connectors/amp-cli` exists and none may be added on this record.
+- Two routes: **Route A** is Amp's own agent (everything above
+  [Route B](#route-b-amp-in-claude-code-mode) describes it). **Route B** is Amp in Claude Code
+  mode, where Amp drives the local `claude` binary through the Claude Agent SDK.
 - Candidate: npm `@sourcegraph/amp@0.0.1791676897-g77c125`, an alias that installs
   `@ampcode/cli` and its native per-platform package at the same version.
 - Probe host: Linux x86_64, glibc, key-free. Goal Cup source `6befa1f` (public
@@ -15,12 +18,13 @@ Updated: 2026-10-11.
 - Raw output (local, not in git; the plan names `spikes/amp/out/`, this probe used a temp dir):
   `/tmp/claude-0/amp-probe/`: `raw/`, `tarballs/`, `x/`
   (extracted packages), `pkg/` (npm prefix), `static/strings.txt`, `scripts/`, one directory per
-  probe run.
+  probe run. Route B offline checks: `/tmp/claude-0/amp-probe2/` (local, not in git).
 
 Every fact carries one evidence tag:
 
 - **measured-here**: observed on this Linux host by a key-free, network-less probe.
 - **static**: read from npm metadata, shipped files, or string literals in the binary (not run).
+- **docs**: stated in Amp's public documentation, fetched 2026-10-11 and linked at the fact.
 - **UNKNOWN**: not established; the owner's live probe below must settle it.
 
 The probe method follows [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md#1-capability-worksheet).
@@ -62,14 +66,14 @@ needs no interpreter, so the interpreter refusal does not apply.
 | Headless argv | `amp --stream-json --execute=<goal>`: the whole goal binds as the execute message, including goals `--help`, `-v` and `threads` (logged `executeFlag` equals the goal). `-x <goal>` as two elements also works; words after a bare `-x` are parsed as a command. Help says execute mode also turns on when stdout is redirected | measured-here (offline; the run then fails to reach the server); static (help) |
 | Goal placement | fits `goal_flag = "--execute"`; no argv pre-scan seen for `--help` or `-v` inside the goal, so no `argv_guard` row is indicated | measured-here |
 | Local executor | `--executor local|orb|runner:<id>` exists; what "local" keeps on this machine is UNKNOWN | static (help); UNKNOWN |
-| Provider and hosts | the CLI talks to `AMP_URL` (default `https://ampcode.com/`). Seen offline: `GET https://ampcode.com/api/internal?loadPlugins`. Strings: `/api/thread-actors`, `/api/threads/`, `/api/telemetry`, update check `https://static.ampcode.com/cli/cli-version.txt`, ripgrep download `https://storage.googleapis.com/amp-public-assets-prod-0/ripgrep`. No provider inference host is present; `api.anthropic.com` appears only in a Claude Code OAuth helper path | measured-here (log); static |
+| Provider and hosts | the CLI talks to `AMP_URL` (default `https://ampcode.com/`). Seen offline: `GET https://ampcode.com/api/internal?loadPlugins`. Strings: `/api/thread-actors`, `/api/threads/`, `/api/telemetry`, update check `https://static.ampcode.com/cli/cli-version.txt`, ripgrep download `https://storage.googleapis.com/amp-public-assets-prod-0/ripgrep`. No provider inference host is present for Amp's own agent; `api.anthropic.com` appears in a Claude Code OAuth helper path and as the default base URL of an embedded Anthropic SDK (see [Route B](#route-b-amp-in-claude-code-mode)) | measured-here (log); static |
 | Model relay | inference appears to run behind `ampcode.com` (no provider host in the binary; "thread actor" and rivetkit strings). Wire evidence would then be Amp's own protocol to its server, not a provider API | static; UNKNOWN |
 | Transport, version, body | strings show a rivetkit actor client (`Sec-WebSocket-Protocol`, `rivet_encoding`, `rivet_conn_params`, `rivet_token`), a bundled `cbor-extract` native addon and `text/event-stream`. WebSocket, SSE, HTTP version and body encoding (JSON or CBOR) are all UNKNOWN | static; UNKNOWN |
 | Forward proxy | embedded Bun runtime code reads `HTTPS_PROXY`/`https_proxy`/`NO_PROXY`; a setting `amp.proxy` also exists. Whether the actor WebSocket honours the env proxy is UNKNOWN | static; UNKNOWN |
 | CA variable | embedded Bun runtime reads `NODE_EXTRA_CA_CERTS` (extend) and offers `--use-system-ca`/`NODE_USE_SYSTEM_CA`; `NODE_EXTRA_CA_CERTS` is an admitted extend row. Live trust behaviour is UNKNOWN | static; UNKNOWN |
 | Config paths | with only `HOME` set: settings `$HOME/.config/amp/settings.json` (and `.jsonc`), log `$HOME/.cache/amp/logs/cli.log`, data `$HOME/.local/share/amp/`. With XDG set, settings and log follow `XDG_CONFIG_HOME` and `XDG_CACHE_HOME`. `AMP_HOME` does not move settings or log | measured-here |
 | Data written key-free | `device-id.json` (an installation ID, mode 0600), `.legacy-state-owner.json` (see auth row); read-attempted `accounts.json`, `secrets.json`, `workspace-managed-settings-<hash>.json`; "file-based secrets storage" on Linux | measured-here |
-| Other reads | `/etc/ampcode/managed-settings.json` (machine-wide, outside any private home); `/etc/gitconfig`, `$HOME/.gitconfig`, `$HOME/.config/git/config`. macOS managed path appears as `Application Support/ampcode` (full path UNKNOWN). Server-side workspace managed settings and global plugins are fetched from `ampcode.com` | measured-here (Linux); static (macOS) |
+| Other reads | `/etc/ampcode/managed-settings.json` (machine-wide, outside any private home); `/etc/gitconfig`, `$HOME/.gitconfig`, `$HOME/.config/git/config`. macOS managed file is `/Library/Application Support/ampcode/managed-settings.json` (Windows `%ProgramData%\ampcode\`), per [CLI settings](https://ampcode.com/docs/cli/settings). Server-side workspace managed settings and global plugins are fetched from `ampcode.com` | measured-here (Linux); static and docs (macOS) |
 | Workspace settings | `<workspace root>/.amp/settings.json`; the root is the nearest ancestor holding `.git`, else cwd. A non-git ancestor `.amp/settings.json` was not read | measured-here |
 | Ancestor inheritance | skills are scanned from cwd and every ancestor up to `/` (logged `searchRoots`). `AGENTS.md`/guidance file search is UNKNOWN (`AMP_IGNORE_GUIDANCE_FILES` exists) | measured-here (skills); static |
 | Run-time temp code | Bun extracts a 3,114,112-byte native addon to `$TMPDIR/.bun-0-<hash>.node` (mode 0600) and `dlopen`s it. A second run with the same `TMPDIR` reused the existing file after only a `stat`; no content check was seen in its syscalls | measured-here |
@@ -145,6 +149,169 @@ changes); none belongs in a connector-data PR. Items 6 and 7 may be unfixable on
      native file from stdout or an export is forbidden by the plan. Support would need a new core
      design for a server-relay harness, and the wire leg would need an Amp-protocol decoder.
 
+## Route B: Amp in Claude Code mode
+
+Route A is Amp's own agent: threads live on Amp's server and model work runs behind `ampcode.com`
+over Amp's protocol. Route B is a documented mode where Amp runs Claude Code as the agent. This
+section is docs reading, static inspection and offline checks only; nothing in it is measured
+against a live service.
+
+### What Amp documents
+
+- [Use your Claude plan](https://ampcode.com/news/use-your-claude-plan) (2026-10-10): Claude Pro
+  and Max subscribers can use their plan in Amp through "Mode > Claude Code". "Under the hood,
+  this mode uses the Claude Agent SDK instead of Amp's own agent." (docs)
+- [Use your Claude subscription](https://ampcode.com/docs/the-dial#use-your-claude-subscription)
+  (the dial docs): in the CLI on your own computer, "Claude Code runs there with that computer's
+  install and login". It uses that machine's Claude Code install, Claude login and `~/.claude`
+  settings, and needs Claude Code 2.1.276 or later (Goal Cup's `claude-code-cli` connector pins
+  2.1.283). "An API key does not work: Amp removes ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, and
+  the Bedrock, Vertex, and Foundry settings from Claude Code's environment." The runner finds
+  `claude` on `PATH`, in `~/.local/bin` or in `~/bin`. In the CLI, Ctrl+S selects the mode. Claude
+  Code plan mode, the todo tool and notebook editing are disabled. (docs)
+- [Amp is free](https://ampcode.com/news/free-agent) (2026-09-13): free with your own compute
+  (runners) and your own model subscriptions or keys (BYOK). BYOK keys are managed with
+  `amp config model-providers` (list, activate, test, check-access, and add-router for Bedrock,
+  Vertex and OpenRouter). Whether BYOK inference goes straight from the CLI to the provider or
+  through Amp's servers: UNKNOWN. (docs)
+- [CLI settings](https://ampcode.com/docs/cli/settings): `HTTP_PROXY`/`HTTPS_PROXY` and
+  `NODE_EXTRA_CA_CERTS`; `amp.updates.mode` and `AMP_SKIP_UPDATE_CHECK`; managed settings at
+  `/Library/Application Support/ampcode/managed-settings.json` (macOS), `/etc/ampcode/...`
+  (Linux) and `%ProgramData%\ampcode\...` (Windows); user settings `~/.config/amp/settings.json`;
+  workspace `.amp/settings.json`; `--settings-file` and `AMP_SETTINGS_FILE`; `amp.git.commit`
+  trailers, turned off by `AMP_DISABLE_AMP_THREAD_TRAILER` and `AMP_DISABLE_AMP_COAUTHOR_TRAILER`;
+  `amp.skills.disableClaudeCodeSkills` (Amp also loads skills from Claude Code directories by
+  default). All of these names also appear in the binary strings. (docs; static)
+
+### What the help and the binary show
+
+From the installed help (`/tmp/claude-0/amp-probe/11/out/stdout.txt`, local, not in git; static):
+
+- `-m, --mode <value>`: "Set the agent mode (low, medium, high, ultra, or a plugin mode by key
+  or label, case-insensitive)"; the help adds that it controls the model, system prompt and
+  tool selection.
+- `--stream-json`: "When used with --execute, output in Claude Code-compatible stream JSON format
+  instead of plain text."
+- `amp config external-agents` (`list`, `show`, `update`, `activate`, `deactivate`, `reset`):
+  "External agents are third-party coding agents that run in an Amp thread instead of Amp itself.
+  Claude Code is the only one available for now. This command manages the same personal settings
+  as Settings > Advanced > External Agents on ampcode.com". It "requires the "External agents"
+  experimental feature". `update` can set a post-install script and
+  `--append-system-prompt <text>` ("Claude Code: text added to its system prompt"), and
+  `--mark-set-up` records "that you set the agent up yourself so the picker offers it even
+  though Amp finds no credential for it". These are account settings held on `ampcode.com`,
+  outside the run directory.
+
+From `/tmp/claude-0/amp-probe/static/strings.txt` (local, not in git), each grepped as a fixed
+string and quoted exactly (static):
+
+| String | Where it sits |
+|---|---|
+| `@anthropic-ai/claude-agent-sdk` | the package name; also in "Native CLI binary for linux-x64 not found. Reinstall @anthropic-ai/claude-agent-sdk without --omit=optional, or set options.pathToClaudeCodeExecutable." |
+| `external-agent:` | a bare literal next to `agent-sdk` and `/home/user/.amp/external-agent-setup.log` |
+| `Agent key, such as claude-code (the part after external-agent:)` | argument help of `amp config external-agents show` |
+| `sessionStore with custom spawnClaudeCodeProcess: ensure the subprocess CLAUDE_CONFIG_DIR matches the parent (same path, same separators) or transcript_mirror frames will be dropped.` | an Agent SDK error message |
+| `sessionStore cannot be used with persistSession: false -- the storage adapter requires local writes to mirror from. Use CLAUDE_CONFIG_DIR=/tmp for ephemeral local writes with external mirroring.` | an Agent SDK error message |
+| `options.pathToClaudeCodeExecutable` | four messages, for example "Please ensure Claude Code is installed via native installer or specify a valid path with options.pathToClaudeCodeExecutable." |
+| `claudeCodeOAuthToken` | a bare identifier |
+| `https://api.anthropic.com` | default base URL beside `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN:` (an embedded Anthropic SDK) |
+
+The two `sessionStore` messages belong to the SDK. Whether Amp uses `persistSession: false` or a
+`sessionStore` that mirrors transcripts to its server is UNKNOWN. The mode key is probably
+`external-agent:claude-code`, read from the help text above; not confirmed.
+
+### Offline `--mode` checks
+
+Each run: `unshare -n`, `env -i`, private `HOME`, `XDG_*` and `TMPDIR` under
+`/tmp/claude-0/amp-probe2/<n>/`, `PATH=/usr/bin:/bin` (no `claude` on it), stdin `/dev/null`, a
+25 s timeout. "Invented key" is a made-up `AMP_API_KEY` value; it appeared in no output or file.
+(measured-here)
+
+| Run | argv after `amp` | Key | Exit | Output |
+|---|---|---|---|---|
+| 1, 2 | `-x --help`; `--help` | none | 0 | the same global help (only the private paths differ) |
+| 4, 7 | `config external-agents --help`; `... update --help` | none | 0 | the help quoted above |
+| 5, 6 | `config external-agents list --json`; `show claude-code --json` | none | 1 | stderr `Error: Network timeout. Check your connection or proxy settings and retry.` |
+| 10 | `--stream-json --execute=hello --mode claude-code` | none | 124 | stdout `No API key found. Starting login flow...`, a login URL, then the paste prompt; stopped there |
+| 11 to 15 | `--stream-json --execute=hello --mode <m>` for `claude-code`, `Claude Code`, `external-agent:claude-code`, `bogus-mode-zz9`, `high` | invented | 1 | stdout empty; stderr `Error: Couldn't connect to the Amp server at https://ampcode.com/.` and a retry hint, identical for all five |
+
+The log line `Execution mode resolved` shows `executeMode: true` and no mode field in all five
+runs. An unknown key and a built-in one fail the same way: Amp does not reject an unknown mode
+before it contacts its server, so whether `--mode` accepts the external agent key in execute
+mode is UNKNOWN.
+No run started `claude`; the only child process was `git rev-parse --show-toplevel`.
+
+### Analysis (docs and static inspection, not measured)
+
+In Claude Code mode Amp spawns the local `claude` binary through the Agent SDK. If so:
+
+- **(a) Native leg candidate.** Claude Code writes its own transcript under `CLAUDE_CONFIG_DIR`
+  (or `~/.claude`), `projects/<slug>/<session id>.jsonl`. Goal Cup already reads this: the
+  [claude-code-cli](../../connectors/claude-code-cli/harness.toml) native row
+  (`{config_home}/projects`, `*/{id}.jsonl`, `append_only`) and the `claude-code-native` decoder.
+- **(b) Wire leg candidate.** The child's model traffic may go straight to `api.anthropic.com`
+  `/v1/messages`, which the existing `anthropic-messages` decoder reads, if the child inherits
+  `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS` from Amp.
+- **(c) Auth.** The child uses the Claude subscription login, which matches the repository rule
+  that participants use subscription auth. Amp still needs its own auth (`AMP_API_KEY` or a
+  stored login) and still talks to `ampcode.com` for the thread.
+
+What that means for Goal Cup today (source reading of
+[launch.rs](../../crates/goalcup-cli/src/launch.rs) and
+[harness.rs](../../crates/goalcup-protocol/src/harness.rs) `check_cross_field`):
+
+- **Child lookup.** A capture launch sets `PATH` to `/usr/bin:/bin:/usr/sbin:/sbin` and `HOME`
+  to the run home, so Amp's documented lookup (`PATH`, `~/.local/bin`, `~/bin`) finds no
+  `claude` unless one is installed in a system directory. UNKNOWN whether Amp has another way.
+- **Child pin.** Goal Cup pins one executable (`amp`). The `claude` child that does the model
+  work is not pinned, so the pin no longer covers the agent. No DECISIONS row covers a harness
+  that runs a second agent binary; it needs an owner ruling or a core change.
+- **One harness per entry.** [D10](../DECISIONS.md#d10-one-harness-per-entry) keeps one harness
+  per entry, and the verifier treats model traffic under a second harness identity as a Fail.
+  Whether a Route B entry is "Amp" or "Claude Code" is an owner ruling.
+- **Identity.** The `claude-code-cli` profile is `preassigned` and passes `--session-id`. Amp
+  picks the Claude session id, so `preassigned` cannot reach it. With `AMP_API_KEY` as the
+  profile credential, schema 1 admits only `stderr_line` identity, so `stdout_json` and `none`
+  are refused too.
+- **Homes.** A profile names one `home.env`. `CLAUDE_CONFIG_DIR` would hold the native row; Amp's
+  state would sit under the run `HOME`. A credential needs `config_home = "per_run"`, while the
+  `claude-code-cli` profile uses a shared config home and a `keychain_link` run home
+  ([D38](../DECISIONS.md#d38-m2-fresh-per-run-home-for-claude-code-cheapest-models-for-live-tests)).
+  Whether one profile can satisfy both is UNKNOWN.
+- **Server-side settings.** The external agent's post-install script and system prompt addition
+  come from the `ampcode.com` account; a residual like the managed settings above.
+
+### Route A and Route B against schema-1 rows
+
+| Schema-1 row | Route A: Amp's own agent | Route B: Claude Code mode |
+|---|---|---|
+| `capture.executable` | `amp`, pinned | `amp`, pinned; the `claude` child is not pinned |
+| `args`, goal | `--stream-json --execute=<goal>` (measured offline) | the same plus `--mode <key>`; key acceptance UNKNOWN |
+| `capture.home` | run `HOME` holds all measured Amp state | Amp state in run `HOME`, Claude state in `CLAUDE_CONFIG_DIR`; one `home.env`; Claude login (Keychain) UNKNOWN |
+| `capture.credential` | `AMP_API_KEY`, not admitted | same for Amp; the child uses the subscription, no key |
+| `capture.identity` | `stdout_json` candidate, refused with a credential | `preassigned` unreachable; `stdout_json` and `none` refused with a credential; id mapping UNKNOWN |
+| `capture.native` | none evidenced (server-side threads) | candidate Claude transcript, `append_only`, `claude-code-native` decoder; UNKNOWN |
+| `capture.hosts`, wire leg | `ampcode.com`, Amp protocol, no decoder | `ampcode.com` for Amp; candidate `api.anthropic.com` `/v1/messages` from the child, `anthropic-messages` decoder; UNKNOWN |
+| `capture.ca` | `NODE_EXTRA_CA_CERTS` reaches Amp (UNKNOWN effect) | must also reach the child; UNKNOWN |
+| D10 | one harness | Claude Code child; owner ruling |
+
+### Route B UNKNOWNs for the live probe
+
+1. Does `--mode` accept the external agent key in execute mode, and which spelling
+   (`claude-code`, `Claude Code`, `external-agent:claude-code`)? Does it need the "External
+   agents" experimental feature on the account?
+2. Does Amp pass `CLAUDE_CONFIG_DIR`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS` and
+   `PATH` to the child, and does it find `claude` under a capture env?
+3. Which session id appears in Amp's stream JSON (an Amp `T-<uuid>` thread id or the Claude
+   session id), and does it match the transcript file name and its `sessionId` field?
+4. Is the native transcript per run: one new file, a decoy run distinguishable, and written
+   locally at all (not `persistSession: false` with server mirroring only)?
+5. Amp needs a second executable that Goal Cup does not pin. What do the D-rules say about an
+   unpinned child, and does a Claude pin need a core field?
+6. Does the macOS Keychain login reached through `keychain_link` work for the child?
+7. Do the account's external agent settings (post-install script, system prompt addition) apply
+   to a local CLI run?
+
 ## Owner live-probe steps (macOS)
 
 The owner alone supplies the key, through the approved local route (a private mode-0600 env file
@@ -190,6 +357,37 @@ identity carrier and its binding time, the transport and body encoding through t
 behaviour, the token grammar, auth-error echo, Keychain use, ancestor guidance inheritance and
 updater effect in execute mode.
 
+### Route B steps
+
+Same rules as above: the owner alone supplies the Amp key through the approved route; the Claude
+side uses the owner's subscription login and never a key; record names, paths and outcomes only,
+never a token. Never point anything at the real `~/.claude`.
+
+1. **Claude install.** Record `claude --version` (2.1.276 or later), its canonical path and
+   SHA-256, and which of `PATH`, `~/.local/bin` or `~/bin` holds it. Check whether Amp still
+   finds it with `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and `HOME` set to the run home, as a
+   capture launch sets them.
+2. **Claude login in the private setup.** Use a private `CLAUDE_CONFIG_DIR` and a private `HOME`
+   that holds only a link to `Library/Keychains`, as `keychain_link` builds it. Confirm the
+   login is present there (`claude` alone answers one short prompt), metadata only.
+3. **Mode key.** `amp config external-agents list --json`: record the agent's mode key and
+   status, and whether the "External agents" experimental feature had to be turned on.
+4. **The run.** `amp --stream-json --execute=<goal> --mode <key>` with the private homes,
+   private `CLAUDE_CONFIG_DIR` and `TMPDIR`, the forward proxy and its CA, stdin `/dev/null`.
+   Repeat with `Claude Code` and `external-agent:claude-code` if the key is refused. Record exit,
+   the first stdout events, and whether a `claude` child starts (its argv, and its environment
+   variable names only).
+5. **Transcript files.** List new files under `CLAUDE_CONFIG_DIR/projects/` and under the run
+   `HOME/.claude` (in case the child ignored the variable). Record form, one file per run, and
+   whether a decoy run in the same home is distinguishable.
+6. **Traffic.** From the proxy log, record hosts and paths per process: the child
+   (`api.anthropic.com` `/v1/messages`?) and Amp (`ampcode.com`). Repeat once without the CA to
+   confirm the child fails closed rather than going around the proxy.
+7. **Session id mapping.** Compare the stream JSON `session_id`, any Amp `T-<uuid>` thread id,
+   the transcript file name and its `sessionId` field.
+8. **Residue.** Re-hash both executables. Scan the transcript, stdout, stderr and logs for Amp
+   key fragments. Confirm nothing under the real `~/.claude` changed (metadata only).
+
 ## Readiness verdict
 
 | Phase 1 field | State |
@@ -202,11 +400,19 @@ updater effect in execute mode.
 | Native storage/scope | UNKNOWN, likely server-side only |
 | Identity source/binding | UNKNOWN; candidate `stdout_json` refused with a credential |
 | Semantics | UNKNOWN; no decoder |
+| Route B (Claude Code mode) | UNKNOWN; candidate native and wire legs read by existing decoders |
 
 **BLOCKED.** Downstream Tasks 2 and 3 stay closed until the live probe replaces every UNKNOWN in
 transport, native storage/scope, auth and identity, and the owner rules on the key-fingerprint
 file. If the live probe finds no local own-session store, Amp is BLOCKED unsupported under schema
 1.
+
+Route B may avoid the "no local store" blocker: in Claude Code mode the agent is a local
+`claude` that should write its own transcript and may call `api.anthropic.com` directly, both
+of which Goal Cup already decodes. That is docs and static reading only. Route B keeps the Amp
+credential and identity blockers and adds three of its own: the D10 ruling, the unpinned
+`claude` child and the session id mapping. Amp stays BLOCKED until the live probe, including
+the [Route B steps](#route-b-steps), is measured.
 
 ### Owner decision if there is no local store
 
@@ -221,6 +427,9 @@ exactly one `[[capture.native]]` row. The options:
   the proxy and gives no provider semantics or own-session claim until an Amp decoder exists.
 - **(c) A server-relay harness design.** A new core design for harnesses whose sessions live on
   a vendor server. Larger than (b).
+- **(d) Route B.** If the live probe confirms a per-run local Claude transcript and direct
+  `api.anthropic.com` traffic, the native-row gap closes without (b) or (c), subject to the
+  owner's D10 ruling and a decision on the unpinned child.
 
 ## Handoff record
 
@@ -233,6 +442,7 @@ Candidate executable path/version/SHA-256; package provenance:
   npm trusted publishing, gitHead 77c125710201165716ff6b47c9ec9441c1abc649
 Connector directory pin; harness-contract schema: none; schema 1 target
 Transport hosts/paths/version/body; native storage/form/scope: UNKNOWN; UNKNOWN
+  (Route B candidate: Claude transcript and api.anthropic.com, not measured)
 Isolation roots (metadata only); auth variable names and lifecycle:
   per-run HOME (.config/amp, .local/share/amp, .cache/amp); AMP_API_KEY (not admitted)
 Identity source/binding and crosscheck; semantic decoder: UNKNOWN; none
