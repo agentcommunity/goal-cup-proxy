@@ -7,7 +7,7 @@
 //! harness homes.
 //!
 //! A case whose `expect.toml` names `credential_env` is a keyed case: the runner puts the
-//! invented [`KIT_CREDENTIAL`] in that variable of `goalcup start`'s own environment, so the
+//! invented [`KIT_CREDENTIAL`] (shared through `support`) in that variable of `goalcup start`'s own environment, so the
 //! launcher's child-secret path hands it to the stand-in. The runner then checks that the
 //! stand-in received exactly that value, and that no fragment of it is in the sealed trace, the
 //! run directory or the launcher's forwarded stdout and stderr.
@@ -32,6 +32,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, UNIX_EPOCH};
+use support::{KIT_CREDENTIAL, KIT_CREDENTIAL_MARKER_PREFIX};
 
 #[derive(Debug, Clone)]
 struct Expect {
@@ -56,16 +57,6 @@ struct Expect {
     /// The admitted credential variable a keyed case is handed [`KIT_CREDENTIAL`] in.
     credential_env: Option<String>,
 }
-
-/// The value a keyed kit case receives. Invented for the kit and never a real key; it fits the
-/// launcher's shared grammar (20 to 256 bytes of `[A-Za-z0-9_-]`) and has no provider prefix.
-const KIT_CREDENTIAL: &str = "kit-synthetic-credential_5e1d9c3a7b2f4068";
-
-/// What a keyed stand-in writes to its marker to show which value it received: the SHA-256 of
-/// this prefix and the value. Not one of the key scan's forms (which include the SHA-256 of the
-/// bare value), so the marker proves delivery without planting a fragment. The marker lives
-/// outside the run directory, under the runner's own root.
-const KIT_CREDENTIAL_MARKER_PREFIX: &str = "kit-marker:";
 
 #[derive(Debug, Clone)]
 struct Case {

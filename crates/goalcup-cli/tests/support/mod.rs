@@ -43,6 +43,21 @@ pub const NOW: &str = "2026-09-05T00:00:00Z";
 /// is only ever reached when the condition is not going to come true at all.
 pub const PATIENCE: Duration = Duration::from_secs(20);
 
+/// The value a keyed harness-contract kit case receives. Invented for the kit and never a real
+/// key; it fits the launcher's shared grammar (20 to 256 bytes of `[A-Za-z0-9_-]`) and has no
+/// provider prefix. No key-scan form of it (its first or last eight bytes, a mask, the window
+/// rule, its SHA-256 prefix or a base64 rendering of any of them) may appear in a kit fixture,
+/// a case id, a case directory name or a shipped connector file: the daemon writes the case id
+/// into the sealed chain, so a collision would fail the keyed case's own key scan.
+/// `harness_kit_credential` holds that rule on every platform.
+pub const KIT_CREDENTIAL: &str = "Qv7Rk2Wm9Xp4Tn6Lj3Hb8Zc5Fd_0eYs";
+
+/// What a keyed kit stand-in writes to its marker to show which value it received: the
+/// SHA-256 of this prefix and the value. A salted digest of the invented key, not one of the
+/// key scan's forms (which include the SHA-256 of the bare value), so the marker proves
+/// delivery without planting a fragment. Never reuse the scheme with a real key.
+pub const KIT_CREDENTIAL_MARKER_PREFIX: &str = "kit-marker:";
+
 // ------------------------------------------------------------------ the tree
 
 /// The workspace root: `CARGO_MANIFEST_DIR/../..`.
