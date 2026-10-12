@@ -7,6 +7,17 @@ fail-fast = false
 slow-timeout = { period = "30s", terminate-after = 6 }
 test-threads = "num-cpus"
 
+# The two longest tests (each 30 s or more, both P1, so they stay in the fast tier) start first,
+# so the fast gate's wall time is not their run added to everything scheduled before them.
+[[profile.default.overrides]]
+filter = '''
+package(goalcup-daemon) & binary(it) & (
+    test(=capture_redaction::a_masked_key_around_the_hold_bound_is_never_retained)
+    | test(=capture_redaction_extra::seeded_random_chunking_matches_the_oracle_with_extra_patterns)
+)
+'''
+priority = 100
+
 # Some suites serialise through an in-process lock (the process-table `TableLock` in
 # crates/goalcup-daemon/tests/common/support/table_lock.rs, and capture_gate's static Mutex).
 # Under nextest every test is its own process, so those locks hold nothing; this group restores
