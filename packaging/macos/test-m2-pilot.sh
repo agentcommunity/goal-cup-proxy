@@ -1,7 +1,9 @@
 #!/bin/sh
 # Focused installed-path smoke for the private M2 local-capture candidate. It uses a
 # disposable tracker prefix and a tiny synthetic Codex-compatible executable; it never
-# starts a real harness or sends traffic to a model service.
+# starts a real harness or sends traffic to a model service. It installs no service:
+# `goalcup start` starts the installed daemon for the run, and the daemon exits once the
+# run is sealed.
 
 set -eu
 
@@ -30,78 +32,32 @@ work_dir=$(mktemp -d "${TMPDIR:-/tmp}/goalcup-test-m2-pilot.XXXXXX")
 work_dir=$(CDPATH= cd -- "$work_dir" && pwd -P)
 prefix="$work_dir/prefix"
 stage="$work_dir/stage"
-label="com.agentcommunity.goalcup.m2pilot.$$"
 prepublish_prefix="$work_dir/prepublish-prefix"
-prepublish_label="com.agentcommunity.goalcup.m2pilot.pre.$$"
 postpublish_prefix="$work_dir/postpublish-prefix"
-postpublish_label="com.agentcommunity.goalcup.m2pilot.post.$$"
 home="$work_dir/home"
 fake_bin="$work_dir/harness-bin"
 host_path=$PATH
 mkdir -m 0700 "$home" "$fake_bin"
 installed=0
-fixture_daemon_pid=""
+fixture_config_dir="$work_dir/controlled-config"
 cleanup_failed=0
 
+# The run-scoped daemon `goalcup start` starts over the fixture configuration. Its command
+# line names this run's unique work directory, so nothing else on the machine can match.
 stop_fixture_daemon() {
-    [ -n "$fixture_daemon_pid" ] || return 0
-    pid=$fixture_daemon_pid
-    kill -TERM "$pid" 2>/dev/null || true
-    stop_attempt=0
-    while kill -0 "$pid" 2>/dev/null; do
-        stop_attempt=$((stop_attempt + 1))
-        if [ "$stop_attempt" -ge 40 ]; then
-            kill -KILL "$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-            fixture_daemon_pid=""
-            return 1
-        fi
-        sleep 0.25
-    done
-    if wait "$pid" 2>/dev/null; then
-        stop_status=0
-    else
-        stop_status=$?
-    fi
-    fixture_daemon_pid=""
-    [ "$stop_status" -eq 0 ]
-}
-
-bootout_disposable_label() {
-    owned_label=$1
-    case "$owned_label" in
-        com.agentcommunity.goalcup.m2pilot.*) ;;
-        *)
-            echo "test-m2-pilot.sh: cleanup refused non-disposable label: $owned_label" >&2
-            return 1
-            ;;
-    esac
-    if launchctl print "gui/$(id -u)/$owned_label" >/dev/null 2>&1; then
-        launchctl bootout "gui/$(id -u)/$owned_label" >/dev/null 2>&1 || {
-            echo "test-m2-pilot.sh: cleanup could not unload $owned_label" >&2
-            return 1
-        }
-    fi
+    pkill -TERM -f -- "--config $fixture_config_dir/daemon.toml" 2>/dev/null || true
 }
 
 cleanup() {
     status=$?
-    stop_fixture_daemon >/dev/null 2>&1 || cleanup_failed=1
+    stop_fixture_daemon
     if [ "$installed" -eq 1 ]; then
-        HOME="$home" sh "$SCRIPT_DIR/uninstall-assisted.sh" --prefix "$prefix" --label "$label" >/dev/null 2>&1 || cleanup_failed=1
+        HOME="$home" sh "$SCRIPT_DIR/uninstall-assisted.sh" --prefix "$prefix" >/dev/null 2>&1 || cleanup_failed=1
     fi
     if [ -f "$postpublish_prefix/.goalcup-install-manifest.json" ]; then
         HOME="$home" sh "$SCRIPT_DIR/uninstall-assisted.sh" --prefix "$postpublish_prefix" \
-            --label "$postpublish_label" >/dev/null 2>&1 || cleanup_failed=1
+            >/dev/null 2>&1 || cleanup_failed=1
     fi
-    # Cover every label minted by this pilot. The helper refuses anything outside the
-    # disposable prefix before inspecting or unloading the exact gui/<uid>/<label> job.
-    bootout_disposable_label "$label" || cleanup_failed=1
-    bootout_disposable_label "$prepublish_label" || cleanup_failed=1
-    bootout_disposable_label "$postpublish_label" || cleanup_failed=1
-    rm -f "$home/Library/LaunchAgents/$label.plist"
-    rm -f "$home/Library/LaunchAgents/$prepublish_label.plist"
-    rm -f "$home/Library/LaunchAgents/$postpublish_label.plist"
     rm -rf "$work_dir"
     if [ "$status" -eq 0 ] && [ "$cleanup_failed" -ne 0 ]; then
         status=1
@@ -170,57 +126,37 @@ for item in manifest["files"]:
 print(f"test-m2-pilot.sh: source {manifest['revision']} target {manifest['target']} version {manifest['version']}")
 PYEOF
 
-step "proving pre-publication failure leaves no visible install or launchd job"
+step "proving pre-publication failure leaves no visible install"
 set +e
 HOME="$home" GOALCUP_INSTALL_TESTING=1 GOALCUP_INSTALL_TEST_FAIL=copy \
     sh "$SCRIPT_DIR/install-assisted.sh" --profile m2-pilot \
-    --bundle "$stage" --prefix "$prepublish_prefix" --label "$prepublish_label" \
+    --bundle "$stage" --prefix "$prepublish_prefix" \
     >"$work_dir/prepublish.out" 2>"$work_dir/prepublish.err"
 prepublish_status=$?
 set -e
 [ "$prepublish_status" -ne 0 ] || fail "injected pre-publication failure unexpectedly succeeded"
 [ ! -e "$prepublish_prefix" ] || fail "injected pre-publication failure exposed a prefix"
-[ ! -e "$home/Library/LaunchAgents/$prepublish_label.plist" ] \
-    || fail "injected pre-publication failure exposed a plist"
 [ ! -s "$work_dir/prepublish.out" ] || fail "injected pre-publication failure printed a success banner"
-if launchctl print "gui/$(id -u)/$prepublish_label" >/dev/null 2>&1; then
-    fail "injected pre-publication failure left a launchd job"
-fi
 
-step "proving post-publication failure preserves outputs and a ready job for manual recovery"
+step "proving post-publication failure preserves the prefix for manual recovery"
 set +e
-HOME="$home" GOALCUP_INSTALL_TESTING=1 GOALCUP_INSTALL_TEST_FAIL=after-activation \
+HOME="$home" GOALCUP_INSTALL_TESTING=1 GOALCUP_INSTALL_TEST_FAIL=after-prefix \
     sh "$SCRIPT_DIR/install-assisted.sh" --profile m2-pilot \
-    --bundle "$stage" --prefix "$postpublish_prefix" --label "$postpublish_label" \
+    --bundle "$stage" --prefix "$postpublish_prefix" \
     >"$work_dir/postpublish.out" 2>"$work_dir/postpublish.err"
 postpublish_status=$?
 set -e
 [ "$postpublish_status" -ne 0 ] || fail "injected post-publication failure unexpectedly succeeded"
 [ -d "$postpublish_prefix" ] || fail "post-publication failure removed the published prefix"
-[ -f "$home/Library/LaunchAgents/$postpublish_label.plist" ] \
-    || fail "post-publication failure removed the published plist"
-launchctl print "gui/$(id -u)/$postpublish_label" >/dev/null 2>&1 \
-    || fail "post-publication failure removed or failed to preserve the ready launchd job"
 [ ! -s "$work_dir/postpublish.out" ] || fail "post-publication failure printed a success banner"
 grep -F "$postpublish_prefix" "$work_dir/postpublish.err" >/dev/null \
     || fail "post-publication recovery report omitted the exact prefix"
-grep -F "$home/Library/LaunchAgents/$postpublish_label.plist" "$work_dir/postpublish.err" >/dev/null \
-    || fail "post-publication recovery report omitted the exact plist"
-grep -F "launchd label: $postpublish_label" "$work_dir/postpublish.err" >/dev/null \
-    || fail "post-publication recovery report omitted the exact label"
-grep -F "uid domain: gui/$(id -u)" "$work_dir/postpublish.err" >/dev/null \
-    || fail "post-publication recovery report omitted the uid domain"
-grep -F "bootstrap returned success: yes" "$work_dir/postpublish.err" >/dev/null \
-    || fail "post-publication recovery report omitted bootstrap state"
-grep -F "readiness observed: yes" "$work_dir/postpublish.err" >/dev/null \
-    || fail "post-publication recovery report omitted readiness state"
-HOME="$home" sh "$SCRIPT_DIR/uninstall-assisted.sh" --prefix "$postpublish_prefix" \
-    --label "$postpublish_label" >/dev/null \
+HOME="$home" sh "$SCRIPT_DIR/uninstall-assisted.sh" --prefix "$postpublish_prefix" >/dev/null \
     || fail "manual recovery cleanup of injected post-publication install failed"
 
 step "installing only the m2-pilot profile under the disposable prefix"
 HOME="$home" sh "$SCRIPT_DIR/install-assisted.sh" --profile m2-pilot \
-    --bundle "$stage" --prefix "$prefix" --label "$label" \
+    --bundle "$stage" --prefix "$prefix" \
     || fail "m2-pilot installation failed"
 installed=1
 config_file="$prefix/etc/daemon.toml"
@@ -291,12 +227,7 @@ PYEOF
 "$prefix/bin/goalcup-daemon" --help >/dev/null
 "$prefix/bin/goalcup-verify" --version >/dev/null
 "$prefix/bin/goalcup-verify" --help >/dev/null
-attempt=0
-while ! "$prefix/bin/goalcup-daemon" --config "$config_file" --print-addresses >/dev/null 2>&1; do
-    attempt=$((attempt + 1))
-    [ "$attempt" -lt 40 ] || fail "installed daemon did not become ready"
-    sleep 0.25
-done
+# No daemon is running and none is needed before a run: doctor passes without one.
 for connector in codex-cli claude-code-cli; do
     "$prefix/bin/goalcup" doctor --json --harness "$connector" \
         >"$work_dir/doctor-$connector.json" \
@@ -328,45 +259,24 @@ harness.write_text(text, encoding="utf-8")
 print(f"test-m2-pilot.sh: synthetic schema profile controlled-workload-codex (process_group) pins codex shim sha256 {digest}; shipped profiles remain unchanged")
 PYEOF
 
-# Keep the fixture runtime state separate from the launchd-served install config and roots.
-# The package/installer path above has already loaded and served the installed daemon once;
-# after its scoped unload, run that same installed binary directly in foreground for the
-# controlled profile instead of rewriting/rebootstrapping the same launchd label.
-fixture_config="$work_dir/controlled-daemon.toml"
-fixture_config_dir="$work_dir/controlled-config"
+# Keep the fixture runtime state separate from the install's own config and roots. The
+# fixture's daemon configuration is `<config dir>/daemon.toml`, the file `goalcup start`
+# starts the installed daemon from when none is running.
 fixture_artifact_root="$prefix/var/controlled-artifacts"
 fixture_workspace_parent="$prefix/var/controlled-workspaces"
 mkdir -m 0700 -p "$fixture_config_dir" "$fixture_artifact_root" "$fixture_workspace_parent"
-cat > "$fixture_config" <<EOF
+cat > "$fixture_config_dir/daemon.toml" <<EOF
 artifact_root = "$fixture_artifact_root"
 connectors_dir = "$fixture_connectors"
 config_dir = "$fixture_config_dir"
 workspace_parent = "$fixture_workspace_parent"
 control_addr = "127.0.0.1:0"
 EOF
-chmod 0600 "$fixture_config"
-launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 \
-    || fail "could not stop the disposable launchd daemon before fixture foreground start"
+chmod 0600 "$fixture_config_dir/daemon.toml"
 
 export GOALCUP_CONFIG_DIR="$fixture_config_dir"
 export GOALCUP_CONNECTORS_DIR="$fixture_connectors"
 export PATH="$fake_bin:$prefix/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-step "starting the installed daemon in foreground with isolated fixture roots"
-"$prefix/bin/goalcup-daemon" --config "$fixture_config" --foreground \
-    >"$work_dir/controlled-daemon.log" 2>&1 &
-fixture_daemon_pid=$!
-attempt=0
-while ! "$prefix/bin/goalcup-daemon" --config "$fixture_config" --print-addresses >/dev/null 2>&1; do
-    if ! kill -0 "$fixture_daemon_pid" 2>/dev/null; then
-        if wait "$fixture_daemon_pid" 2>/dev/null; then :; else :; fi
-        fixture_daemon_pid=""
-        fail "foreground installed daemon exited before readiness: $(cat "$work_dir/controlled-daemon.log")"
-    fi
-    attempt=$((attempt + 1))
-    [ "$attempt" -lt 40 ] || fail "foreground installed daemon did not publish its fresh control file"
-    sleep 0.25
-done
 
 step "driving an explicitly unpinned synthetic --dev v5 lifecycle and its deliberate coverage gap"
 mkdir -m 0700 "$work_dir/run"
@@ -409,9 +319,16 @@ assert report["coverage_incomplete"] is True, report
 assert report["anchor"] == "local_only", report
 PYEOF
 
+step "waiting for the run-scoped daemon to exit once nothing is unsealed"
+attempt=0
+while [ -e "$fixture_config_dir/control.json" ]; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 240 ] || fail "the run-scoped daemon did not exit within 60 s of the seal"
+    sleep 0.25
+done
+
 step "uninstalling and confirming the disposable prefix alone was used"
-stop_fixture_daemon || fail "foreground installed daemon did not stop cleanly"
-HOME="$home" sh "$SCRIPT_DIR/uninstall-assisted.sh" --prefix "$prefix" --label "$label" \
+HOME="$home" sh "$SCRIPT_DIR/uninstall-assisted.sh" --prefix "$prefix" \
     || fail "m2-pilot uninstall failed"
 installed=0
 [ ! -e "$prefix/bin" ] || fail "uninstall left installed binaries behind"

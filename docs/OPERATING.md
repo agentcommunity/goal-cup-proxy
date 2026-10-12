@@ -182,12 +182,21 @@ for the same reason.
 
 ### Running the daemon
 
+You normally never start it yourself. `goalcup start` and `goalcup seal` start
+`goalcup-daemon --config $GOALCUP_CONFIG_DIR/daemon.toml --exit-when-idle` when no daemon answers
+on `control.json` (the README's [daemon](../README.md#the-daemon) note says how), and
+`goalcup start` writes a default `daemon.toml` the first time: the keys below, with
+`artifact_root` and `workspace_parent` beside the configuration directory
+(`<config dir>-artifacts`, `<config dir>-runs`). Edit that file to change them.
+
 The daemon takes one required argument, a configuration file, and runs in the foreground
 under whatever started it. There is no daemonisation, no pidfile and no logger; what it
-would have logged is counted on the signed status document instead.
+would have logged is counted on the signed status document instead. With `--exit-when-idle`
+it exits 0 once no capture is unfinished and no authenticated control request has arrived for
+30 seconds, removing its `control.json` first; without it, it runs until a signal.
 
 ```
-goalcup-daemon --config <FILE> [--foreground]
+goalcup-daemon --config <FILE> [--foreground] [--exit-when-idle]
 goalcup-daemon --config <FILE> --print-addresses
 goalcup-daemon --version
 ```
@@ -221,9 +230,11 @@ public. Omit both.
 reads that directory instead of the platform default, and a daemon started with the same value
 in `config_dir` writes its `control.json` there. That is the whole of how a second, isolated
 tracker is run on one machine — a test, a second round, a development build beside an
-installed one — and it is why nothing in this tree needs to move `$HOME` to do it. Set one
-without the other and the CLI looks in one directory while the daemon writes to another, and
-every command answers "no daemon is running".
+installed one — and it is why nothing in this tree needs to move `$HOME` to do it. The CLI
+starts a daemon from `daemon.toml` in that same directory, so the default it writes always
+agrees. A hand-written `config_dir` that names another directory does not: the started daemon
+writes `control.json` where the CLI is not looking, and `goalcup start` refuses, naming
+`daemon.log`.
 
 With no `[event]` section the signed status document reports the entry's own timeline in the
 competition's fields and marks it `event_status_source: "fallback"`, so a reader can tell a
@@ -237,14 +248,15 @@ The bearer in that file is read and never printed.
 
 | Exit | Meaning |
 |---|---|
-| 0 | Stopped on SIGTERM or SIGINT. A signal ends the process; it does not seal the entry. After a restart an unfinished capture has status and seal authority only. Also `--print-addresses` when it read `control.json`, and `--version`. |
+| 0 | Stopped on SIGTERM or SIGINT, or idle under `--exit-when-idle`. Neither seals an entry. After a restart an unfinished capture has status and seal authority only. Also `--print-addresses` when it read `control.json`, and `--version`. |
 | 1 | Refused, in one sentence on `stderr` prefixed `goalcup-daemon:` and never a panic. The configuration file could not be read or did not validate; the daemon would not start (`control.json` among the things it writes); the async runtime or the signal handlers would not install; or `--print-addresses` found no `control.json`. Every refusal that is about a file names that file. |
 | 2 | clap refused the arguments (`--config` missing, an unknown flag). |
 
 ### Running a capture with the CLI
 
-With a daemon up (above), a capture run is one command, and the verify line it prints. Every
-command reads `$GOALCUP_CONFIG_DIR`, or the platform default beside it, to find that daemon.
+A capture run is one command, and the verify line it prints; `goalcup start` starts the daemon
+for it (above). Every command reads `$GOALCUP_CONFIG_DIR`, or the platform default beside it, to
+find that daemon.
 
 ```
 goalcup start --harness <id> --goal-file <PATH>   # launches, waits, seals, prints `verify:`
@@ -295,7 +307,7 @@ usage error (exit 1).
 | Exit | Meaning |
 |---|---|
 | 0 | The command did what it was asked. |
-| 1 | Refused, and you can fix it: no daemon running, a tracker still busy with the entry after the retry is spent, an entry that is already sealed, a mistyped sub-command, a preflight check that said no. |
+| 1 | Refused, and you can fix it: no daemon to ask (`status`, `entries`) or none could be started (`start`, `seal`), a tracker still busy with the entry after the retry is spent, an entry that is already sealed, a mistyped sub-command, a preflight check that said no. |
 | 2 | **Never this binary's.** It is "invalid evidence", and only `goalcup-verify` leaves under it. |
 | 3 | The CLI could not do its job: a file it could not read, an answer it could not parse. |
 | 4 | Not left by a capture run: it belonged to the removed V1 gates (D48). |

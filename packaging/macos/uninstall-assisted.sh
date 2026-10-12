@@ -1,15 +1,17 @@
 #!/bin/sh
-# Assisted uninstall of a bundle `install-assisted.sh` installed: unload the launchd USER
-# agent, remove the installed program and connector files, and remove the daemon config —
-# but PRESERVE `<prefix>/var/artifacts` and `<prefix>/var/workspaces`, because those hold
-# whatever entries a participant actually ran. Uninstalling is never how evidence is lost.
+# Assisted uninstall of a bundle `install-assisted.sh` installed: remove the installed program
+# and connector files and the daemon config, but PRESERVE `<prefix>/var/artifacts` and
+# `<prefix>/var/workspaces`, because those hold whatever entries a participant actually ran.
+# Uninstalling is never how evidence is lost. There is no service to unload: the daemon is
+# started by `goalcup start` for a run and exits once nothing is unsealed.
 #
 # Usage:
-#   sh uninstall-assisted.sh --prefix <installed-prefix> [--label <launchd-label>]
+#   sh uninstall-assisted.sh --prefix <installed-prefix>
 #
 # Refuses (rather than guessing) a prefix that was not installed by install-assisted.sh: it
-# requires and reads back `<prefix>/.goalcup-install-manifest.json`, and refuses a --label
-# that does not match what that manifest recorded.
+# requires `<prefix>/.goalcup-install-manifest.json`. An install made by an earlier installer
+# also loaded a launchd agent; its manifest names the label, and this script prints the one
+# command that removes it rather than running launchctl itself.
 
 set -eu
 
@@ -19,18 +21,12 @@ refuse() {
 }
 
 prefix=""
-label=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --prefix)
             [ $# -ge 2 ] || refuse "--prefix requires a value"
             prefix="$2"
-            shift 2
-            ;;
-        --label)
-            [ $# -ge 2 ] || refuse "--label requires a value"
-            label="$2"
             shift 2
             ;;
         *)
@@ -55,27 +51,13 @@ manifest="$prefix/.goalcup-install-manifest.json"
 [ -f "$manifest" ] || refuse "no install manifest at $manifest — refusing to guess what to remove (this prefix was not installed by install-assisted.sh, or was already uninstalled)"
 [ ! -L "$manifest" ] || refuse "refusing a symlinked install manifest: $manifest"
 
-recorded_label=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['label'])" "$manifest")
-recorded_plist=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['plist_path'])" "$manifest")
-
-if [ -n "$label" ] && [ "$label" != "$recorded_label" ]; then
-    refuse "--label $label does not match the installed label $recorded_label recorded in $manifest"
-fi
-label="$recorded_label"
-
-echo "uninstall-assisted.sh: unloading launchd label $label"
-launchctl bootout "gui/$me/$label" 2>/dev/null || true
-
-if [ -e "$recorded_plist" ] || [ -L "$recorded_plist" ]; then
-    rm -f "$recorded_plist"
-fi
-
-# Also remove the canonical plist path for this label in case the manifest's recorded path
-# ever drifts from the platform default — belt and braces, never a second guess about what
-# else to delete.
-default_plist="$HOME/Library/LaunchAgents/$label.plist"
-if [ -e "$default_plist" ] || [ -L "$default_plist" ]; then
-    rm -f "$default_plist"
+# An earlier installer's manifest (format 1) records the launchd agent it loaded.
+recorded_label=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('label', ''))" "$manifest")
+recorded_plist=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('plist_path', ''))" "$manifest")
+if [ -n "$recorded_label" ]; then
+    echo "uninstall-assisted.sh: this prefix was installed with the launchd agent $recorded_label;" \
+        "this script no longer touches launchd. Remove it yourself with" \
+        "launchctl bootout gui/$me/$recorded_label && rm -f '$recorded_plist'" >&2
 fi
 
 rm -rf "${prefix:?}/bin"

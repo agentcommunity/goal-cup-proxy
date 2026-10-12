@@ -10,27 +10,25 @@ its model traffic and its own session files, and seals them into one tamper-evid
 command line tools, and a Claude or ChatGPT subscription. Install the exact harness build Goal Cup
 is pinned to, Claude Code 2.1.283 or Codex CLI 0.153.0: `goalcup start` refuses any other build.
 
-<a id="build"></a>From the repository root, build, configure and start the daemon:
+<a id="build"></a>From the repository root, build and put the three binaries (`goalcup`,
+`goalcup-daemon`, `goalcup-verify`) on your `PATH`:
 
 ```sh
 cargo build --release
 export PATH="$PWD/target/release:$PATH"
-mkdir -p ~/goalcup && cat > ~/goalcup/daemon.toml <<EOF
-artifact_root    = "$HOME/goalcup/artifacts"
-connectors_dir   = "$PWD/connectors"
-config_dir       = "$HOME/goalcup/config"
-workspace_parent = "$HOME/goalcup/runs"
-control_addr     = "127.0.0.1:0"
-EOF
-export GOALCUP_CONFIG_DIR="$HOME/goalcup/config"
-goalcup-daemon --config ~/goalcup/daemon.toml    # leave it running
+export GOALCUP_CONFIG_DIR="$HOME/goalcup"    # where the tracker keeps its state
 ```
+
+There is no daemon to install or keep running: `goalcup start` starts `goalcup-daemon` for the
+run, and the daemon exits once every run is sealed. The first `start` writes
+`$GOALCUP_CONFIG_DIR/daemon.toml`, which keeps traces in `~/goalcup-artifacts`; edit it to move
+them ([the daemon](#the-daemon)).
 
 Claude Code uses your normal Claude login. Codex signs in once to the tracker's own Codex home:
 `mkdir -p -m 700 "$GOALCUP_CONFIG_DIR/capture-homes/codex-cli"`, then
 `CODEX_HOME="$GOALCUP_CONFIG_DIR/capture-homes/codex-cli" codex login`.
 
-In a second terminal, export the same `PATH` and `GOALCUP_CONFIG_DIR`, then run:
+Then run:
 
 ```sh
 mkdir ~/goal-1 && echo "Build a to-do app in Python." > ~/goal-1/goal.txt
@@ -40,7 +38,8 @@ goalcup-verify --capture-integrity <trace>    # copy the verify: line start prin
 ```
 
 `start` runs the agent until it exits, seals the run, and prints its `trace:` folder and the
-`verify:` line. Meanwhile `goalcup status` shows how it is doing and `goalcup seal` stops it early.
+`verify:` line. Meanwhile, from another terminal with the same `GOALCUP_CONFIG_DIR`,
+`goalcup status` shows how it is doing and `goalcup seal` stops it early.
 Verify exit 0 means the record is complete and valid ([all exit codes](#run-a-capture)). What you
 agree to as a participant: [docs/RULES.md](docs/RULES.md).
 
@@ -135,6 +134,22 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `*_PROXY` is dropped, not inherited. The tracker
   never sets a model base URL; the only proxy the harness gets is the tracker's own recorder on
   your machine.
+- <a id="the-daemon"></a>**The daemon.** `goalcup start` and `goalcup seal` use the daemon that
+  answers on `$GOALCUP_CONFIG_DIR/control.json`, and start one when none does:
+  `goalcup-daemon --config $GOALCUP_CONFIG_DIR/daemon.toml --exit-when-idle`, found beside
+  `goalcup` or on `PATH`, in a session of its own (closing the terminal does not stop it), with
+  an environment built from nothing (`HOME`, `USER`, `LOGNAME`, `TMPDIR` and a system `PATH`;
+  none of your API keys or proxy variables), and its output in
+  `$GOALCUP_CONFIG_DIR/daemon.log`. It stays up while any run is unsealed and exits 30 seconds
+  after the last one is sealed. `goalcup status` and `goalcup entries` never start one: with no
+  daemon they say nothing is running. If a run outlives its daemon (a crash, a reboot), run
+  `goalcup seal`: it starts a daemon, which reopens the run for status and seal only and seals
+  it; a run that had launched carries the lost interval as a gap. While `daemon.toml` is the
+  unedited default, `start` keeps its `connectors_dir` naming the connectors it loaded (binaries
+  move); an edited file that names other connectors is refused, naming the file. A
+  `daemon.toml` you wrote for an earlier build belongs at `$GOALCUP_CONFIG_DIR/daemon.toml`;
+  otherwise the first `start` writes a default with other roots. The configuration's keys are in
+  [OPERATING](docs/OPERATING.md#running-the-daemon).
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
   `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. The macOS staging scripts in
   [packaging/README.md](packaging/README.md) are private tooling, not a released installer.

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Descriptor-rooted assisted installation for the private macOS M2 candidate."""
+"""Descriptor-rooted assisted installation for the private macOS M2 candidate.
+
+It places the three binaries, the shipped connectors and a daemon configuration under one
+fresh prefix, and nothing else: there is no service. `goalcup start` starts the daemon for a
+run (with `GOALCUP_CONFIG_DIR=<prefix>/etc` it finds `<prefix>/etc/daemon.toml`), and the
+daemon exits once nothing is unsealed.
+"""
 
 from __future__ import annotations
 
@@ -9,12 +15,10 @@ import errno
 import hashlib
 import json
 import os
-import plistlib
 import re
 import secrets
 import signal
 import stat
-import subprocess
 import sys
 import time
 import tomllib
@@ -24,7 +28,6 @@ from contextlib import contextmanager
 from typing import Iterator, NoReturn
 
 _BLOCK = 1024 * 1024
-_LABEL = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9.-]{0,127}\Z")
 _HEX = re.compile(r"\A[0-9a-f]{64}\Z")
 _REVISION = re.compile(r"\A(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _MODE = re.compile(r"\A[0-7]{4}\Z")
@@ -102,33 +105,6 @@ class PublishedPath:
     observed_st_ino: int | None = None
 
 
-@dataclass
-class ActivationResult:
-    bootstrap_returned_success: bool | None
-    ready: bool | None
-    bootstrap_attempted: bool = False
-    possibly_loaded: bool = False
-
-
-@dataclass
-class ActivationBindings:
-    prefix_fd: int
-    plist_fd: int
-    program_fd: int
-    config_fd: int
-    prefix_path: Path
-    plist_path: Path
-    prefix_authority: _LeafAuthority
-    plist_authority: _LeafAuthority
-
-    def close(self) -> None:
-        for name in ("prefix_fd", "plist_fd", "program_fd", "config_fd"):
-            fd = getattr(self, name)
-            if fd >= 0:
-                os.close(fd)
-                setattr(self, name, -1)
-
-
 @dataclass(frozen=True)
 class _TreeEntry:
     relative_path: str
@@ -147,16 +123,6 @@ class _ExpectedTreeEntry:
     digest: str | None
 
 
-@dataclass(frozen=True)
-class _LeafAuthority:
-    st_dev: int
-    st_ino: int
-    st_mode: int
-    st_size: int
-    digest: str | None
-    tree: tuple[_TreeEntry, ...] | None
-
-
 @dataclass
 class _StagedLeaf:
     fd: int
@@ -171,12 +137,6 @@ class _StagedLeaf:
         if self.fd >= 0:
             os.close(self.fd)
             self.fd = -1
-
-
-class ActivationError(RuntimeError):
-    def __init__(self, message: str, result: ActivationResult):
-        super().__init__(message)
-        self.result = result
 
 
 class PublicationAmbiguous(RuntimeError):
@@ -752,13 +712,13 @@ def open_destination(path: Path) -> Destination:
     return Destination(parent_fd, absolute.parent, absolute.name, info.st_dev, info.st_ino)
 
 
-def _open_install_namespace(parent_fd: int, leaf_name: str, test_failure: str | None) -> int:
-    if test_failure == "second-namespace-open-error" and _testing_failure(test_failure):
+def _open_install_namespace(parent_fd: int, leaf_name: str) -> int:
+    if _testing_failure("namespace-open-error"):
         raise OSError(errno.EMFILE, "injected namespace os.open failure")
     return os.open(leaf_name, _flags(directory=True), dir_fd=parent_fd)
 
 
-def create_install_namespace(destination: Destination, *, _test_failure: str | None = None) -> InstallNamespace:
+def create_install_namespace(destination: Destination) -> InstallNamespace:
     info = os.fstat(destination.parent_fd)
     if (info.st_dev, info.st_ino) != (destination.st_dev, destination.st_ino):
         _value_error("destination parent descriptor identity changed")
@@ -772,13 +732,13 @@ def create_install_namespace(destination: Destination, *, _test_failure: str | N
                     os.mkdir(leaf_name, 0o700, dir_fd=destination.parent_fd)
                 finally:
                     os.umask(previous)
-                if _test_failure == "second-namespace-after-mkdir" and _testing_failure(_test_failure):
+                if _testing_failure("namespace-after-mkdir"):
                     raise NamespaceAcquisitionError(
                         "private namespace open failed after mkdir",
                         f"{destination.parent_path / leaf_name}: created namespace could not be opened; preserved for inspection",
                     )
                 try:
-                    fd = _open_install_namespace(destination.parent_fd, leaf_name, _test_failure)
+                    fd = _open_install_namespace(destination.parent_fd, leaf_name)
                 except OSError as error:
                     raise NamespaceAcquisitionError(
                         f"private namespace open failed after mkdir: {error}",
@@ -796,7 +756,7 @@ def create_install_namespace(destination: Destination, *, _test_failure: str | N
             ) from error
         assert namespace is not None
         try:
-            if _test_failure == "second-namespace-fchmod-error" and _testing_failure(_test_failure):
+            if _testing_failure("namespace-fchmod-error"):
                 raise OSError(errno.EMFILE, "injected namespace fchmod failure")
             os.fchmod(fd, 0o700)
             child = os.fstat(fd)
@@ -812,13 +772,6 @@ def create_install_namespace(destination: Destination, *, _test_failure: str | N
     _value_error("could not allocate a fresh private install namespace")
 
 
-def validate_label(label: str, plist_path: Path) -> None:
-    if not isinstance(label, str) or not _LABEL.fullmatch(label) or ".." in label:
-        _value_error(f"invalid launchd label: {label!r}")
-    if plist_path.name != f"{label}.plist":
-        _value_error("launchd plist leaf does not exactly match the requested label")
-
-
 def render_daemon_toml(prefix: Path) -> bytes:
     values = {"artifact_root": prefix / "var" / "artifacts", "connectors_dir": prefix / "share" / "goalcup" / "connectors", "config_dir": prefix / "etc", "workspace_parent": prefix / "var" / "workspaces"}
     text = "# Written by install-assisted.py. Owner-only; never edited by a run.\n"
@@ -830,16 +783,6 @@ def render_daemon_toml(prefix: Path) -> bytes:
         if parsed.get(key) != os.fspath(value):
             _value_error(f"rendered daemon.toml did not round-trip {key}")
     return encoded
-
-
-def render_plist(prefix: Path, label: str) -> bytes:
-    validate_label(label, Path(f"{label}.plist"))
-    config, log = prefix / "etc" / "daemon.toml", prefix / "var" / "log"
-    expected = {"Label": label, "ProgramArguments": [os.fspath(prefix / "bin" / "goalcup-daemon"), "--config", os.fspath(config)], "RunAtLoad": True, "KeepAlive": {"Crashed": True}, "ProcessType": "Background", "ThrottleInterval": 10, "StandardOutPath": os.fspath(log / "daemon.out.log"), "StandardErrorPath": os.fspath(log / "daemon.err.log"), "EnvironmentVariables": {"GOALCUP_CONNECTORS_DIR": os.fspath(prefix / "share" / "goalcup" / "connectors")}}
-    rendered = plistlib.dumps(expected, fmt=plistlib.FMT_XML, sort_keys=False)
-    if plistlib.loads(rendered) != expected:
-        _value_error("rendered launchd plist did not round-trip structurally")
-    return rendered
 
 
 def _mkdirs_at(root_fd: int, parts: tuple[str, ...]) -> int:
@@ -908,15 +851,14 @@ def _copy_bundle_file(plan: BundlePlan, source: BundleFile, staged_root_fd: int,
         _value_error(f"bundle source failed validation while copying: {source.relative_path}")
 
 
-def stage_install(plan: BundlePlan, namespace: InstallNamespace, temporary_name: str, prefix: Path, label: str) -> None:
+def stage_install(plan: BundlePlan, namespace: InstallNamespace, temporary_name: str, prefix: Path) -> None:
     if not temporary_name or "/" in temporary_name or temporary_name in (".", "..") or "\x00" in temporary_name:
         _value_error("invalid staging leaf name")
-    validate_label(label, Path(f"{label}.plist"))
     _mkdir_exact(namespace.fd, temporary_name)
     staged_fd = os.open(temporary_name, _flags(directory=True), dir_fd=namespace.fd)
     keep_fd = False
     try:
-        for path in (("bin",), ("share",), ("share", "goalcup"), ("share", "goalcup", "connectors"), ("etc",), ("var",), ("var", "artifacts"), ("var", "workspaces"), ("var", "log")):
+        for path in (("bin",), ("share",), ("share", "goalcup"), ("share", "goalcup", "connectors"), ("etc",), ("var",), ("var", "artifacts"), ("var", "workspaces")):
             fd = _mkdirs_at(staged_fd, path)
             os.close(fd)
         for item in plan.files:
@@ -927,7 +869,7 @@ def stage_install(plan: BundlePlan, namespace: InstallNamespace, temporary_name:
             _write_new(etc_fd, "daemon.toml", daemon_toml, 0o600)
         finally:
             os.close(etc_fd)
-        manifest = {"format": 1, "label": label, "plist_path": os.fspath(Path(os.environ["HOME"]) / "Library" / "LaunchAgents" / f"{label}.plist"), "source_revision": plan.source_revision, "config_file": os.fspath(prefix / "etc" / "daemon.toml"), "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        manifest = {"format": 2, "source_revision": plan.source_revision, "config_file": os.fspath(prefix / "etc" / "daemon.toml"), "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         manifest_content = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
         _write_new(staged_fd, ".goalcup-install-manifest.json", manifest_content, 0o600)
         mapped = {_mapped_path(item.relative_path): item for item in plan.files}
@@ -944,7 +886,6 @@ def stage_install(plan: BundlePlan, namespace: InstallNamespace, temporary_name:
             "var",
             "var/artifacts",
             "var/workspaces",
-            "var/log",
         }
         expected_tree = {
             path: _ExpectedTreeEntry(stat.S_IFDIR, 0o700, None, None)
@@ -987,24 +928,6 @@ def stage_install(plan: BundlePlan, namespace: InstallNamespace, temporary_name:
     finally:
         if not keep_fd:
             os.close(staged_fd)
-
-
-def _stage_plist(namespace: InstallNamespace, temporary_name: str, content: bytes) -> None:
-    _write_new(namespace.fd, temporary_name, content, 0o644)
-    fd = os.open(temporary_name, _flags(directory=False), dir_fd=namespace.fd)
-    try:
-        _register_staged_leaf(
-            namespace.fd,
-            temporary_name,
-            fd,
-            expected_mode=0o644,
-            expected_size=len(content),
-            expected_digest=hashlib.sha256(content).hexdigest(),
-            expected_tree=None,
-        )
-    except Exception:
-        os.close(fd)
-        raise
 
 
 def publish_no_replace(
@@ -1060,193 +983,6 @@ def publish_no_replace(
     return candidate
 
 
-def _leaf_authority(staged: _StagedLeaf) -> _LeafAuthority:
-    return _LeafAuthority(
-        staged.st_dev,
-        staged.st_ino,
-        staged.st_mode,
-        staged.st_size,
-        staged.digest,
-        staged.tree,
-    )
-
-
-def _verify_fd_authority(fd: int, authority: _LeafAuthority) -> None:
-    retained = os.fstat(fd)
-    if (retained.st_dev, retained.st_ino, retained.st_mode, retained.st_size) != (
-        authority.st_dev,
-        authority.st_ino,
-        authority.st_mode,
-        authority.st_size,
-    ):
-        _value_error("activation refused because retained identity, mode, or size changed")
-    if authority.digest is not None:
-        size, digest = _hash_fd_incrementally(fd)
-        if size != authority.st_size or digest != authority.digest:
-            _value_error("activation refused because retained file content changed")
-    if authority.tree is not None and _snapshot_staged_tree(fd) != authority.tree:
-        _value_error("activation refused because the validated staged tree changed")
-
-
-def _same_identity(
-    fd: int,
-    path: Path,
-    *,
-    directory: bool,
-    authority: _LeafAuthority | None = None,
-) -> bool:
-    retained = os.fstat(fd)
-    if authority is not None and (
-        retained.st_dev,
-        retained.st_ino,
-        retained.st_mode,
-        retained.st_size,
-    ) != (
-        authority.st_dev,
-        authority.st_ino,
-        authority.st_mode,
-        authority.st_size,
-    ):
-        return False
-    try:
-        named = os.stat(path, follow_symlinks=False)
-        opened = os.open(path, _flags(directory=directory))
-    except OSError:
-        return False
-    try:
-        current = os.fstat(opened)
-    finally:
-        os.close(opened)
-    if authority is None:
-        expected = (retained.st_dev, retained.st_ino, stat.S_IFMT(retained.st_mode))
-        return (
-            (named.st_dev, named.st_ino, stat.S_IFMT(named.st_mode)) == expected
-            and (current.st_dev, current.st_ino, stat.S_IFMT(current.st_mode)) == expected
-        )
-    expected_exact = (
-        authority.st_dev,
-        authority.st_ino,
-        authority.st_mode,
-        authority.st_size,
-    )
-    return (
-        (named.st_dev, named.st_ino, named.st_mode, named.st_size) == expected_exact
-        and (current.st_dev, current.st_ino, current.st_mode, current.st_size) == expected_exact
-    )
-
-
-def _verify_activation_bindings(bindings: ActivationBindings, label: str) -> None:
-    program_path = bindings.prefix_path / "bin" / "goalcup-daemon"
-    config_path = bindings.prefix_path / "etc" / "daemon.toml"
-    if (
-        _descriptor_path(bindings.prefix_fd) != bindings.prefix_path
-        or _descriptor_path(bindings.plist_fd) != bindings.plist_path
-        or _descriptor_path(bindings.program_fd) != program_path
-        or _descriptor_path(bindings.config_fd) != config_path
-    ):
-        _value_error("activation refused stale descriptor-backed path")
-    _verify_fd_authority(bindings.prefix_fd, bindings.prefix_authority)
-    _verify_fd_authority(bindings.plist_fd, bindings.plist_authority)
-    for fd, path, directory, authority in (
-        (bindings.prefix_fd, bindings.prefix_path, True, bindings.prefix_authority),
-        (bindings.plist_fd, bindings.plist_path, False, bindings.plist_authority),
-        (bindings.program_fd, program_path, False, None),
-        (bindings.config_fd, config_path, False, None),
-    ):
-        if not _same_identity(fd, path, directory=directory, authority=authority):
-            _value_error(f"activation refused changed identity or exact mode: {path}")
-    os.lseek(bindings.plist_fd, 0, os.SEEK_SET)
-    parsed = plistlib.loads(_read_fd(bindings.plist_fd))
-    os.lseek(bindings.plist_fd, 0, os.SEEK_SET)
-    expected = plistlib.loads(render_plist(bindings.prefix_path, label))
-    if parsed != expected:
-        _value_error("activation refused because retained plist content does not match bound paths")
-
-
-def bind_activation_paths(
-    prefix_namespace_fd: int,
-    plist_namespace_fd: int,
-    prefix: Path,
-    plist_path: Path,
-    label: str,
-) -> ActivationBindings:
-    validate_label(label, plist_path)
-    prefix_leaf = _STAGED_LEAVES.get((prefix_namespace_fd, "prefix"))
-    plist_leaf = _STAGED_LEAVES.get((plist_namespace_fd, "agent.plist"))
-    if prefix_leaf is None or plist_leaf is None:
-        _value_error("activation lacks retained published descriptors")
-    if prefix_leaf.tree is None:
-        _value_error("activation lacks the validated staged tree binding")
-    prefix_current = _descriptor_path(prefix_leaf.fd)
-    plist_current = _descriptor_path(plist_leaf.fd)
-    if prefix_current != prefix or plist_current != plist_path:
-        _value_error(
-            f"activation refused stale descriptor path: prefix current={prefix_current!s}, plist current={plist_current!s}"
-        )
-    prefix_authority = _leaf_authority(prefix_leaf)
-    plist_authority = _leaf_authority(plist_leaf)
-    _verify_retained_staged_leaf(prefix_leaf)
-    _verify_retained_staged_leaf(plist_leaf)
-    if not _same_identity(prefix_leaf.fd, prefix, directory=True, authority=prefix_authority) or not _same_identity(
-        plist_leaf.fd,
-        plist_path,
-        directory=False,
-        authority=plist_authority,
-    ):
-        _value_error("activation refused because current prefix or plist identity or exact mode differs from retained publication")
-    program_path = prefix / "bin" / "goalcup-daemon"
-    config_path = prefix / "etc" / "daemon.toml"
-    program_fd = _open_relative(prefix_leaf.fd, PurePosixPath("bin/goalcup-daemon"), directory=False)
-    config_fd = _open_relative(prefix_leaf.fd, PurePosixPath("etc/daemon.toml"), directory=False)
-    bindings = ActivationBindings(
-        os.dup(prefix_leaf.fd),
-        os.dup(plist_leaf.fd),
-        program_fd,
-        config_fd,
-        prefix,
-        plist_path,
-        prefix_authority,
-        plist_authority,
-    )
-    try:
-        _verify_activation_bindings(bindings, label)
-        return bindings
-    except Exception:
-        bindings.close()
-        raise
-
-
-def activate_and_wait(bindings: ActivationBindings, label: str, uid: int, timeout_seconds: float, state: ActivationResult) -> ActivationResult:
-    validate_label(label, bindings.plist_path)
-    _test_barrier("before-activation-verification")
-    _verify_activation_bindings(bindings, label)
-    state.bootstrap_attempted = True
-    state.possibly_loaded = True
-    bootstrap = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", os.fspath(bindings.plist_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    if bootstrap.returncode != 0:
-        state.bootstrap_returned_success = False
-        state.ready = False
-        state.possibly_loaded = False
-        return state
-    state.bootstrap_returned_success = True
-    state.ready = False
-    state.possibly_loaded = True
-    if _testing_failure("readiness-exec-error"):
-        raise ActivationError("injected readiness exec error", state)
-    deadline = time.monotonic() + max(0.0, timeout_seconds)
-    while True:
-        try:
-            ready = subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        except OSError as error:
-            raise ActivationError(f"launchctl readiness execution failed: {error}", state) from error
-        if ready.returncode == 0:
-            state.ready = True
-            return state
-        if time.monotonic() >= deadline:
-            return state
-        time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
-
-
 def _descriptor_path(fd: int) -> Path | None:
     if sys.platform == "darwin":
         try:
@@ -1282,20 +1018,9 @@ def _reported_path(item: PublishedPath) -> str:
     return f"  - intended path at validation: {intended}; current descriptor-derived path: {current} ({identity})"
 
 
-def report_manual_recovery(published: tuple[PublishedPath, ...], label: str, uid: int, activation: ActivationResult | None, reason: str) -> str:
-    if activation is None or (
-        not activation.bootstrap_attempted and activation.bootstrap_returned_success is None
-    ):
-        bootstrap_line = "bootstrap returned success: not attempted"
-        ready = "not attempted"
-    elif activation.bootstrap_returned_success is None:
-        bootstrap_line = "bootstrap state: unknown; job possibly loaded"
-        ready = "unknown"
-    else:
-        bootstrap_line = f"bootstrap returned success: {'yes' if activation.bootstrap_returned_success else 'no'}"
-        ready = "yes" if activation.ready else "no"
+def report_manual_recovery(published: tuple[PublishedPath, ...], reason: str) -> str:
     paths = "\n".join(_reported_path(item) for item in published)
-    return (f"assisted installation failed after publication: {reason}\npublished paths preserved:\n{paths}\nlaunchd label: {label}\nuid domain: gui/{uid}\n{bootstrap_line}\nreadiness observed: {ready}\nmanual recovery is inspection-first: verify that each path, its install manifest, and the exact-label launchd job still belong to this install before deliberately running the documented unload and uninstall steps. A same-UID process may have replaced a path or the same-label job; the installer cannot distinguish or delete that replacement safely.")
+    return (f"assisted installation failed after publication: {reason}\npublished paths preserved:\n{paths}\nmanual recovery is inspection-first: verify that each path and its install manifest still belong to this install before deliberately running the documented uninstall step. A same-UID process may have replaced a path; the installer cannot distinguish or delete that replacement safely.")
 
 
 def _cleanup_namespace(namespace: InstallNamespace) -> str | None:
@@ -1326,30 +1051,11 @@ def _cleanup_namespace(namespace: InstallNamespace) -> str | None:
         return f"{intended}: {error}"
 
 
-def _ensure_launch_agents(home: Path) -> Path:
-    home_fd = _open_absolute_directory(home)
-    current = os.dup(home_fd)
-    try:
-        for name in ("Library", "LaunchAgents"):
-            try:
-                _mkdir_exact(current, name)
-            except FileExistsError:
-                pass
-            child = os.open(name, _flags(directory=True), dir_fd=current)
-            os.close(current)
-            current = child
-    finally:
-        os.close(current)
-        os.close(home_fd)
-    return home / "Library" / "LaunchAgents"
-
-
 def _parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install the private M2 pilot bundle on macOS.")
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--prefix", required=True, type=Path)
     parser.add_argument("--profile", default="m2-pilot")
-    parser.add_argument("--label", default="com.agentcommunity.goalcup")
     return parser.parse_args(argv)
 
 
@@ -1382,11 +1088,8 @@ def install(arguments: argparse.Namespace) -> None:
         _value_error("HOME is required")
     home = Path(os.path.abspath(home_value))
     prefix = _validate_prefix(arguments.prefix, home)
-    plist_path = home / "Library" / "LaunchAgents" / f"{arguments.label}.plist"
-    validate_label(arguments.label, plist_path)
-    plan = prefix_destination = plist_destination = prefix_namespace = plist_namespace = bindings = None
+    plan = prefix_destination = prefix_namespace = None
     published: list[PublishedPath] = []
-    activation: ActivationResult | None = None
     private_residuals: list[str] = []
     old_handlers: dict[signal.Signals, object] = {}
 
@@ -1401,50 +1104,22 @@ def install(arguments: argparse.Namespace) -> None:
             private_residuals.append(value)
 
     def recover_publication_state() -> None:
-        for destination in (prefix_destination, plist_destination):
-            if destination is None:
-                continue
-            item = destination.publication_ambiguous or destination.published
-            if item is not None and item not in published:
-                published.append(item)
+        if prefix_destination is None:
+            return
+        item = prefix_destination.publication_ambiguous or prefix_destination.published
+        if item is not None and item not in published:
+            published.append(item)
 
     try:
-        launch_agents = _ensure_launch_agents(home)
-        plist_path = launch_agents / f"{arguments.label}.plist"
         plan = inspect_bundle(arguments.bundle, arguments.profile, ("goalcup", "goalcup-daemon", "goalcup-verify"), ("codex-cli", "claude-code-cli"), _host_arch())
         prefix_destination = open_destination(prefix)
-        if _testing_failure("second-destination"):
-            _value_error("injected second destination acquisition failure")
-        plist_destination = open_destination(plist_path)
         try:
             prefix_namespace = create_install_namespace(prefix_destination)
         except NamespaceAcquisitionError as error:
             prefix_namespace = error.namespace
             remember_residual(error.residual)
             raise
-        second_namespace_failure = next(
-            (
-                phase
-                for phase in (
-                    "second-namespace-after-mkdir",
-                    "second-namespace-open-error",
-                    "second-namespace-fchmod-error",
-                )
-                if _testing_failure(phase)
-            ),
-            None,
-        )
-        try:
-            plist_namespace = create_install_namespace(
-                plist_destination,
-                _test_failure=second_namespace_failure,
-            )
-        except NamespaceAcquisitionError as error:
-            plist_namespace = error.namespace
-            remember_residual(error.residual)
-            raise
-        stage_install(plan, prefix_namespace, "prefix", prefix, arguments.label)
-        _stage_plist(plist_namespace, "agent.plist", render_plist(prefix, arguments.label))
+        stage_install(plan, prefix_namespace, "prefix", prefix)
         if _testing_failure("copy"):
             _value_error("injected copy failure")
         _test_barrier("before-publication")
@@ -1460,40 +1135,7 @@ def install(arguments: argparse.Namespace) -> None:
         _test_barrier("after-prefix-publication")
         if _testing_failure("after-prefix"):
             _value_error("injected post-prefix publication failure")
-        published.append(
-            publish_no_replace(
-                plist_namespace.fd,
-                "agent.plist",
-                plist_destination,
-                barrier_phase="before-plist-rename",
-                post_verification_barrier_phase="after-plist-final-verification",
-            )
-        )
-        _test_barrier("after-plist-publication")
-        if _testing_failure("after-plist"):
-            _value_error("injected post-plist publication failure")
-        bindings = bind_activation_paths(
-            prefix_namespace.fd,
-            plist_namespace.fd,
-            prefix,
-            plist_path,
-            arguments.label,
-        )
-        activation = ActivationResult(None, None)
-        try:
-            activation = activate_and_wait(bindings, arguments.label, os.getuid(), 5.0, activation)
-        except ActivationError as error:
-            activation = error.result
-            raise
-        if not activation.bootstrap_returned_success:
-            _value_error("launchctl bootstrap returned failure")
-        if not activation.ready:
-            _value_error("bounded exact-label readiness probe failed")
-        _test_barrier("after-activation")
-        if _testing_failure("after-activation"):
-            _value_error("injected post-activation failure")
-        for namespace in (prefix_namespace, plist_namespace):
-            remember_residual(_cleanup_namespace(namespace))
+        remember_residual(_cleanup_namespace(prefix_namespace))
         if private_residuals:
             print(
                 "install-assisted.sh: retained private namespace(s) for inspection: "
@@ -1501,18 +1143,20 @@ def install(arguments: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
         print(f"install-assisted.sh: installed under {prefix}")
-        print(f"install-assisted.sh: launchd label {arguments.label} loaded (gui/{os.getuid()})")
         print(f"install-assisted.sh: daemon config {prefix / 'etc' / 'daemon.toml'}")
-        print(f"install-assisted.sh: log directory {prefix / 'var' / 'log'}")
         print(f"install-assisted.sh: artifact root {prefix / 'var' / 'artifacts'}")
+        print(
+            "install-assisted.sh: no service was installed; run "
+            f"GOALCUP_CONFIG_DIR={prefix / 'etc'} {prefix / 'bin' / 'goalcup'} start ..., "
+            "which starts the daemon for the run"
+        )
     except (Exception, KeyboardInterrupt) as error:
         recover_publication_state()
-        for namespace in (prefix_namespace, plist_namespace):
-            if namespace is not None:
-                remember_residual(_cleanup_namespace(namespace))
+        if prefix_namespace is not None:
+            remember_residual(_cleanup_namespace(prefix_namespace))
         if published:
             reason = str(error) + (("; retained private namespace: " + "; ".join(private_residuals)) if private_residuals else "")
-            print(report_manual_recovery(tuple(published), arguments.label, os.getuid(), activation, reason), file=sys.stderr)
+            print(report_manual_recovery(tuple(published), reason), file=sys.stderr)
         else:
             message = f"assisted installation refused before publication: {error}"
             if private_residuals:
@@ -1522,16 +1166,12 @@ def install(arguments: argparse.Namespace) -> None:
     finally:
         for number, handler in old_handlers.items():
             signal.signal(number, handler)
-        if bindings is not None:
-            bindings.close()
         if plan is not None:
             plan.close()
-        for namespace in (prefix_namespace, plist_namespace):
-            if namespace is not None:
-                namespace.close()
-        for destination in (prefix_destination, plist_destination):
-            if destination is not None:
-                destination.close()
+        if prefix_namespace is not None:
+            prefix_namespace.close()
+        if prefix_destination is not None:
+            prefix_destination.close()
 
 
 def main(argv: list[str] | None = None) -> None:

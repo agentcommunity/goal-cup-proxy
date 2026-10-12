@@ -17,3 +17,5 @@ mod m2_hermes_lifecycle;
 #[cfg(target_os = "macos")]
 mod m2_synthetic_vertical;
 mod preflight_doctor;
+#[cfg(target_os = "macos")]
+mod run_scoped_daemon;

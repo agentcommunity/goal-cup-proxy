@@ -13,8 +13,11 @@ fn opts() -> DoctorOptions {
     }
 }
 
+/// With no daemon running the report still says what it found about the daemon, and the
+/// daemon check fails only when `goalcup start` could not start one: no `goalcup-daemon` beside
+/// this executable or on `PATH` (the run-scoped daemon).
 #[test]
-fn doctor_reports_on_a_machine_with_no_daemon_and_exits_one() {
+fn doctor_reports_on_a_machine_with_no_daemon_and_fails_only_without_a_daemon_binary() {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let code = run_with(
@@ -27,17 +30,20 @@ fn doctor_reports_on_a_machine_with_no_daemon_and_exits_one() {
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert!(
-        text.contains("daemon"),
-        "it says the daemon is not reachable"
-    );
+    let daemon_line = text
+        .lines()
+        .find(|line| line.contains(" daemon "))
+        .unwrap_or_else(|| panic!("a daemon line: {text}"));
     for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
         assert!(text.contains(id), "every shipped connector is reported on");
     }
-    assert_eq!(
-        code, 1,
-        "M1 acceptance: doctor reports, and exits 1, with no daemon running"
-    );
+    // The same lookup `goalcup start` makes, from this same executable.
+    if goalcup_cli::daemon::spawn::daemon_binary().is_ok() {
+        assert!(daemon_line.contains("PASS"), "{daemon_line}");
+    } else {
+        assert!(daemon_line.contains("FAIL"), "{daemon_line}");
+        assert_eq!(code, 1, "a daemon that cannot be started fails the report");
+    }
     assert_ne!(code, 2, "2 is a verdict's alone");
 }
 
@@ -306,9 +312,9 @@ fn doctor_fails_naming_both_versions_when_the_control_file_speaks_another_api() 
 
 /// The other arm of `daemon_check`. A `control.json` naming a port nothing answers
 /// on is a daemon that died without taking its file with it, and the check must say so
-/// rather than report the file's existence as health.
+/// (naming the port) rather than report the file's existence as health.
 #[test]
-fn doctor_fails_when_the_control_file_names_a_port_nothing_is_listening_on() {
+fn doctor_reports_a_control_file_whose_port_nothing_is_listening_on_as_no_daemon() {
     let cfg = support::tmp_cfg();
     let port = a_closed_loopback_port();
     write_control_file(&cfg, goalcup_protocol::control::CONTROL_API_VERSION, port);
@@ -329,19 +335,22 @@ fn doctor_fails_when_the_control_file_names_a_port_nothing_is_listening_on() {
     let text = String::from_utf8(out).unwrap();
     let line = text
         .lines()
-        .find(|l| l.contains("daemon") && l.contains("FAIL"))
-        .unwrap_or_else(|| panic!("a FAIL line for the daemon check: {text}"));
+        .find(|l| l.contains(" daemon "))
+        .unwrap_or_else(|| panic!("a line for the daemon check: {text}"));
     assert!(
         line.contains(&port.to_string()),
         "the port it could not reach: {line}"
     );
-    assert!(
-        text.contains("start `goalcup-daemon`"),
-        "and the fix a participant acts on: {text}"
-    );
+    // A daemon that is gone is no daemon: the run-scoped one is started by `goalcup start`, so
+    // the check fails only when this executable could not start one.
+    if goalcup_cli::daemon::spawn::daemon_binary().is_ok() {
+        assert!(line.contains("PASS"), "{line}");
+    } else {
+        assert!(line.contains("FAIL"), "{line}");
+        assert_eq!(code, 1);
+    }
     assert!(
         !text.contains("a-test-control-token"),
         "and the bearer is in no diagnostic: {text}"
     );
-    assert_eq!(code, 1);
 }

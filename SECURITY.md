@@ -28,11 +28,10 @@ report of one of those is known, not new, unless it shows the stated bound does 
 
 ## What the tool does on your machine
 
-- Runs a per-user daemon, and optionally a persistent launchd user agent that starts at every
-  login (`RunAtLoad`) and restarts the daemon only after a crash (`KeepAlive = {Crashed = true}`,
-  at most once per 10 seconds); a daemon that refuses its configuration stays down.
-  `uninstall-assisted.sh` removes the agent, and [packaging/README.md](packaging/README.md) says
-  how to unload it by hand.
+- Runs a per-user daemon only while a run needs it. `goalcup start` (or `goalcup seal`) starts
+  it detached, in a session of its own, with an environment built from nothing: none of your
+  shell's API keys or proxy variables reach it. It exits once no run is unsealed. Nothing is
+  installed as a service and nothing starts at login.
 - Listens on loopback TCP only: the control API, an ingest port, and a per-launch HTTPS proxy.
 - Generates a per-launch CA that only the harness process trusts, through its own variable
   (`NODE_EXTRA_CA_CERTS`, `CODEX_CA_CERTIFICATE` or `HERMES_CA_BUNDLE`). It never touches the
@@ -101,8 +100,9 @@ writer can mutate the open file from the first read, then replace its pathname b
 shared-home checks do not inspect ACLs and cannot exclude a same-UID replacement after the final
 check, and connector tree loading/staging is a sequence of directory enumeration and file opens,
 not an atomic namespace snapshot. A same-UID process can replace names between those operations;
-the digest binds the observed sequence, not one coherent instant. The persistent launchd agent is
-also inside the stated boundary.
+the digest binds the observed sequence, not one coherent instant. The daemon `goalcup` starts is
+the `goalcup-daemon` beside it or first on `PATH`; a same-user process that replaces that binary
+is also inside the stated boundary.
 
 ## Out of scope
 

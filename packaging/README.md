@@ -105,27 +105,26 @@ evaluating the candidate:
 ```sh
 sh packaging/macos/install-assisted.sh --profile m2-pilot \
   --bundle /physical/path/to/m2-pilot-stage \
-  --prefix /physical/path/to/disposable/goalcup-prefix \
-  --label com.agentcommunity.goalcup.m2pilot
+  --prefix /physical/path/to/disposable/goalcup-prefix
 ```
+
+Nothing is installed as a service. To run, put `<prefix>/bin` on `PATH`, export
+`GOALCUP_CONFIG_DIR=<prefix>/etc` and run `goalcup start`: it starts `<prefix>/bin/goalcup-daemon`
+from `<prefix>/etc/daemon.toml` for the run, and the daemon exits once the run is sealed.
 
 The M2 daemon config is local-only: it omits `upload_url` and `server_public_key`, and no
 receipt service is started. Use subscription authentication in each tracker's
 isolated harness home. Do not set a harness model base URL or install a system CA. These steps
 produce an unqualified private candidate; they do not establish harness qualification or a
 public release. `sh packaging/macos/test-m2-pilot.sh` builds, stages, installs, checks a
-controlled local v5 lifecycle and integrity result, then uninstalls from its own temporary
-prefix. The synthetic workload deliberately lacks wire and native evidence, so its expected
+controlled local v5 lifecycle (the daemon started by `goalcup start` and gone after the seal) and
+its integrity result, then uninstalls from its own temporary prefix. The synthetic workload deliberately lacks wire and native evidence, so its expected
 integrity exit is 1; it is an installation smoke, not either real-harness journey.
 
-> **Warning (evidence installs).** The installer bootstraps a persistent launchd user agent
-> (`RunAtLoad`, so it comes back at every login; `KeepAlive` restarts it only after a crash, at
-> most once per 10 seconds), and no run script boots it out: a daemon keeps running after the
-> run. Stop it with `launchctl bootout gui/$(id -u)/<label>`, or remove it with
-> `uninstall-assisted.sh`. `test-m2-pilot.sh` boots out only the disposable
-> label it minted. `uninstall-assisted.sh` keeps
-> `var/artifacts` and `var/workspaces` but deletes the install's `goalcup-verify` and daemon
-> config, so verify or archive an entry's evidence before you uninstall.
+`uninstall-assisted.sh` keeps `var/artifacts` and `var/workspaces` but deletes the install's
+`goalcup-verify` and daemon config, so verify or archive an entry's evidence before you uninstall.
+An install made by an earlier installer also loaded a launchd user agent; this uninstaller prints
+the `launchctl bootout` line for it and does not run launchctl itself.
 
 Construction happens in a private temporary sibling. Files are opened read-only with
 no-follow and nonblocking flags where the host provides them, checked as regular files by
@@ -151,45 +150,40 @@ release qualification are later work.
 
 ## Assisted macOS installation
 
-`packaging/macos/` turns a staged `m2-pilot` bundle into a running, supervised
-`goalcup-daemon` on this machine, without a package manager, a signing step, or root:
+`packaging/macos/` places a staged `m2-pilot` bundle's binaries, connectors and a daemon
+configuration under one fresh prefix on this machine, without a package manager, a signing step,
+or root. It installs no service and starts nothing:
 
-- `install-assisted.sh --bundle <staged-bundle> --prefix <fresh-dir> [--label <launchd-label>]`
-  is the thin public entry point to `install_assisted.py`. The installer retains the bundle-root
-  and destination-parent descriptors, refuses links and special nodes during a closed-tree walk,
-  strictly validates canonical manifest paths and the launchd label, and re-verifies every staged
-  file's hash, size and mode against `bundle.json` before publication. It creates
-  `<prefix>/{bin,share/goalcup/connectors,etc,var/{artifacts,workspaces,log}}` at mode `0700`,
-  copies the three binaries and the shipped connectors in, writes `<prefix>/etc/daemon.toml`
+- `install-assisted.sh --bundle <staged-bundle> --prefix <fresh-dir>` is the thin public entry
+  point to `install_assisted.py`. The installer retains the bundle-root and destination-parent
+  descriptors, refuses links and special nodes during a closed-tree walk, strictly validates
+  canonical manifest paths, and re-verifies every staged file's hash, size and mode against
+  `bundle.json` before publication. It creates
+  `<prefix>/{bin,share/goalcup/connectors,etc,var/{artifacts,workspaces}}` at mode `0700`,
+  copies the three binaries and the shipped connectors in, and writes `<prefix>/etc/daemon.toml`
   (structurally reparsed after TOML escaping; loopback control address on an OS-assigned port,
-  no upload service), structurally renders and reparses
-  `com.agentcommunity.goalcup.plist` for that prefix and label, and loads it as a launchd
-  **user** agent (`launchctl bootstrap gui/<uid>`) with `RunAtLoad` set and
-  `KeepAlive = {Crashed = true}` and `ThrottleInterval = 10`. A crashed daemon is respawned, at
-  most every ten seconds; one that exits cleanly, or refuses its configuration (exit 1), stays
-  down. Nothing here touches a system LaunchDaemon or asks for a password. It refuses: a symlinked bundle or prefix path, any symlink in the prefix's
+  no upload service). It refuses: a symlinked bundle or prefix path, any symlink in the prefix's
   ancestor chain, an ancestor not owned by this user or root (a shared sticky-bit directory
   such as `/tmp` is accepted), a named "broad root" (`/`, `$HOME`, `/Users`, `/System`, ...),
-  a prefix that already exists, and an already-loaded plist at the chosen label.
-- `uninstall-assisted.sh --prefix <installed-prefix> [--label <launchd-label>]` reads back
+  and a prefix that already exists.
+- `uninstall-assisted.sh --prefix <installed-prefix>` reads back
   `<prefix>/.goalcup-install-manifest.json` (refusing a prefix that has none, rather than
-  guessing what to remove), unloads the launchd agent, removes the plist, `<prefix>/bin`,
-  `<prefix>/share`, and the daemon config, and **always preserves** `<prefix>/var/artifacts`
-  and `<prefix>/var/workspaces`: uninstalling is never how an entry's evidence is lost.
+  guessing what to remove), removes `<prefix>/bin`, `<prefix>/share`, and the daemon config, and
+  **always preserves** `<prefix>/var/artifacts` and `<prefix>/var/workspaces`: uninstalling is
+  never how an entry's evidence is lost.
 - `test-m2-pilot.sh` is the end-to-end smoke (see above).
 
 **The profile has an explicit binary allowlist.** `bin/` is a flat directory keyed by binary
 name in the staged bundle and `<prefix>/bin` after install.
 
-Prefix and plist staging each use a fresh unpredictable mode-`0700` sibling namespace, with exact
+Prefix staging uses a fresh unpredictable mode-`0700` sibling namespace, with exact
 directory modes independent of the caller's umask. The installer retains a descriptor for each
 verified staged leaf. Its one authority-building traversal simultaneously compares the complete
 staged prefix inventory with the inspected bundle manifest and the exact generated config/manifest
 bytes: every relative name and node type, every exact directory/file mode, every regular-file size
 and digest, with device/inode identities and directory sizes captured into the resulting immutable
 snapshot. Registration therefore cannot turn a replacement introduced after earlier copying into a
-new trusted baseline. The standalone plist is bound to its exact generated bytes, size, and mode in
-the same step. After any test/coordination boundary and with control signals blocked, the installer
+new trusted baseline. After any test/coordination boundary and with control signals blocked, the installer
 checks the retained leaf's exact mode and size, descriptor-relative name, and complete descendant
 snapshot immediately before publication, then checks that the destination is that same retained
 identity with the same exact mode and that its retained tree or file bytes remain unchanged
@@ -204,34 +198,22 @@ Private-namespace cleanup is deliberately non-recursive and never automatically 
 namespace: macOS has no inode-conditional `rmdir`, so even an empty, identity-checked namespace is
 retained and reported rather than exposing a final check-to-remove race. Namespace open/finalization
 failures likewise retain an authority when one exists or explicitly report the created path when it
-could not be opened. Before the first publication, failures expose no final prefix, plist, or job,
-but may retain a mode-`0700` private namespace for inspection. Successful installs also report their
-two empty retained namespaces; disposable pilot teardown removes them only with its enclosing
-temporary directory.
+could not be opened. Before publication, failures expose no final prefix, but may retain a
+mode-`0700` private namespace for inspection. Successful installs also report their empty retained
+namespace; disposable pilot teardown removes it only with its enclosing temporary directory.
 
-Before activation, retained descriptors must resolve to the original prefix and plist paths. The
-installer opens and retains the daemon program and config beneath the retained prefix descriptor,
-requires their descriptor-derived paths and identities to match the absolute paths embedded in the
-structurally re-parsed plist, and rechecks the published prefix/plist identities and complete staged
-tree, exact prefix-root mode `0700`, and exact plist mode `0644` immediately before bootstrap. A moved
-or unavailable prefix or `LaunchAgents` parent, an observed descendant substitution, or a chmod-only
-prefix/plist mutation therefore refuses activation and never bootstraps the stale or unverified
-content. After either publication, failure never unlinks a
-published object and never unloads the job: stderr records each path as the intended validation-time
-path and, when available, its current descriptor-derived path, plus device/inode identity, label,
-`gui/<uid>` domain, bootstrap/readiness state, and inspection-first manual recovery.
+After publication, failure never unlinks the published prefix: stderr records it as the intended
+validation-time path and, when available, its current descriptor-derived path, plus its
+device/inode identity, and inspection-first manual recovery.
 
 `SIGINT` and `SIGTERM` are converted to the same phase-aware refusal/recovery path. They are blocked
 only across the process-global umask window and the exclusive-rename/immediate-latch window, then
 handled with all descriptors still retained through the final report. `SIGKILL`, host power loss,
-kernel failure, and abrupt process destruction cannot be caught; they can leave a private namespace,
-one or both published objects, or a bootstrapped job at the last completed phase. A retry remains
-exclusive and refuses those existing destinations, so recovery is inspection-first rather than an
-automatic rollback. Bootstrap is marked attempted/possibly loaded before invocation, so interruption
-during the command reports unknown state rather than “not attempted.” A same-UID process can still
-mutate descendants between adjacent kernel operations, replace a published leaf, or replace the
-same-label job after any observation; the pre/post publication and activation checks fail closed when
-they observe such a change. Each complete-tree comparison is a sequence of descriptor-relative
+kernel failure, and abrupt process destruction cannot be caught; they can leave a private namespace
+or the published prefix at the last completed phase. A retry remains exclusive and refuses an
+existing destination, so recovery is inspection-first rather than an automatic rollback. A same-UID
+process can still mutate descendants between adjacent kernel operations or replace a published leaf
+after any observation; the pre/post publication checks fail closed when they observe such a change. Each complete-tree comparison is a sequence of descriptor-relative
 opens and reads, not an indivisible filesystem snapshot; a same-UID process may still race between
 those adjacent syscalls or mutate again after the final observation. Automatic cleanup cannot
 distinguish a later replacement safely.

@@ -15,6 +15,8 @@
 //! | Path | Written by | Held here |
 //! |---|---|---|
 //! | `control.json` | the daemon | [`read_control_file`] reads it; the CLI never writes it |
+//! | `daemon.toml` | `goalcup start`, once, if missing | the configuration the CLI starts the daemon from (`daemon::spawn`) |
+//! | `daemon.log` | a daemon the CLI started | its startup lines and any refusal |
 //! | `grant.json` | the V1 `goalcup auth` (removed by D48) | nothing: a leftover one is ignored |
 //! | `entries/` | the CLI | one record per entry `goalcup start` created |
 
@@ -234,7 +236,7 @@ pub fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
 
 /// `<dir>` at mode 0700, created if it is not there. An existing directory is left alone:
 /// a participant who tightened the bits on their own configuration directory keeps them.
-fn create_private_dir(dir: &Path) -> Result<(), CliError> {
+pub(crate) fn create_private_dir(dir: &Path) -> Result<(), CliError> {
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -335,7 +337,8 @@ pub fn read_control_file(cfg: &Path) -> Result<ControlFile, CliError> {
         Ok(file) => file,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
             return Err(CliError::Refused(format!(
-                "no daemon: there is no {}. Start one and try again.",
+                "no daemon is running: there is no {}. `goalcup start` starts one for a run, \
+                 and `goalcup seal` starts one to finish a run that was not sealed.",
                 path.display()
             )));
         }
