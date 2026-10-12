@@ -41,10 +41,4 @@ pub fn open_regular(path: &Path) -> Result<File, FileCapError> {
         }
         Ok(file)
     }
-
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Err(FileCapError::UnsupportedPlatform)
-    }
 }

@@ -669,12 +669,6 @@ fn replace_created_root_with_symlink_for_test(path: &std::path::Path) -> Result<
     })
 }
 
-/// Create one configured daemon root on a platform with no POSIX mode contract.
-#[cfg(not(unix))]
-fn create_configured_root(path: &std::path::Path, _role: &str) -> Result<(), DaemonError> {
-    create_dir(path)
-}
-
 fn create_dir(path: &std::path::Path) -> Result<(), DaemonError> {
     std::fs::create_dir_all(path).map_err(|source| DaemonError::Io {
         path: path.display().to_string(),

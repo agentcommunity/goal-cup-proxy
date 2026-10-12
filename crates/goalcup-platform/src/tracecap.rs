@@ -865,11 +865,6 @@ fn restrict_regular(file: &File, mode: u32) -> Result<(), TraceCapError> {
         .map_err(|source| TraceCapError::io("restrict registry file", source))
 }
 
-#[cfg(not(unix))]
-fn restrict_regular(_file: &File, _mode: u32) -> Result<(), TraceCapError> {
-    Ok(())
-}
-
 /// The retained authority for one configured `artifacts/<entry-id>` directory.
 ///
 /// The display paths are diagnostics only. Every returned trace root, buffer/cursor file,

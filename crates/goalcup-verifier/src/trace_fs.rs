@@ -61,10 +61,6 @@ pub(crate) struct PrivateDir {
     display: String,
 }
 
-#[cfg(not(unix))]
-#[derive(Debug)]
-pub(crate) struct PrivateDir;
-
 #[cfg(unix)]
 fn selected_root_name(root: &Path) -> Result<std::path::PathBuf, VerifierError> {
     use std::ffi::OsString;
@@ -456,57 +452,6 @@ fn set_errno_zero() {
 fn set_errno_zero() {
     // SAFETY: the platform errno accessor returns a valid, writable thread-local pointer.
     unsafe { *libc::___errno() = 0 };
-}
-
-#[cfg(not(unix))]
-impl PrivateDir {
-    pub(crate) fn child_names(&self, _limit: u64) -> Result<Vec<String>, VerifierError> {
-        Err(VerifierError::Trace(
-            "handle-relative directory enumeration is unsupported on this platform".into(),
-        ))
-    }
-
-    pub(crate) fn open_private_regular_child(
-        &self,
-        _name: &str,
-    ) -> Result<std::fs::File, VerifierError> {
-        Err(VerifierError::Trace(
-            "private submission storage is unsupported on this platform".into(),
-        ))
-    }
-
-    pub(crate) fn open_private_dir_child(&self, _name: &str) -> Result<PrivateDir, VerifierError> {
-        Err(VerifierError::Trace(
-            "private submission storage is unsupported on this platform".into(),
-        ))
-    }
-}
-
-#[cfg(not(unix))]
-impl TraceRoot {
-    pub(crate) fn open_private_dir(&self, _path: &TracePath) -> Result<PrivateDir, VerifierError> {
-        Err(VerifierError::Trace(
-            "private submission storage requires Unix capability and mode validation".into(),
-        ))
-    }
-}
-
-#[cfg(not(unix))]
-#[derive(Debug, Clone)]
-pub(crate) struct TraceRoot;
-
-#[cfg(not(unix))]
-impl TraceRoot {
-    pub fn open(_root: &Path) -> Result<Self, VerifierError> {
-        Err(VerifierError::Trace(
-            "trace containment is unsupported on this platform".into(),
-        ))
-    }
-    pub fn open_reader(&self, _path: &TracePath) -> Result<std::fs::File, VerifierError> {
-        Err(VerifierError::Trace(
-            "trace containment is unsupported on this platform".into(),
-        ))
-    }
 }
 
 #[cfg(all(test, unix))]

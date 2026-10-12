@@ -129,22 +129,6 @@ pub(super) fn terminate_handle(
     ))
 }
 
-/// [`terminate_for_finalization`]'s reason on a platform other than unix.
-#[cfg(not(unix))]
-pub(super) fn terminate_handle(
-    daemon: &Daemon,
-    _handle: &ProcessHandle,
-    _walk_cap: usize,
-    requested_at: &Rfc3339Utc,
-) -> Result<(TerminationOutcomeV1, Option<String>), DaemonError> {
-    unresolved_termination(
-        daemon,
-        requested_at,
-        TerminationFailureV1::UnsupportedPlatform,
-        "no verified termination path on this platform in V1".to_string(),
-    )
-}
-
 /// `Unresolved` for `reason`, stopped waiting now and never before `requested_at`, with
 /// `note` for the durable record beside it.
 pub(super) fn unresolved_termination(

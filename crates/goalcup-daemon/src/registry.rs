@@ -1983,11 +1983,6 @@ pub(crate) fn restrict(path: &Path, mode: u32) -> Result<(), DaemonError> {
     })
 }
 
-#[cfg(not(unix))]
-pub(crate) fn restrict(_path: &Path, _mode: u32) -> Result<(), DaemonError> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod foreign_pending_registry_tests {
     use super::*;
