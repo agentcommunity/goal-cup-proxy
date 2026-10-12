@@ -268,7 +268,7 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 - ✅ **OS-30** D48 (owner, 2026-10-11): the `v1-compat` path, its tests, fixtures and
   `open`/`rusqlite`/`age` deps are deleted; docs describe the capture path; devserver stays.
 - ✅ **OS-31** `[post-tag]` D48 follow-up, widened to the [PR #5](https://github.com/agentcommunity/goal-cup-tracer/pull/5) post-merge review, done
-  2026-10-12 on branch `os-31-dead-v1-code`. Removed the V1 `pub` items no production code
+  2026-10-12 in [PR #10](https://github.com/agentcommunity/goal-cup-tracer/pull/10). Removed the V1 `pub` items no production code
   reached, with the tests that only exercised them:
   - no caller at all: `launch::scrubbed_env`, `terminate::same_process`,
     `DaemonError::submission_failure`, three `status` helpers, `ProcessHandoffPhase::as_wire`,
