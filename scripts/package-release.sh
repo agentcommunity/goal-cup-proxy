@@ -8,7 +8,9 @@
 # unpacked directory runs as it is and Homebrew installs it file for file:
 #
 #   bin/goalcup bin/goalcup-daemon bin/goalcup-verify
-#   share/goalcup/connectors/   goalcup finds it as <exe dir>/../share/goalcup/connectors
+#   share/goalcup/connectors/   goalcup finds it as <exe dir>/../share/goalcup/connectors;
+#                               codex-cli and claude-code-cli only (hermes-cli is the
+#                               maintainer's, H-21 in TODO.md)
 #   LICENSE NOTICE THIRD-PARTY-LICENSES.md
 #
 # The connectors are the committed tree (`git archive HEAD`), never a working copy: their pins
@@ -33,7 +35,7 @@ mkdir -p "$root/bin" "$root/share/goalcup"
 for binary in goalcup goalcup-daemon goalcup-verify; do
     install -m 0755 "target/$target/release/$binary" "$root/bin/$binary"
 done
-git archive HEAD connectors | tar -x -C "$root/share/goalcup"
+git archive HEAD connectors/codex-cli connectors/claude-code-cli | tar -x -C "$root/share/goalcup"
 cp LICENSE NOTICE "$root/"
 python3 scripts/third-party-licenses.py --target "$target" >"$root/THIRD-PARTY-LICENSES.md"
 

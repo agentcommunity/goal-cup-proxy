@@ -64,8 +64,8 @@ Carried over from the old ledger's open tickets; only those that bear on the fiv
 - **H-28 (steps 2, 3):** Anthropic usage objects pass through the private research observations;
   allowlist token fields structurally and strip plan, credit and billing data (D26) before
   anything is published or read from R2.
-- **T24 (step 4):** the pilot bundle is unsigned and `M2_PILOT_CONNECTORS` lists only Codex and
-  Claude (H-21). (H-19, the persistent launchd agent an evidence install left behind, is closed:
+- **T24 (step 4):** the release tarballs are unsigned and carry only the Codex and Claude
+  connectors (`scripts/package-release.sh`, H-21). (H-19, the persistent launchd agent an evidence install left behind, is closed:
   the daemon is run-scoped and nothing is installed as a service.)
 - **H-26 (step 3):** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git
   commit as a "last known state" marker. Open question: which branch counts when the work is not

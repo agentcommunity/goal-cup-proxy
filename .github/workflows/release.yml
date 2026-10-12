@@ -44,6 +44,8 @@ jobs:
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -56,11 +58,13 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target "$TARGET"
       - run: >-
-          cargo build --release --locked --target ${{ matrix.target }}
+          cargo build --release --locked --target "$TARGET"
           -p goalcup-cli -p goalcup-daemon -p goalcup-verifier
-      - run: sh scripts/package-release.sh ${{ matrix.target }} ${{ steps.version.outputs.version }} dist
+      - run: sh scripts/package-release.sh "$TARGET" "$VERSION" dist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: goalcup-${{ matrix.target }}
@@ -68,7 +72,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.ref_type == 'tag'
+    # A tag push only: a manual start from a tag also has ref_type tag, and it must not publish.
+    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10

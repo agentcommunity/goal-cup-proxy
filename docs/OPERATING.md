@@ -24,8 +24,8 @@ that equals the workspace version, and installed with Homebrew
 ([packaging/README.md](../packaging/README.md)); they are unsigned and unnotarized, and no
 qualification exists. Until a version is tagged, built binaries print `0.1.0`. The source
 contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
-`hermes-cli`, and a release tarball carries all three, as committed, under
-`share/goalcup/connectors`. macOS is the only measured platform. Linux builds, but a
+`hermes-cli`. A release tarball carries `codex-cli` and `claude-code-cli`, as committed, under
+`share/goalcup/connectors`; `hermes-cli` stays maintainer-only (H-21). macOS is the only measured platform. Linux builds, but a
 `goalcup start` capture is refused there: the chain's disk reservation is implemented only for
 macOS APFS.
 
