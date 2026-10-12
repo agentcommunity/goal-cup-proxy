@@ -199,11 +199,12 @@ fn modified_stamp(metadata: &std::fs::Metadata) -> String {
 /// are what the rule "never write into ~/.claude or ~/.codex" protects, so these are what the
 /// guard watches. Session files, caches, backups and the desktop apps' own state churn
 /// continuously while the owner's Claude and Codex apps run, and they are not watched.
-const WATCHED_APP_WIDE_FILES: [&str; 4] = [
+/// `~/.claude.json` is left out too: Claude Code rewrites it every few minutes, so watching it
+/// would fail the kit at random.
+const WATCHED_APP_WIDE_FILES: [&str; 3] = [
     ".codex/config.toml",
     ".codex/auth.json",
     ".claude/settings.json",
-    ".claude.json",
 ];
 
 /// Hermes is not an app the owner runs, so anything created under `~/.hermes` is a harness
@@ -735,13 +736,14 @@ fn home_listing_watches_app_wide_config_and_credentials_not_session_churn() {
     let before = home_listing(home.path());
 
     // What the owner's live apps do while a test runs: session files written, the desktop
-    // app's state rewritten, backups and locks created.
+    // app's state and Claude Code's ~/.claude.json rewritten, backups and locks created.
     std::thread::sleep(Duration::from_millis(20));
     std::fs::write(codex.join("session_index.jsonl"), b"{\"id\":1}\n").unwrap();
     std::fs::write(codex.join("sessions").join("rollout.jsonl"), b"{}").unwrap();
     std::fs::write(codex.join(".codex-global-state.json"), b"{}").unwrap();
     std::fs::create_dir_all(codex.join("thread-writer-locks")).unwrap();
     std::fs::create_dir_all(claude.join("backups")).unwrap();
+    std::fs::write(home.path().join(".claude.json"), b"{\"rewritten\":true}").unwrap();
     assert_eq!(
         home_listing(home.path()),
         before,
@@ -749,7 +751,7 @@ fn home_listing_watches_app_wide_config_and_credentials_not_session_churn() {
     );
 
     // What an escaped harness would do: each one trips it.
-    let trips: [(&str, &dyn Fn()); 5] = [
+    let trips: [(&str, &dyn Fn()); 4] = [
         ("~/.codex/config.toml changed", &|| {
             std::fs::write(codex.join("config.toml"), b"after!").unwrap()
         }),
@@ -758,9 +760,6 @@ fn home_listing_watches_app_wide_config_and_credentials_not_session_churn() {
         }),
         ("~/.claude/settings.json created", &|| {
             std::fs::write(claude.join("settings.json"), b"{}").unwrap()
-        }),
-        ("~/.claude.json created", &|| {
-            std::fs::write(home.path().join(".claude.json"), b"{}").unwrap()
         }),
         ("a file created under ~/.hermes", &|| {
             std::fs::create_dir_all(home.path().join(".hermes").join("sessions")).unwrap();

@@ -8,10 +8,12 @@
 //! test, from the defect the test is looking for. In `goalcup-cli` the same contention
 //! surfaces as `ProcessAuthorityUnavailable`.
 //!
-//! A `static` here is per-binary, not global. Two test binaries that both include this
-//! file get two distinct mutexes in two distinct processes. That is sufficient and is the
-//! whole design: cargo runs test targets one at a time, so the only contention that needs
-//! serialising is a binary against its own worker pool.
+//! A `static` here is per-process, not global. Under plain `cargo test` that is enough: cargo
+//! runs test targets one at a time, so the only contention is a binary against its own worker
+//! pool, and this lock serialises that. Under cargo-nextest (`sh scripts/gate.sh`) every test
+//! is its own process and this lock serialises nothing. There, safety comes from the `serial`
+//! test group in `.config/nextest.toml`: **any new module that takes this lock must be added
+//! to that group's filters**, or its tests will run concurrently.
 //!
 //! Never acquire this from a thread the test spawned. The depth counter is
 //! thread-local, so a guard held on the test's main thread plus an acquisition on a worker

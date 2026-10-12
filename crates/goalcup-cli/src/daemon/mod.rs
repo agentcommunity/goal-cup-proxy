@@ -131,8 +131,7 @@ pub const PROCESS_HANDOFF_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 /// timeout: giving an ordinary call the seal's deadline would give the retry helper a budget
 /// it could blow through.
 ///
-/// So this constant appears at exactly one call site, and `tests/it/daemon_client.rs` counts
-/// them.
+/// So this constant appears at exactly one call site. No test pins that count any more.
 pub const SLOW_CALL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The control API client. One base URL, one bearer, one agent.
