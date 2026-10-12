@@ -12,7 +12,7 @@ How do the M2 recorder's parts fit, and where is each guarantee tested? For cont
 - **Status:** v0.5.0 is published as source only; a private unsigned staged three-binary pilot
   candidate exists. No downloadable binary, installer, staged bundle, registry publication,
   signing, notarization or qualification claim is made. The qualification records are in git
-  history at `fddf776`.
+  history at `6494030`.
 - **V1** lives on `v1/trunk`. Its hook leg is not in this tree
   ([D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree)); the verifier still ships the
   thirteen V1 checks for v4 traces (§3).
@@ -135,7 +135,7 @@ is the guard; a server refuses an unknown `protocol_version` with `client_newer`
 **1** incomplete (a gap, unsealed, a Recovery, no Launch, a missing manifest); **2** invalid,
 including a torn tail (kept, never repaired; the entry cannot resume, [C2]); **3** no usable
 report. Research output: `goalcup-verify --research-json`; the report format document is in git history at
-`fddf776` (`docs/research/m2-report-format.md`).
+`6494030` (`docs/research/m2-report-format.md`).
 
 Integrity, anchor, key-source and terminal status facts are typed Rust values. The full research
 summary is assembled JSON, not one typed Rust document. Typed names may be idiomatic while their
@@ -197,7 +197,7 @@ residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`): [checklist](C
 ## 10. Where each guarantee is tested
 
 Test paths are under `crates/`. The "Record" column names the measurement that backed the row; those records are in git history at
-`fddf776` (`docs/qualification/`).
+`6494030` (`docs/qualification/`).
 
 | Guarantee | Tests | Record |
 |---|---|---|

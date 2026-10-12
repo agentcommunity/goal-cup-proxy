@@ -155,7 +155,7 @@ The runner is un-ignored: with F7, F8 and F9 closed it passes 5000 cases by defa
 with `GOALCUP_SIM_CASES=50000 GOALCUP_SIM_ALL=1` reporting no seeds.
 
 **Provenance note (2026-09-19):** the 5000-case default run is covered by the committed gate
-log (`docs/qualification/2026-09-17-gate.md`, in git history at `fddf776`). The 50 000-case figure is **not backed by any
+log (`docs/qualification/2026-09-17-gate.md`, in git history at `6494030`). The 50 000-case figure is **not backed by any
 committed artifact** in this repository — it is a remembered result. Either re-run it at the pin
 and file the output beside the gate log, or drop the number. Do not cite it as evidence until
 one of those happens.
@@ -171,10 +171,10 @@ fork witness to pay for it. A report over that tree can therefore come back `obs
 `Confirmed` can stand, while the orphan is still running. This is **inside `W` as written
 above**, so `I1` is not violated and the implementation is behaving as documented.
 
-It has been measured twice, independently: `docs/qualification/2026-09-16-review.md` (in git history at `fddf776`; 5/5
+It has been measured twice, independently: `docs/qualification/2026-09-16-review.md` (in git history at `6494030`; 5/5
 reproductions, and its §"seal.rs gate" recording that `Confirmed` *would be returned*), and
 again on 2026-09-18 while the CI death was being diagnosed —
-`docs/qualification/2026-09-18-f0-linux-residual.md` (also in git history at `fddf776`).
+`docs/qualification/2026-09-18-f0-linux-residual.md` (also in git history at `6494030`).
 
 **The question is whether the phrase "same-poll orphan" honestly conveys the reach of that
 window.** The argument that it does not: a same-poll orphan sounds like an unlucky race inside a

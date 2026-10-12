@@ -4,7 +4,7 @@ Updated: 2026-10-11.
 
 Paths under `.superpowers/` and `docs/superpowers/` named below are internal planning records
 and are not part of the public repository. References to `LEDGER` name the retired ledger,
-in git history at `fddf776`.
+in git history at `6494030`.
 
 Normative for the v0.5 implementation. These contracts are implemented and current for v0.5.
 At review baseline `37e0072`, the APIs below were proposals and were not yet present; T00 and the

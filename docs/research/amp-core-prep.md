@@ -49,8 +49,8 @@ included, and pass.
   reason, and the pinned harness goldens do not move. A future harness that needs a harmless
   `*_URL` switch would need a core change.
 - **The CLI's D23 predicate.** `is_denied` in [launch.rs](../../crates/goalcup-cli/src/launch.rs),
-  which `scrubbed_env` and `probe_env` use to strip inherited variables, is widened the same way
-  (`*_URL`, was `*_BASE_URL`). `scrubbed_env` has had no caller since D48 removed the V1 launch;
+  which `probe_env` uses to strip inherited variables, is widened the same way
+  (`*_URL`, was `*_BASE_URL`). `scrubbed_env`, its other user, was deleted under OS-31;
   `probe_env` runs in the default build: `goalcup doctor` probes a V1 manifest's harness version
   through it. Test:
   `the_version_probe_runs_the_harness_with_no_base_url_and_no_proxy_in_its_environment` in

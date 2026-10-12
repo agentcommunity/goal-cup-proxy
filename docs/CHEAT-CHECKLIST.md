@@ -14,7 +14,7 @@ apply. A v5 capture trace is judged by the integrity reader (exit 0 complete and
 or unsealed, 2 invalid, 3 no usable report), not by the V1 thirteen checks. LocalOnly (no server,
 receipt or ACK) is a valid local outcome. Nothing on m2 is qualified for long runs ([TODO](../TODO.md)).
 
-Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it in git history at `fddf776`. Open issues that still matter are in [TODO](../TODO.md#known-issues).
+Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it in git history at `6494030`. Open issues that still matter are in [TODO](../TODO.md#known-issues).
 
 ### Wire leg, finish and storage
 
@@ -144,7 +144,7 @@ wording is in git (`git show f8621f99:docs/CHEAT-CHECKLIST.md`).
   after the root exits cannot be adopted. F0 (2026-09-17) is closed; the residual windows are in
   [TERMINATION](TERMINATION.md) and [D30](DECISIONS.md#d30-confirmed-termination-is-bounded-to-the-owned-process-set-and-the-limitation-is-stated).
   Read the Linux failure of `a_child_started_before_the_next_authenticated_snapshot_is_chased`
-  (the 2026-09-16 Linux ARM qualification record, in git history at `fddf776`) before citing that test.
+  (the 2026-09-16 Linux ARM qualification record, in git history at `6494030`) before citing that test.
 - **Seal attribution is a Flag, not the gate** (D35). A shell call that merely quotes a whole
   `apply_patch` envelope attributes the file it names without writing it
   (`patch_target_paths`); `BULK_ATTRIBUTION_THRESHOLD` caps the mass-import version, a single planted

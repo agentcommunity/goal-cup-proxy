@@ -11,7 +11,7 @@ goal, not a claim about this code.
 ## Status
 
 What is next and what is open: [TODO.md](TODO.md). The old status page, ledger and qualification
-records are in git history at `fddf776`.
+records are in git history at `6494030`.
 
 v0.5.0 is published as source only, with no attached files: see the [v0.5.0
 release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0). There is no downloadable
@@ -21,7 +21,7 @@ has exactly three pinned schema-1 connector directories: `codex-cli`, `claude-co
 `hermes-cli` (capture-only). The separate private `m2-pilot` macOS packaging allowlist
 ([packaging/README.md](packaging/README.md)) selects only Codex and Claude; a source pin does not
 prove package inclusion. Short rows are measured; long runs are not qualified (the records are in git history before
-`fddf776`). `v1/trunk` and its `v0.1.0` tag are
+`6494030`). `v1/trunk` and its `v0.1.0` tag are
 private; the V1 code that v0.5.0 kept behind `v1-compat` was removed (D48) and lives on in the
 `v0.5.0` tag. Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
@@ -141,7 +141,7 @@ connector cannot name a `*_URL` variable in `[capture.env]` or as its home varia
 incomplete or unsealed, 2 invalid (a torn tail included), 3 no usable report. A LocalOnly seal
 with exit 0 means local evidence is complete; it is not an anchored or qualified result. The
 research report is `goalcup-verify --research-json <trace> --output <REPORT.ndjson>`
-(format: git history at `fddf776`, `docs/research/m2-report-format.md`).
+(format: git history at `6494030`, `docs/research/m2-report-format.md`).
 
 **Hermes** needs a provider key, which only the owner loads, through the reviewed launch seam
 and never pasted into a shell:
@@ -152,7 +152,7 @@ and never pasted into a shell:
 
 `<ENV_FILE>` is a mode 0600 file holding one `DEEPSEEK_API_KEY=` line. The script runs exactly
 that command and refuses any other. This run is owner-run and the agent never opens the key file
-(D41). The procedure and the measured row are in git history at `fddf776`
+(D41). The procedure and the measured row are in git history at `6494030`
 (`docs/qualification/m2-hermes-reference-row.md`).
 
 ## More

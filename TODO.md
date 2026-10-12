@@ -1,7 +1,7 @@
 # TODO
 
 The single tracker. Five steps, in order. Everything else is parked. Old plans, the ledger and the
-qualification records are in git history at `fddf776`; ticket IDs below (H-11, F-07, ...) name
+qualification records are in git history at `6494030`; ticket IDs below (H-11, F-07, ...) name
 tickets in the retired `LEDGER.md` there.
 
 Done means: the fast gate passes, one reviewer reads the PR once, and README or this file is
@@ -27,6 +27,7 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
 - New harnesses (builders bring them: [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md))
 - Full registration and teams system
 - Qualification records
+- Decide: delete the unused `goalcup-devserver` crate
 
 ## Known issues
 
@@ -37,8 +38,8 @@ Carried over from the old ledger's open tickets; only those that bear on the fiv
   any long run (D40).
 - **T25 (steps 1, 5):** fault coverage still open: a literal ENOSPC on a disposable volume, a
   live-receiver TCP close, and RSS growth over a long run.
-- **F-04 (step 1):** `repair_seal` refuses every v5 terminal, so a torn tail is kept and never
-  repaired; the entry cannot resume.
+- **F-04 (step 1):** a torn tail is kept and never repaired (the V1 `repair_seal` was removed under
+  OS-31); the entry cannot resume.
 - **H-10 residual (step 1):** a CLI crash after release plus a raced manual seal can leave a
   harness running on a sealed entry.
 - **F-16 / E02 (step 1):** the cross-check matcher that scored the early unattended run failed 2

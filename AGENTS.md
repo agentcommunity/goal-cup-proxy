@@ -2,8 +2,7 @@
 
 Goal Cup records what a coding agent actually did during a run. A tracker captures the agent's own
 session files and its model traffic into a sealed, hash-linked chain that anyone can verify
-offline. This file is for agents (Claude Code, Codex, others) and people. What is next:
-[`TODO.md`](TODO.md).
+offline. For agents and people. What is next: [`TODO.md`](TODO.md).
 
 ## Read
 
@@ -11,14 +10,13 @@ offline. This file is for agents (Claude Code, Codex, others) and people. What i
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how the parts fit.
 - [`docs/DECISIONS.md`](docs/DECISIONS.md): frozen; treat the entries as constraints.
 - [`docs/RULES.md`](docs/RULES.md): the participant contract.
-- [`docs/CHEAT-CHECKLIST.md`](docs/CHEAT-CHECKLIST.md): read before trusting a Pass.
-- [`docs/TERMINATION.md`](docs/TERMINATION.md): what finish and kill claim.
+- [`docs/CHEAT-CHECKLIST.md`](docs/CHEAT-CHECKLIST.md) (read before trusting a Pass) and
+  [`docs/TERMINATION.md`](docs/TERMINATION.md) (what finish and kill claim).
 - [`docs/GLOSSARY.md`](docs/GLOSSARY.md): the words; use them exactly.
-- Adding a harness: [`skills/adding-a-capture-harness/SKILL.md`](skills/adding-a-capture-harness/SKILL.md)
-  and [`docs/HARNESS-ONBOARDING.md`](docs/HARNESS-ONBOARDING.md).
+- Adding a harness: [`skills/adding-a-capture-harness/SKILL.md`](skills/adding-a-capture-harness/SKILL.md),
+  [`docs/HARNESS-ONBOARDING.md`](docs/HARNESS-ONBOARDING.md).
 
-Old plans, the ledger and the qualification records were deleted from the tree; they are in git
-history at `fddf776`.
+Old plans, the ledger and the qualification records are in git history at `6494030`.
 
 ## The gate
 
@@ -51,8 +49,8 @@ python3 scripts/check-links.py --root .
 
 - Record raw, interpret later: the daemon captures bytes, the verifier judges them, and the daemon
   never depends on the verifier (D3). Keep the daemon small.
-- Rust edition 2024, stable toolchain, one workspace under `crates/`.
-- Questions about rules or scope go to the maintainer, Balazs Nemethi, not to a guess.
+- Rust edition 2024, stable toolchain. Questions about rules or scope go to the maintainer, Balazs
+  Nemethi, not to a guess.
 
 ## Definition of done
 

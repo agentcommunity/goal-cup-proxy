@@ -124,7 +124,7 @@ Updated: 2026-10-11. Use these terms exactly; do not coin synonyms.
 - **run key**: the entry's per-run Ed25519 key. Its public half is `Launch.run_public_key`, the key
   that signs chunks and status.
 - **row**: one real-harness qualification run with an exact source, binary, harness and model
-  identity. (the qualification records are in git history at `fddf776`).
+  identity. (the qualification records are in git history at `6494030`).
 - **qualified**: passed T27/T28 acceptance. Nothing on `m2/wire` is qualified yet.
   See [TODO](../TODO.md). Say "built" for code that exists; "measured" needs a record.
 - **V1 / V1.1 / M2**: V1 is the `v1/trunk` foundation pinned `7f01234`/`v0.1.0`; V1.1 is its
