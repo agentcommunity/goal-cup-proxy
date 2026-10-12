@@ -221,10 +221,8 @@ control_addr = "127.0.0.1:7787"
 ```
 
 `upload_url` and `server_public_key` are still parsed, both or neither, so a V1 configuration
-keeps loading. Nothing in this tree uploads or checks a receipt (D48), so the pair changes only
-one thing: when `server_public_key` is the published placeholder (the verifying key of the
-published seed `[5u8; 32]`), the daemon prints one stderr line saying its seed is
-public. Omit both.
+keeps loading. Nothing in this tree uploads or checks a receipt (D48), so the pair changes
+nothing. Omit both.
 
 `$GOALCUP_CONFIG_DIR` overrides **both sides at once**: exported, the CLI
 reads that directory instead of the platform default, and a daemon started with the same value
@@ -315,22 +313,22 @@ usage error (exit 1).
 | 3 | The CLI could not do its job: a file it could not read, an answer it could not parse. |
 | 4 | Not left by a capture run: it belonged to the removed V1 gates (D48). |
 
-**What `--dev` means, on each of the two binaries that carry it.** Both say the same thing:
-this is a development run, and its result is not a judged entry's.
+**What `--dev` and `--dev-key` mean.** Both say the same thing: this is a development run,
+and its result is not a judged entry's.
 
 | Flag | What it admits |
 |---|---|
 | `goalcup start --dev` | A connector directory this build does not pin: an edited manifest, a hand-written one, a connector under development. Without the flag that is a pre-allocation refusal before daemon entry/artifact/workspace creation; CLI preparation may already exist and is cleaned. The run says so on stdout and the entry record records it. |
-| `goalcup-verify --dev` | See **Running the verifier** below: the placeholder-server-key finding is suppressed. |
+| `goalcup-verify --dev-key <hex>` | See **Running the verifier** below: a server key this build does not pin, for one run. |
 
-None of them is a way to make a failing entry pass. `--dev` never suppresses a `chain_broken`,
-and a verdict that used it says so in its own document.
+Neither is a way to make a failing entry pass. Neither suppresses a `chain_broken`, and a
+verdict that used one says so in its own document.
 
 ### Running the verifier
 
 ```
-goalcup-verify --capture-integrity <trace> [--dev] [--dev-key <hex>]
-goalcup-verify --research-json <trace> --output <report.ndjson> [--dev] [--dev-key <hex>]
+goalcup-verify --capture-integrity <trace> [--dev-key <hex>]
+goalcup-verify --research-json <trace> --output <report.ndjson> [--dev-key <hex>]
 ```
 
 `<trace>` is a protocol-v5 capture trace directory (`chain.jsonl` and the files beside it).
@@ -347,7 +345,9 @@ exits 3.
 | 2 | Invalid evidence, a torn tail included |
 | 3 | No usable report: the trace could not be read, its chain is not v5, or the invocation was refused |
 
-`--dev` suppresses the `placeholder_server_key` finding. `--dev-key <hex>` (repeatable, 64 hex
+This build pins no server key, so a receipt or acknowledgement never verifies on its own: an
+untrusted signature is `receipt_key_not_accepted` or `ack_signature_unverified`, and the anchor
+stays `local_only`. `--dev-key <hex>` (repeatable, 64 hex
 characters) accepts acknowledgement and receipt signatures under that Ed25519 public key for
 one run; the report records `key_source: "supplied"` so a development run can never be mistaken
 for a production one.

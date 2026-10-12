@@ -157,7 +157,7 @@ impl Rig {
             workspace_parent,
             control_addr: "127.0.0.1:0".parse().unwrap(),
             upload_url: format!("http://{}", upload_trap.local_addr().unwrap()),
-            server_public_key: goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY.to_string(),
+            server_public_key: super::support::TEST_SERVER_PUBLIC_KEY_HEX.to_string(),
             receipt_binding: goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
             poll_interval_ms: 250,
             // Short, so a run of a second meets several upload ticks that must not dial.

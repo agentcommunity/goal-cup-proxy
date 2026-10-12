@@ -57,7 +57,7 @@ a local-only chain can be rewritten and re-sealed, see [CHEAT-CHECKLIST](docs/CH
 | Same-user processes, including the agent under test | **Inside the boundary.** They can read `control.json` (mode 0600, same uid), the harness environment and run directories, and call authenticated mutators while a capture has live authority. After restart, recovered v5 captures accept status and seal only. Detection is after the fact, from captured native and wire records. A keychain-held or per-run token, or a sandbox denying config access, is future work. |
 | Network | The proxy validates upstream TLS. Only declared provider hosts and paths are decrypted and retained; authentication hosts always tunnel unmodified. |
 | Connector authors | **Trusted code.** See below. |
-| The project server | Not used by the M2 capture path (LocalOnly). Until a production server exists the server key is a published placeholder, so **every receipt and acknowledgement can be forged until V1.1**: its seed is in this repository, anybody can sign under it, and a run anchored to it is anchored to nothing. The daemon does not refuse that key (development runs use it) but prints one line on stderr at startup when it is configured, and the verifier flags `placeholder_server_key` on every trace unless `--dev` is given. |
+| The project server | Not used by the M2 capture path (LocalOnly). Until a production server exists, `goalcup-verify` trusts **no** server key: a receipt or acknowledgement verifies only under a key supplied to that one run (`--dev-key`), and the report then records `key_source: "supplied"` and `server_key_unpinned`. No key whose seed is in this repository is trusted, so no trace reads as `anchor: signed` on its own. |
 
 ## Connectors are trusted code
 
@@ -95,7 +95,7 @@ any seeds; a source pin does not prove package inclusion. The build has no V1 ex
 
 Listed in [docs/CHEAT-CHECKLIST.md](docs/CHEAT-CHECKLIST.md): redaction (F-07, H-20), key-scan
 blind spots (H-18), and the termination windows in [docs/TERMINATION.md](docs/TERMINATION.md).
-Also stated here: same-user control of the daemon (above), the placeholder server key (above),
+Also stated here: same-user control of the daemon (above), the absent server key (above),
 the macOS executable recheck is neither a coherent snapshot nor inode-bound execution (a same-UID
 writer can mutate the open file from the first read, then replace its pathname before `exec`),
 shared-home checks do not inspect ACLs and cannot exclude a same-UID replacement after the final

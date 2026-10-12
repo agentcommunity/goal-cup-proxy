@@ -720,7 +720,7 @@ fn local_daemon(
         control_addr: "127.0.0.1:0".parse().unwrap(),
         // A placeholder no call reaches: a local capture asks no server anything.
         upload_url: "http://127.0.0.1:9".to_string(),
-        server_public_key: goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY.to_string(),
+        server_public_key: support::TEST_SERVER_PUBLIC_KEY_HEX.to_string(),
         receipt_binding: goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
         poll_interval_ms: 250,
         upload_interval_ms: 2_000,

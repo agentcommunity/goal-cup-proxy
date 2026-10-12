@@ -495,7 +495,7 @@ fn decoded_segments(records: &[CaptureRecord]) -> u64 {
 }
 
 fn server_key() -> SigningKey {
-    // A public synthetic key: neither the placeholder seed nor any real anchor.
+    // A public, test-only key the verifier never trusts.
     SigningKey::from_bytes(&[0x42; 32])
 }
 
@@ -2323,6 +2323,81 @@ fn v5_legacy_seal_terminal_is_reported_as_legacy_seal() {
             seal_manifest_sha256: Some(manifest_sha256(&manifest()).unwrap()),
         })
     );
+}
+
+/// No key whose seed is written in this repository is trusted. A receipt and an ACK signed
+/// under the old published placeholder seed `[5u8; 32]`, or under this suite's own test seed,
+/// are never a signed anchor; only a key the run supplies (`--dev-key`) verifies them, and the
+/// report says the trust was borrowed.
+#[test]
+fn a_receipt_signed_by_an_untrusted_key_is_never_a_signed_anchor() {
+    for seed in [[5u8; 32], [0x42; 32]] {
+        let key = SigningKey::from_bytes(&seed);
+        let dir = tempfile::tempdir().unwrap();
+        let mut export = capture_export(dir.path());
+        append(&mut export, &launch());
+        let (_, head) = export.head().unwrap();
+        let receipt = StartReceipt::sign(
+            StartReceiptClaims {
+                entry_id: ENTRY.to_string(),
+                connector_id: "codex-cli".to_string(),
+                workspace: "/ws".to_string(),
+                session_id: "session-t18".to_string(),
+                started_at: STARTED_AT.to_string(),
+                deadline_at: DEADLINE_AT.to_string(),
+                manifest_sha256: "11".repeat(32),
+                chain_head: head,
+                connector_dir_sha256: None,
+                run_public_key: None,
+                questionnaire_version: None,
+            },
+            &key,
+        )
+        .unwrap();
+        export.write_receipt(&receipt).unwrap();
+        for record in goal_stream().into_iter().chain(complete_wire(None)) {
+            append(&mut export, &record);
+        }
+        let (_, finish) = export
+            .write_local_finish(&manifest(), finish_time(), "participant_stop", confirmed())
+            .unwrap();
+        export
+            .append_ack_synced(&sign_ack(&key, &finish, "2026-09-27T12:01:00Z"))
+            .unwrap();
+        drop(export);
+
+        let (report, _) = scan(dir.path());
+        assert_eq!(report.anchor, AnchorState::LocalOnly, "{report:#?}");
+        assert_eq!(report.key_source, KeySource::None);
+        assert_eq!(report.receipt_clock, None);
+        assert_eq!(report.verified_ack, None);
+        assert!(
+            has(&report, "receipt_key_not_accepted"),
+            "{:?}",
+            report.findings
+        );
+        assert_eq!(report.exit_code(), 2);
+        let output = bin()
+            .arg("--capture-integrity")
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let printed: CaptureIntegrityReport = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(printed.anchor, AnchorState::LocalOnly);
+        assert_eq!(printed.key_source, KeySource::None);
+
+        // Supplied for this run, the same trace verifies as before, and says so.
+        let (report, _) = scan_with(dir.path(), &supplied(&key));
+        assert_eq!(report.exit_code(), 0, "{report:#?}");
+        assert_eq!(report.anchor, AnchorState::Signed);
+        assert_eq!(report.key_source, KeySource::Supplied);
+        assert_eq!(
+            report.verified_ack.as_ref().map(|a| a.seq),
+            Some(finish.seq)
+        );
+        assert!(has(&report, "server_key_unpinned"), "{:?}", report.findings);
+    }
 }
 
 #[test]

@@ -235,7 +235,8 @@ pub fn research_summary(
         "exit_code": exit_code,
         "verifier_version": crate::VERIFIER_VERSION,
         "options": {
-            "dev_mode": options.dev_mode,
+            // Schema 1 keeps this key; there is no development mode to record any more.
+            "dev_mode": false,
             "allow_descriptor_key": options.allow_descriptor_key,
             "extra_server_keys": options.extra_server_keys,
         },

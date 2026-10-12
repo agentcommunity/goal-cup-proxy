@@ -1126,7 +1126,7 @@ fn chat_choice_cap_changes_whole_report_from_available_to_partial() {
 
 #[test]
 fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
-    // A public synthetic key, neither the placeholder seed nor any real anchor, supplied
+    // A public, test-only key the verifier never trusts, supplied
     // as `--dev-key` would supply it.
     let key = SigningKey::from_bytes(&[0x42; 32]);
     let options = VerifyOptions {

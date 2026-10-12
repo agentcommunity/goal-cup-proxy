@@ -29,9 +29,8 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
 - Qualification records
 - Delete the daemon's `ReceiptBindingPolicy` / `[receipt_binding]` config: its only reader,
   `Registry::store_receipt`, is gone.
-- Delete daemon `server_public_key` / `upload_url` and `placeholder_key_notice`: since D48 the key's
-  only consumer is a startup notice about receipts that no longer exist. Its test,
-  `tests/it/placeholder_notice.rs`, goes with it.
+- Delete daemon `server_public_key` / `upload_url`, or wire them to the server: since D48 and
+  the removal of the placeholder notice nothing reads the key.
 - Delete `DaemonClient::current_entry` and the daemon's `GET /v0/entries/current`: no `goalcup`
   command calls it.
 - Delete the protocol's pre-v5 trace surface the removed V1 verifier was the reader of:

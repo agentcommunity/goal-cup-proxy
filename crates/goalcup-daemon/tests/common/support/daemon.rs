@@ -19,7 +19,7 @@ pub fn config_at(root: &Path, upload_url: &str) -> DaemonConfig {
         workspace_parent: root.join("workspaces"),
         control_addr: "127.0.0.1:0".parse().expect("a loopback address"),
         upload_url: upload_url.to_string(),
-        server_public_key: goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX.to_string(),
+        server_public_key: super::TEST_SERVER_PUBLIC_KEY_HEX.to_string(),
         receipt_binding: goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
         poll_interval_ms: 250,
         upload_interval_ms: 2_000,

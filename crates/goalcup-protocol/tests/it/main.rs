@@ -15,7 +15,6 @@ mod harness_schema;
 mod m2_contract;
 mod no_family_literals;
 mod pins_build_fails;
-mod placeholder_seed;
 mod provenance_wire;
 mod ps_env;
 mod roundtrip;

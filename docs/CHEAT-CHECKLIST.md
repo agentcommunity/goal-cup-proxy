@@ -142,8 +142,9 @@ wording is in git (`git show f8621f99:docs/CHEAT-CHECKLIST.md`).
   `crates/goalcup-daemon/src/tailer/sqlite.rs` at `v0.5.0`). OpenCode has no connector on m2.
 - **App-wide config changed while no daemon runs is not reported.** The baseline is re-hashed at
   daemon start; the chain shows a `DaemonRestart` marking the window.
-- **The pinned server key is the published placeholder** until V1.1; `goalcup-verify` reports
-  `placeholder_server_key` without `--dev`. V1 qualification used the development signer.
+- **No server key is pinned** until V1.1, so no trace is `anchor: signed` on its own; a key
+  supplied with `--dev-key` is reported as `supplied` with `server_key_unpinned`. V1
+  qualification used the development signer.
 - **More than 20,000 transcript files** hit the directory tailer's seen-set cap (`MAX_SEEN_FILES`);
   further files are reported as `StoreUnavailable`, never tailed.
 - **The connector-directory digest walks by name, then opens by handle**, so a symlink swap between
