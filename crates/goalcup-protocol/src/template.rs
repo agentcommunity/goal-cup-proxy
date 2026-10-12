@@ -285,29 +285,4 @@ mod tests {
         let e = render("oops }", &v).unwrap_err().to_string();
         assert!(e.contains("lone `}`"), "{e}");
     }
-
-    /// The V1 templates the daemon renders are inside the strict grammar.
-    #[test]
-    fn every_shipped_v1_template_lexes_under_the_strict_grammar() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
-        let mut seen = 0;
-        for id in ["claude-code-cli", "codex-cli"] {
-            let manifest_path = root.join(id).join("manifest.toml");
-            let manifest = crate::manifest::ConnectorManifest::from_toml_str(
-                &std::fs::read_to_string(&manifest_path)
-                    .unwrap_or_else(|e| panic!("{}: {e}", manifest_path.display())),
-            )
-            .unwrap_or_else(|e| panic!("{}: {e}", manifest_path.display()));
-            for hook in &manifest.hook_install {
-                let path = root.join(id).join("files").join(&hook.template);
-                let text = std::fs::read_to_string(&path)
-                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-                if let Err(why) = tokens(&text) {
-                    panic!("{}: {why}", path.display());
-                }
-                seen += 1;
-            }
-        }
-        assert_eq!(seen, 2, "the claude and codex V1 templates");
-    }
 }

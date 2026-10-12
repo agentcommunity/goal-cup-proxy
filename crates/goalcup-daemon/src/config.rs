@@ -24,7 +24,7 @@ pub struct DaemonConfig {
     /// Where the daemon writes. **The only tree it writes to outside a tracker-created
     /// workspace**: never `$HOME`, never a harness config directory, never `spikes/`.
     pub artifact_root: PathBuf,
-    /// Where the shipped `manifest.toml` files live.
+    /// Where the shipped connector directories (`<id>/harness.toml`) live.
     pub connectors_dir: PathBuf,
     /// Where `control.json` and the status-cache mirrors live. Separate from
     /// `artifact_root` because the CLI reads it, and it may not see a capture buffer.

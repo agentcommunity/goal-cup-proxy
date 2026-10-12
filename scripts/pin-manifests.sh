@@ -34,7 +34,7 @@
 # CLI look a pin up by the id the connector DECLARES; a table keyed by the
 # basename would silently pin nothing for a directory whose name and declared id differ,
 # and the lookup would return None — an unpinned connector — rather than a mismatch. So the
-# `id = "..."` line is parsed out of each harness.toml (or manifest.toml) and that is the key.
+# `id = "..."` line is parsed out of each harness.toml and that is the key.
 #
 # ROW ORDER IS THE C-LOCALE ORDER: `LC_ALL=C` is exported below, so the glob, the sort inside
 # the directory walk and the sort of the pin lines (by id) compare bytes rather than letting a
@@ -125,12 +125,11 @@ put_u64be() {
   printf "$esc"
 }
 
-# The id a connector manifest DECLARES, which is the key every lookup uses.
+# The id a connector's harness.toml DECLARES, which is the key every lookup uses.
 #
-# The top-level `id = "..."`, and only that one: `[human_rule]` carries an `id` of its
-# own (and a recorded V1 manifest's `[[human_rule.exclusions]]` entries carry one each), so the first match in file order is taken and a manifest whose
-# top-level id is not its first `id =` line is a manifest this script refuses rather than
-# mis-keys. An id that is empty, or that is not the `[a-z0-9-]` shape a connector id has,
+# The top-level `id = "..."`, and only that one: the first match in file order is taken, and
+# a harness.toml whose top-level id is not its first `id =` line is one this script refuses
+# rather than mis-keys. An id that is empty, or that is not the `[a-z0-9-]` shape a connector id has,
 # is refused too — it would create an invalid lookup key in generated pin data.
 declared_id() {
   id=$(sed -n 's/^id[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' "$1" | head -n 1)
@@ -144,26 +143,13 @@ declared_id() {
   printf '%s' "$id"
 }
 
-# The id a connector FOLDER declares: its harness.toml's, else its manifest.toml's. Where both
-# exist they must agree, or one pin table would be keyed by an id the other does not carry.
+# The id a connector FOLDER declares: its harness.toml's. A folder without one is refused.
 folder_id() {
-  fid=''
-  if [ -f "$1/harness.toml" ]; then
-    fid=$(declared_id "$1/harness.toml")
-    if [ -f "$1/manifest.toml" ]; then
-      mid=$(declared_id "$1/manifest.toml")
-      if [ "$mid" != "$fid" ]; then
-        echo "pin-manifests: $1: harness.toml declares '$fid' and manifest.toml '$mid'" >&2
-        exit 1
-      fi
-    fi
-  elif [ -f "$1/manifest.toml" ]; then
-    fid=$(declared_id "$1/manifest.toml")
-  else
-    echo "pin-manifests: $1 holds neither harness.toml nor manifest.toml" >&2
+  if [ ! -f "$1/harness.toml" ]; then
+    echo "pin-manifests: $1 holds no harness.toml" >&2
     exit 1
   fi
-  printf '%s' "$fid"
+  declared_id "$1/harness.toml"
 }
 
 # The directory digest, per the byte layout in this file's header.
@@ -260,15 +246,20 @@ fi
 # The directory pins, one `<id> <sha256>` line per connector folder, in id order. Sorting the
 # whole line orders by id: the id is the line's prefix, and the space after it (0x20) is below
 # every character an id may hold (`[a-z0-9-]`), so a shorter id sorts before its extensions,
-# exactly as pins.rs compares ids.
+# exactly as pins.rs compares ids. The rows are collected in a file before the sort rather than
+# piped into it: a refusal inside a `for ... | sort` pipeline exits only the subshell, and the
+# script would go on to write a table missing that connector.
 emit_dir_pins() {
+  rows=$work/dir-rows
+  : >"$rows"
   for d in connectors/*/; do
     d=${d%/}
     id=$(folder_id "$d")
     digest=$(digest_of_dir "$d")
     check_digest "$digest" "$d"
-    printf '%s %s\n' "$id" "$digest"
-  done | LC_ALL=C sort
+    printf '%s %s\n' "$id" "$digest" >>"$rows"
+  done
+  LC_ALL=C sort "$rows"
 }
 
 dir_pins_file=crates/goalcup-protocol/pins/connector-dirs.txt

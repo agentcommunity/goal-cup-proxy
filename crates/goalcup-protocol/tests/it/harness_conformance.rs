@@ -3,26 +3,23 @@
 //!
 //! For EVERY folder under `connectors/`: it holds a `harness.toml` (this file), and the
 //! checks below that this file owns. Everything `harness::load_dir` already enforces (loads as
-//! `Origin::Pinned`, every `files/**` entry is a seed or a legacy V1 template, every seed
-//! exists and is small, `harness.toml` and `manifest.toml` agree on the id) is NOT restated
+//! `Origin::Pinned`, every `files/**` entry is a seed, nothing else sits beside `harness.toml`,
+//! every seed exists and is small) is NOT restated
 //! here: `load_dir` is the one loader the CLI and the daemon share, so `check_dir` calls it and
 //! the sensitivity tests prove it refuses (`validate` also owns "`extra_patterns` are on the
 //! protocol mirror of the recognizers"). What this file adds on top, each proven by a test that
 //! no earlier gate refuses first:
-//! * the declared id is the folder name (a new harness folder has no `manifest.toml` to
-//!   cross-check against, and `load_dir` does not compare with the folder name);
+//! * the declared id is the folder name (`load_dir` does not compare with the folder name);
 //! * no non-comment line of `harness.toml` names the tracker, a rule broader than
 //!   `validate`'s (which scans args, goal flag, env and hosts, not `continuation` or
 //!   `evidence_paths`).
 //!
 //! The set the loop runs over is itself asserted (M-2): at least the three shipped connectors,
-//! and exactly as many `harness.toml` files as connector folders, so a folder that ships only a
-//! V1 `manifest.toml`, or a loop that silently iterates over nothing, fails here. A connector
+//! and exactly as many `harness.toml` files as connector folders, so a folder without one, or a
+//! loop that silently iterates over nothing, fails here. A connector
 //! folder that is a symlink is refused too (`load_dir` and `connector_dirs` both).
 //!
 //! The kit (offline stand-ins, macOS) stays a maintainer gate.
-//!
-//! Deleting the V1 profiles removes the two patterns-versus-`manifest.toml` tests below.
 
 use goalcup_protocol::capture_policy::{EXTRA_PATTERN_SOURCES, mentions_goalcup};
 use goalcup_protocol::harness::{Origin, load_dir};
@@ -136,73 +133,34 @@ fn every_connector_passes_every_static_check() {
     }
 }
 
-/// The mirror equals the patterns the shipped V1 manifests carry, which the daemon's own test
-/// `extra_shapes_follow_the_shipped_manifests` equates with `EXTRA_SHAPES`: so the mirror
-/// equals the recorder's recognizers by transitivity, without a daemon edit.
+/// The mirror equals the patterns the shipped `harness.toml` files carry, in connector order,
+/// which the daemon's own test `extra_shapes_follow_the_shipped_harnesses` equates with
+/// `EXTRA_SHAPES`: so the mirror equals the recorder's recognizers by transitivity, without a
+/// daemon edit.
 #[test]
-fn the_extra_pattern_mirror_equals_the_shipped_manifests_patterns() {
-    let mut from_manifests: Vec<String> = Vec::new();
+fn the_extra_pattern_mirror_equals_the_shipped_harness_patterns() {
+    let mut shipped: Vec<String> = Vec::new();
     for id in ["codex-cli", "claude-code-cli"] {
-        let text =
-            std::fs::read_to_string(root().join("connectors").join(id).join("manifest.toml"))
-                .expect("the V1 manifest");
-        let table: toml::Table = text.parse().expect("TOML");
-        let patterns = table
-            .get("redaction")
-            .and_then(|r| r.get("extra_patterns"))
-            .and_then(toml::Value::as_array)
-            .expect("extra_patterns");
-        for p in patterns {
-            from_manifests.push(
-                p.get("regex")
-                    .and_then(toml::Value::as_str)
-                    .unwrap()
-                    .to_string(),
-            );
-        }
+        let dir = root().join("connectors").join(id);
+        let loaded = load_dir(&dir, Origin::Pinned).unwrap_or_else(|e| panic!("{id}: {e}"));
+        shipped.extend(
+            loaded
+                .manifest
+                .redaction
+                .iter()
+                .flat_map(|r| &r.extra_patterns)
+                .map(|p| p.regex.clone()),
+        );
     }
     let mirror: Vec<String> = EXTRA_PATTERN_SOURCES
         .iter()
         .map(|s| s.to_string())
         .collect();
     assert_eq!(
-        from_manifests, mirror,
+        shipped, mirror,
         "capture_policy::EXTRA_PATTERN_SOURCES must list the recognizers in order: codex's \
          three, then claude's one"
     );
-}
-
-/// The shipped `harness.toml` patterns are exactly the V1 manifests' (kind and regex, in
-/// order); deleted with the V1 files in S5.
-#[test]
-fn the_harness_toml_patterns_are_the_manifest_patterns() {
-    for id in ["codex-cli", "claude-code-cli"] {
-        let dir = root().join("connectors").join(id);
-        let loaded = load_dir(&dir, Origin::Pinned).unwrap_or_else(|e| panic!("{id}: {e}"));
-        let got: Vec<(String, String)> = loaded
-            .manifest
-            .redaction
-            .iter()
-            .flat_map(|r| &r.extra_patterns)
-            .map(|p| (p.kind.clone(), p.regex.clone()))
-            .collect();
-        let v1: toml::Table = std::fs::read_to_string(dir.join("manifest.toml"))
-            .unwrap()
-            .parse()
-            .unwrap();
-        let want: Vec<(String, String)> = v1["redaction"]["extra_patterns"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| {
-                (
-                    p["kind"].as_str().unwrap().to_string(),
-                    p["regex"].as_str().unwrap().to_string(),
-                )
-            })
-            .collect();
-        assert_eq!(got, want, "{id}");
-    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -254,7 +212,7 @@ fn sensitivity_an_unmutated_copy_passes() {
 fn sensitivity_a_missing_harness_toml_is_refused() {
     let (_tmp, dir) = copy_connector("codex-cli");
     std::fs::remove_file(dir.join("harness.toml")).unwrap();
-    let err = check_dir(&dir).expect_err("a folder with only manifest.toml");
+    let err = check_dir(&dir).expect_err("a folder without harness.toml");
     assert!(err.contains("no harness.toml"), "{err}");
 }
 
@@ -314,8 +272,8 @@ fn sensitivity_f7_catches_a_value_validate_does_not_scan() {
     assert!(err.contains("(F7)"), "{err}");
 }
 
-/// The id-versus-folder rule is `check_dir`'s own. The copy has no `manifest.toml` (it is what a
-/// new harness folder looks like) and an untouched id, so no earlier gate refuses it.
+/// The id-versus-folder rule is `check_dir`'s own. The copy has an untouched id, so no earlier
+/// gate refuses it.
 #[test]
 fn sensitivity_an_id_that_is_not_the_folder_name_is_refused() {
     let (_tmp, dir) = copy_connector_as("hermes-cli", "other");

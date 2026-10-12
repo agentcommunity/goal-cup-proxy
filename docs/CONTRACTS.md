@@ -1349,11 +1349,11 @@ the tracker's.
 
 ### Migrating from manifest.toml
 
-The daemon and CLI now load `harness.toml` through the shared schema-1 loader. Hermes has no
-V1 manifest. Codex and Claude retain `manifest.toml` and its named hook templates, which the V1
-product path used until D48 deleted it; those compatibility files are still parsed at startup
-(OS-29) and are still part of their connector directory digests. `family`, `tier`,
-`tested_version_range` and `capture_only` are not harness schema fields (D43 ruling 2).
+The daemon and CLI load `harness.toml` through the shared schema-1 loader, and nothing else.
+The V1 product path that used `manifest.toml` was deleted by D48, and the Codex and Claude
+`manifest.toml` files and their hook templates by OS-29; the loader refuses a leftover one.
+`family`, `tier`, `tested_version_range` and `capture_only` are not harness schema fields (D43
+ruling 2).
 
 No schema bump has happened. The [schema evolution rule](CONNECTOR-SCHEMA.md#pin-evolution) says
 which widening stays schema 1 and which incompatible change creates schema 2. A schema-bump PR

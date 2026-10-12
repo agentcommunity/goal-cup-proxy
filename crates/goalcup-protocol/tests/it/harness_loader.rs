@@ -234,61 +234,15 @@ fn a_symlink_anywhere_is_refused() {
     assert!(refusal(tmp.path(), Origin::Pinned).contains("symlink"));
 }
 
+/// No connector ships a V1 `manifest.toml` any more (OS-29), so one left beside a
+/// `harness.toml` is an unnamed file like any other, and the loader refuses it rather than
+/// reading it.
 #[test]
-fn any_retained_v1_manifest_is_bounded_by_its_declared_id_and_templates() {
+fn a_leftover_v1_manifest_is_refused() {
     let tmp = hermes_dir();
     std::fs::write(tmp.path().join("manifest.toml"), b"id = \"hermes-cli\"\n").unwrap();
-    // A matching recorded V1 identity with no template allowance is accepted and ignored.
-    load_dir(tmp.path(), Origin::Pinned).expect("the matching recorded V1 identity is bounded");
-    // A recorded matching V1 manifest is accepted without a compiled connector-id table; its
-    // declared id and templates are the retained authority (OS-29).
-    let tmp = tempfile::tempdir().unwrap();
-    let text = fixture_text("codex-cli").replace("id = \"codex-cli\"", "id = \"brand-new-cli\"");
-    std::fs::write(tmp.path().join("harness.toml"), text).unwrap();
-    std::fs::write(
-        tmp.path().join("manifest.toml"),
-        b"id = \"brand-new-cli\"\n",
-    )
-    .unwrap();
-    load_dir(tmp.path(), Origin::Pinned).expect("the V1 allowance is parsed from captured bytes");
-}
-
-#[test]
-fn legacy_files_are_allowed_only_beside_their_manifest() {
-    // codex-cli with its V1 manifest and files/config.toml loads.
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("harness.toml"), fixture_text("codex-cli")).unwrap();
-    std::fs::write(
-        tmp.path().join("manifest.toml"),
-        b"id = \"codex-cli\"\n[[hook_install]]\ntemplate = \"config.toml\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(tmp.path().join("files")).unwrap();
-    std::fs::write(tmp.path().join("files/config.toml"), b"x").unwrap();
-    load_dir(tmp.path(), Origin::Pinned).expect("legacy file beside its manifest");
-    // Without the V1 manifest the same file is just an unnamed file.
-    std::fs::remove_file(tmp.path().join("manifest.toml")).unwrap();
-    assert!(refusal(tmp.path(), Origin::Pinned).contains("files/config.toml"));
-    // And another connector's legacy file is not allowed for this one.
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("harness.toml"), fixture_text("codex-cli")).unwrap();
-    std::fs::write(
-        tmp.path().join("manifest.toml"),
-        b"id = \"codex-cli\"\n[[hook_install]]\ntemplate = \"config.toml\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(tmp.path().join("files")).unwrap();
-    std::fs::write(tmp.path().join("files/settings-launch.json"), b"x").unwrap();
-    assert!(refusal(tmp.path(), Origin::Pinned).contains("files/settings-launch.json"));
-}
-
-#[test]
-fn both_files_must_declare_one_id() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("harness.toml"), fixture_text("codex-cli")).unwrap();
-    std::fs::write(tmp.path().join("manifest.toml"), b"id = \"other-cli\"\n").unwrap();
     let msg = refusal(tmp.path(), Origin::Pinned);
-    assert!(msg.contains("one id"), "{msg}");
+    assert!(msg.contains("manifest.toml"), "{msg}");
 }
 
 #[test]
@@ -308,74 +262,6 @@ fn a_bad_manifest_is_refused_with_the_validators_message() {
         .replace("id = \"hermes-cli\"", "id = \"scratch-cli\"");
     std::fs::write(tmp.path().join("harness.toml"), text).unwrap();
     load_dir(tmp.path(), Origin::Dev).expect("an unpinned directory loaded with --dev may run one");
-}
-
-#[test]
-fn legacy_allowance_comes_from_the_manifest_bytes_captured_by_the_directory_walk() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("harness.toml"), fixture_text("codex-cli")).unwrap();
-    let manifest = tmp.path().join("manifest.toml");
-    std::fs::write(
-        &manifest,
-        b"id = \"codex-cli\"\n[[hook_install]]\ntemplate = \"dynamic.txt\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(tmp.path().join("files")).unwrap();
-    std::fs::write(tmp.path().join("files/dynamic.txt"), b"captured\n").unwrap();
-
-    let loaded = load_dir_resolving_origin(tmp.path(), |_, _| {
-        std::fs::write(
-            &manifest,
-            b"id = \"codex-cli\"\n[[hook_install]]\ntemplate = \"changed.txt\"\n",
-        )
-        .unwrap();
-        Origin::Pinned
-    })
-    .expect("post-walk mutation cannot change the captured V1 allowance");
-    assert_eq!(loaded.manifest.id, "codex-cli");
-}
-
-#[test]
-fn legacy_template_allowance_is_narrow_path_safe_and_complete() {
-    for template in ["", "/absolute", "../escape", "sub/../escape", r"sub\escape"] {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("harness.toml"), fixture_text("codex-cli")).unwrap();
-        std::fs::write(
-            tmp.path().join("manifest.toml"),
-            format!("id = \"codex-cli\"\n[[hook_install]]\ntemplate = {template:?}\n"),
-        )
-        .unwrap();
-        let error = refusal(tmp.path(), Origin::Pinned);
-        assert!(
-            error.contains("hook_install") || error.contains("manifest.toml"),
-            "{template:?}: {error}"
-        );
-    }
-
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("harness.toml"), fixture_text("codex-cli")).unwrap();
-    std::fs::write(
-        tmp.path().join("manifest.toml"),
-        b"id = \"codex-cli\"\n[[hook_install]]\ntemplate = \"missing.txt\"\n",
-    )
-    .unwrap();
-    let error = refusal(tmp.path(), Origin::Pinned);
-    assert!(
-        error.contains("files/missing.txt") && error.contains("not in the directory"),
-        "{error}"
-    );
-
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("harness.toml"), fixture_text("codex-cli")).unwrap();
-    std::fs::write(
-        tmp.path().join("manifest.toml"),
-        b"id = \"codex-cli\"\n[[hook_install]]\ntemplate = \"declared.txt\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(tmp.path().join("files")).unwrap();
-    std::fs::write(tmp.path().join("files/undeclared.txt"), b"x").unwrap();
-    let error = refusal(tmp.path(), Origin::Pinned);
-    assert!(error.contains("files/undeclared.txt"), "{error}");
 }
 
 // ---------------------------------------------------------------------------------------

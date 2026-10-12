@@ -68,8 +68,6 @@ async fn shipped_connectors_record_the_pinned_directory_and_harness_profile_dige
 async fn a_harness_only_unpinned_connector_is_created_and_its_redaction_reaches_the_daemon() {
     let connectors = copied(&[("dev", "codex-cli")]);
     let dir = connectors.path().join("dev");
-    std::fs::remove_file(dir.join("manifest.toml")).unwrap();
-    std::fs::remove_dir_all(dir.join("files")).unwrap();
     let harness = std::fs::read_to_string(dir.join("harness.toml"))
         .unwrap()
         .replacen("id = \"codex-cli\"", "id = \"harness-only-dev\"", 1);
@@ -125,7 +123,6 @@ async fn two_unpinned_same_id_directories_with_different_bytes_refuse_before_any
         ("daemon-dev", "codex-cli"),
     ]);
     let daemon_dir = connectors.path().join("daemon-dev");
-    std::fs::remove_file(daemon_dir.join("manifest.toml")).unwrap();
     let daemon_harness = std::fs::read_to_string(daemon_dir.join("harness.toml"))
         .unwrap()
         .replacen("id = \"codex-cli\"", &format!("id = \"{ID}\""), 1);
@@ -175,8 +172,8 @@ async fn two_unpinned_same_id_directories_with_different_bytes_refuse_before_any
 #[tokio::test]
 async fn a_nonselected_harness_real_home_refuses_before_any_write() {
     const NONSHIPPED_HOME: &str = ".goalcup-s4a-nonshipped-union-proof";
-    // Keep the legacy manifests complete for the startup manifest parse (OS-29), then
-    // add a harness-only family whose real home must constrain a different selected harness.
+    // The shipped connectors plus a harness-only family whose real home must constrain a
+    // different selected harness.
     let connectors = copied(&[
         ("codex-cli", "codex-cli"),
         ("claude-code-cli", "claude-code-cli"),
@@ -184,8 +181,6 @@ async fn a_nonselected_harness_real_home_refuses_before_any_write() {
         ("nonshipped", "codex-cli"),
     ]);
     let nonshipped = connectors.path().join("nonshipped");
-    std::fs::remove_file(nonshipped.join("manifest.toml")).unwrap();
-    std::fs::remove_dir_all(nonshipped.join("files")).unwrap();
     let harness = std::fs::read_to_string(nonshipped.join("harness.toml"))
         .unwrap()
         .replacen("id = \"codex-cli\"", "id = \"nonshipped-dev\"", 1)
@@ -222,8 +217,6 @@ async fn an_unknown_capture_profile_is_unsupported_not_missing_and_writes_nothin
 
 #[tokio::test]
 async fn a_pinned_id_with_changed_directory_bytes_is_refused_before_any_write() {
-    // Hermes has no V1 manifest, so the startup manifest parse (OS-29) does not pre-empt this
-    // capture assertion.
     let connectors = copied(&[
         ("codex-cli", "codex-cli"),
         ("claude-code-cli", "claude-code-cli"),
@@ -252,10 +245,7 @@ async fn a_renamed_changed_shipped_connector_is_refused_before_any_write() {
         ("hermes-cli", "hermes-cli"),
     ]);
     let renamed = connectors.path().join("renamed-codex");
-    // The canonical legacy directory keeps the startup manifest parse complete. The alias is
-    // a schema-only candidate so the request reaches the S4a loader.
-    std::fs::remove_file(renamed.join("manifest.toml")).unwrap();
-    std::fs::remove_dir_all(renamed.join("files")).unwrap();
+    // The alias declares the shipped id with changed bytes, so the request reaches the loader.
     let path = renamed.join("harness.toml");
     let mut bytes = std::fs::read(&path).unwrap();
     bytes.extend_from_slice(b"\n# renamed and changed\n");
@@ -295,8 +285,6 @@ async fn two_harness_directories_declaring_one_id_are_refused_before_any_write()
     let connectors = copied(&[("one", "codex-cli"), ("two", "codex-cli")]);
     for folder in ["one", "two"] {
         let dir = connectors.path().join(folder);
-        std::fs::remove_file(dir.join("manifest.toml")).unwrap();
-        std::fs::remove_dir_all(dir.join("files")).unwrap();
         let harness = std::fs::read_to_string(dir.join("harness.toml"))
             .unwrap()
             .replacen("id = \"codex-cli\"", "id = \"duplicate-dev\"", 1);
@@ -314,10 +302,50 @@ async fn two_harness_directories_declaring_one_id_are_refused_before_any_write()
     no_writes(&rig, &workspace);
 }
 
+/// A connector directory the daemon cannot hash is refused at capture creation, before the
+/// first write. `connector_dir_sha256` refuses a symlink rather than following it, because
+/// following one would pin bytes living outside the directory. The daemon no longer reads the
+/// connectors directory at startup (OS-29), so this is where the refusal lands.
+#[tokio::test]
+async fn a_connector_directory_holding_a_symlink_is_refused_at_create_before_any_write() {
+    let connectors = copied(&[
+        ("codex-cli", "codex-cli"),
+        ("claude-code-cli", "claude-code-cli"),
+        ("hermes-cli", "hermes-cli"),
+    ]);
+    let files = connectors.path().join("claude-code-cli/files");
+    std::fs::create_dir_all(&files).unwrap();
+    std::os::unix::fs::symlink("project-settings.json", files.join("alias.json")).unwrap();
+    let root = connectors.path().to_path_buf();
+    let rig = Rig::start_with(move |config| config.connectors_dir = root).await;
+    let workspace = rig.workspace("refused-unhashable");
+    // `Rig::request` hashes the directory client-side, which the symlink refuses; name the
+    // shipped pin instead, as the CLI would for an untouched install.
+    let mut request = rig.request("hermes-cli", &workspace, RESERVE);
+    request.profile_id = "claude-code-cli".to_string();
+    request.connector_dir_sha256 =
+        goalcup_protocol::pins::pinned_connector_dir_sha256("claude-code-cli")
+            .unwrap()
+            .to_string();
+    let response = rig.create_request(&request).await;
+    assert_eq!(response.status(), 422, "{}", response.body());
+    let body: goalcup_protocol::control::ErrorBody = response.json().unwrap();
+    assert_eq!(
+        body.error.code, "preflight_failed",
+        "{}",
+        body.error.message
+    );
+    assert!(
+        body.error.message.contains("directory is invalid"),
+        "the refusal says the connector directory could not be loaded: {}",
+        body.error.message
+    );
+    no_writes(&rig, &workspace);
+}
+
 #[tokio::test]
 async fn a_symlinked_connector_refuses_without_echoing_its_out_of_tree_target_or_writing() {
     const MARKER: &str = "OUT_OF_TREE_MARKER_MUST_NOT_ECHO";
-    // Keep the legacy manifests mutually complete for the startup manifest parse (OS-29).
     let connectors = copied(&[
         ("codex-cli", "codex-cli"),
         ("claude-code-cli", "claude-code-cli"),

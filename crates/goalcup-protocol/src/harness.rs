@@ -7,9 +7,10 @@
 //! refusal table names. The trust tables it checks against are in [`crate::capture_policy`]; a
 //! manifest can only be checked against them, never widen them.
 //!
-//! "Schema 1" is this file's format; the V1 manifest is the legacy `manifest.toml`, whose V1
-//! path D48 removed. They are different files. The CLI and the daemon load a connector through
-//! [`load_dir`], the one loader all three callers share; S4a and S4b move them onto it.
+//! "Schema 1" is this file's format; the V1 manifest was the legacy `manifest.toml`, whose V1
+//! path D48 removed and whose last shipped copies OS-29 deleted. The loader refuses one. The
+//! CLI and the daemon load a connector through [`load_dir`], the one loader all three callers
+//! share.
 //!
 //! # Parsing
 //!
@@ -1875,57 +1876,6 @@ impl LoadedConnector {
     }
 }
 
-/// Read only the V1 identity and hook-template allowance from the exact `manifest.toml` bytes
-/// captured by the connector-directory walk. Nothing is reread from disk after the digest is
-/// accepted.
-fn legacy_manifest_allowance(bytes: &[u8]) -> Result<(String, Vec<String>), ProtocolError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| refuse("manifest.toml", "is not UTF-8"))?;
-    let table: toml::Table = text
-        .parse()
-        .map_err(|e| refuse("manifest.toml", format!("is malformed TOML: {e}")))?;
-    let id = table
-        .get("id")
-        .and_then(toml::Value::as_str)
-        .ok_or_else(|| refuse("manifest.toml.id", "must be a string"))?
-        .to_string();
-    let mut files = Vec::new();
-    if let Some(rows) = table.get("hook_install") {
-        let rows = rows
-            .as_array()
-            .ok_or_else(|| refuse("manifest.toml.hook_install", "must be an array of tables"))?;
-        for row in rows {
-            let template = row
-                .as_table()
-                .and_then(|row| row.get("template"))
-                .and_then(toml::Value::as_str)
-                .ok_or_else(|| {
-                    refuse(
-                        "manifest.toml.hook_install.template",
-                        "must be a relative UTF-8 path string",
-                    )
-                })?;
-            let path = Path::new(template);
-            let unsafe_component = path
-                .components()
-                .any(|component| !matches!(component, std::path::Component::Normal(_)));
-            let windows_absolute = template.as_bytes().get(1).is_some_and(|b| *b == b':');
-            if template.is_empty()
-                || path.is_absolute()
-                || windows_absolute
-                || template.contains('\\')
-                || unsafe_component
-            {
-                return Err(refuse(
-                    "manifest.toml.hook_install.template",
-                    format!("`{template}` must be a relative path with no traversal or backslash"),
-                ));
-            }
-            files.push(format!("files/{template}"));
-        }
-    }
-    Ok((id, files))
-}
-
 /// Load one connector directory: the one loader the CLI, the daemon and the conformance test
 /// share.
 ///
@@ -1945,10 +1895,9 @@ fn legacy_manifest_allowance(bytes: &[u8]) -> Result<(String, Vec<String>), Prot
 ///
 /// * It hashes the directory and parses the exact `harness.toml` bytes that went into the
 ///   hash, then validates for `origin`.
-/// * It refuses any regular file outside `harness.toml`, `manifest.toml` and the `files/**`
-///   entries `capture.home.seed` or the captured V1 manifest's `hook_install.template` names.
+/// * It refuses any regular file outside `harness.toml` and the `files/**` entries
+///   `capture.home.seed` names (a leftover V1 `manifest.toml` included, OS-29).
 /// * Every seed must exist under `files/` and weigh at most [`MAX_SEED_BYTES`].
-/// * Where both files exist, `manifest.toml` declares the same `id`.
 ///
 /// A symlink anywhere in the directory, or as the directory itself, is refused.
 pub fn load_dir(dir: &Path, origin: Origin) -> Result<LoadedConnector, ProtocolError> {
@@ -2014,9 +1963,8 @@ fn load_dir_resolving_origin_fallible(
     }
     // The seeds are read by the same walk that hashes them (M-6): everything under `files/` is
     // kept, and the loop below refuses any file that is not a named seed.
-    let mut listing = hash_connector_dir_listing(dir, |p| {
-        p == "harness.toml" || p == "manifest.toml" || p.starts_with("files/")
-    })?;
+    let mut listing =
+        hash_connector_dir_listing(dir, |p| p == "harness.toml" || p.starts_with("files/"))?;
     let harness_toml = listing.captured.remove("harness.toml").ok_or_else(|| {
         refuse(
             "connector_dir",
@@ -2032,26 +1980,6 @@ fn load_dir_resolving_origin_fallible(
     }
     manifest.validate(origin)?;
 
-    let legacy = listing
-        .captured
-        .get("manifest.toml")
-        .map(|bytes| legacy_manifest_allowance(bytes))
-        .transpose()?;
-    if let Some((legacy_id, _)) = &legacy
-        && legacy_id != &manifest.id
-    {
-        return Err(refuse(
-            "id",
-            format!(
-                "harness.toml declares `{}` and manifest.toml declares `{legacy_id}`: a \
-                 connector has one id",
-                manifest.id
-            ),
-        ));
-    }
-    let legacy_files = legacy
-        .as_ref()
-        .map_or(&[][..], |(_, files)| files.as_slice());
     let seeds: Vec<String> = manifest
         .capture
         .home
@@ -2060,10 +1988,7 @@ fn load_dir_resolving_origin_fallible(
         .map(|s| format!("files/{}", s.file))
         .collect();
     for (path, _) in &listing.files {
-        let allowed = path == "harness.toml"
-            || path == "manifest.toml"
-            || seeds.iter().any(|s| s == path)
-            || legacy_files.iter().any(|legacy| legacy == path);
+        let allowed = path == "harness.toml" || seeds.iter().any(|s| s == path);
         if !allowed {
             return Err(refuse(
                 "connector_dir",
@@ -2091,15 +2016,6 @@ fn load_dir_resolving_origin_fallible(
             Some(_) => {}
         }
     }
-    for legacy_file in legacy_files {
-        if !listing.files.iter().any(|(path, _)| path == legacy_file) {
-            return Err(refuse(
-                "manifest.toml.hook_install.template",
-                format!("`{legacy_file}` is declared but is not in the directory"),
-            ));
-        }
-    }
-    listing.captured.remove("manifest.toml");
     let seeds = manifest
         .capture
         .home

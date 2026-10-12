@@ -3,7 +3,7 @@
 //! one test-only input is `GOALCUP_TEST_UPSTREAM_ROOTS`; the controlled TLS endpoint,
 //! served from this process; and the controlled workload
 //! (`fixtures/m2-controlled-workload.py`) as the capture executable of a development connector
-//! written from `fixtures/m2-controlled-workload/manifest.toml`.
+//! written from `fixtures/m2-controlled-workload/harness.toml`.
 //!
 //! What the workload sent is known from its own report, outside the recorder; what was
 //! retained is read back from the chain file line by line. Every wait is bounded, and every

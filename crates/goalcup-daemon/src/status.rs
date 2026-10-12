@@ -33,7 +33,6 @@ use goalcup_protocol::control::{
     WorkspaceFinalizationStatusV1,
 };
 use goalcup_protocol::events::HealthState;
-use goalcup_protocol::manifest::ConnectorManifest;
 use goalcup_protocol::provenance::TerminationOutcomeV1;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::collections::{BTreeMap, BTreeSet};
@@ -48,11 +47,6 @@ use std::sync::{Mutex, OnceLock};
 /// struct: it is never serialised and never reaches the wire.
 pub struct StatusInputs<'a> {
     pub entry: &'a Entry,
-    /// `None` only for a capture-closed row rebuilt without a live runtime. Its terminal
-    /// status deliberately has no arming recipe, so reading an untrusted/current connector
-    /// manifest merely to acknowledge an already sealed trace would be both unnecessary
-    /// and an avoidable parser surface.
-    pub manifest: Option<&'a ConnectorManifest>,
     pub arming: GateState,
     pub health: HealthState,
     pub events_uploaded: u64,
@@ -356,7 +350,6 @@ pub fn compose_capture_closed(entry: &Entry, now: f64) -> Result<SignedStatus, D
     });
     let payload = build_payload(&StatusInputs {
         entry,
-        manifest: None,
         arming,
         health: entry.health,
         events_uploaded: entry.events_uploaded,

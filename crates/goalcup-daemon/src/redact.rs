@@ -12,7 +12,7 @@
 //! would publish a digest of the secret; persisting before redacting would store it.
 //!
 //! **No interpretation.** A pattern match is a byte comparison against a regular
-//! expression this file or the connector's manifest carries, never a judgement about what
+//! expression this file or the connector's `harness.toml` carries, never a judgement about what
 //! the matched text means. Whether a removed span was in fact a live credential is not a
 //! question this module asks or answers.
 //!
@@ -28,7 +28,8 @@
 //! could serve as a confirmation oracle for a low-entropy credential.
 
 use crate::DaemonError;
-use goalcup_protocol::manifest::{ConnectorManifest, RedactionPattern};
+use goalcup_protocol::harness::HarnessManifest;
+use goalcup_protocol::manifest::RedactionPattern;
 use goalcup_protocol::redaction::RedactionAuditSpan;
 use std::sync::OnceLock;
 
@@ -267,8 +268,27 @@ fn compile(kind: &str, re: &str) -> Option<Pattern> {
     }
 }
 
+/// A connector's `[redaction].extra_patterns`, in declaration order, as the patterns both
+/// redactors compile. Empty when `harness.toml` has no `[redaction]` table.
+pub fn extra_patterns_of(manifest: &HarnessManifest) -> Vec<RedactionPattern> {
+    manifest
+        .redaction
+        .as_ref()
+        .map(|redaction| {
+            redaction
+                .extra_patterns
+                .iter()
+                .map(|pattern| RedactionPattern {
+                    kind: pattern.kind.clone(),
+                    regex: pattern.regex.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The one compiler for a connector's `redaction.extra_patterns[]` entry, shared by
-/// [`Redactor::for_connector`] and [`stream::StreamRedactor::with_extra_patterns`]: a
+/// [`Redactor::for_patterns`] and [`stream::StreamRedactor::with_extra_patterns`]: a
 /// pattern one path refuses, the other refuses for the same reason. The error is that
 /// reason, without the connector's name.
 pub(crate) fn compile_extra(p: &RedactionPattern) -> Result<Pattern, String> {
@@ -302,7 +322,7 @@ pub struct Redacted {
     pub spans: Vec<RedactionAuditSpan>,
 }
 
-/// The shared set, plus whatever the connector's manifest adds.
+/// The shared set, plus whatever the connector's `harness.toml` adds.
 #[derive(Debug)]
 pub struct Redactor {
     /// The connector's own `redaction.extra_patterns[]`, applied after the shared set.
@@ -322,21 +342,25 @@ impl Redactor {
         Redactor { extra: Vec::new() }
     }
 
-    /// The shared set plus the connector's `redaction.extra_patterns[]` — how Codex's
-    /// `plan_type` and credit fields, measured fifteen times in a ten-minute session, and
-    /// Claude's billing header block are stripped at capture rather than at publication
-    /// (D26 strips them before publication, these before the upload).
+    /// The shared set plus a connector's `redaction.extra_patterns[]` (see
+    /// [`extra_patterns_of`]) — how Codex's `plan_type` and credit fields, measured fifteen
+    /// times in a ten-minute session, and Claude's billing header block are stripped at
+    /// capture rather than at publication (D26 strips them before publication, these before
+    /// the upload). `id` names the connector in the error.
+    ///
+    /// The capture path streams through [`stream::StreamRedactor`]; this whole-record form is
+    /// the independent oracle its tests compare against.
     ///
     /// A pattern that will not compile is an error and not a skip. A rule a participant
-    /// can read in the manifest but that never fires is a privacy hole with a paper trail
+    /// can read in `harness.toml` but that never fires is a privacy hole with a paper trail
     /// claiming otherwise.
-    pub fn for_connector(manifest: &ConnectorManifest) -> Result<Redactor, DaemonError> {
-        let mut extra = Vec::with_capacity(manifest.redaction.extra_patterns.len());
-        for p in &manifest.redaction.extra_patterns {
+    pub fn for_patterns(id: &str, patterns: &[RedactionPattern]) -> Result<Redactor, DaemonError> {
+        let mut extra = Vec::with_capacity(patterns.len());
+        for p in patterns {
             extra.push(compile_extra(p).map_err(|reason| {
                 DaemonError::Config(format!(
-                    "connector {} redaction pattern {}: {reason}",
-                    manifest.id, p.kind
+                    "connector {id} redaction pattern {}: {reason}",
+                    p.kind
                 ))
             })?);
         }

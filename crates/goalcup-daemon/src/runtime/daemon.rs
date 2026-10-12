@@ -2,12 +2,10 @@ use super::CycleCounters;
 use super::capture::{CaptureEntry, fresh_capture_id};
 use crate::config::DaemonConfig;
 use crate::ingest::{IngestClock, IngestConfig, IngestListener};
-use crate::manifests::TrustedManifests;
 use crate::registry::Registry;
 use crate::{DaemonError, now_unix};
 use goalcup_platform::tracecap::ArtifactRoot;
 use goalcup_protocol::control::{CycleErrors, EntrySummary, SignedStatus};
-use goalcup_protocol::manifest::ConnectorManifest;
 use goalcup_protocol::process::ProcessRegistration;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -41,10 +39,6 @@ pub(super) struct DaemonInner {
     /// Acquired once before the registry and retained for every later entry operation.
     /// `config.artifact_root` is display/validation data after this capability exists.
     pub(super) artifact_root: ArtifactRoot,
-    /// The shipped connector manifests, by declared id, loaded once at startup. Nothing
-    /// re-reads the connector directory while the daemon runs: the V1 `create_workspace`
-    /// route that did was removed by D48.
-    manifests: Arc<TrustedManifests>,
     /// entry id → its v5 local capture. Never an entry of `entries`.
     pub(super) captures: Mutex<BTreeMap<String, Arc<CaptureEntry>>>,
     /// The loopback capture ingest listener, bound once at start; [`Daemon::stop`] takes it
@@ -116,8 +110,9 @@ impl Daemon {
         self.has_capture_entry(entry_id)
     }
 
-    /// Open the registry, sweep what a crash left behind, load the shipped manifests, bind
-    /// the listeners and reopen every retained local capture.
+    /// Open the registry, sweep what a crash left behind, bind the listeners and reopen every
+    /// retained local capture. The connectors directory is read per capture, at workspace
+    /// creation, from each connector's `harness.toml`.
     pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
         config.validate()?;
         create_configured_root(&config.artifact_root, "artifact_root")?;
@@ -157,7 +152,6 @@ impl Daemon {
         // the cache directory trips over a document that verifies as nothing.
         sweep_stale_temp_files(&config.config_dir.join("cache"))?;
 
-        let manifests = Arc::new(TrustedManifests::load(&config.connectors_dir)?);
         let capture_clock = crate::ingest::monotonic_clock(fresh_capture_id());
         let ingest =
             IngestListener::bind_loopback(loopback(0), IngestConfig::new(capture_clock.clone()))
@@ -170,7 +164,6 @@ impl Daemon {
         let inner = Arc::new(DaemonInner {
             registry: registry.clone(),
             artifact_root,
-            manifests: manifests.clone(),
             captures: Mutex::new(BTreeMap::new()),
             ingest: Mutex::new(Some(ingest)),
             ingest_addr,
@@ -360,20 +353,6 @@ impl Daemon {
 
     pub fn config(&self) -> &DaemonConfig {
         &self.inner.config
-    }
-
-    /// The shipped connector manifests this daemon loaded, in id order.
-    pub fn manifests(&self) -> Vec<ConnectorManifest> {
-        self.loaded_manifests().values().cloned().collect()
-    }
-
-    /// The map as it stands, without touching the disk.
-    fn loaded_manifests(&self) -> Arc<BTreeMap<String, ConnectorManifest>> {
-        self.trusted_manifests().manifests_arc()
-    }
-
-    fn trusted_manifests(&self) -> Arc<TrustedManifests> {
-        self.inner.manifests.clone()
     }
 
     /// The signed status document of a local capture, as `goalcup status` reads it. `None`

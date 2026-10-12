@@ -348,20 +348,7 @@ impl Daemon {
         reserve_bytes: u64,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let config_home = isolated_config_home(config_home, every_loaded_real_dir)?;
-        let extra_patterns: Vec<RedactionPattern> = manifest
-            .redaction
-            .as_ref()
-            .map(|redaction| {
-                redaction
-                    .extra_patterns
-                    .iter()
-                    .map(|pattern| RedactionPattern {
-                        kind: pattern.kind.clone(),
-                        regex: pattern.regex.clone(),
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let extra_patterns = crate::redact::extra_patterns_of(manifest);
         StreamRedactor::with_extra_patterns(&extra_patterns)?;
         let artifact_dir = self
             .config()
@@ -920,7 +907,6 @@ fn sign_capture_status(
 ) -> Result<SignedStatus, DaemonError> {
     let mut payload = status::build_payload(&status::StatusInputs {
         entry,
-        manifest: None,
         arming: if entry.state == EntryState::Started {
             GateState::Started
         } else {

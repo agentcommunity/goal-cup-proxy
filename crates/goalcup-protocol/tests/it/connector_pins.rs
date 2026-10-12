@@ -17,33 +17,17 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The id a connector folder declares: its `harness.toml`'s, else its `manifest.toml`'s. Read
-/// as a generic TOML table so this test needs neither the V1 nor the schema-1 types.
+/// The id a connector folder declares in its `harness.toml`. Read as a generic TOML table so
+/// this test needs none of the schema-1 types.
 fn declared_id(dir: &Path) -> String {
-    let mut ids = Vec::new();
-    for file in ["harness.toml", "manifest.toml"] {
-        let path = dir.join(file);
-        if !path.is_file() {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
-        let table: toml::Table = text.parse().unwrap_or_else(|e| panic!("{path:?}: {e}"));
-        let id = table
-            .get("id")
-            .and_then(toml::Value::as_str)
-            .unwrap_or_else(|| panic!("{path:?} declares no top-level id"))
-            .to_string();
-        ids.push(id);
-    }
-    assert!(
-        !ids.is_empty(),
-        "{dir:?} holds neither harness.toml nor manifest.toml"
-    );
-    assert!(
-        ids.windows(2).all(|w| w[0] == w[1]),
-        "{dir:?}: harness.toml and manifest.toml declare different ids {ids:?}"
-    );
-    ids.remove(0)
+    let path = dir.join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    let table: toml::Table = text.parse().unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    table
+        .get("id")
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| panic!("{path:?} declares no top-level id"))
+        .to_string()
 }
 
 fn connector_folders() -> Vec<(String, PathBuf)> {

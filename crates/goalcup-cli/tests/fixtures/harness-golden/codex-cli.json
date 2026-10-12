@@ -597,15 +597,9 @@
     ]
   },
   "connector": {
-    "capture_only": false,
+    "capture_only": true,
     "family": "codex",
-    "files_dir": [
-      {
-        "bytes": 2021,
-        "name": "config.toml",
-        "sha256": "776f5a90326020276259241d576bebc89ad6366f57d96b4f1ecfd7b354367ba9"
-      }
-    ],
+    "files_dir": [],
     "id": "codex-cli",
     "launch_home_env": "CODEX_HOME",
     "launch_program": "codex",

@@ -15,9 +15,9 @@ Updated: 2026-10-11. Use these terms exactly; do not coin synonyms.
   `crates/goalcup-protocol/src/harness.rs` (`HarnessManifest`).
   A harness PR adds this file, any seeds and the regenerated directory pin, and no `.rs` file.
   D42, D43; [schema reference](CONNECTOR-SCHEMA.md).
-- **V1 manifest**: `connectors/<id>/manifest.toml`: the legacy, pre-schema file. Codex and Claude
-  retain one, still parsed at startup until OS-29 (the V1 path that used it was deleted by D48).
-  Hermes has none, and the daemon and CLI read the harness manifest.
+- **V1 manifest**: `connectors/<id>/manifest.toml`: the legacy, pre-schema file. No connector
+  ships one since OS-29 (the V1 path that used it was deleted by D48), and the loader refuses a
+  leftover one; the daemon and CLI read the harness manifest.
   `crates/goalcup-protocol/src/manifest.rs`. It is not the harness manifest.
 - **profile**: the `[capture]` table of the harness manifest (`CaptureSpec`): headless argv
   template, HOME/config-home mode, CA variable, provider hosts, executable pin. The V1 manifest

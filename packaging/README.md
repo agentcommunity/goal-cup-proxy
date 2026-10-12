@@ -49,8 +49,8 @@ stage/
   bundle.json
 ```
 
-Each staged connector entry is copied as a complete ordinary directory, including declared seeds
-and any retained V1 `manifest.toml`, and must have an ordinary schema-1
+Each staged connector entry is copied as a complete ordinary directory, including declared seeds,
+and must have an ordinary schema-1
 `harness.toml`. Its declared `id` must be a nonempty string exactly equal to the connector
 directory basename. Mismatched or duplicate IDs, malformed TOML, links, reparse points, and
 special files are refused. Connector

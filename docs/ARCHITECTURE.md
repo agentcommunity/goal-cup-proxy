@@ -38,7 +38,7 @@ and `the_shipped_binary_links_no_daemon` ([seal_scan.rs](../crates/goalcup-cli/t
 ### One feature set: the capture product
 
 The build is M2: D48 deleted the V1 execution path (behind `v1-compat` since D42); the `v0.5.0`
-tag keeps it. Startup still parses the retained Codex and Claude `manifest.toml` files until OS-29.
+tag keeps it. Connectors load from `harness.toml` alone; the V1 `manifest.toml` files went with OS-29.
 The daemon opens a registry written by either line and refuses only V1 rows that still owe work.
 
 ## 3. Roles

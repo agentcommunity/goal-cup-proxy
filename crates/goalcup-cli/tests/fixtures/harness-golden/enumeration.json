@@ -2,28 +2,22 @@
   "controlled_workload_fixture": "m2-controlled-workload",
   "rows": [
     {
-      "capture_only": false,
+      "capture_only": true,
       "dir": "claude-code-cli",
       "dir_digest_matches_its_pin": true,
-      "family": "claude-code",
+      "family": "claude",
       "has_capture_profile": true,
       "has_pinned_dir_digest": true,
-      "id": "claude-code-cli",
-      "manifest_files": [
-        "manifest.toml"
-      ]
+      "id": "claude-code-cli"
     },
     {
-      "capture_only": false,
+      "capture_only": true,
       "dir": "codex-cli",
       "dir_digest_matches_its_pin": true,
       "family": "codex",
       "has_capture_profile": true,
       "has_pinned_dir_digest": true,
-      "id": "codex-cli",
-      "manifest_files": [
-        "manifest.toml"
-      ]
+      "id": "codex-cli"
     },
     {
       "capture_only": true,
@@ -32,10 +26,7 @@
       "family": "hermes",
       "has_capture_profile": true,
       "has_pinned_dir_digest": true,
-      "id": "hermes-cli",
-      "manifest_files": [
-        "manifest.toml"
-      ]
+      "id": "hermes-cli"
     }
   ],
   "shipped": [

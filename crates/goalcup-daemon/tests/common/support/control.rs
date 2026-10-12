@@ -17,7 +17,7 @@
 
 use goalcup_daemon::config::DaemonConfig;
 use goalcup_daemon::runtime::Daemon;
-use goalcup_protocol::control::{CONTROL_API_VERSION, WorkspaceOpts};
+use goalcup_protocol::control::CONTROL_API_VERSION;
 use goalcup_protocol::process::ProcessHandle;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -429,37 +429,6 @@ pub async fn restart_empty_control_planting(
         _upload,
         _dir,
     })
-}
-
-/// The options `goalcup start` posts for `connector_id`, with the manifest digest read off
-/// the shipped file rather than made up: the daemon refuses a manifest that is not the one
-/// in the signed release, so a fixture carrying a plausible hex string would test
-/// the refusal instead of the route.
-///
-/// There is no connector-directory digest to send. The daemon hashes its own connectors
-/// directory and compares that against the pins itself, so the only way a test can move
-/// that comparison is to point the daemon at a different directory —
-/// [`super::write_config_with`] and [`shipped_connector_dir`] are what
-/// `control_api.rs` builds such a case out of.
-pub fn workspace_opts(connector_id: &str) -> WorkspaceOpts {
-    WorkspaceOpts {
-        connector_id: connector_id.to_string(),
-        manifest_sha256: shipped_manifest_sha256(connector_id),
-        workspace_parent: None,
-        attach: false,
-        deadline_hours: 168,
-        grant_token: "gt-a-grant-goalcup-auth-stored".to_string(),
-        arming_timeout_seconds: None,
-        // What the CLI's preflight measured. A test daemon runs no probe, so
-        // this is the value under test rather than something it discovers.
-        harness_version: Some("2.1.259".to_string()),
-    }
-}
-
-/// The digest of `connectors/<id>/manifest.toml` as it ships.
-pub fn shipped_manifest_sha256(connector_id: &str) -> String {
-    let path = shipped_connector_dir(connector_id).join("manifest.toml");
-    goalcup_daemon::workspace::sha256_hex(&std::fs::read(&path).expect("the shipped manifest"))
 }
 
 /// `from` copied to `to`, recursively, creating what it needs.

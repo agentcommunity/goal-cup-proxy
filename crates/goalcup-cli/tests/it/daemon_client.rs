@@ -1103,12 +1103,12 @@ fn pause_points_exist_only_under_test_support() {
     assert!(source.contains("pause_at(\"capture-finish-started\")"));
 }
 
-/// The only places this crate starts a process are the launch module's
-/// one command builder (which the ordinary spawn and the gate both run) and the version probe,
-/// which refuses a capture-only connector before it spawns. The child-only credential is set on
-/// the one builder, so a third site would be a third place a key could be forgotten or leaked.
+/// The only place this crate starts a process is the launch module's one command builder
+/// (which the ordinary spawn and the gate both run); the V1 version probe that was the second
+/// went with the V1 manifest (OS-29). The child-only credential is set on the one builder, so a
+/// second site would be a second place a key could be forgotten or leaked.
 #[test]
-fn the_only_command_sites_are_the_launch_builder_and_the_probe() {
+fn the_only_command_site_is_the_launch_builder() {
     fn sites(dir: &std::path::Path, found: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -1137,7 +1137,7 @@ fn the_only_command_sites_are_the_launch_builder_and_the_probe() {
     );
     found.sort();
     let files: Vec<&str> = found.iter().map(|f| f.split(':').next().unwrap()).collect();
-    assert_eq!(files, ["launch.rs", "probe.rs"], "{found:?}");
+    assert_eq!(files, ["launch.rs"], "{found:?}");
 }
 
 /// D40 (CONTRACTS.md, C6 capture spawn gate): every capture child is spawned only through the pre-exec gate, whatever

@@ -30,8 +30,8 @@
 //! # Connector `extra_patterns` (D39)
 //!
 //! [`StreamRedactor::with_extra_patterns`] adds a connector's `[redaction].extra_patterns`
-//! after the shared literals, in manifest order — the rule set and priorities
-//! `Redactor::for_connector` applies to a whole record — compiled by the same compiler
+//! after the shared literals, in declaration order — the rule set and priorities
+//! `Redactor::for_patterns` applies to a whole record — compiled by the same compiler
 //! (`super::compile_extra`). A connector regex is a participant-authored rule, and a hold
 //! can only be as sound as the recognizer that decides it, so each one needs its own
 //! bounded recognizer, derived by hand and reviewed at the hold bound like the shared ones.
@@ -47,7 +47,7 @@
 //!
 //! * While no stream's held bytes reach [`MAX_HELD_BYTES`], the retained bytes and audit
 //!   of a completed stream are exactly `Redactor::apply(whole stream)` — `Redactor::new()`,
-//!   or `Redactor::for_connector` with the same extra patterns — however the stream was
+//!   or `Redactor::for_patterns` with the same extra patterns — however the stream was
 //!   chunked: a secret split across pushes is one secret.
 //! * Output never depends on chunking. Segment boundaries and observation intervals may
 //!   differ; retained bytes and audit spans may not.
@@ -515,9 +515,9 @@ struct ExtraShape {
 }
 
 /// The streaming recognizer of every connector `extra_patterns` regex this module accepts,
-/// each pinned to its exact source (the regex string the manifest's TOML literal carries).
+/// each pinned to its exact source (the regex string the `harness.toml` literal carries).
 /// [`StreamRedactor::with_extra_patterns`] refuses any other regex; the unit test
-/// `extra_shapes_follow_the_shipped_manifests` fails when a shipped manifest's pattern and
+/// `extra_shapes_follow_the_shipped_harnesses` fails when a shipped `harness.toml` pattern and
 /// this list disagree, in either direction.
 ///
 /// Each recognizer's character predicates are checked against their regex classes over
@@ -530,7 +530,7 @@ struct ExtraShape {
 ///   space (never a `"`), or is a string interior whose quotes the match contains;
 /// * no rule has an assertion, so a match does not depend on bytes outside it.
 static EXTRA_SHAPES: [ExtraShape; 4] = [
-    // Codex `connectors/codex-cli/manifest.toml` [redaction], in its order.
+    // Codex `connectors/codex-cli/harness.toml` [redaction], in its order.
     ExtraShape {
         source: r#""rate_limits"\s*:\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})"#,
         span_group: 1,
@@ -555,7 +555,7 @@ static EXTRA_SHAPES: [ExtraShape; 4] = [
             value: FieldValue::Credits,
         },
     },
-    // Claude `connectors/claude-code-cli/manifest.toml` [redaction].
+    // Claude `connectors/claude-code-cli/harness.toml` [redaction].
     ExtraShape {
         source: r#"x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+"#,
         span_group: 0,
@@ -574,7 +574,7 @@ struct Extra {
 }
 
 /// The rule set one redactor streams: the shared literals (`lit` below [`SHAPES`]'s length,
-/// in `super::SHARED` order), then the connector's rules in manifest order. A `lit` is a
+/// in `super::SHARED` order), then the connector's rules in declaration order. A `lit` is a
 /// rule's position in this list, which is also its priority in `super::select`.
 #[derive(Default)]
 struct Policy {
@@ -2227,11 +2227,11 @@ impl StreamRedactor {
     }
 
     /// The shared rules plus a connector's `[redaction].extra_patterns`, applied after them
-    /// in manifest order: below the hold bound a completed stream's retained bytes and audit
-    /// are exactly `Redactor::for_connector(manifest).apply(whole stream)`, and past it the
+    /// in declaration order: below the hold bound a completed stream's retained bytes and audit
+    /// are exactly `Redactor::for_patterns(id, extra).apply(whole stream)`, and past it the
     /// connector's rules fail closed like the shared ones (see the module documentation).
     ///
-    /// Each pattern goes through the V1 compiler — a pattern `Redactor::for_connector`
+    /// Each pattern goes through the V1 compiler — a pattern `Redactor::for_patterns`
     /// refuses is refused here for the same reason — and then must be one this module can
     /// stream soundly: its regex must equal a pinned recognizer's source exactly, and its
     /// kind (copied into every marker and audit span) must be 1 to 64 ASCII letters, digits,
@@ -3012,32 +3012,33 @@ mod tests {
         }
     }
 
-    /// Every connector `extra_patterns` entry the repository ships, in connector order.
+    /// Every connector `extra_patterns` entry the repository ships, in connector order, read
+    /// from each `connectors/<id>/harness.toml`.
     fn shipped_extra_patterns() -> Vec<RedactionPattern> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
         let mut dirs: Vec<_> = std::fs::read_dir(&root)
             .expect("connectors directory")
             .map(|e| e.expect("entry").path())
-            .filter(|p| p.join("manifest.toml").is_file())
+            .filter(|p| p.join("harness.toml").is_file())
             .collect();
         dirs.sort();
         let mut out = Vec::new();
         for dir in dirs {
-            let text = std::fs::read_to_string(dir.join("manifest.toml")).expect("manifest");
-            let manifest = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(&text)
-                .expect("a shipped manifest parses");
-            out.extend(manifest.redaction.extra_patterns);
+            let text = std::fs::read_to_string(dir.join("harness.toml")).expect("harness.toml");
+            let manifest = goalcup_protocol::harness::HarnessManifest::from_toml_str(&text)
+                .expect("a shipped harness.toml parses");
+            out.extend(crate::redact::extra_patterns_of(&manifest));
         }
         out
     }
 
-    /// The pinned recognizers and the shipped manifests agree in both directions: every
-    /// shipped connector regex has a recognizer pinned to its exact source and span group,
-    /// and no recognizer is pinned to a regex nothing ships. Editing a manifest's pattern
+    /// The pinned recognizers and the shipped `harness.toml` files agree in both directions:
+    /// every shipped connector regex has a recognizer pinned to its exact source and span
+    /// group, and no recognizer is pinned to a regex nothing ships. Editing a shipped pattern
     /// fails here, and refuses streaming at construction, until its recognizer is
     /// re-derived and its oracles re-run.
     #[test]
-    fn extra_shapes_follow_the_shipped_manifests() {
+    fn extra_shapes_follow_the_shipped_harnesses() {
         let shipped = shipped_extra_patterns();
         assert_eq!(shipped.len(), EXTRA_SHAPES.len(), "{shipped:?}");
         for p in &shipped {
@@ -3054,7 +3055,7 @@ mod tests {
         for s in &EXTRA_SHAPES {
             assert!(
                 shipped.iter().any(|p| p.regex == s.source),
-                "a recognizer is pinned to a regex no manifest ships: {:?}",
+                "a recognizer is pinned to a regex no harness.toml ships: {:?}",
                 s.source
             );
         }

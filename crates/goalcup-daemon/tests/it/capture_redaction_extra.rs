@@ -1,7 +1,7 @@
 //! Connector `[redaction].extra_patterns` on the streaming redactor (D39).
 //!
 //! The independent oracle is the V1 whole-record redactor with the same extra patterns,
-//! `Redactor::for_connector(manifest).apply(whole stream)`. Below the hold bound the
+//! `Redactor::for_patterns(id, extra).apply(whole stream)`. Below the hold bound the
 //! stream must equal it at every chunking; past the bound the stream may redact more,
 //! never less; at a cut (interrupt, `End{Interrupted}`, `Gap`) it may not release a byte
 //! the oracle redacts in the delivered prefix, nor a held connector value. The patterns
@@ -11,11 +11,11 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use goalcup_daemon::DaemonError;
-use goalcup_daemon::redact::Redactor;
 use goalcup_daemon::redact::stream::{MAX_HELD_BYTES, StreamRedactor};
+use goalcup_daemon::redact::{Redactor, extra_patterns_of};
 use goalcup_protocol::capture::*;
 use goalcup_protocol::harness::HarnessManifest;
-use goalcup_protocol::manifest::{ConnectorManifest, RedactionPattern};
+use goalcup_protocol::manifest::RedactionPattern;
 use goalcup_protocol::redaction::RedactionAuditSpan;
 
 use crate::common::redaction;
@@ -29,24 +29,7 @@ fn harness_patterns(connector: &str) -> Vec<RedactionPattern> {
         .join(connector)
         .join("harness.toml");
     let harness = HarnessManifest::from_toml_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    harness
-        .redaction
-        .unwrap_or_default()
-        .extra_patterns
-        .into_iter()
-        .map(|pattern| RedactionPattern {
-            kind: pattern.kind,
-            regex: pattern.regex,
-        })
-        .collect()
-}
-
-/// The V1 whole-record implementation is retained only as an independent oracle. Its rule
-/// bytes are always replaced with schema-1 harness rules before it is used.
-fn legacy_oracle_manifest() -> ConnectorManifest {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../connectors/codex-cli/manifest.toml");
-    ConnectorManifest::from_toml_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    extra_patterns_of(&harness)
 }
 
 /// Codex's three rules, then Claude's billing header: one list, one order, used by both
@@ -64,11 +47,9 @@ const EXTRA_KINDS: [&str; 4] = [
     "anthropic_billing_header",
 ];
 
-/// `Redactor::for_connector` over a manifest carrying exactly [`shipped`].
+/// The whole-record redactor over exactly [`shipped`]: the independent oracle.
 fn oracle() -> Redactor {
-    let mut m = legacy_oracle_manifest();
-    m.redaction.extra_patterns = shipped();
-    Redactor::for_connector(&m).unwrap()
+    Redactor::for_patterns("shipped", &shipped()).unwrap()
 }
 
 fn legacy(input: &[u8]) -> (Vec<u8>, Vec<RedactionAuditSpan>) {

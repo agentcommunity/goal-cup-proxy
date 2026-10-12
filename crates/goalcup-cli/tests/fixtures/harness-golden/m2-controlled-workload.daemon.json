@@ -3,7 +3,7 @@
   "launched_with_a_native_scope": {
     "gaps_after_launch": [],
     "launch_allowed_tool_rule": null,
-    "launch_connector_dir_sha256": "0cb38ffa1c065bee43d20781d83106ddcdd0dcf4289638abb89caa1df86c5536",
+    "launch_connector_dir_sha256": "db2598abb62d67a9e4443b70a815f642312c87a8f27ed2f67708a74a56584aff",
     "launch_process_handoff_digest": null,
     "launch_profile_digest_is_sha256_of_harness_toml": true,
     "launch_profile_id": "m2-controlled-workload",
@@ -13,7 +13,7 @@
   "launched_without_a_native_scope": {
     "gaps_after_launch": [],
     "launch_allowed_tool_rule": null,
-    "launch_connector_dir_sha256": "0cb38ffa1c065bee43d20781d83106ddcdd0dcf4289638abb89caa1df86c5536",
+    "launch_connector_dir_sha256": "db2598abb62d67a9e4443b70a815f642312c87a8f27ed2f67708a74a56584aff",
     "launch_process_handoff_digest": null,
     "launch_profile_digest_is_sha256_of_harness_toml": true,
     "launch_profile_id": "m2-controlled-workload",
