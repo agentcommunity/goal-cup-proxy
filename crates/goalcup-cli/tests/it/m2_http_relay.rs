@@ -1399,8 +1399,11 @@ async fn malformed_accept_and_missing_token_do_not_hand_off() {
     .await;
 }
 
+/// A request whose Host names another host turns the connection opaque, which is a loss: it
+/// is never relayed as ordinary uncaptured traffic inside a connection admitted for this host.
+/// What came before it on the connection stays captured; what comes after is opaque too.
 #[tokio::test]
-async fn host_mismatch_disables_only_that_exchange() {
+async fn host_mismatch_turns_the_connection_opaque() {
     let paths = [("/v1/", true, None)];
     // An upgrade whose Host names another host is neither captured nor handed off.
     let sink = RecordingSink::new();
@@ -1411,12 +1414,13 @@ async fn host_mismatch_disables_only_that_exchange() {
         &response("HTTP/1.1 200 OK", &["Content-Length: 2"], b"[]"),
     )
     .await;
-    coalesced_upgrade(
-        &mut h,
-        &ws_request("/v1/realtime", "evil.example", "Upgrade"),
-        &ws_101(WS_ACCEPT),
-    )
-    .await;
+    // The relay goes opaque at the mismatched head, so the surplus is not held back for a 101.
+    let req = ws_request("/v1/realtime", "evil.example", "Upgrade");
+    write(&mut h.client, &[&req[..], CLIENT_SURPLUS].concat()).await;
+    assert_eq!(read_exact(&mut h.upstream, req.len()).await, req);
+    let resp = ws_101(WS_ACCEPT);
+    write(&mut h.upstream, &[&resp[..], UPSTREAM_SURPLUS].concat()).await;
+    assert_eq!(read_exact(&mut h.client, resp.len()).await, resp);
     assert_eq!(
         read_exact(&mut h.client, UPSTREAM_SURPLUS.len()).await,
         UPSTREAM_SURPLUS
@@ -1434,7 +1438,8 @@ async fn host_mismatch_disables_only_that_exchange() {
     );
     assert!(!has(&views, WIRE_REQUEST, 2) && !has(&views, WIRE_RESPONSE, 2));
 
-    // A mismatched ordinary request, then a matching one on the same connection.
+    // A mismatched ordinary request, then a matching one on the same connection: both are
+    // relayed, neither is captured, and the fallback is the connection's one loss.
     let sink = RecordingSink::new();
     let mut h = start(emitter_for(sink.clone()), policy(&paths));
     round_trip(
@@ -1455,11 +1460,20 @@ async fn host_mismatch_disables_only_that_exchange() {
         &response("HTTP/1.1 200 OK", &["Content-Length: 1"], b"2"),
     )
     .await;
-    close_both(h).await;
-    let views = streams(&sink.frames());
-    assert!(!has(&views, WIRE_REQUEST, 1) && !has(&views, WIRE_RESPONSE, 1));
-    assert_eq!(find(&views, WIRE_REQUEST, 2).bytes, b"right");
-    assert_eq!(find(&views, WIRE_RESPONSE, 2).bytes, b"2");
+    close_opaque(h).await;
+    let frames = sink.frames();
+    assert!(
+        streams(&frames).is_empty(),
+        "nothing after the mismatch is captured"
+    );
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|f| matches!(f.event, FrameEvent::Loss { .. }))
+            .count(),
+        1,
+        "the fallback is chained as one loss"
+    );
 }
 
 #[tokio::test]

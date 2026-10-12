@@ -9,7 +9,10 @@
 //! is never reserialized.
 //!
 //! **What is captured.** Only an exchange whose Host names the admitted host and whose
-//! query-free path the host profile selects ([`crate::proxy::metadata`]). Its request body is a
+//! query-free path the host profile selects ([`crate::proxy::metadata`]). A request whose Host
+//! (or absolute-form authority) names any other host turns the connection into an opaque relay,
+//! counted and chained as a loss: another host's traffic never rides uncaptured inside an
+//! admitted connection. Its request body is a
 //! `WireRequest` stream, its final response body a `WireResponse` stream; both carry the typed
 //! [`goalcup_protocol::capture::WireIdentity`] of this physical connection and a per-connection
 //! exchange counter (starting at one), with `message_index: None`. Informational (1xx) heads
@@ -263,21 +266,26 @@ async fn relay_requests(
         let Some((mut framing, codings)) = request.framing() else {
             return requests_opaque(shared, tx, src, dst).await;
         };
-        exchange += 1;
-        let at = src.at.clone();
-
         let target = metadata::safe_target(&request.target);
         let host_ok = target
             .as_ref()
             .is_some_and(|t| metadata::host_matches(shared.host, &request.fields.host, t));
-        let capture = select(shared, &request, target.as_ref(), host_ok, exchange);
+        // A request for another host inside a connection admitted for this one would be relayed
+        // uncaptured: the connection falls back to opaque, which is chained as a loss. So does a
+        // target with no safe form (an authority-form CONNECT, `OPTIONS *`), fail-safe.
+        if !host_ok {
+            return requests_opaque(shared, tx, src, dst).await;
+        }
+        exchange += 1;
+        let at = src.at.clone();
+        let capture = select(shared, &request, target.as_ref(), exchange);
         let request_ok = capture.as_ref().map(|c| c.request_ok.clone());
         let meta = capture
             .as_ref()
             .map(|c| c.meta.request(c.request_content_type.clone()));
         let (upgrade, decision) = if request.asks_upgrade() {
             let (sender, receiver) = oneshot::channel();
-            let websocket_key = host_ok.then(|| request.websocket_key()).flatten();
+            let websocket_key = request.websocket_key();
             let ask = UpgradeAsk {
                 websocket_key,
                 decision: sender,
@@ -355,10 +363,9 @@ fn select(
     shared: &Shared<'_>,
     request: &RequestHead,
     target: Option<&SafeTarget>,
-    host_ok: bool,
     exchange: u64,
 ) -> Option<ExchangeCapture> {
-    let target = target.filter(|_| host_ok && metadata::is_method(&request.method))?;
+    let target = target.filter(|_| metadata::is_method(&request.method))?;
     let path = metadata::select(shared.policy, &target.path)?;
     Some(ExchangeCapture {
         meta: ExchangeMeta {

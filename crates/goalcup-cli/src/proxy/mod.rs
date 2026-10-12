@@ -907,7 +907,8 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
     // never reaches the counters below.
     let admission = connect::admit_observed(tcp, &shared.admission, |reason| {
         // A tunnel is decided only once its upstream is connected; every reason but a host
-        // that is not approved is a provider host's.
+        // that is not approved is a provider host's, or (a `SniMismatch` to another authority)
+        // names one in its ClientHello.
         if reason != connect::TunnelReason::NotApproved {
             shared.outages.success(&metadata::capture_time().wall);
         }
@@ -1008,8 +1009,10 @@ fn record_upstream_reach(shared: &Shared, admission: &Admission) {
     }
 }
 
-/// An approved host's tunnel that was not intercepted, so was relayed uncaptured. An
-/// authentication host and a host that is not approved are opaque by design, not a loss.
+/// An approved host's traffic relayed uncaptured: a tunnel to an approved host that was not
+/// intercepted, or a tunnel to any other authority whose ClientHello names an approved host
+/// (`SniMismatch`). An authentication host and a host that is not approved are otherwise
+/// opaque by design, not a loss.
 fn is_fail_open(reason: connect::TunnelReason) -> bool {
     !matches!(
         reason,
