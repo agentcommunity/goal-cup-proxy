@@ -1125,7 +1125,6 @@
       ],
       "grace_seconds": 10,
       "has_process_start": true,
-      "home_seed": false,
       "native_binary": "codex",
       "native_pid_found": false,
       "pgid_is_pid": false,

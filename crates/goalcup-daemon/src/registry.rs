@@ -28,7 +28,7 @@ use goalcup_protocol::chain::Link;
 use goalcup_protocol::control::{EventStatus, WorkspaceFinalizationStatusV1};
 use goalcup_protocol::cursor::StoreCursor;
 use goalcup_protocol::envelope::{Envelope, EventBody};
-use goalcup_protocol::events::{HealthState, HomeSeedRecord, SeededKey};
+use goalcup_protocol::events::HealthState;
 use goalcup_protocol::export::{TraceDescriptorDoc, manifest_sha256};
 use goalcup_protocol::manifest::ForeignScanRoot;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
@@ -141,8 +141,7 @@ pub enum ChainPredecessorV1 {
 }
 
 /// The registered launch authority latched by the same transaction as finalization.
-/// `registration` uses the protocol's strict nested decoder; callers construct it from a
-/// seed-stripped handle so private home-seed values never enter this registry document.
+/// `registration` uses the protocol's strict nested decoder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AcceptedProcessHandoffV1 {
@@ -414,7 +413,7 @@ pub enum ProcessHandoffPhase {
     OpenInitial,
     /// The started resume has atomically cleared the predecessor and may prepare once.
     OpenResume,
-    /// The request identity and safe seed record are durable; the event must be reconciled
+    /// The request identity is durable; the event must be reconciled
     /// before this becomes `Registered`.
     Prepared,
     /// The one accepted process is the active health/termination target.
@@ -425,8 +424,6 @@ pub enum ProcessHandoffPhase {
     /// authoritative seal target until a later `Registered` replacement commits.
     ResumeCancelled,
 }
-
-const MAX_PREPARED_HOME_SEED_BYTES: usize = 64 * 1024;
 
 /// The three per-run secrets.
 ///
@@ -713,17 +710,12 @@ pub struct Entry {
     #[serde(default)]
     process_handoff_phase: ProcessHandoffPhase,
     /// Canonical, domain-separated digest of entry+generation+termination identity.  It
-    /// excludes home-seed evidence and is private registry state, not a receipt claim.
+    /// is private registry state, not a receipt claim.
     #[serde(default)]
     process_handoff_digest: Option<String>,
-    /// The termination identity awaiting/holding registration.  It is always stripped of
-    /// `home_seed`; copied account settings never live on the ordinary process handle.
+    /// The termination identity awaiting/holding registration.
     #[serde(default)]
     prepared_process_handle: Option<ProcessHandle>,
-    /// The bounded, already-sanitized seed record only a crash replay needs to append its
-    /// one event.  It is private registry state and has no auth-file bytes or paths.
-    #[serde(default)]
-    prepared_home_seed: Option<HomeSeedRecord>,
     /// The exact Prepared identity an idempotent cancellation returned.  Unlike the live
     /// handoff digest this is not termination authority; it only prevents a lost cancel
     /// response from turning a later caller's different digest into a success.
@@ -922,7 +914,6 @@ impl Entry {
             process_handoff_phase: ProcessHandoffPhase::InitialClosed,
             process_handoff_digest: None,
             prepared_process_handle: None,
-            prepared_home_seed: None,
             cancelled_process_handoff_digest: None,
             cleanup_termination_complete: false,
             last_process: None,
@@ -1033,74 +1024,6 @@ impl Entry {
 
 fn handoff_conflict(entry_id: &str, why: &str) -> DaemonError {
     DaemonError::Guard(format!("entry {entry_id} process handoff conflict: {why}"))
-}
-
-/// Accept only the already-public, bounded `HomeSeedRecord` shape for crash recovery.  This
-/// is defense in depth against a direct loopback caller: the actual CLI builds this record
-/// through `SeededKey::new`, but a registry row must not become a second place to retain an
-/// arbitrary copied auth file or an oversized secret-shaped value.
-fn safe_seed_for_recovery(
-    seed: Option<HomeSeedRecord>,
-) -> Result<Option<HomeSeedRecord>, DaemonError> {
-    let Some(mut seed) = seed else {
-        return Ok(None);
-    };
-    let bytes = serde_json::to_vec(&seed)?;
-    if bytes.len() > MAX_PREPARED_HOME_SEED_BYTES {
-        return Err(DaemonError::Refused(format!(
-            "home-seed recovery record is {} bytes, above the {MAX_PREPARED_HOME_SEED_BYTES}-byte bound",
-            bytes.len()
-        )));
-    }
-    let key_is_safe = |key: &SeededKey| {
-        key.value
-            .as_ref()
-            .map(|value| SeededKey::new(&key.name, value).value.as_ref() == Some(value))
-            .unwrap_or(true)
-    };
-    if !seed.keys.iter().all(key_is_safe) || !seed.written.iter().all(key_is_safe) {
-        return Err(DaemonError::Refused(
-            "home-seed recovery record carries an unsafe copied value shape".to_string(),
-        ));
-    }
-    if !safe_manifest_home_spelling(&seed.from) {
-        return Err(DaemonError::Refused(
-            "home-seed recovery record names a resolved or unsafe source path".to_string(),
-        ));
-    }
-    let safe_file_name = |name: &str| {
-        !name.is_empty()
-            && !name.starts_with('/')
-            && !name.split('/').any(|segment| segment == "..")
-            && !name.contains('{')
-            && !name.contains('}')
-    };
-    if !seed.files.iter().all(|file| safe_file_name(&file.name))
-        || !seed.files_kept.iter().all(|file| safe_file_name(file))
-        || !seed.files_missing.iter().all(|file| safe_file_name(file))
-    {
-        return Err(DaemonError::Refused(
-            "home-seed recovery record names an unsafe copied file path".to_string(),
-        ));
-    }
-    // Only the daemon writes correlation markers.  A caller-provided marker could make an
-    // untrusted body impersonate a chain event after a crash.
-    seed.handoff_generation = None;
-    seed.handoff_request_digest = None;
-    Ok(Some(seed))
-}
-
-/// `HomeSeedRecord::from` is public evidence, so it has the connector manifest's stable
-/// `{home}/…` spelling rather than the participant's resolved account path.  The manifest
-/// validates the same shape before the CLI can construct a normal record; repeat the
-/// narrow check at the durable direct-caller boundary, where the registry has no manifest
-/// to consult.
-fn safe_manifest_home_spelling(path: &str) -> bool {
-    path.starts_with("{home}/")
-        && !path["{home}/".len()..].is_empty()
-        && !path.split('/').any(|segment| segment == "..")
-        && !path["{home}/".len()..].contains('{')
-        && !path["{home}/".len()..].contains('}')
 }
 
 /// The entries, on disk, in their own redb database.
@@ -1238,7 +1161,6 @@ impl Registry {
                     to_write.process_handoff_phase = stored.process_handoff_phase;
                     to_write.process_handoff_digest = stored.process_handoff_digest;
                     to_write.prepared_process_handle = stored.prepared_process_handle;
-                    to_write.prepared_home_seed = stored.prepared_home_seed;
                     to_write.cancelled_process_handoff_digest =
                         stored.cancelled_process_handoff_digest;
                     to_write.sealing_from_state = stored.sealing_from_state;
@@ -1372,7 +1294,6 @@ impl Registry {
             let process_handoff_phase = e.process_handoff_phase;
             let process_handoff_digest = e.process_handoff_digest.clone();
             let prepared_process_handle = e.prepared_process_handle.clone();
-            let prepared_home_seed = e.prepared_home_seed.clone();
             let cancelled_process_handoff_digest = e.cancelled_process_handoff_digest.clone();
             let sealing_from_state = e.sealing_from_state;
             let sealing_intent = e.sealing_intent.clone();
@@ -1390,7 +1311,6 @@ impl Registry {
             e.process_handoff_phase = process_handoff_phase;
             e.process_handoff_digest = process_handoff_digest;
             e.prepared_process_handle = prepared_process_handle;
-            e.prepared_home_seed = prepared_home_seed;
             e.cancelled_process_handoff_digest = cancelled_process_handoff_digest;
             e.sealing_from_state = sealing_from_state;
             e.sealing_intent = sealing_intent;
@@ -1432,16 +1352,14 @@ impl Registry {
     }
 
     /// Persist the accepted request identity before the trace event.  The retry-safe record
-    /// holds only a stripped termination handle and a bounded public seed description; it
-    /// never retains copied authentication-file bytes, a resolved home path, or a digest of
-    /// seed contents.
+    /// holds only the termination handle.
     pub fn prepare_process_handoff(
         &self,
         entry_id: &str,
         registration: ProcessRegistration,
     ) -> Result<Entry, DaemonError> {
         let digest = registration.canonical_handle_digest(entry_id);
-        let handle = registration.stripped_handle();
+        let handle = registration.handle.clone();
         self.modify_handoff(entry_id, "prepare_process_handoff", |entry| {
             // A successful registration is a pure acknowledgement on every retry, even if
             // a concurrent seal has made the row terminal.  It must never re-open or mutate.
@@ -1474,15 +1392,9 @@ impl Registry {
             }
             match entry.process_handoff_phase {
                 ProcessHandoffPhase::OpenInitial | ProcessHandoffPhase::OpenResume => {
-                    // Only a new Open -> Prepared transition inspects seed material.  An
-                    // exact replay's original safe seed already won; an alternate or even
-                    // malformed seed must not turn that idempotent acknowledgement into a
-                    // new failure or overwrite recovery evidence.
-                    let seed = safe_seed_for_recovery(registration.handle.home_seed.clone())?;
                     entry.process_handoff_phase = ProcessHandoffPhase::Prepared;
                     entry.process_handoff_digest = Some(digest.clone());
                     entry.prepared_process_handle = Some(handle.clone());
-                    entry.prepared_home_seed = seed.clone();
                     entry.cancelled_process_handoff_digest = None;
                     Ok(())
                 }
@@ -1614,14 +1526,12 @@ impl Registry {
             entry.last_process = Some(handle);
             entry.process_handoff_phase = ProcessHandoffPhase::Registered;
             entry.prepared_process_handle = None;
-            entry.prepared_home_seed = None;
             Ok(())
         })
     }
 
-    /// Clone the exact handle a runtime is about to reconcile.  The runtime validates it
-    /// before writing a HomeSeeded marker; the registry validates again in the promotion
-    /// transaction so neither replay nor restart can install stale authority.
+    /// Clone the exact handle a runtime is about to reconcile. The registry validates it again
+    /// in the promotion transaction so neither replay nor restart can install stale authority.
     pub(crate) fn prepared_process_handle(
         &self,
         entry_id: &str,

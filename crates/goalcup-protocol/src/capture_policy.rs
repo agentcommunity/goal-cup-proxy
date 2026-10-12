@@ -16,8 +16,7 @@
 //!   reviewer's re-derivation of the executable's `sha256` and the reviewer checklist
 //!   (`docs/DECISIONS.md` D43, ruling 6).
 //!
-//! Recorded V1 manifests retain parser-only compatibility in `manifest.rs`; they do not own
-//! capture policy. The harness manifest's loader and validator (schema 1) are in `harness.rs`.
+//! The harness manifest's loader and validator (schema 1) are in `harness.rs`.
 
 use std::collections::BTreeSet;
 

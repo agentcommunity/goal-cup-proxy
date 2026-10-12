@@ -69,6 +69,5 @@ pub fn handle_for_now(pid: u32) -> ProcessHandle {
         program: "sleep".to_string(),
         argv: vec!["/bin/sleep".to_string(), "300".to_string()],
         env_keys: Vec::new(),
-        home_seed: None,
     }
 }

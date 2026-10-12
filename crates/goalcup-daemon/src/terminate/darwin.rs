@@ -436,7 +436,6 @@ mod tests {
             program: "codex".to_string(),
             argv: argv.iter().map(|a| a.to_string()).collect(),
             env_keys: Vec::new(),
-            home_seed: None,
         }
     }
 

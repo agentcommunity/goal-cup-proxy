@@ -60,9 +60,6 @@ pub struct EntryRecord {
     /// The pid of the `ProcessHandle` this CLI registered — written after `register_process`
     /// by `goalcup start`. `None` until something has been spawned.
     pub last_pid: Option<u32>,
-    /// The daemon's own list, kept so `goalcup seal` can build the exclusion set after
-    /// `start` has exited.
-    pub workspace_relative: Vec<String>,
     pub status_url: String,
     /// The daemon's stamp on `WorkspaceInfo.created_at`, carried across unchanged. This CLI
     /// reads no clock for it: two records are ordered by the one clock that made them.

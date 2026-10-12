@@ -421,7 +421,8 @@ stream. Manual resume selects the stored entry format and never redispatches the
 There is no `continue`/stdin relay command in this release.
 
 T15 owns additive M2 control request/response types and routes, plus atomic CLI client/mock
-methods; T16 consumes the exact merged API. Existing WorkspaceOpts/WorkspaceInfo stay unchanged.
+methods; T16 consumes the exact merged API. Existing WorkspaceInfo stays unchanged (control API v6
+later removed `WorkspaceOpts` and the V1 hook-path fields).
 The M2 create path selects v5 before baseline construction. It does not depend on T14's new
 profile fields; T16 supplies measured launch/profile settings when composing those two owners.
 T15 owns the minimal C4 snapshot/status projection before signing in live, sealed and restart
@@ -1397,3 +1398,9 @@ this section is a reading of it and the function wins.
   `connector_dir_sha256`. The daemon compares it with the authoritative connector it just loaded,
   before capture allocation or writes; mismatch is path-free `422 preflight_failed`. The response
   does not echo it. This control-only bump does not change the frozen v5 chain (D46).
+- **Control API v6.** Removes the retired V1 hook-path shapes: `WorkspaceInfo`'s `server_port`,
+  `installed_files` and `workspace_relative`; the always-constant `StatusPayload` fields
+  `arming_recipe`, `posts_dropped`, `posts_dropped_after_seal` and `pins_dropped`; the
+  `arming_timeout` and `unsupported_connector` error codes (an unknown connector is now
+  `422 preflight_failed`); and `ProcessHandle.home_seed`, which a v6 `ProcessRegistration`
+  refuses as an unknown field. It does not change the frozen v5 chain or its export.

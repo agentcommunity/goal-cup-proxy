@@ -329,9 +329,7 @@ fn every_control_error_variant_maps_to_exactly_one_http_status() {
         ("not_found", 404),
         ("conflict", 409),
         ("unauthorized", 401),
-        ("arming_timeout", 408),
         ("preflight_failed", 422),
-        ("unsupported_connector", 422),
         ("internal", 500),
         ("malformed", 400),
         // `unsupported` is 426 and nothing else is. The version gate is the only
@@ -456,14 +454,12 @@ fn the_daemon_s_own_errors_become_the_contract_s_codes() {
     // And the codes the CLI can rebuild round-trip through `from_code`. `unreachable`,
     // `internal`, `malformed` and `unsupported` are not in that set — the protocol's
     // `from_code` collapses them to `Internal` by design, "never a silent success" — so
-    // the round trip is asserted over the six it does name.
+    // the round trip is asserted over the five it does name.
     for code in [
         "not_found",
         "conflict",
         "unauthorized",
-        "arming_timeout",
         "preflight_failed",
-        "unsupported_connector",
         "busy",
     ] {
         assert_eq!(protocol::ControlError::from_code(code, "m").code(), code);

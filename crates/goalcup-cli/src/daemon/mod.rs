@@ -50,8 +50,8 @@
 //!
 //! It is the one secret this struct holds. It is never interpolated into an error, never
 //! printed, and [`HttpDaemonClient`]'s `Debug` redacts it — the same treatment
-//! `config::ControlFile` and `control::WorkspaceOpts` give the
-//! credentials they carry. `tests/it/daemon_client.rs` greps every refusal this client raises
+//! `config::ControlFile` gives the
+//! credential it carries. `tests/it/daemon_client.rs` greps every refusal this client raises
 //! for it.
 
 #[cfg(feature = "test-support")]

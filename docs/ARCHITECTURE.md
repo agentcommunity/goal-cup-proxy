@@ -53,7 +53,7 @@ The daemon opens a registry written by either line and refuses only V1 rows that
 
 `goalcup` has five commands (`start --goal-file`, `status`, `entries`, `seal`, `doctor`); a v5
 entry cannot resume ([C5 amendments][cont]).
-Control API v5 requires the version on mutating requests; create binds the directory digest.
+Control API v6 requires the version on mutating requests; create binds the directory digest.
 
 The open protocol-hint grammar validates metadata only. `DecoderRegistry::builtin()` and each
 decoder's `accepts` decide which retained formats are decoded. The wire decoders share framing,

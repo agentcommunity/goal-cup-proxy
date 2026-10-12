@@ -205,13 +205,13 @@ async fn a_nonselected_harness_real_home_refuses_before_any_write() {
 }
 
 #[tokio::test]
-async fn an_unknown_capture_profile_is_unsupported_not_missing_and_writes_nothing() {
+async fn an_unknown_capture_profile_is_a_preflight_refusal_not_missing_and_writes_nothing() {
     let rig = Rig::start().await;
     let workspace = rig.workspace("unsupported-profile");
     let response = rig.create("cursor-cli", &workspace, RESERVE).await;
     assert_eq!(response.status(), 422, "{}", response.body());
     let body: goalcup_protocol::control::ErrorBody = response.json().unwrap();
-    assert_eq!(body.error.code, "unsupported_connector");
+    assert_eq!(body.error.code, "preflight_failed");
     no_writes(&rig, &workspace);
 }
 

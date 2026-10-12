@@ -136,9 +136,6 @@ impl MockDaemonClient {
             status_cache_path: artifact_root.join("status.json").display().to_string(),
             status_line_path: artifact_root.join("status-line.txt").display().to_string(),
             session_id: "session-mock-0001".to_string(),
-            server_port: None,
-            installed_files: Vec::new(),
-            workspace_relative: Vec::new(),
             created_at: NOW.to_string(),
         };
         let payload = StatusPayload {
@@ -156,7 +153,6 @@ impl MockDaemonClient {
             last_sync_at: Some(NOW.to_string()),
             events_uploaded: 0,
             events_pending: 0,
-            arming_recipe: None,
             // The daemon's own plain words for `Online` (`goalcup_daemon::status::
             // plain_words`), so a command test asserts the CLI prints the daemon's
             // vocabulary rather than a second one of its own.
@@ -171,9 +167,6 @@ impl MockDaemonClient {
             },
             event_status_source: control::EventStatusSource::Fallback,
             cycles: control::CycleErrors::default(),
-            posts_dropped: 0,
-            posts_dropped_after_seal: 0,
-            pins_dropped: 0,
             polls_capped: 0,
             cursor_restore_failures: 0,
             skipped_replayed: 0,
@@ -352,9 +345,6 @@ fn unreachable_info() -> WorkspaceInfo {
         status_cache_path: said.clone(),
         status_line_path: said.clone(),
         session_id: said.clone(),
-        server_port: None,
-        installed_files: Vec::new(),
-        workspace_relative: Vec::new(),
         created_at: said,
     }
 }
@@ -403,14 +393,6 @@ impl MockDaemonClient {
         let version = version.map(str::to_string);
         self.write(|state| {
             state.status.payload.harness_version = version.clone();
-            resign(state);
-        });
-    }
-
-    /// Hook posts that never reached this entry's chain.
-    pub fn set_posts_dropped(&self, n: u64) {
-        self.write(|state| {
-            state.status.payload.posts_dropped = n;
             resign(state);
         });
     }
@@ -522,12 +504,8 @@ fn clone_control_error(e: &ControlError) -> ControlError {
         ControlError::NotFound(s) => ControlError::NotFound(s.clone()),
         ControlError::Conflict(s) => ControlError::Conflict(s.clone()),
         ControlError::Unauthorized(s) => ControlError::Unauthorized(s.clone()),
-        ControlError::UnsupportedConnector(s) => ControlError::UnsupportedConnector(s.clone()),
         ControlError::PreflightFailed(s) => ControlError::PreflightFailed(s.clone()),
         ControlError::Busy(s) => ControlError::Busy(s.clone()),
-        ControlError::ArmingTimeout { detail } => ControlError::ArmingTimeout {
-            detail: detail.clone(),
-        },
         ControlError::Internal(s) => ControlError::Internal(s.clone()),
         ControlError::Malformed(s) => ControlError::Malformed(s.clone()),
         ControlError::Unsupported(s) => ControlError::Unsupported(s.clone()),

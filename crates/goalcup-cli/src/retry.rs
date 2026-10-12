@@ -703,11 +703,7 @@ mod schedule_tests {
                 ControlError::NotFound("entry absent".into()),
                 ControlError::Conflict("entry changed".into()),
                 ControlError::Unauthorized("wrong bearer".into()),
-                ControlError::ArmingTimeout {
-                    detail: "the server refused the gate".into(),
-                },
                 ControlError::PreflightFailed("server gate failed".into()),
-                ControlError::UnsupportedConnector("unknown harness".into()),
                 ControlError::Malformed("bad reply".into()),
                 ControlError::Internal("daemon failed".into()),
                 ControlError::Unsupported("wrong platform".into()),
