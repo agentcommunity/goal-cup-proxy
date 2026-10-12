@@ -16,8 +16,8 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
    older than 2 hours; it retries until the connection returns.
 3. **One admin page.** Entries, first prompt, last upload, outage flags. Researchers read R2
    directly.
-4. **Signed macOS installer.** Signed, replacing the unsigned private `m2-pilot`
-   bundle ([packaging/README.md](packaging/README.md)).
+4. **Signed macOS binaries.** Sign and notarize the Homebrew release tarballs
+   ([packaging/README.md](packaging/README.md)), which ship unsigned.
 5. **168-hour dry run** with two or three friendly teams.
 
 ## Parked

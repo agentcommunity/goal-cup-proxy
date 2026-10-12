@@ -178,9 +178,8 @@ residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`): [checklist](C
 - Discovery checks `$GOALCUP_CONNECTORS_DIR`, installed `share/goalcup/connectors`, then the source
   tree. It validates every immediate child with a regular `harness.toml` before selecting by id.
 - The source tree and OSS cut contain exactly three pinned directories: `codex-cli`,
-  `claude-code-cli`, `hermes-cli`. The private `m2-pilot` package allowlist contains only the first
-  two and stages each selected directory whole, including seeds and its retained V1 manifest. A
-  source pin is integrity metadata, not evidence that the connector is packaged.
+  `claude-code-cli`, `hermes-cli`. A release tarball carries all three as committed, including
+  seeds, under `share/goalcup/connectors` ([packaging/README.md](../packaging/README.md)).
 - Every run gets a fresh `HOME`. Codex and Claude use shared isolated config homes (Claude adds the
   checked Keychains link); Hermes uses a seeded per-run `HERMES_HOME`, child-only
   `DEEPSEEK_API_KEY`, replace-mode `HERMES_CA_BUNDLE`, deferred identity and a fail-closed key scan.

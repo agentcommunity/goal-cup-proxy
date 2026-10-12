@@ -19,14 +19,13 @@ install, one capture run) is in [../README.md](../README.md).
 ## Current M2 operating boundary
 
 v0.5.0 is published as source only
-(cleanup record). No downloadable binary,
-installer, staged bundle, registry publication, signature, notarization or qualification exists.
-Built binaries print `0.1.0`: the package version is independent of source release tags. The source
+(cleanup record). Binary releases are built by `.github/workflows/release.yml` from a `v*` tag
+that equals the workspace version, and installed with Homebrew
+([packaging/README.md](../packaging/README.md)); they are unsigned and unnotarized, and no
+qualification exists. Until a version is tagged, built binaries print `0.1.0`. The source
 contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
-`hermes-cli`. The separate private macOS packaging allowlist (`m2-pilot` in
-[packaging/README.md](../packaging/README.md)) stages only Codex and Claude, copying each selected
-directory whole, including any seeds. A source pin is not
-evidence of package inclusion. macOS is the only measured platform. Linux builds, but a
+`hermes-cli`, and a release tarball carries all three, as committed, under
+`share/goalcup/connectors`. macOS is the only measured platform. Linux builds, but a
 `goalcup start` capture is refused there: the chain's disk reservation is implemented only for
 macOS APFS.
 
