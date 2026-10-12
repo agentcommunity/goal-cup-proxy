@@ -2,7 +2,15 @@
 
 Can a coding agent add a connector end to end from the docs alone? A record of three trial runs
 of [the skill](../../skills/adding-a-capture-harness/SKILL.md), for maintainers who change the
-onboarding docs. Updated: 2026-10-11.
+onboarding docs. Updated: 2026-10-12.
+
+> **Since this trial (2026-10-12).** The Linux key-loader fix it calls pending landed in PR #6
+> (`b3277f1`). A post-merge review ran `sh scripts/check-connector.sh toy-cli` on macOS against
+> `main` and got `toy-cli: 6 passed, 0 failed, 0 skipped` (local, no committed record). A kit
+> case may now name `credential_env`
+> ([amp-core-prep §3](amp-core-prep.md#3-teach-the-generic-kit-a-credential),
+> [decision table](../../skills/adding-a-capture-harness/decision-table.md) row 3). The tree
+> now sets `rust-version = "1.99"`, so cargo 1.97.0 no longer builds it.
 
 ## Setup
 
@@ -74,15 +82,16 @@ Trial 1 found 1 to 9, trial 2 found 10 and 11, and trial 3 found none.
 
 ## Still needs a maintainer or macOS
 
-- The harness kit never ran on the toy case. `harness_contract_kit` is macOS-only; the Linux
-  smoke above is not the kit. The macOS expected line `6 passed, 0 failed, 0 skipped` is
-  unverified.
+- The harness kit never ran on the toy case in this trial. `harness_contract_kit` is
+  macOS-only; the Linux smoke above is not the kit. The macOS line `6 passed, 0 failed,
+  0 skipped` was later observed by a reviewer (see the note at the top).
 - The daemon's live goldens (`<id>.daemon.json`, `native-stream-labels.json`) are written only
   on macOS. A Linux contributor's PR lacks them, so a maintainer regenerates them.
 - The macOS-only `goalcup-cli` and `goalcup-daemon` suites did not run with a fifth connector.
   Whether any of them assumes exactly three is UNKNOWN.
-- Until the pending Linux loader-golden fix (BSD `stat` in `scripts/with-deepseek-key.sh`)
-  lands, Linux shows the `loader-script.json` golden failure on every tree.
+- During the trial, Linux showed the `loader-script.json` golden failure on every tree. The
+  loader fix (BSD `stat` in `scripts/with-deepseek-key.sh`) is in PR #6 (`b3277f1`).
 - The `*.native.json` files under `harness-golden/` are written and read by no test.
-- A credential connector cannot have a complete kit case, because the kit injects no key
-  (decision table, row 3).
+- At the time of the trial, a credential connector could not have a complete kit case,
+  because the kit injected no key. A kit case now names `credential_env`
+  (`synthetic-keyed-stderr`, `synthetic-keyed-stdout-json`).

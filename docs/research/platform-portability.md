@@ -2,7 +2,7 @@
 
 What does Goal Cup assume about macOS and Unix, and what is the smallest change at each seam so
 Linux and Windows can be added later without a rewrite? For maintainers planning V1.1 platform
-work and reviewing new harness code. Updated: 2026-10-11.
+work and reviewing new harness code. Updated: 2026-10-12.
 
 This is a design note, not a plan of record and not evidence. Nothing here is qualified or
 measured unless it links a record. Platform scope is set by [D42](../DECISIONS.md) (macOS
@@ -224,7 +224,7 @@ portable interface (existing or missing), the smallest next step, and the risk t
   - a per-target map, for example `[capture.executable.sha256]` keyed by
     `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` and so on. This is a harness-contract
     schema change: an older `goalcup` refuses the new key (`deny_unknown_fields`, `NEWER_SENTENCE`),
-    so it is `schema_version = 2` once v0.5.0 is tagged;
+    so it is `schema_version = 2`: the tagged v0.5.0 reads schema 1;
   - or one connector directory per target (`claude-code-cli` and `claude-code-cli-linux`). No
     schema change, but duplicated recipes and pins.
 - **Smallest next step.** Decide the shape now (see "Decide now"), before Amp's connector is
@@ -278,11 +278,11 @@ portable interface (existing or missing), the smallest next step, and the risk t
   `goalcup-daemon/tests/fixtures`.
 - **Assumption.** A POSIX `sh` and Unix tools; some scripts are macOS-only by design
   (`packaging/macos`, `uname -s` checks, BSD `stat -f '%u'` in `uninstall-assisted.sh`).
-- **Linux.** Fixed in the commit before this note: `with-deepseek-key.sh` read the mode with
-  BSD `stat -f %Lp` and its `||` fallback captured GNU's file-system dump ahead of the mode, so
-  every 0600 file was refused. It now accepts a form only when it succeeds and prints octal digits
-  alone. `loader_script.rs`'s positive control assumed `/bin/sh` is bash (true on macOS); on a
-  dash `/bin/sh` it now uses `/bin/bash`. `pin-manifests.sh` already handles `shasum` and
+- **Linux.** `with-deepseek-key.sh` reads the file's mode by absolute path with BSD
+  `stat -f %Lp`, then GNU `stat -c %a`, and accepts a form only when it succeeds and prints
+  octal digits alone. `loader_script.rs` runs copies of the loader against a fake GNU `stat`,
+  so that selection is tested on every host, and its positive control uses `/bin/sh` where it is
+  bash (macOS) and `/bin/bash` on a dash `/bin/sh`. `pin-manifests.sh` handles `shasum` and
   `sha256sum`.
 - **Windows.** None of these run without a POSIX shell. A PowerShell copy of each would be a
   second implementation to keep in step.

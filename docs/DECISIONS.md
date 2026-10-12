@@ -1226,9 +1226,9 @@ connector, and the owner rules separately on Amp's on-disk key fingerprint
 **Reconsider when** the owner's live probe shows a token outside the shared grammar, or Amp
 renames the variable.
 
-**Evidence.** `docs/qualification/m2-amp-readiness.md` (branch `claude/v060-amp-readiness`;
-static: Amp's help text names `AMP_API_KEY` as an access token that takes precedence over stored
-credentials); [amp-core-prep](research/amp-core-prep.md), change 2.
+**Evidence.** `docs/qualification/m2-amp-readiness.md` (branch `claude/v060-amp-readiness`,
+merged as PR #3, `8ee9eb3`; static: Amp's help text names `AMP_API_KEY` as an access token that
+takes precedence over stored credentials); [amp-core-prep](research/amp-core-prep.md), change 2.
 
 ---
 
