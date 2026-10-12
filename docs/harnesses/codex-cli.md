@@ -87,7 +87,7 @@ Compressed rollouts: vendor docs (research file, from Codex source) say a backgr
 - **Shared home.** All runs share one isolated `CODEX_HOME` (D39), so runs must be serialized and the directory holds older runs' sessions.
 - **Account state on OpenAI's side.** Plugins, apps, connectors and memory summary arrive from the account and appear in the developer message (measured); rate-limit and plan data ride on every turn.
 - **Read-everywhere sandbox.** The `workspace-write` profile still grants filesystem read access (measured); the per-run `HOME` stops automatic loading of `~/.agents/skills` and shell startup files, not deliberate reads.
-- **Machine-wide or managed settings.** `requirements.toml` is allowed inside `CODEX_HOME` (code: V1 manifest allowlist). A system-wide managed config location: unknown.
+- **Machine-wide or managed settings.** `requirements.toml` inside `CODEX_HOME` was on the old V1 connector's allowlist (git history before `e4993a2`); the current connector does not seed it. A system-wide managed config location: unknown.
 - **A second Codex.** Another `CODEX_HOME`, an older global Homebrew copy, or the Codex desktop app can run beside the tracked one; the app shares `CODEX_HOME` (vendor docs via research file; Goal Cup measured an app thread in 2026-09).
 
 ## 9. Quirks and open questions
