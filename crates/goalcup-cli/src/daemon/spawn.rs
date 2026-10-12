@@ -30,9 +30,8 @@
 //! refuses at `Registry::open` and exits 1, and both commands then find the winner through
 //! `control.json`. A daemon that is stopping holds the lock until it has stopped, so a start
 //! that lost to it is tried again, with a growing pause, until the wait's deadline. A daemon
-//! that exits for any other reason before it answers is started once more (the loser of a race
-//! over a fresh artifact root can refuse with another sentence); a second such exit in a row (a
-//! configuration it refuses) ends the wait at once, naming its exit status and `daemon.log`.
+//! that exits for any other reason before it answers (a configuration it refuses) ends the wait at
+//! once, naming its exit status and `daemon.log`.
 //!
 //! # The configuration names this command's connectors
 //!
@@ -152,7 +151,6 @@ pub fn ensure_daemon(
     let (mut child, mut said_from) = spawn(&binary, &config, &log)?;
     let mut pause = RESPAWN_PAUSE;
     let mut respawn_at: Option<Instant> = None;
-    let mut refused_in_a_row = 0u32;
     loop {
         if let Some(client) = live_daemon(cfg)? {
             // The daemon is in a session of its own and outlives this process. A thread waits
@@ -181,22 +179,17 @@ pub fn ensure_daemon(
             None => {
                 if let Ok(Some(status)) = child.try_wait() {
                     // Lost the registry lock to a daemon that is starting or stopping: start
-                    // again after a pause, until the deadline. Any other early exit gets one
-                    // more start, because a daemon that lost a start race over a fresh
-                    // artifact root can refuse with another sentence; a second one in a row
-                    // (a refused configuration refuses every time) ends the wait now.
-                    if lost_the_registry_lock(&log, said_from) {
-                        refused_in_a_row = 0;
-                    } else {
-                        refused_in_a_row += 1;
-                        if refused_in_a_row >= 2 {
-                            return Err(not_started(
-                                &binary,
-                                &config,
-                                &log,
-                                &format!("it exited ({status}) before answering, twice"),
-                            ));
-                        }
+                    // again after a pause, until the deadline. Any other early exit is a
+                    // daemon that will refuse every time (its configuration), so the wait
+                    // ends now. A start race over a fresh artifact root also ends at the
+                    // lock: the registry file is opened race-free (`goalcup-platform`).
+                    if !lost_the_registry_lock(&log, said_from) {
+                        return Err(not_started(
+                            &binary,
+                            &config,
+                            &log,
+                            &format!("it exited ({status}) before answering"),
+                        ));
                     }
                     respawn_at = Some(now + pause);
                     pause = (pause * 2).min(RESPAWN_PAUSE_MAX);

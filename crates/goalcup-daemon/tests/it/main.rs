@@ -1,7 +1,7 @@
 //! The fast tier of goalcup-daemon's integration tests, folded into one binary.
 //!
-//! Slow files go in `tests/full/`. `dir_modes` and `health_status` stay standalone binaries
-//! because they change process state (umask, a re-exec by exact test name).
+//! Slow files go in `tests/full/`. `dir_modes` stays a standalone binary because it changes
+//! process state (umask); `health_status` is a standalone binary too.
 
 // Each test binary uses a different subset of the shared support.
 #[allow(dead_code)]
@@ -25,6 +25,8 @@ mod control_api;
 mod placeholder_notice;
 mod redaction;
 mod registry_roundtrip;
+#[cfg(unix)]
+mod start_race;
 #[cfg(unix)]
 mod terminate_sim;
 mod workspace_layout;
