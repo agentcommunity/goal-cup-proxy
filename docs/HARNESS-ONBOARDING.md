@@ -13,10 +13,12 @@ need to know afterwards that no human helped, so every participant runs an open-
 The tracer starts your harness on the participant's goal and records two things while it runs:
 
 - the session files your harness writes for that run (its own transcript), and
-- its model traffic, through a local proxy set for that one process only.
+- its model traffic, through a local proxy set (`HTTPS_PROXY`) for that one process only. The
+  proxy's certificate is trusted by that process only, through your harness's own CA variable
+  (for example `NODE_EXTRA_CA_CERTS`).
 
-When the run ends, the tracer seals both into one hash-linked trace. Anyone can then check it
-offline with `goalcup-verify --capture-integrity <trace>`. Traces are private to the organizers.
+When the run ends, the tracer seals both into one hash-linked trace, which the organizers check
+offline with `goalcup-verify --capture-integrity <trace>`. Traces are never published.
 
 What the tracer never does:
 
