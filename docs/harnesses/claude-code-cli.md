@@ -27,7 +27,7 @@ claude -p --model haiku --effort low --permission-mode acceptEdits --permission-
 ## 2. Install and pin a version
 
 - Installed form on macOS: `~/.local/bin/claude` is a symlink to `~/.local/share/claude/versions/2.1.283`, a single native executable (measured). Other installs' updaters move the symlink (2.1.281 to 2.1.283 in three days, measured), so Goal Cup execs and pins the versioned file by SHA-256 (code: `[capture.executable]`).
-- Print the version: `claude --version` (code: V1 manifest `[detection]`).
+- Print the version: `claude --version`. The pinned version is `[executable] version` in `connectors/claude-code-cli/harness.toml`.
 - Install an exact version: unknown (not recorded by Goal Cup).
 - Stop self-update: `DISABLE_AUTOUPDATER=1` (code: connector env).
 - Version lock: while a run is going Claude creates and removes `~/.local/state/claude/locks/2.1.283.lock`; `XDG_STATE_HOME` redirects it (measured).
