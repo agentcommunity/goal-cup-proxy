@@ -161,8 +161,8 @@ pub struct TrackerFile {
     pub restore_invalidates_trust: bool,
     /// `hook_install[].harness_owned`, carried here because the two things it decides
     /// happen in two crates: [`rendered`] writes this file only when it is not already
-    /// there, and [`crate::configwatch::ConfigWatch::new`] leaves it off the watch
-    /// entirely. See `goalcup_protocol::manifest::HookInstall::harness_owned` for why a
+    /// there, and the V1 config watch (removed by D48) left it off the watch entirely.
+    /// See `goalcup_protocol::manifest::HookInstall::harness_owned` for why a
     /// connector asks for it.
     ///
     /// It is not a third state of `restore_invalidates_trust`: an unwatched file is never
@@ -184,8 +184,8 @@ impl Installation {
     /// The installation a caller already holding the rendered files describes.
     ///
     /// **The one derivation of `workspace_relative`.** `render_tracker_files` finishes
-    /// here, and so does a runtime rebuilding its exclusion union from the files it was
-    /// handed (`EntryRuntime::new`), so the list the seal excludes and the list the public
+    /// here, as did the V1 per-entry runtime rebuilding its exclusion union from the files
+    /// it was handed (removed by D48), so the list the seal excludes and the list the public
     /// entry discloses cannot come apart. A second `filter(scope == Workspace)` written
     /// somewhere else is how the union becomes a subset.
     pub fn from_files(files: Vec<TrackerFile>) -> Installation {
@@ -413,52 +413,17 @@ pub fn render_tracker_files(
     roots: &Roots,
     optional: bool,
 ) -> Result<Installation, DaemonError> {
-    rendered(manifest, connector_dir, vars, roots, optional, true, None)
+    rendered(manifest, connector_dir, vars, roots, optional, None)
 }
 
-/// `render_tracker_files` with the writes left out: the same two passes over the same
-/// templates, answering the same [`Installation`], and touching no file at all.
-///
-/// The one caller is `Daemon`'s startup rehydration. A restarted daemon has to hand
-/// [`crate::runtime::EntryRuntime::new`] the bytes the tracker rendered at launch — the
-/// config watch compares against them and restores from them, and
-/// [`exclusion_union`] is built from their paths — and the registry keeps no copy of them.
-/// Rendering them again from the shipped templates and the entry's own variables is how
-/// they come back.
-///
-/// **It must not write.** The writing variant is the tracker installing its files; this
-/// one runs on a daemon whose entry has been live for hours, and a write here would put
-/// back a file the agent had changed before the watch had a chance to report that it did —
-/// the deviation would be undone and never chained, which the config watch exists to
-/// prevent.
-///
-/// The bytes are identical to the first render wherever the variables are: every one of
-/// them is on the entry's registry row or is a constant. The two
-/// that are not — `{session_id}`, which is the id minted for the launch rather than the one
-/// the run later bound, and `{server_port}`, which no row records — are supplied as the
-/// bound session and as empty. No shipped connector template uses either, and a connector
-/// that did would meet the difference as an ordinary `ConfigDeviation` on the first poll
-/// after a restart rather than as a silent one.
-pub fn rerender_tracker_files(
-    manifest: &ConnectorManifest,
-    connector_dir: &Path,
-    vars: &TemplateVars,
-    roots: &Roots,
-    optional: bool,
-) -> Result<Installation, DaemonError> {
-    rendered(manifest, connector_dir, vars, roots, optional, false, None)
-}
-
-/// The two passes both public renderers share. `write` is the only difference between
-/// them, and it is a parameter rather than a second copy of the loop so the bytes a
-/// restart rebuilds cannot drift from the bytes a launch installed.
+/// The render pass both callers share: the fixture renderer and fresh setup. A restart
+/// re-render without writes was its other caller until D48 removed it.
 fn rendered(
     manifest: &ConnectorManifest,
     connector_dir: &Path,
     vars: &TemplateVars,
     roots: &Roots,
     optional: bool,
-    write: bool,
     artifact: Option<&EntryArtifactRoot>,
 ) -> Result<Installation, DaemonError> {
     let mut done = Installation::default();
@@ -485,7 +450,7 @@ fn rendered(
         // Write-if-absent, for the one kind of entry that asks for it: the file belongs to
         // the harness, so a home that already holds one keeps it byte for byte.
         let found = spec.harness_owned && absolute_path.exists();
-        if write && !found && spec.scope != InstallScope::Workspace {
+        if !found && spec.scope != InstallScope::Workspace {
             write_non_workspace_file(
                 artifact,
                 spec.scope,
@@ -912,7 +877,7 @@ fn prepare_inner(
     // live bearer on disk for a run that never starts. So every refusal is asked here, and
     // `create_workspace` asks it again below for the caller that comes in directly.
     check_workspace_available(roots)?;
-    let files = rendered(manifest, connector_dir, vars, roots, false, true, artifact)?;
+    let files = rendered(manifest, connector_dir, vars, roots, false, artifact)?;
 
     let excluded = exclusion_union(manifest, &files);
     let mut created = create_workspace(roots, entry_id, &files, &excluded)?;

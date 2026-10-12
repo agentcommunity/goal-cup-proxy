@@ -18,9 +18,9 @@
 //! thread deadlocks: the worker's count is 0, so it blocks on the mutex the main thread
 //! holds. Guard test bodies and spawn helpers that run on the test's own thread only.
 //!
-//! Included by `#[path]` rather than through `support/mod.rs`, because that module
-//! unconditionally declares `pub mod mock_server` and would link axum, tokio and the
-//! devserver into every consumer. `tree.rs` beside this file is included the same way.
+//! Included by `#[path]` rather than through `support/mod.rs`, because that module's
+//! devserver fixture would link axum, tokio and the devserver into every consumer. `tree.rs`
+//! beside this file is included the same way.
 
 #![allow(dead_code)]
 

@@ -91,7 +91,7 @@ pub const SUFFIX_ABANDON: &str = "abandon";
 /// See [`SUFFIX_ARM`].
 pub const SUFFIX_RESUME: &str = "resume";
 
-/// See [`SUFFIX_ARM`]. The read-only launch-pin answer for `resume --print-launch`.
+/// See [`SUFFIX_ARM`]. The read-only launch-pin answer the V1 `resume --print-launch` read.
 pub const SUFFIX_RESUME_PREVIEW: &str = "resume-preview";
 
 /// See [`SUFFIX_ARM`].
@@ -257,10 +257,10 @@ pub struct WorkspaceOpts {
     /// **Nothing reads this, and a daemon must not honour it**.
     ///
     /// The window is a RULE, not a preference: 168 hours, and the clock never pauses. The
-    /// daemon derives the deadline from `goalcup_devserver::ENTRY_WINDOW_SECONDS` and
-    /// compares its own re-derivation field-by-field against the receipt the server signed
-    /// (`goalcup_daemon::receipt::deadline_for`), so the number a CLI puts here reaches no
-    /// deadline anywhere. The shipped CLI always sends the constant
+    /// V1 daemon derived the deadline from `goalcup_devserver::ENTRY_WINDOW_SECONDS` and
+    /// compared its re-derivation against the receipt the server signed; D48 removed that
+    /// receipt path, and the current daemon sets no deadline from this field. So the number a
+    /// CLI puts here reaches no deadline anywhere. The shipped CLI always sends the constant
     /// `DEFAULT_DEADLINE_HOURS = 168`.
     ///
     /// It stays on the wire because removing a field breaks version skew in the direction
@@ -269,7 +269,8 @@ pub struct WorkspaceOpts {
     /// looks: a daemon that honoured this in good faith would turn a participant's number
     /// into the run's window.
     pub deadline_hours: u32,
-    /// The grant `goalcup auth` stored. The daemon exchanges it with the server.
+    /// The grant the V1 `goalcup auth` stored (D48 removed the command). The V1 daemon
+    /// exchanged it with the server.
     pub grant_token: String,
     /// Third and last step of the arming-timeout precedence chain documented on
     /// `manifest::Arming`: manifest default, daemon-config override, CLI flag. `None`
@@ -297,7 +298,7 @@ pub struct WorkspaceOpts {
 /// Every field as a derive would print it, except `grant_token`, which prints
 /// `<redacted>`. `WorkspaceOpts` reaches the daemon's request log and is interpolated
 /// into `ControlError::PreflightFailed`; a `{:?}` that carried the grant would hand a
-/// reader the credential `goalcup auth` stored, which is the one that exchanges for
+/// reader the credential the V1 `goalcup auth` stored, which is the one that exchanges for
 /// everything else.
 impl std::fmt::Debug for WorkspaceOpts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -401,7 +402,7 @@ pub enum ArmingState {
     StartSignalSeen,
     Started,
     /// The gate will never arm — a start signal that never arrived, a timeout, or an
-    /// occupied harness home (`goalcup_daemon::arming::RefusalReason`). Last in the enum so
+    /// occupied harness home. Only a pre-D48 (v0.5.0) daemon writes it. Last in the enum so
     /// no existing wire value shifts meaning; a reader that does not know this variant
     /// reports it as an unrecognised string rather than as a live state it can misjudge as
     /// still pending.
@@ -817,7 +818,8 @@ pub struct ResumeInfo {
     pub last_process: Option<ProcessHandle>,
 }
 
-/// The immutable launch pins a `goalcup resume --print-launch` needs.
+/// The immutable launch pins the V1 `goalcup resume --print-launch` needed. D48 removed
+/// that command, and the daemon now refuses the preview route.
 ///
 /// Unlike [`ResumeInfo`], obtaining this answer does not poll the capture receiver or
 /// clear the registered process handle. Keep it deliberately limited to the seven values a

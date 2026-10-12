@@ -45,7 +45,7 @@ as an error saying so, and none of its contents are reported. So:
     "title": "Round status"
   },
   {
-    "description": "How the current run is doing, from the signed status cache: arming state, health, seconds remaining, when the tracker last synced, and whether that document is stale (`offline`). `arming: \"refused\"` means the gate will never arm and waiting for it is waiting for nothing. Read-only.",
+    "description": "How the current run is doing, from the signed status cache: arming state, health, seconds remaining, when the tracker last synced, and whether that document is stale (`offline`). `arming: \"refused\"` appears only in a status a pre-D48 (v0.5.0) daemon wrote, and means that run's gate will never arm. Read-only.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -91,10 +91,11 @@ the round's schedule.
 `stale_seconds`, `offline` and `freshness`. Takes an optional `entry_id`; without one it
 answers about the most recently started run.
 
-- `arming: "refused"` means the gate will **never** arm — no start signal arrived, the wait
-  timed out, or the harness home was already in use. It is not one more pending state, and
-  waiting for it to clear is waiting for a thing that will not happen. `detail` says which
-  refusal it was, in words meant for the participant.
+- `arming: "refused"` appears only in a status a pre-D48 (v0.5.0) daemon wrote; a current
+  daemon never produces it. It means that run's gate will **never** arm: no start signal
+  arrived, the wait timed out, or the harness home was already in use. It is not one more
+  pending state, and waiting for it to clear is waiting for a thing that will not happen.
+  `detail` says which refusal it was, in words meant for the participant.
 - `offline: true` means nothing has published a status for this run recently, and
   `stale_seconds` says how long it has been. What you are reading is then the last document
   there was — `last_sync_at` and `published_at` are how old it is. It does not mean the run

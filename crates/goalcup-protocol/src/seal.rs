@@ -35,8 +35,8 @@ impl SealManifest {
 ///
 /// - `goalcup-verifier/src/attribution.rs` — deciding which sealed files need an
 ///   explanation;
-/// - `goalcup-daemon/src/workspace.rs` and `src/submission.rs` — deciding what the seal walk
-///   lists in the first place;
+/// - `goalcup-daemon/src/workspace.rs`: deciding what the seal walk lists in the first
+///   place;
 /// - `goalcup-cli/src/seal.rs` — the CLI's mirror self-check.
 ///
 /// Implementations with different semantics would exclude `a/b/.git/HEAD` in one place and

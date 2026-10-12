@@ -642,7 +642,7 @@ fn a_parked_child_that_died_is_refused_in_its_own_words() {
 
 /// b4a249eb's ordering, pinned by source because the behaviour is timing-shaped: the child's
 /// creation identity is read before anything that takes time. A harness that exits at once is a
-/// zombie within milliseconds and has no identity to read (`resume_locks`, `start_arming`).
+/// zombie within milliseconds and has no identity to read.
 #[test]
 fn the_creation_identity_is_read_before_the_native_probe() {
     let source = include_str!("../src/launch.rs");

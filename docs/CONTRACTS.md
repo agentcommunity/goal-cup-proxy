@@ -1,6 +1,6 @@
 # M2 first-release contracts
 
-Updated: 2026-10-07.
+Updated: 2026-10-11.
 
 Paths under `.superpowers/` and `docs/superpowers/` named below are internal planning records
 and are not part of the public repository.
@@ -1345,11 +1345,11 @@ the tracker's.
 
 ### Migrating from manifest.toml
 
-The default daemon and CLI now load `harness.toml` through the shared schema-1 loader. Hermes has
-no V1 manifest. Codex and Claude retain `manifest.toml` and its named hook templates only for the
-feature-gated `v1-compat` product path; those compatibility files are still part of their connector
-directory digests. `family`, `tier`, `tested_version_range` and `capture_only` are not harness
-schema fields (D43 ruling 2).
+The daemon and CLI now load `harness.toml` through the shared schema-1 loader. Hermes has no
+V1 manifest. Codex and Claude retain `manifest.toml` and its named hook templates, which the V1
+product path used until D48 deleted it; those compatibility files are still parsed at startup
+(OS-29) and are still part of their connector directory digests. `family`, `tier`,
+`tested_version_range` and `capture_only` are not harness schema fields (D43 ruling 2).
 
 No schema bump has happened. The [schema evolution rule](CONNECTOR-SCHEMA.md#pin-evolution) says
 which widening stays schema 1 and which incompatible change creates schema 2. A schema-bump PR
@@ -1362,8 +1362,8 @@ What a request to the control listener must carry, and which routes need no bear
 function is `goalcup_protocol::control::is_public_route`; the daemon and the CLI both call it, so
 this section is a reading of it and the function wins.
 
-- **Public routes: two.** `GET /v0/ui` (the V1 status page; a default build answers it with the
-  "not in this build" stub) and `GET /v0/entries/{id}/status` (the signed status document, for an
+- **Public routes: two.** `GET /v0/ui` (the removed V1 status page; it answers with the stub
+  that names D48) and `GET /v0/entries/{id}/status` (the signed status document, for an
   id the caller already holds). Everything else needs `Authorization: Bearer <token from
   control.json>`. `/v0/entries/current` and `/v0/entries` are not public: enumeration is not
   accepted.

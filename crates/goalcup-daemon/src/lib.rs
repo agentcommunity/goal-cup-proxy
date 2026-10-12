@@ -9,21 +9,11 @@
 //! them and extends none of them.
 
 pub mod arming;
-#[cfg(feature = "v1-compat")]
-pub mod buffer;
-#[cfg(feature = "v1-compat")]
-pub mod chain_writer;
 pub mod config;
-#[cfg(feature = "v1-compat")]
-pub mod configwatch;
 /// The control API's server side: the state its handlers share, the one authentication
 /// rule — `control::is_public_route` on the raw request path — the `control.json` the CLI
 /// reads to find this daemon, and the router around all three.
 pub mod control;
-#[cfg(feature = "v1-compat")]
-pub mod cursor;
-#[cfg(feature = "v1-compat")]
-pub mod foreign;
 /// The file mechanics every writer in this crate shares: a mode, a private atomic
 /// write through a fresh `O_EXCL` temp file, and the startup sweep for what a killed write
 /// left behind. Crate-private: it is plumbing, not a surface the CLI or the verifier has any
@@ -31,38 +21,25 @@ pub mod foreign;
 mod fsutil;
 /// The five judgements of D17, as health state names.
 pub mod health;
-/// The heartbeat timer: proof of life on a fixed cadence, off the caller's clock.
-#[cfg(feature = "v1-compat")]
-pub mod heartbeat;
 /// The authenticated, bounded capture ingest listener.
 pub mod ingest;
 /// Bounded, scoped native byte capture.
 pub mod manifests;
 pub mod native_capture;
-#[cfg(feature = "v1-compat")]
-pub mod partition;
 pub mod paths;
-#[cfg(feature = "v1-compat")]
-pub mod receipt;
 pub mod redact;
 pub mod registry;
-/// One entry's runtime — the ordered poll, the notices, the heartbeat and the chained
-/// health — and the process-level [`runtime::Daemon`] around it: the entry map D4 routes by
-/// working directory, the loopback control listener, the tick, and the seal that the
-/// deadline and a participant's early finish both take.
+/// The process-level [`runtime::Daemon`] and the local captures it holds: the loopback
+/// control listener, each capture's ingest and chain, and the finish a participant's seal
+/// asks for. The V1 per-entry runtime (the ordered poll, the heartbeat, the tick and the
+/// deadline seal) was removed by D48.
 ///
 /// Where every module above is wired together.
 pub mod runtime;
 /// Building, signing and mirroring the signed status document (D25).
 pub mod status;
-/// Immutable workspace-submission capture: byte retention, not rule
-/// interpretation. The verifier owns every judgement about the retained manifest.
-#[cfg(feature = "v1-compat")]
-pub mod submission;
 mod submission_types;
 pub use submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};
-#[cfg(feature = "v1-compat")]
-pub mod tailer;
 /// Terminating the harness process tree at seal (D22).
 ///
 /// Unix only, like `goalcup_protocol::process`, which owns the discovery half. A module
@@ -70,12 +47,6 @@ pub mod tailer;
 /// designed for behind a call that looks available.
 #[cfg(unix)]
 pub mod terminate;
-/// The bundled status page and the per-entry cache it is served beside (D25).
-#[cfg(feature = "v1-compat")]
-pub mod ui;
-/// The uploader: signed chunks out, verified acknowledgements in.
-#[cfg(feature = "v1-compat")]
-pub mod upload;
 pub mod workspace;
 
 // The immutable-submission writer is a daemon API. Re-export its daemon-owned request and
@@ -84,53 +55,21 @@ pub mod workspace;
 pub use goalcup_platform::handle_budget::NativeHandleBudgetV1;
 pub use goalcup_platform::sourcecap::SourceDir;
 pub use goalcup_platform::tracecap::{EntryArtifactRoot, TraceDir};
-#[cfg(feature = "v1-compat")]
-pub use submission::{
-    SubmissionRequestV1, capture_submission, prepare_source_journal, readback_submission,
-    recover_submission,
-};
 
 /// This build's version, for `trace.toml` and for the `VersionChange` the daemon chains
 /// when it observes its own binary change under a running entry.
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// What `goalcup-daemon --version` prints: the version, plus the semver build metadata
-/// `+v1-compat` when the V1 runtime is compiled in (D42). The CLI's test support checks it against
-/// its own feature set, and the packaging tool refuses a bundle whose daemon carries it, so a
-/// binary left over from the other configuration fails loudly instead of masking a regression.
-#[cfg(feature = "v1-compat")]
-pub const DAEMON_VERSION_TEXT: &str = concat!(env!("CARGO_PKG_VERSION"), "+v1-compat");
-/// See the `v1-compat` constant of the same name.
-#[cfg(not(feature = "v1-compat"))]
+/// What `goalcup-daemon --version` prints.
 pub const DAEMON_VERSION_TEXT: &str = env!("CARGO_PKG_VERSION");
 
-/// The most bytes the tailer reads from one file in one poll. A poll that hits this cap
-/// carries what it read and sets `TailBatch.more_available`; the rest waits for the next
-/// poll. Bounded memory is a constraint on the whole daemon, so no store reader ever holds
-/// a whole file.
-///
-/// Hitting this cap chains no notice: `TailNoticeKind::OversizeFile` belongs to the whole-file
-/// cap [`MAX_FILE_BYTES`], where bytes are genuinely dropped, and a poll at this cap drops
-/// nothing — it reads the rest a moment later.
-///
-/// **One byte above [`MAX_LINE_BYTES`], written as that sum rather than as a round number.**
-/// A line is overlong above the line cap — both comparisons in `jsonl.rs` are `>` — but a
-/// line at the cap still needs its newline to be a line, so the poll window needs one byte of
-/// headroom. With the two constants equal, a whole window would hold the bytes and not the
-/// newline, and an exactly-1 MiB line would be discarded as `OverlongLine`.
-pub const MAX_POLL_BYTES: u64 = MAX_LINE_BYTES + 1;
-
-/// The per-line cap, distinct from the per-poll cap: a single line longer than this is
-/// discarded and reported as `TailNotice::OverlongLine`. A line and a poll are different
-/// bounds, so each has its own constant.
+/// The per-line cap: a single line longer than this is discarded and reported as
+/// `TailNotice::OverlongLine`.
 pub const MAX_LINE_BYTES: u64 = 1 << 20;
 
 /// The largest whole-file capture the daemon will take in one piece — a config file it
 /// baselines or restores, never a transcript it tails.
 pub const MAX_FILE_BYTES: u64 = 8 << 20;
-
-/// The most rows read from one SQLite store in one poll.
-pub const MAX_POLL_ROWS: usize = 512;
 
 /// Wall-clock seconds since the epoch, fractional. Used for intervals and for the
 /// daemon's own bookkeeping; anything that reaches a chained envelope goes through
@@ -171,7 +110,8 @@ pub fn unix_to_rfc3339(t: f64) -> String {
 pub enum DaemonError {
     /// A typed capture outcome. Callers must map this enum value directly into the protocol
     /// finalization document; string matching an operating-system error would make a restart
-    /// path non-deterministic and duplicate capture policy outside `submission`.
+    /// path non-deterministic and duplicate capture policy outside the V1 `submission`
+    /// module (removed by D48).
     #[error("submission capture incomplete: {reason:?}")]
     SubmissionCapture {
         reason: goalcup_protocol::submission::SubmissionFailureV1,
@@ -220,9 +160,9 @@ pub enum DaemonError {
     /// runtime hold after durable Prepare as `ProcessAdmissionBusy`, so clients can retry
     /// without treating the child as definitely refused.
     ///
-    /// Its producer is `runtime::held_elsewhere`, which is what
-    /// `Daemon::with_entry` and `Daemon::seal_entry` raise when the runtime is out of the
-    /// entry map for the length of a pump.
+    /// Its producer was the V1 `runtime::held_elsewhere`, raised while a runtime was out of
+    /// the entry map for the length of a pump. D48 removed it, so no runtime path raises
+    /// `Busy` now.
     #[error("busy: {0}")]
     Busy(String),
     /// The v5 local finish ran out of its one budget before `stage` (a `FinishStage` token),

@@ -21,8 +21,6 @@ use goalcup_protocol::capture::{
     ConnectionEvent, ConnectionOutcome, DeliveryState, EndReason, FrameEvent, GapReason, RunState,
     StreamKey, WireIdentity, is_capture_id,
 };
-#[cfg(feature = "v1-compat")]
-use goalcup_protocol::control::CaptureSealRequest;
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureWorkspaceInfo, LocalSealOutcome, ProxyCounters, ResumeRequest,
     SUFFIX_CAPTURE_GOAL, SUFFIX_RESUME, SUFFIX_RESUME_PREVIEW, SUFFIX_SEAL, SUFFIX_STATUS,
@@ -127,14 +125,6 @@ async fn local_capture_create_needs_no_server_config() {
         .verify_with(&info.run_public_key)
         .expect("the status verifies against the run key the create call returned");
 
-    // Every cadence the daemon runs, once: none of them reaches a capture entry.
-    // The V1 cadences exist only in a `v1-compat` build (D42); a default daemon has none to run.
-    #[cfg(feature = "v1-compat")]
-    {
-        rig.daemon.tick().await.expect("a tick");
-        rig.daemon.pump_all().await.expect("a pump");
-        rig.daemon.refresh_statuses().expect("a status pass");
-    }
     let trace = rig.trace_dir(&info.entry_id);
     assert!(!trace.join("receipt.json").exists(), "no receipt exists");
     assert_eq!(
@@ -2313,39 +2303,11 @@ async fn unknown_session_still_captures_and_finishes_locally() {
     assert!(closed < finish, "native capture closes before the terminal");
 }
 
-#[cfg(feature = "v1-compat")]
-#[tokio::test]
-async fn a_capture_seal_request_never_seals_a_legacy_entry() {
-    let h = support::control_harness().await;
-    let route = entry_route(&h.entry_id, SUFFIX_SEAL);
-    let refused = h
-        .post_body(
-            &route,
-            &CaptureSealRequest {
-                proxy: None,
-                remaining_finish_ms: None,
-                native_scope: None,
-            },
-        )
-        .await;
-    assert_eq!(refused.status(), 400, "{}", refused.body());
-    assert!(
-        h.daemon
-            .registry()
-            .get(&h.entry_id)
-            .unwrap()
-            .unwrap()
-            .sealed_at
-            .is_none()
-    );
-}
-
 // ---------------------------------------------------------------------------------------------
-// D42: what a default daemon does with V1 rows already in its registry. The `v1-compat` build
-// recovers them instead, so these two are default-build facts.
+// D48: what the daemon does with V1 rows already in its registry. The V1 runtime that
+// recovered them was removed, so a row that still owes work is refused.
 
 /// A V1 (non-capture) row with the given state, chain head and acknowledgement watermark.
-#[cfg(not(feature = "v1-compat"))]
 fn plant_v1_row(
     registry: &goalcup_daemon::registry::Registry,
     root: &std::path::Path,
@@ -2367,7 +2329,6 @@ fn plant_v1_row(
     registry.put(&entry).expect("the V1 row is stored");
 }
 
-#[cfg(not(feature = "v1-compat"))]
 #[tokio::test]
 async fn a_sealed_v1_row_does_not_block_a_default_daemon_and_a_capture_entry_beside_it_finishes() {
     let (rig, _native, _connectors) = native_rig().await;
@@ -2427,7 +2388,6 @@ async fn a_sealed_v1_row_does_not_block_a_default_daemon_and_a_capture_entry_bes
     );
 }
 
-#[cfg(not(feature = "v1-compat"))]
 #[tokio::test]
 async fn a_v1_row_that_owes_work_is_refused_by_a_default_daemon_with_a_remedy_that_clears_it() {
     use goalcup_daemon::registry::EntryState;
@@ -2460,7 +2420,7 @@ async fn a_v1_row_that_owes_work_is_refused_by_a_default_daemon_with_a_remedy_th
         );
         assert!(
             message.contains("sealed and fully acknowledged")
-                && message.contains("`v1-compat`")
+                && message.contains("v0.5.0")
                 && message.contains("artifact_root"),
             "{what}: says what clears it: {message}"
         );
@@ -2469,7 +2429,6 @@ async fn a_v1_row_that_owes_work_is_refused_by_a_default_daemon_with_a_remedy_th
 
 /// A default daemon has no V1 cadence to run, and the foreground binary relies on `run_forever`
 /// never returning: the only way out is a signal.
-#[cfg(not(feature = "v1-compat"))]
 #[tokio::test]
 async fn a_default_daemons_loop_stays_pending() {
     let rig = Rig::start().await;

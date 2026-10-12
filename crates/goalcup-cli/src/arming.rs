@@ -2,60 +2,42 @@
 //!
 //! **Every connector arms on its own transcript**. The daemon arms
 //! an entry on the first chained transcript record, so there is no start signal for this CLI
-//! to wait for: the launch plus that first record is the start. What is left for the CLI is
-//! the one thing the daemon can still say before a run begins, which is that it has settled
-//! the gate and will not arm (`control::ArmingState::Refused`: a harness home somebody else's
-//! run is holding, for example). [`wait_foreground`] and [`watch_beside`] read that once,
-//! off the signed status, and report it.
+//! to wait for: the launch plus that first record is the start, and a capture run reports
+//! [`GateOutcome::NotRequired`]. The V1 gate reads (`wait_foreground` and `watch_beside`),
+//! which read a settled refusal (`control::ArmingState::Refused`) off the signed status,
+//! were removed by D48.
 //!
 //! The start-signal long poll (`DaemonClient::wait_start_signal`) is part of the daemon's
 //! wire contract; this CLI does not make it.
 //!
 //! # The Ctrl-C handler is here too
 //!
-//! [`watch_for_interrupt`] and [`interrupted`] live beside the gate because the gate is where
-//! a participant spends the moments a Ctrl-C is most likely to land in: attach mode stands at
-//! it with an armed workspace and nothing running. The flag they carry is read by the whole
-//! of `goalcup start`'s abandon window and not only by the gate — a run interrupted between
-//! `create_workspace` and `register_process` has to leave nothing behind either way.
+//! [`watch_for_interrupt`] and [`interrupted`] live beside the gate because the V1 gate was
+//! where a participant spent the moments a Ctrl-C was most likely to land in. The flag they
+//! carry is read by the whole of `goalcup start`'s abandon window and not only by a gate:
+//! a run interrupted between `create_workspace` and `register_process` has to leave nothing
+//! behind either way.
 //!
 //! **The window closes at `register_process`, and so does every read of the flag.** Past
 //! that the harness owns the terminal and owns the Ctrl-C typed into it: a TUI child shares
 //! this terminal, so an ordinary interrupt inside the harness latches this flag, and a gate
 //! that still read it afterwards would report a fully armed, recorded run as "interrupted
-//! before the run began" and ask the daemon to abandon a stamped entry. [`Watch`] is where
-//! the two moments are told apart, and it is the only reader of the flag inside this file.
+//! before the run began" and ask the daemon to abandon a stamped entry. The V1 gate's
+//! `Watch` told the two moments apart until D48 removed it; the readers left are
+//! `goalcup start`'s abandon window and the busy backoffs in `retry.rs`.
 
-/// What the gate said, in the three answers it has.
-///
-/// **`Refused` is not a timeout.** `ArmingState` has a fourth state (`refused`, on the wire)
-/// for a gate that will never arm (`goalcup_daemon::arming::RefusalReason`). A participant
-/// told to wait longer for a state that cannot change would open a session that runs blind:
-/// a session opened before arming is never recorded.
+/// What the gate said. One answer is left.
 ///
 /// [`GateOutcome::NotRequired`] is every connector's ordinary case and not an absence of a
 /// gate: the launch plus the first transcript record is the start, and the daemon is
-/// already watching for it.
+/// already watching for it. The V1 gate's other two answers, `Refused` (a settled
+/// `refused` on the wire, exit 4) and `Interrupted` (a Ctrl-C inside the abandon window),
+/// went with the V1 gate reads (D48).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateOutcome {
-    /// The daemon has settled that this gate will not arm, in its own words. Exit 4.
-    Refused(String),
     /// Nothing to wait for: the first transcript record arms the entry.
     NotRequired,
-    /// The gate was asked about while this process was being stopped — and only ever inside
-    /// the abandon window, which is the only place [`Watch`] reads the flag. Rung 1: nothing
-    /// refused this run, the participant stopped it.
-    Interrupted,
 }
-
-// What the gate says to a participant (the daemon's settled-refusal reports, the foreground
-// and beside-the-harness watchers) is the V1 path's alone (D42) and lives in `arming/gate.rs`,
-// compiled with `v1-compat`. `GateOutcome` stays here because a local capture run reports
-// `NotRequired` in the same `StartOutcome`.
-#[cfg(feature = "v1-compat")]
-mod gate;
-#[cfg(feature = "v1-compat")]
-pub use gate::*;
 
 // ------------------------------------------------------------------ Ctrl-C
 
@@ -135,10 +117,9 @@ pub fn raise_sigint_for_tests() {
 /// — must not have the second one refuse itself over the first one's Ctrl-C.
 ///
 /// **Its callers hold a [`ClearOnDrop`] rather than calling it last.** A trailing call is a
-/// promise about every path out of a function, and the
-/// paths out of `start_with` and `resume_with` include a panic in a scoped watcher thread
-/// and an early `?` a later edit adds without reading to the end. A guard keeps the promise
-/// by construction.
+/// promise about every path out of a function, and the paths out of `start_with` include a
+/// panic and an early `?` a later edit adds without reading to the end. A guard keeps the
+/// promise by construction.
 pub fn clear_interrupt() {
     INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
 }

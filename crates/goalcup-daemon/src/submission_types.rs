@@ -1,7 +1,7 @@
 //! The two small persisted records of the V1 workspace-submission capture that the registry row and
-//! the daemon configuration carry (D42). They are plain data and always compiled, so a registry
-//! written by a `v1-compat` build still opens, and the daemon configuration still parses, in a
-//! default build; the writer that fills them (`submission`) is `v1-compat` only.
+//! the daemon configuration carry. They are plain data, kept so a registry written by a v0.5.0
+//! V1 build still opens and the daemon configuration still parses; the writer that filled them
+//! was removed with the V1 path (D48).
 
 use serde::{Deserialize, Serialize};
 

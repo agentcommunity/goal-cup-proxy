@@ -27,10 +27,6 @@ use goalcup_daemon::registry::{
 use goalcup_daemon::status::{
     build_payload, mirror, plain_words, sign_payload, write_entry_status_line_rooted,
 };
-#[cfg(feature = "v1-compat")]
-use goalcup_daemon::ui::{STATUS_HTML, UiState, ui_router};
-#[cfg(feature = "v1-compat")]
-use goalcup_daemon::upload::{UploadClient, Uploader};
 use goalcup_protocol::control::{ArmingState, SignedStatus};
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::provenance::{
@@ -48,8 +44,6 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::CommandExt as _;
 #[cfg(unix)]
 use std::process::Command;
-#[cfg(feature = "v1-compat")]
-use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
 const STATUS_UMASK_CHILD_ROOT_ENV: &str = "GOALCUP_STATUS_UMASK_CHILD_ROOT";
@@ -342,52 +336,6 @@ fn clock_skew_backoff_and_an_unverified_acknowledgement_are_details_not_states()
         report.details.iter().any(|d| d.contains("did not verify")),
         "{:?}",
         report.details
-    );
-}
-
-#[cfg(feature = "v1-compat")]
-#[tokio::test]
-async fn configured_clock_skew_threshold_is_applied() {
-    // The same six-hour divergence, acknowledged twice: under the default threshold it is a
-    // `clock_skew` detail, and under a machine's configured `clock_skew_seconds` that
-    // tolerates it, it is nothing.
-    let t = tempfile::tempdir().unwrap();
-    let mut h = support::harness_with_devserver(t.path()).await;
-    h.devserver.set_clock(&goalcup_daemon::unix_to_rfc3339(
-        goalcup_daemon::now_unix() + 21_600.0,
-    ));
-    let details = |skew: Option<f64>| {
-        let mut inputs = support::inputs();
-        inputs.clock_skew_seconds = skew;
-        evaluate(&inputs, &support::policy()).details
-    };
-
-    h.buffer.append(&support::envelope(0, "main")).unwrap();
-    let default = h.uploader.pump(&h.buffer, &mut h.writer).await.unwrap();
-    assert_eq!(default.acked_seq, Some(0), "{default:?}");
-    let reported = details(default.clock_skew_seconds);
-    assert!(
-        reported.iter().any(|d| d.contains("clock_skew")),
-        "{reported:?}"
-    );
-
-    let mut config = support::config_at(t.path(), &h.url);
-    config.clock_skew_seconds = 1.0e9;
-    h.uploader = Uploader::new(
-        support::ENTRY_ID,
-        UploadClient::new(config.upload_url.clone()),
-        config.upload_chunk_max,
-        h.run_keys.clone(),
-        h.devserver.public_key_hex(),
-        config.clock_skew_seconds,
-    );
-    h.buffer.append(&support::envelope(1, "main")).unwrap();
-    let configured = h.uploader.pump(&h.buffer, &mut h.writer).await.unwrap();
-    assert_eq!(configured.acked_seq, Some(1), "{configured:?}");
-    let reported = details(configured.clock_skew_seconds);
-    assert!(
-        !reported.iter().any(|d| d.contains("clock_skew")),
-        "{reported:?}"
     );
 }
 
@@ -734,128 +682,6 @@ fn the_summary_is_the_entry_a_reader_sees_in_a_list() {
     assert_eq!(row.sealed_at, None);
 }
 
-#[cfg(feature = "v1-compat")]
-#[test]
-fn the_page_is_one_file_that_loads_nothing_and_polls_only_its_own_entry() {
-    let html = STATUS_HTML;
-    for forbidden in [
-        "http://",
-        "https://cdn",
-        "//fonts.",
-        "<script src=",
-        "<img src=\"http",
-        "<link href=",
-    ] {
-        assert!(
-            !html.contains(forbidden),
-            "R18: loads nothing from the network ({forbidden})"
-        );
-    }
-    assert!(
-        html.contains("?entry=") || html.contains("entry"),
-        "it reads its own query string"
-    );
-    assert!(html.contains("/v0/entries/"));
-    assert!(
-        !html.contains("/v0/entries/current"),
-        "authenticated; a browser has no token"
-    );
-    assert!(
-        !html.contains("/v0/assets/"),
-        "the sponsor list is inline (round 2 §7)"
-    );
-    assert!(html.contains("Agent Community"));
-    // The one absolute URL in the file is the Agent Community link, and it is a link
-    // rather than a load.
-    assert_eq!(
-        html.matches("https://").count(),
-        html.matches("https://agentcommunity.org").count()
-    );
-    // Every fetch is the one relative route the page may use.
-    for line in html.lines().filter(|l| l.contains("fetch(")) {
-        assert!(line.contains("/v0/entries/${"), "unexpected fetch: {line}");
-    }
-}
-
-#[cfg(feature = "v1-compat")]
-#[test]
-fn legacy_surfaces_do_not_claim_m2_health() {
-    assert!(STATUS_HTML.contains("if (e.capture)"));
-    assert!(STATUS_HTML.contains("M2 capture details are unavailable in this page."));
-    assert!(STATUS_HTML.contains("Run `goalcup status` for capture health."));
-    let guard = STATUS_HTML.find("if (e.capture)").unwrap();
-    let legacy_health = STATUS_HTML.find("row(dl, \"Health\", e.health)").unwrap();
-    assert!(
-        guard < legacy_health,
-        "M2 rows must return before legacy health renders"
-    );
-}
-
-#[cfg(feature = "v1-compat")]
-#[tokio::test]
-async fn the_local_endpoint_serves_the_page_without_a_token() {
-    let e = support::started_entry();
-    let signed = sign_payload(
-        build_payload(&support::status_inputs(&e)),
-        "2026-09-04T09:00:00Z".to_string(),
-        &e.keys.signing_key().unwrap(),
-    )
-    .unwrap();
-    let state = UiState {
-        cache: Arc::new(Mutex::new(BTreeMap::from([(
-            e.entry_id.clone(),
-            signed.clone(),
-        )]))),
-        current: Arc::new(Mutex::new(Some(e.entry_id.clone()))),
-    };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap().to_string();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, ui_router(state)).await;
-    });
-
-    // No Authorization header anywhere in this test: that is the point.
-    let served = addr.clone();
-    let (status, body) = tokio::task::spawn_blocking(move || {
-        support::http_get(&served, goalcup_protocol::control::ROUTE_UI)
-    })
-    .await
-    .unwrap();
-    assert_eq!(status, 200, "a browser has no token to send");
-    assert_eq!(body, STATUS_HTML, "one file, served whole");
-}
-
-#[cfg(feature = "v1-compat")]
-#[test]
-fn the_ui_state_is_per_entry() {
-    // The control API serves `GET /v0/entries/{id}/status` off this same state, so a single
-    // `Option<SignedStatus>` cannot answer it.
-    let e = support::started_entry();
-    let key = e.keys.signing_key().unwrap();
-    let public = e.keys.public_key_hex().unwrap();
-    let mut map: BTreeMap<String, SignedStatus> = BTreeMap::new();
-    for id in ["entry-0001", "entry-0002"] {
-        map.insert(
-            id.to_string(),
-            sign_payload(
-                support::payload_for(id),
-                "2026-09-04T09:00:00Z".to_string(),
-                &key,
-            )
-            .unwrap(),
-        );
-    }
-    let state = UiState {
-        cache: Arc::new(Mutex::new(map)),
-        current: Arc::new(Mutex::new(Some("entry-0002".to_string()))),
-    };
-    let cache = state.cache.lock().unwrap();
-    assert_eq!(cache.len(), 2);
-    assert_eq!(cache["entry-0001"].payload.entry_id, "entry-0001");
-    cache["entry-0001"].verify_with(&public).unwrap();
-    assert_eq!(state.current.lock().unwrap().as_deref(), Some("entry-0002"));
-}
-
 // ---------------------------------------------------------------------------
 // The shared temp name, the page's copied threshold,
 // the refusal's wire state, and the last minute of the clock.
@@ -1037,52 +863,6 @@ fn two_entries_mirroring_at_once_leave_a_whole_document() {
     );
 }
 
-/// The page copies the daemon's staleness threshold into JavaScript. It may copy it, but
-/// it may not drift from it: this asserts the literal in the file is
-/// `control::STALE_AFTER_SECONDS`, so moving the constant fails the build's tests rather
-/// than quietly telling the participant a different story.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn the_page_reads_stale_at_the_protocol_constant() {
-    let expected = format!(
-        "STALE_AFTER_SECONDS = {};",
-        goalcup_protocol::control::STALE_AFTER_SECONDS
-    );
-    assert!(
-        STATUS_HTML.contains(&expected),
-        "assets/status.html must spell {expected:?}"
-    );
-}
-
-/// The last minute is not "0h 0m left". A participant with forty seconds on the clock is
-/// being told something different from a participant with forty minutes.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn the_final_minute_is_not_rendered_as_zero() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut e = support::started_entry();
-    // `status_inputs` asks at now = 10_000.
-    e.deadline_unix = Some(10_059.0);
-    let signed = sign_payload(
-        build_payload(&support::status_inputs(&e)),
-        "2026-09-04T09:00:00Z".to_string(),
-        &e.keys.signing_key().unwrap(),
-    )
-    .unwrap();
-    assert_eq!(signed.payload.seconds_remaining, Some(59));
-    let artifact = EntryArtifactRoot::create(dir.path(), &e.entry_id).unwrap();
-    write_entry_status_line_rooted(&signed, &artifact).unwrap();
-    let line = std::fs::read_to_string(artifact.display_path().join("status-line.txt")).unwrap();
-    assert!(line.contains("<1m left"), "got {line:?}");
-    assert!(!line.contains("0h 0m"), "got {line:?}");
-
-    // And the page renders the same minute the same way.
-    assert!(
-        STATUS_HTML.contains("\"<1m\""),
-        "the page must not print 0h 0m for the last minute either"
-    );
-}
-
 /// A refused gate has its own wire state, `ArmingState::Refused`, so a machine reader
 /// keying on `arming` alone can tell a run waiting to arm from one that never will.
 /// `detail` carries the refusal in words for a human reader.
@@ -1109,54 +889,6 @@ fn a_refused_gate_reports_refused_and_says_why_in_words() {
         HealthState::ArmingPending,
     );
     assert_eq!(row.arming, ArmingState::Refused);
-}
-
-/// What the daemon's own four timers lost is on the page, not only in the JSON.
-///
-/// `StatusPayload::cycles` is rendered: a participant whose ticks are failing must not read a
-/// page that looks exactly like a healthy run. This crate has no logger, so the page is the
-/// operator surface.
-///
-/// The assertion is against the field names the document actually serialises, so a rename in
-/// `CycleErrors` fails here rather than leaving the page reading a key that is no longer
-/// there — the page is a constant compiled into the binary and has no other way to be wrong.
-#[cfg(feature = "v1-compat")]
-#[test]
-fn the_page_renders_the_cycle_error_count_and_the_last_message() {
-    let e = support::started_entry();
-    let mut inputs = support::status_inputs(&e);
-    inputs.cycles = goalcup_protocol::control::CycleErrors {
-        tick: 2,
-        upload: 1,
-        status: 0,
-        deadline: 0,
-        last: Some("io: broken pipe".to_string()),
-        // When the loops last turned, beside what they lost. The page reads the four
-        // failure counters and `last`; this rides on the
-        // document and on `goalcup status`.
-        last_pass_at: Some("2026-09-07T07:12:03Z".to_string()),
-    };
-    let payload = build_payload(&inputs);
-    let doc = serde_json::to_value(&payload).expect("the payload serialises");
-    assert_eq!(
-        doc["cycles"]["last_pass_at"].as_str(),
-        Some("2026-09-07T07:12:03Z"),
-        "the stamp travels on the document"
-    );
-    for field in ["tick", "upload", "status", "deadline", "last"] {
-        assert!(
-            doc["cycles"].get(field).is_some(),
-            "the document carries cycles.{field}"
-        );
-        assert!(
-            STATUS_HTML.contains(&format!("c.{field}")),
-            "and the page reads cycles.{field}"
-        );
-    }
-    assert!(
-        STATUS_HTML.contains("Tracker errors"),
-        "the count is labelled in words a participant can act on"
-    );
 }
 
 /// `tracker_restarted` is set once and never cleared, and `version_changed` is the

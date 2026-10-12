@@ -17,8 +17,8 @@
 //! it never opened (404) from a document that does not link (400) from a server that is
 //! merely down (503).
 
-/// The link and chunk builders. `#[path]` rather than `mod support;` so this binary does
-/// not compile the compliant fixture generator it has no use for.
+/// The link and chunk builders, included by `#[path]`: this crate's tests have no `support`
+/// module.
 #[path = "support/chain.rs"]
 mod chain;
 

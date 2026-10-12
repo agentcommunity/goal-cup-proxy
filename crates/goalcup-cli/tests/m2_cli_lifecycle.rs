@@ -498,38 +498,6 @@ fn an_altered_pinned_id_under_an_alias_is_exit_one_before_any_start_write() {
     assert_aliased_shipped_connector_refuses_before_start_writes(true);
 }
 
-#[cfg(feature = "v1-compat")]
-#[test]
-fn a_capture_run_is_not_resumed_and_the_tracker_is_asked_nothing_else() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::new();
-    rig.tell("stop", "");
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let (result, out) =
-        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
-    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    let entry_id = client.created().entry_id;
-    let resumed = Hooked::new(&http, &rig);
-    for print_launch in [false, true] {
-        let mut opts = support::resume_options();
-        opts.print_launch = print_launch;
-        let error = goalcup_cli::commands::resume::resume_with(
-            &resumed,
-            &rig.connectors,
-            &rig.cfg,
-            &entry_id,
-            &opts,
-            &mut Vec::new(),
-        )
-        .expect_err("a capture run is sealed, not resumed");
-        assert_eq!(error.exit_code(), 1, "{error}");
-        assert!(format!("{error}").contains("cannot resume"), "{error}");
-    }
-    assert_eq!(resumed.names(), vec!["status", "status"]);
-}
-
 #[test]
 fn an_unreservable_chain_refuses_before_the_proxy_and_leaves_nothing() {
     let _lock = table_lock::TableLock::acquire();

@@ -185,10 +185,8 @@ fn v9_reports_arming_and_config_events() {
 /// is still watched, so removing it still chains a `ConfigDeviation`, and a deviation no
 /// traced write explains is still `unattributed_config_change` at **Fail**.
 ///
-/// The daemon half — that the hook file deviates and the harness's own `config.toml` does
-/// not — is `crates/goalcup-daemon/tests/configwatch.rs`,
-/// `a_harness_owned_file_is_off_the_watch_and_the_hook_file_beside_it_is_not`. This is what
-/// the verifier then does with the event that test produces: the deviation is planted into
+/// The daemon half, the V1 config watch that chained the event, left with D48. This is what
+/// the verifier still does with that event in a recorded trace: the deviation is planted into
 /// the context the shipped pipeline builds for the codex fixture, changing only the event
 /// stream, so the verdict is V9's own and not a constructed one.
 #[test]

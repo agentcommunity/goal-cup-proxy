@@ -10,9 +10,6 @@
 - [ ] I ran the gate: `cargo build`, `cargo fmt --all --check`,
       `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
       Platform and Rust version used:
-- [ ] If I touched `crates/goalcup-{daemon,cli,devserver}` or code they share with V1, I also ran
-      `cargo build --workspace --features v1-compat`, then the `v1-compat` clippy and test
-      commands from CONTRIBUTING.md (or: not applicable).
 - [ ] No credential, token, real transcript or trace is in this PR, its commits, or its description.
 - [ ] Any committed fixture went through `spikes/redact.py` and I reviewed it by eye. Nothing under
       `spikes/*/out/`, `harnesses/` or `target/` is committed.

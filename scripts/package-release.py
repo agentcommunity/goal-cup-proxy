@@ -528,24 +528,6 @@ def _ensure_unchanged(
         refuse("source changed during staging: binary tree")
 
 
-V1_COMPAT_MARKER = b"+v1-compat"
-
-
-def _refuse_v1_compat_daemon(path: Path) -> None:
-    """Refuse a daemon built with the V1 runtime (D42): the pilot bundle is the capture product.
-
-    `goalcup-daemon --version` carries the semver build metadata `+v1-compat` only in that build,
-    and the string is in the binary, so the check reads the file; it never runs it.
-    """
-    with path.open("rb") as source:
-        data = source.read()
-    if V1_COMPAT_MARKER in data:
-        refuse(
-            f"{path.name} was built with the v1-compat feature; the m2-pilot bundle needs the "
-            "default build (cargo build --release, without --features v1-compat)"
-        )
-
-
 def stage(
     repo_root: os.PathLike[str] | str,
     binaries: os.PathLike[str] | str,
@@ -596,7 +578,6 @@ def stage(
     binary_root_snapshot, binary_snapshot = _snapshot_binary_sources(
         binaries_path, extension, names=binary_names
     )
-    _refuse_v1_compat_daemon(binaries_path / "goalcup-daemon")
     connectors_path = repo_path / "connectors"
     connector_snapshot = _snapshot_tree(
         connectors_path, label="connector source tree", only=connector_only

@@ -16,17 +16,18 @@
 //! # `--dev` is the one door
 //!
 //! Exactly one flag admits a rulebook this build does not pin, a placeholder server key, a
-//! loopback development server or a machine that has never run `goalcup auth`, and it is
-//! `--dev` (`--verify-with-dev` where the flag is passed to the verifier rather than to a
-//! launch). It is typed by a human, never set by a shipped code path, and **every place it
-//! matters says so on stdout**: [`manifest_pin_gate`] keeps the check and re-words it rather
-//! than dropping it, so a report from a run that came through the door can never be read as
-//! a report from a run that did not. [`DEV_DOOR`] is the flag's one spelling.
+//! loopback development server or a machine that has no stored grant, and it is `--dev`
+//! (the V1 `goalcup auth` stored the grant and the V1 `--verify-with-dev` passed the flag
+//! to the verifier; D48 removed both). It is typed by a human, never set by a shipped code
+//! path, and **every place it matters says so on stdout**: [`manifest_pin_gate`] keeps the
+//! check and re-words it rather than dropping it, so a report from a run that came through
+//! the door can never be read as a report from a run that did not. [`DEV_DOOR`] is the
+//! flag's one spelling.
 //!
-//! The fourth of those, the grant, is `crate::commands::start`'s rather than this module's:
-//! it is not a preflight check. It is named here because this is where the door is
-//! described, and a list of what one flag admits that is missing one of them is the kind of
-//! list a reader trusts and should not.
+//! The fourth of those, the grant, was the V1 `goalcup start`'s rather than this module's:
+//! it was not a preflight check, and a capture start asks for no grant. It is named here
+//! because this is where the door is described, and a list of what one flag admits that is
+//! missing one of them is the kind of list a reader trusts and should not.
 //!
 //! # The environment is handed in
 //!

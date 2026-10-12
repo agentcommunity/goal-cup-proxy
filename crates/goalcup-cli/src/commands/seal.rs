@@ -8,9 +8,10 @@
 //! legacy sealed manifest. This command asks for that and reports it.
 //!
 //! **It does not signal anything.** D22: the daemon terminates the registered process tree
-//! per `kill.strategy`, because the deadline seal happens when the participant's terminal is
-//! long gone and a kill that only worked from the terminal would be a kill that only worked
-//! when somebody was watching. There is exactly one terminator, and it is not here.
+//! per `kill.strategy`, because a seal can come when the participant's terminal is long gone
+//! (the V1 deadline seal did, until D48 removed it) and a kill that only worked from the
+//! terminal would be a kill that only worked when somebody was watching. There is exactly
+//! one terminator, and it is not here.
 //!
 //! **It does not write the trace.** `<artifact_root>/trace` belongs to the daemon's export,
 //! start to finish. This command's half of exporting is [`crate::seal::trace_dir`] and the
@@ -622,9 +623,9 @@ fn difference_report(local: &SealManifest, sealed: &SealManifest) -> String {
 /// The cap is [`crate::config::CONTROL_FILE_MAX_BYTES`], taken from there rather than named
 /// again so the two cannot drift, and the reason is that file's: **the size of a document
 /// this process did not write is not this process's to trust**. `<trace>/seal.json` sits
-/// under an `artifact_root` the entry cache names — the same cache whose `status_url` is
-/// checked before a browser is handed it — so an edited record, or two entries pointed at one
-/// artifact root, decides which file this reads.
+/// under an `artifact_root` the entry cache names (the same cache whose `status_url` the V1
+/// `goalcup ui` checked before a browser was handed it), so an edited record, or two entries
+/// pointed at one artifact root, decides which file this reads.
 ///
 /// One byte past the cap, so a file exactly at it still reads and anything larger is caught
 /// having read the cap and no more — the shape `config::read_control_file` uses.

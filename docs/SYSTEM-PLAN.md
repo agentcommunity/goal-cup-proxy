@@ -1,11 +1,13 @@
 # The /goal Cup — System Plan and Delivery Tracker v0.2
 
 > **Historical (2026-10-02).** Section 4 predates M1 and the M2 recorder; public V1 scope is
-> recorded in [STATUS](../STATUS.md#v1-on-v1trunk); sections 5-7
-> stay live. Current: [ARCHITECTURE](ARCHITECTURE.md), [STATUS](../STATUS.md).
+> recorded in [STATUS](../STATUS.md#v1-on-v1trunk), and
+> [D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree) deleted the V1 code from this tree (the
+> `v0.5.0` tag keeps it). Sections 5-7 stay live. Current: [ARCHITECTURE](ARCHITECTURE.md),
+> [STATUS](../STATUS.md).
 
 Status: **section 4 (workstream A) is history** — it is the tracker plan as it stood before M1 was built, and `docs/PRD-tracker.md` plus the code supersede it wherever they disagree. Sections 5 to 7 (backend, website, compliance) are live and are covered nowhere else, which is why this file is kept whole. Supersedes v0.1.
-Updated: 2026-09-03; scoped as above 2026-09-08
+Updated: 2026-10-11
 Target event: late September or early October 2026; exact T0 is not set.
 
 v0.2 rewrites the tracker workstream after the harness research pass (`docs/harness-research/`) and the design review recorded in `docs/DECISIONS.md`. The competition model in section 2 is unchanged except where a decision explicitly touches it. Workstreams B, C, and D carry over with the deltas noted.

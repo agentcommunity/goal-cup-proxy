@@ -179,7 +179,7 @@ async fn two_unpinned_same_id_directories_with_different_bytes_refuse_before_any
 #[tokio::test]
 async fn a_nonselected_harness_real_home_refuses_before_any_write() {
     const NONSHIPPED_HOME: &str = ".goalcup-s4a-nonshipped-union-proof";
-    // Keep the legacy manifests complete for the transitional `v1-compat` startup cache, then
+    // Keep the legacy manifests complete for the startup manifest parse (OS-29), then
     // add a harness-only family whose real home must constrain a different selected harness.
     let connectors = copied(&[
         ("codex-cli", "codex-cli"),
@@ -226,8 +226,8 @@ async fn an_unknown_capture_profile_is_unsupported_not_missing_and_writes_nothin
 
 #[tokio::test]
 async fn a_pinned_id_with_changed_directory_bytes_is_refused_before_any_write() {
-    // Hermes has no V1 foreign-scan declaration, so the transitional manifest cache does not
-    // pre-empt this default-capture assertion in a `v1-compat` build. S5 removes that remnant.
+    // Hermes has no V1 manifest, so the startup manifest parse (OS-29) does not pre-empt this
+    // capture assertion.
     let connectors = copied(&[
         ("codex-cli", "codex-cli"),
         ("claude-code-cli", "claude-code-cli"),
@@ -256,8 +256,8 @@ async fn a_renamed_changed_shipped_connector_is_refused_before_any_write() {
         ("hermes-cli", "hermes-cli"),
     ]);
     let renamed = connectors.path().join("renamed-codex");
-    // The canonical legacy directory keeps `v1-compat` startup complete. The alias is a
-    // schema-only candidate so the request reaches the S4a loader in both feature sets.
+    // The canonical legacy directory keeps the startup manifest parse complete. The alias is
+    // a schema-only candidate so the request reaches the S4a loader.
     std::fs::remove_file(renamed.join("manifest.toml")).unwrap();
     std::fs::remove_dir_all(renamed.join("files")).unwrap();
     let path = renamed.join("harness.toml");
@@ -276,10 +276,8 @@ async fn a_renamed_changed_shipped_connector_is_refused_before_any_write() {
     no_writes(&rig, &workspace);
 }
 
-// A v1-compat daemon rejects the aliased V1 manifest while building its startup cache, before a
-// capture endpoint exists. The runtime loader's cross-feature unit test covers the shared policy;
-// this endpoint test covers the default S4 path.
-#[cfg(not(feature = "v1-compat"))]
+// The runtime loader's unit test covers the shared alias policy; this endpoint test covers the
+// S4 path.
 #[tokio::test]
 async fn a_byte_identical_shipped_connector_under_an_alias_is_refused_by_daemon_preflight() {
     let connectors = copied(&[
@@ -323,8 +321,7 @@ async fn two_harness_directories_declaring_one_id_are_refused_before_any_write()
 #[tokio::test]
 async fn a_symlinked_connector_refuses_without_echoing_its_out_of_tree_target_or_writing() {
     const MARKER: &str = "OUT_OF_TREE_MARKER_MUST_NOT_ECHO";
-    // Keep the legacy manifests mutually complete so this default-capture regression also runs
-    // in a `v1-compat` build until S5 removes that startup cache.
+    // Keep the legacy manifests mutually complete for the startup manifest parse (OS-29).
     let connectors = copied(&[
         ("codex-cli", "codex-cli"),
         ("claude-code-cli", "claude-code-cli"),

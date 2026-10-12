@@ -9,7 +9,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 |---|---|---|---|
 | D1 | No API proxy; the transcript is the evidence | amended: forward proxy built; base-URL proxy still forbidden | [entry](#d1-no-api-proxy-the-harnesss-own-transcript-is-the-evidence) · wire-primary §2.3, §4 |
 | D2 | Two legs per harness, reconciled | amended: native + wire; hook leg removed | [entry](#d2-two-legs-per-harness-reconciled) · wire-primary §4; capture-first |
-| D3 | Record raw, interpret later | no m2 note | [entry](#d3-record-raw-interpret-later) |
+| D3 | Record raw, interpret later | no m2 note; `doctor --verify` removed by D48 | [entry](#d3-record-raw-interpret-later) |
 | D4 | One daemon per machine | no m2 note (hook endpoint moot, D24) | [entry](#d4-one-daemon-per-machine) |
 | D5 | Only tracker-created folders are seen | no m2 note (hook-config part moot) | [entry](#d5-only-sessions-in-tracker-created-folders-are-ever-seen) |
 | D6 | Workspace config watched, not locked | no m2 note (hook-config part moot) | [entry](#d6-tracker-config-in-the-workspace-is-watched-not-locked) |
@@ -33,12 +33,12 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D24 | Local hook receiver is authenticated | superseded: no hook receiver | [entry](#d24-m0-the-local-hook-receiver-is-authenticated) · wire-primary §4 |
 | D25 | Feedback is a status-API consumer | no m2 note | [entry](#d25-participant-feedback-is-a-consumer-of-the-status-api-never-a-daemon-feature-and-never-agent-context) |
 | D26 | Token usage derived by the verifier | no m2 note | [entry](#d26-token-usage-is-derived-by-the-verifier-and-published-it-is-not-a-rule) |
-| D27 | `[home_seed]` reads the participant's config | no m2 note | [entry](#d27-dogfood-home_seed-the-per-run-home-is-seeded-by-reading-the-participants-own-configuration-and-what-it-carried-is-recorded) |
+| D27 | `[home_seed]` reads the participant's config | removed by D48 (V1 code; `v0.5.0` keeps it) | [entry](#d27-dogfood-home_seed-the-per-run-home-is-seeded-by-reading-the-participants-own-configuration-and-what-it-carried-is-recorded) |
 | D28 | Wire and PTY capture (M2 reservation) | amended by D36: wire built | [entry](#d28-m2-reservation-wire-and-pty-capture-are-a-later-launch-mode-evidence-boundary) · D36, D1 note |
 | D29 | V1 is the foundation target; V1.1 expands | V1 scope; holds on `v1/trunk` | [entry](#d29-v1-is-the-defined-foundation-qualification-target-v11-is-product-and-event-expansion) · D33 |
 | D30 | `Confirmed` is bounded to the owned set | in force | [entry](#d30-confirmed-termination-is-bounded-to-the-owned-process-set-and-the-limitation-is-stated) · TERMINATION |
-| D31 | Crash recovery resumes the intent | no m2 note | [entry](#d31-crash-recovery-resumes-the-interrupted-intent-it-never-quarantines-an-in-progress-run) |
-| D32 | Receiver evidence loss is a verifier finding | V1 path (receiver gone on m2, D24) | [entry](#d32-receiver-evidence-loss-is-a-verifier-finding-not-a-daemon-side-refusal) |
+| D31 | Crash recovery resumes the intent | removed by D48 (V1 code; `v0.5.0` keeps it) | [entry](#d31-crash-recovery-resumes-the-interrupted-intent-it-never-quarantines-an-in-progress-run) |
+| D32 | Receiver evidence loss is a verifier finding | V1 path (receiver gone on m2, D24); V1 daemon deleted by D48, verifier rule kept | [entry](#d32-receiver-evidence-loss-is-a-verifier-finding-not-a-daemon-side-refusal) |
 | D33 | No ES observer, no privileged daemon, no protocol V5 | in force; note added for D37 | [entry](#d33-no-endpoint-security-observer-no-privileged-daemon-no-protocol-v5--in-v1-or-v11) · D37 |
 | D34 | `3633a14` row-hardening deferred | no m2 note | [entry](#d34-3633a14-row-hardening-is-deferred-past-v1-cherry-pickable-afterward) |
 | D35 | Fail is a broken rule; inference is a Flag | no m2 note | [entry](#d35-dogfood-a-fail-is-a-rule-broken-an-inference-from-incomplete-information-is-a-flag-unexplained_seal_file-is-a-flag) |
@@ -48,12 +48,13 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D39 | Headless launches, ported patterns, Codex home | in force (m2) | [entry](#d39-m2-headless-capture-launches-ported-extra-redaction-patterns-shared-isolated-codex-home) |
 | D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2) | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
 | D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2) | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
-| D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
+| D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47; V1-path clause replaced by D48 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
 | D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2) | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
 | D44 | OpenCode native = read-only own-session SQLite snapshot; public repo goal-cup-tracer | in force (m2); DCO clause amended by D47 | [entry](#d44-m2-opencodes-native-leg-is-a-read-only-snapshot-of-its-own-sessions-rows-the-public-repo-is-goal-cup-tracer) |
 | D45 | Integrity exit judges the record, not the run: interrupted, undecoded and unconfirmed-stop runs stay exit 0 | in force (m2) | [entry](#d45-m2-the-integrity-exit-judges-the-record-not-the-run) |
 | D46 | Capture creation binds the CLI and daemon to identical connector bytes | in force (m2) | [entry](#d46-m2-capture-creation-binds-both-local-halves-to-identical-connector-bytes) |
 | D47 | No DCO sign-off; a human answers for each PR | in force (m2) | [entry](#d47-m2-no-dco-sign-off) |
+| D48 | The V1 path and its `v1-compat` feature leave the tree; history keeps them | in force (m2) | [entry](#d48-m2-the-v1-path-leaves-the-tree) · LEDGER OS-30 |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -129,6 +130,8 @@ Format: decision, why, what it costs, what it changes elsewhere. Passages marked
 **Decision.** The participant-side daemon does no rule interpretation. It captures, hashes, buffers, uploads, snapshots the workspace at seal, and reports health. All parsing, normalization, rule checks, and reconciliation run server-side in the open-source verifier, which also runs offline as `goalcup-verify <trace-dir>`.
 
 **(Corrected 2026-09-08.)** This line said `goalcup verify`, a sub-command of the participant CLI. There is no such sub-command and there is not meant to be one: verification ships as its own binary so the daemon never links the verifier, and so there is one set of flags and one set of exit codes for it. `goalcup` has eight sub-commands and its own `--help` says where verification went; `goalcup doctor --verify <dir>` relays the verdict's exit code for a participant who wants one command.
+(Removed by [D48](#d48-m2-the-v1-path-leaves-the-tree), 2026-10-11: `doctor --verify` was V1-only
+and is deleted, so `goalcup-verify` is the one verdict command; the `v0.5.0` tag keeps it.)
 
 **Why.** Parsers will have bugs and formats will drift. If raw bytes are preserved, a parser fix in judging week is a re-run, not a lost entry. It also keeps the signed, hard-to-change binary small.
 
@@ -432,6 +435,10 @@ The app-wide check becomes "no change to a named `config_allowlist[]` of files t
 
 ## D27. **(dogfood)** `[home_seed]`: the per-run home is seeded by READING the participant's own configuration, and what it carried is recorded.
 
+> **Removed by [D48](#d48-m2-the-v1-path-leaves-the-tree), 2026-10-11.** The CLI code that follows
+> `[home_seed]` was V1-only and is deleted; the verifier still reads recorded `HomeSeeded` events.
+> The `v0.5.0` tag keeps the code.
+
 **Decision.** A connector may declare a `[home_seed]` section, and `goalcup start` and `goalcup resume` follow it before the harness is spawned: named keys are copied out of the participant's own harness configuration file into the document at `[home_seed] to` inside that entry's harness home, and named whole files are copied out of `[home_seed] from_dir` into the same home at mode `0600`. Nothing under the participant's home is opened for writing, and the manifest has no field that could ask for one. A file the per-run home already holds is left as it is; a file the machine does not have is reported and never refused; a machine carrying none of `required` is refused with the step to take. The one value the tracker decides rather than copies is the `trust_keys` entry marking that entry's own empty workspace trusted, written only into the per-run document and only for that one path. Every seeding is chained as a raw `HomeSeeded` record naming the connector, the manifest's spelling of the source, the keys, the keys that were already identical, the keys the tracker itself wrote, and the files copied, kept or missing.
 
 The maintainer's ruling that fixes the shape, recorded 2026-09-08 in `docs/dogfood/2026-09-07/ledger.md`: **"harness settings are the participant's decision, not ours (browser tools etc. allowed if they chose them); the tracker copies their answers and RECORDS as many of these decisions as possible."** So the seed never invents an answer and never overrides one — it carries what is there, and the trace says what it carried.
@@ -512,6 +519,10 @@ D5-D10, D12-D20, D22, D24, D26-D28 remain binding wherever applicable to the nar
 
 ## D30. `Confirmed` termination is bounded to the owned process set, and the limitation is stated.
 
+> **[D48](#d48-m2-the-v1-path-leaves-the-tree), 2026-10-11.** `runtime/seal.rs`, cited below, was
+> V1 code and is deleted (the `v0.5.0` tag keeps it); `termination_summary` is now in
+> `runtime/termination.rs` and the definition stands.
+
 **Decision.** `TerminationOutcomeV1::Confirmed` means: a process-table sweep taken after
 signalling found no member of the bounded owned target set — the group leader, its group
 members, and descendants walked up to the connector's `process_walk` bound — alive, re-confirmed
@@ -572,6 +583,10 @@ qualifying journeys; the definition above does not change.
 
 ## D31. Crash recovery resumes the interrupted intent; it never quarantines an in-progress run.
 
+> **Removed by [D48](#d48-m2-the-v1-path-leaves-the-tree), 2026-10-11.** The V1 sealing recovery
+> below is deleted; the daemon now refuses a registry whose V1 row still owes work
+> (`runtime/daemon.rs`). The `v0.5.0` tag keeps the code.
+
 **Decision.** A crash **during finalization** — a durable `SealingIntent` already exists for the
 entry, in state `Sealing` or `Sealed` — resumes and completes that same intent on restart; it is
 never diverted into a refused or quarantined outcome. A crash **during ordinary capture** — no
@@ -598,6 +613,9 @@ matrix, which requires a daemon restart during capture to resume cleanly.
 cutoff" section.
 
 ## D32. Receiver evidence loss is a verifier finding, not a daemon-side refusal.
+
+> **[D48](#d48-m2-the-v1-path-leaves-the-tree), 2026-10-11.** The V1 daemon path is deleted (the
+> `v0.5.0` tag keeps it); the verifier rule below stays and still applies to recorded v4 traces.
 
 **Decision.** A gap in the leg-2 receiver's declared sequence is decided in the verifier, by one
 rule: per `source`, declared `receiver_meta.seq` values (`Leg2Post::receiver_meta` is `PostMeta`,
@@ -1008,6 +1026,8 @@ Task 5/H-11 designs and the H-11 APFS probe).**
 - **V1 path.** The v4/V1 transcript-and-hook product path stays in the repo but compiles only with a
   `v1-compat` cargo feature, off by default. It is not public surface for v0.5. Its upload, receipt,
   acknowledgement and sign-in pieces are reused by the server phase; the rest is deleted later.
+  (Replaced by [D48](#d48-m2-the-v1-path-leaves-the-tree): the whole path is deleted, and git
+  history and the `v0.5.0` tag keep it.)
 - **Harness contract.** A harness is data: its connector manifest declares the native source and
   form, the session-identity source, seed files, credential variable and CA variable, under a
   `schema_version`. The v5 evidence format is frozen for v0.x (a breaking change means v6). Common
@@ -1034,6 +1054,8 @@ The harness contract of D42 is `connectors/<id>/harness.toml`, harness-contract 
 (`.superpowers/sdd/2026-10-02-oss/harness-contract-v1-design-v2.md`). Eight rulings:
 1. **Two files.** `harness.toml` beside a V1-only `manifest.toml`; the V1 file exists only for
    codex-cli and claude-code-cli under `v1-compat`, and Hermes's is deleted.
+   (By [D48](#d48-m2-the-v1-path-leaves-the-tree) `v1-compat` is gone; the two V1 manifests
+   stay for parsing only, LEDGER OS-29.)
 2. **No claim fields in the contract.** `family`, `tier`, `tested_version_range` and `capture_only`
    are not harness-contract schema-1 fields; claim level lives in `docs/qualification/`. The Claude tool allowance
    becomes an id-only check.
@@ -1154,6 +1176,33 @@ certifies a diff nobody read or fails a check the agent forgot. Contributions ar
 Apache-2.0 section 5. The person who opens a PR states in it that they read the whole diff and
 discloses AI assistance; code-owner review on `main` stays. The `main` ruleset requires `check`
 only and the DCO App is not installed. A `Signed-off-by` line is allowed but not checked.
+
+## D48. **(M2)** The V1 path leaves the tree.
+
+**Decision (owner, Balazs Nemethi, 2026-10-11).** Replaces D42's V1-path clause. The V1/v4
+transcript-and-hook path that compiled only with the `v1-compat` cargo feature is deleted, with
+its upload, receipt, acknowledgement and sign-in pieces. D42 kept those pieces for a later server
+phase; git history and the `v0.5.0` tag preserve them, so a server phase starts from there and
+not from dead code in the tree.
+
+- **Gone.** The `v1-compat` features of `goalcup-cli`, `goalcup-daemon` and `goalcup-devserver`;
+  every item they gated; the V1-only tests (`real_daemon_end_to_end` among them) and their
+  support files; the optional `open`, `rusqlite` and `age` dependencies; the second gate block in
+  README and CONTRIBUTING; the `v1-compat` checkbox in the PR template.
+- **Kept.** Default-build behaviour. The hidden `auth`, `ui` and `resume` commands and the V1
+  control routes still refuse, now naming D48. The daemon still refuses a registry whose V1 rows
+  owe work. The control API types, the V1 `manifest.toml` parsing (OS-29) and the verifier's V1
+  checks are unchanged. The V1 config fields `upload_url`, `server_public_key` and
+  `receipt_binding` drive no upload but are still parsed, because `DaemonConfig` refuses unknown
+  fields and would reject a config that sets them. The V1-only registry functions
+  `open_resume_process_handoff`, `begin_sealing`, `restore_unfinished_sealing`, `in_harness_home`,
+  `remove_if_unstarted` and `start_handoff_complete` still compile because tests cover them
+  (OS-31).
+- **`goalcup-devserver` stays** for now. No shipped binary links it, but the default test suite
+  still does, and code comments cite its constants. Moving what those need and possibly removing
+  the crate is a separate follow-up (OS-31).
+
+**Evidence.** LEDGER OS-30; the pull request that lands it carries the gate results.
 
 ---
 

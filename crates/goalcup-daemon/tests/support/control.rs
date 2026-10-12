@@ -15,7 +15,6 @@
 
 #![allow(dead_code)]
 
-use super::daemon::DaemonHarness;
 use goalcup_daemon::config::DaemonConfig;
 use goalcup_daemon::runtime::Daemon;
 use goalcup_protocol::control::{CONTROL_API_VERSION, WorkspaceOpts};
@@ -48,17 +47,6 @@ impl Response {
             .map(|(_, v)| v.as_str())
     }
 
-    /// Every value under one case-insensitive HTTP header name.  `header` above is enough
-    /// for ordinary response fields, while control-version tests must prove the daemon emits
-    /// exactly one value rather than merely finding a valid first one beside a duplicate.
-    pub fn headers_named(&self, name: &str) -> Vec<&str> {
-        self.headers
-            .iter()
-            .filter(|(key, _)| key.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
-            .collect()
-    }
-
     /// The body as one of the contract's types.
     ///
     /// Synchronous: the body is already whole in memory by the time this returns —
@@ -70,11 +58,8 @@ impl Response {
 
 /// The control listener's address and the CLI's bearer, and every way a test reaches it.
 ///
-/// Separate from [`ControlHarness`]: that harness holds a daemon with one started
-/// entry, and `POST /v0/workspaces` has to be exercised against a daemon holding none —
-/// "failure before dispatch leaves no entry" is an assertion about an empty entry list, and
-/// a fixture that came with an entry already in it could not make it. So both harnesses hold
-/// one of these rather than each carrying its own copy of the twenty lines below.
+/// Both harnesses below hold one of these rather than each carrying its own copy of the
+/// twenty lines that follow.
 pub struct ControlClient {
     pub addr: SocketAddr,
     pub token: String,
@@ -191,22 +176,6 @@ impl ControlClient {
         .await
     }
 
-    /// [`ControlClient::request`] for a deliberate non-text header value.  A `String`
-    /// cannot carry `0x80`, but `HeaderValue::to_str` must refuse it just as a real raw
-    /// loopback client would; writing this request by bytes keeps that protocol boundary
-    /// observable without adding an HTTP client dependency to the test tree.
-    pub async fn request_raw_header_values(
-        &self,
-        method: &'static str,
-        path: &str,
-        token: Option<String>,
-        extra: Vec<(String, Vec<u8>)>,
-        body: String,
-    ) -> Response {
-        self.request_with_header_bytes(method, path, token, extra, body)
-            .await
-    }
-
     async fn request_with_header_bytes(
         &self,
         method: &'static str,
@@ -258,92 +227,6 @@ fn control_version_header() -> Vec<(String, String)> {
     )]
 }
 
-/// A daemon with one started entry, its control listener, and the two tokens that must
-/// never be the same string.
-pub struct ControlHarness {
-    inner: DaemonHarness,
-    pub client: ControlClient,
-    pub control_addr: SocketAddr,
-    pub config_dir: PathBuf,
-    /// The CLI's bearer, read back out of `control.json`.
-    pub control_token: String,
-    /// D24's per-run token, which lives in the workspace where the agent can read it.
-    pub receiver_token: String,
-    /// The key `SignedStatus::verify_with` is pinned against.
-    pub run_public_key: String,
-}
-
-/// Field access on the daemon harness — `h.daemon`, `h.entry_id`, `h.trace_dir` — reads
-/// through to the harness this one wraps, so a control test names the same fields every
-/// other daemon test does.
-impl std::ops::Deref for ControlHarness {
-    type Target = DaemonHarness;
-
-    fn deref(&self) -> &DaemonHarness {
-        &self.inner
-    }
-}
-
-/// Every request method reads through the one [`ControlClient`], so a test written against
-/// the started-entry harness and a test written against the empty one send the same bytes.
-///
-/// Delegated rather than `Deref`'d: this type already dereferences to [`DaemonHarness`], so
-/// `h.entry_id` and `h.daemon` keep reading through to the daemon fixture, and a second
-/// `Deref` impl on one type does not compile.
-impl ControlHarness {
-    pub async fn get(&self, path: &str) -> Response {
-        self.client.get(path).await
-    }
-
-    pub async fn get_no_token(&self, path: &str) -> Response {
-        self.client.get_no_token(path).await
-    }
-
-    pub async fn get_raw_no_token(&self, path: &str) -> Response {
-        self.client.get_raw_no_token(path).await
-    }
-
-    pub async fn post(&self, path: &str) -> Response {
-        self.client.post(path).await
-    }
-
-    pub async fn post_body<B: serde::Serialize>(&self, path: &str, body: &B) -> Response {
-        self.client.post_body(path, body).await
-    }
-
-    pub async fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> T {
-        self.client.post_json(path, body).await
-    }
-
-    pub async fn request(
-        &self,
-        method: &'static str,
-        path: &str,
-        token: Option<String>,
-        extra: Vec<(String, String)>,
-        body: String,
-    ) -> Response {
-        self.client.request(method, path, token, extra, body).await
-    }
-
-    pub async fn request_raw_header_values(
-        &self,
-        method: &'static str,
-        path: &str,
-        token: Option<String>,
-        extra: Vec<(String, Vec<u8>)>,
-        body: String,
-    ) -> Response {
-        self.client
-            .request_raw_header_values(method, path, token, extra, body)
-            .await
-    }
-}
-
 fn parse(text: &str) -> Response {
     let (head, body) = match text.split_once("\r\n\r\n") {
         Some((h, b)) => (h, b.to_string()),
@@ -363,61 +246,6 @@ fn parse(text: &str) -> Response {
         status,
         headers,
         body,
-    }
-}
-
-/// A daemon holding one started entry, with its status document published, so the one
-/// public route that answers a document has a document to answer with.
-#[cfg(feature = "v1-compat")]
-pub async fn control_harness() -> ControlHarness {
-    let inner = super::daemon::started_entry_with_work().await;
-    // The status cadence, run once by hand: `Daemon::run_forever` is not driving this
-    // harness, and the public status route reads what the last publication left.
-    inner
-        .daemon
-        .refresh_statuses()
-        .expect("the statuses publish");
-
-    let config_dir = inner.config.config_dir.clone();
-    let client = ControlClient::of(&inner.daemon, &config_dir);
-    let entry = inner.entry();
-
-    ControlHarness {
-        control_addr: client.addr,
-        control_token: client.token.clone(),
-        client,
-        receiver_token: entry.keys.receiver_token.clone(),
-        run_public_key: entry.keys.public_key_hex().expect("the run public key"),
-        config_dir,
-        inner,
-    }
-}
-
-/// [`super::daemon::restart_daemon`] with the control surface rebuilt around the second
-/// daemon.
-///
-/// The bearer is re-read rather than carried over: `Daemon::start` mints a fresh control
-/// token every time and writes it into `control.json`, so a harness that kept the first one
-/// would get a `401` from every authenticated route and read it as a regression in the
-/// route.
-pub async fn restart_control(h: ControlHarness) -> ControlHarness {
-    let ControlHarness {
-        inner,
-        receiver_token,
-        run_public_key,
-        ..
-    } = h;
-    let inner = super::daemon::restart_daemon(inner).await;
-    let config_dir = inner.config.config_dir.clone();
-    let client = ControlClient::of(&inner.daemon, &config_dir);
-    ControlHarness {
-        control_addr: client.addr,
-        control_token: client.token.clone(),
-        client,
-        receiver_token,
-        run_public_key,
-        config_dir,
-        inner,
     }
 }
 
@@ -500,46 +328,8 @@ pub async fn empty_control_harness_on(
     }
 }
 
-/// An empty daemon under [`v4_binding`], with its receipts signed by a new-event signer for
-/// the same questionnaire.
-pub async fn v4_daemon(object_count: u64) -> EmptyControlHarness {
-    let authority = goalcup_devserver::ReceiptAuthority::new_event("goal-cup-2026-v1")
-        .expect("the V4 questionnaire authority is valid");
-    let (server, upload_url) = super::devserver_with_authority(authority).await;
-    empty_control_harness_on(server, &upload_url, |config| {
-        config.receipt_binding = v4_binding(object_count);
-    })
-    .await
-}
-
-/// The V4 workspace-submission receipt binding with test limits: `object_count` caps the
-/// out-of-window partition's records, and `total_bytes` (1 MiB) caps one record.
-pub fn v4_binding(object_count: u64) -> goalcup_daemon::config::ReceiptBindingPolicy {
-    goalcup_daemon::config::ReceiptBindingPolicy::WorkspaceSubmission {
-        questionnaire_version: "goal-cup-2026-v1".to_string(),
-        submission_profile: goalcup_protocol::submission::SubmissionProfileV1::WorkspaceSnapshotV1,
-        limit_profile: goalcup_protocol::submission::LimitProfileV1 {
-            id: "goal-cup-v1-test".to_string(),
-        },
-        effective_limits: goalcup_protocol::submission::EffectiveSubmissionLimitsV1 {
-            object_count,
-            total_bytes: 1_048_576,
-            pre_cutoff_drain: 1_000,
-            process_walk: 16,
-        },
-        capture_limits: goalcup_daemon::CaptureResourceLimitsV1 {
-            version: 1,
-            namespace_nodes: 1_024,
-            inventory_bytes: 1_048_576,
-            manifest_bytes: 1_048_576,
-        },
-    }
-}
-
 /// A daemon holding one **capture** entry (a v5 local capture, no V1 workspace), its control
-/// listener and bearer. It is the fixture the auth, version and route-table tests use, because
-/// those properties belong to the control layer both builds serve; the V1 entry in
-/// [`ControlHarness`] exists only with `v1-compat`.
+/// listener and bearer. It is the fixture the auth, version and route-table tests use.
 pub struct CaptureControlHarness {
     inner: EmptyControlHarness,
     pub entry_id: String,
@@ -593,13 +383,13 @@ pub async fn capture_control_harness() -> CaptureControlHarness {
 /// [`empty_control_harness`] restarted over the same tree: a second daemon, rehydrating
 /// whatever rows the first one left.
 ///
-/// The started-entry harness has [`restart_control`]; this one is for the case of a
-/// registry row in the shape an older daemon wrote it, taken up by the current daemon.
-/// That row can only be planted after a create and can only be rehydrated by a restart, so
-/// the fixture has to be the empty one.
+/// This one is for the case of a registry row in the shape an older daemon wrote it, taken
+/// up by the current daemon. That row can only be planted after a create and can only be
+/// rehydrated by a restart, so the fixture has to be the empty one.
 ///
-/// The bearer is re-read for [`restart_control`]'s reason: `Daemon::start` mints a fresh
-/// control token every time and writes it into `control.json`.
+/// The bearer is re-read because `Daemon::start` mints a fresh control token every time and
+/// writes it into `control.json`; a harness holding the old one would get a `401` from every
+/// authenticated route.
 pub async fn restart_empty_control(h: EmptyControlHarness) -> EmptyControlHarness {
     restart_empty_control_planting(h, |_| {})
         .await
@@ -671,13 +461,6 @@ pub fn workspace_opts(connector_id: &str) -> WorkspaceOpts {
 pub fn shipped_manifest_sha256(connector_id: &str) -> String {
     let path = shipped_connector_dir(connector_id).join("manifest.toml");
     goalcup_daemon::workspace::sha256_hex(&std::fs::read(&path).expect("the shipped manifest"))
-}
-
-/// The digest of the whole `connectors/<id>/` directory as it ships — the start-time pin,
-/// which covers the hook templates under `files/` the manifest digest cannot see.
-pub fn shipped_connector_dir_sha256(connector_id: &str) -> String {
-    goalcup_protocol::connector_dir::connector_dir_sha256(&shipped_connector_dir(connector_id))
-        .expect("the shipped connector directory hashes")
 }
 
 /// `from` copied to `to`, recursively, creating what it needs.

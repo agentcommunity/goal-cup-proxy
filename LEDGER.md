@@ -203,10 +203,8 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 - ✅ **OS-03** `[OS]` `04ec186`. Build prerequisites documented; `--offline` works on a warm cache.
 - 🟠 **OS-04** `[OS]` `docs/RULES.md` corrections. OS-04a done `04ec186`; OS-04b
   (`docs/TRACKER-CONTRACT.md` from the shipped tree) after T23. c4-C3.
-- ⬜ **OS-05** `[D]`/`[next]` The V1 README walkthrough and `real_daemon_end_to_end` wait for hook
-  posts this branch never receives. Re-execute the walkthrough on the T23 tree.
-  `real_daemon_end_to_end` now compiles only with `v1-compat` (D42); run it with the command in
-  OPERATING, after building the `v1-compat` workspace binaries.
+- ✅ **OS-05** Closed 2026-10-11 by D48: the V1 walkthrough and `real_daemon_end_to_end` were
+  deleted with the V1 path (OS-30); nothing is left to re-execute.
 - ✅ **OS-06** `[OS]` Allowlist copy published as public v0.5.0 (`d2b3206`). c4-I2/I3.
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#source-release).
 - ✅ **OS-07** `[OS]` Private reporting on, `main` ruleset requires `check` (2026-10-11), no DCO.
@@ -217,16 +215,10 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   public allowlist (`3a4672d` kept the directory off the workspace). Prune its Git/publisher half
   after M2.
 - 🟠 **OS-10** `[OS]`/`[next]` Minors. OS-10a done `04ec186`; OS-10b Cargo metadata after Phase D;
-  OS-10c restated by D42: `rusqlite` (and `age`) are optional, `v1-compat`-only dependencies; no
-  shipped connector declares a SQLite store, so a default build links neither (the next SQLite
+  OS-10c done by D48: `rusqlite` and `age` left the tree with the V1 path (the next SQLite
   harness is a separate core PR); OS-10g README to about 200 lines after T23.
-- ✅ **OS-11** `[OS]` D42 gate (branch `m2/v05-v1-gate`): the V1/v4 path compiles only with the
-  `v1-compat` feature (daemon, CLI, devserver). Done: whole V1 modules gated in both `lib.rs`; shared
-  manifest, termination and submission-limit code moved to always-compiled modules; a default daemon
-  refuses only V1 rows that owe work; `goalcup-daemon --version` carries `+v1-compat` and CLI tests
-  and packaging check it; `doctor --verify` is V1; E00–E02 deleted (S-13); packaging collapsed to
-  `m2-pilot`; `tungstenite` replaced; V1 `[launch.env]` pins use the capture deny policy; tests
-  gated per test, with the control-layer auth and route-table tests running in both builds.
+- ✅ **OS-11** `[OS]` D42 gate (branch `m2/v05-v1-gate`): the V1/v4 path compiled only with
+  `v1-compat`. Superseded by D48: the gated path was deleted (OS-30).
 - 🔨 **OS-12** `[post-tag]` Seam refactors. Nothing is merged. Local branch-only coordination
   state: Seam-D has three branch commits plus an uncommitted continuation; Seam-R and Seam-FM
   have two branch commits each; Seam-C, Seam-CLI, Seam-T-daemon and Seam-T-cli are not started.
@@ -271,8 +263,14 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   block `v0.5.0`.
 - ⬜ **OS-28** `[post-tag]` Tail cleanup: the undated C1/C3/C5/C10 cleanup and the `CaptureSpec`
   rename. Starts after every other post-tag lane; changes no frozen record shape.
-- ⬜ **OS-29** `[post-tag]` Remove the default build's retained V1 manifests parsing dependency
-  while preserving `v1-compat`. This does not block source-only `v0.5.0`.
+- ⬜ **OS-29** `[post-tag]` Remove the build's retained V1 manifests parsing dependency. This does
+  not block source-only `v0.5.0`.
+- ✅ **OS-30** D48 (owner, 2026-10-11): the `v1-compat` path, its tests, fixtures and
+  `open`/`rusqlite`/`age` deps are deleted; docs describe the capture path; devserver stays.
+- ⬜ **OS-31** `[post-tag]` D48 follow-up: move `ENTRY_WINDOW_SECONDS`, `DEV_SERVER_SEED` and
+  `dev_server_public_key_hex` out of `goalcup-devserver`, drop the daemon's dev-dependency on it
+  (tests use it only for a placeholder key), consider deleting the crate, and remove the V1-only
+  registry functions D48 lists under "Kept" with their tests.
 
 ---
 
@@ -281,7 +279,7 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
 - ⬜ **H-01** `[next]` Decided 2026-09-29: the user deletes `/tmp/test.db` (left by the E02 Claude run).
 - ⬜ **H-02** `[next]` Decided 2026-09-29: push only after reviewed T23 with the walkthrough
   re-executed, into the fresh public repository (OS-01). Source is published; the walkthrough
-  re-execution (OS-05) stays open.
+  re-execution (OS-05) was closed by D48, which deleted it.
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#source-release).
 - ✅ **H-03** `[next]` Done 2026-10-02, merged `23756d71`, independently reviewed APPROVED. Five causes:
   four test/fixture defects (native-pid rename guess, 400 ms Busy poll, verify before ack, inherited
@@ -346,11 +344,8 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   (D39, T04b) ported them later in the same file. C2 needs an owner-approved amendment note.
 - ⬜ **H-24** `[next]` `docs/qualification/m2-hermes-readiness.md` cites code as `file.rs:line`;
   those citations rot. Replace them with symbol names, or mark the source SHA they were taken at.
-- ⬜ **H-25** `[next]` Found 2026-10-02 by the H-03 lane (api_gate V1 dev path, low rate, not
-  reproduced in 40 loaded runs): `Entry::sweep_foreign` (`runtime/entry.rs`) can chain the run's own
-  session as foreign when a sweep sees the store before the first leg-1 record binds the session
-  (`bound_session()` still `None`) — a false V4 Flag. Needs a design (defer same-family sightings
-  until bound) and independent review.
+- ✅ **H-25** Closed 2026-10-11 by D48: `Entry::sweep_foreign` and the V1 runtime it lived in
+  were deleted (OS-30).
 - ⬜ **H-26** `[later]` Opened 2026-10-05 with D45, for the server phase: when a run's stop cannot be
   confirmed (`Unresolved`), record the final pushed Git commit (for example a GitHub commit hash) as a
   "last known state" marker. Open question: which branch counts when the work is not on main.

@@ -1,8 +1,8 @@
 //! `goalcup-verify <trace-dir>` — the offline verifier. **There is no `goalcup
 //! verify` sub-command**: one verifier, one set of flags, one set of exit codes, and this
-//! binary is it. The one other caller, `goalcup doctor --verify`, links this crate and calls
-//! `verify_trace_with_options` in process rather than shelling out here, so the two cannot
-//! diverge.
+//! binary is it. The one other caller, the V1 `goalcup doctor --verify`, linked this crate
+//! and called `verify_trace_with_options` in process rather than shelling out here, so the
+//! two could not diverge; D48 removed it.
 //!
 //! Exit codes: the verdict's own (0 Pass, 1 Flag, 2 Fail), and **3** for anything that
 //! stopped a verdict from being produced at all. A trace that could not be read is not a

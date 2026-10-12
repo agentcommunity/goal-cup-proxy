@@ -1,79 +1,33 @@
-//! `goalcup doctor` — is the daemon there, what can it see, and the one door the verifier's
-//! development flags come through.
+//! `goalcup doctor` — is the daemon there, and what can it see.
 //!
-//! **The verify mode is V1.** `--verify`, `--verify-with-dev` and `--verify-dev-key` relay the V1
-//! thirteen-check verifier's verdict and compile only with the `v1-compat` feature (D42); a default
-//! build has no verdict path, and a sealed capture is checked by `goalcup-verify
-//! --capture-integrity`. Everything below about `--verify` describes a `v1-compat` build.
+//! This command is [`crate::preflight`] run over every shipped connector with the daemon's
+//! reachability added, and it leaves under the CLI's own ladder: **0** when nothing failed,
+//! **1** when anything did — including on a machine with no daemon running. A sealed capture
+//! is checked by `goalcup-verify --capture-integrity`, not here; the V1 `--verify` mode was
+//! removed with the rest of the V1 path (D48).
 //!
-//! # Two modes, and two exit codes that cannot be confused
-//!
-//! Without `--verify` this command is [`crate::preflight`] run over every shipped connector
-//! with the daemon's reachability added, and it leaves under the CLI's own ladder: **0** when
-//! nothing failed, **1** when anything did — including on a machine with no daemon running.
-//!
-//! With `--verify <dir>` it runs nothing of its own. The number it leaves under is the
-//! **verdict's**, relayed by [`crate::relay_verdict`] and not re-derived: 0 `Pass`, 1 `Flag`,
-//! 2 `Fail`, and 3 when the trace could not be read at all — which is where `goalcup-verify`'s
-//! own `main` lands for the same reason.
-//!
-//! The two ladders overlap at `1`, which is why the modes are exclusive: `--verify`
-//! contributes no check of its own to the number, so within that mode `1` means a flag and
-//! nothing else, and within the other mode `2` is unreachable. `goalcup doctor --help` says
-//! all of this, because an exit code a caller has to reverse-engineer gets reverse-engineered
-//! wrong.
-//!
-//! # `--harness <id>` narrows both halves of the unscoped mode
+//! # `--harness <id>` narrows the report and the number
 //!
 //! Unscoped, this command reports every shipped connector and exits 1 if any of them failed.
 //! "Is this machine healthy" and "can I start this harness" are two questions with two right
 //! answers, and a participant about to run one harness is asking the second. The flag scopes
-//! the report and the number. The daemon check is in both modes, because no harness starts
+//! the report and the number. The daemon check is in both, because no harness starts
 //! without one. A harness id no connector here declares is rung 1 naming the ids that are
 //! there, not an empty report that exits 0.
-//!
-//! # The one door
-//!
-//! `--verify-with-dev` and `--verify-dev-key <hex>` are the only things in this crate that
-//! build a non-default [`VerifyOptions`]; `tests/preflight_doctor.rs` greps the other modules
-//! to keep it that way, because a development flag a shipped path can turn on is a
-//! development flag a judged run can carry. They print a banner naming the flags that were
-//! actually typed — on **stderr** under `--json`, so that stdout stays the one parseable
-//! document — and the relayed verdict's `key_source` is printed beside the severity so a
-//! `supplied` run can never be read as a pinned one.
-//!
-//! # D26
-//!
-//! `Verdict.tokens` is derived and never a rule. In this crate the verdict this diagnostic
-//! relays is the only surface that shows a token total.
 
 use crate::preflight::{self, Check, Level, PreflightReport, connector_checks};
-#[cfg(feature = "v1-compat")]
-use crate::relay_verdict;
 use crate::{CliError, config, connector};
 use goalcup_protocol::control::{CONTROL_API_VERSION, DaemonClient};
-#[cfg(feature = "v1-compat")]
-use goalcup_verifier::{VerifyOptions, verify_trace_with_options};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// What the flags asked for. Built by `main.rs` and by tests, never assembled from the
-/// environment: `verify_with_dev` and `verify_dev_key` are a human's typing or they are
-/// nothing.
+/// environment.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DoctorOptions {
     pub json: bool,
-    /// A sealed entry's trace directory. Present means the verify mode; see the header.
-    #[cfg(feature = "v1-compat")]
-    pub verify: Option<PathBuf>,
-    /// `--verify-with-dev`: `VerifyOptions::dev_mode`.
-    #[cfg(feature = "v1-compat")]
-    pub verify_with_dev: bool,
-    /// `--verify-dev-key <hex>`, repeatable: `VerifyOptions::extra_server_keys`.
-    #[cfg(feature = "v1-compat")]
-    pub verify_dev_key: Vec<String>,
     /// `--harness <id>`: report on this connector alone, and leave under its result alone.
     ///
     /// Unscoped, `goalcup doctor` reports every shipped connector and exits 1 if any of them
@@ -98,9 +52,8 @@ struct DoctorReport<'a> {
 /// or a control API this build does not speak), which is why the no-client branch reads
 /// `control.json` itself rather than reporting a failure it has not actually observed.
 ///
-/// Returns the exit code rather than taking it: with `--verify` the number is the verdict's
-/// and is not this CLI's to choose. See the module header for why that mode is exclusive.
-#[cfg_attr(not(feature = "v1-compat"), allow(unused_variables))]
+/// Returns the exit code rather than taking it, so the caller builds the one `ExitCode`.
+/// `_err` is unused: nothing this command prints goes to standard error.
 pub fn run_with(
     client: Option<&dyn DaemonClient>,
     connectors: &Path,
@@ -108,12 +61,8 @@ pub fn run_with(
     env: &BTreeMap<String, String>,
     opts: &DoctorOptions,
     out: &mut dyn Write,
-    err: &mut dyn Write,
+    _err: &mut dyn Write,
 ) -> Result<u8, CliError> {
-    #[cfg(feature = "v1-compat")]
-    if let Some(dir) = &opts.verify {
-        return verify(dir, opts, out, err);
-    }
     // Before anything is checked, and before `required_paths_gate` creates one of its own: a
     // `.goalcup-preflight-<pid>` in the participant's configuration directory is litter from
     // a process killed mid-check, and the diagnostic that goes looking at this directory is
@@ -433,142 +382,6 @@ fn daemon_check(client: Option<&dyn DaemonClient>, cfg: &Path) -> Check {
     }
 }
 
-/// `--verify <dir>`: the one place a verdict's exit code reaches a participant through this
-/// binary, and the one place [`VerifyOptions`] is built with anything but its defaults.
-#[cfg(feature = "v1-compat")]
-fn verify(
-    dir: &Path,
-    opts: &DoctorOptions,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> Result<u8, CliError> {
-    // Named one at a time, so the banner says what was actually typed.
-    let mut typed: Vec<String> = Vec::new();
-    if opts.verify_with_dev {
-        typed.push("`--verify-with-dev`".to_string());
-    }
-    if !opts.verify_dev_key.is_empty() {
-        typed.push(format!(
-            "{} `--verify-dev-key` value(s)",
-            opts.verify_dev_key.len()
-        ));
-    }
-    if !typed.is_empty() {
-        let mut said = format!(
-            "development verification: {}. This run borrows its trust from whoever typed the \
-             flags, and it is not how a judged entry is verified.",
-            typed.join(" and ")
-        );
-        if opts.verify_with_dev {
-            said.push_str(
-                " Under `--verify-with-dev` an unpinned rulebook is a flag rather than a \
-                 failure, and the placeholder server key is not reported.",
-            );
-        }
-        if !opts.verify_dev_key.is_empty() {
-            said.push_str(" A verdict checked with a supplied key records `key_source: supplied`.");
-        }
-        said.push_str("\n\n");
-        // Under `--json` the banner goes to STDERR and stdout stays one parseable document.
-        // Without `--json` stdout is prose already and the banner belongs in it, immediately
-        // above what it qualifies.
-        let where_it_goes: &mut dyn Write = if opts.json { err } else { out };
-        put_named(where_it_goes, stream_name(opts.json), &said)?;
-    }
-    // The only non-default `VerifyOptions` in this crate. `allow_descriptor_key` stays
-    // false: honouring whatever key a participant wrote into their own descriptor is a
-    // third door, `goalcup-verify --dev-descriptor-key` is where it is opened, and this
-    // command does not open a door the verifier's own binary already owns.
-    let options = VerifyOptions {
-        allow_descriptor_key: false,
-        extra_server_keys: opts.verify_dev_key.clone(),
-        dev_mode: opts.verify_with_dev,
-    };
-    let verdict = verify_trace_with_options(dir, options)
-        // Rung 3, which is where `goalcup-verify`'s own `main` lands when it cannot read a
-        // trace, and never rung 1: inside this mode 1 is a `Flag` and nothing else.
-        .map_err(|e| CliError::Internal(format!("{}: {e}", dir.display())))?;
-    if opts.json {
-        put(out, &format!("{}\n", verdict.to_json()?))?;
-    } else {
-        put(out, &render_verdict(dir, &verdict))?;
-    }
-    Ok(relay_verdict(&verdict))
-}
-
-/// The verdict as a participant reads it.
-///
-/// `key_source` is printed **beside** the severity and not below the fold, because "the
-/// signatures verified" means nothing without which key verified them: a `supplied` run
-/// borrowed its trust from whoever invoked it and must never be read as a pinned one.
-#[cfg(feature = "v1-compat")]
-fn render_verdict(dir: &Path, v: &goalcup_verifier::Verdict) -> String {
-    let mut out = format!("verification: {}\n", dir.display());
-    out.push_str(&format!(
-        "  overall      {}  (key_source: {}, manifest_pin: {})\n",
-        word(&v.overall),
-        word(&v.key_source),
-        word(&v.manifest_pin)
-    ));
-    out.push_str(&format!(
-        "  connector    {} ({})\n",
-        v.connector_id, v.connector_manifest_sha256
-    ));
-    out.push_str(&format!(
-        "  entry        {} on harness {}\n",
-        v.entry_id, v.harness_version
-    ));
-    // D26: the one surface in this crate that shows a token total.
-    if v.tokens.by_model.is_empty() {
-        out.push_str("  tokens       none recorded\n");
-    } else {
-        for m in &v.tokens.by_model {
-            out.push_str(&format!(
-                "  tokens       {}: {} prompt, {} completion, {} cached\n",
-                m.model, m.prompt, m.completion, m.cached
-            ));
-        }
-    }
-    if !v.tokens.stripped.is_empty() {
-        out.push_str(&format!(
-            "               stripped before publication: {}\n",
-            v.tokens.stripped.join(", ")
-        ));
-    }
-    out.push_str(
-        "               (derived, never a rule; this diagnostic is the only surface in M1 \
-         that shows it)\n",
-    );
-    if v.review_queue.is_empty() {
-        out.push_str("  review queue empty\n");
-    } else {
-        out.push_str(&format!("  review queue ({}):\n", v.review_queue.len()));
-        for f in &v.review_queue {
-            out.push_str(&format!(
-                "    {} {}  {}\n",
-                word(&f.severity),
-                f.code,
-                f.message
-            ));
-        }
-    }
-    out
-}
-
-/// The word a serialised enum uses — `pinned`, `flag`, `supplied` — so this command names
-/// the verdict's own vocabulary rather than inventing a second one that can drift from it.
-///
-/// A value that will not serialise is a defect in the verifier's own document rather than
-/// something to panic over here: it renders as `?` and the rest of the verdict still prints.
-#[cfg(feature = "v1-compat")]
-fn word<T: Serialize>(value: &T) -> String {
-    match serde_json::to_value(value) {
-        Ok(serde_json::Value::String(s)) => s,
-        Ok(other) => other.to_string(),
-        Err(_) => "?".to_string(),
-    }
-}
-
 /// Every byte this command prints goes through here, so a closed pipe is a [`CliError::Io`]
 /// naming the stream rather than an `unwrap` in a command a participant is watching.
 fn put(out: &mut dyn Write, text: &str) -> Result<(), CliError> {
@@ -582,15 +395,4 @@ fn put_named(out: &mut dyn Write, name: &str, text: &str) -> Result<(), CliError
             path: name.to_string(),
             source,
         })
-}
-
-/// Which stream the development banner went to, for the error that says it could not be
-/// written.
-#[cfg(feature = "v1-compat")]
-fn stream_name(json: bool) -> &'static str {
-    if json {
-        "standard error"
-    } else {
-        "standard output"
-    }
 }

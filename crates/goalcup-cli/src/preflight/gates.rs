@@ -15,8 +15,8 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// The one spelling of the one door. `goalcup start --dev` and
-/// `goalcup doctor --verify-with-dev` are the two places a human types it, and the header of
+/// The one spelling of the one door. `goalcup start --dev` is the place a human types it
+/// (the V1 `goalcup doctor --verify-with-dev` was the other until D48), and the header of
 /// [`super`] lists the four things it admits.
 pub const DEV_DOOR: &str = "--dev";
 

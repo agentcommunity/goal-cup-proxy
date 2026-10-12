@@ -4,12 +4,12 @@
 //! span is recorded in the same hash-covered envelope as the bytes it describes,
 //! "so hashes are computed over redacted bytes consistently". This module is the whole of
 //! that: [`Redactor::apply`] takes a record's raw bytes and returns the bytes the chain
-//! will hash. The raw bytes never leave this stage — [`crate::tailer::CapturedRecord`]'s
-//! `bytes` field exists for this call and enters no hash.
+//! will hash. The raw bytes never leave this stage: the caller's raw record exists for this
+//! call and enters no hash.
 //!
-//! **The order is fixed and cannot be reordered.** Partition, then redact, then hash, then
-//! buffer. Redacting after hashing would publish a digest of the secret; hashing after
-//! buffering would buffer it.
+//! **The order is fixed and cannot be reordered.** Redact, then hash, then persist (the V1
+//! path also partitioned first and buffered last; D48 removed it). Redacting after hashing
+//! would publish a digest of the secret; persisting before redacting would store it.
 //!
 //! **No interpretation.** A pattern match is a byte comparison against a regular
 //! expression this file or the connector's manifest carries, never a judgement about what

@@ -3,29 +3,16 @@ use super::handlers::{
     no_such_route, record_capture_goal, record_capture_launch, register_process, seal_entry,
     wrong_method,
 };
-#[cfg(feature = "v1-compat")]
-use super::handlers::{
-    arm_entry, cancel_process_handoff, create_workspace, resume_entry, resume_preview_entry,
-    wait_start_signal,
-};
-// A default build mounts the V1 routes as one stub that says so (D42), behind the same bearer
-// and version gates, so the route table does not change shape between configurations.
-#[cfg(not(feature = "v1-compat"))]
+// The removed V1 routes (D48) are mounted as one stub that says so, behind the same bearer and
+// version gates, so the route table keeps its shape.
 use super::handlers::resume_refused as resume_entry;
-#[cfg(not(feature = "v1-compat"))]
 use super::handlers::resume_refused as resume_preview_entry;
-#[cfg(not(feature = "v1-compat"))]
 use super::handlers::v1_route_not_built as arm_entry;
-#[cfg(not(feature = "v1-compat"))]
 use super::handlers::v1_route_not_built as cancel_process_handoff;
-#[cfg(not(feature = "v1-compat"))]
 use super::handlers::v1_route_not_built as create_workspace;
-#[cfg(not(feature = "v1-compat"))]
 use super::handlers::v1_route_not_built as wait_start_signal;
 use super::{ControlErrorResponse, ControlState, http_status_for};
 use crate::DaemonError;
-#[cfg(feature = "v1-compat")]
-use crate::ui::{UiState, ui_router};
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, header::HOST};
@@ -386,21 +373,8 @@ fn version_refusal(client: serde_json::Value) -> Response {
 
 // ------------------------------------------------------------------ the router
 
-/// `ui_router(ui)` ∪ the unauthenticated status route ∪ everything else behind the auth
-/// layer — with the layer over all three, because the split is decided by
-/// `is_public_route` and not by which sub-router a path happened to land in.
-///
-/// Every route [`TOP_LEVEL_ROUTES`] and [`ENTRY_SUFFIXES`] name is registered here. The
-/// route names all come from those two tables and the protocol's
-/// `ROUTE_*`; no path in this crate is a literal.
-#[cfg(feature = "v1-compat")]
-pub fn control_router(state: ControlState, ui: UiState) -> Router {
-    control_router_with(state, ui_router(ui))
-}
-
-/// The default build's router: the same table, with the V1 browser page replaced by the stub
-/// that says it is not in this build.
-#[cfg(not(feature = "v1-compat"))]
+/// The control router: the route table, with the removed V1 browser page answered by the stub
+/// that says so (D48).
 pub fn control_router(state: ControlState) -> Router {
     control_router_with(
         state,

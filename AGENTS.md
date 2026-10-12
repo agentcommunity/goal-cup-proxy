@@ -8,7 +8,7 @@ verify. This file is for agents (Claude Code, Codex, others) and people.
 [`skills/adding-a-capture-harness`](skills/adding-a-capture-harness/SKILL.md) and
 [`docs/HARNESS-ONBOARDING.md`](docs/HARNESS-ONBOARDING.md). Treat STATUS and LEDGER as
 maintainer-owned: put proposed edits to them in your PR description.
-Updated: 2026-10-10.
+Updated: 2026-10-11.
 
 ## Read in this order
 
@@ -39,8 +39,9 @@ Updated: 2026-10-10.
   hash of one: only selected bodies and allowlisted metadata, redacted before hashing or disk
   (D36). It never changes the harness base URL.
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** The tracker
-  creates isolated homes. The only reads of app-wide files are the documented `[home_seed]`
-  copies. Participants use subscription auth.
+  creates isolated homes and reads no app-wide harness configuration. The one link into the real
+  home is Claude Code's run `HOME/Library/Keychains` to `~/Library/Keychains`, for its subscription
+  login (D38). Participants use subscription auth.
 - **A test that launches a harness uses a private HOME.** Check the real HOME before and after.
   A test that touches the real HOME has already broken this rule (LEDGER H-17).
 - **Run the four-command gate before any commit**, in this order ([README](README.md#the-gate)

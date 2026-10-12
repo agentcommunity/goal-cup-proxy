@@ -563,8 +563,8 @@ fn spell(seconds: u64) -> String {
 
 /// One write, and the error naming the stream it could not be made on.
 ///
-/// Shared with [`crate::commands::entries`] and [`crate::commands::ui`]: three surfaces over
-/// one document, and one sentence for a terminal that closed under them.
+/// Shared with [`crate::commands::entries`]: two surfaces over one document, and one
+/// sentence for a terminal that closed under them.
 pub(crate) fn put(out: &mut dyn Write, text: &str) -> Result<(), CliError> {
     out.write_all(text.as_bytes())
         .map_err(|source| CliError::Io {

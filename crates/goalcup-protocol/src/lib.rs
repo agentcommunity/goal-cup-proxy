@@ -9,7 +9,7 @@
 //! * [`connector_dir`]: the connector-directory digest;
 //! * [`pins`]: the directory pins this build ships, as data;
 //! * [`hints`]: the protocol-hint grammar;
-//! * [`manifest`]: the V1 manifest (`manifest.toml`), kept for the `v1-compat` product path.
+//! * [`manifest`]: the V1 manifest (`manifest.toml`), still parsed at startup until OS-29.
 
 pub mod ack;
 pub mod capture;

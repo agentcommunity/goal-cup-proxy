@@ -180,18 +180,6 @@ class PackageReleaseTests(unittest.TestCase):
                 reparse, 0o644, "bin/goalcup", windows_host=True
             )
 
-    def test_a_v1_compat_daemon_is_refused_before_creating_output(self) -> None:
-        fixture = StagingFixture(self)
-        fixture.minimal_complete()
-        (fixture.binaries / "goalcup-daemon").write_bytes(b"goalcup-daemon 0.1.0+v1-compat\0")
-        output = fixture.temp / "stage"
-
-        with self.assertRaisesRegex(ValueError, "v1-compat"):
-            fixture.stage(output)
-
-        self.assertFalse(output.exists())
-        self.assertEqual(list(fixture.temp.glob("stage.tmp-*")), [])
-
     def test_missing_binary_is_named_and_leaves_no_output(self) -> None:
         fixture = StagingFixture(self)
         fixture.minimal_complete()

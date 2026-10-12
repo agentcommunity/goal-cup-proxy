@@ -4,7 +4,7 @@ For anyone about to trust a Pass or claim a new check closes something. It lists
 this build accepts, each with what bounds it and the ticket that tracks it. Anything that behaves
 worse than stated here is a bug. Add a row whenever a review accepts a gap instead of fixing it.
 
-Updated: 2026-10-02. A verifier exit 0 alone is not a capture claim: a claim needs native and wire
+Updated: 2026-10-11. A verifier exit 0 alone is not a capture claim: a claim needs native and wire
 records per real harness ([ARCHITECTURE](ARCHITECTURE.md), [qualification index](qualification/README.md)).
 
 ## On m2/wire (current)
@@ -101,11 +101,12 @@ closed where they can. These are the shapes they cannot see (independent secret 
 
 ## On v1/trunk
 
-These rows describe the V1 hook-era build on `v1/trunk` and `v0.1.0`. They are kept short; the
-earlier long wording is in git (`git show f8621f99:docs/CHEAT-CHECKLIST.md`).
+These rows are V1 history: the hook-era build on `v1/trunk` and `v0.1.0`. D48 deleted that code
+from this tree; the files they name are at the `v0.5.0` tag. They are kept short; the earlier long
+wording is in git (`git show f8621f99:docs/CHEAT-CHECKLIST.md`).
 
 - **SQLite in-place UPDATE or DELETE is unwitnessed** (OpenCode tailer pages by rowid;
-  `crates/goalcup-daemon/src/tailer/sqlite.rs`). OpenCode has no connector on m2.
+  `crates/goalcup-daemon/src/tailer/sqlite.rs` at `v0.5.0`). OpenCode has no connector on m2.
 - **App-wide config changed while no daemon runs is not reported.** The baseline is re-hashed at
   daemon start; the chain shows a `DaemonRestart` marking the window.
 - **The pinned server key is the published placeholder** until V1.1; `goalcup-verify` reports

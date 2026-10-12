@@ -502,8 +502,10 @@ pub struct AppWideException {
     pub disclosure: String,
 }
 
-/// What `goalcup start` and `goalcup resume` copy out of the participant's own app-wide
-/// harness configuration into the per-run home, before the harness is spawned.
+/// What the V1 `goalcup start` and `goalcup resume` copied out of the participant's own
+/// app-wide harness configuration into the per-run home, before the harness was spawned.
+/// D48 removed that seeding: a capture launch carries no home seed, and the daemon refuses
+/// one that does.
 ///
 /// # Why a connector needs this at all
 ///
@@ -723,10 +725,11 @@ impl<'de> Deserialize<'de> for LegacyIgnored {
 
 /// Whether a `lock_paths[]` entry, rendered, is HELD right now.
 ///
-/// **One rule, in one place, because two readers ask it.** The daemon refuses a resume on
-/// it (`control::handlers::free_of_held_locks`) and the CLI refuses one before the POST
-/// (`commands::resume::check_locks`). A directory the harness creates at startup and never
-/// removes must read as free to both, so the rule is written once, here.
+/// **One rule, in one place, because two readers asked it.** The V1 daemon refused a resume
+/// on it (`control::handlers::free_of_held_locks`) and the V1 CLI refused one before the
+/// POST (`commands::resume::check_locks`); D48 removed both, and nothing calls it now. A
+/// directory the harness creates at startup and never removes must read as free to every
+/// reader, so the rule is written once, here.
 ///
 /// The rule:
 ///

@@ -3,14 +3,14 @@
 //!
 //! The status document is `goalcup_protocol::control::StatusPayload` — the daemon defines
 //! no second shape — so the fixture builds that type and nothing else. `health_status.rs`
-//! reads all of it; `entry_lifecycle.rs` and `control_api.rs` read the
-//! payload half, which is why it lives here rather than inline in one test file.
+//! reads all of it; `control_api.rs` reads the payload half, which is why it lives here
+//! rather than inline in one test file.
 
 use goalcup_daemon::arming::GateState;
 use goalcup_daemon::health::{HealthInputs, HealthPolicy};
 use goalcup_daemon::registry::{Entry, RunKeys};
-use goalcup_daemon::status::{StatusInputs, plain_words};
-use goalcup_protocol::control::{ArmingState, EventStatus, StatusPayload};
+use goalcup_daemon::status::StatusInputs;
+use goalcup_protocol::control::EventStatus;
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::manifest::ConnectorManifest;
 use std::sync::OnceLock;
@@ -114,68 +114,4 @@ pub fn status_inputs(entry: &Entry) -> StatusInputs<'_> {
         files_capped: 0,
         harness_unverified: false,
     }
-}
-
-/// The payload alone, for a caller that has no `Entry` to build it from.
-pub fn payload_for(entry_id: &str) -> StatusPayload {
-    StatusPayload {
-        entry_id: entry_id.to_string(),
-        connector_id: "claude-code-cli".to_string(),
-        workspace: "/tmp/goalcup/ws/entry-0001".to_string(),
-        session_id: Some("95addb64".to_string()),
-        harness_version: Some("2.1.259".to_string()),
-        arming: ArmingState::Started,
-        health: HealthState::Online,
-        started_at: Some("2026-09-03T07:42:00Z".to_string()),
-        deadline_at: Some("2026-09-10T07:42:00Z".to_string()),
-        sealed_at: None,
-        seconds_remaining: Some(3_600),
-        last_sync_at: Some("2026-09-04T08:59:55Z".to_string()),
-        events_uploaded: 206,
-        events_pending: 0,
-        arming_recipe: None,
-        detail: plain_words(HealthState::Online, GateState::Started, true),
-        event: event_status(),
-        event_status_source: goalcup_protocol::control::EventStatusSource::Fallback,
-        cycles: goalcup_protocol::control::CycleErrors::default(),
-        posts_dropped: 0,
-        posts_dropped_after_seal: 0,
-        pins_dropped: 0,
-        polls_capped: 0,
-        cursor_restore_failures: 0,
-        skipped_replayed: 0,
-        buffer_gap_at: None,
-        files_capped: 0,
-        harness_unverified: false,
-        finalization: None,
-        capture: None,
-        producers_consumed: None,
-        admissions_refused: None,
-    }
-}
-
-/// One GET, one response, as a browser with no token would make it. Twenty lines of
-/// HTTP/1.1 over `std::net::TcpStream`, for the same reason the POST client beside it is:
-/// this workspace has no client crate, and a dependency added so a test can speak the
-/// protocol it already serves is a dependency the workspace then carries.
-pub fn http_get(addr: &str, path: &str) -> (u16, String) {
-    use std::io::{Read, Write};
-    let mut stream = std::net::TcpStream::connect(addr).expect("connect to the ui server");
-    let head =
-        format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAccept: */*\r\n\r\n");
-    stream.write_all(head.as_bytes()).expect("write the head");
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).expect("read the response");
-    let text = String::from_utf8_lossy(&raw).to_string();
-    let (head, body) = match text.split_once("\r\n\r\n") {
-        Some((h, b)) => (h.to_string(), b.to_string()),
-        None => (text.clone(), String::new()),
-    };
-    let status = head
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse::<u16>().ok())
-        .expect("a status line");
-    (status, body)
 }

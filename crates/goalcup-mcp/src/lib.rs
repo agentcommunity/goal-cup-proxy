@@ -451,8 +451,9 @@ pub fn tools_manifest() -> Value {
             "description": "How the current run is doing, from the signed status cache: \
                             arming state, health, seconds remaining, when the tracker last \
                             synced, and whether that document is stale (`offline`). \
-                            `arming: \"refused\"` means the gate will never arm and waiting \
-                            for it is waiting for nothing. Read-only.",
+                            `arming: \"refused\"` appears only in a status a pre-D48 \
+                            (v0.5.0) daemon wrote, and means that run's gate will never arm. \
+                            Read-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
