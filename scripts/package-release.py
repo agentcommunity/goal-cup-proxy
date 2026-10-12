@@ -545,7 +545,7 @@ def stage(
     target. It records candidate, private, unsigned, unnotarized and unqualified labels, plus
     each schema harness's SHA-256. Every payload binary and connector file is
     SHA-256-bound in the inventory.
-    No profile ever includes `goalcup-devserver`, `goalcup-git`, traces, keys, or `.git`:
+    No profile ever includes another binary, traces, keys, or `.git`:
     this tool never looks at any of them.
     """
     repo_path = _absolute_path(repo_root)

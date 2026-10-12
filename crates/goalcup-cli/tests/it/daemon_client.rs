@@ -2,9 +2,8 @@
 //!
 //! The two halves of this file test two different things on purpose. The bearer rule, the
 //! wire codes and the body shape are properties of a REQUEST, so they are asserted against a
-//! real socket. The mock holds no headers and models none; what it is for is call order, a
-//! signature a test can pin a key against, and a start signal that can be withheld or
-//! delayed.
+//! real socket. The mock holds no headers and models none; what it is for is call order and
+//! a signature a test can pin a key against.
 //!
 //! The `busy` retry is asserted on BOTH, which is the point of where it lives: it is
 //! `retry::retry_busy`, above the trait, so the same helper covers a command driven by the
@@ -354,7 +353,8 @@ fn a_busy_409_is_retried_by_the_helper_and_a_conflict_409_is_not() {
     // Answers 409/`busy` once, then 200.
     let srv = support::recording_daemon_busy_once();
     let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
-    retry_busy(|| c.arm("e1")).expect("a busy daemon is a daemon to ask again");
+    retry_busy(|| c.abandon("e1", "stopping early"))
+        .expect("a busy daemon is a daemon to ask again");
     assert_eq!(
         srv.attempts(),
         2,
@@ -377,7 +377,7 @@ fn a_daemon_that_stays_busy_is_reported_after_a_bounded_number_of_attempts() {
     let srv = support::erroring_daemon(409, "busy", "an upload is holding this entry");
     let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
     assert!(matches!(
-        retry_busy(|| c.arm("e1")),
+        retry_busy(|| c.abandon("e1", "stopping early")),
         Err(ControlError::Busy(_))
     ));
     assert_eq!(
@@ -393,7 +393,10 @@ fn a_daemon_that_stays_busy_is_reported_after_a_bounded_number_of_attempts() {
 fn the_transport_itself_never_retries_anything() {
     let srv = support::erroring_daemon(409, "busy", "an upload is holding this entry");
     let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
-    assert!(matches!(c.arm("e1"), Err(ControlError::Busy(_))));
+    assert!(matches!(
+        c.abandon("e1", "stopping early"),
+        Err(ControlError::Busy(_))
+    ));
     assert_eq!(
         srv.attempts(),
         1,
@@ -403,7 +406,7 @@ fn the_transport_itself_never_retries_anything() {
 
 /// A command is written against the trait and tested against the mock, so the retry has to
 /// work there — `busy_once` then success, one call to the helper, and the fake counting both
-/// attempts. That a resume retries a busy once is testable because of this test's shape, not
+/// attempts. That a command retries a busy once is testable because of this test's shape, not
 /// the wire one's.
 #[test]
 fn the_helper_retries_a_busy_through_the_mock_the_commands_are_driven_by() {
@@ -411,16 +414,12 @@ fn the_helper_retries_a_busy_through_the_mock_the_commands_are_driven_by() {
     let m = MockDaemonClient::armed_ok(tmp.path(), "claude-code-cli");
     let info = m.info();
 
-    m.busy_once("resume");
-    let request = goalcup_protocol::control::ResumeRequest {
-        expected_generation: info.process_generation,
-    };
-    let resumed = retry_busy(|| m.resume(&info.entry_id, &request))
+    m.busy_once("abandon");
+    retry_busy(|| m.abandon(&info.entry_id, "stopping early"))
         .expect("one busy, asked again, and answered");
 
-    assert_eq!(resumed.entry_id, info.entry_id);
     assert_eq!(
-        m.calls().iter().filter(|call| *call == "resume").count(),
+        m.calls().iter().filter(|call| *call == "abandon").count(),
         2,
         "the mock's own record of the attempts: the same retry the wire client gets, \
          because both are reached through the trait"
@@ -477,7 +476,7 @@ fn the_helper_stops_at_its_wall_clock_budget_and_not_only_at_its_attempt_count()
     let srv = support::erroring_daemon(409, "busy", "an upload is holding this entry");
     let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
     assert!(matches!(
-        retry_busy_within(Duration::ZERO, || c.arm("e1")),
+        retry_busy_within(Duration::ZERO, || c.abandon("e1", "stopping early")),
         Err(ControlError::Busy(_))
     ));
     assert_eq!(srv.attempts(), 1);
@@ -652,9 +651,9 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
     let info = m.info();
 
     // One `busy`, then the call goes through, and the mock counts both.
-    m.busy_once("arm");
-    assert!(matches!(m.arm(&info.entry_id), Err(ControlError::Busy(_))));
-    assert!(m.arm(&info.entry_id).is_ok(), "one busy, and then success");
+    m.busy_once("health");
+    assert!(matches!(m.health(), Err(ControlError::Busy(_))));
+    assert!(m.health().is_ok(), "one busy, and then success");
 
     // An arbitrary refusal, once.
     m.fail_next("seal", ControlError::NotFound("no such entry".into()));
@@ -720,28 +719,6 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
     )
     .unwrap();
     assert_eq!(m.last_registered_pid(), Some(4242));
-    m.set_last_process_pid(777);
-    assert_eq!(
-        m.resume_info().last_process.map(|p| p.pid),
-        Some(777),
-        "a resume reports the process the previous launch left behind"
-    );
-    assert_eq!(
-        m.resume(
-            &info.entry_id,
-            &goalcup_protocol::control::ResumeRequest {
-                expected_generation: info.process_generation,
-            },
-        )
-        .unwrap()
-        .entry_id,
-        info.entry_id
-    );
-    assert_eq!(
-        m.resume_preview(&info.entry_id).unwrap().entry_id,
-        info.entry_id,
-        "the mock exposes the same dedicated preview method as the wire client"
-    );
 
     // What the CLI abandoned, and why.
     m.abandon(&info.entry_id, "the arming window closed")
@@ -754,16 +731,6 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
         )]
     );
 
-    // The options the command actually sent.
-    assert_eq!(
-        m.last_workspace_opts().connector_id,
-        "no create_workspace call was made on this mock",
-        "nothing was created on this mock, and the sentinel says so rather than \
-         inventing an options document"
-    );
-    let opts = support::workspace_opts();
-    m.create_workspace("claude-code-cli", &opts).unwrap();
-    assert_eq!(m.last_workspace_opts(), opts);
     assert_eq!(m.entry_count(), 1);
 
     // The seal, once, and the mirror that disagrees with the workspace.

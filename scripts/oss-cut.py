@@ -106,8 +106,8 @@ ALLOW = [
     ("regex", r"^spikes/[^/]+/fixtures/"),
 ]
 
-# Internal by D42: plans, handoffs, reviews, dogfood logs, spike reports; build output; the one
-# non-workspace crate; local scratch.
+# Internal by D42: plans, handoffs, reviews, dogfood logs, spike reports; build output; local
+# scratch.
 DENY = [
     ("prefix", ".superpowers/"),
     ("prefix", "docs/superpowers/"),
@@ -115,7 +115,6 @@ DENY = [
     ("prefix", "docs/dogfood/"),
     # Local compatibility alias for the canonical, already-included skills/ directory.
     ("exact", ".claude/skills/adding-a-capture-harness"),
-    ("prefix", "crates/goalcup-git/"),
     ("prefix", "docs/qualification/2026-09-16-review-evidence/"),
     ("exact", "docs/qualification/2026-09-16-review.md"),
     ("exact", "docs/qualification/2026-09-17-journey-dogfood.md"),

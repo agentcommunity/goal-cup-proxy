@@ -3,14 +3,6 @@ use super::handlers::{
     no_such_route, record_capture_goal, record_capture_launch, register_process, seal_entry,
     wrong_method,
 };
-// The removed V1 routes (D48) are mounted as one stub that says so, behind the same bearer and
-// version gates, so the route table keeps its shape.
-use super::handlers::resume_refused as resume_entry;
-use super::handlers::resume_refused as resume_preview_entry;
-use super::handlers::v1_route_not_built as arm_entry;
-use super::handlers::v1_route_not_built as cancel_process_handoff;
-use super::handlers::v1_route_not_built as create_workspace;
-use super::handlers::v1_route_not_built as wait_start_signal;
 use super::{ControlErrorResponse, ControlState, http_status_for};
 use crate::DaemonError;
 use axum::Router;
@@ -22,8 +14,7 @@ use axum::routing::{get, post};
 use goalcup_protocol::constant_time::constant_time_eq;
 use goalcup_protocol::control::{
     CONTROL_API_VERSION, ControlError, ErrorBody, ErrorDetail, ROUTE_CAPTURE_WORKSPACES,
-    ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, ROUTE_UI, ROUTE_WORKSPACES,
-    is_public_route,
+    ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, is_public_route,
 };
 use std::net::SocketAddr;
 use std::sync::OnceLock;
@@ -35,28 +26,22 @@ use std::sync::OnceLock;
 ///
 /// They are strings the daemon's router and the CLI's client both have to spell the same
 /// way, and a string spelled in two crates is a string that drifts. They live in the crate
-/// neither side owns and are re-exported here, so `control::SUFFIX_ARM` names the route the
+/// neither side owns and are re-exported here, so `control::SUFFIX_SEAL` names the route the
 /// protocol names and there is no second definition to drift from the first.
 /// `ENTRY_SUFFIXES` and [`entry_pattern`] below are here only: they are this router's own
 /// business, and no client reads them.
 pub use goalcup_protocol::control::{
-    QUERY_TIMEOUT_MS, SUFFIX_ABANDON, SUFFIX_ARM, SUFFIX_CAPTURE_GOAL, SUFFIX_CAPTURE_LAUNCH,
-    SUFFIX_PROCESS, SUFFIX_PROCESS_CANCEL, SUFFIX_RESUME, SUFFIX_RESUME_PREVIEW, SUFFIX_SEAL,
-    SUFFIX_START_SIGNAL, SUFFIX_STATUS,
+    SUFFIX_ABANDON, SUFFIX_CAPTURE_GOAL, SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS, SUFFIX_SEAL,
+    SUFFIX_STATUS,
 };
 
 /// Every `/v0/entries/{id}/…` route the control API defines, in the order the CLI meets
 /// them over a run's life. Enumerated so a test can assert the bearer rule over the whole
 /// surface rather than over a handful of hand-picked paths.
-pub const ENTRY_SUFFIXES: [&str; 11] = [
-    SUFFIX_ARM,
-    SUFFIX_START_SIGNAL,
+pub const ENTRY_SUFFIXES: [&str; 6] = [
     SUFFIX_STATUS,
-    SUFFIX_RESUME,
-    SUFFIX_RESUME_PREVIEW,
     SUFFIX_SEAL,
     SUFFIX_PROCESS,
-    SUFFIX_PROCESS_CANCEL,
     SUFFIX_ABANDON,
     SUFFIX_CAPTURE_GOAL,
     SUFFIX_CAPTURE_LAUNCH,
@@ -64,11 +49,8 @@ pub const ENTRY_SUFFIXES: [&str; 11] = [
 
 /// Every route that is not under `/v0/entries/{id}/`.
 ///
-/// There is no sponsor route here: the list is markup inside the bundled page, and this
-/// daemon serves nothing under `/v0/assets/` (and the contract does not call it public).
-pub const TOP_LEVEL_ROUTES: [&str; 6] = [
-    ROUTE_UI,
-    ROUTE_WORKSPACES,
+/// This daemon serves nothing under `/v0/assets/` (and the contract does not call it public).
+pub const TOP_LEVEL_ROUTES: [&str; 4] = [
     ROUTE_CAPTURE_WORKSPACES,
     ROUTE_ENTRIES,
     ROUTE_ENTRIES_CURRENT,
@@ -247,7 +229,7 @@ fn version_header() -> Option<&'static (HeaderName, HeaderValue)> {
 
 /// What the client said about the version it speaks.
 enum ClientVersion {
-    /// No header. The bundled page sends none and neither does `curl`.
+    /// No header. `curl` sends none.
     Absent,
     /// A header this daemon cannot read as a version. Refused: a client whose version is
     /// unreadable is one this daemon cannot promise anything to.
@@ -295,14 +277,13 @@ fn declared_version(headers: &HeaderMap) -> ClientVersion {
 async fn authenticate(State(state): State<ControlState>, request: Request, next: Next) -> Response {
     let port = request.extensions().get::<BoundPort>().map(|p| p.0);
     let mut response = if !port.is_some_and(|p| addressed_to_this_listener(&request, p)) {
-        // Before the public/bearer split: the two public routes are readable by a browser
+        // Before the public/bearer split: the public route is readable by a browser
         // without a token, which is exactly what a rebinding page is.
         foreign_host(port)
     } else {
         match is_public_route(request.uri().path()) {
-            // Public, loopback and read-only by the contract: `GET /v0/ui` and
-            // `GET /v0/entries/{id}/status`. A browser sends no `Authorization` header and
-            // the page has no token to add.
+            // Public, loopback and read-only by the contract: `GET /v0/entries/{id}/status`.
+            // A browser sends no `Authorization` header and has no token to add.
             true => gated_by_version(request, next).await,
             false => match presented_bearer(request.headers()) {
                 Some(token) if constant_time_eq(token.as_bytes(), state.token.as_bytes()) => {
@@ -335,9 +316,9 @@ async fn authenticate(State(state): State<ControlState>, request: Request, next:
 /// reads only the body code and a client that reads only the status reach the same
 /// conclusion about this one refusal.
 ///
-/// Read-only clients may omit the header (the bundled page and curl do), but every
+/// Read-only clients may omit the header (curl does), but every
 /// authenticated mutation must declare the exact generation it speaks.  Otherwise an old
-/// client can reach a newly shaped `/resume` or `/process` handler with an empty/bare body
+/// client can reach a newly shaped `/process` handler with an empty/bare body
 /// and consume authority before body validation gets a chance to refuse it.
 async fn gated_by_version(request: Request, next: Next) -> Response {
     match declared_version(request.headers()) {
@@ -373,39 +354,18 @@ fn version_refusal(client: serde_json::Value) -> Response {
 
 // ------------------------------------------------------------------ the router
 
-/// The control router: the route table, with the removed V1 browser page answered by the stub
-/// that says so (D48).
+/// The control router: the route table.
 pub fn control_router(state: ControlState) -> Router {
-    control_router_with(
-        state,
-        Router::new().route(ROUTE_UI, get(super::handlers::v1_route_not_built)),
-    )
-}
-
-fn control_router_with(state: ControlState, page: Router) -> Router {
     let public = Router::new()
         .route(&entry_pattern(SUFFIX_STATUS), get(entry_status))
         .with_state(state.clone());
-    // Everything else, in the order the CLI meets it: the two directories, the workspace,
-    // the four calls over a live run, and the two that end one.
+    // Everything else: the directories, the calls over a live run, and the two that end one.
     let authed = Router::new()
         .route(ROUTE_HEALTH, get(health))
         .route(ROUTE_ENTRIES, get(list_entries))
         .route(ROUTE_ENTRIES_CURRENT, get(current_entry))
-        .route(ROUTE_WORKSPACES, post(create_workspace))
-        .route(&entry_pattern(SUFFIX_ARM), post(arm_entry))
-        .route(&entry_pattern(SUFFIX_START_SIGNAL), get(wait_start_signal))
         .route(&entry_pattern(SUFFIX_PROCESS), post(register_process))
-        .route(
-            &entry_pattern(SUFFIX_PROCESS_CANCEL),
-            post(cancel_process_handoff),
-        )
         .route(&entry_pattern(SUFFIX_ABANDON), post(abandon_entry))
-        .route(&entry_pattern(SUFFIX_RESUME), post(resume_entry))
-        .route(
-            &entry_pattern(SUFFIX_RESUME_PREVIEW),
-            get(resume_preview_entry),
-        )
         .route(&entry_pattern(SUFFIX_SEAL), post(seal_entry))
         .route(ROUTE_CAPTURE_WORKSPACES, post(create_capture_workspace))
         .route(
@@ -418,7 +378,7 @@ fn control_router_with(state: ControlState, page: Router) -> Router {
         )
         .with_state(state.clone());
 
-    page.merge(public)
+    public
         .merge(authed)
         .fallback(no_such_route)
         // A route that exists under another method answers the contract's shape as well.

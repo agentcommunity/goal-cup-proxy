@@ -152,7 +152,7 @@ is complete; it is not a judged or server-confirmed result. `goalcup-verify --re
 | For | Read |
 |---|---|
 | How the parts fit | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| Daemon config, every CLI flag and exit code, MCP server, verifier, fixtures, pins | [docs/OPERATING.md](docs/OPERATING.md) |
+| Daemon config, every CLI flag and exit code, verifier, fixtures, pins | [docs/OPERATING.md](docs/OPERATING.md) |
 | Adding a harness | [skills/adding-a-capture-harness](skills/adding-a-capture-harness/SKILL.md), then [docs/HARNESS-ONBOARDING.md](docs/HARNESS-ONBOARDING.md) |
 | What is next | [TODO.md](TODO.md) |
 | What a participant agrees to | [docs/RULES.md](docs/RULES.md) |

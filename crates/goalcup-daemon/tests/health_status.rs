@@ -407,7 +407,7 @@ fn the_cache_is_mirrored_where_the_cli_the_mcp_server_and_the_page_read_it() {
             assert_eq!(
                 std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o644,
-                "{name} is readable by the MCP server, and holds no secret"
+                "{name} is readable by other local readers, and holds no secret"
             );
         }
     }
@@ -544,7 +544,7 @@ fn mirroring_two_entries_leaves_no_temp_file_behind() {
     latest.verify_with(&last_public).unwrap();
 }
 
-/// `status-latest.json` is the one document `goalcup-mcp` reads when
+/// `status-latest.json` is the one document a reader opens when
 /// it has not been told which entry it wants, and `Daemon::refresh_statuses` walks the entry
 /// map in ID order — so writing the pointer on every mirror would make "latest" mean "the
 /// highest id".

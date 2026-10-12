@@ -82,7 +82,7 @@ This profile is macOS-only and binds the exact source revision, target, version,
 connector-file hashes, plus each connector's exact schema `harness.toml` SHA-256 under the
 compatibility key `profile_sha256`. Its metadata explicitly says
 `m2-pilot`, `candidate`, `private`, `unsigned`, `unnotarized`, and `unqualified`. It excludes
-MCP, devserver, harness installations or homes, keys, traces, reports, and caches. Installation
+harness installations or homes, keys, traces, reports, and caches. Installation
 checks the candidate labels,
 exact host target, source SHA, three-binary allowlist and both schema profile hashes before it
 writes the disposable tracker prefix.
@@ -110,7 +110,7 @@ sh packaging/macos/install-assisted.sh --profile m2-pilot \
 ```
 
 The M2 daemon config is local-only: it omits `upload_url` and `server_public_key`, and no
-receipt service or devserver is started. Use subscription authentication in each tracker's
+receipt service is started. Use subscription authentication in each tracker's
 isolated harness home. Do not set a harness model base URL or install a system CA. These steps
 produce an unqualified private candidate; they do not establish harness qualification or a
 public release. `sh packaging/macos/test-m2-pilot.sh` builds, stages, installs, checks a

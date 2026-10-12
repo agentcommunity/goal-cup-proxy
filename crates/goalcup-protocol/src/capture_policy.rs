@@ -102,8 +102,8 @@ pub const EXTRA_PATTERN_SOURCES: &[&str] = &[
 
 /// Hosts that belong to the tracker's own delivery path. A harness may name none of them, nor a
 /// subdomain (the delivery-agnostic rule, F7). Empty until a project domain is chosen; a host
-/// containing `goalcup` is refused anyway ([`mentions_goalcup`]), and the devserver binds
-/// `127.0.0.1`, which [`is_capture_host`] already refuses.
+/// containing `goalcup` is refused anyway ([`mentions_goalcup`]), and a loopback address such
+/// as `127.0.0.1` is already refused by [`is_capture_host`].
 pub const TRACKER_HOSTS: &[&str] = &[];
 
 /// Whether `host` equals, or is a subdomain of, a [`TRACKER_HOSTS`] entry.
