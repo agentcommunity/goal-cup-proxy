@@ -401,8 +401,8 @@ fn is_capture_row(state: &ControlState, id: &str) -> Result<bool, DaemonError> {
 /// the weaker guard rather than pretending the launch never happened.
 ///
 /// **A second registration is a `409` while a handle stands**, raised inside
-/// `Daemon::register_process`: the handle is what `harness_alive` measures and what the
-/// seal terminates, so a decoy posted on the loopback would redirect both. Only the V1
+/// `Daemon::register_process`: the handle is what the seal terminates, so a decoy posted
+/// on the loopback would redirect it. Only the V1
 /// resume cleared it, and D48 removed that: a capture entry cannot be resumed, so its
 /// harness registers once.
 pub(super) async fn register_process(

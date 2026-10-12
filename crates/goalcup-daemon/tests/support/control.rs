@@ -21,7 +21,6 @@ use goalcup_protocol::control::{CONTROL_API_VERSION, WorkspaceOpts};
 use goalcup_protocol::process::ProcessHandle;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 /// One response, read to EOF under `Connection: close` so nothing here decodes chunks.
 pub struct Response {
@@ -256,8 +255,8 @@ fn parse(text: &str) -> Response {
 /// empty afterwards — neither can be written against a harness that arrives with a started
 /// entry already in it.
 ///
-/// The `TempDir` and the dev server are held so the tree and the upload target outlive the
-/// daemon; dropping either mid-test would make a tick fail for a reason no test caused.
+/// The `TempDir` and the upload target are held so the tree and the port outlive the
+/// daemon.
 pub struct EmptyControlHarness {
     pub daemon: Daemon,
     pub client: ControlClient,
@@ -266,7 +265,7 @@ pub struct EmptyControlHarness {
     pub control_token: String,
     /// The canonical root every path in this harness hangs off.
     pub root: PathBuf,
-    _server: Arc<goalcup_devserver::DevServer>,
+    _upload: Option<std::net::TcpListener>,
     _dir: tempfile::TempDir,
 }
 
@@ -292,14 +291,14 @@ pub async fn empty_control_harness() -> EmptyControlHarness {
 pub async fn empty_control_harness_with(
     edit: impl FnOnce(&mut DaemonConfig),
 ) -> EmptyControlHarness {
-    let (server, upload_url) = super::devserver().await;
-    empty_control_harness_on(server, &upload_url, edit).await
+    let (upload, upload_url) = super::upload_target();
+    let mut h = empty_control_harness_on(&upload_url, edit).await;
+    h._upload = Some(upload);
+    h
 }
 
-/// [`empty_control_harness_with`] against a receipt signer the caller started, at
-/// `upload_url`.
+/// [`empty_control_harness_with`] with the `upload_url` the caller chose.
 pub async fn empty_control_harness_on(
-    server: Arc<goalcup_devserver::DevServer>,
     upload_url: &str,
     edit: impl FnOnce(&mut DaemonConfig),
 ) -> EmptyControlHarness {
@@ -323,7 +322,7 @@ pub async fn empty_control_harness_on(
         config,
         root,
         daemon,
-        _server: server,
+        _upload: None,
         _dir: dir,
     }
 }
@@ -406,7 +405,7 @@ pub async fn restart_empty_control_planting(
         daemon,
         config,
         root,
-        _server,
+        _upload,
         _dir,
         ..
     } = h;
@@ -427,7 +426,7 @@ pub async fn restart_empty_control_planting(
         config,
         root,
         daemon,
-        _server,
+        _upload,
         _dir,
     })
 }

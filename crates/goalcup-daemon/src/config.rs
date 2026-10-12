@@ -44,7 +44,7 @@ pub struct DaemonConfig {
     pub upload_url: String,
     /// The Ed25519 key this daemon verifies every `StartReceipt` and `AckCheckpoint`
     /// against, hex. Written into `trace.toml` as `server_public_key`. In development it
-    /// is `goalcup_devserver::dev_server_public_key_hex()`; in a signed release it is the
+    /// is `goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX`; in a signed release it is the
     /// event backend's. `validate()` refuses anything that is not 64 hex characters,
     /// because an unparseable key would make every acknowledgement silently unverifiable.
     ///
@@ -55,8 +55,8 @@ pub struct DaemonConfig {
     /// every start; the daemon prints one line on stderr at startup
     /// ([`DaemonConfig::placeholder_key_notice`]). It does not refuse, because refusing would
     /// break every development run in this tree. Read as: a `server_public_key` equal to
-    /// `goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX` (which is
-    /// `goalcup_devserver::dev_server_public_key_hex()`) names a trace that a verifier will
+    /// `goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX` (the key of the
+    /// devserver's `DEV_SERVER_SEED`) names a trace that a verifier will
     /// flag, and only `--dev` suppresses the flag.
     /// Omitted together with `upload_url`, this is empty and only local v5 entries are admitted.
     #[serde(default)]

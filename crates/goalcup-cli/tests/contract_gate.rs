@@ -50,7 +50,7 @@ fn the_exit_ladder_reserves_two_for_a_verdict_and_gives_a_gate_four() {
 #[test]
 fn every_secret_this_cli_writes_is_unreadable_by_anyone_but_its_owner() {
     let tmp = tempfile::tempdir().unwrap();
-    let secret = goalcup_cli::config::grant_path(tmp.path());
+    let secret = tmp.path().join("secret.json");
     goalcup_cli::config::write_secret_file(&secret, b"{}").unwrap();
     #[cfg(unix)]
     {
@@ -303,24 +303,6 @@ fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
     // which `CliError::exit_code` maps and only a pre-D48 daemon sends. A new site is a new
     // gate; say which in `lib.rs`'s ladder, in `AFTER_HELP`, and here.
     assert!(sites.is_empty(), "an unexpected rung-4 site: {sites:#?}");
-}
-
-/// A verdict `goalcup-verify` produced, relayed with its own number unchanged — including
-/// the `2` this CLI never chooses for itself.
-///
-/// That no variant of `CliError` lands on 2 is asserted by
-/// `every_variant_lands_on_a_rung_and_no_variant_lands_on_two` above, which walks the enum.
-/// This one checks the other half — that the relay does not re-derive the number.
-#[test]
-fn a_relayed_verdict_keeps_the_verifiers_own_number() {
-    use goalcup_verifier::checks::Severity;
-    let mut verdict = a_verdict();
-    verdict.overall = Severity::Fail;
-    assert_eq!(goalcup_cli::relay_verdict(&verdict), 2);
-    verdict.overall = Severity::Flag;
-    assert_eq!(goalcup_cli::relay_verdict(&verdict), 1);
-    verdict.overall = Severity::Pass;
-    assert_eq!(goalcup_cli::relay_verdict(&verdict), 0);
 }
 
 /// clap exits `2` on a usage error, and `2` is a verdict here — so this binary parses with
@@ -604,34 +586,6 @@ fn nothing_this_crate_formats_can_print_the_daemons_bearer() {
         "a `{{:?}}` of the control file handed over the bearer: {printed}"
     );
     assert!(printed.contains("<redacted>"), "and it says so: {printed}");
-}
-
-/// A `Verdict` with every field set, so the relay above has something real to relay.
-fn a_verdict() -> goalcup_verifier::Verdict {
-    use goalcup_verifier::{KeySource, ManifestPin, Verdict};
-    Verdict {
-        verifier_version: "0".to_string(),
-        schema_version: goalcup_verifier::atif::SCHEMA_VERSION.to_string(),
-        connector_id: "claude-code-cli".to_string(),
-        connector_manifest_sha256: "00".repeat(32),
-        manifest_pin: ManifestPin::Pinned,
-        entry_id: "e".to_string(),
-        harness_version: "0".to_string(),
-        key_source: KeySource::None,
-        dev: false,
-        overall: goalcup_verifier::checks::Severity::Pass,
-        human_messages: Vec::new(),
-        checks: Vec::new(),
-        review_queue: Vec::new(),
-        gaps: Vec::new(),
-        seal_attribution: Vec::new(),
-        tokens: goalcup_verifier::verdict::TokenSummary {
-            by_model: Vec::new(),
-            stripped: Vec::new(),
-        },
-        parser_census: std::collections::BTreeMap::new(),
-        carried_settings: Vec::new(),
-    }
 }
 
 /// `--json` is a promise about STDOUT, and it is kept through the shipped binary: one

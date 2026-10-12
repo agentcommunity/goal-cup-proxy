@@ -26,7 +26,6 @@ use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::process::ProcessRegistration;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 /// A small physical reservation: 4 MiB, the 1 MiB terminal allowance included.
 pub const RESERVE: u64 = 4 * 1024 * 1024;
@@ -57,9 +56,8 @@ impl Rig {
             .set_nonblocking(true)
             .expect("a non-blocking trap");
         let upload_url = format!("http://{}", upload_trap.local_addr().unwrap());
-        // The signer is never served: nothing but the trap listens at the upload URL.
-        let signer = Arc::new(goalcup_devserver::DevServer::new());
-        let h = empty_control_harness_on(signer, &upload_url, edit).await;
+        // Nothing but the trap listens at the upload URL.
+        let h = empty_control_harness_on(&upload_url, edit).await;
         Rig { h, upload_trap }
     }
 

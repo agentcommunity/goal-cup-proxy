@@ -600,3 +600,152 @@ fn nothing_external_runs_while_the_key_is_in_memory() {
     // And the usage the script documents is the privileged one.
     assert!(text.contains("/bin/sh -p scripts/with-deepseek-key.sh"));
 }
+
+/// The stat list the loader tries, in its own words; the variants below replace it.
+const STAT_LIST: &str = "for stat in /usr/bin/stat /bin/stat; do";
+
+/// A copy of the loader whose stat list is `stats` instead of the system's, so the BSD/GNU
+/// selection can be exercised on any host.
+fn copy_with_stats(w: &World, name: &str, stats: &[&Path]) -> PathBuf {
+    let text = std::fs::read_to_string(script()).unwrap();
+    assert!(text.contains(STAT_LIST), "the loader's stat list moved");
+    let list: Vec<String> = stats.iter().map(|p| p.display().to_string()).collect();
+    let path = w.path(name);
+    std::fs::write(
+        &path,
+        text.replace(STAT_LIST, &format!("for stat in {}; do", list.join(" "))),
+    )
+    .unwrap();
+    path
+}
+
+/// An executable shell script at `name` in the world's directory.
+fn fake_command(w: &World, name: &str, body: &str) -> PathBuf {
+    let path = w.path(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// The file's real permission bits, read with whichever form this host's stat speaks.
+const REAL_MODE: &str = "m=$(/usr/bin/stat -c %a -- \"$4\" 2>/dev/null) || \
+                         m=$(/usr/bin/stat -f %Lp -- \"$4\") || exit 1\nprintf '%s\\n' \"$m\"\nexit 0\n";
+
+/// GNU stat's answer to the BSD form: `-f` is "file system", so it prints a multi-line dump of the
+/// file's file system and fails on the `%Lp` operand; `-c %a` prints the bits.
+fn fake_gnu_stat(w: &World) -> PathBuf {
+    fake_command(
+        w,
+        "gnu-stat",
+        &format!(
+            "case $1 in\n\
+             -f) printf '  File: \"%s\"\\n    ID: 0 Namelen: 255 Type: ext2/ext3\\n\
+             Block size: 4096\\n' \"$4\"\n\
+             \x20   echo \"stat: cannot read file system information for '%Lp'\" >&2\n\
+             \x20   exit 1 ;;\n\
+             -c) [ \"$2\" = %a ] && [ \"$3\" = -- ] || exit 1\n{REAL_MODE};;\n\
+             esac\nexit 1\n"
+        ),
+    )
+}
+
+/// Run a loader copy under `/bin/sh` the way [`World::run`] runs the real one, from `cwd`.
+fn run_copy(w: &World, copy: &Path, args: &[&str], cwd: &Path) -> Output {
+    let _ = std::fs::remove_file(w.path("env"));
+    let _ = std::fs::remove_file(w.path("argv"));
+    Command::new("/bin/sh")
+        .arg(copy)
+        .args(args)
+        .current_dir(cwd)
+        .env_clear()
+        .env("PATH", format!("{}:/usr/bin:/bin", w.path("bin").display()))
+        .env("OUT", w.dir.path())
+        .output()
+        .unwrap()
+}
+
+/// GNU stat (Linux): the BSD form fails with a file-system dump on stdout, which must not reach
+/// the mode; the GNU form's bits decide. 0600 starts goalcup, 0644 is refused.
+#[test]
+fn a_gnu_stat_reads_the_mode_with_its_own_form() {
+    let w = World::new();
+    let gnu = fake_gnu_stat(&w);
+    let copy = copy_with_stats(&w, "gnu.sh", &[&gnu]);
+    let file = w.env_file(&format!("DEEPSEEK_API_KEY={KEY}\n"));
+    let args = start_args(&file, "/tmp/goal.txt");
+
+    let out = run_copy(&w, &copy, &args, w.dir.path());
+    assert!(
+        out.status.success(),
+        "0600 under GNU stat: {}",
+        printed(&out)
+    );
+    assert!(w.ran());
+    assert_no_key("GNU stat, 0600", &printed(&out));
+
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let out = run_copy(&w, &copy, &args, w.dir.path());
+    assert_eq!(out.status.code(), Some(1), "0644 was accepted");
+    assert!(!w.ran());
+    assert!(
+        printed(&out).contains("env file is not mode 0600"),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// A stat whose answer is not octal digits alone, in either form and even when it exits 0, is never
+/// taken for a mode; nor is no stat at all. Both are refused before the key is read.
+#[test]
+fn an_unreadable_mode_is_refused() {
+    let w = World::new();
+    let file = w.env_file(&format!("DEEPSEEK_API_KEY={KEY}\n"));
+    let args = start_args(&file, "/tmp/goal.txt");
+    let chatty = fake_command(
+        &w,
+        "chatty-stat",
+        "printf '600\\nBlock size: 4096\\n'\nexit 0\n",
+    );
+    let failing = fake_command(&w, "failing-stat", "printf '600\\n'\nexit 1\n");
+    let absent = w.path("no-such-stat");
+    for (what, stats) in [
+        (
+            "a stat that prints more than the bits",
+            vec![chatty.as_path()],
+        ),
+        (
+            "a stat that fails after printing bits",
+            vec![failing.as_path()],
+        ),
+        ("no stat at all", vec![absent.as_path()]),
+    ] {
+        let copy = copy_with_stats(&w, "variant.sh", &stats);
+        let out = run_copy(&w, &copy, &args, w.dir.path());
+        assert_eq!(out.status.code(), Some(1), "{what}: {}", printed(&out));
+        assert!(!w.ran(), "{what}: goalcup was started");
+        assert!(
+            printed(&out).contains("cannot read the env file's mode"),
+            "{what}: {}",
+            printed(&out)
+        );
+    }
+    // The first stat in the list that answers in octal wins, after one that does not.
+    let gnu = fake_gnu_stat(&w);
+    let copy = copy_with_stats(&w, "variant.sh", &[&chatty, &gnu]);
+    let out = run_copy(&w, &copy, &args, w.dir.path());
+    assert!(out.status.success(), "{}", printed(&out));
+    assert!(w.ran());
+}
+
+/// An env file whose name starts with `-` is read as a file, not parsed as a stat option.
+#[test]
+fn an_env_file_named_like_an_option_is_read_as_a_file() {
+    let w = World::new();
+    let file = w.env_file(&format!("DEEPSEEK_API_KEY={KEY}\n"));
+    std::fs::rename(&file, w.path("-rf")).unwrap();
+    let mut args = start_args(&file, "/tmp/goal.txt");
+    args[0] = "-rf";
+    let out = run_copy(&w, &script(), &args, w.dir.path());
+    assert!(out.status.success(), "{}", printed(&out));
+    assert!(w.ran());
+}

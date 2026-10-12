@@ -19,8 +19,6 @@ pub mod control;
 /// left behind. Crate-private: it is plumbing, not a surface the CLI or the verifier has any
 /// business calling.
 mod fsutil;
-/// The five judgements of D17, as health state names.
-pub mod health;
 /// The authenticated, bounded capture ingest listener.
 pub mod ingest;
 /// Bounded, scoped native byte capture.
@@ -49,12 +47,11 @@ pub use submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};
 pub mod terminate;
 pub mod workspace;
 
-// The immutable-submission writer is a daemon API. Re-export its daemon-owned request and
-// journal types together with the platform capabilities in its public signature so consumers
-// such as the development server do not need a second, direct platform dependency.
-pub use goalcup_platform::handle_budget::NativeHandleBudgetV1;
-pub use goalcup_platform::sourcecap::SourceDir;
-pub use goalcup_platform::tracecap::{EntryArtifactRoot, TraceDir};
+// `status`'s public status-line writer takes an `EntryArtifactRoot`, so a caller of it needs
+// no direct `goalcup-platform` dependency. The V1 immutable-submission writer whose
+// signature also needed `SourceDir`, `TraceDir` and `NativeHandleBudgetV1` was removed by
+// D48, and those re-exports went with OS-31.
+pub use goalcup_platform::tracecap::EntryArtifactRoot;
 
 /// This build's version, for `trace.toml` and for the `VersionChange` the daemon chains
 /// when it observes its own binary change under a running entry.
@@ -170,15 +167,4 @@ pub enum DaemonError {
     /// legacy pump hold a client retries, and from [`Self::Refused`], the entry's own state.
     #[error("finish_deadline: {stage}")]
     FinishDeadline { stage: &'static str },
-}
-
-impl DaemonError {
-    /// The exact protocol failure class when this error came from immutable submission
-    /// capture. All other daemon errors are deliberately unclassified here.
-    pub fn submission_failure(&self) -> Option<goalcup_protocol::submission::SubmissionFailureV1> {
-        match self {
-            Self::SubmissionCapture { reason } => Some(*reason),
-            _ => None,
-        }
-    }
 }

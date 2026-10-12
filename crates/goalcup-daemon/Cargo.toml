@@ -78,8 +78,3 @@ goalcup-daemon = { path = ".", features = ["test-hooks"] }
 # use, rather than treating a hand-parsed cache file as a substitute for goalcup-mcp.
 goalcup-mcp = { path = "../goalcup-mcp" }
 tempfile.workspace = true
-# The test support code (`tests/support/`, `tests/capture_lifecycle_support/`) configures
-# each test daemon with a real dev server's public key and signer rather than a made-up
-# one. A dev dependency and nothing else (D3): the devserver holds a server key and must
-# not link into the shipped daemon binary.
-goalcup-devserver = { path = "../goalcup-devserver" }

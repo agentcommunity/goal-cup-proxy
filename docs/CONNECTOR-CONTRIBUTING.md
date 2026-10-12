@@ -4,7 +4,7 @@ How do I submit and review a schema-1 connector, and what evidence supports its 
 contributor or agent adding harness data. Start with [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)
 for the worksheet and phase gate; this file owns the connector checklist and tiny-row procedure.
 Evidence records are indexed in [qualification/README](qualification/README.md). Updated:
-2026-10-11.
+2026-10-12.
 
 A connector launches and captures a harness. Its `harness.toml` is data: it declares the launch,
 isolated home, provider/auth hosts and paths, protocol hints, native source and redaction
@@ -35,7 +35,7 @@ A common data-only PR carries exactly these concerns:
    exercises the connector's schema-1 path; do not substitute an existing baseline case.
 5. Evidence that the current baseline harness-kit suite passes. Build the workspace first, then
    run `cargo test -p goalcup-cli --test harness_contract_kit`; the six existing baseline cases
-   are listed separately below.
+   are listed in [HARNESS-ONBOARDING §3](HARNESS-ONBOARDING.md#3-generic-harness-contract-kit).
 6. The regenerated harness goldens. The tests read the connector list from `connectors/`, so
    they need no edit. On macOS, run
    `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test harness_contract_golden`

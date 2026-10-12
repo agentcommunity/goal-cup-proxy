@@ -38,7 +38,9 @@ use goalcup_protocol::manifest::ConnectorManifest;
 use goalcup_protocol::provenance::TerminationOutcomeV1;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(any(test, feature = "test-hooks"))]
+use std::path::PathBuf;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::sync::{Arc, Condvar};
 use std::sync::{Mutex, OnceLock};
@@ -90,15 +92,18 @@ fn finalization_needs_harness_review(finalization: Option<&WorkspaceFinalization
     }
 }
 
-/// The payload, from the entry and the moment. No I/O, no clock: `now` is an argument for
-/// the same reason `health::evaluate`'s is.
+/// The payload, from the entry and the moment. No I/O, no clock: `now` is an argument, so a
+/// test can ask the same inputs about two moments.
 ///
 /// # A refusal is `ArmingState::Refused`
 ///
-/// A refused gate reports `ArmingState::Refused`, so a machine reader that keys on `arming`
-/// alone can tell a run that is waiting to be armed from one that will never arm. `health`
-/// still reports `ArmingPending` and `detail` still says which refusal it was, in words a
-/// participant can act on. `GateState::to_control` is total, so there is no fallback here to
+/// Given a refused gate, the payload reports `ArmingState::Refused`, so a machine reader that
+/// keys on `arming` alone can tell a run that is waiting to be armed from one that will never
+/// arm; `health` reports `ArmingPending` and `detail` says which refusal it was, in words a
+/// participant can act on. No current producer builds `GateState::Refused`: the V1 arming
+/// poll that did was removed by D48, and the capture runtime never refuses a gate. The
+/// mapping stays because the status type still carries the variant. `GateState::to_control`
+/// is total, so there is no fallback here to
 /// hide a future `GateState` variant behind — an unmapped variant is a compile error.
 pub fn build_payload(inputs: &StatusInputs) -> StatusPayload {
     let arming = inputs.arming.to_control();
@@ -385,23 +390,6 @@ pub fn compose_capture_closed(entry: &Entry, now: f64) -> Result<SignedStatus, D
         crate::unix_to_rfc3339(now),
         &entry.keys.signing_key()?,
     )
-}
-
-/// Compose the signed capture-closed fact first, then persist it to cache views. Callers that
-/// have a durable terminal review to publish may install the exact composed value in their
-/// in-process cache before these fallible views; that ordering keeps the daemon/API honest
-/// even when a filesystem write is unavailable. Its terminal status-line replacement is
-/// performed through the caller's rooted artifact capability, never the registry spelling.
-pub fn publish_capture_closed(
-    entry: &Entry,
-    config_dir: &Path,
-    artifact: &EntryArtifactRoot,
-    now: f64,
-) -> Result<SignedStatus, DaemonError> {
-    let signed = compose_capture_closed(entry, now)?;
-    mirror(&signed, config_dir)?;
-    write_entry_status_line_rooted(&signed, artifact)?;
-    Ok(signed)
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -769,34 +757,6 @@ fn invalidate_terminal_views_locked(
     }
 }
 
-/// Attempt every terminal cache view in isolation after invalidation. A per-entry failure
-/// cannot suppress a latest replacement.  Every terminal status-line removal and replacement
-/// stays beneath the owner that observed the refusal.
-pub fn replace_terminal_views_with_artifact(
-    signed: &SignedStatus,
-    entry: &Entry,
-    config_dir: &Path,
-    artifact: &EntryArtifactRoot,
-) -> Result<(), DaemonError> {
-    // Hold the latest-pointer authority from target-owned read/delete through this review's
-    // rank/write. Releasing it between those operations would allow another entry to write
-    // into the old pointer interval and turn our subsequent removal into a lost update.
-    let _latest_guard = latest_view_lock();
-    let mut first = None;
-    collect_view_result(
-        &mut first,
-        invalidate_terminal_views_locked(entry, config_dir, artifact),
-    );
-    collect_view_result(&mut first, mirror_entry(signed, config_dir));
-    collect_view_result(&mut first, mirror_latest_locked(signed, config_dir));
-    let rooted_line = write_entry_status_line_rooted(signed, artifact);
-    collect_view_result(&mut first, rooted_line);
-    match first {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
-}
-
 #[cfg(any(test, feature = "test-hooks"))]
 fn acquire_terminal_artifact(
     entry: &Entry,
@@ -826,20 +786,6 @@ fn validate_status_entry_id(entry_id: &str) -> Result<(), DaemonError> {
         )));
     }
     Ok(())
-}
-
-/// The only status-line path this daemon owns. The row's historical `status_line_path` is
-/// never deletion or write authority: all production callers derive this path again from the
-/// configured artifact root and a validated one-component entry id.
-pub fn canonical_status_line_path(
-    entry_id: &str,
-    artifact_root: &Path,
-) -> Result<PathBuf, DaemonError> {
-    validate_status_entry_id(entry_id)?;
-    Ok(artifact_root
-        .join("artifacts")
-        .join(entry_id)
-        .join("status-line.txt"))
 }
 
 /// Write a participant status line through the runtime's retained entry-artifact
@@ -951,8 +897,8 @@ fn status_line_bytes(signed: &SignedStatus) -> String {
 
 /// The row `goalcup entries` prints and `GET /v0/entries` returns.
 ///
-/// A refused gate reports `ArmingState::Refused` here, for the same reason as
-/// [`build_payload`].
+/// A refused gate would report `ArmingState::Refused` here, for the same reason as
+/// [`build_payload`] (which also says why no current producer refuses one).
 pub fn summary(entry: &Entry, arming: GateState, health: HealthState) -> EntrySummary {
     let finalization_needs_review =
         finalization_needs_harness_review(entry.workspace_finalization_status().as_ref());

@@ -19,7 +19,7 @@
 //! holds. Guard test bodies and spawn helpers that run on the test's own thread only.
 //!
 //! Included by `#[path]` rather than through `support/mod.rs`, because that module's
-//! devserver fixture would link axum, tokio and the devserver into every consumer. `tree.rs`
+//! async control fixtures would link tokio into every consumer. `tree.rs`
 //! beside this file is included the same way.
 
 #![allow(dead_code)]

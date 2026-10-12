@@ -7,7 +7,7 @@ description: Use when adding or supporting a CLI coding-agent harness in Goal Cu
 
 What do I do, in order, to add a harness connector? The single entry point for a contributor's
 coding agent. Every step has a command, its expected output, and a STOP rule. Read the linked
-docs when a step points to them; do not guess past a STOP. Updated: 2026-10-11.
+docs when a step points to them; do not guess past a STOP. Updated: 2026-10-12.
 
 A normal contribution is data only: `connectors/<id>/harness.toml`, reviewed seeds, one pin
 line, regenerated goldens, one kit case and a readiness record. No `.rs` file. Policy rows and
@@ -75,8 +75,9 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    Expect: both `test result: ok.`; a new `<id>.json`, and changed `enumeration.json` and
    `redaction-extra-patterns.json`. On macOS also a new `<id>.daemon.json` and a changed
    `native-stream-labels.json`. `git diff` must show no change to another connector's values.
-   A changed golden that does not mention `<id>` (for example `loader-script.json` on Linux)
-   is a platform difference: `git checkout -- <that file>` and name it in the PR.
+   A changed golden that does not mention `<id>` did not change because of your connector:
+   `git checkout -- <that file>` and name it in the PR. Set the variable per command as above,
+   never `export` it (`check-connector.sh` unsets it, so its golden step always compares).
 10. **Add the kit case.**
     ```
     k=crates/goalcup-cli/tests/fixtures/harness-kit/<id>

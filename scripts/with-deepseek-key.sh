@@ -70,14 +70,14 @@ command -v goalcup >/dev/null 2>&1 || refuse "goalcup is not on PATH"
 # The only external commands, before the key is anywhere: the file's mode. BSD stat (macOS) prints
 # the permission bits with `-f %Lp`; GNU stat (Linux) reads `-f` as "file system" and prints
 # something else, so each form's output counts only if that form succeeded and printed octal
-# digits alone. Absolute paths only, so no PATH entry or function can stand in for stat. Any
-# other answer is refused, never guessed.
+# digits alone. Absolute paths only, so no PATH entry or function can stand in for stat; `--`, so
+# a file name starting with `-` is read as a name. Any other answer is refused, never guessed.
 [ -f "$f" ] || refuse "the env file is not a regular file"
 mode=
 for stat in /usr/bin/stat /bin/stat; do
   [ -x "$stat" ] || continue
-  mode=$("$stat" -f %Lp "$f" 2>/dev/null) || mode=
-  case $mode in '' | *[!0-7]*) mode=$("$stat" -c %a "$f" 2>/dev/null) || mode= ;; esac
+  mode=$("$stat" -f %Lp -- "$f" 2>/dev/null) || mode=
+  case $mode in '' | *[!0-7]*) mode=$("$stat" -c %a -- "$f" 2>/dev/null) || mode= ;; esac
   case $mode in '' | *[!0-7]*) mode= ;; *) break ;; esac
 done
 stat=

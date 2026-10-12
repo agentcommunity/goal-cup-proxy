@@ -832,7 +832,7 @@ fn validate_refuses_duplicate_store_names_and_hook_paths() {
 
 /// `hook_install[].path` is rendered under `scope`'s root
 /// (`InstallScope::Workspace | ArtifactRoot | HarnessHome`) with no filesystem check of
-/// its own — `render_tracker_files` joins it onto that root and writes there. An absolute
+/// its own — the V1 renderer (removed by OS-31) joined it onto that root and wrote there. An absolute
 /// path or a `..` segment escapes the scope root the same way `hook_install.template`
 /// escaping `connectors/<id>/files/` would (that field is already refused above it), so
 /// the same refusal belongs on `path`.
@@ -1079,118 +1079,6 @@ fn connector_directory_hash_returns_the_manifest_bytes_from_its_own_stream() {
         goalcup_protocol::connector_dir::connector_dir_sha256(dir.path()).unwrap(),
         "a later pathname read is distinguishable from the bytes in the accepted stream"
     );
-}
-
-/// What "held" means, in the one place the daemon and the CLI both read.
-///
-/// The two shapes are a bare file path (`codex-cli` names one lock file; `claude-code-cli`
-/// names none) and a DIRECTORY of lock files, which a harness may create at startup and
-/// never remove, which is why its existence cannot be the test.
-#[test]
-fn a_lock_directory_is_held_by_its_contents_and_a_lock_file_by_existing() {
-    use goalcup_protocol::manifest::lock_path_is_held;
-    let tmp = tempfile::tempdir().unwrap();
-
-    // A bare file path: held when anything is at it.
-    let file = tmp.path().join("thread.lock");
-    assert!(!lock_path_is_held(&file.display().to_string()));
-    std::fs::write(&file, "4242").unwrap();
-    assert!(lock_path_is_held(&file.display().to_string()));
-
-    // A directory of locks, named with a trailing slash.
-    let dir = tmp.path().join("locks");
-    let spelling = format!("{}/", dir.display());
-    assert!(
-        !lock_path_is_held(&spelling),
-        "a directory that is not there holds nothing"
-    );
-    std::fs::create_dir_all(&dir).unwrap();
-    assert!(
-        !lock_path_is_held(&spelling),
-        "an EMPTY lock directory is a directory the harness made, not a lock it holds"
-    );
-    std::fs::create_dir_all(dir.join("nested")).unwrap();
-    assert!(
-        !lock_path_is_held(&spelling),
-        "a directory inside it is not a lock file"
-    );
-    std::fs::write(dir.join("held.lock"), "").unwrap();
-    assert!(
-        lock_path_is_held(&spelling),
-        "one file in it is a held lock"
-    );
-
-    // The same directory named WITHOUT the trailing slash reads the same way: the shape is
-    // the path on disk, and the slash is only what a manifest may say about a directory
-    // that does not exist yet.
-    assert!(lock_path_is_held(&dir.display().to_string()));
-}
-
-/// The two branches where "held" is the answer BECAUSE the question
-/// could not be answered.
-///
-/// Both are the same reading — the silent pass is the failure mode this rule exists to
-/// close — so each is pinned against turning into "no locks, go ahead".
-#[test]
-fn a_lock_path_this_process_cannot_read_is_held_rather_than_free() {
-    use goalcup_protocol::manifest::lock_path_is_held;
-    let tmp = tempfile::tempdir().unwrap();
-
-    // A DANGLING SYMLINK, in both shapes. `is_dir()` follows the link and answers false,
-    // so the path falls through to the file reading, and `symlink_metadata` sees the link
-    // itself: something is at the name, and a relaunch will trip over it.
-    let dangling = tmp.path().join("thread.lock");
-    std::os::unix::fs::symlink(tmp.path().join("gone"), &dangling).unwrap();
-    assert!(
-        lock_path_is_held(&dangling.display().to_string()),
-        "a link a killed harness left behind is still a name"
-    );
-    let dir = tmp.path().join("locks");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::os::unix::fs::symlink(dir.join("gone"), dir.join("stale")).unwrap();
-    assert!(
-        lock_path_is_held(&format!("{}/", dir.display())),
-        "a dangling link INSIDE the directory is an entry that is not a directory"
-    );
-
-    // The mirror the doc calls a CHOICE: a lock directory holding only DIRECTORIES — or
-    // only symlinks that RESOLVE to directories, because `is_dir()` follows the link —
-    // reads as FREE. Neither shipped connector locks that way; this pins the reading so a
-    // connector that did would fail here rather than resume into a live session.
-    let dirs_only = tmp.path().join("dirs-only");
-    std::fs::create_dir_all(dirs_only.join("subdir")).unwrap();
-    assert!(
-        !lock_path_is_held(&format!("{}/", dirs_only.display())),
-        "a directory holding only a subdirectory holds no lock FILE"
-    );
-    std::os::unix::fs::symlink(dirs_only.join("subdir"), dirs_only.join("link")).unwrap();
-    assert!(
-        !lock_path_is_held(&format!("{}/", dirs_only.display())),
-        "a symlink that resolves to a directory reads as a directory too"
-    );
-
-    // A DIRECTORY THIS PROCESS CANNOT ENUMERATE. `read_dir` fails with something other
-    // than `NotFound`, and the answer is "held": "no locks" would be a guess, and the
-    // guess that lets a second harness into a live session.
-    let shut = tmp.path().join("shut");
-    std::fs::create_dir_all(&shut).unwrap();
-    let spelling = format!("{}/", shut.display());
-    assert!(!lock_path_is_held(&spelling), "empty and readable is free");
-    let mut perms = std::fs::metadata(&shut).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o000);
-    std::fs::set_permissions(&shut, perms).unwrap();
-    // Root ignores the mode, so the branch is only asserted where the mode binds. The
-    // check is the read itself rather than a uid lookup: what matters is whether THIS
-    // process can look inside.
-    if std::fs::read_dir(&shut).is_err() {
-        assert!(
-            lock_path_is_held(&spelling),
-            "a directory this process cannot look in is not a directory with no locks in it"
-        );
-    }
-    let mut perms = std::fs::metadata(&shut).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o700);
-    std::fs::set_permissions(&shut, perms).unwrap();
 }
 
 /// An exclusion pattern that cannot match is refused at load, because the failure

@@ -1,6 +1,6 @@
 # goal-cup
 
-How do I build, gate, install and run the tracker? For contributors and agents. Updated: 2026-10-11.
+How do I build, gate, install and run the tracker? For contributors and agents. Updated: 2026-10-12.
 
 **Goal Cup** is an open-source tracker that records what a coding agent actually did during a run.
 It captures the harness's own session files (the native leg) and its model traffic (the wire leg)
@@ -130,10 +130,14 @@ goalcup-verify --capture-integrity <trace>
 `start` launches the harness, waits for it, seals the entry and prints the harness exit code,
 the termination, the `trace:` directory and the exact `verify:` line to run. Optional flags:
 `--capture-reserve-bytes <BYTES>` (chain bytes reserved before launch) and
-`--capture-claude-allowed-tool <RULE>` (one bounded Claude Bash rule for this launch). A shell
-with `ANTHROPIC_BASE_URL` or any `*_PROXY` exported is refused before daemon entry, artifact or
-workspace allocation: CLI run/home/CA/seed preparation may already exist and is cleaned on this
-pre-allocation refusal. Unset it. The tracker never sets a base URL.
+`--capture-claude-allowed-tool <RULE>` (one bounded Claude Bash rule for this launch). The
+harness's environment is built from nothing: of the shell's own variables only `USER`,
+`LOGNAME`, `TMPDIR` and a keyed connector's one credential (`DEEPSEEK_API_KEY` or `AMP_API_KEY`,
+below) reach it, so an exported `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `*_PROXY` is
+dropped, not inherited (`start` does not refuse it). The tracker never sets a base
+URL; the only proxy the harness is given is the tracker's own loopback capture proxy, and a
+connector cannot name a `*_URL` variable in `[capture.env]` or as its home variable
+(`capture.home.env`).
 
 **Integrity exit codes** of `goalcup-verify --capture-integrity`: 0 complete and valid, 1
 incomplete or unsealed, 2 invalid (a torn tail included), 3 no usable report. A LocalOnly seal

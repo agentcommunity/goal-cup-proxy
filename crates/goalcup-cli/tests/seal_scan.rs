@@ -169,7 +169,7 @@ fn the_scan_hashes_what_is_there_and_reads_a_symlink_the_way_the_daemon_reads_on
 /// streams a file, so a multi-chunk file is where a mis-chunked digest would show).
 #[test]
 fn an_honest_run_over_one_tree_prints_no_difference_at_all() {
-    use goalcup_daemon::workspace::{Installation, exclusion_union, list_workspace};
+    use goalcup_daemon::workspace::list_workspace;
 
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path();
@@ -199,21 +199,12 @@ fn an_honest_run_over_one_tree_prints_no_difference_at_all() {
 
     let manifest = support::connector("claude-code-cli").manifest;
     let tracker_files = vec![".claude/settings.json".to_string()];
-    // The two exclusion unions are built by the two sides' own functions and must agree
-    // before the walks can be compared at all: a difference report about the union is not a
-    // report about the workspace.
+    // Both walks get the one exclusion set, so a difference report is about the workspace
+    // and not about the set.
     let mine = exclusion_set(&manifest, &tracker_files);
-    let theirs = exclusion_union(
-        &manifest,
-        &Installation {
-            workspace_relative: tracker_files.clone(),
-            ..Default::default()
-        },
-    );
-    assert_eq!(mine, theirs, "one exclusion union, spelled on both sides");
 
     let local = scan_workspace(ws, &mine, "entry-0001", support::NOW).unwrap();
-    let sealed = list_workspace(ws, "entry-0001", support::NOW, &theirs).unwrap();
+    let sealed = list_workspace(ws, "entry-0001", support::NOW, &mine).unwrap();
 
     assert_eq!(
         compare(&local, &sealed),

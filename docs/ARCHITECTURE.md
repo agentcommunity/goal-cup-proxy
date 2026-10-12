@@ -1,7 +1,7 @@
 # Architecture
 
 How do the M2 recorder's parts fit, and where is each guarantee tested? For contributors on
-`m2/wire`. Updated: 2026-10-11. Normative interfaces: [CONTRACTS]; terms: [glossary](GLOSSARY.md).
+`m2/wire`. Updated: 2026-10-12. Normative interfaces: [CONTRACTS]; terms: [glossary](GLOSSARY.md).
 
 ## 1. Scope
 
@@ -12,8 +12,9 @@ How do the M2 recorder's parts fit, and where is each guarantee tested? For cont
 - **Status:** v0.5.0 is published as source only; a private unsigned staged three-binary pilot
   candidate exists. No downloadable binary, installer, staged bundle, registry publication,
   signing, notarization or qualification claim is made. [Evidence](qualification/README.md).
-- **V1** lives on `v1/trunk` with the hook leg and thirteen checks; those are outside M2.
-  [Current V1 status](../STATUS.md#v1-on-v1trunk).
+- **V1** lives on `v1/trunk`. Its hook leg is not in this tree
+  ([D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree)); the verifier still ships the
+  thirteen V1 checks for v4 traces (§3). [Current V1 status](../STATUS.md#v1-on-v1trunk).
 
 ## 2. Crates and the dependency rule
 
@@ -25,7 +26,7 @@ non-member `goalcup-git`; the public OSS cut omits it ([LEDGER OS-09](../LEDGER.
 | `goalcup-platform` | library | none | none |
 | `goalcup-protocol` | library | platform | none |
 | `goalcup-verifier` | `goalcup-verify` | protocol | itself (feature) |
-| `goalcup-daemon` | `goalcup-daemon` | protocol, platform | itself, mcp, devserver |
+| `goalcup-daemon` | `goalcup-daemon` | protocol, platform | itself, mcp |
 | `goalcup-cli` | `goalcup` | protocol, verifier, platform | itself, daemon |
 | `goalcup-mcp` | `goalcup-mcp` | protocol, platform | none |
 | `goalcup-devserver` | dev only | protocol | verifier |
@@ -218,7 +219,7 @@ Test paths are under `crates/`. Records are under [qualification/](qualification
 | Hermes key child-only, private home, key scan | `goalcup-cli/tests/hermes_child_secret.rs`, `goalcup-cli/tests/hermes_per_run_home.rs`, `goalcup-cli/tests/key_scan.rs`, `goalcup-cli/tests/key_scan_run.rs`, `goalcup-cli/tests/capture_stderr_tee.rs`, `goalcup-cli/tests/loader_script.rs`, `goalcup-cli/tests/m2_hermes_lifecycle.rs`, `goalcup-cli/tests/hermes_offline_key.rs` | [Hermes row][hrow] |
 | Crash, torn tail, restart | `goalcup-cli/tests/capture_crash_campaign.rs` | [T25 crash](qualification/m2-crash-campaign.md) |
 | Whole vertical on a synthetic workload | `goalcup-cli/tests/m2_synthetic_vertical.rs` | [T23][synth] |
-| Four schema-1 contract-kit cases | `goalcup-cli/tests/harness_contract_kit.rs` | none |
+| Six schema-1 contract-kit cases | `goalcup-cli/tests/harness_contract_kit.rs` | none |
 | Research report | `goalcup-verifier/tests/m2_research_report.rs` | [3c rows][real] |
 
 ## 11. Not here
@@ -226,7 +227,8 @@ Test paths are under `crates/`. Records are under [qualification/](qualification
 Deferred deliberately: durable ingest replay, automatic proxy process restart, torn-tail repair,
 separate blobs/object routes, a new journal backend, universal lineage/assistance classification,
 aggregate unique totals, continuous process/workspace/binary surveys, PTY/input relay, and
-desktop/Windows/Linux qualification, public publishing, and production service operation.
+desktop/Windows/Linux qualification ([portability seams](research/platform-portability.md)),
+public publishing, and production service operation.
 Optional signed M2 upload/anchoring and rich browser/MCP presentation are post-pilot packets with
 their own gates. Basic existing hashes/signatures remain; new evidence-comparison machinery can
 follow a recorder that works. The supporting private historical record is intentionally omitted
