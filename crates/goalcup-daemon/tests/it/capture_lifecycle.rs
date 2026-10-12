@@ -2379,3 +2379,100 @@ async fn a_default_daemons_loop_stays_pending() {
     .await;
     assert!(ended.is_err(), "run_forever returned: {ended:?}");
 }
+
+/// Review R4 I3: the terminal is chained and synced, and then the registry row does not say so
+/// (its write failed, or the daemon died between the two). The next daemon reopens the entry
+/// and the next seal must commit that terminal as it stands: nothing appended after it, and
+/// never `SealWriteFailed`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_whose_registry_write_was_lost_is_committed_without_a_second_terminal() {
+    let (rig, _native, _connectors) = native_rig().await;
+    let info = rig.created("capture-dev").await;
+    let harness = Child::sleeping();
+    let registered = rig
+        .register(
+            &info.entry_id,
+            &harness.registration(info.process_generation),
+        )
+        .await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    clean_epoch(&info).await;
+    let sealed = rig
+        .seal(&info.entry_id, Some(ProxyCounters::default()))
+        .await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let first: CaptureFinishReport = sealed.json().unwrap();
+    assert_eq!(first.seal, LocalSealOutcome::SealWritten);
+    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+    let closed = std::fs::read(&chain).unwrap();
+
+    // The row as it stood before the registry write.
+    rig.daemon
+        .registry()
+        .update(&info.entry_id, |entry| {
+            entry.sealed_at = None;
+            if let Some(capture) = entry.capture.as_mut() {
+                capture.finished = None;
+                capture.sealed_status = None;
+            }
+        })
+        .unwrap();
+    let rig = rig.restart().await;
+    let again = rig
+        .seal(&info.entry_id, Some(ProxyCounters::default()))
+        .await;
+    assert_eq!(again.status(), 200, "{}", again.body());
+    let again: CaptureFinishReport = again.json().unwrap();
+    assert_eq!(again.seal, LocalSealOutcome::SealWritten);
+    assert_eq!(again.terminal_seq, first.terminal_seq);
+    assert_eq!(
+        std::fs::read(&chain).unwrap(),
+        closed,
+        "nothing after the terminal"
+    );
+    assert_eq!(local_finishes(&rig.records(&info.entry_id)), 1);
+    let status = rig.status(&info.entry_id).await;
+    assert_eq!(status.payload.capture.unwrap().run, RunState::Sealed);
+    let seal: goalcup_protocol::seal::SealManifest = serde_json::from_slice(
+        &std::fs::read(rig.trace_dir(&info.entry_id).join("seal.json")).unwrap(),
+    )
+    .unwrap();
+    let row = rig.daemon.registry().get(&info.entry_id).unwrap().unwrap();
+    assert_eq!(row.sealed_at.as_deref(), Some(seal.sealed_at.as_str()));
+}
+
+/// The same, with the terminal chained and `seal.json` never written (a crash between the
+/// two, or a full disk): the seal is a failed one, and stays one, and nothing is appended.
+#[tokio::test]
+async fn a_terminal_chained_without_its_seal_is_committed_as_a_failed_seal() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let first: CaptureFinishReport = rig.seal(&info.entry_id, None).await.json().unwrap();
+    assert_eq!(first.seal, LocalSealOutcome::SealWritten);
+    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+    let closed = std::fs::read(&chain).unwrap();
+    std::fs::remove_file(rig.trace_dir(&info.entry_id).join("seal.json")).unwrap();
+    rig.daemon
+        .registry()
+        .update(&info.entry_id, |entry| {
+            entry.sealed_at = None;
+            if let Some(capture) = entry.capture.as_mut() {
+                capture.finished = None;
+                capture.sealed_status = None;
+            }
+        })
+        .unwrap();
+    let rig = rig.restart().await;
+    let again = rig.seal(&info.entry_id, None).await;
+    assert_eq!(again.status(), 200, "{}", again.body());
+    let again: CaptureFinishReport = again.json().unwrap();
+    assert_eq!(again.seal, LocalSealOutcome::SealWriteFailed);
+    assert_eq!(again.terminal_seq, first.terminal_seq);
+    assert_eq!(
+        std::fs::read(&chain).unwrap(),
+        closed,
+        "nothing after the terminal"
+    );
+}

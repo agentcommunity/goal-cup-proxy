@@ -157,3 +157,51 @@ fn the_seal_walk_and_the_baseline_walk_apply_the_same_exclusion_union() {
     assert_eq!(main.sha256, sha256_hex(b"print(1)"));
     assert_eq!(main.bytes, 8);
 }
+
+/// Review R5 I-3: the agent can leave a FIFO, a link to an endless device or an unreadable
+/// directory in its workspace. The seal walk must still finish, list each one with the absent
+/// digest, and hash the ordinary files. On the old walk the FIFO blocked `open` forever.
+#[test]
+fn the_seal_walk_finishes_over_a_fifo_a_device_link_and_an_unreadable_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    // SAFETY: reading the effective uid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return; // `chmod 000` does not lock root out.
+    }
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("locked")).unwrap();
+    std::fs::write(ws.join("locked/inside.txt"), b"hidden").unwrap();
+    std::fs::write(ws.join("main.py"), b"print(1)").unwrap();
+    let fifo = std::ffi::CString::new(ws.join("pipe").to_str().unwrap()).unwrap();
+    // SAFETY: a valid NUL-terminated path and a plain mode.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    std::os::unix::fs::symlink("/dev/zero", ws.join("zero")).unwrap();
+    std::os::unix::fs::symlink(ws.join("main.py"), ws.join("link.py")).unwrap();
+    std::fs::set_permissions(ws.join("locked"), std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let walked = ws.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(list_workspace(&walked, "e1", "2026-10-13T00:00:00Z", &[]));
+    });
+    let listed = rx.recv_timeout(std::time::Duration::from_secs(10));
+    std::fs::set_permissions(ws.join("locked"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let m = listed
+        .expect("the walk finished")
+        .expect("an unreadable directory is listed, not an error");
+
+    let digest = |p: &str| {
+        m.files
+            .iter()
+            .find(|f| f.path == p)
+            .unwrap_or_else(|| panic!("{p} is listed: {:?}", m.files))
+            .sha256
+            .clone()
+    };
+    let absent = "0".repeat(64);
+    assert_eq!(digest("main.py"), sha256_hex(b"print(1)"));
+    for p in ["pipe", "zero", "link.py", "locked"] {
+        assert_eq!(digest(p), absent, "{p}");
+    }
+}
