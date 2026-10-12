@@ -161,13 +161,14 @@ const SECRET_MAX_BYTES: usize = 256;
 pub(crate) type IngestClock = Arc<dyn Fn() -> CaptureTime + Send + Sync>;
 
 /// A clock named `clock_id`: RFC 3339 UTC wall time with nanoseconds, and monotonic
-/// nanoseconds from the moment this clock was made. The entry owner may supply its own
-/// daemon clock instead, so that every daemon observation shares one `clock_id`.
+/// nanoseconds from the moment this clock was made, sleep included
+/// ([`goalcup_protocol::clock`]). The entry owner may supply its own daemon clock instead, so
+/// that every daemon observation shares one `clock_id`.
 pub fn monotonic_clock(clock_id: impl Into<String>) -> IngestClock {
     let clock_id = clock_id.into();
-    let base = std::time::Instant::now();
+    let base = goalcup_protocol::clock::ContinuousOrigin::now();
     Arc::new(move || {
-        let mono_ns = u64::try_from(base.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let mono_ns = base.elapsed_ns();
         // A clock before the epoch reads as the epoch, never a panic.
         let since = SystemTime::now()
             .duration_since(UNIX_EPOCH)

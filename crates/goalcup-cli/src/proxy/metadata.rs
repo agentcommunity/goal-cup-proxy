@@ -26,8 +26,9 @@ use crate::proxy::api::{CapturePath, CapturePolicy};
 use goalcup_protocol::capture::{
     CaptureMeta, CaptureTime, MAX_METADATA_STRING_BYTES, WireIdentity,
 };
+use goalcup_protocol::clock::ContinuousOrigin;
 use std::sync::OnceLock;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The longest content-type essence retained. A real media type is a few dozen bytes.
 const MAX_CONTENT_TYPE_BYTES: usize = 127;
@@ -40,15 +41,16 @@ const MAX_METHOD_BYTES: usize = 64;
 const PROCESS_CLOCK: &str = "goalcup-proxy-process";
 
 /// Now, as a capture observation: RFC 3339 UTC wall time with nanoseconds, and nanoseconds on
-/// one process-wide monotonic clock whose zero is the first observation this process made.
+/// one process-wide monotonic clock whose zero is the first observation this process made. The
+/// monotonic clock counts sleep ([`goalcup_protocol::clock`]).
 ///
 /// Every relay in one proxy process that reads this function shares one monotonic base, so
 /// two observations of one producer compare meaningfully whichever relay made them.
 /// `clock_id` is a placeholder the emitter replaces with the producer ID.
 pub fn capture_time() -> CaptureTime {
-    static BASE: OnceLock<Instant> = OnceLock::new();
-    let base = *BASE.get_or_init(Instant::now);
-    let mono_ns = u64::try_from(base.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    static BASE: OnceLock<ContinuousOrigin> = OnceLock::new();
+    let base = *BASE.get_or_init(ContinuousOrigin::now);
+    let mono_ns = base.elapsed_ns();
     // A clock before the epoch reads as the epoch: never a panic on the relay path.
     let since = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -132,7 +132,8 @@ pub(super) fn alive(os: &dyn ProcessOs, pid: u32) -> bool {
     os.liveness(pid).unwrap_or(false)
 }
 
-/// Wall-clock milliseconds since `started`, on the seam's clock, for a report.
+/// Milliseconds since `started` on the seam's `Instant` clock: how long the wait ran while the
+/// machine was awake, for a report. Not a timestamp; no record time is derived from it.
 pub(super) fn waited_ms(os: &dyn ProcessOs, started: Instant) -> u64 {
     u64::try_from(os.now().saturating_duration_since(started).as_millis()).unwrap_or(u64::MAX)
 }
