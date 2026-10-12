@@ -10,6 +10,7 @@
 //! environment map and hand it to `Command`, which is a different thing from `set_var`
 //! (`tests/env_resolution.rs` says why that distinction is load-bearing).
 
+#[path = "common/support/mod.rs"]
 mod support;
 
 use goalcup_cli::connector::{self, PinState};
