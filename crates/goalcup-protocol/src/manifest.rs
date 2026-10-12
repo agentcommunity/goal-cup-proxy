@@ -704,32 +704,6 @@ impl<'de> Deserialize<'de> for LegacyIgnored {
     }
 }
 
-/// The complete token set any **path** template may use.
-///
-/// `workspace` is the tracker-created working directory; `home` is the participant's real
-/// home, used only where a connector must baseline an app-wide file it did not write;
-/// `config_dir` is the harness's per-run configuration root — the directory
-/// `launch.home_env` points at (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`), or, for a harness with
-/// no single home variable, the per-run harness home the daemon created;
-/// `artifact_root` is the run's artifact directory; `slug`, `session_id`, `yyyy`, `mm`,
-/// `dd` are per-session and per-date components.
-///
-/// No manifest ever names an environment variable. The daemon resolves the roots first and
-/// then renders, so a participant cannot move a tailed store by exporting a variable.
-///
-/// `path_tokens_used()` must return a subset of this list or `validate()` fails.
-pub const PATH_TOKENS: &[&str] = &[
-    "workspace",
-    "home",
-    "config_dir",
-    "artifact_root",
-    "slug",
-    "session_id",
-    "yyyy",
-    "mm",
-    "dd",
-];
-
 impl ConnectorManifest {
     pub fn from_toml_str(s: &str) -> Result<ConnectorManifest, ProtocolError> {
         Ok(toml::from_str(s)?)
