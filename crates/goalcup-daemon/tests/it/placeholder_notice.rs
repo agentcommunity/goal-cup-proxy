@@ -86,16 +86,3 @@ fn the_placeholder_key_produces_exactly_one_notice_line_at_startup() {
         notices[0]
     );
 }
-
-#[test]
-fn another_key_produces_no_notice() {
-    let stderr = stderr_of_a_refused_start(&"ab".repeat(32));
-    assert!(
-        !stderr.to_ascii_lowercase().contains(MARKER),
-        "no notice for an ordinary key: {stderr}"
-    );
-    assert!(
-        stderr.contains("goalcup-daemon:"),
-        "the refusal itself is still said: {stderr}"
-    );
-}

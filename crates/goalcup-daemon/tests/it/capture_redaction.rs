@@ -13,8 +13,7 @@ use goalcup_protocol::chain::Link;
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::redaction::RedactionAuditSpan;
 
-#[path = "support/redaction.rs"]
-mod redaction;
+use crate::common::redaction;
 use redaction::*;
 
 fn frame(seq: u64, event: FrameEvent) -> CaptureFrame {

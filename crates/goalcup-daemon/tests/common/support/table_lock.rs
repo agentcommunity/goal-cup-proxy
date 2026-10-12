@@ -18,9 +18,8 @@
 //! thread deadlocks: the worker's count is 0, so it blocks on the mutex the main thread
 //! holds. Guard test bodies and spawn helpers that run on the test's own thread only.
 //!
-//! Included by `#[path]` rather than through `support/mod.rs`, because that module's
-//! async control fixtures would link tokio into every consumer. `tree.rs`
-//! beside this file is included the same way.
+//! Declared by `tests/common/mod.rs` as `common::table_lock`, beside `support` rather than
+//! inside it.
 
 #![allow(dead_code)]
 

@@ -76,7 +76,7 @@ const NATIVE_INTERIOR_ROLE: &str = "native-interior";
 const MEMBER_FORKS_AFTER_ROOT_ROLE: &str = "member-forks-after-root";
 
 // The constructor entries. Two sections because the two platforms this crate supports
-// (`crates/goalcup-daemon/tests/process_kill.rs`'s own `#![cfg(unix)]`)
+// (`crates/goalcup-daemon/tests/full/main.rs` gates `process_kill` on `cfg(unix)`)
 // name their init-array sections differently; everywhere else this static is simply absent,
 // and the role can never fire, which is fine because nothing on those targets ever sets
 // `GOALCUP_FIXTURE_ROLE`.

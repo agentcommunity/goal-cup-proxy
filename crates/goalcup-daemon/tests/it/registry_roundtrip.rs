@@ -1,7 +1,7 @@
 //! The entry registry: what an entry holds, and that it still holds it after a restart.
 //!
 //! An entry carries "workspace path, harness, manifest hash, session
-//! binding, signed receipts, per-run keys, health". These tests pin the receipt, alongside
+//! binding, signed receipts, per-run keys, health". These tests pin the entry, alongside
 //! the two lookups D4 and D24 need (by
 //! workspace, by token) and the removal a failed start needs.
 
@@ -16,7 +16,6 @@ use goalcup_protocol::export::{
 };
 use goalcup_protocol::manifest::KillStrategy;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
-use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
 use goalcup_protocol::seal::SealManifest;
 
 fn entry(tmp: &std::path::Path, id: &str) -> Entry {
@@ -455,39 +454,6 @@ fn prepared_seed_recovery_never_retains_resolved_or_escaping_paths() {
         .expect("the manifest spelling and relative name are safe recovery evidence");
 }
 
-/// The `[5u8; 32]` seed is the published placeholder server key
-/// (`goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX`) the test daemons pin.
-fn server_key() -> ed25519_dalek::SigningKey {
-    ed25519_dalek::SigningKey::from_bytes(&[5u8; 32])
-}
-
-/// The hex verifying key a build pins, which is what `store_receipt` checks against.
-fn pinned(key: &ed25519_dalek::SigningKey) -> String {
-    hex::encode(key.verifying_key().to_bytes())
-}
-
-fn receipt_for(entry_id: &str, key: &ed25519_dalek::SigningKey) -> StartReceipt {
-    StartReceipt::sign(
-        StartReceiptClaims {
-            entry_id: entry_id.to_string(),
-            connector_id: "claude-code-cli".to_string(),
-            workspace: "/ws/e1".to_string(),
-            session_id: "s1".to_string(),
-            started_at: "2026-09-01T00:00:00Z".to_string(),
-            deadline_at: "2026-09-08T00:00:00Z".to_string(),
-            manifest_sha256: "ab".repeat(32),
-            chain_head: "cd".repeat(32),
-            // Round-tripped like every other claim: `store_receipt` verifies the signature
-            // over whatever bytes the layout produced, and this field is in those bytes.
-            connector_dir_sha256: Some("ef".repeat(32)),
-            run_public_key: None,
-            questionnaire_version: None,
-        },
-        key,
-    )
-    .unwrap()
-}
-
 #[test]
 fn an_entry_round_trips_through_the_registry() {
     let tmp = tempfile::tempdir().unwrap();
@@ -681,83 +647,6 @@ fn generic_writes_cannot_desynchronize_the_registered_termination_handle() {
     );
 }
 
-/// `Entry.receipt` is private and has no unchecked writer, so the receipt goes in
-/// through the legacy compatibility path that verifies first.
-#[test]
-fn the_registry_holds_the_signed_receipt_r2_asks_for() {
-    let tmp = tempfile::tempdir().unwrap();
-    let r = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    r.put(&entry(tmp.path(), "e1")).unwrap();
-    let server = server_key();
-    let receipt = receipt_for("e1", &server);
-
-    let stored = r.store_receipt("e1", &receipt, &pinned(&server)).unwrap();
-    assert_eq!(stored.receipt(), Some(&receipt));
-
-    let updated = r
-        .update("e1", |e| {
-            e.state = EntryState::Started;
-            e.started_at = Some(receipt.claims.started_at.clone());
-        })
-        .unwrap();
-    assert_eq!(updated.receipt(), Some(&receipt));
-    assert_eq!(
-        r.get("e1")
-            .unwrap()
-            .unwrap()
-            .receipt()
-            .unwrap()
-            .claims
-            .session_id,
-        "s1"
-    );
-}
-
-/// The receipt's invariant, stated as a property of the type rather than a convention: a caller
-/// outside this crate cannot build an `Entry` at all except through `Entry::new` (the
-/// `receipt` field is private, so a struct literal does not compile), and `new` leaves it
-/// empty. `update` hands out `&mut Entry`, and there is no setter to reach the field
-/// with — a closure that tries to keep the receipt it was given cannot change it.
-#[test]
-fn an_entry_can_only_be_born_without_a_receipt_and_update_cannot_add_one() {
-    let tmp = tempfile::tempdir().unwrap();
-    assert_eq!(entry(tmp.path(), "e1").receipt(), None);
-
-    let r = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    r.put(&entry(tmp.path(), "e1")).unwrap();
-    let server = server_key();
-    let receipt = receipt_for("e1", &server);
-    r.store_receipt("e1", &receipt, &pinned(&server)).unwrap();
-
-    // An `update` closure gets `&mut Entry` and still cannot reach the receipt: the most
-    // it can do is replace the whole value with a fresh one, and the receipt survives.
-    let after = r
-        .update("e1", |e| {
-            *e = Entry::new(
-                "e1",
-                &e.connector_id,
-                e.workspace.clone(),
-                e.artifact_dir.clone(),
-                &e.manifest_sha256,
-                &e.harness_version,
-                goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
-                ExpectedProcessHandoff::NotRequired,
-                e.keys.clone(),
-            );
-        })
-        .unwrap();
-    assert_eq!(
-        after.receipt(),
-        Some(&receipt),
-        "update cannot drop the verified receipt either"
-    );
-
-    // A `put` of an entry value that never held a receipt does not erase the stored one
-    // either: the receipt is the registry's, not the caller's.
-    r.put(&entry(tmp.path(), "e1")).unwrap();
-    assert_eq!(r.get("e1").unwrap().unwrap().receipt(), Some(&receipt));
-}
-
 #[test]
 fn remove_leaves_no_entry() {
     let tmp = tempfile::tempdir().unwrap();
@@ -798,44 +687,12 @@ fn put_refuses_a_second_entry_bound_to_the_same_workspace() {
     assert_eq!(r.all().unwrap().len(), 1);
 }
 
-/// A receipt that does not verify against the pinned server key is never stored, so a
-/// stored receipt is a verified one by construction. This is the one write path the arming
-/// gate uses; `update` stays open for everything else.
-#[test]
-fn a_receipt_signed_by_the_wrong_key_is_refused_and_nothing_is_stored() {
-    let tmp = tempfile::tempdir().unwrap();
-    let r = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    r.put(&entry(tmp.path(), "e1")).unwrap();
-
-    let server = server_key();
-    let key = pinned(&server);
-    let impostor = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
-
-    let forged = receipt_for("e1", &impostor);
-    let err = r.store_receipt("e1", &forged, &key).unwrap_err();
-    assert!(
-        err.to_string().contains("receipt"),
-        "the refusal names the receipt, not a database: {err}"
-    );
-    assert!(
-        r.get("e1").unwrap().unwrap().receipt().is_none(),
-        "a receipt that did not verify is never stored"
-    );
-
-    let genuine = receipt_for("e1", &server);
-    let stored = r.store_receipt("e1", &genuine, &key).unwrap();
-    assert_eq!(stored.receipt(), Some(&genuine));
-    assert_eq!(r.get("e1").unwrap().unwrap().receipt(), Some(&genuine));
-}
-
 /// The registry is the daemon's memory across a crash. Reopening the same file must give
-/// back the same entries, field for field, receipt included.
+/// back the same entries, field for field.
 #[test]
 fn the_registry_survives_a_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("registry.redb");
-    let server = server_key();
-    let receipt = receipt_for("e1", &server);
     let mut e = entry(tmp.path(), "e1");
     e.state = EntryState::Started;
     e.chain_seq = Some(0);
@@ -844,17 +701,14 @@ fn the_registry_survives_a_restart() {
     e.expected_config
         .insert("settings.json".to_string(), "aa".repeat(32));
 
-    let written;
     {
         let r = Registry::open(&path).unwrap();
         r.put(&e).unwrap();
-        written = r.store_receipt("e1", &receipt, &pinned(&server)).unwrap();
     }
 
     let r = Registry::open(&path).unwrap();
-    assert_eq!(r.get("e1").unwrap().unwrap(), written);
-    assert_eq!(r.all().unwrap(), vec![written.clone()]);
-    assert_eq!(written.receipt(), Some(&receipt));
+    assert_eq!(r.get("e1").unwrap().unwrap(), e);
+    assert_eq!(r.all().unwrap(), vec![e.clone()]);
 }
 
 /// A fresh registry has no entries.

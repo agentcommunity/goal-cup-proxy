@@ -10,7 +10,7 @@
 use super::support::control::{
     EmptyControlHarness, Response, empty_control_harness_on, restart_empty_control,
 };
-use crate::table_lock::TableLock;
+use super::table_lock::TableLock;
 use goalcup_daemon::config::DaemonConfig;
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureRecord, CaptureTime, FrameEvent, GapReason, IngestMessage, StreamKey,

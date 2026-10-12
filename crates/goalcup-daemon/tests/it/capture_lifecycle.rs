@@ -5,12 +5,8 @@
 //! macOS only: the chain reservation is qualified on APFS alone and refuses everywhere else,
 //! so every entry here is created on the temporary directory's APFS volume.
 
-#![cfg(target_os = "macos")]
-
-mod capture_lifecycle_support;
-mod support;
-#[path = "support/table_lock.rs"]
-mod table_lock;
+use crate::common::capture_lifecycle_support;
+use crate::common::support;
 
 use capture_lifecycle_support::{
     Child, RESERVE, Rig, Wire, controlled_native_rig, descriptors_on, dev_connectors, fresh_id,
@@ -671,7 +667,8 @@ fn refused_native_roots_run_under_a_private_home_and_never_touch_the_real_one() 
     }
 }
 
-const CHILD_TEST: &str = "refused_native_roots_child_half";
+// The libtest name inside the folded `it` binary, which prefixes the module path.
+const CHILD_TEST: &str = "capture_lifecycle::refused_native_roots_child_half";
 const PRIVATE_HOME_ENV: &str = "GOALCUP_TEST_PRIVATE_HOME";
 
 /// Run only by [`refused_native_roots_run_under_a_private_home_and_never_touch_the_real_one`].

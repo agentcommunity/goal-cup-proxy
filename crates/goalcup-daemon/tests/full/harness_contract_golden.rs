@@ -26,15 +26,7 @@
 //! them (off unless set to exactly `1`). Everything is synthetic and lives in the test's
 //! temporary root.
 
-#[cfg(target_os = "macos")]
-mod capture_lifecycle_support;
-#[path = "support/redaction.rs"]
-mod redaction;
-#[cfg(target_os = "macos")]
-mod support;
-#[cfg(target_os = "macos")]
-#[path = "support/table_lock.rs"]
-mod table_lock;
+use crate::common::redaction;
 
 use base64::Engine as _;
 use goalcup_daemon::redact::stream::StreamRedactor;
@@ -273,8 +265,8 @@ fn the_extra_redaction_patterns_and_their_recognizers_are_pinned() {
 #[cfg(target_os = "macos")]
 mod live {
     use super::*;
-    use crate::capture_lifecycle_support::{Rig, launch_request};
-    use crate::support;
+    use crate::common::capture_lifecycle_support::{Rig, launch_request};
+    use crate::common::support;
     use goalcup_protocol::harness::{Binding, IdGrammar, IdentitySource};
 
     /// The shipped connectors and the controlled workload, as a connectors directory.

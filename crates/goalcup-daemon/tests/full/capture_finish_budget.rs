@@ -12,12 +12,9 @@
 //!
 //! macOS only: every entry is reserved on the temporary directory's APFS volume.
 
-#![cfg(target_os = "macos")]
-
-mod capture_lifecycle_support;
-mod support;
-#[path = "support/table_lock.rs"]
-mod table_lock;
+use crate::common::capture_lifecycle_support;
+use crate::common::support;
+use crate::common::table_lock;
 
 use capture_lifecycle_support::{
     Child, Rig, Wire, fresh_id, launch_request, local_finishes, native_rig, streamless,
