@@ -638,22 +638,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "goalcup-devserver"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "ed25519-dalek",
- "goalcup-protocol",
- "goalcup-verifier",
- "hex",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
 name = "goalcup-mcp"
 version = "0.1.0"
 dependencies = [

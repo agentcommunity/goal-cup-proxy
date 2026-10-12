@@ -51,12 +51,11 @@ pub struct DaemonConfig {
     /// **The development key is a published placeholder; the daemon says so and does not
     /// refuse it.** Its seed is a constant in this repository, so anybody can sign a receipt
     /// and an acknowledgement under it and a run anchored to it is anchored to nothing. The
-    /// verifier reports that as V13's `placeholder_server_key` and the devserver banners it on
-    /// every start; the daemon prints one line on stderr at startup
+    /// verifier reports that as V13's `placeholder_server_key`; the daemon prints one line on stderr at startup
     /// ([`DaemonConfig::placeholder_key_notice`]). It does not refuse, because refusing would
     /// break every development run in this tree. Read as: a `server_public_key` equal to
     /// `goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX` (the key of the
-    /// devserver's `DEV_SERVER_SEED`) names a trace that a verifier will
+    /// published seed `[5u8; 32]`) names a trace that a verifier will
     /// flag, and only `--dev` suppresses the flag.
     /// Omitted together with `upload_url`, this is empty and only local v5 entries are admitted.
     #[serde(default)]

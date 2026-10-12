@@ -941,7 +941,7 @@ fn server_upload_and_goalcup_names_are_refused() {
     let mut t = hermes();
     set(&mut t, &["capture"], "goal_flag", "--goalcup-goal");
     refused(&t, PINNED, &["goal_flag", "delivery-agnostic"]);
-    // The devserver's loopback host is already not a capture host.
+    // A loopback host is already not a capture host.
     let mut t = codex();
     set(&mut t, &["capture", "hosts"], "host", "127.0.0.1");
     refused(&t, PINNED, &["not a lowercase DNS name"]);

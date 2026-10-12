@@ -232,8 +232,7 @@ impl HttpDaemonClient {
     /// directly meets it here. Neither path can produce a client that would carry the token
     /// off this machine.
     ///
-    /// A *name* is refused as well, `localhost` included — `goalcup-devserver`'s own address
-    /// check makes the same call for the same reason, that a name is resolved by something
+    /// A *name* is refused as well, `localhost` included: a name is resolved by something
     /// this process does not control, and the fix is to write the literal.
     ///
     /// No connection pooling. The calls a run makes are seconds and minutes apart, and a

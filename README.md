@@ -119,8 +119,7 @@ only move tier.
 ## Run from source or stage a private candidate
 
 Nothing below is a `cargo run`: the commands are written as a participant types them, with the
-binaries on `PATH`. The workspace builds `goalcup`, `goalcup-daemon`, `goalcup-verify` and
-`goalcup-mcp` (`goalcup-devserver` is development-only).
+binaries on `PATH`. The workspace builds `goalcup`, `goalcup-daemon` and `goalcup-verify`.
 
 ```
 cargo build --release

@@ -124,9 +124,8 @@ cargo test -p goalcup-cli --offline --features test-support --test full m2_synth
 `--features test-support` is written out because `tests/common/support/mod.rs` needs it, even though
 the crate's own dev-list already turns it on.
 
-Nothing in the suite reaches the network. The `goalcup-devserver` tests bind their own
-loopback port, and the one listener the daemon serves on `m2/wire`, the control API, is refused
-a non-loopback address by `DaemonConfig::validate`. (On `v1/trunk` the hook receiver is a
+Nothing in the suite reaches the network. The one listener the daemon serves on `m2/wire`, the
+control API, is refused a non-loopback address by `DaemonConfig::validate`. (On `v1/trunk` the hook receiver is a
 second listener under the same rule.)
 
 ### CI
@@ -151,9 +150,8 @@ Every runner minute costs something on every pull request. Keep this file small:
 ### Installing the participant binaries
 
 Nothing below is a `cargo run`. Every command in this file is written as a participant types
-it, which means `goalcup`, `goalcup-daemon`, `goalcup-verify`, and `goalcup-mcp` are on
-`PATH` — and a clean checkout has none of them there. `goalcup-devserver` is development-only,
-not a participant install target. One build makes the workspace binaries:
+it, which means `goalcup`, `goalcup-daemon` and `goalcup-verify` are on
+`PATH` — and a clean checkout has none of them there. One build makes the workspace binaries:
 
 ```
 cargo build --release
@@ -218,8 +216,8 @@ control_addr = "127.0.0.1:7787"
 
 `upload_url` and `server_public_key` are still parsed, both or neither, so a V1 configuration
 keeps loading. Nothing in this tree uploads or checks a receipt (D48), so the pair changes only
-one thing: when `server_public_key` is the published placeholder (the verifying key of
-`goalcup_devserver::DEV_SERVER_SEED`), the daemon prints one stderr line saying its seed is
+one thing: when `server_public_key` is the published placeholder (the verifying key of the
+published seed `[5u8; 32]`), the daemon prints one stderr line saying its seed is
 public. Omit both.
 
 `$GOALCUP_CONFIG_DIR` overrides **both sides at once**: exported, the CLI and `goalcup-mcp`

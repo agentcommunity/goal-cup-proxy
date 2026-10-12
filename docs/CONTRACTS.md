@@ -1274,7 +1274,8 @@ Decided by D43 ruling 7; the design is `.superpowers/sdd/2026-10-02-oss/harness-
 - **Side artifacts.** `receipt.json`, `acks.jsonl` and the `StartReceipt`, `AckCheckpoint` and
   `Chunk` types, and any later side file (the server phase's registration and fixed documents),
   are versioned by their own domain tags (`goalcup-receipt-v1`, `goalcup-chunk-v1`, ...) and are
-  outside the record freeze. `MAX_UPLOAD_BYTES` lives in `chunk.rs` for that reason. The v5
+  outside the record freeze. (`Chunk` and `MAX_UPLOAD_BYTES`, in `chunk.rs`, were deleted with the
+  devserver on 2026-10-12: no shipped binary uploaded a chunk.) The v5
   reader reads only the named files; an absent receipt or ack file is not an error, and it opens
   no other file in the trace directory.
 - **Not frozen.** The seven `FrameEvent` kinds are the producer-to-daemon seam inside one

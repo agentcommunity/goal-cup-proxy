@@ -257,7 +257,7 @@ pub struct WorkspaceOpts {
     /// **Nothing reads this, and a daemon must not honour it**.
     ///
     /// The window is a RULE, not a preference: 168 hours, and the clock never pauses. The
-    /// V1 daemon derived the deadline from `goalcup_devserver::ENTRY_WINDOW_SECONDS` and
+    /// V1 daemon derived the deadline from the development server's entry window and
     /// compared its re-derivation against the receipt the server signed; D48 removed that
     /// receipt path, and the current daemon sets no deadline from this field. So the number a
     /// CLI puts here reaches no deadline anywhere. The shipped CLI always sends the constant

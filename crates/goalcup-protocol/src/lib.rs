@@ -16,7 +16,6 @@ pub mod capture;
 pub mod capture_policy;
 pub mod capture_status;
 pub mod chain;
-pub mod chunk;
 pub mod connector_dir;
 pub mod constant_time;
 pub mod control;
@@ -88,11 +87,6 @@ pub enum ProtocolError {
     Signature(String),
     #[error("field {field}: {reason}")]
     Field { field: String, reason: String },
-    /// A chunk's `chunk_id` does not name the range the same claims declare. Distinct from
-    /// `Signature` because the signature may be perfectly good: the document is internally
-    /// inconsistent, and a server that files by `chunk_id` would store the wrong range.
-    #[error("chunk id {claimed} does not name this chunk's range, which derives {derived}")]
-    ChunkIdMismatch { claimed: String, derived: String },
     /// Reading bytes this crate was asked to hash. `connector_dir::connector_dir_sha256` walks a
     /// whole directory, so the path that failed is carried: "io error" over a tree of files
     /// names nothing a caller can act on.

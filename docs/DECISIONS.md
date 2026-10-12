@@ -1208,8 +1208,8 @@ not from dead code in the tree.
   listed here (`open_resume_process_handoff`, `begin_sealing`, `restore_unfinished_sealing`,
   `in_harness_home`, `remove_if_unstarted`, `start_handoff_complete`) were removed under OS-31,
   with the other V1 items no production code reached.
-- **`goalcup-devserver` stays** for now. No shipped binary links it and, after OS-31, no crate
-  depends on it; deleting the unused crate is an open decision ([TODO](../TODO.md)).
+- **`goalcup-devserver` stayed** at first. No shipped binary linked it and, after OS-31, no crate
+  depended on it. Deleted on 2026-10-12, together with the protocol `chunk` module it alone used.
 
 **Evidence.** LEDGER OS-30; the pull request that lands it carries the gate results.
 

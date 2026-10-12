@@ -27,13 +27,6 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
 - New harnesses (builders bring them: [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md))
 - Full registration and teams system
 - Qualification records
-- Decide: delete the unused `goalcup-devserver` crate (and its three test files): a dev-only
-  receipt, acknowledgement and chunk signer. Check first whether the verifier's V12/V13 round
-  trip still needs it; protocol `receipt.rs` and `ack.rs` stay either way, the verifier reads them.
-- Delete `goalcup-protocol/src/chunk.rs` (and its unit tests) with the devserver's chunk route: no
-  shipped binary reaches the chunk upload flow. Its integration tests went in the test diet, so
-  `CHUNK_DOMAIN`'s distinctness from the receipt, acknowledgement and chain domains is untested
-  now: if `chunk` stays, restore one distinctness assertion.
 - Remove the manifest `launch`, `resume` and `banned_args` fields from the V1 manifest schema
   (`goalcup-protocol/src/manifest.rs`): parsed, read by no shipped binary (launch plans come from
   `harness.toml`). Their snapshot tests went in the test diet.
