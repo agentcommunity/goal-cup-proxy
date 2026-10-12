@@ -1,52 +1,54 @@
 # goal-cup
 
-How do I build, gate, install and run the tracker? For contributors and agents. Updated: 2026-10-12.
+Goal Cup records what a coding agent does in one run: it launches the agent on your goal, records
+its model traffic and its own session files, and seals them into one tamper-evident trace that
+`goalcup-verify` checks offline. It is the tracker for the /goal Cup ([docs/VISION.md](docs/VISION.md)).
 
-**Goal Cup** is an open-source tracker that records what a coding agent actually did during a run.
-It captures the harness's own session files (the native leg) and its model traffic (the wire leg)
-into one sealed, hash-linked chain that `goalcup-verify` checks offline. The aim is
-**One Prompt. One Agent. 168 Hours.** ([docs/VISION.md](docs/VISION.md)); that sentence is the
-goal, not a claim about this code.
+## Quickstart
 
-## Status
+**You need** a Mac with Apple silicon, Rust 1.99 or later ([rustup](https://rustup.rs)), the Xcode
+command line tools, and a Claude or ChatGPT subscription. Install the exact harness build Goal Cup
+is pinned to, Claude Code 2.1.283 or Codex CLI 0.153.0: `goalcup start` refuses any other build.
 
-What is next and what is open: [TODO.md](TODO.md). The old status page, ledger and qualification
-records are in git history at `6494030`.
+<a id="build"></a>From the repository root, build, configure and start the daemon:
 
-v0.5.0 is published as source only, with no attached files: see the [v0.5.0
-release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0). There is no downloadable
-binary, installer, staged bundle, registry publication, signature, notarization or qualification.
-Built binaries print `0.1.0`: the package version is independent of source release tags. The source
-has exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
-`hermes-cli` (capture-only). The separate private `m2-pilot` macOS packaging allowlist
-([packaging/README.md](packaging/README.md)) selects only Codex and Claude; a source pin does not
-prove package inclusion. Short rows are measured; long runs are not qualified (the records are in git history before
-`6494030`). `v1/trunk` and its `v0.1.0` tag are
-private; the V1 code that v0.5.0 kept behind `v1-compat` was removed (D48) and lives on in the
-`v0.5.0` tag. Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md).
-
-## Build
-
-Prerequisites:
-
-- **Rust 1.99 or later** (edition 2024, `let` chains). `rust-toolchain.toml` asks for `stable`.
-- **A supported platform.** macOS is supported and is the only measured target. Linux is
-  best-effort and untested: the workspace builds and a small CI smoke check runs there, but the
-  daemon and CLI test suites are not run there (they spawn process trees and hang small machines)
-  and a `goalcup start` capture is refused, because the chain's disk reservation is implemented
-  only for macOS APFS. Windows is planned; its code stubs say "not yet supported" and
-  `goalcup-platform` refuses to compile on it today.
-- **A C compiler** (`ring` compiles C and assembly).
-- **`shasum` or `sha256sum`**, because a test runs `scripts/pin-manifests.sh --print`, and
-  **`python3`** if you change `connectors/` and regenerate the pins.
-
-Plain `cargo build` works: cargo fetches the locked dependencies the first time. The optional
-maintainer `--offline` convention is under [the gate](#the-gate); `cargo fmt` reads no registry
-and takes no `--offline` flag. Never create a `.cargo/config.toml`.
-
+```sh
+cargo build --release
+export PATH="$PWD/target/release:$PATH"
+mkdir -p ~/goalcup && cat > ~/goalcup/daemon.toml <<EOF
+artifact_root    = "$HOME/goalcup/artifacts"
+connectors_dir   = "$PWD/connectors"
+config_dir       = "$HOME/goalcup/config"
+workspace_parent = "$HOME/goalcup/runs"
+control_addr     = "127.0.0.1:0"
+EOF
+export GOALCUP_CONFIG_DIR="$HOME/goalcup/config"
+goalcup-daemon --config ~/goalcup/daemon.toml    # leave it running
 ```
-cargo build
+
+Claude Code uses your normal Claude login. Codex signs in once to the tracker's own Codex home:
+`mkdir -p -m 700 "$GOALCUP_CONFIG_DIR/capture-homes/codex-cli"`, then
+`CODEX_HOME="$GOALCUP_CONFIG_DIR/capture-homes/codex-cli" codex login`.
+
+In a second terminal, export the same `PATH` and `GOALCUP_CONFIG_DIR`, then run:
+
+```sh
+mkdir ~/goal-1 && echo "Build a to-do app in Python." > ~/goal-1/goal.txt
+goalcup doctor --harness claude-code-cli
+goalcup start --harness claude-code-cli --goal-file ~/goal-1/goal.txt
+goalcup-verify --capture-integrity <trace>    # copy the verify: line start printed
 ```
+
+`start` runs the agent until it exits, seals the run, and prints its `trace:` folder and the
+`verify:` line. Meanwhile `goalcup status` shows how it is doing and `goalcup seal` stops it early.
+Verify exit 0 means the record is complete and valid ([all exit codes](#run-a-capture)). What you
+agree to as a participant: [docs/RULES.md](docs/RULES.md).
+
+**Adding a harness?** Start at [skills/adding-a-capture-harness](skills/adding-a-capture-harness/SKILL.md).
+
+Status: source only (v0.5.0); there is no binary release. Open work: [TODO.md](TODO.md). Terms:
+[docs/GLOSSARY.md](docs/GLOSSARY.md). Contributors running the tests also need `shasum` and
+`python3`; never create a `.cargo/config.toml`.
 
 ## The gate
 
@@ -120,81 +122,30 @@ only move tier.
 | P6 | The proxy captures faithfully | cli TLS, HTTP and WebSocket relay; verifier decoders |
 | P7 | One end-to-end capture per harness, and termination | cli lifecycle suites and contract kit; daemon capture lifecycle and process kill |
 
-## Run from source or stage a private candidate
-
-Nothing below is a `cargo run`: the commands are written as a participant types them, with the
-binaries on `PATH`. The workspace builds `goalcup`, `goalcup-daemon` and `goalcup-verify`.
-
-```
-cargo build --release
-export PATH="$PWD/target/release:$PATH"
-export GOALCUP_CONNECTORS_DIR="$PWD/connectors"
-```
-
-`GOALCUP_CONNECTORS_DIR` matters only for a binary copied off the build tree; the discovery order
-is in [docs/OPERATING.md](docs/OPERATING.md#current-m2-operating-boundary). Connector directories
-are pinned; edit one only with `sh scripts/pin-manifests.sh` in the same commit. The macOS staging
-and assisted-install tooling in [packaging/README.md](packaging/README.md) is not a released
-installer or staged artifact. The assisted install adds a persistent launchd user agent that
-restarts after a crash and at every login; `uninstall-assisted.sh` removes it.
-
 ## Run a capture
 
-A capture run records one headless harness session for one goal through the recording proxy. Every
-run gets a fresh `HOME`; Codex and Claude use isolated shared `CODEX_HOME`/`CLAUDE_CONFIG_DIR`
-(Claude's run home has the checked Keychains link), while Hermes gets a per-run `HERMES_HOME` seeded
-only with declared files. It needs a running daemon (`goalcup-daemon --config <FILE>`), and
-`GOALCUP_CONFIG_DIR` must name the directory the daemon's `config_dir` names. A LocalOnly daemon
-needs five keys and no server:
+The reference behind the quickstart. Every flag is in `goalcup <command> --help`; the daemon's
+other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
 
-```toml
-artifact_root    = "<install>/var/artifacts"
-connectors_dir   = "<install>/share/goalcup/connectors"
-config_dir       = "<install>/etc"
-workspace_parent = "<install>/var/workspaces"
-control_addr     = "127.0.0.1:0"
-```
+- **Where things go.** The run's folder (`workspace/`, the harness's fresh `HOME`) is created
+  beside the goal file, so keep the goal file in an empty folder outside any repository. The
+  sealed trace is under the daemon's `artifact_root`.
+- **What the harness sees.** Its environment is built from nothing: of your shell's variables only
+  `USER`, `LOGNAME`, `TMPDIR` and, for a keyed connector, its one API key reach it. An exported
+  `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `*_PROXY` is dropped, not inherited. The tracker
+  never sets a model base URL; the only proxy the harness gets is the tracker's own recorder on
+  your machine.
+- **A binary copied out of `target/release`** cannot find the connectors on its own: export
+  `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. The macOS staging scripts in
+  [packaging/README.md](packaging/README.md) are private tooling, not a released installer.
+- **Hermes** (`hermes-cli`) needs a provider key and is run by the maintainer only, through
+  `/bin/sh -p scripts/with-deepseek-key.sh <ENV_FILE> start --harness hermes-cli --goal-file <PATH>`
+  with a mode 0600 file holding one `DEEPSEEK_API_KEY=` line. Never paste the key into a shell.
 
-Omit `upload_url` and `server_public_key`: the daemon admits only local v5 entries (D48).
-Every other key is in [OPERATING](docs/OPERATING.md#running-the-daemon).
-
-Put the goal in a text file in a directory of its own, outside any repository: the run's
-directory is created beside it. Then:
-
-```
-goalcup start --harness <codex-cli|claude-code-cli|hermes-cli> --goal-file <PATH>
-goalcup-verify --capture-integrity <trace>
-```
-
-`start` launches the harness, waits for it, seals the entry and prints the harness exit code,
-the termination, the `trace:` directory and the exact `verify:` line to run. Optional flags:
-`--capture-reserve-bytes <BYTES>` (chain bytes reserved before launch) and
-`--capture-claude-allowed-tool <RULE>` (one bounded Claude Bash rule for this launch). The
-harness's environment is built from nothing: of the shell's own variables only `USER`,
-`LOGNAME`, `TMPDIR` and a keyed connector's one credential (`DEEPSEEK_API_KEY` or `AMP_API_KEY`,
-below) reach it, so an exported `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `*_PROXY` is
-dropped, not inherited (`start` does not refuse it). The tracker never sets a base
-URL; the only proxy the harness is given is the tracker's own loopback capture proxy, and a
-connector cannot name a `*_URL` variable in `[capture.env]` or as its home variable
-(`capture.home.env`).
-
-**Integrity exit codes** of `goalcup-verify --capture-integrity`: 0 complete and valid, 1
-incomplete or unsealed, 2 invalid (a torn tail included), 3 no usable report. A LocalOnly seal
-with exit 0 means local evidence is complete; it is not an anchored or qualified result. The
-research report is `goalcup-verify --research-json <trace> --output <REPORT.ndjson>`
-(format: git history at `6494030`, `docs/research/m2-report-format.md`).
-
-**Hermes** needs a provider key, which only the owner loads, through the reviewed launch seam
-and never pasted into a shell:
-
-```
-/bin/sh -p scripts/with-deepseek-key.sh <ENV_FILE> start --harness hermes-cli --goal-file <PATH>
-```
-
-`<ENV_FILE>` is a mode 0600 file holding one `DEEPSEEK_API_KEY=` line. The script runs exactly
-that command and refuses any other. This run is owner-run and the agent never opens the key file
-(D41). The procedure and the measured row are in git history at `6494030`
-(`docs/qualification/m2-hermes-reference-row.md`).
+**Exit codes of `goalcup-verify --capture-integrity`:** 0 complete and valid, 1 incomplete or not
+sealed, 2 invalid (including a torn last record), 3 no usable report. Exit 0 says the local record
+is complete; it is not a judged or server-confirmed result. `goalcup-verify --research-json <trace>
+--output <REPORT.ndjson>` writes the private research report.
 
 ## More
 
@@ -202,7 +153,7 @@ that command and refuses any other. This run is owner-run and the agent never op
 |---|---|
 | How the parts fit | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Daemon config, every CLI flag and exit code, verifier, fixtures, pins | [docs/OPERATING.md](docs/OPERATING.md) |
-| Adding a harness | [docs/HARNESS-ONBOARDING.md](docs/HARNESS-ONBOARDING.md) |
+| Adding a harness | [skills/adding-a-capture-harness](skills/adding-a-capture-harness/SKILL.md), then [docs/HARNESS-ONBOARDING.md](docs/HARNESS-ONBOARDING.md) |
 | What is next | [TODO.md](TODO.md) |
 | What a participant agrees to | [docs/RULES.md](docs/RULES.md) |
 | Settled decisions | [docs/DECISIONS.md](docs/DECISIONS.md) |
@@ -216,9 +167,9 @@ tests, never to build or run the gate. Source `harnesses/env.sh` before any real
 ## Contributing
 
 Harness connectors are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md) and
-[docs/HARNESS-ONBOARDING.md](docs/HARNESS-ONBOARDING.md). No DCO sign-off is needed; a human
-reads and answers for each PR. Security issues go to goalhack@agentcommunity.org, never a public
-issue, or use GitHub private vulnerability reporting ([SECURITY.md](SECURITY.md)).
+[skills/adding-a-capture-harness](skills/adding-a-capture-harness/SKILL.md). No DCO sign-off is
+needed; a human reads and answers for each PR. Security issues go to goalhack@agentcommunity.org,
+never a public issue, or use GitHub private vulnerability reporting ([SECURITY.md](SECURITY.md)).
 Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License

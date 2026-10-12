@@ -312,8 +312,8 @@ fn compare(left: &[u64], right: &[u64]) -> Ordering {
 
 fn unreadable(written: &str) -> CliError {
     CliError::Internal(format!(
-        "{written:?} is not a version range this build reads. D12's grammar is two \
-         operators: `>=<version>` and `=<version>`, with a version written as dotted \
+        "{written:?} is not a version range this build reads. A range is one of two \
+         forms, `>=<version>` or `=<version>`, with a version written as dotted \
          numbers — `>=2.1.259`, `=0.153.0`."
     ))
 }

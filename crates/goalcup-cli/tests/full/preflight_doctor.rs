@@ -73,7 +73,7 @@ fn the_tier_gate_is_d23s_measured_table_and_refuses_anything_but_full() {
     );
     assert!(elevated.detail.to_lowercase().contains("review"));
     assert!(
-        elevated.detail.contains("M1"),
+        elevated.detail.contains("refused for now, not forever"),
         "say WHY it is refused now and not forever"
     );
     c.manifest.tier = goalcup_protocol::manifest::Tier::Unsupported;
