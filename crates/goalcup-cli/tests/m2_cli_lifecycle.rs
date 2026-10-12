@@ -15,7 +15,7 @@ mod m2_common;
 #[path = "common/support/mod.rs"]
 mod support;
 
-#[path = "../../goalcup-daemon/tests/support/table_lock.rs"]
+#[path = "../../goalcup-daemon/tests/common/support/table_lock.rs"]
 mod table_lock;
 
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource, RunState};

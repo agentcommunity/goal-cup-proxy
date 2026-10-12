@@ -25,5 +25,5 @@ pub mod secret_support;
 pub mod support;
 
 // Shared with goalcup-daemon's process-table tests; one mutex per test binary.
-#[path = "../../../goalcup-daemon/tests/support/table_lock.rs"]
+#[path = "../../../goalcup-daemon/tests/common/support/table_lock.rs"]
 pub mod table_lock;
