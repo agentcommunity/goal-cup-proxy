@@ -267,6 +267,37 @@ fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
             "{name} is not a gate, and 4 is a gate's number"
         );
     }
+
+    // Every construction of the rung, enumerated. One line per site, which is how this crate
+    // already writes them — `CliError::Gate(format!(` opens the call and the sentence
+    // follows underneath.
+    let mut sites: Vec<(String, usize, String)> = Vec::new();
+    for entry in support::walk("crates/goalcup-cli/src") {
+        let Ok(source) = std::fs::read_to_string(&entry) else {
+            continue;
+        };
+        for (n, line) in source.lines().enumerate() {
+            let trimmed = line.trim_start();
+            // The match arm in `lib.rs` reads the rung; it does not raise it.
+            if !trimmed.contains("CliError::Gate(")
+                || trimmed.contains("CliError::Gate(_)")
+                || trimmed.starts_with("//")
+            {
+                continue;
+            }
+            let file = entry
+                .strip_prefix(support::repo_root())
+                .unwrap_or(&entry)
+                .display()
+                .to_string();
+            sites.push((file, n + 1, trimmed.to_string()));
+        }
+    }
+    // The CLI raises no rung-4 site of its own since D48 removed the V1 arming wait and the
+    // `resume` gates: rung 4 reaches a participant only as the daemon's `arming_timeout`,
+    // which `CliError::exit_code` maps and only a pre-D48 daemon sends. A new site is a new
+    // gate; say which in `lib.rs`'s ladder, in `AFTER_HELP`, and here.
+    assert!(sites.is_empty(), "an unexpected rung-4 site: {sites:#?}");
 }
 
 /// clap exits `2` on a usage error, and `2` is a verdict here — so this binary parses with
@@ -502,9 +533,9 @@ fn start_and_doctor_skip_a_non_utf8_environment_pair_through_the_real_binary() {
     }
 }
 
-/// `goalcup doctor` has no verify mode (D48): it offers neither `--verify` nor the development
-/// flags, and its footer names only the exit codes this binary can leave under. The top-level
-/// footer no longer claims 2 is unreachable for a reason that is false.
+/// `goalcup doctor` has no verify mode (D48): its help offers no `--verify` and the flag is
+/// refused as a usage error, on rung 1. The top-level footer says that 2 and 4 are never this
+/// binary's exit codes.
 #[test]
 fn doctor_has_no_verify_mode_and_the_help_footers_say_so() {
     let out = goalcup().args(["doctor", "--help"]).output().unwrap();
@@ -519,6 +550,12 @@ fn doctor_has_no_verify_mode_and_the_help_footers_say_so() {
         refused.status.code(),
         Some(1),
         "an unknown flag is a usage error"
+    );
+    let top = goalcup().arg("--help").output().unwrap();
+    let top = String::from_utf8(top.stdout).unwrap();
+    assert!(
+        top.contains("2 is never this binary's, and neither is 4"),
+        "the footer names 2 and 4 as V1-only: {top}"
     );
 }
 
