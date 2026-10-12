@@ -901,9 +901,8 @@ async fn a_request_for_another_host_inside_an_intercepted_connection_is_a_loss()
 
 /// H-16 (CONTRACTS.md, proxy loss in the stream): a fail-open tunnel runs inside admission until both sides close, so its
 /// loss is chained when the tunnel is decided, not when it ends. Held open here, the frame is
-/// already in the sink while the tunnel still carries bytes, and the counter (which moves only
-/// when the tunnel ends) has not moved. A task cut or panicking mid-relay therefore still
-/// leaves its loss in the stream.
+/// already in the sink while the tunnel still carries bytes, and the counter moved with it. A
+/// task cut or panicking mid-relay therefore still leaves its loss in the stream.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fail_open_tunnel_is_chained_when_it_begins_not_when_it_ends() {
     let pki = TestPki::new("upstream test CA");
@@ -928,8 +927,8 @@ async fn a_fail_open_tunnel_is_chained_when_it_begins_not_when_it_ends() {
     .await;
     assert_eq!(
         rig.handle().health().tunneled_fail_open,
-        0,
-        "the tunnel has not ended: the counter has not moved, the frame did not wait for it"
+        1,
+        "the tunnel has not ended: the counter moved with the frame, at the decision"
     );
     // And the tunnel is live and unchanged after the loss was recorded.
     send(&mut client, &request).await;
@@ -971,7 +970,7 @@ async fn a_fail_open_tunnel_is_chained_when_it_begins_not_when_it_ends() {
         },
     )
     .await;
-    assert_eq!(rig.handle().health().tunneled_fail_open, 0);
+    assert_eq!(rig.handle().health().tunneled_fail_open, 1);
     drop(tcp);
     let report = rig.stop().await;
     assert_eq!(report.health.tunneled_fail_open, 1, "{report:?}");
@@ -1020,6 +1019,74 @@ async fn a_connection_cut_unsettled_is_a_loss_before_the_close() {
     );
 }
 
+/// A fail-open tunnel still open at stop is settled at its decision, so it is no unsettled cut,
+/// but it is still counted: the report reads lossy and the seal request's counters carry it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fail_open_tunnel_open_at_stop_is_still_capture_loss() {
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost", "other.test"]).await;
+    let port = upstream.addr.port();
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.approved = vec![approved("localhost", policy(&[("/", true, None)]))];
+    config.shutdown = Duration::from_millis(400);
+    let mut rig = Rig::start(config, sink.clone()).await;
+    let tcp = connect_via(rig.addr, &format!("localhost:{port}")).await;
+    let mut client = tls_over(tcp, &[pki.root()], "other.test").await;
+    let mut up = upstream.accept().await.tls;
+    let handle = rig.handle();
+    eventually("the tunnel is open", || handle.health().unsettled == 1).await;
+    let report = rig.stop().await;
+    assert_eq!(report.health.cut_unsettled, 0, "{report:?}");
+    assert_eq!(report.health.tunneled_fail_open, 1, "{report:?}");
+    assert!(report.capture_loss(), "{report:?}");
+    let _ = read_to_end(&mut client).await;
+    let _ = read_to_end(&mut up).await;
+    sink.settle().await;
+    assert_eq!(losses(&sink.frames()), vec![(0, GapReason::DecodeFailed)]);
+}
+
+/// Tunnels that are opaque by design (an authentication host, a host that is not approved),
+/// still held open at stop by a process that outlived the harness, were decided when their
+/// ClientHello arrived: cutting them is not a loss, and nothing is chained.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_open_tunnel_opaque_by_design_cut_at_stop_is_not_a_loss() {
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost", "other.test"]).await;
+    let port = upstream.addr.port();
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.approved = vec![approved("api.test", policy(&[("/", true, None)]))];
+    config.auth_hosts = vec!["localhost".into()];
+    config.shutdown = Duration::from_millis(400);
+    let mut rig = Rig::start(config, sink.clone()).await;
+    let tcp = connect_via(rig.addr, &format!("localhost:{port}")).await;
+    let mut auth = tls_over(tcp, &[pki.root()], "localhost").await;
+    let mut auth_up = upstream.accept().await.tls;
+    let tcp = connect_via(rig.addr, &format!("127.0.0.1:{port}")).await;
+    let mut other = tls_over(tcp, &[pki.root()], "other.test").await;
+    let mut other_up = upstream.accept().await.tls;
+    let handle = rig.handle();
+    eventually("both tunnels are open", || handle.health().unsettled == 2).await;
+    let report = rig.stop().await;
+    assert_eq!(report.health.cut_unsettled, 0, "{report:?}");
+    assert_eq!(report.producer_close, ProducerClose::Queued);
+    assert!(!report.capture_loss(), "{report:?}");
+    let _ = read_to_end(&mut auth).await;
+    let _ = read_to_end(&mut auth_up).await;
+    let _ = read_to_end(&mut other).await;
+    let _ = read_to_end(&mut other_up).await;
+    sink.settle().await;
+    assert!(losses(&sink.frames()).is_empty(), "nothing is chained");
+    assert_eq!(
+        sink.retained(),
+        vec![Retained::ProducerClosed {
+            producer: PRODUCER.into(),
+            final_seq: None
+        }]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stop_with_active_stream_and_blocked_sink_meets_one_deadline() {
     let clock = clock_start();
@@ -1065,7 +1132,8 @@ async fn stop_with_active_stream_and_blocked_sink_meets_one_deadline() {
     );
     assert!(!report.drained && report.unterminated == 0, "{report:?}");
     assert_eq!(report.health.cut_intercepted, 1);
-    assert_eq!(report.health.cut_unsettled, 2);
+    // The open tunnel is not a host that is approved: it was decided, and cut without a loss.
+    assert_eq!(report.health.cut_unsettled, 1);
     assert_eq!(report.health.closed_interrupted, 1);
     assert_eq!(
         (report.health.active, report.health.unsettled),
@@ -1073,8 +1141,8 @@ async fn stop_with_active_stream_and_blocked_sink_meets_one_deadline() {
         "{report:?}"
     );
     assert_eq!(report.producer_close, ProducerClose::Queued);
-    // Cuts are the drain's story, not transport failures; the cut admission and tunnel are
-    // possible capture loss (admission cannot say yet whether the tunnel was fail-open).
+    // Cuts are the drain's story, not transport failures; the cut admission is possible
+    // capture loss (admission cannot say yet whether it would have been a fail-open tunnel).
     assert!(
         !report.is_clean_drain() && report.capture_loss(),
         "{report:?}"
@@ -1108,7 +1176,7 @@ async fn stop_with_active_stream_and_blocked_sink_meets_one_deadline() {
             .map(|(_, reason)| reason)
             .collect::<Vec<_>>(),
         vec![GapReason::ShutdownDeadline],
-        "the cut admission and the cut tunnel are one chained loss, once per reason"
+        "the cut admission is the one chained loss"
     );
     let views = streams(&frames);
     let response = views
