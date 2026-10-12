@@ -4,6 +4,7 @@
 
 #![allow(dead_code, unused_imports)]
 
+#[cfg(target_os = "macos")]
 pub mod capture_lifecycle_support;
 #[path = "support/redaction.rs"]
 pub mod redaction;

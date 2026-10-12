@@ -637,8 +637,7 @@ impl MockDaemonClient {
     /// quietly undoes another is a hook whose call order changes the answer, and a test
     /// asserting a gate stays shut would pass or fail on where in the file the delay was
     /// set. The two hooks compose in the honest direction instead — delay it, watch it
-    /// arrive, withhold it, watch it time out — which is what `tests/it/daemon_client.rs`
-    /// does.
+    /// arrive, withhold it, watch it time out. No test exercises that sequence any more.
     pub fn set_signal_delay(&self, d: Duration) {
         self.write(|state| state.signal_after = Some(d));
     }

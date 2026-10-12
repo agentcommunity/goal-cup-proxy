@@ -54,7 +54,7 @@ cargo-nextest once (`cargo install cargo-nextest --locked`). Report the gate's l
 platform and the Rust version in the PR.
 
 On Linux, run CI's form `cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli`
-instead of the last test command and say so in the PR; a maintainer runs the full gate on macOS.
+instead of `sh scripts/gate.sh fast` and say so in the PR; a maintainer runs the gate on macOS.
 
 ## Checks on your pull request
 
