@@ -45,6 +45,17 @@ pub use goalcup_protocol::process::{KILL_SWEEP_TIMEOUT_MS, RECONFIRM_DELAY_MS};
 /// parent — the CLI was.
 const LIVENESS_POLL_MS: u64 = 50;
 
+/// The longest SIGTERM grace this module waits, whatever the registered handle says: the
+/// manifest's own ceiling (`capture.termination.grace_seconds` is 1 to 60). The handle's
+/// `grace_seconds` arrives from the control client unchecked, and an unclamped `u64::MAX`
+/// overflows `Instant + Duration`, a panic that would poison every later seal of the entry.
+const MAX_GRACE_SECONDS: u64 = 60;
+
+/// `grace_seconds` as the wait it buys, clamped to [`MAX_GRACE_SECONDS`].
+fn grace(grace_seconds: u64) -> Duration {
+    Duration::from_secs(grace_seconds.min(MAX_GRACE_SECONDS))
+}
+
 /// Ask the process table once more, after `delay`, whether any pid a termination named is
 /// alive.
 ///
@@ -135,7 +146,7 @@ pub struct TerminationReport {
     /// A capped walk kept its root and its authority; it simply ran out of budget, and the
     /// honest record of that is "still running", not "authority unavailable".
     pub walk_cap_exceeded: bool,
-    /// Wall-clock milliseconds the whole escalation took. At least `grace_seconds` when
+    /// Wall-clock milliseconds the whole escalation took. At least `min(grace_seconds, 60)` when
     /// anything survived SIGTERM, because the grace is a promise to the harness and not a
     /// budget to be cut short.
     pub waited_ms: u64,
@@ -513,7 +524,7 @@ impl Escalation {
         grace_seconds: u64,
         gate: Option<&[u32]>,
     ) -> Result<(), ()> {
-        let grace_ends = os.now() + Duration::from_secs(grace_seconds);
+        let grace_ends = os.now() + grace(grace_seconds);
         loop {
             self.poll(os, handle, cap, libc::SIGTERM)?;
             if self.gate_clear(os, gate) || os.now() >= grace_ends {
