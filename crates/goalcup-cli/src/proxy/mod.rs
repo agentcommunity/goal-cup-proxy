@@ -913,7 +913,7 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
         // that is not approved is a provider host's, or (a `SniMismatch` to another authority)
         // names one in its ClientHello.
         if reason != connect::TunnelReason::NotApproved {
-            shared.outages.success(&metadata::capture_time().wall);
+            shared.outages.success();
         }
         if is_fail_open(reason) {
             bump(&counters.tunneled_fail_open);
@@ -1007,11 +1007,10 @@ fn record_upstream_reach(shared: &Shared, admission: &Admission) {
         },
         Admission::Tunneled(_) => return,
     };
-    let at = metadata::capture_time().wall;
     if reached {
-        shared.outages.success(&at);
+        shared.outages.success();
     } else {
-        shared.outages.failure(&at);
+        shared.outages.failure();
     }
 }
 
