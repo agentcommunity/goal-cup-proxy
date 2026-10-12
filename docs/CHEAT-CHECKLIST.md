@@ -24,6 +24,16 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   old CLI on a new daemon keeps the old behaviour (counters only on the seal request); gap counts
   count records, not individual losses; a handled finish shows doubled daemon-clocked gaps.
   Ticket: H-16.
+- **A tunnel whose ClientHello names an approved host is a loss; one that names none is not.**
+  A tunnel to any authority (an IP literal, a sibling name, an authentication host) whose
+  ClientHello names an approved host is chained as a fail-open loss, and so is a request inside
+  an intercepted connection whose Host names another host (the connection goes opaque, so a
+  later legitimate request on it is not captured either). A tunnel to a host that is not
+  approved stays opaque by design, and is not a loss, when its ClientHello names a host that is
+  not approved (domain fronting on a provider's edge, an ECH outer name), names none, or is not
+  TLS: an edge that answered the API that way would let it through uncaptured. Every tunnel now
+  waits for the client's first bytes, inside the 30-second admission deadline, so a protocol
+  whose server speaks first, or a CONNECT held idle past the deadline, fails admission.
 - **Two faults can leave a harness running on a sealed entry.** The spawn gate (4b) closes the
   spawn-to-registration window and the finish budget (4a) keeps the SIGTERM, grace, SIGKILL bound.
   A CLI crash after the gate released the child, combined with a raced manual `goalcup seal`, can

@@ -757,8 +757,10 @@ async fn auth_host_and_unknown_sni_tunnels_stay_opaque() {
     config.approved = vec![approved("localhost", policy(&[("/", true, None)]))];
     let mut rig = Rig::start(config, sink.clone()).await;
     // A host that is not approved is opaque by design, not a loss: nothing is chained for it.
+    // Its ClientHello names a host that is not approved either; one naming an approved host is
+    // a bypass (`a_tunnel_to_another_authority_naming_an_approved_host_is_a_loss`).
     let tcp = connect_via(rig.addr, &format!("127.0.0.1:{port}")).await;
-    let mut client = tls_over(tcp, &[pki.root()], "localhost").await;
+    let mut client = tls_over(tcp, &[pki.root()], "other.test").await;
     let mut up = upstream.accept().await.tls;
     through(&mut client, &mut up, &request, &reply).await;
     close_both(client, up).await;
@@ -813,6 +815,88 @@ async fn auth_host_and_unknown_sni_tunnels_stay_opaque() {
     ] {
         assert!(!retained_contains(&sink.retained(), sentinel.as_bytes()));
     }
+}
+
+/// A CONNECT to another authority (here an IP literal; an authentication host takes the same
+/// path) whose ClientHello names an approved host carries that host's traffic uncaptured. It is
+/// a fail-open tunnel and a loss, never an opaque by-design one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tunnel_to_another_authority_naming_an_approved_host_is_a_loss() {
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let port = upstream.addr.port();
+    let request = post("/v1/responses", b"SENTINEL-BYPASS-BODY", "");
+    let reply = ok_response("application/json", b"SENTINEL-BYPASS-REPLY");
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    let tcp = connect_via(rig.addr, &format!("127.0.0.1:{port}")).await;
+    let mut client = tls_over(tcp, &[pki.root()], "localhost").await;
+    let mut up = upstream.accept().await.tls;
+    send(&mut client, &request).await;
+    let (head, body) = read_request(&mut up).await;
+    assert_eq!([head, body].concat(), request);
+    send(&mut up, &reply).await;
+    let mut seen = Vec::new();
+    read_at_least(&mut client, &mut seen, reply.len()).await;
+    close_both(client, up).await;
+    let handle = rig.handle();
+    eventually("the fail-open tunnel is reported", || {
+        handle.health().tunneled_fail_open == 1
+    })
+    .await;
+    let report = rig.stop().await;
+    assert_eq!(report.health.tunneled_not_approved, 0, "{report:?}");
+    assert!(report.capture_loss(), "{report:?}");
+    sink.settle().await;
+    assert_eq!(
+        losses(&sink.frames()),
+        vec![(0, GapReason::DecodeFailed)],
+        "the bypass is chained as the producer's one loss"
+    );
+    assert!(!retained_contains(
+        &sink.retained(),
+        b"SENTINEL-BYPASS-BODY"
+    ));
+}
+
+/// A request inside an intercepted connection whose Host names another host is not relayed
+/// uncaptured as if it were ordinary traffic: the connection falls back to opaque, a loss.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_for_another_host_inside_an_intercepted_connection_is_a_loss() {
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    let request = b"POST /v1/responses HTTP/1.1\r\nHost: other.test\r\n\
+        Content-Type: application/json\r\nContent-Length: 18\r\n\r\nSENTINEL-HOST-BODY"
+        .to_vec();
+    send(&mut client, &request).await;
+    let mut got = Vec::new();
+    read_at_least(&mut up, &mut got, request.len()).await;
+    assert_eq!(got, request, "the bytes are still relayed unchanged");
+    let response = ok_response("application/json", b"{}");
+    send(&mut up, &response).await;
+    let mut seen = Vec::new();
+    read_at_least(&mut client, &mut seen, response.len()).await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let report = rig.stop().await;
+    sink.settle().await;
+    assert_eq!(report.health.opaque_fallbacks, 1, "{report:?}");
+    assert!(report.capture_loss(), "{report:?}");
+    assert!(
+        streams(&sink.frames()).is_empty(),
+        "nothing of it was captured"
+    );
+    assert_eq!(
+        losses(&sink.frames())
+            .into_iter()
+            .map(|(_, reason)| reason)
+            .collect::<Vec<_>>(),
+        vec![GapReason::DecodeFailed]
+    );
 }
 
 /// H-16 (CONTRACTS.md, proxy loss in the stream): a fail-open tunnel runs inside admission until both sides close, so its
@@ -940,7 +1024,7 @@ async fn a_connection_cut_unsettled_is_a_loss_before_the_close() {
 async fn stop_with_active_stream_and_blocked_sink_meets_one_deadline() {
     let clock = clock_start();
     let pki = TestPki::new("upstream test CA");
-    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let mut upstream = Upstream::start(&pki, &["localhost", "other.test"]).await;
     let port = upstream.addr.port();
     let sink = DirectSink::new(QUEUE_BYTES);
     sink.block_worker(true);
@@ -961,7 +1045,7 @@ async fn stop_with_active_stream_and_blocked_sink_meets_one_deadline() {
     // A connection still in admission, and an open opaque tunnel.
     let mut silent = TcpStream::connect(rig.addr).await.unwrap();
     let tcp = connect_via(rig.addr, &format!("127.0.0.1:{port}")).await;
-    let mut tunnel = tls_over(tcp, &[pki.root()], "localhost").await;
+    let mut tunnel = tls_over(tcp, &[pki.root()], "other.test").await;
     let mut tunnel_up = upstream.accept().await.tls;
     let handle = rig.handle();
     eventually("three live connections", || {
@@ -2289,9 +2373,11 @@ async fn an_upstream_outage_is_one_window_closed_by_the_next_reach() {
     assert!(open.first_failure <= open.last_failure);
     assert_eq!(open.recovered, None);
 
-    // The provider host is back: the next tunnel to it closes the window when it is decided.
+    // The provider host is back: the next tunnel to it closes the window when it is decided,
+    // which is once the client's first bytes arrive (the proxy reads the server name in them).
     let upstream = Upstream::start(&pki, &["localhost"]).await;
-    let tunnel = connect_via(rig.addr, &format!("localhost:{}", upstream.addr.port())).await;
+    let mut tunnel = connect_via(rig.addr, &format!("localhost:{}", upstream.addr.port())).await;
+    tunnel.write_all(b"not a ClientHello").await.unwrap();
     eventually("the window closes", || {
         handle.health().outage_windows[0].recovered.is_some()
     })
