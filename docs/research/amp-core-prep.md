@@ -26,11 +26,12 @@ record's "Mapping to Goal Cup policy" table and its "Core changes Amp would need
 proposals and approved by the owner on 2026-10-12 before the code merged. Change 3's
 `synthetic-keyed-stdout-json` kit case depends on change 4 and landed with it.
 
-Each numbered change is one commit on this branch, meant to be reviewed as its own pull request,
-smallest first. Changes 1, 2 and 4 were built test first: the new tests failed before the
-change and passed after it. Change 3 is test code for the macOS-only kit. It was first only
-type-checked on a Linux host; the macOS-only suites (the harness-contract kit, the end-to-end and
-Hermes offline-key tests) have since run on macOS, both keyed kit cases included, and pass.
+The four numbered changes are on `main` (PR #8, `8703825`); each started as its own commit
+(`ac4fdc9`, `9f952b3`, `115d406`, `a10ed4c`). Changes 1, 2 and 4 were built test first: the new
+tests failed before the change and passed after it. Change 3 is test code for the macOS-only
+kit. It was first only type-checked on a Linux host; the macOS-only suites (the harness-contract
+kit, the end-to-end and Hermes offline-key tests) have since run on macOS, both keyed kit cases
+included, and pass.
 
 ## 1. Refuse `*_URL` env names as endpoints
 
@@ -54,7 +55,7 @@ Hermes offline-key tests) have since run on macOS, both keyed kit cases included
   through it. Test:
   `the_version_probe_runs_the_harness_with_no_base_url_and_no_proxy_in_its_environment` in
   `preflight_doctor.rs` now plants `AMP_URL`.
-- **Status.** Implemented on this branch.
+- **Status.** Implemented.
 
 ## 2. Admit `AMP_API_KEY` as a credential
 
@@ -76,7 +77,7 @@ Hermes offline-key tests) have since run on macOS, both keyed kit cases included
   a name-only error, which fails closed. The grammar change would then belong in this PR. The
   plan's key loader script (`scripts/with-amp-key.sh`) is not written: it targets
   `--harness amp-cli`, which does not exist.
-- **Status.** Implemented on this branch.
+- **Status.** Implemented.
 
 ### DECISIONS entry
 
@@ -125,7 +126,7 @@ owner on 2026-10-12.
   stand-in's no-key branch exits 3 before touching its marker. It now runs and passes on macOS.
 - **Risk.** Low; test-only. If the key scan or the credential path changes behaviour, the case
   fails rather than passing silently.
-- **Status.** Implemented on this branch; passes on macOS.
+- **Status.** Implemented; passes on macOS.
 
 ## 4. Credential with `stdout_json` identity
 
@@ -179,7 +180,7 @@ owner on 2026-10-12.
   depends on. Hermes's path (keyed, `stderr_line`) now goes through the new call with no stdout
   rule, which is the old code path. The kit, the end-to-end tests and the Hermes offline-key
   test are macOS-only; they pass on macOS.
-- **Status.** Implemented on this branch; passes on macOS.
+- **Status.** Implemented; passes on macOS.
 
 ### DECISIONS entry
 
@@ -188,7 +189,7 @@ amendment to D43 ruling 3, approved by the owner on 2026-10-12.
 
 ## Owner decisions that remain
 
-These are not code changes this branch can make. Each needs the owner's ruling, and most need
+These are not code changes. Each needs the owner's ruling, and most need
 the live probe first.
 
 - **Key fingerprint file.** Amp writes `$HOME/.local/share/amp/.legacy-state-owner.json` with

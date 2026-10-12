@@ -1,6 +1,6 @@
 # Operating the tracker
 
-Updated: 2026-10-11
+Updated: 2026-10-12
 
 How do I build, configure and run the binaries in full detail: the daemon config, the CLI flags
 and exit codes, the MCP server, the verifier, the committed traces,
@@ -71,13 +71,9 @@ Prerequisites:
   (`crates/goalcup-verifier/tests/checks_v13.rs`), and **`python3`** if you change
   `connectors/` and regenerate the pins (`scripts/pin-manifests.sh`).
 
-```
-cargo build
-cargo test --workspace
-```
-
-That second command is the whole suite, every crate at once, and it is what "green" means
-here. One crate at a time, or one file of one crate, is the same runner narrowed:
+`cargo test --workspace` is the whole suite, every crate at once. "Green" means the
+four-command gate below passes, not the suite alone. One crate at a time, or one file of one
+crate, is the same runner narrowed:
 
 ```
 cargo test -p goalcup-daemon                       # one crate
