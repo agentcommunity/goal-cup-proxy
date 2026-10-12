@@ -1721,6 +1721,7 @@ fn proxy_admission_line(
         ("upstream_tls", a.upstream_tls),
         ("client_tls", a.client_tls),
         ("alpn_incompatible", a.alpn_incompatible),
+        ("upstream_outages", h.upstream_outages),
     ];
     let mut line = String::from("proxy admission:");
     for (name, count) in always
@@ -1767,6 +1768,9 @@ fn finish(
     let a = &h.admission_failures;
     // Diagnostics are fixed counters only. A failed stdout write must not prevent sealing.
     let _ = say(out, &proxy_admission_line(h, a));
+    for line in crate::proxy::outage::finish_lines(h.upstream_outages, &h.outage_windows) {
+        let _ = say(out, &line);
+    }
     let counters = ProxyCounters {
         tunneled_fail_open: h.tunneled_fail_open,
         opaque_fallbacks: h.opaque_fallbacks,

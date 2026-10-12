@@ -122,6 +122,7 @@ fn the_proxy_and_the_admitted_producer_precede_the_spawn_and_the_goal_is_one_arg
         !admission.contains("auth_refused=") && !admission.contains("upstream_"),
         "{admission}"
     );
+    assert!(!out.contains("proxy upstream outage"), "{out}");
 
     let calls = client.book().calls.clone();
     let at = |name: &str| {
