@@ -22,8 +22,7 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
 
 ## Parked
 
-- Linux
-- Windows
+- Windows (WSL2 documented, untested: [README](README.md#windows-use-wsl2))
 - New harnesses (builders bring them: [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md))
 - Full registration and teams system
 - Qualification records
@@ -70,3 +69,8 @@ Carried over from the old ledger's open tickets; only those that bear on the fiv
 - **H-26 (step 3):** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git
   commit as a "last known state" marker. Open question: which branch counts when the work is not
   on main.
+- **Linux (steps 1, 5):** builds and passes the fast gate in Docker; the reservation works on ext4
+  and XFS. Not proven: termination of a fork-and-leave wrapper (a child-subreaper fix is due before
+  the 168-hour dry run, [TERMINATION.md](docs/TERMINATION.md)); a real harness capture (the shipped
+  connectors pin macOS binaries); the end-to-end suites on x86_64; a real Linux host; long runs
+  ([README, Linux](README.md#linux)).
