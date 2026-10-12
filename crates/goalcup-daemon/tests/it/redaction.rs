@@ -1252,18 +1252,28 @@ fn with_script(body: &str) -> String {
 }
 
 /// The script's rules where the shared set spells the regex differently, as
-/// `(kind, python regex, rust regex)`. Only two literals differ, and only in spelling. The
+/// `(kind, python regex, rust regex)`. Two literals differ in spelling. The
 /// block rule's end of input is `\Z` in Python and `\z` in Rust. In the shell/TOML literal the
 /// script's groups capture, which does not matter to it (it replaces `m.group(0)`); the shared
 /// literal's are non-capturing, because in Rust a capture group
 /// *is* the span (`Pattern::span_group`) and this rule's span is the whole match. And the
 /// script writes the optional quote as `['\"]` inside a Python raw string, which is an escaped
 /// quote that means the same as Rust's `['"]`.
+///
+/// One differs in a bound: the daemon's `email` local part is at most 64 units, because its
+/// stream holds an undecided run and a bare token run must not hold to the hold bound (I-2).
+/// The script holds nothing and keeps `+`; it redacts a longer local part whole, so it
+/// redacts more, never less.
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "generic_secret_assignment",
         r#"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*['\"]?([A-Za-z0-9_\-]{16,})"#,
         r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?(?:[A-Za-z0-9_\-]{16,})"#,
+    ),
+    (
+        "email",
+        r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+        r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
     ),
     (
         "private_key",

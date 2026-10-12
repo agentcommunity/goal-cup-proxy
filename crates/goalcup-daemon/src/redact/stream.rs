@@ -121,9 +121,12 @@ const MAX_TIME_MARKS: usize = 8;
 /// source, timestamps, link hashes, JSON framing and the trailing newline).
 const ENVELOPE_RESERVE_BYTES: usize = 4 * 1024;
 const SEGMENT_RECORD_BUDGET: usize = MAX_ENVELOPE_BYTES - ENVELOPE_RESERVE_BYTES;
-/// A quoted JSON key longer than this is not copied for the key check; it is assumed
-/// to be a secret key (holding more, never less).
-const JSON_KEY_PROBE_BYTES: usize = 256;
+/// The longest key the shared JSON literal can match, in units: up to sixty on each side of
+/// an eight-unit key word. A longer `[A-Za-z0-9_\-]` run after a quote is no key, so its
+/// candidate ends there instead of holding the run.
+const JSON_KEY_MAX_UNITS: u8 = 128;
+/// The longest local part the shared `email` literal matches, in units (all ASCII).
+const EMAIL_LOCAL_MAX: u8 = 64;
 
 /// Positions of the two `generic_secret_assignment` literals in the shared list, counting
 /// `masked_key` at index 2. A rule inserted before them shifts both, which `policy_ready`
@@ -435,7 +438,7 @@ static SHAPES: [Shape; 19] = [
     ),
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)"(?:[A-Za-z0-9]+[_\-])*(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9]+)*"\s*:\s*"([^"\\]{16,})""#,
+        source: r#"(?i)"(?:[A-Za-z0-9_\-]{0,59}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,59})?"\s*:\s*"([^"\\]{16,})""#,
         form: Form::JsonAssignment,
     },
     Shape {
@@ -445,7 +448,7 @@ static SHAPES: [Shape; 19] = [
     },
     Shape {
         kind: "email",
-        source: r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+        source: r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
         form: Form::Email,
     },
     prefixed(
@@ -805,9 +808,10 @@ enum JsonPhase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Json {
     phase: JsonPhase,
-    /// The key so far, while it is short enough to check; empty after the key.
+    /// The key so far; empty after the key.
     key: Vec<u8>,
-    long_key: bool,
+    /// Units of the key so far, at most [`JSON_KEY_MAX_UNITS`].
+    key_units: u8,
     value_start: u64,
     /// Value characters, capped at sixteen.
     n: u8,
@@ -833,7 +837,8 @@ enum Shell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Email {
-    Local,
+    /// Local-part units, at most [`EMAIL_LOCAL_MAX`]: past that the window slides.
+    Local(u8),
     Domain {
         /// At least one domain unit seen (capped).
         some: bool,
@@ -1203,25 +1208,24 @@ impl Json {
                 is(u, b'"')
             }
             JsonPhase::Key if json_key(u) => {
+                if self.key_units == JSON_KEY_MAX_UNITS {
+                    return false;
+                }
                 if let Unit::Char(c) = u {
                     let mut buf = [0u8; 4];
-                    let bytes = c.encode_utf8(&mut buf).as_bytes();
-                    if self.key.len() + bytes.len() <= JSON_KEY_PROBE_BYTES {
-                        self.key.extend_from_slice(bytes);
-                    } else {
-                        self.long_key = true;
-                    }
+                    self.key
+                        .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
                 }
+                self.key_units += 1;
                 true
             }
             JsonPhase::Key => {
                 if !is(u, b'"') {
                     return false;
                 }
-                let secret =
-                    !self.key.is_empty() && (self.long_key || json_key_is_secret(&self.key));
+                let secret = !self.key.is_empty() && json_key_is_secret(&self.key);
                 self.key = Vec::new();
-                self.long_key = false;
+                self.key_units = 0;
                 self.phase = JsonPhase::AfterKey;
                 secret
             }
@@ -1306,11 +1310,11 @@ impl Shell {
 }
 
 impl Email {
-    /// `[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`. The domain stays live while
-    /// its run continues, since a later `.xx` can still extend the match.
+    /// `[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`. The domain stays live
+    /// while its run continues, since a later `.xx` can still extend the match.
     fn step(&mut self, u: Unit) -> bool {
         match self {
-            Email::Local if is(u, b'@') => {
+            Email::Local(_) if is(u, b'@') => {
                 *self = Email::Domain {
                     some: false,
                     after_dot: None,
@@ -1318,7 +1322,10 @@ impl Email {
                 };
                 true
             }
-            Email::Local => local_part(u),
+            Email::Local(n) => {
+                *n = (*n + 1).min(EMAIL_LOCAL_MAX);
+                local_part(u)
+            }
             Email::Domain {
                 some,
                 after_dot,
@@ -1379,7 +1386,9 @@ impl Candidate {
             Form::PrivateKey => is(u, b'-'),
             Form::JsonAssignment => is(u, b'"'),
             Form::ShellAssignment => matches!(folded(u), Some(b's' | b't' | b'p' | b'a')),
-            // The leftmost-first email match starts where its local-part run starts.
+            // The leftmost-first email match starts where its local-part run starts, or
+            // sixty-four units before its `@` in a longer run: one candidate per run, whose
+            // start slides with the run (see `Candidate::step`).
             Form::Email => local_part(u) && !prev_local,
             Form::Field { key, .. } => key.first().is_some_and(|&b| is(u, b)),
             Form::BillingHeader => is(u, BILLING_PREFIX[0]),
@@ -1404,12 +1413,12 @@ impl Candidate {
             Form::JsonAssignment => Walk::Json(Json {
                 phase: JsonPhase::Open,
                 key: Vec::new(),
-                long_key: false,
+                key_units: 0,
                 value_start: 0,
                 n: 0,
             }),
             Form::ShellAssignment => Walk::Shell(Shell::Word { which: 0, pos: 0 }),
-            Form::Email => Walk::Email(Email::Local),
+            Form::Email => Walk::Email(Email::Local(0)),
             Form::Field { .. } => Walk::Field(Field {
                 phase: FieldPhase::Key(0),
                 value_start: 0,
@@ -1447,7 +1456,14 @@ impl Candidate {
             (Walk::Pem(pem), _) => return pem.step(u),
             (Walk::Json(json), _) => json.step(u, off + len as u64),
             (Walk::Shell(shell), _) => shell.step(u),
-            (Walk::Email(email), _) => email.step(u),
+            (Walk::Email(email), _) => {
+                // A full window that takes one more local-part unit drops its first: the
+                // local part is ASCII, so the match can start no earlier than one byte on.
+                if *email == Email::Local(EMAIL_LOCAL_MAX) && local_part(u) {
+                    self.start += 1;
+                }
+                email.step(u)
+            }
             (Walk::Field(field), Form::Field { key, value }) => {
                 return field.step(key, *value, u, off, len);
             }

@@ -83,10 +83,14 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   one stall can lose up to about 2.1 MiB; `seal.json` sits outside the reservation, so a failed seal
   write reads `incomplete` with no further policy; the network-filter rule is bound to the E01
   binary hash. Ticket: H-04.
-- **A base64url run of 16 KiB or more redacts the rest of a one-line JSON body** (the redactor holds
-  16 KiB and fails closed). Measured unreachable on the pilot path (0 `encrypted_content` in 14 real
-  Codex client messages); reachable on a stateless HTTP fallback. Parked; re-measure on every long
-  chain. Ticket: F-07.
+- **A base64url run of 16 KiB or more can still redact the rest of its JSON line** (the redactor
+  holds 16 KiB and fails closed), but only when a rule prefix inside it (`sk-`, `eyJ`, `AIza`,
+  `glpat-`) lies more than 16 KiB before the run's end. A bare run holds nothing: the JSON key and
+  the email local part are bounded (128 and 64 units). The run is common: the native Codex rollout
+  persists `encrypted_content` on every reasoning item (9 in
+  `spikes/codex-cli/fixtures/rollout-main-01a06614.jsonl`, largest 2,020 B; 8 in
+  `spikes/codex-app/fixtures/rollout-main-01a06657.jsonl`, largest 2,276 B). The earlier
+  "unreachable" counted wire client messages. Ticket: F-07.
 - **Redaction residuals.** An invalid UTF-8 byte inside a key body leaves the whole key raw (fix
   before any raw-byte capture surface). A lone `BEGIN` mention redacts to the end of that record and
   breaks that record's JSON. Ticket: H-20.

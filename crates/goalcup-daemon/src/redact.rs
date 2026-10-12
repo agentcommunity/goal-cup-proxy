@@ -161,10 +161,12 @@ const SHARED: &[(&str, &str)] = &[
     ("slack_token", r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
     // (i) the JSON form: a quoted key, a quoted value. The key word may sit inside an
     // `_`/`-`-joined compound (`refresh_token`, `client_secret`, `x-api-key`) but must be a
-    // whole segment of it, so `tokenizer` is not a token.
+    // whole segment of it, so `tokenizer` is not a token. Each side of the key word is at most
+    // sixty units, so a key is at most 128: a base64url run after a quote (a Codex
+    // `encrypted_content` value) is then not a key the stream must hold to its end.
     (
         "generic_secret_assignment",
-        r#"(?i)"(?:[A-Za-z0-9]+[_\-])*(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9]+)*"\s*:\s*"([^"\\]{16,})""#,
+        r#"(?i)"(?:[A-Za-z0-9_\-]{0,59}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,59})?"\s*:\s*"([^"\\]{16,})""#,
     ),
     // (ii) the shell/TOML form, with redact.py's own value class. Widening this one is what
     // put source lines in spans; the JSON form above is what catches base64 secrets.
@@ -172,7 +174,12 @@ const SHARED: &[(&str, &str)] = &[
         "generic_secret_assignment",
         r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?(?:[A-Za-z0-9_\-]{16,})"#,
     ),
-    ("email", r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
+    // The local part is at most 64 units (RFC 5321's limit), for the same reason as the JSON
+    // key: a bare token run is not an address the stream must hold to its end.
+    (
+        "email",
+        r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+    ),
     // ── then the seven fixed vendor prefixes ───────────────────────────────────────────
     ("google_key", r"AIza[A-Za-z0-9_\-]{30,}"),
     ("huggingface_token", r"hf_[A-Za-z0-9]{20,}"),

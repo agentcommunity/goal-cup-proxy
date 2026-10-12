@@ -911,16 +911,8 @@ fn fail_closed_cases() -> Vec<(String, Vec<u8>)> {
             b"\n-----END RSA PRIVATE KEY----- tail",
         ]),
     ));
-    cases.push((
-        "PREFIX JSON key".into(),
-        cat(&[
-            b"{\"",
-            &long(b"abcdefghijklmnopqrstuvwxyz", h + 4096),
-            b"_token\": \"",
-            secret,
-            b"\"}",
-        ]),
-    ));
+    // A JSON key is at most 128 units, so a key longer than the hold is no key: only a match
+    // inside the run is left to redact.
     cases.push((
         "PREFIX JSON key with a vendor key inside".into(),
         cat(&[
@@ -1399,20 +1391,22 @@ fn long_secrets_are_chunking_invariant() {
     dop.extend_from_slice(b" done");
     cases.push(("digitalocean", dop, false, &hex_probe));
 
-    // Long unproven prefixes: released, so only chunking invariance applies.
+    // A local part and a JSON key are bounded (64 and 128 units), so a longer run is never
+    // held past the bound: the stream equals the whole-record policy.
     let mut email = lower(&mut rng, 40_000, b"abcdefghijklmnopqrstuvwxyz0123456789.");
     email.extend_from_slice(b"@example.com and more");
-    cases.push(("email-run", email, false, b""));
-
-    let mut spaced = b"bearer".to_vec();
-    spaced.extend(std::iter::repeat_n(b' ', 20_000));
-    spaced.extend_from_slice(b"abcdefghijklmnopqrstuvwxyz end");
-    cases.push(("bearer-spaces", spaced, false, b""));
+    cases.push(("email-run", email, true, b""));
 
     let mut key = b"{\"".to_vec();
     key.extend_from_slice(&lower(&mut rng, 20_000, b"abcdefghijklmnopqrstuvwxyz"));
     key.extend_from_slice(b"_token\": \"abcdefghijklmnopqrstuvwxyz\"}");
-    cases.push(("json-long-key", key, false, b""));
+    cases.push(("json-long-key", key, true, b""));
+
+    // A long unproven prefix: released, so only chunking invariance applies.
+    let mut spaced = b"bearer".to_vec();
+    spaced.extend(std::iter::repeat_n(b' ', 20_000));
+    spaced.extend_from_slice(b"abcdefghijklmnopqrstuvwxyz end");
+    cases.push(("bearer-spaces", spaced, false, b""));
 
     // A PEM block with no END line: replaced to the end of the stream.
     let mut open_pem = b"-----BEGIN PRIVATE KEY-----\n".to_vec();
@@ -1932,14 +1926,15 @@ fn stream_limit_bounds_memory() {
         .unwrap_err();
     assert!(err.to_string().contains("too many open"), "{err}");
 
-    // Held state per stream is bounded: an undecided run far longer than the bound fails
-    // closed instead of being held, and each record terminator hands the stream back, so
-    // pushed minus accounted source never exceeds the hold bound.
+    // Held state per stream is bounded: an undecided run far longer than the bound (a key
+    // body after its prefix) fails closed instead of being held, and each record terminator
+    // hands the stream back, so pushed minus accounted source never exceeds the hold bound.
     let mut p = Producer::new(P1);
     p.open(1, CaptureSource::WireResponse);
     let mut pushed = 0usize;
     let mut records = Vec::new();
-    let mut line = vec![b'a'; MAX_SEGMENT_BYTES - 1];
+    let mut line = b"sk-ant-".to_vec();
+    line.resize(MAX_SEGMENT_BYTES - 1, b'a');
     line.push(b'\n');
     for i in 0..8 {
         records.extend(p.bytes(1, &line));
@@ -3167,5 +3162,55 @@ fn an_incomplete_masked_key_is_never_released_on_a_discontinuity() {
         let all = all_segment_bytes(&records);
         assert!(!contains(&all, b"sk-abcde"), "{ending}: {all:?}");
         assert!(!contains(&all, b"***wx"), "{ending}: {all:?}");
+    }
+}
+
+/// I-2: a Codex native rollout carries `encrypted_content` on every reasoning item, a
+/// base64url run with no quote or `@` in it. Past 16 KiB that run used to hold a candidate
+/// (a quoted JSON key, an email local part) to the hold bound and fail closed, which replaced
+/// the rest of the line with a marker and left a record that was no longer JSON. The measured
+/// shape: the largest reasoning line of a committed Codex rollout, its token repeated to
+/// 18 KiB. It contains no secret, so it streams through byte for byte at every chunking.
+#[test]
+fn a_long_codex_reasoning_item_streams_through_intact() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../spikes/codex-app/fixtures/rollout-main-01a06657.jsonl");
+    let rollout = std::fs::read_to_string(path).unwrap();
+    let (line, token) = rollout
+        .lines()
+        .filter_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            let token = v["payload"]["encrypted_content"].as_str()?.to_string();
+            Some((line, token))
+        })
+        .max_by_key(|(_, token)| token.len())
+        .expect("a reasoning item with encrypted_content");
+    assert_eq!(token.len(), 2276, "the measured largest token");
+    let long = format!("{}=", token.trim_end_matches('=').repeat(8));
+    assert!(long.len() > MAX_HELD_BYTES);
+    let input = format!(
+        "{}\n{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\"}}}}\n",
+        line.replace(&token, &long)
+    );
+    let input = input.as_bytes();
+    assert_eq!(legacy(input), (input.to_vec(), Vec::new()));
+    let mut rng = Rng(0xC0DE_C0DE);
+    for chunks in [
+        vec![MAX_SEGMENT_BYTES],
+        vec![1],
+        vec![4096],
+        random_chunks(&mut rng, 3000),
+    ] {
+        let (bytes, spans) =
+            retained_of(&stream_through(StreamRedactor::new(), input, &chunks, 2), 1);
+        assert!(spans.is_empty(), "chunks {:?}: {spans:?}", &chunks[..1]);
+        assert!(
+            bytes == input,
+            "chunks {:?}: the record changed",
+            &chunks[..1]
+        );
+        for record in bytes.split(|&b| b == b'\n').filter(|r| !r.is_empty()) {
+            serde_json::from_slice::<serde_json::Value>(record).expect("each record is JSON");
+        }
     }
 }
