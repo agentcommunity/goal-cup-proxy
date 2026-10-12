@@ -10,7 +10,6 @@ use goalcup_daemon::registry::{Entry, RunKeys};
 use goalcup_daemon::status::StatusInputs;
 use goalcup_protocol::control::EventStatus;
 use goalcup_protocol::events::HealthState;
-use std::sync::OnceLock;
 
 /// An entry with a clock: started, with a deadline the status can count down to.
 ///

@@ -53,32 +53,6 @@ pub fn entry_in(
     entry
 }
 
-// ---------------------------------------------------------------------------------------
-// The fixture dev server.
-// ---------------------------------------------------------------------------------------
-
-/// The instant this process pins the fixture dev server's clock to: one hour before the
-/// first call, so the 168-hour window it derives always contains now.
-///
-/// The pin is relative to now. The window a
-/// receipt carries is an absolute instant, `StatusPayload::seconds_remaining` counts down
-/// to it off the wall clock, and `Daemon::run_forever`'s deadline cadence seals an entry
-/// whose deadline has passed, so a fixed pin eventually hands every harness a window
-/// already spent. A pin far enough out to be safe breaks the other assertion these fixtures
-/// make, that a started run's countdown is no longer than the window itself.
-///
-/// Computed once per process so two calls agree: a test that asserts the spelling the
-/// server used has to be able to name it, and a second reading a second later would not be
-/// the same string.
-pub fn pinned_start() -> String {
-    goalcup_protocol::control::format_z(pinned_start_secs())
-}
-
-fn pinned_start_secs() -> u64 {
-    static PINNED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *PINNED.get_or_init(|| (goalcup_daemon::now_unix() as u64).saturating_sub(3_600))
-}
-
 /// An upload URL on a loopback port the OS chose, with a listener held open behind it so
 /// nothing else can take the port while the test runs. Nothing connects: this tree has no
 /// uploader (D48), and `DaemonConfig` still parses the V1 `upload_url`.

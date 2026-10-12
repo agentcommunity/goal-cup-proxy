@@ -2,8 +2,6 @@
 //! it once with `#[path = "../common/mod.rs"] mod common;`, and the standalone `dir_modes` and
 //! `health_status` with `#[path = "common/mod.rs"]`. Fixtures stay in `tests/fixtures/`.
 
-#![allow(dead_code, unused_imports)]
-
 #[cfg(target_os = "macos")]
 pub mod capture_lifecycle_support;
 #[path = "support/redaction.rs"]
