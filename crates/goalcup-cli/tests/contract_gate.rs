@@ -11,6 +11,7 @@
 //! undefined behaviour, not a flake. The environment-dependent cases live in
 //! `tests/env_resolution.rs`, which spawns nothing and runs them one after another.
 
+#[path = "common/support/mod.rs"]
 mod support;
 
 use goalcup_cli::CliError;

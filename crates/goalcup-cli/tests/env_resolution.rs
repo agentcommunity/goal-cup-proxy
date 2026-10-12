@@ -22,6 +22,7 @@
 //!    `src/config.rs`; what is left here is the one thing that route cannot check, which is
 //!    that the shipped `config_dir()` really is wired to the real environment.
 
+#[path = "common/m2_profile_support/mod.rs"]
 mod m2_profile_support;
 
 use goalcup_cli::config;
