@@ -21,8 +21,10 @@ const QUALIFIED_ALLOCATOR: &[u8] = b"apfs";
 /// The `statfs(2)` `f_type` magics whose `fallocate(FALLOC_FL_KEEP_SIZE)` blocks a later write
 /// into the range is documented not to fail for space on: ext4 (`EXT4_SUPER_MAGIC`, shared with
 /// ext2 and ext3, whose non-extent files refuse the call) and XFS (`XFS_SUPER_MAGIC`). Measured in
-/// Docker on Linux 7.0.12 (aarch64) loop-mounted ext4 and XFS images. btrfs (copy-on-write), ZFS,
-/// tmpfs, overlayfs, NFS, FUSE and every other magic are refused.
+/// Docker on Linux 7.0.12 (aarch64) loop-mounted ext4 and XFS images: the allocation is retained
+/// across close. Unlike the macOS allocator above, remount and `SIGKILL` were not measured on
+/// Linux. btrfs (copy-on-write), ZFS, tmpfs, overlayfs, NFS, FUSE and every other magic are
+/// refused.
 #[cfg(target_os = "linux")]
 const QUALIFIED_ALLOCATORS: [u64; 2] = [EXT4_SUPER_MAGIC, XFS_SUPER_MAGIC];
 #[cfg(target_os = "linux")]
@@ -1170,8 +1172,9 @@ impl AppendFileHandle {
     ///
     /// One shape on both qualified platforms: a filesystem gate that refuses before anything
     /// is allocated, a free-space precheck on the missing difference, the platform's allocator,
-    /// and the file's own `st_blocks × 512` as the only evidence. Only `allocate` and the gate's
-    /// allowlist differ per platform.
+    /// and the file's own `st_blocks × 512` as the only evidence. The allocator, the free-space
+    /// measure (`available_bytes`) and the gate's allowlist (`qualified_volume`) differ per
+    /// platform.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(super) fn reserve(&self, total_bytes: u64) -> Result<AppendAllocation, TraceCapError> {
         let fd = self.file.as_raw_fd();

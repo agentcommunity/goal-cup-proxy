@@ -26,7 +26,8 @@
 //! off-macOS test classifies its temporary directory itself and expects whichever of the two
 //! follows.
 
-// The pilot fixtures below are macOS-only; elsewhere only the refusal test uses these helpers.
+// The pilot fixtures below are macOS-only; elsewhere only the refusal test and the ext4/XFS
+// reservation test use these helpers.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use goalcup_platform::tracecap::{RefusalKind, TraceCapError};
