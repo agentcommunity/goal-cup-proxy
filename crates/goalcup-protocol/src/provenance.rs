@@ -147,10 +147,6 @@ impl GitObjectFormat {
 pub struct GitObjectId(String);
 
 impl GitObjectId {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
     pub fn validate_for(&self, format: GitObjectFormat) -> Result<(), ProvenanceError> {
         if self.0.len() == format.hex_len() {
             Ok(())
@@ -235,12 +231,6 @@ impl<'de> Deserialize<'de> for PortableRelativePath {
 #[serde(transparent)]
 pub struct PortableRelativePathOrRoot(String);
 
-impl PortableRelativePathOrRoot {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
 impl TryFrom<&str> for PortableRelativePathOrRoot {
     type Error = ProvenanceError;
 
@@ -271,12 +261,6 @@ impl<'de> Deserialize<'de> for PortableRelativePathOrRoot {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ValidatedHeadsRef(String);
-
-impl ValidatedHeadsRef {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
 
 impl TryFrom<&str> for ValidatedHeadsRef {
     type Error = ProvenanceError;
@@ -540,22 +524,6 @@ impl RepositoryObservedV1 {
                 validate_complete_ids(commits, *object_format)
             }
             _ => Err(invalid("transition", "does not match repository state")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum RepositorySelectionOutcomeV1 {
-    Selected(SelectedRepositoryV1),
-    NotSelected(RepositoryNonSelectionV1),
-}
-
-impl RepositorySelectionOutcomeV1 {
-    pub fn validate(&self) -> Result<(), ProvenanceError> {
-        match self {
-            Self::Selected(selected) => selected.validate(),
-            Self::NotSelected(not_selected) => not_selected.validate(),
         }
     }
 }

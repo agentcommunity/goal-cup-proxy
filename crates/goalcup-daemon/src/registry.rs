@@ -45,8 +45,6 @@ use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-#[cfg(any(test, feature = "test-hooks"))]
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// One JSON document per entry, keyed by `entry_id`. JSON rather than a hand-rolled
 /// encoding so an added field cannot silently shift the meaning of the bytes already on
@@ -100,30 +98,6 @@ pub enum FinalizationPhaseV1 {
     FinalizationBound,
     TerminalStatusPending,
     Terminal,
-}
-
-impl FinalizationPhaseV1 {
-    /// Whether `next` is this checkpoint or a later checkpoint. Recovery may replay one
-    /// committed phase but may never move an intent backward.
-    pub const fn permits(self, next: Self) -> bool {
-        self.rank() <= next.rank()
-    }
-
-    const fn rank(self) -> u8 {
-        match self {
-            Self::AdmissionClosed => 0,
-            Self::DrainResolved => 1,
-            Self::CutoffAppendPending => 2,
-            Self::CutoffBound => 3,
-            Self::HandoffReconciled => 4,
-            Self::Terminated => 5,
-            Self::SubmissionResolved => 6,
-            Self::FinalizationAppendPending => 7,
-            Self::FinalizationBound => 8,
-            Self::TerminalStatusPending => 9,
-            Self::Terminal => 10,
-        }
-    }
 }
 
 /// Exact V1 discriminator for the workspace arm of the untagged registry intent.
@@ -280,19 +254,6 @@ impl WorkspaceSealingIntentV1 {
         } else {
             WorkspaceFinalizationStatusV1::Finishing {}
         }
-    }
-}
-
-impl EntryState {
-    /// No capture, delivery, or reopening may cross a durable terminal boundary.  `Sealing`
-    /// is deliberately included: the terminal chain link may already exist even when the
-    /// registry promotion has not happened yet, so treating it as an ordinary open row
-    /// would race evidence after its intended last link.
-    pub const fn capture_closed(self) -> bool {
-        matches!(
-            self,
-            Self::CleanupPending | Self::Sealing | Self::Sealed | Self::Refused
-        )
     }
 }
 
@@ -971,14 +932,6 @@ impl Entry {
         }
     }
 
-    /// The verified start receipt, or `None` while the run has none.
-    ///
-    /// Read-only by design: there is no matching setter, because a receipt this returns
-    /// was checked by the registry against the pinned server key.
-    pub fn receipt(&self) -> Option<&StartReceipt> {
-        self.receipt.as_ref()
-    }
-
     /// The immutable receipt policy captured for this entry.
     pub fn receipt_binding(&self) -> &ReceiptBindingPolicy {
         &self.receipt_binding
@@ -1151,11 +1104,6 @@ fn safe_manifest_home_spelling(path: &str) -> bool {
 /// The entries, on disk, in their own redb database.
 pub struct Registry {
     db: Database,
-    /// Integration tests need one deterministic representation of the storage failure that
-    /// makes terminal review persistence impossible. It is strictly process-local and never
-    /// compiled into the shipped registry.
-    #[cfg(any(test, feature = "test-hooks"))]
-    fail_next_terminal_drain_validation_persistence: AtomicBool,
 }
 
 impl Registry {
@@ -1256,11 +1204,7 @@ impl Registry {
             txn.commit()
                 .map_err(|e| db_err(path, "creating the registry tables", e))?;
         }
-        Ok(Registry {
-            db,
-            #[cfg(any(test, feature = "test-hooks"))]
-            fail_next_terminal_drain_validation_persistence: AtomicBool::new(false),
-        })
+        Ok(Registry { db })
     }
 
     /// Write an entry, replacing any entry with the same id.
@@ -1455,68 +1399,6 @@ impl Registry {
             e.source_date = source_date;
             e.last_process = last_process;
         })
-    }
-
-    /// Test-only: fail the exact monotonic terminal-quarantine transaction once. This is
-    /// narrower than a generic registry write failure so live, retained, and startup callers
-    /// can prove their common fail-closed boundary without weakening unrelated persistence.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn fail_next_terminal_drain_validation_persistence_for_test(&self) {
-        self.fail_next_terminal_drain_validation_persistence
-            .store(true, Ordering::SeqCst);
-    }
-
-    /// Test-only fixture seam for the historical V1 sealed-row shape, which did not carry
-    /// a trace-root identity.  Production writes cannot clear this field.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn clear_sealed_trace_root_identity_for_test(
-        &self,
-        entry_id: &str,
-    ) -> Result<Entry, DaemonError> {
-        self.modify_handoff(
-            entry_id,
-            "clear_sealed_trace_root_identity_for_test",
-            |entry| {
-                if entry.state != EntryState::Sealed {
-                    return Err(DaemonError::Refused(format!(
-                        "entry {entry_id} is not sealed for the legacy-root fixture"
-                    )));
-                }
-                entry.sealed_trace_root_identity = None;
-                Ok(())
-            },
-        )
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn sealed_trace_root_identity_for_test(
-        &self,
-        entry_id: &str,
-    ) -> Result<Option<String>, DaemonError> {
-        Ok(self
-            .get(entry_id)?
-            .and_then(|entry| entry.sealed_trace_root_identity))
-    }
-
-    /// Test-only corrupt-row fixture: production handoff writers never make a Registered
-    /// phase without a target.  The reaper needs an executable regression for refusing to
-    /// silently skip such a durable contradiction after a crash.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn mark_registered_without_termination_handle_for_test(
-        &self,
-        entry_id: &str,
-    ) -> Result<Entry, DaemonError> {
-        self.modify_handoff(
-            entry_id,
-            "mark_registered_without_termination_handle_for_test",
-            |entry| {
-                entry.process_handoff_generation = 1;
-                entry.process_handoff_phase = ProcessHandoffPhase::Registered;
-                entry.process_handoff_digest = Some("test-corrupt-registered-row".to_string());
-                entry.last_process = None;
-                Ok(())
-            },
-        )
     }
 
     /// Open generation one after arming.  A request received while `Created`, attached,
@@ -1761,29 +1643,6 @@ impl Registry {
         })
     }
 
-    /// Read the private prepared evidence for the one runtime that owns this entry slot.
-    /// A clone prevents the caller from mutating the registry's copy before reconciliation.
-    pub fn prepared_home_seed(
-        &self,
-        entry_id: &str,
-        generation: u64,
-    ) -> Result<Option<(String, HomeSeedRecord)>, DaemonError> {
-        let entry = self
-            .get(entry_id)?
-            .ok_or_else(|| DaemonError::Missing(format!("entry {entry_id}")))?;
-        if entry.process_handoff_generation != generation
-            || !matches!(entry.process_handoff_phase, ProcessHandoffPhase::Prepared)
-        {
-            return Err(handoff_conflict(
-                entry_id,
-                "the process handoff is no longer prepared",
-            ));
-        }
-        Ok(entry
-            .prepared_home_seed
-            .map(|seed| (entry.process_handoff_digest.unwrap_or_default(), seed)))
-    }
-
     /// Read/modify/write a process-authority transition in one redb write transaction.
     /// Keeping these transitions out of generic `update` is what gives a resume its CAS
     /// semantics instead of a best-effort clear followed by an unrelated write.
@@ -1846,73 +1705,6 @@ impl Registry {
             stored = entry;
         }
         txn.commit().map_err(|e| plain(e, "update"))?;
-        Ok(stored)
-    }
-
-    /// Store a start receipt **after** it verifies against the key this build pins.
-    ///
-    /// This compatibility helper is limited to legacy receipt-only rows. Bound receipts
-    /// went through the V1 `Registry::commit_start` (removed by D48), so the receipt and
-    /// start state were one durable transition. `verify_with` compares the document's own
-    /// key to the pinned one first, so a receipt a participant signed themselves is refused
-    /// before any cryptography runs, and a refusal writes nothing at all.
-    ///
-    /// Test-only: no shipped caller remains, so a shipped daemon does not compile it.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn store_receipt(
-        &self,
-        entry_id: &str,
-        receipt: &StartReceipt,
-        server_public_key_hex: &str,
-    ) -> Result<Entry, DaemonError> {
-        if receipt.claims.entry_id != entry_id {
-            return Err(DaemonError::Refused(format!(
-                "the start receipt names entry {}, and this is entry {entry_id}",
-                receipt.claims.entry_id
-            )));
-        }
-        receipt.verify_with(server_public_key_hex).map_err(|e| {
-            DaemonError::Refused(format!(
-                "the start receipt for entry {entry_id} was not stored: {e}"
-            ))
-        })?;
-        let txn = self
-            .db
-            .begin_write()
-            .map_err(|e| plain(e, "store_receipt"))?;
-        let stored;
-        {
-            let mut table = txn
-                .open_table(ENTRIES)
-                .map_err(|e| plain(e, "store_receipt"))?;
-            let mut entry: Entry = {
-                let found = table.get(entry_id).map_err(|e| plain(e, "store_receipt"))?;
-                match found {
-                    Some(bytes) => serde_json::from_slice(bytes.value())?,
-                    None => return Err(DaemonError::Missing(format!("entry {entry_id}"))),
-                }
-            };
-            if !matches!(entry.receipt_binding, ReceiptBindingPolicy::Legacy) {
-                return Err(DaemonError::Refused(format!(
-                    "entry {entry_id} uses bound receipts, so its receipt and start state \
-                     must be committed together"
-                )));
-            }
-            if receipt.claims.run_public_key.is_some()
-                || receipt.claims.questionnaire_version.is_some()
-            {
-                return Err(DaemonError::Refused(format!(
-                    "entry {entry_id} uses legacy receipts, so a bound receipt was not stored"
-                )));
-            }
-            entry.receipt = Some(receipt.clone());
-            let bytes = serde_json::to_vec(&entry)?;
-            table
-                .insert(entry_id, bytes.as_slice())
-                .map_err(|e| plain(e, "store_receipt"))?;
-            stored = entry;
-        }
-        txn.commit().map_err(|e| plain(e, "store_receipt"))?;
         Ok(stored)
     }
 

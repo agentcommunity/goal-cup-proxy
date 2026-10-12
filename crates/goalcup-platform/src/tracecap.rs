@@ -11,8 +11,6 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::filecap::RelativeDescendant;
-
 #[cfg(unix)]
 #[path = "tracecap/unix.rs"]
 mod imp;
@@ -415,11 +413,6 @@ impl TraceDir {
         self.inner.entry_exists(document.name())
     }
 
-    fn child_exists(&self, name: &str) -> Result<bool, TraceCapError> {
-        validate_component(name)?;
-        self.inner.entry_exists(name)
-    }
-
     pub fn read_fixed(
         &self,
         document: FixedDocument,
@@ -475,25 +468,6 @@ impl TraceDir {
             NEXT.fetch_add(1, Ordering::Relaxed)
         );
         self.inner.replace_descriptor(&temporary, bytes)
-    }
-
-    /// Atomically replace a fixed trace document through the retained root capability.
-    /// Recovery uses this for an already-created `seal.json`: a terminal chain can be
-    /// durable while the fixed manifest write was interrupted, and a new once-only create
-    /// cannot repair that state.
-    pub fn replace_fixed(
-        &self,
-        document: FixedDocument,
-        bytes: &[u8],
-    ) -> Result<(), TraceCapError> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let target = document.name();
-        let temporary = format!(
-            "{target}.{}.{}.tmp",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
-        self.inner.replace_fixed(&temporary, target, bytes)
     }
 
     /// Make every byte appended through `writer` durable under its fixed name in this
@@ -707,157 +681,6 @@ impl ArtifactRoot {
     }
 }
 
-/// Retained write authority for one daemon-created per-run harness home.
-///
-/// A launcher receives the home as a path over the control API, but every credential copy and
-/// configuration merge is resolved below this retained native directory handle. Reopening the
-/// selected spelling before each operation detects a later root/ancestor exchange; descendant
-/// directories are acquired one component at a time without following links or reparse points.
-pub struct HomeSeedRoot {
-    root: TraceDir,
-    display: PathBuf,
-}
-
-impl fmt::Debug for HomeSeedRoot {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("HomeSeedRoot")
-            .field("display", &self.display)
-            .finish_non_exhaustive()
-    }
-}
-
-impl HomeSeedRoot {
-    /// Acquire an existing per-run home without following its final link or reparse point.
-    pub fn open(selected_home: &Path) -> Result<Self, TraceCapError> {
-        Ok(Self {
-            root: TraceDir::open(selected_home)?,
-            display: selected_home.to_path_buf(),
-        })
-    }
-
-    /// Observe whether a destination entry already exists without following the leaf.
-    /// Whole credential files use this to preserve anything a resumed harness already owns,
-    /// including an alias it installed itself, without reading or writing its target.
-    pub fn entry_exists(&self, relative: &str) -> Result<bool, TraceCapError> {
-        self.ensure_current()?;
-        let components = home_seed_components(relative)?;
-        let (parents, leaf) = components.split_at(components.len() - 1);
-        let Some(parent) = self.open_existing_parent(parents)? else {
-            return Ok(false);
-        };
-        match parent {
-            Some(parent) => parent.child_exists(leaf[0]),
-            None => self.root.child_exists(leaf[0]),
-        }
-    }
-
-    /// Open a JSON merge target, treating only a final alias as replaceable absence.
-    /// Parent aliases remain errors because replacing a leaf through them would escape.
-    pub fn read_merge_target(&self, relative: &str) -> Result<Option<File>, TraceCapError> {
-        self.ensure_current()?;
-        let components = home_seed_components(relative)?;
-        let (parents, leaf) = components.split_at(components.len() - 1);
-        let Some(parent) = self.open_existing_parent(parents)? else {
-            return Ok(None);
-        };
-        let result = match parent {
-            Some(parent) => parent.read_regular(leaf[0]),
-            None => self.root.read_regular(leaf[0]),
-        };
-        match result {
-            Err(error) if final_alias_refusal(&error) => Ok(None),
-            result => result,
-        }
-    }
-
-    /// Atomically replace one regular descendant at private mode through retained handles.
-    pub fn replace_private(&self, relative: &str, bytes: &[u8]) -> Result<(), TraceCapError> {
-        self.ensure_current()?;
-        let components = home_seed_components(relative)?;
-        let (parents, leaf) = components.split_at(components.len() - 1);
-        let parent = self.open_or_create_private_parent(parents)?;
-        match parent {
-            Some(parent) => parent.replace_regular_with_mode(leaf[0], bytes, 0o600),
-            None => self.root.replace_regular_with_mode(leaf[0], bytes, 0o600),
-        }
-    }
-
-    fn ensure_current(&self) -> Result<(), TraceCapError> {
-        let current = TraceDir::open(&self.display)?;
-        if current.identity()? != self.root.identity()? {
-            return Err(TraceCapError::refused(
-                "validate home-seed destination",
-                RefusalKind::IdentityChanged,
-            ));
-        }
-        Ok(())
-    }
-
-    /// `None` is the selected root itself; `Some` is the deepest retained descendant.
-    fn open_existing_parent(
-        &self,
-        parents: &[&str],
-    ) -> Result<Option<Option<TraceDir>>, TraceCapError> {
-        let Some((first, remaining)) = parents.split_first() else {
-            return Ok(Some(None));
-        };
-        let mut current = match self.root.open_child_dir(first) {
-            Ok(directory) => directory,
-            Err(TraceCapError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
-        };
-        for component in remaining {
-            current = match current.open_child_dir(component) {
-                Ok(directory) => directory,
-                Err(TraceCapError::Io { source, .. })
-                    if source.kind() == io::ErrorKind::NotFound =>
-                {
-                    return Ok(None);
-                }
-                Err(error) => return Err(error),
-            };
-        }
-        Ok(Some(Some(current)))
-    }
-
-    fn open_or_create_private_parent(
-        &self,
-        parents: &[&str],
-    ) -> Result<Option<TraceDir>, TraceCapError> {
-        let Some((first, remaining)) = parents.split_first() else {
-            return Ok(None);
-        };
-        let mut current = self.root.open_or_create_child_dir(first)?;
-        current.restrict(0o700)?;
-        for component in remaining {
-            current = current.open_or_create_child_dir(component)?;
-            current.restrict(0o700)?;
-        }
-        Ok(Some(current))
-    }
-}
-
-fn home_seed_components(value: &str) -> Result<Vec<&str>, TraceCapError> {
-    RelativeDescendant::parse(value).map_err(|_| {
-        TraceCapError::refused("validate home-seed destination", RefusalKind::NameTooLong)
-    })?;
-    Ok(value.split('/').collect())
-}
-
-fn final_alias_refusal(error: &TraceCapError) -> bool {
-    #[cfg(unix)]
-    if matches!(
-        error,
-        TraceCapError::Io { source, .. } if source.raw_os_error() == Some(libc::ELOOP)
-    ) {
-        return true;
-    }
-    false
-}
-
 #[cfg(unix)]
 fn restrict_regular(file: &File, mode: u32) -> Result<(), TraceCapError> {
     use std::os::unix::fs::PermissionsExt;
@@ -932,10 +755,6 @@ impl EntryArtifactRoot {
     /// Open the existing final `trace` child for restart/recovery.
     pub fn open_trace(&self) -> Result<TraceDir, TraceCapError> {
         self.entry.open_child_dir("trace")
-    }
-
-    pub fn open_buffer(&self) -> Result<File, TraceCapError> {
-        self.entry.open_or_create_regular("buffer.redb")
     }
 
     /// Create the immutable source-root journal before cutoff. This deliberately has no
@@ -1059,14 +878,6 @@ impl EntryArtifactRoot {
         self.entry.read_regular("sealing-source.json")
     }
 
-    pub fn read_cursors(&self) -> Result<Option<File>, TraceCapError> {
-        self.entry.read_regular("cursors.json")
-    }
-
-    pub fn replace_cursors(&self, bytes: &[u8]) -> Result<(), TraceCapError> {
-        self.entry.replace_regular("cursors.json", bytes)
-    }
-
     /// Replace Claude's process-scoped launch settings through the held entry directory.
     /// This name is deliberately fixed: it is the only artifact-root file V1 ships, and
     /// adding another artifact file needs a separately reviewed capability method rather
@@ -1139,10 +950,6 @@ impl TraceAppendFile {
             self.poisoned = true;
         }
         result
-    }
-
-    pub fn is_empty(&mut self) -> Result<bool, TraceCapError> {
-        Ok(self.len()? == 0)
     }
 
     pub fn append_checked(&mut self, bytes: &[u8]) -> Result<(), TraceCapError> {

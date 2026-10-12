@@ -30,23 +30,6 @@ pub enum ForeignScanUnavailableReason {
     SightingLimit,
 }
 
-impl ForeignScanUnavailableReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Discovery => "discovery",
-            Self::Race => "race",
-            Self::Open => "open",
-            Self::Schema => "schema",
-            Self::Identity => "identity",
-            Self::Row => "row",
-            Self::PathLimit => "path_limit",
-            Self::RowLimit => "row_limit",
-            Self::RecordLimit => "record_limit",
-            Self::SightingLimit => "sighting_limit",
-        }
-    }
-}
-
 /// The health states. The daemon reports them; no rule reads them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

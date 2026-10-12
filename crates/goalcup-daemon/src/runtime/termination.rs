@@ -227,27 +227,4 @@ impl Daemon {
         ))
         .map_err(|error| DaemonError::Refused(format!("cannot timestamp {fact}: {error}")))
     }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn set_finalization_clock_for_test(&self, now: f64) {
-        self.inner
-            .finalization_clock_steps
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clear();
-        *self
-            .inner
-            .finalization_clock
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(now);
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn set_finalization_clock_steps_for_test(&self, steps: impl IntoIterator<Item = f64>) {
-        *self
-            .inner
-            .finalization_clock_steps
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = steps.into_iter().collect();
-    }
 }

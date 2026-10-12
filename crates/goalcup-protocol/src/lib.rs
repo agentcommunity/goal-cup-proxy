@@ -69,15 +69,6 @@ pub fn is_supported_protocol_version(v: u32) -> bool {
     matches!(v, 1 | 2 | 3 | 4)
 }
 
-/// The goal-length limit (D7): the original prompt must be at most this many
-/// characters. The daemon enforces it in a blocking hook and the verifier checks it in
-/// V1, so it lives here rather than in either crate.
-///
-/// This is not a violation of D3. D3 forbids rule *logic* in the daemon; a shared
-/// constant is data, and the daemon's use of it stays a comparison against a number the
-/// protocol carries. Defining it twice, once per crate, is how the two silently drift.
-pub const MAX_PROMPT_CHARS: usize = 4_000;
-
 #[derive(Debug, thiserror::Error)]
 pub enum ProtocolError {
     #[error("json: {0}")]

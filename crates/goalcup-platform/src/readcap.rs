@@ -3,9 +3,8 @@
 //! Cache and lock files are attacker-influenceable leaves even when their parent directory
 //! is selected by the tracker. Callers receive the same handle that was checked, never a
 //! metadata result followed by a pathname reopen. Unix opens nonblocking and without
-//! following a final link. Windows is not yet supported (it is planned); a build for
-//! any other target fails at `goalcup-platform`'s crate root instead of shipping a silent
-//! [`FileCapError::UnsupportedPlatform`] stub.
+//! following a final link. A build for any other target fails at `goalcup-platform`'s crate
+//! root.
 
 use crate::filecap::{FileCapError, RefusalKind};
 use std::fs::File;

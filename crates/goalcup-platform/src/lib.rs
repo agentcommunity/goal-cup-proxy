@@ -65,22 +65,6 @@ pub fn config_dir_with(
     }
 }
 
-/// Resolve the current platform's configuration directory without creating it.
-pub fn config_dir() -> Option<PathBuf> {
-    config_dir_with(current_platform(), |name| std::env::var_os(name))
-}
-
-fn current_platform() -> Platform {
-    #[cfg(target_os = "macos")]
-    {
-        Platform::Macos
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Platform::Unix
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Platform, config_dir_with};

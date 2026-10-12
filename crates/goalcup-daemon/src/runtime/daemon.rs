@@ -315,17 +315,6 @@ impl Daemon {
         &self.inner.artifact_root
     }
 
-    /// Test-only: how many of [`MAX_IN_FLIGHT`] permits are free right now.
-    ///
-    /// What it exists for is the invariant `stop` rests on — that a spawned unit of work
-    /// holds its permit from before it is spawned — which is otherwise invisible: a test
-    /// can only watch `stop` take a long time, and that is also what a coincidence looks
-    /// like.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn free_permits(&self) -> usize {
-        self.inner.blocking.available_permits()
-    }
-
     /// A second handle on the same daemon, for a task that outlives the caller's borrow.
     ///
     /// Every field is behind the one `Arc`, so this is a pointer copy and not a second

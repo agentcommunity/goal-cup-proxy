@@ -24,8 +24,6 @@ use crate::arming::{GateState, RefusalReason};
 use crate::config::EventConfig;
 use crate::registry::{Entry, EntryState};
 use ed25519_dalek::SigningKey;
-#[cfg(any(test, feature = "test-hooks"))]
-use goalcup_platform::tracecap::ArtifactRoot;
 use goalcup_platform::tracecap::EntryArtifactRoot;
 use goalcup_protocol::capture::{CaptureState, M2Status, RunState};
 use goalcup_protocol::control::{
@@ -39,8 +37,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::path::PathBuf;
-#[cfg(any(test, feature = "test-hooks"))]
-use std::sync::{Arc, Condvar};
 use std::sync::{Mutex, OnceLock};
 
 /// Everything the daemon knows about one entry at one moment. The daemon's own gathering
@@ -322,68 +318,6 @@ pub fn sign_payload(
     Ok(SignedStatus::sign(payload, cached_at, key)?)
 }
 
-/// Re-publish a capture-closed row without reconstructing a runtime or parsing the current
-/// connector manifest. This is the only status path for an evicted sealed drain and an
-/// unreconciled sealing quarantine; both facts are already durable in the registry.
-pub fn compose_capture_closed(entry: &Entry, now: f64) -> Result<SignedStatus, DaemonError> {
-    if !entry.state.capture_closed() {
-        return Err(DaemonError::Refused(format!(
-            "entry {} is not capture-closed and needs a live runtime status",
-            entry.entry_id
-        )));
-    }
-    // Terminal state is `Sealed`/`Sealing`, so it cannot describe how far the gate got.
-    // The persisted start facts survive the terminal transition and keep a restarted
-    // capture-closed status from regressing a genuinely started run to `armed`.
-    let arming = if entry.started_at.is_some() {
-        GateState::Started
-    } else if entry.start_signal_at.is_some() {
-        GateState::StartSignalSeen
-    } else {
-        GateState::Armed
-    };
-    let terminal_pending = entry.chain_seq.map_or(0, |head| {
-        let floor = entry
-            .last_ack_seq
-            .map_or(0, |acked| acked.saturating_add(1));
-        head.saturating_add(1).saturating_sub(floor)
-    });
-    let payload = build_payload(&StatusInputs {
-        entry,
-        arming,
-        health: entry.health,
-        events_uploaded: entry.events_uploaded,
-        // A terminal-validation quarantine means the registry's acknowledgement mirror
-        // cannot honestly prove completion. It may itself name the terminal (or even an
-        // impossible value beyond it), so its arithmetic pending count can be zero while
-        // the durable buffer/trace remains unresolved. Preserve the precise count when it
-        // exists, but never render the review status as an all-clear zero-pending run.
-        events_pending: if entry.terminal_drain_needs_review() {
-            terminal_pending.max(1)
-        } else {
-            terminal_pending
-        },
-        last_sync_at: entry.last_ack_at.map(crate::unix_to_rfc3339),
-        now,
-        event: event_status_from(entry, entry.event.as_ref()),
-        cycles: CycleErrors::default(),
-        polls_capped: 0,
-        cursor_restore_failures: 0,
-        skipped_replayed: 0,
-        buffer_gap_at: None,
-        files_capped: 0,
-        harness_unverified: entry
-            .seal_outcome
-            .as_ref()
-            .is_some_and(|outcome| outcome.harness_unverified),
-    });
-    sign_payload(
-        payload,
-        crate::unix_to_rfc3339(now),
-        &entry.keys.signing_key()?,
-    )
-}
-
 #[cfg(any(test, feature = "test-hooks"))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StatusFaultCounts {
@@ -401,143 +335,12 @@ struct StatusFaultState {
     latest_failures: BTreeSet<PathBuf>,
     mirror_counts: BTreeMap<PathBuf, StatusFaultCounts>,
     status_line_attempts: BTreeMap<PathBuf, u64>,
-    latest_invalidation_pause: Option<(PathBuf, LatestInvalidationObserver)>,
-}
-
-/// A deterministic observer for the tiny status-latest ownership interval. The test hook
-/// pauses *after* invalidation has read an owned pointer and while the process-local latest
-/// lock is still held; a competing ranked writer must therefore block until `release`.
-#[cfg(any(test, feature = "test-hooks"))]
-#[derive(Clone)]
-pub struct LatestInvalidationObserver {
-    state: Arc<(Mutex<LatestInvalidationObserverState>, Condvar)>,
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-#[derive(Default)]
-struct LatestInvalidationObserverState {
-    paused: bool,
-    released: bool,
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-impl LatestInvalidationObserver {
-    /// Wait until invalidation has recognized its target pointer under the latest lock.
-    pub fn wait_until_paused(&self) {
-        let (state, wake) = &*self.state;
-        let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-        while !state.paused {
-            state = wake.wait(state).unwrap_or_else(|e| e.into_inner());
-        }
-    }
-
-    /// Let the paused invalidation remove its target pointer and release the latest lock.
-    pub fn release(&self) {
-        let (state, wake) = &*self.state;
-        let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-        state.released = true;
-        wake.notify_all();
-    }
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
 fn status_fault_state() -> &'static Mutex<StatusFaultState> {
     static STATE: OnceLock<Mutex<StatusFaultState>> = OnceLock::new();
     STATE.get_or_init(|| Mutex::new(StatusFaultState::default()))
-}
-
-/// Test-only: fail one mirror attempt for this configuration root. The key is path-scoped so
-/// independently running integration cases cannot consume each other's deterministic fault.
-#[cfg(any(test, feature = "test-hooks"))]
-pub fn fail_next_mirror_for_test(config_dir: &Path) {
-    status_fault_state()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .mirror_failures
-        .insert(config_dir.to_path_buf());
-}
-
-/// Test-only: fail the `status-latest.json` write after the per-entry document was written.
-/// This distinct sink proves an all-clear pointer cannot survive a terminal quarantine.
-#[cfg(any(test, feature = "test-hooks"))]
-pub fn fail_next_latest_for_test(config_dir: &Path) {
-    status_fault_state()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .latest_failures
-        .insert(config_dir.to_path_buf());
-}
-
-/// Pause the next target-owned terminal-latest invalidation for this configuration root.
-/// This is intentionally scoped to one root so parallel integration cases cannot observe
-/// each other's writer boundary.
-#[cfg(any(test, feature = "test-hooks"))]
-pub fn pause_next_latest_invalidation_after_read_for_test(
-    config_dir: &Path,
-) -> LatestInvalidationObserver {
-    let observer = LatestInvalidationObserver {
-        state: Arc::new((
-            Mutex::new(LatestInvalidationObserverState::default()),
-            Condvar::new(),
-        )),
-    };
-    status_fault_state()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .latest_invalidation_pause = Some((config_dir.to_path_buf(), observer.clone()));
-    observer
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-fn pause_latest_invalidation_after_read(config_dir: &Path) {
-    let observer = status_fault_state()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .latest_invalidation_pause
-        .as_ref()
-        .filter(|(root, _)| root == config_dir)
-        .map(|(_, observer)| observer.clone());
-    let Some(observer) = observer else {
-        return;
-    };
-    let (state, wake) = &*observer.state;
-    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    state.paused = true;
-    wake.notify_all();
-    while !state.released {
-        state = wake.wait(state).unwrap_or_else(|e| e.into_inner());
-    }
-    drop(state);
-    let mut faults = status_fault_state()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if faults
-        .latest_invalidation_pause
-        .as_ref()
-        .is_some_and(|(root, pending)| {
-            root == config_dir && Arc::ptr_eq(&pending.state, &observer.state)
-        })
-    {
-        faults.latest_invalidation_pause = None;
-    }
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-pub fn status_fault_counts_for_test(config_dir: &Path, status_line: &Path) -> StatusFaultCounts {
-    let state = status_fault_state()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let mut counts = state
-        .mirror_counts
-        .get(config_dir)
-        .copied()
-        .unwrap_or_default();
-    counts.status_line_attempts = state
-        .status_line_attempts
-        .get(status_line)
-        .copied()
-        .unwrap_or_default();
-    counts
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -661,109 +464,6 @@ fn mirror_latest_locked(signed: &SignedStatus, config_dir: &Path) -> Result<(), 
             write_atomic(&latest, &bytes, 0o644)
         }
         false => Ok(()),
-    }
-}
-
-/// Remove the previous terminal cache views before a best-effort replacement. The exact
-/// per-entry cache belongs to this row. `status-latest.json` is removed only after its signed
-/// document names this exact entry; a newer unrelated run keeps its pointer. The participant
-/// status line is removed through the caller's retained entry capability.
-///
-/// The three files do not share a filesystem transaction. Each removal is attempted even if
-/// another fails, and the first error is returned only after all safe targets were tried. A
-/// persistent filesystem failure that prevents both unlink and replacement cannot be revoked
-/// by daemon memory; callers keep their in-process status unavailable/review rather than
-/// claiming cross-file atomicity this filesystem does not provide.
-#[cfg(any(test, feature = "test-hooks"))]
-pub fn invalidate_terminal_views(
-    entry: &Entry,
-    config_dir: &Path,
-    artifact_root: &Path,
-) -> Result<(), DaemonError> {
-    let root = ArtifactRoot::open(artifact_root).map_err(|error| {
-        DaemonError::Refused(format!(
-            "terminal status cannot acquire the selected artifact root: {error}"
-        ))
-    })?;
-    invalidate_terminal_views_with_root(entry, config_dir, &root)
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-pub(crate) fn invalidate_terminal_views_with_root(
-    entry: &Entry,
-    config_dir: &Path,
-    artifact_root: &ArtifactRoot,
-) -> Result<(), DaemonError> {
-    let artifact = acquire_terminal_artifact(entry, artifact_root)?;
-    invalidate_terminal_views_with_artifact(entry, config_dir, &artifact)
-}
-
-/// The live-runtime and retained-drain form of [`invalidate_terminal_views`].  These owners
-/// already hold the exact entry capability that observed the terminal refusal, so they must
-/// not re-resolve the registry-visible spelling before revoking their status line.
-pub fn invalidate_terminal_views_with_artifact(
-    entry: &Entry,
-    config_dir: &Path,
-    artifact: &EntryArtifactRoot,
-) -> Result<(), DaemonError> {
-    let _latest_guard = latest_view_lock();
-    invalidate_terminal_views_locked(entry, config_dir, artifact)
-}
-
-/// Remove exactly this terminal row's raw views while the caller owns the process-local
-/// latest lock. It is private so every public caller either takes that lock itself or is the
-/// one terminal replacement cadence that retains it through the following ranked write.
-fn invalidate_terminal_views_locked(
-    entry: &Entry,
-    config_dir: &Path,
-    artifact: &EntryArtifactRoot,
-) -> Result<(), DaemonError> {
-    validate_status_entry_id(&entry.entry_id)?;
-    let cache = config_dir.join("cache");
-    let entry_status = cache.join(format!("status-{}.json", entry.entry_id));
-    let latest = cache.join("status-latest.json");
-    let mut first = None;
-    collect_view_result(&mut first, remove_view_if_present(&entry_status));
-    // A one-daemon process has one lock for every status-latest reader that can decide to
-    // replace or remove it. The comparison and removal are indivisible with respect to
-    // another entry's normal `mirror_latest` write; external filesystem writers are outside
-    // that authority and still limited by the best-effort filesystem boundary.
-    let latest_is_this_entry = std::fs::read_to_string(&latest)
-        .ok()
-        .and_then(|text| serde_json::from_str::<SignedStatus>(&text).ok())
-        .is_some_and(|signed| signed.payload.entry_id == entry.entry_id);
-    if latest_is_this_entry {
-        #[cfg(any(test, feature = "test-hooks"))]
-        pause_latest_invalidation_after_read(config_dir);
-        collect_view_result(&mut first, remove_view_if_present(&latest));
-    }
-    let rooted_line = artifact.remove_status_line().map_err(|error| {
-        DaemonError::Refused(format!(
-            "terminal status line cannot be removed through retained entry artifact authority: {error}"
-        ))
-    });
-    collect_view_result(&mut first, rooted_line);
-    match first {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-fn acquire_terminal_artifact(
-    entry: &Entry,
-    artifact_root: &ArtifactRoot,
-) -> Result<EntryArtifactRoot, DaemonError> {
-    artifact_root.open_entry(&entry.entry_id).map_err(|error| {
-        DaemonError::Refused(format!(
-            "terminal status line cannot acquire entry artifact authority through the retained selected root: {error}"
-        ))
-    })
-}
-
-fn collect_view_result(first: &mut Option<DaemonError>, result: Result<(), DaemonError>) {
-    if let Err(error) = result {
-        first.get_or_insert(error);
     }
 }
 

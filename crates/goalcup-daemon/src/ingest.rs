@@ -879,10 +879,6 @@ impl fmt::Debug for IngestEntry {
 }
 
 impl IngestEntry {
-    pub fn entry_id(&self) -> &str {
-        &self.shared.entry_id
-    }
-
     /// Every latched outcome not yet taken, in latch order. Each is delivered once.
     pub fn take_outcomes(&self) -> Vec<ProducerOutcome> {
         self.shared.lock().outcomes.drain(..).collect()
