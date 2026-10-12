@@ -3,31 +3,28 @@
 Which core changes would let a reviewed Amp CLI connector land later, and what does each one
 change? For maintainers reviewing these changes one at a time, and for whoever writes the Amp
 connector after the owner's live probe.
-Updated: 2026-10-11.
+Updated: 2026-10-12.
 
-Status: **proposed**. Nothing here admits an Amp connector. No `connectors/amp-cli` exists, and
-none may be added until the owner's live probe settles the UNKNOWN rows of the Amp readiness
-record, `docs/qualification/m2-amp-readiness.md` (on branch `claude/v060-amp-readiness`, not yet
-on this branch). The rows cited below are rows of that record's "Mapping to Goal Cup policy"
-table and its "Core changes Amp would need" list.
+Status: changes 1 to 4 **landed**; D49 and D50 are in force (owner, 2026-10-12). Nothing here admits
+an Amp connector. No `connectors/amp-cli` exists, and none may be added until the owner's live probe
+settles the UNKNOWN rows of the Amp readiness record,
+[m2-amp-readiness](../qualification/m2-amp-readiness.md). The rows cited below are rows of that
+record's "Mapping to Goal Cup policy" table and its "Core changes Amp would need" list.
 
-| # | Change | Readiness item | Status on `claude/v060-amp-core-prep` |
+| # | Change | Readiness item | Status |
 |---|---|---|---|
 | 1 | Refuse `*_URL` env names | core change 1 | implemented |
-| 2 | Admit `AMP_API_KEY` | core change 2 | implemented; needs D49 approved |
+| 2 | Admit `AMP_API_KEY` | core change 2 | implemented; D49 in force |
 | 3 | Kit credential support | core change 3 | implemented; macOS kit not run |
-| 4 | Credential with `stdout_json` identity | core change 5 | implemented; needs D50 approved |
+| 4 | Credential with `stdout_json` identity | core change 5 | implemented; D50 in force |
 | - | Private `TMPDIR` per capture launch | core change 4 | not started (optional hardening) |
 | - | Settings seed under the run home | core change 6 | not started (only if needed) |
 | - | Key fingerprint file, native store | core change 7 | owner decisions, below |
 
-**Merge gate.** Changes 2 and 4 contradict D43 ruling 3 as in force. Their DECISIONS entries are
-in [DECISIONS](../DECISIONS.md) itself as proposals, D49 (admit `AMP_API_KEY`) and D50 (amend D43
-ruling 3 for credential + `stdout_json` via one stdout reader), each marked "Status: Proposed,
-owner approval required before merge." The code commits for changes 2 and 4 must not merge
-until the owner approves those entries, and any pull request carrying them carries the entries
-too. Change 3's `synthetic-credential-stdout-json` kit case depends on change 4 and waits with
-it.
+**Merge gate (met).** Changes 2 and 4 amend D43 ruling 3. Their DECISIONS entries, D49 (admit
+`AMP_API_KEY`) and D50 (credential + `stdout_json` via one stdout reader), were carried as
+proposals and approved by the owner on 2026-10-12 before the code merged. Change 3's
+`synthetic-credential-stdout-json` kit case depends on change 4 and landed with it.
 
 Each numbered change is one commit on this branch, meant to be reviewed as its own pull request,
 smallest first. Changes 1, 2 and 4 were built test first: the new tests failed before the
@@ -52,8 +49,9 @@ end-to-end and Hermes offline-key tests) were not run.
   `*_URL` switch would need a core change.
 - **The CLI's D23 predicate.** `is_denied` in [launch.rs](../../crates/goalcup-cli/src/launch.rs),
   which `scrubbed_env` and `probe_env` use to strip inherited variables, is widened the same way
-  (`*_URL`, was `*_BASE_URL`). `scrubbed_env` serves only the V1 launch, but `probe_env` runs in
-  the default build: `goalcup doctor` probes a V1 manifest's harness version through it. Test:
+  (`*_URL`, was `*_BASE_URL`). `scrubbed_env` has had no caller since D48 removed the V1 launch;
+  `probe_env` runs in the default build: `goalcup doctor` probes a V1 manifest's harness version
+  through it. Test:
   `the_version_probe_runs_the_harness_with_no_base_url_and_no_proxy_in_its_environment` in
   `preflight_doctor.rs` now plants `AMP_URL`.
 - **Status.** Implemented on this branch.
@@ -82,8 +80,8 @@ end-to-end and Hermes offline-key tests) were not run.
 
 ### DECISIONS entry
 
-Proposed as [D49](../DECISIONS.md#d49-m2-proposed-admit-amp_api_key-as-a-child-credential), not
-in force. This change must not merge until the owner approves it.
+In force as [D49](../DECISIONS.md#d49-m2-admit-amp_api_key-as-a-child-credential), approved by the
+owner on 2026-10-12.
 
 ## 3. Teach the generic kit a credential
 
@@ -181,9 +179,8 @@ in force. This change must not merge until the owner approves it.
 
 ### DECISIONS entry
 
-Proposed as
-[D50](../DECISIONS.md#d50-m2-proposed-amend-d43-ruling-3-for-stdout_json-identity), an
-amendment to D43 ruling 3, not in force. This change must not merge until the owner approves it.
+In force as [D50](../DECISIONS.md#d50-m2-amend-d43-ruling-3-for-stdout_json-identity), an
+amendment to D43 ruling 3, approved by the owner on 2026-10-12.
 
 ## Owner decisions that remain
 
@@ -212,7 +209,8 @@ the live probe first.
   plugins from its server. Goal Cup cannot isolate either. The owner rules whether a row must
   record their presence (metadata only), refuse to start when the machine-wide file exists, or
   disclose them as residuals.
-- **Token grammar.** Change 2 assumes Amp tokens fit 20 to 256 bytes of `[A-Za-z0-9_-]`. The
-  live probe must confirm it before D49 is approved.
+- **Token grammar.** Change 2 assumes Amp tokens fit 20 to 256 bytes of `[A-Za-z0-9_-]`. D49 was
+  approved before the live probe. If a real token falls outside the grammar, every launch is
+  refused by name (fail closed), and widening the grammar is a core PR.
 - **Identity carrier.** Change 4 matters only if the live probe shows the stdout `init` event
   arrives before the first model request and names the session a native file is scoped by.

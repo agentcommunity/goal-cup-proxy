@@ -90,8 +90,7 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
     one more case of the same `harness_contract_kit` test. A keyed case names `credential_env`
     in `expect.toml` and copies the connector's `[capture.credential]`: the kit hands the
     stand-in an invented key, never a real one, and checks that no fragment of it leaks.
-    `AMP_API_KEY` (D49) and a credential with `stdout_json` identity (D50) are both Proposed
-    decisions: treat them as a core PR until the owner approves them.
+    `AMP_API_KEY` (D49) and a credential with `stdout_json` identity (D50) are admitted.
     Check: `grep -nE '^[^#]*<[^>]+>' $k/harness.toml $k/expect.toml`. Expect: no output.
     The stand-in itself stops with `replace the placeholder in <NAME>` while one is left.
     Check that `BODY` in `stand-in.py` equals `wire_request` in `expect.toml`:

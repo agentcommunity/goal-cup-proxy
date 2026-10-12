@@ -32,13 +32,12 @@ when policy moves). Never spell around a rule.
 ## How to tell, row by row
 
 1. `CREDENTIAL_ENV` lists `DEEPSEEK_API_KEY` and `AMP_API_KEY`. `AMP_API_KEY` is admitted by
-   [D49](../../docs/DECISIONS.md#d49-m2-proposed-admit-amp_api_key-as-a-child-credential),
-   which is **Proposed**: until the owner approves it, treat `AMP_API_KEY` as a core PR.
+   [D49](../../docs/DECISIONS.md#d49-m2-admit-amp_api_key-as-a-child-credential).
    Subscription or login auth needs no `[capture.credential]` table.
 2. A credential always needs `config_home = "per_run"`. With `stderr_line` + `deferred` it is
    in force. With `stdout_json` + `at_launch` it rests on
-   [D50](../../docs/DECISIONS.md#d50-m2-proposed-amend-d43-ruling-3-for-stdout_json-identity),
-   also **Proposed**: one stdout reader feeds both the key-fragment scan and the identity
+   [D50](../../docs/DECISIONS.md#d50-m2-amend-d43-ruling-3-for-stdout_json-identity):
+   one stdout reader feeds both the key-fragment scan and the identity
    matcher. A credential with `preassigned` or `none` identity is refused.
 3. A kit case may name the credential variable in `expect.toml` as `credential_env`. The runner
    then hands the stand-in an invented key and checks that no fragment of it leaks. Copy the
@@ -74,10 +73,9 @@ Amp is a coding agent CLI, installed from npm, that talks to Amp's own server. I
 step 3. Its readiness record will live at docs/qualification/m2-amp-readiness.md. The rows it
 hits, and why:
 
-- **1, credential name**: Amp reads `AMP_API_KEY`. Admitted on the Amp core branch by D49,
-  which is Proposed. Core PR until it is approved.
+- **1, credential name**: Amp reads `AMP_API_KEY`. Admitted by D49. Fits.
 - **2, credential with identity**: the likely carrier is a stdout JSON init event. Admitted by
-  D50 with a per-run home, also Proposed. Core PR until it is approved.
+  D50 with a per-run home. Fits once the live probe confirms the carrier.
 - **3, kit**: a keyed case names `credential_env`, as `synthetic-credential-stdout-json`
   already does. Fits.
 - **9, one native row**: no local own-session file was found; sessions appear to live on Amp's
