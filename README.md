@@ -118,8 +118,11 @@ exited on this path.
 **Not proven:**
 
 - Termination of an orphan the process walk cannot see, such as a wrapper that forks a child and
-  leaves. Measured, and it fails: on Linux, `Confirmed` can be claimed while such an orphan still
-  runs. A child-subreaper fix is due before the 168-hour dry run
+  leaves, by the daemon alone. On Linux the daemon's `Confirmed` can still be claimed while such
+  an orphan runs. `goalcup start` is a child subreaper there and sweeps what the harness left
+  behind after it exits and before the seal; measured in Docker on a synthetic harness only. It
+  sweeps nothing if `goalcup start` itself dies, and a `goalcup seal` from another terminal can
+  report `all_gone` while the sweep is still running
   ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
 - A successful, logged-in harness run on Linux, and the Linux x86_64 harness builds, which are
   pinned but were not run.
