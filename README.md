@@ -31,9 +31,10 @@ export PATH="$PWD/target/release:$PATH"
 
 ## Quickstart
 
-**You need** a Mac with Apple silicon, Goal Cup [installed](#install), and a Claude or ChatGPT
-subscription. Install the exact harness build Goal Cup is pinned to, Claude Code 2.1.283 or Codex
-CLI 0.153.0: `goalcup start` refuses any other build. Choose where the tracker keeps its state:
+**You need** a Mac with Apple silicon, or Linux (x86_64 or arm64) with the trace folder on ext4 or
+XFS ([Linux](#linux)); Goal Cup [installed](#install); and a Claude or ChatGPT subscription.
+Install the exact harness build Goal Cup is pinned to, Claude Code 2.1.283 or Codex CLI 0.153.0:
+`goalcup start` refuses any other build. Choose where the tracker keeps its state:
 
 ```sh
 export GOALCUP_CONFIG_DIR="$HOME/goalcup"
@@ -71,6 +72,66 @@ Status: v0.5.0 is published as source; binary releases come from
 [release.yml](.github/workflows/release.yml) once a version is tagged. Open work:
 [TODO.md](TODO.md). Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md). Contributors running the tests also need `shasum` and
 `python3`; never create a `.cargo/config.toml`.
+
+## Linux
+
+The [quickstart](#quickstart) would be the same on Linux, apart from two things below, but it
+cannot be followed yet: both shipped connectors pin the macOS executables by sha256, so until Linux
+pins land in them, `goalcup doctor` fails `harness_executable` and `goalcup start` refuses every
+Linux harness build. Linux is measured less than macOS; the lists below say what was and was not.
+
+**You need** Rust 1.99 or later, a C compiler (on Debian or Ubuntu, `build-essential`), and the
+trace folder (`artifact_root` in `daemon.toml`) on ext4 or XFS. btrfs, ZFS, NFS, tmpfs, overlayfs
+and FUSE are refused before anything runs, with this message:
+`the trace folder must be on APFS (macOS) or ext4 or XFS (Linux); move artifact_root in daemon.toml`.
+Check the folder, or its parent before the first run, with `stat -f -c %T ~/goalcup-artifacts`
+(or `stat -f -c %T ~`): `xfs` is XFS, and `ext2/ext3` is what GNU `stat` prints for ext4. The other tools the tests need are in [the gate](#the-gate).
+
+**What differs from the macOS quickstart:**
+
+- **The configuration directory.** With `GOALCUP_CONFIG_DIR` unset it is `$XDG_CONFIG_HOME/goalcup`,
+  else `~/.config/goalcup`; an empty `$XDG_CONFIG_HOME` counts as unset
+  (`crates/goalcup-cli/src/config.rs`). The quickstart sets `GOALCUP_CONFIG_DIR` and skips this.
+- **The Claude Code login, once Linux pins land.** Linux has no Keychain, and the Claude Code
+  connector links only the macOS Keychains directory into the run. Its login is expected in its
+  config directory, so sign in once to the tracker's own:
+  `mkdir -p -m 700 "$GOALCUP_CONFIG_DIR/capture-homes/claude-code-cli"`, then
+  `CLAUDE_CONFIG_DIR="$GOALCUP_CONFIG_DIR/capture-homes/claude-code-cli" claude`.
+  **This is not yet measured:** where Claude Code 2.1.283 keeps its login on Linux has not been
+  checked, and nor has the Codex login location (the Codex command above is unchanged). Neither
+  can be tried while the pins refuse the Linux builds.
+
+**Measured, in Docker** (rust:1.99, Linux 7.0.12, arm64): the full workspace builds and the fast
+gate passes; the reservation reserves on ext4 and XFS and refuses overlayfs, tmpfs and FUSE; the
+six synthetic contract-kit captures seal and verify. `sh scripts/linux-check.sh` reproduces this
+from a Mac ([what it runs](#the-gate)). On x86_64, CI on ubuntu-24.04 runs the reservation tests on
+ext4 and they pass; the end-to-end suites were run only on arm64.
+
+**Not proven:**
+
+- Termination of an orphan the process walk cannot see, such as a wrapper that forks a child and
+  leaves. Measured, and it fails: on Linux, `Confirmed` can be claimed while such an orphan still
+  runs. A child-subreaper fix is due before the 168-hour dry run
+  ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
+- A real harness capture on Linux. The shipped Codex and Claude Code connectors pin macOS
+  binaries, so a Linux harness build is refused today and a Linux capture is not measured.
+- The end-to-end suites on x86_64, and any real Linux host or distribution kernel (only Docker
+  Desktop's was run).
+- Long runs, and termination against a real harness's process tree on Linux.
+
+## Windows: use WSL2
+
+**Not yet tested on a real Windows machine.** Run the tracker inside WSL2, as Linux:
+
+1. In PowerShell: `wsl --install -d Ubuntu`.
+2. Inside Ubuntu, install Rust, the build tools and the harness as in [Linux](#linux), then build
+   and run the tracker there.
+3. Keep the goal folder, the run folder and `artifact_root` under the Linux filesystem (`~/...`),
+   never under `/mnt/c`: that is a Windows drive (drvfs), and `artifact_root` there is refused by
+   the filesystem check. Keep the goal and run folders on the Linux filesystem too. WSL2's own root
+   is ext4.
+
+Native Windows is planned, not built.
 
 ## The gate
 
