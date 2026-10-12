@@ -160,36 +160,33 @@ committed artifact** in this repository — it is a remembered result. Either re
 and file the output beside the gate log, or drop the number. Do not cite it as evidence until
 one of those happens.
 
-## OPEN: an owner ruling, not a defect — how wide is Linux's `W`?
+## RULED: on Linux, `Confirmed` excludes fork-and-leave wrappers
 
-Stated as a question on purpose. Nothing below changes the contract; the contract changes only
-when the owner rules.
+Owner ruling (1), 2026-10-13: say plainly that on Linux `observed_gone`, `all_gone` and
+`Confirmed` exclude a fork-and-leave wrapper, meaning a child forked before the root exits and
+never waited for. Linux has no fork witness, so such a child is in no snapshot under a live
+parent and no ppid walk can see it. A report over that tree can come back `observed_gone` with
+`all_gone: true`, and `Confirmed` can stand, while the orphan is still running. This is inside
+`W` as written above, so `I1` is not violated and the implementation behaves as documented; the
+ruling widens the stated limitation and changes no code.
 
-The measurement: a wrapper that forks a child and then exits without waiting for it leaves that
-child in no snapshot under a live parent, so no ppid walk can see it — and on Linux there is no
-fork witness to pay for it. A report over that tree can therefore come back `observed_gone`, and
-`Confirmed` can stand, while the orphan is still running. This is **inside `W` as written
-above**, so `I1` is not violated and the implementation is behaving as documented.
+It has been measured three times. `docs/qualification/2026-09-16-review.md` (in git history at
+`6494030`; 5/5 reproductions, and its section "seal.rs gate" recording that `Confirmed` *would
+be returned*), and again on 2026-09-18 while the CI death was being diagnosed,
+`docs/qualification/2026-09-18-f0-linux-residual.md` (also in git history at `6494030`). On
+2026-10-13, measured in Docker, `a_report_does_not_claim_the_harness_gone_while_a_post_root_death_orphan_lives`
+fails on Linux with `all_gone: true` and the orphan alive. That test is `ignore`d on Linux, with
+this section as its reason, and still runs and passes on macOS.
 
-It has been measured twice, independently: `docs/qualification/2026-09-16-review.md` (in git history at `6494030`; 5/5
-reproductions, and its §"seal.rs gate" recording that `Confirmed` *would be returned*), and
-again on 2026-09-18 while the CI death was being diagnosed —
-`docs/qualification/2026-09-18-f0-linux-residual.md` (also in git history at `6494030`).
+"Same-poll orphan" understates the reach of the window. `fork()` immediately followed by
+`exit()` is two syscalls apart with nothing enforcing a gap, so *every* wrapper of the shape
+"hand off to a child and leave" lands in it *every time*. This repository already has a name and
+a fixture for that shape, "the ordinary shape — a launcher whose session is a child".
 
-**The question is whether the phrase "same-poll orphan" honestly conveys the reach of that
-window.** The argument that it does not: a same-poll orphan sounds like an unlucky race inside a
-50 ms poll, but `fork()` immediately followed by `exit()` is two syscalls apart with nothing
-enforcing a gap, so *every* wrapper of the shape "hand off to a child and leave" lands in the
-window *every time*. This repository already has a name and a fixture for that shape and calls
-it "the ordinary shape — a launcher whose session is a child."
-
-**The three answers available to the owner**, none of which this document may pick for them:
-
-1. Say plainly, here, that on Linux `Confirmed` excludes fork-and-leave wrappers — widening the
-   stated limitation without changing code.
-2. Rule that the residual is acceptable as worded and close it, recording why.
-3. Treat it as a V1.1 gate: require a fork witness on Linux (pidfd or a `PTRACE_O_TRACEFORK`
-   equivalent) before Linux is ever claimed as a qualified row.
+**The fix is due before the 168-hour dry run:** make the daemon a child subreaper
+(`PR_SET_CHILD_SUBREAPER`), so that an orphan of any member is re-parented to the daemon and
+becomes visible to the ppid walk. When it lands, the Linux `ignore` comes off the test and this
+section is rewritten.
 
 **This is not a V1 blocker.** Linux is not a V1 row; V1 claims one macOS target, where the
-kqueue witness closes this. It is a correctness-of-documentation issue now and a gate later.
+kqueue witness closes this.
