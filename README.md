@@ -75,24 +75,27 @@ Status: v0.5.0 is published as source; binary releases come from
 
 ## Linux
 
-The [quickstart](#quickstart) is the same on Linux, apart from two things below. Linux is measured
-less than macOS; the lists below say what was and was not.
+The [quickstart](#quickstart) is the same on Linux, apart from two things below. The shipped
+connectors pin the Linux x86_64 and arm64 harness builds as well as the macOS ones, so install the
+exact versions the quickstart names. Linux is measured less than macOS, and no logged-in harness
+run has happened on Linux yet; the lists below say what was and was not measured.
 
 **You need** Rust 1.99 or later, a C compiler (on Debian or Ubuntu, `build-essential`), and the
 trace folder (`artifact_root` in `daemon.toml`) on ext4 or XFS. btrfs, ZFS, NFS, tmpfs, overlayfs
 and FUSE are refused before anything runs, with this message:
 `the trace folder must be on APFS (macOS) or ext4 or XFS (Linux); move artifact_root in daemon.toml`.
-Check a folder with `stat -f -c %T ~/goalcup-artifacts`: `xfs` is XFS, and `ext2/ext3` is what
-GNU `stat` prints for ext4. The other tools the tests need are in [the gate](#the-gate).
+Check the folder, or its parent before the first run, with `stat -f -c %T ~/goalcup-artifacts`
+(or `stat -f -c %T ~`): `xfs` is XFS, and `ext2/ext3` is what GNU `stat` prints for ext4. The
+other tools the tests need are in [the gate](#the-gate).
 
 **What differs from the macOS quickstart:**
 
 - **The configuration directory.** With `GOALCUP_CONFIG_DIR` unset it is `$XDG_CONFIG_HOME/goalcup`,
   else `~/.config/goalcup`; an empty `$XDG_CONFIG_HOME` counts as unset
   (`crates/goalcup-cli/src/config.rs`). The quickstart sets `GOALCUP_CONFIG_DIR` and skips this.
-- **The Claude Code login.** Linux has no Keychain, and the Claude Code connector links only the
-  macOS Keychains directory into the run. Its login is expected in its config directory, so sign in
-  once to the tracker's own:
+- **The Claude Code login.** Linux has no Keychain, and the Claude Code
+  connector links only the macOS Keychains directory into the run. Its login is expected in its
+  config directory, so sign in once to the tracker's own:
   `mkdir -p -m 700 "$GOALCUP_CONFIG_DIR/capture-homes/claude-code-cli"`, then
   `CLAUDE_CONFIG_DIR="$GOALCUP_CONFIG_DIR/capture-homes/claude-code-cli" claude`.
   **This is not yet measured:** where Claude Code 2.1.283 keeps its login on Linux has not been
@@ -112,10 +115,11 @@ prints `Not logged in`, and both exit 1); the run seals; and
 `goalcup-verify --capture-integrity` exits 0. Neither binary left a child running after it
 exited on this path.
 
-**Not measured:**
+**Not proven:**
 
-- Termination of a wrapper that forks a child and leaves. On Linux, `Confirmed` can be claimed
-  while such an orphan still runs. A child-subreaper fix is due before the 168-hour dry run
+- Termination of an orphan the process walk cannot see, such as a wrapper that forks a child and
+  leaves. Measured, and it fails: on Linux, `Confirmed` can be claimed while such an orphan still
+  runs. A child-subreaper fix is due before the 168-hour dry run
   ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
 - A successful, logged-in harness run on Linux, and the Linux x86_64 harness builds, which are
   pinned but were not run.
@@ -131,8 +135,9 @@ exited on this path.
 2. Inside Ubuntu, install Rust, the build tools and the harness as in [Linux](#linux), then build
    and run the tracker there.
 3. Keep the goal folder, the run folder and `artifact_root` under the Linux filesystem (`~/...`),
-   never under `/mnt/c`: that is a Windows drive (drvfs), which the filesystem check refuses.
-   WSL2's own root is ext4.
+   never under `/mnt/c`: that is a Windows drive (drvfs), and `artifact_root` there is refused by
+   the filesystem check. Keep the goal and run folders on the Linux filesystem too. WSL2's own root
+   is ext4.
 
 Native Windows is planned, not built.
 

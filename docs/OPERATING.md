@@ -25,10 +25,10 @@ that equals the workspace version, and installed with Homebrew
 qualification exists. Until a version is tagged, built binaries print `0.1.0`. The source
 contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
 `hermes-cli`. A release tarball carries `codex-cli` and `claude-code-cli`, as committed, under
-`share/goalcup/connectors`; `hermes-cli` stays maintainer-only (H-21). macOS is the only platform measured with a real harness. On Linux the workspace builds, the
-chain's disk reservation works on ext4 and XFS and refuses other filesystems, and the synthetic
-contract-kit captures seal and verify in Docker; no real harness has been captured there
-([README, Linux](../README.md#linux)).
+`share/goalcup/connectors`; `hermes-cli` stays maintainer-only (H-21). macOS is the only platform
+measured with a real harness. On Linux the workspace builds, the chain's disk reservation works on
+ext4 and XFS and refuses other filesystems, and the synthetic contract-kit captures seal and
+verify in Docker; no real harness has been captured there ([README, Linux](../README.md#linux)).
 
 Connector discovery checks `$GOALCUP_CONNECTORS_DIR`, `<exe>/../share/goalcup/connectors`, then
 `<exe>/../../connectors`, beside the path `goalcup` was started by and then beside its resolved
@@ -143,7 +143,8 @@ runs the `test_ci_scope.py` and `test_check_links.py` suites and `scripts/check-
 
 Every runner minute costs something on every pull request. Keep this file small:
 - Do not add branches, jobs, a build matrix, or the daemon and CLI suites. Those suites spawn
-  process trees that hang or kill a 2-core Linux runner, and Linux is measured by `scripts/linux-check.sh` in Docker, not by CI.
+  process trees that hang or kill a 2-core Linux runner. CI runs the reservation tests on x86_64
+  ext4; the daemon and CLI suites run on Linux in Docker via `scripts/linux-check.sh`, not in CI.
 - A green `ci` run proves nothing about the macOS target. `sh scripts/gate.sh fast` above (and `full` before a
   release), plus the ignored synthetic vertical suite, runs by hand before a merge.
 
