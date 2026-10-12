@@ -151,7 +151,8 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   With no run on record they answer without starting anything. If a run outlives its daemon (a
   crash, a reboot), the daemon any of these commands starts reopens the run for status and seal
   only, a run that had launched carries the lost interval as one gap, and that daemon **stays up
-  until `goalcup seal`** finishes the run rather than exiting after 30 seconds. While `daemon.toml` is the
+  until `goalcup seal`** finishes the run rather than exiting after 30 seconds. A run whose
+  `goalcup start` died before the launch, with nothing handed off, is abandoned after 15 minutes. While `daemon.toml` is the
   unedited default, `start` keeps its `connectors_dir` naming the connectors it loaded (binaries
   move); an edited file that names other connectors is refused, naming the file. A
   `daemon.toml` you wrote for an earlier build belongs at `$GOALCUP_CONFIG_DIR/daemon.toml`;
