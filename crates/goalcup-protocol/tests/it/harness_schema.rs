@@ -398,7 +398,7 @@ fn a_native_store_names_its_hint_protocol_hint() {
 
 /// The one grammar and one bound, on both ends of the same record field: the native store and
 /// the wire host refuse a leading digit and a 65-byte hint. (The V1 manifest refuses the same
-/// two, `tests/manifest_load.rs`.)
+/// two, `tests/it/manifest_load.rs`.)
 #[test]
 fn both_hint_homes_refuse_a_leading_digit_and_sixty_five_bytes() {
     for hint in ["1foo".to_string(), "a".repeat(65)] {

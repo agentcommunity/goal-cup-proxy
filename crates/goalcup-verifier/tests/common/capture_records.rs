@@ -1,4 +1,4 @@
-//! Record and trace builders for the v5 reader corpus (`tests/v5_corpus.rs`).
+//! Record and trace builders for the v5 reader corpus (`tests/it/v5_corpus.rs`).
 //!
 //! Deliberately self-contained: the corpus traces are frozen reader inputs, so their generator
 //! does not borrow the clocks, ids or shapes of any other suite, which are free to change. The

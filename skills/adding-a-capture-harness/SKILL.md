@@ -62,12 +62,12 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    `git diff --stat -- crates/*/pins`. Expect: `connector-dirs.txt` with one line added for
    `<id>`. Re-run after every edit under `connectors/<id>/`; never edit a pin by hand.
 8. **Run the schema and pin tests.**
-   `cargo test -p goalcup-protocol --test harness_conformance --test connector_pins`.
+   `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
    Expect: two `test result: ok.` lines. A failure names the field; fix it and go back to 7.
 9. **Regenerate the goldens.**
    ```
-   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test harness_contract_golden
-   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test harness_contract_golden
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test full harness_contract_golden::
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test full harness_contract_golden::
    git status --short crates/goalcup-cli/tests/fixtures/harness-golden
    ```
    Expect: both `test result: ok.`; a new `<id>.json`, and changed `enumeration.json` and

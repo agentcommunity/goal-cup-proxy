@@ -229,7 +229,7 @@ pub fn empty_cfg() -> PathBuf {
 /// It does not weaken the launch: `launch::spawn` resolves its program on **this process's**
 /// `PATH`, not on the map handed to `start_with`, so a test whose recipe runs `sh` still
 /// runs `sh`. The gate itself is tested where it belongs, against synthetic manifests, in
-/// `tests/preflight_doctor.rs`.
+/// `tests/full/preflight_doctor.rs`.
 pub fn clean_env_with_no_harness_installed() -> BTreeMap<String, String> {
     let mut env = clean_env();
     env.insert("PATH".to_string(), "/nonexistent".to_string());

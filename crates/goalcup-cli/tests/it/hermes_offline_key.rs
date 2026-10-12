@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! GOALCUP_TEST_HERMES_EXE=/path/to/hermes \
-//!   cargo test --offline -p goalcup-cli --test hermes_offline_key -- --ignored --test-threads=1
+//!   cargo test --offline -p goalcup-cli --test it hermes_offline_key:: -- --ignored --test-threads=1
 //! ```
 //!
 //! `GOALCUP_TEST_HERMES_EXE` must name the installed `hermes-agent` executable. There is no
@@ -66,7 +66,7 @@ fn hermes_exe() -> PathBuf {
         panic!(
             "GOALCUP_TEST_HERMES_EXE is not set. Point it at the installed hermes-agent \
              executable, for example: GOALCUP_TEST_HERMES_EXE=/path/to/hermes cargo test \
-             --offline -p goalcup-cli --test hermes_offline_key -- --ignored --test-threads=1"
+             --offline -p goalcup-cli --test it hermes_offline_key:: -- --ignored --test-threads=1"
         );
     };
     PathBuf::from(path)

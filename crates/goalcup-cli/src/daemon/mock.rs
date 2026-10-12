@@ -18,7 +18,7 @@
 //!
 //! It is in-process. It has no `Authorization` header to inspect and claims none, so the
 //! bearer/public split is asserted on the wire, against `HttpDaemonClient` and a real
-//! socket, in `tests/daemon_client.rs`. A mock that pretended to hold a bearer would be a
+//! socket, in `tests/it/daemon_client.rs`. A mock that pretended to hold a bearer would be a
 //! second, weaker copy of a rule that already has one home.
 //!
 //! # The surface is closed
@@ -637,7 +637,7 @@ impl MockDaemonClient {
     /// quietly undoes another is a hook whose call order changes the answer, and a test
     /// asserting a gate stays shut would pass or fail on where in the file the delay was
     /// set. The two hooks compose in the honest direction instead — delay it, watch it
-    /// arrive, withhold it, watch it time out — which is what `tests/daemon_client.rs`
+    /// arrive, withhold it, watch it time out — which is what `tests/it/daemon_client.rs`
     /// does.
     pub fn set_signal_delay(&self, d: Duration) {
         self.write(|state| state.signal_after = Some(d));

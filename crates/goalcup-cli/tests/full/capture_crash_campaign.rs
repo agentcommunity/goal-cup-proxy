@@ -28,7 +28,7 @@
 //!
 //! ```text
 //! cargo build --offline
-//! cargo test -p goalcup-cli --offline --features test-support --test capture_crash_campaign -- --ignored --test-threads=1
+//! cargo test -p goalcup-cli --offline --features test-support --test full capture_crash_campaign:: -- --ignored --test-threads=1
 //! ```
 
 // Shared with the storage campaign; each campaign uses a subset.

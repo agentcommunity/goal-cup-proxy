@@ -21,7 +21,7 @@
 //! A panic in const evaluation can only carry a literal, so the build error cannot name the
 //! bad line. [`parse_pins_text`] runs the same scanner at run time and reports the line
 //! number and the reason; the unit tests exercise every refusal through it, and
-//! `tests/connector_pins.rs` runs it over the committed file.
+//! `tests/it/connector_pins.rs` runs it over the committed file.
 //!
 //! A pin is a tamper check after the build, not a defence against a malicious merge:
 //! review is the control for that (`docs/DECISIONS.md` D43, ruling 5).

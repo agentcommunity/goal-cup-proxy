@@ -51,7 +51,7 @@
 //! It is the one secret this struct holds. It is never interpolated into an error, never
 //! printed, and [`HttpDaemonClient`]'s `Debug` redacts it — the same treatment
 //! `config::ControlFile`, `control::WorkspaceOpts` and `control::ResumeInfo` give the
-//! credentials they carry. `tests/daemon_client.rs` greps every refusal this client raises
+//! credentials they carry. `tests/it/daemon_client.rs` greps every refusal this client raises
 //! for it.
 
 #[cfg(feature = "test-support")]
@@ -135,7 +135,7 @@ pub const PROCESS_HANDOFF_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 /// into it, and a catch-up over a chain the daemon already holds, are both ordinary calls, and
 /// giving them the seal's deadline would give the retry helper a budget it could blow through.
 ///
-/// So this constant appears at exactly one call site, and `tests/daemon_client.rs` counts
+/// So this constant appears at exactly one call site, and `tests/it/daemon_client.rs` counts
 /// them.
 pub const SLOW_CALL_TIMEOUT: Duration = Duration::from_secs(300);
 

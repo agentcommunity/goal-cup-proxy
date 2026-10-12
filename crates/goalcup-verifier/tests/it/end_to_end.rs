@@ -347,7 +347,7 @@ fn codex_verdict_names_the_going_typo_and_the_readme() {
             .iter()
             .any(|f| f.code == "disjoint_tool_id_spaces")
     );
-    // No V8 finding counts the overlap of tool id spaces (`tests/checks_v6_v11.rs` asserts
+    // No V8 finding counts the overlap of tool id spaces (`tests/it/checks_v6_v11.rs` asserts
     // its absence): V8 pairs calls per turn. The measured fact — two shared `call_` ids — is
     // reported by V3 instead, so the overlap is still asserted, from where the number lives.
     let v3 = v.checks.iter().find(|c| c.id == "V3").unwrap();

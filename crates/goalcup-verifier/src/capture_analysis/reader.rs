@@ -233,7 +233,7 @@ pub fn scan_capture_trace(
 /// mode.
 ///
 /// Naming `VerifyOptions` is reserved to the verifier binary and `goalcup doctor`: a walk of
-/// `goalcup-cli/src` in `goalcup-cli/tests/preflight_doctor.rs` fails on any other file that
+/// `goalcup-cli/src` in `goalcup-cli/tests/full/preflight_doctor.rs` fails on any other file that
 /// does. This wrapper lets the launcher's key scan, which only reads a trace's records, read
 /// one with the defaults without naming the type.
 pub fn scan_capture_trace_default(

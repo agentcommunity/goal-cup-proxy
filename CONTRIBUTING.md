@@ -92,9 +92,9 @@ A common data-only harness PR contains:
   and `expect.toml` (plus only reviewed declared seeds) for this connector;
 - evidence that the current baseline harness kit passed on macOS after a workspace build (the six
   baseline cases plus the new connector case):
-  `cargo build`, then `cargo test -p goalcup-cli --test harness_contract_kit`.
+  `cargo build`, then `cargo test -p goalcup-cli --test full harness_contract_kit::`.
 - the focused schema and generated-pin checks:
-  `cargo test -p goalcup-protocol --test harness_conformance --test connector_pins`.
+  `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
 
 The harness kit test (`harness_contract_kit`) is macOS-only. On Linux it compiles to zero tests,
 so a Linux "pass" proves nothing about your connector; say so if you have no Mac, and a

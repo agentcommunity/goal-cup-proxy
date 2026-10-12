@@ -2,7 +2,7 @@
 //! tracker's own configuration directory, and the `control.json` the daemon writes.
 //!
 //! `assert_cmd` is unavailable offline, so the binary is the one cargo built for this test
-//! target, as `crates/goalcup-daemon/tests/binary_surface.rs` does it.
+//! target, as `crates/goalcup-daemon/tests/it/binary_surface.rs` does it.
 //!
 //! **Nothing in this file touches the process environment.** Most
 //! of the tests here spawn `goalcup` with `Command::output()`, which reads the environment
@@ -347,12 +347,12 @@ fn version_and_help_print_on_stdout_and_exit_zero() {
 /// daemon running" is a thing the participant fixes by starting one, and "this build never
 /// wrote the command" is not.
 ///
-/// **`--dry-run` is in the list on purpose.** It makes no call — `tests/seal_scan.rs` counts
+/// **`--dry-run` is in the list on purpose.** It makes no call — `tests/it/seal_scan.rs` counts
 /// the mock's calls and finds none. A real seal resolves the client before the entry, because
 /// its first need is a daemon; a `--dry-run` resolves neither a client nor anything else the
 /// tracker owns, and the second half of this test is that difference. Everything past it (the
 /// scan, the self-check, the trace directory and the printed verifier line) is driven against
-/// the in-process mock in `tests/seal_scan.rs`.
+/// the in-process mock in `tests/it/seal_scan.rs`.
 #[test]
 fn seal_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
     let cfg = support::empty_cfg();
@@ -419,7 +419,7 @@ fn seal_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
 /// the participant fixes by starting one, and "this build never wrote the command" is not.
 /// Everything past that first refusal
 /// — the pinned key, the render, the URL that is opened — is driven against the in-process
-/// mock in `tests/status_views.rs`, where a test can assert what was printed without a
+/// mock in `tests/it/status_views.rs`, where a test can assert what was printed without a
 /// daemon on the machine that runs it.
 #[test]
 fn the_three_participant_surfaces_are_no_longer_stubs_and_no_daemon_is_rung_one() {

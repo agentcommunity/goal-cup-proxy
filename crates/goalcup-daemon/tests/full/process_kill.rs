@@ -964,7 +964,7 @@ fn an_absent_wrapper_without_a_native_hint_is_reported_unverified() {
 }
 
 // ---------------------------------------------------------------------------------------
-// The fixtures. Inline rather than `tests/support/mod.rs`, which pulls axum, tokio and the
+// The fixtures. Inline rather than `tests/common/support/mod.rs`, which pulls axum, tokio and the
 // dev server into every binary that names it: this file spawns `sleep` and reads `ps`, and
 // a termination test that had to link a web server to do it would be the wrong test.
 // ---------------------------------------------------------------------------------------

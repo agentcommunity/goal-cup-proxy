@@ -363,7 +363,7 @@ fn daemon_check(client: Option<&dyn DaemonClient>, cfg: &Path) -> Check {
         };
     };
     // Through the retry like every other daemon call a command makes, and
-    // `tests/start_launch.rs` sweeps `src/` for one that is not. `health` is a read and the
+    // `tests/it/start_launch.rs` sweeps `src/` for one that is not. `health` is a read and the
     // daemon has no reason to answer `busy` on it; the helper costs nothing when it does not,
     // and an exemption is a rule nobody can grep for.
     match crate::retry::retry_busy(|| client.health()) {

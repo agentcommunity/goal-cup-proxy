@@ -378,7 +378,7 @@ fn route_sponsors_stays_gone() {
 
 /// The auth rule is a function, and this is the test that pins it. The daemon's middleware
 /// and the CLI's `HttpDaemonClient` both call `is_public_route`, and
-/// `goalcup-protocol/tests/control_consumer.rs` asserts the same six lines from the
+/// `goalcup-protocol/tests/it/control_consumer.rs` asserts the same six lines from the
 /// consuming side. Public means **exactly** the two routes the rule names.
 #[test]
 fn exactly_two_routes_are_public_and_everything_else_is_authed() {

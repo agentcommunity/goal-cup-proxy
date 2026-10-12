@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! cargo build --offline
-//! cargo test -p goalcup-cli --offline --features test-support --test m2_synthetic_vertical -- --ignored --test-threads=1
+//! cargo test -p goalcup-cli --offline --features test-support --test full m2_synthetic_vertical:: -- --ignored --test-threads=1
 //! ```
 
 use crate::common::m2_common;

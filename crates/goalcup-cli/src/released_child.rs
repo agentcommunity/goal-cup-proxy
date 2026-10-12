@@ -10,7 +10,7 @@
 //! a process, and it is not a second terminator.** It acts only on this process's own unreaped
 //! `Child` (whose pid cannot have been recycled) and on that child's native descendant bound by
 //! its creation identity. It never touches an entry, a seal or a trace; `goalcup_daemon::terminate`
-//! remains the only terminator of a recorded run. `tests/process_handoff.rs`
+//! remains the only terminator of a recorded run. `tests/it/process_handoff.rs`
 //! (`this_crate_never_terminates_anything`) exempts this file by name and no other new one.
 //!
 //! The CLI cannot link the daemon, so only protocol functions are used.

@@ -91,7 +91,7 @@ pub const SEALED_AT: &str = "2026-09-08T00:00:00Z";
 /// `placeholder_server_key`: anybody holding this repository can sign under it, so a
 /// `key_source` of `pinned` says only that the signature matched a key everyone has. That
 /// Flag is suppressed by `--dev`, which is what the pass assertions in
-/// `tests/compliant.rs` pass, and the committed `expected-verdict.json` records the
+/// `tests/it/compliant.rs` pass, and the committed `expected-verdict.json` records the
 /// reading without it.
 pub const SERVER_SEED: [u8; 32] = [5u8; 32];
 

@@ -36,7 +36,7 @@
 //! process variable.
 //!
 //! To regenerate after a deliberate change: `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline
-//! -p goalcup-cli --test harness_contract_golden`, then read the diff. The switch is off unless
+//! -p goalcup-cli --test full harness_contract_golden::`, then read the diff. The switch is off unless
 //! set to exactly `1`.
 
 use crate::common::m2_profile_support;

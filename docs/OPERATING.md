@@ -68,7 +68,7 @@ Prerequisites:
   smoke check (see CI below).
 - **A C compiler.** `ring` compiles C and assembly.
 - **`shasum` or `sha256sum`**, because the test suite runs `scripts/pin-manifests.sh --print`
-  (`crates/goalcup-verifier/tests/checks_v13.rs`), and **`python3`** if you change
+  (`crates/goalcup-verifier/tests/it/checks_v13.rs`), and **`python3`** if you change
   `connectors/` and regenerate the pins (`scripts/pin-manifests.sh`).
 
 `cargo test --workspace` is the whole suite, every crate at once. "Green" means the
@@ -77,7 +77,7 @@ crate, is the same runner narrowed:
 
 ```
 cargo test -p goalcup-daemon                       # one crate
-cargo test -p goalcup-daemon --test control_api    # one integration test file
+cargo test -p goalcup-daemon --test it control_api::  # one integration test module
 ```
 
 On the maintainer's machine every cargo command carries `--offline`, so none of them can
@@ -115,10 +115,10 @@ The D3 dependency check, `the_structural_bans_hold_at_the_dependency_level`, liv
 The synthetic vertical suite also runs by hand after building the workspace binaries:
 
 ```sh
-cargo test -p goalcup-cli --offline --features test-support --test m2_synthetic_vertical -- --ignored --test-threads=1
+cargo test -p goalcup-cli --offline --features test-support --test full m2_synthetic_vertical:: -- --ignored --test-threads=1
 ```
 
-`--features test-support` is written out because `tests/support/mod.rs` needs it, even though
+`--features test-support` is written out because `tests/common/support/mod.rs` needs it, even though
 the crate's own dev-list already turns it on.
 
 Nothing in the suite reaches the network. The `goalcup-devserver` tests bind their own
@@ -226,9 +226,6 @@ tracker is run on one machine — a test, a second round, a development build be
 installed one — and it is why nothing in this tree needs to move `$HOME` to do it. Set one
 without the other and the CLI looks in one directory while the daemon writes to another, and
 every command answers "no daemon is running".
-
-`crates/goalcup-daemon/tests/config_load.rs` parses that block, so the daemon's own loader
-is what says it is still a configuration this build accepts.
 
 With no `[event]` section the signed status document reports the entry's own timeline in the
 competition's fields and marks it `event_status_source: "fallback"`, so a reader can tell a
@@ -420,8 +417,8 @@ Both generators are `#[ignore]`d **and** gated on `GOALCUP_REGEN=1`, so neither
 accident:
 
 ```
-GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test adversarial -- --ignored regenerate
-GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test compliant   -- --ignored regenerate
+GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test it -- --ignored adversarial::regenerate
+GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test it -- --ignored compliant::regenerate
 ```
 
 Read the diff before committing it.

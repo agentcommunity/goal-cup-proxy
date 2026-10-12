@@ -7,7 +7,7 @@
 //! * **every row needs a DECISIONS entry**; a new CA variable, credential name, interpreter
 //!   exemption or startup-file class is a core PR, not a harness PR;
 //! * **tightening a row that a shipped connector uses migrates that connector in the same
-//!   PR**, and `tests/harness_conformance.rs` fails until it does;
+//!   PR**, and `tests/it/harness_conformance.rs` fails until it does;
 //! * the lists that name *spellings* (interpreters, startup files, env names) slow an
 //!   attacker down; they do not stop one. The control is the reviewer's re-derivation of the
 //!   executable's `sha256` and the reviewer checklist (`docs/DECISIONS.md` D43, ruling 6).
@@ -91,7 +91,7 @@ pub const CREDENTIAL_ENV: &[&str] = &["DEEPSEEK_API_KEY", "AMP_API_KEY"];
 /// The regex sources of the daemon's streaming recognizers (`redact/stream.rs`
 /// `EXTRA_SHAPES`), in order. A `[redaction].extra_patterns` regex must equal one of them
 /// exactly: the daemon's redactor refuses any other, and the protocol crate must refuse it
-/// first so a fork PR sees the failure in CI. `tests/harness_schema.rs` ties this list to the
+/// first so a fork PR sees the failure in CI. `tests/it/harness_schema.rs` ties this list to the
 /// shipped manifests, which the daemon's own test ties to `EXTRA_SHAPES`.
 pub const EXTRA_PATTERN_SOURCES: &[&str] = &[
     r#""rate_limits"\s*:\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})"#,

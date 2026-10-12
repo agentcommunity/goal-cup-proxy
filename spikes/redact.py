@@ -16,7 +16,7 @@ rule merges the same claims into the block). A block with no END line runs to th
 text. And the last rule, masked_key, is soft: after that pass, any byte of a masked-key shape (matched on the
 ORIGINAL text) that is still raw is replaced too, as its own "residual" marker. The daemon
 (crates/goalcup-daemon/src/redact.rs) reaches the same result by a different route; the shared
-rules, and the few places the two differ, are pinned by crates/goalcup-daemon/tests/redaction.rs.
+rules, and the few places the two differ, are pinned by crates/goalcup-daemon/tests/it/redaction.rs.
 
 Two offset frames in OUT.redactions.jsonl, both counted in characters, not bytes:
   - an entry from the sequential pass (no "residual" key) has start/end in the text as the

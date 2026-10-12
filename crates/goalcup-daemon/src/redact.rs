@@ -101,7 +101,7 @@ pub(crate) const BLOCK_KIND: &str = "private_key";
 ///
 /// Two deliberate deltas from the script. `generic_secret_assignment` is one kind spelled as
 /// two literals, and the seven vendor prefixes are new: shapes the script predates.
-/// `tests/redaction.rs` holds the whole comparison (every script regex against this list,
+/// `tests/it/redaction.rs` holds the whole comparison (every script regex against this list,
 /// with the differences written out) so that either side drifting fails a test.
 ///
 /// The split exists because the script's rule requires `[=:]` immediately after the key
@@ -190,7 +190,7 @@ static COMPILED: OnceLock<Vec<Pattern>> = OnceLock::new();
 /// A literal in [`SHARED`] that will not compile is skipped rather than unwrapped: this
 /// crate raises no panic in `src/`, and the signature returns a slice and not a `Result`.
 /// The gate against a silently missing rule is a test, not a runtime abort —
-/// `tests/redaction.rs` pins both the count and the exact ordered kind list, so a broken
+/// `tests/it/redaction.rs` pins both the count and the exact ordered kind list, so a broken
 /// literal fails the test step rather than shipping a hole.
 pub fn patterns() -> &'static [Pattern] {
     COMPILED.get_or_init(|| SHARED.iter().filter_map(|(k, r)| compile(k, r)).collect())

@@ -8,7 +8,7 @@
 //!
 //! Every wire type rejects unknown fields. Enums with fields are internally tagged by `kind`
 //! and every enum variant is `snake_case`, so the JSON layout is the one frozen by
-//! `crates/goalcup-protocol/tests/m2_contract.rs`.
+//! `crates/goalcup-protocol/tests/it/m2_contract.rs`.
 
 use serde::{Deserialize, Serialize};
 

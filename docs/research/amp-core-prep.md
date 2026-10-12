@@ -41,7 +41,7 @@ included, and pass.
 - **Why.** Readiness row "`AMP_URL` endpoint override": Amp reads `AMP_URL` as its server
   address, and the name passed the name rules. Only the value rule (`://`) stopped it.
 - **Files.** `capture_policy.rs`; test in
-  [harness_schema.rs](../../crates/goalcup-protocol/tests/harness_schema.rs)
+  [harness_schema.rs](../../crates/goalcup-protocol/tests/it/harness_schema.rs)
   (`a_url_named_variable_is_refused_as_an_endpoint`).
 - **Risk.** Low. The rule is broad (`*_URL`, not only `AMP_URL`). Every shipped connector, kit
   fixture and V1 `[launch.env]` was checked: none sets a `_URL` name. The rule runs last, so a
@@ -69,7 +69,7 @@ included, and pass.
   (`crates/goalcup-cli/tests/fixtures/harness-golden/*.json`);
   [CONNECTOR-SCHEMA](../CONNECTOR-SCHEMA.md). Tests:
   `amp_credential_is_admitted_only_in_credential_field` and the closed-list test in
-  `harness_schema.rs`; [amp_child_secret.rs](../../crates/goalcup-cli/tests/amp_child_secret.rs)
+  `harness_schema.rs`; [amp_child_secret.rs](../../crates/goalcup-cli/tests/it/amp_child_secret.rs)
   (child-only delivery, no echo in Debug, plan or refusal text, grammar bounds, and the key scan
   on a token with no `sk-` prefix).
 - **Risk.** Amp's real token grammar is UNKNOWN. If a real token holds a byte outside
@@ -87,9 +87,9 @@ owner on 2026-10-12.
 ## 3. Teach the generic kit a credential
 
 - **What.** A kit case may name `credential_env` in `expect.toml`. The runner in
-  [harness_contract_kit.rs](../../crates/goalcup-cli/tests/harness_contract_kit.rs) then sets
+  [harness_contract_kit.rs](../../crates/goalcup-cli/tests/full/harness_contract_kit.rs) then sets
   that variable in `goalcup start`'s own environment to an invented value (`KIT_CREDENTIAL`,
-  shared through `tests/support/mod.rs`), so the launcher's existing child-secret path hands it
+  shared through `tests/common/support/mod.rs`), so the launcher's existing child-secret path hands it
   to the stand-in. After the run it checks that the stand-in received exactly that value, that
   the launcher reported
   `key scan: clean`, and that the key scan finds no fragment in the sealed trace or the run
@@ -106,14 +106,14 @@ owner on 2026-10-12.
   key-scan forms must appear in no case id or fixture. The first invented value began with
   `kit-synt`, which every `kit-synthetic-*` id holds, so both keyed cases would have failed their
   own key scan. The value is now a random-looking token with no such overlap, and
-  [harness_kit_credential.rs](../../crates/goalcup-cli/tests/harness_kit_credential.rs), which
+  [harness_kit_credential.rs](../../crates/goalcup-cli/tests/it/harness_kit_credential.rs), which
   runs on Linux too, asserts that no key-scan form of it (first or last eight bytes, masks, the
   window rule, the SHA-256 prefix and their base64 renderings) occurs in any file or directory
   name under `tests/fixtures/harness-kit/` or in `connectors/`, and that the marker digest is
   not one either.
 - **Why.** Readiness row "Synthetic kit for a credential profile": the kit had no credential
   field and supplied no synthetic key, so a keyed connector case could not run.
-- **Files.** `harness_contract_kit.rs`, `harness_kit_credential.rs`, `tests/support/mod.rs`;
+- **Files.** `harness_contract_kit.rs`, `harness_kit_credential.rs`, `tests/common/support/mod.rs`;
   the new case under
   `crates/goalcup-cli/tests/fixtures/harness-kit/synthetic-keyed-stderr/`; the kit case
   lists in [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md), [OPERATING](../OPERATING.md),
@@ -166,13 +166,13 @@ owner on 2026-10-12.
 - **Tests.** `harness_schema.rs`:
   `a_credential_with_stdout_json_identity_is_admitted_with_a_per_run_home` (replaces the refusal
   test; a shared home is still refused). New
-  [credential_stdout_identity.rs](../../crates/goalcup-cli/tests/credential_stdout_identity.rs),
+  [credential_stdout_identity.rs](../../crates/goalcup-cli/tests/it/credential_stdout_identity.rs),
   which runs on any Unix: a Python child with the synthetic key prints an Amp-shaped init
   event; clean output is forwarded byte for byte with the identity bound, and a stdout key echo
   is a hit and withheld while the identity still binds. An init event whose `session_id` is the key, holds
   its last eight bytes, or spells the key in JSON `\u` escapes, or a clean `session_id` beside
   another field holding the key's last eight bytes, binds nothing, is a key hit, and forwards no
-  fragment. [capture_stderr_tee.rs](../../crates/goalcup-cli/tests/capture_stderr_tee.rs):
+  fragment. [capture_stderr_tee.rs](../../crates/goalcup-cli/tests/it/capture_stderr_tee.rs):
   a `token` marker that is the key or holds its last eight bytes is `Absent` and a hit.
   `daemon_client.rs`'s gate sweep names the new call. A macOS kit case,
   `synthetic-keyed-stdout-json`, drives the whole `goalcup start` path.

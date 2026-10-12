@@ -3,7 +3,7 @@
 //! `connectors/*/` folder in Rust and compares with the pins this build embedded from
 //! `pins/connector-dirs.txt`, in both directions.
 //!
-//! `goalcup-verifier/tests/checks_v13.rs` keeps the other half, the maintainer gate that the
+//! `goalcup-verifier/tests/it/checks_v13.rs` keeps the other half, the maintainer gate that the
 //! shell script and the Rust walk compute one digest.
 
 use goalcup_protocol::connector_dir::connector_dir_sha256;
