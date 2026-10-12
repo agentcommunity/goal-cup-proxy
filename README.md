@@ -39,7 +39,9 @@ goalcup-verify --capture-integrity <trace>    # copy the verify: line start prin
 
 `start` runs the agent until it exits, seals the run, and prints its `trace:` folder and the
 `verify:` line. Meanwhile, from another terminal with the same `GOALCUP_CONFIG_DIR`,
-`goalcup status` shows how it is doing and `goalcup seal` stops it early.
+`goalcup status` shows how it is doing and `goalcup seal` stops it early. Claude Code and Codex
+runs share one tracker home per harness, so a second `start` of the same harness while one is
+recording is refused; run them one at a time.
 Verify exit 0 means the record is complete and valid ([all exit codes](#run-a-capture)). What you
 agree to as a participant: [docs/RULES.md](docs/RULES.md).
 

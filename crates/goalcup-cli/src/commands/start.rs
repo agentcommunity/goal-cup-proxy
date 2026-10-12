@@ -171,6 +171,16 @@ fn interrupted_refusal() -> CliError {
     )
 }
 
+/// A Ctrl-C after the entry was registered and before the harness was released: the parked
+/// child is ended without running, and the entry is sealed with no launch.
+fn interrupted_before_launch() -> CliError {
+    CliError::Refused(
+        "`goalcup start` was interrupted before the harness started, so nothing ran; the \
+         entry is being sealed without a launch."
+            .to_string(),
+    )
+}
+
 /// The cleanup every abandon takes: ask the daemon, and remove the local record only where it
 /// agreed. `sentence` is what the participant is told when both went through. Answers
 /// whether the daemon abandoned the entry.
@@ -182,6 +192,9 @@ fn abandon_because(
     sentence: &str,
     out: &mut dyn std::io::Write,
 ) -> bool {
+    // A Ctrl-C may be what started this abandon; it has been acted on, and must not cut the
+    // abandon's own busy retries short.
+    crate::arming::close_window();
     let abandoned = retry_busy_entry(|| client.abandon(entry_id, reason));
     let confirmed = abandoned.is_ok();
     let removed = match &abandoned {
@@ -299,6 +312,10 @@ struct CapturePrep {
     /// The harness home every run of this connector shares (D39); `None` when each run makes its
     /// own inside its run directory.
     shared_home: Option<SharedCaptureHome>,
+    /// The lock that keeps a second run off that shared home, held until this run's finish
+    /// returns (the struct lives to the end of the capture) and released by the OS if this
+    /// process dies.
+    _shared_home_lock: Option<std::fs::File>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -363,6 +380,51 @@ fn file_identity(metadata: &std::fs::Metadata) -> FileIdentity {
         )]
         kind: metadata.mode() & libc::S_IFMT as u32,
     }
+}
+
+/// D39: runs on one shared harness home are serialized. Two Codex runs on one `CODEX_HOME`
+/// that both refresh the subscription token fail with `refresh_token_reused` and log the
+/// participant out of that home. A second start is refused plainly, before anything is made.
+///
+/// An exclusive `flock` on `<capture-homes>/<connector>.lock`, beside the home rather than in
+/// it, so the harness never sees it. The descriptor is close-on-exec (std's default), so the
+/// harness never inherits the lock either.
+#[cfg(unix)]
+fn lock_shared_home(config_home: &Path, connector: &str) -> Result<std::fs::File, CliError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let path = config_home
+        .parent()
+        .expect("a capture-home parent")
+        .join(format!("{connector}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(|source| CliError::Io {
+            path: path.display().to_string(),
+            source,
+        })?;
+    // SAFETY: `file` owns a live descriptor; `flock` reads nothing else.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let source = std::io::Error::last_os_error();
+        if source.kind() == std::io::ErrorKind::WouldBlock {
+            return Err(CliError::Refused(format!(
+                "a {connector} run is already recording on this machine, and runs share one \
+                 {connector} home, so they go one at a time. Wait for it to finish, or stop it \
+                 and run `goalcup seal`. Nothing was created."
+            )));
+        }
+        return Err(CliError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+    Ok(file)
 }
 
 fn shared_home_refusal(alias: &Path, why: &str) -> CliError {
@@ -497,6 +559,8 @@ impl Forked<'_> {
     /// End a run whose harness never ran or was never told about: the entry is sealed within
     /// the one budget, and the run is marked unscanned. Returns the error that ended it.
     fn unlaunched(self, error: CliError, out: &mut dyn std::io::Write) -> CliError {
+        // Whatever ended the launch, including a Ctrl-C, the seal below runs its full retries.
+        crate::arming::close_window();
         finish_unlaunched(self.client, &self.info.entry_id, self.proxied, out);
         note_unscanned(self.scanning, &self.run.dir, out);
         error
@@ -704,11 +768,13 @@ fn prepare(
             env.get("HOME").map(Path::new),
         )?;
     }
+    let mut shared_home_lock = None;
     let shared_home = if per_run {
         None
     } else {
         let config_home = cfg.join(CAPTURE_HOMES_DIR).join(&c.loaded.manifest.id);
         private_dir(config_home.parent().expect("a capture-home parent"), true)?;
+        shared_home_lock = Some(lock_shared_home(&config_home, &c.loaded.manifest.id)?);
         match std::fs::symlink_metadata(&config_home) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -739,6 +805,7 @@ fn prepare(
         matcher,
         executable,
         shared_home,
+        _shared_home_lock: shared_home_lock,
     })
 }
 
@@ -945,11 +1012,21 @@ fn register_and_release<'a>(
         gated.abort();
         return Err(forked.unlaunched(e, out));
     }
+    // The last look at the flag. A Ctrl-C during the spawn, the registration or the re-hash
+    // above reached only this process and the parked child, which rides it out; released now,
+    // the harness would run the whole goal the participant asked to stop.
+    if crate::arming::interrupted() {
+        gated.abort();
+        return Err(forked.unlaunched(interrupted_before_launch(), out));
+    }
     let mut spawned = match gated.release() {
         Ok(spawned) => spawned,
         // No harness ran, so no `Launch` is written, and the entry is sealed.
         Err(e) => return Err(forked.unlaunched(e, out)),
     };
+    // The harness owns every Ctrl-C from here (it shares the terminal), and the launch record
+    // and the seal below must not give up on their first `busy` because of one.
+    crate::arming::close_window();
     // Observed on this process's monotonic clock, the one the proxy's first producer stamps
     // its frames with under its own ID.
     let mut spawned_at = crate::proxy::metadata::capture_time();
@@ -1808,5 +1885,67 @@ fn unmake(
                 run.dir.display()
             ),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::MockDaemonClient;
+
+    /// The interrupt flag is process-global; the tests that move it take turns.
+    static FLAG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// #7: a Ctrl-C started this abandon; the daemon's ordinary `busy` must be ridden out, not
+    /// surfaced at the first try, or the entry stays held with its reservation.
+    #[test]
+    fn an_abandon_after_ctrl_c_rides_out_a_busy() {
+        let _flag = FLAG.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let daemon = MockDaemonClient::armed_ok(tmp.path(), "fake");
+        daemon.busy_once("abandon");
+        crate::arming::clear_interrupt();
+        crate::arming::interrupt_for_test();
+
+        let mut out = Vec::new();
+        let abandoned = abandon_because(&daemon, tmp.path(), "entry-1", "ctrl-c", "gone", &mut out);
+
+        crate::arming::clear_interrupt();
+        assert!(abandoned, "{}", String::from_utf8_lossy(&out));
+        assert_eq!(daemon.abandoned().len(), 1);
+    }
+
+    /// #7: once the window is closed (the harness released), a Ctrl-C meant for the harness
+    /// is not latched, so the launch record and the seal keep their retries.
+    #[test]
+    fn a_ctrl_c_after_the_release_is_not_latched() {
+        let _flag = FLAG.lock().unwrap_or_else(|e| e.into_inner());
+        crate::arming::clear_interrupt();
+        crate::arming::close_window();
+        crate::arming::interrupt_for_test();
+        let latched = crate::arming::interrupted();
+        crate::arming::clear_interrupt();
+        assert!(!latched);
+        crate::arming::interrupt_for_test();
+        let reopened = crate::arming::interrupted();
+        crate::arming::clear_interrupt();
+        assert!(reopened, "the next start's window is open again");
+    }
+
+    /// #11: two runs on one shared harness home. The second is refused plainly while the first
+    /// holds the home, and admitted once it lets go.
+    #[test]
+    fn a_second_run_on_a_shared_home_is_refused_until_the_first_ends() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("codex-cli");
+        let first = lock_shared_home(&home, "codex-cli").expect("the first run takes the home");
+
+        let refused = lock_shared_home(&home, "codex-cli").expect_err("a second run is refused");
+        let said = refused.to_string();
+        assert!(matches!(refused, CliError::Refused(_)), "{said}");
+        assert!(said.contains("already recording"), "{said}");
+
+        drop(first);
+        lock_shared_home(&home, "codex-cli").expect("free again once the first run ends");
     }
 }
