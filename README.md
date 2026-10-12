@@ -83,7 +83,8 @@ The gate runs cargo with `--offline`, which is why the one `cargo fetch --locked
   `cargo clippy --offline --workspace --all-targets -- -D warnings`, then every test under
   cargo-nextest (one process per test, in parallel) except the slow tier, then the doctests.
   It aims at under a minute warm.
-- **full** is the release check. It runs everything fast runs plus the slow tier, the scripts'
+- **full** is the release check. It runs everything fast runs plus the slow tier, the CLI's
+  `#[ignore]`d end-to-end tests (`m2_synthetic_vertical`, `capture_failure_campaign`), the scripts'
   unit tests (`python3 -m unittest discover -s scripts`) and the link check
   (`python3 scripts/check-links.py --root .`). Nothing else runs the slow tier, CI included, so
   run `full` before every tag or it rots unseen.

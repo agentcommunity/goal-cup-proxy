@@ -95,9 +95,12 @@ class GateTests(unittest.TestCase):
         result = self.run_gate("full")
         self.assertEqual(result.returncode, 0, result.stderr)
         runs = self.nextest_runs()
-        self.assertEqual(len(runs), 1, runs)
+        self.assertEqual(len(runs), 2, runs)
         self.assertNotIn("binary(full)", runs[0])
         self.assertNotIn("-E", runs[0])
+        # Review R10 I1: the `#[ignore]`d end-to-end tests, by name, and nothing else ignored.
+        self.assertIn("--run-ignored ignored-only", runs[1])
+        self.assertIn("m2_synthetic_vertical|capture_failure_campaign", runs[1])
         self.assertIn("python3 -m unittest discover -s scripts", self.calls())
         self.assertIn("python3 scripts/check-links.py --root .", self.calls())
 
@@ -129,6 +132,15 @@ class GateTests(unittest.TestCase):
         )
         self.assertIn("cargo test --offline --workspace", self.calls())
         self.assertEqual(self.nextest_runs(), [])
+
+    def test_full_falls_back_to_the_ignored_end_to_end_tests_too(self) -> None:
+        result = self.run_gate("full", STUB_NO_NEXTEST="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "cargo test --offline -p goalcup-cli --test full -- --ignored "
+            "m2_synthetic_vertical:: capture_failure_campaign::",
+            self.calls(),
+        )
 
     def test_reports_pass_line(self) -> None:
         result = self.run_gate("fast")
