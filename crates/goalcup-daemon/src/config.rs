@@ -29,7 +29,7 @@ pub struct DaemonConfig {
     /// Where `control.json` and the status-cache mirrors live. Separate from
     /// `artifact_root` because the CLI reads it, and it may not see a capture buffer.
     pub config_dir: PathBuf,
-    /// Where `create_workspace` puts a workspace when the caller does not choose one.
+    /// The default workspace parent when the caller does not choose one.
     pub workspace_parent: PathBuf,
     /// The control API's listen address. `validate()` refuses anything but loopback.
     pub control_addr: SocketAddr,

@@ -1,10 +1,9 @@
 use ed25519_dalek::SigningKey;
 use goalcup_protocol::control::{
     ArmingState, CONTROL_API_VERSION, ControlError, CycleErrors, DaemonHealth, EntrySummary,
-    EventStatus, EventStatusSource, InstalledFile, ProcessHandoffCancelRequest, ROUTE_ENTRIES,
-    ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, ROUTE_UI, ROUTE_WORKSPACES, ResumeInfo, ResumePreviewInfo,
-    ResumeRequest, STALE_AFTER_SECONDS, SignedStatus, StartSignal, StatusPayload,
-    WorkspaceFinalizationStatusV1, WorkspaceInfo, WorkspaceOpts, entry_route, is_public_route,
+    EventStatus, EventStatusSource, InstalledFile, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT,
+    ROUTE_HEALTH, STALE_AFTER_SECONDS, SignedStatus, StatusPayload, WorkspaceFinalizationStatusV1,
+    WorkspaceInfo, WorkspaceOpts, entry_route, is_public_route,
 };
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::manifest::{InstallScope, KillStrategy};
@@ -208,31 +207,6 @@ fn workspace_opts_and_info_use_the_documented_field_names() {
 }
 
 #[test]
-fn authority_bearing_control_bodies_reject_unknown_fields() {
-    for (name, body) in [
-        (
-            "resume",
-            serde_json::json!({ "expected_generation": 2, "unexpected": true }),
-        ),
-        (
-            "process cancel",
-            serde_json::json!({
-                "expected_generation": 2,
-                "request_digest": "ab",
-                "unexpected": true,
-            }),
-        ),
-    ] {
-        let accepted = match name {
-            "resume" => serde_json::from_value::<ResumeRequest>(body).is_ok(),
-            "process cancel" => serde_json::from_value::<ProcessHandoffCancelRequest>(body).is_ok(),
-            _ => unreachable!("the table only names typed request bodies"),
-        };
-        assert!(!accepted, "{name} accepts no undeclared authority field");
-    }
-}
-
-#[test]
 fn signed_status_verifies_and_rejects_a_rewritten_deadline() {
     let key = SigningKey::from_bytes(&[9u8; 32]);
     let pinned = hex::encode(key.verifying_key().to_bytes());
@@ -291,7 +265,7 @@ fn signed_status_reports_staleness_against_a_supplied_now() {
 }
 
 #[test]
-fn one_staleness_threshold_and_the_three_unauthenticated_routes() {
+fn one_staleness_threshold_and_the_one_unauthenticated_route() {
     // `goalcup status` reads this one number.
     assert_eq!(STALE_AFTER_SECONDS, 120);
     let key = SigningKey::from_bytes(&[9u8; 32]);
@@ -299,10 +273,8 @@ fn one_staleness_threshold_and_the_three_unauthenticated_routes() {
     assert!(signed.stale_seconds("2026-09-04T09:02:30Z").unwrap() > STALE_AFTER_SECONDS);
     assert!(signed.stale_seconds("2026-09-04T09:01:00Z").unwrap() < STALE_AFTER_SECONDS);
 
-    // The loopback-only, read-only routes the bundled page uses. `entry_route` builds
-    // the per-entry status path the page polls; `/v0/entries/current` is NOT among them
-    // and the page must never fetch it.
-    assert_eq!(ROUTE_UI, "/v0/ui");
+    // The loopback-only, read-only route. `entry_route` builds the per-entry status path;
+    // `/v0/entries/current` is NOT public.
     assert_eq!(
         entry_route("entry-0001", "status"),
         "/v0/entries/entry-0001/status"
@@ -311,7 +283,7 @@ fn one_staleness_threshold_and_the_three_unauthenticated_routes() {
     assert_ne!(
         ROUTE_ENTRIES_CURRENT,
         entry_route("entry-0001", "status"),
-        "the page polls the per-entry route, which is unauthenticated; `current` is not"
+        "the per-entry status route is unauthenticated; `current` is not"
     );
 
     // The signed status carries nothing secret, which is what makes an unauthenticated
@@ -378,13 +350,15 @@ fn route_sponsors_stays_gone() {
 
 /// The auth rule is a function, and this is the test that pins it. The daemon's middleware
 /// and the CLI's `HttpDaemonClient` both call `is_public_route`, and
-/// `goalcup-protocol/tests/it/control_consumer.rs` asserts the same six lines from the
-/// consuming side. Public means **exactly** the two routes the rule names.
+/// `goalcup-protocol/tests/it/control_consumer.rs` asserts the same rule from the
+/// consuming side. Public means **exactly** the one route the rule names.
 #[test]
-fn exactly_two_routes_are_public_and_everything_else_is_authed() {
-    assert!(is_public_route(ROUTE_UI));
-    // `ROUTE_SPONSORS` does not exist: the sponsor list is markup inside the bundled page.
-    // Nothing serves `/v0/assets/*` either, so no prefix is public for it.
+fn exactly_one_route_is_public_and_everything_else_is_authed() {
+    assert!(
+        !is_public_route("/v0/ui"),
+        "the removed V1 page is not public"
+    );
+    // Nothing serves `/v0/assets/*`, so no prefix is public for it.
     assert!(
         !is_public_route("/v0/assets/sponsors.json"),
         "a prefix with no route behind it is not public"
@@ -396,25 +370,13 @@ fn exactly_two_routes_are_public_and_everything_else_is_authed() {
         "a query string is not part of the routing decision"
     );
 
-    for authed in [
-        ROUTE_WORKSPACES,
-        ROUTE_ENTRIES,
-        ROUTE_ENTRIES_CURRENT,
-        ROUTE_HEALTH,
-    ] {
+    for authed in [ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH] {
         assert!(
             !is_public_route(authed),
             "{authed} must carry the bearer token"
         );
     }
-    for verb in [
-        "arm",
-        "start-signal",
-        "resume",
-        "seal",
-        "process",
-        "abandon",
-    ] {
+    for verb in ["seal", "process", "abandon"] {
         let route = entry_route("e1", verb);
         assert!(
             !is_public_route(&route),
@@ -521,18 +483,6 @@ fn from_code_round_trips_every_wire_code_except_unreachable() {
 
 #[test]
 fn the_remaining_types_round_trip() {
-    let sig = StartSignal {
-        entry_id: "entry-0001".into(),
-        signal: "SessionStart".into(),
-        session_id: Some("thread-1".into()),
-        observed_at: "2026-09-04T09:00:05Z".into(),
-        source: "leg2".into(),
-    };
-    assert_eq!(
-        sig,
-        serde_json::from_str(&serde_json::to_string(&sig).unwrap()).unwrap()
-    );
-
     let sum = EntrySummary {
         entry_id: "entry-0001".into(),
         connector_id: "opencode".into(),
@@ -548,68 +498,34 @@ fn the_remaining_types_round_trip() {
         serde_json::from_str(&serde_json::to_string(&sum).unwrap()).unwrap()
     );
 
-    let r = ResumeInfo {
-        entry_id: "entry-0001".into(),
-        process_generation: 2,
-        session_id: "thread-1".into(),
-        caught_up_events: 12,
-        workspace: "/tmp/ws".into(),
-        artifact_root: "/tmp/root".into(),
-        harness_home: "/tmp/home".into(),
-        status_line_path: "/tmp/root/status-line.txt".into(),
-        server_port: None,
-        last_process: Some(ProcessHandle {
-            pid: 4242,
-            pgid: None,
-            native_pid: Some(4243),
-            native_binary: Some("native-harness".to_string()),
-            native_process_start: Some("native-fixture-start".to_string()),
-            process_start: Some("fixture-start".to_string()),
-            strategy: KillStrategy::NativePid,
-            grace_seconds: 5,
-            launched_at: "2026-09-04T09:00:00Z".into(),
-            program: "/opt/homebrew/bin/claude".into(),
-            argv: vec![
-                "--settings".into(),
-                "/runs/entry-0001/settings-launch.json".into(),
-            ],
-            env_keys: vec!["CLAUDE_CONFIG_DIR".into(), "OTEL_LOG_RAW_API_BODIES".into()],
-            home_seed: None,
-        }),
+    let handle = ProcessHandle {
+        pid: 4242,
+        pgid: None,
+        native_pid: Some(4243),
+        native_binary: Some("native-harness".to_string()),
+        native_process_start: Some("native-fixture-start".to_string()),
+        process_start: Some("fixture-start".to_string()),
+        strategy: KillStrategy::NativePid,
+        grace_seconds: 5,
+        launched_at: "2026-09-04T09:00:00Z".into(),
+        program: "/opt/homebrew/bin/claude".into(),
+        argv: vec![
+            "--settings".into(),
+            "/runs/entry-0001/settings-launch.json".into(),
+        ],
+        env_keys: vec!["CLAUDE_CONFIG_DIR".into(), "OTEL_LOG_RAW_API_BODIES".into()],
+        home_seed: None,
     };
     assert_eq!(
-        r,
-        serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap()
-    );
-
-    let preview = ResumePreviewInfo {
-        entry_id: r.entry_id.clone(),
-        process_generation: r.process_generation,
-        process_handoff_phase: "registered".to_string(),
-        session_id: r.session_id.clone(),
-        workspace: r.workspace.clone(),
-        artifact_root: r.artifact_root.clone(),
-        harness_home: r.harness_home.clone(),
-        status_line_path: r.status_line_path.clone(),
-        server_port: r.server_port,
-    };
-    assert_eq!(
-        preview,
-        serde_json::from_str(&serde_json::to_string(&preview).unwrap()).unwrap()
-    );
-    let preview_json: serde_json::Value = serde_json::to_value(&preview).unwrap();
-    assert_eq!(
-        preview_json.as_object().unwrap().len(),
-        9,
-        "the read-only preview carries the seven launch pins plus authoritative handoff diagnostics"
+        handle,
+        serde_json::from_str(&serde_json::to_string(&handle).unwrap()).unwrap()
     );
 
     // Twelve serialized fields, including every process identity the daemon checks, are
     // pinned by name:
     // they cross the wire through `register_process` and are stored in the registry, so
     // a rename here silently breaks the launch hand-off.
-    let handle_json: serde_json::Value =
-        serde_json::to_value(r.last_process.as_ref().unwrap()).unwrap();
+    let handle_json: serde_json::Value = serde_json::to_value(&handle).unwrap();
     for key in [
         "pid",
         "pgid",
@@ -691,14 +607,13 @@ fn capture_workspace_requires_one_canonical_connector_directory_digest() {
 #[test]
 fn a_dot_segment_never_reaches_a_public_route() {
     use goalcup_protocol::control::is_public_route;
-    assert!(is_public_route("/v0/ui"));
     assert!(is_public_route("/v0/entries/e1/status"));
 
     for path in [
         "/v0/entries/../status",
         "/v0/entries/./../../v0/entries",
         "/v0/entries/../entries/e1/status",
-        "/v0/ui/../health",
+        "/v0/entries/e1/status/../../health",
         // The same traversal in the alphabet a URL decoder speaks. A decoder sits between
         // this function and the filesystem, so the encoded spelling must be refused too.
         "/v0/entries/%2e%2e/status",

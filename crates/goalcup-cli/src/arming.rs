@@ -5,18 +5,15 @@
 //! to wait for: the launch plus that first record is the start, and a capture run reports
 //! [`GateOutcome::NotRequired`]. The V1 gate reads (`wait_foreground` and `watch_beside`),
 //! which read a settled refusal (`control::ArmingState::Refused`) off the signed status,
-//! were removed by D48.
-//!
-//! The start-signal long poll (`DaemonClient::wait_start_signal`) is part of the daemon's
-//! wire contract; this CLI does not make it.
+//! were removed by D48, and the start-signal long poll with them.
 //!
 //! # The Ctrl-C handler is here too
 //!
 //! [`watch_for_interrupt`] and [`interrupted`] live beside the gate because the V1 gate was
 //! where a participant spent the moments a Ctrl-C was most likely to land in. The flag they
 //! carry is read by the whole of `goalcup start`'s abandon window and not only by a gate:
-//! a run interrupted between `create_workspace` and `register_process` has to leave nothing
-//! behind either way.
+//! a run interrupted between `create_capture_workspace` and `register_process` has to leave
+//! nothing behind either way.
 //!
 //! **The window closes at `register_process`, and so does every read of the flag.** Past
 //! that the harness owns the terminal and owns the Ctrl-C typed into it: a TUI child shares
@@ -51,9 +48,9 @@ static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 
 /// Whether this process has been asked to stop since [`watch_for_interrupt`] was called.
 ///
-/// The gate reads it, and so does every step of `goalcup start` between `create_workspace`
-/// and `register_process` — the window in which a failure leaves no entry behind. A Ctrl-C
-/// inside that window has to unmake the entry, because the alternative is a workspace the
+/// The gate reads it, and so does every step of `goalcup start` between
+/// `create_capture_workspace` and `register_process` — the window in which a failure leaves no
+/// entry behind. A Ctrl-C inside that window has to unmake the entry, because the alternative is a workspace the
 /// daemon is watching for a run nobody is doing.
 pub fn interrupted() -> bool {
     INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)

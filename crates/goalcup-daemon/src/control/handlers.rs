@@ -26,34 +26,6 @@ pub(super) async fn no_such_route() -> Response {
         .into_response()
 }
 
-/// A removed V1 route (D48): the route table keeps its shape, and the answer says what is
-/// missing instead of a bare 404.
-///
-/// It sits behind the bearer and version gates like every other route, so it answers only a
-/// client that was allowed to ask. (`ROUTE_UI` is public, so its stub answers without a token.)
-/// `not_found` and not `unsupported`: `unsupported` already means "the control API version
-/// differs" to every client.
-pub(super) async fn v1_route_not_built() -> Response {
-    ControlErrorResponse::new(ControlError::NotFound(
-        "this route belonged to the V1 transcript path, which this daemon no longer carries \
-         (D48)"
-            .to_string(),
-    ))
-    .into_response()
-}
-
-/// The resume and resume-preview routes: a capture entry is refused ("a capture entry cannot
-/// be resumed"), and any other id names the removed V1 path (D48).
-pub(super) async fn resume_refused(
-    State(state): State<ControlState>,
-    Path(id): Path<String>,
-) -> Response {
-    match refuse_capture_resume(&state, &id) {
-        Err(e) => ControlErrorResponse::from(e).into_response(),
-        Ok(()) => v1_route_not_built().await,
-    }
-}
-
 /// A route that exists, under a method it does not answer.
 ///
 /// **`405` is one of the two statuses this module does not take from the code**, and the
@@ -360,17 +332,6 @@ pub(super) async fn record_capture_launch(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => ControlErrorResponse::from(e).into_response(),
     }
-}
-
-/// A v5 capture entry cannot resume in this release: it is sealed instead.
-fn refuse_capture_resume(state: &ControlState, id: &str) -> Result<(), DaemonError> {
-    if is_capture_row(state, id)? {
-        return Err(DaemonError::Refused(format!(
-            "entry {id} is a v5 capture entry, and a capture entry cannot be resumed: seal it \
-             instead"
-        )));
-    }
-    Ok(())
 }
 
 /// Whether `id`'s registry row is a v5 capture entry's.

@@ -36,11 +36,8 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
 - Delete daemon `server_public_key` / `upload_url` and `placeholder_key_notice`: since D48 the key's
   only consumer is a startup notice about receipts that no longer exist. Its test,
   `tests/it/placeholder_notice.rs`, goes with it.
-- Delete the CLI's V1 daemon-client routes, now untested and unreachable from
-  `goalcup start|seal|status|entries|doctor`: `HttpDaemonClient::{create_workspace, arm,
-  wait_start_signal, resume, resume_preview, current_entry}`, `daemon::long_poll_read_timeout`,
-  `MockDaemonClient::{set_signal_delay, withhold_signal}`, with the V1 methods of
-  `goalcup_protocol::control::DaemonClient`.
+- Delete `DaemonClient::current_entry` and the daemon's `GET /v0/entries/current`: no `goalcup`
+  command calls it.
 - Decide: retire the legacy `trace.toml` verify path (seal's legacy branch prints
   `goalcup-verify <dir>`); about twelve verifier suites (`checks_*`, `parser_*`, `compliant`,
   `adversarial`, `end_to_end`, ...) then go with it.

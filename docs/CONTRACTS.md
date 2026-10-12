@@ -832,7 +832,8 @@ carry their own amendments and point here for shared text.
 > chains can resume only explicitly, closing previous open streams with unknown loss and recording
 > assistance" and C5's "Manual resume selects the stored entry format". This release a v5 entry
 > cannot resume: `resume` and `resume-preview` on it are refused with a plain sentence, and a
-> complete valid unsealed chain can be sealed. C2's "a human resume or repair still is Assistance"
+> complete valid unsealed chain can be sealed. (2026-10-12: both routes were deleted; there is no
+> resume path to refuse.) C2's "a human resume or repair still is Assistance"
 > stands for when resume is built. Torn chains stay preserved and non-resumable.
 
 > **Amendment 2026-09-29 (decoder note for T22, human marker).** Supersedes "The tracker's
@@ -1364,10 +1365,10 @@ What a request to the control listener must carry, and which routes need no bear
 function is `goalcup_protocol::control::is_public_route`; the daemon and the CLI both call it, so
 this section is a reading of it and the function wins.
 
-- **Public routes: two.** `GET /v0/ui` (the removed V1 status page; it answers with the stub
-  that names D48) and `GET /v0/entries/{id}/status` (the signed status document, for an
-  id the caller already holds). Everything else needs `Authorization: Bearer <token from
-  control.json>`. `/v0/entries/current` and `/v0/entries` are not public: enumeration is not
+- **Public routes: one.** `GET /v0/entries/{id}/status` (the signed status document, for an
+  id the caller already holds). `GET /v0/ui`, the removed V1 status page, was the second until
+  its stub was deleted on 2026-10-12; it now needs the bearer like any unknown path.
+  Everything else needs `Authorization: Bearer <token from control.json>`. `/v0/entries/current` and `/v0/entries` are not public: enumeration is not
   accepted.
 - **`/v0/assets/*` is not public.** It was the third public prefix until v0.5, and nothing ever
   served it. A request under it is an unauthenticated `401` like any other protected path.

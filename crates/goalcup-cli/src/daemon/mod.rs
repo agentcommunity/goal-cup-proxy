@@ -50,7 +50,7 @@
 //!
 //! It is the one secret this struct holds. It is never interpolated into an error, never
 //! printed, and [`HttpDaemonClient`]'s `Debug` redacts it — the same treatment
-//! `config::ControlFile`, `control::WorkspaceOpts` and `control::ResumeInfo` give the
+//! `config::ControlFile` and `control::WorkspaceOpts` give the
 //! credentials they carry. `tests/it/daemon_client.rs` greps every refusal this client raises
 //! for it.
 
@@ -66,13 +66,10 @@ use goalcup_protocol::capture::StreamKey;
 use goalcup_protocol::control::{
     CONTROL_API_VERSION, CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest,
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
-    ControlError, DaemonClient, DaemonHealth, EntrySummary, ErrorBody, ProcessHandoffCancelInfo,
-    ProcessHandoffCancelRequest, ProcessRegistrationError, ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES,
-    ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, ROUTE_WORKSPACES, ResumeInfo, ResumePreviewInfo,
-    ResumeRequest, SUFFIX_ABANDON, SUFFIX_ARM, SUFFIX_CAPTURE_GOAL, SUFFIX_CAPTURE_LAUNCH,
-    SUFFIX_PROCESS, SUFFIX_PROCESS_CANCEL, SUFFIX_RESUME, SUFFIX_RESUME_PREVIEW, SUFFIX_SEAL,
-    SUFFIX_STATUS, SealResponse, SignedStatus, StartSignal, WorkspaceInfo, WorkspaceOpts,
-    entry_route, is_public_route, start_signal_route,
+    ControlError, DaemonClient, DaemonHealth, EntrySummary, ErrorBody, ProcessRegistrationError,
+    ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, SUFFIX_ABANDON,
+    SUFFIX_CAPTURE_GOAL, SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS,
+    SealResponse, SignedStatus, entry_route, is_public_route,
 };
 use goalcup_protocol::process::ProcessRegistration;
 use std::path::Path;
@@ -104,8 +101,8 @@ pub fn capture_seal_read_timeout(remaining: Duration, termination_allowance: Dur
         .saturating_add(CONNECT_TIMEOUT)
 }
 
-/// The deadline on an ordinary call — a directory read, an arm, a health check, a
-/// workspace, a resume.
+/// The deadline on an ordinary call — a directory read, a health check, an abandon, a
+/// capture workspace.
 ///
 /// Public because it is also the unit [`crate::retry::BUSY_BUDGET`] is written in: the
 /// whole of a retried call is allowed twice this and no more, and the two numbers moving
@@ -130,20 +127,13 @@ pub const PROCESS_HANDOFF_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 /// after an ambiguous timeout, unreachable transport, or malformed response: the daemon may
 /// have completed that seal. A confirmed pre-operation `busy` refusal is different:
 /// [`crate::retry::retry_busy_seal`] retries only those short refusals within its 301-second
-/// reservation, always leaving room for one full admitted seal. `create_workspace` and
-/// `resume` do not carry this timeout: a directory tree with a connector's files rendered
-/// into it, and a catch-up over a chain the daemon already holds, are both ordinary calls, and
-/// giving them the seal's deadline would give the retry helper a budget it could blow through.
+/// reservation, always leaving room for one full admitted seal. No other call carries this
+/// timeout: giving an ordinary call the seal's deadline would give the retry helper a budget
+/// it could blow through.
 ///
 /// So this constant appears at exactly one call site, and `tests/it/daemon_client.rs` counts
 /// them.
 pub const SLOW_CALL_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// What [`HttpDaemonClient::wait_start_signal`] allows the daemon on top of the long-poll
-/// deadline it asked for. The daemon returns at its own deadline; this is the slack that
-/// keeps the transport from timing out first and reporting a long poll that worked as a
-/// daemon that did not answer.
-const LONG_POLL_SLACK: Duration = Duration::from_secs(10);
 
 /// The control API client. One base URL, one bearer, one agent.
 pub struct HttpDaemonClient {
@@ -552,16 +542,6 @@ fn read_bounded(url: &str, response: ureq::Response) -> Result<String, ControlEr
     Ok(text)
 }
 
-/// The read deadline for a long poll of `timeout`.
-///
-/// The caller's own poll interval plus [`LONG_POLL_SLACK`], and **nothing else**: a daemon
-/// that accepted the connection and then said nothing must not hold the caller for half a
-/// minute on a call it asked to give up after fifty milliseconds. The bound that matters is
-/// still there — this is a finite deadline the caller chose the size of.
-pub fn long_poll_read_timeout(timeout: Duration) -> Duration {
-    timeout.saturating_add(LONG_POLL_SLACK)
-}
-
 /// Whether `base` names a loopback address on this machine, written as a literal.
 ///
 /// The scheme must be `http://` (this API is loopback cleartext and this client speaks
@@ -615,46 +595,8 @@ fn document<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, Control
 }
 
 impl DaemonClient for HttpDaemonClient {
-    /// **The body is a bare `WorkspaceOpts`.**
-    ///
-    /// `harness` is dead on the wire and this signature keeps it only because the trait
-    /// does: the daemon takes the connector from `opts.connector_id` and from nothing else
-    /// (`goalcup-daemon/src/control/handlers.rs`), and a client that wrapped the two as
-    /// `{harness, opts}` would get `malformed` from a daemon that was never going to read
-    /// the wrapper.
-    fn create_workspace(
-        &self,
-        _harness: &str,
-        opts: &WorkspaceOpts,
-    ) -> Result<WorkspaceInfo, ControlError> {
-        let body = document(opts)?;
-        let answer = self.post(ROUTE_WORKSPACES, Some(&body), CALL_TIMEOUT)?;
-        parsed(ROUTE_WORKSPACES, answer)
-    }
-
-    fn arm(&self, entry_id: &str) -> Result<(), ControlError> {
-        self.post(&entry_route(entry_id, SUFFIX_ARM), None, CALL_TIMEOUT)?;
-        Ok(())
-    }
-
-    /// The long-poll. `start_signal_route` puts the deadline on the wire as
-    /// `timeout_ms=<ms>`, and the transport is given [`long_poll_read_timeout`] of it — that
-    /// deadline plus [`LONG_POLL_SLACK`] — so the daemon's own answer always arrives before
-    /// this client stops listening for it, and a short poll stays a short wait.
-    fn wait_start_signal(
-        &self,
-        entry_id: &str,
-        timeout: Duration,
-    ) -> Result<StartSignal, ControlError> {
-        let path = start_signal_route(entry_id, timeout);
-        let response = self
-            .call("GET", &path, None, long_poll_read_timeout(timeout))
-            .map_err(CallError::into_error)?;
-        parsed(&path, response.value)
-    }
-
     /// The one public route this client calls: no `Authorization` header goes with it, and
-    /// [`SignedStatus::verify_with`] against the run key from `create_workspace` is what
+    /// [`SignedStatus::verify_with`] against the run key the CLI pinned at creation is what
     /// makes that safe.
     fn status(&self, entry_id: &str) -> Result<SignedStatus, ControlError> {
         let path = entry_route(entry_id, SUFFIX_STATUS);
@@ -665,19 +607,6 @@ impl DaemonClient for HttpDaemonClient {
     fn entries(&self) -> Result<Vec<EntrySummary>, ControlError> {
         let answer = self.get(ROUTE_ENTRIES)?;
         parsed(ROUTE_ENTRIES, answer)
-    }
-
-    fn resume(&self, entry_id: &str, request: &ResumeRequest) -> Result<ResumeInfo, ControlError> {
-        let path = entry_route(entry_id, SUFFIX_RESUME);
-        let body = document(request)?;
-        let answer = self.post(&path, Some(&body), CALL_TIMEOUT)?;
-        parsed(&path, answer)
-    }
-
-    fn resume_preview(&self, entry_id: &str) -> Result<ResumePreviewInfo, ControlError> {
-        let path = entry_route(entry_id, SUFFIX_RESUME_PREVIEW);
-        let answer = self.get(&path)?;
-        parsed(&path, answer)
     }
 
     /// The one slow call: it finishes the entry and terminates a process tree, so it
@@ -710,17 +639,6 @@ impl DaemonClient for HttpDaemonClient {
         request: &ProcessRegistration,
     ) -> Result<(), ProcessRegistrationError> {
         HttpDaemonClient::register_process_with_admission(self, entry_id, request)
-    }
-
-    fn cancel_process_handoff(
-        &self,
-        entry_id: &str,
-        request: &ProcessHandoffCancelRequest,
-    ) -> Result<ProcessHandoffCancelInfo, ControlError> {
-        let path = entry_route(entry_id, SUFFIX_PROCESS_CANCEL);
-        let body = document(request)?;
-        let answer = self.post(&path, Some(&body), PROCESS_HANDOFF_CALL_TIMEOUT)?;
-        parsed(&path, answer)
     }
 
     fn health(&self) -> Result<DaemonHealth, ControlError> {

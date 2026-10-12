@@ -6,9 +6,9 @@
 //! Transport in V4 is HTTP-only at `http://127.0.0.1:<port>`, with the loopback port read
 //! from `<config_dir>/control.json`. Every response carries `Content-Length`; there is no
 //! chunked encoding and no keep-alive requirement, so a small client is enough.
-//! Every request carries `Authorization: Bearer <control_token>` **except the two public
-//! routes `is_public_route` names** — `GET /v0/ui` and `GET /v0/entries/{id}/status`, which
-//! are unauthenticated, loopback-only and read-only.
+//! Every request carries `Authorization: Bearer <control_token>` **except the one public
+//! route `is_public_route` names** — `GET /v0/entries/{id}/status`, which is
+//! unauthenticated, loopback-only and read-only.
 //! Write the middleware from `is_public_route`, never from this sentence.
 //!
 //! Every request, public or not, carries exactly one `Host` that names the listener itself:
@@ -20,7 +20,6 @@
 use crate::ProtocolError;
 use crate::events::HealthState;
 use crate::manifest::InstallScope;
-use crate::process::ProcessHandle;
 use crate::provenance::{PreCutoffDrainOutcomeV1, TerminationOutcomeV1};
 use crate::seal::SealManifest;
 use crate::submission::SubmissionOutcomeV1;
@@ -46,11 +45,9 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// This is only the local control boundary; it does not change `M2_PROTOCOL_VERSION`.
 pub const CONTROL_API_VERSION: u32 = 5;
 
-pub const ROUTE_WORKSPACES: &str = "/v0/workspaces";
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
 pub const ROUTE_ENTRIES_CURRENT: &str = "/v0/entries/current";
 pub const ROUTE_HEALTH: &str = "/v0/health";
-pub const ROUTE_UI: &str = "/v0/ui";
 /// `POST` a [`CaptureWorkspaceRequest`]: create a protocol-v5 local capture entry.
 pub const ROUTE_CAPTURE_WORKSPACES: &str = "/v0/capture-workspaces";
 
@@ -67,81 +64,36 @@ pub const STALE_AFTER_SECONDS: u64 = 120;
 /// string spelled in two crates is a route string that drifts. The daemon's router
 /// re-exports these names rather than defining its own: one definition site, or the
 /// drift is back with a `pub use` in front of it.
-pub const SUFFIX_ARM: &str = "arm";
-
-/// See [`SUFFIX_ARM`].
-pub const SUFFIX_START_SIGNAL: &str = "start-signal";
-
-/// See [`SUFFIX_ARM`]. The one suffix that is also a PUBLIC route.
+///
+/// The one suffix that is also a PUBLIC route.
 pub const SUFFIX_STATUS: &str = "status";
 
-/// See [`SUFFIX_ARM`].
+/// See [`SUFFIX_STATUS`].
 pub const SUFFIX_PROCESS: &str = "process";
 
-/// See [`SUFFIX_ARM`].  Returns an issued resume permit before a replacement child is
-/// accepted; it is deliberately separate from `abandon`, which may only delete unstarted
-/// entries.
-pub const SUFFIX_PROCESS_CANCEL: &str = "process/cancel";
-
-/// See [`SUFFIX_ARM`].
+/// See [`SUFFIX_STATUS`].
 pub const SUFFIX_ABANDON: &str = "abandon";
 
-/// See [`SUFFIX_ARM`].
-pub const SUFFIX_RESUME: &str = "resume";
-
-/// See [`SUFFIX_ARM`]. The read-only launch-pin answer the V1 `resume --print-launch` read.
-pub const SUFFIX_RESUME_PREVIEW: &str = "resume-preview";
-
-/// See [`SUFFIX_ARM`].
+/// See [`SUFFIX_STATUS`].
 pub const SUFFIX_SEAL: &str = "seal";
 
-/// See [`SUFFIX_ARM`]. A v5 entry's one-shot goal ([`CaptureGoalRequest`]).
+/// See [`SUFFIX_STATUS`]. A v5 entry's one-shot goal ([`CaptureGoalRequest`]).
 pub const SUFFIX_CAPTURE_GOAL: &str = "capture/goal";
 
-/// See [`SUFFIX_ARM`]. A v5 entry's launch, recorded after spawn ([`CaptureLaunchRequest`]).
+/// See [`SUFFIX_STATUS`]. A v5 entry's launch, recorded after spawn ([`CaptureLaunchRequest`]).
 pub const SUFFIX_CAPTURE_LAUNCH: &str = "capture/launch";
-
-/// The long-poll deadline `wait_start_signal` puts on the wire.
-pub const QUERY_TIMEOUT_MS: &str = "timeout_ms";
-
-/// The most the daemon will hold one start-signal long poll open for, whatever
-/// [`QUERY_TIMEOUT_MS`] asks for.
-///
-/// **A contract and not a daemon detail.** The daemon clamps every request to it, so a CLI
-/// asking for a connector's whole arming window (300 s for Codex) would get a `408` at sixty
-/// seconds and read it as the window closing. A CLI cannot size its polls against a number
-/// it cannot see, so the number lives here, in the crate both halves share, and the daemon
-/// imports it.
-///
-/// Sixty seconds is well inside every connector's `arming.timeout_seconds` (Claude 120,
-/// Codex 300), which is what makes a loop of these meet the gate's own answer rather than
-/// this bound.
-pub const MAX_START_SIGNAL_WAIT_MS: u64 = 60_000;
 
 /// `/v0/entries/{id}/{suffix}`.
 pub fn entry_route(entry_id: &str, suffix: &str) -> String {
     format!("{ROUTE_ENTRIES}/{entry_id}/{suffix}")
 }
 
-/// `/v0/entries/{id}/start-signal?timeout_ms=<ms>`, built once so the client and the
-/// server agree on the parameter's name, its unit and its rounding.
-///
-/// Saturates at `u64::MAX` milliseconds rather than wrapping, because a wrapped deadline
-/// is a long-poll that returns instantly and reads as "the signal never came" — the one
-/// failure a participant cannot tell apart from a harness that never armed.
-pub fn start_signal_route(entry_id: &str, timeout: Duration) -> String {
-    let ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
-    format!(
-        "{}?{QUERY_TIMEOUT_MS}={ms}",
-        entry_route(entry_id, SUFFIX_START_SIGNAL)
-    )
-}
-
 /// The authentication ruling above, as one function.
 ///
-/// `true` for exactly the two routes the ruling names as unauthenticated, loopback-only
-/// and read-only, and `false` for everything else. (`/v0/assets/*` was a third until nothing
-/// served it: a prefix with no route behind it is public surface for no reader.) The daemon's auth middleware skips the
+/// `true` for exactly the one route the ruling names as unauthenticated, loopback-only
+/// and read-only, and `false` for everything else. (`/v0/assets/*` and the V1 page `/v0/ui`
+/// were public too until nothing served them: a route with nothing behind it is public
+/// surface for no reader.) The daemon's auth middleware skips the
 /// token on a `true`; the CLI's `HttpDaemonClient` omits the `Authorization` header on a
 /// `true`. **Both call this function**, so the server and the client cannot drift into
 /// disagreeing about which routes need a token.
@@ -149,9 +101,9 @@ pub fn start_signal_route(entry_id: &str, timeout: Duration) -> String {
 /// `/v0/entries/current` is deliberately **not** public: reading one entry's signed status
 /// when you already know its id is accepted, enumeration is not.
 ///
-/// A path carrying a `.` or `..` segment is never public. `/v0/ui/../entries` starts with a
-/// public route and resolves, at every normalising client and proxy between here and the
-/// socket, to an authed one — so matching on the unresolved text would hand the authed
+/// A path carrying a `.` or `..` segment is never public. `/v0/entries/e1/status/../../seal`
+/// carries the public route's text and resolves, at every normalising client and proxy
+/// between here and the socket, to an authed one — so matching on the unresolved text would hand the authed
 /// surface a free pass. (The rule was written for the `/v0/assets/` prefix, whose
 /// `/v0/assets/../entries/e1/seal` was the sharpest case; the prefix is gone and the rule
 /// stays.) The rule is stated as a refusal
@@ -178,9 +130,6 @@ pub fn is_public_route(path: &str) -> bool {
                 }
             }
         }
-    }
-    if path == ROUTE_UI {
-        return true;
     }
     // `/v0/entries/{id}/status` — and nothing else under `/v0/entries/`.
     match path.strip_prefix("/v0/entries/") {
@@ -341,9 +290,8 @@ pub struct WorkspaceInfo {
     /// **The canonical spelling** — what `std::fs::canonicalize` returns for it (D16).
     /// This is the ONE path this run is known by: the daemon stores it on the
     /// registry row, renders every `{workspace}` and `{slug}` from it, compares every hook
-    /// post's `cwd` against it, and answers the same string later on
-    /// [`ResumeInfo::workspace`]. A caller that caches this value and hands it back — a
-    /// resume's lock roots, a seal's self-check — compares equal, which the requested
+    /// post's `cwd` against it, and answers the same string later. A caller that caches this
+    /// value and hands it back — a seal's self-check — compares equal, which the requested
     /// spelling did not under a workspace parent reached through a symlink.
     pub workspace: String,
     /// The spelling the participant ASKED for: `workspace_parent` joined with the entry
@@ -378,19 +326,6 @@ pub struct WorkspaceInfo {
     /// seal excludes and the public entry discloses (`RULES.md`).
     pub workspace_relative: Vec<String>,
     pub created_at: String,
-}
-
-/// The observed arming signal. Distinct from `manifest::StartSignal`, which only says
-/// whether one is required; always qualify the name at the use site.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StartSignal {
-    pub entry_id: String,
-    /// The connector's `arming.signal` string, echoed back.
-    pub signal: String,
-    pub session_id: Option<String>,
-    pub observed_at: String,
-    /// `leg1` or `leg2`: which leg witnessed it.
-    pub source: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -791,81 +726,6 @@ pub struct EntrySummary {
     pub started_at: Option<String>,
     pub deadline_at: Option<String>,
     pub sealed_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResumeInfo {
-    pub entry_id: String,
-    /// The newly opened process generation.  `resume` consumed the caller's expected
-    /// generation atomically, so this is the only generation its relaunch may register.
-    pub process_generation: u64,
-    pub session_id: String,
-    /// How many events the daemon caught up before answering.
-    pub caught_up_events: u64,
-    pub workspace: String,
-    pub artifact_root: String,
-    pub harness_home: String,
-    pub status_line_path: String,
-    /// `None` means the connector reserves no server port (`Tui`/`Attach` launch modes).
-    /// `Some` is the port reserved at workspace creation and remembered on the registry
-    /// row, returned here so a resume renders the same `{server_port}`; it is
-    /// remembered, not re-reserved, so a preflight must check it is still free.
-    pub server_port: Option<u16>,
-    /// The process the previous launch registered, so the CLI can tell a stale lock
-    /// from a live one before relaunching (D22, D9).
-    pub last_process: Option<ProcessHandle>,
-}
-
-/// The immutable launch pins the V1 `goalcup resume --print-launch` needed. D48 removed
-/// that command, and the daemon now refuses the preview route.
-///
-/// Unlike [`ResumeInfo`], obtaining this answer does not poll the capture receiver or
-/// clear the registered process handle. Keep it deliberately limited to the seven values a
-/// launch template consumes: adding a resume-only operational field here would make the
-/// preview endpoint look like a non-mutating form of `resume`, which it is not.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResumePreviewInfo {
-    pub entry_id: String,
-    /// The authoritative, read-only process generation.  A local cache may have missed a
-    /// successful cancellation response, so a normal resume obtains this before deciding
-    /// which generation to compare-and-swap.
-    pub process_generation: u64,
-    /// Diagnostic only: the daemon's durable phase for that generation.  The CLI does not
-    /// derive permission from its cache or from this string; the mutating resume CAS remains
-    /// authoritative.
-    pub process_handoff_phase: String,
-    pub session_id: String,
-    pub workspace: String,
-    pub artifact_root: String,
-    pub harness_home: String,
-    pub status_line_path: String,
-    pub server_port: Option<u16>,
-}
-
-/// The sole body accepted by `POST /resume`.  A bare or empty request would let an old
-/// client consume a replacement slot without proving which registered generation it saw.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResumeRequest {
-    pub expected_generation: u64,
-}
-
-/// The sole body accepted by `POST /process/cancel`.  `request_digest` is absent only when
-/// no child reached `Prepared`; a prepared child can be returned only by the client whose
-/// exact canonical process identity it is.  The digest contains no seed contents.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProcessHandoffCancelRequest {
-    pub expected_generation: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_digest: Option<String>,
-}
-
-/// The durable generation after a cancellation.  It is never decremented or reused; this
-/// answer is what lets a CLI repair its cache before reporting its original local failure.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProcessHandoffCancelInfo {
-    pub process_generation: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1322,31 +1182,10 @@ pub struct ErrorDetail {
 /// The whole surface between the CLI and the daemon. Implemented by `HttpDaemonClient` and by
 /// `MockDaemonClient`; served by `goalcup-daemon`. Adding a method means editing all three.
 pub trait DaemonClient {
-    /// Create the entry, the empty workspace and the artifact root, **and write the
-    /// connector's folder-scoped config**. The rendered paths and hashes come
-    /// back on `WorkspaceInfo`; the CLI writes nothing itself.
-    fn create_workspace(
-        &self,
-        harness: &str,
-        opts: &WorkspaceOpts,
-    ) -> Result<WorkspaceInfo, ControlError>;
-    /// Move the entry to `armed`: config hashes recorded, receiver token live (D16).
-    fn arm(&self, entry_id: &str) -> Result<(), ControlError>;
-    /// Long-poll for the connector's `arming.signal` for this workspace (D16).
-    fn wait_start_signal(
-        &self,
-        entry_id: &str,
-        timeout: Duration,
-    ) -> Result<StartSignal, ControlError>;
     /// The signed status cache for one entry (D25).
     fn status(&self, entry_id: &str) -> Result<SignedStatus, ControlError>;
     /// Every entry this daemon knows about.
     fn entries(&self) -> Result<Vec<EntrySummary>, ControlError>;
-    /// Catch the tail up to the present, then report what a relaunch needs.
-    fn resume(&self, entry_id: &str, request: &ResumeRequest) -> Result<ResumeInfo, ControlError>;
-    /// Read only the pinned launch values needed to render a relaunch line. This does not
-    /// catch up capture state or clear a registered process handle.
-    fn resume_preview(&self, entry_id: &str) -> Result<ResumePreviewInfo, ControlError>;
     /// Finalize the entry and return the daemon's durable result. Workspace entries never
     /// rescan live bytes in the CLI; legacy entries retain their historical manifest arm.
     fn seal(&self, entry_id: &str) -> Result<SealResponse, ControlError>;
@@ -1371,13 +1210,6 @@ pub trait DaemonClient {
         self.register_process(entry_id, request)
             .map_err(ProcessRegistrationError::from_unclassified)
     }
-    /// Return an issued resume generation before a replacement process was accepted.  This
-    /// is an authenticated administrative recovery transition, not a bearer-derived nonce.
-    fn cancel_process_handoff(
-        &self,
-        entry_id: &str,
-        request: &ProcessHandoffCancelRequest,
-    ) -> Result<ProcessHandoffCancelInfo, ControlError>;
     /// `goalcup doctor` needs one call that answers "is the daemon there".
     fn health(&self) -> Result<DaemonHealth, ControlError>;
     /// `goalcup status` with no entry argument, and the status page's default view.

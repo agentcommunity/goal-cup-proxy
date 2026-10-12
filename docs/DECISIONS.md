@@ -1201,7 +1201,8 @@ not from dead code in the tree.
   support files; the optional `open`, `rusqlite` and `age` dependencies; the second gate block in
   README and CONTRIBUTING; the `v1-compat` checkbox in the PR template.
 - **Kept.** Default-build behaviour. The hidden `auth`, `ui` and `resume` commands and the V1
-  control routes still refuse, now naming D48. The control API types, the V1 `manifest.toml` parsing (OS-29) and the verifier's V1
+  control routes still refuse, now naming D48 (all deleted on 2026-10-12, with the stub
+  routes' client and mock methods). The control API types, the V1 `manifest.toml` parsing (OS-29) and the verifier's V1
   checks are unchanged. The V1 config fields `upload_url`, `server_public_key` and
   `receipt_binding` drive no upload but are still parsed, because `DaemonConfig` refuses unknown
   fields and would reject a config that sets them. The V1-only registry functions this entry first
