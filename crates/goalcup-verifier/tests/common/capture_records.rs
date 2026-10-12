@@ -304,8 +304,8 @@ pub fn write_trace(dir: &Path, records: &[CaptureRecord], sealed: bool) {
     });
 }
 
-/// The seed of the synthetic signer of receipts and acknowledgements: a public test key,
-/// neither the placeholder seed nor any real anchor.
+/// The seed of the synthetic signer of receipts and acknowledgements: a public, test-only
+/// key the verifier never trusts.
 pub const SERVER_SEED: [u8; 32] = [0x42; 32];
 
 pub fn server_key() -> SigningKey {

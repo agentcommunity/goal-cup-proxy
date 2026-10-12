@@ -25,27 +25,12 @@ pub const VERIFIER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// from. The allowlist lives in the binary: a key the participant could name is not an
 /// anchor.
 ///
-/// **M1 placeholder.** The single entry is `PLACEHOLDER_SERVER_PUBLIC_KEY`, whose seed is
-/// written in this repository. Read that constant before trusting anything this list
-/// resolves to `KeySource::Pinned`.
-pub(crate) const SERVER_PUBLIC_KEYS: [&str; 1] = [PLACEHOLDER_SERVER_PUBLIC_KEY];
-
-/// The M1 placeholder anchor: the Ed25519 verifying key of the seed `[5u8; 32]`, which is
-/// written in this repository so development fixtures can sign receipts and
-/// acknowledgements with it. The unit test below re-derives it, so the constant cannot drift
-/// from what the tests sign with.
-///
-/// **The seed is public, so anybody can mint a receipt or an acknowledgement that this
-/// build reads as `KeySource::Pinned`** — the strongest word a verdict has for the
-/// provenance of a signature. It stays on `SERVER_PUBLIC_KEYS` so the committed fixtures
-/// keep working, and the capture-integrity report says out loud, as `placeholder_server_key`,
-/// whenever the key that verified a receipt or an acknowledgement was this one.
-///
-/// **Release gate.** Replacing this constant with the real organiser key is a prerequisite
-/// to judging any entry: until it is replaced, `KeySource::Pinned` on a submitted trace
-/// means the participant could have signed their own start. Nothing in this crate can
-/// enforce that — the Flag is what makes it impossible to miss in a verdict.
-pub use goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX as PLACEHOLDER_SERVER_PUBLIC_KEY;
+/// **Empty until the organiser's real key exists.** No key whose seed is written in this
+/// repository may be on it, because anybody could then sign a start and have it read as
+/// `KeySource::Pinned`. With the list empty, a receipt or acknowledgement verifies only
+/// under a key the caller supplies for one run (`goalcup-verify --dev-key`), which the
+/// report records as `supplied`.
+pub(crate) const SERVER_PUBLIC_KEYS: [&str; 0] = [];
 
 /// Where the key that checked a signature came from.
 ///
@@ -82,30 +67,6 @@ pub struct VerifyOptions {
     /// `KeySource::Supplied`, so a reader of the verdict can see that the run borrowed its
     /// trust from whoever ran it.
     pub extra_server_keys: Vec<String>,
-    /// This is a development run (`goalcup-verify --dev`): `placeholder_server_key` is
-    /// suppressed, because signing with the published placeholder seed is the expected thing
-    /// to do while developing.
-    ///
-    /// It does not suppress `server_key_unpinned`: a run that borrowed its trust from the
-    /// invocation says so at every severity, in every mode.
-    pub dev_mode: bool,
-}
-
-#[cfg(test)]
-mod key_tests {
-    use super::*;
-    use ed25519_dalek::SigningKey;
-
-    /// The placeholder in `SERVER_PUBLIC_KEYS` is exactly the key the test suite signs
-    /// with. Re-derived rather than re-typed, so the constant and the tests cannot drift.
-    #[test]
-    fn the_placeholder_key_is_the_one_the_tests_sign_with() {
-        let signer = SigningKey::from_bytes(&[5u8; 32]);
-        assert_eq!(
-            SERVER_PUBLIC_KEYS[0],
-            hex::encode(signer.verifying_key().to_bytes())
-        );
-    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -262,7 +262,7 @@ fn regenerate_the_corpus() {
         std::env::var_os("GOALCUP_REGEN_V5_CORPUS").is_some(),
         "set GOALCUP_REGEN_V5_CORPUS=1 to rewrite the corpus"
     );
-    // A public synthetic key, neither the placeholder seed nor any real anchor.
+    // A public, test-only key the verifier never trusts.
     let real_key = hex::encode(
         SigningKey::from_bytes(&[0x42; 32])
             .verifying_key()

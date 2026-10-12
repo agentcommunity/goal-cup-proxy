@@ -131,7 +131,7 @@ impl Vertical {
                 cfg.display(),
                 workspaces.display(),
                 upload_trap.local_addr().unwrap(),
-                goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY,
+                super::support::TEST_SERVER_PUBLIC_KEY_HEX,
             ),
         )
         .unwrap();

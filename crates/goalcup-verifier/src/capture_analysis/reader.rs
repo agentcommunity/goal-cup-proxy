@@ -34,9 +34,7 @@
 use super::lineage::Lineage;
 use crate::VerifyOptions;
 use crate::trace_fs::{TracePath, TraceRoot};
-use crate::{
-    KeySource as VerdictKeySource, PLACEHOLDER_SERVER_PUBLIC_KEY, SERVER_PUBLIC_KEYS, VerifierError,
-};
+use crate::{KeySource as VerdictKeySource, SERVER_PUBLIC_KEYS, VerifierError};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use goalcup_protocol::ack::AckCheckpoint;
@@ -225,11 +223,10 @@ pub fn scan_capture_trace(
         scan.bind_baseline(&root)?;
         scan.bind_terminal(&root)?;
     }
-    Ok(scan.report(options))
+    Ok(scan.report())
 }
 
-/// [`scan_capture_trace`] with the default options: no extra server keys and no development
-/// mode.
+/// [`scan_capture_trace`] with the default options: no extra server keys.
 ///
 /// Naming `VerifyOptions` is reserved to the verifier binary and `goalcup doctor`: a walk of
 /// `goalcup-cli/src` in `goalcup-cli/tests/full/preflight_doctor.rs` fails on any other file that
@@ -897,7 +894,7 @@ impl<'k> Scan<'k> {
         faults.is_empty() && proven
     }
 
-    fn report(mut self, options: &VerifyOptions) -> CaptureIntegrityReport {
+    fn report(mut self) -> CaptureIntegrityReport {
         // Every entry carries a Launch naming a goal stream that ended Complete, the two in
         // either order. Without that the run is unproven, never forged.
         if self.capture.launch_goals.is_empty() {
@@ -933,13 +930,8 @@ impl<'k> Scan<'k> {
                 started_at: r.receipt.claims.started_at.clone(),
                 deadline_at: r.receipt.claims.deadline_at.clone(),
             });
-        if let Some((key, source)) = self.anchor {
-            if source == VerdictKeySource::Supplied {
-                self.findings.add("server_key_unpinned");
-            }
-            if key.eq_ignore_ascii_case(PLACEHOLDER_SERVER_PUBLIC_KEY) && !options.dev_mode {
-                self.findings.add("placeholder_server_key");
-            }
+        if let Some((_, VerdictKeySource::Supplied)) = self.anchor {
+            self.findings.add("server_key_unpinned");
         }
         let integrity = if self.invalid {
             CaptureIntegrity::Invalid

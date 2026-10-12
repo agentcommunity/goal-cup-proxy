@@ -22,7 +22,6 @@ mod capture_redaction_extra;
 mod config_load;
 mod contract_present;
 mod control_api;
-mod placeholder_notice;
 mod redaction;
 mod registry_roundtrip;
 #[cfg(unix)]

@@ -41,21 +41,11 @@ pub struct DaemonConfig {
     /// Omit this and `server_public_key` together for a service-free v5 installation.
     #[serde(default)]
     pub upload_url: String,
-    /// The Ed25519 key this daemon verifies every `StartReceipt` and `AckCheckpoint`
-    /// against, hex. Written into `trace.toml` as `server_public_key`. In development it
-    /// is `goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX`; in a signed release it is the
-    /// event backend's. `validate()` refuses anything that is not 64 hex characters,
-    /// because an unparseable key would make every acknowledgement silently unverifiable.
-    ///
-    /// **The development key is a published placeholder; the daemon says so and does not
-    /// refuse it.** Its seed is a constant in this repository, so anybody can sign a receipt
-    /// and an acknowledgement under it and a run anchored to it is anchored to nothing. The
-    /// verifier reports that as V13's `placeholder_server_key`; the daemon prints one line on
-    /// stderr at startup ([`DaemonConfig::placeholder_key_notice`]). It does not refuse, because refusing would
-    /// break every development run in this tree. Read as: a `server_public_key` equal to
-    /// `goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX` (the key of the
-    /// published seed `[5u8; 32]`) names a trace that a verifier will
-    /// flag, and only `--dev` suppresses the flag.
+    /// The event backend's Ed25519 key, hex. Nothing in this tree reads it yet (no receipt or
+    /// acknowledgement is verified by the daemon); `validate()` refuses anything that is not
+    /// 64 hex characters.
+    /// `goalcup-verify` pins no key yet, so a trace signed under any key verifies only when
+    /// the key is supplied to that run (`--dev-key`), and its report says so.
     /// Omitted together with `upload_url`, this is empty and only local v5 entries are admitted.
     #[serde(default)]
     pub server_public_key: String,
@@ -326,23 +316,6 @@ impl DaemonConfig {
     /// `validate` separately refuses partial pairs and validates their URL and key.
     pub(crate) fn has_service(&self) -> bool {
         !self.upload_url.is_empty() && !self.server_public_key.is_empty()
-    }
-
-    /// The one stderr line the daemon prints at startup when `server_public_key` is the
-    /// published placeholder, or `None` for any other key (and for none at all).
-    ///
-    /// Compared without regard to hex case. The text names what the placeholder costs: the
-    /// seed is public, so every receipt and acknowledgement under it can be forged, until the
-    /// project server's real key is configured (V1.1). A line, not a refusal: see the field.
-    pub fn placeholder_key_notice(&self) -> Option<String> {
-        self.server_public_key
-            .eq_ignore_ascii_case(goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX)
-            .then(|| {
-                "server_public_key is the published placeholder key: its seed is public, so \
-                 every receipt and acknowledgement under it can be forged until the project \
-                 server's key replaces it (V1.1)"
-                    .to_string()
-            })
     }
 
     /// Parse without touching the filesystem. `validate()` is a separate call, so a

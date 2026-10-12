@@ -20,9 +20,8 @@
 //!   document (`StatusPayload::cycles`), which is a participant-readable surface rather
 //!   than a file nobody rotates. So `stdout` here carries the two startup facts and
 //!   nothing else, and
-//!   `stderr` carries a refusal the process is about to exit on — and, when the configured
-//!   server key is the published placeholder, the one line that says so — plus one warning
-//!   for each existing configured root whose group or other permission bits are set.
+//!   `stderr` carries a refusal the process is about to exit on, plus one warning for each
+//!   existing configured root whose group or other permission bits are set.
 //! * **A signal seals nothing, and it does not merely drop either.** SIGTERM and SIGINT
 //!   end the process through [`Daemon::stop`] (the listener down, every in-flight seal
 //!   awaited, every redb file lock released), but they do not end the entry. A capture entry
@@ -141,12 +140,6 @@ async fn run(args: Args) -> ExitCode {
     // never become one: see the field's own documentation.
     if args.print_addresses {
         return print_addresses(&config.config_dir, &control_file);
-    }
-
-    // One line, after the validation and the `--print-addresses` early return: a doctor asking
-    // where a running daemon is must not be told off about a key it did not start with.
-    if let Some(notice) = config.placeholder_key_notice() {
-        eprintln!("goalcup-daemon: {notice}");
     }
 
     let daemon = match Daemon::start(config).await {

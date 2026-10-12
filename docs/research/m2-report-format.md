@@ -16,8 +16,8 @@ that no one helped.
 - Stdout stays empty. Stderr carries the development-flag notices and one summary line.
 - `--research-json` cannot be combined with a trace directory, `--capture-integrity` or `--json`.
   Every refused invocation exits 3 before anything is written.
-- `--dev-key HEX` and `--dev` keep their `--capture-integrity` meaning, and the summary records
-  them under `options`.
+- `--dev-key HEX` keeps its `--capture-integrity` meaning, and the summary records it under
+  `options`. `dev_mode` stays in `options` for schema 1 and is always `false`.
 
 ## Lines
 
@@ -67,7 +67,7 @@ The research-report schema-1 kind vocabulary is closed at these ten values. Code
 | `exit_code` | The verifier/report exit code (below), not the harness run's exit code. |
 | `verifier_version` | The verifier build that wrote the report. |
 | `options` | The effective options: `dev_mode`, `allow_descriptor_key`, `extra_server_keys`. |
-| `key_source` | Which key checked the receipt and ACK signatures: `pinned`, `supplied` or `none`. |
+| `key_source` | Which key checked the receipt and ACK signatures: `pinned`, `supplied` or `none`. This build pins no key, so it is never `pinned`. |
 | `input` | The validated chain prefix the report covers: `validated_head` (the link hash of its last record), `validated_records`, `validated_bytes`. |
 | `run.launch` | The first `Launch` record as retained: profile, profile digest, harness version, recorder revision, continuation and the goal stream it names, and, when the daemon wrote them (contract S1), `run_public_key` and `connector_dir_sha256`. Both are additive and absent from a trace written before S1, so a consumer treats a missing key as unknown rather than as an error. `null` when there is none. |
 | `run.connector` | Present only when `run.launch.connector_dir_sha256` is present: `Pinned` when the launch profile and digest match this build's connector-directory pins, otherwise `Dev/unpinned`. This presentation does not change capture integrity. It is absent for an old/unbound launch or when there is no launch. |
