@@ -2651,6 +2651,33 @@ fn replaced_evidence_is_refused_not_followed() {
     std::os::unix::fs::symlink(elsewhere.path().join(SEAL_FILE), dir.path().join(SEAL_FILE))
         .unwrap();
     assert!(scan_capture_trace(dir.path(), &VerifyOptions::default(), &mut |_| Ok(())).is_err());
+
+    // A hard link to a valid chain or seal elsewhere is a second name for bytes outside the
+    // trace: refused, though following it would read a valid trace.
+    let refusal = |dir: &Path| {
+        scan_capture_trace(dir, &VerifyOptions::default(), &mut |_| Ok(()))
+            .expect_err("replaced evidence leaves no usable report")
+            .to_string()
+    };
+    for file in [CHAIN_FILE, SEAL_FILE] {
+        let dir = make_trace(&launched(complete_wire(None)), true);
+        std::fs::remove_file(dir.path().join(file)).unwrap();
+        std::fs::hard_link(elsewhere.path().join(file), dir.path().join(file)).unwrap();
+        let said = refusal(dir.path());
+        assert!(said.contains("hard linked"), "{file}: {said}");
+    }
+
+    // A FIFO in the chain's place is not evidence, and opening it never waits for a writer.
+    let dir = make_trace(&launched(complete_wire(None)), true);
+    std::fs::remove_file(dir.path().join(CHAIN_FILE)).unwrap();
+    let fifo = std::ffi::CString::new(std::os::unix::ffi::OsStringExt::into_vec(
+        dir.path().join(CHAIN_FILE).into_os_string(),
+    ))
+    .unwrap();
+    // SAFETY: `fifo` is a live NUL-terminated path for the duration of the call.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let said = refusal(dir.path());
+    assert!(said.contains("not a regular file"), "{said}");
 }
 
 #[test]

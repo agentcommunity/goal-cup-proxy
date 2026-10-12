@@ -308,6 +308,34 @@ mod tests {
         );
     }
 
+    /// The same manifest with one insignificant space: it parses to the same value and its
+    /// digest is the one the finalization claims, so only the canonical-bytes check refuses it.
+    #[test]
+    fn reader_refuses_a_noncanonical_manifest_whose_digest_is_claimed() {
+        let dir = independent_submission_fixture();
+        let spaced = MANIFEST.replacen("{\"profile\"", "{ \"profile\"", 1);
+        assert_ne!(spaced, MANIFEST);
+        let error = verify_fixture(dir.path(), spaced.as_bytes()).unwrap_err();
+        assert!(
+            error.to_string().contains("not canonical JSON bytes"),
+            "{error}"
+        );
+    }
+
+    /// The canonical manifest under a finalization that claims another digest is refused.
+    #[test]
+    fn reader_refuses_a_manifest_the_finalization_does_not_claim() {
+        let dir = independent_submission_fixture();
+        let root = TraceRoot::open(dir.path()).unwrap();
+        let error = super::verify_submission(&root, &captured(b"another manifest")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the captured finalization claim"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn fixture_is_parseable_before_the_reader_opens_objects() {
         let manifest: SubmissionManifestV1 = serde_json::from_str(MANIFEST).unwrap();
