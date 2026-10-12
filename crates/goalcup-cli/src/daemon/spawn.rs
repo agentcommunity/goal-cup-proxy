@@ -1,7 +1,7 @@
 //! The daemon a command needs, started on demand: the run-scoped lifetime.
 //!
-//! There is no service. Every command that asks the daemon anything (`goalcup start`, `seal`,
-//! `status` and `entries`) calls [`ensure_daemon`]: a daemon
+//! There is no service. `goalcup start` and `goalcup seal` call [`ensure_daemon`], and
+//! `goalcup status` and `goalcup entries` call it through [`daemon_to_read`]: a daemon
 //! that answers on `control.json` is used as it is, and otherwise this module starts
 //! `goalcup-daemon --config <cfg>/daemon.toml --exit-when-idle` detached and waits for it to
 //! answer. The daemon ends itself once no capture is unfinished (its `IDLE_GRACE`), so a
@@ -80,6 +80,10 @@ const RESPAWN_PAUSE: Duration = Duration::from_millis(100);
 const RESPAWN_PAUSE_MAX: Duration = Duration::from_secs(1);
 
 /// The first line of the default `daemon.toml`, which marks it as the tracker's own.
+///
+/// True as written: only `goalcup start` writes the file (`status` and `entries` never do).
+/// Do not reword it: [`prepare_config`] recognises an unedited default by its exact text, so
+/// a new header would make every existing default read as edited by hand.
 const DEFAULT_CONFIG_HEADER: &str =
     "# Written by `goalcup start` the first time it needed a daemon.";
 
@@ -96,12 +100,8 @@ pub enum MissingConfig<'a> {
     /// connectors directory is the one this command resolved, so the daemon reads the same
     /// rulebook the CLI pinned.
     WriteDefault { connectors: &'a Path },
-    /// Write the default configuration only when there is none (`goalcup status` and
-    /// `goalcup entries`), naming [`crate::config::connectors_dir`]. A daemon that answers is
-    /// used whatever connectors it reads, and an existing file is used as it is: reading the
-    /// registry needs no connector, so there is nothing to keep in step and nothing to refuse.
-    WriteDefaultToRead,
-    /// Start nothing and refuse "no daemon" (`goalcup seal` and the finish's restart path):
+    /// Start nothing and refuse "no daemon" (`goalcup seal`, the finish's restart path, and
+    /// [`daemon_to_read`] once it has seen a `daemon.toml`):
     /// with no configuration no daemon was ever started from this directory, so there is
     /// no unsealed run here to recover.
     Refuse,
@@ -140,15 +140,6 @@ pub fn ensure_daemon(
                     )));
                 }
                 return Ok(client);
-            }
-        }
-        MissingConfig::WriteDefaultToRead => {
-            if let Some(client) = live {
-                return Ok(client);
-            }
-            if read_config(&config)?.is_none() {
-                let connectors = crate::config::connectors_dir()?;
-                create_config(&config, &default_config(cfg, &connectors)?)?;
             }
         }
         MissingConfig::Refuse => {
@@ -213,6 +204,23 @@ pub fn ensure_daemon(
         }
         std::thread::sleep(POLL);
     }
+}
+
+/// The daemon `goalcup status` and `goalcup entries` ask, or `None` when there is nothing to
+/// ask: no daemon answers and there is no `<cfg>/daemon.toml`, so no daemon was ever started
+/// from this directory and its registry holds no run. Nothing is written and nothing is started
+/// then. Otherwise this is [`ensure_daemon`] with [`MissingConfig::Refuse`]: the one that
+/// answers, or one started from `daemon.toml`.
+///
+/// A daemon started here exits on its grace once nothing is unfinished. A run whose daemon died
+/// mid-run is unfinished: the started daemon reopens it for status and seal only (chaining the
+/// lost interval as one gap) and stays up until `goalcup seal` finishes it, so a later seal
+/// meets the same daemon and chains no second gap.
+pub fn daemon_to_read(cfg: &Path, deadline: Instant) -> Result<Option<HttpDaemonClient>, CliError> {
+    if !cfg.join(DAEMON_CONFIG_NAME).is_file() {
+        return live_daemon(cfg);
+    }
+    ensure_daemon(cfg, MissingConfig::Refuse, deadline).map(Some)
 }
 
 /// A client for the daemon `control.json` names, if that daemon answers.

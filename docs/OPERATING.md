@@ -185,7 +185,7 @@ for the same reason.
 You normally never start it yourself. `goalcup start`, `seal`, `status` and `entries` start
 `goalcup-daemon --config $GOALCUP_CONFIG_DIR/daemon.toml --exit-when-idle` when no daemon answers
 on `control.json` (the README's [daemon](../README.md#the-daemon) note says how), and
-`goalcup start` (or `status`, `entries`) writes a default `daemon.toml` the first time: the keys below, with
+`goalcup start` writes a default `daemon.toml` the first time: the keys below, with
 `artifact_root` and `workspace_parent` beside the configuration directory
 (`<config dir>-artifacts`, `<config dir>-runs`). Edit that file to change them.
 

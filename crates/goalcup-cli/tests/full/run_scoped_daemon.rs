@@ -266,26 +266,26 @@ fn start_with_no_daemon_starts_one_that_exits_after_the_seal() {
     );
 }
 
-/// `goalcup status` on a machine where no run was ever started: it starts a daemon (writing
-/// the default configuration), says plainly that there is no run, and `entries` lists none.
-/// The daemon it started exits on its grace.
+/// `goalcup status` and `goalcup entries` on a machine where no run was ever started: a plain
+/// answer, and nothing written or started for it: no `daemon.toml`, no daemon.
 #[test]
-fn status_with_no_runs_ever_says_so_and_its_daemon_exits_after_grace() {
+fn status_and_entries_with_no_runs_ever_answer_without_starting_anything() {
     let rig = Rig::run_scoped();
     let _reaper = reaper(&rig);
+    let config = rig.cfg.join(goalcup_cli::daemon::spawn::DAEMON_CONFIG_NAME);
     assert!(daemons(&rig).is_empty());
+    assert!(!config.exists());
 
-    let asked = Instant::now();
-    let output = goalcup(&rig, &cli()).arg("status").output().unwrap();
-    assert_eq!(output.status.code(), Some(1), "{}", said(&output));
-    assert!(
-        said(&output).contains("no run has been started from this machine"),
-        "a clear answer: {}",
-        said(&output)
-    );
-    let daemon = the_daemon(&rig);
-    assert!(rig.cfg.join("daemon.toml").is_file());
-
+    for args in [vec!["status"], vec!["status", "e0123456789abcdef"]] {
+        let output = goalcup(&rig, &cli()).args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {}", said(&output));
+        assert!(
+            said(&output).contains("no run has been started from this machine")
+                || said(&output).contains("e0123456789abcdef"),
+            "{args:?}: a clear answer: {}",
+            said(&output)
+        );
+    }
     let output = goalcup(&rig, &cli())
         .args(["entries", "--json"])
         .output()
@@ -296,12 +296,79 @@ fn status_with_no_runs_ever_says_so_and_its_daemon_exits_after_grace() {
     let output = goalcup(&rig, &cli()).arg("entries").output().unwrap();
     assert!(output.status.success(), "{}", said(&output));
     assert!(String::from_utf8_lossy(&output.stdout).contains("(none)"));
-    assert_eq!(daemons(&rig), vec![daemon], "the same one daemon");
 
-    wait_gone(daemon, GRACE + GRACE_SLACK);
+    // Long enough for a daemon a command had started to have shown itself.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(daemons(&rig).is_empty(), "no daemon was started");
+    assert!(!config.exists(), "no daemon.toml was written");
+    assert!(!goalcup_cli::config::control_path(&rig.cfg).exists());
+}
+
+/// The one write path a look may take. A run whose daemon was killed mid-run is unfinished, so
+/// the daemon `goalcup status` starts reopens it for status and seal only and chains the lost
+/// interval as exactly one `IngestLost` gap. That daemon then stays up past its 30-second grace,
+/// because an unfinished capture is work, and `goalcup seal` meets the same daemon, finishes the
+/// run and chains no second gap.
+#[test]
+fn status_after_a_mid_run_crash_reopens_the_run_keeps_its_daemon_up_and_seal_adds_no_gap() {
+    let rig = Rig::run_scoped();
+    let _reaper = reaper(&rig);
+    let start = start_in_background(&rig, &goal_in(&rig, "runs"));
+    let entry = latest_entry(&rig);
+    wait_running(&rig, &entry);
+    let killed = the_daemon(&rig);
+    // SAFETY: two integers; the pid was just seen running this row's daemon.
+    assert_eq!(unsafe { libc::kill(killed, libc::SIGKILL) }, 0);
+    wait_gone(killed, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_secs(1));
     assert!(
-        asked.elapsed() >= GRACE - Duration::from_secs(2),
-        "the daemon left before its grace"
+        daemons(&rig).is_empty(),
+        "nothing but the look below restarts it while the harness runs"
+    );
+
+    let reopened = status(&rig, &entry);
+    let capture = reopened.payload.capture.expect("a capture status");
+    assert_ne!(capture.run, RunState::Sealed, "status does not seal it");
+    let respawned = the_daemon(&rig);
+    assert_ne!(respawned, killed, "status started a daemon");
+
+    std::thread::sleep(GRACE + GRACE_SLACK);
+    assert_eq!(
+        daemons(&rig),
+        vec![respawned],
+        "the daemon holding the unfinished run is still up after its grace"
+    );
+
+    let output = goalcup(&rig, &cli())
+        .args(["seal", entry.as_str()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    let _ = start.wait_with_output().unwrap();
+    assert_eq!(daemons(&rig), vec![respawned], "seal met the same daemon");
+    let sealed = status(&rig, &entry);
+    assert_eq!(
+        sealed.payload.capture.map(|c| c.run),
+        Some(RunState::Sealed)
+    );
+    let (report, records) = rig.read_trace(&entry);
+    assert!(report.sealed, "{:?}", report.findings);
+    let lost = records
+        .iter()
+        .filter(|r| {
+            matches!(
+                r,
+                CaptureRecord::Gap {
+                    stream: None,
+                    reason: GapReason::IngestLost,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        lost, 1,
+        "one reopen, one IngestLost gap, and none from the seal"
     );
 }
 

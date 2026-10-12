@@ -51,7 +51,8 @@ struct Args {
 const AFTER_HELP: &str = "\
 Start a run with `goalcup start --harness <id> --goal-file <file>`. It starts the recording \
 daemon (`goalcup-daemon`, beside this binary) for the run, and the daemon exits once every run \
-is sealed. `status` and `entries` start it again to answer, sealed runs included.
+is sealed. `status` and `entries` start it again to answer, sealed runs included; it stays up \
+while a run whose daemon died is unsealed, until `goalcup seal`.
 
 To check a finished run, use the separate `goalcup-verify --capture-integrity <trace-dir>`; \
 `goalcup start` prints that line for you. There is no `goalcup verify`.
@@ -281,18 +282,29 @@ fn test_upstream_roots(
 /// `goalcup status`, with the three things it reads resolved here: the configuration
 /// directory the pinned run key is in, a client for the daemon, and this machine's clock.
 ///
-/// **The daemon's registry is the one source of truth**, so a status with no daemon running
-/// starts the run-scoped one, exactly as `start` and `seal` do, and that daemon exits again
-/// on its usual grace. A sealed run is answered after its own daemon is long gone. A run
-/// whose daemon died mid-run is reopened by the started daemon for seal only, and the loss
-/// is chained as a gap: that is the recording of a real loss, not one this look caused.
+/// **The daemon's registry is the one source of truth.** The local record is looked up first:
+/// a run this machine never started is refused without asking, or starting, anything. Then the
+/// daemon that answers is asked, or the run-scoped one is started from `daemon.toml`, as `seal`
+/// does. A sealed run is answered after its own daemon is long gone, and a daemon started for
+/// it exits again on its 30-second grace.
+///
+/// One write path, accepted: a run whose daemon died mid-run is unfinished, so the daemon
+/// started here reopens it for status and seal only and chains the lost interval as one gap.
+/// That records a real loss rather than one this look caused, and that daemon then **stays up
+/// until `goalcup seal`** finishes the run (an unfinished capture is work), so the seal chains
+/// no second gap.
 ///
 /// The clock is read here and handed over as a string, so the rendering itself is a
 /// function of its arguments and a test can pin what a stale document looks like without
 /// waiting two minutes for one.
 fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
-    let client = reading_daemon(&cfg)?;
+    commands::status::pinned(&cfg, entry.as_deref())?;
+    let client = match goalcup_cli::daemon::daemon_to_read(&cfg, daemon_deadline())? {
+        Some(client) => client,
+        // A record but no configuration: say there is no daemon, naming `control.json`.
+        None => goalcup_cli::daemon::HttpDaemonClient::from_config_dir(&cfg)?,
+    };
     commands::status::status_with(
         &client,
         &cfg,
@@ -300,18 +312,6 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
         json,
         &now_z(),
         &mut std::io::stdout(),
-    )
-}
-
-/// The daemon `status` and `entries` ask: the one that answers, or one started for the
-/// question from `<cfg>/daemon.toml` (written with local defaults if missing).
-fn reading_daemon(
-    cfg: &std::path::Path,
-) -> Result<goalcup_cli::daemon::HttpDaemonClient, CliError> {
-    goalcup_cli::daemon::ensure_daemon(
-        cfg,
-        goalcup_cli::daemon::MissingConfig::WriteDefaultToRead,
-        daemon_deadline(),
     )
 }
 
@@ -367,11 +367,15 @@ fn resolve_entry(cfg: &std::path::Path, entry: Option<String>) -> Result<String,
 }
 
 /// `goalcup entries`: every run the registry holds, sealed ones included. Like `status`, it
-/// starts the run-scoped daemon when none answers.
+/// starts the run-scoped daemon from `daemon.toml` when none answers; with no `daemon.toml`
+/// no daemon was ever started here, and the answer is the empty list, with nothing started.
 fn entries(json: bool) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
-    let client = reading_daemon(&cfg)?;
-    commands::entries::entries_with(&client, json, &mut std::io::stdout())
+    let mut out = std::io::stdout();
+    match goalcup_cli::daemon::daemon_to_read(&cfg, daemon_deadline())? {
+        Some(client) => commands::entries::entries_with(&client, json, &mut out),
+        None => commands::entries::render_entries(&[], json, &mut out),
+    }
 }
 
 /// How long a command waits for a daemon it had to start.

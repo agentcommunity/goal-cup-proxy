@@ -1,9 +1,10 @@
 //! `goalcup entries` — every run the daemon's registry holds.
 //!
 //! `GET /v0/entries` lists the open runs and the sealed rows alike, so a run finished ten
-//! seconds ago, or a week ago, is still here. `main` starts the run-scoped daemon when none
-//! answers, so the list does not depend on a daemon happening to be up. Each line names the
-//! id `goalcup status <id>` takes.
+//! seconds ago, or a week ago, is still here. `main` starts the run-scoped daemon from
+//! `daemon.toml` when none answers, so the list does not depend on a daemon happening to be up. Each line names the
+//! id `goalcup status <id>` takes. With no `daemon.toml` no daemon was ever started here, and
+//! the answer is the empty list, with no daemon started for it.
 
 use crate::CliError;
 use crate::commands::status::{put, wire_word};
@@ -21,6 +22,16 @@ pub fn entries_with(
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
     let live = retry_busy(|| client.entries())?;
+    render_entries(&live, json, out)
+}
+
+/// The list, as `entries_with` prints it. `main` hands it an empty list when no daemon was
+/// ever started from this machine.
+pub fn render_entries(
+    live: &[goalcup_protocol::control::EntrySummary],
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<(), CliError> {
     if json {
         return put(out, &format!("{}\n", serde_json::to_string_pretty(&live)?));
     }
@@ -28,7 +39,7 @@ pub fn entries_with(
     if live.is_empty() {
         put(out, "  (none)\n")?;
     }
-    for e in &live {
+    for e in live {
         // One line per run, and the id first: it is what every other command is given.
         put(
             out,

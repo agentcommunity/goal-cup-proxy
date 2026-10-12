@@ -60,7 +60,7 @@ pub mod spawn;
 
 #[cfg(feature = "test-support")]
 pub use mock::{MockCapture, MockDaemonClient, MockState};
-pub use spawn::{MissingConfig, ensure_daemon};
+pub use spawn::{MissingConfig, daemon_to_read, ensure_daemon};
 
 use crate::CliError;
 use crate::config::read_control_file;

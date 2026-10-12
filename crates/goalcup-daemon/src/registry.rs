@@ -211,6 +211,8 @@ pub struct WorkspaceSealingIntentV1 {
     pub expected_finalization_predecessor: Option<ChainPredecessorV1>,
     pub finalization: Option<Link>,
     pub terminal_status_at: Option<Rfc3339Utc>,
+    // TODO(status-cache removal): dead since PR #26 (nothing sets or reads it); kept so stored
+    // rows keep their shape, drop with the next registry row version.
     pub status_mirror_complete: bool,
 }
 

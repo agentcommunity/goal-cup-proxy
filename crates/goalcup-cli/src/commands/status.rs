@@ -168,7 +168,10 @@ fn refuse(
 /// A configuration directory with no run in it at all is a refusal the participant can act
 /// on rather than an empty render: there is no entry to ask about and no key to check an
 /// answer with, and the fix is to start one.
-fn pinned(cfg: &Path, entry: Option<&str>) -> Result<EntryRecord, CliError> {
+///
+/// `main` asks this first, before it starts a daemon: a run this machine has no record of is
+/// an answer that needs no daemon, and a look on an unused machine must not create one.
+pub fn pinned(cfg: &Path, entry: Option<&str>) -> Result<EntryRecord, CliError> {
     match entry {
         Some(entry_id) => entries::read_entry(cfg, entry_id),
         None => entries::latest_entry(cfg)?.ok_or_else(|| {
