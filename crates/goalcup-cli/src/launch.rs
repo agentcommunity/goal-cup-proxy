@@ -32,10 +32,6 @@
 //! one either, because nothing outside the allowlist is inherited: an allowlist leaves no
 //! `*_URL` the participant exported to strip.
 //!
-//! The D23 denylist predicate, [`is_denied`] (anything ending `_URL` or `_PROXY`, and a bare
-//! `PROXY`), survives for the one child that does inherit the participant's environment: the
-//! preflight version probe, which [`crate::preflight::probe_env`] strips with it.
-//!
 //! Headless as it is, the capture child stays in the launcher's process group: the daemon
 //! never confirms a group ended (D30), and there a Ctrl-C typed at the terminal reaches it.
 //!
@@ -308,8 +304,7 @@ impl fmt::Debug for Keys<'_> {
 }
 
 /// This process's environment, as a map — the `parent_env` [`build_capture_launch`] takes
-/// the [`CAPTURE_IDENTITY_ENV`] allowlist from, and what the preflight probe inherits after
-/// [`crate::preflight::probe_env`] strips it.
+/// the [`CAPTURE_IDENTITY_ENV`] allowlist from.
 ///
 /// `vars_os` and not `vars`, which **panics** on a variable whose name or value is not valid
 /// Unicode — a participant with one exported would get a panic where they had asked for a
@@ -344,15 +339,6 @@ pub fn launched_at_now() -> String {
             .map(|d| d.as_secs())
             .unwrap_or(0),
     )
-}
-
-/// Whether D23's denylist names this variable. Its one caller is
-/// [`crate::preflight::probe_env`], which strips these from the version probe: the one child
-/// that inherits the participant's environment. The capture launch needs no denylist, because
-/// it inherits nothing outside [`CAPTURE_IDENTITY_ENV`].
-pub(crate) fn is_denied(key: &str) -> bool {
-    let upper = key.to_ascii_uppercase();
-    upper.ends_with("_URL") || upper.ends_with("_PROXY") || upper == "PROXY"
 }
 
 /// A recipe that names `{server_port}` may not be launched on an empty one.

@@ -916,37 +916,6 @@ async fn a_refused_control_file_write_leaves_the_control_port_closed() {
 // The process handle and the abandon.
 // =========================================================================================
 
-/// A connector directory this daemon cannot hash refuses daemon startup, before the first write.
-///
-/// The sibling above covers the digest that moved. This covers the digest that could not be
-/// taken at all: `connector_dir_sha256` refuses a symlink rather than following it, because
-/// following one would pin bytes living outside the directory. Startup must refuse rather than
-/// accepting scan declarations whose connector bytes were not measured. Unix-only, because
-/// planting a symlink is how the unhashable case is reached.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_connector_directory_this_daemon_cannot_hash_refuses_daemon_start() {
-    let connectors = tempfile::tempdir().expect("a temporary connectors directory");
-    let copied = connectors.path().join("claude-code-cli");
-    support::copy_tree(&support::shipped_connector_dir("claude-code-cli"), &copied);
-    std::os::unix::fs::symlink("project-settings.json", copied.join("files/alias.json"))
-        .expect("the symlink plants");
-
-    let opts = support::workspace_opts("claude-code-cli");
-    let (_upload, upload_url) = support::upload_target();
-    let mut config = support::config_at(connectors.path(), &upload_url);
-    config.connectors_dir = connectors.path().to_path_buf();
-    let error = match goalcup_daemon::runtime::Daemon::start(config).await {
-        Ok(_) => panic!("an unhashable scan authority must not start"),
-        Err(error) => error.to_string(),
-    };
-    assert!(
-        error.contains("symlink"),
-        "the refusal says the directory could not be hashed: {error}"
-    );
-    assert!(!error.contains(&opts.grant_token), "R12: never the grant");
-}
-
 /// Restarted v5 captures retain their durable Registered fact for sealing, but it is no longer
 /// live process-admission authority. The exact historical request therefore refuses before the
 /// process route's ordinary idempotent-204 shortcut and changes no retained evidence.

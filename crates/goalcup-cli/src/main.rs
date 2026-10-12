@@ -368,12 +368,11 @@ fn now_z() -> String {
 fn doctor(opts: commands::doctor::DoctorOptions) -> Result<u8, CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
-    let env = goalcup_cli::launch::process_env();
     let mut out = std::io::stdout();
     let mut err = std::io::stderr();
     let client = goalcup_cli::daemon::HttpDaemonClient::from_config_dir(&cfg).ok();
     let client = client
         .as_ref()
         .map(|c| c as &dyn goalcup_protocol::control::DaemonClient);
-    commands::doctor::run_with(client, &connectors, &cfg, &env, &opts, &mut out, &mut err)
+    commands::doctor::run_with(client, &connectors, &cfg, &opts, &mut out, &mut err)
 }

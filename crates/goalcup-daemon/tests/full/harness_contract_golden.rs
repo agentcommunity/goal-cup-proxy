@@ -32,7 +32,7 @@ use base64::Engine as _;
 use goalcup_daemon::redact::stream::StreamRedactor;
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource, EndReason};
 use goalcup_protocol::harness::HarnessManifest;
-use goalcup_protocol::manifest::{ConnectorManifest, RedactionPattern};
+use goalcup_protocol::manifest::RedactionPattern;
 use redaction::{P1, Producer, daemon_time};
 use serde_json::{Value, json};
 #[cfg(target_os = "macos")]
@@ -109,34 +109,13 @@ fn shipped_harness(id: &str) -> HarnessManifest {
     HarnessManifest::from_toml_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-/// The V1-era family the golden shape still carries: the `family` of the connector's V1
-/// `manifest.toml` when it ships one, otherwise its capture program. Never keyed by id.
-fn legacy_family(id: &str) -> String {
-    let v1 = connectors_root().join(id).join("manifest.toml");
-    match std::fs::read_to_string(&v1) {
-        Ok(text) => {
-            ConnectorManifest::from_toml_str(&text)
-                .unwrap_or_else(|e| panic!("{}: {e}", v1.display()))
-                .family
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            shipped_harness(id).capture.executable.program
-        }
-        Err(e) => panic!("{}: {e}", v1.display()),
-    }
+/// The family the golden shape carries: the connector's capture program. Never keyed by id.
+fn family(id: &str) -> String {
+    shipped_harness(id).capture.executable.program
 }
 
 fn redaction_patterns(id: &str) -> Vec<RedactionPattern> {
-    shipped_harness(id)
-        .redaction
-        .unwrap_or_default()
-        .extra_patterns
-        .into_iter()
-        .map(|pattern| RedactionPattern {
-            kind: pattern.kind,
-            regex: pattern.regex,
-        })
-        .collect()
+    goalcup_daemon::redact::extra_patterns_of(&shipped_harness(id))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -203,7 +182,7 @@ fn the_extra_redaction_patterns_and_their_recognizers_are_pinned() {
     let mut per_connector = serde_json::Map::new();
     for id in shipped_ids() {
         let patterns = redaction_patterns(&id);
-        let family = legacy_family(&id);
+        let family = family(&id);
         let accepted = StreamRedactor::with_extra_patterns(&patterns).map(|_| "ok");
         let each: Vec<Value> = patterns
             .iter()

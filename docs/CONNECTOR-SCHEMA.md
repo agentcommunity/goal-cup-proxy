@@ -315,13 +315,12 @@ non-UTF-8 name and other unhashable entry.
 The walk captures and hashes the same `harness.toml` and seed bytes the loader parses and later
 writes. A connector directory may contain only:
 
-- `harness.toml`;
-- a retained `manifest.toml` (parsed at startup until OS-29; its V1 path was deleted by D48);
-- `files/<path>` named by `capture.home.seed`; and
-- for a retained V1 manifest, `files/<path>` named by its `hook_install.template` rows.
+- `harness.toml`; and
+- `files/<path>` named by `capture.home.seed`.
 
-Where both manifests exist, their declared ids must match. Every declared seed and retained V1
-template must exist, and an unnamed file is refused.
+A leftover V1 `manifest.toml` is refused like any other unnamed file (OS-29).
+
+Every declared seed must exist, and an unnamed file is refused.
 
 For a discovered folder, `connector_folder_admission` compares three captured facts with the
 compiled pin table: immediate folder name, declared `id`, and whole-directory digest. If none

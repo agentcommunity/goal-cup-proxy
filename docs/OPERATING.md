@@ -25,7 +25,7 @@ Built binaries print `0.1.0`: the package version is independent of source relea
 contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
 `hermes-cli`. The separate private macOS packaging allowlist (`m2-pilot` in
 [packaging/README.md](../packaging/README.md)) stages only Codex and Claude, copying each selected
-directory whole, including seeds and its retained V1 `manifest.toml`. A source pin is not
+directory whole, including any seeds. A source pin is not
 evidence of package inclusion. macOS is the only measured platform. Linux builds, but a
 `goalcup start` capture is refused there: the chain's disk reservation is implemented only for
 macOS APFS.
@@ -42,10 +42,10 @@ writes, but CLI run/home/CA/seed preparation may already exist and is cleaned. A
 unfinished v5 capture has status/seal-only authority; other authenticated mutators refuse before
 side effects, and an unfinished launched capture receives one `IngestLost` gap.
 
-The V1 execution path was removed (D48; the `v0.5.0` tag keeps it). The build still parses the
-retained Codex and Claude `manifest.toml` files at startup. Full removal is ticket OS-29 and is not
-complete. The schema-1 synthetic contract kit covers exactly six cases: `controlled-workload` (no
-identity, append-only), `synthetic-preassigned` (launch identity, append-only),
+The V1 execution path was removed (D48; the `v0.5.0` tag keeps it), and the Codex and Claude
+`manifest.toml` files with it (OS-29): connectors load from `harness.toml` alone. The schema-1
+synthetic contract kit covers exactly six cases: `controlled-workload` (no identity,
+append-only), `synthetic-preassigned` (launch identity, append-only),
 `synthetic-stderr-token` (deferred identity, append-only), `synthetic-keyed-stderr` (the same
 with an invented child-only `DEEPSEEK_API_KEY` and a clean key scan), `synthetic-stdout-json` (launch
 identity, two snapshot generations), and `synthetic-keyed-stdout-json` (the same with an
@@ -352,7 +352,7 @@ whose bytes moved, and a v5 entry binds the digest at create and in
 `Launch.connector_dir_sha256`. `goalcup doctor` runs the CLI's own copy of the same comparison
 over the CLI's own installation.
 
-The table uses declared connector ids (`harness.toml`, else `manifest.toml`). Run it in the
+The table uses the connector ids `harness.toml` declares. Run it in the
 same commit as any change under `connectors/`;
 `sh scripts/pin-manifests.sh && git diff --exit-code` is what proves the pins match.
 `sh scripts/pin-manifests.sh --print` writes nothing and prints the directory rows — the mode

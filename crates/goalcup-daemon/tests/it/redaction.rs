@@ -66,15 +66,8 @@ fn the_widened_set_and_the_connectors_own_patterns_both_fire() {
         assert_eq!(out.spans[0].kind, kind);
     }
 
-    let m = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(
-        &std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../connectors/codex-cli/manifest.toml"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let mut r = Redactor::for_connector(&m).unwrap();
+    let m = connector("codex-cli");
+    let mut r = Redactor::for_patterns("codex-cli", &m).unwrap();
     assert!(
         r.kinds().len() > goalcup_daemon::redact::patterns().len(),
         "the connector's extra_patterns[] are appended, not ignored"
@@ -95,7 +88,7 @@ fn the_widened_set_and_the_connectors_own_patterns_both_fire() {
         );
         assert!(
             value.starts_with("<redacted:") && value.ends_with('>'),
-            "the brief names credits_remaining beside plan_type, and the manifest must \
+            "the brief names credits_remaining beside plan_type, and harness.toml must \
              too: {field} is {value}"
         );
     }
@@ -276,19 +269,12 @@ fn reverse_ordered_high_match_input_keeps_first_pattern_wins_and_source_order() 
     );
 }
 
-/// Acceptance line 4, the other half: `for_connector` catches Claude's billing header
+/// Acceptance line 4, the other half: `for_patterns` catches Claude's billing header
 /// block, exactly as it catches Codex's `plan_type`.
 #[test]
-fn for_connector_catches_claudes_billing_header_block() {
-    let m = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(
-        &std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../connectors/claude-code-cli/manifest.toml"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let mut r = Redactor::for_connector(&m).unwrap();
+fn for_patterns_catches_claudes_billing_header_block() {
+    let m = connector("claude-code-cli");
+    let mut r = Redactor::for_patterns("claude-code-cli", &m).unwrap();
     let out = r.apply(b"x-anthropic-billing-tier: enterprise-2026\n");
     assert_eq!(out.spans.len(), 1);
     assert_eq!(out.spans[0].kind, "anthropic_billing_header");
@@ -323,25 +309,16 @@ fn invalid_utf8_around_a_secret_is_preserved_and_the_secret_is_still_removed() {
 }
 
 /// A connector whose `extra_patterns[]` will not compile is refused at build time, not
-/// silently dropped: a pattern the participant can read in the manifest but that never
+/// silently dropped: a pattern the participant can read in `harness.toml` but that never
 /// fires is a privacy hole with a paper trail saying otherwise.
 #[test]
 fn an_uncompilable_extra_pattern_is_an_error_not_a_silent_drop() {
-    let mut m = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(
-        &std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../connectors/codex-cli/manifest.toml"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    m.redaction
-        .extra_patterns
-        .push(goalcup_protocol::manifest::RedactionPattern {
-            kind: "broken".to_string(),
-            regex: "([unclosed".to_string(),
-        });
-    let err = Redactor::for_connector(&m).unwrap_err();
+    let mut m = connector("codex-cli");
+    m.push(goalcup_protocol::manifest::RedactionPattern {
+        kind: "broken".to_string(),
+        regex: "([unclosed".to_string(),
+    });
+    let err = Redactor::for_patterns("codex-cli", &m).unwrap_err();
     assert!(format!("{err}").contains("broken"), "the kind names itself");
 }
 
@@ -573,52 +550,33 @@ fn the_shared_set_finds_nothing_new_in_the_committed_m0_fixtures() {
 /// `(?-u)` turns Unicode mode off, and a `regex::bytes` pattern in that mode may match
 /// bytes that are not valid UTF-8. That would widen a text-pattern contract to arbitrary
 /// binary bytes and could cut a span boundary through the middle of a codepoint. A
-/// connector manifest may not ask for that.
+/// connector's `harness.toml` may not ask for that.
 #[test]
 fn an_extra_pattern_that_turns_unicode_mode_off_is_refused() {
-    let base = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(
-        &std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../connectors/codex-cli/manifest.toml"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let base = connector("codex-cli");
     for regex in [r"(?-u)\xff+", r"(?i-u)secret", r"(?-ui:secret)"] {
         let mut m = base.clone();
-        m.redaction
-            .extra_patterns
-            .push(goalcup_protocol::manifest::RedactionPattern {
-                kind: "byte_mode".to_string(),
-                regex: regex.to_string(),
-            });
-        let err = Redactor::for_connector(&m).unwrap_err();
+        m.push(goalcup_protocol::manifest::RedactionPattern {
+            kind: "byte_mode".to_string(),
+            regex: regex.to_string(),
+        });
+        let err = Redactor::for_patterns("codex-cli", &m).unwrap_err();
         let text = format!("{err}");
         assert!(text.contains("byte_mode"), "{regex}: {text}");
         assert!(text.contains("Unicode"), "{regex}: {text}");
     }
 }
 
-/// The codex manifest strips the credit balance as well as `plan_type` and `rate_limits`:
+/// The codex `harness.toml` strips the credit balance as well as `plan_type` and `rate_limits`:
 /// it is the one number the spike measured fifteen times in ten minutes.
 #[test]
-fn the_codex_manifest_strips_the_credit_balance_it_names() {
-    let m = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(
-        &std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../connectors/codex-cli/manifest.toml"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+fn the_codex_harness_strips_the_credit_balance_it_names() {
+    let m = connector("codex-cli");
     assert!(
-        m.redaction
-            .extra_patterns
-            .iter()
-            .any(|p| p.kind == "codex_credits_remaining"),
-        "the manifest declares the rule a participant can read"
+        m.iter().any(|p| p.kind == "codex_credits_remaining"),
+        "harness.toml declares the rule a participant can read"
     );
-    let mut r = Redactor::for_connector(&m).unwrap();
+    let mut r = Redactor::for_patterns("codex-cli", &m).unwrap();
     let out = r.apply(br#"{"credits_remaining": 17.5, "plan_type": "pro"}"#);
     let kinds: Vec<&str> = out.spans.iter().map(|s| s.kind.as_str()).collect();
     assert_eq!(kinds, vec!["codex_credits_remaining", "codex_plan_type"]);
@@ -629,16 +587,17 @@ fn the_codex_manifest_strips_the_credit_balance_it_names() {
 // The connectors' own patterns, and the record they leave behind.
 // ---------------------------------------------------------------------------------------
 
-/// Load one shipped connector manifest.
-fn connector(id: &str) -> goalcup_protocol::manifest::ConnectorManifest {
+/// One shipped connector's `[redaction].extra_patterns`, read from its `harness.toml`.
+fn connector(id: &str) -> Vec<goalcup_protocol::manifest::RedactionPattern> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../connectors")
         .join(id)
-        .join("manifest.toml");
-    goalcup_protocol::manifest::ConnectorManifest::from_toml_str(
+        .join("harness.toml");
+    let harness = goalcup_protocol::harness::HarnessManifest::from_toml_str(
         &std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())),
     )
-    .expect("manifest parses")
+    .expect("harness.toml parses");
+    goalcup_daemon::redact::extra_patterns_of(&harness)
 }
 
 /// A connector's own `extra_patterns[]` must leave the record it fires on parseable, the
@@ -718,7 +677,7 @@ fn a_connector_pattern_leaves_the_record_valid_json_with_its_key_intact() {
         },
     ] {
         let m = connector(c.connector);
-        let mut r = Redactor::for_connector(&m).unwrap();
+        let mut r = Redactor::for_patterns(c.connector, &m).unwrap();
         let out = r.apply(c.record.as_bytes());
 
         let kinds: Vec<&str> = out.spans.iter().map(|s| s.kind.as_str()).collect();
@@ -763,7 +722,7 @@ fn a_connector_pattern_leaves_the_record_valid_json_with_its_key_intact() {
 #[test]
 fn stripping_rate_limits_leaves_the_token_count_record_readable() {
     let m = connector("codex-cli");
-    let mut r = Redactor::for_connector(&m).unwrap();
+    let mut r = Redactor::for_patterns("codex-cli", &m).unwrap();
     let record = br#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":412213,"output_tokens":1737}},"rate_limits":{"primary":{"used_percent":12.5,"resets_in_seconds":1800}}}}"#;
     let out = r.apply(record);
     let v: serde_json::Value = serde_json::from_slice(&out.bytes)
@@ -1871,21 +1830,12 @@ fn spikes_redact_py_is_never_weaker_than_the_daemon() {
 /// and two rules of that name overlapping cannot make `apply` panic.
 #[test]
 fn a_connector_pattern_named_masked_key_is_an_ordinary_rule() {
-    let mut m = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(
-        &std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../connectors/codex-cli/manifest.toml"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    m.redaction
-        .extra_patterns
-        .push(goalcup_protocol::manifest::RedactionPattern {
-            kind: "masked_key".to_string(),
-            regex: r"k-ab\.\.\.wx".to_string(),
-        });
-    let mut r = Redactor::for_connector(&m).expect("the connector compiles");
+    let mut m = connector("codex-cli");
+    m.push(goalcup_protocol::manifest::RedactionPattern {
+        kind: "masked_key".to_string(),
+        regex: r"k-ab\.\.\.wx".to_string(),
+    });
+    let mut r = Redactor::for_patterns("codex-cli", &m).expect("the connector compiles");
     for line in [
         &b"see sk-ab...wxyz now"[..],
         b"sk-ab...wxyz sk-ab...wxyz",
@@ -2029,21 +1979,12 @@ fn a_claim_across_a_pem_edge_is_merged_into_the_block() {
 /// is an ordinary rule, last in the list, and loses an overlap as any extra pattern does.
 #[test]
 fn a_connector_pattern_named_private_key_is_an_ordinary_rule() {
-    let mut m = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(
-        &std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../connectors/codex-cli/manifest.toml"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    m.redaction
-        .extra_patterns
-        .push(goalcup_protocol::manifest::RedactionPattern {
-            kind: "private_key".to_string(),
-            regex: r"A{10}-ZZZZ".to_string(),
-        });
-    let mut r = Redactor::for_connector(&m).expect("the connector compiles");
+    let mut m = connector("codex-cli");
+    m.push(goalcup_protocol::manifest::RedactionPattern {
+        kind: "private_key".to_string(),
+        regex: r"A{10}-ZZZZ".to_string(),
+    });
+    let mut r = Redactor::for_patterns("codex-cli", &m).expect("the connector compiles");
     let text = format!("ghp_{}-ZZZZ", "A".repeat(20));
     let out = r.apply(text.as_bytes());
     assert_eq!(

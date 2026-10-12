@@ -1,7 +1,7 @@
 //! `goalcup doctor` — is the daemon there, and what can it see.
 //!
-//! This command is [`crate::preflight`] run over every shipped connector with the daemon's
-//! reachability added, and it leaves under the CLI's own ladder: **0** when nothing failed,
+//! This command is [`crate::preflight`] run over every shipped connector's `harness.toml` with
+//! the daemon's reachability added, and it leaves under the CLI's own ladder: **0** when nothing failed,
 //! **1** when anything did — including on a machine with no daemon running. A sealed capture
 //! is checked by `goalcup-verify --capture-integrity`, not here; the V1 `--verify` mode was
 //! removed with the rest of the V1 path (D48).
@@ -15,7 +15,8 @@
 //! without one. A harness id no connector here declares is rung 1 naming the ids that are
 //! there, not an empty report that exits 0.
 
-use crate::preflight::{self, Check, Level, PreflightReport, connector_checks};
+use crate::connector::HarnessConnector;
+use crate::preflight::{self, Check, Level, PreflightReport, harness_pin_gate};
 use crate::{CliError, config, connector};
 use goalcup_protocol::control::{CONTROL_API_VERSION, DaemonClient};
 use serde::Serialize;
@@ -58,22 +59,20 @@ pub fn run_with(
     client: Option<&dyn DaemonClient>,
     connectors: &Path,
     cfg: &Path,
-    env: &BTreeMap<String, String>,
     opts: &DoctorOptions,
     out: &mut dyn Write,
     _err: &mut dyn Write,
 ) -> Result<u8, CliError> {
-    // Before anything is checked, and before `required_paths_gate` creates one of its own: a
-    // `.goalcup-preflight-<pid>` in the participant's configuration directory is litter from
-    // a process killed mid-check, and the diagnostic that goes looking at this directory is
-    // the right place to take it away.
+    // Before anything is checked: a `.goalcup-preflight-<pid>` in the participant's
+    // configuration directory is litter from an older doctor killed mid-check, and the
+    // diagnostic that goes looking at this directory is the right place to take it away.
     preflight::sweep_stale_probes(cfg);
     let daemon = daemon_check(client, cfg);
-    let mut reports = connector_reports(connectors, cfg, env)?;
+    let mut reports = connector_reports(connectors)?;
     // `--harness <id>` narrows both the report and the number. Everything is still
-    // loaded first — `connector::list` above is what refuses two directories declaring one
-    // id, and that refusal is about the installation rather than about the harness asked
-    // after — and then the list is narrowed to the one connector.
+    // loaded first — `connector_reports` is what refuses two directories declaring one id,
+    // and that refusal is about the installation rather than about the harness asked after —
+    // and then the list is narrowed to the one connector.
     if let Some(id) = &opts.harness {
         let all: Vec<String> = reports.iter().map(|r| r.connector_id.clone()).collect();
         reports.retain(|r| &r.connector_id == id);
@@ -108,57 +107,18 @@ pub fn run_with(
     Ok(u8::from(failed))
 }
 
-/// One report per connector directory, in path order.
+/// One report per connector directory (`<dir>/*/harness.toml`), in id order.
 ///
-/// Directories and not `connector::list`'s ids, and the difference is the whole point:
-/// discovery keys on the id a manifest **declares**, an unparseable manifest declares
-/// nothing, and a roster built from ids therefore drops exactly the connector this command
-/// exists to find.
+/// Directories and not ids, and the difference is the whole point: discovery keys on the id a
+/// manifest **declares**, an unloadable manifest declares nothing, and a roster built from ids
+/// would drop exactly the connector this command exists to find. So each directory is loaded
+/// on its own and a load that fails is a `Fail` naming the path.
 ///
-/// So each directory is loaded on its own and a load that fails is a `Fail` naming the path.
-/// The path and not an id, because a manifest that did not parse has no id to name.
-///
-/// One id declared by two directories is still the whole roster's refusal rather than one
-/// connector's `Fail` — nothing here can say which of the two a `goalcup start` would run —
-/// and `connector::list` is where that refusal is made, before a line is printed.
-fn connector_reports(
-    connectors: &Path,
-    cfg: &Path,
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<PreflightReport>, CliError> {
-    connector::list(connectors)?;
+/// One id declared by two directories is the whole roster's refusal rather than one
+/// connector's `Fail`: nothing here can say which of the two a `goalcup start` would run.
+fn connector_reports(connectors: &Path) -> Result<Vec<PreflightReport>, CliError> {
     let mut out: Vec<(PathBuf, PreflightReport)> = Vec::new();
-    for dir in connector::dirs(connectors)? {
-        let named = dir.display().to_string();
-        match connector::load_dir(&dir) {
-            Ok(c) => out.push((dir, connector_checks(&c, env, cfg))),
-            Err(e) => out.push((
-                dir,
-                PreflightReport {
-                    connector_id: named.clone(),
-                    // Nothing was probed: the manifest did not parse, so there is no
-                    // `detection.version_command` to run.
-                    harness_version: None,
-                    checks: vec![Check::new(
-                        "manifest",
-                        Level::Fail,
-                        format!(
-                            "the connector in {named} could not be loaded: {e}. This build \
-                             cannot read it, so nothing can be started under it."
-                        ),
-                        "reinstall the shipped `connectors/` beside the binary, or remove this \
-                         directory.",
-                    )],
-                },
-            )),
-        }
-    }
-
-    // Harness-contract inventory is additive during the transition. A directory that also has
-    // a V1 manifest is one connector, not two reports; its existing V1 probe stays only where
-    // V1 can safely run it. A harness-only connector is described from the manifest and never
-    // spawned by doctor.
-    let mut seen_harness: BTreeMap<String, String> = BTreeMap::new();
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
     for dir in connector::harness_dirs(connectors)? {
         let named = dir.display().to_string();
         match goalcup_protocol::harness::load_discovered_dir(
@@ -167,59 +127,40 @@ fn connector_reports(
         ) {
             Ok(loaded) => {
                 let id = loaded.manifest.id.clone();
-                if let Some(first) = seen_harness.insert(id.clone(), named.clone()) {
+                if let Some(first) = seen.insert(id.clone(), named.clone()) {
                     return Err(CliError::Refused(format!(
                         "connector {id:?} is declared by two harness directories: {first} and \
                          {named}. Discovery keys on the id a manifest declares."
                     )));
                 }
                 let decoder = decoder_check(&loaded.manifest);
-                match out.iter_mut().find(|(report_dir, _)| report_dir == &dir) {
-                    Some((_, report)) => report.checks.push(decoder),
-                    None => out.push((
-                        dir,
-                        PreflightReport {
-                            connector_id: id.clone(),
-                            harness_version: None,
-                            checks: vec![harness_only_check(&id), decoder],
-                        },
-                    )),
-                }
+                let pin = harness_pin_gate(
+                    &HarnessConnector {
+                        dir: dir.clone(),
+                        loaded,
+                    },
+                    false,
+                );
+                out.push((
+                    dir,
+                    PreflightReport {
+                        connector_id: id,
+                        checks: vec![pin, decoder],
+                    },
+                ));
             }
-            Err(error) => {
-                // A dual-manifest directory already has a V1 report; add one harness failure to
-                // that report rather than producing a second connector row.
-                if let Some(report) = out
-                    .iter_mut()
-                    .find(|(report_dir, _)| report_dir == &dir)
-                    .map(|(_, report)| report)
-                {
-                    report.checks.push(Check::new(
+            Err(error) => out.push((
+                dir,
+                PreflightReport {
+                    connector_id: named.clone(),
+                    checks: vec![Check::new(
                         "harness_manifest",
                         Level::Fail,
-                        format!("the harness manifest in {named} could not be loaded: {error}."),
-                        "restore the shipped harness.toml and connector files.",
-                    ));
-                } else {
-                    out.push((
-                        dir,
-                        PreflightReport {
-                            connector_id: named.clone(),
-                            harness_version: None,
-                            checks: vec![Check::new(
-                                "harness_manifest",
-                                Level::Fail,
-                                format!(
-                                    "the harness connector in {named} could not be loaded: \
-                                     {error}."
-                                ),
-                                "reinstall the shipped connectors directory or remove this \
-                                 directory.",
-                            )],
-                        },
-                    ));
-                }
-            }
+                        format!("the harness connector in {named} could not be loaded: {error}."),
+                        "reinstall the shipped connectors directory or remove this directory.",
+                    )],
+                },
+            )),
         }
     }
     out.sort_by(|(a_dir, a), (b_dir, b)| {
@@ -228,18 +169,6 @@ fn connector_reports(
             .then_with(|| a_dir.cmp(b_dir))
     });
     Ok(out.into_iter().map(|(_, report)| report).collect())
-}
-
-fn harness_only_check(id: &str) -> Check {
-    Check::new(
-        "harness_manifest",
-        Level::Warn,
-        format!(
-            "`{id}` uses the newer connector format, which has no install checks yet; \
-             nothing was probed."
-        ),
-        "nothing is required for the capture path.",
-    )
 }
 
 fn decoder_check(manifest: &goalcup_protocol::harness::HarnessManifest) -> Check {

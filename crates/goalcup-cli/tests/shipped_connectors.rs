@@ -1,26 +1,22 @@
-//! The shipped connectors, as this CLI depends on them.
+//! The shipped connectors, as this CLI depends on them: each loads from its `harness.toml`
+//! alone, is the directory this build pins, and is found by the id it declares.
 //!
-//! The launch, resume, kill and hook-install assertions below duplicate the protocol crate's own
-//! `manifest_load.rs` deliberately. It is the CLI that breaks when a launch recipe changes
-//! — a renamed flag, a `mode` that moved from `tui` to `server`, a resume argument that
-//! stopped being positional — so the CLI asserts the values it depends on rather than
-//! trusting that somebody else's test still covers them.
+//! The recipe assertions below duplicate the protocol crate's own schema tests deliberately.
+//! It is the CLI that breaks when a capture recipe changes — a renamed program, a termination
+//! strategy that moved, a base URL that crept into the environment — so the CLI asserts the
+//! values it depends on rather than trusting that somebody else's test still covers them.
 //!
-//! Nothing here mutates the process environment: the two cases that need one build a child's
-//! environment map and hand it to `Command`, which is a different thing from `set_var`
-//! (`tests/env_resolution.rs` says why that distinction is load-bearing).
+//! The V1 `manifest.toml` recipe, version-range and hook-template tests went with the V1 files
+//! (OS-29); the pin, discovery and duplicate-id promises they carried are asserted here over
+//! `harness.toml`.
 
 #[path = "common/support/mod.rs"]
 mod support;
 
-use goalcup_cli::connector::{self, PinState};
-use goalcup_cli::version::VersionRange;
-use goalcup_protocol::manifest::{InstallScope, KillStrategy, LaunchMode, SessionArgStyle};
+use goalcup_cli::connector;
+use goalcup_cli::preflight::{Level, harness_pin_gate};
+use goalcup_protocol::harness::Strategy;
 use std::path::PathBuf;
-
-fn load(id: &str) -> goalcup_cli::connector::Connector {
-    connector::load(&support::connectors_dir(), id).expect("the shipped connector loads")
-}
 
 fn load_harness(id: &str) -> goalcup_cli::connector::HarnessConnector {
     connector::load_harness(&support::connectors_dir(), id, false)
@@ -28,175 +24,57 @@ fn load_harness(id: &str) -> goalcup_cli::connector::HarnessConnector {
 }
 
 #[test]
-fn claude_launch_recipe_matches_spike_4_run_sh() {
-    let c = load("claude-code-cli");
-    let m = &c.manifest;
-    assert_eq!(m.launch.mode, LaunchMode::Tui);
-    assert_eq!(m.launch.program, "claude");
-    assert_eq!(
-        m.launch.args,
-        vec![
-            "--settings".to_string(),
-            "{artifact_root}/settings-launch.json".to_string(),
-            "--session-id".to_string(),
-            "{session_id}".to_string()
-        ]
-    );
-    assert_eq!(m.launch.home_env.as_deref(), Some("CLAUDE_CONFIG_DIR"));
-    assert_eq!(
-        m.launch.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
-        Some("{harness_home}")
-    );
-    assert_eq!(
-        m.launch
-            .env
-            .get("OTEL_LOG_RAW_API_BODIES")
-            .map(String::as_str),
-        Some("file:{artifact_root}/raw-bodies")
+fn claude_capture_recipe_is_the_pinned_headless_launch() {
+    let m = load_harness("claude-code-cli").loaded.manifest;
+    let c = &m.capture;
+    assert_eq!(c.executable.program, "claude");
+    assert_eq!(c.executable.version, "2.1.283", "launch-recipes §2");
+    let session = c
+        .args
+        .iter()
+        .position(|a| a == "--session-id")
+        .expect("the session id is preassigned on the command line");
+    assert_eq!(c.args[session + 1], "{session_id}");
+    assert!(
+        !c.args.iter().any(|a| a == "--no-session-persistence"),
+        "the native transcript is what the capture reads: {:?}",
+        c.args
     );
     assert!(
-        !m.launch.env.keys().any(|k| k.ends_with("_BASE_URL")),
+        !c.env.keys().any(|k| k.ends_with("_BASE_URL")),
         "D1: the tracker never sets a model base URL"
     );
-    assert!(
-        m.launch
-            .env_remove
-            .iter()
-            .any(|k| k == "ANTHROPIC_BASE_URL")
-    );
-    assert!(
-        m.launch
-            .banned_args
-            .iter()
-            .any(|a| a == "--no-session-persistence")
-    );
+    assert_eq!(c.home.env, "CLAUDE_CONFIG_DIR");
+    let t = m.termination();
     assert_eq!(
-        m.resume.args,
-        vec![
-            "--settings".to_string(),
-            "{artifact_root}/settings-launch.json".to_string(),
-            "--resume".to_string(),
-            "{session_id}".to_string()
-        ]
-    );
-    assert_eq!(
-        m.resume.session_arg_style,
-        SessionArgStyle::Flag,
-        "it is an enum at HEAD, not the string the old plan asserted"
-    );
-    let sl = m
-        .launch
-        .status_line
-        .as_ref()
-        .expect("R18: Claude gets a status line");
-    assert_eq!(
-        (sl.settings_key.as_str(), sl.command_template.as_str()),
-        ("statusLine", "cat {status_line_path}")
-    );
-    assert_eq!(m.hook_install[0].path, "settings-launch.json");
-    assert_eq!(m.hook_install[0].scope, InstallScope::ArtifactRoot);
-    assert_eq!(
-        m.hook_install.len(),
-        1,
-        "the workspace settings shim went with the hook leg"
-    );
-    assert_eq!(
-        (m.kill.strategy, m.kill.grace_seconds),
-        (KillStrategy::ProcessGroup, 10)
+        (t.strategy(), t.grace_seconds()),
+        (Strategy::ProcessGroup, 10)
     );
 }
 
 #[test]
-fn the_codex_recipe_matches_what_the_spike_actually_ran() {
-    let m = load("codex-cli").manifest;
-    assert_eq!(m.launch.program, "codex");
+fn the_codex_capture_recipe_kills_the_native_binary_not_the_wrapper() {
+    let m = load_harness("codex-cli").loaded.manifest;
+    let c = &m.capture;
+    assert_eq!(c.executable.program, "codex");
+    assert_eq!(c.executable.version, "0.153.0", "launch-recipes §2");
     assert!(
-        !m.launch.args.iter().any(|a| a.contains("hook")),
-        "the hook flags went with the hook leg (m2/wire deletion pass): {:?}",
-        m.launch.args
+        !c.args.iter().any(|a| a == "--ephemeral"),
+        "the rollout is what the capture reads: {:?}",
+        c.args
     );
-    assert_eq!(m.launch.home_env.as_deref(), Some("CODEX_HOME"));
-    assert_eq!(m.resume.args[0], "resume");
-    assert_eq!(m.resume.args[1], "{session_id}", "positional, at index 1");
-    assert_eq!(m.resume.session_arg_style, SessionArgStyle::Positional);
-    assert_eq!(m.kill.strategy, KillStrategy::NativePid);
+    assert!(
+        !c.env.keys().any(|k| k.ends_with("_BASE_URL")),
+        "D1: the tracker never sets a model base URL"
+    );
+    assert_eq!(c.home.env, "CODEX_HOME");
+    let t = m.termination();
+    assert_eq!(t.strategy(), Strategy::NativePid);
     assert_eq!(
-        m.kill.native_binary.as_deref(),
+        t.native_binary.as_deref(),
         Some("codex"),
         "D22: the npm wrapper is not the session"
     );
-    for banned in ["--ephemeral", "exec"] {
-        assert!(
-            m.launch.banned_args.iter().any(|a| a == banned),
-            "missing {banned}"
-        );
-    }
-}
-
-#[test]
-fn the_version_range_grammar_is_d12s_two_operators_and_compares_numerically() {
-    let r = VersionRange::parse(">=2.1.259").unwrap();
-    assert!(r.matches("2.1.259") && r.matches("2.2.0") && r.matches("2.1.300"));
-    assert!(
-        !r.matches("2.1.9"),
-        "numeric per component: 9 is not above 259"
-    );
-    assert!(!r.matches("2.0.999"));
-    let e = VersionRange::parse("=0.153.0").unwrap();
-    assert!(e.matches("0.153.0") && !e.matches("0.153.1"));
-    // D12: `=` records what was tested, it does not pin. Newer is
-    // untested and allowed; the bound is the floor.
-    use goalcup_cli::version::Standing;
-    assert_eq!(e.standing("0.153.1"), Standing::NewerThanTested);
-    assert_eq!(e.standing("0.152.9"), Standing::BelowFloor);
-    assert_eq!(r.standing("2.1.300"), Standing::Tested);
-    assert!(
-        !e.matches("0.153.0-beta"),
-        "a pre-release is a build made before the release D12 tested, and no range here can \
-         name a tag"
-    );
-    assert!(
-        VersionRange::parse("^1.2").is_err(),
-        "two operators, no more"
-    );
-    assert_eq!(
-        goalcup_cli::version::extract_version("codex-cli 0.153.0 (rust)").as_deref(),
-        Some("0.153.0")
-    );
-    assert_eq!(
-        goalcup_cli::version::extract_version("no numbers here"),
-        None
-    );
-    for id in ["claude-code-cli", "codex-cli"] {
-        VersionRange::parse(&load(id).manifest.tested_version_range)
-            .unwrap_or_else(|e| panic!("{id}: {e}"));
-    }
-}
-
-/// Each shipped schema-1 harness pins the exact version its recipe was measured at,
-/// and that version is one the unchanged V1 range already covers — the capture pin does not
-/// move `tested_version_range`, whose floor semantics are V1's (D12).
-#[test]
-fn each_harness_pins_an_exact_version_the_unchanged_v1_range_covers() {
-    use goalcup_cli::version::Standing;
-    for (id, range, version) in [
-        ("claude-code-cli", ">=2.1.259", "2.1.283"),
-        ("codex-cli", "=0.153.0", "0.153.0"),
-    ] {
-        let m = load(id).manifest;
-        assert_eq!(
-            m.tested_version_range, range,
-            "{id}: V1's range is untouched"
-        );
-        let h = load_harness(id);
-        let exe = &h.loaded.manifest.capture.executable;
-        assert_eq!(exe.version, version, "{id}: launch-recipes §2");
-        assert_eq!(
-            VersionRange::parse(range).unwrap().standing(&exe.version),
-            Standing::Tested,
-            "{id}"
-        );
-    }
 }
 
 /// Every host a shipped schema-1 harness names is one the recording proxy accepts — its
@@ -251,156 +129,140 @@ fn every_capture_host_is_one_the_proxy_accepts_and_the_two_host_rules_agree() {
 
 #[test]
 fn a_shipped_connector_is_pinned_by_the_verifier_this_build_links() {
-    // PRD 5.4: the digest the release-hash allowlist compares against is the one the verifier
-    // binary pins. Over the whole DIRECTORY, because PRD 5.4 says "manifests and shims" and
-    // the shims are the hook bodies under `files/`.
-    for id in ["claude-code-cli", "codex-cli"] {
-        let c = load(id);
-        // Lowercase hex, and the length alone does not say that: `ManifestPinning::resolve`
-        // compares case-insensitively, so a digest that started arriving uppercase from here
-        // would keep passing while every printed digest changed shape.
-        assert_eq!(c.manifest_sha256.len(), 64);
-        assert_eq!(c.dir_sha256.len(), 64);
-        assert_ne!(
-            c.manifest_sha256, c.dir_sha256,
-            "{id}: the directory digest covers files/ and the manifest digest does not"
-        );
+    // PRD 5.4: the digest the release-hash allowlist compares against is the one this build
+    // pins. Over the whole DIRECTORY, so a seed under `files/` is covered as well as the
+    // `harness.toml` beside it.
+    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
+        let c = load_harness(id);
+        let digest = &c.loaded.connector_dir_sha256;
+        // Lowercase hex, and the length alone does not say that: the pins are compared
+        // case-insensitively, so a digest that started arriving uppercase from here would
+        // keep passing while every printed digest changed shape.
+        assert_eq!(digest.len(), 64);
         assert!(
-            c.manifest_sha256
+            digest
                 .bytes()
                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
-            "{id}'s digest is lowercase hex: {}",
-            c.manifest_sha256
+            "{id}'s digest is lowercase hex: {digest}"
         );
-        assert!(
-            matches!(connector::pin_state(&c), PinState::Pinned),
+        assert_eq!(
+            Some(digest.as_str()),
+            goalcup_protocol::pins::pinned_connector_dir_sha256(id),
             "{id} must match goalcup_protocol::pins::pinned_connector_dir_sha256"
         );
+        let gate = harness_pin_gate(&c, false);
+        assert_eq!(gate.level, Level::Pass, "{id}: {}", gate.detail);
     }
-    // An edited manifest is Altered, and says which digest it should have been.
-    let tmp = tempfile::tempdir().unwrap();
-    support::copy_connector(&tmp, "claude-code-cli");
-    let path = tmp.path().join("claude-code-cli/manifest.toml");
-    let text = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, text.replace("free_ports = []", "free_ports = [1]")).unwrap();
-    let edited = connector::load(tmp.path(), "claude-code-cli").unwrap();
-    match connector::pin_state(&edited) {
-        PinState::Altered { pinned } => assert_eq!(
-            Some(pinned.as_str()),
-            goalcup_protocol::pins::pinned_connector_dir_sha256("claude-code-cli")
-        ),
-        other => panic!("an edited rulebook must not read as pinned: {other:?}"),
+    // An edited harness.toml under a pinned id is refused at load, with or without --dev, and
+    // the refusal names the digest it found.
+    let dir = support::connectors_dir_with_edited_harness("codex-cli");
+    assert_altered_is_refused(&dir, "codex-cli");
+}
+
+/// `dir/<id>` is a pinned id holding bytes that are not its pin: `load_harness` refuses it as
+/// rung 1 under both doors, naming the digest the directory actually has.
+fn assert_altered_is_refused(dir: &std::path::Path, id: &str) {
+    let found = goalcup_protocol::connector_dir::connector_dir_sha256(&dir.join(id)).unwrap();
+    assert_ne!(
+        Some(found.as_str()),
+        goalcup_protocol::pins::pinned_connector_dir_sha256(id)
+    );
+    for dev in [false, true] {
+        let error = match connector::load_harness(dir, id, dev) {
+            Ok(_) => panic!("{id}: an altered pinned connector must not load (dev {dev})"),
+            Err(error) => error,
+        };
+        assert_eq!(error.exit_code(), 1, "{error}");
+        let said = error.to_string();
+        assert!(
+            said.contains("exact pinned bytes") && said.contains(&found),
+            "dev {dev}: {said}"
+        );
     }
 }
 
-/// The gap the directory pin exists to close: the manifest is the shipped one, byte for
-/// byte, and a hook template beside it is not.
-///
-/// The daemon renders that template into the workspace, records its rendered digest as the
-/// config the entry will guard, and then guards it — so an edit here is an edit to what the
-/// run captures, made under a manifest that still passes every check taken over the file.
-/// `pin_state` reads `Altered`, and the manifest digest on the same `Connector` is still
-/// the shipped one, which is what makes the point rather than merely asserting it.
+/// The gap the directory pin exists to close: `harness.toml` is the shipped one, byte for
+/// byte, and a seed beside it is not. The seed is copied into the run's home, so an edit there
+/// is an edit to what the run does, made under a manifest that still passes every check taken
+/// over the file.
 #[test]
-fn an_edited_hook_template_is_altered_even_though_the_manifest_is_untouched() {
+fn an_edited_seed_is_altered_even_though_the_harness_toml_is_untouched() {
     let tmp = tempfile::tempdir().unwrap();
-    support::copy_connector(&tmp, "codex-cli");
-    let tracker = tmp.path().join("codex-cli/files/config.toml");
-    let mut body = std::fs::read(&tracker).unwrap();
+    support::copy_connector(&tmp, "hermes-cli");
+    let seed = tmp.path().join("hermes-cli/files/config.yaml");
+    let mut body = std::fs::read(&seed).unwrap();
     body.push(b'\n');
-    std::fs::write(&tracker, &body).unwrap();
+    std::fs::write(&seed, &body).unwrap();
 
-    let tampered = connector::load(tmp.path(), "codex-cli").unwrap();
     assert_eq!(
-        tampered.manifest_sha256,
-        support::connector("codex-cli").manifest_sha256,
-        "the manifest is untouched, and a digest over it sees nothing"
+        std::fs::read(tmp.path().join("hermes-cli/harness.toml")).unwrap(),
+        support::connector("hermes-cli").loaded.harness_toml,
+        "harness.toml is untouched, and a digest over it alone sees nothing"
     );
-    match connector::pin_state(&tampered) {
-        PinState::Altered { pinned } => assert_eq!(
-            Some(pinned.as_str()),
-            goalcup_protocol::pins::pinned_connector_dir_sha256("codex-cli")
-        ),
-        other => panic!("an edited hook template must not read as pinned: {other:?}"),
-    }
+    assert_altered_is_refused(tmp.path(), "hermes-cli");
 }
 
-/// The rest of the allowlist's vocabulary: a connector no build pins is `Unpinned`, and the
-/// roster's own edited-manifest fixture reads `Altered`.
-///
-/// `Unpinned` is the reading a hand-written connector gets, and it has to be reachable from
-/// a test or the third arm of the enum is a claim nothing checks. The fixture is a copy of a
-/// shipped connector under a new id, which is exactly how a participant would produce one.
+/// A connector no build pins is refused without `--dev` and admitted with it, and the report
+/// says which door it came through. The fixture is a copy of a shipped connector under a new
+/// id and a new folder, which is exactly how a participant would produce one: discovery uses
+/// the id the manifest declares, never an enumerated registry.
 #[test]
-fn a_connector_this_build_does_not_pin_reads_as_unpinned_and_an_edited_one_as_altered() {
+fn a_connector_this_build_does_not_pin_is_refused_without_dev_and_warned_with_it() {
     let tmp = tempfile::tempdir().unwrap();
-    // A third surface is declared from the Claude Code family beside both shipping
-    // surfaces. Discovery must use the id declared by each manifest, never an enumerated
-    // registry or the directory basename.
-    support::copy_connector(&tmp, "claude-code-cli");
-    std::fs::rename(
-        tmp.path().join("claude-code-cli"),
-        tmp.path().join("claude-code-synthetic"),
-    )
-    .unwrap();
-    let path = tmp.path().join("claude-code-synthetic/manifest.toml");
-    let text = std::fs::read_to_string(&path).unwrap();
-    let text = text.replacen(
-        "id = \"claude-code-cli\"",
-        "id = \"claude-code-synthetic\"",
-        1,
-    );
-    let text = text.replacen(
-        "harness = \"claude-code-cli\"\npath_glob = \"{config_dir}/projects/*/*.jsonl\"",
-        "harness = \"claude-code-synthetic\"\npath_glob = \"{config_dir}/projects/*/*.jsonl\"",
-        1,
-    );
-    std::fs::write(&path, text).unwrap();
     for id in ["claude-code-cli", "codex-cli"] {
         support::copy_connector(&tmp, id);
     }
-    let forked = connector::load(tmp.path(), "claude-code-synthetic").unwrap();
+    let forked = tmp.path().join("claude-code-synthetic");
+    std::fs::create_dir(&forked).unwrap();
+    let text = std::fs::read_to_string(tmp.path().join("claude-code-cli/harness.toml"))
+        .unwrap()
+        .replacen(
+            "id = \"claude-code-cli\"",
+            "id = \"claude-code-synthetic\"",
+            1,
+        );
+    std::fs::write(forked.join("harness.toml"), text).unwrap();
+
+    let c = connector::load_harness(tmp.path(), "claude-code-synthetic", true)
+        .expect("an unpinned connector loads through --dev");
     assert_eq!(
-        connector::pin_state(&forked),
-        PinState::Unpinned,
+        goalcup_protocol::pins::pinned_connector_dir_sha256("claude-code-synthetic"),
+        None,
         "no build pins a connector it does not ship"
     );
-    assert_eq!(forked.manifest.family, "claude-code");
-    assert_eq!(
-        goalcup_cli::connector::list(tmp.path()).unwrap(),
-        vec![
-            "claude-code-cli".to_string(),
-            "claude-code-synthetic".to_string(),
-            "codex-cli".to_string(),
-        ],
-        "discovery accepts a third declared surface without a registry edit"
-    );
-
-    let dir = support::connectors_dir_with_edited_manifest("codex-cli");
-    let edited = connector::load(&dir, "codex-cli").unwrap();
-    assert!(
-        matches!(connector::pin_state(&edited), PinState::Altered { .. }),
-        "the roster's edited-manifest fixture is what Task 9 refuses a start on"
-    );
+    let strict = harness_pin_gate(&c, false);
+    assert_eq!(strict.level, Level::Fail, "{}", strict.detail);
+    assert!(strict.fix.contains("--dev"), "{}", strict.fix);
+    let dev = harness_pin_gate(&c, true);
+    assert_eq!(dev.level, Level::Warn, "{}", dev.detail);
+    assert!(dev.detail.contains("--dev"), "{}", dev.detail);
 }
 
 /// Discovery over the shipped directory, and the two refusals it can produce.
 #[test]
 fn discovery_lists_what_ships_and_refuses_a_connector_that_does_not() {
     let dir = support::connectors_dir();
-    assert_eq!(
-        connector::list(&dir).unwrap(),
-        vec!["claude-code-cli".to_string(), "codex-cli".to_string()]
-    );
-    for id in ["claude-code-cli", "codex-cli"] {
+    let ids: Vec<String> = connector::harness_dirs(&dir)
+        .unwrap()
+        .iter()
+        .map(|d| d.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(ids, ["claude-code-cli", "codex-cli", "hermes-cli"]);
+    for id in &ids {
+        let c = load_harness(id);
+        assert_eq!(&c.loaded.manifest.id, id);
         assert!(
-            load(id).dir.join("manifest.toml").is_file(),
+            c.dir.join("harness.toml").is_file(),
             "`dir` is {id}'s own directory, which is where its files/ live"
+        );
+        assert!(
+            !c.dir.join("manifest.toml").exists(),
+            "{id}: no V1 manifest ships (OS-29)"
         );
     }
     // "pick a connector this build ships" is rung 1, the rung `UnsupportedConnector` gets.
-    let (code, said) = match connector::load(&dir, "cursor-cli") {
-        Ok(c) => (0, c.manifest.id),
+    let (code, said) = match connector::load_harness(&dir, "cursor-cli", false) {
+        Ok(c) => (0, c.loaded.manifest.id),
         Err(e) => (e.exit_code(), e.to_string()),
     };
     assert_eq!(
@@ -413,8 +275,8 @@ fn discovery_lists_what_ships_and_refuses_a_connector_that_does_not() {
     );
     // A traversal is not a connector id: nothing joins the caller's string onto the path.
     let traversal = "../connectors/codex-cli";
-    let (code, said) = match connector::load(&dir, traversal) {
-        Ok(c) => (0, c.manifest.id),
+    let (code, said) = match connector::load_harness(&dir, traversal, false) {
+        Ok(c) => (0, c.loaded.manifest.id),
         Err(e) => (e.exit_code(), e.to_string()),
     };
     assert_eq!(
@@ -435,20 +297,22 @@ fn discovery_lists_what_ships_and_refuses_a_connector_that_does_not() {
 ///
 /// Discovery keys on the id a manifest DECLARES, so two directories can declare one id — and
 /// the one that sorted second would vanish. That is where an unpinned rulebook would sit:
-/// `goalcup doctor` would report the pinned twin while `goalcup start` ran whichever the sort
-/// happened to reach first. Both [`connector::load`] and [`connector::list`] refuse instead.
+/// `goalcup doctor` would report one twin while `goalcup start` ran whichever the sort
+/// happened to reach first. [`connector::load_harness`] refuses instead.
 #[test]
 fn an_id_two_directories_declare_is_refused_by_name_and_by_both_paths() {
     let tmp = tempfile::tempdir().unwrap();
-    support::copy_connector(&tmp, "codex-cli");
-    let text = std::fs::read_to_string(tmp.path().join("codex-cli/manifest.toml")).unwrap();
-    // A second directory whose manifest declares the same id, which is exactly what a
+    let text = std::fs::read_to_string(support::connectors_dir().join("codex-cli/harness.toml"))
+        .unwrap()
+        .replacen("id = \"codex-cli\"", "id = \"codex-dup\"", 1);
+    // Two directories whose manifests declare the same id, which is exactly what a
     // participant produces by copying a connector directory and editing nothing.
-    let twin = tmp.path().join("codex-copy");
-    std::fs::create_dir_all(&twin).unwrap();
-    std::fs::write(twin.join("manifest.toml"), &text).unwrap();
+    for folder in ["codex-dup", "codex-copy"] {
+        std::fs::create_dir(tmp.path().join(folder)).unwrap();
+        std::fs::write(tmp.path().join(folder).join("harness.toml"), &text).unwrap();
+    }
 
-    let (code, said) = match connector::load(tmp.path(), "codex-cli") {
+    let (code, said) = match connector::load_harness(tmp.path(), "codex-dup", true) {
         Ok(c) => (0, format!("loaded {}", c.dir.display())),
         Err(e) => (e.exit_code(), e.to_string()),
     };
@@ -456,23 +320,30 @@ fn an_id_two_directories_declare_is_refused_by_name_and_by_both_paths() {
         code, 1,
         "an ambiguous id is a refusal and not a silent choice: {said}"
     );
-    for named in ["codex-cli", "codex-copy"] {
+    for named in ["codex-dup", "codex-copy"] {
         assert!(
             said.contains(&tmp.path().join(named).display().to_string()),
             "the refusal names {named}'s path so the twin can be found: {said}"
         );
     }
-    let listed = match connector::list(tmp.path()) {
-        Ok(ids) => format!("{ids:?}"),
-        Err(e) => {
-            assert_eq!(e.exit_code(), 1);
-            String::new()
-        }
-    };
-    assert!(
-        listed.is_empty(),
-        "and the roster refuses too rather than listing the id once: {listed}"
-    );
+}
+
+/// `pin-manifests.sh` copied beside a copy of the shipped connectors, run with `args`.
+#[cfg(unix)]
+fn run_pinner(root: &std::path::Path, args: &[&str]) -> std::process::Output {
+    let scripts = root.join("scripts");
+    std::fs::create_dir_all(&scripts).unwrap();
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/pin-manifests.sh"),
+        scripts.join("pin-manifests.sh"),
+    )
+    .unwrap();
+    std::process::Command::new("sh")
+        .arg(scripts.join("pin-manifests.sh"))
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap()
 }
 
 /// The shell pinner keys table rows by manifest-declared ids too, so it must reject the
@@ -484,20 +355,6 @@ fn the_pinner_refuses_duplicate_declared_ids() {
     let connectors = tmp.path().join("connectors");
     support::copy_connectors_into(&connectors);
     let hyphen_id = "-n";
-    let original = connectors.join("claude-code-cli/manifest.toml");
-    let original_text = std::fs::read_to_string(&original).unwrap();
-    std::fs::write(
-        &original,
-        original_text.replacen(
-            "id = \"claude-code-cli\"",
-            &format!("id = \"{hyphen_id}\""),
-            1,
-        ),
-    )
-    .unwrap();
-    // The connector's harness.toml declares the id too, and the pinner refuses a folder whose
-    // two files disagree (`folder_id`, another refusal, covered by
-    // `the_pinner_refuses_a_harness_toml_whose_id_differs_from_the_manifests`); rewrite it so only the duplicate is left.
     let harness = connectors.join("claude-code-cli/harness.toml");
     let harness_text = std::fs::read_to_string(&harness).unwrap();
     std::fs::write(
@@ -511,22 +368,9 @@ fn the_pinner_refuses_duplicate_declared_ids() {
     .unwrap();
     let twin = connectors.join("claude-code-cli-copy");
     std::fs::create_dir(&twin).unwrap();
-    std::fs::copy(&original, twin.join("manifest.toml")).unwrap();
     std::fs::copy(&harness, twin.join("harness.toml")).unwrap();
-    let scripts = tmp.path().join("scripts");
-    std::fs::create_dir(&scripts).unwrap();
-    std::fs::copy(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/pin-manifests.sh"),
-        scripts.join("pin-manifests.sh"),
-    )
-    .unwrap();
 
-    let output = std::process::Command::new("sh")
-        .arg(scripts.join("pin-manifests.sh"))
-        .arg("--print")
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
+    let output = run_pinner(tmp.path(), &["--print"]);
     assert!(!output.status.success(), "duplicate ids must refuse");
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
@@ -536,133 +380,41 @@ fn the_pinner_refuses_duplicate_declared_ids() {
     assert!(stderr.contains(hyphen_id), "{stderr}");
 }
 
-/// `pin-manifests.sh`'s `folder_id` refuses a folder whose `harness.toml` and `manifest.toml`
-/// declare different ids, because one pin table would be keyed by an id the other does not carry.
+/// A connector folder without a `harness.toml` — a leftover V1 folder holding only a
+/// `manifest.toml`, say — is refused by the pinner in both modes, and the rewrite mode leaves
+/// the committed table untouched rather than writing one that silently lacks that connector.
 #[cfg(unix)]
 #[test]
-fn the_pinner_refuses_a_harness_toml_whose_id_differs_from_the_manifests() {
+fn the_pinner_refuses_a_folder_without_a_harness_toml() {
     let tmp = tempfile::tempdir().unwrap();
     let connectors = tmp.path().join("connectors");
     support::copy_connectors_into(&connectors);
-    let harness = connectors.join("codex-cli/harness.toml");
-    let text = std::fs::read_to_string(&harness).unwrap();
-    assert!(text.contains("id = \"codex-cli\""));
-    std::fs::write(
-        &harness,
-        text.replacen("id = \"codex-cli\"", "id = \"codex-cli-other\"", 1),
-    )
-    .unwrap();
-    let scripts = tmp.path().join("scripts");
-    std::fs::create_dir(&scripts).unwrap();
-    std::fs::copy(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/pin-manifests.sh"),
-        scripts.join("pin-manifests.sh"),
-    )
-    .unwrap();
+    let v1_only = connectors.join("v1-only");
+    std::fs::create_dir(&v1_only).unwrap();
+    std::fs::write(v1_only.join("manifest.toml"), "id = \"v1-only\"\n").unwrap();
+    let table = tmp
+        .path()
+        .join("crates/goalcup-protocol/pins/connector-dirs.txt");
+    std::fs::create_dir_all(table.parent().unwrap()).unwrap();
+    std::fs::write(&table, "sentinel\n").unwrap();
 
-    let output = std::process::Command::new("sh")
-        .arg(scripts.join("pin-manifests.sh"))
-        .arg("--print")
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-    assert!(!output.status.success(), "disagreeing ids must refuse");
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(
-        stderr.contains("harness.toml declares 'codex-cli-other' and manifest.toml 'codex-cli'"),
-        "{stderr}"
+    for args in [&["--print"][..], &[][..]] {
+        let output = run_pinner(tmp.path(), args);
+        assert!(
+            !output.status.success(),
+            "{args:?}: a folder without harness.toml must refuse"
+        );
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains("holds no harness.toml"),
+            "{args:?}: {stderr}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(&table).unwrap(),
+        "sentinel\n",
+        "a refused rewrite writes no table"
     );
-}
-
-/// The D12 range, run against a harness binary's real output rather than a string literal.
-///
-/// The fake `claude` is resolved **on `PATH`** by a child shell, because that is how the
-/// launch this range predicts will resolve it. The child's environment is built here rather
-/// than inherited: it carries `PATH` and nothing else, so no model base URL and no proxy is
-/// set for the probe, and the assertion below checks that rather than trusting it.
-///
-/// Running the version command itself is `preflight::sample_harness_version`. What is under
-/// test here is the pair — `extract_version` over what a harness actually printed, and
-/// `VersionRange::matches` over what came out.
-#[cfg(unix)]
-#[test]
-fn the_range_holds_against_a_fake_harness_on_path_in_and_out_of_range() {
-    let range = VersionRange::parse(">=2.1.259").expect("Claude's shipped range");
-    for (printed, in_range) in [
-        ("2.1.259 (Claude Code)", true),
-        ("2.1.9 (Claude Code)", false),
-    ] {
-        let tmp = tempfile::tempdir().expect("a directory to put a fake harness in");
-        let fake = tmp.path().join("claude");
-        std::fs::write(&fake, format!("#!/bin/sh\necho '{printed}'\n")).expect("the fake harness");
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
-                .expect("the fake harness is executable");
-        }
-
-        let mut env = support::clean_env();
-        env.insert("PATH".to_string(), tmp.path().display().to_string());
-        assert!(
-            !env.keys()
-                .any(|k| k.ends_with("_BASE_URL") || k.ends_with("_PROXY")),
-            "a version probe never runs with a model base URL or a proxy set: {env:?}"
-        );
-        // `/bin/sh` by absolute path, so the only thing `PATH` above resolves is the fake.
-        let mut command = std::process::Command::new("/bin/sh");
-        command
-            .args(["-c", "claude --version"])
-            .env_clear()
-            .envs(&env);
-        let out = output_within(command, goalcup_cli::preflight::PROBE_TIMEOUT);
-        assert!(
-            out.status.success(),
-            "the fake harness exited {:?}",
-            out.status
-        );
-
-        let said = String::from_utf8_lossy(&out.stdout).to_string();
-        let found = goalcup_cli::version::extract_version(&said)
-            .unwrap_or_else(|| panic!("no version in {said:?}"));
-        assert_eq!(
-            range.matches(&found),
-            in_range,
-            "{found:?} against >=2.1.259, from a harness that printed {said:?}"
-        );
-    }
-}
-
-/// `Command::output()` with the bound `preflight` puts on its own probe.
-///
-/// The same shape as `sample_harness_version_within`'s wait — poll `try_wait`, kill at the
-/// deadline, and only then read the pipes, so a child that filled one cannot hold this
-/// process while this process holds it. That function is not reusable here (it takes a
-/// `Connector` and runs the manifest's own version command), so what is shared is the bound
-/// itself: [`goalcup_cli::preflight::PROBE_TIMEOUT`].
-#[cfg(unix)]
-fn output_within(
-    mut command: std::process::Command,
-    timeout: std::time::Duration,
-) -> std::process::Output {
-    let mut child = command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("the child runs");
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        match child.try_wait().expect("waiting on the child") {
-            Some(_) => break,
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("the child did not exit within {timeout:?}");
-            }
-            None => std::thread::sleep(std::time::Duration::from_millis(20)),
-        }
-    }
-    child.wait_with_output().expect("what the child printed")
 }
 
 /// `config::connectors_dir`'s exe-relative fallback, driven through a child process.
@@ -678,7 +430,7 @@ fn output_within(
 /// back to a checkout that happens to be two levels above it.
 #[cfg(unix)]
 #[test]
-fn connectors_dir_finds_the_shipped_manifests_beside_the_binary_it_was_run_from() {
+fn connectors_dir_finds_the_shipped_connectors_beside_the_binary_it_was_run_from() {
     let me = std::env::current_exe().expect("this test binary's own path");
     let name = me
         .file_name()
@@ -764,7 +516,7 @@ const CHILD_AGREED: &str = "goalcup-test: connectors_dir() resolved what the lay
 /// the gate honest is [`CHILD_AGREED`], which the parent asserts on.
 #[cfg(unix)]
 #[test]
-#[ignore = "run by connectors_dir_finds_the_shipped_manifests_beside_the_binary_it_was_run_from"]
+#[ignore = "run by connectors_dir_finds_the_shipped_connectors_beside_the_binary_it_was_run_from"]
 fn the_child_half_of_the_connectors_dir_fallback() {
     let Ok(expected) = std::env::var(EXPECTED_CONNECTORS_ENV) else {
         println!("${EXPECTED_CONNECTORS_ENV} is unset: this case is run by its parent, not alone.");
@@ -781,10 +533,9 @@ fn the_child_half_of_the_connectors_dir_fallback() {
         "connectors_dir() resolved {} and the layout put them in {expected}",
         resolved.display()
     );
-    assert_eq!(
-        goalcup_cli::connector::list(&resolved).unwrap(),
-        vec!["claude-code-cli".to_string(), "codex-cli".to_string()],
-        "and what it found is the shipped rulebook"
-    );
+    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
+        goalcup_cli::connector::load_harness(&resolved, id, false)
+            .unwrap_or_else(|e| panic!("and what it found is the shipped rulebook: {id}: {e}"));
+    }
     println!("{CHILD_AGREED}");
 }

@@ -99,9 +99,9 @@ by-hand suites and the CI smoke check are in
 [docs/OPERATING.md](docs/OPERATING.md#building-and-verifying).
 
 The gate covers the M2 capture product, which is the whole build: the V1/v4
-transcript-and-hook path was removed (D48), so there is no second feature set to gate. The build
-still parses the retained `manifest.toml` compatibility files in the Codex and Claude connector
-directories at startup; removing that parser dependency is ticket OS-29, not completed work.
+transcript-and-hook path was removed (D48), so there is no second feature set to gate. Every
+connector loads from its `harness.toml` alone; the V1 `manifest.toml` files and their startup
+parser were removed (OS-29).
 
 Narrower runs: `cargo nextest run --offline -p goalcup-daemon`, or one module with
 `cargo test --offline -p goalcup-daemon --test it control_api::`. Run

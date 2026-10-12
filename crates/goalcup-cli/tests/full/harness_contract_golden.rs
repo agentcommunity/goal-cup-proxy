@@ -54,7 +54,6 @@ use goalcup_protocol::capture_policy::{
     CA_REGISTRY, CREDENTIAL_ENV, CaMode, EnvContext, capture_arg_denied, env_key_denied,
 };
 use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, Origin};
-use goalcup_protocol::manifest::ConnectorManifest;
 use m2_profile_support as s;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -528,15 +527,14 @@ fn streams_json(family: &str, credential: Option<&str>) -> Value {
 }
 
 /// The V1-era fields the golden shape still carries for one connector, derived from its files
-/// and never from its id, so a new folder needs no edit here.
+/// and never from its id, so a new folder needs no edit here. Every shipped connector is
+/// schema 1 only (OS-29): capture only, and its family is its program. The controlled workload
+/// is this file's own fixture, not a folder under `connectors/`.
 struct Legacy {
     family: String,
     capture_only: bool,
 }
 
-/// A connector that ships a V1 `manifest.toml` takes its `family` from it and is a launch-mode
-/// connector. One without (schema 1 only) is capture only, and its family is its program. The
-/// controlled workload is this file's own fixture, not a folder under `connectors/`.
 fn legacy(c: &HarnessConnector) -> Legacy {
     if c.loaded.manifest.id == CONTROLLED {
         return Legacy {
@@ -544,19 +542,9 @@ fn legacy(c: &HarnessConnector) -> Legacy {
             capture_only: false,
         };
     }
-    let v1 = c.dir.join("manifest.toml");
-    match std::fs::read_to_string(&v1) {
-        Ok(text) => Legacy {
-            family: ConnectorManifest::from_toml_str(&text)
-                .unwrap_or_else(|e| panic!("{}: {e}", v1.display()))
-                .family,
-            capture_only: false,
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Legacy {
-            family: profile(c).executable.program.clone(),
-            capture_only: true,
-        },
-        Err(e) => panic!("{}: {e}", v1.display()),
+    Legacy {
+        family: profile(c).executable.program.clone(),
+        capture_only: true,
     }
 }
 
@@ -1643,7 +1631,6 @@ fn enumeration(root: &Path) -> Value {
             "capture_only": legacy.capture_only,
             "has_pinned_dir_digest": goalcup_protocol::pins::pinned_connector_dir_sha256(id).is_some(),
             "dir_digest_matches_its_pin": goalcup_protocol::pins::connector_dir_is_pinned(id, &c.loaded.connector_dir_sha256),
-            "manifest_files": ["manifest.toml"],
         }));
     }
     json!({
@@ -1766,12 +1753,12 @@ fn a_new_schema1_connector_needs_no_edit_to_this_file() {
         json!(EXTRA),
     );
     expect(
-        "family (no V1 manifest: the program)",
+        "family (the program)",
         extra["connector"]["family"].clone(),
         json!("synthtool"),
     );
     expect(
-        "capture_only (no V1 manifest)",
+        "capture_only",
         extra["connector"]["capture_only"].clone(),
         json!(true),
     );

@@ -10,7 +10,6 @@ use goalcup_daemon::registry::{Entry, RunKeys};
 use goalcup_daemon::status::StatusInputs;
 use goalcup_protocol::control::EventStatus;
 use goalcup_protocol::events::HealthState;
-use goalcup_protocol::manifest::ConnectorManifest;
 use std::sync::OnceLock;
 
 /// An entry with a clock: started, with a deadline the status can count down to.
@@ -39,14 +38,6 @@ pub fn started_entry() -> Entry {
     entry
 }
 
-/// The shipped Claude manifest, once, so `StatusInputs` has something to borrow that
-/// outlives the call. `StatusInputs` holds a `&ConnectorManifest`, and a fixture that
-/// built one on the stack could not return the struct that borrows it.
-fn claude_manifest() -> &'static ConnectorManifest {
-    static MANIFEST: OnceLock<ConnectorManifest> = OnceLock::new();
-    MANIFEST.get_or_init(|| super::manifest("claude-code-cli"))
-}
-
 pub fn event_status() -> EventStatus {
     EventStatus {
         t0: "2026-09-04T00:00:00Z".to_string(),
@@ -56,11 +47,10 @@ pub fn event_status() -> EventStatus {
     }
 }
 
-/// What the daemon knows about `entry` at one moment, against the shipped manifest.
+/// What the daemon knows about `entry` at one moment.
 pub fn status_inputs(entry: &Entry) -> StatusInputs<'_> {
     StatusInputs {
         entry,
-        manifest: Some(claude_manifest()),
         arming: GateState::Started,
         health: HealthState::Online,
         events_uploaded: 206,

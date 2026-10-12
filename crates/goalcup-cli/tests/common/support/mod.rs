@@ -73,16 +73,16 @@ pub fn connectors_dir() -> PathBuf {
     repo_root().join("connectors")
 }
 
-/// The shipped connector `id`, loaded from [`connectors_dir`].
-pub fn connector(id: &str) -> goalcup_cli::connector::Connector {
-    match goalcup_cli::connector::load(&connectors_dir(), id) {
+/// The shipped connector `id`, loaded from [`connectors_dir`] by its `harness.toml`.
+pub fn connector(id: &str) -> goalcup_cli::connector::HarnessConnector {
+    match goalcup_cli::connector::load_harness(&connectors_dir(), id, false) {
         Ok(c) => c,
         Err(e) => panic!("the shipped connector {id}: {e}"),
     }
 }
 
-/// `connectors/<id>/` copied to `<tmp>/<id>/`, whole — the manifest and the `files/` beside
-/// it — so a test can edit a copy without touching the pinned original.
+/// `connectors/<id>/` copied to `<tmp>/<id>/`, whole — the `harness.toml` and any `files/`
+/// beside it — so a test can edit a copy without touching the pinned original.
 pub fn copy_connector(tmp: &tempfile::TempDir, id: &str) {
     copy_tree(&connectors_dir().join(id), &tmp.path().join(id));
 }
@@ -110,27 +110,28 @@ pub fn copy_connectors_into(dir: &Path) {
     }
 }
 
-/// A connectors directory holding one connector whose manifest is **not** the one this
+/// A connectors directory holding one connector whose `harness.toml` is **not** the one this
 /// build pins: `connectors/<id>/`, copied, with a comment appended.
 ///
 /// A comment and not a value, deliberately. What the release-hash allowlist compares is the
-/// file's bytes, so the smallest possible edit is the honest fixture: it proves the digest
-/// is over the file rather than over a re-serialisation of the parsed manifest, and it
-/// leaves a manifest that still parses and still passes `validate()` — which is exactly the
-/// case a participant produces, and exactly the case that would otherwise pass unnoticed.
+/// directory's bytes, so the smallest possible edit is the honest fixture: it proves the digest
+/// is over the file rather than over a re-serialisation of the parsed manifest, and it leaves
+/// a manifest that still parses and still validates — which is exactly the case a participant
+/// produces, and exactly the case that would otherwise pass unnoticed.
 ///
 /// Leaked like [`tmp_cfg`], so the caller gets a `PathBuf` without holding a guard.
-pub fn connectors_dir_with_edited_manifest(id: &str) -> PathBuf {
+pub fn connectors_dir_with_edited_harness(id: &str) -> PathBuf {
     let root = empty_cfg();
     copy_tree(&connectors_dir().join(id), &root.join(id));
-    let manifest = root.join(id).join("manifest.toml");
-    let text = match std::fs::read_to_string(&manifest) {
+    let harness = root.join(id).join("harness.toml");
+    let text = match std::fs::read_to_string(&harness) {
         Ok(text) => text,
-        Err(e) => panic!("{}: {e}", manifest.display()),
+        Err(e) => panic!("{}: {e}", harness.display()),
     };
-    let edited = format!("{text}\n# edited by a test: this manifest is no longer the pinned one\n");
-    if let Err(e) = std::fs::write(&manifest, edited) {
-        panic!("{}: {e}", manifest.display());
+    let edited =
+        format!("{text}\n# edited by a test: this harness.toml is no longer the pinned one\n");
+    if let Err(e) = std::fs::write(&harness, edited) {
+        panic!("{}: {e}", harness.display());
     }
     root
 }

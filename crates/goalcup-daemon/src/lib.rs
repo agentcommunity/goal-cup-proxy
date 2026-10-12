@@ -22,7 +22,6 @@ mod fsutil;
 /// The authenticated, bounded capture ingest listener.
 pub mod ingest;
 /// Bounded, scoped native byte capture.
-pub mod manifests;
 pub mod native_capture;
 pub mod paths;
 pub mod redact;

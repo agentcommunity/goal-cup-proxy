@@ -1,7 +1,7 @@
 //! Fixtures shared by the integration tests in this crate; it is compiled into every test
 //! binary that declares `mod support`.
 //!
-//! What is here directly: a registry with one entry, the shipped manifests, a loopback upload
+//! What is here directly: a registry with one entry, a loopback upload
 //! target and a daemon config file. The bigger harnesses are the submodules:
 //! [`daemon`] (the process-level object), [`control`] (its control listener and a client) and
 //! [`status`] (a status document and the reader that checks its signature).
@@ -29,19 +29,6 @@ pub mod tree;
 pub use status::*;
 
 use goalcup_daemon::registry::{Entry, ExpectedProcessHandoff, Registry, RunKeys};
-use goalcup_protocol::manifest::ConnectorManifest;
-
-/// The shipped connector manifests, read from `connectors/<id>/manifest.toml`. Loading the
-/// real file rather than a hand-written stub is the whole point of the block-shape test:
-/// a manifest that changed its `response_shape` has to fail here.
-pub fn manifest(id: &str) -> ConnectorManifest {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../connectors")
-        .join(id)
-        .join("manifest.toml");
-    let text = std::fs::read_to_string(&path).expect("the shipped manifest");
-    ConnectorManifest::from_toml_str(&text).expect("the shipped manifest parses")
-}
 
 /// One entry, put into `registry` and returned as it was stored.
 pub fn entry_in(

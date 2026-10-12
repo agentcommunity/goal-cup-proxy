@@ -2,27 +2,8 @@
 //! not a parser lives here.
 
 use crate::ProtocolError;
-use crate::connector_dir::hash_connector_dir_listing;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-
-/// The connector-directory digest and the exact `manifest.toml` bytes that contributed to
-/// it. The daemon uses this result to compile trusted foreign scans: parsing a second path
-/// read after accepting the directory digest could authorize bytes that were never hashed.
-pub fn connector_dir_sha256_with_manifest(dir: &Path) -> Result<(String, Vec<u8>), ProtocolError> {
-    let (sha256, manifest) = hash_connector_dir(dir)?;
-    let manifest = manifest.ok_or_else(|| ProtocolError::Field {
-        field: "connector_dir".to_string(),
-        reason: format!("{} contains no regular manifest.toml", dir.display()),
-    })?;
-    Ok((sha256, manifest))
-}
-
-fn hash_connector_dir(dir: &Path) -> Result<(String, Option<Vec<u8>>), ProtocolError> {
-    let mut listing = hash_connector_dir_listing(dir, |path| path == "manifest.toml")?;
-    Ok((listing.sha256, listing.captured.remove("manifest.toml")))
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

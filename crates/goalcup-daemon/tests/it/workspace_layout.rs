@@ -1,24 +1,12 @@
 //! Where the artifact root may sit relative to the workspace, that the workspace is a new
 //! directory outside any Git worktree with zero entries, that the workspace walk applies its
-//! exclusions the way the seal reads them, and the connector path templates. The V1
-//! `hook_install[]` rendering these tests also covered was removed by OS-31.
+//! exclusions the way the seal reads them, and the path-template renderer. The V1
+//! `hook_install[]` rendering these tests also covered was removed by OS-31, and the walk over
+//! the V1 manifests' templates by OS-29.
 
 use goalcup_daemon::paths::{PathVars, claude_slug, expand_globs, resolve_template};
 use goalcup_daemon::workspace::*;
-use goalcup_protocol::manifest::ConnectorManifest;
 use std::path::{Path, PathBuf};
-
-fn connector_dir(id: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../connectors")
-        .join(id)
-}
-
-fn manifest(id: &str) -> ConnectorManifest {
-    let path = connector_dir(id).join("manifest.toml");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    ConnectorManifest::from_toml_str(&text).expect("manifest parses")
-}
 
 // ---------------------------------------------------------------- the workspace
 
@@ -226,44 +214,6 @@ fn templates_resolve_every_variable_and_glob_the_unknown_session_id() {
     let err = resolve_template("{config-dir}/projects", &bound)
         .expect_err("`config-dir` is not one of the nine tokens; `config_dir` is");
     assert!(format!("{err}").contains("config-dir"), "got {err}");
-}
-
-#[test]
-fn every_path_template_in_every_manifest_uses_only_the_nine_tokens() {
-    let vars = PathVars::new(
-        PathBuf::from("/tmp/ws-one"),
-        PathBuf::from("/Users/team"),
-        PathBuf::from("/tmp/home/.config"),
-        PathBuf::from("/var/goalcup/entry-0001"),
-        Some("95addb64".into()),
-        ("2026".into(), "09".into(), "04".into()),
-    );
-    for id in ["claude-code-cli", "codex-cli"] {
-        let m = manifest(id);
-        for store in &m.store {
-            for template in [
-                Some(store.path_template.clone()),
-                store.subagent_path_template.clone(),
-                store.spill_path_template.clone(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                resolve_template(&template, &vars)
-                    .unwrap_or_else(|e| panic!("{id}/{}: {template}: {e}", store.name));
-            }
-        }
-        for lock in &m.lock_paths {
-            resolve_template(lock, &vars).unwrap_or_else(|e| panic!("{id}: {lock}: {e}"));
-        }
-        for allowed in &m.config_allowlist {
-            resolve_template(allowed, &vars).unwrap_or_else(|e| panic!("{id}: {allowed}: {e}"));
-        }
-        for scan in &m.foreign_scan {
-            resolve_template(&scan.path_glob, &vars)
-                .unwrap_or_else(|e| panic!("{id}: {}: {e}", scan.path_glob));
-        }
-    }
 }
 
 #[test]

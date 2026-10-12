@@ -6,8 +6,7 @@
 #
 # This file is a template. Its user writes a copy into a private connectors directory, read by
 # both `goalcup` (GOALCUP_CONNECTORS_DIR) and `goalcup-daemon` (connectors_dir), with four
-# placeholders filled from the machine it runs on. They are the same four as in the V1
-# `manifest.toml` beside it, which goes away with the V1 manifests:
+# placeholders filled from the machine it runs on:
 #   @PYTHON3_SHA256@   sha256 of /usr/bin/python3, the pinned capture executable
 #   @PYTHON3_VERSION@  its dotted version, as `python3 --version` prints it
 #   @WORKLOAD@         absolute path of tests/fixtures/m2-controlled-workload.py

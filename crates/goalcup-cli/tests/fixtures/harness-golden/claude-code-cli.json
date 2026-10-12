@@ -612,15 +612,9 @@
     ]
   },
   "connector": {
-    "capture_only": false,
-    "family": "claude-code",
-    "files_dir": [
-      {
-        "bytes": 210,
-        "name": "settings-launch.json",
-        "sha256": "34fd01e7577c7260b7cb8ddce08a626429e207494d3058fcae1f24c3b7972d9d"
-      }
-    ],
+    "capture_only": true,
+    "family": "claude",
+    "files_dir": [],
     "id": "claude-code-cli",
     "launch_home_env": "CLAUDE_CONFIG_DIR",
     "launch_program": "claude",

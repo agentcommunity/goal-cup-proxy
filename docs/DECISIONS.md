@@ -1063,7 +1063,7 @@ The harness contract of D42 is `connectors/<id>/harness.toml`, harness-contract 
 1. **Two files.** `harness.toml` beside a V1-only `manifest.toml`; the V1 file exists only for
    codex-cli and claude-code-cli under `v1-compat`, and Hermes's is deleted.
    (By [D48](#d48-m2-the-v1-path-leaves-the-tree) `v1-compat` is gone; the two V1 manifests
-   stay for parsing only, LEDGER OS-29.)
+   stayed for parsing only until OS-29 deleted them on 2026-10-12.)
 2. **No claim fields in the contract.** `family`, `tier`, `tested_version_range` and `capture_only`
    are not harness-contract schema-1 fields; claim level lives in `docs/qualification/`. The Claude tool allowance
    becomes an id-only check.
@@ -1202,7 +1202,7 @@ not from dead code in the tree.
   README and CONTRIBUTING; the `v1-compat` checkbox in the PR template.
 - **Kept.** Default-build behaviour. The hidden `auth`, `ui` and `resume` commands and the V1
   control routes still refuse, now naming D48 (all deleted on 2026-10-12, with the stub
-  routes' client and mock methods). The control API types, the V1 `manifest.toml` parsing (OS-29) and the verifier's V1
+  routes' client and mock methods). The control API types, the V1 `manifest.toml` parsing (removed 2026-10-12, OS-29) and the verifier's V1
   checks are unchanged. The V1 config fields `upload_url`, `server_public_key` and
   `receipt_binding` drive no upload but are still parsed, because `DaemonConfig` refuses unknown
   fields and would reject a config that sets them. The V1-only registry functions this entry first
