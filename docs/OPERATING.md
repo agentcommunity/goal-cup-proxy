@@ -58,7 +58,8 @@ Prerequisites:
 - **Rust 1.99 or later.** `Cargo.toml` sets `rust-version = "1.99"`, the latest stable release
   when v0.5.1 was cut. The code itself needs less: edition 2024 needs 1.85, it uses `let` chains,
   and the locked dependencies declare at most 1.88. Development and CI use 1.99.0.
-  `rust-toolchain.toml` asks for `stable`.
+  `rust-toolchain.toml` pins `1.99.0`, which rustup installs on first use; the release workflow
+  builds with the same pin.
 - **macOS or Linux.** `goalcup-platform` refuses to compile on anything else
   (`crates/goalcup-platform/src/lib.rs`). The V1 claim is one macOS target; Linux is a
   smoke check (see CI below).

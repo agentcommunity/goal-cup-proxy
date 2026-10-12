@@ -133,6 +133,8 @@ fn current_platform() -> Platform {
 /// developer running out of `target/debug` finds the checkout's `connectors/` without
 /// setting anything, and an installed build never silently falls back to a checkout that
 /// happens to be two levels above it, because that is not where an installed binary lives.
+/// Both candidates are tried beside the executable's resolved path first, then beside the path
+/// it was started by ([`connectors_beside`]).
 pub fn connectors_dir() -> Result<PathBuf, CliError> {
     if let Some(dir) = non_empty_var(CONNECTORS_DIR_ENV) {
         return Ok(PathBuf::from(dir));
@@ -141,19 +143,36 @@ pub fn connectors_dir() -> Result<PathBuf, CliError> {
         path: "the running executable".to_string(),
         source,
     })?;
-    if let Some(dir) = exe.parent() {
-        for candidate in ["../share/goalcup/connectors", "../../connectors"] {
-            let path = dir.join(candidate);
-            if path.is_dir() {
-                return Ok(path);
-            }
-        }
+    if let Some(dir) = connectors_beside(&exe) {
+        return Ok(dir);
     }
     Err(CliError::Refused(format!(
         "cannot find the connectors directory beside {}. Set ${CONNECTORS_DIR_ENV} to the \
          shipped `connectors/` — in a checkout, this repository's.",
         exe.display()
     )))
+}
+
+/// The first existing `../share/goalcup/connectors` or `../../connectors` beside `exe`'s
+/// resolved path, then beside `exe` as given.
+///
+/// Resolved first because an installed binary is usually started through a link: Homebrew
+/// starts `/opt/homebrew/bin/goalcup`, a link into its keg, and macOS reports the link as the
+/// executable. The keg's own `share/goalcup/connectors` holds the bytes this build pins, as
+/// ordinary files, however the prefix's `share` is linked; a prefix that links them file by
+/// file would hand the loader links, which it refuses. The path as given still serves a copy
+/// whose resolved directory has neither.
+fn connectors_beside(exe: &Path) -> Option<PathBuf> {
+    let resolved = std::fs::canonicalize(exe).ok();
+    resolved
+        .as_deref()
+        .into_iter()
+        .chain([exe])
+        .filter_map(Path::parent)
+        .flat_map(|dir| {
+            ["../share/goalcup/connectors", "../../connectors"].map(|candidate| dir.join(candidate))
+        })
+        .find(|path| path.is_dir())
 }
 
 /// `$HOME`-style lookup that treats an empty value as unset.
@@ -371,6 +390,51 @@ pub fn read_control_file(cfg: &Path) -> Result<ControlFile, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Homebrew-shaped install: the binary and its connectors in a keg, and a prefix whose
+    /// `bin/goalcup` links into the keg and whose `share/goalcup/connectors` links each file.
+    #[cfg(unix)]
+    #[test]
+    fn connectors_are_found_beside_the_resolved_executable_first() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let keg = root.path().join("Cellar/goalcup/1.0.0");
+        let keg_connectors = keg.join("share/goalcup/connectors");
+        std::fs::create_dir_all(keg.join("bin")).unwrap();
+        std::fs::create_dir_all(keg_connectors.join("codex-cli")).unwrap();
+        std::fs::write(keg_connectors.join("codex-cli/harness.toml"), "").unwrap();
+        std::fs::write(keg.join("bin/goalcup"), "").unwrap();
+
+        let prefix = root.path().join("prefix");
+        let linked = prefix.join("share/goalcup/connectors/codex-cli");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(&linked).unwrap();
+        symlink(
+            keg_connectors.join("codex-cli/harness.toml"),
+            linked.join("harness.toml"),
+        )
+        .unwrap();
+        symlink(keg.join("bin/goalcup"), prefix.join("bin/goalcup")).unwrap();
+
+        let found = connectors_beside(&prefix.join("bin/goalcup")).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(found).unwrap(),
+            std::fs::canonicalize(&keg_connectors).unwrap(),
+            "the keg's own connectors, not the prefix's linked copy"
+        );
+
+        // A binary whose resolved directory has no connectors still finds them beside the path
+        // it was started by.
+        let bare = root.path().join("a/b/goalcup");
+        std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+        std::fs::write(&bare, "").unwrap();
+        std::fs::remove_file(prefix.join("bin/goalcup")).unwrap();
+        symlink(&bare, prefix.join("bin/goalcup")).unwrap();
+        let found = connectors_beside(&prefix.join("bin/goalcup")).unwrap();
+        assert_eq!(found, prefix.join("bin/../share/goalcup/connectors"));
+
+        assert_eq!(connectors_beside(&bare), None);
+    }
 
     /// A lookup over a fixed table, so each case below reads as the environment it means.
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
