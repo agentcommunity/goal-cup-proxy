@@ -124,10 +124,10 @@ fn current_platform() -> Platform {
 /// `<exe dir>/../share/goalcup/connectors` for an installed build, else
 /// `<exe dir>/../../connectors` — the repository's `connectors/` from `target/debug`.
 ///
-/// Beside the binary and never under [`config_dir`], because the manifests are the
-/// rulebook: the human rule, the exclusion catalogue and the tool classes, with their
-/// digests pinned by the verifier. A copy under a directory the participant writes would be
-/// a rulebook the participant edits.
+/// Beside the binary and never under [`config_dir`], because the connector directories are
+/// the rulebook: how a harness is launched and captured, with their digests pinned in
+/// `goalcup-protocol`. A copy under a directory the participant writes would be a rulebook the
+/// participant edits.
 ///
 /// Nothing here creates a directory, and the first candidate that exists wins — so a
 /// developer running out of `target/debug` finds the checkout's `connectors/` without

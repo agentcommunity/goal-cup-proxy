@@ -69,7 +69,7 @@ On M2 the legs are **native + wire**; the V1 hook leg is deleted (D2 note in
 | Source | Model traffic to the connector's declared hosts | The harness's own session file |
 | How | Process-scoped `HTTPS_PROXY` + per-launch CA in the profile's `ca_env`; no base URL is ever set ([D1](DECISIONS.md) note) | Bytes read under an isolated root through no-follow capabilities |
 | Producer | Proxy epochs over loopback IPC ([sender](../crates/goalcup-cli/src/proxy/ingest.rs) → [receiver](../crates/goalcup-daemon/src/ingest.rs)) | [native_capture.rs](../crates/goalcup-daemon/src/native_capture.rs), submitting to the owner directly |
-| Scope | `[[capture.hosts]]` hosts and `evidence_paths` | One source per family ([native_scope.rs](../crates/goalcup-daemon/src/runtime/capture/native_scope.rs) `shipped_source`): Codex `sessions/*/*/*/rollout-*-{id}.jsonl`, Claude `projects/*/{id}.jsonl`, Hermes `sessions/session_{id}.json` (snapshot) |
+| Scope | `[[capture.hosts]]` hosts and `evidence_paths` | One source per connector, from its `harness.toml` `[[capture.native]]` row ([native_scope.rs](../crates/goalcup-daemon/src/runtime/capture/native_scope.rs) `native_plan`): Codex `sessions/*/*/*/rollout-*-{id}.jsonl`, Claude `projects/*/{id}.jsonl`, Hermes `sessions/session_{id}.json` (snapshot) |
 | Identity | Physical connection id + exchange, WS `message_index` ([C1]) | Codex: first `thread.started` on stdout; Claude: preassigned session id; Hermes: stderr `session_id:` line, bound at finish |
 | On loss | `Loss` frames and gaps (§6); the relay never stops | One stream-less `SourceChanged` gap; the harness never stops ([C5 T24N amendment][cont]) |
 
@@ -187,7 +187,7 @@ residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`): [checklist](C
   `synthetic-preassigned` (launch identity), `synthetic-stderr-token` (deferred identity) and
   `synthetic-stdout-json` (two snapshots), the last two each with a keyed `synthetic-keyed-*`
   twin. Each requires `--dev`; wrong-id decoys appear in all but `controlled-workload`.
-- Directory pins and the two transitional V1-manifest pins come from `pin-manifests.sh`; executables
+- Directory pins come from `pin-manifests.sh` (`connector-dirs.txt`; no V1 manifest exists); executables
   carry version/SHA-256 pins. Same-UID executable and non-atomic connector-namespace races remain
   accepted residuals; see [SECURITY](../SECURITY.md).
 

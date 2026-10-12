@@ -159,7 +159,7 @@ Then either put that directory in front of `PATH` for the session:
 export PATH="$PWD/target/release:$PATH"
 ```
 
-— or copy the four binaries somewhere already on it, and **set `$GOALCUP_CONNECTORS_DIR` to
+— or copy the three binaries somewhere already on it, and **set `$GOALCUP_CONNECTORS_DIR` to
 this checkout's `connectors/`**:
 
 ```
@@ -167,10 +167,10 @@ export GOALCUP_CONNECTORS_DIR="$PWD/connectors"
 ```
 
 That second variable is not optional for a copied binary, and it is the one thing about
-installing this tree that surprises people. The connector manifests are the **rulebook** —
-the human rule, the exclusion catalogue, the tool classes, with their digests pinned in the
-verifier — so they live beside the binary and never under a directory the participant
-writes. `goalcup` looks for them at `$GOALCUP_CONNECTORS_DIR`, then at
+installing this tree that surprises people. The connector directories (`harness.toml` and
+seeds) are the **rulebook** — how a harness is launched and captured, with their digests pinned
+in `goalcup-protocol` — so they live beside the binary and never under a directory the
+participant writes. `goalcup` looks for them at `$GOALCUP_CONNECTORS_DIR`, then at
 `<exe dir>/../share/goalcup/connectors` for an installed layout, then at
 `<exe dir>/../../connectors`, which is what makes `target/release/goalcup` find this
 repository's `connectors/` with nothing exported at all. A binary copied to `~/bin` matches
