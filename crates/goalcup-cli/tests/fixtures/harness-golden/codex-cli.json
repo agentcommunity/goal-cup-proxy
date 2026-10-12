@@ -594,7 +594,23 @@
         "prefix_paths": [],
         "protocol_hint": "openai-responses"
       }
-    ]
+    ],
+    "platform": {
+      "linux-aarch64": {
+        "env": {
+          "SHELL": "/bin/bash"
+        },
+        "sha256": "c92824b2e068b8cb15eecba45271f7e3dd35a5b3929383593284a36074d40aec",
+        "version": null
+      },
+      "linux-x86_64": {
+        "env": {
+          "SHELL": "/bin/bash"
+        },
+        "sha256": "fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be",
+        "version": null
+      }
+    }
   },
   "connector": {
     "capture_only": true,

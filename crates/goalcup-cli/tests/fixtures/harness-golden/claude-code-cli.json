@@ -609,7 +609,23 @@
         "prefix_paths": [],
         "protocol_hint": "anthropic-messages"
       }
-    ]
+    ],
+    "platform": {
+      "linux-aarch64": {
+        "env": {
+          "SHELL": "/bin/bash"
+        },
+        "sha256": "346d294f0103d6fc0de11ac953579b5c62dfa90698a4cfc486b6f927c615e697",
+        "version": null
+      },
+      "linux-x86_64": {
+        "env": {
+          "SHELL": "/bin/bash"
+        },
+        "sha256": "1859583ce32920595c61ef868bee52e1b1594f7486db209935e01f1e5e804ae2",
+        "version": null
+      }
+    }
   },
   "connector": {
     "capture_only": true,
