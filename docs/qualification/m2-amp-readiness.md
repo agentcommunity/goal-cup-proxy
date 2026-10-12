@@ -2,11 +2,14 @@
 
 Can the exact Amp CLI candidate be captured through the existing schema-1 seam, and what blocks it?
 For the maintainer deciding Tasks 2 and 3 of the v0.6.0 plan, and for whoever runs the live probe.
-Updated: 2026-10-11.
+Updated: 2026-10-12.
 
 - Status: **BLOCKED**. Transport, native storage/scope, auth lifecycle and identity binding are
   UNKNOWN or measured unsupported (see [Readiness verdict](#readiness-verdict)). No
   `connectors/amp-cli` exists and none may be added on this record.
+- Superseded in part (2026-10-12): core changes 1, 2, 3 and 5 below landed, with D49 and D50 in
+  force; see [amp-core-prep](../research/amp-core-prep.md). Rows marked "superseded" record the
+  state before that. The BLOCKED verdict stands.
 - Two routes: **Route A** is Amp's own agent (everything above
   [Route B](#route-b-amp-in-claude-code-mode) describes it). **Route B** is Amp in Claude Code
   mode, where Amp drives the local `claude` binary through the Claude Agent SDK.
@@ -105,11 +108,11 @@ Source: [capture_policy.rs](../../crates/goalcup-protocol/src/capture_policy.rs)
 | Seeding Amp settings | seeds land only under the per-run config home (`home.env`); Amp reads `$HOME/.config/amp`. `XDG_CONFIG_HOME` is refused as `home.env` (XDG prefix and shape); `AMP_SETTINGS_FILE` cannot take an absolute value; no `{config_home}` template token | blocked only if a settings seed is required |
 | Update suppression | `AMP_SKIP_UPDATE_CHECK = "1"` passes the `capture.env` name and value rules | fits by static reading; effect UNKNOWN |
 | `home.env` for a per-run home | `AMP_HOME` passes the one-word `_HOME` shape; measured not to move settings or log. Its remaining effect (tool bin dir, installer) is UNKNOWN | candidate fit, owner to confirm |
-| `AMP_URL` endpoint override | absent from the built env; a `://` value is refused by `env_value_denied`; the name itself passes `env_name_denied` (no `_BASE_URL`/`_API_URL`/`ENDPOINT`) | gap: name not refused |
-| `AMP_API_KEY` | `CREDENTIAL_ENV` admits only `DEEPSEEK_API_KEY` | blocked |
-| Credential with `stdout_json` identity | `check_cross_field` refuses it: one tee per stream, so key scan and identity cannot share stdout | blocked |
+| `AMP_URL` endpoint override | absent from the built env; a `://` value is refused by `env_value_denied`; the name itself passes `env_name_denied` (no `_BASE_URL`/`_API_URL`/`ENDPOINT`) | gap: name not refused; superseded: the `*_URL` rule refuses it |
+| `AMP_API_KEY` | `CREDENTIAL_ENV` admits only `DEEPSEEK_API_KEY` | blocked; superseded: D49 admits it |
+| Credential with `stdout_json` identity | `check_cross_field` refuses it: one tee per stream, so key scan and identity cannot share stdout | blocked; superseded: D50 admits it with a per-run home |
 | Credential needs `per_run` | `config_home = "per_run"` required; a `home.env` must still be named | fits if `AMP_HOME` is acceptable |
-| Synthetic kit for a credential profile | kit `Expect` has no credential field and the runner supplies no synthetic key, so a credential connector case cannot run | blocked for Task 3 |
+| Synthetic kit for a credential profile | kit `Expect` has no credential field and the runner supplies no synthetic key, so a credential connector case cannot run | blocked for Task 3; superseded: a kit case may name `credential_env` |
 | `NODE_EXTRA_CA_CERTS` | admitted extend row | fits by static reading; live UNKNOWN |
 | Proxy-only HTTP/1.1 with WebSocket relay | the proxy offers ALPN `http/1.1` only and relays an upgraded WebSocket | UNKNOWN until live |
 | Own-session native store | schema 1 needs one `append_only` or `snapshot` source; stdout JSON is not native capture | blocked (UNKNOWN, likely absent) |
@@ -272,7 +275,7 @@ What that means for Goal Cup today (source reading of
 - **Identity.** The `claude-code-cli` profile is `preassigned` and passes `--session-id`. Amp
   picks the Claude session id, so `preassigned` cannot reach it. With `AMP_API_KEY` as the
   profile credential, schema 1 admits only `stderr_line` identity, so `stdout_json` and `none`
-  are refused too.
+  are refused too. (Superseded in part: D50 admits `stdout_json` with a credential.)
 - **Homes.** A profile names one `home.env`. `CLAUDE_CONFIG_DIR` would hold the native row; Amp's
   state would sit under the run `HOME`. A credential needs `config_home = "per_run"`, while the
   `claude-code-cli` profile uses a shared config home and a `keychain_link` run home
@@ -288,8 +291,8 @@ What that means for Goal Cup today (source reading of
 | `capture.executable` | `amp`, pinned | `amp`, pinned; the `claude` child is not pinned |
 | `args`, goal | `--stream-json --execute=<goal>` (measured offline) | the same plus `--mode <key>`; key acceptance UNKNOWN |
 | `capture.home` | run `HOME` holds all measured Amp state | Amp state in run `HOME`, Claude state in `CLAUDE_CONFIG_DIR`; one `home.env`; Claude login (Keychain) UNKNOWN |
-| `capture.credential` | `AMP_API_KEY`, not admitted | same for Amp; the child uses the subscription, no key |
-| `capture.identity` | `stdout_json` candidate, refused with a credential | `preassigned` unreachable; `stdout_json` and `none` refused with a credential; id mapping UNKNOWN |
+| `capture.credential` | `AMP_API_KEY`, not admitted (superseded: D49) | same for Amp; the child uses the subscription, no key |
+| `capture.identity` | `stdout_json` candidate, refused with a credential (superseded: D50) | `preassigned` unreachable; `stdout_json` (superseded: D50) and `none` refused with a credential; id mapping UNKNOWN |
 | `capture.native` | none evidenced (server-side threads) | candidate Claude transcript, `append_only`, `claude-code-native` decoder; UNKNOWN |
 | `capture.hosts`, wire leg | `ampcode.com`, Amp protocol, no decoder | `ampcode.com` for Amp; candidate `api.anthropic.com` `/v1/messages` from the child, `anthropic-messages` decoder; UNKNOWN |
 | `capture.ca` | `NODE_EXTRA_CA_CERTS` reaches Amp (UNKNOWN effect) | must also reach the child; UNKNOWN |
@@ -396,9 +399,9 @@ never a token. Never point anything at the real `~/.claude`.
 | Headless argv and goal placement | known (`--stream-json --execute=<goal>`) |
 | Transport, hosts, version, body | UNKNOWN |
 | Isolation | per-run `HOME` contains measured state; machine-wide and server-pushed settings, ancestor skills and `TMPDIR` reuse are residuals |
-| Auth | `AMP_API_KEY` not admitted; a key fingerprint is written to disk; grammar UNKNOWN |
+| Auth | `AMP_API_KEY` not admitted (superseded: D49); a key fingerprint is written to disk; grammar UNKNOWN |
 | Native storage/scope | UNKNOWN, likely server-side only |
-| Identity source/binding | UNKNOWN; candidate `stdout_json` refused with a credential |
+| Identity source/binding | UNKNOWN; candidate `stdout_json` refused with a credential (superseded: D50) |
 | Semantics | UNKNOWN; no decoder |
 | Route B (Claude Code mode) | UNKNOWN; candidate native and wire legs read by existing decoders |
 

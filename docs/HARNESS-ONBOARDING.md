@@ -83,9 +83,9 @@ On macOS the current baseline suite runs six synthetic stand-ins, each with `har
 - `synthetic-keyed-stdout-json`: a keyed `stdout_json` case; one stdout reader binds the
   identity and scans for the key.
 
-A kit case name becomes part of the stand-in path, which is a capture argument, so it must not hold a
-word `capture_arg_denied` refuses (`credential`, `apikey`, `proxy`, ...); that is why keyed cases say
-`keyed`.
+A kit case name becomes part of the stand-in path, which is a capture argument, so it must not
+hold a word `capture_arg_denied` refuses (`credential`, `apikey`, `proxy`, ...); that is why keyed
+cases say `keyed`.
 
 The kit uses a test-owned proxy, `Origin::Dev`, private homes and Python stand-ins. It does not
 read a participant home, provider credential or package registry. A passing kit proves only

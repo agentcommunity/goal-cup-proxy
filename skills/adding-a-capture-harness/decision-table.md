@@ -61,17 +61,19 @@ when policy moves). Never spell around a rule.
 10. One `sha256`. The CLI resolves `program` on `PATH`, follows symlinks, and hashes the regular
     file. A pinned `program` cannot be an interpreter (`python3`, `node`, `sh`, `env`). Per-arch
     binaries hash differently: pin the platform you measured and list the others in readiness.
-11. Names ending `_BASE_URL` or `_API_URL`, or containing `ENDPOINT`, are refused, and so is any
-    value with `://`. A harness endpoint variable with another name is not refused by name:
-    never set it, record it in readiness and open an issue to refuse it.
+11. Names ending `_URL` (including `_BASE_URL` and `_API_URL`) or containing `ENDPOINT` are
+    refused, and so is any value with `://`. A harness endpoint variable with another name (no
+    `_URL` suffix) is not refused by name: never set it, record it in readiness and open an
+    issue to refuse it.
 12. For example `NO_PAGER` (the `PAGER` suffix rule), an absolute path in `args`, or a
     redaction regex that is not one of the four core recognizers.
 
 ## Worked example: Amp
 
 Amp is a coding agent CLI, installed from npm, that talks to Amp's own server. It is BLOCKED at
-step 3. Its readiness record will live at docs/qualification/m2-amp-readiness.md. The rows it
-hits, and why:
+step 3. Its readiness record is
+[docs/qualification/m2-amp-readiness.md](../../docs/qualification/m2-amp-readiness.md). The rows
+it hits, and why:
 
 - **1, credential name**: Amp reads `AMP_API_KEY`. Admitted by D49. Fits.
 - **2, credential with identity**: the likely carrier is a stdout JSON init event. Admitted by
@@ -80,8 +82,8 @@ hits, and why:
   already does. Fits.
 - **9, one native row**: no local own-session file was found; sessions appear to live on Amp's
   server. Core decision, possibly no schema-1 fit.
-- **11, endpoint names**: `AMP_URL` redirects the server but passes the name rule. Never set
-  it; open an issue.
+- **11, endpoint names**: `AMP_URL` redirects the server and is refused by name since the
+  `*_URL` rule. Fits.
 - **6, XDG**: settings follow `XDG_CONFIG_HOME`, which is refused. With XDG unset all state
   lands in the run home, so it fits unless a settings seed is required.
 - **5, home variable**: `AMP_HOME` passes the shape but does not move settings. Maintainer call.

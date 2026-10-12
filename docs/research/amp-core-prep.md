@@ -15,7 +15,7 @@ record's "Mapping to Goal Cup policy" table and its "Core changes Amp would need
 |---|---|---|---|
 | 1 | Refuse `*_URL` env names | core change 1 | implemented |
 | 2 | Admit `AMP_API_KEY` | core change 2 | implemented; D49 in force |
-| 3 | Kit credential support | core change 3 | implemented; macOS kit not run |
+| 3 | Kit credential support | core change 3 | implemented; macOS kit passes |
 | 4 | Credential with `stdout_json` identity | core change 5 | implemented; D50 in force |
 | - | Private `TMPDIR` per capture launch | core change 4 | not started (optional hardening) |
 | - | Settings seed under the run home | core change 6 | not started (only if needed) |
@@ -28,9 +28,9 @@ proposals and approved by the owner on 2026-10-12 before the code merged. Change
 
 Each numbered change is one commit on this branch, meant to be reviewed as its own pull request,
 smallest first. Changes 1, 2 and 4 were built test first: the new tests failed before the
-change and passed after it. Change 3 is test code for the macOS-only kit, so it could only be
-type-checked here. On this Linux host the macOS-only suites (the harness-contract kit, the
-end-to-end and Hermes offline-key tests) were not run.
+change and passed after it. Change 3 is test code for the macOS-only kit. It was first only
+type-checked on a Linux host; the macOS-only suites (the harness-contract kit, the end-to-end and
+Hermes offline-key tests) have since run on macOS, both keyed kit cases included, and pass.
 
 ## 1. Refuse `*_URL` env names as endpoints
 
@@ -120,13 +120,12 @@ owner on 2026-10-12.
   [harness skill](../../skills/adding-a-capture-harness/SKILL.md).
 - **Tests.** The existing `every_kit_case_seals_and_matches_expectations` and
   `every_kit_case_requires_the_dev_door` pick the case up from its directory. The kit is
-  macOS-only and was **not run** here. On Linux it was type-checked with
-  `cargo clippy -p goalcup-cli --tests --target aarch64-apple-darwin -- -D warnings`, the new
-  `harness.toml` was validated as `Origin::Dev` by a throwaway test, and the stand-in's no-key
-  branch exits 3 before touching its marker.
-- **Risk.** Low; test-only. The first macOS run is the real proof. If the key scan or the
-  credential path behaves differently on macOS, the case fails rather than passing silently.
-- **Status.** Implemented on this branch; not yet run on macOS.
+  macOS-only. It was first type-checked on Linux with
+  `cargo clippy -p goalcup-cli --tests --target aarch64-apple-darwin -- -D warnings`, and the
+  stand-in's no-key branch exits 3 before touching its marker. It now runs and passes on macOS.
+- **Risk.** Low; test-only. If the key scan or the credential path changes behaviour, the case
+  fails rather than passing silently.
+- **Status.** Implemented on this branch; passes on macOS.
 
 ## 4. Credential with `stdout_json` identity
 
@@ -156,6 +155,9 @@ owner on 2026-10-12.
   event's line or decoded id holds any key-scan form, it binds nothing (the unbound path an
   unusable id takes) and records a key hit. For a keyed launch its line buffer is overwritten
   before each clear and on drop, as the tee's own buffer is; an unkeyed scan just clears it.
+  The keyed `stderr_line` marker follows the same rule (final review): the `token` grammar's
+  alphabet is a key's, so a marker line that holds any key-scan form binds nothing (the answer
+  is `Absent`, whatever marker follows) and records a key hit. A clean marker binds as before.
   No v5 record, control API or verifier change.
 - **Why.** Readiness row "Credential with `stdout_json` identity": Amp documents a stdout
   `system`/`init` event with `session_id` as its identity carrier. Needed only if the owner's
@@ -164,18 +166,20 @@ owner on 2026-10-12.
   `a_credential_with_stdout_json_identity_is_admitted_with_a_per_run_home` (replaces the refusal
   test; a shared home is still refused). New
   [credential_stdout_identity.rs](../../crates/goalcup-cli/tests/credential_stdout_identity.rs),
-  Linux-runnable: a Python child with the synthetic key prints an Amp-shaped init event; clean
-  output is forwarded byte for byte with the identity bound, and a stdout key echo is a hit and
-  withheld while the identity still binds. An init event whose `session_id` is the key, holds
-  its last eight bytes, or spells the key in JSON `\u` escapes binds nothing, is a key hit, and
-  forwards no fragment. `daemon_client.rs`'s gate sweep names the new call. A
-  macOS kit case, `synthetic-keyed-stdout-json`, drives the whole `goalcup start` path
-  (not run here).
+  which runs on any Unix: a Python child with the synthetic key prints an Amp-shaped init
+  event; clean output is forwarded byte for byte with the identity bound, and a stdout key echo
+  is a hit and withheld while the identity still binds. An init event whose `session_id` is the key, holds
+  its last eight bytes, or spells the key in JSON `\u` escapes, or a clean `session_id` beside
+  another field holding the key's last eight bytes, binds nothing, is a key hit, and forwards no
+  fragment. [capture_stderr_tee.rs](../../crates/goalcup-cli/tests/capture_stderr_tee.rs):
+  a `token` marker that is the key or holds its last eight bytes is `Absent` and a hit.
+  `daemon_client.rs`'s gate sweep names the new call. A macOS kit case,
+  `synthetic-keyed-stdout-json`, drives the whole `goalcup start` path.
 - **Risk.** Medium. It changes the launcher's tee wiring for keyed children, the one area D41
   depends on. Hermes's path (keyed, `stderr_line`) now goes through the new call with no stdout
   rule, which is the old code path. The kit, the end-to-end tests and the Hermes offline-key
-  test are macOS-only and were not run here.
-- **Status.** Implemented on this branch; macOS runs pending.
+  test are macOS-only; they pass on macOS.
+- **Status.** Implemented on this branch; passes on macOS.
 
 ### DECISIONS entry
 
