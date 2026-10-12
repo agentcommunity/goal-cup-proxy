@@ -24,7 +24,6 @@
 /crates/goalcup-protocol/tests/it/harness_schema.rs    @nembal
 /crates/goalcup-protocol/tests/it/harness_loader.rs    @nembal
 /crates/goalcup-verifier/src/capture_analysis/        @nembal
-/crates/goalcup-verifier/pins/                      @nembal
 /skills/adding-a-capture-harness/                   @nembal
 /docs/CONNECTOR-SCHEMA.md                           @nembal
 /docs/CONNECTOR-CONTRIBUTING.md                     @nembal

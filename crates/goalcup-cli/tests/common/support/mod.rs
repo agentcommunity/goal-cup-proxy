@@ -832,43 +832,6 @@ pub fn wait_until_gone(pid: u32) {
     panic!("pid {pid} was still running {PATIENCE:?} after the command returned");
 }
 
-/// The same, for `dev` — the flag `goalcup start --dev` leaves in the record.
-///
-/// `cfg_with_entry` writes `false`, which is the ordinary case. The seal prints
-/// `goalcup-verify --dev` iff this is set, and a flag with only one reachable value is a flag
-/// nothing checks.
-pub fn set_cached_dev(cfg: &Path, entry_id: &str, dev: bool) {
-    let mut record = match goalcup_cli::entries::read_entry(cfg, entry_id) {
-        Ok(record) => record,
-        Err(e) => panic!(
-            "the cached record for {entry_id} under {}: {e}",
-            cfg.display()
-        ),
-    };
-    record.dev = dev;
-    if let Err(e) = goalcup_cli::entries::write_entry(cfg, &record) {
-        panic!("rewriting the cached record for {entry_id}: {e}");
-    }
-}
-
-/// A real [`goalcup_protocol::seal::SealManifest`] at `<artifact_root>/trace/seal.json`,
-/// where `TraceExport` puts one.
-///
-/// `goalcup seal`'s conflict branch — the entry was already sealed, at its deadline or by an
-/// earlier run — reads that file and compares this machine's scan against it, so a test of
-/// that branch needs the real document rather than the `{}` placeholder `mock_sealable`
-/// writes.
-pub fn plant_exported_seal(artifact_root: &str, manifest: &goalcup_protocol::seal::SealManifest) {
-    let path = Path::new(artifact_root)
-        .join("trace")
-        .join(goalcup_protocol::export::SEAL_FILE);
-    let bytes = match serde_json::to_vec_pretty(manifest) {
-        Ok(bytes) => bytes,
-        Err(e) => panic!("the planted seal manifest: {e}"),
-    };
-    put(&path, &bytes);
-}
-
 // ------------------------------------------------ a mock with the daemon's files in place
 
 /// Every path under `root`, with its size and its modification time, sorted.

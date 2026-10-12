@@ -254,9 +254,8 @@ pub enum EventBody {
         /// **It is a harness-chosen string.** Whatever posts to the receiver picks it, and
         /// the receiver takes the raw URI path with no decoding step in between; its length
         /// is bounded by the HTTP stack's request head and by nothing this protocol
-        /// chooses. Nothing reads it as anything but a discriminator —
-        /// `goalcup_verifier::legs::Leg2Post::transport` asks whether it ends in `-cmd` —
-        /// and no surface interpolates it. A v2 writer includes it in the complete compact
+        /// chooses. Nothing read it as anything but a discriminator — the removed pre-v5
+        /// verifier asked whether it ends in `-cmd` — and no surface interpolates it. A v2 writer includes it in the complete compact
         /// `EventBody::Leg2Post` byte vector passed through the redactor once.
         ///
         /// It exists because a harness may carry ONE submission over two hook sources, and
@@ -265,9 +264,8 @@ pub enum EventBody {
         /// settings register an `http` hook at `/UserPromptSubmit` and the project settings
         /// a `curl` shim at `/UserPromptSubmit-cmd`, both carrying `X-GoalCup-Event:
         /// UserPromptSubmit`. The daemon chains the header's name — which is right, because
-        /// that is the event — so without the path `goalcup_verifier::legs::Leg2Post::transport`
-        /// would read both copies as `http` and the second would become a `duplicate_pairing`
-        /// Fail on an honest run.
+        /// that is the event — so without the path the pre-v5 verifier read both copies as
+        /// `http` and the second became a `duplicate_pairing` Fail on an honest run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
         /// What the RECEIVER measured about this post. Additive,

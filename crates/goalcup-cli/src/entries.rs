@@ -130,17 +130,11 @@ pub struct EntryRecord {
     /// This run was started with `goalcup start --dev`.
     ///
     /// The one thing a later process cannot re-derive: `--dev` is a flag on a command that
-    /// has exited, and `goalcup seal` prints a `goalcup-verify` line the participant is
-    /// meant to paste. A development run's trace names a connector manifest this build does
-    /// not pin, and `goalcup-verify` fails it outright without `--dev` — so a seal that
-    /// printed the bare command would hand exactly the wrong participant a line that cannot
-    /// work. It is remembered here rather than guessed from the trace, because the trace is
-    /// the document being checked and a flag read out of it would be the document choosing
-    /// how strictly it is read.
+    /// has exited, and `goalcup seal` loads the run's connector the way the run did, which
+    /// for a development run admits a connector this build does not pin.
     ///
     /// `serde(default)` so a record written before this field existed still reads, as
-    /// `false` — which is the safe reading: a run this machine has no `--dev` note for gets
-    /// the strict verify line.
+    /// `false` — the strict reading.
     #[serde(default)]
     pub dev: bool,
 }

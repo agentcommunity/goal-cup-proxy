@@ -311,7 +311,6 @@ fn local_owned_stop_and_seal_need_no_anchor() {
             &rig.connectors,
             &rig.cfg,
             &client.created().entry_id,
-            false,
             &mut out,
         )
         .map(|()| String::from_utf8(out).unwrap());
@@ -1346,7 +1345,6 @@ fn a_blocked_evidence_queue_does_not_outlast_the_one_finish_deadline() {
                 &rig.connectors,
                 &rig.cfg,
                 &client.created().entry_id,
-                false,
                 &mut sealed,
             )
             .unwrap_or_else(|e| panic!("the second seal: {e}"));

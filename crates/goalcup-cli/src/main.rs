@@ -132,15 +132,11 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
         _args: Vec<std::ffi::OsString>,
     },
-    /// Record the workspace manifest and end the run.
+    /// Finish the run and seal its trace.
     Seal {
         /// The entry. Defaults to the newest run started from this machine.
         #[arg(value_name = "ENTRY")]
         entry: Option<String>,
-        /// Scan the workspace and print the self-check, and seal nothing. The tracker is
-        /// not called and the run goes on.
-        #[arg(long)]
-        dry_run: bool,
     },
     /// Is the daemon there, and what can it see.
     #[command(after_help = DOCTOR_AFTER_HELP)]
@@ -202,7 +198,7 @@ fn run(command: Command) -> Result<u8, CliError> {
         Command::Auth { .. } => Err(v1_only("auth")),
         Command::Ui { .. } => Err(v1_only("ui")),
         Command::Resume { .. } => Err(v1_only("resume")),
-        Command::Seal { entry, dry_run } => seal(entry, dry_run).map(|()| 0),
+        Command::Seal { entry } => seal(entry).map(|()| 0),
         Command::Doctor { json, harness } => {
             doctor(commands::doctor::DoctorOptions { json, harness })
         }
@@ -320,30 +316,15 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
 /// `control.json` describes.
 ///
 /// The default entry is the newest run **started from this machine**, the same default
-/// `goalcup status` takes and for the same reason: the workspace to scan and the tracker's
-/// own file list to scan it against are in the record this machine wrote, and no other
-/// process holds them.
+/// `goalcup status` takes and for the same reason: the connector the run used is in the
+/// record this machine wrote, and no other process holds it.
 ///
-/// **The client is built even for `--dry-run`.** The dry run makes no call — `seal_with`
-/// never reaches the daemon on that path, and `tests/it/seal_scan.rs` asserts it — but this
-/// function resolves the same three things whichever way the run goes. A `--dry-run` on a
-/// machine with no daemon therefore refuses at rung 1 naming `control.json`, which is the
-/// answer every other command gives from that file.
-fn seal(entry: Option<String>, dry_run: bool) -> Result<(), CliError> {
+/// The client is built before the entry is resolved: a seal's first need is a daemon, so a
+/// machine with none is told about `control.json` rather than about which entry it failed to
+/// name, the same first answer `goalcup start` and `doctor` give.
+fn seal(entry: Option<String>) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
-    // The dry run resolves its entry and leaves before a client is built: building the client
-    // first would make `goalcup seal --dry-run` on a machine with no daemon running answer
-    // "the tracker is unreachable" — to a question that never reaches the tracker.
-    // `dry_run_with` takes no client at all, so the ordering cannot quietly come back.
-    //
-    // A real seal keeps the old order, and deliberately: its first need is a daemon, so a
-    // machine with none is told about `control.json` rather than about which entry it failed
-    // to name, the same first answer `goalcup start` and `doctor` give.
-    if dry_run {
-        let entry_id = resolve_entry(&cfg, entry)?;
-        return commands::seal::dry_run_with(&connectors, &cfg, &entry_id, &mut std::io::stdout());
-    }
     let client = goalcup_cli::daemon::HttpDaemonClient::from_config_dir(&cfg)?;
     let entry_id = resolve_entry(&cfg, entry)?;
     commands::seal::seal_with(
@@ -351,15 +332,14 @@ fn seal(entry: Option<String>, dry_run: bool) -> Result<(), CliError> {
         &connectors,
         &cfg,
         &entry_id,
-        dry_run,
         &mut std::io::stdout(),
     )
 }
 
 /// The entry named on the command line, or the newest run this machine started.
 ///
-/// Only a run started here can be sealed here: the workspace to scan and the tracker's own
-/// file list live in that record and nowhere else this process can reach.
+/// Only a run started here can be sealed here: the connector it ran under lives in that record
+/// and nowhere else this process can reach.
 fn resolve_entry(cfg: &std::path::Path, entry: Option<String>) -> Result<String, CliError> {
     match entry {
         Some(entry_id) => Ok(entry_id),

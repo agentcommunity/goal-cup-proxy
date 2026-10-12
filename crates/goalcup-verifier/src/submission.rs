@@ -16,58 +16,6 @@ const MANIFEST_NAME: &str = "manifest.json";
 const OBJECT_DIR: &str = "submission/objects/sha256";
 const MANIFEST_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
-/// The one V4 retained artifact read by the pipeline. Checks and attribution share this
-/// value so a mutable trace directory cannot make them judge different bytes.
-#[derive(Debug)]
-pub(crate) enum SubmissionRead {
-    Absent,
-    Invalid,
-    Captured(Box<SubmissionManifestV1>),
-}
-
-impl SubmissionRead {
-    pub(crate) fn load(
-        trace: &crate::trace::TraceDescriptor,
-        chain: Option<&crate::chain::VerifiedChain>,
-    ) -> Self {
-        use goalcup_protocol::envelope::EventBody;
-        use goalcup_protocol::provenance::FinalizationV1;
-        use goalcup_protocol::submission::SubmissionOutcomeV1;
-
-        let Some(chain) = chain else {
-            return Self::Absent;
-        };
-        let mut finalizations = chain
-            .envelopes
-            .iter()
-            .filter(|env| matches!(env.body, EventBody::FinalizationV1(_)));
-        let Some(env) = finalizations.next() else {
-            return Self::Absent;
-        };
-        if finalizations.next().is_some() {
-            return Self::Absent;
-        }
-        let EventBody::FinalizationV1(FinalizationV1::WorkspaceSubmission {
-            submission: SubmissionOutcomeV1::Captured(captured),
-            ..
-        }) = &env.body
-        else {
-            return Self::Absent;
-        };
-        match trace.load_submission(captured) {
-            Ok(manifest) => Self::Captured(Box::new(manifest)),
-            Err(_) => Self::Invalid,
-        }
-    }
-
-    pub(crate) fn manifest(&self) -> Option<&SubmissionManifestV1> {
-        match self {
-            Self::Captured(manifest) => Some(manifest.as_ref()),
-            Self::Absent | Self::Invalid => None,
-        }
-    }
-}
-
 /// Read an immutable private submission without consulting the live workspace or legacy seal.
 ///
 /// The manifest is decoded and canonical-hashed before any object is opened. Every retained

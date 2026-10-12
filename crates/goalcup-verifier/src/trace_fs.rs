@@ -46,13 +46,6 @@ impl TracePath {
     pub fn display(&self) -> &str {
         &self.0
     }
-
-    pub(crate) fn file_stem(&self) -> String {
-        Path::new(&self.0)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    }
 }
 
 #[cfg(unix)]
@@ -341,61 +334,6 @@ impl PrivateDir {
     }
 }
 
-impl TraceRoot {
-    /// Read one inherently-whole document through the retained handle, capped at `limit`.
-    pub(crate) fn read_bytes_limited(
-        &self,
-        path: &TracePath,
-        limit: u64,
-    ) -> Result<Vec<u8>, VerifierError> {
-        use std::io::Read;
-
-        let file = self.open_reader(path)?;
-        let length = file
-            .metadata()
-            .map_err(|source| VerifierError::Io {
-                path: path.display().to_owned(),
-                source,
-            })?
-            .len();
-        if length > limit {
-            return Err(VerifierError::EvidenceTooLarge {
-                path: path.display().to_owned(),
-                limit,
-            });
-        }
-        let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
-        let read = file
-            .take(limit.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(|source| VerifierError::Io {
-                path: path.display().to_owned(),
-                source,
-            })?;
-        if u64::try_from(read).unwrap_or(u64::MAX) > limit {
-            return Err(VerifierError::EvidenceTooLarge {
-                path: path.display().to_owned(),
-                limit,
-            });
-        }
-        Ok(bytes)
-    }
-
-    pub(crate) fn read_text_limited(
-        &self,
-        path: &TracePath,
-        limit: u64,
-    ) -> Result<String, VerifierError> {
-        let bytes = self.read_bytes_limited(path, limit)?;
-        String::from_utf8(bytes).map_err(|source| {
-            VerifierError::Trace(format!(
-                "trace path {:?} is not UTF-8: {source}",
-                path.display()
-            ))
-        })
-    }
-}
-
 #[cfg(unix)]
 impl PrivateDir {
     /// Enumerate one retained directory through a no-follow descriptor-relative handle.
@@ -646,14 +584,16 @@ mod tests {
         std::fs::create_dir(root.join("evidence")).unwrap();
         std::fs::write(root.join("evidence/manifest.toml"), "OUTSIDE_SENTINEL").unwrap();
 
-        assert_eq!(
-            cap.read_text_limited(&descriptor, 1024).unwrap(),
-            "trusted descriptor"
-        );
-        assert_eq!(
-            cap.read_text_limited(&manifest, 1024).unwrap(),
-            "trusted manifest"
-        );
+        let read = |path: &TracePath| {
+            let mut text = String::new();
+            cap.open_reader(path)
+                .unwrap()
+                .read_to_string(&mut text)
+                .unwrap();
+            text
+        };
+        assert_eq!(read(&descriptor), "trusted descriptor");
+        assert_eq!(read(&manifest), "trusted manifest");
     }
 
     #[test]

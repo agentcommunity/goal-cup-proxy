@@ -300,7 +300,7 @@ fn a_shipped_connector_is_pinned_by_the_verifier_this_build_links() {
 /// config the entry will guard, and then guards it — so an edit here is an edit to what the
 /// run captures, made under a manifest that still passes every check taken over the file.
 /// `pin_state` reads `Altered`, and the manifest digest on the same `Connector` is still
-/// the pinned one, which is what makes the point rather than merely asserting it.
+/// the shipped one, which is what makes the point rather than merely asserting it.
 #[test]
 fn an_edited_hook_template_is_altered_even_though_the_manifest_is_untouched() {
     let tmp = tempfile::tempdir().unwrap();
@@ -312,9 +312,9 @@ fn an_edited_hook_template_is_altered_even_though_the_manifest_is_untouched() {
 
     let tampered = connector::load(tmp.path(), "codex-cli").unwrap();
     assert_eq!(
-        Some(tampered.manifest_sha256.as_str()),
-        goalcup_verifier::pinned_manifest_sha256("codex-cli"),
-        "the manifest is untouched, and a pin over it sees nothing"
+        tampered.manifest_sha256,
+        support::connector("codex-cli").manifest_sha256,
+        "the manifest is untouched, and a digest over it sees nothing"
     );
     match connector::pin_state(&tampered) {
         PinState::Altered { pinned } => assert_eq!(

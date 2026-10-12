@@ -336,12 +336,9 @@ fn declared_twice(id: &str, first: &Path, second: &Path) -> CliError {
 /// A connector is a manifest and the hook bodies beside it under `files/`; the daemon
 /// renders those bodies into the workspace, records the rendered digests as the config it
 /// will guard, and then guards them. A directory carrying the genuine `manifest.toml`
-/// beside an edited tracker body therefore satisfies
-/// `goalcup_verifier::pinned_manifest_sha256` and still changes what the run captures —
-/// and the trace itself carries the manifest and none of its neighbours. So this resolves
-/// from `CONNECTOR_DIR_SHA256S`, which covers both, and the verifier's own `manifest_pin`
-/// stays the post-hoc half over the one file the trace holds — beside V13's
-/// `connector_dir_unpinned`, which reads the same table off the digest the daemon claimed.
+/// beside an edited tracker body therefore passes any check over the manifest file and still
+/// changes what the run captures. So this resolves from `CONNECTOR_DIR_SHA256S`, which covers
+/// both.
 ///
 /// The comparison is the one `goalcup_verifier::ManifestPinning::resolve` makes, over the
 /// sibling constant, case-insensitively for the same reason: the pins are written lowercase

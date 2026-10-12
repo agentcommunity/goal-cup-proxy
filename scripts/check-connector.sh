@@ -150,8 +150,7 @@ fi
 
 # 2. Pins.
 step "pins: sh scripts/pin-manifests.sh"
-pins="crates/goalcup-protocol/pins/connector-dirs.txt
-crates/goalcup-verifier/pins/connector-manifests.txt"
+pins="crates/goalcup-protocol/pins/connector-dirs.txt"
 if sh scripts/pin-manifests.sh; then
   # shellcheck disable=SC2086
   if ! diff=$(git diff HEAD -- $pins 2>/dev/null); then
