@@ -522,6 +522,30 @@ impl PinnedExecutable {
     }
 }
 
+/// The connector's program as the `PATH` in `env` finds it, followed to the file an
+/// updater's link names, and accepted only if its bytes are the profile's pin. That file is
+/// the one the launch runs. It is hashed, never started: `goalcup start` and `goalcup doctor`
+/// both ask this one question.
+pub fn capture_executable(
+    c: &HarnessConnector,
+    profile: &CaptureSpec,
+    env: &BTreeMap<String, String>,
+) -> Result<PinnedExecutable, CliError> {
+    let program = &profile.executable.program;
+    let Some(found) = crate::preflight::resolve_on_path(program, env) else {
+        return Err(CliError::Refused(format!(
+            "`{program}` is not on PATH, so `{}`'s capture executable cannot be found. Nothing \
+             is launched.",
+            c.loaded.manifest.id
+        )));
+    };
+    let file = std::fs::canonicalize(&found).map_err(|source| CliError::Io {
+        path: found.display().to_string(),
+        source,
+    })?;
+    pin_harness_executable(profile, &file)
+}
+
 /// Hash the executable at `path` and accept it only if it is `profile`'s pinned one.
 ///
 /// `path` is resolved by the caller: the measured recipes run the native binary (not the

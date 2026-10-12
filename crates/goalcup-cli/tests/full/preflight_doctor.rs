@@ -6,6 +6,12 @@ use crate::common::support;
 
 use goalcup_cli::commands::doctor::{DoctorOptions, run_with};
 
+/// An environment with no `PATH`: no harness executable is found, so every connector's
+/// `harness_executable` check fails and the other checks are read on their own.
+fn no_path() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::new()
+}
+
 fn opts() -> DoctorOptions {
     DoctorOptions {
         json: false,
@@ -24,6 +30,7 @@ fn doctor_reports_on_a_machine_with_no_daemon_and_fails_only_without_a_daemon_bi
         None,
         &support::connectors_dir(),
         &support::tmp_cfg(),
+        &no_path(),
         &opts(),
         &mut out,
         &mut err,
@@ -64,6 +71,7 @@ fn doctor_sweeps_the_probe_files_a_killed_run_left_in_the_configuration_director
         None,
         &support::connectors_dir(),
         &cfg,
+        &no_path(),
         &opts(),
         &mut out,
         &mut err,
@@ -98,7 +106,7 @@ fn doctor_at(
 ) -> Result<(u8, String), goalcup_cli::CliError> {
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let code = run_with(None, connectors, cfg, o, &mut out, &mut err)?;
+    let code = run_with(None, connectors, cfg, &no_path(), o, &mut out, &mut err)?;
     Ok((code, String::from_utf8(out).unwrap()))
 }
 
@@ -134,18 +142,34 @@ fn harness_scopes_the_doctor_report_and_its_exit_code_to_one_connector() {
         );
     }
 
+    // No `PATH` here, so codex-cli's own `harness_executable` fails; what is pinned is that
+    // claude-code-cli's failure is not in the scoped report, and so not in its number.
     let mut scoped = opts();
     scoped.harness = Some("codex-cli".to_string());
-    let (code, text) = doctor_at(&dir, &cfg, &scoped).unwrap();
-    assert_eq!(
-        code, 0,
-        "the connector asked after is fine, and that is the answer: {text}"
-    );
+    let (_, text) = doctor_at(&dir, &cfg, &scoped).unwrap();
     assert!(text.contains("codex-cli"));
     assert!(
         !text.contains("claude-code-cli"),
         "a scoped report is about the one connector: {text}"
     );
+    scoped.json = true;
+    let (code, text) = doctor_at(&dir, &cfg, &scoped).unwrap();
+    let document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let reports = document["connectors"].as_array().unwrap();
+    assert_eq!(reports.len(), 1, "{document:#}");
+    let failed: Vec<&str> = reports[0]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["level"] == "fail")
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        failed,
+        ["harness_executable"],
+        "only the asked-after connector's own failure: {document:#}"
+    );
+    assert_eq!(code, 1, "and the number is that report's");
 
     let mut absent = opts();
     absent.harness = Some("not-a-connector".to_string());
@@ -238,6 +262,73 @@ fn an_unpinned_rulebook_is_a_doctor_failure_whose_fix_names_the_one_door() {
     }
 }
 
+/// `goalcup doctor` fails when the harness `goalcup start` would run is not there, or is not
+/// the pinned build: the same lookup and hash `start` makes, without starting anything.
+#[test]
+fn doctor_fails_naming_the_harness_when_its_pinned_executable_is_missing_or_another_build() {
+    let cfg = cfg_with_a_daemon();
+    let mut scoped = opts();
+    scoped.harness = Some("codex-cli".to_string());
+    let bin = support::empty_cfg();
+    let env = std::collections::BTreeMap::from([("PATH".to_string(), bin.display().to_string())]);
+    let check = |text: &str| -> String {
+        text.lines()
+            .find(|l| l.contains("harness_executable"))
+            .unwrap_or_else(|| panic!("a harness_executable line: {text}"))
+            .to_string()
+    };
+
+    let mut out = Vec::new();
+    let code = run_with(
+        None,
+        &support::connectors_dir(),
+        &cfg,
+        &env,
+        &scoped,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(code, 1, "no harness installed fails the report: {text}");
+    let line = check(&text);
+    assert!(line.contains("FAIL"), "{line}");
+    assert!(
+        line.contains("`codex` is not on PATH") && line.contains("codex-cli"),
+        "naming the program and the harness: {line}"
+    );
+
+    // Something called `codex` that is not the measured build: its bytes decide.
+    let impostor = bin.join("codex");
+    let marker = bin.join("ran");
+    std::fs::write(
+        &impostor,
+        format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&impostor, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut out = Vec::new();
+    let code = run_with(
+        None,
+        &support::connectors_dir(),
+        &cfg,
+        &env,
+        &scoped,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(code, 1, "another build fails the report: {text}");
+    let line = check(&text);
+    assert!(
+        line.contains("FAIL") && line.contains("the profile pins"),
+        "naming both digests: {line}"
+    );
+    assert!(!marker.exists(), "and it was hashed, never run");
+}
+
 // ------------------------------------------------------ the two ways the daemon check fails
 
 /// A `control.json` as the running daemon writes it, with the version and the port the
@@ -285,6 +376,7 @@ fn doctor_fails_naming_both_versions_when_the_control_file_speaks_another_api() 
         None,
         &support::connectors_dir(),
         &cfg,
+        &no_path(),
         &opts(),
         &mut out,
         &mut err,
@@ -327,6 +419,7 @@ fn doctor_reports_a_control_file_whose_port_nothing_is_listening_on_as_no_daemon
         Some(&client),
         &support::connectors_dir(),
         &cfg,
+        &no_path(),
         &opts(),
         &mut out,
         &mut err,
