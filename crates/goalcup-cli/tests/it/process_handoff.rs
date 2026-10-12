@@ -45,7 +45,7 @@ fn this_crate_never_terminates_anything() {
     // `support::walk` takes a path relative to the repository root, so the crate's own source
     // directory is spelled out.
     //
-    // The signal check carries three exemptions, and each is written down rather than
+    // The signal check carries four exemptions, and each is written down rather than
     // glossed.
     //
     // `preflight/probe.rs`: the version probe spawns the harness with `--version` in a group
@@ -68,6 +68,14 @@ fn this_crate_never_terminates_anything() {
     // exemption is by name: it signals only this process's own unreaped `Child` and that
     // child's native descendant bound by creation identity, never anything recorded, and
     // `goalcup_daemon::terminate` stays the only terminator of a recorded run.
+    //
+    // `subreaper.rs` (Linux only): `goalcup start` is a child subreaper, and after its root's
+    // `wait` has returned and before the seal it sweeps what the harness left behind, which the
+    // kernel reparented to it: SIGTERM, the connector's grace, SIGKILL, each one reaped. It
+    // signals only this process's own unreaped children that started no earlier than the root
+    // and are not the daemon it started. The root is reaped by then, so the daemon's
+    // termination answers `AlreadyStopped` and walks nothing: no second killer races it, and the
+    // sweep is printed, never chained.
     //
     // The `start.rs` exemption stays ONE file: a second file that signals a launched harness
     // would have to be exempted here as well, by name.
@@ -98,7 +106,7 @@ fn this_crate_never_terminates_anything() {
             !s.contains("fn terminate"),
             "{entry:?} defines a terminator"
         );
-        // The three files that signal, and the reason each one is allowed to. Only the probe half
+        // The four files that signal, and the reason each one is allowed to. Only the probe half
         // of `preflight/{mod,gates,probe}.rs` kills anything, so the exemption is matched on the
         // tail of the path, and `preflight/gates.rs` is NOT exempt — a `SIGKILL` appearing there
         // is the sweep doing its job.
@@ -106,6 +114,7 @@ fn this_crate_never_terminates_anything() {
             "preflight/probe.rs",
             "commands/start.rs",
             "released_child.rs",
+            "subreaper.rs",
         ]
         .iter()
         .any(|tail| entry.ends_with(tail));

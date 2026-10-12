@@ -1162,10 +1162,18 @@ fn run_harness<'a>(
         out,
         "Recording. The harness runs headless; this command ends with it.",
     );
+    // Linux: what the harness leaves behind is this process's own child (a subreaper, `main.rs`),
+    // and is swept between the root's exit and the seal. Armed while the root is still unreaped.
+    let sweep = crate::subreaper::Sweep::for_root(handed.pid);
     let status = child.wait().map_err(|source| CliError::Io {
         path: handed.program.clone(),
         source,
     });
+    if let Some(sweep) = sweep {
+        for line in sweep.run(Duration::from_secs(handed.grace_seconds)).lines() {
+            let _ = say(out, &line);
+        }
+    }
     Ok(Exited {
         forked,
         tees,

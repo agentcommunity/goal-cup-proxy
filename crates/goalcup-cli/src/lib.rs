@@ -40,6 +40,7 @@ pub mod preflight;
 pub mod proxy;
 mod released_child;
 pub mod retry;
+pub mod subreaper;
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::control::ControlError;

@@ -219,6 +219,15 @@ fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
         },
         daemon_deadline(),
     )?;
+    // Linux: before the gated spawn, so what the harness leaves behind is reparented here and
+    // swept before the seal (`subreaper.rs`). Only this binary arms it, never an in-process start.
+    if let Err(e) = goalcup_cli::subreaper::arm() {
+        eprintln!(
+            "goalcup: this command could not become a child subreaper ({e}), so a process the \
+             harness leaves behind after it exits is not swept before the seal, and the daemon's \
+             walk may not see it (docs/TERMINATION.md)."
+        );
+    }
     let env = goalcup_cli::launch::process_env();
     #[cfg(feature = "test-support")]
     if let Some(pem) = std::env::var_os(TEST_UPSTREAM_ROOTS) {
