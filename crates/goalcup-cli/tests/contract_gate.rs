@@ -526,8 +526,8 @@ fn doctor_has_no_verify_mode_and_the_help_footers_say_so() {
     let top = goalcup().arg("--help").output().unwrap();
     let top = String::from_utf8(top.stdout).unwrap();
     assert!(
-        top.contains("2 is never this binary's, and neither is 4"),
-        "the footer names 2 and 4 as V1-only: {top}"
+        top.contains("This command never exits with 2 or 4"),
+        "the footer says 2 and 4 are never this binary's: {top}"
     );
 }
 
@@ -641,7 +641,7 @@ fn goalcup_refuses_each_v1_command_by_name_and_never_panics() {
         assert!(
             said.starts_with("goalcup: ")
                 && said.contains(&format!("`goalcup {}`", args[0]))
-                && said.contains("D48")
+                && said.contains("removed after v0.5.0")
                 && said.contains("--goal-file"),
             "`goalcup {args:?}` says what it is and how to get a capture run: {said:?}"
         );

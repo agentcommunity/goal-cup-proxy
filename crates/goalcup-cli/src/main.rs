@@ -23,8 +23,8 @@ use clap::{Parser, Subcommand};
 use goalcup_cli::{CliError, commands};
 use std::process::ExitCode;
 
-/// Capture a /goal Cup entry: create the workspace, arm the folder, launch the harness, and
-/// seal what it produced.
+/// Record one coding agent's run for the /goal Cup: launch the harness on your goal, record what
+/// it does, and seal the record when it finishes.
 #[derive(Parser)]
 #[command(
     name = "goalcup",
@@ -49,45 +49,44 @@ struct Args {
 /// Every `goalcup --help` footer: where verification lives, and the rungs a capture run can
 /// leave under.
 const AFTER_HELP: &str = "\
-Verification is a separate binary: run `goalcup-verify --capture-integrity <trace-dir>` on a \
-sealed capture. It is not a sub-command here.
+A run needs a running `goalcup-daemon --config <FILE>` (see the README). Then: \
+`goalcup start --harness <id> --goal-file <file>`.
 
-Exit codes: 0 the command did what it was asked; 1 refused, and you can fix it (no daemon, \
-a tracker still busy, an entry already sealed, a mistyped sub-command); 3 this CLI could not \
-do its job (a file it could not read, an answer it could not parse). 2 is never this \
-binary's, and neither is 4: both belonged to the V1 path, which this tree no longer carries \
-(D48; the v0.5.0 tag has it).";
+To check a finished run, use the separate `goalcup-verify --capture-integrity <trace-dir>`; \
+`goalcup start` prints that line for you. There is no `goalcup verify`.
+
+Exit codes: 0 done; 1 refused, and you can fix it (no daemon running, the tracker still busy, \
+the run already sealed, a mistyped command); 3 this command could not do its job (a file it \
+could not read, an answer it could not parse). This command never exits with 2 or 4.";
 
 /// What `goalcup doctor --help` says under its flags. There is no verify
 /// mode here: a sealed capture is checked by `goalcup-verify --capture-integrity`.
 const DOCTOR_AFTER_HELP: &str = "\
-Exit codes: 0 = every check passed and 1 = something failed (a machine with no daemon \
-running is a 1).
+Exit codes: 0 every check passed; 1 something failed (no daemon running counts as a failure).
 
---harness <id> narrows the report AND the exit code to one connector, which is the \
-question a participant about to start that harness is asking: without it, a connector you \
-are not running can fail this command.";
+Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
+are not using can make this command exit 1.";
 
 /// The sub-commands: five. `verify` is deliberately absent:
 /// see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
-    /// Record a local capture run: launch the harness headless with a goal file's text, through
-    /// the recording proxy, and seal what it produced.
+    /// Run the harness on a goal file, record the run, and seal it when the harness exits.
     Start {
-        /// Which harness: a connector this build ships (`goalcup doctor` lists them).
+        /// Which harness to run, for example `claude-code-cli` or `codex-cli` (`goalcup doctor`
+        /// lists every one this build ships).
         #[arg(long, value_name = "ID")]
         harness: String,
-        /// Development only: accept a rulebook this build does not pin. The run says so on
-        /// stdout, and its result is not a judged entry's.
+        /// For connector developers: accept a connector directory this build does not pin. The
+        /// run says so, and it does not count as a competition entry.
         #[arg(long)]
         dev: bool,
-        /// Record a local capture run: launch the harness headless with this file's text as
-        /// its one goal, through the recording proxy. The run's directory is made beside
-        /// the file, so keep it in a directory of its own, outside any repository.
+        /// A text file holding your goal. Its text is the agent's first and only prompt. The
+        /// run's folder is created next to this file, so put it in an empty folder of its own,
+        /// outside any git repository.
         #[arg(long, value_name = "PATH", required = true)]
         goal_file: Option<std::path::PathBuf>,
-        /// With --goal-file: the chain bytes the daemon reserves on disk before the launch.
+        /// Disk space, in bytes, reserved for the recording before the harness starts.
         #[arg(
             long,
             value_name = "BYTES",
@@ -95,57 +94,62 @@ enum Command {
             default_value_t = goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES
         )]
         capture_reserve_bytes: u64,
-        /// With --goal-file: one bounded Claude Bash command rule for this launch only.
+        /// claude-code-cli only: let the agent run one Python script without asking, written
+        /// `Bash(python3 <name>.py *)`. Applies to this run only.
         #[arg(long, value_name = "RULE", requires = "goal_file")]
         capture_claude_allowed_tool: Option<String>,
     },
-    /// What one entry's signed status says.
+    /// Show how a run is doing: recording state, health, storage and any gaps.
     Status {
-        /// The entry. Defaults to the newest run started from this machine.
+        /// The entry id (`goalcup entries` lists them). Defaults to the newest run started on
+        /// this machine.
         #[arg(value_name = "ENTRY")]
         entry: Option<String>,
-        /// The signed document itself on stdout, and nothing else.
+        /// Print the signed status document as JSON, and nothing else.
         #[arg(long)]
         json: bool,
     },
-    /// The runs this daemon is carrying right now.
+    /// List the runs the daemon is holding right now.
     Entries {
-        /// The summaries as one JSON array.
+        /// Print the list as one JSON array.
         #[arg(long)]
         json: bool,
     },
-    /// Not in this build: the removed V1 sign-in command (D48).
+    /// Removed: the old sign-in command.
     #[command(hide = true, disable_help_flag = true)]
     Auth {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
         _args: Vec<std::ffi::OsString>,
     },
-    /// Not in this build: the removed V1 status page (D48).
+    /// Removed: the old status page.
     #[command(hide = true, disable_help_flag = true)]
     Ui {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
         _args: Vec<std::ffi::OsString>,
     },
-    /// Not in this build: the removed V1 relaunch (D48).
+    /// Removed: the old relaunch command.
     #[command(hide = true, disable_help_flag = true)]
     Resume {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
         _args: Vec<std::ffi::OsString>,
     },
-    /// Finish the run and seal its trace.
+    /// End a run early: stop the harness, seal the record, and print where the trace is.
+    ///
+    /// `goalcup start` seals on its own when the harness exits, so this is only for stopping a
+    /// run before then.
     Seal {
-        /// The entry. Defaults to the newest run started from this machine.
+        /// The entry id. Defaults to the newest run started on this machine.
         #[arg(value_name = "ENTRY")]
         entry: Option<String>,
     },
-    /// Is the daemon there, and what can it see.
+    /// Check this machine: is the daemon running, and is each harness ready to run.
     #[command(after_help = DOCTOR_AFTER_HELP)]
     Doctor {
-        /// The report as one JSON document instead of a page of text.
+        /// Print the report as one JSON document instead of text.
         #[arg(long)]
         json: bool,
-        /// Report on this connector alone, and exit on its result alone. Without it every
-        /// shipped connector is reported and any failure among them is a 1.
+        /// Check this harness only, and set the exit code from it alone. Without it every
+        /// shipped harness is checked and any failure makes the exit code 1.
         #[arg(long, value_name = "ID")]
         harness: Option<String>,
     },
@@ -208,9 +212,8 @@ fn run(command: Command) -> Result<u8, CliError> {
 /// The refusal a removed V1 command gets (D48): rung 1, naming the way back.
 fn v1_only(command: &str) -> CliError {
     CliError::Refused(format!(
-        "`goalcup {command}` belonged to the V1 transcript path, which this tree no longer \
-         carries (D48; the v0.5.0 tag has it). A local capture run \
-         is `goalcup start --harness <id> --goal-file <file>`; then `goalcup status`, \
+        "`goalcup {command}` was removed after v0.5.0. To record a run: \
+         `goalcup start --harness <id> --goal-file <file>`; then `goalcup status`, \
          `goalcup entries` and `goalcup seal`."
     ))
 }

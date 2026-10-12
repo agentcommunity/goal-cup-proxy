@@ -312,7 +312,7 @@ fn declared_twice(id: &str, first: &Path, second: &Path) -> CliError {
     CliError::Refused(format!(
         "connector {id:?} is declared by two directories: {} and {}. Discovery keys on the id \
          a manifest DECLARES, so one of these would silently answer for the other, and the \
-         one that lost is where an unpinned rulebook would sit unnoticed.",
+         one that lost is where an unpinned connector would sit unnoticed.",
         first.display(),
         second.display()
     ))
