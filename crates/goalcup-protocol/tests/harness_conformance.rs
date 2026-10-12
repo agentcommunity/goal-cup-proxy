@@ -32,8 +32,9 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The connectors the build ships. Not a ceiling: a harness PR adds a folder and the count
-/// assertions below follow the directory, not this list.
+/// The connectors the build ships: a floor, so one cannot vanish unnoticed. Not a ceiling: a
+/// harness PR adds a folder and every loop and count below follows the directory, not this
+/// list, so a new folder is checked with no edit here.
 const SHIPPED: [&str; 3] = ["claude-code-cli", "codex-cli", "hermes-cli"];
 
 /// Every entry under `connectors/`, sorted, judged by `symlink_metadata` so a link is not
@@ -242,9 +243,10 @@ fn mutate(file: &Path, from: &str, to: &str) {
 
 #[test]
 fn sensitivity_an_unmutated_copy_passes() {
-    for id in SHIPPED {
-        let (_tmp, dir) = copy_connector(id);
-        check_dir(&dir).unwrap_or_else(|e| panic!("{e}"));
+    for dir in connector_dirs() {
+        let id = dir.file_name().unwrap().to_str().unwrap();
+        let (_tmp, copy) = copy_connector(id);
+        check_dir(&copy).unwrap_or_else(|e| panic!("{e}"));
     }
 }
 

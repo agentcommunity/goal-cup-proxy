@@ -42,10 +42,5 @@
     "claude-code-cli",
     "codex-cli",
     "hermes-cli"
-  ],
-  "the_test_lists_that_hard_code_ids": [
-    "codex-cli",
-    "claude-code-cli",
-    "hermes-cli"
   ]
 }

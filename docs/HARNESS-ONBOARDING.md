@@ -53,10 +53,11 @@ must use admitted recognizers.
 | Exact candidate readiness and a live result | readiness/qualification evidence, never an inferred claim |
 
 The common data-only PR is `connectors/<id>/` (manifest and reviewed seeds), its generated line
-in `crates/goalcup-protocol/pins/connector-dirs.txt`, a new generic harness-kit fixture case under
-`crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` containing `harness.toml`, `stand-in.py`
-and `expect.toml`, a readiness record, and evidence that the current baseline kit passes. Do not
-add `.rs` files, policy rows or decoder code to that PR.
+in `crates/goalcup-protocol/pins/connector-dirs.txt`, the regenerated harness goldens, a new
+generic harness-kit fixture case under `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/`
+containing `harness.toml`, `stand-in.py` and `expect.toml`, a readiness record, and evidence that
+the current baseline kit passes. Do not add `.rs` files, policy rows or decoder code to that PR.
+The tests read the connector list from `connectors/`, so a new folder needs no test edit.
 
 ## 3. Generic harness-contract kit
 
@@ -102,6 +103,11 @@ policy change, not a connector-data shortcut.
 - [ ] `harness.toml` uses schema 1 and only admitted policy and identity values; seeds are safe.
 - [ ] `sh scripts/pin-manifests.sh` was run and the intended connector pin is the only pin diff.
 - [ ] `cargo test -p goalcup-protocol --test harness_conformance --test connector_pins` passed.
+- [ ] The harness goldens were regenerated on macOS, so the daemon's live goldens are written too:
+  `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test harness_contract_golden`, then
+  the same with `-p goalcup-daemon`. The JSON diff under
+  `crates/goalcup-cli/tests/fixtures/harness-golden/` is in the PR: new files and rows for the
+  new connector, and no change to another connector's values.
 - [ ] The workspace build ran before `harness_contract_kit`; all discovered cases passed (the four
   baseline cases plus the new connector case).
 - [ ] Readiness evidence names source revision, candidate path/version/hash, transport/native/
