@@ -26,8 +26,7 @@ test-support = ["dep:ed25519-dalek"]
 goalcup-platform = { path = "../goalcup-platform" }
 goalcup-protocol = { path = "../goalcup-protocol" }
 # The key-fragment scan and `goalcup doctor` read capture traces through the verifier's
-# reader and decoder registry, and the one exit code this CLI would relay rather than
-# choose (`relay_verdict`) is its `Verdict`'s. A library dependency and not a dev one.
+# reader and decoder registry. A library dependency and not a dev one.
 goalcup-verifier = { path = "../goalcup-verifier" }
 serde.workspace = true
 serde_json.workspace = true
@@ -107,8 +106,8 @@ x509-parser.workspace = true
 # The shipped binary links none of it: `cargo build --offline` builds no dev-dependency, and
 # `grep -rn goalcup_daemon crates/goalcup-cli/src/` is empty — `tests/seal_scan.rs` asserts
 # both of those in `the_cli_binary_links_no_daemon`. There is no cycle: `goalcup-daemon`
-# depends on `goalcup-protocol` and `goalcup-platform`, its dev-dependencies are itself,
-# `goalcup-mcp` and `goalcup-devserver`, and none of them depends on this crate.
+# depends on `goalcup-protocol` and `goalcup-platform`, its dev-dependencies are itself and
+# `goalcup-mcp`, and neither depends on this crate.
 # `test-hooks`: `m2_ipc_compose` drives hook-gated daemon items (`IngestEntry::wait_outcome`), so
 # a narrow `-p goalcup-cli` test build needs the feature without the workspace's unification.
 goalcup-daemon = { path = "../goalcup-daemon", features = ["test-hooks"] }

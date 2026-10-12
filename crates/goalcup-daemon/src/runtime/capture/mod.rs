@@ -371,7 +371,6 @@ impl Daemon {
         workspace::check_workspace_available(&Roots {
             workspace: workspace.to_path_buf(),
             artifact_root: artifact_dir.clone(),
-            harness_home: PathBuf::new(),
         })?;
         let artifact = self
             .artifact_root()

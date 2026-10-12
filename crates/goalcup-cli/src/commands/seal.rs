@@ -548,7 +548,7 @@ fn exported_seal(trace: &Path, entry_id: &str) -> Result<SealManifest, String> {
     Ok(sealed)
 }
 
-/// The exact invocation, quoted the way [`crate::launch::shell_line`] quotes an argument, so
+/// The exact invocation, quoted with [`crate::launch::quote`], so
 /// a participant whose artifact root has a space in it can paste the line as it stands.
 ///
 /// `--dev` when, and only when, the run was started with `goalcup start --dev`. A development

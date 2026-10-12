@@ -41,10 +41,10 @@ pub(super) struct DaemonInner {
     /// Acquired once before the registry and retained for every later entry operation.
     /// `config.artifact_root` is display/validation data after this capability exists.
     pub(super) artifact_root: ArtifactRoot,
-    /// The shipped connector manifests, by declared id. Behind a lock rather than an
-    /// immutable `Arc`: `create_workspace` re-reads the connector
-    /// directory, so a manifest edited on disk is seen without restarting the daemon.
-    manifests: Mutex<Arc<TrustedManifests>>,
+    /// The shipped connector manifests, by declared id, loaded once at startup. Nothing
+    /// re-reads the connector directory while the daemon runs: the V1 `create_workspace`
+    /// route that did was removed by D48.
+    manifests: Arc<TrustedManifests>,
     /// entry id → its v5 local capture. Never an entry of `entries`.
     pub(super) captures: Mutex<BTreeMap<String, Arc<CaptureEntry>>>,
     /// The loopback capture ingest listener, bound once at start; [`Daemon::stop`] takes it
@@ -170,7 +170,7 @@ impl Daemon {
         let inner = Arc::new(DaemonInner {
             registry: registry.clone(),
             artifact_root,
-            manifests: Mutex::new(manifests.clone()),
+            manifests: manifests.clone(),
             captures: Mutex::new(BTreeMap::new()),
             ingest: Mutex::new(Some(ingest)),
             ingest_addr,
@@ -373,34 +373,7 @@ impl Daemon {
     }
 
     fn trusted_manifests(&self) -> Arc<TrustedManifests> {
-        self.inner
-            .manifests
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    }
-
-    /// Re-read `connectors/` and answer what is there now.
-    ///
-    /// A map loaded once at startup would leave a connector edited on disk invisible to a
-    /// running daemon: `create_workspace` would compare the CLI's digest against a manifest
-    /// this process had read minutes earlier and refuse the start, naming the wrong cause.
-    ///
-    /// Called by `create_workspace`, which is the one moment a manifest is chosen — a read
-    /// of a few small files, once per run, against a decision the run is then judged by.
-    /// The nearest cadence never reaches it. A directory whose `manifest.toml` does not
-    /// parse fails here, naming the file and the parse error.
-    pub fn reload_manifests(
-        &self,
-    ) -> Result<Arc<BTreeMap<String, ConnectorManifest>>, DaemonError> {
-        let fresh = Arc::new(TrustedManifests::load(&self.inner.config.connectors_dir)?);
-        let manifests = fresh.manifests_arc();
-        *self
-            .inner
-            .manifests
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = fresh.clone();
-        Ok(manifests)
+        self.inner.manifests.clone()
     }
 
     /// The signed status document of a local capture, as `goalcup status` reads it. `None`
@@ -442,12 +415,11 @@ impl Daemon {
         })
     }
 
-    /// Record the process the CLI launched, so `harness_alive` has something to measure and
-    /// the seal has something to end (D22, D9).
+    /// Record the process the CLI launched, so the seal has something to end (D22, D9).
     ///
     /// **Refused while a handle stands, and for exactly as long as one does.** The handle is
-    /// what `same_process` measures and what the seal terminates, so a second one posted on
-    /// the loopback is a decoy that points both at a process the launch never made. The
+    /// what the seal terminates, so a second one posted on the loopback is a decoy that
+    /// points it at a process the launch never made. The
     /// registered handle wins and everything else is a `409`.
     pub fn register_process(
         &self,
@@ -486,10 +458,6 @@ impl Daemon {
         self.inner
             .registry
             .acknowledge_sealed_process_replay(entry_id, registration)
-    }
-
-    pub fn uptime_seconds(&self) -> u64 {
-        self.inner.started.elapsed().as_secs()
     }
 
     /// Whether every open entry's last upload reached the server. Always `true`: this tree has

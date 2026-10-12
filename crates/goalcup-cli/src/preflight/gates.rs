@@ -588,36 +588,6 @@ pub fn free_ports_gate(c: &Connector) -> Check {
     }
 }
 
-/// The port a stopped run reserved, checked before it is relaunched into.
-///
-/// The daemon **remembers** the port it reserved on the registry row and never re-reserves
-/// it, so between the stop and the resume anything at all may have taken it.
-/// `ResumeInfo.server_port` is `None` for every connector that reserves no port, which is why
-/// this answers `None` rather than a `Pass` nobody asked for.
-pub fn server_port_gate(port: Option<u16>) -> Option<Check> {
-    let port = port?;
-    if port_is_free(port) {
-        Some(Check::pass(
-            "server_port",
-            format!("the port this run reserved ({port}) is still free."),
-        ))
-    } else {
-        Some(Check::new(
-            "server_port",
-            Level::Fail,
-            format!(
-                "the port this run reserved ({port}) is held by something else now. The \
-                 daemon remembers the port it reserved and does not re-reserve it, so a \
-                 relaunch would bind nothing."
-            ),
-            &format!(
-                "stop whatever is listening on {port} (`lsof -nP -iTCP:{port} \
-                 -sTCP:LISTEN`) and resume again."
-            ),
-        ))
-    }
-}
-
 /// Whether 127.0.0.1:`port` can be bound right now.
 ///
 /// The listener is dropped immediately: this asks a question, it does not hold an answer.

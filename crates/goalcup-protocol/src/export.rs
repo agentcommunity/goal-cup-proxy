@@ -17,6 +17,13 @@
 //! `Envelope::chain_bytes`, so the base is part of what is hashed and the two sequences
 //! must not share an implementation. This module calls `link_hash` directly with its own
 //! 0-based counter.
+//!
+//! **Some writers here have no production caller, on purpose.** The capture runtime writes
+//! a trace with `write_baseline_for_protocol`, `append_chain` and `write_local_finish`.
+//! The V1 writers — `write_cutoff`, `write_finalization`, `write_descriptor`,
+//! `write_receipt`, `write_manifest`, `write_seal` and their `_for_protocol` forms — lost
+//! their daemon caller in D48. They stay because the verifier's and this crate's tests build
+//! their V1/v4 fixture traces with them, and the verifier still judges such traces (OS-31).
 
 use crate::ProtocolError;
 use crate::ack::AckCheckpoint;
@@ -1850,61 +1857,6 @@ impl TraceExport {
     /// leave is two claims a reviewer has to choose between.
     pub fn write_seal(&mut self, m: &SealManifest) -> Result<(PathBuf, Link), ExportError> {
         self.write_seal_for_protocol(crate::PROTOCOL_VERSION, m)
-    }
-
-    /// Repair the fixed manifest for an already-chained legacy seal without appending a
-    /// second terminal link.  This is recovery-only: `write_seal` remains the sole normal
-    /// admission path, while a crash between its append and fixed-document replacement can
-    /// be made whole only from the exact terminal link this held export validated and the
-    /// caller's independently staged manifest identity.
-    pub fn repair_seal(
-        &self,
-        m: &SealManifest,
-        terminal: &Envelope,
-    ) -> Result<PathBuf, ExportError> {
-        let held_terminal = match &self.phase {
-            ExportPhase::Terminal {
-                kind: TerminalKind::LegacySeal,
-                link,
-                ..
-            } => link,
-            ExportPhase::Terminal { seq, .. } => {
-                return Err(ExportError::Terminal { terminal_seq: *seq });
-            }
-            _ => {
-                return Err(ExportError::Protocol(ProtocolError::Field {
-                    field: "seal".to_string(),
-                    reason: "repair requires an already chained seal".to_string(),
-                }));
-            }
-        };
-        terminal
-            .validate_version_body_compatibility()
-            .map_err(|error| version_body_export_error(terminal.link.seq, error))?;
-        if terminal.link != *held_terminal
-            || terminal.expected_hash(&terminal.link.prev)? != terminal.link.hash
-        {
-            return Err(ExportError::Protocol(ProtocolError::Field {
-                field: "seal".to_string(),
-                reason: "repair terminal does not match the retained chain terminal".to_string(),
-            }));
-        }
-        if !matches!(terminal.body, EventBody::Seal { .. }) {
-            return Err(ExportError::Protocol(ProtocolError::Field {
-                field: "seal".to_string(),
-                reason: "repair requires the already-chained seal envelope".to_string(),
-            }));
-        }
-        let canonical = m.clone().sorted();
-        if !terminal_binds_manifest(terminal, &canonical)? {
-            return Err(ExportError::Protocol(ProtocolError::Field {
-                field: "seal".to_string(),
-                reason: "repair manifest does not match its terminal envelope".to_string(),
-            }));
-        }
-        let bytes = to_json("seal", &canonical)?;
-        self.root.dir.replace_fixed(FixedDocument::Seal, &bytes)?;
-        Ok(self.root.display.join(SEAL_FILE))
     }
 
     /// Write a seal using an explicit envelope protocol version.

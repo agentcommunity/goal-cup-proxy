@@ -106,8 +106,8 @@ pub struct ProcessHandle {
     /// every handle written before this field existed: additive, `serde(default)`, skipped
     /// when absent, so a registry row from an older build reads back exactly as it did.
     ///
-    /// Nothing terminates on it. `terminate`, `same_process` and `harness_alive` read the
-    /// pid, the group, the program and the argv; this field is inert to all four.
+    /// Nothing terminates on it. `terminate` reads the pid, the group, the program and the
+    /// argv; this field is inert to all four.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home_seed: Option<crate::events::HomeSeedRecord>,
 }
@@ -563,29 +563,6 @@ pub fn validate_live_process_handle(handle: &ProcessHandle) -> Result<(), String
         }
     }
     Ok(())
-}
-
-/// Whether every durable process identity associated with a rejected handoff is gone.
-/// `Same` outranks `Unknown`; either blocks cleanup. Only all confirmed-absent/reused
-/// identities permit the non-replayable cleanup marker to clear.
-pub fn process_handle_instance_status(handle: &ProcessHandle) -> ProcessInstanceStatus {
-    let mut statuses = vec![process_instance_status(
-        handle.pid,
-        handle.process_start.as_deref(),
-    )];
-    if let Some(native_pid) = handle.native_pid {
-        statuses.push(process_instance_status(
-            native_pid,
-            handle.native_process_start.as_deref(),
-        ));
-    }
-    if statuses.contains(&ProcessInstanceStatus::Same) {
-        ProcessInstanceStatus::Same
-    } else if statuses.contains(&ProcessInstanceStatus::Unknown) {
-        ProcessInstanceStatus::Unknown
-    } else {
-        ProcessInstanceStatus::GoneOrReused
-    }
 }
 
 /// Is `pid` a live, non-zombie process — or could the process table not be asked?

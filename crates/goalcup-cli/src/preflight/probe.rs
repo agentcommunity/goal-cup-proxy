@@ -345,10 +345,10 @@ fn first_line(text: &str) -> Option<String> {
 /// * every variable this connector's own `preflight.banned_env` names, because a probe run
 ///   under a variable the run itself refuses is a measurement of a machine nobody will run on.
 ///
-/// D1's rule on the launch side is the same rule: the tracker never sets a model base URL.
-/// This is that rule applied to the one child preflight spawns — and it is literally the same
-/// rule, [`crate::launch::is_denied`], rather than a second spelling of it that would agree
-/// with the launch's until one of the two was widened.
+/// This is D1, the tracker never points a harness at a different server, applied to the one
+/// child that inherits the participant's environment. The predicate is
+/// [`crate::launch::is_denied`]; the capture launch needs none, because it inherits nothing
+/// outside its allowlist.
 pub fn probe_env(c: &Connector, env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     env.iter()
         .filter(|(k, _)| {

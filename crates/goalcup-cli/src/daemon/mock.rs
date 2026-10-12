@@ -822,10 +822,10 @@ impl MockDaemonClient {
     /// the tracker wrote into the participant's workspace.
     ///
     /// `workspace_relative` is **derived here** rather than taken as a second argument, the
-    /// way `goalcup_daemon::workspace::Installation::from_files` derives it: the
+    /// way the daemon's V1 `Installation::from_files` (removed by OS-31) derived it: the
     /// `Workspace`-scoped relative paths, sorted and deduplicated. Two fields a caller could
     /// set apart from each other is a fixture no daemon could ever answer with, and a
-    /// duplicate this dropped is one `from_files` drops too.
+    /// duplicate this dropped is one `from_files` dropped too.
     pub fn set_workspace_files(&self, files: Vec<control::InstalledFile>) {
         let mut relative: Vec<String> = files
             .iter()
@@ -891,7 +891,7 @@ impl MockDaemonClient {
     ///
     /// The pid alone cannot answer the question a resume raises: whether what was handed
     /// over describes the resume recipe. The daemon's
-    /// `same_process` guard compares a live command line against `argv`, and a relaunch that
+    /// termination guard compares a live command line against `argv`, and a relaunch that
     /// registered the start argv would be handing the daemon a description of a process that
     /// no longer exists.
     pub fn last_registered_handle(&self) -> Option<ProcessHandle> {

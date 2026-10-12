@@ -7,9 +7,7 @@ mod m2_profile_support;
 mod secret_support;
 
 use goalcup_cli::CliError;
-use goalcup_cli::launch::{
-    ChildSecret, GOAL_ARG_MARKER, build_capture_launch, child_secret_for_harness, shell_line,
-};
+use goalcup_cli::launch::{ChildSecret, build_capture_launch, child_secret_for_harness};
 use goalcup_protocol::harness::CaptureSpec;
 use m2_profile_support as s;
 use secret_support::KEY;
@@ -171,7 +169,6 @@ fn hostile_goals_stay_one_goal_flag_element_and_the_key_is_in_no_plan_surface() 
         for (surface, text) in [
             ("Debug", format!("{plan:?}")),
             ("pretty Debug", format!("{plan:#?}")),
-            ("shell_line", shell_line(&plan)),
         ] {
             // A two-byte goal such as `-h` occurs inside ordinary path text (`run-home`), so the
             // whole goal is searched for only when it is long enough to mean something, and the
@@ -194,12 +191,6 @@ fn hostile_goals_stay_one_goal_flag_element_and_the_key_is_in_no_plan_surface() 
         assert!(
             debugged.contains(&format!("--query=<goal: {} bytes>", goal.len())),
             "{debugged}"
-        );
-        let line = shell_line(&plan);
-        assert!(line.contains("--query"), "{line}");
-        assert!(
-            !line.contains(GOAL_ARG_MARKER) || line.contains("withheld"),
-            "{line}"
         );
     }
 }

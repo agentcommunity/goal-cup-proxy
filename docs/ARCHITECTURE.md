@@ -26,7 +26,7 @@ non-member `goalcup-git`; the public OSS cut omits it ([LEDGER OS-09](../LEDGER.
 | `goalcup-platform` | library | none | none |
 | `goalcup-protocol` | library | platform | none |
 | `goalcup-verifier` | `goalcup-verify` | protocol | itself (feature) |
-| `goalcup-daemon` | `goalcup-daemon` | protocol, platform | itself, mcp, devserver |
+| `goalcup-daemon` | `goalcup-daemon` | protocol, platform | itself, mcp |
 | `goalcup-cli` | `goalcup` | protocol, verifier, platform | itself, daemon |
 | `goalcup-mcp` | `goalcup-mcp` | protocol, platform | none |
 | `goalcup-devserver` | dev only | protocol | verifier |

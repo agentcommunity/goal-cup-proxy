@@ -989,7 +989,7 @@ async fn a_connector_directory_this_daemon_cannot_hash_refuses_daemon_start() {
         .expect("the symlink plants");
 
     let opts = support::workspace_opts("claude-code-cli");
-    let (_server, upload_url) = support::devserver().await;
+    let (_upload, upload_url) = support::upload_target();
     let mut config = support::config_at(connectors.path(), &upload_url);
     config.connectors_dir = connectors.path().to_path_buf();
     let error = match goalcup_daemon::runtime::Daemon::start(config).await {
@@ -1226,66 +1226,6 @@ async fn selected_artifact_root_swap_is_refused_before_workspace_artifacts_are_w
     );
     assert!(!outside.join("artifacts").exists());
     assert!(h.daemon.entries().unwrap().is_empty());
-}
-
-/// A connector edited on disk is seen without restarting the daemon.
-///
-/// A map loaded once, at startup, would have `create_workspace` compare the CLI's digest
-/// against a manifest this process read minutes earlier — and refuse the start with a
-/// message about a directory that was there the whole time.
-#[tokio::test]
-async fn a_connector_edited_on_disk_is_seen_without_restarting_the_daemon() {
-    let tmp = tempfile::tempdir().expect("a temporary root");
-    let connectors = tmp.path().join("connectors/codex-cli");
-    std::fs::create_dir_all(&connectors).expect("the connector directory");
-    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../connectors/codex-cli/manifest.toml");
-    let shipped = std::fs::read_to_string(&source).expect("the shipped manifest");
-    let mut parsed = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(&shipped)
-        .expect("the shipped manifest parses");
-    parsed.foreign_scan.clear();
-    let text = toml::to_string(&parsed).expect("the non-scanning subset manifest serialises");
-    std::fs::write(connectors.join("manifest.toml"), &text).expect("the copy");
-
-    let mut config = support::config_at(tmp.path(), "http://127.0.0.1:7788");
-    config.connectors_dir = tmp.path().join("connectors");
-    let daemon = goalcup_daemon::runtime::Daemon::start(config)
-        .await
-        .expect("the daemon starts");
-
-    let range = |d: &goalcup_daemon::runtime::Daemon| {
-        d.manifests()
-            .into_iter()
-            .find(|m| m.id == "codex-cli")
-            .expect("the connector")
-            .tested_version_range
-    };
-    let first = range(&daemon);
-    std::fs::write(
-        connectors.join("manifest.toml"),
-        text.replace(
-            &format!("tested_version_range = \"{first}\""),
-            "tested_version_range = \"=9.9.9\"",
-        ),
-    )
-    .expect("the edit a participant makes to a connector");
-    assert_eq!(range(&daemon), first, "the cached map is what it was");
-
-    let fresh = daemon.reload_manifests().expect("the directory is re-read");
-    assert_eq!(
-        fresh
-            .get("codex-cli")
-            .expect("the connector")
-            .tested_version_range,
-        "=9.9.9",
-        "the reload `create_workspace` runs sees the file on disk"
-    );
-    assert_eq!(
-        range(&daemon),
-        "=9.9.9",
-        "and the map it left behind carries it"
-    );
-    drop(daemon);
 }
 
 /// D48: one stub is mounted on every removed V1 route, behind the same bearer gate. An
