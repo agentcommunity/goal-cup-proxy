@@ -93,26 +93,22 @@ async fn create_capture(
 /// The authentication rule, asserted from both sides of the same function: the CLI's
 /// `is_public_route` and the daemon's answer have to agree route for route, because the
 /// failure this test exists to prevent is the two drifting apart and making the status
-/// page a guaranteed `401`.
+/// route a guaranteed `401`.
 #[tokio::test]
 async fn exactly_the_public_routes_answer_without_a_token_and_nothing_else_does() {
     let h = support::capture_control_harness().await;
 
-    for path in [
-        protocol::ROUTE_UI.to_string(),
-        protocol::entry_route(&h.entry_id, control::SUFFIX_STATUS),
-    ] {
-        assert!(protocol::is_public_route(&path), "{path}");
-        // The page itself was V1 (D48): the stub that says so is mounted there, still public.
-        let served = if path == protocol::ROUTE_UI { 404 } else { 200 };
-        assert_eq!(
-            h.get_no_token(&path).await.status(),
-            served,
-            "{path} must serve a browser"
-        );
-    }
+    let status = protocol::entry_route(&h.entry_id, control::SUFFIX_STATUS);
+    assert!(protocol::is_public_route(&status), "{status}");
+    assert_eq!(
+        h.get_no_token(&status).await.status(),
+        200,
+        "{status} must answer without a token"
+    );
 
     for path in [
+        // The removed V1 page is not public: nothing is served there.
+        "/v0/ui".to_string(),
         protocol::ROUTE_ENTRIES.to_string(),
         protocol::ROUTE_ENTRIES_CURRENT.to_string(),
         protocol::ROUTE_HEALTH.to_string(),
@@ -149,7 +145,7 @@ async fn every_route_the_table_names_is_public_or_answers_401() {
             .iter()
             .map(|s| protocol::entry_route(&h.entry_id, s)),
     );
-    assert!(paths.len() >= 12, "the table is the whole surface");
+    assert!(paths.len() >= 10, "the table is the whole surface");
 
     for path in paths {
         let status = h.get_no_token(&path).await.status();
@@ -168,9 +164,9 @@ async fn every_route_the_table_names_is_public_or_answers_401() {
 /// `%252e%252e` then reads as literal text, is admitted, and resolves to `..` at the next
 /// normalising hop. So the middleware hands it `req.uri().path()` verbatim.
 ///
-/// The cases are written against the public routes that exist (`/v0/ui` and
-/// `/v0/entries/{id}/status`); they were once written against `/v0/assets/*`, which nothing
-/// served and which is no longer public.
+/// The cases are written against the public route that exists (`/v0/entries/{id}/status`);
+/// they were once written against `/v0/assets/*` and `/v0/ui`, which nothing serves and
+/// which are no longer public.
 #[tokio::test]
 async fn the_auth_layer_asks_about_the_raw_path_and_a_traversal_is_never_public() {
     let h = support::capture_control_harness().await;
@@ -179,7 +175,7 @@ async fn the_auth_layer_asks_about_the_raw_path_and_a_traversal_is_never_public(
         "/v0/entries/%2e%2e/status",
         "/v0/entries/%2E%2E/status",
         "/v0/entries/%2e/status",
-        "/v0/ui/../entries",
+        "/v0/entries/e1/status/../../health",
         "/v0/entries/%zz/status",
     ] {
         assert!(!protocol::is_public_route(path), "{path}");
@@ -701,8 +697,9 @@ async fn every_response_carries_the_version_and_a_stranger_major_is_refused() {
     let h = support::capture_control_harness().await;
     let expected = protocol::CONTROL_API_VERSION.to_string();
     for r in [
-        // the page, public
-        h.get_no_token(protocol::ROUTE_UI).await,
+        // the status, public
+        h.get_no_token(&protocol::entry_route(&h.entry_id, control::SUFFIX_STATUS))
+            .await,
         // a refusal, unauthenticated
         h.get_no_token(protocol::ROUTE_HEALTH).await,
         // an answer, authenticated
@@ -916,61 +913,8 @@ async fn a_refused_control_file_write_leaves_the_control_port_closed() {
 }
 
 // =========================================================================================
-// The workspace, the arming, the process handle and the abandon.
+// The process handle and the abandon.
 // =========================================================================================
-
-/// Fresh registration must acquire every component beneath the configured artifact root
-/// before it writes Claude's launch settings.  An attacker replacing the not-yet-created
-/// `artifacts` component cannot turn the control request into a token-bearing write outside
-/// that configured root.
-#[cfg(unix)]
-#[tokio::test]
-async fn fresh_workspace_registration_refuses_a_swapped_artifacts_parent() {
-    use std::os::unix::fs::symlink;
-
-    let h = support::empty_control_harness().await;
-    let outside = h.root.join("outside-artifact-parent");
-    std::fs::create_dir(&outside).expect("outside directory");
-    std::fs::write(outside.join("keep.txt"), b"OUTSIDE_ARTIFACT_SENTINEL")
-        .expect("outside sentinel");
-    symlink(&outside, h.config.artifact_root.join("artifacts"))
-        .expect("the mutable artifacts component is replaced");
-
-    let response = h
-        .post_body(
-            protocol::ROUTE_WORKSPACES,
-            &support::workspace_opts("claude-code-cli"),
-        )
-        .await;
-
-    assert_ne!(
-        response.status(),
-        200,
-        "a fresh entry must not follow a swapped artifacts component: {}",
-        response.body()
-    );
-    assert_eq!(
-        std::fs::read(outside.join("keep.txt")).expect("outside sentinel remains"),
-        b"OUTSIDE_ARTIFACT_SENTINEL"
-    );
-    let outside_entries: Vec<_> = std::fs::read_dir(&outside)
-        .expect("outside directory remains readable")
-        .map(|entry| entry.expect("outside entry reads").file_name())
-        .collect();
-    assert_eq!(
-        outside_entries,
-        vec![std::ffi::OsString::from("keep.txt")],
-        "a lexical launch-settings write would have created an entry child below outside"
-    );
-    assert!(
-        !outside.join("settings-launch.json").exists(),
-        "the outside root itself must never receive the token-bearing launch settings"
-    );
-    assert!(
-        h.daemon.entries().expect("the live map reads").is_empty(),
-        "a refused fresh authority acquisition registers no runtime"
-    );
-}
 
 /// A connector directory this daemon cannot hash refuses daemon startup, before the first write.
 ///
@@ -1061,17 +1005,112 @@ async fn a_reopened_capture_refuses_registered_process_replay() {
     let _ = child.wait();
 }
 
+/// A `codex-cli` capture create under the harness root, shaped like the one
+/// `support::capture_control_harness` sends.
+#[cfg(unix)]
+fn capture_create_request(
+    h: &support::EmptyControlHarness,
+    name: &str,
+) -> protocol::CaptureWorkspaceRequest {
+    protocol::CaptureWorkspaceRequest {
+        workspace: h.root.join("workspaces").join(name).display().to_string(),
+        profile_id: "codex-cli".to_string(),
+        connector_dir_sha256: goalcup_protocol::pins::pinned_connector_dir_sha256("codex-cli")
+            .unwrap()
+            .to_string(),
+        reserve_bytes: 4 * 1024 * 1024,
+        run_home: h
+            .root
+            .join(format!("{name}-run-home"))
+            .display()
+            .to_string(),
+        config_home: h
+            .root
+            .join(format!("{name}-config-home"))
+            .display()
+            .to_string(),
+    }
+}
+
+/// What a refused capture create must leave: a `409`, the outside directory holding only its
+/// sentinel, and no entry registered.
+#[cfg(unix)]
+fn assert_refused_and_outside_untouched(
+    h: &support::EmptyControlHarness,
+    response: &support::Response,
+    outside: &std::path::Path,
+) {
+    assert_eq!(response.status(), 409, "{}", response.body());
+    let names: Vec<_> = std::fs::read_dir(outside)
+        .expect("the outside directory remains readable")
+        .map(|entry| entry.expect("an outside entry reads").file_name())
+        .collect();
+    assert_eq!(
+        names,
+        vec![std::ffi::OsString::from("sentinel.txt")],
+        "the create wrote below the outside directory"
+    );
+    assert_eq!(
+        std::fs::read(outside.join("sentinel.txt")).unwrap(),
+        b"outside"
+    );
+    assert!(
+        h.daemon.entries().unwrap().is_empty(),
+        "a refused create registered an entry"
+    );
+}
+
+/// A capture create acquires every component beneath the configured artifact root through
+/// the artifact-root authority, never through a path: an `artifacts` component swapped for a
+/// symlink to an outside directory is refused, and nothing is written through it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_create_refuses_a_symlinked_artifacts_component() {
+    let h = support::empty_control_harness().await;
+    let outside = h.root.join("outside-artifacts");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("sentinel.txt"), b"outside").unwrap();
+    let artifacts = h.config.artifact_root.join("artifacts");
+    let _ = std::fs::remove_dir_all(&artifacts);
+    std::os::unix::fs::symlink(&outside, &artifacts).unwrap();
+
+    let response = h
+        .post_body(
+            protocol::ROUTE_CAPTURE_WORKSPACES,
+            &capture_create_request(&h, "swapped-artifacts"),
+        )
+        .await;
+    assert_refused_and_outside_untouched(&h, &response, &outside);
+}
+
+/// The same, with the whole configured artifact root moved away and replaced by a symlink.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_create_refuses_a_symlinked_artifact_root() {
+    let h = support::empty_control_harness().await;
+    let outside = h.root.join("outside-root");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("sentinel.txt"), b"outside").unwrap();
+    std::fs::rename(&h.config.artifact_root, h.root.join("detached-root")).unwrap();
+    std::os::unix::fs::symlink(&outside, &h.config.artifact_root).unwrap();
+
+    let response = h
+        .post_body(
+            protocol::ROUTE_CAPTURE_WORKSPACES,
+            &capture_create_request(&h, "swapped-root"),
+        )
+        .await;
+    assert_refused_and_outside_untouched(&h, &response, &outside);
+}
+
 /// Every one of these routes is behind the bearer, and an id this daemon does not hold
 /// is a `404` in the contract's shape on each of them.
 #[tokio::test]
 async fn task_21_s_routes_need_the_bearer_and_answer_404_for_an_entry_that_is_not_here() {
     let h = support::empty_control_harness().await;
     for path in [
-        protocol::ROUTE_WORKSPACES.to_string(),
-        protocol::entry_route("no-such-entry", control::SUFFIX_ARM),
         protocol::entry_route("no-such-entry", control::SUFFIX_PROCESS),
         protocol::entry_route("no-such-entry", control::SUFFIX_ABANDON),
-        protocol::entry_route("no-such-entry", control::SUFFIX_START_SIGNAL),
     ] {
         assert!(!protocol::is_public_route(&path), "{path}");
         assert_eq!(
@@ -1083,12 +1122,10 @@ async fn task_21_s_routes_need_the_bearer_and_answer_404_for_an_entry_that_is_no
         );
     }
 
-    // Each route with the body it actually takes: `arm` and `abandon` take none, and
-    // `process` takes the handle. An id this daemon does not hold is the same 404 on all
-    // three, and the refusal names no path — the caller knows what it asked for.
+    // Each route with the body it actually takes: `abandon` takes none, and `process` takes
+    // the handle. An id this daemon does not hold is the same 404 on both, and the refusal
+    // names no path — the caller knows what it asked for.
     for r in [
-        h.post(&protocol::entry_route("no-such-entry", control::SUFFIX_ARM))
-            .await,
         h.post(&protocol::entry_route(
             "no-such-entry",
             control::SUFFIX_ABANDON,
@@ -1116,13 +1153,6 @@ async fn task_21_s_routes_need_the_bearer_and_answer_404_for_an_entry_that_is_no
     assert_eq!(strange.status(), 400);
     let body: protocol::ErrorBody = strange.json().expect("the contract's error body");
     assert_eq!(body.error.code, "malformed");
-    let r = h
-        .get(&protocol::entry_route(
-            "no-such-entry",
-            control::SUFFIX_START_SIGNAL,
-        ))
-        .await;
-    assert_eq!(r.status(), 404);
 }
 
 // =========================================================================================
@@ -1193,108 +1223,6 @@ async fn a_refused_control_file_write_leaves_the_control_listener_closed() {
         std::net::TcpStream::connect(("127.0.0.1", control_port)).is_err(),
         "the control listener outlived the start that failed"
     );
-}
-
-// ------------------------------------------------------------------ state guards
-//
-// The artifact-root guard, and the cleanup a refusal owes the disk.
-
-#[cfg(unix)]
-#[tokio::test]
-async fn selected_artifact_root_swap_is_refused_before_workspace_artifacts_are_written() {
-    use std::os::unix::fs::symlink;
-
-    let h = support::empty_control_harness().await;
-    let detached = h.root.join("detached-holder");
-    let outside = h.root.join("outside-holder");
-    std::fs::create_dir(&outside).unwrap();
-    std::fs::write(outside.join("sentinel.txt"), b"outside").unwrap();
-    std::fs::rename(&h.config.artifact_root, &detached).unwrap();
-    symlink(&outside, &h.config.artifact_root).unwrap();
-
-    let response = h
-        .post_body(
-            protocol::ROUTE_WORKSPACES,
-            &support::workspace_opts("claude-code-cli"),
-        )
-        .await;
-
-    assert_ne!(response.status(), 200, "{}", response.body());
-    assert_eq!(
-        std::fs::read(outside.join("sentinel.txt")).unwrap(),
-        b"outside"
-    );
-    assert!(!outside.join("artifacts").exists());
-    assert!(h.daemon.entries().unwrap().is_empty());
-}
-
-/// D48: one stub is mounted on every removed V1 route, behind the same bearer gate. An
-/// anonymous caller meets `401` as on any other route; an authenticated one is told the path
-/// belonged to the V1 transcript path, for a capture entry's id and for an unknown one alike
-/// (the stub never reads the id). `resume` and `resume-preview` are the exception: they refuse
-/// a capture entry as a capture entry.
-#[tokio::test]
-async fn every_v1_route_answers_with_the_stub_behind_the_bearer() {
-    let h = support::capture_control_harness().await;
-    let entry = h.entry_id.clone();
-    let routes: [(&str, String); 5] = [
-        ("POST", protocol::ROUTE_WORKSPACES.to_string()),
-        ("POST", protocol::entry_route(&entry, control::SUFFIX_ARM)),
-        (
-            "POST",
-            protocol::entry_route("no-such-entry", control::SUFFIX_PROCESS_CANCEL),
-        ),
-        (
-            "GET",
-            protocol::entry_route(&entry, control::SUFFIX_START_SIGNAL),
-        ),
-        (
-            "POST",
-            protocol::entry_route("no-such-entry", control::SUFFIX_RESUME),
-        ),
-    ];
-    for (method, path) in routes {
-        let anonymous = h
-            .request(method, &path, None, Vec::new(), String::new())
-            .await;
-        assert_eq!(anonymous.status(), 401, "{method} {path}");
-        let answered = if method == "GET" {
-            h.get(&path).await
-        } else {
-            h.post(&path).await
-        };
-        assert_eq!(
-            answered.status(),
-            404,
-            "{method} {path}: {}",
-            answered.body()
-        );
-        let body: protocol::ErrorBody = answered.json().expect("the contract's error body");
-        assert_eq!(body.error.code, "not_found", "{method} {path}");
-        assert!(
-            body.error.message.contains("D48"),
-            "{method} {path} names the removal: {}",
-            body.error.message
-        );
-    }
-
-    // A capture entry is refused as one, not as a missing route.
-    for path in [
-        protocol::entry_route(&entry, control::SUFFIX_RESUME),
-        protocol::entry_route(&entry, control::SUFFIX_RESUME_PREVIEW),
-    ] {
-        let refused = if path.ends_with(control::SUFFIX_RESUME_PREVIEW) {
-            h.get(&path).await
-        } else {
-            h.post(&path).await
-        };
-        assert_eq!(refused.status(), 409, "{path}: {}", refused.body());
-        assert!(
-            refused.body().contains("a capture entry cannot be resumed"),
-            "{path}: {}",
-            refused.body()
-        );
-    }
 }
 
 // ------------------------------------------------------------------ the Host check
@@ -1383,7 +1311,6 @@ async fn a_foreign_host_is_refused_on_a_public_route_and_on_a_bearer_route() {
     ];
     for host in &foreign {
         for (path, bearer) in [
-            (protocol::ROUTE_UI.to_string(), false),
             (status.clone(), false),
             (protocol::ROUTE_HEALTH.to_string(), true),
             (status.clone(), true),
@@ -1523,14 +1450,16 @@ async fn the_host_refusal_carries_the_version_header_and_quotes_nothing_it_was_s
         Some(protocol::CONTROL_API_VERSION.to_string().as_str())
     );
 
+    // The public status route, so the bearer check cannot be what refuses it: only the Host
+    // check can.
+    let status_path = protocol::entry_route(&h.entry_id, control::SUFFIX_STATUS);
     let addr = h.client.addr.to_string();
     let body = tokio::task::spawn_blocking(move || {
         use std::io::{Read, Write};
         let mut s = std::net::TcpStream::connect(&addr).expect("connect");
         write!(
             s,
-            "GET {} HTTP/1.1\r\nHost: evil-marker.example:{port}\r\nConnection: close\r\n\r\n",
-            protocol::ROUTE_UI
+            "GET {status_path} HTTP/1.1\r\nHost: evil-marker.example:{port}\r\nConnection: close\r\n\r\n",
         )
         .expect("write");
         let mut raw = String::new();

@@ -427,7 +427,6 @@ fn the_three_participant_surfaces_are_no_longer_stubs_and_no_daemon_is_rung_one(
     let expected = goalcup_cli::config::control_path(&cfg)
         .display()
         .to_string();
-    // `ui` was the V1 path's, removed by D48: it is a hidden stub that refuses.
     let commands = vec![vec!["status"], vec!["status", "--json"], vec!["entries"]];
     for args in commands {
         let out = goalcup()
@@ -641,47 +640,6 @@ fn goalcup_lists_the_five_capture_commands_and_nothing_else() {
     }
     let bad = goalcup().arg("verify").output().unwrap();
     assert!(!bad.status.success(), "`goalcup verify` must not exist");
-}
-
-/// `auth`, `resume` and `ui` are hidden stubs: a refusal, rung 1, naming the removal (D48),
-/// written before any daemon or configuration is looked at.
-#[test]
-fn goalcup_refuses_each_v1_command_by_name_and_never_panics() {
-    let cfg = support::empty_cfg();
-    for args in [
-        vec!["auth"],
-        vec!["auth", "--server", "https://example.invalid", "--no-open"],
-        vec!["resume"],
-        vec!["resume", "entry-0000", "--print-launch"],
-        vec!["ui"],
-        vec!["ui", "--print"],
-    ] {
-        let out = goalcup()
-            .args(&args)
-            .env_clear()
-            .envs(support::clean_env())
-            .env("GOALCUP_CONFIG_DIR", &cfg)
-            .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
-            .output()
-            .unwrap();
-        assert_eq!(out.status.code(), Some(1), "`goalcup {args:?}`");
-        let said = String::from_utf8_lossy(&out.stderr).to_string();
-        assert!(
-            said.starts_with("goalcup: ")
-                && said.contains(&format!("`goalcup {}`", args[0]))
-                && said.contains("removed after v0.5.0")
-                && said.contains("--goal-file"),
-            "`goalcup {args:?}` says what it is and how to get a capture run: {said:?}"
-        );
-        assert!(
-            !said.contains("panicked"),
-            "a refusal and not a panic: {said:?}"
-        );
-        assert!(
-            String::from_utf8_lossy(&out.stdout).is_empty(),
-            "`goalcup {args:?}` printed nothing before it refused"
-        );
-    }
 }
 
 /// `goalcup start` names its goal: the V1 path's flags are not in `--help`, and leaving

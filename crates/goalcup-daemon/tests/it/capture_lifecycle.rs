@@ -18,9 +18,8 @@ use goalcup_protocol::capture::{
     StreamKey, WireIdentity, is_capture_id,
 };
 use goalcup_protocol::control::{
-    CaptureFinishReport, CaptureWorkspaceInfo, LocalSealOutcome, ProxyCounters, ResumeRequest,
-    SUFFIX_CAPTURE_GOAL, SUFFIX_RESUME, SUFFIX_RESUME_PREVIEW, SUFFIX_SEAL, SUFFIX_STATUS,
-    SignedStatus, entry_route,
+    CaptureFinishReport, CaptureWorkspaceInfo, LocalSealOutcome, ProxyCounters,
+    SUFFIX_CAPTURE_GOAL, SUFFIX_SEAL, SUFFIX_STATUS, SignedStatus, entry_route,
 };
 use goalcup_protocol::envelope::EventBody;
 use goalcup_protocol::provenance::TerminationOutcomeV1;
@@ -1023,10 +1022,6 @@ async fn a_reopened_capture_accepts_only_status_and_seal() {
     let recovered_conflict = |entry_id: &str| {
         format!("conflict: entry {entry_id} is a recovered capture restricted to status and seal")
     };
-    let resume_conflict = format!(
-        "conflict: entry {} is a v5 capture entry, and a capture entry cannot be resumed: seal it instead",
-        post_goal.entry_id
-    );
 
     let response = rig.goal(&pre_goal.entry_id, b"a late goal").await;
     assert_error_identity(&response, &recovered_conflict(&pre_goal.entry_id));
@@ -1044,25 +1039,6 @@ async fn a_reopened_capture_accepts_only_status_and_seal() {
 
     let response = rig.abandon(&pre_goal.entry_id).await;
     assert_error_identity(&response, &recovered_conflict(&pre_goal.entry_id));
-    assert_unchanged();
-
-    let response = rig
-        .client
-        .post_body(
-            &entry_route(&post_goal.entry_id, SUFFIX_RESUME),
-            &ResumeRequest {
-                expected_generation: post_goal.process_generation,
-            },
-        )
-        .await;
-    assert_error_identity(&response, &resume_conflict);
-    assert_unchanged();
-
-    let response = rig
-        .client
-        .get(&entry_route(&post_goal.entry_id, SUFFIX_RESUME_PREVIEW))
-        .await;
-    assert_error_identity(&response, &resume_conflict);
     assert_unchanged();
 
     rig.status(&pre_goal.entry_id)
@@ -2245,39 +2221,6 @@ async fn a_failed_local_finish_is_reported_and_never_reads_finished() {
     failed(rig.status(&info.entry_id).await);
     let rig = rig.restart().await;
     failed(rig.status(&info.entry_id).await);
-}
-
-#[tokio::test]
-async fn torn_tail_cannot_resume() {
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
-    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
-    let mut torn = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&chain)
-        .unwrap();
-    std::io::Write::write_all(&mut torn, b"{\"protocol_version\":5,").unwrap();
-    let resume = rig
-        .client
-        .post_body(
-            &entry_route(&info.entry_id, SUFFIX_RESUME),
-            &ResumeRequest {
-                expected_generation: 1,
-            },
-        )
-        .await;
-    let preview = rig
-        .client
-        .get(&entry_route(&info.entry_id, SUFFIX_RESUME_PREVIEW))
-        .await;
-    for refused in [resume, preview] {
-        assert_eq!(refused.status(), 409, "{}", refused.body());
-        assert!(
-            refused.body().contains("cannot be resumed"),
-            "{}",
-            refused.body()
-        );
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -9,8 +9,7 @@
 //! # It is not a stub
 //!
 //! It records the order calls arrived in, it signs its `SignedStatus` with a fixed seed so a
-//! test can pin `WorkspaceInfo.run_public_key` and mean it, it can withhold or delay the
-//! start signal (which is how the D16 refusal is tested without a harness), and it can
+//! test can pin `WorkspaceInfo.run_public_key` and mean it, and it can
 //! answer one `busy` on a named method — the transient the daemon raises on every mutating
 //! route while an entry is mid-pump.
 //!
@@ -33,17 +32,15 @@ use goalcup_protocol::control::{
     self, ArmingState, CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest,
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
     ControlError, DaemonClient, DaemonHealth, EntrySummary, EventStatus, FinishReportV1,
-    LocalSealOutcome, ResumeInfo, ResumePreviewInfo, SealResponse, SignedStatus, StatusPayload,
-    WorkspaceInfo, WorkspaceOpts,
+    LocalSealOutcome, SealResponse, SignedStatus, StatusPayload, WorkspaceInfo,
 };
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
 use goalcup_protocol::provenance::{Rfc3339Utc, TerminationOutcomeV1};
 use goalcup_protocol::seal::{SealManifest, SealedFile};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
-use std::time::Duration;
 
 /// The seed the mock's run key is built from. Fixed, because a test that pinned a random
 /// key would be pinning nothing.
@@ -75,59 +72,20 @@ pub struct MockCapture {
 /// is what they write to.
 pub struct MockState {
     pub info: WorkspaceInfo,
-    pub armed: bool,
-    /// The start signal, or `None` for a gate that will never clear.
-    pub signal: Option<control::StartSignal>,
-    /// How long `wait_start_signal` waits before handing the signal over.
-    pub signal_after: Option<Duration>,
     pub status: SignedStatus,
     pub entries: Vec<EntrySummary>,
-    pub resume: ResumeInfo,
-    /// Durable handoff state returned by the read-only resume preview.  Production keeps it
-    /// in the registry; this test fake keeps it beside the matching answer so command tests
-    /// can model a CLI that died after `/resume` opened its permit.
-    pub resume_handoff_phase: String,
-    /// A one-shot barrier for `resume`, consumed before waiting.  This lets a concurrent
-    /// command test distinguish local serialization from two callers merely waiting on the
-    /// same fake daemon response.
-    pub resume_wait_once_for: Option<PathBuf>,
-    /// Makes the next resume simulate the server accepting its CAS and opening the next
-    /// permit, followed by a response body the client cannot decode.  This is the ambiguous
-    /// after-send outcome a successor must recover through its durable marker.
-    pub resume_accept_then_malformed: bool,
-    /// Makes the answer `resume` (not `resume_preview`) gives, once, name a different
-    /// workspace than every reading before it. `resume` and `resume_preview` both read
-    /// `resume.workspace` off this one struct, so nothing on this fake can otherwise put the
-    /// post-CAS answer at odds with the preview that ran moments before — the two always
-    /// agree. A real daemon cannot disagree here either — `entry.workspace` is immutable
-    /// once the entry is created — so this is a synthetic vehicle, not a model of any
-    /// daemon race: it exists only to exercise the one lock-roots check that reads the CAS
-    /// answer instead of the preview.
-    pub resume_workspace_disagree_once: Option<String>,
-    /// Expected generations passed to successful cancellation calls.  Kept separately from
-    /// `calls` so recovery tests can prove the successor cancelled exactly N+1.
-    pub cancelled_process_handoff_generations: Vec<u64>,
     pub seal: SealManifest,
     /// A durable finish answer. `None` retains the legacy manifest behavior used by
     /// historical command tests.
     pub workspace_finish: Option<FinishReportV1>,
     pub sealed: bool,
-    /// Every typed compare-and-swap body the CLI offered to `/resume`, including a request
-    /// the mock subsequently refused.  `calls` answers order; this preserves the authority
-    /// generation the caller actually named.
-    pub resume_requests: Vec<control::ResumeRequest>,
     pub processes: Vec<ProcessHandle>,
     /// Every typed `/process` body offered by the CLI, including a body the mock refused.
     /// `processes` remains the accepted-handle ledger; this one proves a retry did not
     /// silently change its generation or termination identity.
     pub process_registrations: Vec<ProcessRegistration>,
-    /// Every typed cancellation body.  A cancelled permit has an authority generation and,
-    /// once a child was prepared, its canonical request digest; tests need both rather than
-    /// only the route name in `calls`.
-    pub process_handoff_cancellations: Vec<control::ProcessHandoffCancelRequest>,
     pub abandoned: Vec<(String, String)>,
     pub calls: Vec<String>,
-    pub last_opts: Option<WorkspaceOpts>,
     /// One refusal per method name, taken by the next call to it and then gone.
     pub failures: BTreeMap<String, ControlError>,
     /// One refusal per method name that is not taken: every call to that method answers it.
@@ -149,32 +107,6 @@ pub struct MockDaemonClient {
 /// [`MockDaemonClient::run_public_key`] comparable to `WorkspaceInfo.run_public_key`.
 fn hex_of(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The repository's `connectors/`, as this crate's own tests see it.
-///
-/// `config::connectors_dir()` resolves relative to the running executable, and a test
-/// binary runs from `target/debug/deps/` where neither of its candidates exists. This file
-/// is compiled only under `test-support`, so the manifest directory is the honest answer
-/// and it is never baked into anything a participant installs.
-fn shipped_connectors() -> PathBuf {
-    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    dir.pop();
-    dir.pop();
-    dir.join("connectors")
-}
-
-/// The `arming.signal` connector `id` declares, read from the shipped manifest rather than
-/// copied into a table here — a signal spelled twice is a signal that drifts.
-///
-/// A connector that cannot be read yields the reason in place of a signal, so the assertion
-/// that compares this against the manifest fails naming the cause. Nothing in `src/` panics,
-/// including here.
-fn arming_signal_of(id: &str) -> String {
-    match crate::connector::load(&shipped_connectors(), id) {
-        Ok(connector) => connector.manifest.arming.signal,
-        Err(e) => format!("the shipped connector {id} could not be read: {e}"),
-    }
 }
 
 // ------------------------------------------------------------------ construction
@@ -206,16 +138,8 @@ impl MockDaemonClient {
             artifact_root: artifact_root.display().to_string(),
             harness_home: harness_home.display().to_string(),
             run_public_key,
-            // The page, with the entry id in the query, which is what
-            // `goalcup_daemon::control::handlers` builds: `/v0/entries/current` is
-            // authenticated and a browser has no token, so the daemon tells the page which
-            // entry it is looking at. The V1 `goalcup ui` (removed by D48) opened this string
-            // byte for byte, so it must not be the signed status route, which no daemon puts
-            // on this field.
-            status_url: format!(
-                "http://127.0.0.1:53310{}?entry={entry_id}",
-                control::ROUTE_UI
-            ),
+            // Empty, as `goalcup start` writes it for a capture entry: the V1 page is gone.
+            status_url: String::new(),
             status_cache_path: artifact_root.join("status.json").display().to_string(),
             status_line_path: artifact_root.join("status-line.txt").display().to_string(),
             session_id: "session-mock-0001".to_string(),
@@ -269,15 +193,6 @@ impl MockDaemonClient {
             admissions_refused: None,
         };
         let state = MockState {
-            armed: true,
-            signal: Some(control::StartSignal {
-                entry_id: entry_id.clone(),
-                signal: arming_signal_of(connector_id),
-                session_id: Some(info.session_id.clone()),
-                observed_at: NOW.to_string(),
-                source: "leg1".to_string(),
-            }),
-            signal_after: None,
             status: signed(payload, &key),
             entries: vec![EntrySummary {
                 entry_id: entry_id.clone(),
@@ -289,23 +204,6 @@ impl MockDaemonClient {
                 deadline_at: None,
                 sealed_at: None,
             }],
-            resume: ResumeInfo {
-                entry_id: entry_id.clone(),
-                process_generation: 2,
-                session_id: bound_session_of(&info.session_id),
-                caught_up_events: 0,
-                workspace: info.workspace.clone(),
-                artifact_root: info.artifact_root.clone(),
-                harness_home: info.harness_home.clone(),
-                status_line_path: info.status_line_path.clone(),
-                server_port: None,
-                last_process: None,
-            },
-            resume_handoff_phase: "registered".to_string(),
-            resume_wait_once_for: None,
-            resume_accept_then_malformed: false,
-            resume_workspace_disagree_once: None,
-            cancelled_process_handoff_generations: Vec::new(),
             seal: SealManifest {
                 entry_id: entry_id.clone(),
                 sealed_at: NOW.to_string(),
@@ -315,13 +213,10 @@ impl MockDaemonClient {
             },
             workspace_finish: None,
             sealed: false,
-            resume_requests: Vec::new(),
             processes: Vec::new(),
             process_registrations: Vec::new(),
-            process_handoff_cancellations: Vec::new(),
             abandoned: Vec::new(),
             calls: Vec::new(),
-            last_opts: None,
             failures: BTreeMap::new(),
             standing: BTreeMap::new(),
             capture: MockCapture {
@@ -407,25 +302,6 @@ impl MockDaemonClient {
         }
     }
 
-    /// What a resume of this entry answers.
-    pub fn resume_info(&self) -> ResumeInfo {
-        match self.read(|state| state.resume.clone()) {
-            Some(resume) => resume,
-            None => unreachable_resume(),
-        }
-    }
-
-    /// Every complete `/resume` CAS body this mock was offered, in call order.
-    ///
-    /// The ordinary string call log can prove that a route was reached, but it cannot prove
-    /// that the client used the daemon's freshly previewed generation rather than a stale
-    /// cache value. Keep the typed bodies observable without teaching command tests a second
-    /// fake control protocol.
-    pub fn resume_requests(&self) -> Vec<control::ResumeRequest> {
-        self.read(|state| state.resume_requests.clone())
-            .unwrap_or_default()
-    }
-
     /// Every complete `/process` body this mock was offered, including one it refused.
     ///
     /// `last_registered_handle` intentionally answers a different question: the latest
@@ -436,65 +312,9 @@ impl MockDaemonClient {
             .unwrap_or_default()
     }
 
-    /// Every complete `/process/cancel` body this mock was offered, in call order.
-    pub fn process_handoff_cancellations(&self) -> Vec<control::ProcessHandoffCancelRequest> {
-        self.read(|state| state.process_handoff_cancellations.clone())
-            .unwrap_or_default()
-    }
-
-    /// What the read-only resume preview answers for this entry.
-    pub fn resume_preview_info(&self) -> ResumePreviewInfo {
-        match self
-            .read(|state| preview_from_resume(&state.resume, state.resume_handoff_phase.clone()))
-        {
-            Some(preview) => preview,
-            None => preview_from_resume(&unreachable_resume(), "registered".to_string()),
-        }
-    }
-
-    /// Make the next `resume` wait until `path` exists, after recording the call and before
-    /// returning its permit.  A command test can then hold one local CLI in the critical
-    /// section while a second one tries the same entry.
-    pub fn block_next_resume_until(&self, path: &Path) {
-        let path = path.to_path_buf();
-        self.write(|state| state.resume_wait_once_for = Some(path));
-    }
-
-    /// Make the next resume mutate the simulated daemon as though the request won, then
-    /// return a malformed response to the caller.
-    pub fn accept_next_resume_then_malformed(&self) {
-        self.write(|state| state.resume_accept_then_malformed = true);
-    }
-
-    /// Make the next `resume` answer a different workspace than every `resume_preview`
-    /// before it. Synthetic: no real daemon can do this, since `entry.workspace` is
-    /// immutable after creation — see [`MockState::resume_workspace_disagree_once`].
-    pub fn disagree_workspace_on_next_resume(&self, workspace: &str) {
-        self.write(|state| {
-            state.resume_workspace_disagree_once = Some(workspace.to_string());
-        });
-    }
-
-    /// Set the durable handoff state a restart observes.  It models the registry rather than
-    /// a client cache, which is why a test can distinguish its own crashed resume from an
-    /// unrelated open permit.
-    pub fn set_resume_handoff(&self, generation: u64, phase: &str) {
-        let phase = phase.to_string();
-        self.write(|state| {
-            state.resume.process_generation = generation;
-            state.resume_handoff_phase = phase;
-        });
-    }
-
     /// The trait methods called on this mock, in order.
     pub fn calls(&self) -> Vec<String> {
         self.read(|state| state.calls.clone()).unwrap_or_default()
-    }
-
-    /// The exact expected generation on each successful handoff cancellation.
-    pub fn cancelled_process_handoff_generations(&self) -> Vec<u64> {
-        self.read(|state| state.cancelled_process_handoff_generations.clone())
-            .unwrap_or_default()
     }
 
     /// How many entries this mock reports.
@@ -506,26 +326,6 @@ impl MockDaemonClient {
     pub fn abandoned(&self) -> Vec<(String, String)> {
         self.read(|state| state.abandoned.clone())
             .unwrap_or_default()
-    }
-
-    /// The options the last `create_workspace` actually sent.
-    ///
-    /// With nothing sent yet the answer is a sentinel whose `connector_id` says so, rather
-    /// than a plausible options document a test could assert against by accident.
-    pub fn last_workspace_opts(&self) -> WorkspaceOpts {
-        match self.read(|state| state.last_opts.clone()) {
-            Some(Some(opts)) => opts,
-            _ => WorkspaceOpts {
-                connector_id: "no create_workspace call was made on this mock".to_string(),
-                manifest_sha256: String::new(),
-                workspace_parent: None,
-                attach: false,
-                deadline_hours: 0,
-                grant_token: String::new(),
-                arming_timeout_seconds: None,
-                harness_version: None,
-            },
-        }
     }
 
     /// `status.payload.detail` — the daemon's own plain words, so a command test asserts
@@ -561,17 +361,6 @@ impl MockDaemonClient {
     }
 }
 
-/// The id the arming gate bound, given the id `create_workspace` minted.
-///
-/// A real daemon answers a resume with "the session the latest corroborating leg-1 record
-/// belongs to", and only `claude-code-cli` pins the minted id at launch (`--session-id`):
-/// `codex-cli` pins none, so the harness mints its own and the daemon's bound id is a
-/// different string. Deriving it rather than naming a constant keeps it recognisable in a
-/// failure message and keeps it unequal by construction.
-pub fn bound_session_of(minted: &str) -> String {
-    format!("{minted}-bound")
-}
-
 /// The `WorkspaceInfo` a poisoned lock yields: every string says what happened, so an
 /// assertion against it fails naming the cause instead of comparing empty strings.
 fn unreachable_info() -> WorkspaceInfo {
@@ -595,58 +384,9 @@ fn unreachable_info() -> WorkspaceInfo {
     }
 }
 
-/// See [`unreachable_info`].
-fn unreachable_resume() -> ResumeInfo {
-    let said = "the mock's state was poisoned by a panic in another test thread".to_string();
-    ResumeInfo {
-        entry_id: said.clone(),
-        process_generation: 0,
-        session_id: said.clone(),
-        caught_up_events: 0,
-        workspace: said.clone(),
-        artifact_root: said.clone(),
-        harness_home: said.clone(),
-        status_line_path: said,
-        server_port: None,
-        last_process: None,
-    }
-}
-
-fn preview_from_resume(info: &ResumeInfo, process_handoff_phase: String) -> ResumePreviewInfo {
-    ResumePreviewInfo {
-        entry_id: info.entry_id.clone(),
-        process_generation: info.process_generation,
-        process_handoff_phase,
-        session_id: info.session_id.clone(),
-        workspace: info.workspace.clone(),
-        artifact_root: info.artifact_root.clone(),
-        harness_home: info.harness_home.clone(),
-        status_line_path: info.status_line_path.clone(),
-        server_port: info.server_port,
-    }
-}
-
 // ------------------------------------------------------------------ the hooks
 
 impl MockDaemonClient {
-    /// Hand the start signal over only after `d`. A delay longer than the caller's timeout
-    /// is an `ArmingTimeout`, exactly as the daemon's long poll would report it.
-    ///
-    /// **It sets the delay and nothing else.** In particular it does not re-arm a signal
-    /// [`MockDaemonClient::withhold_signal`] took away: a hook named for one thing that
-    /// quietly undoes another is a hook whose call order changes the answer, and a test
-    /// asserting a gate stays shut would pass or fail on where in the file the delay was
-    /// set. The two hooks compose in the honest direction instead — delay it, watch it
-    /// arrive, withhold it, watch it time out. No test exercises that sequence any more.
-    pub fn set_signal_delay(&self, d: Duration) {
-        self.write(|state| state.signal_after = Some(d));
-    }
-
-    /// A gate that will never clear, and nothing below re-opens it.
-    pub fn withhold_signal(&self) {
-        self.write(|state| state.signal = None);
-    }
-
     /// Put the status payload into `ArmingState::Refused` with this `detail` — the fourth
     /// arming state, which is a refusal and not a timeout.
     pub fn set_arming_refused(&self, detail: &str) {
@@ -772,78 +512,6 @@ impl MockDaemonClient {
         self.write(|state| state.standing.insert(method, err));
     }
 
-    /// The page URL the workspace answer carries, and the spelling of the workspace it was
-    /// asked for.
-    ///
-    /// Two fields and one hook, because both are answers about the workspace that only
-    /// `create_workspace` gives and neither has any other way in. `goalcup start` refuses a
-    /// `status_url` that is not a loopback page before it writes one into the entry cache, and
-    /// prints `workspace_requested` where it differs from the canonical spelling (D16). A test
-    /// cannot reach either through the fixture, which builds one consistent answer.
-    ///
-    /// `None` leaves a field as it stands, so a test that is about one of the two says so.
-    pub fn set_workspace_answer(&self, status_url: Option<&str>, requested: Option<&str>) {
-        self.write(|state| {
-            if let Some(url) = status_url {
-                state.info.status_url = url.to_string();
-            }
-            if let Some(requested) = requested {
-                state.info.workspace_requested = requested.to_string();
-            }
-        });
-    }
-
-    /// The port the daemon reserved for this entry, on **both** answers it gives about it.
-    ///
-    /// `armed_ok` builds a mock with no port, which is right for the shipped connectors, none
-    /// of which reserves one, and wrong for a manifest whose launch and resume recipes both
-    /// render `{server_port}`. Both `WorkspaceInfo` and `ResumeInfo` are set from the one
-    /// call: the daemon remembers the port it reserved at creation and hands the same one
-    /// back on a resume, so a mock whose two answers disagreed about it would be one no
-    /// daemon could ever produce.
-    pub fn set_server_port(&self, port: Option<u16>) {
-        self.write(|state| {
-            state.info.server_port = port;
-            state.resume.server_port = port;
-        });
-    }
-
-    /// The `hook_install[]` files the daemon rendered and wrote, and the
-    /// workspace-relative list derived from them.
-    ///
-    /// `armed_ok` lists none, which leaves the entry record's `workspace_relative` empty —
-    /// and that list is the half of the seal's exclusion set that names the tracker's own
-    /// files. It is load-bearing for **disclosure**, not for exclusion. A run against a mock
-    /// that answered nothing here would still not count `.claude/settings.json` as the
-    /// agent's work, because `.claude` is in `claude-code-cli`'s own `workspace_exclusions`
-    /// and the connector prunes that subtree on its own; what it would lose is the naming —
-    /// the seal would apply two patterns instead of three and never say out loud which file
-    /// the tracker wrote into the participant's workspace.
-    ///
-    /// `workspace_relative` is **derived here** rather than taken as a second argument, the
-    /// way the daemon's V1 `Installation::from_files` (removed by OS-31) derived it: the
-    /// `Workspace`-scoped relative paths, sorted and deduplicated. Two fields a caller could
-    /// set apart from each other is a fixture no daemon could ever answer with, and a
-    /// duplicate this dropped is one `from_files` dropped too.
-    pub fn set_workspace_files(&self, files: Vec<control::InstalledFile>) {
-        let mut relative: Vec<String> = files
-            .iter()
-            .filter(|f| f.scope == goalcup_protocol::manifest::InstallScope::Workspace)
-            .map(|f| f.relative_path.clone())
-            .collect();
-        relative.sort();
-        relative.dedup();
-        self.write(|state| {
-            state.info.installed_files = files;
-            state.info.workspace_relative = relative;
-        });
-    }
-
-    /// How many events the daemon caught up before answering the resume.
-    pub fn set_caught_up_events(&self, n: u64) {
-        self.write(|state| state.resume.caught_up_events = n);
-    }
-
     /// Answer one `busy` on this method and then succeed — the transient the daemon raises
     /// on every mutating route while an entry is mid-pump.
     pub fn busy_once(&self, method: &str) {
@@ -853,32 +521,6 @@ impl MockDaemonClient {
         );
     }
 
-    /// Put a process on the resume answer, so a test can meet a live or a dead holder in
-    /// front of the pre-relaunch lock check.
-    pub fn set_last_process_pid(&self, pid: u32) {
-        self.write(|state| {
-            let handle = match state.resume.last_process.take() {
-                Some(handle) => ProcessHandle { pid, ..handle },
-                None => ProcessHandle {
-                    pid,
-                    pgid: Some(pid),
-                    native_pid: None,
-                    native_binary: None,
-                    native_process_start: None,
-                    process_start: None,
-                    strategy: goalcup_protocol::manifest::KillStrategy::ProcessGroup,
-                    grace_seconds: 5,
-                    launched_at: NOW.to_string(),
-                    program: "/usr/bin/true".to_string(),
-                    argv: vec!["true".to_string()],
-                    env_keys: Vec::new(),
-                    home_seed: None,
-                },
-            };
-            state.resume.last_process = Some(handle);
-        });
-    }
-
     /// The pid of the handle most recently `register_process`ed, so a test can assert the
     /// relaunch was handed over and the entry cache followed it.
     pub fn last_registered_pid(&self) -> Option<u32> {
@@ -886,13 +528,8 @@ impl MockDaemonClient {
             .flatten()
     }
 
-    /// The whole of that handle.
-    ///
-    /// The pid alone cannot answer the question a resume raises: whether what was handed
-    /// over describes the resume recipe. The daemon's
-    /// termination guard compares a live command line against `argv`, and a relaunch that
-    /// registered the start argv would be handing the daemon a description of a process that
-    /// no longer exists.
+    /// The whole of that handle. The daemon's termination guard compares a live command line
+    /// against `argv`, so a test needs more than the pid.
     pub fn last_registered_handle(&self) -> Option<ProcessHandle> {
         self.read(|state| state.processes.last().cloned()).flatten()
     }
@@ -974,83 +611,7 @@ fn poisoned() -> ControlError {
     )
 }
 
-/// Test-only bounded barrier for a concurrent command test.  A missing release marker must
-/// become a test failure, not hang the suite forever.
-fn wait_for_test_file(path: &Path) -> Result<(), ControlError> {
-    for _ in 0..400 {
-        if path.exists() {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    Err(ControlError::Internal(format!(
-        "the test release marker {} never appeared",
-        path.display()
-    )))
-}
-
 impl DaemonClient for MockDaemonClient {
-    fn create_workspace(
-        &self,
-        _harness: &str,
-        opts: &WorkspaceOpts,
-    ) -> Result<WorkspaceInfo, ControlError> {
-        let Ok(mut state) = self.state.lock() else {
-            return Err(poisoned());
-        };
-        record(&mut state, "create_workspace")?;
-        state.last_opts = Some(opts.clone());
-        Ok(state.info.clone())
-    }
-
-    fn arm(&self, _entry_id: &str) -> Result<(), ControlError> {
-        let Ok(mut state) = self.state.lock() else {
-            return Err(poisoned());
-        };
-        record(&mut state, "arm")?;
-        state.armed = true;
-        Ok(())
-    }
-
-    fn wait_start_signal(
-        &self,
-        entry_id: &str,
-        timeout: Duration,
-    ) -> Result<control::StartSignal, ControlError> {
-        let waited = {
-            let Ok(mut state) = self.state.lock() else {
-                return Err(poisoned());
-            };
-            record(&mut state, "wait_start_signal")?;
-            // The signal is about the entry that was asked about, the way the daemon's
-            // own long poll answers off the gate it was handed an id for.
-            let Some(signal) = state.signal.clone().map(|s| control::StartSignal {
-                entry_id: entry_id.to_string(),
-                ..s
-            }) else {
-                return Err(ControlError::ArmingTimeout {
-                    detail: "the tracker never saw your harness start in this folder, so \
-                             nothing was recorded"
-                        .to_string(),
-                });
-            };
-            let after = state.signal_after.unwrap_or_default();
-            if after > timeout {
-                return Err(ControlError::ArmingTimeout {
-                    detail: format!(
-                        "the start signal did not arrive within {}ms",
-                        timeout.as_millis()
-                    ),
-                });
-            }
-            (after, signal)
-        };
-        // Outside the lock: a mock that slept holding it would serialise a test's threads
-        // against a delay the test asked one of them to wait out.
-        std::thread::sleep(waited.0);
-        Ok(waited.1)
-    }
-
     fn status(&self, _entry_id: &str) -> Result<SignedStatus, ControlError> {
         let Ok(mut state) = self.state.lock() else {
             return Err(poisoned());
@@ -1065,57 +626,6 @@ impl DaemonClient for MockDaemonClient {
         };
         record(&mut state, "entries")?;
         Ok(state.entries.clone())
-    }
-
-    fn resume(
-        &self,
-        _entry_id: &str,
-        request: &control::ResumeRequest,
-    ) -> Result<ResumeInfo, ControlError> {
-        let (info, wait_for, malformed_after_accept) = {
-            let Ok(mut state) = self.state.lock() else {
-                return Err(poisoned());
-            };
-            // Keep the request even where the mock refuses it: the caller has already
-            // offered a concrete generation to the daemon, and recovery tests must
-            // distinguish that from a route that was never reached.
-            state.resume_requests.push(request.clone());
-            record(&mut state, "resume")?;
-            let malformed_after_accept = std::mem::take(&mut state.resume_accept_then_malformed);
-            if malformed_after_accept {
-                state.resume.process_generation += 1;
-                state.resume_handoff_phase = "open_resume".to_string();
-            }
-            let mut answered = state.resume.clone();
-            if let Some(workspace) = state.resume_workspace_disagree_once.take() {
-                answered.workspace = workspace;
-            }
-            (
-                answered,
-                state.resume_wait_once_for.take(),
-                malformed_after_accept,
-            )
-        };
-        if let Some(path) = wait_for {
-            wait_for_test_file(&path)?;
-        }
-        if malformed_after_accept {
-            return Err(ControlError::Malformed(
-                "resume was accepted but its response could not be decoded".to_string(),
-            ));
-        }
-        Ok(info)
-    }
-
-    fn resume_preview(&self, _entry_id: &str) -> Result<ResumePreviewInfo, ControlError> {
-        let Ok(mut state) = self.state.lock() else {
-            return Err(poisoned());
-        };
-        record(&mut state, "resume_preview")?;
-        Ok(preview_from_resume(
-            &state.resume,
-            state.resume_handoff_phase.clone(),
-        ))
     }
 
     /// A second seal is a `conflict` — already sealed is a state that will not change, and
@@ -1163,26 +673,6 @@ impl DaemonClient for MockDaemonClient {
         record(&mut state, "register_process")?;
         state.processes.push(registration.handle.clone());
         Ok(())
-    }
-
-    fn cancel_process_handoff(
-        &self,
-        _entry_id: &str,
-        request: &control::ProcessHandoffCancelRequest,
-    ) -> Result<control::ProcessHandoffCancelInfo, ControlError> {
-        let Ok(mut state) = self.state.lock() else {
-            return Err(poisoned());
-        };
-        state.process_handoff_cancellations.push(request.clone());
-        record(&mut state, "cancel_process_handoff")?;
-        state
-            .cancelled_process_handoff_generations
-            .push(request.expected_generation);
-        state.resume.process_generation = request.expected_generation;
-        state.resume_handoff_phase = "registered".to_string();
-        Ok(control::ProcessHandoffCancelInfo {
-            process_generation: request.expected_generation,
-        })
     }
 
     fn health(&self) -> Result<DaemonHealth, ControlError> {

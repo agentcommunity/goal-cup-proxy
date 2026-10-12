@@ -1,5 +1,5 @@
 //! The control API's server side: the state the handlers share, the one authentication
-//! rule, `control.json`, and the router the CLI and the bundled page both reach.
+//! rule, `control.json`, and the router the CLI reaches.
 //!
 //! The contract is `goalcup_protocol::control` and this module implements it. It defines
 //! no wire type of its own — [`ControlFile`] is a local file and not a wire shape — and it
@@ -92,10 +92,9 @@ pub use file::{
 pub(crate) use goalcup_protocol::constant_time::constant_time_eq;
 pub use handlers::AbandonRequest;
 pub use router::{
-    ControlListener, ENTRY_SUFFIXES, MAX_CONTROL_BODY_BYTES, QUERY_TIMEOUT_MS, SUFFIX_ABANDON,
-    SUFFIX_ARM, SUFFIX_PROCESS, SUFFIX_PROCESS_CANCEL, SUFFIX_RESUME, SUFFIX_RESUME_PREVIEW,
-    SUFFIX_SEAL, SUFFIX_START_SIGNAL, SUFFIX_STATUS, TOP_LEVEL_ROUTES, VERSION_HEADER,
-    control_router, entry_pattern, serve_control,
+    ControlListener, ENTRY_SUFFIXES, MAX_CONTROL_BODY_BYTES, SUFFIX_ABANDON, SUFFIX_PROCESS,
+    SUFFIX_SEAL, SUFFIX_STATUS, TOP_LEVEL_ROUTES, VERSION_HEADER, control_router, entry_pattern,
+    serve_control,
 };
 
 use crate::DaemonError;
@@ -123,7 +122,7 @@ pub struct ControlState {
 
 /// Nothing but the shape. A derived `Debug` would put the CLI's bearer into every
 /// interpolated error that carries the state, which is the leak `WorkspaceOpts`,
-/// `WorkspaceInfo`, `ResumeInfo` and `RunKeys` all hand-write their `Debug` to close.
+/// `WorkspaceInfo` and `RunKeys` all hand-write their `Debug` to close.
 impl std::fmt::Debug for ControlState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControlState")

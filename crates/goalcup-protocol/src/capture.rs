@@ -12,16 +12,14 @@
 
 use serde::{Deserialize, Serialize};
 
-// Contract S1 (F6): the status projection and the upload bound moved out of this record module,
-// which the v5 freeze covers, into `capture_status` and `chunk`. These re-exports keep every
-// existing `capture::` import path working until S5 fixes the import sites and deletes them.
+// Contract S1 (F6): the status projection moved out of this record module, which the v5 freeze
+// covers, into `capture_status`. These re-exports keep every existing `capture::` import path
+// working until S5 fixes the import sites and deletes them.
 #[doc(hidden)]
 pub use crate::capture_status::{
     AnalysisState, AnchorState, CaptureState, CaptureStorage, DeliveryState, DurableFrontier,
     M2Status, RunState,
 };
-#[doc(hidden)]
-pub use crate::chunk::MAX_UPLOAD_BYTES;
 
 /// The protocol version whose envelopes may carry [`CaptureRecord`]s. The legacy default,
 /// [`crate::PROTOCOL_VERSION`], stays 4: v5 is selected explicitly, never by default.

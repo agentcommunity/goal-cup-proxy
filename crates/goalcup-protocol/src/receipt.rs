@@ -17,14 +17,13 @@ pub const RECEIPT_DOMAIN: &[u8] = b"goalcup-receipt-v1\0";
 pub const START_RECEIPT_DIGEST_DOMAIN: &[u8] = b"goalcup:start-receipt-digest:v1\0";
 
 /// The published placeholder server key, hex: the Ed25519 verifying key of the seed
-/// `[5u8; 32]`, which is written in this repository (`goalcup_devserver::DEV_SERVER_SEED`,
-/// the verifier's fixtures).
+/// `[5u8; 32]`, which is written in this repository (the verifier's fixtures).
 ///
 /// **Anybody can sign a receipt or an acknowledgement under it**, so a run anchored to it is
 /// anchored to nothing until the project server's real key replaces it (V1.1). It lives in the
-/// protocol crate, which every side already links, so the daemon can say so at startup without
-/// linking the devserver (D3). `crates/goalcup-devserver/tests/full/placeholder_seed.rs` derives it
-/// from the seed, so the constant cannot drift from what signs under it.
+/// protocol crate, which every side already links, so the daemon can say so at startup.
+/// `crates/goalcup-protocol/tests/it/placeholder_seed.rs` derives it from the seed, so the
+/// constant cannot drift from what signs under it.
 ///
 /// `goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY` aliases this constant; the one spelling
 /// cannot drift from the seed the development fixtures use.

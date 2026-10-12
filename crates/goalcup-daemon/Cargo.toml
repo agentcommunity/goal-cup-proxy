@@ -30,7 +30,7 @@ redb.workspace = true
 # `OsRng`, for the three per-run secrets `RunKeys::generate` mints.
 rand.workspace = true
 # `RunKeys` hands out an `ed25519_dalek::SigningKey` and the hex verifying key that
-# `SignedStatus::verify_with` and `Chunk::verify` are pinned against.
+# `SignedStatus::verify_with` is pinned against.
 ed25519-dalek.workspace = true
 hex.workspace = true
 # `workspace::sha256_hex` and the streaming digest the seal walk takes over a
@@ -74,7 +74,4 @@ libc.workspace = true
 # as an ordinary dependency, so this is the only way to hand the integration tests a
 # feature the shipped build does not carry.
 goalcup-daemon = { path = ".", features = ["test-hooks"] }
-# The terminal-publication regressions read the exact offline interface participants' agents
-# use, rather than treating a hand-parsed cache file as a substitute for goalcup-mcp.
-goalcup-mcp = { path = "../goalcup-mcp" }
 tempfile.workspace = true

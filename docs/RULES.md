@@ -64,7 +64,7 @@ The latest possible run ends 192 hours after T0. The latest publication window e
 - Any instruction file your harness reads from the workspace at the start (`AGENTS.md`, `CLAUDE.md` and the like) is part of the prompt: it is recorded with it and published with it. Prepared context is allowed; hidden context is not, and there is nowhere to hide it.
 - After the start, every message a human sends to the agent, by any channel, is recorded, published with the entry, and counted as an intervention. `keep going` after an outage or a crash counts too and is labelled as a resume. Nothing is banned; the count is the score.
 - An entry with zero interventions carries a label that says so. That label is a detection, not a proof: the tracker records what the model saw and works out who said it from what was typed and how the harness structures its messages. A message it cannot explain is published as unexplained and reviewed by an organizer.
-- The tracker never sends anything to the agent, and never relays, edits or blocks your input: no reminders, no automatic continuation. `goalcup-mcp`, the read-only status server, is shipped and never registered for you; if you register it, your prompt may refer to it.
+- The tracker never sends anything to the agent, and never relays, edits or blocks your input: no reminders, no automatic continuation.
 
 ## Prepared agent setups are allowed
 
@@ -79,7 +79,7 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
 - An empty workspace is not an empty context, and some harnesses fill it in for you. The Codex desktop app injects your saved memory summary and your global skill listing into every thread; OpenCode and Cursor read the skills in your home directory into the system prompt. That is allowed, and it is disclosed with your entry like any other prepared context. If you would rather it were not there, turn it off before you start; you cannot change it during the run.
 - If the tracker cannot resolve a referenced skill, website, MCP resource, memory, or similar source automatically, organizers may request access and the participant must provide the exact frozen material.
 - Credentials, tokens, and unrelated private account data are never published.
-- **You will see that it is working.** **Planned:** a small status page in your browser while the entry runs: whether recording is confirmed, time left, last sync, and any step you still have to do. The tracker sends no notifications; `goalcup status` is how you check. There is no token limit. **Planned:** token usage read from your harness's own records and shown on your entry.
+- **You will see that it is working.** `goalcup status` shows whether recording is confirmed, time left, last sync, and any step you still have to do. The tracker sends no notifications. There is no token limit. **Planned:** token usage read from your harness's own records and shown on your entry.
 - Ordinary public internet pages and normal third-party service responses do not need to be republished in full. Their source should be traceable when the harness exposes it.
 - Skills, plans, task lists, external state, and infrastructure created by the agent after the start are part of the agent's work and are allowed.
 

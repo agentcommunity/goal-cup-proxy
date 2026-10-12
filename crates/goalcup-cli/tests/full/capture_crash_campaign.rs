@@ -46,11 +46,9 @@ use capture_campaign_support::{
 use capture_crash_support::{
     Daemon, cli, leaves_trace_unchanged, tail_after_last_newline, tree_hashes,
 };
-use goalcup_cli::daemon::HttpDaemonClient;
 use goalcup_protocol::capture::{
     CaptureRecord, CaptureSource, CaptureState, GapReason, M2Status, MAX_ENVELOPE_BYTES, RunState,
 };
-use goalcup_protocol::control::{ControlError, DaemonClient, ResumeRequest};
 use goalcup_protocol::envelope::Envelope;
 use m2_vertical_support::{Chain, Launcher, RESERVE, Vertical, now, wait_until};
 use serde_json::{Value, json};
@@ -184,31 +182,6 @@ fn assert_upstream_saw_each_once(v: &Vertical, row: &mut Row) {
         "the upstream saw a request that is neither an echo nor the WebSocket upgrade"
     );
     assert_eq!((counters.bad_requests, counters.tls_failures), (0, 0));
-}
-
-/// Resume and its preview, through the control API the CLI uses: both refused as a capture
-/// entry that cannot be resumed.
-fn assert_resume_refused(v: &Vertical, entry: &str, row: &mut Row) {
-    let client = HttpDaemonClient::from_config_dir(&v.cfg).expect("the running daemon's client");
-    let resume = client
-        .resume(
-            entry,
-            &ResumeRequest {
-                expected_generation: 1,
-            },
-        )
-        .err();
-    let preview = client.resume_preview(entry).err();
-    for (what, refused) in [("resume", resume), ("resume-preview", preview)] {
-        row.note(&format!("{what}_answer"), format!("{refused:?}"));
-        match refused {
-            Some(ControlError::Conflict(message)) => assert!(
-                message.contains("a capture entry cannot be resumed"),
-                "{what}: {message}"
-            ),
-            other => panic!("{what} was not refused as a capture entry: {other:?}"),
-        }
-    }
 }
 
 /// The launcher outlived the daemon it had been talking to, so at its finish its control client
@@ -397,14 +370,13 @@ fn crash_and_restart(v: &Vertical, entry: &str, row: &mut Row, start: &mut Launc
     }
 }
 
-/// With the restarted daemon up and the relay still running: resume and its preview are
-/// refused (the control API, a real refusal), the relay keeps delivering, and nothing moves
+/// With the restarted daemon up and the relay still running: the relay keeps delivering, and
+/// nothing moves
 /// (chain, producers, status) across a window longer than the sender's whole reconnect
 /// schedule. This observes no movement; it does not prove the daemon's readmission policy,
 /// because the sender cannot reach the restarted daemon's new ingest port (see
 /// `READMISSION_WINDOW`).
 fn assert_no_readmission(v: &Vertical, entry: &str, row: &mut Row, crash: &Crash) {
-    assert_resume_refused(v, entry, row);
     let window_began = now();
     std::thread::sleep(READMISSION_WINDOW);
     wait_delivered(v, window_began, 10, 5, RUN);
@@ -653,9 +625,6 @@ fn torn_tail_is_preserved_and_nonresumable() {
     // CLI ladder rung 1: refused, the daemon has no status for that entry.
     assert_eq!(st.code(), Some(1), "{out}{err}");
     assert!(err.contains("no status for that entry"), "{err}");
-    leaves_trace_unchanged(&trace, "resume and its preview", || {
-        assert_resume_refused(&v, &entry, &mut row)
-    });
     let (st, out, err) = leaves_trace_unchanged(&trace, "seal", || cli(&v, &["seal", &entry]));
     row.note("seal_exit", st.code());
     row.note("seal_stderr", err.clone());

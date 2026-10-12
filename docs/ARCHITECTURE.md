@@ -19,18 +19,15 @@ How do the M2 recorder's parts fit, and where is each guarantee tested? For cont
 
 ## 2. Crates and the dependency rule
 
-Seven workspace members ([Cargo.toml](../Cargo.toml)). The private source tree also retains the
-non-member `goalcup-git`; the public OSS cut omits it.
+Five workspace members ([Cargo.toml](../Cargo.toml)).
 
 | Crate | Ships | `[dependencies]` (workspace crates) | `[dev-dependencies]` |
 |---|---|---|---|
 | `goalcup-platform` | library | none | none |
 | `goalcup-protocol` | library | platform | none |
 | `goalcup-verifier` | `goalcup-verify` | protocol | itself (feature) |
-| `goalcup-daemon` | `goalcup-daemon` | protocol, platform | itself, mcp |
+| `goalcup-daemon` | `goalcup-daemon` | protocol, platform | itself |
 | `goalcup-cli` | `goalcup` | protocol, verifier, platform | itself, daemon |
-| `goalcup-mcp` | `goalcup-mcp` | protocol, platform | none |
-| `goalcup-devserver` | dev only | protocol | verifier |
 
 The rule ([D3](DECISIONS.md)): **the daemon never links the verifier; the CLI never links the
 daemon**. Both hold for `[dependencies]`; dev-dependencies cross them for tests only. The CLI
@@ -53,11 +50,9 @@ The daemon opens a registry written by either line and refuses only V1 rows that
 | Proxy | Loopback CONNECT proxy; relays bytes unchanged, tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Ingest, per-producer redaction, chain append, native capture, finish, termination | [runtime/capture/][rc] |
 | Verifier | v5 integrity reader and research report with five built-in decoders (two native: `codex-native`, `claude-code-native`; three wire: `openai-responses`, `anthropic-messages`, `openai-chat-completions`); V1 thirteen checks for v4 traces (library and `goalcup-verify`; no CLI relay since D48) | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
-| MCP | Three read-only tools: `goalcup_event_status`, `goalcup_run_status`, `goalcup_entries` | [goalcup-mcp](../crates/goalcup-mcp/src/lib.rs) |
-| Devserver | Development-only signer of receipts and ACKs; the local pilot uses none | [goalcup-devserver](../crates/goalcup-devserver/src/lib.rs) |
 
-`goalcup` has five commands (`start --goal-file`, `status`, `entries`, `seal`, `doctor`); `auth`,
-`ui` and `resume` are hidden stubs naming D48 ([C5 amendments][cont]: a v5 entry cannot resume).
+`goalcup` has five commands (`start --goal-file`, `status`, `entries`, `seal`, `doctor`); a v5
+entry cannot resume ([C5 amendments][cont]).
 Control API v5 requires the version on mutating requests; create binds the directory digest.
 
 The open protocol-hint grammar validates metadata only. `DecoderRegistry::builtin()` and each

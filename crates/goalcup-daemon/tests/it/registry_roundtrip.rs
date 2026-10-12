@@ -750,7 +750,7 @@ fn run_keys_never_print_their_secrets() {
 }
 
 /// The signing seed is the run key. `public_key_hex` is what `WorkspaceInfo.run_public_key`
-/// carries and what `SignedStatus::verify_with` and `Chunk::verify` are pinned against, so
+/// carries and what `SignedStatus::verify_with` is pinned against, so
 /// it must be the verifying key of the seed and nothing else.
 #[test]
 fn the_run_key_is_the_signing_seed() {
@@ -867,7 +867,7 @@ fn a_pre_server_port_row_loads_with_server_port_and_seal_outcome_both_none() {
 
 /// The mode the registry sets on its parent is the registry's to set only when the
 /// parent is the registry's. Handed a path inside a directory that holds somebody else's
-/// files — a shared `config_dir`, say, which the CLI and the MCP server both read — the
+/// files — a shared `config_dir`, say, which the CLI reads — the
 /// daemon tightens the file and leaves the directory exactly as it found it.
 #[cfg(unix)]
 #[test]
