@@ -1,9 +1,9 @@
 use super::CycleCounters;
 use super::capture::{CaptureEntry, fresh_capture_id};
+use crate::DaemonError;
 use crate::config::DaemonConfig;
 use crate::ingest::{IngestClock, IngestConfig, IngestListener};
 use crate::registry::Registry;
-use crate::{DaemonError, now_unix};
 use goalcup_platform::tracecap::ArtifactRoot;
 use goalcup_protocol::control::{CycleErrors, EntrySummary, SignedStatus};
 use goalcup_protocol::process::ProcessRegistration;
@@ -47,14 +47,13 @@ pub(super) struct DaemonInner {
     pub(super) ingest_addr: SocketAddr,
     /// The daemon's one observation clock for capture records and ingest outcomes.
     pub(super) capture_clock: IngestClock,
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) finalization_clock: Mutex<Option<f64>>,
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) finalization_clock_steps: Mutex<std::collections::VecDeque<f64>>,
-    /// Process-local monotone wall-time authority for deadline/finalization decisions.
-    /// `deadline_observed` carries the threshold latch across restarts; this high-water
-    /// prevents a wall-clock rollback within one process from moving any phase backwards.
-    pub(super) finalization_epoch_unix: f64,
+    /// Seconds a test has pretended the machine slept: what a real sleep adds to the wall
+    /// clock and to nothing an `Instant` reads.
+    #[cfg(test)]
+    pub(super) simulated_sleep_seconds: Mutex<f64>,
+    /// The latest finalization time this process has handed out. The finalization clock is
+    /// the wall clock, which keeps counting while the Mac sleeps; this high-water keeps a
+    /// wall-clock rollback within one process from moving any phase backwards.
     pub(super) finalization_high_water: Mutex<f64>,
     /// What the daemon's loop lost, so the signed status can carry it.
     pub(super) cycles: Arc<CycleCounters>,
@@ -167,11 +166,8 @@ impl Daemon {
             ingest: Mutex::new(Some(ingest)),
             ingest_addr,
             capture_clock,
-            #[cfg(any(test, feature = "test-hooks"))]
-            finalization_clock: Mutex::new(None),
-            #[cfg(any(test, feature = "test-hooks"))]
-            finalization_clock_steps: Mutex::new(std::collections::VecDeque::new()),
-            finalization_epoch_unix: now_unix(),
+            #[cfg(test)]
+            simulated_sleep_seconds: Mutex::new(0.0),
             finalization_high_water: Mutex::new(0.0),
             cycles: Arc::new(CycleCounters::default()),
             control_addr: OnceLock::new(),

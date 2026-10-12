@@ -17,6 +17,7 @@ pub mod capture;
 pub mod capture_policy;
 pub mod capture_status;
 pub mod chain;
+pub mod clock;
 pub mod connector_dir;
 pub mod constant_time;
 pub mod control;

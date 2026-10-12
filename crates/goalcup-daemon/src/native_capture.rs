@@ -309,16 +309,17 @@ pub trait NativeClock: Send {
     fn now(&mut self) -> ClockReading;
 }
 
-/// The process clock: `Instant` since construction and the daemon's RFC 3339 wall time.
+/// The process clock: nanoseconds since construction, sleep included
+/// ([`goalcup_protocol::clock`]), and the daemon's RFC 3339 wall time.
 #[derive(Debug, Clone, Copy)]
 pub struct SystemNativeClock {
-    origin: std::time::Instant,
+    origin: goalcup_protocol::clock::ContinuousOrigin,
 }
 
 impl SystemNativeClock {
     pub fn new() -> Self {
         SystemNativeClock {
-            origin: std::time::Instant::now(),
+            origin: goalcup_protocol::clock::ContinuousOrigin::now(),
         }
     }
 }
@@ -333,7 +334,7 @@ impl NativeClock for SystemNativeClock {
     fn now(&mut self) -> ClockReading {
         ClockReading {
             wall: crate::now_rfc3339(),
-            mono_ns: u64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            mono_ns: self.origin.elapsed_ns(),
         }
     }
 }
