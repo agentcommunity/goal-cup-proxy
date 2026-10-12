@@ -19,11 +19,12 @@
 //! # `busy` is ridden out
 //!
 //! `busy` is the daemon holding the entry for the length of one asynchronous call — ridden out
-//! by [`retry_busy_seal`], and reported at rung 1 if it is still busy when that is spent.
+//! by [`retry_capture_seal`] within the local-finish budget, and reported at rung 1 if it is
+//! still busy when that is spent.
 
 use crate::CliError;
 use crate::entries::read_entry;
-use crate::retry::{SEAL_BUSY_ATTEMPTS, retry_busy, retry_busy_seal, retry_capture_seal};
+use crate::retry::{BUSY_ATTEMPTS, retry_busy, retry_capture_seal};
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureSealError, CaptureSealRequest, ControlError, DaemonClient,
     LOCAL_CAPTURE_FINISH_BUDGET, LocalSealOutcome, ProxyCounters,
@@ -83,8 +84,9 @@ pub fn seal_with(
 
     // No capture status: the bare seal is the only one this command can send. The daemon
     // answers it `malformed` for a capture row it could not reopen, and `missing` for an id
-    // it does not hold; it never answers it with a report this command could print.
-    match retry_busy_seal(|| client.seal(entry_id)) {
+    // it does not hold; it never answers it with a report this command could print, and never
+    // with `busy` (the route reads only the registry row), so the generic retry is enough.
+    match retry_busy(|| client.seal(entry_id)) {
         Ok(_) => Err(CliError::Control(ControlError::Malformed(format!(
             "the tracker answered the seal of entry {entry_id} with a pre-v5 seal report, which \
              this build does not read"
@@ -94,7 +96,7 @@ pub fn seal_with(
                  The entry is held, not broken, and no seal manifest was returned to this command. \
                  The daemon may still be completing a seal — wait a moment and \
                  run `goalcup seal {entry_id}` again.",
-            SEAL_BUSY_ATTEMPTS
+            BUSY_ATTEMPTS
         ))),
         // The daemon has the entry's row as a v5 capture but no status and no open capture: its
         // chain could not be reopened (a torn tail, an unreadable file), so there is nothing a

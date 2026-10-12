@@ -277,12 +277,6 @@ pub fn cfg_with_entry(tmp: &Path, info: &control::WorkspaceInfo) -> PathBuf {
     let record = goalcup_cli::entries::EntryRecord {
         entry_id: info.entry_id.clone(),
         process_generation: info.process_generation,
-        pending_process_registration: None,
-        pending_process_registration_origin: None,
-        pending_process_cleanup: None,
-        pending_process_cleanup_origin: None,
-        pending_unresolved_native_cleanup: None,
-        resume_recovery: None,
         connector_id: "claude-code-cli".to_string(),
         run_public_key: info.run_public_key.clone(),
         workspace: info.workspace.clone(),
