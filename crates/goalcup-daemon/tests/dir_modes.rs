@@ -7,7 +7,9 @@
 
 #![cfg(unix)]
 
-mod support;
+#[path = "common/mod.rs"]
+mod common;
+use common::support;
 
 use std::io::{BufRead as _, Read as _};
 use std::os::unix::fs::PermissionsExt as _;

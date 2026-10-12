@@ -18,8 +18,7 @@ use goalcup_protocol::harness::HarnessManifest;
 use goalcup_protocol::manifest::{ConnectorManifest, RedactionPattern};
 use goalcup_protocol::redaction::RedactionAuditSpan;
 
-#[path = "support/redaction.rs"]
-mod redaction;
+use crate::common::redaction;
 use redaction::*;
 
 // ── the shipped rules and the oracle ─────────────────────────────────────────────────

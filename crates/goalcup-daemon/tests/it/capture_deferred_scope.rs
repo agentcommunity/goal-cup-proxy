@@ -10,12 +10,8 @@
 //! macOS only: every entry is reserved on the temporary directory's APFS volume. Every file here
 //! lives in the rig's temporary root; nothing resolves a real `HOME` or any `.hermes`.
 
-#![cfg(target_os = "macos")]
-
-mod capture_lifecycle_support;
-mod support;
-#[path = "support/table_lock.rs"]
-mod table_lock;
+use crate::common::capture_lifecycle_support;
+use crate::common::support;
 
 use base64::Engine as _;
 use capture_lifecycle_support::{Rig, launch_request, local_finishes, streamless};

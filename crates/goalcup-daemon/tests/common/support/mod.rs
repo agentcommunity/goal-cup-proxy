@@ -20,10 +20,7 @@ pub mod control;
 #[allow(unused_imports)]
 pub use control::*;
 // The process-group escape helper (re-exec this test binary as a hard-linked `codex`
-// under a pre-`main` role dispatch). Unix-only, matching `process_kill.rs`'s own gate;
-// `process_kill.rs` itself pulls this file in directly via `#[path = "support/tree.rs"]`
-// rather than through this module, so its binary does not also link the async control
-// fixtures' tokio for a file that spawns `sh` and `sleep`.
+// under a pre-`main` role dispatch). Unix-only, matching `process_kill.rs`'s own gate.
 #[cfg(unix)]
 pub mod tree;
 // Re-exported so a test says `support::started_entry()`; the

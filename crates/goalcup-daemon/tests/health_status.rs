@@ -12,7 +12,9 @@
 //!   the only entry it can ask about is the one its own query string names — because
 //!   `/v0/entries/current` needs a bearer token and a browser has none.
 
-mod support;
+#[path = "common/mod.rs"]
+mod common;
+use common::support;
 
 use goalcup_daemon::EntryArtifactRoot;
 use goalcup_daemon::arming::{GateState, RefusalReason};

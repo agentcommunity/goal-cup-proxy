@@ -6,7 +6,7 @@
 //! decision, what the file the CLI reads to find the daemon contains, and the one table
 //! that turns a `ControlError` into an HTTP status.
 
-mod support;
+use crate::common::support;
 
 use goalcup_daemon::control;
 use goalcup_protocol::control as protocol;

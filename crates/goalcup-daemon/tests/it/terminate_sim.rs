@@ -1,6 +1,6 @@
 //! `terminate_with` against a simulated process table.
 //!
-//! `tests/process_kill.rs` runs the escalation against real `/bin/sh` trees, and it is the
+//! `tests/full/process_kill.rs` runs the escalation against real `/bin/sh` trees, and it is the
 //! right test for the walk, the signals and the verification. It cannot test two things:
 //!
 //! 1. A `/bin/ps` that cannot be spawned. Every reader spawns it by absolute path, so no
@@ -16,8 +16,6 @@
 //! The property runner quantifies the invariants of `docs/TERMINATION.md` over generated
 //! trees. `GOALCUP_SIM_CASES` and `GOALCUP_SIM_SEED` override the defaults; a failure prints
 //! the seed that replays it alone.
-#![cfg(unix)]
-
 use goalcup_daemon::terminate::{
     BoundTarget, ForkWitness, InstanceAuthority, ProcessOs, SignalOutcome, TerminationReport,
     terminate_with,

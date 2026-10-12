@@ -7,22 +7,12 @@
 //!
 //! The fixtures are `#!/bin/sh` scripts and the assertions read a `ps` snapshot, so the
 //! whole file is unix-only. An ungated test here would fail to compile rather than be skipped.
-#![cfg(unix)]
-
 use goalcup_daemon::terminate::terminate;
 use goalcup_protocol::manifest::KillStrategy;
 
-// The process-group escape helper, included directly by file path rather than through
-// `tests/support/mod.rs`: that module's async control fixtures pull tokio into every
-// binary that names it, which is exactly what `mod support` below already avoids.
-// `tests/support/mod.rs` also declares `pub mod tree;` (cfg(unix)) so any other test binary
-// that already pays for the full `support` module can reach the same file as
-// `support::tree`; this is the same source either way, just reached without the toll.
-#[path = "support/tree.rs"]
-mod tree;
-
-#[path = "support/table_lock.rs"]
-mod table_lock;
+// The process-group escape helper (`tests/common/support/tree.rs`). The `mod support` below
+// is this file's own, not the shared one.
+use crate::common::support::tree;
 
 /// Darwin has no pidfd, but it does have an instance-bound process audit token. A direct
 /// TUI launch with no process group uses that authority to terminate the exact root.
@@ -290,7 +280,7 @@ fn a_native_binary_interior_to_the_root_does_not_orphan_its_own_children_out_of_
 /// report may never claim the harness is `observed_gone` while that never-targeted orphan
 /// is still alive.
 ///
-/// The member is `tests/support/tree.rs`'s `member-forks-after-root` role, not a shell
+/// The member is `tests/common/support/tree.rs`'s `member-forks-after-root` role, not a shell
 /// trap: a shell `SIGTERM` delay forks a helper, and that fork is itself a fresh descendant
 /// this daemon's own newcomer-adoption can discover and signal mid-delay. See
 /// `run_member_forks_after_root_role`'s doc for the mechanism.
@@ -979,7 +969,7 @@ fn an_absent_wrapper_without_a_native_hint_is_reported_unverified() {
 // a termination test that had to link a web server to do it would be the wrong test.
 // ---------------------------------------------------------------------------------------
 mod support {
-    use crate::table_lock::TableLock;
+    use crate::common::table_lock::TableLock;
     use goalcup_protocol::manifest::KillStrategy;
     use goalcup_protocol::process::{ProcInfo, ProcessHandle, descendants, is_alive, snapshot};
     use std::os::unix::process::CommandExt;
