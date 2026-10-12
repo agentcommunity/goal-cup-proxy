@@ -30,7 +30,8 @@ disqualification decision. Traces are never public.
 2. **Provenance of human input.** Every message a human typed is identifiable as such, so the check "only the original prompt, then only `keep going`" is mechanical.
 3. **Tamper evidence.** A participant controls their own machine. We cannot stop them editing a
    file or promise to observe every edit; declared evidence, artifact attribution, gaps, and
-   capture failures make detected changes reviewable through the hash chain and acknowledgements.
+   capture failures make detected changes reviewable through the hash chain (server
+   acknowledgements, which would catch a re-sealed rewrite, are not in place yet).
 4. **Scope.** The tracker captures the bound session and workspace. It may read declared shared
    harness stores only to identify the bound partition and discard foreign records before
    persistence; it does not retain ordinary sessions, other terminals, browser history, or

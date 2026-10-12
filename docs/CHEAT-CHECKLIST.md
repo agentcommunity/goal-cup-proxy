@@ -4,7 +4,7 @@ For anyone about to trust a Pass or claim a new check closes something. It lists
 this build accepts, each with what bounds it and the ticket that tracks it. Anything that behaves
 worse than stated here is a bug. Add a row whenever a review accepts a gap instead of fixing it.
 
-Updated: 2026-10-12. A verifier exit 0 alone is not a capture claim: a claim needs native and wire
+Updated: 2026-10-13. A verifier exit 0 alone is not a capture claim: a claim needs native and wire
 records per real harness ([ARCHITECTURE](ARCHITECTURE.md)).
 
 ## On m2/wire (current)
@@ -13,6 +13,16 @@ The hook leg and OpenCode are gone on `m2/wire`, so the v1/trunk rows below that
 apply. A v5 capture trace is judged by the integrity reader (exit 0 complete and valid, 1 incomplete
 or unsealed, 2 invalid, 3 no usable report); the V1 checks are not in this tree. LocalOnly (no server,
 receipt or ACK) is a valid local outcome. Nothing on m2 is qualified for long runs ([TODO](../TODO.md)).
+
+- **A local-only record can be rewritten and re-sealed.** The chain is plain SHA-256 with no
+  secret key: anyone who controls the machine can edit a record, recompute the hashes after it
+  and update `seal.json`, or truncate at a clean point (no producer left open) and finish again
+  with the public code, and the verifier still exits 0 with anchor LocalOnly. What the chain
+  catches is an edit that leaves the later hashes alone, a reorder, a splice, a truncation left
+  unsealed and accidental corruption. Every trace this build ships is local only. Bounded by:
+  nothing yet. The fix is a server-signed acknowledgement of the chain head, which needs the
+  hourly upload (TODO step 2) and a production server key; until then even a signed receipt can
+  be forged ([SECURITY](../SECURITY.md)).
 
 Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it in git history at `6494030`. Open issues that still matter are in [TODO](../TODO.md#known-issues).
 
