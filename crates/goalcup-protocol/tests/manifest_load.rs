@@ -832,7 +832,7 @@ fn validate_refuses_duplicate_store_names_and_hook_paths() {
 
 /// `hook_install[].path` is rendered under `scope`'s root
 /// (`InstallScope::Workspace | ArtifactRoot | HarnessHome`) with no filesystem check of
-/// its own — `render_tracker_files` joins it onto that root and writes there. An absolute
+/// its own — the V1 renderer (removed by OS-31) joined it onto that root and wrote there. An absolute
 /// path or a `..` segment escapes the scope root the same way `hook_install.template`
 /// escaping `connectors/<id>/files/` would (that field is already refused above it), so
 /// the same refusal belongs on `path`.

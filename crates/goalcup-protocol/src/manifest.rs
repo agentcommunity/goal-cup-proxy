@@ -1045,8 +1045,8 @@ impl ConnectorManifest {
                     "a template names one file under connectors/<id>/files/, not a path",
                 ));
             }
-            // `path` is rendered under `h.scope`'s root with no filesystem
-            // check of its own (`render_tracker_files` joins it straight on). An absolute
+            // `path` was rendered under `h.scope`'s root with no filesystem check of its own
+            // (the V1 renderer, removed by OS-31, joined it straight on). An absolute
             // path ignores that root entirely and a `..` segment walks out of it, so both
             // are refused here rather than trusted to every connector author.
             if h.path.starts_with('/') {
@@ -1070,9 +1070,9 @@ impl ConnectorManifest {
             //
             // `config_allowlist[]` entries are full path templates (they may carry a leading
             // `{workspace}`, `{home}` or `{config_dir}` scope token), while
-            // `hook_install[].path` is always scope-relative — `render_tracker_files` joins
-            // it onto `h.scope`'s root without ever seeing a token. Comparing the raw strings
-            // therefore misses an overlap such as
+            // `hook_install[].path` is always scope-relative — the V1 renderer (removed by
+            // OS-31) joined it onto `h.scope`'s root without ever seeing a token. Comparing
+            // the raw strings therefore misses an overlap such as
             // `{workspace}/.opencode/plugin/goalcup-tracker.ts` against
             // `.opencode/plugin/goalcup-tracker.ts`: they name the same file and differ only
             // by that anchor. `allowlist_entry_names_hook_install_path` strips exactly the
@@ -1399,8 +1399,8 @@ fn scan_braces(s: &str, out: &mut BTreeSet<String>) {
 }
 
 /// The path-template token a `hook_install[].path` is implicitly anchored at, given its
-/// `scope` — the same mapping `render_tracker_files` uses to pick which root to join the
-/// path onto (`InstallScope::Workspace` -> `{workspace}`, `ArtifactRoot` ->
+/// `scope` — the same mapping the V1 renderer (removed by OS-31) used to pick which root to
+/// join the path onto (`InstallScope::Workspace` -> `{workspace}`, `ArtifactRoot` ->
 /// `{artifact_root}`, `HarnessHome` -> `{config_dir}`, per `PATH_TOKENS`'s doc comment:
 /// "config_dir ... the per-run harness home the daemon created").
 fn scope_token(scope: InstallScope) -> &'static str {

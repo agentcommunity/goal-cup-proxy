@@ -98,8 +98,8 @@ pub fn scanned_at_now() -> String {
 /// The exclusion union the seal applies: the connector's `workspace_exclusions[]` plus every
 /// workspace-scoped file the tracker itself installed.
 ///
-/// The mirror of `goalcup_daemon::workspace::exclusion_union`, and the two must agree or the
-/// difference report is about the union rather than about the workspace. `tracker_files` is
+/// The mirror of the daemon's V1 `exclusion_union` (removed by OS-31; a capture entry's seal
+/// walk excludes nothing). `tracker_files` is
 /// the daemon's own list, carried to this process on the entry cache's `workspace_relative`
 /// — not a second derivation from anything: a list derived twice is a list that comes apart.
 ///

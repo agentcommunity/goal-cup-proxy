@@ -38,7 +38,9 @@ use goalcup_protocol::manifest::ConnectorManifest;
 use goalcup_protocol::provenance::TerminationOutcomeV1;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(any(test, feature = "test-hooks"))]
+use std::path::PathBuf;
 #[cfg(any(test, feature = "test-hooks"))]
 use std::sync::{Arc, Condvar};
 use std::sync::{Mutex, OnceLock};
