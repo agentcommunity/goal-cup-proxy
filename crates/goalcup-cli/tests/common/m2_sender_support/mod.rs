@@ -8,8 +8,6 @@
 //! items and how each connection ended. Each connection is served on its own thread, so a stalled
 //! reader really leaves the kernel buffers to fill.
 
-#![allow(dead_code)]
-
 use goalcup_protocol::capture::{
     FrameEvent, IngestMessage, MAX_HANDSHAKE_BYTES, MAX_INGEST_FRAME_BYTES, checked_frame_len,
     decode_ingest_message,

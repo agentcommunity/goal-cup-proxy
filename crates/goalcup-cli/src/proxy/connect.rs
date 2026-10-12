@@ -62,29 +62,29 @@ pub const MAX_CONNECT_HEAD_BYTES: usize = 8 * 1024;
 
 /// The most bytes buffered while inspecting a ClientHello. A ClientHello that does not
 /// complete within it is tunnelled unchanged rather than intercepted.
-pub const MAX_CLIENT_HELLO_PEEK_BYTES: usize = 32 * 1024;
+pub(crate) const MAX_CLIENT_HELLO_PEEK_BYTES: usize = 32 * 1024;
 
 /// The default bound on everything before a tunnel/intercept decision is settled.
-pub const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The default bound on one upstream TCP connect attempt (one resolved address).
-pub const DEFAULT_CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const DEFAULT_CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The first pause between two rounds of upstream connect attempts; it doubles up to
 /// [`CONNECT_RETRY_MAX`]. Rounds go on until the admission's connect deadline.
-pub const CONNECT_RETRY_FIRST: Duration = Duration::from_millis(250);
+pub(crate) const CONNECT_RETRY_FIRST: Duration = Duration::from_millis(250);
 
 /// The longest pause between two rounds of upstream connect attempts.
-pub const CONNECT_RETRY_MAX: Duration = Duration::from_secs(2);
+pub(crate) const CONNECT_RETRY_MAX: Duration = Duration::from_secs(2);
 
 /// Upstream TCP keepalive: idle time before the first probe.
-pub const UPSTREAM_KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
+pub(crate) const UPSTREAM_KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
 
 /// Upstream TCP keepalive: time between unanswered probes.
-pub const UPSTREAM_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+pub(crate) const UPSTREAM_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Upstream TCP keepalive: unanswered probes before the kernel drops the connection.
-pub const UPSTREAM_KEEPALIVE_PROBES: u32 = 4;
+pub(crate) const UPSTREAM_KEEPALIVE_PROBES: u32 = 4;
 
 /// The secret that authorizes a client to this proxy: 32 lowercase hex characters. `Debug`
 /// never shows it; there is no `Clone`, so each copy is an explicit
@@ -408,7 +408,7 @@ pub async fn admit<S: AsyncIo + 'static>(inbound: S, config: &AdmissionConfig) -
 /// first byte of it is relayed. The tunnel runs inside this future until both directions close,
 /// so a caller that must act when an uncaptured relay *begins* (the proxy chains it as a loss)
 /// cannot wait for the return value: a task cancelled or panicking mid-tunnel never gets there.
-pub async fn admit_observed<S: AsyncIo + 'static>(
+pub(crate) async fn admit_observed<S: AsyncIo + 'static>(
     inbound: S,
     config: &AdmissionConfig,
     on_tunnel: impl FnOnce(TunnelReason),

@@ -18,7 +18,7 @@ use std::sync::Mutex;
 
 /// The most outage windows kept for the finish report; older ones are dropped and still
 /// counted in [`super::ProxyHealth::upstream_outages`].
-pub const MAX_KEPT_OUTAGE_WINDOWS: usize = 32;
+pub(crate) const MAX_KEPT_OUTAGE_WINDOWS: usize = 32;
 
 /// One stretch of failed upstream connects, coalesced. Times are the proxy's wall clock
 /// (RFC 3339 UTC, nanoseconds), as every capture observation's `wall`.
@@ -93,7 +93,7 @@ impl OutageTracker {
 
 /// The finish report's lines for a run's outage windows, one per kept window and one more for
 /// windows no longer kept. Times only: no host, path or address. Empty when there were none.
-pub fn finish_lines(total: u64, windows: &[OutageWindow]) -> Vec<String> {
+pub(crate) fn finish_lines(total: u64, windows: &[OutageWindow]) -> Vec<String> {
     let mut lines = Vec::new();
     let unlisted = total.saturating_sub(windows.len() as u64);
     if unlisted > 0 {

@@ -31,8 +31,8 @@ use goalcup_protocol::capture::{DEFAULT_CAPTURE_RESERVE_BYTES, M2Status, StreamK
 use goalcup_protocol::control::{
     self, ArmingState, CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest,
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
-    ControlError, DaemonClient, DaemonHealth, EntrySummary, EventStatus, FinishReportV1,
-    LocalSealOutcome, SealResponse, SignedStatus, StatusPayload, WorkspaceInfo,
+    ControlError, DaemonClient, DaemonHealth, EntrySummary, EventStatus, LocalSealOutcome,
+    SealResponse, SignedStatus, StatusPayload, WorkspaceInfo,
 };
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
@@ -75,15 +75,8 @@ pub struct MockState {
     pub status: SignedStatus,
     pub entries: Vec<EntrySummary>,
     pub seal: SealManifest,
-    /// A durable finish answer. `None` retains the legacy manifest behavior used by
-    /// historical command tests.
-    pub workspace_finish: Option<FinishReportV1>,
     pub sealed: bool,
     pub processes: Vec<ProcessHandle>,
-    /// Every typed `/process` body offered by the CLI, including a body the mock refused.
-    /// `processes` remains the accepted-handle ledger; this one proves a retry did not
-    /// silently change its generation or termination identity.
-    pub process_registrations: Vec<ProcessRegistration>,
     pub abandoned: Vec<(String, String)>,
     pub calls: Vec<String>,
     /// One refusal per method name, taken by the next call to it and then gone.
@@ -211,10 +204,8 @@ impl MockDaemonClient {
                 files: Vec::new(),
                 excluded: Vec::new(),
             },
-            workspace_finish: None,
             sealed: false,
             processes: Vec::new(),
-            process_registrations: Vec::new(),
             abandoned: Vec::new(),
             calls: Vec::new(),
             failures: BTreeMap::new(),
@@ -253,12 +244,6 @@ impl MockDaemonClient {
     /// The run key, from the fixed [`SEED`].
     pub fn signing_key() -> SigningKey {
         SigningKey::from_bytes(&SEED)
-    }
-
-    /// The hex verifying key the mock signs with — the same string
-    /// [`MockDaemonClient::info`] carries on `run_public_key`.
-    pub fn run_public_key(&self) -> String {
-        hex_of(&MockDaemonClient::signing_key().verifying_key().to_bytes())
     }
 }
 
@@ -300,16 +285,6 @@ impl MockDaemonClient {
             Some(info) => info,
             None => unreachable_info(),
         }
-    }
-
-    /// Every complete `/process` body this mock was offered, including one it refused.
-    ///
-    /// `last_registered_handle` intentionally answers a different question: the latest
-    /// *accepted* handle. A recovery test needs the exact request body before an ambiguous
-    /// or refused response has been classified.
-    pub fn process_registrations(&self) -> Vec<ProcessRegistration> {
-        self.read(|state| state.process_registrations.clone())
-            .unwrap_or_default()
     }
 
     /// The trait methods called on this mock, in order.
@@ -432,35 +407,6 @@ impl MockDaemonClient {
         });
     }
 
-    /// The session this entry is bound to, or `None` for a run whose harness never started.
-    ///
-    /// `goalcup seal` asks the daemon this before it seals, so a participant sealing a run
-    /// that never began is told what the verdict will be while stopping is still a choice
-    /// they have. Reachable from a test only through here, because every mock builds an
-    /// entry that is already bound.
-    pub fn set_session_id(&self, session_id: Option<&str>) {
-        let session_id = session_id.map(str::to_string);
-        self.write(|state| {
-            state.status.payload.session_id = session_id.clone();
-            resign(state);
-        });
-    }
-
-    /// Answer with a document about a different entry, correctly signed.
-    ///
-    /// One run key signs every document of a run, so a payload for another entry verifies
-    /// exactly as well as this one's — a routing bug, or an id the CLI resolved and the
-    /// daemon did not. Re-signed here on purpose: the point of this hook is a document that
-    /// passes the signature check and fails the id check, which is the half a signature
-    /// cannot cover, and it is the only way a test reaches that comparison.
-    pub fn set_status_entry_id(&self, entry_id: &str) {
-        let entry_id = entry_id.to_string();
-        self.write(|state| {
-            state.status.payload.entry_id = entry_id.clone();
-            resign(state);
-        });
-    }
-
     /// Hook posts that never reached this entry's chain.
     pub fn set_posts_dropped(&self, n: u64) {
         self.write(|state| {
@@ -481,11 +427,6 @@ impl MockDaemonClient {
     /// is what this mock does from the moment it is built.
     pub fn seal_once_then_conflict(&self) {
         self.write(|state| state.sealed = false);
-    }
-
-    /// Return the daemon-owned finish result instead of the historical live-scan manifest.
-    pub fn set_workspace_finish(&self, finish: FinishReportV1) {
-        self.write(|state| state.workspace_finish = Some(finish));
     }
 
     /// Edit the signed payload's bytes without re-signing: the signature no longer checks,
@@ -526,12 +467,6 @@ impl MockDaemonClient {
     pub fn last_registered_pid(&self) -> Option<u32> {
         self.read(|state| state.processes.last().map(|h| h.pid))
             .flatten()
-    }
-
-    /// The whole of that handle. The daemon's termination guard compares a live command line
-    /// against `argv`, so a test needs more than the pid.
-    pub fn last_registered_handle(&self) -> Option<ProcessHandle> {
-        self.read(|state| state.processes.last().cloned()).flatten()
     }
 
     /// Put `rel` in the sealed manifest with a digest the workspace's own bytes cannot
@@ -645,7 +580,7 @@ impl DaemonClient for MockDaemonClient {
             return Err(poisoned());
         };
         record(&mut state, "seal")?;
-        if state.sealed && state.workspace_finish.is_none() {
+        if state.sealed {
             return Err(ControlError::Conflict(format!(
                 "{} is already sealed",
                 state.info.entry_id
@@ -653,10 +588,7 @@ impl DaemonClient for MockDaemonClient {
         }
         state.sealed = true;
         state.entries.retain(|e| e.entry_id != entry_id);
-        Ok(match &state.workspace_finish {
-            Some(finish) => SealResponse::Workspace(finish.clone()),
-            None => SealResponse::Legacy(state.seal.clone()),
-        })
+        Ok(SealResponse::Legacy(state.seal.clone()))
     }
 
     fn register_process(
@@ -667,9 +599,6 @@ impl DaemonClient for MockDaemonClient {
         let Ok(mut state) = self.state.lock() else {
             return Err(poisoned());
         };
-        // As above, this is the offered immutable body, not the accepted-handle ledger.
-        // The latter remains `processes` and changes only after `record` permits the route.
-        state.process_registrations.push(registration.clone());
         record(&mut state, "register_process")?;
         state.processes.push(registration.handle.clone());
         Ok(())

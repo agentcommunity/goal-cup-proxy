@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 
 /// The shortest key this scan accepts. A shorter secret yields forms common enough to hit on
 /// ordinary data, and a scan that cries wolf is one that gets switched off.
-pub const MIN_KEY_BYTES: usize = 20;
+pub(crate) const MIN_KEY_BYTES: usize = 20;
 
 /// The shortest derived form. Every form is at least this long (a base64 form of an
 /// eight-byte fragment, after the bits that depend on its neighbours are dropped, is not
@@ -316,7 +316,7 @@ impl ScanOutcome {
     /// Both outcomes as one: every hit of either (a hit names its files, and outranks an
     /// incomplete scan); otherwise incomplete if either was, with the first reason; clean only
     /// when both were.
-    pub fn merge(self, other: ScanOutcome) -> ScanOutcome {
+    pub(crate) fn merge(self, other: ScanOutcome) -> ScanOutcome {
         match (self, other) {
             (
                 ScanOutcome::Hit {
@@ -594,7 +594,7 @@ fn write_verdict_text(
 }
 
 /// The verdict file's name in a run directory.
-pub const VERDICT_FILE: &str = "key-scan.txt";
+pub(crate) const VERDICT_FILE: &str = "key-scan.txt";
 
 /// What a verdict was a verdict about: the trace's chain (its length and SHA-256) and a digest of
 /// the file list of everything scanned (the run directory without the verdict file, and the trace

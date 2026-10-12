@@ -120,7 +120,7 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// envelope bound a real handoff at 31 seconds rather than letting ordinary 30-second calls
 /// hold the terminal. That envelope spans one daemon upload network timeout while preserving
 /// this route's short request deadline.
-pub const PROCESS_HANDOFF_CALL_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const PROCESS_HANDOFF_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The deadline on the **one** call that does unbounded work before it answers: the seal,
 /// which finishes the entry and terminates a process tree.

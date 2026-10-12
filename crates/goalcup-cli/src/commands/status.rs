@@ -530,7 +530,7 @@ fn freshness(s: &SignedStatus, now: &str) -> String {
 /// Everything above U+009F is left alone. A workspace path may legitimately hold any
 /// character a filesystem accepts, and a renderer that stripped non-ASCII would print a
 /// participant's own directory back at them wrong.
-pub fn plain(said: &str) -> String {
+pub(crate) fn plain(said: &str) -> String {
     said.chars()
         .map(|c| match c.is_control() {
             true => char::REPLACEMENT_CHARACTER,

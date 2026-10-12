@@ -33,4 +33,4 @@ mod gates;
 mod probe;
 
 pub use gates::*;
-pub use probe::*;
+pub(crate) use probe::*;

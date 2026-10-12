@@ -20,8 +20,6 @@
 //! Every wait is bounded by `m2_common::DEADLINE`; spawned tasks and threads end with their
 //! owners.
 
-#![allow(dead_code)]
-
 pub use super::m2_common::{
     ClientTls, HTTP11, TestPki, UpstreamTls, client_config, close_both, contains, eventually,
     provider, read_at_least, read_head, read_to_end, send, within, ws_101, ws_upgrade_request,

@@ -56,12 +56,12 @@ pub const DAEMON_CONFIG_NAME: &str = "daemon.toml";
 pub const DAEMON_LOG_NAME: &str = "daemon.log";
 
 /// The daemon's binary name, looked for beside this executable and then on `PATH`.
-pub const DAEMON_BINARY_NAME: &str = "goalcup-daemon";
+pub(crate) const DAEMON_BINARY_NAME: &str = "goalcup-daemon";
 
 /// The only variables of this process a started daemon receives. `HOME` because the daemon
 /// refuses a harness `config_home` under the participant's real home and must know where
 /// that is; the other three are identity and scratch space, and none of them is a secret.
-pub const INHERITED_ENV: [&str; 4] = ["HOME", "USER", "LOGNAME", "TMPDIR"];
+pub(crate) const INHERITED_ENV: [&str; 4] = ["HOME", "USER", "LOGNAME", "TMPDIR"];
 
 /// The started daemon's `PATH`: the system directories, never this shell's. It runs `/bin/ps`
 /// and nothing else by name.

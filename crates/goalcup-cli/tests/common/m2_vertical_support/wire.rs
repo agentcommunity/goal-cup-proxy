@@ -54,11 +54,6 @@ impl Head {
     pub fn is_chunked(&self) -> bool {
         self.has_token("transfer-encoding", "chunked")
     }
-
-    /// The response status code of a status line.
-    pub fn status(&self) -> Option<u16> {
-        self.start.split(' ').nth(1).and_then(|s| s.parse().ok())
-    }
 }
 
 pub fn invalid(what: &'static str) -> io::Error {
@@ -77,11 +72,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
             io,
             buf: Vec::new(),
         }
-    }
-
-    /// Bytes already read past the last parsed item.
-    pub fn buffered(&self) -> usize {
-        self.buf.len()
     }
 
     async fn fill(&mut self) -> io::Result<usize> {
@@ -161,16 +151,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
                 return Err(invalid("chunk data not followed by CRLF"));
             }
         }
-    }
-
-    /// Read whatever arrives next (at least one byte), or `Ok(0)` at EOF.
-    pub async fn read_some(&mut self, out: &mut Vec<u8>) -> io::Result<usize> {
-        if self.buf.is_empty() && self.fill().await? == 0 {
-            return Ok(0);
-        }
-        let n = self.buf.len();
-        out.append(&mut self.buf);
-        Ok(n)
     }
 
     pub async fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -348,14 +328,6 @@ impl Det {
         x.wrapping_mul(0x2545_f491_4f6c_dd1d)
     }
 
-    /// `n` printable ASCII letters and digits.
-    pub fn alnum(&mut self, n: usize) -> String {
-        const SET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        (0..n)
-            .map(|_| SET[(self.next_u64() % SET.len() as u64) as usize] as char)
-            .collect()
-    }
-
     /// Exactly `n` bytes of lowercase words (2–9 letters) separated by single spaces. No
     /// built-in redaction rule matches it, and no word is long enough to stay an undecided
     /// candidate (an e-mail local part, a key) past the streaming redactor's 16 KiB hold, so
@@ -380,9 +352,5 @@ impl Det {
     /// `n` bytes with the high bit set: never valid UTF-8 text, never a redaction match.
     pub fn high_bytes(&mut self, n: usize) -> Vec<u8> {
         (0..n).map(|_| 0x80 | (self.next_u64() as u8)).collect()
-    }
-
-    pub fn mask(&mut self) -> [u8; 4] {
-        (self.next_u64() as u32).to_be_bytes()
     }
 }

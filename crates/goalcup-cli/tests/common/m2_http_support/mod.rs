@@ -6,8 +6,6 @@
 //! Loopback only: every byte travels through `tokio::io::duplex`. Nothing here parses HTTP
 //! the way the relay does; expectations are the literal bytes a test wrote.
 
-#![allow(dead_code)]
-
 use goalcup_cli::proxy::api::{
     BoxIo, CaptureEmitter, CapturePath, CapturePolicy, HttpOutcome, RelayContext, RelayPair,
 };

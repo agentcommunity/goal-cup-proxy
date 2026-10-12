@@ -26,7 +26,7 @@
 //! [`CliError::exit_code`] is the only place a command decides its number, and `main.rs` is
 //! the only place an `ExitCode` is built.
 
-pub mod arming;
+pub(crate) mod arming;
 pub mod capture_tee;
 pub mod commands;
 pub mod config;

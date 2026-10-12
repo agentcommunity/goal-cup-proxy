@@ -70,7 +70,7 @@ pub mod connect;
 pub mod http;
 pub mod ingest;
 pub mod metadata;
-pub mod outage;
+pub(crate) mod outage;
 pub mod preflight;
 pub mod tls;
 pub mod websocket;
@@ -97,13 +97,13 @@ use tokio::time::Instant;
 
 /// The first pause between two polls of a `Pending` initial admission; it doubles up to
 /// [`ADMISSION_POLL_MAX`]. Startup never busy-loops on the sink.
-pub const ADMISSION_POLL_FIRST: Duration = Duration::from_millis(5);
+pub(crate) const ADMISSION_POLL_FIRST: Duration = Duration::from_millis(5);
 
 /// The longest pause between two polls of a `Pending` initial admission.
-pub const ADMISSION_POLL_MAX: Duration = Duration::from_millis(100);
+pub(crate) const ADMISSION_POLL_MAX: Duration = Duration::from_millis(100);
 
 /// The pause after a listener accept error before accepting again.
-pub const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(10);
+pub(crate) const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(10);
 
 /// The most connection tasks [`ProxyConfig::max_connections`] may allow: a guard on the file
 /// descriptors this process holds, since a relayed connection holds two.
@@ -112,7 +112,7 @@ pub const MAX_CONNECTION_TASKS: u64 = 1024;
 /// The most of the shutdown deadline kept back for cancelling what did not drain and asking
 /// the sink to close the producer. The cut happens at `deadline - min(deadline / 4, this)`,
 /// so both finish inside the one deadline rather than after a second timeout.
-pub const SHUTDOWN_CANCEL_RESERVE: Duration = Duration::from_millis(250);
+pub(crate) const SHUTDOWN_CANCEL_RESERVE: Duration = Duration::from_millis(250);
 
 /// What a best-effort refusal of an accept beyond the connection limit writes before closing.
 const OVER_CAPACITY_RESPONSE: &[u8] =

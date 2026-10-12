@@ -140,7 +140,7 @@ fn backoff() -> bool {
 ///
 /// These calls all reject `busy` before performing their operation. Nine bounded asks span
 /// one ordinary daemon upload hold without widening retry semantics for unrelated routes.
-pub const ENTRY_BUSY_ATTEMPTS: usize = 9;
+pub(crate) const ENTRY_BUSY_ATTEMPTS: usize = 9;
 
 /// The maximum nominal sleep after the first selected entry-runtime `busy`: 12,050 ms.
 pub const ENTRY_BUSY_MAX_SLEEP: Duration = Duration::from_millis(12_050);
@@ -149,7 +149,7 @@ pub const ENTRY_BUSY_MAX_SLEEP: Duration = Duration::from_millis(12_050);
 pub const ENTRY_BUSY_SCHEDULER_HEADROOM: Duration = Duration::from_millis(950);
 
 /// Planned entry-runtime sleeps plus bounded scheduler headroom.
-pub const ENTRY_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(13);
+pub(crate) const ENTRY_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(13);
 
 /// The wall-clock reservation for a selected entry-runtime call.
 ///
@@ -157,7 +157,7 @@ pub const ENTRY_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(13);
 /// a strict 73-second ceiling. A `busy` is expected to answer immediately; reserving two full
 /// transport windows keeps a late current response from starting another request that cannot
 /// finish inside the stated bound.
-pub const ENTRY_BUSY_BUDGET: Duration = Duration::new(
+pub(crate) const ENTRY_BUSY_BUDGET: Duration = Duration::new(
     crate::daemon::CALL_TIMEOUT.as_secs() * 2 + ENTRY_BUSY_RETRY_ENVELOPE.as_secs(),
     ENTRY_BUSY_RETRY_ENVELOPE.subsec_nanos(),
 );
@@ -182,7 +182,7 @@ const ENTRY_BUSY_BACKOFFS: [Duration; ENTRY_BUSY_ATTEMPTS - 1] = [
 /// refusal. `Unreachable`, timeout, malformed, conflict, and internal responses are returned
 /// once. Each wait uses the shared 20 ms interruption slices, and a retry is made only where
 /// its wait and one full ordinary transport window fit [`ENTRY_BUSY_BUDGET`].
-pub fn retry_busy_entry<T>(
+pub(crate) fn retry_busy_entry<T>(
     call: impl FnMut() -> Result<T, ControlError>,
 ) -> Result<T, ControlError> {
     let started = Instant::now();
@@ -228,7 +228,7 @@ fn retry_busy_entry_with<T>(
 /// This is intentionally independent from [`BUSY_ATTEMPTS`]. The handoff is a fixed,
 /// immutable request made immediately after a child was launched, so it gets nine bounded
 /// tries spanning one ordinary upload hold rather than changing every other control route.
-pub const PROCESS_BUSY_ATTEMPTS: usize = 9;
+pub(crate) const PROCESS_BUSY_ATTEMPTS: usize = 9;
 
 /// The maximum nominal sleep after the first `/process` `busy`.
 ///
@@ -243,7 +243,7 @@ pub const PROCESS_BUSY_MAX_SLEEP: Duration = Duration::from_millis(12_050);
 pub const PROCESS_BUSY_SCHEDULER_HEADROOM: Duration = Duration::from_millis(950);
 
 /// The `/process` retry envelope: planned sleeps plus bounded scheduler headroom.
-pub const PROCESS_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(13);
+pub(crate) const PROCESS_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(13);
 
 /// The wall-clock ceiling for a real `/process` handoff, start to final refusal.
 ///
@@ -252,7 +252,7 @@ pub const PROCESS_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(13);
 /// [`PROCESS_BUSY_MAX_SLEEP`] and [`PROCESS_BUSY_SCHEDULER_HEADROOM`]. These equalities are
 /// pinned in deterministic tests below so a route deadline or schedule change also makes the
 /// participant-visible bound an intentional choice.
-pub const PROCESS_BUSY_BUDGET: Duration = Duration::new(
+pub(crate) const PROCESS_BUSY_BUDGET: Duration = Duration::new(
     crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT.as_secs() * PROCESS_BUSY_ATTEMPTS as u64
         + PROCESS_BUSY_RETRY_ENVELOPE.as_secs(),
     PROCESS_BUSY_RETRY_ENVELOPE.subsec_nanos(),
@@ -384,7 +384,7 @@ pub const SEAL_BUSY_SCHEDULER_HEADROOM: Duration = Duration::from_millis(450);
 /// This is deliberately one second, not a claim that the policy sleeps for one second. The
 /// schedule remains [`SEAL_BUSY_MAX_SLEEP`]; the remaining 450 ms makes the fourth ordinary
 /// command-path attempt reachable while still refusing an extraordinary late wake.
-pub const SEAL_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(1);
+pub(crate) const SEAL_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(1);
 
 /// The wall-clock reservation for a real `/seal` retry, start to final refusal.
 ///
@@ -393,7 +393,7 @@ pub const SEAL_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(1);
 /// one-second [`SEAL_BUSY_RETRY_ENVELOPE`] are reserved together. The planned dephased sleeps
 /// still total only [`SEAL_BUSY_MAX_SLEEP`]; `busy` itself is immediate, and a later `busy`
 /// only earns an attempt if a full slow seal can still begin inside this 301-second envelope.
-pub const SEAL_BUSY_BUDGET: Duration = Duration::new(
+pub(crate) const SEAL_BUSY_BUDGET: Duration = Duration::new(
     crate::daemon::SLOW_CALL_TIMEOUT.as_secs() + SEAL_BUSY_RETRY_ENVELOPE.as_secs(),
     SEAL_BUSY_RETRY_ENVELOPE.subsec_nanos(),
 );
@@ -417,7 +417,7 @@ const SEAL_BUSY_BACKOFFS: [Duration; SEAL_BUSY_ATTEMPTS - 1] = [
 /// [`SEAL_BUSY_BUDGET`]. The 550 ms planned schedule has 450 ms explicit scheduler headroom;
 /// a wake beyond that envelope surfaces the daemon's last refusal instead of beginning another
 /// five-minute route outside its stated reservation.
-pub fn retry_busy_seal<T>(
+pub(crate) fn retry_busy_seal<T>(
     call: impl FnMut() -> Result<T, ControlError>,
 ) -> Result<T, ControlError> {
     let started = Instant::now();

@@ -15,7 +15,7 @@ const PROBE_FILE_PREFIX: &str = ".goalcup-preflight-";
 /// participant who then finds files with this tracker's name on them in their configuration
 /// directory is owed their removal rather than an explanation. `goalcup doctor` sweeps before
 /// it checks anything. Best effort throughout.
-pub fn sweep_stale_probes(dir: &Path) {
+pub(crate) fn sweep_stale_probes(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -44,7 +44,7 @@ pub fn sweep_stale_probes(dir: &Path) {
 ///
 /// A `binary` that already contains a separator is taken as the path it is, so a connector
 /// naming an absolute program is not looked up under it.
-pub fn resolve_on_path(binary: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+pub(crate) fn resolve_on_path(binary: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
     if binary.contains(std::path::MAIN_SEPARATOR) {
         let path = PathBuf::from(binary);
         return is_executable_file(&path).then_some(path);
