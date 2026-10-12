@@ -33,6 +33,10 @@
 //! The CONNECT head is read into at most [`MAX_CONNECT_HEAD_BYTES`]; the ClientHello
 //! inspection buffers at most [`MAX_CLIENT_HELLO_PEEK_BYTES`]. Everything before the decision
 //! (head, inspection, upstream connect, both handshakes) runs under one admission deadline.
+//! The upstream connect is retried, re-resolving the name each round, until five sixths of
+//! that deadline (at most five seconds are kept back for the handshakes), so a short network
+//! outage costs the harness a slower answer rather than a `502`. Nothing has been sent
+//! upstream when it is retried: no request is ever replayed.
 //! A tunnel, once decided, has no deadline: dropping the `admit` future (for example on the
 //! caller's shutdown) closes exactly the two sockets it owns and nothing else.
 
@@ -63,6 +67,22 @@ pub const DEFAULT_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The default bound on one upstream TCP connect attempt (one resolved address).
 pub const DEFAULT_CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The first pause between two rounds of upstream connect attempts; it doubles up to
+/// [`CONNECT_RETRY_MAX`]. Rounds go on until the admission's connect deadline.
+pub const CONNECT_RETRY_FIRST: Duration = Duration::from_millis(250);
+
+/// The longest pause between two rounds of upstream connect attempts.
+pub const CONNECT_RETRY_MAX: Duration = Duration::from_secs(2);
+
+/// Upstream TCP keepalive: idle time before the first probe.
+pub const UPSTREAM_KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
+
+/// Upstream TCP keepalive: time between unanswered probes.
+pub const UPSTREAM_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Upstream TCP keepalive: unanswered probes before the kernel drops the connection.
+pub const UPSTREAM_KEEPALIVE_PROBES: u32 = 4;
 
 /// The secret that authorizes a client to this proxy: 32 lowercase hex characters. `Debug`
 /// never shows it; there is no `Clone`, so each copy is an explicit
@@ -340,8 +360,9 @@ pub enum FailureClass {
     AlpnIncompatible,
 }
 
-/// Fixed, non-secret source of an upstream connection failure. TCP kinds describe only the
-/// last resolved address attempted; earlier attempts may have failed differently.
+/// Fixed, non-secret source of an upstream connection failure. It describes the last attempt
+/// of the last retry round: TCP kinds the last resolved address attempted, while earlier
+/// attempts may have failed differently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConnectFailureKind {
     Dns,
@@ -384,7 +405,12 @@ pub async fn admit_observed<S: AsyncIo + 'static>(
 ) -> Admission {
     let mut host = None;
     let deadline = tokio::time::Instant::now() + config.admission_timeout;
-    let decision = tokio::time::timeout_at(deadline, negotiate(inbound, config, &mut host)).await;
+    let connect_until = deadline - connect_reserve(config.admission_timeout);
+    let decision = tokio::time::timeout_at(
+        deadline,
+        negotiate(inbound, config, connect_until, &mut host),
+    )
+    .await;
     match decision {
         Err(_elapsed) => Admission::Failed(AdmissionFailure {
             class: FailureClass::Timeout,
@@ -434,6 +460,7 @@ struct Target {
 async fn negotiate<S: AsyncIo + 'static>(
     mut inbound: S,
     config: &AdmissionConfig,
+    connect_until: tokio::time::Instant,
     host_out: &mut Option<String>,
 ) -> Decision<S> {
     let (mut buf, head_len) = match read_connect_head(&mut inbound).await {
@@ -458,10 +485,13 @@ async fn negotiate<S: AsyncIo + 'static>(
         } else {
             TunnelReason::NotApproved
         };
-        let upstream = match connect_upstream(&target, config.connect_attempt_timeout).await {
-            Ok(upstream) => upstream,
-            Err(kind) => return refuse(&mut inbound, FailureClass::UpstreamConnect(kind)).await,
-        };
+        let upstream =
+            match connect_upstream(&target, config.connect_attempt_timeout, connect_until).await {
+                Ok(upstream) => upstream,
+                Err(kind) => {
+                    return refuse(&mut inbound, FailureClass::UpstreamConnect(kind)).await;
+                }
+            };
         if write_established(&mut inbound).await.is_err() {
             return Decision::Failed(FailureClass::ClientIo);
         }
@@ -484,14 +514,14 @@ async fn negotiate<S: AsyncIo + 'static>(
     };
     let reason = match hello {
         HelloParse::Sni(Some(name)) if normalize_sni(&name) == target.host => {
-            return intercept(inbound, prefix, target, entry, config).await;
+            return intercept(inbound, prefix, target, entry, config, connect_until).await;
         }
         HelloParse::Sni(Some(_)) => TunnelReason::SniMismatch,
         HelloParse::Sni(None) => TunnelReason::SniAbsent,
         HelloParse::NotTls => TunnelReason::NotTls,
         HelloParse::NeedMore | HelloParse::Malformed => TunnelReason::ClientHelloUnparsed,
     };
-    match connect_upstream(&target, config.connect_attempt_timeout).await {
+    match connect_upstream(&target, config.connect_attempt_timeout, connect_until).await {
         Ok(upstream) => Decision::Tunnel {
             inbound,
             upstream,
@@ -511,8 +541,9 @@ async fn intercept<S: AsyncIo + 'static>(
     target: Target,
     entry: &ApprovedEntry,
     config: &AdmissionConfig,
+    connect_until: tokio::time::Instant,
 ) -> Decision<S> {
-    let tcp = match connect_upstream(&target, config.connect_attempt_timeout).await {
+    let tcp = match connect_upstream(&target, config.connect_attempt_timeout, connect_until).await {
         Ok(tcp) => tcp,
         Err(kind) => return Decision::Failed(FailureClass::UpstreamConnect(kind)),
     };
@@ -784,30 +815,79 @@ fn normalize_sni(name: &str) -> String {
     name.strip_suffix('.').map(str::to_owned).unwrap_or(name)
 }
 
-/// Resolves the target and tries each address in turn, IPv4 first, each attempt bounded by
-/// `attempt` so one dead route cannot stall admission.
+/// How much of the admission deadline the upstream connect leaves to what follows it (the
+/// two TLS handshakes): a sixth of it, at most five seconds.
+fn connect_reserve(admission: Duration) -> Duration {
+    (admission / 6).min(Duration::from_secs(5))
+}
+
+/// Connects to the target before `until`, retrying through a short outage. Each round
+/// resolves the name afresh and tries every address in turn, IPv4 first, each attempt bounded
+/// by `attempt` (and by `until`) so one dead route cannot stall admission. A failed round is
+/// followed by a pause that starts at [`CONNECT_RETRY_FIRST`] and doubles up to
+/// [`CONNECT_RETRY_MAX`]; no round starts that could not begin before `until`. The error is the
+/// last round's last failure.
+///
+/// Nothing has been sent upstream when this runs, so a retry never replays a request: it only
+/// opens a TCP connection again. A connected socket gets `TCP_NODELAY` and upstream keepalive
+/// ([`UPSTREAM_KEEPALIVE_IDLE`], [`UPSTREAM_KEEPALIVE_INTERVAL`],
+/// [`UPSTREAM_KEEPALIVE_PROBES`]). There is no idle timeout: SSE and WebSocket streams idle
+/// legitimately, and keepalive is what notices a path that went dark under one.
 async fn connect_upstream(
     target: &Target,
     attempt: Duration,
+    until: tokio::time::Instant,
 ) -> Result<TcpStream, ConnectFailureKind> {
-    let mut addresses: Vec<std::net::SocketAddr> =
-        tokio::net::lookup_host((target.host.as_str(), target.port))
-            .await
-            .map_err(|_| ConnectFailureKind::Dns)?
-            .collect();
-    addresses.sort_by_key(|address| address.is_ipv6());
-    connect_addresses(addresses, attempt).await
+    connect_host(&target.host, target.port, attempt, until).await
+}
+
+/// [`connect_upstream`] for a host and port, so the start preflight can probe the same way.
+pub(crate) async fn connect_host(
+    host: &str,
+    port: u16,
+    attempt: Duration,
+    until: tokio::time::Instant,
+) -> Result<TcpStream, ConnectFailureKind> {
+    let mut pause = CONNECT_RETRY_FIRST;
+    loop {
+        let round =
+            match tokio::time::timeout_at(until, tokio::net::lookup_host((host, port))).await {
+                Ok(Ok(resolved)) => {
+                    let mut addresses: Vec<std::net::SocketAddr> = resolved.collect();
+                    addresses.sort_by_key(|address| address.is_ipv6());
+                    connect_addresses(addresses, attempt, until).await
+                }
+                Ok(Err(_)) | Err(_) => Err(ConnectFailureKind::Dns),
+            };
+        let last = match round {
+            Ok(stream) => return Ok(stream),
+            Err(kind) => kind,
+        };
+        let now = tokio::time::Instant::now();
+        if now + pause >= until {
+            return Err(last);
+        }
+        tokio::time::sleep(pause).await;
+        pause = (pause * 2).min(CONNECT_RETRY_MAX);
+    }
 }
 
 async fn connect_addresses(
     addresses: Vec<std::net::SocketAddr>,
     attempt: Duration,
+    until: tokio::time::Instant,
 ) -> Result<TcpStream, ConnectFailureKind> {
     let mut last = ConnectFailureKind::NoAddresses;
     for address in addresses {
-        match tokio::time::timeout(attempt, TcpStream::connect(address)).await {
+        let now = tokio::time::Instant::now();
+        if now >= until {
+            break;
+        }
+        let bound = (now + attempt).min(until);
+        match tokio::time::timeout_at(bound, TcpStream::connect(address)).await {
             Ok(Ok(stream)) => {
                 let _ = stream.set_nodelay(true);
+                set_upstream_keepalive(&stream);
                 return Ok(stream);
             }
             Ok(Err(e)) => last = ConnectFailureKind::tcp(e.kind()),
@@ -815,6 +895,16 @@ async fn connect_addresses(
         }
     }
     Err(last)
+}
+
+/// Turns on keepalive for one upstream socket. Best effort: a socket that refuses it is still
+/// used, as it was before keepalive existed.
+fn set_upstream_keepalive(stream: &TcpStream) {
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(UPSTREAM_KEEPALIVE_IDLE)
+        .with_interval(UPSTREAM_KEEPALIVE_INTERVAL)
+        .with_retries(UPSTREAM_KEEPALIVE_PROBES);
+    let _ = socket2::SockRef::from(stream).set_tcp_keepalive(&keepalive);
 }
 
 /// Reads until the ClientHello is complete (or cannot be), into at most
@@ -1065,7 +1155,12 @@ mod tests {
     #[tokio::test]
     async fn empty_resolution_and_terminal_tcp_errors_keep_fixed_kinds() {
         assert!(matches!(
-            connect_addresses(Vec::new(), Duration::from_millis(1)).await,
+            connect_addresses(
+                Vec::new(),
+                Duration::from_millis(1),
+                tokio::time::Instant::now() + Duration::from_secs(1)
+            )
+            .await,
             Err(ConnectFailureKind::NoAddresses)
         ));
         assert_eq!(
@@ -1084,6 +1179,72 @@ mod tests {
             ConnectFailureKind::tcp(std::io::ErrorKind::Other),
             ConnectFailureKind::TcpOther
         );
+    }
+
+    fn loopback(port: u16) -> Target {
+        Target {
+            host: "127.0.0.1".into(),
+            port,
+        }
+    }
+
+    /// A loopback port nothing listens on (yet).
+    fn free_port() -> u16 {
+        let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        reserved.local_addr().unwrap().port()
+    }
+
+    #[tokio::test]
+    async fn a_refused_upstream_is_retried_until_it_listens() {
+        let port = free_port();
+        let opener = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            tokio::net::TcpListener::bind(("127.0.0.1", port))
+                .await
+                .unwrap()
+        });
+        let until = tokio::time::Instant::now() + Duration::from_secs(5);
+        let connected = connect_upstream(&loopback(port), Duration::from_secs(1), until).await;
+        let _listener = opener.await.unwrap();
+        assert!(connected.is_ok(), "{:?}", connected.err());
+    }
+
+    #[tokio::test]
+    async fn retries_end_by_the_connect_deadline_with_the_last_kind() {
+        let port = free_port();
+        let started = tokio::time::Instant::now();
+        let until = started + Duration::from_millis(800);
+        let failed = connect_upstream(&loopback(port), Duration::from_secs(1), until).await;
+        assert_eq!(failed.err(), Some(ConnectFailureKind::TcpRefused));
+        let took = started.elapsed();
+        // It went on past the first refusal, and it never outlived its deadline.
+        assert!(took >= Duration::from_millis(400), "{took:?}");
+        assert!(took <= Duration::from_millis(900), "{took:?}");
+    }
+
+    #[tokio::test]
+    async fn upstream_sockets_carry_tcp_keepalive() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let until = tokio::time::Instant::now() + Duration::from_secs(5);
+        let stream = connect_upstream(&loopback(port), Duration::from_secs(1), until)
+            .await
+            .unwrap();
+        let socket = socket2::SockRef::from(&stream);
+        assert!(socket.keepalive().unwrap());
+        assert_eq!(
+            socket.tcp_keepalive_time().unwrap(),
+            UPSTREAM_KEEPALIVE_IDLE
+        );
+        assert_eq!(
+            socket.tcp_keepalive_interval().unwrap(),
+            UPSTREAM_KEEPALIVE_INTERVAL
+        );
+        assert_eq!(
+            socket.tcp_keepalive_retries().unwrap(),
+            UPSTREAM_KEEPALIVE_PROBES
+        );
+        assert!(socket.tcp_nodelay().unwrap());
     }
 
     #[test]

@@ -271,6 +271,13 @@ async fn refused_loopback_upstream_keeps_a_fixed_connect_failure_kind() {
     drop(reserved);
     let pki = TestPki::new("unused");
     let (_ca, config) = config(&["api.test"], &[], &roots(&pki));
+    // The connect is retried until the admission's connect deadline (five sixths of it), so a
+    // short admission keeps this test short; the class is the last attempt's.
+    let config = Arc::new(
+        Arc::try_unwrap(config)
+            .unwrap()
+            .with_timeouts(Duration::from_millis(1200), Duration::from_millis(300)),
+    );
     let proxy = serve_one(config).await;
     let target = format!("127.0.0.1:{port}");
     let mut client = TcpStream::connect(proxy.addr).await.unwrap();
