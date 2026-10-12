@@ -1,12 +1,9 @@
 //! The fifteen health states, the signed status cache, and the bundled page.
 //!
-//! Three separate claims, and they fail for three different reasons:
+//! Two separate claims, and they fail for different reasons. (The D17 health ladder,
+//! `health::evaluate`, was V1-only and went with OS-31; the states it produced are still
+//! wire values, so their words are still tested here.)
 //!
-//! - The judgement (D3, D17). The daemon judges exactly five things and reports
-//!   the rest as facts. `evaluate` is a priority ladder over those inputs, it is `now`-
-//!   parameterised so it can be asked about any moment, and it reports what it passed over
-//!   in `also` rather than dropping it, so an exited agent does not hide a
-//!   stalled capture.
 //! - The document (D25). One signed `control::SignedStatus`, verified with
 //!   the run public key the caller pinned and never with the key the document names, and
 //!   carrying no secret at all: the status route is unauthenticated, so a token on it
@@ -19,7 +16,6 @@ mod support;
 
 use goalcup_daemon::EntryArtifactRoot;
 use goalcup_daemon::arming::{GateState, RefusalReason};
-use goalcup_daemon::health::{HealthInputs, chains_as_event, evaluate};
 use goalcup_daemon::registry::{
     Entry, EntryState, FinalizationPhaseV1, SealingIntent, WorkspaceSealingIntentV1,
     WorkspaceSourceBindingV1,
@@ -66,10 +62,6 @@ const ALL_FIFTEEN: [HealthState; 15] = [
     HealthState::StoreReplaced,
     HealthState::DiskPressure,
 ];
-
-fn state_of(i: &HealthInputs) -> HealthState {
-    evaluate(i, &support::policy()).state
-}
 
 fn sealed_entry_with_v4_termination(termination: TerminationOutcomeV1) -> Entry {
     let mut entry = support::started_entry();
@@ -150,193 +142,6 @@ fn confirmed_termination() -> TerminationOutcomeV1 {
         confirmed_at: Rfc3339Utc::try_from("2026-09-14T00:00:03Z".to_string()).unwrap(),
         method: TerminationMethodV1::ProcessSignal,
     }
-}
-
-#[test]
-fn the_agent_exiting_never_hides_a_stalled_capture() {
-    let mut i = support::inputs();
-    i.agent_exited = true;
-    i.last_leg1_at = Some(i.now - 3_600.0);
-    let r = evaluate(&i, &support::policy());
-    assert_eq!(r.state, HealthState::CaptureStalled);
-    assert!(
-        r.also.contains(&HealthState::AgentExited),
-        "MF-8: both facts, not one"
-    );
-}
-
-#[test]
-fn only_the_states_with_no_event_of_their_own_are_chained() {
-    for s in [
-        HealthState::ConfigMismatch,
-        HealthState::ConfigRestored,
-        HealthState::ArmingLost,
-        HealthState::VersionChanged,
-        HealthState::StoreReplaced,
-        HealthState::TrackerInterrupted,
-    ] {
-        assert!(
-            !chains_as_event(s),
-            "{s:?} already has a dedicated EventBody (round 2 §7)"
-        );
-    }
-    for s in [
-        HealthState::Online,
-        HealthState::UploadLagging,
-        HealthState::ConnectionLost,
-        HealthState::AgentExited,
-        HealthState::CaptureStalled,
-        HealthState::HooksSilent,
-        HealthState::DeadlineReached,
-        HealthState::ArmingPending,
-        HealthState::DiskPressure,
-    ] {
-        assert!(
-            chains_as_event(s),
-            "{s:?} would otherwise exist only in the status cache"
-        );
-    }
-    // Exactly six, so a state added to the enum cannot quietly join the silent side.
-    assert_eq!(
-        ALL_FIFTEEN.iter().filter(|s| !chains_as_event(**s)).count(),
-        6
-    );
-}
-
-#[test]
-fn every_r14_state_but_hooks_silent_is_reachable_from_health_inputs() {
-    assert_eq!(state_of(&support::inputs()), HealthState::Online);
-
-    let mut pending = support::inputs();
-    pending.arming = GateState::Armed;
-    assert_eq!(state_of(&pending), HealthState::ArmingPending);
-
-    let mut refused = support::inputs();
-    refused.arming = GateState::Refused(RefusalReason::StartSignalMissing);
-    assert_eq!(state_of(&refused), HealthState::ArmingPending);
-
-    let mut lost = support::inputs();
-    lost.arming_lost = true;
-    assert_eq!(state_of(&lost), HealthState::ArmingLost);
-
-    let mut mismatch = support::inputs();
-    mismatch.config_mismatch = true;
-    assert_eq!(state_of(&mismatch), HealthState::ConfigMismatch);
-
-    let mut changed = support::inputs();
-    changed.version_changed = true;
-    assert_eq!(state_of(&changed), HealthState::VersionChanged);
-
-    let mut stalled = support::inputs();
-    stalled.last_leg1_at = Some(1_000.0);
-    assert_eq!(state_of(&stalled), HealthState::CaptureStalled);
-
-    let mut exited = support::inputs();
-    exited.harness_alive = false;
-    exited.agent_exited = true;
-    assert_eq!(state_of(&exited), HealthState::AgentExited);
-
-    let mut offline = support::inputs();
-    offline.connected = false;
-    assert_eq!(state_of(&offline), HealthState::ConnectionLost);
-
-    let mut lagging = support::inputs();
-    lagging.pending_events = 400;
-    lagging.last_ack_at = Some(9_000.0);
-    assert_eq!(state_of(&lagging), HealthState::UploadLagging);
-
-    let mut done = support::inputs();
-    done.deadline_at = Some(9_000.0);
-    assert_eq!(state_of(&done), HealthState::DeadlineReached);
-
-    // The on-disk signature of a rewritten transcript.
-    let mut replaced = support::inputs();
-    replaced.store_replaced = true;
-    assert_eq!(state_of(&replaced), HealthState::StoreReplaced);
-
-    // Reported while there is still room to act on it.
-    let mut full = support::inputs();
-    full.disk_pressure = true;
-    assert_eq!(state_of(&full), HealthState::DiskPressure);
-
-    // Both of these have plain words and an input that produces them.
-    let mut restored = support::inputs();
-    restored.config_restored = true;
-    assert_eq!(state_of(&restored), HealthState::ConfigRestored);
-
-    let mut restarted = support::inputs();
-    restarted.tracker_restarted = true;
-    assert_eq!(state_of(&restarted), HealthState::TrackerInterrupted);
-}
-
-#[test]
-fn evaluate_reads_its_now_from_the_caller_and_never_from_the_clock() {
-    // The same inputs, asked about two moments: before the deadline and after it. A
-    // function that read `now_unix()` would answer the same thing twice.
-    let mut i = support::inputs();
-    i.deadline_at = Some(10_500.0);
-    assert_eq!(state_of(&i), HealthState::Online);
-    i.now = 10_501.0;
-    assert_eq!(state_of(&i), HealthState::DeadlineReached);
-}
-
-#[test]
-fn an_exited_agent_is_reported_alongside_a_stalled_capture_not_instead_of_it() {
-    let mut both = support::inputs();
-    both.harness_alive = false;
-    both.last_leg1_at = Some(1_000.0);
-    let report = evaluate(&both, &support::policy());
-    assert_eq!(
-        report.state,
-        HealthState::CaptureStalled,
-        "the more specific fact leads"
-    );
-    assert!(report.also.contains(&HealthState::AgentExited));
-    assert_eq!(report.states().len(), 2);
-
-    // With nothing else wrong, the exit is the story.
-    let mut only_exited = support::inputs();
-    only_exited.harness_alive = false;
-    let report = evaluate(&only_exited, &support::policy());
-    assert_eq!(report.state, HealthState::AgentExited);
-    assert!(report.also.is_empty());
-}
-
-#[test]
-fn clock_skew_backoff_and_an_unverified_acknowledgement_are_details_not_states() {
-    // The clocks disagreeing is a fact about the trace, not a capture
-    // failure, so it rides on whatever state applies rather than displacing it.
-    let mut skewed = support::inputs();
-    skewed.clock_skew_seconds = Some(21_600.0);
-    skewed.backing_off = true;
-    let report = evaluate(&skewed, &support::policy());
-    assert_eq!(
-        report.state,
-        HealthState::Online,
-        "capture is fine; the clocks are not"
-    );
-    assert!(
-        report.details.iter().any(|d| d.contains("clock_skew")),
-        "{:?}",
-        report.details
-    );
-    assert!(
-        report.details.iter().any(|d| d.contains("backing off")),
-        "{:?}",
-        report.details
-    );
-
-    // An acknowledgement the pinned key did not vouch for is no anchor at all,
-    // so it reads as `ConnectionLost` and says why.
-    let mut unverified = support::inputs();
-    unverified.ack_unverified = true;
-    let report = evaluate(&unverified, &support::policy());
-    assert_eq!(report.state, HealthState::ConnectionLost);
-    assert!(
-        report.details.iter().any(|d| d.contains("did not verify")),
-        "{:?}",
-        report.details
-    );
 }
 
 #[test]
@@ -889,73 +694,4 @@ fn a_refused_gate_reports_refused_and_says_why_in_words() {
         HealthState::ArmingPending,
     );
     assert_eq!(row.arming, ArmingState::Refused);
-}
-
-/// `tracker_restarted` is set once and never cleared, and `version_changed` is the
-/// same shape. Both sit below the live signals: above them, one daemon restart would freeze the
-/// health surface at `TrackerInterrupted` for the rest of the run — a server that then
-/// vanished, an upload that fell behind, a harness that exited and a capture that stalled
-/// would all be reported as a restart that had already been handled.
-///
-/// Two flags at a time: the latch, and a live
-/// signal arriving after it.
-#[test]
-fn a_latched_restart_never_hides_a_live_signal() {
-    for (name, live) in live_signals() {
-        let mut restarted = live.clone();
-        restarted.tracker_restarted = true;
-        assert_eq!(
-            state_of(&restarted),
-            state_of(&live),
-            "tracker_restarted masked {name}"
-        );
-
-        let mut updated = live.clone();
-        updated.version_changed = true;
-        assert_eq!(
-            state_of(&updated),
-            state_of(&live),
-            "version_changed masked {name}"
-        );
-    }
-
-    // And with nothing live to report, they are still the story.
-    let mut only_restarted = support::inputs();
-    only_restarted.tracker_restarted = true;
-    assert_eq!(state_of(&only_restarted), HealthState::TrackerInterrupted);
-
-    let mut only_updated = support::inputs();
-    only_updated.version_changed = true;
-    assert_eq!(state_of(&only_updated), HealthState::VersionChanged);
-
-    // The two together: a build that changed under a daemon that restarted reports the
-    // version, because the version is what the trace is about.
-    let mut both = support::inputs();
-    both.tracker_restarted = true;
-    both.version_changed = true;
-    assert_eq!(state_of(&both), HealthState::VersionChanged);
-}
-
-/// The four live signals, each on its own inputs.
-fn live_signals() -> Vec<(&'static str, HealthInputs)> {
-    let mut offline = support::inputs();
-    offline.connected = false;
-
-    let mut lagging = support::inputs();
-    lagging.pending_events = 400;
-    lagging.last_ack_at = Some(9_000.0);
-
-    let mut exited = support::inputs();
-    exited.harness_alive = false;
-    exited.agent_exited = true;
-
-    let mut stalled = support::inputs();
-    stalled.last_leg1_at = Some(1_000.0);
-
-    vec![
-        ("ConnectionLost", offline),
-        ("UploadLagging", lagging),
-        ("AgentExited", exited),
-        ("CaptureStalled", stalled),
-    ]
 }

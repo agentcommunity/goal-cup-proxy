@@ -715,23 +715,6 @@ pub enum ProcessHandoffPhase {
     ResumeCancelled,
 }
 
-impl ProcessHandoffPhase {
-    /// The authenticated read-only spelling used by resume preview.  Keep this beside the
-    /// serde enum: a CLI may display/diagnose the authoritative phase but never interpret a
-    /// cached spelling as authority.
-    pub const fn as_wire(self) -> &'static str {
-        match self {
-            Self::LegacyUnknown => "legacy_unknown",
-            Self::InitialClosed => "initial_closed",
-            Self::OpenInitial => "open_initial",
-            Self::OpenResume => "open_resume",
-            Self::Prepared => "prepared",
-            Self::Registered => "registered",
-            Self::ResumeCancelled => "resume_cancelled",
-        }
-    }
-}
-
 const MAX_PREPARED_HOME_SEED_BYTES: usize = 64 * 1024;
 
 /// The three per-run secrets.
@@ -1155,27 +1138,6 @@ pub(crate) fn validate_foreign_pending(entry: &Entry) -> Result<(), DaemonError>
         }
     }
     Ok(())
-}
-
-/// The non-receipt path identity of the runtime that requested a start receipt.
-///
-/// Captured from the runtime's [`Entry`] before the outbound request, then compared with
-/// the row re-read inside the V1 `Registry::commit_start` (removed by D48). These paths do
-/// not belong in the signed receipt, but a receipt built from one trace must never be
-/// installed after the same entry id is replaced with another artifact or trace directory.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StartPathIdentity {
-    artifact_dir: PathBuf,
-    trace_dir: PathBuf,
-}
-
-impl StartPathIdentity {
-    pub fn from_entry(entry: &Entry) -> StartPathIdentity {
-        StartPathIdentity {
-            artifact_dir: entry.artifact_dir.clone(),
-            trace_dir: entry.trace_dir.clone(),
-        }
-    }
 }
 
 impl Entry {

@@ -1,5 +1,4 @@
-//! One healthy `HealthInputs`, one `HealthPolicy`, one hand-written
-//! `HookSilence` row, one `StatusPayload` and one started `Entry`.
+//! One `StatusInputs`, one `EventStatus` and one started `Entry`.
 //!
 //! The status document is `goalcup_protocol::control::StatusPayload` — the daemon defines
 //! no second shape — so the fixture builds that type and nothing else. `health_status.rs`
@@ -7,49 +6,12 @@
 //! rather than inline in one test file.
 
 use goalcup_daemon::arming::GateState;
-use goalcup_daemon::health::{HealthInputs, HealthPolicy};
 use goalcup_daemon::registry::{Entry, RunKeys};
 use goalcup_daemon::status::StatusInputs;
 use goalcup_protocol::control::EventStatus;
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::manifest::ConnectorManifest;
 use std::sync::OnceLock;
-
-/// The daemon's own defaults, spelled out rather than loaded, so a test that moves a
-/// threshold moves it here and not in `DaemonConfig`.
-pub fn policy() -> HealthPolicy {
-    HealthPolicy {
-        arming_timeout_seconds: 120.0,
-        stall_after_seconds: 900.0,
-        ack_lag_seconds: 300.0,
-        disk_reserve_bytes: 256 << 20,
-    }
-}
-
-/// A run where nothing is wrong: started, alive, leg 1 recent, acknowledged, online.
-pub fn inputs() -> HealthInputs {
-    HealthInputs {
-        now: 10_000.0,
-        arming: GateState::Started,
-        harness_alive: true,
-        last_leg1_at: Some(9_990.0),
-        last_ack_at: Some(9_998.0),
-        pending_events: 0,
-        connected: true,
-        config_mismatch: false,
-        arming_lost: false,
-        version_changed: false,
-        deadline_at: Some(200_000.0),
-        agent_exited: false,
-        store_replaced: false,
-        disk_pressure: false,
-        tracker_restarted: false,
-        config_restored: false,
-        clock_skew_seconds: None,
-        backing_off: false,
-        ack_unverified: false,
-    }
-}
 
 /// An entry with a clock: started, with a deadline the status can count down to.
 ///

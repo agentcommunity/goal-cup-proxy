@@ -26,7 +26,7 @@ pub use control::*;
 // fixture's axum and tokio for a file that spawns `sh` and `sleep`.
 #[cfg(unix)]
 pub mod tree;
-// Re-exported so a test says `support::inputs()`; the
+// Re-exported so a test says `support::started_entry()`; the
 // module path stays available for a caller that prefers `support::status::payload_for`.
 #[allow(unused_imports)]
 pub use status::*;

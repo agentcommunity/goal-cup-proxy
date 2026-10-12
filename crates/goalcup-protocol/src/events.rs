@@ -72,7 +72,7 @@ pub enum HealthState {
     /// buffer degrades before `append` starts failing.
     DiskPressure,
     /// The entry's chain is closed. Additive, and it is a state of the
-    /// DOCUMENT rather than a rung of `health::evaluate`: nothing chains it, because a
+    /// DOCUMENT rather than a rung of the V1 health ladder (removed by D48): nothing chains it, because a
     /// health event chained after the seal would be a link past the last link. The status
     /// document carries it so that a sealed run stops reading `online — Recording…` with a
     /// countdown running.

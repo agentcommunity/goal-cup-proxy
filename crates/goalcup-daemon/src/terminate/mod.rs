@@ -16,7 +16,7 @@
 
 use goalcup_protocol::manifest::KillStrategy;
 use goalcup_protocol::process::{
-    ProcInfo, ProcessError, ProcessHandle, descendants, is_alive, liveness, process_start_identity,
+    ProcInfo, ProcessError, ProcessHandle, descendants, liveness,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,9 +28,9 @@ mod darwin;
 pub mod os;
 
 use authority::{
-    Owned, Presence, Refused, absent_root_unverified, argv_matches, bounded_targets,
+    Owned, Presence, Refused, absent_root_unverified, bounded_targets,
     containment_unverified, degraded_guard, guard_registered, identity_unverified, instance_alive,
-    live_identity, members_deepest_first, owns_registered_group, push_capped, push_targeted,
+    members_deepest_first, owns_registered_group, push_capped, push_targeted,
     signal_owned, signal_registered_group,
 };
 #[cfg(target_os = "macos")]
@@ -166,36 +166,11 @@ pub struct TerminationReport {
     pub harness_unverified: bool,
 }
 
-/// Is the pid the daemon registered still the process the launch registered?
-///
-/// A process instance identity rejects PID reuse, then `ps` names the program the CLI
-/// recorded among its arguments, so "kill the tracked harness and start your own by hand"
-/// is visible to the health judgements.
-///
-/// **`ps` failing to answer is "unknown", never "mismatch".** A process table this daemon
-/// could not read must not read as a stranger - that would report the participant's own
-/// harness as replaced on any machine where `/bin/ps` is unavailable - so an absent
-/// identity falls back to [`is_alive`] alone, which is the fact that *was* measured.
-pub fn same_process(handle: &ProcessHandle) -> bool {
-    if !is_alive(handle.pid) {
-        return false;
-    }
-    if let Some(expected) = handle.process_start.as_deref()
-        && process_start_identity(handle.pid).as_deref() != Some(expected)
-    {
-        return false;
-    }
-    match live_identity(handle.pid) {
-        Some((_, args)) => argv_matches(handle, &args),
-        None => true,
-    }
-}
-
 /// Terminate the tree per the connector's `kill.strategy`, then verify it is gone.
 ///
 /// Never reaps: the daemon is not the harness's parent, and a test that owns a `Child`
 /// calls `wait()` itself. A pid whose process has exited but not been reaped is gone as far
-/// as this module is concerned — [`is_alive`] rules on that, once, for both halves.
+/// as this module is concerned — [`goalcup_protocol::process::is_alive`] rules on that, once, for both halves.
 pub fn terminate(handle: &ProcessHandle) -> Result<TerminationReport, ProcessError> {
     terminate_with(handle, MAX_TARGETED, &LiveOs)
 }

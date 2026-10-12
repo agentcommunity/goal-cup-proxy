@@ -891,7 +891,7 @@ impl MockDaemonClient {
     ///
     /// The pid alone cannot answer the question a resume raises: whether what was handed
     /// over describes the resume recipe. The daemon's
-    /// `same_process` guard compares a live command line against `argv`, and a relaunch that
+    /// termination guard compares a live command line against `argv`, and a relaunch that
     /// registered the start argv would be handing the daemon a description of a process that
     /// no longer exists.
     pub fn last_registered_handle(&self) -> Option<ProcessHandle> {

@@ -10,49 +10,34 @@
 //! pure the same way, which is what let the V1 `goalcup start --print-launch` print a line
 //! without running it; D48 removed both.
 //!
-//! # The environment is subtraction, never addition
+//! # The environment is built from nothing (D1, D23, D38)
 //!
-//! This section describes the V1 launch D48 removed. [`scrubbed_env`] is kept but has no
-//! caller; the live use of the D23 predicate is [`crate::preflight::probe_env`]. The capture
-//! launch (below) is built from nothing, so it inherits no `*_URL` name to strip.
+//! [`build_capture_launch`] is the one builder left, and its child inherits nothing.
+//! [`LaunchPlan::env_base`] is empty and [`LaunchPlan::env_remove`] is empty; [`spawn`] clears
+//! the child's environment, so what reaches the harness is exactly [`LaunchPlan::env_set`]:
 //!
-//! A launch environment is the participant's own, minus the D23 denylist, minus
-//! [`LaunchPlan::env_remove`], plus [`LaunchPlan::env_set`]. Nothing else is inherited and
-//! nothing else is added: [`spawn`] clears the child's environment and rebuilds it from
-//! [`LaunchPlan::env_base`], so what reaches the harness is what the plan says reaches it and
-//! not what happened to be exported in the shell that ran `spawn`.
+//! * the profile's own `capture.env`, rendered;
+//! * the allowlist [`CAPTURE_IDENTITY_ENV`] (`USER`, `LOGNAME`, `TMPDIR`), carried across
+//!   from the tracker's environment and nothing else from it;
+//! * `HOME` (the per-run home), `PATH` ([`CAPTURE_PATH`]) and the profile's home variable;
+//! * the passive **loopback** recording proxy through process-scoped `HTTPS_PROXY`/
+//!   `https_proxy` — the M2 reservation AGENTS.md names, and the only proxy a launch may name,
+//!   checked by `loopback_proxy_url` — with `NO_PROXY`/`no_proxy` ([`CAPTURE_NO_PROXY`]) and
+//!   the profile's process-scoped CA variable.
 //!
-//! The subtraction happens at two moments and both are here. [`scrubbed_env`] takes the D23
-//! denylist out of the parent environment (anything ending `_URL`, anything ending
-//! `_PROXY`, and a bare `PROXY`) before a plan is built from it, which is the same rule
-//! [`crate::preflight::probe_env`] applies to the one child the preflight spawns. Then
-//! [`LaunchPlan::env_remove`] takes the connector's own names out on top. A plan builder
-//! stays pure by taking the already-scrubbed map as an argument: reading `std::env` there
-//! would put the participant's whole environment inside a function that only describes a
-//! launch.
+//! **D1: the tracker never sets a model base URL.** Nothing on that list can be one except
+//! the profile's `capture.env`, and `goalcup_protocol::capture_policy` refuses a profile that
+//! names a `*_BASE_URL`, `*_API_URL` or `*ENDPOINT` variable, a `*_PROXY` or bare `PROXY`, or
+//! any other `*_URL` there, before a plan is ever built. The participant's shell cannot add
+//! one either, because nothing outside the allowlist is inherited: an allowlist leaves no
+//! `*_URL` the participant exported to strip.
 //!
-//! Both removals and not either alone. `preflight.banned_env` refuses a start under one of
-//! these variables and the launch strips it anyway, because "refused" is a message a
-//! participant can talk themselves out of and "stripped" is not; and the denylist catches the
-//! `*_PROXY` that a connector's manifest forgot to name. `env_remove` is itself the
-//! union of the connector's `launch.env_remove` and its `preflight.banned_env`: those two
-//! lists answer the same question at two moments, and a variable one names and the other
-//! forgets is a hole with a shipped manifest behind it.
+//! The D23 denylist predicate, [`is_denied`] (anything ending `_URL` or `_PROXY`, and a bare
+//! `PROXY`), survives for the one child that does inherit the participant's environment: the
+//! preflight version probe, which [`crate::preflight::probe_env`] strips with it.
 //!
-//! The addition is `[launch.env]` and nothing else. **D1: the tracker never sets a model
-//! base URL and never sets a proxy.** No `*_BASE_URL`, no `*_PROXY`, on any harness, ever;
-//! the shipped manifests name those variables only on the removal side, and a test asserts
-//! that no key on the set side ends `_BASE_URL`.
-//!
-//! # The M2 capture launch is the one exception, and it is a different function
-//!
-//! [`build_capture_launch`] builds the measured headless launch of a connector's profile
-//! (D38, D39). Its environment is built from nothing rather than subtracted, and it pins
-//! the passive **loopback** recording proxy through process-scoped `HTTPS_PROXY` — the M2
-//! reservation AGENTS.md names — plus the profile's process-scoped CA variable. It still
-//! never sets a model base URL. Headless as it is, its child stays in the launcher's
-//! process group: the daemon never confirms a group ended (D30), and there a Ctrl-C typed
-//! at the terminal reaches it.
+//! Headless as it is, the capture child stays in the launcher's process group: the daemon
+//! never confirms a group ended (D30), and there a Ctrl-C typed at the terminal reaches it.
 //!
 //! # The three modes differ in exactly one place
 //!
@@ -98,16 +83,17 @@
 //!
 //! # Why the handle records argv, and who checks it afterwards
 //!
-//! `preflight.banned_env` and `launch.banned_args` run **once**, at `goalcup start`.
-//! Nothing in them stops a participant from killing the launched harness thirty seconds
-//! later and starting their own by hand — without `--settings`, with `--pure`, with
-//! `CLAUDE_CODE_SKIP_PROMPT_HISTORY` set — in the same workspace. **This crate cannot close
-//! that hole**: it exits when the TUI exits, and the run has 167 more hours to go. What it
-//! owes the daemon is enough recorded truth to make the continuing check possible, and that
-//! truth is three fields on [`ProcessHandle`] — `program`, `argv` and `env_keys`. The daemon's
-//! `terminate::same_process` compares a live command line against them; `env_keys` is
-//! names only and never values, because a process's environment is not portably readable
-//! after the fact and because one of those values is this run's bearer token.
+//! The profile's argument checks ([`harness_arg_refusal`]) run **once**, when the plan is
+//! built. Nothing in them stops a participant from killing the launched harness and starting
+//! their own by hand in the same workspace, and **this crate cannot close that hole**: no
+//! check watches the process while the run is live (the V1 per-entry poll that did was
+//! removed by D48). What this module owes the daemon is enough recorded truth to make the one
+//! later check possible, and that truth is three fields on [`ProcessHandle`] — `program`,
+//! `argv` and `env_keys`. Before the daemon signals anything at the seal, its termination
+//! guard (`goalcup_daemon::terminate`) compares the live process's creation identity and
+//! command line against them, so a stranger on a reused pid is refused rather than killed.
+//! `env_keys` is names only and never values, because a process's environment is not portably
+//! readable after the fact and because one of those values can be a credential.
 //!
 //! **That check is the daemon's and this module must not grow a second copy of it.**
 //! Nor may it grow a deadline killer: terminating a recorded run is
@@ -164,9 +150,9 @@ pub struct LaunchPlan {
     pub env_set: BTreeMap<String, String>,
     /// Removed from [`Self::env_base`] before the child is spawned.
     pub env_remove: Vec<String>,
-    /// The environment the child starts from: the participant's own, already scrubbed of the
-    /// D23 denylist by [`scrubbed_env`]. [`spawn`] clears the child's environment and
+    /// The environment the child starts from. [`spawn`] clears the child's environment and
     /// rebuilds it from this, so a variable that is not here does not reach the harness.
+    /// [`build_capture_launch`] leaves it empty: a capture child inherits nothing (D38).
     pub env_base: BTreeMap<String, String>,
     /// The workspace. The harness's working directory is the directory the run is about.
     pub cwd: PathBuf,
@@ -321,8 +307,9 @@ impl fmt::Debug for Keys<'_> {
     }
 }
 
-/// This process's environment, as a map — what [`scrubbed_env`] is given, and what the
-/// harness inherits the survivors of.
+/// This process's environment, as a map — the `parent_env` [`build_capture_launch`] takes
+/// the [`CAPTURE_IDENTITY_ENV`] allowlist from, and what the preflight probe inherits after
+/// [`crate::preflight::probe_env`] strips it.
 ///
 /// `vars_os` and not `vars`, which **panics** on a variable whose name or value is not valid
 /// Unicode — a participant with one exported would get a panic where they had asked for a
@@ -359,34 +346,10 @@ pub fn launched_at_now() -> String {
     )
 }
 
-/// The parent environment with the D23 denylist taken out of it.
-///
-/// Removed, by name, in either case:
-///
-/// * anything ending `_URL` — `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `AMP_URL`, the same
-///   name rule the capture policy applies to `[capture.env]`;
-/// * anything ending `_PROXY` (`HTTPS_PROXY`, `http_proxy`, `ALL_PROXY`), and a bare `PROXY`.
-///
-/// The same set [`crate::preflight::probe_env`] removes, for the same reason and stated in
-/// the same terms: **D1, the tracker never points a harness at a different server.** A run
-/// whose harness talked to something other than the model provider is not the run its trace
-/// describes, and a variable the participant exported in their shell an hour ago is not a
-/// thing this launch inherits on their behalf.
-///
-/// A pattern and not a list of names, because the failure this closes is the variable nobody
-/// wrote down. The connector's own `preflight.banned_env` names are removed too, on top of
-/// this, through [`LaunchPlan::env_remove`].
-pub fn scrubbed_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    env.iter()
-        .filter(|(k, _)| !is_denied(k))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
-}
-
-/// Whether D23's denylist names this variable. **The one predicate**: [`scrubbed_env`] (no
-/// caller since D48) and [`crate::preflight::probe_env`], which strips these from the version
-/// probe, both use it. The same rule written out twice is a rule that agrees until someone
-/// widens one copy.
+/// Whether D23's denylist names this variable. Its one caller is
+/// [`crate::preflight::probe_env`], which strips these from the version probe: the one child
+/// that inherits the participant's environment. The capture launch needs no denylist, because
+/// it inherits nothing outside [`CAPTURE_IDENTITY_ENV`].
 pub(crate) fn is_denied(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();
     upper.ends_with("_URL") || upper.ends_with("_PROXY") || upper == "PROXY"

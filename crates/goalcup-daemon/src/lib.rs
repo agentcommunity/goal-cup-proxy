@@ -19,8 +19,6 @@ pub mod control;
 /// left behind. Crate-private: it is plumbing, not a surface the CLI or the verifier has any
 /// business calling.
 mod fsutil;
-/// The five judgements of D17, as health state names.
-pub mod health;
 /// The authenticated, bounded capture ingest listener.
 pub mod ingest;
 /// Bounded, scoped native byte capture.
@@ -170,15 +168,4 @@ pub enum DaemonError {
     /// legacy pump hold a client retries, and from [`Self::Refused`], the entry's own state.
     #[error("finish_deadline: {stage}")]
     FinishDeadline { stage: &'static str },
-}
-
-impl DaemonError {
-    /// The exact protocol failure class when this error came from immutable submission
-    /// capture. All other daemon errors are deliberately unclassified here.
-    pub fn submission_failure(&self) -> Option<goalcup_protocol::submission::SubmissionFailureV1> {
-        match self {
-            Self::SubmissionCapture { reason } => Some(*reason),
-            _ => None,
-        }
-    }
 }

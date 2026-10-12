@@ -442,12 +442,11 @@ impl Daemon {
         })
     }
 
-    /// Record the process the CLI launched, so `harness_alive` has something to measure and
-    /// the seal has something to end (D22, D9).
+    /// Record the process the CLI launched, so the seal has something to end (D22, D9).
     ///
     /// **Refused while a handle stands, and for exactly as long as one does.** The handle is
-    /// what `same_process` measures and what the seal terminates, so a second one posted on
-    /// the loopback is a decoy that points both at a process the launch never made. The
+    /// what the seal terminates, so a second one posted on the loopback is a decoy that
+    /// points it at a process the launch never made. The
     /// registered handle wins and everything else is a `409`.
     pub fn register_process(
         &self,
@@ -486,10 +485,6 @@ impl Daemon {
         self.inner
             .registry
             .acknowledge_sealed_process_replay(entry_id, registration)
-    }
-
-    pub fn uptime_seconds(&self) -> u64 {
-        self.inner.started.elapsed().as_secs()
     }
 
     /// Whether every open entry's last upload reached the server. Always `true`: this tree has
