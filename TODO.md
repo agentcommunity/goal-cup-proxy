@@ -70,7 +70,8 @@ Carried over from the old ledger's open tickets; only those that bear on the fiv
   commit as a "last known state" marker. Open question: which branch counts when the work is not
   on main.
 - **Linux (steps 1, 5):** builds and passes the fast gate in Docker; the reservation works on ext4
-  and XFS. Not proven: termination of a fork-and-leave wrapper (a child-subreaper fix is due before
-  the 168-hour dry run, [TERMINATION.md](docs/TERMINATION.md)); a real harness capture (the shipped
-  connectors pin macOS binaries); the end-to-end suites on x86_64; a real Linux host; long runs
-  ([README, Linux](README.md#linux)).
+  and XFS; the shipped connectors pin the Linux builds, and a run with no login launches the pinned
+  arm64 binary, fails on auth and seals. Not proven: termination of a fork-and-leave wrapper (a
+  child-subreaper fix is due before the 168-hour dry run, [TERMINATION.md](docs/TERMINATION.md));
+  a logged-in harness capture; the end-to-end suites and the harness builds on x86_64; a real Linux
+  host; long runs ([README, Linux](README.md#linux)).

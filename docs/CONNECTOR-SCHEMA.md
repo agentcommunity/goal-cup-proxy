@@ -2,7 +2,7 @@
 
 What may `connectors/<id>/harness.toml` contain? This is the public field and validation
 reference for harness authors and reviewers.
-Updated: 2026-10-11.
+Updated: 2026-10-13.
 
 The executable authority is
 [`harness.rs`](../crates/goalcup-protocol/src/harness.rs). Its
@@ -18,8 +18,8 @@ those sources disagree, the sources refuse the manifest.
 `harness.toml` is UTF-8 TOML. The loader first reads `schema_version` from a generic table, then
 deserializes every table with unknown fields denied, then validates in this fixed order:
 executable; arguments and goal; environment; home; credential; CA; identity; native source;
-argument guard; termination; hosts; redaction; delivery independence; cross-field rules. The
-first refusal is deterministic. Unknown keys and unknown closed values use the same message: a
+argument guard; termination; hosts; redaction; delivery independence; cross-field rules; then each
+`capture.platform` entry in key order. The first refusal is deterministic. Unknown keys and unknown closed values use the same message: a
 newer schema needs a newer `goalcup`, while a misspelling is refused rather than ignored.
 
 All public schema structs and enums are non-exhaustive. A manifest cannot select its load origin:
@@ -55,6 +55,7 @@ optional field or table is absent.
 | `capture.auth_hosts` | optional, default `[]` | At most 16 unique lowercase DNS hosts; always opaque tunnels. |
 | `capture.env` | optional, default `{}` | At most 32 string-to-string entries; the child-only process environment additions. |
 | `capture.executable` | required table | Exact executable name, measured version and byte digest. |
+| `capture.platform` | optional, default `{}` | Per-platform executable digest, version and env entries; see below. |
 | `capture.home` | required table | Run `HOME`, isolated harness home and any seeds. |
 | `capture.credential` | optional, default absent | One core-allowlisted child credential variable. |
 | `capture.ca` | required table | One CA mode and its core-allowlisted variables. |
@@ -86,6 +87,49 @@ numeric version suffix, such as `python3.13`. The current table includes shells,
 and command wrappers, script runtimes, package launchers, `git`, `find`, `make`, Java and
 PowerShell. A development kit case may use one, but its executable digest is still checked by the
 runtime.
+
+### Per-platform executable pin and environment
+
+A harness ships a different build per platform, so `[capture.platform.<key>]` may replace the
+executable's digest and add env entries for one platform. Nothing else differs between
+platforms.
+
+| Field | Required/default | Contract |
+|---|---|---|
+| `<key>` | closed set | `linux-x86_64`, `linux-aarch64`, `macos-aarch64` or `macos-x86_64`: Rust's `std::env::consts::OS` and `ARCH`, joined by `-`. Any other key is refused. |
+| `capture.platform.<key>.sha256` | required | That platform's executable digest; exactly 64 lowercase hexadecimal characters. |
+| `capture.platform.<key>.version` | optional, default the base `version` | Same grammar as `capture.executable.version`. |
+| `capture.platform.<key>.env` | optional, default `{}` | Entries added to `capture.env`; one with the same name replaces the base entry. |
+
+Any other field inside an override, such as `program`, `args`, `home` or `hosts`, is refused as
+not part of schema 1. The running platform's entry applies to `goalcup start` and `goalcup
+doctor`. Without one, including on a platform outside the closed set, the base
+`capture.executable` and `capture.env` apply, so a connector with no `capture.platform` table runs
+its base values everywhere.
+
+Each entry is validated as the whole recipe it resolves to: the base table with that platform's
+digest, version and env applied. Every rule in this document applies to that recipe, including
+the env deny lists, value rules, bounds, cross-field rules and, for a pinned id,
+`CAPTURE_ENV_ALLOWLIST`. An override cannot set a variable, value or name that the base table
+could not. A refusal names `capture.platform.<key>` (`.sha256`, `.version` or `.env`) and keeps
+the base rule's reason.
+
+```toml
+[capture.executable]
+program = "codex"
+version = "0.153.0"
+sha256 = "a29d9e86eef88cbbd69f97ce8c590b1d0a287c8f77424f5eef226b883d7eaa22"
+
+[capture.env]
+SHELL = "/bin/zsh"
+
+# npm @openai/codex@0.153.0-linux-arm64: vendor/aarch64-unknown-linux-musl/bin/codex
+[capture.platform.linux-aarch64]
+sha256 = "c92824b2e068b8cb15eecba45271f7e3dd35a5b3929383593284a36074d40aec"
+
+[capture.platform.linux-aarch64.env]
+SHELL = "/bin/bash"
+```
 
 ### Arguments and environment policy
 

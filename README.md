@@ -104,13 +104,21 @@ six synthetic contract-kit captures seal and verify. `sh scripts/linux-check.sh`
 from a Mac ([what it runs](#the-gate)). On x86_64, CI on ubuntu-24.04 runs the reservation tests on
 ext4 and they pass; the end-to-end suites were run only on arm64.
 
+The shipped Codex and Claude Code connectors pin the Linux x86_64 and arm64 builds
+(`[capture.platform.*]` in each `harness.toml`). With the arm64 builds and no login, measured in
+Docker: `goalcup doctor` passes the executable check; `goalcup start` launches the pinned binary;
+the harness fails on auth and gets no model reply (Codex receives 401 Unauthorized, Claude Code
+prints `Not logged in`, and both exit 1); the run seals; and
+`goalcup-verify --capture-integrity` exits 0. Neither binary left a child running after it
+exited on this path.
+
 **Not measured:**
 
 - Termination of a wrapper that forks a child and leaves. On Linux, `Confirmed` can be claimed
   while such an orphan still runs. A child-subreaper fix is due before the 168-hour dry run
   ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
-- A real harness capture on Linux. The shipped Codex and Claude Code connectors pin macOS
-  binaries until Linux pins land, so a Linux capture is not measured.
+- A successful, logged-in harness run on Linux, and the Linux x86_64 harness builds, which are
+  pinned but were not run.
 - The end-to-end suites on x86_64, and any real Linux host or distribution kernel (only Docker
   Desktop's was run).
 - Long runs, and termination against a real harness's process tree on Linux.
