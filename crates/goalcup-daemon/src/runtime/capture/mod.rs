@@ -366,6 +366,13 @@ impl Daemon {
             workspace: workspace.to_path_buf(),
             artifact_root: artifact_dir.clone(),
         })?;
+        workspace::check_machine_roots(
+            workspace,
+            &[
+                ("artifact_root", &self.config().artifact_root),
+                ("config_dir", &self.config().config_dir),
+            ],
+        )?;
         let artifact = self
             .artifact_root()
             .create_entry(&entry_id)
