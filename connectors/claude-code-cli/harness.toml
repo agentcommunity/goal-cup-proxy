@@ -28,6 +28,11 @@ SHELL = "/bin/zsh"
 DISABLE_AUTOUPDATER = "1"
 ENABLE_CLAUDEAI_MCP_SERVERS = "false"
 CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS = "1"
+# Documented for unattended sessions (Claude Code 2.1.186+, raised defaults 2.1.199+): a dropped
+# connection, timeout or server error is retried up to 300 times (about three hours of backoff)
+# instead of 10, and 429/529 capacity errors indefinitely, so a network outage of minutes does
+# not end the run. A spend-limit or exhausted-credit 429 still fails at once.
+CLAUDE_CODE_RETRY_WATCHDOG = "1"
 
 # D38: HOME holds only Library/Keychains; CLAUDE_CONFIG_DIR is the shared isolated dir.
 [capture.home]

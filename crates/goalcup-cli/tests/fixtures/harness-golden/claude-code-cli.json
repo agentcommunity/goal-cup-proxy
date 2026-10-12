@@ -589,6 +589,7 @@
     "config_home": "shared",
     "continuation": "none: claude -p one turn, acceptEdits, permission prompts denied, stdin /dev/null",
     "env": {
+      "CLAUDE_CODE_RETRY_WATCHDOG": "1",
       "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS": "1",
       "DISABLE_AUTOUPDATER": "1",
       "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
@@ -1053,6 +1054,7 @@
     "env_base_keys": [],
     "env_remove": [],
     "env_set": {
+      "CLAUDE_CODE_RETRY_WATCHDOG": "1",
       "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS": "1",
       "CLAUDE_CONFIG_DIR": "<TMP>/harness-home",
       "DISABLE_AUTOUPDATER": "1",
@@ -1128,6 +1130,7 @@
         "<goal>"
       ],
       "env_keys": [
+        "CLAUDE_CODE_RETRY_WATCHDOG",
         "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS",
         "CLAUDE_CONFIG_DIR",
         "DISABLE_AUTOUPDATER",
