@@ -71,6 +71,7 @@ pub mod http;
 pub mod ingest;
 pub mod metadata;
 pub mod outage;
+pub mod preflight;
 pub mod tls;
 pub mod websocket;
 

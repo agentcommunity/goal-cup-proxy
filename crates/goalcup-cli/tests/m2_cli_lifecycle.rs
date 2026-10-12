@@ -434,6 +434,43 @@ fn a_tool_allowance_in_legacy_or_unpinned_capture_mode_refuses_before_entry_crea
     assert!(!rig.harness_started());
 }
 
+/// A provider host that cannot be reached refuses the start before the daemon is asked for
+/// anything: the refusal names the host, the failure subtype and this binary.
+#[test]
+fn an_unreachable_provider_host_refuses_the_start_before_anything_is_created() {
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::new();
+    let manifest = rig.capture_connectors.join(FAKE_ID).join("harness.toml");
+    let source = std::fs::read_to_string(&manifest).unwrap();
+    assert!(source.contains("host = \"localhost\""));
+    std::fs::write(
+        &manifest,
+        source.replacen(
+            "host = \"localhost\"",
+            "host = \"preflight-unreachable.invalid\"",
+            1,
+        ),
+    )
+    .unwrap();
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let (result, out) =
+        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
+    let error = result.expect_err("the provider host does not resolve");
+    assert_eq!(error.exit_code(), 1, "{error}\n{out}");
+    let said = error.to_string();
+    assert!(said.contains("preflight-unreachable.invalid:443"), "{said}");
+    assert!(said.contains("the DNS lookup failed"), "{said}");
+    assert!(said.contains("Little Snitch"), "{said}");
+    let binary = std::env::current_exe().unwrap();
+    assert!(said.contains(&binary.display().to_string()), "{said}");
+    assert!(client.names().is_empty(), "{:?}", client.names());
+    assert!(rig.run_dirs().is_empty());
+    assert!(!rig.harness_started());
+    assert!(!rig.cfg.join("capture-homes").exists());
+}
+
 #[test]
 fn an_unpinned_connector_without_dev_is_refused_before_anything_is_created() {
     let _lock = table_lock::TableLock::acquire();

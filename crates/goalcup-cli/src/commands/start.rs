@@ -701,6 +701,10 @@ fn prepare(
         None => None,
     };
     let executable = capture_executable(c, profile, env)?;
+    // The provider hosts answer a TCP connect before anything is created (the proxy module's
+    // preflight; it names a firewall holding this binary when they do not).
+    crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
+        .map_err(|unreachable| CliError::Refused(unreachable.to_string()))?;
     // A per-run home is made inside the run directory below. A run directory beside a goal file
     // inside a Git work tree is refused before anything is created: it would hold what the
     // harness wrote, which can include a fragment of the provider key (D41).
