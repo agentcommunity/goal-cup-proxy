@@ -83,13 +83,26 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   one stall can lose up to about 2.1 MiB; `seal.json` sits outside the reservation, so a failed seal
   write reads `incomplete` with no further policy; the network-filter rule is bound to the E01
   binary hash. Ticket: H-04.
-- **A base64url run of 16 KiB or more redacts the rest of a one-line JSON body** (the redactor holds
-  16 KiB and fails closed). Measured unreachable on the pilot path (0 `encrypted_content` in 14 real
-  Codex client messages); reachable on a stateless HTTP fallback. Parked; re-measure on every long
-  chain. Ticket: F-07.
-- **Redaction residuals.** An invalid UTF-8 byte inside a key body leaves the whole key raw (fix
-  before any raw-byte capture surface). A lone `BEGIN` mention redacts to the end of that record and
-  breaks that record's JSON. Ticket: H-20.
+- **A base64url run of 16 KiB or more can still redact the rest of its JSON line** (the redactor
+  holds 16 KiB and fails closed), but only when a rule prefix inside it (`sk-`, `eyJ`, `AIza`,
+  `glpat-`) lies more than 16 KiB before the run's end. A bare run holds nothing: the JSON key and
+  the email local part are bounded (2,008 and 1,024 units). The run is common: the native Codex rollout
+  persists `encrypted_content` on every reasoning item (9 in
+  `spikes/codex-cli/fixtures/rollout-main-01a06614.jsonl`, largest 2,020 B; 8 in
+  `spikes/codex-app/fixtures/rollout-main-01a06657.jsonl`, largest 2,276 B). The earlier
+  "unreachable" counted wire client messages. Ticket: F-07.
+- **Redaction residuals.** A PEM block is at most 12,288 bytes after its `BEGIN` line: an `END`
+  line must start within them, and without one the block is those bytes. An RSA-8192 key fits:
+  one measured PKCS#8 file is 6,388 bytes, and 7,325 as Claude Code's Read tool prints it,
+  JSON-escaped. The trade, against the unbounded rule before it:
+  - a lone `BEGIN` mention redacts the next 12,288 bytes, across record boundaries, and breaks the
+    JSON of every record it reaches, where before it redacted the rest of the stream, a whole
+    session;
+  - a key body longer than the bound leaks its tail, where before the stream failed closed over
+    it. Larger keys and several keys between one `BEGIN` and one `END` do not fit;
+  - an `END` more than 12,288 bytes after its `BEGIN` is not this block's: the text between them
+    past the bound stays raw.
+  Ticket: H-20.
 
 ### Hermes reference row (D41): what the key scan cannot see
 
