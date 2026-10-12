@@ -34,8 +34,12 @@ MODULE_PATH = ROOT / "packaging" / "macos" / "install_assisted.py"
 SHELL_PATH = ROOT / "packaging" / "macos" / "install-assisted.sh"
 BINARIES = ("goalcup", "goalcup-daemon", "goalcup-verify")
 CONNECTORS = ("codex-cli", "claude-code-cli")
-ARCH = {"arm64": "macos/aarch64", "x86_64": "macos/x86_64"}[os.uname().machine]
-TARGET = {"macos/aarch64": "aarch64-apple-darwin", "macos/x86_64": "x86_64-apple-darwin"}[ARCH]
+# `.get`: on a machine name macOS never reports (Linux `aarch64`) the import still succeeds and
+# the class below is skipped, instead of discovery failing with a KeyError.
+ARCH = {"arm64": "macos/aarch64", "x86_64": "macos/x86_64"}.get(os.uname().machine, "")
+TARGET = {"macos/aarch64": "aarch64-apple-darwin", "macos/x86_64": "x86_64-apple-darwin"}.get(
+    ARCH, ""
+)
 
 
 def installer():
@@ -229,6 +233,7 @@ def fake_launchctl(directory: Path, *, bootstrap: int, ready: bool, require_pref
     return path
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS installer")
 class AssistedInstallerTests(unittest.TestCase):
     def inspect(self, bundle: Path):
         module = installer()

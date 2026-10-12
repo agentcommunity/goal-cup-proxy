@@ -490,10 +490,18 @@ fn an_unguarded_loader_without_privileged_mode_does_leak() {
         }
         printed(&c.output().unwrap())
     };
-    let said = run("/bin/sh", &as_refs(&functions));
+    // macOS's `/bin/sh` is bash and imports exported functions; a dash `/bin/sh` (Debian, Ubuntu)
+    // never does, so there the vector is shown under `/bin/bash`, which always imports them.
+    let sh_is_bash = Command::new("/bin/sh")
+        .args(["-c", "printf %s \"${BASH_VERSION-}\""])
+        .env_clear()
+        .output()
+        .is_ok_and(|o| !o.stdout.is_empty());
+    let plain = if sh_is_bash { "/bin/sh" } else { "/bin/bash" };
+    let said = run(plain, &as_refs(&functions));
     assert!(
         said.contains("LEAK:") && said.contains(&KEY[..8]),
-        "an exported function did not run under plain `sh`: {said}"
+        "an exported function did not run under plain `{plain}`: {said}"
     );
     let tracer = w.path("tracer.sh");
     std::fs::write(
