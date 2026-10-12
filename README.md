@@ -1,8 +1,11 @@
 # goal-cup
 
 Goal Cup records what a coding agent does in one run: it launches the agent on your goal, records
-its model traffic and its own session files, and seals them into one tamper-evident trace that
+its model traffic and its own session files, and seals them into one hash-chained trace that
 `goalcup-verify` checks offline. It is the tracker for the /goal Cup ([docs/VISION.md](docs/VISION.md)).
+Until the server signs acknowledgements of the record, it is local only: the chain catches a stray
+edit or corruption, but whoever controls the machine can edit a record, recompute the hashes after
+it and re-seal, and it still verifies ([checklist](docs/CHEAT-CHECKLIST.md)).
 
 ## Quickstart
 
@@ -114,7 +117,7 @@ only move tier.
 | | Promise | Where the tests are |
 |---|---|---|
 | P1 | No key fragment leaks | cli key scan, stderr tee, child-secret suites; daemon redaction suites |
-| P2 | The chain is tamper-evident | protocol chain golden and round trips; verifier capture integrity, v5 corpus, containment |
+| P2 | The chain catches a stray edit (an edit with recomputed hashes re-seals; see the checklist) | protocol chain golden and round trips; verifier capture integrity, v5 corpus, containment |
 | P3 | Capture policy refuses endpoints, proxies, credentials and bad args | protocol harness schema and conformance; cli launch plan, env resolution, dependency bans |
 | P4 | Connectors load and pins match | protocol connector pins and loader; cli shipped connectors |
 | P5 | The control API authenticates | daemon control API |
@@ -161,7 +164,8 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
 
 **Exit codes of `goalcup-verify --capture-integrity`:** 0 complete and valid, 1 incomplete or not
 sealed, 2 invalid (including a torn last record), 3 no usable report. Exit 0 says the local record
-is complete; it is not a judged or server-confirmed result. `goalcup-verify --research-json <trace>
+is complete and consistent; it is not a judged or server-confirmed result, and a local-only record
+can be rewritten and re-sealed so that it still exits 0. `goalcup-verify --research-json <trace>
 --output <REPORT.ndjson>` writes the private research report.
 
 ## More

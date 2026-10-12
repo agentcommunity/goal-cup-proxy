@@ -47,7 +47,8 @@ report of one of those is known, not new, unless it shows the stated bound does 
 ## Assets and trust boundaries
 
 Assets: harness subscription credentials; prompts, responses and tool output in traces; the
-control bearer; the ingest and proxy secrets; trace integrity (the chain and its seal).
+control bearer; the ingest and proxy secrets; trace integrity (the chain and its seal;
+a local-only chain can be rewritten and re-sealed, see [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md)).
 
 | Adversary | Position |
 |---|---|
