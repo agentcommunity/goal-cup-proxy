@@ -5,7 +5,8 @@
 #     sh scripts/check-connector.sh [--allow-no-kit] <connector-id>
 #
 # Steps, in order (all run, so one report shows every problem):
-#   1. files: the kit case crates/goalcup-cli/tests/fixtures/harness-kit/<id>/ holds
+#   1. files: the kit case crates/goalcup-cli/tests/fixtures/harness-kit/<id>/ (named after the
+#      connector id) holds
 #      harness.toml, stand-in.py and expect.toml, and no template placeholder is left: no
 #      `<...>` outside comments in the three TOML files, no `<` in the stand-in's EDIT block.
 #      A missing connectors/<id>/harness.toml is a usage error (exit 2) before anything runs.
@@ -19,6 +20,11 @@
 #   5. kit (macOS only): `cargo build`, then `cargo test -p goalcup-cli --test full
 #      harness_contract_kit::`. Elsewhere the kit compiles to zero tests, so the step is SKIPPED
 #      and the script exits non-zero unless --allow-no-kit is given.
+#
+# It checks a new connector, which brings its kit case. The three shipped connectors predate
+# the kit and have no case of their own, so step 1 fails for them and the script is not meant
+# for them; their regression checks are the schema and golden steps (3 and 4), which the gate
+# also runs.
 #
 # Exit status: 0 when every step passed (or only the kit was skipped with --allow-no-kit),
 # 1 when a step failed or the kit was skipped without --allow-no-kit, 2 on a usage error.
