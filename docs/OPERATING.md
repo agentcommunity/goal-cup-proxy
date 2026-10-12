@@ -71,9 +71,9 @@ Prerequisites:
   (`crates/goalcup-verifier/tests/it/checks_v13.rs`), and **`python3`** if you change
   `connectors/` and regenerate the pins (`scripts/pin-manifests.sh`).
 
-`cargo test --workspace` is the whole suite, every crate at once. "Green" means the
-four-command gate below passes, not the suite alone. One crate at a time, or one file of one
-crate, is the same runner narrowed:
+`cargo test --workspace` is the whole suite, every crate at once. "Green" means
+`sh scripts/gate.sh fast` passes (and `full` before a release), not the suite alone. One
+crate at a time, or one module of one crate, is the same runner narrowed:
 
 ```
 cargo test -p goalcup-daemon                       # one crate
@@ -88,23 +88,26 @@ One narrowing does not work from a clean tree: the CLI tests drive the shipped
 `goalcup-daemon` and `goalcup-verify` binaries, and only `--workspace` builds them. They say
 so, by name, rather than skipping.
 
-The gate a change has to pass before it is committed is four commands, in this order:
+The gate a change has to pass before it is committed is `sh scripts/gate.sh fast`; a release
+passes `sh scripts/gate.sh full` ([README, The gate](../README.md#the-gate) has the tiers). Both
+run, in this order:
 
 ```
-cargo build
+cargo build --offline --workspace
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo nextest run --offline --workspace   # fast: -E 'not (binary(full) | binary(m2_cli_lifecycle))'
+cargo test --offline --workspace --doc
 ```
 
-`cargo build` is step zero and it is not redundant. The other three all build
+`cargo build` is step zero and it is not redundant. The other steps all build
 dev-dependencies, and `goalcup-daemon` depends on itself in its dev list with the
 `test-hooks` feature on — cargo unifies features within a package, so **the shipped,
 `test-hooks`-off build of the library is compiled by none of them**. A `#[cfg(not(feature =
 "test-hooks"))]` mistake, or a non-gated reference to a gated field, passes the last three
 and breaks the binary that ships.
 
-`cargo test --workspace` skips every `#[ignore]` test (child halves, fixture regenerators,
+The gate (and `cargo test --workspace`) skips every `#[ignore]` test (child halves, fixture regenerators,
 real-process and live-harness campaigns, vertical suites). List them with
 `rg '^\s*#\[ignore' crates` and run one named suite at a time with its documented setup. The
 default gate is not proof that ignored coverage ran.
@@ -142,8 +145,8 @@ runs the `test_ci_scope.py` and `test_check_links.py` suites and `scripts/check-
 Every runner minute costs something on every pull request. Keep this file small:
 - Do not add branches, jobs, a build matrix, or the daemon and CLI suites. Those suites spawn
   process trees that hang or kill a 2-core Linux runner, and Linux is best-effort, not a claim.
-- A green `ci` run proves nothing about the macOS target. The four-command gate above, plus
-  the ignored synthetic vertical suite, runs by hand before a merge.
+- A green `ci` run proves nothing about the macOS target. `sh scripts/gate.sh fast` above (and `full` before a
+  release), plus the ignored synthetic vertical suite, runs by hand before a merge.
 
 ### Installing the participant binaries
 

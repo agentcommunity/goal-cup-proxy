@@ -7,8 +7,7 @@
 
 - [ ] I, a human, read the whole diff and answer for it. Any AI assistance is disclosed here or
       in `Co-Authored-By:` trailers.
-- [ ] I ran the gate: `cargo build`, `cargo fmt --all --check`,
-      `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
+- [ ] I ran the gate, `sh scripts/gate.sh fast`, and it printed `gate fast: PASS`.
       Platform and Rust version used:
 - [ ] No credential, token, real transcript or trace is in this PR, its commits, or its description.
 - [ ] Any committed fixture went through `spikes/redact.py` and I reviewed it by eye. Nothing under

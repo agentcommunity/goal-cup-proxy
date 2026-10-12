@@ -20,19 +20,19 @@ Old plans, the ledger and the qualification records are in git history at `64940
 
 ## The gate
 
-Run before any commit, in this order:
-
 ```
-cargo build
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-python3 -m unittest discover -s scripts
-python3 scripts/check-links.py --root .
+sh scripts/gate.sh fast   # every change, before it is committed
+sh scripts/gate.sh full   # before a release
 ```
 
-`cargo build` comes first on purpose ([README](README.md#the-gate) says why). Maintainers may add
-`--offline` after one `cargo fetch --locked`. CI (`check`) is a small Linux smoke, not the gate.
+Setup (cargo-nextest, one `cargo fetch --locked`) and what each tier runs are in the
+[README](README.md#the-gate). CI (`check`) is a small Linux smoke, not the gate.
+
+## Tests
+
+One test per behaviour you add or change. Test the promise, not the shape: no golden snapshots of
+internal structures, no assertions on doc text or message wording unless that text is the
+contract. Never delete a test in the promises list (P1–P7 in README).
 
 ## Hard rules
 
@@ -54,6 +54,6 @@ python3 scripts/check-links.py --root .
 
 ## Definition of done
 
-1. The gate above passes.
+1. `sh scripts/gate.sh fast` passes; `full` too before a release.
 2. One reviewer reads the PR once.
 3. `README.md` or `TODO.md` is updated if behaviour changed.

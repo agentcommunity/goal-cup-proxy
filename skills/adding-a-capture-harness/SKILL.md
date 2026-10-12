@@ -104,8 +104,9 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
     `5 passed, 0 failed, 1 skipped`, and write in the PR that the kit was not run. A failed
     step prints what to do; a golden failure names the differing files. When the only failure
     is a golden that does not mention `<id>` (step 9), the check is otherwise clean: say so.
-12. **Run the gate.** The four commands in [CONTRIBUTING](../../CONTRIBUTING.md#the-gate), in
-    order, with Linux's documented exclusions if you are not on macOS.
+12. **Run the gate.** `sh scripts/gate.sh fast`, as in
+    [CONTRIBUTING](../../CONTRIBUTING.md#the-gate), with Linux's documented exclusions if you
+    are not on macOS.
 13. **Review your own PR** against the
     [reviewer checklist](../../docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr): every
     field and seed, no base URL, no secrets, one intended pin line.

@@ -41,18 +41,17 @@ Build prerequisites are in [README, Build](README.md#build): Rust 1.99 or later,
 `shasum` or `sha256sum`, and `python3` when you regenerate connector pins. macOS is the
 supported, measured platform; Linux is best-effort.
 
-Every change passes these four commands, in this order
-([why the first is not redundant](README.md#the-gate)):
+Every change passes the fast gate; a release passes the full one
+([setup and what each tier runs](README.md#the-gate)):
 
 ```
-cargo build
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+sh scripts/gate.sh fast
+sh scripts/gate.sh full   # before a release
 ```
 
-Plain cargo works; `--offline` is an optional maintainer convention. Report the exact command
-exits, test counts, platform and Rust version in the PR.
+The gate runs cargo with `--offline`, so run `cargo fetch --locked` once first, and install
+cargo-nextest once (`cargo install cargo-nextest --locked`). Report the gate's last line, the
+platform and the Rust version in the PR.
 
 On Linux, run CI's form `cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli`
 instead of the last test command and say so in the PR; a maintainer runs the full gate on macOS.
