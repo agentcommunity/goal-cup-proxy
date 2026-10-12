@@ -580,13 +580,17 @@ pub fn from_hex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-/// A loopback TCP port that is bound but not listening. On macOS a SYN to it is dropped, so a
-/// connect hangs until the caller's own timeout (not refused), and no other socket (another
-/// test's `127.0.0.1:0` endpoint included) can take the port meanwhile.
+/// A loopback TCP port that is bound, and that a connect hangs on until the caller's own timeout
+/// (not refused), and no other socket (another test's `127.0.0.1:0` endpoint included) can take
+/// the port meanwhile. macOS silently drops a SYN to a bound socket that is not listening;
+/// Linux refuses it with an RST, so there the socket listens with a zero backlog and one filler
+/// connection fills the accept queue, which makes the kernel drop every later SYN.
 /// [`ReservedPort::listen`] later turns the same socket into a listener.
 pub struct ReservedPort {
     fd: OwnedFd,
     addr: SocketAddr,
+    #[cfg(target_os = "linux")]
+    filler: TcpStream,
 }
 
 impl ReservedPort {
@@ -629,6 +633,14 @@ impl ReservedPort {
             );
             assert_eq!(named, 0, "getsockname: {}", std::io::Error::last_os_error());
             let addr = SocketAddr::from(([127, 0, 0, 1], u16::from_be(out.sin_port)));
+            #[cfg(target_os = "linux")]
+            {
+                let listening = libc::listen(fd.as_raw_fd(), 0);
+                assert_eq!(listening, 0, "listen: {}", std::io::Error::last_os_error());
+                let filler = TcpStream::connect(addr).expect("fill the accept queue");
+                ReservedPort { fd, addr, filler }
+            }
+            #[cfg(not(target_os = "linux"))]
             ReservedPort { fd, addr }
         }
     }
@@ -642,7 +654,16 @@ impl ReservedPort {
         // SAFETY: `listen` on the bound descriptor this value owns.
         let listening = unsafe { libc::listen(self.fd.as_raw_fd(), 128) };
         assert_eq!(listening, 0, "listen: {}", std::io::Error::last_os_error());
-        TcpListener::from(self.fd)
+        let listener = TcpListener::from(self.fd);
+        // The filler sits in the accept queue; take it out so the first connection the
+        // emulator accepts is the sender's.
+        #[cfg(target_os = "linux")]
+        {
+            let (accepted, _) = listener.accept().expect("accept the filler");
+            drop(accepted);
+            drop(self.filler);
+        }
+        listener
     }
 }
 
