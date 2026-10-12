@@ -803,27 +803,15 @@ fn list_tree(
 }
 
 /// ` m<seconds>.<nanoseconds> i<inode>`: what tells a file rewritten at the same size from the
-/// file that was scanned. A platform without an inode contributes the modification time alone.
+/// file that was scanned.
 fn file_identity(meta: &fs::Metadata) -> String {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        format!(
-            " m{}.{:09} i{}",
-            meta.mtime(),
-            meta.mtime_nsec(),
-            meta.ino()
-        )
-    }
-    #[cfg(not(unix))]
-    {
-        let since = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .unwrap_or_default();
-        format!(" m{}.{:09}", since.as_secs(), since.subsec_nanos())
-    }
+    use std::os::unix::fs::MetadataExt;
+    format!(
+        " m{}.{:09} i{}",
+        meta.mtime(),
+        meta.mtime_nsec(),
+        meta.ino()
+    )
 }
 
 /// What [`check_verdict`] found. Only [`VerdictCheck::Current`] with the word `clean` is clean.

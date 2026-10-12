@@ -1,10 +1,9 @@
 //! Platform-specific paths for /goal Cup binaries.
 //!
 //! This crate's native capability layers (`filecap`, `sourcecap`, `tracecap`) are
-//! implemented for Unix only. Windows is not yet supported; it is planned (D42). The
-//! `cfg(not(unix))` stubs across the workspace stay as the shape of that work, each refusing
-//! by name, and a non-Unix build fails at compile time below rather than shipping a silently
-//! unsupported binary. Linux is best-effort until it is tested.
+//! implemented for Unix only. Windows is not yet supported; it is planned (D42). A non-Unix
+//! build fails at compile time below rather than shipping a silently unsupported binary, and
+//! the workspace carries no non-Unix stub code. Linux is best-effort until it is tested.
 
 #[cfg(not(unix))]
 compile_error!(
@@ -63,26 +62,6 @@ pub fn config_dir_with(
             Some(xdg) => Some(PathBuf::from(xdg).join("goalcup")),
             None => var("HOME").map(|home| PathBuf::from(home).join(".config").join("goalcup")),
         },
-    }
-}
-
-/// Resolve the current platform's configuration directory without creating it.
-pub fn config_dir() -> Option<PathBuf> {
-    config_dir_with(current_platform(), |name| std::env::var_os(name))
-}
-
-fn current_platform() -> Platform {
-    #[cfg(target_os = "windows")]
-    {
-        Platform::Windows
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Platform::Macos
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        Platform::Unix
     }
 }
 

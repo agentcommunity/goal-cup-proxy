@@ -23,7 +23,7 @@ const MAX_GOAL_EXCERPT_BYTES: usize = 1024;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 #[non_exhaustive]
-pub enum Reference {
+pub(crate) enum Reference {
     /// A `Gap`, `Recovery`, `Assistance` or later `Launch` record, as chained.
     Record(CaptureRecord),
     /// A goal stream's retained parts and a short excerpt of its sanitized bytes.
@@ -34,7 +34,7 @@ pub enum Reference {
 /// of its sanitized bytes. The whole goal stays in the chain.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
-pub struct GoalReference {
+pub(crate) struct GoalReference {
     kind: &'static str,
     pub stream: StreamKey,
     pub first_part: Option<u64>,
@@ -67,18 +67,18 @@ impl Operations {
     }
 
     /// The first `Launch` record.
-    pub fn launch(&self) -> Option<&CaptureRecord> {
+    pub(crate) fn launch(&self) -> Option<&CaptureRecord> {
         self.launch.as_ref()
     }
 
     /// The first operational references in chain order (goal excerpts, later launches, gaps,
     /// recoveries, assistance), bounded.
-    pub fn references(&self) -> &[Reference] {
+    pub(crate) fn references(&self) -> &[Reference] {
         &self.references
     }
 
     /// References dropped once a bound was reached.
-    pub fn references_omitted(&self) -> u64 {
+    pub(crate) fn references_omitted(&self) -> u64 {
         self.references_omitted
     }
 

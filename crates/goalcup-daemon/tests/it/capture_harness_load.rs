@@ -316,6 +316,17 @@ async fn a_connector_directory_holding_a_symlink_is_refused_at_create_before_any
     let files = connectors.path().join("claude-code-cli/files");
     std::fs::create_dir_all(&files).unwrap();
     std::os::unix::fs::symlink("project-settings.json", files.join("alias.json")).unwrap();
+    // The cause is the symlink and nothing else: the directory walk refuses exactly that entry,
+    // by the typed symlink refusal, rather than following it or failing for some other reason.
+    match goalcup_protocol::connector_dir::connector_dir_sha256(
+        &connectors.path().join("claude-code-cli"),
+    ) {
+        Err(goalcup_protocol::ProtocolError::UnhashableEntry { path, reason }) => {
+            assert!(path.ends_with("alias.json"), "{path}");
+            assert!(reason.contains("symlink"), "{reason}");
+        }
+        other => panic!("the symlinked entry is refused as unhashable, got {other:?}"),
+    }
     let root = connectors.path().to_path_buf();
     let rig = Rig::start_with(move |config| config.connectors_dir = root).await;
     let workspace = rig.workspace("refused-unhashable");
@@ -335,9 +346,17 @@ async fn a_connector_directory_holding_a_symlink_is_refused_at_create_before_any
         "{}",
         body.error.message
     );
+    // The daemon refuses with its one generic directory refusal, and names no path: nothing of
+    // the symlink's name or target is repeated.
     assert!(
         body.error.message.contains("directory is invalid"),
         "the refusal says the connector directory could not be loaded: {}",
+        body.error.message
+    );
+    assert!(
+        !body.error.message.contains("alias.json")
+            && !body.error.message.contains("project-settings"),
+        "the refusal does not repeat the symlink's name or target: {}",
         body.error.message
     );
     no_writes(&rig, &workspace);

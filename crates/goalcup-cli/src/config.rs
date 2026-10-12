@@ -110,15 +110,11 @@ fn config_dir_on(
 }
 
 fn current_platform() -> Platform {
-    #[cfg(target_os = "windows")]
-    {
-        Platform::Windows
-    }
     #[cfg(target_os = "macos")]
     {
         Platform::Macos
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(target_os = "macos"))]
     {
         Platform::Unix
     }

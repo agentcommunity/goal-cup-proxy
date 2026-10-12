@@ -19,8 +19,8 @@
 //! **One [`Redactor`] for every record.** `apply` takes bytes and does not know which store
 //! produced them.
 //!
-//! **Bounded memory.** `apply` holds the caller's borrowed record (at most
-//! [`crate::MAX_LINE_BYTES`]), one output buffer of the same order, and one interval per
+//! **Bounded memory.** `apply` holds the caller's borrowed record (the caller bounds its
+//! size), one output buffer of the same order, and one interval per
 //! match. It never holds a batch and never copies one.
 //!
 //! The replacement publishes only the pattern kind. The hash-covered audit publishes that

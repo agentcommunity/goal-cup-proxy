@@ -288,16 +288,3 @@ pub fn end_released_child(mut child: Child, handle: &ProcessHandle) -> ReleasedC
     }
     ReleasedChildEnd::Ended { termed, killed }
 }
-
-/// Without the unix process model nothing here can be observed, so the root is killed and
-/// reported unverified.
-#[cfg(not(unix))]
-pub fn end_released_child(mut child: Child, _handle: &ProcessHandle) -> ReleasedChildEnd {
-    let root = child.id();
-    let _ = child.kill();
-    let _ = child.wait();
-    ReleasedChildEnd::NativeUnverified {
-        termed: Vec::new(),
-        killed: vec![root],
-    }
-}

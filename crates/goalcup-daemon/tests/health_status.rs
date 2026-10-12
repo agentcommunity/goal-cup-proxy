@@ -12,6 +12,8 @@
 //!   the only entry it can ask about is the one its own query string names — because
 //!   `/v0/entries/current` needs a bearer token and a browser has none.
 
+// Each test binary uses a different subset of the shared support.
+#[allow(dead_code)]
 #[path = "common/mod.rs"]
 mod common;
 use common::support;

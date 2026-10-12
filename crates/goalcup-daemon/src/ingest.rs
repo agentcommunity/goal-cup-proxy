@@ -139,16 +139,16 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
 
 /// Default bound on unauthenticated sockets held at once.
-pub const DEFAULT_MAX_PENDING_HANDSHAKES: usize = 16;
+pub(crate) const DEFAULT_MAX_PENDING_HANDSHAKES: usize = 16;
 /// Default time from accept to an admitted epoch.
 pub const DEFAULT_SETUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default wait, after a valid `Close`, for the end of stream that makes it clean.
-pub const DEFAULT_CLOSE_GRACE: Duration = Duration::from_secs(2);
+pub(crate) const DEFAULT_CLOSE_GRACE: Duration = Duration::from_secs(2);
 /// How long a listener dropped without [`IngestListener::shutdown`] lets its tasks settle
 /// before aborting them.
-pub const DROP_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+pub(crate) const DROP_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 /// Longest entry ID accepted by [`IngestListener::authorize`] and in a handshake.
-pub const MAX_ENTRY_ID_BYTES: usize = 256;
+pub(crate) const MAX_ENTRY_ID_BYTES: usize = 256;
 
 const ADMISSION_POLL_FIRST: Duration = Duration::from_millis(5);
 const ADMISSION_POLL_MAX: Duration = Duration::from_millis(100);
@@ -158,7 +158,7 @@ const SECRET_MAX_BYTES: usize = 256;
 
 /// The daemon clock the receiver stamps its own observations with (daemon loss/control
 /// observations name the daemon clock, never a producer's).
-pub type IngestClock = Arc<dyn Fn() -> CaptureTime + Send + Sync>;
+pub(crate) type IngestClock = Arc<dyn Fn() -> CaptureTime + Send + Sync>;
 
 /// A clock named `clock_id`: RFC 3339 UTC wall time with nanoseconds, and monotonic
 /// nanoseconds from the moment this clock was made. The entry owner may supply its own
@@ -879,10 +879,6 @@ impl fmt::Debug for IngestEntry {
 }
 
 impl IngestEntry {
-    pub fn entry_id(&self) -> &str {
-        &self.shared.entry_id
-    }
-
     /// Every latched outcome not yet taken, in latch order. Each is delivered once.
     pub fn take_outcomes(&self) -> Vec<ProducerOutcome> {
         self.shared.lock().outcomes.drain(..).collect()
@@ -917,7 +913,7 @@ impl IngestEntry {
     }
 
     /// Refuse every further handshake for this entry. Live producers continue.
-    pub fn close_admission(&self) {
+    pub(crate) fn close_admission(&self) {
         self.shared.lock().admission_open = false;
     }
 

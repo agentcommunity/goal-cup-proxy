@@ -50,7 +50,7 @@ use std::sync::Once;
 
 /// The most distinct (source, hint) groups [`DecodeOutcome::undecoded`] keeps; streams of
 /// further groups are counted in [`DecodeOutcome::undecoded_omitted`].
-pub const MAX_UNDECODED_GROUPS: usize = 64;
+pub(crate) const MAX_UNDECODED_GROUPS: usize = 64;
 
 // ---------------------------------------------------------------------------------------
 // Quiet panic isolation.
@@ -73,7 +73,7 @@ static HOOK: Once = Once::new();
 /// else reaches `previous`.
 ///
 /// A [`DecodeSession`] installs this over the hook current at its first use
-/// ([`install_quiet_panic_hook`]). A host that installs its own hook afterwards replaces it, and
+/// (`install_quiet_panic_hook`). A host that installs its own hook afterwards replaces it, and
 /// from then on its hook sees decoder panics, payload included; to keep them quiet, wrap it:
 /// `set_hook(quiet_panic_hook(take_hook()))`. The gate is shared, so wrapping again is safe.
 pub fn quiet_panic_hook(
@@ -89,7 +89,7 @@ pub fn quiet_panic_hook(
 /// Wraps the current panic hook with [`quiet_panic_hook`], once per process. A session calls
 /// this before it runs a decoder; a host may call it first to choose when the wrapping
 /// happens, relative to its own hook.
-pub fn install_quiet_panic_hook() {
+pub(crate) fn install_quiet_panic_hook() {
     HOOK.call_once(|| std::panic::set_hook(quiet_panic_hook(std::panic::take_hook())));
 }
 
@@ -149,7 +149,7 @@ pub enum DecoderPhase {
 
 impl DecoderPhase {
     /// The word a report prints.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Create => "create",
             Self::Accepts => "accepts",
@@ -211,7 +211,7 @@ pub struct Undecoded {
 pub struct DecodeOutcome {
     /// One per registered decoder, in registry order.
     pub decoders: Vec<DecoderOutcome>,
-    /// Capture-only streams, in first-seen order, at most [`MAX_UNDECODED_GROUPS`] groups.
+    /// Capture-only streams, in first-seen order, at most `MAX_UNDECODED_GROUPS` groups.
     /// The goal stream is not capture-only and is not listed.
     pub undecoded: Vec<Undecoded>,
     /// Capture-only streams of groups past the bound.

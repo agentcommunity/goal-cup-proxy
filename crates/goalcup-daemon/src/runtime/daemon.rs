@@ -315,17 +315,6 @@ impl Daemon {
         &self.inner.artifact_root
     }
 
-    /// Test-only: how many of [`MAX_IN_FLIGHT`] permits are free right now.
-    ///
-    /// What it exists for is the invariant `stop` rests on — that a spawned unit of work
-    /// holds its permit from before it is spawned — which is otherwise invisible: a test
-    /// can only watch `stop` take a long time, and that is also what a coincidence looks
-    /// like.
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn free_permits(&self) -> usize {
-        self.inner.blocking.available_permits()
-    }
-
     /// A second handle on the same daemon, for a task that outlives the caller's borrow.
     ///
     /// Every field is behind the one `Arc`, so this is a pointer copy and not a second
@@ -336,7 +325,7 @@ impl Daemon {
     /// [`Daemon::stop`] is by value and releases the locks only when the last handle is
     /// gone, which is why the spawned work that holds one of these is drained before it
     /// returns rather than merely aborted.
-    pub fn clone_handle(&self) -> Daemon {
+    pub(crate) fn clone_handle(&self) -> Daemon {
         Daemon {
             inner: self.inner.clone(),
         }
@@ -418,19 +407,22 @@ impl Daemon {
     // maps they read.
     // -------------------------------------------------------------------------------
 
-    pub fn config(&self) -> &DaemonConfig {
+    pub(crate) fn config(&self) -> &DaemonConfig {
         &self.inner.config
     }
 
     /// The signed status document of a local capture, as `goalcup status` reads it. `None`
     /// for an id that is not a capture this daemon holds.
-    pub fn signed_status(&self, entry_id: &str) -> Result<Option<SignedStatus>, DaemonError> {
+    pub(crate) fn signed_status(
+        &self,
+        entry_id: &str,
+    ) -> Result<Option<SignedStatus>, DaemonError> {
         self.capture_status(entry_id)
     }
 
     /// Drop a local capture that never started: failure before dispatch leaves no entry.
     /// `_reason` is the caller's sentence; a capture abandon records none.
-    pub fn abandon(&self, entry_id: &str, _reason: &str) -> Result<(), DaemonError> {
+    pub(crate) fn abandon(&self, entry_id: &str, _reason: &str) -> Result<(), DaemonError> {
         if self.has_capture_entry(entry_id) {
             return self.abandon_capture(entry_id);
         }
@@ -448,7 +440,7 @@ impl Daemon {
     /// The single entry a caller with no id means: the one open run that is not sealed.
     /// `None` when there is none, and `None` when there is more than one — a daemon holding
     /// two live runs must not guess which one a bare `goalcup status` is about.
-    pub fn current_entry(&self) -> Result<Option<String>, DaemonError> {
+    pub(crate) fn current_entry(&self) -> Result<Option<String>, DaemonError> {
         let mut live: Vec<String> = self
             .capture_summaries()?
             .into_iter()
@@ -467,7 +459,7 @@ impl Daemon {
     /// what the seal terminates, so a second one posted on the loopback is a decoy that
     /// points it at a process the launch never made. The
     /// registered handle wins and everything else is a `409`.
-    pub fn register_process(
+    pub(crate) fn register_process(
         &self,
         entry_id: &str,
         registration: ProcessRegistration,
@@ -496,7 +488,7 @@ impl Daemon {
     /// evicted after the original accepted response was lost.  This is intentionally not a
     /// general registry registration path: live and unsealed entries must retain the runtime
     /// slot's ordering with trace and encrypted-buffer reconciliation.
-    pub fn acknowledge_evicted_sealed_process_replay(
+    pub(crate) fn acknowledge_evicted_sealed_process_replay(
         &self,
         entry_id: &str,
         registration: &ProcessRegistration,
@@ -508,7 +500,7 @@ impl Daemon {
 
     /// Whether every open entry's last upload reached the server. Always `true`: this tree has
     /// no uploader (D48), so none is failing.
-    pub fn upload_ok(&self) -> bool {
+    pub(crate) fn upload_ok(&self) -> bool {
         true
     }
 
@@ -667,12 +659,6 @@ fn replace_created_root_with_symlink_for_test(path: &std::path::Path) -> Result<
         path: path.display().to_string(),
         source,
     })
-}
-
-/// Create one configured daemon root on a platform with no POSIX mode contract.
-#[cfg(not(unix))]
-fn create_configured_root(path: &std::path::Path, _role: &str) -> Result<(), DaemonError> {
-    create_dir(path)
 }
 
 fn create_dir(path: &std::path::Path) -> Result<(), DaemonError> {

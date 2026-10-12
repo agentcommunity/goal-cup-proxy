@@ -129,22 +129,6 @@ pub(super) fn terminate_handle(
     ))
 }
 
-/// [`terminate_for_finalization`]'s reason on a platform other than unix.
-#[cfg(not(unix))]
-pub(super) fn terminate_handle(
-    daemon: &Daemon,
-    _handle: &ProcessHandle,
-    _walk_cap: usize,
-    requested_at: &Rfc3339Utc,
-) -> Result<(TerminationOutcomeV1, Option<String>), DaemonError> {
-    unresolved_termination(
-        daemon,
-        requested_at,
-        TerminationFailureV1::UnsupportedPlatform,
-        "no verified termination path on this platform in V1".to_string(),
-    )
-}
-
 /// `Unresolved` for `reason`, stopped waiting now and never before `requested_at`, with
 /// `note` for the durable record beside it.
 pub(super) fn unresolved_termination(
@@ -242,28 +226,5 @@ impl Daemon {
             self.finalization_now_unix().max(0.0) as u64,
         ))
         .map_err(|error| DaemonError::Refused(format!("cannot timestamp {fact}: {error}")))
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn set_finalization_clock_for_test(&self, now: f64) {
-        self.inner
-            .finalization_clock_steps
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clear();
-        *self
-            .inner
-            .finalization_clock
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(now);
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub fn set_finalization_clock_steps_for_test(&self, steps: impl IntoIterator<Item = f64>) {
-        *self
-            .inner
-            .finalization_clock_steps
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = steps.into_iter().collect();
     }
 }

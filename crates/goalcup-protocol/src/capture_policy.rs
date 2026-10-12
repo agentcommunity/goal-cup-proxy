@@ -21,17 +21,16 @@ use std::collections::BTreeSet;
 // Bounds
 // ---------------------------------------------------------------------------------------
 
-pub const MAX_CAPTURE_ARGS: usize = 64;
-pub const MAX_CAPTURE_ARG_BYTES: usize = 4096;
-pub const MAX_CAPTURE_ENV: usize = 32;
-pub const MAX_CAPTURE_ENV_KEY_BYTES: usize = 128;
-pub const MAX_CAPTURE_ENV_VALUE_BYTES: usize = 1024;
-pub const MAX_CAPTURE_HOSTS: usize = 16;
-pub const MAX_CAPTURE_PATHS_PER_HOST: usize = 32;
-pub const MAX_CAPTURE_PATH_BYTES: usize = 1024;
-pub const MAX_CONTINUATION_BYTES: usize = 512;
-pub const MAX_GOAL_FLAG_BYTES: usize = 32;
-pub const MAX_VERSION_BYTES: usize = 32;
+pub(crate) const MAX_CAPTURE_ARGS: usize = 64;
+pub(crate) const MAX_CAPTURE_ARG_BYTES: usize = 4096;
+pub(crate) const MAX_CAPTURE_ENV: usize = 32;
+pub(crate) const MAX_CAPTURE_ENV_KEY_BYTES: usize = 128;
+pub(crate) const MAX_CAPTURE_ENV_VALUE_BYTES: usize = 1024;
+pub(crate) const MAX_CAPTURE_HOSTS: usize = 16;
+pub(crate) const MAX_CAPTURE_PATHS_PER_HOST: usize = 32;
+pub(crate) const MAX_CAPTURE_PATH_BYTES: usize = 1024;
+pub(crate) const MAX_CONTINUATION_BYTES: usize = 512;
+pub(crate) const MAX_GOAL_FLAG_BYTES: usize = 32;
 
 // ---------------------------------------------------------------------------------------
 // CA trust, credentials, redaction mirror, tracker hosts
@@ -51,10 +50,10 @@ pub enum CaMode {
 
 impl CaMode {
     /// The spellings `capture.ca.mode` accepts, in declaration order.
-    pub const VALUES: &'static [&'static str] = &["extend", "replace"];
+    pub(crate) const VALUES: &'static [&'static str] = &["extend", "replace"];
 
     /// The TOML spelling.
-    pub const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             CaMode::Extend => "extend",
             CaMode::Replace => "replace",
@@ -75,7 +74,7 @@ pub const CA_REGISTRY: &[(&str, CaMode)] = &[
 ];
 
 /// The registry mode of a CA variable, or `None` when it is not a registry row.
-pub fn ca_registry_mode(name: &str) -> Option<CaMode> {
+pub(crate) fn ca_registry_mode(name: &str) -> Option<CaMode> {
     CA_REGISTRY
         .iter()
         .find(|(n, _)| *n == name)
@@ -104,10 +103,10 @@ pub const EXTRA_PATTERN_SOURCES: &[&str] = &[
 /// subdomain (the delivery-agnostic rule, F7). Empty until a project domain is chosen; a host
 /// containing `goalcup` is refused anyway ([`mentions_goalcup`]), and a loopback address such
 /// as `127.0.0.1` is already refused by [`is_capture_host`].
-pub const TRACKER_HOSTS: &[&str] = &[];
+pub(crate) const TRACKER_HOSTS: &[&str] = &[];
 
 /// Whether `host` equals, or is a subdomain of, a [`TRACKER_HOSTS`] entry.
-pub fn is_tracker_host(host: &str) -> bool {
+pub(crate) fn is_tracker_host(host: &str) -> bool {
     TRACKER_HOSTS
         .iter()
         .any(|t| host == *t || host.strip_suffix(*t).is_some_and(|p| p.ends_with('.')))
@@ -189,7 +188,7 @@ pub const INJECTION_ENV: &[&str] = &[
 /// Name SUFFIXES that make a tool run a command: `GIT_PROXY_COMMAND`, `GIT_EDITOR`,
 /// `MANPAGER`, `SUDO_ASKPASS`, `RUSTC_WRAPPER`, `CARGO_TARGET_<triple>_RUNNER`. The value rule
 /// cannot stop these: a program resolved on `PATH` needs no `/`, `$`, backtick or `://`.
-pub const COMMAND_SUFFIXES: &[(&str, &str)] = &[
+pub(crate) const COMMAND_SUFFIXES: &[(&str, &str)] = &[
     ("_COMMAND", "names a command a tool runs"),
     ("_CMD", "names a command a tool runs"),
     ("EDITOR", "names an editor a tool runs"),
@@ -278,7 +277,7 @@ pub enum EnvContext {
 /// `home.env` points a variable at the per-run config home, so naming a tool's own relocator
 /// (`GRADLE_USER_HOME`, `CARGO_HOME`, `IPYTHONDIR`, ...) would make that tool read the
 /// connector's seeds as its configuration.
-pub const TOOL_HOME_NAMES: &[&str] = &[
+pub(crate) const TOOL_HOME_NAMES: &[&str] = &[
     "CARGO_HOME",
     "RUSTUP_HOME",
     "GEM_HOME",
@@ -310,7 +309,7 @@ pub const TOOL_HOME_NAMES: &[&str] = &[
 ];
 
 /// Prefixes of other tools' namespaces, refused as `home.env` (S2 review I-3).
-pub const TOOL_HOME_PREFIXES: &[&str] = &[
+pub(crate) const TOOL_HOME_PREFIXES: &[&str] = &[
     "CONDA_",
     "MAMBA_",
     "NPM_",
@@ -693,7 +692,7 @@ pub const STARTUP_BASENAMES: &[&str] = &[
 ];
 
 /// A file with one of these suffixes runs code when the interpreter starts (Python `*.pth`).
-pub const STARTUP_SUFFIXES: &[&str] = &[".pth"];
+pub(crate) const STARTUP_SUFFIXES: &[&str] = &[".pth"];
 
 /// Directory components that hold credentials or code the tools load, wherever they sit in a
 /// seed destination or a `dirs` entry.
@@ -838,7 +837,7 @@ pub fn is_capture_host(host: &str) -> bool {
 }
 
 /// Why a capture path is refused, or `None`.
-pub fn capture_path_problem(path: &str) -> Option<&'static str> {
+pub(crate) fn capture_path_problem(path: &str) -> Option<&'static str> {
     if !path.starts_with('/') {
         return Some("must start with `/`");
     }

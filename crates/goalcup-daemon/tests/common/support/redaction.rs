@@ -5,8 +5,6 @@
 //! Included by file path, so a redaction test does not link the daemon harnesses in
 //! `support/mod.rs`.
 
-#![allow(dead_code)]
-
 use goalcup_daemon::redact::stream::StreamRedactor;
 use goalcup_protocol::capture::*;
 use goalcup_protocol::redaction::RedactionAuditSpan;

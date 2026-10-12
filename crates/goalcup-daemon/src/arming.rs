@@ -45,7 +45,7 @@ pub enum GateState {
 impl GateState {
     /// The wire state. Total: every `GateState` has a wire value, including a refusal, so a
     /// new variant fails to compile here rather than silently reading as `Armed`.
-    pub fn to_control(&self) -> ArmingState {
+    pub(crate) fn to_control(self) -> ArmingState {
         match self {
             GateState::Armed => ArmingState::Armed,
             GateState::StartSignalSeen => ArmingState::StartSignalSeen,

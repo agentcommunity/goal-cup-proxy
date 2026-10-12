@@ -130,9 +130,6 @@ fn add_directory_prefixes(plan: &mut BTreeSet<(usize, String)>, relative: &str) 
 #[cfg(unix)]
 type PrivateDirHandle = std::fs::File;
 
-#[cfg(not(unix))]
-struct PrivateDirHandle;
-
 /// Create one planned directory strictly, remembering what this invocation made.
 ///
 /// A case-insensitive filesystem can report `AlreadyExists` for two different schema-valid
@@ -167,11 +164,6 @@ fn private_plan_dir(dir: &Path, created: &mut Vec<PrivateDirHandle>) -> Result<(
         }
         Err(error) => Err(error),
     }
-}
-
-#[cfg(not(unix))]
-fn private_plan_dir(dir: &Path, _created: &mut Vec<PrivateDirHandle>) -> Result<(), CliError> {
-    private_dir(dir)
 }
 
 #[cfg(unix)]
@@ -402,11 +394,6 @@ fn same_directory(a: &Path, b: &Path) -> bool {
         (Ok(a), Ok(b)) => a.is_dir() && b.is_dir() && a.dev() == b.dev() && a.ino() == b.ino(),
         _ => false,
     }
-}
-
-#[cfg(not(unix))]
-fn same_directory(_: &Path, _: &Path) -> bool {
-    false
 }
 
 #[cfg(target_os = "macos")]

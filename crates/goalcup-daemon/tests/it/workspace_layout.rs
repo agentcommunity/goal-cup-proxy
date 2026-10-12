@@ -1,12 +1,9 @@
 //! Where the artifact root may sit relative to the workspace, that the workspace is a new
-//! directory outside any Git worktree with zero entries, that the workspace walk applies its
-//! exclusions the way the seal reads them, and the path-template renderer. The V1
-//! `hook_install[]` rendering these tests also covered was removed by OS-31, and the walk over
-//! the V1 manifests' templates by OS-29.
+//! directory outside any Git worktree with zero entries, and that the workspace walk applies its
+//! exclusions the way the seal reads them.
 
-use goalcup_daemon::paths::{PathVars, claude_slug, expand_globs, resolve_template};
 use goalcup_daemon::workspace::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // ---------------------------------------------------------------- the workspace
 
@@ -159,90 +156,4 @@ fn the_seal_walk_and_the_baseline_walk_apply_the_same_exclusion_union() {
     let main = m.files.iter().find(|f| f.path == "main.py").unwrap();
     assert_eq!(main.sha256, sha256_hex(b"print(1)"));
     assert_eq!(main.bytes, 8);
-}
-
-// ---------------------------------------------------------------- path templates
-
-#[test]
-fn claude_slug_matches_the_spike_4_project_directory() {
-    assert_eq!(
-        claude_slug(Path::new(
-            "/Users/team/goalcup-spikes/ws-claude-code-cli-20260903T073054Z"
-        )),
-        "-Users-team-goalcup-spikes-ws-claude-code-cli-20260903T073054Z"
-    );
-}
-
-#[test]
-fn templates_resolve_every_variable_and_glob_the_unknown_session_id() {
-    let vars = PathVars::new(
-        PathBuf::from("/Users/team/goalcup-spikes/ws-one"),
-        PathBuf::from("/Users/team"),
-        PathBuf::from("/home/h/.claude"),
-        PathBuf::from("/var/goalcup"),
-        None,
-        ("2026".into(), "09".into(), "04".into()),
-    );
-    assert_eq!(
-        resolve_template("{config_dir}/projects/{slug}/{session_id}.jsonl", &vars).unwrap(),
-        "/home/h/.claude/projects/-Users-team-goalcup-spikes-ws-one/*.jsonl",
-        "an unknown session id becomes a glob, never an empty segment"
-    );
-    // The canonical workspace is resolved once, at construction, so a bound variant is
-    // built by cloning and setting the one field that moves rather than by a struct literal.
-    let mut bound = vars.clone();
-    bound.session_id = Some("95addb64".into());
-    assert_eq!(
-        resolve_template("{config_dir}/projects/{slug}/{session_id}.jsonl", &bound).unwrap(),
-        "/home/h/.claude/projects/-Users-team-goalcup-spikes-ws-one/95addb64.jsonl"
-    );
-    assert_eq!(
-        resolve_template("{artifact_root}/raw-bodies/", &bound).unwrap(),
-        "/var/goalcup/raw-bodies/"
-    );
-    // Codex's date-partitioned tree, which is why `yyyy`/`mm`/`dd` are tokens at all.
-    assert_eq!(
-        resolve_template(
-            "{config_dir}/sessions/{yyyy}/{mm}/{dd}/rollout-*.jsonl",
-            &bound
-        )
-        .unwrap(),
-        "/home/h/.claude/sessions/2026/09/04/rollout-*.jsonl"
-    );
-    // One strict renderer, so a typo is an error rather than a glob that silently never
-    // matches.
-    let err = resolve_template("{config-dir}/projects", &bound)
-        .expect_err("`config-dir` is not one of the nine tokens; `config_dir` is");
-    assert!(format!("{err}").contains("config-dir"), "got {err}");
-}
-
-#[test]
-fn globs_expand_within_a_component_and_a_missing_tree_yields_nothing() {
-    let t = tempfile::tempdir().unwrap();
-    let root = t.path().join("sessions/2026/09/04");
-    std::fs::create_dir_all(&root).unwrap();
-    for name in ["rollout-b.jsonl", "rollout-a.jsonl", "notes.txt"] {
-        std::fs::write(root.join(name), b"x").unwrap();
-    }
-    let hits = expand_globs(&format!("{}/rollout-*.jsonl", root.display()));
-    assert_eq!(
-        hits,
-        vec![root.join("rollout-a.jsonl"), root.join("rollout-b.jsonl")],
-        "sorted, so a poll order never depends on the filesystem's iteration order"
-    );
-    assert_eq!(
-        expand_globs(&format!(
-            "{}/sessions/*/*/*/rollout-*.jsonl",
-            t.path().display()
-        ))
-        .len(),
-        2,
-        "a `*` in the middle of a path walks that level"
-    );
-    assert!(
-        expand_globs(&format!("{}/nothing/here/*.jsonl", t.path().display())).is_empty(),
-        "a store whose directory does not exist yet is normal before the harness starts"
-    );
-    let plain = root.join("notes.txt");
-    assert_eq!(expand_globs(&plain.to_string_lossy()), vec![plain]);
 }

@@ -4,10 +4,10 @@
 use super::*;
 
 /// The owner-driven safe-byte flush cadence: inside the 250 ms bound, with scheduling headroom.
-pub const FLUSH_EVERY: Duration = Duration::from_millis(200);
+pub(crate) const FLUSH_EVERY: Duration = Duration::from_millis(200);
 
 /// The durable-frontier cadence: inside the 1 s bound, with scheduling headroom.
-pub const SYNC_EVERY: Duration = Duration::from_millis(800);
+pub(crate) const SYNC_EVERY: Duration = Duration::from_millis(800);
 
 /// Native bytes the finish may still read.
 pub(super) const NATIVE_FINISH_BYTES: u64 = 64 << 20;

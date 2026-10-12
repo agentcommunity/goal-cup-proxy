@@ -27,12 +27,8 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
 - New harnesses (builders bring them: [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md))
 - Full registration and teams system
 - Qualification records
-- Remove the manifest `launch`, `resume` and `banned_args` fields from the V1 manifest schema
-  (`goalcup-protocol/src/manifest.rs`): parsed, read by no shipped binary (launch plans come from
-  `harness.toml`). Their snapshot tests went in the test diet.
-- Delete daemon `Registry::store_receipt` (test-hooks only, no caller left) with the
-  `ReceiptBindingPolicy` / `[receipt_binding]` config that only it reads, and `Entry::receipt` if
-  nothing else does.
+- Delete the daemon's `ReceiptBindingPolicy` / `[receipt_binding]` config: its only reader,
+  `Registry::store_receipt`, is gone.
 - Delete daemon `server_public_key` / `upload_url` and `placeholder_key_notice`: since D48 the key's
   only consumer is a startup notice about receipts that no longer exist. Its test,
   `tests/it/placeholder_notice.rs`, goes with it.

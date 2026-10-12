@@ -201,16 +201,6 @@ fn create_new(temp: &Path, mode: u32) -> std::io::Result<std::fs::File> {
         .open(temp)
 }
 
-/// The same create where there is no Unix mode to carry. It deliberately does not pretend
-/// the file is protected.
-#[cfg(not(unix))]
-fn create_new(temp: &Path, _mode: u32) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(temp)
-}
-
 /// Apply the caller's exact mode through the open descriptor before the temp is published.
 ///
 /// The create mode is still important: a restrictive umask may make the initial inode more
@@ -220,11 +210,6 @@ fn create_new(temp: &Path, _mode: u32) -> std::io::Result<std::fs::File> {
 fn set_open_file_mode(file: &std::fs::File, mode: u32) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     file.set_permissions(std::fs::Permissions::from_mode(mode))
-}
-
-#[cfg(not(unix))]
-fn set_open_file_mode(_file: &std::fs::File, _mode: u32) -> std::io::Result<()> {
-    Ok(())
 }
 
 /// The temp name a startup sweep can find again: `<name>.<pid>.tmp`, beside the target.

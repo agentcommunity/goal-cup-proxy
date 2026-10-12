@@ -256,22 +256,6 @@ impl Signals {
     }
 }
 
-/// On a platform with no `SIGTERM` — none this build targets — Ctrl-C is the whole of it,
-/// so the binary still stops rather than refusing to compile.
-#[cfg(not(unix))]
-struct Signals;
-
-#[cfg(not(unix))]
-impl Signals {
-    fn install() -> std::io::Result<Signals> {
-        Ok(Signals)
-    }
-
-    async fn stopped(&mut self) {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}
-
 /// One sentence on stderr and exit 1. Never a panic: a participant meeting a bad
 /// configuration should read what is wrong with it, not a backtrace.
 fn refuse(message: &str) -> ExitCode {

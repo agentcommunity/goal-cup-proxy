@@ -48,7 +48,7 @@ pub const MAX_PRODUCERS: usize = 128;
 /// Each metadata string is at most 1 KiB.
 pub const MAX_METADATA_STRING_BYTES: usize = 1024;
 /// All metadata strings of one stream total at most 8 KiB.
-pub const MAX_METADATA_BYTES: usize = 8 * 1024;
+pub(crate) const MAX_METADATA_BYTES: usize = 8 * 1024;
 /// The separate first handshake object `{"entry_id","producer","token"}` is at most 1 KiB.
 pub const MAX_HANDSHAKE_BYTES: usize = 1024;
 
@@ -569,7 +569,7 @@ impl CaptureFrame {
 }
 
 impl IngestMessage {
-    pub fn validate(&self) -> Result<(), CaptureLimitError> {
+    pub(crate) fn validate(&self) -> Result<(), CaptureLimitError> {
         match self {
             IngestMessage::Frame(frame) => frame.validate(),
             IngestMessage::Close { producer, .. } => check_id("close.producer", producer),

@@ -70,8 +70,6 @@ fn allow_descriptors(needed: u64) {
             }
         }
     }
-    #[cfg(not(unix))]
-    let _ = needed;
 }
 
 fn begins(calls: &[Call]) -> Vec<(String, EpochAdmission)> {

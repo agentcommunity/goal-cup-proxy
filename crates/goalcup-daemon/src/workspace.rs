@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 ///
 /// What [`list_workspace`] records for a file it could not open or read through. The CLI's
 /// `seal` mirror spells the same sentinel, so the two walks agree about such a file.
-pub const ABSENT: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+pub(crate) const ABSENT: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// Bytes read per hashing step. A workspace file can be arbitrarily large and bounded
 /// memory is a constraint on the whole daemon, so the seal walk never holds one whole.

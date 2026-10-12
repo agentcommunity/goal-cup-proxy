@@ -66,7 +66,7 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
 /// The capture-integrity report document schema version.
-pub const CAPTURE_INTEGRITY_SCHEMA_VERSION: u32 = 1;
+pub(crate) const CAPTURE_INTEGRITY_SCHEMA_VERSION: u32 = 1;
 /// At most this many distinct finding codes are retained; the rest are counted into one
 /// final `findings_omitted:<n>` code.
 pub const MAX_FINDING_CODES: usize = 128;
