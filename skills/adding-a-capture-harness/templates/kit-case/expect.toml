@@ -16,8 +16,12 @@ identity_binding = "<none|at_launch|deferred>"
 identity_id = "<toy_case_42>"
 # Required. The [[capture.native]] `name`.
 native_source = "<session>"
-# Required. The native file's path relative to the native root. `{id}` is replaced by the
-# identity (minted, printed or none), so "session-{id}.jsonl" works for every source.
+# Required. The native file's path RELATIVE TO THE NATIVE ROOT, so it never repeats the root's
+# own directories: it is the harness.toml `pattern`. `{id}` is replaced by the identity
+# (minted, printed or none), so "session-{id}.jsonl" works for every source. Example: with
+#   root = "{config_home}/sessions"  and  pattern = "session-{id}.jsonl"
+# write native_path = "session-{id}.jsonl" (not "sessions/session-{id}.jsonl"). The kit
+# compares it inside the stream label `<native_source>:<native_path>#g1`.
 native_path = "<session-{id}.jsonl>"
 # Required. "append_only" or "snapshot"; equals harness.toml.
 native_form = "<append_only|snapshot>"
@@ -27,10 +31,13 @@ native_g1 = "<{\"message\":\"first\"}\n{\"message\":\"second\"}\n>"
 # append_only: leave "". snapshot: required with the template stand-in, which writes a SECOND
 # full file (SECOND in stand-in.py); the case then expects exactly two streams.
 native_g2 = ""
-# Optional pair, for patterns with {id}: a wrong-id file the stand-in writes, matched as a
-# path suffix under the run directory. Its bytes must equal the text and it must NOT be
-# captured. The template stand-in writes NATIVE_DIR/NATIVE_NAME with {id} = "wrong_id" and
-# the DECOY text. Leave both "" when the pattern has no {id}.
+# Optional pair, for patterns with {id}: a wrong-id file the stand-in writes. Unlike
+# native_path, native_decoy_path is a path SUFFIX UNDER THE RUN DIRECTORY, so it DOES include
+# the root's last directory. Its bytes must equal the text and it must NOT be captured. The
+# template stand-in writes NATIVE_DIR/NATIVE_NAME with {id} = "wrong_id" and the DECOY text.
+# Same example as above (NATIVE_DIR = "sessions"):
+#   native_decoy_path = "sessions/session-wrong_id.jsonl"
+# Leave both "" when the pattern has no {id}.
 native_decoy_path = "<sessions/session-wrong_id.jsonl>"
 native_decoy_text = "<{\"message\":\"decoy\"}\n>"
 # Required. Fixed by the kit's upstream.

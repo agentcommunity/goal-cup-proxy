@@ -32,14 +32,17 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
 
 1. **Set up.** Fork and branch as in
    [CONTRIBUTING](../../CONTRIBUTING.md#from-fork-to-pull-request) and read the rules in
-   [AGENTS.md](../../AGENTS.md) once. Then, once per machine and once per checkout:
+   [AGENTS.md](../../AGENTS.md) once. Check `which cargo` is `~/.cargo/bin/cargo` (rustup), not
+   a Homebrew cargo that shadows it. Then, online, once per machine and once per checkout:
    ```
-   cargo install cargo-nextest --locked
+   cargo nextest --version || cargo install cargo-nextest --locked
    cargo fetch --locked
    cargo build
    ```
-   Expect: `Finished` and exit 0. Keep one cargo target directory per checkout (the default
-   `target/`); `check-connector.sh` warns when `CARGO_TARGET_DIR` points outside it.
+   Expect: `Finished` and exit 0. After this the gate runs cargo `--offline`. Warm timings:
+   `check-connector.sh` about 1 to 1.5 minutes, `gate.sh fast` about 2.5; a cold first build
+   takes longer, and `target/` grows to about 3 GB. Keep one cargo target directory per
+   checkout (the default `target/`).
 2. **Fill the facts sheet.** `docs/harnesses/<id>.md` from
    [templates/harness-facts.md](templates/harness-facts.md):
    ```
@@ -49,8 +52,9 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    Keep every heading and its order; replace each one-line prompt with facts. Every fact has a
    source (docs link, "measured on version X") or says "unknown"; never guess. No secrets,
    tokens or personal paths (`$HOME`, `%APPDATA%`). Measure with a private `HOME` and harness
-   home under a temp directory, against the exact installed version. Rules:
-   [docs/harnesses/README.md](../../docs/harnesses/README.md). The sections map onto the
+   home under a temp directory, against the exact installed version. Worked example:
+   [codex-cli.md](../../docs/harnesses/codex-cli.md). Rules and the meaning of each `Status:`
+   value: [docs/harnesses/README.md](../../docs/harnesses/README.md). The sections map onto the
    connector like this:
 
    | Facts sheet section | Lands in `harness.toml` |
@@ -62,9 +66,10 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    | 5. Auth | `[capture.credential]`, `auth_hosts`, `[capture.home]` `run_home` |
    | 6. Network | `[[capture.hosts]]`, `[capture.ca]` |
    | 7. Process model | `[capture.termination]`, `[capture.argv_guard]` |
-   | 8. Things Goal Cup cannot isolate | the PR description; a blocker if it changes the run |
+   | 8. Things Goal Cup cannot isolate | nothing; it stays in the sheet (a blocker if it changes the run) |
 
-   STOP on an unknown in sections 4, 5 or 6, or in the macOS column of section 3.
+   Section 8 lives only in the sheet; the PR description links the sheet rather than repeating
+   it. STOP on an unknown in sections 4, 5 or 6, or in the macOS column of section 3.
 3. **Decide: do I need a core PR?** Walk every row of [decision-table.md](decision-table.md).
    STOP on any "core PR" or "core decision" row.
 4. **Pin the executable.** Hash the regular file the CLI will run, not a symlink:
@@ -74,13 +79,22 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    <program> --version
    ```
    Expect: one absolute path; one line `<64 hex>  <path>`; the version. These go into
-   `[capture.executable]` and section 2 of the facts sheet.
+   `[capture.executable]` and section 2 of the facts sheet; `version` is the number only
+   (`1.2.3`, not `toy 1.2.3`). A harness that is a script with a shebang passes the pin: the
+   hash is of the script file, and the interpreter it runs under is not pinned.
+   No check verifies this hash against your binary: `check-connector.sh` and the kit never run
+   the real harness (the kit runs `/usr/bin/python3`), and the binary need not be on `PATH`
+   for them. A wrong hash shows up only as a changed `"sha256"` in your `<id>.json` golden
+   (step 7), and as a refusal when `goalcup start` launches the real binary. A maintainer
+   re-derives the hash from an official artifact before merging, so record where yours came
+   from in section 2.
 5. **Write the connector.**
    ```
    mkdir -p connectors/<id>
    cp skills/adding-a-capture-harness/templates/connector-harness.toml connectors/<id>/harness.toml
    ```
-   Replace every `<PLACEHOLDER>` and delete unused options. Seeds go in `connectors/<id>/files/`
+   Replace every `<PLACEHOLDER>` and delete unused options; the template's comments may go too.
+   The closest complete example is `connectors/hermes-cli/`. Seeds go in `connectors/<id>/files/`
    and must be named in `seed`; any other file in the folder is refused. Field rules:
    [CONNECTOR-SCHEMA](../../docs/CONNECTOR-SCHEMA.md). Check that no placeholder is left
    outside comments: `grep -nE '^[^#]*<[^>]+>' connectors/<id>/harness.toml`. Expect: no output.
@@ -104,14 +118,20 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    k=crates/goalcup-cli/tests/fixtures/harness-kit/<id>
    mkdir -p $k && cp skills/adding-a-capture-harness/templates/kit-case/* $k/
    ```
-   Follow the comments in the three files: the case mirrors the connector's home, identity and
+   Follow the comments in the three files, then delete them if you like (replacing a file
+   wholesale is fine): the case mirrors the connector's home, identity and
    native shape with a Python stand-in, uses id `kit-<id>`, and copies any seeds into
    `$k/files/`. Read the closest baseline case beside it: `controlled-workload`,
    `synthetic-preassigned`, `synthetic-stderr-token`, `synthetic-keyed-stderr`,
    `synthetic-stdout-json` or `synthetic-keyed-stdout-json`. A keyed case names
    `credential_env` in `expect.toml` and copies the connector's `[capture.credential]`; the kit
    hands the stand-in an invented key and checks that no fragment of it leaks.
-   Check: `grep -nE '^[^#]*<[^>]+>' $k/harness.toml $k/expect.toml`. Expect: no output.
+   `native_path` is relative to the native root (the `pattern`, without the root's
+   directories); `native_decoy_path` is a suffix under the run directory and does include the
+   root's last directory. The comments in `expect.toml` have a worked pair.
+   Check: `grep -nE '^[^#]*<[^>]+>' $k/harness.toml $k/expect.toml`. Expect: no output. In
+   `stand-in.py` only the EDIT block must be free of `<`: the stand-in stops on a leftover there
+   and step 9 checks it; the docstring's `<HARNESS_ID>` is safe to edit or keep.
    Check that `BODY` in `stand-in.py` equals `wire_request` in `expect.toml`:
    ```
    grep -hE '^(BODY|wire_request) = b?"' $k/stand-in.py $k/expect.toml | cut -d\" -f2 | uniq -c
@@ -119,8 +139,14 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    Expect: one line, `2` and then the body.
 9. **Run the connector check.** `sh scripts/check-connector.sh <id>`. It runs files, pins,
    schema, both goldens and the kit. Expect, last line:
-   `check-connector: <id>: 6 passed, 0 failed, 0 skipped`. A failed step prints what to do; a
-   golden failure names the differing files. When the only failure is a golden that does not
+   `check-connector: <id>: 6 passed, 0 failed, 0 skipped`. The files, pins and goldens steps
+   print what to do; a golden failure names the differing files. A kit failure prints only
+   `FAIL kit` in the summary; scroll up to the Rust assertion, which shows the expected and
+   actual values raw, for example
+   `left: "session:session-x_42.jsonl#g1"` / `right: "session:sessions/session-x_42.jsonl#g1"`
+   (`left` is what was captured, `right` what `expect.toml` predicts; here `native_path`
+   wrongly repeated the root's `sessions/`). Fix the `expect.toml` field the `right` side
+   came from. When the only failure is a golden that does not
    mention `<id>` (step 7), say so in the PR. Off macOS the kit cannot run: STOP and ask for a
    Mac rather than claim a pass.
 10. **Run the gate.** `sh scripts/gate.sh fast`. Expect, last line: `gate fast: PASS in <N>s`.
