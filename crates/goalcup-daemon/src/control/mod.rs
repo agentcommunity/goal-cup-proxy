@@ -35,7 +35,7 @@
 //! `/v0/entries/%252e%252e/status` decodes once to the literal characters `%2e%2e`, which is
 //! neither `.` nor `..`, so `is_public_route` admits it as the status route of an entry with a
 //! strange id. That is the contract's answer and this module does not second-guess it. It is
-//! not an escalation, for two reasons that `tests/control_api.rs` asserts rather than assumes:
+//! not an escalation, for two reasons that `tests/it/control_api.rs` asserts rather than assumes:
 //! the router matches the raw path too, so `%252e%252e` is a literal id naming no entry and
 //! the answer is `404`; and the hop that would turn it into a traversal — a proxy that decodes
 //! once — produces `%2e%2e`, which this layer refuses. Tightening the contract's function to

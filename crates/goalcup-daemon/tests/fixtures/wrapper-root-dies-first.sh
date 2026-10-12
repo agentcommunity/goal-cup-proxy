@@ -3,7 +3,7 @@
 # (the shell variant; read-only in that directory, evidence rather than a test) — the F0
 # adoption-window repro, now a real fixture this file's own tests can chase.
 #
-# The registered root. The member is `tests/support/tree.rs`'s
+# The registered root. The member is `tests/common/support/tree.rs`'s
 # `member-forks-after-root` role rather than a shell script: that function's own doc
 # explains why the delay it used to run as a forked, TERM-ignoring shell helper is now an
 # in-process `std::thread::sleep` instead, and this file no longer carries the shell member

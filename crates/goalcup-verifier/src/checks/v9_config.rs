@@ -1161,7 +1161,7 @@ mod tests {
 
     // The chain-descriptor half of `declares_expected_reread` — the top-level
     // `trace.toml` flag, gated by the same witness — is exercised end to end over a real
-    // trace directory in `tests/compliant.rs`
+    // trace directory in `tests/it/compliant.rs`
     // (`expected_reread_without_a_restart_does_not_downgrade_a_rewrite`). A unit test
     // would have to hand-build a `VerifiedChain` for `cx.chain` to be `Some`, which is a
     // fixture asserting nothing the integration test does not assert over real bytes.

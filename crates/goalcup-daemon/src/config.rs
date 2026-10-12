@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 /// `#[serde(deny_unknown_fields)]`, and that attribute is the whole mechanism behind the
-/// two "cut fields are load errors" assertions in `tests/config_load.rs`: without it, a
+/// two "cut fields are load errors" assertions in `tests/it/config_load.rs`: without it, a
 /// config still setting `unix_socket` or `foreign_scan_interval_ms` would load and be
 /// silently ignored — the participant would believe a transport was configured and a
 /// scan scheduled, and neither would exist.

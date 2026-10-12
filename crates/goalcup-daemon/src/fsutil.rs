@@ -341,7 +341,7 @@ mod tests {
     /// The removal must not become one thread deleting the file another is writing.
     ///
     /// `process_temp` is one name for every write of one target in this process, and
-    /// `tests/control_api.rs` drives two threads at `control.json` at once for exactly this
+    /// `tests/it/control_api.rs` drives two threads at `control.json` at once for exactly this
     /// reason. `O_EXCL` alone refuses the second writer; a removal in front of that create
     /// would let both through, and the loser would rename a half-written document over a
     /// target a reader polls. Held here as the claim it is.

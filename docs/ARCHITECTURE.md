@@ -35,8 +35,8 @@ non-member `goalcup-git`; the public OSS cut omits it.
 The rule ([D3](DECISIONS.md)): **the daemon never links the verifier; the CLI never links the
 daemon**. Both hold for `[dependencies]`; dev-dependencies cross them for tests only. The CLI
 links the verifier on purpose. Checked by `the_structural_bans_hold_at_the_dependency_level`
-([dependency_bans.rs](../crates/goalcup-cli/tests/dependency_bans.rs), `cargo tree`)
-and `the_shipped_binary_links_no_daemon` ([seal_scan.rs](../crates/goalcup-cli/tests/seal_scan.rs)).
+([dependency_bans.rs](../crates/goalcup-cli/tests/it/dependency_bans.rs), `cargo tree`)
+and `the_shipped_binary_links_no_daemon` ([seal_scan.rs](../crates/goalcup-cli/tests/it/seal_scan.rs)).
 
 ### One feature set: the capture product
 
@@ -204,26 +204,26 @@ Test paths are under `crates/`. The "Record" column names the measurement that b
 
 | Guarantee | Tests | Record |
 |---|---|---|
-| D3: daemon links no verifier; CLI links no daemon | `goalcup-cli/tests/dependency_bans.rs`, `goalcup-cli/tests/seal_scan.rs` | none |
-| Spawn gate: no exec before durable registration | `goalcup-cli/tests/capture_gate.rs`, `goalcup-cli/tests/m2_cli_lifecycle.rs`, `goalcup-cli/tests/capture_crash_campaign.rs` | H-10 4c |
-| Finish budget: 8 s + 2 s, latch, termination outside | `goalcup-daemon/tests/capture_finish_budget.rs`, `goalcup-daemon/src/runtime/capture/tests.rs`, `goalcup-cli/tests/capture_failure_campaign.rs` | H-10 4c |
-| Termination contract | `goalcup-daemon/tests/terminate_sim.rs`, `goalcup-daemon/tests/process_kill.rs` | [TERMINATION](TERMINATION.md) |
-| Loss frames make a lossy run incomplete | `goalcup-cli/tests/m2_emitter.rs`, `goalcup-cli/tests/m2_proxy_integration.rs`, `goalcup-daemon/tests/capture_ingest.rs`, `goalcup-cli/tests/m2_cli_lifecycle.rs`, `goalcup-cli/tests/capture_crash_campaign.rs` | [CONTRACTS][cont], H-16 ¶8 |
-| One orphan rule (sink, receiver, writer, reader) | `goalcup-daemon/src/runtime/capture/tests.rs`, `goalcup-daemon/tests/capture_ingest.rs`, `goalcup-verifier/tests/m2_capture_integrity.rs` | T23 (CP-A4) |
-| Integrity exits 0/1/2/3; baseline and seal binding | `goalcup-verifier/tests/m2_capture_integrity.rs` | T23 |
-| Streaming = whole-stream redaction; 16 KiB fail closed | `goalcup-daemon/tests/capture_redaction.rs`, `goalcup-daemon/tests/capture_redaction_extra.rs`, `goalcup-daemon/tests/redaction.rs` | E00 |
+| D3: daemon links no verifier; CLI links no daemon | `goalcup-cli/tests/it/dependency_bans.rs`, `goalcup-cli/tests/it/seal_scan.rs` | none |
+| Spawn gate: no exec before durable registration | `goalcup-cli/tests/it/capture_gate.rs`, `goalcup-cli/tests/m2_cli_lifecycle.rs`, `goalcup-cli/tests/full/capture_crash_campaign.rs` | H-10 4c |
+| Finish budget: 8 s + 2 s, latch, termination outside | `goalcup-daemon/tests/full/capture_finish_budget.rs`, `goalcup-daemon/src/runtime/capture/tests.rs`, `goalcup-cli/tests/full/capture_failure_campaign.rs` | H-10 4c |
+| Termination contract | `goalcup-daemon/tests/it/terminate_sim.rs`, `goalcup-daemon/tests/full/process_kill.rs` | [TERMINATION](TERMINATION.md) |
+| Loss frames make a lossy run incomplete | `goalcup-cli/tests/it/m2_emitter.rs`, `goalcup-cli/tests/it/m2_proxy_integration.rs`, `goalcup-daemon/tests/it/capture_ingest.rs`, `goalcup-cli/tests/m2_cli_lifecycle.rs`, `goalcup-cli/tests/full/capture_crash_campaign.rs` | [CONTRACTS][cont], H-16 ¶8 |
+| One orphan rule (sink, receiver, writer, reader) | `goalcup-daemon/src/runtime/capture/tests.rs`, `goalcup-daemon/tests/it/capture_ingest.rs`, `goalcup-verifier/tests/it/m2_capture_integrity.rs` | T23 (CP-A4) |
+| Integrity exits 0/1/2/3; baseline and seal binding | `goalcup-verifier/tests/it/m2_capture_integrity.rs` | T23 |
+| Streaming = whole-stream redaction; 16 KiB fail closed | `goalcup-daemon/tests/it/capture_redaction.rs`, `goalcup-daemon/tests/it/capture_redaction_extra.rs`, `goalcup-daemon/tests/it/redaction.rs` | E00 |
 | Reservation on the real chain file | `goalcup-protocol/tests/capture_reserved_storage.rs` | T01, T25 storage |
-| Native scope, no symlink, deferred Hermes scope | `goalcup-daemon/tests/capture_native.rs`, `goalcup-daemon/tests/capture_deferred_scope.rs` | 3c rows, Hermes row |
-| TLS and CONNECT, HTTP and WebSocket relay | `goalcup-cli/tests/m2_tls_connect.rs`, `goalcup-cli/tests/m2_http_relay.rs`, `goalcup-cli/tests/m2_websocket_relay.rs` | E00 |
-| Frozen wire contracts; connector pins | `goalcup-protocol/tests/m2_contract.rs`, `goalcup-protocol/tests/harness_schema.rs`, `goalcup-protocol/tests/harness_loader.rs`, `goalcup-protocol/tests/harness_conformance.rs`, `goalcup-protocol/tests/connector_pins.rs` | none |
-| v5 create, goal, launch, status through the daemon | `goalcup-daemon/tests/capture_lifecycle.rs` | T23 |
-| Profile launch, executable pin, env refusals | `goalcup-cli/tests/harness_launch_plan.rs`, `goalcup-cli/tests/start_launch.rs` | T02 |
-| Recorded V1 `capture_only` keys ignored; Hermes row decoded by exact hint | `goalcup-cli/tests/capture_only_refusal.rs`, `goalcup-verifier/tests/m2_hermes_capture_only.rs` | Hermes row |
-| Hermes key child-only, private home, key scan | `goalcup-cli/tests/hermes_child_secret.rs`, `goalcup-cli/tests/hermes_per_run_home.rs`, `goalcup-cli/tests/key_scan.rs`, `goalcup-cli/tests/key_scan_run.rs`, `goalcup-cli/tests/capture_stderr_tee.rs`, `goalcup-cli/tests/loader_script.rs`, `goalcup-cli/tests/m2_hermes_lifecycle.rs`, `goalcup-cli/tests/hermes_offline_key.rs` | Hermes row |
-| Crash, torn tail, restart | `goalcup-cli/tests/capture_crash_campaign.rs` | T25 crash |
-| Whole vertical on a synthetic workload | `goalcup-cli/tests/m2_synthetic_vertical.rs` | T23 |
-| Six schema-1 contract-kit cases | `goalcup-cli/tests/harness_contract_kit.rs` | none |
-| Research report | `goalcup-verifier/tests/m2_research_report.rs` | 3c rows |
+| Native scope, no symlink, deferred Hermes scope | `goalcup-daemon/tests/it/capture_native.rs`, `goalcup-daemon/tests/it/capture_deferred_scope.rs` | 3c rows, Hermes row |
+| TLS and CONNECT, HTTP and WebSocket relay | `goalcup-cli/tests/it/m2_tls_connect.rs`, `goalcup-cli/tests/it/m2_http_relay.rs`, `goalcup-cli/tests/it/m2_websocket_relay.rs` | E00 |
+| Frozen wire contracts; connector pins | `goalcup-protocol/tests/it/m2_contract.rs`, `goalcup-protocol/tests/it/harness_schema.rs`, `goalcup-protocol/tests/it/harness_loader.rs`, `goalcup-protocol/tests/it/harness_conformance.rs`, `goalcup-protocol/tests/it/connector_pins.rs` | none |
+| v5 create, goal, launch, status through the daemon | `goalcup-daemon/tests/it/capture_lifecycle.rs` | T23 |
+| Profile launch, executable pin, env refusals | `goalcup-cli/tests/it/harness_launch_plan.rs`, `goalcup-cli/tests/it/start_launch.rs` | T02 |
+| Recorded V1 `capture_only` keys ignored; Hermes row decoded by exact hint | `goalcup-cli/tests/it/capture_only_refusal.rs`, `goalcup-verifier/tests/it/m2_hermes_capture_only.rs` | Hermes row |
+| Hermes key child-only, private home, key scan | `goalcup-cli/tests/it/hermes_child_secret.rs`, `goalcup-cli/tests/it/hermes_per_run_home.rs`, `goalcup-cli/tests/it/key_scan.rs`, `goalcup-cli/tests/it/key_scan_run.rs`, `goalcup-cli/tests/it/capture_stderr_tee.rs`, `goalcup-cli/tests/it/loader_script.rs`, `goalcup-cli/tests/full/m2_hermes_lifecycle.rs`, `goalcup-cli/tests/it/hermes_offline_key.rs` | Hermes row |
+| Crash, torn tail, restart | `goalcup-cli/tests/full/capture_crash_campaign.rs` | T25 crash |
+| Whole vertical on a synthetic workload | `goalcup-cli/tests/full/m2_synthetic_vertical.rs` | T23 |
+| Six schema-1 contract-kit cases | `goalcup-cli/tests/full/harness_contract_kit.rs` | none |
+| Research report | `goalcup-verifier/tests/it/m2_research_report.rs` | 3c rows |
 
 ## 11. Not here
 

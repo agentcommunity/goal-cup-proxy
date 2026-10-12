@@ -102,7 +102,7 @@
 //! only this process's own [`Child`], with `Child::kill` and no grace: one the gate parked and
 //! never released, one whose gate step failed, and one just released whose tee could not start
 //! (the seal that follows answers for that one). A child released onto a sealed entry is ended,
-//! with a grace, by `released_child.rs`. The `tests/process_handoff.rs` sweep matches signals by
+//! with a grace, by `released_child.rs`. The `tests/it/process_handoff.rs` sweep matches signals by
 //! name and cannot see `Child::kill`, so those sites are listed here.
 
 use crate::CliError;

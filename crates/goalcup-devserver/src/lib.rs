@@ -52,7 +52,7 @@ use std::sync::{Mutex, MutexGuard};
 /// **`[5u8; 32]`: the placeholder IS the dev key.** Its verifying key is
 /// `goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY`, the single entry on
 /// `SERVER_PUBLIC_KEYS`, and it is what the committed compliant fixture signs with
-/// (`crates/goalcup-verifier/tests/support/compliant.rs`). Using the same seed here is the
+/// (`crates/goalcup-verifier/tests/common/compliant.rs`). Using the same seed here is the
 /// whole point: a run this server signed passes ONLY under `--dev`, because a strict run
 /// resolves `KeySource::Pinned` and V13 says `placeholder_server_key` — everybody holding
 /// this repository can sign under it. The thing that makes such a run mean something is

@@ -78,9 +78,9 @@ does.
 - **Registering a decoder changes every pinned report.** The summary's `analysis.decoders` lists
   every registered decoder, so one more entry adds one row to each of
   `tests/fixtures/m2-report-bytes/*.ndjson` (regenerate with `REGENERATE_REPORT_BYTES=1 cargo test
-  --offline -p goalcup-verifier --test m2_research_report report_bytes_are_pinned`) and to
+  --offline -p goalcup-verifier --test it m2_research_report::report_bytes_are_pinned`) and to
   `goalcup-cli/tests/fixtures/harness-golden/decoder-selection.json` (regenerate with
-  `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-verifier --test harness_contract_golden`).
+  `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-verifier --test full harness_contract_golden::`).
   Check the diffs are only the new row (and, in the golden, the probes your hint now reads).
   Also edit the id list in `m2_decoder_v1.rs` (registry order) and `DECODERS` in
   `m2_research_report.rs`, whose mixed trace must say whether your decoder saw a stream. The v5
@@ -219,9 +219,9 @@ Source: `marker()` in `crates/goalcup-daemon/src/redact.rs`; streaming policy in
 
 ## Tests
 
-Model: `crates/goalcup-verifier/tests/m2_anthropic_decoder.rs` and `m2_openai_decoder.rs`, which
-drive the decoder through a `DecodeSession` (`tests/support/decode.rs`), so routing is under test
-too. The three wire suites share only transport builders in `tests/support/wire.rs`; provider
+Model: `crates/goalcup-verifier/tests/it/m2_anthropic_decoder.rs` and `m2_openai_decoder.rs`, which
+drive the decoder through a `DecodeSession` (`tests/common/decode.rs`), so routing is under test
+too. The three wire suites share only transport builders in `tests/common/wire.rs`; provider
 payload builders stay local.
 
 - Every split: the same bytes cut at every offset, at random offsets, and one byte per segment,

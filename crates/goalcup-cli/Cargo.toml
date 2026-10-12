@@ -102,12 +102,12 @@ x509-parser.workspace = true
 #
 # `src/seal.rs` mirrors `goalcup_daemon::workspace::list_workspace`. Everything else in this
 # tree checks that mirror against a fixture, which proves the mirror agrees with a document
-# somebody typed — not that it agrees with the walker it mirrors. `tests/seal_scan.rs` runs
+# somebody typed — not that it agrees with the walker it mirrors. `tests/it/seal_scan.rs` runs
 # BOTH walkers over one tree and asserts `compare` yields nothing, which is the property the
 # self-check is for and the only way to hold the two implementations together as they change.
 #
 # The shipped binary links none of it: `cargo build --offline` builds no dev-dependency, and
-# `grep -rn goalcup_daemon crates/goalcup-cli/src/` is empty — `tests/seal_scan.rs` asserts
+# `grep -rn goalcup_daemon crates/goalcup-cli/src/` is empty — `tests/it/seal_scan.rs` asserts
 # both of those in `the_cli_binary_links_no_daemon`. There is no cycle: `goalcup-daemon`
 # depends on `goalcup-protocol` and `goalcup-platform`, its dev-dependencies are itself and
 # `goalcup-mcp`, and neither depends on this crate.

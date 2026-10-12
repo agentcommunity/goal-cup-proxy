@@ -62,12 +62,12 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    `git diff --stat -- crates/*/pins`. Expect: `connector-dirs.txt` with one line added for
    `<id>`. Re-run after every edit under `connectors/<id>/`; never edit a pin by hand.
 8. **Run the schema and pin tests.**
-   `cargo test -p goalcup-protocol --test harness_conformance --test connector_pins`.
+   `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
    Expect: two `test result: ok.` lines. A failure names the field; fix it and go back to 7.
 9. **Regenerate the goldens.**
    ```
-   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test harness_contract_golden
-   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test harness_contract_golden
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test full harness_contract_golden::
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test full harness_contract_golden::
    git status --short crates/goalcup-cli/tests/fixtures/harness-golden
    ```
    Expect: both `test result: ok.`; a new `<id>.json`, and changed `enumeration.json` and
@@ -104,8 +104,9 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
     `5 passed, 0 failed, 1 skipped`, and write in the PR that the kit was not run. A failed
     step prints what to do; a golden failure names the differing files. When the only failure
     is a golden that does not mention `<id>` (step 9), the check is otherwise clean: say so.
-12. **Run the gate.** The four commands in [CONTRIBUTING](../../CONTRIBUTING.md#the-gate), in
-    order, with Linux's documented exclusions if you are not on macOS.
+12. **Run the gate.** `sh scripts/gate.sh fast`, as in
+    [CONTRIBUTING](../../CONTRIBUTING.md#the-gate), with Linux's documented exclusions if you
+    are not on macOS.
 13. **Review your own PR** against the
     [reviewer checklist](../../docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr): every
     field and seed, no base URL, no secrets, one intended pin line.

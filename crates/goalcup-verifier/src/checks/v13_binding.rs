@@ -2226,20 +2226,6 @@ mod tests {
     }
 
     #[test]
-    fn a_field_list_reads_as_a_sentence() {
-        assert_eq!(and_list(&[]), "");
-        assert_eq!(and_list(&["workspace"]), "workspace");
-        assert_eq!(
-            and_list(&["entry_id", "workspace"]),
-            "entry_id and workspace"
-        );
-        assert_eq!(
-            and_list(&["entry_id", "connector", "workspace"]),
-            "entry_id, connector and workspace"
-        );
-    }
-
-    #[test]
     fn manifest_link_claims_bind_each_identity_workspace_time_and_count_field() {
         let trace = crate::checks::support::trace("codex-cli");
         let manifest = SealManifest {

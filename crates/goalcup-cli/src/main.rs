@@ -328,7 +328,7 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
 /// process holds them.
 ///
 /// **The client is built even for `--dry-run`.** The dry run makes no call — `seal_with`
-/// never reaches the daemon on that path, and `tests/seal_scan.rs` asserts it — but this
+/// never reaches the daemon on that path, and `tests/it/seal_scan.rs` asserts it — but this
 /// function resolves the same three things whichever way the run goes. A `--dry-run` on a
 /// machine with no daemon therefore refuses at rung 1 naming `control.json`, which is the
 /// answer every other command gives from that file.

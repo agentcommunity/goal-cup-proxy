@@ -68,16 +68,16 @@ Prerequisites:
   smoke check (see CI below).
 - **A C compiler.** `ring` compiles C and assembly.
 - **`shasum` or `sha256sum`**, because the test suite runs `scripts/pin-manifests.sh --print`
-  (`crates/goalcup-verifier/tests/checks_v13.rs`), and **`python3`** if you change
+  (`crates/goalcup-verifier/tests/it/checks_v13.rs`), and **`python3`** if you change
   `connectors/` and regenerate the pins (`scripts/pin-manifests.sh`).
 
-`cargo test --workspace` is the whole suite, every crate at once. "Green" means the
-four-command gate below passes, not the suite alone. One crate at a time, or one file of one
-crate, is the same runner narrowed:
+`cargo test --workspace` is the whole suite, every crate at once. "Green" means
+`sh scripts/gate.sh fast` passes (and `full` before a release), not the suite alone. One
+crate at a time, or one module of one crate, is the same runner narrowed:
 
 ```
 cargo test -p goalcup-daemon                       # one crate
-cargo test -p goalcup-daemon --test control_api    # one integration test file
+cargo test -p goalcup-daemon --test it control_api::  # one integration test module
 ```
 
 On the maintainer's machine every cargo command carries `--offline`, so none of them can
@@ -88,23 +88,26 @@ One narrowing does not work from a clean tree: the CLI tests drive the shipped
 `goalcup-daemon` and `goalcup-verify` binaries, and only `--workspace` builds them. They say
 so, by name, rather than skipping.
 
-The gate a change has to pass before it is committed is four commands, in this order:
+The gate a change has to pass before it is committed is `sh scripts/gate.sh fast`; a release
+passes `sh scripts/gate.sh full` ([README, The gate](../README.md#the-gate) has the tiers). Both
+run, in this order:
 
 ```
-cargo build
+cargo build --offline --workspace
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --offline --workspace --all-targets -- -D warnings
+cargo nextest run --offline --workspace   # fast: -E 'not (binary(full) | binary(m2_cli_lifecycle))'
+cargo test --offline --workspace --doc
 ```
 
-`cargo build` is step zero and it is not redundant. The other three all build
+`cargo build` is step zero and it is not redundant. The other steps all build
 dev-dependencies, and `goalcup-daemon` depends on itself in its dev list with the
 `test-hooks` feature on — cargo unifies features within a package, so **the shipped,
 `test-hooks`-off build of the library is compiled by none of them**. A `#[cfg(not(feature =
 "test-hooks"))]` mistake, or a non-gated reference to a gated field, passes the last three
 and breaks the binary that ships.
 
-`cargo test --workspace` skips every `#[ignore]` test (child halves, fixture regenerators,
+The gate (and `cargo test --workspace`) skips every `#[ignore]` test (child halves, fixture regenerators,
 real-process and live-harness campaigns, vertical suites). List them with
 `rg '^\s*#\[ignore' crates` and run one named suite at a time with its documented setup. The
 default gate is not proof that ignored coverage ran.
@@ -115,10 +118,10 @@ The D3 dependency check, `the_structural_bans_hold_at_the_dependency_level`, liv
 The synthetic vertical suite also runs by hand after building the workspace binaries:
 
 ```sh
-cargo test -p goalcup-cli --offline --features test-support --test m2_synthetic_vertical -- --ignored --test-threads=1
+cargo test -p goalcup-cli --offline --features test-support --test full m2_synthetic_vertical:: -- --ignored --test-threads=1
 ```
 
-`--features test-support` is written out because `tests/support/mod.rs` needs it, even though
+`--features test-support` is written out because `tests/common/support/mod.rs` needs it, even though
 the crate's own dev-list already turns it on.
 
 Nothing in the suite reaches the network. The `goalcup-devserver` tests bind their own
@@ -142,8 +145,8 @@ runs the `test_ci_scope.py` and `test_check_links.py` suites and `scripts/check-
 Every runner minute costs something on every pull request. Keep this file small:
 - Do not add branches, jobs, a build matrix, or the daemon and CLI suites. Those suites spawn
   process trees that hang or kill a 2-core Linux runner, and Linux is best-effort, not a claim.
-- A green `ci` run proves nothing about the macOS target. The four-command gate above, plus
-  the ignored synthetic vertical suite, runs by hand before a merge.
+- A green `ci` run proves nothing about the macOS target. `sh scripts/gate.sh fast` above (and `full` before a
+  release), plus the ignored synthetic vertical suite, runs by hand before a merge.
 
 ### Installing the participant binaries
 
@@ -226,9 +229,6 @@ tracker is run on one machine — a test, a second round, a development build be
 installed one — and it is why nothing in this tree needs to move `$HOME` to do it. Set one
 without the other and the CLI looks in one directory while the daemon writes to another, and
 every command answers "no daemon is running".
-
-`crates/goalcup-daemon/tests/config_load.rs` parses that block, so the daemon's own loader
-is what says it is still a configuration this build accepts.
 
 With no `[event]` section the signed status document reports the entry's own timeline in the
 competition's fields and marks it `event_status_source: "fallback"`, so a reader can tell a
@@ -420,8 +420,8 @@ Both generators are `#[ignore]`d **and** gated on `GOALCUP_REGEN=1`, so neither
 accident:
 
 ```
-GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test adversarial -- --ignored regenerate
-GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test compliant   -- --ignored regenerate
+GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test it -- --ignored adversarial::regenerate
+GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test it -- --ignored compliant::regenerate
 ```
 
 Read the diff before committing it.

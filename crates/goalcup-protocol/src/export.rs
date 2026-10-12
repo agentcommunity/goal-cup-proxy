@@ -13,7 +13,7 @@
 //!
 //! **`chain::Chain` is the M0 formula and is deliberately not used here; envelopes hash
 //! through `envelope.rs`.** `Chain::try_append` pre-increments, so its first link is `seq`
-//! 1, which `tests/chain_golden.rs` pins. The entry chain starts at 0, and `seq` is inside
+//! 1, which `tests/it/chain_golden.rs` pins. The entry chain starts at 0, and `seq` is inside
 //! `Envelope::chain_bytes`, so the base is part of what is hashed and the two sequences
 //! must not share an implementation. This module calls `link_hash` directly with its own
 //! 0-based counter.
@@ -682,7 +682,7 @@ fn validate_phase_inputs(entry_id: &str, recorded_at: &str) -> Result<(), Proven
 }
 
 /// The `trace.toml` document, serialisable. The verifier's `TraceDescriptor`
-/// deserialises this exact shape; `crates/goalcup-verifier/tests/trace_export_roundtrip.rs` binds
+/// deserialises this exact shape; `crates/goalcup-verifier/tests/it/trace_export_roundtrip.rs` binds
 /// the two together.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceDescriptorDoc {

@@ -2,11 +2,11 @@
 
 `crates/goalcup-verifier/tests/fixtures/adversarial/` is **generated and committed**. It is
 derived deterministically from `spikes/claude-code-cli/fixtures/` by
-`crates/goalcup-verifier/tests/support/adversarial.rs`.
+`crates/goalcup-verifier/tests/common/adversarial.rs`.
 
 To regenerate:
 
-    GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test adversarial -- --ignored regenerate
+    GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test it -- --ignored adversarial::regenerate
 
 Then read the diff before committing. Every byte is a pure function of the committed input,
 so an unexpected diff means the generator changed, not the fixture.
@@ -36,4 +36,4 @@ and compare its `review_queue`, `checks` and `seal_attribution` against the file
 editing it. `finding_codes` is compared for **set equality**, so a new finding code fails the
 test until someone has decided whether it is the truth about the planted bytes.
 
-What is planted, and why: see the doc comment at the top of `tests/support/adversarial.rs`.
+What is planted, and why: see the doc comment at the top of `tests/common/adversarial.rs`.

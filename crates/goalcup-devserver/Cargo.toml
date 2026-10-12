@@ -25,7 +25,7 @@ tokio.workspace = true
 # Tests only.
 #   goalcup-verifier — D3. This crate is the ONE place allowed to depend on the verifier,
 #     and only here, in the dev list, so nothing it links reaches the daemon binary.
-#     `tests/placeholder_seed.rs` checks the dev key against the verifier's placeholder.
+#     `tests/full/placeholder_seed.rs` checks the dev key against the verifier's placeholder.
 [dev-dependencies]
 goalcup-verifier = { path = "../goalcup-verifier" }
 # The devserver's tests read and write JSON; its own source does not.

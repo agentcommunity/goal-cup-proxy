@@ -4,7 +4,7 @@
 //! outcomes, the three [`Anchor`] states, what each [`TerminationReport`] field does and does
 //! not claim, the ordering and adoption rules, the duration bound, and the windows that are
 //! still open on each platform — in one page, with the property-test invariant quoted from
-//! `tests/terminate_sim.rs` so the two cannot drift. This header does not repeat it.
+//! `tests/it/terminate_sim.rs` so the two cannot drift. This header does not repeat it.
 //!
 //! The shape of the code: [`terminate_with`] is the whole algorithm over one [`ProcessOs`]
 //! seam (`os.rs`); [`terminate`] and [`terminate_within`] are it with [`LiveOs`]. The
