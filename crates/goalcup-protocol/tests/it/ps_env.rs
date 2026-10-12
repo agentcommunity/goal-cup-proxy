@@ -4,7 +4,7 @@
 
 #[test]
 fn every_ps_child_starts_with_an_empty_environment() {
-    let source = include_str!("../src/process.rs");
+    let source = include_str!("../../src/process.rs");
     let mut sites = 0;
     for (at, _) in source.match_indices("Command::new(\"/bin/ps\")") {
         sites += 1;
