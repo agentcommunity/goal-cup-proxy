@@ -55,7 +55,7 @@ pub const VERIFIER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SERVER_PUBLIC_KEYS: [&str; 1] = [PLACEHOLDER_SERVER_PUBLIC_KEY];
 
 /// The M1 placeholder anchor: the Ed25519 verifying key of the seed `[5u8; 32]`, which is
-/// written in this repository (`tests/support/compliant.rs`, `tests/checks_v12.rs`) so the
+/// written in this repository (`tests/common/compliant.rs`, `tests/it/checks_v12.rs`) so the
 /// fixtures can sign receipts and acknowledgements with it. The unit test below re-derives
 /// it, so the constant cannot drift from what the tests sign with.
 ///
