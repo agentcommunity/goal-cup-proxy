@@ -301,8 +301,9 @@ pub fn process_instance_status(pid: u32, expected: Option<&str>) -> ProcessInsta
         Some(true)
     } else {
         // No identity, so ask the table: a row that is absent or a zombie (it has exited and
-        // only awaits its parent's reap, as on a Linux host whose reaper is slow) is gone;
-        // only a failure to ask is unknown.
+        // only awaits its parent's reap, as on a Linux host whose reaper is slow) is gone. With
+        // no identity, a `ps` that runs and prints nothing therefore reads as gone; only a `ps`
+        // that cannot be run at all is unknown.
         liveness(pid).ok()
     };
     classify_process_instance(expected, observed.as_deref(), presence)

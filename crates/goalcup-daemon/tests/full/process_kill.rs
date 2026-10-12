@@ -287,7 +287,7 @@ fn a_native_binary_interior_to_the_root_does_not_orphan_its_own_children_out_of_
 #[test]
 #[cfg_attr(
     target_os = "linux",
-    ignore = "TERMINATION.md: no fork witness on Linux; a fork-and-leave orphan can be missed until the subreaper lands"
+    ignore = "TERMINATION.md: no fork witness on Linux; a post-root-death orphan, or any orphan the ppid walk cannot see, can be missed until a launcher-side subreaper lands"
 )]
 fn a_report_does_not_claim_the_harness_gone_while_a_post_root_death_orphan_lives() {
     let member_bin = std::env::current_exe().expect("goalcup fixture: current_exe");

@@ -190,10 +190,12 @@ What each run measured:
 to a child and leave" has landed in it in every reproduction so far. This repository already has
 a name and a fixture for that shape, "the ordinary shape — a launcher whose session is a child".
 
-**The fix is due before the 168-hour dry run:** make the daemon a child subreaper
-(`PR_SET_CHILD_SUBREAPER`), so that an orphan of any member is re-parented to the daemon and
-becomes visible to the ppid walk. When it lands, the Linux `ignore` comes off the test and this
-section is rewritten.
+**The fix is due before the 168-hour dry run:** a child subreaper (`PR_SET_CHILD_SUBREAPER`)
+that is an ancestor of the harness, which is the launcher (`goalcup start`), so that orphans
+stay inside a tree the termination walk can reach. The daemon is not that process: it is
+detached into its own session and is not an ancestor of the harness, so it would never see a
+harness orphan. The design and its caveats come in a follow-up PR. When it lands, the Linux
+`ignore` comes off the test and this section is rewritten.
 
 **This is not a V1 blocker.** Linux is not a V1 row; V1 claims one macOS target, where the
 kqueue witness closes this.
