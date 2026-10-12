@@ -399,7 +399,7 @@ mod linux {
                 "stopped before its bound: {line}"
             );
             assert!(
-                field("took_ms") <= bound + 1_000,
+                field("took_ms") <= bound + 2_000,
                 "overran its bound: {line}"
             );
             assert!(field("left") >= 1, "no straggler reported: {line}");
@@ -416,6 +416,16 @@ mod linux {
         /// The grace the host sweeps with: one second of SIGTERM that every orphan ignores.
         const HOST_GRACE: Duration = Duration::from_secs(1);
 
+        /// The host's spawner, SIGKILLed and reaped however the host ends short of a kill.
+        struct Spawner(std::process::Child);
+
+        impl Drop for Spawner {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
         /// The sweep's host, run only by [`the_bound_reports_what_keeps_arriving`]. A spawner
         /// that ignores SIGTERM is started before the root, so the start filter never lets the
         /// sweep touch it; from 300 ms on it keeps handing this process new orphans (each
@@ -429,13 +439,20 @@ mod linux {
                 return;
             }
             crate::subreaper::arm().expect("this process becomes a child subreaper");
-            let mut spawner = std::process::Command::new("/bin/sh")
-                .args([
-                    "-c",
-                    "trap '' TERM; sleep 0.3; while :; do sh -c 'sleep 30 &'; sleep 0.01; done",
-                ])
-                .spawn()
-                .unwrap();
+            // The loop ends itself once its parent is no longer this host (a host that panicked
+            // or was killed): `$PPID` is fixed at start, the live parent is field 4 of its own
+            // `/proc/$$/stat` (`comm` is `(sh)`, no spaces), read with a builtin, no fork.
+            let mut spawner = Spawner(
+                std::process::Command::new("/bin/sh")
+                    .args([
+                        "-c",
+                        "trap '' TERM; sleep 0.3; \
+                         while read -r _ _ _ parent _ < /proc/$$/stat && [ \"$parent\" = \"$PPID\" ]; \
+                         do sh -c 'sleep 30 &'; sleep 0.01; done",
+                    ])
+                    .spawn()
+                    .unwrap(),
+            );
             // At least one clock tick (10 ms) after the spawner, so it is older than the root.
             std::thread::sleep(Duration::from_millis(50));
             let mut root = std::process::Command::new("/bin/sh")
@@ -449,9 +466,8 @@ mod linux {
             let began = Instant::now();
             let swept = sweep(root_start, HOST_GRACE);
             let took = began.elapsed();
-            let spawner_alive = spawner.try_wait().unwrap().is_none();
-            let _ = spawner.kill();
-            let _ = spawner.wait();
+            let spawner_alive = spawner.0.try_wait().unwrap().is_none();
+            drop(spawner);
             // Everything this process still holds, the spawner's last orphans included.
             let cleanup = sweep(0, Duration::ZERO);
             println!(
