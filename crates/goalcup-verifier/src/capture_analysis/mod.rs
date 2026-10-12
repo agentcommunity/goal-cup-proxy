@@ -2,10 +2,9 @@
 //! that turn retained capture records into source-referenced observations, and the private
 //! research report that streams them.
 //!
-//! This is a separate route from the legacy whole-trace pipeline in the crate root, which
-//! keeps refusing protocol v5. The stable decoder contract is [`api::DecoderV1`]; a
-//! [`registry::DecoderRegistry`] holds the decoders, a [`session::DecodeSession`] runs them
-//! over records, and [`report`] writes the result as NDJSON.
+//! The stable decoder contract is [`api::DecoderV1`]; a [`registry::DecoderRegistry`] holds
+//! the decoders, a [`session::DecodeSession`] runs them over records, and [`report`] writes
+//! the result as NDJSON.
 
 /// The Anthropic Messages decoder.
 pub mod anthropic;

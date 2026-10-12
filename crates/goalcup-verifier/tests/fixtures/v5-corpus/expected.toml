@@ -635,7 +635,7 @@ terminal_kind = "none"
 verified_ack = false
 
 [[case]]
-# A committed pre-v5 trace: this mode has no usable report for it.
+# The first two records of a committed pre-v5 (protocol v1) chain: no usable report.
 name = "legacy-pre-v5-trace"
-path = "../compliant"
+path = "legacy-pre-v5-trace"
 exit = 3

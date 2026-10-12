@@ -5,8 +5,7 @@
 //! no-follow trace root. It reads the fixed names the trace writer produces: `chain.jsonl`
 //! (required), `baseline.json`, plus `receipt.json`, `acks.jsonl` and `seal.json` when they
 //! are present. There is no `trace.toml` and no connector manifest, because a v5 capture
-//! trace has neither. The legacy whole-trace pipeline in the crate root is never involved.
-//! It keeps refusing v5, and this reader refuses a chain whose first record is not v5.
+//! trace has neither. This reader refuses a chain whose first record is not v5.
 //!
 //! **Bounded.** One chain line is held at a time. Each line is read into a reused buffer
 //! capped at `MAX_ENVELOPE_BYTES` (newline included) before it is decoded. Base64 is
@@ -205,7 +204,7 @@ impl CaptureIntegrityReport {
 ///
 /// `Err` means no usable report. That covers an unreadable or replaced trace artifact (the
 /// no-follow containment policy refuses symbolic links and hard links), a chain whose
-/// first record is not protocol v5 (the legacy verifier's to judge), an I/O failure, or
+/// first record is not protocol v5 (this build reads no other), an I/O failure, or
 /// `emit` failing. Evidence problems are never `Err`: they are findings in an `invalid` or
 /// `incomplete` report.
 pub fn scan_capture_trace(
@@ -566,7 +565,7 @@ impl<'k> Scan<'k> {
                     io::ErrorKind::InvalidData,
                     format!(
                         "chain.jsonl begins with a protocol v{} record, not a protocol v5 \
-                         capture chain; verify it with `goalcup-verify TRACE`",
+                         capture chain, and this verifier reads no other",
                         header.protocol_version
                     ),
                 ));

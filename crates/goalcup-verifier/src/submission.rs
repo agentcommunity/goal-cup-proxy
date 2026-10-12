@@ -16,58 +16,6 @@ const MANIFEST_NAME: &str = "manifest.json";
 const OBJECT_DIR: &str = "submission/objects/sha256";
 const MANIFEST_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
-/// The one V4 retained artifact read by the pipeline. Checks and attribution share this
-/// value so a mutable trace directory cannot make them judge different bytes.
-#[derive(Debug)]
-pub(crate) enum SubmissionRead {
-    Absent,
-    Invalid,
-    Captured(Box<SubmissionManifestV1>),
-}
-
-impl SubmissionRead {
-    pub(crate) fn load(
-        trace: &crate::trace::TraceDescriptor,
-        chain: Option<&crate::chain::VerifiedChain>,
-    ) -> Self {
-        use goalcup_protocol::envelope::EventBody;
-        use goalcup_protocol::provenance::FinalizationV1;
-        use goalcup_protocol::submission::SubmissionOutcomeV1;
-
-        let Some(chain) = chain else {
-            return Self::Absent;
-        };
-        let mut finalizations = chain
-            .envelopes
-            .iter()
-            .filter(|env| matches!(env.body, EventBody::FinalizationV1(_)));
-        let Some(env) = finalizations.next() else {
-            return Self::Absent;
-        };
-        if finalizations.next().is_some() {
-            return Self::Absent;
-        }
-        let EventBody::FinalizationV1(FinalizationV1::WorkspaceSubmission {
-            submission: SubmissionOutcomeV1::Captured(captured),
-            ..
-        }) = &env.body
-        else {
-            return Self::Absent;
-        };
-        match trace.load_submission(captured) {
-            Ok(manifest) => Self::Captured(Box::new(manifest)),
-            Err(_) => Self::Invalid,
-        }
-    }
-
-    pub(crate) fn manifest(&self) -> Option<&SubmissionManifestV1> {
-        match self {
-            Self::Captured(manifest) => Some(manifest.as_ref()),
-            Self::Absent | Self::Invalid => None,
-        }
-    }
-}
-
 /// Read an immutable private submission without consulting the live workspace or legacy seal.
 ///
 /// The manifest is decoded and canonical-hashed before any object is opened. Every retained
@@ -357,6 +305,34 @@ mod tests {
                 .filter(|e| e.path.as_str() == "empty")
                 .count(),
             1
+        );
+    }
+
+    /// The same manifest with one insignificant space: it parses to the same value and its
+    /// digest is the one the finalization claims, so only the canonical-bytes check refuses it.
+    #[test]
+    fn reader_refuses_a_noncanonical_manifest_whose_digest_is_claimed() {
+        let dir = independent_submission_fixture();
+        let spaced = MANIFEST.replacen("{\"profile\"", "{ \"profile\"", 1);
+        assert_ne!(spaced, MANIFEST);
+        let error = verify_fixture(dir.path(), spaced.as_bytes()).unwrap_err();
+        assert!(
+            error.to_string().contains("not canonical JSON bytes"),
+            "{error}"
+        );
+    }
+
+    /// The canonical manifest under a finalization that claims another digest is refused.
+    #[test]
+    fn reader_refuses_a_manifest_the_finalization_does_not_claim() {
+        let dir = independent_submission_fixture();
+        let root = TraceRoot::open(dir.path()).unwrap();
+        let error = super::verify_submission(&root, &captured(b"another manifest")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the captured finalization claim"),
+            "{error}"
         );
     }
 

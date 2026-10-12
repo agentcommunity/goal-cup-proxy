@@ -22,8 +22,9 @@
 //! a trace with `write_baseline_for_protocol`, `append_chain` and `write_local_finish`.
 //! The V1 writers — `write_cutoff`, `write_finalization`, `write_descriptor`,
 //! `write_receipt`, `write_manifest`, `write_seal` and their `_for_protocol` forms — lost
-//! their daemon caller in D48. They stay because the verifier's and this crate's tests build
-//! their V1/v4 fixture traces with them, and the verifier still judges such traces (OS-31).
+//! their daemon caller in D48. The receipt, seal, cutoff and finalization writers stay because
+//! the verifier's v5 tests build signed and sealed fixture traces with them; `write_descriptor`
+//! and `write_manifest` are read by nothing since the pre-v5 verifier was removed (`TODO.md`).
 
 use crate::ProtocolError;
 use crate::ack::AckCheckpoint;

@@ -18,8 +18,8 @@
 //! case or for a writer change that is itself a v6 decision; it must not be used to make a
 //! failing expectation pass.
 //!
-//! The one exit-3 case points outside the corpus at the committed pre-v5 `compliant` trace,
-//! which has no v5 chain to read.
+//! The one exit-3 case, `legacy-pre-v5-trace`, is not written by the writer: it holds the first
+//! two records of a protocol-v1 chain, which has no v5 chain to read.
 
 use crate::common as support;
 

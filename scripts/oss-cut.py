@@ -101,8 +101,8 @@ ALLOW = [
     ("prefix", "docs/qualification/"),
     ("prefix", "docs/research/"),
     ("prefix", "docs/harness-research/"),
-    # Tests read these (daemon redaction walks every spikes/*/fixtures/*.jsonl; the verifier reads
-    # the claude-code-cli, claude-desktop and codex-app fixtures).
+    # Tests read these (daemon redaction walks every spikes/*/fixtures/*.jsonl; the verifier's
+    # native-decoder fixtures are excerpts of the codex-cli and claude-code-cli ones).
     ("regex", r"^spikes/[^/]+/fixtures/"),
 ]
 

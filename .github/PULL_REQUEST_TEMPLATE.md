@@ -30,9 +30,7 @@ author's half of that list, so say where the reviewer can check it.
       hashes and the harness's argv pre-scan source (or "none") (item 2).
 - [ ] I ran `sh scripts/pin-manifests.sh` in the same commit and the conformance tests as in
       `docs/CONNECTOR-CONTRIBUTING.md#add-or-change-a-connector`. The pin diff is one line of
-      `crates/goalcup-protocol/pins/connector-dirs.txt`, plus the connector's line in
-      `crates/goalcup-verifier/pins/connector-manifests.txt` only if I changed a V1
-      `manifest.toml` in `codex-cli` or `claude-code-cli` (item 10).
+      `crates/goalcup-protocol/pins/connector-dirs.txt` (item 10).
 - [ ] If two harness PRs conflict on the pins, I re-ran the pin script on the merged tree instead
       of hand-merging the generated data.
 - [ ] Exact version and executable SHA-256, and the official artifact they came from; `program` is

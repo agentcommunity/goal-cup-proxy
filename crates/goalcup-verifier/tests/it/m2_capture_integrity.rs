@@ -48,7 +48,6 @@ use goalcup_verifier::capture_analysis::reader::{
 };
 use goalcup_verifier::capture_analysis::registry::{DecoderRegistry, Registered};
 use goalcup_verifier::capture_analysis::session::decode_records;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -1544,103 +1543,6 @@ fn producer_closed_attestation_does_not_claim_raw_sequence_reconstruction() {
 }
 
 #[test]
-fn legacy_results_remain_identical() {
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let baseline = crate_dir.join("tests/fixtures/m2-legacy-baseline");
-    let repo = crate_dir.join("../..");
-    let read_json = |path: PathBuf| -> Value {
-        serde_json::from_slice(&std::fs::read(&path).unwrap())
-            .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-    };
-    let trust = read_json(baseline.join("trust-fixture.json"));
-    let leak = |rows: &Value| -> goalcup_verifier::PinTable {
-        let rows: Vec<(&'static str, &'static str)> = rows
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|row| {
-                let id: &'static str =
-                    Box::leak(row[0].as_str().unwrap().to_string().into_boxed_str());
-                let sha: &'static str =
-                    Box::leak(row[1].as_str().unwrap().to_string().into_boxed_str());
-                (id, sha)
-            })
-            .collect();
-        Box::leak(rows.into_boxed_slice())
-    };
-    let fixed = goalcup_verifier::PinTables::fixture(
-        leak(&trust["manifest_pins"]),
-        leak(&trust["directory_pins"]),
-    );
-
-    let cases = read_json(baseline.join("cases.json"));
-    let mut compared = 0;
-    for case in cases.as_array().unwrap() {
-        // The whole-directory cases need no frozen connector substitution.
-        if case["materialize"] != "directory" || !case["frozen_manifest"].is_null() {
-            continue;
-        }
-        let name = case["case"].as_str().unwrap();
-        let options = VerifyOptions {
-            dev_mode: case["options"]["dev_mode"].as_bool().unwrap(),
-            allow_descriptor_key: case["options"]["allow_descriptor_key"].as_bool().unwrap(),
-            extra_server_keys: case["options"]["extra_server_keys"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|k| k.as_str().unwrap().to_string())
-                .collect(),
-        };
-        let root = support::materialize_private(&repo.join(case["source"].as_str().unwrap()));
-
-        // Fixed trust: the frozen semantic baseline, never regenerated here.
-        let mut observed = serde_json::to_value(
-            goalcup_verifier::Pipeline::load_with_pin_tables(root.path(), options.clone(), fixed)
-                .unwrap()
-                .verdict()
-                .unwrap(),
-        )
-        .unwrap();
-        observed.as_object_mut().unwrap().remove("verifier_version");
-        let expected = read_json(baseline.join("expected").join(format!("{name}.json")));
-        assert_eq!(
-            observed, expected["verdict"],
-            "{name}: fixed-trust historical verdict changed"
-        );
-
-        // Build-relative current pins: the legacy positional mode of the shipped binary is
-        // byte-for-byte the library's current-build document, and its exit is the verdict's.
-        let (verdict, document) =
-            goalcup_verifier::verify_trace_document_with_options(root.path(), options.clone())
-                .unwrap();
-        let mut command = bin();
-        command.arg(root.path());
-        if options.dev_mode {
-            command.arg("--dev");
-        }
-        let output = command.output().unwrap();
-        assert_eq!(
-            String::from_utf8(output.stdout).unwrap(),
-            format!("{document}\n"),
-            "{name}: legacy stdout"
-        );
-        assert_eq!(output.status.code(), Some(verdict.exit_code()), "{name}");
-
-        // And the capture-integrity mode never routes a legacy chain through anything: no
-        // usable report.
-        let output = bin()
-            .arg("--capture-integrity")
-            .arg(root.path())
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(3), "{name}");
-        assert!(output.stdout.is_empty(), "{name}");
-        compared += 1;
-    }
-    assert!(compared >= 3, "compared {compared} legacy cases");
-}
-
-#[test]
 fn large_chain_scans_without_whole_trace_collection() {
     // Evidence hook: M2_T18_LARGE_TRACE_DIR keeps the generated trace for an external
     // peak-memory measurement of the binary, and M2_T18_LARGE_SEGMENTS sizes it.
@@ -2749,6 +2651,33 @@ fn replaced_evidence_is_refused_not_followed() {
     std::os::unix::fs::symlink(elsewhere.path().join(SEAL_FILE), dir.path().join(SEAL_FILE))
         .unwrap();
     assert!(scan_capture_trace(dir.path(), &VerifyOptions::default(), &mut |_| Ok(())).is_err());
+
+    // A hard link to a valid chain or seal elsewhere is a second name for bytes outside the
+    // trace: refused, though following it would read a valid trace.
+    let refusal = |dir: &Path| {
+        scan_capture_trace(dir, &VerifyOptions::default(), &mut |_| Ok(()))
+            .expect_err("replaced evidence leaves no usable report")
+            .to_string()
+    };
+    for file in [CHAIN_FILE, SEAL_FILE] {
+        let dir = make_trace(&launched(complete_wire(None)), true);
+        std::fs::remove_file(dir.path().join(file)).unwrap();
+        std::fs::hard_link(elsewhere.path().join(file), dir.path().join(file)).unwrap();
+        let said = refusal(dir.path());
+        assert!(said.contains("hard linked"), "{file}: {said}");
+    }
+
+    // A FIFO in the chain's place is not evidence, and opening it never waits for a writer.
+    let dir = make_trace(&launched(complete_wire(None)), true);
+    std::fs::remove_file(dir.path().join(CHAIN_FILE)).unwrap();
+    let fifo = std::ffi::CString::new(std::os::unix::ffi::OsStringExt::into_vec(
+        dir.path().join(CHAIN_FILE).into_os_string(),
+    ))
+    .unwrap();
+    // SAFETY: `fifo` is a live NUL-terminated path for the duration of the call.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let said = refusal(dir.path());
+    assert!(said.contains("not a regular file"), "{said}");
 }
 
 #[test]

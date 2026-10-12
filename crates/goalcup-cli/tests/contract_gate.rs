@@ -347,12 +347,8 @@ fn version_and_help_print_on_stdout_and_exit_zero() {
 /// daemon running" is a thing the participant fixes by starting one, and "this build never
 /// wrote the command" is not.
 ///
-/// **`--dry-run` is in the list on purpose.** It makes no call — `tests/it/seal_scan.rs` counts
-/// the mock's calls and finds none. A real seal resolves the client before the entry, because
-/// its first need is a daemon; a `--dry-run` resolves neither a client nor anything else the
-/// tracker owns, and the second half of this test is that difference. Everything past it (the
-/// scan, the self-check, the trace directory and the printed verifier line) is driven against
-/// the in-process mock in `tests/it/seal_scan.rs`.
+/// Everything past it is driven against the in-process mock in `tests/it/seal_scan.rs` and
+/// against the real daemon in `tests/m2_cli_lifecycle.rs`.
 #[test]
 fn seal_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
     let cfg = support::empty_cfg();
@@ -384,30 +380,6 @@ fn seal_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
             "`goalcup {args:?}` printed nothing before it refused"
         );
     }
-
-    // `--dry-run` is the one that does NOT go this way. It asks
-    // the tracker nothing, so it builds no client and never reads `control.json`: on this
-    // machine it gets as far as the entry record, and the refusal is about the record. Still
-    // rung 1, still actionable, and about the thing that is actually missing.
-    let out = goalcup()
-        .args(["seal", "--dry-run"])
-        .env_clear()
-        .envs(support::clean_env())
-        .env("GOALCUP_CONFIG_DIR", &cfg)
-        .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(1));
-    let said = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(
-        said.starts_with("goalcup: ") && said.contains("no run has been started"),
-        "a dry run on a machine with no daemon is refused for the record it cannot find, \
-         never for a tracker it was never going to call: {said:?}"
-    );
-    assert!(
-        !said.contains(&expected),
-        "and it did not go looking for the daemon's own file: {said:?}"
-    );
 }
 
 /// The three participant surfaces are wired to real commands, and the first thing each of

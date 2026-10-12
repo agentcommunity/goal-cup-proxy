@@ -1048,7 +1048,7 @@ fn owns_its_group(mode: LaunchMode) -> bool {
 
 /// POSIX single-quoting, applied only where it changes anything.
 ///
-/// `pub(crate)` because `goalcup seal` prints a `goalcup-verify <dir>` line for
+/// `pub(crate)` because `goalcup seal` prints a `goalcup-verify --capture-integrity <dir>` line for
 /// the participant to paste, and a second quoting rule written beside this one is the one
 /// that gets a path with a space in it wrong.
 ///

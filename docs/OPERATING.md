@@ -14,8 +14,6 @@ install, one capture run) is in [../README.md](../README.md).
 - [Running the daemon](#running-the-daemon)
 - [Running a capture with the CLI](#running-a-capture-with-the-cli)
 - [Running the verifier](#running-the-verifier)
-- [The committed traces](#the-committed-traces)
-- [Regenerating fixtures](#regenerating-fixtures)
 - [Pinning connectors](#pinning-connectors)
 
 ## Current M2 operating boundary
@@ -67,7 +65,7 @@ Prerequisites:
   smoke check (see CI below).
 - **A C compiler.** `ring` compiles C and assembly.
 - **`shasum` or `sha256sum`**, because the test suite runs `scripts/pin-manifests.sh --print`
-  (`crates/goalcup-verifier/tests/it/checks_v13.rs`), and **`python3`** if you change
+  (`crates/goalcup-protocol/tests/it/connector_pins.rs`), and **`python3`** if you change
   `connectors/` and regenerate the pins (`scripts/pin-manifests.sh`).
 
 `cargo test --workspace` is the whole suite, every crate at once. "Green" means
@@ -269,7 +267,6 @@ machine healthy" and the wrong one to "can I start this harness".
 |---|---|
 | `goalcup start --capture-reserve-bytes <BYTES>` | The chain bytes the daemon reserves on disk before the launch. |
 | `goalcup start --capture-claude-allowed-tool <RULE>` | One bounded Claude Bash command rule for this launch only. |
-| `goalcup seal --dry-run` | Walk this machine's workspace and print the self-check (what is there and what the exclusions take out) and seal nothing. It makes no call at all, so it answers on a machine whose daemon is not running. |
 | `--json` on `status`, `entries` and `doctor` | The signed document itself, the summaries as one array, and the report as one document, instead of a page of text. |
 
 **Network outages.** Before anything is created, `goalcup start` makes one TCP connect to port
@@ -299,7 +296,7 @@ usage error (exit 1).
 |---|---|
 | 0 | The command did what it was asked. |
 | 1 | Refused, and you can fix it: no daemon running, a tracker still busy with the entry after the retry is spent, an entry that is already sealed, a mistyped sub-command, a preflight check that said no. |
-| 2 | **Never this binary's.** It is a `Fail` verdict, and only `goalcup-verify` leaves under it. |
+| 2 | **Never this binary's.** It is "invalid evidence", and only `goalcup-verify` leaves under it. |
 | 3 | The CLI could not do its job: a file it could not read, an answer it could not parse. |
 | 4 | Not left by a capture run: it belonged to the removed V1 gates (D48). |
 
@@ -309,7 +306,7 @@ this is a development run, and its result is not a judged entry's.
 | Flag | What it admits |
 |---|---|
 | `goalcup start --dev` | A connector directory this build does not pin: an edited manifest, a hand-written one, a connector under development. Without the flag that is a pre-allocation refusal before daemon entry/artifact/workspace creation; CLI preparation may already exist and is cleaned. The run says so on stdout and the entry record records it. |
-| `goalcup-verify --dev <dir>` | See **Running the verifier** below: an unpinned rulebook becomes a Flag rather than a Fail, and the placeholder-server-key Flag is suppressed. |
+| `goalcup-verify --dev` | See **Running the verifier** below: the placeholder-server-key finding is suppressed. |
 
 None of them is a way to make a failing entry pass. `--dev` never suppresses a `chain_broken`,
 and a verdict that used it says so in its own document.
@@ -317,64 +314,28 @@ and a verdict that used it says so in its own document.
 ### Running the verifier
 
 ```
-goalcup-verify <trace-dir> [--json <out>] [--dev] [--dev-key <hex>]
+goalcup-verify --capture-integrity <trace> [--dev] [--dev-key <hex>]
+goalcup-verify --research-json <trace> --output <report.ndjson> [--dev] [--dev-key <hex>]
 ```
 
-`<trace-dir>` is the directory holding `trace.toml`. Without `--json` the verdict JSON is
-stdout and nothing else is; with `--json <path>` the verdict goes to the file and stdout
-stays empty. Everything meant for a person — notices, errors, the summary line — is
-stderr.
+`<trace>` is a protocol-v5 capture trace directory (`chain.jsonl` and the files beside it).
+`--capture-integrity` prints the integrity report on stdout and nothing else;
+`--research-json` writes the private research report to a new `*.ndjson` file outside the
+trace and leaves stdout empty. Everything meant for a person — notices, errors, the summary
+line — is stderr. A pre-v5 trace (a `trace.toml` beside a protocol-v1 chain) is not read: it
+exits 3.
 
 | Exit | Meaning |
 |---|---|
-| 0 | `Pass` |
-| 1 | `Flag` |
-| 2 | `Fail` |
-| 3 | No verdict could be produced at all (the trace could not be read). A trace that could not be read is not a trace that failed. |
+| 0 | Complete, valid local evidence (the anchor may stay `local_only`) |
+| 1 | Incomplete or unsealed coverage (for the research report: incomplete or partial) |
+| 2 | Invalid evidence, a torn tail included |
+| 3 | No usable report: the trace could not be read, its chain is not v5, or the invocation was refused |
 
-**A run whose harness never started is a `Fail`, not a 3.** Its trace names no
-`tracked_sessions`, and the verifier reports that as a `no_session` Fail with a verdict
-document, because "nothing was captured" is a real thing to say about a run and somebody has
-to be able to file it. `goalcup seal` warns before it seals that this is what the verdict
-will be, while stopping is still a choice.
-
-`--dev` reports a connector manifest this build does not pin as a `Flag` instead of a
-`Fail`. `--dev-key <hex>` (repeatable, 64 hex characters) accepts acknowledgement and
-receipt signatures under that Ed25519 public key for one run; the verdict records
-`key_source: "supplied"` so a development run can never be mistaken for a production one.
-
-### The committed traces
-
-| Trace directory | Exits |
-|---|---|
-| `crates/goalcup-verifier/tests/traces/claude-code-cli/` | 2 (`fail`) |
-| `crates/goalcup-verifier/tests/traces/codex-cli/` | 2 (`fail`) |
-| `crates/goalcup-verifier/tests/fixtures/adversarial/` | 2 (`fail`) |
-| `crates/goalcup-verifier/tests/fixtures/compliant/` | 0 (`pass`) |
-
-The two M0 traces are deliberately non-compliant scripts, so `fail` is the expected
-result, not a defect — each has an `expected-verdict.json` beside it that the suite
-compares against. The adversarial trace carries planted tamper evidence. The compliant
-trace is the one entry that is clean end to end.
-
-`v1/trunk` has a third M0 trace, `traces/opencode/`, which the `m2/wire` deletion pass removes
-with the connector (`4039138`, which also deleted the live `traces/opencode-live/` capture).
-On `m2/wire` the `codex-cli` trace still fails, and its findings also carry the interim
-`<environment_context>` goal and one more V3 flag (wire-primary spec §11.2), labelled
-`INTERIM` in its `expected-verdict.json`.
-
-### Regenerating fixtures
-
-Both generators are `#[ignore]`d **and** gated on `GOALCUP_REGEN=1`, so neither
-`cargo test` nor `cargo test -- --include-ignored` can overwrite a committed fixture by
-accident:
-
-```
-GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test it -- --ignored adversarial::regenerate
-GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test it -- --ignored compliant::regenerate
-```
-
-Read the diff before committing it.
+`--dev` suppresses the `placeholder_server_key` finding. `--dev-key <hex>` (repeatable, 64 hex
+characters) accepts acknowledgement and receipt signatures under that Ed25519 public key for
+one run; the report records `key_source: "supplied"` so a development run can never be mistaken
+for a production one.
 
 ### Pinning connectors
 
@@ -382,33 +343,18 @@ Read the diff before committing it.
 sh scripts/pin-manifests.sh
 ```
 
-It recomputes the schema-1 whole-directory pin table and the transitional V1-manifest table.
-These are source integrity allowlists, not package manifests:
+It recomputes the whole-directory pin table, `CONNECTOR_DIR_SHA256S`, built from the data file
+`crates/goalcup-protocol/pins/connector-dirs.txt` by `crates/goalcup-protocol/src/pins.rs` (a
+malformed file does not compile): exactly the Codex, Claude and Hermes whole-directory digests,
+with seeds and templates under `files/` included. It is a source integrity allowlist, not a
+package manifest. The loader hashes each connector directory and refuses a pinned connector
+whose bytes moved, and a v5 entry binds the digest at create and in
+`Launch.connector_dir_sha256`. `goalcup doctor` runs the CLI's own copy of the same comparison
+over the CLI's own installation.
 
-* `CONNECTOR_MANIFEST_SHA256S`, in `crates/goalcup-verifier/src/lib.rs` — exactly the retained
-  Codex and Claude `manifest.toml` digests. This is what the V1 arming receipt claimed and what
-  V13's `manifest_not_pinned` compares, because the `manifest.toml` a trace carries is the only
-  byte of a connector a verifier can **recompute** after the fact.
-* `CONNECTOR_DIR_SHA256S`, built from the data file `crates/goalcup-protocol/pins/connector-dirs.txt`
-  by `crates/goalcup-protocol/src/pins.rs` (a malformed file does not compile) and re-exported
-  from the verifier — exactly the Codex, Claude and Hermes whole-directory digests, with seeds and
-  templates under `files/` included. The manifest digest cannot see an edited seed file, so the
-  loader hashes each connector directory and refuses a pinned connector whose bytes moved, and a
-  v5 entry binds the digest at create and in `Launch.connector_dir_sha256`. On a V1 (v4) trace,
-  V13 reads the digest back from the start receipt the V1 daemon wrote (that daemon path was deleted
-  by D48), and **only out of a receipt whose signature verified**; otherwise a participant could
-  self-sign a receipt naming the pinned digest and buy silence: `connector_dir_unpinned` (Fail, and
-  Pass-level under `--dev`) when the claim is not in this table, `connector_dir_unbound` (Flag) when
-  a verified receipt carries no claim at all. A trace whose receipt did not verify, or that carries
-  none, gets no directory finding: `receipt_invalid`, `receipt_unverified`, `receipt_missing` or
-  `legacy_trace` is already the larger statement. `goalcup doctor` runs the CLI's own copy of the
-  same comparison over the CLI's own installation.
-
-Both tables use declared connector ids; schema 1 uses `harness.toml`, while the compatibility table
-uses `manifest.toml`. Run it in the same commit as any change
-under `connectors/`;
+The table uses declared connector ids (`harness.toml`, else `manifest.toml`). Run it in the
+same commit as any change under `connectors/`;
 `sh scripts/pin-manifests.sh && git diff --exit-code` is what proves the pins match.
-`sh scripts/pin-manifests.sh --print` writes nothing and prints
-the applicable manifest and directory rows — the mode the Rust tests read to
-prove the shell and `goalcup_protocol::manifest::connector_dir_sha256` hash the same
-stream.
+`sh scripts/pin-manifests.sh --print` writes nothing and prints the directory rows — the mode
+`crates/goalcup-protocol/tests/it/connector_pins.rs` reads to prove the shell and
+`goalcup_protocol::connector_dir::connector_dir_sha256` hash the same stream.
