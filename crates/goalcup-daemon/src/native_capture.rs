@@ -156,13 +156,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Most native sources one adapter reads.
-pub const MAX_NATIVE_SOURCES: usize = 8;
+pub(crate) const MAX_NATIVE_SOURCES: usize = 8;
 /// Most components in one source pattern.
-pub const MAX_NATIVE_PATTERN_DEPTH: usize = 8;
+pub(crate) const MAX_NATIVE_PATTERN_DEPTH: usize = 8;
 /// Hard ceiling on [`NativeCaptureLimits::max_files`].
-pub const MAX_NATIVE_FILES: usize = 20_000;
+pub(crate) const MAX_NATIVE_FILES: usize = 20_000;
 /// Hard ceiling on [`NativeCaptureLimits::max_dir_entries`].
-pub const MAX_NATIVE_DIR_ENTRIES: usize = 65_536;
+pub(crate) const MAX_NATIVE_DIR_ENTRIES: usize = 65_536;
 
 const MAX_SOURCE_NAME_BYTES: usize = 64;
 const MAX_PATTERN_BYTES: usize = 1024;
@@ -311,12 +311,12 @@ pub trait NativeClock: Send {
 
 /// The process clock: `Instant` since construction and the daemon's RFC 3339 wall time.
 #[derive(Debug, Clone, Copy)]
-pub struct SystemNativeClock {
+pub(crate) struct SystemNativeClock {
     origin: std::time::Instant,
 }
 
 impl SystemNativeClock {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         SystemNativeClock {
             origin: std::time::Instant::now(),
         }

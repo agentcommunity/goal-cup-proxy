@@ -107,7 +107,7 @@ fn lex(value: &str) -> Result<Vec<Piece<'_>>, String> {
 /// the reason, phrased to follow the thing being checked ("holds a lone `}`").
 ///
 /// A validator that calls this and a renderer cannot disagree about where a token is.
-pub fn tokens(template: &str) -> Result<Vec<&str>, String> {
+pub(crate) fn tokens(template: &str) -> Result<Vec<&str>, String> {
     Ok(lex(template)?
         .into_iter()
         .filter_map(|p| match p {

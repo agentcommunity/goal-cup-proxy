@@ -547,7 +547,7 @@ pub struct SealOutcome {
 /// transcript bytes. The bound is shared by the registry validator and the runtime's
 /// in-memory retention so a malformed or stale row cannot turn restart recovery into an
 /// unbounded allocation.
-pub const MAX_FOREIGN_PENDING_SIGHTINGS: usize = 256;
+pub(crate) const MAX_FOREIGN_PENDING_SIGHTINGS: usize = 256;
 /// Durable pending identities are projections of bounded scan fields, not an alternate
 /// transcript store. This is a retained-state bound applied after serde decodes the registry
 /// row; it is deliberately not described as a pre-deserialization allocation guard.
@@ -1021,7 +1021,7 @@ impl Entry {
     }
 
     /// The process route may receive a handle only from a launch path that owes one.
-    pub fn accepts_process_handoff(&self) -> bool {
+    pub(crate) fn accepts_process_handoff(&self) -> bool {
         !matches!(
             self.expected_process_handoff,
             ExpectedProcessHandoff::NotRequired
@@ -1118,7 +1118,7 @@ impl Registry {
 
     /// Open the production registry through the daemon's retained artifact-root
     /// capability. The configured path remains diagnostic only after root acquisition.
-    pub fn open_artifact(artifact_root: &ArtifactRoot) -> Result<Registry, DaemonError> {
+    pub(crate) fn open_artifact(artifact_root: &ArtifactRoot) -> Result<Registry, DaemonError> {
         let path = Self::default_path(artifact_root.display_path());
         let file = artifact_root.open_registry_file().map_err(|error| {
             DaemonError::Refused(format!(
@@ -1526,7 +1526,7 @@ impl Registry {
     /// The durable phase of an exact accepted process replay. The route needs the phase,
     /// not only a boolean: Prepared still requires reconciliation and preserves transient
     /// Busy, while Registered may be acknowledged without a runtime only after seal.
-    pub fn exact_accepted_process_replay_phase(
+    pub(crate) fn exact_accepted_process_replay_phase(
         &self,
         entry_id: &str,
         registration: &ProcessRegistration,
@@ -1547,7 +1547,7 @@ impl Registry {
     /// This is read-only: it neither reopens authority nor changes the termination handle.
     /// Only a sealed row qualifies. An unsealed Registered row without a runtime would
     /// acknowledge an unmonitored live harness, which is not a successful recovery.
-    pub fn acknowledge_sealed_process_replay(
+    pub(crate) fn acknowledge_sealed_process_replay(
         &self,
         entry_id: &str,
         registration: &ProcessRegistration,

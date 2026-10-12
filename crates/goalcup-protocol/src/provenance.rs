@@ -334,7 +334,7 @@ impl<'de> Deserialize<'de> for Rfc3339Utc {
     }
 }
 
-pub type ChainHash = Sha256Digest;
+pub(crate) type ChainHash = Sha256Digest;
 
 /// Validate the shared questionnaire binding grammar without changing its receipt wire type.
 pub fn validate_questionnaire_version(value: &str) -> Result<(), ProvenanceError> {
@@ -543,7 +543,7 @@ pub enum RepositoryNonSelectionV1 {
 }
 
 impl RepositoryNonSelectionV1 {
-    pub fn validate(&self) -> Result<(), ProvenanceError> {
+    pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
         if let Self::Ambiguous { candidate_count } = self
             && *candidate_count < 2
         {
@@ -594,7 +594,7 @@ pub struct SelectedRepositoryV1 {
 }
 
 impl SelectedRepositoryV1 {
-    pub fn validate(&self) -> Result<(), ProvenanceError> {
+    pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
         self.remote.validate()?;
         match &self.pre_seal_head {
             PreSealHeadV1::Unborn => {}
@@ -712,7 +712,7 @@ pub struct CompleteEnumerationV1 {
 }
 
 impl CompleteEnumerationV1 {
-    pub fn validate(&self) -> Result<(), ProvenanceError> {
+    pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
         self.included
             .checked_add(self.tracked_absent)
             .and_then(|value| value.checked_add(self.ignored))
@@ -740,7 +740,7 @@ pub struct SnapshotCompletedV1 {
 }
 
 impl SnapshotCompletedV1 {
-    pub fn validate(&self) -> Result<(), ProvenanceError> {
+    pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
         self.enumeration.validate()?;
         if self.object_count > MAX_GIT_INDEX_ENTRIES_V1 {
             return Err(invalid("object_count", "snapshot row bound exceeded"));
@@ -1027,7 +1027,7 @@ pub struct RequiredGitObjectHistoryV1 {
 }
 
 impl RequiredGitObjectHistoryV1 {
-    pub fn validate_against_selection(
+    pub(crate) fn validate_against_selection(
         &self,
         selection: &SelectedRepositoryV1,
     ) -> Result<(), ProvenanceError> {
@@ -1100,7 +1100,7 @@ pub struct CutoffReachedV1 {
 }
 
 impl CutoffReachedV1 {
-    pub fn validate(&self) -> Result<(), ProvenanceError> {
+    pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
         Ok(())
     }
 }
@@ -1146,7 +1146,7 @@ impl TerminationOutcomeV1 {
     /// Check the outcome's own time ordering: a stop is not confirmed, and a wait does not
     /// end, before it was requested. Public so the v5 local terminal writer and readers apply
     /// exactly the rule finalizations already use; the semantics are unchanged.
-    pub fn validate(&self) -> Result<(), ProvenanceError> {
+    pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
         match self {
             Self::AlreadyStopped { .. } => Ok(()),
             Self::Confirmed {
@@ -1362,7 +1362,7 @@ pub enum FinalizationV1 {
 }
 
 impl FinalizationV1 {
-    pub fn receipt_sha256(&self) -> &Sha256Digest {
+    pub(crate) fn receipt_sha256(&self) -> &Sha256Digest {
         match self {
             Self::Captured { receipt_sha256, .. }
             | Self::CaptureUnavailable { receipt_sha256, .. }

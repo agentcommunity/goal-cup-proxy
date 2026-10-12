@@ -407,7 +407,7 @@ daemon_error_table! {
 
 /// One failure on the wire: the contract's [`ErrorBody`], the status [`http_status_for`]
 /// gives it, and all three of `ErrorDetail`'s fields filled.
-pub struct ControlErrorResponse {
+pub(crate) struct ControlErrorResponse {
     error: ControlError,
     detail: serde_json::Value,
 }
@@ -416,7 +416,7 @@ impl ControlErrorResponse {
     /// The default detail is the code again, as an object: a client that reads only
     /// `detail` still learns which refusal this was, and nothing is added that the code
     /// did not already say.
-    pub fn new(error: ControlError) -> ControlErrorResponse {
+    pub(crate) fn new(error: ControlError) -> ControlErrorResponse {
         let detail = serde_json::json!({ "code": error.code() });
         ControlErrorResponse { error, detail }
     }
@@ -424,7 +424,7 @@ impl ControlErrorResponse {
     /// A refusal that has something specific to say — the on-screen arming text, the
     /// version this daemon speaks — carries it here rather than in the message, so a
     /// client reads a field instead of parsing a sentence.
-    pub fn with_detail(error: ControlError, detail: serde_json::Value) -> ControlErrorResponse {
+    pub(crate) fn with_detail(error: ControlError, detail: serde_json::Value) -> ControlErrorResponse {
         ControlErrorResponse { error, detail }
     }
 }

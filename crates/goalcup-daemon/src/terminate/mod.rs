@@ -52,7 +52,7 @@ const LIVENESS_POLL_MS: u64 = 50;
 /// vacuously gone, and the caller that turns this into a record must decide separately
 /// whether anything was ever targeted. This function answers the narrow question it is
 /// named for and nothing else.
-pub fn none_alive_after(targeted: &[u32], delay: Duration) -> Result<bool, ProcessError> {
+pub(crate) fn none_alive_after(targeted: &[u32], delay: Duration) -> Result<bool, ProcessError> {
     std::thread::sleep(delay);
     // `liveness`, not `is_alive`: a `/bin/ps` that could not be spawned is "could not ask",
     // and the second sweep of a seal must not fold that to "gone" — the caller maps the `Err`
@@ -181,7 +181,7 @@ pub fn terminate(handle: &ProcessHandle) -> Result<TerminationReport, ProcessErr
 ///
 /// Hitting the cap is recorded, never hidden. `walk_cap_exceeded` says the enumeration was
 /// incomplete, which is why no sweep afterwards may call the tree gone.
-pub fn terminate_within(
+pub(crate) fn terminate_within(
     handle: &ProcessHandle,
     walk_cap: usize,
 ) -> Result<TerminationReport, ProcessError> {

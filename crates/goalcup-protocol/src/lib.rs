@@ -40,13 +40,13 @@ pub mod template;
 pub const PROTOCOL_VERSION: u32 = 4;
 
 /// First version whose envelope may carry inline redaction evidence.
-pub const INLINE_REDACTION_PROTOCOL_VERSION: u32 = 2;
+pub(crate) const INLINE_REDACTION_PROTOCOL_VERSION: u32 = 2;
 
 /// First version whose `HomeSeeded` body may carry handoff markers.
-pub const HOME_SEED_HANDOFF_PROTOCOL_VERSION: u32 = 3;
+pub(crate) const HOME_SEED_HANDOFF_PROTOCOL_VERSION: u32 = 3;
 
 /// First version whose finalization may bind a workspace submission manifest.
-pub const WORKSPACE_SUBMISSION_PROTOCOL_VERSION: u32 = 4;
+pub(crate) const WORKSPACE_SUBMISSION_PROTOCOL_VERSION: u32 = 4;
 
 /// The V2 compatibility label retained by historical fixtures and consumers.
 ///

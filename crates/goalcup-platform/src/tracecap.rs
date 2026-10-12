@@ -223,7 +223,7 @@ impl TraceDir {
     /// Open a retained child when it already exists, or create that one component and
     /// acquire it through the same parent capability.  A raced replacement is still opened
     /// with no-follow semantics; it can make construction fail but cannot redirect it.
-    pub fn open_or_create_child_dir(&self, name: &str) -> Result<Self, TraceCapError> {
+    pub(crate) fn open_or_create_child_dir(&self, name: &str) -> Result<Self, TraceCapError> {
         validate_component(name)?;
         match self.create_child_dir(name) {
             Ok(child) => Ok(child),
@@ -236,7 +236,7 @@ impl TraceDir {
     }
 
     /// Open (or exclusively create) a regular child while retaining this parent authority.
-    pub fn open_or_create_regular(&self, name: &str) -> Result<File, TraceCapError> {
+    pub(crate) fn open_or_create_regular(&self, name: &str) -> Result<File, TraceCapError> {
         validate_component(name)?;
         self.inner.open_or_create_regular(name)
     }
@@ -335,7 +335,7 @@ impl TraceDir {
     }
 
     /// Atomically replace a regular direct child through this retained directory handle.
-    pub fn replace_regular(&self, name: &str, bytes: &[u8]) -> Result<(), TraceCapError> {
+    pub(crate) fn replace_regular(&self, name: &str, bytes: &[u8]) -> Result<(), TraceCapError> {
         validate_component(name)?;
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let temporary = format!(
@@ -375,7 +375,7 @@ impl TraceDir {
     /// A stable identity for the acquired directory capability.  It is intentionally
     /// opaque outside the capability layer: callers may bind a durable operation to the
     /// root they acquired, but cannot manufacture an identity from a path string.
-    pub fn identity(&self) -> Result<String, TraceCapError> {
+    pub(crate) fn identity(&self) -> Result<String, TraceCapError> {
         self.inner.identity()
     }
 

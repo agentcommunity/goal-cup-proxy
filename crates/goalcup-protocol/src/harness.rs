@@ -47,7 +47,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// The schema versions this build reads. Reader policy: these only.
-pub const SUPPORTED_SCHEMA_VERSIONS: &[u32] = &[1];
+pub(crate) const SUPPORTED_SCHEMA_VERSIONS: &[u32] = &[1];
 
 /// The tail of every "this is not schema 1" refusal, for keys and for values alike.
 pub const NEWER_SENTENCE: &str = "not part of connector schema 1: a field from a newer schema needs a newer goalcup, and a misspelling is refused rather than ignored.";
@@ -97,7 +97,7 @@ macro_rules! closed_enum {
 
         impl $name {
             /// The spellings schema 1 accepts, in declaration order.
-            pub const VALUES: &'static [&'static str] = &[$($text),+];
+            pub(crate) const VALUES: &'static [&'static str] = &[$($text),+];
 
             /// The TOML spelling.
             pub const fn as_str(self) -> &'static str {
@@ -332,7 +332,7 @@ pub struct SeedFile {
 
 impl SeedFile {
     /// The mode the file is written with.
-    pub fn mode(&self) -> SeedMode {
+    pub(crate) fn mode(&self) -> SeedMode {
         self.mode.unwrap_or(SeedMode::Rw0600)
     }
 }

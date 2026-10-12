@@ -546,7 +546,7 @@ impl ChainPhaseReplay {
     }
 
     /// The version/body admission alone, without advancing the replay.
-    pub fn check_envelope(&self, env: &Envelope) -> Result<(), ExportError> {
+    pub(crate) fn check_envelope(&self, env: &Envelope) -> Result<(), ExportError> {
         admit_for_format(self.format, env)
     }
 

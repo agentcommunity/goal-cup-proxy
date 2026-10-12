@@ -194,7 +194,7 @@ pub fn build_payload(inputs: &StatusInputs) -> StatusPayload {
 /// Project a v5 entry's capture state onto a payload before it is signed. `Some` also
 /// replaces `detail`, so no surface that reads only that sentence can show a legacy health
 /// sentence (uploads, a countdown) for a local capture. Pure: no I/O and no clock.
-pub fn apply_capture_snapshot(payload: &mut StatusPayload, capture: Option<M2Status>) {
+pub(crate) fn apply_capture_snapshot(payload: &mut StatusPayload, capture: Option<M2Status>) {
     if let Some(snapshot) = &capture {
         payload.detail = capture_words(snapshot).to_string();
     }
@@ -241,7 +241,7 @@ fn capture_words(snapshot: &M2Status) -> &'static str {
 ///
 /// **This is the one definition.** The V1 per-entry runtime held a copy of it, and D48
 /// removed that runtime with its tests, so every caller left is in this module.
-pub fn fallback_event_status(entry: &Entry) -> EventStatus {
+pub(crate) fn fallback_event_status(entry: &Entry) -> EventStatus {
     EventStatus {
         t0: entry.created_at.clone(),
         start_window_closes_at: entry.created_at.clone(),
@@ -259,7 +259,7 @@ pub fn fallback_event_status(entry: &Entry) -> EventStatus {
 /// receipt fixed, and that is immutable. A caller that restated a stored
 /// `publication_closes_at` verbatim would regress it to `created_at`, because `deadline_at`
 /// is `None` until a start receipt sets it, which is later than the round is resolved.
-pub fn event_status_from(entry: &Entry, configured: Option<&EventStatus>) -> EventStatus {
+pub(crate) fn event_status_from(entry: &Entry, configured: Option<&EventStatus>) -> EventStatus {
     let fallback = fallback_event_status(entry);
     match configured {
         None => fallback,
@@ -274,7 +274,7 @@ pub fn event_status_from(entry: &Entry, configured: Option<&EventStatus>) -> Eve
 
 /// The same, from a `[event]` config section. The two callers that hold a `DaemonConfig`
 /// use this; the terminal composers use [`event_status_from`] with the entry's own field.
-pub fn event_status_for(entry: &Entry, configured: Option<&EventConfig>) -> EventStatus {
+pub(crate) fn event_status_for(entry: &Entry, configured: Option<&EventConfig>) -> EventStatus {
     let as_status = configured.map(|event| EventStatus {
         t0: event.t0.clone(),
         start_window_closes_at: event.start_window_closes_at.clone(),
@@ -320,7 +320,7 @@ pub fn sign_payload(
 
 #[cfg(any(test, feature = "test-hooks"))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct StatusFaultCounts {
+pub(crate) struct StatusFaultCounts {
     pub mirror_attempts: u64,
     pub mirror_failures: u64,
     pub latest_attempts: u64,
@@ -512,7 +512,7 @@ fn latest_view_lock() -> std::sync::MutexGuard<'static, ()> {
 /// Remove the shared latest pointer only if it still names this exact entry. Used by abandon
 /// as well as terminal invalidation, so all in-process readers/comparers/removers share the
 /// same lock with ordinary ranked writers.
-pub fn remove_latest_if_owned(entry_id: &str, config_dir: &Path) -> Result<(), DaemonError> {
+pub(crate) fn remove_latest_if_owned(entry_id: &str, config_dir: &Path) -> Result<(), DaemonError> {
     validate_status_entry_id(entry_id)?;
     let latest = config_dir.join("cache").join("status-latest.json");
     let _latest_guard = latest_view_lock();

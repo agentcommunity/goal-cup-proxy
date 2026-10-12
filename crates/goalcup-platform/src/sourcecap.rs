@@ -12,7 +12,7 @@ use std::path::Path;
 mod imp;
 
 /// Largest buffer passed to a single native source read.
-pub const MAX_SOURCE_IO_CHUNK_V1: usize = 1 << 20;
+pub(crate) const MAX_SOURCE_IO_CHUNK_V1: usize = 1 << 20;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceIdentity(imp::Identity);

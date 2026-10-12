@@ -28,18 +28,18 @@ pub const DECODER_API_VERSION: u32 = 1;
 
 /// The closed observation-kind vocabulary of research-report schema 1 and Decoder v1.
 pub mod kinds {
-    pub const MODEL_REQUEST: &str = "model_request";
-    pub const MODEL: &str = "model";
-    pub const MODEL_RESPONSE: &str = "model_response";
-    pub const TOOL_CALL: &str = "tool_call";
-    pub const TOOL_RESULT: &str = "tool_result";
-    pub const USAGE: &str = "usage";
-    pub const OUTCOME: &str = "outcome";
-    pub const ERROR: &str = "error";
+    pub(crate) const MODEL_REQUEST: &str = "model_request";
+    pub(crate) const MODEL: &str = "model";
+    pub(crate) const MODEL_RESPONSE: &str = "model_response";
+    pub(crate) const TOOL_CALL: &str = "tool_call";
+    pub(crate) const TOOL_RESULT: &str = "tool_result";
+    pub(crate) const USAGE: &str = "usage";
+    pub(crate) const OUTCOME: &str = "outcome";
+    pub(crate) const ERROR: &str = "error";
     /// A source-referenced decoder finding, or retained state, record or form not safely
     /// interpreted; never a decoded fact.
     pub const UNKNOWN: &str = "unknown";
-    pub const HUMAN_MESSAGE: &str = "human_message";
+    pub(crate) const HUMAN_MESSAGE: &str = "human_message";
 
     pub const ALL: &[&str] = &[
         MODEL_REQUEST,
@@ -206,7 +206,7 @@ impl DecoderFailure {
     }
 
     /// The failure of an I/O error: its `io::ErrorKind` word, never the error's message.
-    pub fn from_io(error: &io::Error) -> Self {
+    pub(crate) fn from_io(error: &io::Error) -> Self {
         Self::new(error.kind().to_string())
     }
 }

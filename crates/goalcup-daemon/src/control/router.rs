@@ -409,7 +409,7 @@ pub struct ControlListener {
 impl ControlListener {
     /// Where the OS actually put it. `127.0.0.1:0` in every test and possibly in
     /// production, so this and not the configured address is what `control.json` names.
-    pub fn addr(&self) -> SocketAddr {
+    pub(crate) fn addr(&self) -> SocketAddr {
         self.addr
     }
 
@@ -425,7 +425,7 @@ impl ControlListener {
     /// the `TcpListener` it owns is closed when the task is dropped. Awaiting it means the
     /// port is closed before `start` reports its failure, so a caller that retries binds
     /// the same port rather than racing its own corpse.
-    pub async fn abort(self) {
+    pub(crate) async fn abort(self) {
         self.task.abort();
         let _ = self.task.await;
     }
@@ -437,7 +437,7 @@ impl ControlListener {
     /// right for a daemon that never stops, but [`crate::runtime::Daemon::stop`] would then
     /// have nothing to take down. The handle goes into the daemon's own list instead, and the
     /// detach happens there or not at all.
-    pub fn into_task(self) -> tokio::task::JoinHandle<()> {
+    pub(crate) fn into_task(self) -> tokio::task::JoinHandle<()> {
         self.task
     }
 }

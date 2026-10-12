@@ -28,7 +28,7 @@ pub const VERIFIER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// **M1 placeholder.** The single entry is `PLACEHOLDER_SERVER_PUBLIC_KEY`, whose seed is
 /// written in this repository. Read that constant before trusting anything this list
 /// resolves to `KeySource::Pinned`.
-pub const SERVER_PUBLIC_KEYS: [&str; 1] = [PLACEHOLDER_SERVER_PUBLIC_KEY];
+pub(crate) const SERVER_PUBLIC_KEYS: [&str; 1] = [PLACEHOLDER_SERVER_PUBLIC_KEY];
 
 /// The M1 placeholder anchor: the Ed25519 verifying key of the seed `[5u8; 32]`, which is
 /// written in this repository so development fixtures can sign receipts and
@@ -109,7 +109,7 @@ mod key_tests {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum VerifierError {
+pub(crate) enum VerifierError {
     /// An attacker-controlled evidence document exceeded its declared verifier bound.
     #[error("evidence {path} exceeds the {limit}-byte verifier limit")]
     EvidenceTooLarge { path: String, limit: u64 },

@@ -32,7 +32,7 @@ enum Cadence {
 /// `upload`, `status` and `deadline` stay at zero: they are wire fields whose V1 cadences were
 /// removed (D48).
 #[derive(Debug, Default)]
-pub struct CycleCounters {
+pub(crate) struct CycleCounters {
     tick: AtomicU64,
     upload: AtomicU64,
     status: AtomicU64,
@@ -68,7 +68,7 @@ impl CycleCounters {
     }
 
     /// The wire shape, as the status document carries it.
-    pub fn snapshot(&self) -> CycleErrors {
+    pub(crate) fn snapshot(&self) -> CycleErrors {
         CycleErrors {
             last_pass_at: self
                 .last_pass_at

@@ -9,7 +9,7 @@ use std::path::Path;
 
 /// A validated descriptor-relative evidence name. Its host-path representation is private.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TracePath(String);
+pub(crate) struct TracePath(String);
 
 impl TracePath {
     pub(crate) fn parse(value: impl AsRef<str>) -> Result<Self, VerifierError> {
@@ -43,7 +43,7 @@ impl TracePath {
         Ok(Self(value.to_owned()))
     }
 
-    pub fn display(&self) -> &str {
+    pub(crate) fn display(&self) -> &str {
         &self.0
     }
 }
