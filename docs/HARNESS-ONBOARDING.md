@@ -98,6 +98,10 @@ policy change, not a connector-data shortcut.
 
 ## 5. Prepare a contribution
 
+The ordered steps with expected output are in the
+[skill](../skills/adding-a-capture-harness/SKILL.md); `sh scripts/check-connector.sh <id>` runs
+the pin, schema, golden and kit checks below in one command.
+
 - [ ] Worksheet has source-linked values, or explicit UNKNOWN/blockers; Phase 1 has no UNKNOWN in
   transport, native storage/scope, isolation/auth or identity source/binding.
 - [ ] `harness.toml` uses schema 1 and only admitted policy and identity values; seeds are safe.
