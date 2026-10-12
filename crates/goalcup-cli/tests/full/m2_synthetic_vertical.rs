@@ -7,8 +7,8 @@
 //! Each test holds evidence against evidence: what the workload reports it sent, against what
 //! the chain file retained and what the daemon's status and the verifier say.
 //!
-//! macOS only (the chain is reserved on APFS alone), ignored by default because each test runs
-//! real processes for seconds to minutes. Build the binaries first, then run by name:
+//! macOS and Linux (the trace folder must be on APFS, ext4 or XFS), ignored by default because
+//! each test runs real processes for seconds to minutes. Build the binaries first, then run by name:
 //!
 //! ```text
 //! cargo build --offline

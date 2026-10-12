@@ -9,12 +9,12 @@
 mod common;
 
 mod binary_surface;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod capture_deferred_scope;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod capture_harness_load;
 mod capture_ingest;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod capture_lifecycle;
 mod capture_native;
 mod capture_redaction;

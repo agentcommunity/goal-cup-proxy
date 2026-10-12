@@ -108,6 +108,15 @@ The gate runs cargo with `--offline`, which is why the one `cargo fetch --locked
   run `full` before every tag or it rots unseen.
 - Without cargo-nextest the gate says so and falls back to `cargo test`, which runs every tier.
 
+On Linux the gate needs `nc`, procps `ps` (`/bin/ps`; busybox `ps` is not supported),
+`*.localhost` resolving to loopback (systemd-resolved or nss-myhostname), and `TMPDIR` on ext4
+or XFS (capture refuses overlayfs, tmpfs, btrfs and FUSE). `sh scripts/linux-check.sh` runs the
+Linux part in Docker, after the `cargo fetch --locked` above: the registry check, `gate.sh fast`,
+the capture-reservation tests on ext4 and XFS, the CLI's `full` and `m2_cli_lifecycle` suites,
+the `#[ignore]`d `m2_synthetic_vertical` and `capture_failure_campaign` suites, and the daemon's
+`full` suite. It is not `gate.sh full`: the other crates' `full` binaries, the scripts' unit tests
+and the link check are not run there. It has been measured on Docker Desktop on an arm64 Mac only.
+
 Each crate's integration tests are modules of two binaries: `tests/it/` (fast) and `tests/full/`
 (slow). The slow tier is every `full` binary plus the CLI's standalone `m2_cli_lifecycle`
 (about 100 s). A few suites that change process state (umask, environment, the panic hook) stay

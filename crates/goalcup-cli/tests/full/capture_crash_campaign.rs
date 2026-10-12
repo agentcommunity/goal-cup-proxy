@@ -23,8 +23,8 @@
 //! exit code. Power loss, a crashed relay, peer-initiated disconnect with a live receiver and
 //! arbitrary v5 readmission are not measured here.
 //!
-//! macOS only (the chain is reserved on APFS alone). Each row runs real processes for tens of
-//! seconds, so the campaign is in the `full` tier, one row at a time (the `serial` test group in
+//! macOS and Linux (the trace folder must be on APFS, ext4 or XFS). Each row runs real processes
+//! for tens of seconds, so the campaign is in the `full` tier, one row at a time (the `serial` test group in
 //! `.config/nextest.toml`); `sh scripts/gate.sh full` builds the binaries first and runs it. No
 //! row needs a real harness or the network.
 

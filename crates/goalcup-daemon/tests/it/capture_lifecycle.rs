@@ -2,8 +2,9 @@
 //! physically reserved chain and no server, the one-shot goal, the launch record, and the
 //! signed status projection.
 //!
-//! macOS only: the chain reservation is qualified on APFS alone and refuses everywhere else,
-//! so every entry here is created on the temporary directory's APFS volume.
+//! Runs on macOS (APFS) and on Linux (ext4 or XFS): the chain reservation is qualified on those
+//! filesystems alone and refuses everywhere else, so every entry here is created on the
+//! temporary directory's volume, which must be one of them.
 
 use crate::common::capture_lifecycle_support;
 use crate::common::support;

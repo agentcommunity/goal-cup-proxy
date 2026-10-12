@@ -6,7 +6,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod capture_finish_budget;
 mod harness_contract_golden;
 #[cfg(unix)]
