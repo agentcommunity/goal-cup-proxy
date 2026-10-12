@@ -1,5 +1,11 @@
 # The /goal Cup tracker — design decisions (2026-09-03)
 
+> **Frozen: no new entries unless a rule really changes.**
+>
+> Citations below of STATUS, LEDGER,
+> qualification records, plans and research files name documents deleted from the tree; they are in
+> git history at `6494030`.
+
 ## Index
 
 Holds on `m2/wire`? is read from each entry's own m2 note. "no m2 note" means the entry says nothing about
@@ -63,7 +69,7 @@ The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
 ## V1 foundation revision (2026-09-13)
 
-Public V1 scope and current status are recorded in [STATUS](../STATUS.md#v1-on-v1trunk).
+Public V1 scope was recorded in the retired `STATUS.md` (git history at `6494030`).
 
 V1 defines one complete short-duration Codex CLI launch-mode qualification lifecycle on one exact macOS target. Once implemented, it includes interruption, recovery, manual and automatic short-deadline finish, owned-process termination, immutable workspace artifact capture, and offline verification. It does not require or claim a real 168-hour run. D29 records the complete milestone reassignment; all existing security, privacy, isolation, record-raw, and no-agent-steering decisions remain constraints.
 
@@ -1195,17 +1201,15 @@ not from dead code in the tree.
   support files; the optional `open`, `rusqlite` and `age` dependencies; the second gate block in
   README and CONTRIBUTING; the `v1-compat` checkbox in the PR template.
 - **Kept.** Default-build behaviour. The hidden `auth`, `ui` and `resume` commands and the V1
-  control routes still refuse, now naming D48. The daemon still refuses a registry whose V1 rows
-  owe work. The control API types, the V1 `manifest.toml` parsing (OS-29) and the verifier's V1
+  control routes still refuse, now naming D48. The control API types, the V1 `manifest.toml` parsing (OS-29) and the verifier's V1
   checks are unchanged. The V1 config fields `upload_url`, `server_public_key` and
   `receipt_binding` drive no upload but are still parsed, because `DaemonConfig` refuses unknown
-  fields and would reject a config that sets them. The V1-only registry functions
-  `open_resume_process_handoff`, `begin_sealing`, `restore_unfinished_sealing`, `in_harness_home`,
-  `remove_if_unstarted` and `start_handoff_complete` still compile because tests cover them
-  (OS-31).
-- **`goalcup-devserver` stays** for now. No shipped binary links it, but the default test suite
-  still does, and code comments cite its constants. Moving what those need and possibly removing
-  the crate is a separate follow-up (OS-31).
+  fields and would reject a config that sets them. The V1-only registry functions this entry first
+  listed here (`open_resume_process_handoff`, `begin_sealing`, `restore_unfinished_sealing`,
+  `in_harness_home`, `remove_if_unstarted`, `start_handoff_complete`) were removed under OS-31,
+  with the other V1 items no production code reached.
+- **`goalcup-devserver` stays** for now. No shipped binary links it and, after OS-31, no crate
+  depends on it; deleting the unused crate is an open decision ([TODO](../TODO.md)).
 
 **Evidence.** LEDGER OS-30; the pull request that lands it carries the gate results.
 

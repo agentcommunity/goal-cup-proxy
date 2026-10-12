@@ -1,4 +1,0 @@
-entry eb037918c8d3994d4: workspace submission captured (manifest 3a3519fb9893d7843859bf8bc1bca721b21cd8b907ffdff6cd423c7c156daaee).
-harness termination: Confirmed { requested_at: Rfc3339Utc("2026-09-21T12:18:42Z"), confirmed_at: Rfc3339Utc("2026-09-21T12:18:43Z"), method: ProcessSignal }.
-trace:  /Users/team/dev/goalcup-v1-2026-09-21/prefix/var/artifacts/artifacts/eb037918c8d3994d4/trace
-verify: goalcup-verify --dev /Users/team/dev/goalcup-v1-2026-09-21/prefix/var/artifacts/artifacts/eb037918c8d3994d4/trace

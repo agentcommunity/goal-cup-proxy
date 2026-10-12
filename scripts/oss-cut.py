@@ -86,7 +86,7 @@ ALLOW = [
     *[("exact", f) for f in (
         "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".gitignore", ".gitattributes",
         "LICENSE", "NOTICE", "README.md", "SECURITY.md", "CONTRIBUTING.md",
-        "CODE_OF_CONDUCT.md", "AGENTS.md", "STATUS.md", "LEDGER.md",
+        "CODE_OF_CONDUCT.md", "AGENTS.md", "TODO.md",
         "harnesses/install.sh", "spikes/redact.py", "spikes/codex-app/make_fixtures.py",
         "spikes/m2-first-release/e02/early-load.py",
     )],
@@ -139,7 +139,7 @@ STRICT_PREFIXES = (
 )
 STRICT_FILES = {
     "README.md", "AGENTS.md", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md",
-    "NOTICE", "STATUS.md", "LEDGER.md", "LICENSE", "Cargo.toml", ".gitattributes",
+    "NOTICE", "TODO.md", "LICENSE", "Cargo.toml", ".gitattributes",
 }
 
 

@@ -97,7 +97,7 @@ does.
   bytes: decoder panics are silent only through `session::quiet_panic_hook`, installed over the
   hook current at the first session. A host hook installed later replaces it; wrap it with
   `set_hook(quiet_panic_hook(take_hook()))`.
-- Kinds and summary schema: [m2-report-format.md](../../docs/research/m2-report-format.md).
+- Kinds and summary schema: the research report format (`docs/research/m2-report-format.md`, git history at `6494030`).
   Emit only `api::kinds` constants: `model_request`, `model`, `model_response`, `tool_call`,
   `tool_result`, `usage`, `outcome`, `error`, `unknown`, `human_message`. Reuse the existing field names
   (`scope`, `call_id`, `finish_reason`, `withheld`, `unrecognized_fields`, the `*_bytes` and
@@ -251,12 +251,10 @@ and the served `model` field of each response chunk.
 
 ## Records
 
-Update the reference-row record (`docs/qualification/m2-<harness>-reference-row.md`, claim
-level: "decoder available, live row not re-verified" until the row is re-decoded and checked
-against the oracles above), the harness row in `docs/HARNESS-ONBOARDING.md` and the harness
+Update the harness row in `docs/HARNESS-ONBOARDING.md` and the harness
 bullet in `docs/CONNECTOR-CONTRIBUTING.md`, the decoder list in
-`docs/research/m2-report-format.md`, a `docs/GLOSSARY.md` entry for any new term, and the LEDGER
-ticket if one names the lane. Dated readiness records (`m2-*-readiness.md`) are history: add a
+the research report format (`docs/research/m2-report-format.md`, git history at `6494030`), and a
+`docs/GLOSSARY.md` entry for any new term. Dated readiness records (`m2-*-readiness.md`) are history: add a
 dated note, do not rewrite them. Transitional V1 `capture_only = true` on the connector's
 `manifest.toml` is a separate fact (V1 refuses the connector); it is not a harness-manifest
 field, and a decoder does not change it.

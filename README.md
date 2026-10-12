@@ -10,19 +10,18 @@ goal, not a claim about this code.
 
 ## Status
 
-Where the project stands, what is measured and what is open: [STATUS.md](STATUS.md). The ticket
-list is [LEDGER.md](LEDGER.md).
+What is next and what is open: [TODO.md](TODO.md). The old status page, ledger and qualification
+records are in git history at `6494030`.
 
 v0.5.0 is published as source only, with no attached files: see the [v0.5.0
-release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0) and [the v0.5.1
-cleanup record](docs/qualification/v0.5.1-public-release-cleanup.md). There is no downloadable
+release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0). There is no downloadable
 binary, installer, staged bundle, registry publication, signature, notarization or qualification.
 Built binaries print `0.1.0`: the package version is independent of source release tags. The source
 has exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
 `hermes-cli` (capture-only). The separate private `m2-pilot` macOS packaging allowlist
 ([packaging/README.md](packaging/README.md)) selects only Codex and Claude; a source pin does not
-prove package inclusion. Short rows are measured; long runs are not qualified (records:
-[docs/qualification/README.md](docs/qualification/README.md)). `v1/trunk` and its `v0.1.0` tag are
+prove package inclusion. Short rows are measured; long runs are not qualified (the records are in git history before
+`6494030`). `v1/trunk` and its `v0.1.0` tag are
 private; the V1 code that v0.5.0 kept behind `v1-compat` was removed (D48) and lives on in the
 `v0.5.0` tag. Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
@@ -66,8 +65,7 @@ Maintainer variant: add `--offline` to the three cargo commands that take it, af
 
 `cargo build` is step zero and is not redundant: the other three build dev-dependencies, which
 turn on `goalcup-daemon`'s `test-hooks` feature, so none of them compiles the shipped,
-`test-hooks`-off library. The gate result of the current merge is recorded in
-[STATUS.md](STATUS.md); this file carries no count. Ignored tests, the by-hand suites and the CI
+`test-hooks`-off library. This file carries no test count. Ignored tests, the by-hand suites and the CI
 smoke check are in [docs/OPERATING.md](docs/OPERATING.md#building-and-verifying).
 
 The four commands gate the M2 capture product, which is the whole build: the V1/v4
@@ -143,7 +141,7 @@ connector cannot name a `*_URL` variable in `[capture.env]` or as its home varia
 incomplete or unsealed, 2 invalid (a torn tail included), 3 no usable report. A LocalOnly seal
 with exit 0 means local evidence is complete; it is not an anchored or qualified result. The
 research report is `goalcup-verify --research-json <trace> --output <REPORT.ndjson>`
-([docs/research/m2-report-format.md](docs/research/m2-report-format.md)).
+(format: git history at `6494030`, `docs/research/m2-report-format.md`).
 
 **Hermes** needs a provider key, which only the owner loads, through the reviewed launch seam
 and never pasted into a shell:
@@ -154,8 +152,8 @@ and never pasted into a shell:
 
 `<ENV_FILE>` is a mode 0600 file holding one `DEEPSEEK_API_KEY=` line. The script runs exactly
 that command and refuses any other. This run is owner-run and the agent never opens the key file
-(D41). The procedure and the measured row are in
-[docs/qualification/m2-hermes-reference-row.md](docs/qualification/m2-hermes-reference-row.md).
+(D41). The procedure and the measured row are in git history at `6494030`
+(`docs/qualification/m2-hermes-reference-row.md`).
 
 ## More
 
@@ -164,7 +162,7 @@ that command and refuses any other. This run is owner-run and the agent never op
 | How the parts fit | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Daemon config, every CLI flag and exit code, MCP server, verifier, fixtures, pins | [docs/OPERATING.md](docs/OPERATING.md) |
 | Adding a harness | [docs/HARNESS-ONBOARDING.md](docs/HARNESS-ONBOARDING.md) |
-| Which record proves what | [docs/qualification/README.md](docs/qualification/README.md) |
+| What is next | [TODO.md](TODO.md) |
 | What a participant agrees to | [docs/RULES.md](docs/RULES.md) |
 | Settled decisions | [docs/DECISIONS.md](docs/DECISIONS.md) |
 | Working here (agents and people) | [AGENTS.md](AGENTS.md) |

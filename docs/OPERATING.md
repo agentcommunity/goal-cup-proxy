@@ -22,7 +22,7 @@ install, one capture run) is in [../README.md](../README.md).
 ## Current M2 operating boundary
 
 v0.5.0 is published as source only
-([cleanup record](qualification/v0.5.1-public-release-cleanup.md)). No downloadable binary,
+(cleanup record). No downloadable binary,
 installer, staged bundle, registry publication, signature, notarization or qualification exists.
 Built binaries print `0.1.0`: the package version is independent of source release tags. The source
 contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and

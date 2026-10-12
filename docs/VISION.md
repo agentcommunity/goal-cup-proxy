@@ -2,7 +2,7 @@
 
 > **Scope (2026-10-02).** V1 on `v1/trunk` is one short Codex CLI/macOS lifecycle; V1.1 expands it;
 > the 168-hour event is untested. On `m2/wire` the recorder (native leg plus proxy wire leg) is built
-> and measured on short rows, not qualified. Current: [STATUS](../STATUS.md), [ARCHITECTURE](ARCHITECTURE.md).
+> and measured on short rows, not qualified. Current: [TODO](../TODO.md), [ARCHITECTURE](ARCHITECTURE.md).
 
 ## The event
 

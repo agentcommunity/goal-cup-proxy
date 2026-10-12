@@ -77,7 +77,7 @@ does not prove package inclusion, bundling, release, or qualification for any co
 `goalcup-daemon`, and `goalcup-verify` — with the pinned `codex-cli` and `claude-code-cli`
 capture profiles. The proxy runs in-process under `goalcup start --goal-file`, so it is not a
 separate binary. The bundle does not include `hermes-cli` (`M2_PILOT_CONNECTORS` in
-`scripts/package-release.py`; LEDGER H-21).
+`scripts/package-release.py`).
 This profile is macOS-only and binds the exact source revision, target, version, binary and
 connector-file hashes, plus each connector's exact schema `harness.toml` SHA-256 under the
 compatibility key `profile_sha256`. Its metadata explicitly says
@@ -122,7 +122,7 @@ integrity exit is 1; it is an installation smoke, not either real-harness journe
 > (`RunAtLoad`, so it comes back at every login; `KeepAlive` restarts it only after a crash, at
 > most once per 10 seconds), and no run script boots it out: a daemon keeps running after the
 > run. Stop it with `launchctl bootout gui/$(id -u)/<label>`, or remove it with
-> `uninstall-assisted.sh` (LEDGER H-13, H-19). `test-m2-pilot.sh` boots out only the disposable
+> `uninstall-assisted.sh`. `test-m2-pilot.sh` boots out only the disposable
 > label it minted. `uninstall-assisted.sh` keeps
 > `var/artifacts` and `var/workspaces` but deletes the install's `goalcup-verify` and daemon
 > config, so verify or archive an entry's evidence before you uninstall.

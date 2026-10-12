@@ -47,10 +47,8 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    Expect: one absolute path; one line `<64 hex>  <path>`; the version. These go into
    `[capture.executable]`. Write each in the readiness record with where it came from.
 5. **Write the readiness record.** Create `docs/qualification/m2-<name>-readiness.md` from the
-   [handoff record](../../docs/HARNESS-ONBOARDING.md#7-handoff-record) and add one row to the M2
-   table of the [qualification index](../../docs/qualification/README.md), shaped like the
-   `m2-hermes-readiness.md` row. Model:
-   [Hermes readiness](../../docs/qualification/m2-hermes-readiness.md).
+   [handoff record](../../docs/HARNESS-ONBOARDING.md#7-handoff-record) shaped like
+   `docs/qualification/m2-amp-readiness.md`.
 6. **Write the connector.**
    ```
    mkdir -p connectors/<id>

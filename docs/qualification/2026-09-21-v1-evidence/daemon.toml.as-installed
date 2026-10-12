@@ -1,8 +1,0 @@
-# Written by install-assisted.sh. Owner-only (/Users/team/dev/goalcup-v1-2026-09-21/prefix is 0700), never edited by a run.
-artifact_root = "/Users/team/dev/goalcup-v1-2026-09-21/prefix/var/artifacts"
-connectors_dir = "/Users/team/dev/goalcup-v1-2026-09-21/prefix/share/goalcup/connectors"
-config_dir = "/Users/team/dev/goalcup-v1-2026-09-21/prefix/etc"
-workspace_parent = "/Users/team/dev/goalcup-v1-2026-09-21/prefix/var/workspaces"
-control_addr = "127.0.0.1:0"
-upload_url = "http://127.0.0.1:7789"
-server_public_key = "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
