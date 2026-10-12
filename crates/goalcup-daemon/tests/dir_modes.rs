@@ -7,6 +7,8 @@
 
 #![cfg(unix)]
 
+// Each test binary uses a different subset of the shared support.
+#[allow(dead_code)]
 #[path = "common/mod.rs"]
 mod common;
 use common::support;

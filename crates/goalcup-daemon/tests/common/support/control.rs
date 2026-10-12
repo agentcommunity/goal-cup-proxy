@@ -13,8 +13,6 @@
 //! auth layer sees is what the test wrote. A test that could not send an un-normalised
 //! path could not tell a layer that asks about the raw path apart from one that does not.
 
-#![allow(dead_code)]
-
 use goalcup_daemon::config::DaemonConfig;
 use goalcup_daemon::runtime::Daemon;
 use goalcup_protocol::control::CONTROL_API_VERSION;

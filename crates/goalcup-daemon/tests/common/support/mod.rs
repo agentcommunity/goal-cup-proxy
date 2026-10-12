@@ -6,8 +6,6 @@
 //! [`daemon`] (the process-level object), [`control`] (its control listener and a client) and
 //! [`status`] (a status document and the reader that checks its signature).
 
-#![allow(dead_code)]
-
 // Health, status and page fixtures.
 pub mod status;
 // The daemon harness: the process-level object, with the entry map inside it.

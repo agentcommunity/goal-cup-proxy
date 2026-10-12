@@ -92,8 +92,7 @@ pub struct DaemonConfig {
     /// machine that sets it is deliberately overriding every connector at once.
     #[serde(default)]
     pub arming_timeout_seconds: Option<u64>,
-    /// How often an `EventBody::Heartbeat` is chained. `ConnectorManifest.heartbeat_seconds`
-    /// overrides it per connector. Absence of heartbeats over a window is what makes
+    /// How often an `EventBody::Heartbeat` is chained. Absence of heartbeats over a window is what makes
     /// downtime a positive statement in the verdict rather than an absence.
     #[serde(default = "default_heartbeat_seconds")]
     pub heartbeat_seconds: u64,

@@ -3,6 +3,8 @@
 //! Slow files go in `tests/full/`. `dir_modes` and `health_status` stay standalone binaries
 //! because they change process state (umask, a re-exec by exact test name).
 
+// Each test binary uses a different subset of the shared support.
+#[allow(dead_code)]
 #[path = "../common/mod.rs"]
 mod common;
 

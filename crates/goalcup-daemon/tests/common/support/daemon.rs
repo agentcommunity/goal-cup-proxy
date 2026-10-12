@@ -1,8 +1,6 @@
 //! The daemon's own configuration for a run rooted in a temporary directory, and a stand-in
 //! for the harness process the CLI launched, with the process handle that names it.
 
-#![allow(dead_code)]
-
 use goalcup_daemon::config::DaemonConfig;
 use goalcup_protocol::manifest::KillStrategy;
 use goalcup_protocol::process::ProcessHandle;

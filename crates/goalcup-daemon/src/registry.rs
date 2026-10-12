@@ -619,7 +619,7 @@ pub struct Entry {
     /// not compile; [`Registry::put`] carries the stored receipt forward rather than
     /// taking the caller's; and [`Registry::update`] restores it after the closure has
     /// run. So "a stored receipt is a verified receipt" is a property of the type, not a
-    /// convention each caller has to remember. Read it with [`Entry::receipt`].
+    /// convention each caller has to remember.
     receipt: Option<StartReceipt>,
     /// The receipt contract selected when this entry was created.
     ///

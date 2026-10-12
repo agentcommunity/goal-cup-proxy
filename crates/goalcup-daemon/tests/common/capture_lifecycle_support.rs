@@ -5,8 +5,6 @@
 //! [`Rig::upload_dials`] counts every connection made to it, so "needs no server" is an
 //! observation rather than the absence of a stub.
 
-#![allow(dead_code)]
-
 use super::support::control::{
     EmptyControlHarness, Response, empty_control_harness_on, restart_empty_control,
 };

@@ -23,8 +23,6 @@
 //! Declared by `tests/common/mod.rs` as `common::table_lock`, beside `support` rather than
 //! inside it.
 
-#![allow(dead_code)]
-
 use std::cell::RefCell;
 use std::sync::{Mutex, MutexGuard};
 

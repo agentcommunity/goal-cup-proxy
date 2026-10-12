@@ -346,7 +346,13 @@ async fn a_connector_directory_holding_a_symlink_is_refused_at_create_before_any
         "{}",
         body.error.message
     );
-    // The daemon names no path and echoes nothing of the directory it refused.
+    // The daemon refuses with its one generic directory refusal, and names no path: nothing of
+    // the symlink's name or target is repeated.
+    assert!(
+        body.error.message.contains("directory is invalid"),
+        "the refusal says the connector directory could not be loaded: {}",
+        body.error.message
+    );
     assert!(
         !body.error.message.contains("alias.json")
             && !body.error.message.contains("project-settings"),
