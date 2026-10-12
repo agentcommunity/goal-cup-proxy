@@ -3,7 +3,7 @@
 How does a contributor establish a truthful schema-1 connector claim? For a fresh contributor
 or agent preparing harness data. This guide separates connector data, policy, native capture and
 semantic decoding; [CONNECTOR-CONTRIBUTING](CONNECTOR-CONTRIBUTING.md) owns the reviewer checklist
-and real-row procedure. Updated: 2026-10-11.
+and real-row procedure. Updated: 2026-10-12.
 
 Read [CONTRIBUTING](../CONTRIBUTING.md), [STATUS](../STATUS.md), [GLOSSARY](GLOSSARY.md), and
 DECISIONS D1, D40, D41, D42 and D43 first. The source tree currently has exactly three connector
@@ -109,7 +109,8 @@ policy change, not a connector-data shortcut.
 
 The ordered steps with expected output are in the
 [skill](../skills/adding-a-capture-harness/SKILL.md); `sh scripts/check-connector.sh <id>` runs
-the pin, schema, golden and kit checks below in one command.
+the pin, schema, golden and kit checks below in one command. A
+[trial run of the skill](research/harness-onboarding-trial.md) records where a reader got stuck.
 
 - [ ] Worksheet has source-linked values, or explicit UNKNOWN/blockers; Phase 1 has no UNKNOWN in
   transport, native storage/scope, isolation/auth or identity source/binding.

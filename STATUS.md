@@ -1,13 +1,13 @@
 # STATUS: where Goal Cup stands
 
-Updated: 2026-10-11. v0.5.0 is published as source only: the [v0.5.0
+Updated: 2026-10-12. v0.5.0 is published as source only: the [v0.5.0
 release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0) has no attached
 files, and its tag, commit and tree are in [the v0.5.1 cleanup
 record](docs/qualification/v0.5.1-public-release-cleanup.md). Built binaries print `0.1.0`: the
-package version is independent of source release tags. Commit hashes and branch names cited here
-refer to private development history not included in this repository. Tickets:
-[LEDGER.md](LEDGER.md). How the parts fit: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The words:
-[docs/GLOSSARY.md](docs/GLOSSARY.md).
+package version is independent of source release tags. Hashes and branch names cited here are
+private development history, except commits from PR #1 onward, which are on this repository's
+`main`. Tickets: [LEDGER.md](LEDGER.md). How the parts fit:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The words: [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
 ## What m2 is
 
@@ -18,10 +18,8 @@ source-only: the tree has three connector directories and the separate private `
 packaging allowlist selects/stages two. There is no downloadable binary or installer artifact,
 staged bundle, registry publication, signing, notarization or qualification claim; a future Homebrew
 installer is a separate later packaging track. The same-UID local-attacker residual remains out of
-scope. The pilot is private, unsigned and not released. Nothing is qualified.
-
-The phrase `two connector profiles` is not a connector-count claim: a profile is one connector
-manifest's `[capture]` table, while the pilot selects/stages two connectors.
+scope. The pilot is private, unsigned and not released. Nothing is qualified. `Two connector
+profiles` is not a connector count: a profile is one manifest's `[capture]` table.
 
 D42 (2026-10-04) put the V1/v4 transcript-and-hook path behind a `v1-compat` cargo feature; D48
 (2026-10-11) deleted it, so the tree has one feature set and one gate (OS-30). The `v0.5.0` tag
@@ -39,28 +37,26 @@ Detail and the test for each guarantee: [docs/ARCHITECTURE.md](docs/ARCHITECTURE
   hash or disk, fail-closed past the 16 KiB hold (T04, T09–T13).
 - **CLI.** `goalcup start --goal-file` and `seal` over v5, participant output in plain words,
   the key loader for Hermes (T16, H-14, H-15).
-- **Verifier.** Integrity reader with exits 0/1/2/3 and five built-in decoders: two native
-  (`codex-native`, `claude-code-native`) and three wire (`openai-responses`,
-  `anthropic-messages`, `openai-chat-completions`). The Chat decoder has synthetic coverage only;
-  the earlier Hermes/DeepSeek live row was not re-decoded.
-- **PH-V verifier harmonization.** Final lane `1059d16b`, merged as `b4954f64`: wire decoder
-  versions Responses 2 / Anthropic 3 / Chat 2; shared framing, aggregate budget and close
-  classification; registry-owned selection; the closed ten observation kinds; shared bounded
-  Recovery-lineage calculation; typed integrity/anchor/key-source/terminal facts; and
-  presentation-only OS-15 connector labels. Independent review approved exact tip `1059d16b`;
-  focused evidence is 341 passed, 0 failed, 1 ignored, with fmt, shared-wire, default/v1 workspace
-  no-run and all-target clippy exits 0. W1 at `9fc730e6` also covers it; no live re-decode or
-  qualification is claimed.
-- **Control and launchd hardening.** C1 merged as `b93cd27d`: the bound listener's Host is
-  enforced before routing, only status and version are public, the forgeable placeholder key is
-  named at startup, and the launchd agent is crash-only/throttled with owned-label teardown. These
-  are code and static-policy facts; no launchd execution was measured.
+- **Verifier.** Integrity exits 0/1/2/3; decoders `codex-native`, `claude-code-native`,
+  `openai-responses`, `anthropic-messages`, `openai-chat-completions` (Chat: synthetic only).
+- **PH-V verifier harmonization.** Merged `b4954f64` (lane `1059d16b`): decoder versions
+  Responses 2 / Anthropic 3 / Chat 2, shared framing and budgets, typed facts, OS-15 labels.
+  Focused evidence and W1 cover it; no live re-decode or qualification is claimed.
+- **Control and launchd hardening.** C1 `b93cd27d`: Host enforced before routing, only status and
+  version public, crash-only throttled launchd agent. Code and static facts; nothing measured.
 - **Harness-contract path.** PH-A `cf05d4fe`, S4a/S4b `b3c4211d`, S5 `9b29ce10`, S6
-  `b047d854` and C2-0700 `31e9f04f` are merged and covered by the W1 gate. The offline kit has
-  four synthetic cases, including two data-only case commits. This is not a qualified row.
-- **Connectors.** The three connector directories are `codex-cli`, `claude-code-cli`, and
-  capture-only `hermes-cli`; the two selected/staged connectors are Codex and Claude (D40, D41,
-  T14, H-18).
+  `b047d854` and C2-0700 `31e9f04f` are merged and covered by the W1 gate. The offline kit now
+  has six synthetic cases, two of them keyed (PR #8). This is not a qualified row.
+- **Onboarding (2026-10-12).** Entry point: the [skill](skills/adding-a-capture-harness/SKILL.md)
+  and `sh scripts/check-connector.sh <id>` (PR #7). The goldens derive the connector list, so a
+  data-only connector needs no `.rs` edit (PR #4; proven for the CLI half, H-42). Three
+  [trial runs](docs/research/harness-onboarding-trial.md), all by the skill's author (OS-23).
+- **Amp core (2026-10-12).** D49 and D50 are in force; `*_URL` names are refused in connector env
+  and dropped from inherited ones (PR #8, [amp-core-prep](docs/research/amp-core-prep.md)). No Amp
+  connector. Linux script fixes and the [portability note](docs/research/platform-portability.md)
+  (design, not evidence) are PR #6.
+- **Connectors.** `codex-cli`, `claude-code-cli` and capture-only `hermes-cli`; Codex and Claude
+  are the two selected/staged (D40, D41, T14, H-18).
 - **Pilot.** Private unsigned three-binary install, source `3c542aa5` (T24).
 
 ## Measured
@@ -91,30 +87,34 @@ By LEDGER ID. No eight-hour, 168-hour, production, public or acknowledged-delive
 - **v0.5 foundations:** C1, OS-14 through OS-21 and S-08/OS-15 are merged. W1 covers code
   through private head `9fc730e6`; the later S8 documentation merges had focused evidence only.
 - **v0.5 cut and proof:** the public cut (OS-01, OS-06), its link check (OS-22) and the source
-  release (OS-25) are recorded. OS-23 outsider Gemini and OS-24 fresh clone: evidence not yet
-  linked. The v0.5.1 cleanup is merged and OS-07 settings are applied
+  release (OS-25) are recorded; OS-23 and OS-24 evidence is not yet linked. D48 (OS-30, PR #5)
+  deleted the V1 path. The v0.5.1 cleanup is merged and OS-07 settings are applied
   ([record](docs/qualification/v0.5.1-public-release-cleanup.md#applied-2026-10-11)).
 - **Deferred after `v0.5.0`:** OS-12, OS-13, OS-26, OS-27, OS-28, OS-29 (remove the build's
   retained V1 manifests parsing dependency), OS-31 (D48 devserver follow-up), H-28 and H-29.
-- **Other open work:** H-11, H-12, H-04, F-16, H-18, H-20 through H-24, H-26 and older OS
-  tickets stay open until their own evidence closes them.
+- **Amp (in flight):** [BLOCKED](docs/qualification/m2-amp-readiness.md); no `connectors/amp-cli`
+  until the owner's live probe and rulings H-34 to H-38. H-39 and H-40 are optional hardening,
+  not started; H-41 (executable pin shape) is decided before Amp's connector.
+- **Other open work:** H-11, H-12, H-04, F-16, H-18, H-20 through H-24, H-26, H-42, H-43 and
+  older OS tickets stay open until their own evidence closes them.
 
 ## Gate
 
-The last recorded whole-tree gate is W1, **PASS** on private integration head `9fc730e6`, before
-the public cut. It does not validate public commit `d2b3206` or v0.5.1, and no whole-tree gate
-result for `d2b3206` is linked here. W1 counts and identities, and the v0.5.1 local results, are in
+**PASS** on macOS 26.6.2 arm64, rustc/cargo 1.99.0, at `d2c42de` (the Rust head of
+`post-v060-review-fixes`; later commits change Markdown and `check-connector.sh` and its test):
+build, fmt, clippy exit 0; `cargo test --workspace` 2,307 passed, 0 failed, 40 ignored, 141
+targets. By-hand suites not run. One earlier run under load failed `process_kill`'s 5-second
+settle wait; the rerun alone passed. The pre-cut W1 gate (`9fc730e6`, before D48) is in
 [the cleanup record](docs/qualification/v0.5.1-public-release-cleanup.md#local-validation).
-
-Every lane keeps focused failing-first/acceptance proof and independent review. The integrator
-runs V -> D -> C once on each whole-wave head. A timing failure seen only under load is rerun
-alone; only an isolated reproduction blocks.
+The integrator runs the one [gate](README.md#the-gate) on each whole-wave head; a timing failure
+seen only under load is rerun alone, and only an isolated reproduction blocks.
 
 ## V1 on `v1/trunk`
 
-- V1 is the macOS/Codex CLI foundation, pinned at `7f01234` (tag `v0.1.0`); trunk `main` is
-  at `0c5f477`.
+- V1 is the macOS/Codex CLI foundation, pinned at `7f01234` (tag `v0.1.0`); the private V1
+  repository's `main` is at `0c5f477`.
 - Acceptance criteria 1 to 6 are met at the pin; criterion 7 settles on the owner's read.
 - No 168-hour run is part of V1. It is not event-ready, not production-anchored, not public.
-- The `v1/trunk` hook leg and thirteen checks are not on m2.
+- The `v1/trunk` hook leg is not in this tree (D48); the verifier still ships the thirteen V1
+  checks for v4 traces.
   The supporting private historical record is intentionally omitted from this public OSS cut.

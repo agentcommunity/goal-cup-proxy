@@ -1,11 +1,11 @@
 # LEDGER: M2 work tracker
 
-Updated: 2026-10-11.
+Updated: 2026-10-12.
 
 The ticket list for `m2/wire`: what exists, what is broken, what comes next. One line per
 ticket: status, ID, phase tag, SHA, a pointer. Where things stand overall: [STATUS.md](STATUS.md).
-Commit hashes and branch names cited here refer to private development history not included in
-this repository.
+Commit hashes and branch names cited here are private development history not included in this
+repository, except commits from PR #1 onward, which are on this repository's `main`.
 The long bodies of the 2026-10-02 ledger are the private historical record discussed here.
 The supporting private historical record is intentionally omitted from this public OSS cut.
 
@@ -24,7 +24,8 @@ The supporting private historical record is intentionally omitted from this publ
 
 **v0.5 integration cadence:** each lane keeps focused failing-first and acceptance checks plus an
 independent review/rereview. Those checks are not a lane-level full gate. The integrator merges a
-whole wave one lane at a time, then runs V -> D -> C once on the wave head. A timing failure seen
+whole wave one lane at a time, then runs the one four-command gate (README "The gate") once on
+the wave head. A timing failure seen
 only under concurrent load is rerun alone; only an isolated reproduction blocks. Every lane report
 includes Harmonization: module/glossary fit; replacement and remaining duplication; shims and their
 owners; docs/integrator deltas; cheap duplication removed.
@@ -43,7 +44,8 @@ owners; docs/integrator deltas; cheap duplication removed.
 - Local, not in git: review reports `.superpowers/reviews/2026-09-29-codebase/` (`r2-I1` = seat
   r2, finding I1); planner reports `.superpowers/sdd/`.
 
-V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not here.
+V1 on `v1/trunk` (the private V1 repository's `main` at `0c5f477`) is covered in
+[STATUS.md](STATUS.md), not here.
 
 ---
 
@@ -236,9 +238,9 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   `8a1d0b64` then integrated by `b3c4211d`; covered by the W1 gate at `9fc730e6`.
 - ✅ **OS-18** S5 family retirement derives V1-file allowance from the two retained V1 manifests.
   Lane `11f6bf17`, merged `9b29ce10`; covered by the W1 gate at `9fc730e6`.
-- ✅ **OS-19** S6 offline kit has four synthetic cases. The two data-only case commits are
-  `f9cd4288` and `8e5596d0`, not a fourth source connector or a third package profile; lane
-  `1affe6ac`, merged `b047d854`, covered by the W1 gate at `9fc730e6`.
+- ✅ **OS-19** S6 offline kit had four synthetic cases (six since PR #8's two keyed cases). The two
+  data-only case commits are `f9cd4288` and `8e5596d0`, not a fourth source connector or a third
+  package profile; lane `1affe6ac`, merged `b047d854`, covered by the W1 gate at `9fc730e6`.
 - ✅ **OS-20** C2-0700 private configured roots. Lane `4d72f1d4`, merged `31e9f04f`; covered
   by the W1 gate at `9fc730e6`. The 0600 mirrors, SAFETY comments and lint remain OS-26.
 - ✅ **OS-21** S8 schema, contributor, architecture/security, governance and package guidance
@@ -248,7 +250,8 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#local-validation).
 - ⬜ **OS-23** `[OS]` Outsider Gemini proof: an outsider agent enters through only the shipped
   skill for the Gemini scenario and the sources it names, with no hidden maintainer context; any
-  fix becomes a reviewed wave and the proof repeats. Evidence not yet linked.
+  fix becomes a reviewed wave and the proof repeats. The skill shipped (H-32); its three
+  [trial runs](docs/research/harness-onboarding-trial.md) were all by its author. Not yet linked.
 - ⬜ **OS-24** `[OS]` Fresh-clone proof of the public cut: source identity, link check,
   dependency-fetch boundary, build/test commands and results, without the private worktree or its
   `target/`, saying whether the dependency cache was warm. Evidence not yet linked.
@@ -265,8 +268,8 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   rename. Starts after every other post-tag lane; changes no frozen record shape.
 - ⬜ **OS-29** `[post-tag]` Remove the build's retained V1 manifests parsing dependency. This does
   not block source-only `v0.5.0`.
-- ✅ **OS-30** D48 (owner, 2026-10-11): the `v1-compat` path, its tests, fixtures and
-  `open`/`rusqlite`/`age` deps are deleted; docs describe the capture path; devserver stays.
+- ✅ **OS-30** D48 (owner, 2026-10-11), merged `975075d` (PR #5): the `v1-compat` path, its
+  tests, fixtures and `open`/`rusqlite`/`age` deps are deleted; devserver stays.
 - ⬜ **OS-31** `[post-tag]` D48 follow-up: move `ENTRY_WINDOW_SECONDS`, `DEV_SERVER_SEED` and
   `dev_server_public_key_hex` out of `goalcup-devserver`, drop the daemon's dev-dependency on it
   (tests use it only for a placeholder key), consider deleting the crate, and remove the V1-only
@@ -360,3 +363,37 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   checks. Audit: Connection marks wire; orphan Recovery retires all streams; reader rejects later
   native Segment pre-callback; exit-2 report covers preceding validated prefix. Direct nonvalidating
   DecodeSession consumes it. Post-tag test both-way rejection in CaptureState::apply; not PH-V/v0.5.
+- ✅ **H-30** PR #4 `7652eda`: goldens read the connector list from `connectors/`; a new connector
+  needs no `.rs` edit (proven for the CLI half). [Record](docs/CONNECTOR-CONTRIBUTING.md).
+- ✅ **H-31** PR #6, merged `15f7b43`: Linux script fixes (the key loader reads the mode with BSD,
+  then GNU `stat`) and [the portability note](docs/research/platform-portability.md).
+- ✅ **H-32** PR #7 `4835aa5`: the [skill](skills/adding-a-capture-harness/SKILL.md) and
+  `check-connector.sh` as the contributor entry point. Outsider proof is OS-23.
+- ✅ **H-33** PR #8 `8703825`: Amp core prep (D49, D50, `*_URL` env refusal, keyed kit cases); no
+  `connectors/amp-cli`. [Record](docs/research/amp-core-prep.md).
+- ❓ **H-34** `[next]` Amp key-fingerprint file: Amp writes `.legacy-state-owner.json` with a
+  token-derived `identityKey`, which D41 forbids persisting. Owner picks: a setting that stops it,
+  a D41 amendment confining it to the per-run directory, or Amp stays blocked. Needs the live probe.
+- ❓ **H-35** `[next]` Amp with no local own-session store: if the live probe finds sessions are
+  server-only, schema 1 has no fit (one `[[capture.native]]` row required). Owner picks: stay
+  blocked, a core PR for a native-less connector, or a server-relay design.
+- ❓ **H-36** `[next]` Amp managed settings (machine-wide `managed-settings.json`, server-fetched
+  workspace settings and plugins) cannot be isolated: record their presence, refuse to start, or
+  disclose as a residual.
+- ❓ **H-37** `[next]` Amp token grammar: D49 assumes 20 to 256 bytes of `[A-Za-z0-9_-]`, approved
+  before the live probe. A real token outside it is refused by name; widening is a core PR.
+- ❓ **H-38** `[next]` Amp identity carrier: the keyed `stdout_json` path (D50) matters only if the
+  live probe shows the `init` event arrives before the first model request and names the session.
+- ⬜ **H-39** `[next]` Optional hardening, not started: a private `TMPDIR` per capture launch
+  (Amp readiness core change 4).
+- ⬜ **H-40** `[next]` Settings seed under the run home (Amp readiness core change 6), only if the
+  live probe shows Amp needs one. Not started.
+- ❓ **H-41** `[next]` Decide the per-target executable pin shape (schema-2 map, or one directory
+  per target) before Amp's connector ([portability](docs/research/platform-portability.md), seam 7).
+- ⬜ **H-42** `[next]` Golden-test leftovers: `enumeration.json` hard-codes `manifest_files` as
+  `["manifest.toml"]` (false for `hermes-cli`; derive or drop once OS-29/OS-31 decide the V1
+  manifests); the daemon golden keys `RECORDED_NATIVE_FILES` by id, duplicates `legacy()` as
+  `legacy_family`, and its "no edit here" claim has no proof test (only the CLI half has one).
+- ⬜ **H-43** `[next]` `check-connector.sh` leftovers: no kit-id or `BODY` check (the skill greps
+  by hand); a pin diff with non-pin lines is still called connector-only; the golden awk truncates
+  a path with a space. Docs: the six-case count repeats across docs (DOCS-STANDARD: one place).
