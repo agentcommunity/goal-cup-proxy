@@ -93,6 +93,10 @@ pub struct Daemon {
     pub(super) inner: Arc<DaemonInner>,
 }
 
+/// How long an entry may sit created and never launched before the idle loop abandons it.
+/// `goalcup start` goes from create to launch in seconds.
+pub const UNLAUNCHED_LIMIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 impl Daemon {
     /// Test-only: replace this exact configured root with a symlink immediately after its
     /// successful `mkdir` and before private-mode normalization.
@@ -343,7 +347,9 @@ impl Daemon {
     /// work, and no authenticated control request. What `goalcup-daemon --exit-when-idle`
     /// waits on, so the daemon the CLI starts for a run ends once every run is sealed.
     ///
-    /// **An unfinished capture keeps it up however long it takes**, including one reopened
+    /// **An unfinished capture keeps it up however long it takes**, except one that never
+    /// launched and is older than [`UNLAUNCHED_LIMIT`]: its CLI died, and it is abandoned. That
+    /// includes one reopened
     /// after a crash that nobody has sealed yet: a daemon that idled out over it would be
     /// started again by the next `goalcup seal`, and every reopen of a launched entry chains
     /// another `IngestLost` gap. The grace is measured from the last moment there was work,
@@ -353,6 +359,7 @@ impl Daemon {
         const POLL: std::time::Duration = std::time::Duration::from_millis(500);
         loop {
             tokio::time::sleep(POLL).await;
+            self.abandon_stale_unlaunched(UNLAUNCHED_LIMIT);
             if self.has_work() {
                 self.note_activity();
                 continue;

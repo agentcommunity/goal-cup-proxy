@@ -892,7 +892,8 @@ carry their own amendments and point here for shared text.
 >   run of either reads incomplete (exit 1), never valid, until native capture of that home is
 >   scoped (T24N, which replaces this rule with its own gap for an unavailable scoped source). A
 >   profile whose stores are all under `{home}/` launches with no gap.
-> - A restart reopens an unfinished entry for status and seal only and admits no producer again.
+> - A restart reopens an unfinished entry for status and seal only (and abandon, for an entry
+>   that never launched and handed nothing off; amended 2026-10-13) and admits no producer again.
 >   If its harness was registered (`last_process` set) or its launch recorded (the row
 >   `Started`), the reopen appends one stream-less `Gap { reason: IngestLost, lost_bytes: None }`:
 >   whatever the harness did while no daemon admitted its producers is lost. `goalcup start`

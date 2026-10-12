@@ -991,7 +991,8 @@ async fn a_registered_run_reopened_before_its_launch_chains_the_loss() {
 
 /// Reopening retains exactly enough authority to report and seal. Neither an unfinished entry
 /// that has no goal nor one whose goal was already recorded may regain any creation-time
-/// mutation authority after the daemon restarts.
+/// mutation authority after the daemon restarts. (Abandoning one that never launched is not a
+/// mutation of a run: `a_recovered_capture_that_never_launched_can_be_abandoned`.)
 #[tokio::test]
 async fn a_reopened_capture_accepts_only_status_and_seal() {
     let rig = Rig::start().await;
@@ -1035,10 +1036,6 @@ async fn a_reopened_capture_accepts_only_status_and_seal() {
         .launch(&post_goal.entry_id, &launch_request(&goal))
         .await;
     assert_error_identity(&response, &recovered_conflict(&post_goal.entry_id));
-    assert_unchanged();
-
-    let response = rig.abandon(&pre_goal.entry_id).await;
-    assert_error_identity(&response, &recovered_conflict(&pre_goal.entry_id));
     assert_unchanged();
 
     rig.status(&pre_goal.entry_id)
@@ -2378,6 +2375,83 @@ async fn a_default_daemons_loop_stays_pending() {
     )
     .await;
     assert!(ended.is_err(), "run_forever returned: {ended:?}");
+}
+
+/// Review R4 I1: `goalcup start` died between create and launch, and the daemon restarted. The
+/// entry never handed anything off, so it may still be abandoned: otherwise it holds its
+/// reservation and keeps a run-scoped daemon up forever.
+#[tokio::test]
+async fn a_recovered_capture_that_never_launched_can_be_abandoned() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let rig = rig.restart().await;
+    let abandoned = rig.abandon(&info.entry_id).await;
+    assert_eq!(abandoned.status(), 204, "{}", abandoned.body());
+    assert!(
+        !rig.artifact_dir(&info.entry_id).exists(),
+        "the reserved chain is gone"
+    );
+    assert!(rig.daemon.registry().get(&info.entry_id).unwrap().is_none());
+}
+
+/// Review R4 I1: the CLI died between create and launch, so nothing will ever seal or abandon
+/// the entry. The idle loop abandons a never-launched entry past its bound, and leaves a
+/// launched one alone.
+#[tokio::test]
+async fn a_stale_capture_that_never_launched_is_abandoned_by_the_daemon() {
+    let rig = Rig::start().await;
+    let stale = rig.created("codex-cli").await;
+    let launched = rig.created("codex-cli").await;
+    let goal = rig
+        .goal_accepted(&launched.entry_id, b"write hello.txt")
+        .await;
+    rig.launch(&launched.entry_id, &launch_request(&goal)).await;
+    let registered = rig.created("codex-cli").await;
+    let harness = Child::sleeping();
+    let response = rig
+        .register(
+            &registered.entry_id,
+            &harness.registration(registered.process_generation),
+        )
+        .await;
+    assert_eq!(response.status(), 204, "{}", response.body());
+
+    rig.daemon
+        .abandon_stale_unlaunched(std::time::Duration::from_secs(3600));
+    assert!(
+        rig.artifact_dir(&stale.entry_id).exists(),
+        "a young entry is kept"
+    );
+
+    let errors = format!("{:?}", rig.daemon.cycle_errors());
+    rig.daemon
+        .abandon_stale_unlaunched(std::time::Duration::ZERO);
+    assert!(
+        !rig.artifact_dir(&stale.entry_id).exists(),
+        "the reserved chain is gone"
+    );
+    assert!(
+        rig.artifact_dir(&registered.entry_id).exists(),
+        "a registered harness is left for `goalcup seal`"
+    );
+    assert_eq!(
+        format!("{:?}", rig.daemon.cycle_errors()),
+        errors,
+        "and it is not tried, so no refusal is noted"
+    );
+    assert!(
+        rig.daemon
+            .registry()
+            .get(&stale.entry_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        rig.trace_dir(&launched.entry_id)
+            .join("chain.jsonl")
+            .exists(),
+        "a launched entry is never abandoned"
+    );
 }
 
 /// Review R4 I3: the terminal is chained and synced, and then the registry row does not say so

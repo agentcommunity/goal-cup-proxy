@@ -91,8 +91,10 @@ CLI phases are in [commands/start.rs]; daemon finish stages are in
 
 [CONTRACTS C6][cont] pins spawn/finish; [TERMINATION](TERMINATION.md) pins process ownership. A restart
 reopens an unfinished v5 entry under `RecoveredStatusSealOnly`: status and seal remain authoritative,
-every other authenticated mutator refuses before side effects, and a launched entry gets one
-`IngestLost` gap. The launcher reconnects finish once.
+abandon still works for an entry that never launched and handed nothing off, every other
+authenticated mutator refuses before side effects, and a launched entry gets one `IngestLost` gap.
+An entry that never launched and handed nothing off is abandoned by the idle loop after
+`UNLAUNCHED_LIMIT` (15 minutes). The launcher reconnects finish once.
 
 ## 6. Chain, records and verdicts
 

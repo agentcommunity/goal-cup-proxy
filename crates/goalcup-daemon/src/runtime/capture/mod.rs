@@ -193,6 +193,9 @@ pub(crate) struct CaptureEntry {
     finishing: AtomicBool,
     /// What an expired finish left for the next one to chain; see [`ExpiredFinish`].
     expired: Mutex<Option<ExpiredFinish>>,
+    /// When this daemon created or reopened the entry, on a clock that does not count sleep: a
+    /// laptop asleep mid-start does not age it toward [`super::UNLAUNCHED_LIMIT`].
+    opened: std::time::Instant,
     /// The local finish once it is chained, before and after its registry row says so.
     pub(super) chained_finish: Mutex<Option<ChainedFinish>>,
     /// Test seam: a pause taken just before the named finish stage's admission check.
@@ -551,9 +554,13 @@ impl Daemon {
     /// Abandon a v5 entry before its launch and before any process handoff is prepared: its
     /// reservation, row, artifacts and still-empty workspace go, as for a refused create, and
     /// only then its owner and ingest grant. After a launch or a handoff, it is sealed instead.
+    ///
+    /// A recovered entry may be abandoned too: what makes an abandon safe is that nothing was
+    /// handed off, which the checks below prove, and a never-launched entry the CLI can no
+    /// longer finish would otherwise hold its reservation and keep a run-scoped daemon up for
+    /// good (review R4 I1).
     pub(super) fn abandon_capture(&self, entry_id: &str) -> Result<(), DaemonError> {
         let capture = self.capture_entry(entry_id)?;
-        capture.require_live_capture_authority()?;
         let run = capture.lock();
         run.refuse_if_finished()?;
         let row = self
@@ -574,6 +581,37 @@ impl Daemon {
         self.discard_capture(entry_id, &artifact, Some(&row.workspace))?;
         self.captures().remove(entry_id);
         Ok(())
+    }
+
+    /// Abandon every entry that never launched, has handed nothing off (its registry row is
+    /// still `OpenInitial`) and was opened by this daemon more than `older_than` ago. A
+    /// `goalcup start` goes from create to launch in seconds, so such an entry's CLI died (it
+    /// was killed, or its terminal closed): nothing will ever seal or abandon it. An entry with
+    /// a registered harness is left for `goalcup seal`. The idle loop calls this; a failure is
+    /// noted and retried at the next poll.
+    pub fn abandon_stale_unlaunched(&self, older_than: std::time::Duration) {
+        let candidates: Vec<String> = self
+            .captures()
+            .values()
+            .filter(|capture| capture.opened.elapsed() >= older_than)
+            .filter_map(|capture| {
+                let run = capture.run.try_lock().ok()?;
+                (!run.launched() && run.finished().is_none()).then(|| run.entry.entry_id.clone())
+            })
+            .collect();
+        // Registration writes only the registry, so the row is what says nothing was handed off.
+        let stale = candidates.into_iter().filter(|entry_id| {
+            self.registry()
+                .get(entry_id)
+                .ok()
+                .flatten()
+                .is_some_and(|row| row.process_handoff_phase() == ProcessHandoffPhase::OpenInitial)
+        });
+        for entry_id in stale {
+            if let Err(error) = self.abandon_capture(&entry_id) {
+                self.inner.cycles.note(super::Cadence::Tick, &error);
+            }
+        }
     }
 
     /// Admit a v5 entry's harness process: at the generation its create answered, once, and
@@ -1035,6 +1073,7 @@ impl CaptureEntry {
             thread: Mutex::new(None),
             finishing: AtomicBool::new(false),
             expired: Mutex::new(None),
+            opened: std::time::Instant::now(),
             chained_finish: Mutex::new(None),
             #[cfg(any(test, feature = "test-hooks"))]
             stage_delay: Mutex::new(None),
