@@ -9,8 +9,7 @@
 //! signatures for it. `DaemonConfig::validate` refuses a non-loopback `control_addr` on the
 //! other side of the same wire; this is the same refusal, on this side.
 
-#[path = "support/chain.rs"]
-mod chain;
+use crate::common::chain;
 
 use goalcup_devserver::ReceiptRequest;
 use goalcup_protocol::receipt::StartReceipt;
