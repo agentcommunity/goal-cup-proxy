@@ -47,12 +47,11 @@ pub use submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};
 pub mod terminate;
 pub mod workspace;
 
-// The immutable-submission writer is a daemon API. Re-export its daemon-owned request and
-// journal types together with the platform capabilities in its public signature so consumers
-// such as the development server do not need a second, direct platform dependency.
-pub use goalcup_platform::handle_budget::NativeHandleBudgetV1;
-pub use goalcup_platform::sourcecap::SourceDir;
-pub use goalcup_platform::tracecap::{EntryArtifactRoot, TraceDir};
+// `status`'s public status-line writer takes an `EntryArtifactRoot`, so a caller of it needs
+// no direct `goalcup-platform` dependency. The V1 immutable-submission writer whose
+// signature also needed `SourceDir`, `TraceDir` and `NativeHandleBudgetV1` was removed by
+// D48, and those re-exports went with OS-31.
+pub use goalcup_platform::tracecap::EntryArtifactRoot;
 
 /// This build's version, for `trace.toml` and for the `VersionChange` the daemon chains
 /// when it observes its own binary change under a running entry.
