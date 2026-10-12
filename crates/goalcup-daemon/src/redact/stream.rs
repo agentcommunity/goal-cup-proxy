@@ -23,9 +23,9 @@
 //! covers that. A block's `BEGIN` is a live candidate from its first byte until its `END`
 //! completes it, so nothing inside it is released, and a complete match of any rule that
 //! straddles a cut moves the cut back to its start, so a claim across an edge of the block
-//! is held with it. A block that never gets its `END` ends with the stream: it is held until
-//! the hold fills (then the stream fails closed from its `BEGIN`) or until the stream ends,
-//! where the shared regexes take the open block to the end, as they do a record.
+//! is held with it. A block whose `END` does not start within 8,192 units of its `BEGIN` line
+//! is those units (fewer where a unit that is not ASCII or the stream's end comes first): its
+//! candidate ends there, below the hold, and the shared regexes take the same span.
 //!
 //! # Connector `extra_patterns` (D39)
 //!
@@ -425,7 +425,7 @@ static SHAPES: [Shape; 19] = [
     },
     Shape {
         kind: "private_key",
-        source: r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)",
+        source: r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\x00-\x7F]{0,8192}?-----END [A-Z ]*PRIVATE KEY-----|[\x00-\x7F]{0,8192})",
         form: Form::PrivateKey,
     },
     prefixed(
@@ -792,8 +792,19 @@ enum Pem {
     Begin(u8),
     Header(HeaderTail),
     Dashes(u8),
-    Body(EndLine),
+    Body {
+        /// Units after the BEGIN line, this one included.
+        n: u32,
+        end: EndLine,
+        /// Units of the END line in progress, from its first dash; zero when none is.
+        since: u32,
+    },
 }
+
+/// The most units the shared `private_key` literal takes after its BEGIN line, all ASCII: an
+/// END line must start within them, and without one the block is them. An RSA-8192 key is
+/// about 6.4 KiB, and a block this long fits the hold, so a lone BEGIN is decided below it.
+const PEM_BODY_MAX: u32 = 8192;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum JsonPhase {
@@ -1149,9 +1160,10 @@ fn step_bearer(pos: &mut u8, spaced: &mut bool, count: &mut u8, u: Unit) -> bool
 }
 
 impl Pem {
-    /// `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)`.
-    /// The `\z` arm is not a unit this walk takes: a block still open at the end of the
-    /// stream is decided there, with every other held byte, by the shared regexes.
+    /// `-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\x00-\x7F]{0,8192}?-----END [A-Z ]*PRIVATE
+    /// KEY-----|[\x00-\x7F]{0,8192})`: to an END line that starts within [`PEM_BODY_MAX`] units,
+    /// else those units (fewer at the end of the stream, which is decided there with every
+    /// other held byte by the shared regexes).
     fn step(&mut self, u: Unit) -> Step {
         let next = match self {
             Pem::Begin(p) => {
@@ -1177,21 +1189,34 @@ impl Pem {
                     return Step::Dead;
                 }
                 if *n + 1 == 5 {
-                    Pem::Body(EndLine::Scan(0))
+                    Pem::Body {
+                        n: 0,
+                        end: EndLine::Scan(0),
+                        since: 0,
+                    }
                 } else {
                     Pem::Dashes(*n + 1)
                 }
             }
-            // `[\s\S]` cannot match an invalid byte; a completed END line finishes the
-            // lazy match with this unit.
-            Pem::Body(end) => {
-                return if u == Unit::Invalid {
-                    Step::Dead
-                } else if end.step(u) {
-                    Step::Last
-                } else {
-                    Step::Live
+            // The body is ASCII, so both arms end before any other unit; a completed END
+            // line finishes the lazy arm with this unit.
+            Pem::Body { n, end, since } => {
+                if ascii(u).is_none() {
+                    return Step::Dead;
+                }
+                if end.step(u) {
+                    return Step::Last;
+                }
+                *n += 1;
+                *since = match end {
+                    EndLine::Scan(d) => u32::from(*d),
+                    EndLine::Lit(p) => 5 + u32::from(*p),
+                    EndLine::Header(_) | EndLine::Tail(_) => *since + 1,
                 };
+                // Live while an END line may still start within the bound (the next unit is
+                // unit `n`), or one that did is still open. Otherwise the bounded arm ended
+                // before this unit.
+                return Step::of(*n <= PEM_BODY_MAX || (*since > 0 && *n - *since <= PEM_BODY_MAX));
             }
         };
         *self = next;
@@ -1484,7 +1509,7 @@ impl Candidate {
             (Walk::Masked(masked), _) => masked.past_separator().then_some(self.start),
             (Walk::Bearer { count, .. }, _) => (*count >= 1).then_some(self.start),
             (Walk::Jwt { pos, .. }, _) => (*pos == 3).then_some(self.start),
-            (Walk::Pem(Pem::Body(_)), _) => Some(self.start),
+            (Walk::Pem(Pem::Body { .. }), _) => Some(self.start),
             (Walk::Json(json), _) => (json.phase == JsonPhase::Value).then_some(json.value_start),
             (Walk::Shell(Shell::Value(_)), _) => Some(self.start),
             // A connector field's value has begun: from there it is the rule's span.
@@ -2772,14 +2797,14 @@ mod tests {
             .expect("private_key literal")
             .re
             .as_str();
-        // The END line, without the `|\z` arm: the end of the input is not a line this detector
-        // can complete, and the stream decides an open block at its end.
+        // The END line of the lazy arm, without the bounded arm: a block with no END line is
+        // the walk's unit count, not a line this detector completes.
+        let body = format!("[\\x00-\\x7F]{{0,{PEM_BODY_MAX}}}");
         let end_half = shared
-            .split("[\\s\\S]*?")
+            .split(&format!("(?:{body}?"))
             .nth(1)
-            .and_then(|h| h.strip_prefix("(?:"))
-            .and_then(|h| h.strip_suffix("|\\z)"))
-            .expect("lazy body and an END-or-end-of-input arm in the literal");
+            .and_then(|h| h.strip_suffix(&format!("|{body})")))
+            .expect("a bounded lazy body to an END line, or the bounded body, in the literal");
         let end_re = regex::bytes::Regex::new(end_half).expect("END half compiles");
         let pieces: &[&[u8]] = &[
             b"-",

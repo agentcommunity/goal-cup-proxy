@@ -91,9 +91,13 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   `spikes/codex-cli/fixtures/rollout-main-01a06614.jsonl`, largest 2,020 B; 8 in
   `spikes/codex-app/fixtures/rollout-main-01a06657.jsonl`, largest 2,276 B). The earlier
   "unreachable" counted wire client messages. Ticket: F-07.
-- **Redaction residuals.** An invalid UTF-8 byte inside a key body leaves the whole key raw (fix
-  before any raw-byte capture surface). A lone `BEGIN` mention redacts to the end of that record and
-  breaks that record's JSON. Ticket: H-20.
+- **Redaction residuals.** A PEM block is ASCII and at most 8,192 characters after its `BEGIN`
+  line: an `END` line must start within them, and without one the block is those characters. A
+  lone `BEGIN` mention therefore redacts the next 8,192 characters, across record boundaries,
+  and breaks the JSON of every record it reaches; the stream after it is kept (before the bound
+  it redacted the rest of the stream, a whole session). A non-ASCII character or an invalid
+  UTF-8 byte inside a key body ends the block there and leaves the rest of the key raw (fix before
+  any raw-byte capture surface). Ticket: H-20.
 
 ### Hermes reference row (D41): what the key scan cannot see
 

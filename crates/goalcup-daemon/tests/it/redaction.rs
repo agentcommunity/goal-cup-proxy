@@ -1252,18 +1252,20 @@ fn with_script(body: &str) -> String {
 }
 
 /// The script's rules where the shared set spells the regex differently, as
-/// `(kind, python regex, rust regex)`. Two literals differ in spelling. The
-/// block rule's end of input is `\Z` in Python and `\z` in Rust. In the shell/TOML literal the
+/// `(kind, python regex, rust regex)`. One literal differs in spelling: in the shell/TOML literal the
 /// script's groups capture, which does not matter to it (it replaces `m.group(0)`); the shared
 /// literal's are non-capturing, because in Rust a capture group
 /// *is* the span (`Pattern::span_group`) and this rule's span is the whole match. And the
 /// script writes the optional quote as `['\"]` inside a Python raw string, which is an escaped
 /// quote that means the same as Rust's `['"]`.
 ///
-/// One differs in a bound: the daemon's `email` local part is at most 64 units, because its
-/// stream holds an undecided run and a bare token run must not hold to the hold bound (I-2).
-/// The script holds nothing and keeps `+`; it redacts a longer local part whole, so it
-/// redacts more, never less.
+/// Two differ in a bound, because the daemon's stream holds an undecided run and the script
+/// holds nothing. The daemon's `email` local part is at most 64 units, so a bare token run does
+/// not hold to the hold bound (I-2); the script keeps `+` and redacts a longer local part whole.
+/// The daemon's PEM block is ASCII and ends at an END line that starts within 8,192 units, or
+/// is those units, so a lone BEGIN no longer redacts the rest of the stream (I-1); the script
+/// runs the block to its END line or the end of the text. In both the script redacts more,
+/// never less.
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "generic_secret_assignment",
@@ -1278,7 +1280,7 @@ const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "private_key",
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\x00-\x7F]{0,8192}?-----END [A-Z ]*PRIVATE KEY-----|[\x00-\x7F]{0,8192})",
     ),
 ];
 

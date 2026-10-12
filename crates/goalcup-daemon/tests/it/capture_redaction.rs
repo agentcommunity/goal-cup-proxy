@@ -1355,10 +1355,12 @@ fn long_secrets_are_chunking_invariant() {
     let b64ish = b"abcdefghijklmnopqrstuvwxyz0123456789/";
     let mut cases: Vec<(&str, Vec<u8>, bool, &[u8])> = Vec::new();
 
-    let mut pem = b"key follows: -----BEGIN RSA PRIVATE KEY-----\n".to_vec();
+    // A PEM block is at most 8,192 units after its BEGIN line, so a longer body is the bounded
+    // block and then text: the stream equals the whole-record policy.
+    let mut pem = b"key follows: -----BEGIN RSA PRIVATE KEY-----\nSYNTHETICBODYMARK".to_vec();
     let body = lower(&mut rng, 40_000, b64ish);
     pem.extend_from_slice(&body);
-    pem.extend_from_slice(b"SYNTHETICBODYMARK\n-----END RSA PRIVATE KEY-----\ntrailer");
+    pem.extend_from_slice(b"\n-----END RSA PRIVATE KEY-----\ntrailer");
     cases.push(("pem", pem, true, b"SYNTHETICBODYMARK"));
 
     let mut jwt = b"cookie eyJhbGciOiJIUzI1NiJ9.eyJ".to_vec();
@@ -1408,11 +1410,10 @@ fn long_secrets_are_chunking_invariant() {
     spaced.extend_from_slice(b"abcdefghijklmnopqrstuvwxyz end");
     cases.push(("bearer-spaces", spaced, false, b""));
 
-    // A PEM block with no END line: replaced to the end of the stream.
-    let mut open_pem = b"-----BEGIN PRIVATE KEY-----\n".to_vec();
+    // A PEM block with no END line: replaced for 8,192 units, not to the end of the stream.
+    let mut open_pem = b"-----BEGIN PRIVATE KEY-----\nSYNTHETICOPENPEMMARK".to_vec();
     open_pem.extend_from_slice(&lower(&mut rng, 30_000, b64ish));
-    open_pem.extend_from_slice(b"SYNTHETICOPENPEMMARK");
-    cases.push(("pem-unterminated", open_pem, false, b"SYNTHETICOPENPEMMARK"));
+    cases.push(("pem-unterminated", open_pem, true, b"SYNTHETICOPENPEMMARK"));
 
     for (name, input, legacy_equal, secret) in &cases {
         let reference = retained_of(
@@ -1594,46 +1595,46 @@ fn a_pem_block_is_never_shadowed_at_any_split_point() {
     }
 }
 
-/// The same at the hold bound: a block with a claim inside it that fits in the hold, one that
-/// outgrows it with the claim before, at and after the bound, one with the claim last, and a
-/// `BEGIN` that never ends before a later key. Past the bound the stream fails closed and
-/// replaces from the block's start to the record terminator, which here is the block.
+/// The same at the PEM bound: an END line must start within 8,192 units of the BEGIN line,
+/// and without one the block is those units (I-1), which fit the hold. A block with a claim
+/// inside it is one redaction; a block whose END comes later, and a key with no END, are the
+/// bounded block with the claim inside it, and the text after the bound stays. The stream
+/// equals the whole-record policy at every chunking.
 #[test]
-fn a_pem_block_with_a_claim_inside_is_one_redaction_at_the_hold_bound() {
+fn a_pem_block_with_a_claim_inside_is_one_redaction_at_the_pem_bound() {
     const BEGIN: &str = "-----BEGIN RSA PRIVATE KEY-----\n";
     const END: &str = "-----END RSA PRIVATE KEY-----";
+    const BOUND: usize = 8192;
     let mut rng = Rng(0xB10C);
     let filler = |rng: &mut Rng, n: usize| -> String {
         let set = b"abcdefghijklmnopqrstuvwxyz0123456789/";
         (0..n).map(|_| set[rng.below(set.len())] as char).collect()
     };
     let token = "ghp_AAAAAAAAAAAAAAAAAAAA";
-    // `(name, body before the claim, claim, body after it)`.
     let h = MAX_HELD_BYTES;
-    let mut cases: Vec<(String, String, &str, String)> = Vec::new();
-    for (name, before, after) in [
-        ("fits the hold", h / 2 - 300, h / 2 - 300),
-        ("claim just inside the bound", h - 64, 4096),
-        ("claim at the bound", h - BEGIN.len(), 4096),
-        ("claim just past the bound", h + 64, 4096),
-        ("claim first", 0, h + 4096),
-        ("claim last", h + 4096, 0),
+    // The block starts after `log `; its body starts at the BEGIN line's newline.
+    let body_at = "log ".len() + BEGIN.len() - 1;
+    let bounded = body_at + BOUND;
+    // `(name, input, the end of the private_key span that starts the record)`.
+    let mut cases: Vec<(String, Vec<u8>, usize)> = Vec::new();
+    // The END starts at body unit `before + token + after + 4` (four newlines precede it).
+    let at_bound = BOUND - token.len() - 4 - 100;
+    for (name, before, after, whole) in [
+        ("fits the hold", BOUND / 2 - 300, BOUND / 2 - 300, true),
+        ("END starts at the bound", at_bound, 100, true),
+        ("END starts past the bound", at_bound + 1, 100, false),
+        ("claim first, END past the hold", 0, h + 4096, false),
     ] {
+        let block = format!(
+            "{BEGIN}{}\n{token}\n{}\n{END}",
+            filler(&mut rng, before),
+            filler(&mut rng, after)
+        );
+        let end = if whole { 4 + block.len() } else { bounded };
         cases.push((
             name.to_string(),
-            filler(&mut rng, before),
-            token,
-            filler(&mut rng, after),
-        ));
-    }
-    let mut inputs: Vec<(String, Vec<u8>, Vec<u8>)> = Vec::new();
-    let mut truncated: Vec<(String, Vec<u8>, Vec<u8>)> = Vec::new();
-    for (name, before, claim, after) in &cases {
-        let block = format!("{BEGIN}{before}\n{claim}\n{after}\n{END}");
-        inputs.push((
-            name.clone(),
             format!("log {block}\ntrailer").into_bytes(),
-            claim.as_bytes().to_vec(),
+            end,
         ));
     }
     // A BEGIN with no END, a claim, more than the hold of text, then a whole second key.
@@ -1643,40 +1644,41 @@ fn a_pem_block_with_a_claim_inside_is_one_redaction_at_the_hold_bound() {
         filler(&mut rng, h + 4096),
         filler(&mut rng, 200)
     );
-    inputs.push((
+    cases.push((
         "unterminated begin, claim, then a later key".to_string(),
         format!("log {run}\ntrailer").into_bytes(),
-        token.as_bytes().to_vec(),
+        bounded,
     ));
-
-    // Keys with no END at all, at and past the bound: a block to the end of the stream.
+    // Keys with no END at all: to the end of the stream within the bound, else the bound.
     for (name, before, after) in [
-        ("truncated, fits the hold", h / 2 - 300, h / 2 - 300),
-        ("truncated, claim at the bound", h - BEGIN.len(), 4096),
-        ("truncated, claim past the bound", h + 64, 4096),
+        (
+            "truncated, fits the bound",
+            BOUND / 2 - 300,
+            BOUND / 2 - 300,
+        ),
         ("truncated, claim first", 0, h + 4096),
     ] {
-        let (before, after) = (filler(&mut rng, before), filler(&mut rng, after));
-        truncated.push((
-            name.to_string(),
-            format!("log {BEGIN}{before}\n{token}\n{after}").into_bytes(),
-            token.as_bytes().to_vec(),
-        ));
+        let input = format!(
+            "log {BEGIN}{}\n{token}\n{}",
+            filler(&mut rng, before),
+            filler(&mut rng, after)
+        );
+        let end = input.len().min(bounded);
+        cases.push((name.to_string(), input.into_bytes(), end));
     }
 
-    let expected_whole: &[u8] = b"log <redacted:private_key>\ntrailer";
-    let expected_open: &[u8] = b"log <redacted:private_key>";
-    #[allow(clippy::type_complexity)]
-    let all: Vec<(&String, &Vec<u8>, &Vec<u8>, &[u8])> = inputs
-        .iter()
-        .map(|(n, i, c)| (n, i, c, expected_whole))
-        .chain(truncated.iter().map(|(n, i, c)| (n, i, c, expected_open)))
-        .collect();
-    for (name, input, claim, expected) in all {
+    for (name, input, end) in &cases {
         let want = legacy(input);
-        assert_eq!(want.1.len(), 1, "{name}: the whole record is one block");
-        assert_eq!(want.1[0].kind, "private_key", "{name}");
-        assert_eq!(want.0, expected, "{name}: the whole record");
+        let first = &want.1[0];
+        assert_eq!(
+            (first.kind.as_str(), first.start, first.end),
+            ("private_key", 4, *end as u64),
+            "{name}: the block"
+        );
+        assert!(
+            !want.1[1..].iter().any(|s| s.start < *end as u64),
+            "{name}: one redaction for the block"
+        );
         for chunks in [
             vec![MAX_SEGMENT_BYTES],
             vec![1],
@@ -1695,8 +1697,10 @@ fn a_pem_block_with_a_claim_inside_is_one_redaction_at_the_hold_bound() {
                 "{name}: chunking {:?}",
                 &chunks[..4.min(chunks.len())]
             );
-            assert!(!contains(&got.0, claim), "{name}: the claim is retained");
-            assert!(!contains(&got.0, b"MIIB"), "{name}: key material retained");
+            assert!(
+                !contains(&got.0, token.as_bytes()),
+                "{name}: the claim is retained"
+            );
         }
     }
 }
@@ -2043,65 +2047,78 @@ fn metadata_is_redacted_without_retaining_query() {
     assert!(metadata.validate().is_ok());
 }
 
+/// A PEM body far past the bound (one MiB) never grows the hold: its first 8,192 units are
+/// the block, and the rest leaves as it streams past, exactly as the whole-record policy
+/// redacts it (I-1).
 #[test]
 fn long_private_key_does_not_grow_pending_buffer() {
     let mut p = Producer::new(P1);
     let mut records = p.open(1, CaptureSource::WireResponse);
     let lead = b"{\"content\":\"here is the key ";
     let begin = b"-----BEGIN OPENSSH PRIVATE KEY-----\n";
-    records.extend(p.bytes(1, lead));
-    records.extend(p.bytes(1, begin));
     let line = b"b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn\n";
-    let mut body_len = 0usize;
-    // One MiB of key body, pushed in bounded frames. Nothing of it is ever returned.
-    for i in 0..16u64 {
-        let chunk: Vec<u8> = line
+    let tail = b"-----END OPENSSH PRIVATE KEY-----\n\"}";
+    let mut input = Vec::new();
+    let mut pushed = 0usize;
+    let accounted = |records: &[CaptureRecord]| -> usize {
+        records
             .iter()
-            .copied()
-            .cycle()
-            .take(MAX_SEGMENT_BYTES)
-            .collect();
-        body_len += chunk.len();
-        let out = p.bytes(1, &chunk);
-        let mut flushed = p.redactor.flush(daemon_time(i)).unwrap();
-        flushed.extend(out);
-        assert!(!contains(&all_segment_bytes(&flushed), b"b3BlbnNz"));
-        records.extend(flushed);
+            .filter_map(|r| match r {
+                CaptureRecord::Segment { source_len, .. } => Some(*source_len as usize),
+                _ => None,
+            })
+            .sum()
+    };
+    for (i, chunk) in [lead.to_vec(), begin.to_vec()]
+        .into_iter()
+        .chain((0..16).map(|_| {
+            line.iter()
+                .copied()
+                .cycle()
+                .take(MAX_SEGMENT_BYTES)
+                .collect()
+        }))
+        .chain([tail.to_vec()])
+        .enumerate()
+    {
+        records.extend(p.bytes(1, &chunk));
+        records.extend(p.redactor.flush(daemon_time(i as u64)).unwrap());
+        pushed += chunk.len();
+        input.extend_from_slice(&chunk);
+        assert!(
+            pushed - accounted(&records) <= MAX_HELD_BYTES,
+            "held {} bytes after {pushed} pushed",
+            pushed - accounted(&records)
+        );
     }
-    let key_start = (lead.len()) as u64;
-    // The bytes before the key were released while the key streamed past: the key's
-    // prefix is not what held them back.
-    assert_eq!(retained_of(&records, 1).0, lead);
+    records.extend(p.end(1, EndReason::Complete));
+    let (bytes, spans) = retained_of(&records, 1);
+    let key_start = lead.len() as u64;
+    assert_eq!(
+        spans[0],
+        RedactionAuditSpan {
+            kind: "private_key".into(),
+            start: key_start,
+            end: key_start + (begin.len() - 1 + 8192) as u64
+        }
+    );
+    assert_eq!((bytes, spans), legacy(&input));
 
-    // Interrupted mid-key, the replacement in progress is dropped with the undecided
-    // bytes: the retained source range ends where the key begins, so a resume from the
-    // durable end re-reads the key from its start, and the gap accounts for the rest.
+    // Interrupted mid-key, the undecided key is dropped: the retained source range ends where
+    // the key begins, so a resume from the durable end re-reads the key from its start, and
+    // the gap accounts for the rest.
     let mut q = Producer::new(P1);
     q.open(1, CaptureSource::WireResponse);
     q.bytes(1, lead);
     q.bytes(1, begin);
-    for _ in 0..16 {
-        let chunk: Vec<u8> = line
-            .iter()
-            .copied()
-            .cycle()
-            .take(MAX_SEGMENT_BYTES)
-            .collect();
-        q.bytes(1, &chunk);
-    }
+    let body: Vec<u8> = line.iter().copied().cycle().take(4096).collect();
+    q.bytes(1, &body);
     let cut = q
         .redactor
         .interrupt(daemon_time(99), GapReason::ProducerLost);
     let (kept, spans) = retained_of(&cut, 1);
     assert_eq!((kept.as_slice(), spans.len()), (lead.as_slice(), 0));
-    let covered: u64 = cut
-        .iter()
-        .filter_map(|r| match r {
-            CaptureRecord::Segment { source_len, .. } => Some(*source_len),
-            _ => None,
-        })
-        .sum();
-    assert_eq!(covered, key_start);
+    assert_eq!(accounted(&cut) as u64, key_start);
     assert!(matches!(
         cut.last(),
         Some(CaptureRecord::Gap {
@@ -2109,23 +2126,6 @@ fn long_private_key_does_not_grow_pending_buffer() {
             ..
         })
     ));
-
-    let tail = b"-----END OPENSSH PRIVATE KEY-----\n\"}";
-    records.extend(p.bytes(1, tail));
-    records.extend(p.end(1, EndReason::Complete));
-    let (bytes, spans) = retained_of(&records, 1);
-    let end_of_key = key_start + (begin.len() + body_len + tail.len() - 3) as u64;
-    assert_eq!(
-        spans,
-        vec![RedactionAuditSpan {
-            kind: "private_key".into(),
-            start: key_start,
-            end: end_of_key
-        }]
-    );
-    let mut want = lead.to_vec();
-    want.extend_from_slice(b"<redacted:private_key>\n\"}");
-    assert_eq!(bytes, want);
 }
 
 #[test]
@@ -3212,5 +3212,63 @@ fn a_long_codex_reasoning_item_streams_through_intact() {
         for record in bytes.split(|&b| b == b'\n').filter(|r| !r.is_empty()) {
             serde_json::from_slice::<serde_json::Value>(record).expect("each record is JSON");
         }
+    }
+}
+
+/// I-1: a lone PEM `BEGIN` (an agent writing a PEM parser, `grep` output, a key cut off by an
+/// output limit) with no END used to redact the rest of the stream, a whole native session,
+/// because a capture stream is one text and the block ran to its end. The measured shape: one
+/// JSONL record mentioning `BEGIN`, then 2,000 ordinary records. The block is now at most
+/// 8,192 units, so the stream equals the whole-record policy, and every record past the bound
+/// leaves intact and parses.
+#[test]
+fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
+    let mut input =
+        br#"{"type":"msg","text":"if line.starts_with(\"-----BEGIN PRIVATE KEY-----\") {"}"#
+            .to_vec();
+    input.push(b'\n');
+    let mut later = Vec::new();
+    for i in 0..2000 {
+        later.extend_from_slice(
+            format!(
+                "{{\"type\":\"msg\",\"n\":{i},\"text\":\"ordinary transcript line number {i}\"}}\n"
+            )
+            .as_bytes(),
+        );
+    }
+    input.extend_from_slice(&later);
+    let begin_at = 44;
+    let block_end = begin_at + "-----BEGIN PRIVATE KEY-----".len() + 8192;
+    let want = legacy(&input);
+    assert_eq!(
+        want.1,
+        vec![RedactionAuditSpan {
+            kind: "private_key".into(),
+            start: begin_at as u64,
+            end: block_end as u64
+        }]
+    );
+    let mut rng = Rng(0x0B_E61A);
+    for chunks in [
+        vec![MAX_SEGMENT_BYTES],
+        vec![1],
+        random_chunks(&mut rng, 3000),
+    ] {
+        let got = retained_of(
+            &stream_through(StreamRedactor::new(), &input, &chunks, 2),
+            1,
+        );
+        assert_eq!(got, want, "chunks {:?}", &chunks[..1]);
+        // Everything from the first record boundary after the block is kept as it was.
+        let rest = &input[block_end..];
+        let kept_from = block_end + rest.iter().position(|&b| b == b'\n').unwrap() + 1;
+        assert!(
+            got.0.ends_with(&input[kept_from..]),
+            "chunks {:?}: the records after the bound were lost ({} of {} bytes kept)",
+            &chunks[..1],
+            got.0.len(),
+            input.len()
+        );
+        assert!(input.len() - kept_from > 120_000);
     }
 }

@@ -88,7 +88,8 @@ pub struct Pattern {
 pub(crate) const SOFT_KIND: &str = "masked_key";
 
 /// The kind of the one block rule in the shared set: a PEM private key, from its `BEGIN` line
-/// to the first `END` line. Only [`compile`] reads this name. A block claim absorbs every hard
+/// to the first `END` line that starts within 8,192 ASCII characters, else those characters (a
+/// key cut off before its `END`). Only [`compile`] reads this name. A block claim absorbs every hard
 /// claim it contains or that crosses its edge, so a key is never left raw because something
 /// inside it, or touching it, was claimed first; see [`select`] and [`Pattern::block`].
 pub(crate) const BLOCK_KIND: &str = "private_key";
@@ -154,9 +155,14 @@ const SHARED: &[(&str, &str)] = &[
         "jwt",
         r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}",
     ),
+    // Bounded, because a capture stream is one text: an unbounded block with no END ran to the
+    // end of the stream, a whole session. A real key (RSA-8192 is about 6.4 KiB) ends within
+    // the bound; a key cut off before its END takes the next 8,192 characters, not the rest.
+    // The body is ASCII, as base64 and its escapes are: a bounded `[\s\S]` compiles past the
+    // regex crate's 10 MiB limit; `[\x00-\x7F]` fits it (about 7 MiB resident).
     (
         "private_key",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\x00-\x7F]{0,8192}?-----END [A-Z ]*PRIVATE KEY-----|[\x00-\x7F]{0,8192})",
     ),
     ("slack_token", r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
     // (i) the JSON form: a quoted key, a quoted value. The key word may sit inside an
