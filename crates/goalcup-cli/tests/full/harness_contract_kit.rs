@@ -22,7 +22,6 @@ use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
 use goalcup_verifier::capture_analysis::session::decode_records;
 use m2_vertical_support::{RESERVE, Vertical, files_under};
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -196,13 +195,24 @@ fn modified_stamp(metadata: &std::fs::Metadata) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn append_real_home_node(
-    path: &Path,
-    relative: &Path,
-    listing: &mut Vec<String>,
-    volatile_database: Option<(&str, &OsStr)>,
-    volatile_dir_times: bool,
-) -> bool {
+/// The app-wide files an escaped harness would write: its config and its credentials. These
+/// are what the rule "never write into ~/.claude or ~/.codex" protects, so these are what the
+/// guard watches. Session files, caches, backups and the desktop apps' own state churn
+/// continuously while the owner's Claude and Codex apps run, and they are not watched.
+const WATCHED_APP_WIDE_FILES: [&str; 4] = [
+    ".codex/config.toml",
+    ".codex/auth.json",
+    ".claude/settings.json",
+    ".claude.json",
+];
+
+/// Hermes is not an app the owner runs, so anything created under `~/.hermes` is a harness
+/// write. Names are walked this many levels down.
+const HERMES_WALK_DEPTH: usize = 4;
+
+/// One line per watched path: absent, or its type, mode, size, mtime and symlink target. File
+/// contents are never read.
+fn append_real_home_node(path: &Path, relative: &Path, listing: &mut Vec<String>) -> bool {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -224,40 +234,16 @@ fn append_real_home_node(
     } else {
         "other"
     };
-    let include_metadata = volatile_database
-        .map(|(app_name, entry_name)| !is_volatile_live_database(app_name, entry_name, &file_type))
-        .unwrap_or(true);
-    let identity = if volatile_dir_times && file_type.is_dir() {
-        // The directory's own mtime and size move whenever an app rewrites an entry in it;
-        // its entries are listed one by one below, so nothing is lost by leaving them out.
-        #[cfg(unix)]
-        {
-            format!("mode={:o}", metadata.mode() & 0o7777)
-        }
-        #[cfg(not(unix))]
-        {
-            String::new()
-        }
-    } else if include_metadata {
-        #[cfg(unix)]
-        {
-            format!(
-                "mode={:o};size={};mtime={}",
-                metadata.mode() & 0o7777,
-                metadata.len(),
-                modified_stamp(&metadata),
-            )
-        }
-        #[cfg(not(unix))]
-        {
-            format!(
-                "size={};mtime={}",
-                metadata.len(),
-                modified_stamp(&metadata)
-            )
-        }
+    // A directory's own size and mtime move with its entries, which are listed one by one.
+    let identity = if file_type.is_dir() {
+        format!("mode={:o}", metadata.mode() & 0o7777)
     } else {
-        String::new()
+        format!(
+            "mode={:o};size={};mtime={}",
+            metadata.mode() & 0o7777,
+            metadata.len(),
+            modified_stamp(&metadata),
+        )
     };
     let symlink_target = if file_type.is_symlink() {
         std::fs::read_link(path)
@@ -272,73 +258,43 @@ fn append_real_home_node(
     file_type.is_dir()
 }
 
-/// The desktop Codex app updates these direct SQLite leaves and their WAL companions while a
-/// test runs. Keep their names, types, and symlink shape in the guard, but avoid treating their
-/// live metadata churn as a harness write. Every other immediate entry retains metadata checks.
-fn is_volatile_live_database(
-    app_name: &str,
-    entry_name: &OsStr,
-    file_type: &std::fs::FileType,
-) -> bool {
-    if app_name != ".codex" || !file_type.is_file() {
-        return false;
+/// Every name under `~/.hermes`, so any creation there shows.
+fn append_hermes_tree(path: &Path, relative: &Path, listing: &mut Vec<String>, depth: usize) {
+    if !append_real_home_node(path, relative, listing) || depth == 0 {
+        return;
     }
-    let entry_name = entry_name.to_string_lossy();
-    entry_name.ends_with(".sqlite")
-        || entry_name.ends_with(".sqlite-shm")
-        || entry_name.ends_with(".sqlite-wal")
-}
-
-/// The ChatGPT/Codex desktop app rewrites its global state file and that file's backup
-/// continuously while it is open, so both are left out of the guard entirely (name, type and
-/// metadata), together with the `.codex` directory's own mtime. Nothing a kit stand-in writes
-/// lands under either name, and every other entry under `.codex` still counts.
-fn is_codex_app_state(app_name: &str, entry_name: &OsStr) -> bool {
-    app_name == ".codex"
-        && (entry_name == ".codex-global-state.json"
-            || entry_name == ".codex-global-state.json.bak")
+    let mut children = match std::fs::read_dir(path) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|entry| entry.file_name())
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            listing.push(format!("{relative:?}\tread-dir-error={:?}", error.kind()));
+            return;
+        }
+    };
+    children.sort();
+    for name in children {
+        append_hermes_tree(&path.join(&name), &relative.join(&name), listing, depth - 1);
+    }
 }
 
 /// The contract kit launches stand-ins, so bracket every launching test with the same
-/// real-HOME boundary that guards the H-17 refusal regression. The snapshot records each app
-/// directory and its immediate entries by name, file type, symlink target, and metadata only;
-/// it never reads file contents. The test body is caught so this comparison runs before any
-/// unrelated failure is resumed.
+/// real-HOME boundary that guards the H-17 refusal regression. The snapshot records the
+/// app-wide config and credential files and every name under `~/.hermes`, by file type,
+/// symlink target and metadata only; it never reads file contents. The test body is caught so
+/// this comparison runs before any unrelated failure is resumed.
 fn home_listing(home: &Path) -> String {
     let mut listing = Vec::new();
-    for name in [".hermes", ".codex", ".claude"] {
-        let path = home.join(name);
-        if !append_real_home_node(&path, Path::new(name), &mut listing, None, name == ".codex") {
-            continue;
-        }
-        let mut children = Vec::new();
-        let entries = match std::fs::read_dir(&path) {
-            Ok(entries) => entries,
-            Err(error) => {
-                listing.push(format!("{name:?}\tread-dir-error={:?}", error.kind()));
-                continue;
-            }
-        };
-        for entry in entries {
-            match entry {
-                Ok(entry) => children.push((entry.file_name(), entry.path())),
-                Err(error) => listing.push(format!("{name:?}\tentry-error={:?}", error.kind())),
-            }
-        }
-        children.sort_by(|(left, _), (right, _)| left.cmp(right));
-        for (entry_name, entry_path) in children {
-            if is_codex_app_state(name, &entry_name) {
-                continue;
-            }
-            append_real_home_node(
-                &entry_path,
-                &Path::new(name).join(&entry_name),
-                &mut listing,
-                Some((name, &entry_name)),
-                false,
-            );
-        }
+    for relative in WATCHED_APP_WIDE_FILES {
+        append_real_home_node(&home.join(relative), Path::new(relative), &mut listing);
     }
+    append_hermes_tree(
+        &home.join(".hermes"),
+        Path::new(".hermes"),
+        &mut listing,
+        HERMES_WALK_DEPTH,
+    );
     listing.join("\n")
 }
 
@@ -768,34 +724,54 @@ fn home_listing_detects_nonvolatile_in_place_mutations_without_reading_contents(
 }
 
 #[test]
-fn home_listing_ignores_only_the_codex_app_state_files() {
+fn home_listing_watches_app_wide_config_and_credentials_not_session_churn() {
     let home = tempfile::tempdir().unwrap();
     let codex = home.path().join(".codex");
-    std::fs::create_dir_all(&codex).unwrap();
-    let state = codex.join(".codex-global-state.json");
-    let backup = codex.join(".codex-global-state.json.bak");
-    std::fs::write(&state, b"{}").unwrap();
+    let claude = home.path().join(".claude");
+    std::fs::create_dir_all(codex.join("sessions")).unwrap();
+    std::fs::create_dir_all(&claude).unwrap();
     std::fs::write(codex.join("config.toml"), b"before").unwrap();
+    std::fs::write(codex.join("session_index.jsonl"), b"").unwrap();
     let before = home_listing(home.path());
 
-    // The desktop app's churn: the state file rewritten, its backup appearing and changing,
-    // and with them the directory's own mtime.
+    // What the owner's live apps do while a test runs: session files written, the desktop
+    // app's state rewritten, backups and locks created.
     std::thread::sleep(Duration::from_millis(20));
-    std::fs::write(&state, b"{\"rewritten\":true}").unwrap();
-    std::fs::write(&backup, b"{}").unwrap();
+    std::fs::write(codex.join("session_index.jsonl"), b"{\"id\":1}\n").unwrap();
+    std::fs::write(codex.join("sessions").join("rollout.jsonl"), b"{}").unwrap();
+    std::fs::write(codex.join(".codex-global-state.json"), b"{}").unwrap();
+    std::fs::create_dir_all(codex.join("thread-writer-locks")).unwrap();
+    std::fs::create_dir_all(claude.join("backups")).unwrap();
     assert_eq!(
         home_listing(home.path()),
         before,
-        "the desktop app's state file and backup must not trip the guard"
+        "session and app-state churn must not trip the guard"
     );
 
-    // Any other file under `.codex` still does.
-    std::fs::write(codex.join("auth.json"), b"{}").unwrap();
-    assert_ne!(
-        home_listing(home.path()),
-        before,
-        "a new file under .codex was invisible to the guard"
-    );
+    // What an escaped harness would do: each one trips it.
+    let trips: [(&str, &dyn Fn()); 5] = [
+        ("~/.codex/config.toml changed", &|| {
+            std::fs::write(codex.join("config.toml"), b"after!").unwrap()
+        }),
+        ("~/.codex/auth.json created", &|| {
+            std::fs::write(codex.join("auth.json"), b"{}").unwrap()
+        }),
+        ("~/.claude/settings.json created", &|| {
+            std::fs::write(claude.join("settings.json"), b"{}").unwrap()
+        }),
+        ("~/.claude.json created", &|| {
+            std::fs::write(home.path().join(".claude.json"), b"{}").unwrap()
+        }),
+        ("a file created under ~/.hermes", &|| {
+            std::fs::create_dir_all(home.path().join(".hermes").join("sessions")).unwrap();
+            std::fs::write(home.path().join(".hermes/sessions/s.json"), b"{}").unwrap();
+        }),
+    ];
+    for (what, write) in trips {
+        let before = home_listing(home.path());
+        write();
+        assert_ne!(home_listing(home.path()), before, "{what} was invisible");
+    }
 }
 
 #[test]
