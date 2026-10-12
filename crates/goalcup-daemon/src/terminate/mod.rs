@@ -15,9 +15,7 @@
 //! macOS and Linux only.
 
 use goalcup_protocol::manifest::KillStrategy;
-use goalcup_protocol::process::{
-    ProcInfo, ProcessError, ProcessHandle, descendants, liveness,
-};
+use goalcup_protocol::process::{ProcInfo, ProcessError, ProcessHandle, descendants, liveness};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -28,10 +26,9 @@ mod darwin;
 pub mod os;
 
 use authority::{
-    Owned, Presence, Refused, absent_root_unverified, bounded_targets,
-    containment_unverified, degraded_guard, guard_registered, identity_unverified, instance_alive,
-    members_deepest_first, owns_registered_group, push_capped, push_targeted,
-    signal_owned, signal_registered_group,
+    Owned, Presence, Refused, absent_root_unverified, bounded_targets, containment_unverified,
+    degraded_guard, guard_registered, identity_unverified, instance_alive, members_deepest_first,
+    owns_registered_group, push_capped, push_targeted, signal_owned, signal_registered_group,
 };
 #[cfg(target_os = "macos")]
 use darwin::{direct_native_identity_matches, terminate_darwin_singleton};

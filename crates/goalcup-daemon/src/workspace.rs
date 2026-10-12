@@ -38,7 +38,6 @@ pub struct Roots {
     pub artifact_root: PathBuf,
 }
 
-
 /// The artifact root must not be the workspace, must not be an ancestor of it, must
 /// not be inside it, and must not be its sibling.
 ///
@@ -106,7 +105,6 @@ pub fn git_worktree_of(path: &Path) -> Option<PathBuf> {
     }
     None
 }
-
 
 /// Walk `workspace`, applying [`is_excluded`] with `excluded`, and return a sorted
 /// manifest. One walker for the baseline and for the seal, so the zero-entry proof and the

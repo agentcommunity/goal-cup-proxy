@@ -100,7 +100,10 @@ fn pinned_start_secs() -> u64 {
 /// uploader (D48), and `DaemonConfig` still parses the V1 `upload_url`.
 pub fn upload_target() -> (std::net::TcpListener, String) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-    let url = format!("http://{}", listener.local_addr().expect("the bound address"));
+    let url = format!(
+        "http://{}",
+        listener.local_addr().expect("the bound address")
+    );
     (listener, url)
 }
 
