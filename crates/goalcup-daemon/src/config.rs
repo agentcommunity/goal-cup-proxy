@@ -27,10 +27,9 @@ pub struct DaemonConfig {
     /// Where the shipped `manifest.toml` files live.
     pub connectors_dir: PathBuf,
     /// Where `control.json` and the status-cache mirrors live. Separate from
-    /// `artifact_root` because the CLI and the MCP server read it, and neither may see a
-    /// capture buffer.
+    /// `artifact_root` because the CLI reads it, and it may not see a capture buffer.
     pub config_dir: PathBuf,
-    /// Where `create_workspace` puts a workspace when the caller does not choose one.
+    /// The default workspace parent when the caller does not choose one.
     pub workspace_parent: PathBuf,
     /// The control API's listen address. `validate()` refuses anything but loopback.
     pub control_addr: SocketAddr,
@@ -51,12 +50,11 @@ pub struct DaemonConfig {
     /// **The development key is a published placeholder; the daemon says so and does not
     /// refuse it.** Its seed is a constant in this repository, so anybody can sign a receipt
     /// and an acknowledgement under it and a run anchored to it is anchored to nothing. The
-    /// verifier reports that as V13's `placeholder_server_key` and the devserver banners it on
-    /// every start; the daemon prints one line on stderr at startup
-    /// ([`DaemonConfig::placeholder_key_notice`]). It does not refuse, because refusing would
+    /// verifier reports that as V13's `placeholder_server_key`; the daemon prints one line on
+    /// stderr at startup ([`DaemonConfig::placeholder_key_notice`]). It does not refuse, because refusing would
     /// break every development run in this tree. Read as: a `server_public_key` equal to
     /// `goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX` (the key of the
-    /// devserver's `DEV_SERVER_SEED`) names a trace that a verifier will
+    /// published seed `[5u8; 32]`) names a trace that a verifier will
     /// flag, and only `--dev` suppresses the flag.
     /// Omitted together with `upload_url`, this is empty and only local v5 entries are admitted.
     #[serde(default)]
@@ -123,8 +121,8 @@ pub struct DaemonConfig {
 ///
 /// # Why this is configuration and not something the daemon can work out
 ///
-/// `EventStatus` is the one part of the status document an agent may trust: it asks the MCP
-/// server when the start window closes and is answered with a number signed by the run key.
+/// `EventStatus` is the one part of the status document a reader may trust about the round:
+/// when the start window closes, as a number signed by the run key.
 /// The daemon has no way to know that number, so these three fields are how a machine is
 /// told, and `event_status_source` on the status document is how a reader learns whether it
 /// was. Without them the document would assert three numbers nobody had supplied.

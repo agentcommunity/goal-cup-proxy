@@ -115,24 +115,6 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Removed: the old sign-in command.
-    #[command(hide = true, disable_help_flag = true)]
-    Auth {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-        _args: Vec<std::ffi::OsString>,
-    },
-    /// Removed: the old status page.
-    #[command(hide = true, disable_help_flag = true)]
-    Ui {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-        _args: Vec<std::ffi::OsString>,
-    },
-    /// Removed: the old relaunch command.
-    #[command(hide = true, disable_help_flag = true)]
-    Resume {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-        _args: Vec<std::ffi::OsString>,
-    },
     /// End a run early: stop the harness, seal the record, and print where the trace is.
     ///
     /// `goalcup start` seals on its own when the harness exits, so this is only for stopping a
@@ -199,23 +181,11 @@ fn run(command: Command) -> Result<u8, CliError> {
         .map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),
         Command::Entries { json } => entries(json).map(|()| 0),
-        Command::Auth { .. } => Err(v1_only("auth")),
-        Command::Ui { .. } => Err(v1_only("ui")),
-        Command::Resume { .. } => Err(v1_only("resume")),
         Command::Seal { entry } => seal(entry).map(|()| 0),
         Command::Doctor { json, harness } => {
             doctor(commands::doctor::DoctorOptions { json, harness })
         }
     }
-}
-
-/// The refusal a removed V1 command gets (D48): rung 1, naming the way back.
-fn v1_only(command: &str) -> CliError {
-    CliError::Refused(format!(
-        "`goalcup {command}` was removed after v0.5.0. To record a run: \
-         `goalcup start --harness <id> --goal-file <file>`; then `goalcup status`, \
-         `goalcup entries` and `goalcup seal`."
-    ))
 }
 
 /// `goalcup start`, with the four things it reads from this machine resolved here: the

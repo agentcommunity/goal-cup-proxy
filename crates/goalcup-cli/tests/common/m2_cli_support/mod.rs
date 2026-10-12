@@ -722,29 +722,6 @@ impl<'a> Hooked<'a> {
 }
 
 impl DaemonClient for Hooked<'_> {
-    fn create_workspace(
-        &self,
-        harness: &str,
-        opts: &control::WorkspaceOpts,
-    ) -> Result<control::WorkspaceInfo, ControlError> {
-        self.note("create_workspace");
-        self.inner.create_workspace(harness, opts)
-    }
-
-    fn arm(&self, entry_id: &str) -> Result<(), ControlError> {
-        self.note("arm");
-        self.inner.arm(entry_id)
-    }
-
-    fn wait_start_signal(
-        &self,
-        entry_id: &str,
-        timeout: Duration,
-    ) -> Result<control::StartSignal, ControlError> {
-        self.note("wait_start_signal");
-        self.inner.wait_start_signal(entry_id, timeout)
-    }
-
     fn status(&self, entry_id: &str) -> Result<control::SignedStatus, ControlError> {
         self.note("status");
         if !self.book().registered.is_empty() {
@@ -771,20 +748,6 @@ impl DaemonClient for Hooked<'_> {
 
     fn entries(&self) -> Result<Vec<control::EntrySummary>, ControlError> {
         self.inner.entries()
-    }
-
-    fn resume(
-        &self,
-        entry_id: &str,
-        request: &control::ResumeRequest,
-    ) -> Result<control::ResumeInfo, ControlError> {
-        self.note("resume");
-        self.inner.resume(entry_id, request)
-    }
-
-    fn resume_preview(&self, entry_id: &str) -> Result<control::ResumePreviewInfo, ControlError> {
-        self.note("resume_preview");
-        self.inner.resume_preview(entry_id)
     }
 
     fn seal(&self, entry_id: &str) -> Result<control::SealResponse, ControlError> {
@@ -825,15 +788,6 @@ impl DaemonClient for Hooked<'_> {
                 Ok(())
             }
         }
-    }
-
-    fn cancel_process_handoff(
-        &self,
-        entry_id: &str,
-        request: &control::ProcessHandoffCancelRequest,
-    ) -> Result<control::ProcessHandoffCancelInfo, ControlError> {
-        self.note("cancel_process_handoff");
-        self.inner.cancel_process_handoff(entry_id, request)
     }
 
     fn health(&self) -> Result<control::DaemonHealth, ControlError> {

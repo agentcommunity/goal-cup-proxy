@@ -5,8 +5,8 @@
 //! `busy` is the daemon holding an entry for the length of one asynchronous call. It is
 //! raised on every mutating route while an entry is mid-pump, it is transient by
 //! construction, and the same request a moment later is expected to succeed. Most mutable
-//! calls use the bounded generic retry below. Selected entry-runtime calls (`/arm`, `/abandon`,
-//! resume preview/CAS, and `/process/cancel`), the `/process` handoff, and terminal `/seal`
+//! calls use the bounded generic retry below. Selected entry-runtime calls (`/abandon`), the
+//! `/process` handoff, and terminal `/seal`
 //! have deliberately dephased policies with separately stated end-to-end limits: entry calls
 //! must span an upload hold, `/process` is made while a freshly launched child is waiting for
 //! daemon ownership, and `/seal` has to preserve room for one slow, admitted manifest
@@ -17,7 +17,7 @@
 //! It is not inside `HttpDaemonClient::call`, because a command is written against the
 //! [`DaemonClient`](goalcup_protocol::control::DaemonClient) **trait**, and in every command
 //! test it is driven by the in-process `MockDaemonClient`. A retry that only the HTTP client
-//! has is a retry the mock does not have: `busy_once("resume")` would hand the command an
+//! has is a retry the mock does not have: `busy_once("abandon")` would hand the command an
 //! `Err(Busy)`, the command would stop at the first refusal, and the retry rule could not be
 //! tested anywhere the commands are actually tested. The transport is not where the decision
 //! belongs either way; whether a refusal is worth asking again is a question about the
@@ -29,7 +29,7 @@
 //! # use goalcup_cli::retry::retry_busy;
 //! # fn f(client: &dyn goalcup_protocol::control::DaemonClient, entry_id: &str)
 //! #     -> Result<(), goalcup_protocol::control::ControlError> {
-//! retry_busy(|| client.arm(entry_id))?;
+//! retry_busy(|| client.abandon(entry_id, "stopping early"))?;
 //! # Ok(()) }
 //! ```
 //!

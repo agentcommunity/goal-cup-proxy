@@ -27,13 +27,6 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
 - New harnesses (builders bring them: [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md))
 - Full registration and teams system
 - Qualification records
-- Decide: delete the unused `goalcup-devserver` crate (and its three test files): a dev-only
-  receipt, acknowledgement and chunk signer. Check first whether the verifier's V12/V13 round
-  trip still needs it; protocol `receipt.rs` and `ack.rs` stay either way, the verifier reads them.
-- Delete `goalcup-protocol/src/chunk.rs` (and its unit tests) with the devserver's chunk route: no
-  shipped binary reaches the chunk upload flow. Its integration tests went in the test diet, so
-  `CHUNK_DOMAIN`'s distinctness from the receipt, acknowledgement and chain domains is untested
-  now: if `chunk` stays, restore one distinctness assertion.
 - Remove the manifest `launch`, `resume` and `banned_args` fields from the V1 manifest schema
   (`goalcup-protocol/src/manifest.rs`): parsed, read by no shipped binary (launch plans come from
   `harness.toml`). Their snapshot tests went in the test diet.
@@ -43,11 +36,8 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
 - Delete daemon `server_public_key` / `upload_url` and `placeholder_key_notice`: since D48 the key's
   only consumer is a startup notice about receipts that no longer exist. Its test,
   `tests/it/placeholder_notice.rs`, goes with it.
-- Delete the CLI's V1 daemon-client routes, now untested and unreachable from
-  `goalcup start|seal|status|entries|doctor`: `HttpDaemonClient::{create_workspace, arm,
-  wait_start_signal, resume, resume_preview, current_entry}`, `daemon::long_poll_read_timeout`,
-  `MockDaemonClient::{set_signal_delay, withhold_signal}`, with the V1 methods of
-  `goalcup_protocol::control::DaemonClient`.
+- Delete `DaemonClient::current_entry` and the daemon's `GET /v0/entries/current`: no `goalcup`
+  command calls it.
 - Delete the protocol's pre-v5 trace surface the removed V1 verifier was the reader of:
   `TraceExport::{write_descriptor, write_manifest}`, `TraceDescriptorDoc`, `DESCRIPTOR_FILE`,
   `MANIFEST_FILE`, the V1 `human_rule` types in `manifest.rs`, and the parts of

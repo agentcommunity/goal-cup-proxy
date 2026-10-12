@@ -468,8 +468,8 @@ const MAX_PREPARED_HOME_SEED_BYTES: usize = 64 * 1024;
 /// The three per-run secrets.
 ///
 /// They are minted once per entry and never leave this machine: the buffer key encrypts
-/// the write-ahead store, the signing seed is the run key every `SignedStatus` and
-/// `Chunk` is signed with, and the receiver token is the per-run bearer a rendered tracker
+/// the write-ahead store, the signing seed is the run key every `SignedStatus` is
+/// signed with, and the receiver token is the per-run bearer a rendered tracker
 /// file may carry.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunKeys {
@@ -532,7 +532,7 @@ impl RunKeys {
     }
 
     /// Hex verifying key. `WorkspaceInfo.run_public_key`, the key `SignedStatus::verify_with`
-    /// and `Chunk::verify` are pinned against, and the key the receipt request carries.
+    /// is pinned against, and the key the receipt request carries.
     pub fn public_key_hex(&self) -> Result<String, DaemonError> {
         Ok(hex::encode(self.signing_key()?.verifying_key().to_bytes()))
     }
@@ -1161,8 +1161,8 @@ pub struct Registry {
 impl Registry {
     /// Where the registry belongs: `<artifact_root>/registry/registry.redb`.
     ///
-    /// A directory of its own, and not the shared `config_dir` the CLI and the MCP server
-    /// both read, because [`Registry::open`] tightens the directory it owns to `0o700`
+    /// A directory of its own, and not the shared `config_dir` the CLI reads,
+    /// because [`Registry::open`] tightens the directory it owns to `0o700`
     /// and a directory shared with other readers is not the registry's to close.
     pub fn default_path(artifact_root: &Path) -> PathBuf {
         artifact_root.join("registry").join("registry.redb")

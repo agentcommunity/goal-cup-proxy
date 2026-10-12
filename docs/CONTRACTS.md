@@ -833,7 +833,8 @@ carry their own amendments and point here for shared text.
 > chains can resume only explicitly, closing previous open streams with unknown loss and recording
 > assistance" and C5's "Manual resume selects the stored entry format". This release a v5 entry
 > cannot resume: `resume` and `resume-preview` on it are refused with a plain sentence, and a
-> complete valid unsealed chain can be sealed. C2's "a human resume or repair still is Assistance"
+> complete valid unsealed chain can be sealed. (2026-10-12: both routes were deleted; there is no
+> resume path to refuse.) C2's "a human resume or repair still is Assistance"
 > stands for when resume is built. Torn chains stay preserved and non-resumable.
 
 > **Amendment 2026-09-29 (decoder note for T22, human marker).** Supersedes "The tracker's
@@ -1275,7 +1276,8 @@ Decided by D43 ruling 7; the design is `.superpowers/sdd/2026-10-02-oss/harness-
 - **Side artifacts.** `receipt.json`, `acks.jsonl` and the `StartReceipt`, `AckCheckpoint` and
   `Chunk` types, and any later side file (the server phase's registration and fixed documents),
   are versioned by their own domain tags (`goalcup-receipt-v1`, `goalcup-chunk-v1`, ...) and are
-  outside the record freeze. `MAX_UPLOAD_BYTES` lives in `chunk.rs` for that reason. The v5
+  outside the record freeze. (`Chunk` and `MAX_UPLOAD_BYTES`, in `chunk.rs`, were deleted with the
+  devserver on 2026-10-12: no shipped binary uploaded a chunk.) The v5
   reader reads only the named files; an absent receipt or ack file is not an error, and it opens
   no other file in the trace directory.
 - **Not frozen.** The seven `FrameEvent` kinds are the producer-to-daemon seam inside one
@@ -1364,10 +1366,10 @@ What a request to the control listener must carry, and which routes need no bear
 function is `goalcup_protocol::control::is_public_route`; the daemon and the CLI both call it, so
 this section is a reading of it and the function wins.
 
-- **Public routes: two.** `GET /v0/ui` (the removed V1 status page; it answers with the stub
-  that names D48) and `GET /v0/entries/{id}/status` (the signed status document, for an
-  id the caller already holds). Everything else needs `Authorization: Bearer <token from
-  control.json>`. `/v0/entries/current` and `/v0/entries` are not public: enumeration is not
+- **Public routes: one.** `GET /v0/entries/{id}/status` (the signed status document, for an
+  id the caller already holds). `GET /v0/ui`, the removed V1 status page, was the second until
+  its stub was deleted on 2026-10-12; it now needs the bearer like any unknown path.
+  Everything else needs `Authorization: Bearer <token from control.json>`. `/v0/entries/current` and `/v0/entries` are not public: enumeration is not
   accepted.
 - **`/v0/assets/*` is not public.** It was the third public prefix until v0.5, and nothing ever
   served it. A request under it is an unauthenticated `401` like any other protected path.

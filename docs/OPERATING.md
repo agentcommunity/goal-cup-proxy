@@ -3,7 +3,7 @@
 Updated: 2026-10-12
 
 How do I build, configure and run the binaries in full detail: the daemon config, the CLI flags
-and exit codes, the MCP server, the verifier, the committed traces,
+and exit codes, the verifier, the committed traces,
 fixtures and connector pins? For participants and contributors. The short path (build, gate,
 install, one capture run) is in [../README.md](../README.md).
 
@@ -13,7 +13,6 @@ install, one capture run) is in [../README.md](../README.md).
 - [Installing the participant binaries](#installing-the-participant-binaries)
 - [Running the daemon](#running-the-daemon)
 - [Running a capture with the CLI](#running-a-capture-with-the-cli)
-- [The MCP server, `goalcup-mcp`](#the-mcp-server-goalcup-mcp)
 - [Running the verifier](#running-the-verifier)
 - [Pinning connectors](#pinning-connectors)
 
@@ -122,9 +121,8 @@ cargo test -p goalcup-cli --offline --features test-support --test full m2_synth
 `--features test-support` is written out because `tests/common/support/mod.rs` needs it, even though
 the crate's own dev-list already turns it on.
 
-Nothing in the suite reaches the network. The `goalcup-devserver` tests bind their own
-loopback port, and the one listener the daemon serves on `m2/wire`, the control API, is refused
-a non-loopback address by `DaemonConfig::validate`. (On `v1/trunk` the hook receiver is a
+Nothing in the suite reaches the network. The one listener the daemon serves on `m2/wire`, the
+control API, is refused a non-loopback address by `DaemonConfig::validate`. (On `v1/trunk` the hook receiver is a
 second listener under the same rule.)
 
 ### CI
@@ -149,9 +147,8 @@ Every runner minute costs something on every pull request. Keep this file small:
 ### Installing the participant binaries
 
 Nothing below is a `cargo run`. Every command in this file is written as a participant types
-it, which means `goalcup`, `goalcup-daemon`, `goalcup-verify`, and `goalcup-mcp` are on
-`PATH` — and a clean checkout has none of them there. `goalcup-devserver` is development-only,
-not a participant install target. One build makes the workspace binaries:
+it, which means `goalcup`, `goalcup-daemon` and `goalcup-verify` are on
+`PATH` — and a clean checkout has none of them there. One build makes the workspace binaries:
 
 ```
 cargo build --release
@@ -199,7 +196,7 @@ A minimal LocalOnly configuration, with every field that has no default. Paths m
 
 ```toml
 # The registry, every entry's artifact directory and trace: the ONLY tree the daemon writes
-# outside a workspace. BESIDE `config_dir`, never inside it: the CLI and MCP read that one.
+# outside a workspace. BESIDE `config_dir`, never inside it: the CLI reads that one.
 artifact_root = "/Users/you/goalcup-artifacts"
 # Schema-1 connector directories. In a checkout, this repository's `connectors/`.
 connectors_dir = "/Users/you/src/goal-cup/connectors"
@@ -216,12 +213,12 @@ control_addr = "127.0.0.1:7787"
 
 `upload_url` and `server_public_key` are still parsed, both or neither, so a V1 configuration
 keeps loading. Nothing in this tree uploads or checks a receipt (D48), so the pair changes only
-one thing: when `server_public_key` is the published placeholder (the verifying key of
-`goalcup_devserver::DEV_SERVER_SEED`), the daemon prints one stderr line saying its seed is
+one thing: when `server_public_key` is the published placeholder (the verifying key of the
+published seed `[5u8; 32]`), the daemon prints one stderr line saying its seed is
 public. Omit both.
 
-`$GOALCUP_CONFIG_DIR` overrides **both sides at once**: exported, the CLI and `goalcup-mcp`
-read that directory instead of the platform default, and a daemon started with the same value
+`$GOALCUP_CONFIG_DIR` overrides **both sides at once**: exported, the CLI
+reads that directory instead of the platform default, and a daemon started with the same value
 in `config_dir` writes its `control.json` there. That is the whole of how a second, isolated
 tracker is run on one machine — a test, a second round, a development build beside an
 installed one — and it is why nothing in this tree needs to move `$HOME` to do it. Set one
@@ -290,8 +287,8 @@ does not require a custom provider with a base URL, so its budget stays its own.
 
 `goalcup --help` lists five commands (`start`, `status`, `entries`, `seal`, `doctor`) and says
 where verification is. There is no `goalcup verify`: one verifier, one set of flags, one
-set of exit codes. `auth`, `ui` and `resume` were V1 commands; they are hidden and refuse at
-rung 1, naming D48.
+set of exit codes. The V1 commands `auth`, `ui` and `resume` are gone (D48); typing one is a
+usage error (exit 1).
 
 `goalcup`'s own exit codes, which `goalcup --help` also carries:
 
@@ -313,53 +310,6 @@ this is a development run, and its result is not a judged entry's.
 
 None of them is a way to make a failing entry pass. `--dev` never suppresses a `chain_broken`,
 and a verdict that used it says so in its own document.
-
-### The MCP server, `goalcup-mcp`
-
-The other half of M1c. It is the tracker's read-only status, offered to the agent under
-measurement over MCP on stdio: three tools, no socket, and nothing it can change. It reads
-the signed status documents this machine has cached and checks each one against the run key
-`goalcup start` pinned in the entry record — never the key written inside the document being
-checked — so an answer it gives is a fact the tracker signed, and a refusal is not a fact
-about the run at all.
-
-**It is shipped and never auto-registered.** A participant who wants their agent to have
-these tools registers this binary themselves; nothing in `goalcup start` does it for them.
-Registration is whatever the harness's own MCP configuration looks like, and the two things
-it needs are the command and the configuration directory:
-
-```
-goalcup-mcp [--config-dir <DIR>]
-```
-
-`--config-dir` defaults to `$GOALCUP_CONFIG_DIR`, else the same platform default `goalcup`
-uses — so a machine where the CLI already works needs no argument. In Claude Code's own
-`.mcp.json` shape that is:
-
-```json
-{
-  "mcpServers": {
-    "goalcup": { "command": "goalcup-mcp", "args": [] }
-  }
-}
-```
-
-The three tools:
-
-| Tool | Answers |
-|---|---|
-| `goalcup_event_status` | The round's timeline as the last signed document carries it: `t0`, when the start window closes, when publication closes, the rules version — and `source`, which says `config` when an organiser set those dates on this machine and `fallback` when the fields are this entry's own timeline standing in for a round nobody configured. |
-| `goalcup_run_status` | How one run is doing: arming state, health, seconds remaining, when the tracker last synced, and whether that document is stale. Takes an optional `entry_id` and defaults to the most recently started run. `arming: "refused"` appears only in a status a pre-D48 (`v0.5.0`) daemon wrote; a capture entry has no arming gate (D48). |
-| `goalcup_entries` | Every run this machine holds a **verified** status document for. `unverified` counts the cached documents that did not check out and are therefore not in the list. |
-
-`crates/goalcup-mcp/SKILL.md` is the description an agent is given, and it carries the tool
-manifest byte for byte — `crates/goalcup-mcp/tests/protocol.rs` compares the two, so a tool
-renamed in one and not the other is a test failure rather than a skill describing a server
-that is not running. It also says when NOT to call these tools, which is the half a skill
-usually leaves out.
-
-Exit codes are `0` on a clean end of input and `1` on a refusal, usage errors included —
-`2` is a `Fail` verdict in this tree and is nobody else's number.
 
 ### Running the verifier
 
