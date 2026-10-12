@@ -11,7 +11,7 @@ records per real harness ([ARCHITECTURE](ARCHITECTURE.md)).
 
 The hook leg and OpenCode are gone on `m2/wire`, so the v1/trunk rows below that lean on hooks do not
 apply. A v5 capture trace is judged by the integrity reader (exit 0 complete and valid, 1 incomplete
-or unsealed, 2 invalid, 3 no usable report), not by the V1 thirteen checks. LocalOnly (no server,
+or unsealed, 2 invalid, 3 no usable report); the V1 checks are not in this tree. LocalOnly (no server,
 receipt or ACK) is a valid local outcome. Nothing on m2 is qualified for long runs ([TODO](../TODO.md)).
 
 Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it in git history at `6494030`. Open issues that still matter are in [TODO](../TODO.md#known-issues).

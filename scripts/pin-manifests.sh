@@ -1,29 +1,15 @@
 #!/bin/sh
-# Regenerate the two connector pin tables from the shipped connectors. Run it in the same
-# commit as any change under connectors/ (Global Constraint 8).
-#
-# Two tables, in two places, because two different questions are asked at two different
-# times — and because one of the two askers may not link the verifier:
-#
-#   CONNECTOR_MANIFEST_SHA256S — SHA-256 of `connectors/<id>/manifest.toml`'s bytes (the V1
-#     manifest). This is the digest the daemon puts on the arming receipt's `manifest_sha256`
-#     claim and that the verifier recomputes from the `manifest.toml` a trace carries, so V13
-#     can compare a pin against bytes it holds in its hand. A trace does not carry the rest of
-#     the connector directory; this digest is the most a post-hoc verifier can recompute.
-#     Written as crates/goalcup-verifier/pins/connector-manifests.txt. Only folders that hold
-#     a manifest.toml are in it; the verifier embeds it through the protocol pin parser.
+# Regenerate the connector directory pin table from the shipped connectors. Run it in the
+# same commit as any change under connectors/ (Global Constraint 8).
 #
 #   crates/goalcup-protocol/pins/connector-dirs.txt — SHA-256 of the whole `connectors/<id>/`
 #     directory, the files under `files/` included, one `<id> <sha256>` line per connector
 #     folder, sorted by id. DATA, not Rust (harness contract v1, S2): the protocol crate
 #     reads it at build time (`crates/goalcup-protocol/src/pins.rs`, a `const fn` parser that
 #     refuses a malformed file), so a harness PR needs no `.rs` edit. It lives in the protocol
-#     crate and NOT beside the table above, because the daemon reads it and the daemon must
-#     never depend on goalcup-verifier (D3): the daemon hashes its own connectors directory at
-#     workspace creation, compares it here, and puts the value on the start receipt, where V13
-#     compares it against this same table a week later. A directory carrying the genuine
-#     manifest beside an edited seed reads as pinned under the first table and fails under
-#     this one.
+#     crate because the daemon reads it and the daemon must never depend on goalcup-verifier
+#     (D3): the daemon hashes its own connectors directory at workspace creation and compares
+#     it here before a run starts.
 #
 # THE DIRECTORY DIGEST'S EXACT BYTE LAYOUT. For every regular file under the directory,
 # recursively, in ascending order of the BYTES of its path relative to the directory with
@@ -39,16 +25,16 @@
 # cannot be forged from inside the bytes it counts. Big-endian and fixed-width, so this
 # script and the Rust walk write the same eight bytes on any host.
 #
-# `goalcup_protocol::manifest::connector_dir_sha256` computes the same stream in Rust, and
-# `crates/goalcup-verifier/tests/it/checks_v13.rs` runs this script's `--print` mode and
-# compares the two over every shipped connector — so the layout is written down twice
+# `goalcup_protocol::connector_dir::connector_dir_sha256` computes the same stream in Rust,
+# and `crates/goalcup-protocol/tests/it/connector_pins.rs` runs this script's `--print` mode
+# and compares the two over every shipped connector — so the layout is written down twice
 # and measured once.
 #
-# THE TABLES ARE KEYED BY THE DECLARED id, never by a directory's basename. The daemon, the
-# CLI and V13 all look a pin up by the id the manifest DECLARES; a table keyed by the
+# THE TABLE IS KEYED BY THE DECLARED id, never by a directory's basename. The daemon and the
+# CLI look a pin up by the id the connector DECLARES; a table keyed by the
 # basename would silently pin nothing for a directory whose name and declared id differ,
 # and the lookup would return None — an unpinned connector — rather than a mismatch. So the
-# `id = "..."` line is parsed out of each manifest.toml and that is the key.
+# `id = "..."` line is parsed out of each harness.toml (or manifest.toml) and that is the key.
 #
 # ROW ORDER IS THE C-LOCALE ORDER: `LC_ALL=C` is exported below, so the glob, the sort inside
 # the directory walk and the sort of the pin lines (by id) compare bytes rather than letting a
@@ -62,8 +48,8 @@
 # this script reads its file list a line at a time, and a name it cannot read back is a
 # name whose digest would silently differ from the Rust one.
 #
-# The pins are data: every digest below is recomputed from the bytes it pins. Both tables are
-# written whole to their data files. Nothing here is ever typed by hand. The script is
+# The pins are data: every digest below is recomputed from the bytes it pins. The table is
+# written whole to its data file. Nothing here is ever typed by hand. The script is
 # idempotent, so
 #
 #     sh scripts/pin-manifests.sh && git diff --exit-code
@@ -71,12 +57,11 @@
 # is what proves a commit's pins match its connectors.
 #
 # Usage:
-#     sh scripts/pin-manifests.sh            # rewrite both tables
-#     sh scripts/pin-manifests.sh --print    # print "<id> <manifest sha> <dir sha>" lines
+#     sh scripts/pin-manifests.sh            # rewrite the table
+#     sh scripts/pin-manifests.sh --print    # print "<id> <dir sha>" lines
 #
 # `--print` writes nothing, and is what the Rust agreement test reads. It prints one line
-# per connector folder. The manifest field is `-` when the folder has no legacy V1 manifest,
-# while the directory field always carries the folder digest.
+# per connector folder.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -265,30 +250,12 @@ if [ "$mode" = print ]; then
   for dir in connectors/*/; do
     dir=${dir%/}
     id=$(folder_id "$dir")
-    m=$dir/manifest.toml
-    if [ -f "$m" ]; then
-      file_digest=$(digest_of_file "$m")
-      check_digest "$file_digest" "$m"
-    else
-      file_digest=-
-    fi
     dir_digest=$(digest_of_dir "$dir")
     check_digest "$dir_digest" "$dir"
-    printf '%s %s %s\n' "$id" "$file_digest" "$dir_digest"
+    printf '%s %s\n' "$id" "$dir_digest"
   done
   exit 0
 fi
-
-# The manifest pins, one `<id> <sha256>` line per folder that holds a V1 manifest.toml.
-emit_manifest_pins() {
-  for m in connectors/*/manifest.toml; do
-    dir=$(dirname "$m")
-    id=$(folder_id "$dir")
-    digest=$(digest_of_file "$m")
-    check_digest "$digest" "$m"
-    printf '%s %s\n' "$id" "$digest"
-  done | LC_ALL=C sort
-}
 
 # The directory pins, one `<id> <sha256>` line per connector folder, in id order. Sorting the
 # whole line orders by id: the id is the line's prefix, and the space after it (0x20) is below
@@ -304,17 +271,7 @@ emit_dir_pins() {
   done | LC_ALL=C sort
 }
 
-manifest_pins_file=crates/goalcup-verifier/pins/connector-manifests.txt
 dir_pins_file=crates/goalcup-protocol/pins/connector-dirs.txt
-
-{
-  echo '# Connector manifest pins: `<id> <sha256 of connectors/<id>/manifest.toml>`, sorted by id.'
-  echo '# Written by `sh scripts/pin-manifests.sh`; never edited by hand. Embedded by'
-  echo '# crates/goalcup-verifier/src/lib.rs through the protocol pin parser.'
-  emit_manifest_pins
-} >"$work/manifest-pins"
-mkdir -p "$(dirname "$manifest_pins_file")"
-cp "$work/manifest-pins" "$manifest_pins_file"
 
 {
   echo '# Connector directory pins: `<id> <sha256 of connectors/<id>/>`, one per connector, sorted by id.'

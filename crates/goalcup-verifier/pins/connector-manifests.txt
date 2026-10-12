@@ -1,5 +1,0 @@
-# Connector manifest pins: `<id> <sha256 of connectors/<id>/manifest.toml>`, sorted by id.
-# Written by `sh scripts/pin-manifests.sh`; never edited by hand. Embedded by
-# crates/goalcup-verifier/src/lib.rs through the protocol pin parser.
-claude-code-cli 77611154483e4520184c9654eed745bf5f1b86237168f67048c343ffcd45c6b1
-codex-cli 0450933c761a89f45d12b0fa7215d64101bfea37e95b64971da2d8b6146fd823

@@ -1,13 +1,10 @@
 # Line endings, so that a clone on Windows still hashes to the pins.
 #
 # L6 review, I1. Git for Windows installs with `core.autocrlf=true`, so a clone there
-# rewrites every LF file in the working tree to CRLF. `CONNECTOR_MANIFEST_SHA256S` and
-# `CONNECTOR_DIR_SHA256S` are digests of those bytes, so both tables would mismatch and —
-# per STATUS.md — every start would refuse. The same conversion hits the three embedded
-# manifest copies (`crates/goalcup-verifier/tests/traces/{opencode,codex}-live/manifest.toml`
-# and `tests/fixtures/compliant/manifest.toml`), so V13 would read `manifest_not_pinned` on
-# the committed traces too. The promise is a public verifier anyone can run offline, and
-# PRD R1 names a Windows service, so this is not hypothetical.
+# rewrites every LF file in the working tree to CRLF. `CONNECTOR_DIR_SHA256S` is a digest
+# of those bytes, so the table would mismatch and every start would refuse. The promise is a
+# public verifier anyone can run offline, and PRD R1 names a Windows service, so this is not
+# hypothetical.
 #
 # `eol=lf` is the load-bearing half: it forces LF in the WORKING TREE on every platform,
 # whatever `core.autocrlf` says.

@@ -38,9 +38,10 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
   `tests/it/placeholder_notice.rs`, goes with it.
 - Delete `DaemonClient::current_entry` and the daemon's `GET /v0/entries/current`: no `goalcup`
   command calls it.
-- Decide: retire the legacy `trace.toml` verify path (seal's legacy branch prints
-  `goalcup-verify <dir>`); about twelve verifier suites (`checks_*`, `parser_*`, `compliant`,
-  `adversarial`, `end_to_end`, ...) then go with it.
+- Delete the protocol's pre-v5 trace surface the removed V1 verifier was the reader of:
+  `TraceExport::{write_descriptor, write_manifest}`, `TraceDescriptorDoc`, `DESCRIPTOR_FILE`,
+  `MANIFEST_FILE`, the V1 `human_rule` types in `manifest.rs`, and the parts of
+  `tests/export_roundtrip.rs` that only exercise them. No shipped binary calls them.
 - Speed up the two P1 redaction tests that each run over 30 s
   (`capture_redaction::a_masked_key_around_the_hold_bound_is_never_retained`,
   `capture_redaction_extra::seeded_random_chunking_matches_the_oracle_with_extra_patterns`); they

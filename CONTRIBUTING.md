@@ -101,11 +101,9 @@ maintainer runs it. A maintainer acknowledges a connector PR within 7 days; that
 to merge or qualify it
 ([HARNESS-ONBOARDING, section 5](docs/HARNESS-ONBOARDING.md#5-prepare-a-contribution)).
 
-Pin note: for a new schema-1 connector the script changes exactly one line of
-`crates/goalcup-protocol/pins/connector-dirs.txt`. Editing `codex-cli` or `claude-code-cli`,
-which still keep a V1 `manifest.toml`, also changes their line in
-`crates/goalcup-verifier/pins/connector-manifests.txt` when that `manifest.toml` changes.
-Commit what the script writes; never hand-edit or hand-merge either file.
+Pin note: the script changes exactly one line of
+`crates/goalcup-protocol/pins/connector-dirs.txt` per connector you add or edit. Commit what
+the script writes; never hand-edit or hand-merge it.
 
 The current baseline kit cases are `controlled-workload`, `synthetic-preassigned`,
 `synthetic-stderr-token`, `synthetic-keyed-stderr`, `synthetic-stdout-json` and

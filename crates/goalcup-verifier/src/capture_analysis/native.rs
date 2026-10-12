@@ -6,9 +6,7 @@
 //! (`codex-jsonl` or `claude-code-jsonl`); every other stream and every other
 //! source is untouched. A tracked stream's `Segment` bytes are reassembled newline-delimited
 //! (native transcripts are JSONL) and each complete logical record is decoded independently
-//! with `serde_json::from_slice` — never with the legacy whole-trace parser
-//! (`crate::parsers::codex`/`crate::parsers::claude_code`), and never by reconstructing an
-//! entire run in memory.
+//! with `serde_json::from_slice`, never by reconstructing an entire run in memory.
 //!
 //! **Bounds.** One logical (newline-delimited) record is held per tracked stream at a time,
 //! capped at [`MAX_LOGICAL_RECORD_BYTES`]; the sum across every tracked stream's pending
@@ -73,7 +71,6 @@ use super::api::{
     DecoderFailure, DecoderSummary, DecoderV1, Observation, ObservationTimeRange, SourceRef,
     StreamOpen, kinds,
 };
-use crate::legs::dotted;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use goalcup_protocol::capture::{
@@ -83,6 +80,15 @@ use goalcup_protocol::capture::{
 use goalcup_protocol::redaction::RedactionAudit;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Walk a dotted path into a JSON value. `dotted(v, "payload.thread_source")`.
+fn dotted<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut cur = value;
+    for segment in path.split('.') {
+        cur = cur.get(segment)?;
+    }
+    Some(cur)
+}
 
 /// The prospective per-logical-record budget: 1 MiB per active native parser.
 const MAX_LOGICAL_RECORD_BYTES: usize = 1024 * 1024;

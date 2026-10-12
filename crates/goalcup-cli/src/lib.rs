@@ -10,8 +10,7 @@
 //! lives in [`launch`]; the pins one `goalcup start` leaves behind for the processes that
 //! come after it, the run public key among them, live in [`entries`], and the arming answer
 //! and the Ctrl-C handler that unmakes an entry nobody is going to use live in [`arming`];
-//! the self-check `goalcup seal` holds up beside the manifest the daemon recorded lives in
-//! [`seal`]; the number every one of them leaves under lives here, in
+//! the number every one of them leaves under lives here, in
 //! [`CliError::exit_code`], and nowhere else.
 //!
 //! # The exit ladder
@@ -20,7 +19,7 @@
 //! |---|---|
 //! | 0 | The command did what it was asked. |
 //! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. |
-//! | 2 | **Never produced by this CLI.** It is `goalcup-verify`'s `Fail` exit; the V1 `goalcup doctor --verify` that relayed it was removed by D48. |
+//! | 2 | **Never produced by this CLI.** It is `goalcup-verify`'s "invalid evidence" exit; the V1 `goalcup doctor --verify` that relayed it was removed by D48. |
 //! | 3 | The CLI could not do its job: a file it could not read, a response it could not parse. |
 //! | 4 | **A gate said no.** Only the daemon's `arming_timeout` maps here, and no capture-run path raises it: the V1 arming and `goalcup resume` gates were removed (D48). |
 //!
@@ -41,7 +40,6 @@ pub mod preflight;
 pub mod proxy;
 mod released_child;
 pub mod retry;
-pub mod seal;
 pub mod version;
 
 use goalcup_protocol::ProtocolError;
