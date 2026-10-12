@@ -5,7 +5,7 @@ check those settings? For maintainers and for contributors who want to know what
 Updated: 2026-10-11.
 
 **Status: applied 2026-10-11.** The read-backs are in the
-[v0.5.1 evidence record](qualification/v0.5.1-public-release-cleanup.md#applied-2026-10-11),
+v0.5.1 evidence record,
 which holds every observed value (settings, app IDs, check URLs). This guide holds the policy
 and the procedure.
 

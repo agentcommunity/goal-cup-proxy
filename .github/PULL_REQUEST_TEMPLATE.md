@@ -15,7 +15,7 @@
       `spikes/*/out/`, `harnesses/` or `target/` is committed.
 - [ ] The change sets no model base URL and writes no app-wide config (`~/.claude`, `~/.codex`,
       `~/.hermes`); tests that launch a harness use a private HOME.
-- [ ] Outside contributors: I did not edit `STATUS.md`, `LEDGER.md` or `docs/DECISIONS.md`; any
+- [ ] Outside contributors: I did not edit `TODO.md` or `docs/DECISIONS.md`; any
       proposed text for them is in this description.
 
 ## Harness PR only (skip for other PRs)

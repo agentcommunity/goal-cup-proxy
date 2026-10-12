@@ -13,12 +13,12 @@
 > [publicly documented](ARCHITECTURE.md#1-scope). Chain space
 > is reserved before launch; a later capture failure is visible and does not block the agent.
 > The proxy and recorder are built and measured on short rows; they are not qualified for long
-> runs (LEDGER T25-T28 open) and not in any public release. Passages marked **planned** describe
+> runs (see [TODO](../TODO.md)) and not in any public release. Passages marked **planned** describe
 > what no shipped command does yet.
 
 ## V1 foundation revision (2026-09-13)
 
-Public V1 scope and current status are recorded in [STATUS](../STATUS.md#v1-on-v1trunk).
+Current status is in [TODO](../TODO.md).
 
 The event rules below remain the intended competition contract. Features needed to operate them publicly—including production services and keys, public Git publication, presentation collection, broader support, and the later 168-hour exercise—are V1.1 work. V1 tests the same start/interruption/recovery/finish semantics with signed short deadlines.
 
@@ -123,7 +123,7 @@ The direct prompt is the only live human instruction. Prepared resources remain 
 
 Cloud and remote execution modes (Claude Code on the web, Codex cloud, Cursor cloud agents, CI runners, remote servers) are not eligible because they leave no local trace.
 
-We ran a capture test on every harness on 2026-09-03, one per harness and mode, and the results are public in `docs/CAPTURE-RESEARCH.md`. This is the support list that came out of it. **Full** means the capture is complete enough to verify automatically. **Elevated review** means an organizer reads the trace before your entry is accepted; it is not a penalty and it does not affect judging.
+We ran a capture test on every harness on 2026-09-03, one per harness and mode, and the results are public in `docs/CAPTURE-RESEARCH.md` (git history at `fddf776`). This is the support list that came out of it. **Full** means the capture is complete enough to verify automatically. **Elevated review** means an organizer reads the trace before your entry is accepted; it is not a penalty and it does not affect judging.
 
 **This table is the event's target set, not the V1 release matrix.** **On `m2/wire` only `codex-cli`, `claude-code-cli` and `hermes-cli` (capture-only) ship a connector; no other row has one** (the OpenCode connector exists only on `v1/trunk`). V1 defines only the exact Codex CLI/macOS row for final qualification. Claude Code CLI and OpenCode remain preserved candidates; they and the two Desktop surfaces are promoted independently in V1.1 after the same lifecycle suite passes. Anything below about an unqualified harness describes its intended event behavior, not a current V1 support claim.
 

@@ -1,5 +1,11 @@
 # The /goal Cup tracker — design decisions (2026-09-03)
 
+> **Frozen: no new entries unless a rule really changes.**
+>
+> Citations below of STATUS, LEDGER,
+> qualification records, plans and research files name documents deleted from the tree; they are in
+> git history at `fddf776`.
+
 ## Index
 
 Holds on `m2/wire`? is read from each entry's own m2 note. "no m2 note" means the entry says nothing about
@@ -63,7 +69,7 @@ The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
 ## V1 foundation revision (2026-09-13)
 
-Public V1 scope and current status are recorded in [STATUS](../STATUS.md#v1-on-v1trunk).
+Public V1 scope was recorded in the retired `STATUS.md` (git history at `fddf776`).
 
 V1 defines one complete short-duration Codex CLI launch-mode qualification lifecycle on one exact macOS target. Once implemented, it includes interruption, recovery, manual and automatic short-deadline finish, owned-process termination, immutable workspace artifact capture, and offline verification. It does not require or claim a real 168-hour run. D29 records the complete milestone reassignment; all existing security, privacy, isolation, record-raw, and no-agent-steering decisions remain constraints.
 

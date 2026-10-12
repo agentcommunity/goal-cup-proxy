@@ -3,8 +3,7 @@
 How do I submit and review a schema-1 connector, and what evidence supports its claim? For a
 contributor or agent adding harness data. Start with [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)
 for the worksheet and phase gate; this file owns the connector checklist and tiny-row procedure.
-Evidence records are indexed in [qualification/README](qualification/README.md). Updated:
-2026-10-12.
+Updated: 2026-10-12.
 
 A connector launches and captures a harness. Its `harness.toml` is data: it declares the launch,
 isolated home, provider/auth hosts and paths, protocol hints, native source and redaction

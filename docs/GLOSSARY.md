@@ -70,17 +70,17 @@ Updated: 2026-10-11. Use these terms exactly; do not coin synonyms.
   [writing-a-decoder](../skills/adding-a-capture-harness/writing-a-decoder.md).
 - **observation**: one decoded, source-referenced fact (`kind`, `fields`, the stream and parts it
   came from). Decoders emit them to an `ObservationSink`; the research report writes each as one
-  NDJSON line. [m2-report-format](research/m2-report-format.md).
+  NDJSON line. m2-report-format.
 - **observation kind**: the closed research-report schema-1 vocabulary: `model_request`, `model`,
   `model_response`, `tool_call`, `tool_result`, `usage`, `outcome`, `error`, `unknown`, and
   `human_message`. `reasoning` is an item or field value, never an observation kind.
-  `capture_analysis::api::kinds`; [m2-report-format](research/m2-report-format.md).
+  `capture_analysis::api::kinds`; m2-report-format.
 - **decoder finding**: a counted unknown condition reported by a decoder, such as
   `data_after_done`, `missing_done` or an `interrupted` Chat Completions end. When source-referenced
   it emits an `unknown` observation; a spanless finding increments `unknown_records` without a
   written line, so that count can exceed written observations. `KindTally` excludes emitted
   `unknown` lines; `DecoderSummary::unknown_records` owns the count. It carries no decoded fact.
-  [m2-report-format](research/m2-report-format.md).
+  m2-report-format.
 - **protocol hint**: open, grammar-validated stream metadata naming the retained-byte protocol
   (`protocol_hint`, on a `[[capture.hosts]]` or append-only `[[capture.native]]` entry; recorded as
   `CaptureMeta.protocol_hint`). The registry supplies candidates; each decoder's `accepts` receives
@@ -98,13 +98,13 @@ Updated: 2026-10-11. Use these terms exactly; do not coin synonyms.
   trace incomplete, never "clean". D9; `crates/goalcup-protocol/src/capture.rs`.
 - **Loss**: a stream-zero frame by which the proxy reports traffic it relayed but did not
   capture (fail-open tunnel, opaque fallback, full table, unsettled cut). It is chained as a
-  stream-less gap. [LEDGER](../LEDGER.md) H-16.
+  stream-less gap. (Old ledger ticket H-16.)
 - **Recovery**: the record that a new producer epoch replaces a lost predecessor (wire or true
-  zero-record only), with the reason. [LEDGER](../LEDGER.md) H-09.
+  zero-record only), with the reason. (Old ledger ticket H-09.)
 - **seal**: ending an entry: finish, terminate owned processes, write LocalFinish and
   `seal.json`. `goalcup seal`. [TERMINATION](TERMINATION.md); D40.
 - **finish budget**: the one capture budget, split into a drain share and
-  `FINISH_COMMIT_RESERVE`, outside the SIGTERM/grace/SIGKILL termination bound. D40; LEDGER H-10.
+  `FINISH_COMMIT_RESERVE`, outside the SIGTERM/grace/SIGKILL termination bound. D40 (old ledger ticket H-10).
 - **spawn gate**: the capture child waits before `exec` until the daemon has durably registered
   it and the CLI has re-opened the exact path and streamed its regular-file reads into SHA-256. This
   streaming check is not a coherent snapshot or inode-bound execution. [TERMINATION](TERMINATION.md)
@@ -112,7 +112,7 @@ Updated: 2026-10-11. Use these terms exactly; do not coin synonyms.
 - **anchor**: the external binding of the chain head. `AnchorState::LocalOnly` (none) or
   `Signed`. `crates/goalcup-protocol/src/capture_status.rs`.
 - **LocalOnly**: no server, receipt or ACK. A valid local outcome; by itself it never lowers
-  integrity exit 0. [m2-report-format](research/m2-report-format.md).
+  integrity exit 0. m2-report-format.
 - **integrity exit**: `goalcup-verify` on a v5 trace: 0 complete and valid; 1 incomplete,
   unsealed or degraded; 2 invalid (including a torn tail); 3 no usable report.
   `crates/goalcup-verifier/src/capture_analysis/reader.rs` `exit_code`.
@@ -124,9 +124,9 @@ Updated: 2026-10-11. Use these terms exactly; do not coin synonyms.
 - **run key**: the entry's per-run Ed25519 key. Its public half is `Launch.run_public_key`, the key
   that signs chunks and status.
 - **row**: one real-harness qualification run with an exact source, binary, harness and model
-  identity. [qualification/README](qualification/README.md).
+  identity. (the qualification records are in git history at `fddf776`).
 - **qualified**: passed T27/T28 acceptance. Nothing on `m2/wire` is qualified yet.
-  [LEDGER](../LEDGER.md) T27, T28. Say "built" for code that exists; "measured" needs a record.
+  See [TODO](../TODO.md). Say "built" for code that exists; "measured" needs a record.
 - **V1 / V1.1 / M2**: V1 is the `v1/trunk` foundation pinned `7f01234`/`v0.1.0`; V1.1 is its
   product expansion ([D29](DECISIONS.md#d29-v1-is-the-defined-foundation-qualification-target-v11-is-product-and-event-expansion));
   M2 is this branch's [wire-plus-native recorder](ARCHITECTURE.md#4-the-two-legs).

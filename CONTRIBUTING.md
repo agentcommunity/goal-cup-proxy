@@ -60,10 +60,8 @@ instead of the last test command and say so in the PR; a maintainer runs the ful
 ## Checks on your pull request
 
 One check is required on a pull request to `main`: `check` (the `ci` workflow's one Linux job), and
-a code owner must approve. The rules are in [REPOSITORY-GOVERNANCE](docs/REPOSITORY-GOVERNANCE.md)
-and the read-back in the [v0.5.1 evidence
-record](docs/qualification/v0.5.1-public-release-cleanup.md#applied-2026-10-11). On your first fork
-PR, `check` may show pending until a maintainer approves the workflow run; that is GitHub's default
+a code owner must approve. The rules are in [REPOSITORY-GOVERNANCE](docs/REPOSITORY-GOVERNANCE.md).
+On your first fork PR, `check` may show pending until a maintainer approves the workflow run; that is GitHub's default
 for first-time contributors. Required checks are strict: to update your branch, merge upstream
 `main` into it (or rebase your own branch on it) and push.
 
@@ -88,9 +86,7 @@ A common data-only harness PR contains:
   `<id>.json` and the changed `enumeration.json` and `redaction-extra-patterns.json`; on macOS
   also `<id>.daemon.json` and `native-stream-labels.json`;
 - a readiness record under `docs/qualification/m2-<name>-readiness.md` and, when a maintainer
-  has run a real row, links to that row's qualification evidence (a source edit alone is not
-  qualification); add the record as one row of the
-  [qualification index](docs/qualification/README.md) in the same PR;
+  has run a real row, links to that row's evidence (a source edit alone is not qualification);
 - a new generic harness-kit fixture case under
   `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` containing `harness.toml`, `stand-in.py`
   and `expect.toml` (plus only reviewed declared seeds) for this connector;
@@ -138,7 +134,7 @@ fixture with `spikes/redact.py`.
 
 ## Maintainer-owned files
 
-`STATUS.md`, `LEDGER.md` and `docs/DECISIONS.md` are maintainer-owned state trackers. Do not edit
+`TODO.md` and `docs/DECISIONS.md` are maintainer-owned. Do not edit
 them in an outside PR: they conflict on every merge. Put proposed text in the PR description and
 a maintainer lands it.
 

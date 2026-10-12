@@ -5,14 +5,16 @@ this build accepts, each with what bounds it and the ticket that tracks it. Anyt
 worse than stated here is a bug. Add a row whenever a review accepts a gap instead of fixing it.
 
 Updated: 2026-10-12. A verifier exit 0 alone is not a capture claim: a claim needs native and wire
-records per real harness ([ARCHITECTURE](ARCHITECTURE.md), [qualification index](qualification/README.md)).
+records per real harness ([ARCHITECTURE](ARCHITECTURE.md)).
 
 ## On m2/wire (current)
 
 The hook leg and OpenCode are gone on `m2/wire`, so the v1/trunk rows below that lean on hooks do not
 apply. A v5 capture trace is judged by the integrity reader (exit 0 complete and valid, 1 incomplete
 or unsealed, 2 invalid, 3 no usable report), not by the V1 thirteen checks. LocalOnly (no server,
-receipt or ACK) is a valid local outcome. Nothing on m2 is qualified for long runs (LEDGER T25-T28).
+receipt or ACK) is a valid local outcome. Nothing on m2 is qualified for long runs ([TODO](../TODO.md)).
+
+Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it in git history at `fddf776`. Open issues that still matter are in [TODO](../TODO.md#known-issues).
 
 ### Wire leg, finish and storage
 
@@ -21,12 +23,12 @@ receipt or ACK) is a valid local outcome. Nothing on m2 is qualified for long ru
   written as a stream-less gap, so a lossy run reads incomplete (closed `76e88bad`). Residuals: an
   old CLI on a new daemon keeps the old behaviour (counters only on the seal request); gap counts
   count records, not individual losses; a handled finish shows doubled daemon-clocked gaps.
-  Ticket: [H-16](../LEDGER.md).
+  Ticket: H-16.
 - **Two faults can leave a harness running on a sealed entry.** The spawn gate (4b) closes the
   spawn-to-registration window and the finish budget (4a) keeps the SIGTERM, grace, SIGKILL bound.
   A CLI crash after the gate released the child, combined with a raced manual `goalcup seal`, can
-  still leave a harness running. Needs both faults. Ticket: [H-10](../LEDGER.md); record
-  [m2-h10-finish-and-spawn-gate](qualification/m2-h10-finish-and-spawn-gate.md).
+  still leave a harness running. Needs both faults. Ticket: H-10; record
+  m2-h10-finish-and-spawn-gate.
 - **The final executable check is neither a coherent snapshot nor inode-bound execution on macOS.**
   After durable registration the CLI re-opens the exact canonical path with
   `O_NOFOLLOW|O_NONBLOCK`, requires a regular file and streams it into SHA-256. The residual window
@@ -41,14 +43,14 @@ receipt or ACK) is a valid local outcome. Nothing on m2 is qualified for long ru
 - **Open assumptions.** One proxy per entry (CP-A4); the 8 MiB queue holds about 2 MiB of payload, so
   one stall can lose up to about 2.1 MiB; `seal.json` sits outside the reservation, so a failed seal
   write reads `incomplete` with no further policy; the network-filter rule is bound to the E01
-  binary hash. Ticket: [H-04](../LEDGER.md).
+  binary hash. Ticket: H-04.
 - **A base64url run of 16 KiB or more redacts the rest of a one-line JSON body** (the redactor holds
   16 KiB and fails closed). Measured unreachable on the pilot path (0 `encrypted_content` in 14 real
   Codex client messages); reachable on a stateless HTTP fallback. Parked; re-measure on every long
-  chain. Ticket: [F-07](../LEDGER.md).
+  chain. Ticket: F-07.
 - **Redaction residuals.** An invalid UTF-8 byte inside a key body leaves the whole key raw (fix
   before any raw-byte capture surface). A lone `BEGIN` mention redacts to the end of that record and
-  breaks that record's JSON. Ticket: [H-20](../LEDGER.md).
+  breaks that record's JSON. Ticket: H-20.
 
 ### Hermes reference row (D41): what the key scan cannot see
 
@@ -69,7 +71,7 @@ closed where they can. These are the shapes they cannot see (independent secret 
   report) also decodes each stream's segments through the verifier's reader and scans each stream's
   bytes in order. A trace it cannot read, a segment that does not decode, or a trace with no segment
   is `incomplete`, never `clean`. Residual: only the redactor's retained bytes are decoded, so a
-  fragment the redactor already removed is invisible. Ticket: [H-18](../LEDGER.md).
+  fragment the redactor already removed is invisible. Ticket: H-18.
 - **The verdict file is bound, not locked** (H-18). `<run>/key-scan.txt` ends with `trace`,
   `trace-chain bytes=<n> sha256=<hex>` and `scanned-files count=<n> sha256=<hex>`, a digest of the
   sorted listing (relative path, kind, size, modification time, inode) of the run and trace
@@ -86,18 +88,18 @@ closed where they can. These are the shapes they cannot see (independent secret 
   raw bytes, so a key spelled as `\uXXXX` escapes is forwarded to the participant's terminal and
   is no hit in a native file or the trace. Only a bound identity is checked decoded (D50): such a
   key in the stdout identity's id binds nothing and fails the row (`credential_stdout_identity.rs`,
-  `escaped-id`); anywhere else it passes. Ticket: [H-18](../LEDGER.md).
+  `escaped-id`); anywhere else it passes. Ticket: H-18.
 - **"Stays local" is checked by local signal only.** A goal file under Git, `Library/Mobile
   Documents`, `Library/CloudStorage` or a folder named Dropbox, OneDrive, Google Drive or iCloud Drive
   is refused. `~/Desktop` and `~/Documents` are refused only when local state says iCloud owns them
   (the File Provider attribute, or the same device and inode as the CloudDocs folder). No network
   call. A folder synced in a way those signals do not show is not caught. **Unverified positive:** no
-  machine here has the setting on. Ticket: [H-18](../LEDGER.md).
+  machine here has the setting on. Ticket: H-18.
 - **Hermes' tool-child environment is source-only evidence.** The blocklist covering
   `DEEPSEEK_API_KEY` is read from Hermes source; no exercised tool child has shown it. Helpers
   outside that sanitiser inherit everything, which is why the `tirith` download is off. `models.dev`
   is still contacted for model metadata (no switch; it carries neither key nor session content).
-  Marker timing is tested only against a fake late marker. Ticket: [H-18](../LEDGER.md).
+  Marker timing is tested only against a fake late marker. Ticket: H-18.
 - **`masked_key` is soft and has no boundary.** It never wins an overlap, so a mask glued to a longer
   secret is redacted by the longer rule and what is left is redacted as `masked_key`. A key that
   follows a complete mask with no separator keeps its four-character tail; neither is a D41
@@ -142,7 +144,7 @@ wording is in git (`git show f8621f99:docs/CHEAT-CHECKLIST.md`).
   after the root exits cannot be adopted. F0 (2026-09-17) is closed; the residual windows are in
   [TERMINATION](TERMINATION.md) and [D30](DECISIONS.md#d30-confirmed-termination-is-bounded-to-the-owned-process-set-and-the-limitation-is-stated).
   Read the Linux failure of `a_child_started_before_the_next_authenticated_snapshot_is_chased`
-  ([2026-09-16-linux-arm](qualification/2026-09-16-linux-arm.md)) before citing that test.
+  (the 2026-09-16 Linux ARM qualification record, in git history at `fddf776`) before citing that test.
 - **Seal attribution is a Flag, not the gate** (D35). A shell call that merely quotes a whole
   `apply_patch` envelope attributes the file it names without writing it
   (`patch_target_paths`); `BULK_ATTRIBUTION_THRESHOLD` caps the mass-import version, a single planted
