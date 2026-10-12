@@ -34,12 +34,12 @@ use std::path::{Path, PathBuf};
     group(clap::ArgGroup::new("mode").required(true).args(["capture_integrity", "research_json"]))
 )]
 struct Args {
-    /// Check a protocol-v5 capture trace's integrity instead (bounded, streaming). The
+    /// Check a protocol-v5 capture trace's integrity (bounded, streaming). The
     /// report goes to stdout; the exit code is the report's.
     #[arg(long = "capture-integrity", value_name = "TRACE")]
     capture_integrity: Option<PathBuf>,
-    /// Write the private research report of a protocol-v5 capture trace to --output
-    /// instead: one NDJSON line per decoded observation, then one summary line. The exit
+    /// Write the private research report of a protocol-v5 capture trace to --output:
+    /// one NDJSON line per decoded observation, then one summary line. The exit
     /// code is the report's.
     #[arg(long = "research-json", value_name = "TRACE", requires = "output")]
     research_json: Option<PathBuf>,

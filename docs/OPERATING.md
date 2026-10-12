@@ -15,8 +15,6 @@ install, one capture run) is in [../README.md](../README.md).
 - [Running a capture with the CLI](#running-a-capture-with-the-cli)
 - [The MCP server, `goalcup-mcp`](#the-mcp-server-goalcup-mcp)
 - [Running the verifier](#running-the-verifier)
-- [The committed traces](#the-committed-traces)
-- [Regenerating fixtures](#regenerating-fixtures)
 - [Pinning connectors](#pinning-connectors)
 
 ## Current M2 operating boundary
