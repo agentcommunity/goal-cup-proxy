@@ -723,7 +723,13 @@ fn prepare(
         match std::fs::symlink_metadata(&config_home) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                private_dir(&config_home, false)?;
+                match private_dir(&config_home, false) {
+                    // A concurrent `goalcup start` made it between the look and the create;
+                    // `SharedCaptureHome::load` below judges that directory like any other.
+                    Err(CliError::Io { source, .. })
+                        if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    made => made?,
+                }
             }
             Err(_) => {
                 return Err(shared_home_refusal(

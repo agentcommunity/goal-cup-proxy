@@ -30,8 +30,9 @@
 //! refuses at `Registry::open` and exits 1, and both commands then find the winner through
 //! `control.json`. A daemon that is stopping holds the lock until it has stopped, so a start
 //! that lost to it is tried again, with a growing pause, until the wait's deadline. A daemon
-//! that exits for any other reason before it answers (a configuration it refuses) ends the
-//! wait at once, naming its exit status and `daemon.log`.
+//! that exits for any other reason before it answers is started once more (the loser of a race
+//! over a fresh artifact root can refuse with another sentence); a second such exit in a row (a
+//! configuration it refuses) ends the wait at once, naming its exit status and `daemon.log`.
 //!
 //! # The configuration names this command's connectors
 //!
@@ -72,7 +73,7 @@ pub const DAEMON_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 /// tree's hardware that is well under a second.
 pub const SPAWN_WAIT: Duration = Duration::from_secs(10);
 
-/// The pause before starting a daemon again after the last one lost the registry lock,
+/// The pause before starting a daemon again after the last one exited early,
 /// doubling up to [`RESPAWN_PAUSE_MAX`]. A daemon that is idling out holds the lock until it
 /// has stopped, and a start that met it refuses.
 const RESPAWN_PAUSE: Duration = Duration::from_millis(100);
@@ -151,6 +152,7 @@ pub fn ensure_daemon(
     let (mut child, mut said_from) = spawn(&binary, &config, &log)?;
     let mut pause = RESPAWN_PAUSE;
     let mut respawn_at: Option<Instant> = None;
+    let mut refused_in_a_row = 0u32;
     loop {
         if let Some(client) = live_daemon(cfg)? {
             // The daemon is in a session of its own and outlives this process. A thread waits
@@ -179,15 +181,22 @@ pub fn ensure_daemon(
             None => {
                 if let Ok(Some(status)) = child.try_wait() {
                     // Lost the registry lock to a daemon that is starting or stopping: start
-                    // again after a pause. Any other exit (a refused configuration, a root it
-                    // cannot open) would only repeat, so it ends the wait now.
-                    if !lost_the_registry_lock(&log, said_from) {
-                        return Err(not_started(
-                            &binary,
-                            &config,
-                            &log,
-                            &format!("it exited ({status}) before answering"),
-                        ));
+                    // again after a pause, until the deadline. Any other early exit gets one
+                    // more start, because a daemon that lost a start race over a fresh
+                    // artifact root can refuse with another sentence; a second one in a row
+                    // (a refused configuration refuses every time) ends the wait now.
+                    if lost_the_registry_lock(&log, said_from) {
+                        refused_in_a_row = 0;
+                    } else {
+                        refused_in_a_row += 1;
+                        if refused_in_a_row >= 2 {
+                            return Err(not_started(
+                                &binary,
+                                &config,
+                                &log,
+                                &format!("it exited ({status}) before answering, twice"),
+                            ));
+                        }
                     }
                     respawn_at = Some(now + pause);
                     pause = (pause * 2).min(RESPAWN_PAUSE_MAX);
@@ -228,8 +237,8 @@ fn live_daemon(cfg: &Path) -> Result<Option<HttpDaemonClient>, CliError> {
 }
 
 /// What `goalcup-daemon` says when another daemon holds the registry's file lock (its
-/// `Registry::from_file`, D4). The one early exit that is worth waiting out: the holder is a
-/// daemon starting (a start race) or stopping (idling out), and the lock comes free.
+/// `Registry::from_file`, D4). The one early exit that is waited out to the deadline: the holder
+/// is a daemon starting (a start race) or stopping (idling out), and the lock comes free.
 /// `the_registry_lock_held_by_another_process_is_waited_out` in
 /// `tests/full/run_scoped_daemon.rs` holds the two crates' wording together.
 const LOST_REGISTRY_LOCK: &str = "another daemon holds the registry";
