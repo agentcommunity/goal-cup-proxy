@@ -413,7 +413,10 @@ impl Daemon {
 
     /// The signed status document of a local capture, as `goalcup status` reads it. `None`
     /// for an id that is not a capture this daemon holds.
-    pub(crate) fn signed_status(&self, entry_id: &str) -> Result<Option<SignedStatus>, DaemonError> {
+    pub(crate) fn signed_status(
+        &self,
+        entry_id: &str,
+    ) -> Result<Option<SignedStatus>, DaemonError> {
         self.capture_status(entry_id)
     }
 

@@ -326,7 +326,9 @@ pub(crate) const fn count_pins(data: &'static str) -> usize {
 }
 
 /// The pins in `data`, or a build failure. `N` is [`count_pins`] of the same text.
-pub(crate) const fn parse_pins<const N: usize>(data: &'static str) -> [(&'static str, &'static str); N] {
+pub(crate) const fn parse_pins<const N: usize>(
+    data: &'static str,
+) -> [(&'static str, &'static str); N] {
     let mut rows = [ZERO_ROW; N];
     match scan(data.as_bytes(), &mut rows, true) {
         Ok(_) => {}

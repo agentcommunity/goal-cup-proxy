@@ -23,7 +23,6 @@ mod fsutil;
 pub mod ingest;
 /// Bounded, scoped native byte capture.
 pub mod native_capture;
-pub mod paths;
 pub mod redact;
 pub mod registry;
 /// The process-level [`runtime::Daemon`] and the local captures it holds: the loopback

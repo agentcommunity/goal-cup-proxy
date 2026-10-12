@@ -102,7 +102,7 @@ pub struct Observation {
 }
 
 impl Observation {
-    /// An observation with no supplied id; add one with [`with_supplied_id`](Self::with_supplied_id).
+    /// An observation with no supplied id; set `supplied_id` directly when the source gave one.
     pub fn new(
         source: SourceRef,
         observed: ObservationTimeRange,
@@ -116,12 +116,6 @@ impl Observation {
             supplied_id: None,
             fields,
         }
-    }
-
-    /// The id the source supplied for this fact (a response id, a tool call id).
-    pub fn with_supplied_id(mut self, id: impl Into<String>) -> Self {
-        self.supplied_id = Some(id.into());
-        self
     }
 }
 

@@ -424,7 +424,10 @@ impl ControlErrorResponse {
     /// A refusal that has something specific to say — the on-screen arming text, the
     /// version this daemon speaks — carries it here rather than in the message, so a
     /// client reads a field instead of parsing a sentence.
-    pub(crate) fn with_detail(error: ControlError, detail: serde_json::Value) -> ControlErrorResponse {
+    pub(crate) fn with_detail(
+        error: ControlError,
+        detail: serde_json::Value,
+    ) -> ControlErrorResponse {
         ControlErrorResponse { error, detail }
     }
 }

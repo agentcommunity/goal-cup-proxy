@@ -1164,8 +1164,7 @@ fn parse_pattern(pattern: &str) -> Result<Vec<Component>, NativeCaptureError> {
 }
 
 /// One component against one glob: `*` matches any run (including none), `?` exactly one
-/// character, anything else itself. These are the semantics of the private matcher in
-/// `paths.rs` the V1 tailers used, applied here to capability-enumerated names.
+/// character, anything else itself. Applied to capability-enumerated names.
 fn glob_matches(name: &str, pattern: &str) -> bool {
     let name: Vec<char> = name.chars().collect();
     let pattern: Vec<char> = pattern.chars().collect();

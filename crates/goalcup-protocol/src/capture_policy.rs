@@ -31,7 +31,6 @@ pub(crate) const MAX_CAPTURE_PATHS_PER_HOST: usize = 32;
 pub(crate) const MAX_CAPTURE_PATH_BYTES: usize = 1024;
 pub(crate) const MAX_CONTINUATION_BYTES: usize = 512;
 pub(crate) const MAX_GOAL_FLAG_BYTES: usize = 32;
-pub const MAX_VERSION_BYTES: usize = 32;
 
 // ---------------------------------------------------------------------------------------
 // CA trust, credentials, redaction mirror, tracker hosts
