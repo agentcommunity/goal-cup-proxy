@@ -19,8 +19,10 @@ those sources disagree, the sources refuse the manifest.
 deserializes every table with unknown fields denied, then validates in this fixed order:
 executable; arguments and goal; environment; home; credential; CA; identity; native source;
 argument guard; termination; hosts; redaction; delivery independence; cross-field rules; then each
-`capture.platform` entry in key order. The first refusal is deterministic. Unknown keys and unknown closed values use the same message: a
-newer schema needs a newer `goalcup`, while a misspelling is refused rather than ignored.
+`capture.platform` entry, in the fixed order `linux-x86_64`, `linux-aarch64`, `macos-aarch64`,
+`macos-x86_64`, whatever order the file uses. The first refusal is deterministic. Unknown keys and
+unknown closed values use the same message: a newer schema needs a newer `goalcup`, while a
+misspelling is refused rather than ignored.
 
 All public schema structs and enums are non-exhaustive. A manifest cannot select its load origin:
 

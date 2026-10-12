@@ -216,7 +216,8 @@ closed_enum! {
 
 closed_enum! {
     /// The platform a `[capture.platform.<key>]` override applies to: `std::env::consts::OS`,
-    /// `-`, `std::env::consts::ARCH`.
+    /// `-`, `std::env::consts::ARCH`. The declaration order is the order the platform entries
+    /// are validated in.
     PlatformKey, "capture.platform", special: &[];
     LinuxX86_64 = "linux-x86_64",
     LinuxAarch64 = "linux-aarch64",
@@ -339,6 +340,7 @@ pub struct PlatformOverride {
 
 /// The executable a platform runs: the base `program`, with the platform's pin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ResolvedExecutable<'a> {
     pub program: &'a str,
     pub version: &'a str,
@@ -936,7 +938,9 @@ impl HarnessManifest {
     /// Refuse every manifest the refusal table names. The order is fixed, so the first
     /// refusal is deterministic: executable, args and goal, env, home, credential, CA,
     /// identity, native, argv guard, termination, hosts, redaction, the delivery-agnostic
-    /// rule, the cross-field rules, and then each `[capture.platform.<key>]` in key order.
+    /// rule, the cross-field rules, and then each `[capture.platform.<key>]` in [`PlatformKey`]'s
+    /// declaration order (`linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`),
+    /// whatever order the file uses.
     ///
     /// A platform is checked as the whole recipe it resolves to, by these same rules, so an
     /// override can reach nothing the base table could not; its refusal names
