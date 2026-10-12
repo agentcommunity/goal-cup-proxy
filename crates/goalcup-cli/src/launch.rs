@@ -601,7 +601,8 @@ fn pin_executable_fields(
     if !sha256.eq_ignore_ascii_case(expected_sha256) {
         return Err(CliError::Refused(format!(
             "`{text}` is not the harness executable this capture profile was measured with \
-             (version {}): its sha256 is {sha256}, the profile pins {}. Nothing is launched.",
+             (version {}): its sha256 is {sha256}, the profile pins {}. Install that exact \
+             version and try again. Nothing is launched.",
             version, expected_sha256
         )));
     }

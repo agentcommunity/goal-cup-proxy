@@ -183,29 +183,24 @@ pub fn connector_checks_with_dev(
 pub fn tier_gate(c: &Connector) -> Check {
     let id = &c.manifest.id;
     match c.manifest.tier {
-        Tier::Full => Check::pass(
-            "tier",
-            format!("`{id}` is `full` in D23's measured table: M1 runs it."),
-        ),
+        Tier::Full => Check::pass("tier", format!("`{id}` is fully supported.")),
         Tier::ElevatedReview => Check::new(
             "tier",
             Level::Fail,
             format!(
-                "`{id}` is `elevated_review` in D23's measured table: the table measured \
-                 this harness and put it behind a review, and M1 does not run one. It is \
-                 refused in M1 rather than refused forever — a later milestone that stands \
-                 the review up admits this connector unchanged."
+                "`{id}` needs an organizer's review before its runs count, and this build \
+                 does not run that review. It is refused for now, not forever: a later \
+                 release that runs the review admits this connector unchanged."
             ),
-            "run one of the connectors D23 marks `full`, or wait for the milestone that \
-             runs the review.",
+            "run a fully supported harness, or wait for the release that runs the \
+             review.",
         ),
         Tier::Unsupported => Check::new(
             "tier",
             Level::Fail,
             format!(
-                "`{id}` is `unsupported` in D23's measured table: this harness is not \
-                 supported, in M1 or later. The only harness D23 marks so is dsh, which \
-                 ships no connector, so this manifest is a hand-written one."
+                "`{id}` is not supported, now or later. The only harness marked so is \
+                 dsh, which ships no connector, so this manifest is a hand-written one."
             ),
             "run one of the connectors this build ships.",
         ),
@@ -230,22 +225,22 @@ pub fn manifest_pin_gate(c: &Connector, dev: bool) -> Check {
     match pin_state(c) {
         PinState::Pinned => Check::pass(
             "manifest_pin",
-            format!("`{id}`'s rulebook is the one this build pins ({found})."),
+            format!("`{id}`'s connector files are the ones this build pins ({found})."),
         ),
         PinState::Altered { pinned } => {
             let what = format!(
-                "`{id}`'s rulebook is not the one this build pins: it is {found}, and this \
-                 build pins {pinned}. The manifest carries the human rule, the exclusion \
-                 catalogue and the tool classes, so an edited one is a run judged by rules \
-                 nobody agreed to."
+                "`{id}`'s connector files are not the ones this build pins: they hash to \
+                 {found}, and this build pins {pinned}. The manifest carries the human rule, \
+                 the exclusion catalogue and the tool classes, so an edited one is a run \
+                 judged by rules nobody agreed to."
             );
             dev_or_fail(what, dev)
         }
         PinState::Unpinned => {
             let what = format!(
-                "no build pins `{id}` — its rulebook ({found}) is hand-written, or from a \
-                 release this build does not know. Nothing has agreed to the rules this run \
-                 would be judged by."
+                "no build pins `{id}` — its connector files ({found}) are hand-written, or \
+                 from a release this build does not know. Nothing has agreed to the rules \
+                 this run would be judged by."
             );
             dev_or_fail(what, dev)
         }
@@ -270,23 +265,24 @@ pub fn harness_pin_gate(c: &HarnessConnector, dev: bool) -> Check {
         {
             Check::pass(
                 "manifest_pin",
-                format!("`{id}`'s rulebook is the one this build pins ({found})."),
+                format!("`{id}`'s connector files are the ones this build pins ({found})."),
             )
         }
         Some(pinned) => Check::new(
             "manifest_pin",
             Level::Fail,
             format!(
-                "`{id}`'s rulebook is not the one this build pins: it is {found}, and this \
-                 build pins {pinned}. A pinned connector never receives {DEV_DOOR} relaxations."
+                "`{id}`'s connector files are not the ones this build pins: they hash to \
+                 {found}, and this build pins {pinned}. A pinned connector never receives \
+                 {DEV_DOOR} relaxations."
             ),
             &format!("restore the shipped `connectors/{id}` directory."),
         ),
         None => {
             let what = format!(
-                "no build pins `{id}` — its rulebook ({found}) is hand-written, or from a \
-                 release this build does not know. Nothing has agreed to the rules this run \
-                 would be judged by."
+                "no build pins `{id}` — its connector files ({found}) are hand-written, or \
+                 from a release this build does not know. Nothing has agreed to the rules \
+                 this run would be judged by."
             );
             dev_or_fail(what, dev)
         }
@@ -371,8 +367,8 @@ fn version_gate_measured(c: &Connector, env: &BTreeMap<String, String>) -> (Chec
                 "harness_version",
                 Level::Warn,
                 format!(
-                    "`{binary}` is not on PATH, so its version could not be measured. D12 \
-                     tested `{}` at `{want}`.",
+                    "`{binary}` is not on PATH, so its version could not be measured. `{}` \
+                     was tested at `{want}`.",
                     m.id
                 ),
                 &format!(
@@ -389,9 +385,7 @@ fn version_gate_measured(c: &Connector, env: &BTreeMap<String, String>) -> (Chec
             let check = match range.standing(&version) {
                 Standing::Tested => Check::pass(
                     "harness_version",
-                    format!(
-                        "`{binary}` is {version}, which is inside D12's tested range `{want}`."
-                    ),
+                    format!("`{binary}` is {version}, which is inside the tested range `{want}`."),
                 ),
                 // D12: a newer harness is never refused. It runs, and
                 // the report says it is untested, so a run on it reads as what it is.
@@ -399,7 +393,7 @@ fn version_gate_measured(c: &Connector, env: &BTreeMap<String, String>) -> (Chec
                     "harness_version",
                     Level::Warn,
                     format!(
-                        "`{binary}` is {version}, newer than D12's tested range `{want}`: \
+                        "`{binary}` is {version}, newer than the tested range `{want}`: \
                          allowed, and recorded as untested."
                     ),
                     &format!(
@@ -411,8 +405,8 @@ fn version_gate_measured(c: &Connector, env: &BTreeMap<String, String>) -> (Chec
                     "harness_version",
                     Level::Fail,
                     format!(
-                        "`{binary}` is {version}, below D12's floor {floor} (tested range \
-                         `{want}`). A self-updating harness moves under a run, which is why \
+                        "`{binary}` is {version}, below the lowest tested version {floor} \
+                         (tested range `{want}`). A self-updating harness moves under a run, which is why \
                          this is measured at the start rather than discovered in the verdict."
                     ),
                     &format!("install `{binary}` at {floor} or newer."),
@@ -426,7 +420,7 @@ fn version_gate_measured(c: &Connector, env: &BTreeMap<String, String>) -> (Chec
                 Level::Warn,
                 format!(
                     "`{binary}` is installed and this build could not measure its version: \
-                     {e}. D12 tested `{}` at `{want}`.",
+                     {e}. `{}` was tested at `{want}`.",
                     m.id
                 ),
                 &format!(
