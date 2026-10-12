@@ -34,7 +34,7 @@ A common data-only PR carries exactly these concerns:
    `harness.toml`, `stand-in.py` and `expect.toml` (plus only reviewed declared seeds). The case
    exercises the connector's schema-1 path; do not substitute an existing baseline case.
 5. Evidence that the current baseline harness-kit suite passes. Build the workspace first, then
-   run `cargo test -p goalcup-cli --test harness_contract_kit`; the four existing baseline cases
+   run `cargo test -p goalcup-cli --test harness_contract_kit`; the six existing baseline cases
    are listed separately below.
 6. The regenerated harness goldens. The tests read the connector list from `connectors/`, so
    they need no edit. On macOS, run
@@ -155,6 +155,6 @@ general qualification matrix.
 | Task fails while recorder passes, or the reverse | report each outcome separately |
 
 Claim levels are planned, implemented, installed, synthetic tested, short real capture-qualified
-and short decoded-qualified. A passing kit covering the four baseline cases plus the new connector
+and short decoded-qualified. A passing kit covering the six baseline cases plus the new connector
 case is **synthetic tested** only. Qualification requires its own evidence and maintainer review;
 nothing here implies restart reliability, long autonomy, delivery, package publication or release.

@@ -520,6 +520,12 @@ fn the_version_probe_runs_the_harness_with_no_base_url_and_no_proxy_in_its_envir
     );
     env.insert("HTTPS_PROXY".to_string(), "http://elsewhere".to_string());
     env.insert("http_proxy".to_string(), "http://elsewhere".to_string());
+    // Any other `*_URL` names a server too (Amp reads `AMP_URL`), as the capture policy says.
+    env.insert("AMP_URL".to_string(), "http://elsewhere".to_string());
+    env.insert(
+        "some_service_url".to_string(),
+        "http://elsewhere".to_string(),
+    );
 
     let c = support::connector("codex-cli");
     let sampled = sample_harness_version_within(&c, &env, std::time::Duration::from_secs(10));
@@ -537,7 +543,7 @@ fn the_version_probe_runs_the_harness_with_no_base_url_and_no_proxy_in_its_envir
     for line in seen.lines() {
         let name = line.split('=').next().unwrap_or(line).to_ascii_uppercase();
         assert!(
-            !name.ends_with("_BASE_URL"),
+            !name.ends_with("_URL"),
             "the probe carried {line:?} into the harness"
         );
         assert!(

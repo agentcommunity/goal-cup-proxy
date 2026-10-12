@@ -12,6 +12,10 @@
 //!
 //! # The environment is subtraction, never addition
 //!
+//! This section describes the V1 launch D48 removed. [`scrubbed_env`] is kept but has no
+//! caller; the live use of the D23 predicate is [`crate::preflight::probe_env`]. The capture
+//! launch (below) is built from nothing, so it inherits no `*_URL` name to strip.
+//!
 //! A launch environment is the participant's own, minus the D23 denylist, minus
 //! [`LaunchPlan::env_remove`], plus [`LaunchPlan::env_set`]. Nothing else is inherited and
 //! nothing else is added: [`spawn`] clears the child's environment and rebuilds it from
@@ -19,7 +23,7 @@
 //! not what happened to be exported in the shell that ran `spawn`.
 //!
 //! The subtraction happens at two moments and both are here. [`scrubbed_env`] takes the D23
-//! denylist out of the parent environment (anything ending `_BASE_URL`, anything ending
+//! denylist out of the parent environment (anything ending `_URL`, anything ending
 //! `_PROXY`, and a bare `PROXY`) before a plan is built from it, which is the same rule
 //! [`crate::preflight::probe_env`] applies to the one child the preflight spawns. Then
 //! [`LaunchPlan::env_remove`] takes the connector's own names out on top. A plan builder
@@ -132,7 +136,8 @@ use std::process::{Child, Command};
 /// The tees of a Hermes capture child's streams live in their own file; they are part of this
 /// module's interface (D40, D41).
 pub use crate::capture_tee::{
-    CaptureStderr, ScopeMarker, tee_marked, tee_marked_capture, tee_marked_capture_to,
+    CaptureStderr, ScopeMarker, ScopeReceiver, tee_marked, tee_marked_capture,
+    tee_marked_capture_to, tee_marked_capture_with_identity, tee_marked_capture_with_identity_to,
     tee_marked_capture_with_rule, tee_marked_with_rule, tee_stderr_capture_with_rule,
 };
 /// The ending of a child this process just released lives in its own file, which the
@@ -358,7 +363,8 @@ pub fn launched_at_now() -> String {
 ///
 /// Removed, by name, in either case:
 ///
-/// * anything ending `_BASE_URL` — `ANTHROPIC_BASE_URL`, `CODEX_BASE_URL`, `OPENAI_BASE_URL`;
+/// * anything ending `_URL` — `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `AMP_URL`, the same
+///   name rule the capture policy applies to `[capture.env]`;
 /// * anything ending `_PROXY` (`HTTPS_PROXY`, `http_proxy`, `ALL_PROXY`), and a bare `PROXY`.
 ///
 /// The same set [`crate::preflight::probe_env`] removes, for the same reason and stated in
@@ -377,14 +383,13 @@ pub fn scrubbed_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> 
         .collect()
 }
 
-/// Whether D23's denylist names this variable. **The one predicate, and all three callers
-/// use it**: this module strips these from the launch environment and refuses a manifest
-/// that pins one in `[launch.env]`, and [`crate::preflight::probe_env`] strips them from the
-/// version probe. The same rule written out three times is a rule that agrees until someone
+/// Whether D23's denylist names this variable. **The one predicate**: [`scrubbed_env`] (no
+/// caller since D48) and [`crate::preflight::probe_env`], which strips these from the version
+/// probe, both use it. The same rule written out twice is a rule that agrees until someone
 /// widens one copy.
 pub(crate) fn is_denied(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();
-    upper.ends_with("_BASE_URL") || upper.ends_with("_PROXY") || upper == "PROXY"
+    upper.ends_with("_URL") || upper.ends_with("_PROXY") || upper == "PROXY"
 }
 
 /// A recipe that names `{server_port}` may not be launched on an empty one.
@@ -1411,6 +1416,8 @@ fn build_command(p: &LaunchPlan, pipes: Pipes, secret: Option<&ChildSecret>) -> 
 
 /// The two bounded messages from a capture stdout tee: its one scope identity and its
 /// completion after EOF and all forwarding. Waiting for completion never joins the thread.
+/// A keyed `stdout_json` launch has no such tee: its stdout is read by the key-scanning tee,
+/// which hands back only the scope receiver and reports the stream's end itself.
 pub struct CaptureStdout {
     pub scope: std::sync::mpsc::Receiver<Option<String>>,
     completed: std::sync::mpsc::Receiver<std::io::Result<()>>,
@@ -1534,12 +1541,7 @@ pub fn stdout_tee_with_rule(
     sender: std::sync::mpsc::Sender<Option<String>>,
     rule: &StdoutJsonRule,
 ) -> std::io::Result<()> {
-    const LINE_LIMIT: usize = 1024 * 1024;
-    const LINE_COUNT_LIMIT: usize = 64;
-    let mut line = Vec::new();
-    let mut overlong = false;
-    let mut scanning = true;
-    let mut complete_lines = 0usize;
+    let mut scan = StdoutIdentityScan::new(rule.clone(), sender);
     let mut forwarding = true;
     let mut buf = [0u8; 64 * 1024];
     let result = loop {
@@ -1550,48 +1552,168 @@ pub fn stdout_tee_with_rule(
             Err(e) => break Err(e),
         };
         // Announce the scope before a participant's stdout back-pressure can delay Launch.
-        if scanning {
-            for &byte in &buf[..n] {
-                if byte == b'\n' {
-                    complete_lines += 1;
-                    if !overlong
-                        && let Ok(event) = serde_json::from_slice::<serde_json::Value>(&line)
-                        && json_path(&event, &rule.match_field).and_then(|v| v.as_str())
-                            == Some(rule.match_value.as_str())
-                    {
-                        let id = json_path(&event, &rule.id_field)
-                            .and_then(|v| v.as_str())
-                            .map(str::to_owned);
-                        let _ = sender.send(id);
-                        scanning = false;
-                        line.clear();
-                        break;
-                    }
-                    line.clear();
-                    overlong = false;
-                    if complete_lines == LINE_COUNT_LIMIT {
-                        let _ = sender.send(None);
-                        scanning = false;
-                        break;
-                    }
-                } else if !overlong {
-                    if line.len() == LINE_LIMIT {
-                        line.clear();
-                        overlong = true;
-                    } else {
-                        line.push(byte);
-                    }
-                }
-            }
-        }
+        scan.feed(&buf[..n]);
         if forwarding && (writer.write_all(&buf[..n]).is_err() || writer.flush().is_err()) {
             forwarding = false;
         }
     };
-    if scanning {
-        let _ = sender.send(None);
-    }
+    scan.end();
     result
+}
+
+/// The stdout JSON identity matcher, fed every byte one stdout reader reads: complete lines of
+/// at most 1 MiB, at most 64 of them, until the first event whose `match_field` is
+/// `match_value`. It sends exactly one message: that event's `id_field` (or `None` when the id
+/// is unusable), or `None` when the line budget or the stream ends first.
+///
+/// For a keyed launch it also holds a key-fragment matcher of its own ([`Self::with_key_scan`]).
+/// The id it sends is what the daemon writes into the chain as the scope, so a matching event
+/// whose line or decoded id holds any key-scan form is not bound: it sends `None`, the same
+/// unbound path an unusable id takes, and records a key hit, which fails the row. The line
+/// buffer is overwritten before it is cleared and when the matcher is dropped, as the tee's own
+/// buffer is.
+pub(crate) struct StdoutIdentityScan {
+    rule: StdoutJsonRule,
+    sender: std::sync::mpsc::Sender<Option<String>>,
+    line: Vec<u8>,
+    overlong: bool,
+    scanning: bool,
+    complete_lines: usize,
+    key_scan: Option<(
+        crate::key_scan::FragmentMatcher,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    )>,
+}
+
+impl StdoutIdentityScan {
+    const LINE_LIMIT: usize = 1024 * 1024;
+    const LINE_COUNT_LIMIT: usize = 64;
+
+    pub(crate) fn new(
+        rule: StdoutJsonRule,
+        sender: std::sync::mpsc::Sender<Option<String>>,
+    ) -> Self {
+        Self {
+            rule,
+            sender,
+            line: Vec::new(),
+            overlong: false,
+            scanning: true,
+            complete_lines: 0,
+            key_scan: None,
+        }
+    }
+
+    /// Refuse to bind an id that holds a fragment of the launch's key, and set `hit` when a
+    /// matching event held one.
+    pub(crate) fn with_key_scan(
+        mut self,
+        matcher: crate::key_scan::FragmentMatcher,
+        hit: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.key_scan = Some((matcher, hit));
+        self
+    }
+
+    /// Empty the held line, overwriting it first when this scan holds key material (a keyed
+    /// launch's line may hold a fragment of the key).
+    fn clear_line(&mut self) {
+        if self.key_scan.is_some() {
+            crate::key_scan::wipe(&mut self.line);
+        }
+        self.line.clear();
+    }
+
+    /// The id to send for a matching event: `None` when it is unusable, and `None` with a key
+    /// hit recorded when the line or the id holds a fragment of the key.
+    fn bound_id(&self, id: Option<&str>) -> Option<String> {
+        if let Some((matcher, hit)) = &self.key_scan
+            && (matcher.contains(&self.line)
+                || id.is_some_and(|id| matcher.contains(id.as_bytes())))
+        {
+            hit.store(true, std::sync::atomic::Ordering::Release);
+            return None;
+        }
+        id.map(str::to_owned)
+    }
+
+    pub(crate) fn feed(&mut self, bytes: &[u8]) {
+        if !self.scanning {
+            return;
+        }
+        for &byte in bytes {
+            if byte == b'\n' {
+                self.complete_lines += 1;
+                if !self.overlong
+                    && let Ok(event) = serde_json::from_slice::<serde_json::Value>(&self.line)
+                    && json_path(&event, &self.rule.match_field).and_then(|v| v.as_str())
+                        == Some(self.rule.match_value.as_str())
+                {
+                    let id = self
+                        .bound_id(json_path(&event, &self.rule.id_field).and_then(|v| v.as_str()));
+                    let _ = self.sender.send(id);
+                    self.scanning = false;
+                    self.clear_line();
+                    return;
+                }
+                self.clear_line();
+                self.overlong = false;
+                if self.complete_lines == Self::LINE_COUNT_LIMIT {
+                    let _ = self.sender.send(None);
+                    self.scanning = false;
+                    return;
+                }
+            } else if !self.overlong {
+                if self.line.len() == Self::LINE_LIMIT {
+                    self.clear_line();
+                    self.overlong = true;
+                } else {
+                    self.line.push(byte);
+                }
+            }
+        }
+    }
+
+    /// The stream ended (or its reader failed) before a matching event: say so, once.
+    pub(crate) fn end(&mut self) {
+        if self.scanning {
+            let _ = self.sender.send(None);
+            self.scanning = false;
+        }
+    }
+}
+
+impl Drop for StdoutIdentityScan {
+    fn drop(&mut self) {
+        self.end();
+        self.clear_line();
+    }
+}
+
+/// A stdout reader that feeds what it reads to a [`StdoutIdentityScan`] before handing it on,
+/// so the key-scanning tee and the identity matcher share one reader of one pipe. The identity
+/// is seen when the bytes are read, before the tee decides whether to forward them.
+pub(crate) struct IdentityReader<R> {
+    inner: R,
+    scan: StdoutIdentityScan,
+}
+
+impl<R> IdentityReader<R> {
+    pub(crate) fn new(inner: R, scan: StdoutIdentityScan) -> Self {
+        Self { inner, scan }
+    }
+}
+
+impl<R: std::io::Read> std::io::Read for IdentityReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n == 0 {
+            self.scan.end();
+        } else {
+            self.scan.feed(&buf[..n]);
+        }
+        Ok(n)
+    }
 }
 
 fn json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {

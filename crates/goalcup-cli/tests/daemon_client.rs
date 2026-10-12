@@ -1498,13 +1498,15 @@ fn capture_children_spawn_only_through_the_gate() {
         1,
         "the gated capture has one authoritative schema-selected identity tee"
     );
-    let marked_tee =
-        "tee_marked_capture_with_rule(&mut spawned, prep.secret.as_ref(), marker_rule)";
+    // A keyed child's marked tee also reads a stdout JSON identity, with one stdout reader.
+    let marked_call = "tee_marked_capture_with_identity(&mut spawned, prep.secret.as_ref(), \
+                       stdout_rule, marker_rule)";
     assert_eq!(
-        body.matches(marked_tee).count(),
+        flat_body.matches(marked_call).count(),
         1,
         "the gated capture has one authoritative schema-selected marked tee"
     );
+    let marked_tee = "tee_marked_capture_with_identity(";
     let stderr_tee = "tee_stderr_capture_with_rule(&mut spawned, rule)";
     assert_eq!(
         body.matches(stderr_tee).count(),

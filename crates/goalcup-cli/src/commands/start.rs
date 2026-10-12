@@ -28,7 +28,7 @@ use crate::entries::{EntryRecord, remove_entry, write_entry};
 use crate::key_scan::FragmentMatcher;
 use crate::launch::{
     CaptureStderr, LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan,
-    child_secret_for_harness, gated_handle, spawn_gated, tee_marked_capture_with_rule,
+    child_secret_for_harness, gated_handle, spawn_gated, tee_marked_capture_with_identity,
     tee_scoped_capture_with_rule, tee_stderr_capture_with_rule,
 };
 use crate::preflight::Level;
@@ -553,6 +553,9 @@ struct Gate {
 struct Tees {
     /// Codex's stdout tee, which also reads the thread id.
     stdout: Option<crate::launch::CaptureStdout>,
+    /// A keyed `stdout_json` child's thread id, read by the marked tee, which reads stdout
+    /// once for both jobs and reports its end through `marked`.
+    keyed_scope: Option<crate::launch::ScopeReceiver>,
     /// Hermes' two tees, which also scan and read the session marker.
     marked: Option<CaptureStderr>,
     /// Only a stderr-line identity is sent with the finish. A credential may require the same
@@ -561,6 +564,14 @@ struct Tees {
 }
 
 impl Tees {
+    /// The receiver of the stdout JSON identity, from whichever tee reads it.
+    fn scope(&self) -> Option<&crate::launch::ScopeReceiver> {
+        self.stdout
+            .as_ref()
+            .map(|tee| &tee.scope)
+            .or(self.keyed_scope.as_ref())
+    }
+
     /// Let the tees finish while the entry seals, within what remains of the one finish deadline.
     fn finish(&self, deadline: std::time::Instant, out: &mut dyn std::io::Write) {
         report_tee_finish(self.stdout.as_ref().map(|tee| tee.finish(deadline)), out);
@@ -945,15 +956,9 @@ fn register_and_release<'a>(
     // its frames with under its own ID.
     let mut spawned_at = crate::proxy::metadata::capture_time();
     spawned_at.clock_id = forked.info.producer_id.clone();
-    let stdout = if let StdoutUse::IdentityJson(rule) = prep.streams.stdout.clone() {
-        match tee_scoped_capture_with_rule(&mut spawned, rule) {
-            Ok(stdout) => Some(stdout),
-            // The tee ended the child it could not forward; it is registered, so the seal
-            // answers for it.
-            Err(e) => return Err(forked.unlaunched(e, out)),
-        }
-    } else {
-        None
+    let stdout_rule = match prep.streams.stdout.clone() {
+        StdoutUse::IdentityJson(rule) => Some(rule),
+        StdoutUse::Inherit | StdoutUse::Forward => None,
     };
     // Hermes: both streams forwarded verbatim and scanned for key fragments, stderr read for
     // the session marker (the late scope of the finish).
@@ -961,18 +966,36 @@ fn register_and_release<'a>(
         StderrUse::IdentityLine(rule) => Some(rule),
         StderrUse::Inherit | StderrUse::Forward => None,
     };
-    let marked = if prep.streams.scan_for_key {
-        match tee_marked_capture_with_rule(&mut spawned, prep.secret.as_ref(), marker_rule) {
-            Ok(tee) => Some(tee),
-            Err(e) => return Err(forked.unlaunched(e, out)),
-        }
-    } else if let Some(rule) = marker_rule {
-        match tee_stderr_capture_with_rule(&mut spawned, rule) {
-            Ok(tee) => Some(tee),
+    let (stdout, keyed_scope, marked) = if prep.streams.scan_for_key {
+        // A keyed child: both streams scanned, and a stdout JSON identity, if any, read by the
+        // same stdout reader (one tee per stream).
+        match tee_marked_capture_with_identity(
+            &mut spawned,
+            prep.secret.as_ref(),
+            stdout_rule,
+            marker_rule,
+        ) {
+            Ok((scope, tee)) => (None, scope, Some(tee)),
+            // The tee ended the child it could not forward; it is registered, so the seal
+            // answers for it.
             Err(e) => return Err(forked.unlaunched(e, out)),
         }
     } else {
-        None
+        let stdout = match stdout_rule {
+            Some(rule) => match tee_scoped_capture_with_rule(&mut spawned, rule) {
+                Ok(stdout) => Some(stdout),
+                Err(e) => return Err(forked.unlaunched(e, out)),
+            },
+            None => None,
+        };
+        let marked = match marker_rule {
+            Some(rule) => match tee_stderr_capture_with_rule(&mut spawned, rule) {
+                Ok(tee) => Some(tee),
+                Err(e) => return Err(forked.unlaunched(e, out)),
+            },
+            None => None,
+        };
+        (stdout, None, marked)
     };
     // The tees hold what they need; nothing after this reads the key from here.
     drop(prep.secret.take());
@@ -990,6 +1013,7 @@ fn register_and_release<'a>(
         spawned_at,
         tees: Tees {
             stdout,
+            keyed_scope,
             marked,
             late_scope: prep.scope == LaunchScope::AtFinish,
         },
@@ -1035,8 +1059,8 @@ fn run_harness<'a>(
     pause_at("capture-gate-released");
     let native_scope = match scope {
         LaunchScope::Preassigned => Some(forked.template.session_id.clone()),
-        LaunchScope::FromStdout => tees.stdout.as_ref().and_then(|receiver| {
-            crate::launch::wait_native_scope(&mut child, &receiver.scope, scope_deadline)
+        LaunchScope::FromStdout => tees.scope().and_then(|receiver| {
+            crate::launch::wait_native_scope(&mut child, receiver, scope_deadline)
         }),
         // Hermes' scope is read from its stderr after the proxy stops, and sent with the seal.
         LaunchScope::AtFinish | LaunchScope::None => None,

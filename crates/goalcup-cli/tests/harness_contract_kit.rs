@@ -5,6 +5,12 @@
 //! declared `files/**` seeds as a development connector; the Python stand-in remains a test
 //! executable outside that connector. No case reaches a provider or reads the participant's
 //! harness homes.
+//!
+//! A case whose `expect.toml` names `credential_env` is a keyed case: the runner puts the
+//! invented [`KIT_CREDENTIAL`] (shared through `support`) in that variable of `goalcup start`'s own environment, so the
+//! launcher's child-secret path hands it to the stand-in. The runner then checks that the
+//! stand-in received exactly that value, and that no fragment of it is in the sealed trace, the
+//! run directory or the launcher's forwarded stdout and stderr.
 
 #![cfg(target_os = "macos")]
 
@@ -26,6 +32,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, UNIX_EPOCH};
+use support::{KIT_CREDENTIAL, KIT_CREDENTIAL_MARKER_PREFIX};
 
 #[derive(Debug, Clone)]
 struct Expect {
@@ -47,6 +54,8 @@ struct Expect {
     capture_only_hint: String,
     seed_path: Option<String>,
     dirs: Vec<String>,
+    /// The admitted credential variable a keyed case is handed [`KIT_CREDENTIAL`] in.
+    credential_env: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -158,6 +167,7 @@ fn parse_expect(text: &str) -> Expect {
         dirs: optional("dirs")
             .map(|v| v.split(',').map(str::to_string).collect())
             .unwrap_or_default(),
+        credential_env: optional("credential_env"),
     }
 }
 
@@ -400,6 +410,10 @@ impl Staged {
                 self.world.root.join("upstream-ca.pem"),
             )
             .args(["start", "--harness", &self.case.expect.id]);
+        // The launcher reads the key from its own environment and hands it to the child alone.
+        if let Some(name) = self.case.expect.credential_env.as_deref() {
+            command.env(name, KIT_CREDENTIAL);
+        }
         if dev {
             command.arg("--dev");
         }
@@ -633,6 +647,58 @@ fn assert_completed(run: &Completed) {
         0,
         "an offline kit case dialled the daemon upload URL"
     );
+    assert_credential_kept_to_the_child(run);
+}
+
+/// For a keyed case: the stand-in received [`KIT_CREDENTIAL`], the launcher said its key scan
+/// was clean, and no fragment of the value is in the trace, the run directory or the forwarded
+/// output. A case without `credential_env` is not keyed and this checks nothing.
+fn assert_credential_kept_to_the_child(run: &Completed) {
+    use goalcup_cli::key_scan::{FragmentMatcher, ScanOutcome, scan_tree};
+    let Some(name) = run.staged.case.expect.credential_env.as_deref() else {
+        return;
+    };
+    let case = &run.staged.case.name;
+    assert!(
+        goalcup_protocol::capture_policy::CREDENTIAL_ENV.contains(&name),
+        "{case}: `{name}` is not an admitted credential variable"
+    );
+    let marker = std::fs::read_to_string(&run.staged.marker).unwrap();
+    let received = format!("{KIT_CREDENTIAL_MARKER_PREFIX}{KIT_CREDENTIAL}");
+    assert_eq!(
+        marker.trim(),
+        goalcup_daemon::workspace::sha256_hex(received.as_bytes()),
+        "{case}: the stand-in did not receive the kit credential in `{name}`"
+    );
+    assert!(
+        run.output.contains("key scan: clean"),
+        "{case}: the launcher did not report a clean key scan: {}",
+        run.output
+    );
+    let n = KIT_CREDENTIAL.len();
+    for form in [
+        KIT_CREDENTIAL,
+        &KIT_CREDENTIAL[..8],
+        &KIT_CREDENTIAL[n - 8..],
+    ] {
+        assert!(
+            !run.output.contains(form),
+            "{case}: the forwarded stdout or stderr holds a fragment of the credential"
+        );
+    }
+    let matcher = FragmentMatcher::new(KIT_CREDENTIAL.as_bytes()).expect("a usable credential");
+    let trace = run.staged.world.trace(&run.entry);
+    let run_dir = run.staged.world.run_dir().expect("one run directory");
+    assert!(
+        trace.join("chain.jsonl").is_file() && trace.join("seal.json").is_file(),
+        "{case}: the sealed trace is missing"
+    );
+    match scan_tree(&matcher, &[trace.as_path(), run_dir.as_path()], 1 << 30) {
+        ScanOutcome::Clean => {}
+        other => {
+            panic!("{case}: the trace or run directory is not clean of the credential: {other:?}")
+        }
+    }
 }
 
 #[test]

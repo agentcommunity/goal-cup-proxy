@@ -48,8 +48,9 @@ real_dirs = ["{user_home}/.<harness>"]  # the participant's real state dirs (nev
 seed = []
 # seed = [{ file = "config.yaml" }, { file = "settings.json", mode = "0400" }]
 
-# Only if the harness needs a provider key. Closed list: DEEPSEEK_API_KEY. Requires identity
-# stderr_line + deferred and config_home = "per_run". Any other name is a core PR.
+# Only if the harness needs a provider key. Closed list: DEEPSEEK_API_KEY, AMP_API_KEY (D49).
+# Requires config_home = "per_run" and identity stderr_line + deferred, or
+# stdout_json + at_launch (D50). Any other name is a core PR.
 # [capture.credential]
 # env = "DEEPSEEK_API_KEY"
 

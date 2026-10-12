@@ -49,12 +49,14 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2) | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
 | D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2) | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
 | D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47; V1-path clause replaced by D48 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
-| D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2) | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
+| D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2); ruling 3 amended by D49 and D50 | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
 | D44 | OpenCode native = read-only own-session SQLite snapshot; public repo goal-cup-tracer | in force (m2); DCO clause amended by D47 | [entry](#d44-m2-opencodes-native-leg-is-a-read-only-snapshot-of-its-own-sessions-rows-the-public-repo-is-goal-cup-tracer) |
 | D45 | Integrity exit judges the record, not the run: interrupted, undecoded and unconfirmed-stop runs stay exit 0 | in force (m2) | [entry](#d45-m2-the-integrity-exit-judges-the-record-not-the-run) |
 | D46 | Capture creation binds the CLI and daemon to identical connector bytes | in force (m2) | [entry](#d46-m2-capture-creation-binds-both-local-halves-to-identical-connector-bytes) |
 | D47 | No DCO sign-off; a human answers for each PR | in force (m2) | [entry](#d47-m2-no-dco-sign-off) |
 | D48 | The V1 path and its `v1-compat` feature leave the tree; history keeps them | in force (m2) | [entry](#d48-m2-the-v1-path-leaves-the-tree) · LEDGER OS-30 |
+| D49 | Admit `AMP_API_KEY` as a child credential | in force (m2) | [entry](#d49-m2-admit-amp_api_key-as-a-child-credential) |
+| D50 | D43 ruling 3: credential + `stdout_json` via one stdout reader | in force (m2) | [entry](#d50-m2-amend-d43-ruling-3-for-stdout_json-identity) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1062,7 +1064,10 @@ The harness contract of D42 is `connectors/<id>/harness.toml`, harness-contract 
 3. **Credentials stay a closed list for v0.5** (`DEEPSEEK_API_KEY`). A credential requires a
    per-run config home and `stderr_line` identity; credential with `preassigned`, `none` or
    `stdout_json` identity is refused. Key scanning and identity are separate in the recorder. A
-   shape rule plus per-run `--credential-env` consent may follow the tag.
+   shape rule plus per-run `--credential-env` consent may follow the tag. (Amended by
+   [D49](#d49-m2-admit-amp_api_key-as-a-child-credential) and
+   [D50](#d50-m2-amend-d43-ruling-3-for-stdout_json-identity): `AMP_API_KEY` joins the list,
+   and a credential may also pair with `stdout_json` + `at_launch` identity.)
 4. **Any connector may use a replace-mode CA variable** that is a `CA_REGISTRY` row (today only
    `HERMES_CA_BUNDLE`). A new CA variable in either mode is a DECISIONS entry. D41 is amended below.
 5. **Server allowlist as data.** The server keeps acceptable connector directory digests as data,
@@ -1203,6 +1208,62 @@ not from dead code in the tree.
   the crate is a separate follow-up (OS-31).
 
 **Evidence.** LEDGER OS-30; the pull request that lands it carries the gate results.
+
+---
+
+## D49. **(M2)** Admit `AMP_API_KEY` as a child credential.
+
+**Decision (owner, Balazs Nemethi, 2026-10-12; drafted 2026-10-11).** `AMP_API_KEY` joins
+`capture_policy::CREDENTIAL_ENV` beside `DEEPSEEK_API_KEY`. This amends D43 ruling 3's closed list;
+the list stays closed. The token is handed to the harness child only, through the existing
+child-secret seam, under the shared grammar of 20 to 256 bytes of `[A-Za-z0-9_-]`. It is never a
+manifest value: under `capture.env` the name is refused. D43's pairing rules are unchanged (a
+credential needs a per-run config home and an identity pair D43 as amended by D50 admits). D41's
+key-fragment scan applies to the token unchanged. This entry admits a name only. It admits no Amp
+connector, and the owner rules separately on Amp's on-disk key fingerprint
+(`.legacy-state-owner.json`).
+
+**Reconsider when** the owner's live probe shows a token outside the shared grammar, or Amp
+renames the variable.
+
+**Evidence.** `docs/qualification/m2-amp-readiness.md` (branch `claude/v060-amp-readiness`;
+static: Amp's help text names `AMP_API_KEY` as an access token that takes precedence over stored
+credentials); [amp-core-prep](research/amp-core-prep.md), change 2.
+
+---
+
+## D50. **(M2)** Amend D43 ruling 3 for `stdout_json` identity.
+
+**Decision (owner, Balazs Nemethi, 2026-10-12; drafted 2026-10-11).** Approved as part of
+preparing the core for Amp's own agent (Route A in `docs/qualification/m2-amp-readiness.md`),
+whose documented identity carrier is a stdout `init` event. Taken as drafted; the wider
+alternative, a credential with any identity method, was not taken.
+
+Until now D43 ruling 3 refused a credential with `stdout_json` identity and kept key scanning and
+identity separate. D43 ruling 3's pairing sentence becomes: a credential requires a per-run config
+home and either `stderr_line` + `deferred` or `stdout_json` + `at_launch` identity; `preassigned`
+and `none` stay refused.
+- **One stdout reader.** For a keyed `stdout_json` profile one reader of the child's stdout feeds
+  both the key-fragment scan and the identity matcher. The identity is read as bytes arrive,
+  before the scan decides whether to forward them. Output holding a fragment is withheld, sets
+  the live key hit and fails the row, as D41 already requires. Key scanning and identity share
+  that one reader on stdout instead of being separate.
+- **A key-bearing identity is not bound.** The identity matcher holds its own key-fragment
+  matcher. When the matching event's line or its decoded id holds any key-scan form, no identity
+  is bound (the same unbound path as an unusable id) and a key hit is recorded. The bound id is
+  written into the chain as the scope, so it can never carry a fragment of the key. Decoded
+  (JSON `\u`) forms are checked for the bound id only; forwarded output is matched as raw bytes.
+- **The same holds for a keyed `stderr_line` marker** (final review, 2026-10-12). A marker line
+  that holds any key-scan form is not bound, whatever marker follows, and is a key hit.
+- The per-run config home stays required, so the run-directory scan covers the config home.
+
+No v5 record, control API or verifier change.
+
+**Reconsider when** a keyed harness needs `preassigned` or `none` identity (as D43 already says).
+
+**Evidence.** `crates/goalcup-cli/tests/credential_stdout_identity.rs` and
+`capture_stderr_tee.rs` (any Unix); kit case
+`synthetic-keyed-stdout-json` (macOS); [amp-core-prep](research/amp-core-prep.md), change 4.
 
 ---
 

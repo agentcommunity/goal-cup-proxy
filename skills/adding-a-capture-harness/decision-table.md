@@ -16,9 +16,9 @@ when policy moves). Never spell around a rule.
 
 | # | Rule | Data-only fits when | Otherwise |
 |---|---|---|---|
-| 1 | Credential name | no key variable, or exactly `DEEPSEEK_API_KEY` | core PR |
-| 2 | Credential with identity | `stderr_line` + `deferred` identity and a per-run home | core PR |
-| 3 | Credential in the kit | no credential | note in PR (maintainer tests on macOS) |
+| 1 | Credential name | no key variable, `DEEPSEEK_API_KEY`, or `AMP_API_KEY` (D49) | core PR |
+| 2 | Credential with identity | per-run home; `stderr_line`, or `stdout_json` (D50) | core PR |
+| 3 | Credential in the kit | none, or the case names it in `credential_env` | core PR |
 | 4 | Identity pair | one of the four admitted pairs | core PR |
 | 5 | Home variable | `home.env` is `<WORD>_HOME` or `<WORD>_CONFIG_DIR` | core PR |
 | 6 | XDG | the harness falls back to `$HOME` and needs no XDG seed | core PR |
@@ -31,13 +31,19 @@ when policy moves). Never spell around a rule.
 
 ## How to tell, row by row
 
-1. `CREDENTIAL_ENV` lists only `DEEPSEEK_API_KEY`. Subscription or login auth needs no
-   `[capture.credential]` table.
-2. A credential with `stdout_json`, `preassigned` or `none` identity is refused: one tee per
-   stream cannot both scan for key fragments and read the identity.
-3. Today the kit runner injects no key and `expect.toml` has no credential key. Leave the
-   credential out of the kit case, say so in the PR, and a maintainer tests the harness on
-   macOS. A core change that lets a kit case declare a credential is prepared but not landed.
+1. `CREDENTIAL_ENV` lists `DEEPSEEK_API_KEY` and `AMP_API_KEY`. `AMP_API_KEY` is admitted by
+   [D49](../../docs/DECISIONS.md#d49-m2-admit-amp_api_key-as-a-child-credential).
+   Subscription or login auth needs no `[capture.credential]` table.
+2. A credential always needs `config_home = "per_run"`. With `stderr_line` + `deferred` it is
+   in force. With `stdout_json` + `at_launch` it rests on
+   [D50](../../docs/DECISIONS.md#d50-m2-amend-d43-ruling-3-for-stdout_json-identity):
+   one stdout reader feeds both the key-fragment scan and the identity
+   matcher. A credential with `preassigned` or `none` identity is refused.
+3. A kit case may name the credential variable in `expect.toml` as `credential_env`. The runner
+   then hands the stand-in an invented key and checks that no fragment of it leaks. Copy the
+   connector's `[capture.credential]` into the case, and write the marker as
+   `synthetic-keyed-stderr/stand-in.py` does. The kit is macOS-only: off macOS, say in the
+   PR that it was not run.
 4. Admitted pairs: `none` (no binding); `preassigned` + `at_launch` (id passed in `args` as
    `{session_id}`); `stdout_json` + `at_launch`; `stderr_line` + `deferred` with grammar
    `token` (`[A-Za-z0-9_-]{1,128}`) or `timestamp-hex`. Any other carrier needs a kit case too.
@@ -55,26 +61,29 @@ when policy moves). Never spell around a rule.
 10. One `sha256`. The CLI resolves `program` on `PATH`, follows symlinks, and hashes the regular
     file. A pinned `program` cannot be an interpreter (`python3`, `node`, `sh`, `env`). Per-arch
     binaries hash differently: pin the platform you measured and list the others in readiness.
-11. Names ending `_BASE_URL` or `_API_URL`, or containing `ENDPOINT`, are refused, and so is any
-    value with `://`. A harness endpoint variable with another name is not refused by name:
-    never set it, record it in readiness and open an issue to refuse it.
+11. Names ending `_URL` (including `_BASE_URL` and `_API_URL`) or containing `ENDPOINT` are
+    refused, and so is any value with `://`. A harness endpoint variable with another name (no
+    `_URL` suffix) is not refused by name: never set it, record it in readiness and open an
+    issue to refuse it.
 12. For example `NO_PAGER` (the `PAGER` suffix rule), an absolute path in `args`, or a
     redaction regex that is not one of the four core recognizers.
 
 ## Worked example: Amp
 
 Amp is a coding agent CLI, installed from npm, that talks to Amp's own server. It is BLOCKED at
-step 3. Its readiness record will live at docs/qualification/m2-amp-readiness.md. The rows it
-hits, and why:
+step 3. Its readiness record is
+[docs/qualification/m2-amp-readiness.md](../../docs/qualification/m2-amp-readiness.md). The rows
+it hits, and why:
 
-- **1, credential name**: Amp reads `AMP_API_KEY`. Core PR.
-- **2, credential with identity**: the likely carrier is a stdout JSON init event. Core PR.
-- **3, kit**: today no kit case can carry the key, so the PR notes it and a maintainer tests
-  on macOS. The prepared core change that adds kit credential support would close this row.
+- **1, credential name**: Amp reads `AMP_API_KEY`. Admitted by D49. Fits.
+- **2, credential with identity**: the likely carrier is a stdout JSON init event. Admitted by
+  D50 with a per-run home. Fits once the live probe confirms the carrier.
+- **3, kit**: a keyed case names `credential_env`, as `synthetic-keyed-stdout-json`
+  already does. Fits.
 - **9, one native row**: no local own-session file was found; sessions appear to live on Amp's
   server. Core decision, possibly no schema-1 fit.
-- **11, endpoint names**: `AMP_URL` redirects the server but passes the name rule. Never set
-  it; open an issue.
+- **11, endpoint names**: `AMP_URL` redirects the server and is refused by name since the
+  `*_URL` rule. Fits.
 - **6, XDG**: settings follow `XDG_CONFIG_HOME`, which is refused. With XDG unset all state
   lands in the run home, so it fits unless a settings seed is required.
 - **5, home variable**: `AMP_HOME` passes the shape but does not move settings. Maintainer call.

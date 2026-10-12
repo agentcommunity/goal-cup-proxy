@@ -1598,25 +1598,19 @@ impl HarnessManifest {
         let i = &c.identity;
         let per_run = c.home.config_home == ConfigHome::PerRun;
 
-        // Credential: one pair is exercised in schema 1, and it needs a per-run home.
+        // Credential: two identity sources are exercised in schema 1, and both need a per-run
+        // home. A `stdout_json` identity is read by the same stdout reader that scans for key
+        // fragments (`capture_tee::tee_marked_capture_with_identity`).
         if c.credential.is_some() {
             match i.source {
-                IdentitySource::StderrLine => {}
-                IdentitySource::StdoutJson => {
-                    return Err(refuse(
-                        "capture.credential",
-                        "a credential with `stdout_json` identity is not supported by this \
-                         build: one tee per stream, so identity and key scanning cannot share \
-                         stdout (a core PR)",
-                    ));
-                }
+                IdentitySource::StderrLine | IdentitySource::StdoutJson => {}
                 IdentitySource::Preassigned | IdentitySource::None => {
                     return Err(refuse(
                         "capture.credential",
                         format!(
                             "a credential with `{}` identity is not supported by this build: \
-                             schema 1 admits one only with `stderr_line` (a later core PR can \
-                             widen the table with a kit case)",
+                             schema 1 admits one only with `stderr_line` or `stdout_json` (a \
+                             later core PR can widen the table with a kit case)",
                             i.source.as_str()
                         ),
                     ));

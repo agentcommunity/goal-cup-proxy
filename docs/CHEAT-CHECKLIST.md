@@ -4,7 +4,7 @@ For anyone about to trust a Pass or claim a new check closes something. It lists
 this build accepts, each with what bounds it and the ticket that tracks it. Anything that behaves
 worse than stated here is a bug. Add a row whenever a review accepts a gap instead of fixing it.
 
-Updated: 2026-10-11. A verifier exit 0 alone is not a capture claim: a claim needs native and wire
+Updated: 2026-10-12. A verifier exit 0 alone is not a capture claim: a claim needs native and wire
 records per real harness ([ARCHITECTURE](ARCHITECTURE.md), [qualification index](qualification/README.md)).
 
 ## On m2/wire (current)
@@ -82,6 +82,11 @@ closed where they can. These are the shapes they cannot see (independent secret 
   bytes; a named fragment never reaches the terminal, and on a hit the bytes read with it are
   dropped for a fixed line. A shape the scan does not name is forwarded. Output held when a
   descendant keeps a stream open past the finish deadline is never sent.
+- **A JSON `\u`-escaped key reaches the terminal.** The tee, `scan_tree` and `scan_trace` match
+  raw bytes, so a key spelled as `\uXXXX` escapes is forwarded to the participant's terminal and
+  is no hit in a native file or the trace. Only a bound identity is checked decoded (D50): such a
+  key in the stdout identity's id binds nothing and fails the row (`credential_stdout_identity.rs`,
+  `escaped-id`); anywhere else it passes. Ticket: [H-18](../LEDGER.md).
 - **"Stays local" is checked by local signal only.** A goal file under Git, `Library/Mobile
   Documents`, `Library/CloudStorage` or a folder named Dropbox, OneDrive, Google Drive or iCloud Drive
   is refused. `~/Desktop` and `~/Documents` are refused only when local state says iCloud owns them

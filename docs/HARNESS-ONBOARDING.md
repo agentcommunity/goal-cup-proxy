@@ -69,14 +69,23 @@ cargo build
 cargo test -p goalcup-cli --test harness_contract_kit
 ```
 
-On macOS the current baseline suite runs four synthetic stand-ins, each with `harness.toml`,
-`stand-in.py` and `expect.toml`; a connector PR adds a fifth (new) fixture case for its own path:
+On macOS the current baseline suite runs six synthetic stand-ins, each with `harness.toml`,
+`stand-in.py` and `expect.toml`; a connector PR adds a new fixture case for its own path:
 
 - `controlled-workload`: no identity binding and an append-only native file;
 - `synthetic-preassigned`: launch-assigned identity and `{id}`-scoped append-only file;
 - `synthetic-stderr-token`: deferred `stderr_line` identity and append-only file;
+- `synthetic-keyed-stderr`: the same with a credential. Its `expect.toml` names
+  `credential_env`; the runner hands an invented value through the child-secret path, then
+  checks the stand-in received it and that no fragment is in the trace, run directory or output;
 - `synthetic-stdout-json`: launch-assigned `stdout_json` identity and a snapshot, including a
-  seeded file and argv guard.
+  seeded file and argv guard;
+- `synthetic-keyed-stdout-json`: a keyed `stdout_json` case; one stdout reader binds the
+  identity and scans for the key.
+
+A kit case name becomes part of the stand-in path, which is a capture argument, so it must not
+hold a word `capture_arg_denied` refuses (`credential`, `apikey`, `proxy`, ...); that is why keyed
+cases say `keyed`.
 
 The kit uses a test-owned proxy, `Origin::Dev`, private homes and Python stand-ins. It does not
 read a participant home, provider credential or package registry. A passing kit proves only
@@ -112,7 +121,7 @@ the pin, schema, golden and kit checks below in one command.
   the same with `-p goalcup-daemon`. The JSON diff under
   `crates/goalcup-cli/tests/fixtures/harness-golden/` is in the PR: new files and rows for the
   new connector, and no change to another connector's values.
-- [ ] The workspace build ran before `harness_contract_kit`; all discovered cases passed (the four
+- [ ] The workspace build ran before `harness_contract_kit`; all discovered cases passed (the six
   baseline cases plus the new connector case).
 - [ ] Readiness evidence names source revision, candidate path/version/hash, transport/native/
   isolation/auth/identity facts and remaining unknown semantics without secrets.
@@ -155,7 +164,7 @@ Connector directory pin; harness-contract schema:
 Transport hosts/paths/version/body; native storage/form/scope:
 Isolation roots (metadata only); auth variable names and lifecycle:
 Identity source/binding and crosscheck; semantic decoder or UNKNOWN:
-Generic kit command, build/test exits and all discovered case results (four baseline plus the new
+Generic kit command, build/test exits and all discovered case results (six baseline plus the new
 connector case):
 Real-row ENTRY/RUN_DIR/TRACE and start/status/integrity/research/checker exits (if any):
 Independent result bytes and hash (if any):

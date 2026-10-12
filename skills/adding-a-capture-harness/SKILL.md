@@ -84,7 +84,13 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
     ```
     Follow the comments in the three files: the case mirrors the connector's home, identity and
     native shape with a Python stand-in, uses id `kit-<id>`, and copies any seeds into
-    `$k/files/`. The kit cannot inject a key: leave a credential out and say so in the PR.
+    `$k/files/`. The baseline cases beside it are `controlled-workload`,
+    `synthetic-preassigned`, `synthetic-stderr-token`, `synthetic-keyed-stderr`,
+    `synthetic-stdout-json` and `synthetic-keyed-stdout-json`; read the closest. Yours is
+    one more case of the same `harness_contract_kit` test. A keyed case names `credential_env`
+    in `expect.toml` and copies the connector's `[capture.credential]`: the kit hands the
+    stand-in an invented key, never a real one, and checks that no fragment of it leaks.
+    `AMP_API_KEY` (D49) and a credential with `stdout_json` identity (D50) are admitted.
     Check: `grep -nE '^[^#]*<[^>]+>' $k/harness.toml $k/expect.toml`. Expect: no output.
     The stand-in itself stops with `replace the placeholder in <NAME>` while one is left.
     Check that `BODY` in `stand-in.py` equals `wire_request` in `expect.toml`:
@@ -104,13 +110,14 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
 13. **Review your own PR** against the
     [reviewer checklist](../../docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr): every
     field and seed, no base URL, no secrets, one intended pin line.
-14. **Open the PR** (one commit is fine; no sign-off needed, D47) holding exactly: `connectors/<id>/`, the
-    one new line in `connector-dirs.txt`, the golden JSON from step 9, the kit case from step
-    10, the readiness record and its index row. Check with `git status --short`. In the PR
-    body ([CONTRIBUTING](../../CONTRIBUTING.md#adding-a-harness)) paste the step 11 summary
-    and name anything not run: the kit off macOS, restored platform goldens, a credential left
-    out of the kit case. Claim "synthetic tested" at most. STOP here: a live row is
-    maintainer only ([tiny real row](../../docs/CONNECTOR-CONTRIBUTING.md#tiny-real-row)).
+14. **Open the PR** (one commit is fine; no sign-off needed, D47) holding exactly:
+    `connectors/<id>/`, the one new line in `connector-dirs.txt`, the golden JSON from step 9,
+    the kit case from step 10, the readiness record and its index row. Check with
+    `git status --short`. In the PR body
+    ([CONTRIBUTING](../../CONTRIBUTING.md#adding-a-harness)) paste the step 11 summary and name
+    anything not run: the kit off macOS, restored platform goldens. Claim "synthetic tested" at
+    most. STOP here: a live row is maintainer only
+    ([tiny real row](../../docs/CONNECTOR-CONTRIBUTING.md#tiny-real-row)).
 
 ## When something fails
 

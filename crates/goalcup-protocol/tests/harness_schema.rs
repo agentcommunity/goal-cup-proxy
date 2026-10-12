@@ -608,11 +608,14 @@ fn a_credential_with_no_identity_is_refused() {
 }
 
 #[test]
-fn a_credential_with_stdout_json_identity_is_refused() {
+fn a_credential_with_stdout_json_identity_is_admitted_with_a_per_run_home() {
+    // One stdout reader feeds both the key-fragment scan and the identity matcher, so the pair
+    // is admitted; the key-fragment scan still needs the run directory to hold the config home.
+    admitted(&with_credential(codex(), true), PINNED);
     refused(
-        &with_credential(codex(), true),
+        &with_credential(codex(), false),
         PINNED,
-        &["credential", "`stdout_json`", "one tee per stream"],
+        &["per_run", "key-fragment scan", "D41"],
     );
 }
 
@@ -630,6 +633,7 @@ fn the_credential_name_is_a_closed_list() {
         "ANTHROPIC_API_KEY",
         "MY_KEY",
         "deepseek_api_key",
+        "amp_api_key",
     ] {
         let mut t = hermes();
         set(&mut t, &["capture", "credential"], "env", name);
@@ -639,7 +643,36 @@ fn the_credential_name_is_a_closed_list() {
             &["not one of the provider credential variables"],
         );
     }
-    assert_eq!(CREDENTIAL_ENV, ["DEEPSEEK_API_KEY"]);
+    assert_eq!(CREDENTIAL_ENV, ["DEEPSEEK_API_KEY", "AMP_API_KEY"]);
+}
+
+#[test]
+fn amp_credential_is_admitted_only_in_credential_field() {
+    // The Hermes fixture already has a per-run home and `stderr_line` identity, so the name is
+    // the only change.
+    let mut t = hermes();
+    set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
+    admitted(&t, PINNED);
+    // The same name as a manifest env pin is a credential in a manifest, which is never allowed.
+    let mut t = codex();
+    set(&mut t, &["capture", "env"], "AMP_API_KEY", "x");
+    refused(
+        &t,
+        PINNED,
+        &[
+            "capture.env",
+            "AMP_API_KEY",
+            "would carry a credential, and a manifest never does",
+        ],
+    );
+    // Admitting the name does not lift the identity or home rules for it.
+    let mut t = with_credential(claude(), true);
+    set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
+    refused(&t, PINNED, &["credential", "`preassigned`"]);
+    let mut t = hermes();
+    set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
+    set(&mut t, &["capture", "home"], "config_home", "shared");
+    refused(&t, PINNED, &["per_run", "key-fragment scan"]);
 }
 
 #[test]
@@ -1919,6 +1952,36 @@ fn id_and_env_shape() {
         set(&mut t, &["capture", "env"], name, "x");
         refused(&t, PINNED, &["capture.env", name]);
     }
+}
+
+#[test]
+fn a_url_named_variable_is_refused_as_an_endpoint() {
+    // Amp reads `AMP_URL` as its server (m2-amp-readiness). Only the value rule (`://`) stopped
+    // it; the name is now refused too, as is any other `*_URL` that has no earlier reason.
+    for name in ["AMP_URL", "amp_url", "SERVER_URL", "HARNESS_URL"] {
+        assert_eq!(
+            env_key_denied(name, EnvContext::CaptureEnv),
+            Some("redirects an endpoint (D1)"),
+            "{name}"
+        );
+        let mut t = codex();
+        set(&mut t, &["capture", "env"], name, "x");
+        refused(
+            &t,
+            PINNED,
+            &["capture.env", name, "redirects an endpoint (D1)"],
+        );
+    }
+    // An earlier, more specific reason still wins, so the pinned golden reasons do not move.
+    assert_eq!(
+        env_key_denied("AUTH_URL", EnvContext::CaptureEnv),
+        Some("would carry a credential, and a manifest never does")
+    );
+    // A name that only contains `URL` is not an endpoint name.
+    assert_eq!(
+        env_key_denied("URLENCODE_MODE", EnvContext::CaptureEnv),
+        None
+    );
 }
 
 #[test]

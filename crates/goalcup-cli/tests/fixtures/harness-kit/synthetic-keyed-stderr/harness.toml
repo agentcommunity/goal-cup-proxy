@@ -1,0 +1,43 @@
+schema_version = 1
+id = "kit-synthetic-keyed-stderr"
+
+[capture]
+args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "--"]
+continuation = "one keyed child, one deferred stderr-bound echo and one append-only file"
+
+[capture.executable]
+program = "python3"
+version = "@PYTHON3_VERSION@"
+sha256 = "@PYTHON3_SHA256@"
+
+[capture.home]
+run_home = "empty"
+config_home = "per_run"
+env = "SYNTHCRED_HOME"
+per_run_dir = "credential-home"
+real_dirs = ["{user_home}/.codex", "{user_home}/.claude", "{user_home}/.hermes"]
+
+[capture.credential]
+env = "DEEPSEEK_API_KEY"
+
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+[capture.identity]
+source = "stderr_line"
+binding = "deferred"
+prefix = "scope: "
+grammar = "token"
+
+[[capture.native]]
+name = "credential-case"
+root = "{run_home}/sessions"
+pattern = "session-{id}.jsonl"
+form = "append_only"
+protocol_hint = "kit-credential-native"
+
+[[capture.hosts]]
+host = "api.e00.localhost"
+evidence_paths = ["/v1/echo"]
+protocol_hint = "kit-credential-wire"
