@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use goalcup_platform::tracecap::{EntryArtifactRoot, RefusalKind, TraceCapError, TraceDir};
 use goalcup_platform::{
     handle_budget::NativeHandleBudgetV1,

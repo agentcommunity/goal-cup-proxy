@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use goalcup_platform::tracecap::{ArtifactRoot, EntryArtifactRoot};
 use std::fs;
 use std::os::unix::fs::symlink;

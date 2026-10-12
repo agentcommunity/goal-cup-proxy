@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use goalcup_platform::tracecap::{FixedDocument, TraceCapError, TraceDir};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::{PermissionsExt, symlink};
