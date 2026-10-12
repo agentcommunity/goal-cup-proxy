@@ -93,6 +93,25 @@ pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Resul
     Ok(())
 }
 
+/// The machine-wide roots against the workspace (review R4 I5): `check_artifact_placement`
+/// compares it with this entry's own artifact directory only, which a workspace inside the
+/// artifact root's other subtrees, or inside the configuration directory (`control.json` and
+/// its bearer), passes. Refused: the workspace equal to, inside, or an ancestor of a root
+/// (symlinks resolved), or its sibling, since an agent enumerates its parent first.
+pub fn check_machine_roots(workspace: &Path, roots: &[(&str, &Path)]) -> Result<(), DaemonError> {
+    for (name, root) in roots {
+        if crate::config::nests(workspace, root) || workspace.parent() == root.parent() {
+            return Err(DaemonError::Guard(format!(
+                "workspace {} is nested in, or beside, the tracker's {name} {}: the agent would \
+                 enumerate the tracker's own files",
+                workspace.display(),
+                root.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The nearest ancestor holding a `.git` entry, file or directory, or `None`. A `.git`
 /// *file* counts: that is what a linked worktree has.
 pub fn git_worktree_of(path: &Path) -> Option<PathBuf> {
@@ -122,15 +141,39 @@ pub fn list_workspace(
     let mut files = Vec::new();
     let mut stack = vec![workspace.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let entries = std::fs::read_dir(&dir).map_err(|source| DaemonError::Io {
-            path: dir.display().to_string(),
-            source,
-        })?;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            // The workspace itself must be readable: without it there is nothing to seal.
+            Err(source) if dir == workspace => {
+                return Err(DaemonError::Io {
+                    path: dir.display().to_string(),
+                    source,
+                });
+            }
+            // A directory the agent made unreadable (`chmod 000`) is listed, with the absent
+            // digest, and the walk goes on: failing here would fail every retry of the seal.
+            // What it holds is not listed: an absent digest on a directory means "contents
+            // unseen" (CHEAT-CHECKLIST).
+            Err(_) => {
+                files.push(SealedFile {
+                    path: relative_to(workspace, &dir),
+                    bytes: 0,
+                    sha256: ABSENT.to_string(),
+                });
+                continue;
+            }
+        };
         for entry in entries {
-            let entry = entry.map_err(|source| DaemonError::Io {
-                path: dir.display().to_string(),
-                source,
-            })?;
+            let Ok(entry) = entry else {
+                // The listing failed part-way: the directory is listed with the absent digest
+                // beside whatever was read, and the walk leaves it.
+                files.push(SealedFile {
+                    path: relative_to(workspace, &dir),
+                    bytes: 0,
+                    sha256: ABSENT.to_string(),
+                });
+                break;
+            };
             let path = entry.path();
             let rel = relative_to(workspace, &path);
             if is_excluded(&rel, excluded) {
@@ -138,10 +181,14 @@ pub fn list_workspace(
             }
             // `file_type()` comes from the directory read and does not follow a symlink,
             // so a link pointing at an ancestor cannot make this walk loop.
-            let kind = entry.file_type().map_err(|source| DaemonError::Io {
-                path: path.display().to_string(),
-                source,
-            })?;
+            let Ok(kind) = entry.file_type() else {
+                files.push(SealedFile {
+                    path: rel,
+                    bytes: 0,
+                    sha256: ABSENT.to_string(),
+                });
+                continue;
+            };
             if kind.is_dir() {
                 stack.push(path);
                 continue;
@@ -173,14 +220,24 @@ fn relative_to(workspace: &Path, path: &Path) -> String {
 }
 
 /// Length and digest, streamed, so a large workspace file is never held whole (bounded
-/// memory). An entry that cannot be read — a broken symlink, a socket, a file whose
-/// permissions changed under the walk — is still listed, with the absent digest: dropping
-/// it would make the seal quieter than the workspace it describes.
+/// memory). Only a regular file is read. Anything else — a symlink (never followed, so a link
+/// to `/dev/zero` or to a file outside the workspace is not read), a FIFO (opened without
+/// blocking, never read, so an agent's `mkfifo` cannot wedge the seal), a socket, a device, a
+/// file whose permissions changed under the walk — is still listed, with the absent digest:
+/// dropping it would make the seal quieter than the workspace it describes.
 fn measure(path: &Path) -> (u64, String) {
     use std::io::Read;
-    let Ok(mut file) = std::fs::File::open(path) else {
+    use std::os::unix::fs::OpenOptionsExt;
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)
+    else {
         return (0, ABSENT.to_string());
     };
+    if !file.metadata().is_ok_and(|m| m.file_type().is_file()) {
+        return (0, ABSENT.to_string());
+    }
     let mut hasher = Sha256::new();
     let mut total = 0u64;
     let mut buf = vec![0u8; HASH_CHUNK];

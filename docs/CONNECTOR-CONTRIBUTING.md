@@ -30,7 +30,7 @@ A common data-only PR carries exactly these concerns:
    [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)). It replaces the old readiness record. Do not
    label a contributor's source or synthetic result qualified.
 4. A new generic harness-kit fixture under
-   `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` for this connector, containing
+   `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` (named after the connector id), containing
    `harness.toml`, `stand-in.py` and `expect.toml` (plus only reviewed declared seeds). The case
    exercises the connector's schema-1 path; do not substitute an existing baseline case.
 5. Evidence that the current baseline harness-kit suite passes. Build the workspace first, then

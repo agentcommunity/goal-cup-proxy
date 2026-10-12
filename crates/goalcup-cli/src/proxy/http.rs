@@ -94,7 +94,8 @@ const MAX_GZIP_HEADER_BYTES: usize = 64 * 1024;
 ///
 /// `Ok(Closed)` means both directions ended at message boundaries; `Ok(Opaque)` means both
 /// ended but at least one had stopped parsing and relayed the rest as bytes. EOF inside a
-/// message returns `UnexpectedEof`; other I/O errors are returned as they occurred. Dropping
+/// message returns `UnexpectedEof`, and so does a request that arrives after the upstream
+/// closed cleanly (it is not forwarded); other I/O errors are returned as they occurred. Dropping
 /// the future ends every open capture stream `Interrupted`.
 pub async fn relay_http(pair: RelayPair, context: RelayContext) -> io::Result<HttpOutcome> {
     let RelayPair { client, upstream } = pair;
@@ -107,6 +108,7 @@ pub async fn relay_http(pair: RelayPair, context: RelayContext) -> io::Result<Ht
         emitter: &context.emitter,
         policy: &context.policy,
         requests_opaque: AtomicBool::new(false),
+        responses_closed: AtomicBool::new(false),
         fell_back: AtomicBool::new(false),
     };
     let (requests, responses) = tokio::try_join!(
@@ -158,6 +160,8 @@ struct Shared<'a> {
     policy: &'a CapturePolicy,
     /// Set when the request direction stopped parsing: later responses cannot be paired.
     requests_opaque: AtomicBool,
+    /// Set when the response direction ended cleanly: the upstream closed at a message boundary.
+    responses_closed: AtomicBool,
     /// Set when either direction first stopped parsing.
     fell_back: AtomicBool,
 }
@@ -303,6 +307,12 @@ async fn relay_requests(
         };
         // Sent before the request is forwarded, so its response always finds it.
         if tx.send(pending).await.is_err() {
+            // The upstream closed an idle keep-alive as this request arrived (the reuse race):
+            // nothing was relayed or lost, and the client retries on a new connection. It ends
+            // as a peer that went away, as it does when the close lands after the send.
+            if shared.responses_closed.load(Ordering::SeqCst) {
+                return Err(unexpected_eof("the upstream closed before this request"));
+            }
             return requests_opaque(shared, tx, src, dst).await;
         }
 
@@ -411,6 +421,7 @@ async fn relay_responses(
                 if unanswered {
                     return Err(unexpected_eof("the upstream closed before answering"));
                 }
+                shared.responses_closed.store(true, Ordering::SeqCst);
                 return Ok(ResponseEnd::Closed);
             }
             HeadRead::PartialEof => {
@@ -526,6 +537,10 @@ async fn relay_responses(
                 body.finish(true, &src.at);
                 if until_eof {
                     half_close(&mut dst).await;
+                    // Only a close with nothing queued behind it is the keep-alive reuse race.
+                    if rx.is_empty() {
+                        shared.responses_closed.store(true, Ordering::SeqCst);
+                    }
                     return Ok(ResponseEnd::Closed);
                 }
             }

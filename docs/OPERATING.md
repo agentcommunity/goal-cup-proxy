@@ -19,19 +19,19 @@ install, one capture run) is in [../README.md](../README.md).
 ## Current M2 operating boundary
 
 v0.5.0 is published as source only
-(cleanup record). No downloadable binary,
-installer, staged bundle, registry publication, signature, notarization or qualification exists.
-Built binaries print `0.1.0`: the package version is independent of source release tags. The source
+(cleanup record). Binary releases are built by `.github/workflows/release.yml` from a `v*` tag
+that equals the workspace version, and installed with Homebrew
+([packaging/README.md](../packaging/README.md)); they are unsigned and unnotarized, and no
+qualification exists. Until a version is tagged, built binaries print `0.1.0`. The source
 contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
-`hermes-cli`. The separate private macOS packaging allowlist (`m2-pilot` in
-[packaging/README.md](../packaging/README.md)) stages only Codex and Claude, copying each selected
-directory whole, including any seeds. A source pin is not
-evidence of package inclusion. macOS is the only measured platform. Linux builds, but a
+`hermes-cli`. A release tarball carries `codex-cli` and `claude-code-cli`, as committed, under
+`share/goalcup/connectors`; `hermes-cli` stays maintainer-only (H-21). macOS is the only measured platform. Linux builds, but a
 `goalcup start` capture is refused there: the chain's disk reservation is implemented only for
 macOS APFS.
 
 Connector discovery checks `$GOALCUP_CONNECTORS_DIR`, `<exe>/../share/goalcup/connectors`, then
-`<exe>/../../connectors`. It considers immediate child directories with a regular `harness.toml`,
+`<exe>/../../connectors`, beside the path `goalcup` was started by and then beside its resolved
+path, skipping a candidate that holds a link. It considers immediate child directories with a regular `harness.toml`,
 validates every discovered schema-1 profile, then selects by declared id. Every run gets a fresh
 `HOME`: Codex and Claude use shared isolated config homes (Claude links the checked Keychains
 directory); Hermes gets a seeded per-run `HERMES_HOME`.
@@ -59,7 +59,8 @@ Prerequisites:
 - **Rust 1.99 or later.** `Cargo.toml` sets `rust-version = "1.99"`, the latest stable release
   when v0.5.1 was cut. The code itself needs less: edition 2024 needs 1.85, it uses `let` chains,
   and the locked dependencies declare at most 1.88. Development and CI use 1.99.0.
-  `rust-toolchain.toml` asks for `stable`.
+  `rust-toolchain.toml` pins `1.99.0`, which rustup installs on first use; the release workflow
+  builds with the same pin.
 - **macOS or Linux.** `goalcup-platform` refuses to compile on anything else
   (`crates/goalcup-platform/src/lib.rs`). The V1 claim is one macOS target; Linux is a
   smoke check (see CI below).
@@ -160,7 +161,7 @@ Then either put that directory in front of `PATH` for the session:
 export PATH="$PWD/target/release:$PATH"
 ```
 
-— or copy the four binaries somewhere already on it, and **set `$GOALCUP_CONNECTORS_DIR` to
+— or copy the three binaries somewhere already on it, and **set `$GOALCUP_CONNECTORS_DIR` to
 this checkout's `connectors/`**:
 
 ```
@@ -168,14 +169,16 @@ export GOALCUP_CONNECTORS_DIR="$PWD/connectors"
 ```
 
 That second variable is not optional for a copied binary, and it is the one thing about
-installing this tree that surprises people. The connector manifests are the **rulebook** —
-the human rule, the exclusion catalogue, the tool classes, with their digests pinned in the
-verifier — so they live beside the binary and never under a directory the participant
-writes. `goalcup` looks for them at `$GOALCUP_CONNECTORS_DIR`, then at
+installing this tree that surprises people. The connector directories (`harness.toml` and
+seeds) are the **rulebook** — how a harness is launched and captured, with their digests pinned
+in `goalcup-protocol` — so they live beside the binary and never under a directory the
+participant writes. `goalcup` looks for them at `$GOALCUP_CONNECTORS_DIR`, then at
 `<exe dir>/../share/goalcup/connectors` for an installed layout, then at
 `<exe dir>/../../connectors`, which is what makes `target/release/goalcup` find this
-repository's `connectors/` with nothing exported at all. A binary copied to `~/bin` matches
-none of the three and refuses, naming the variable. `cargo install` lands in the same place
+repository's `connectors/` with nothing exported at all. Both are tried beside the path
+`goalcup` was started by, then beside its resolved path, so a link in `~/bin` to
+`target/release/goalcup` finds them too. A binary copied to `~/bin` matches none of them and
+refuses, naming the variable. `cargo install` lands in the same place
 for the same reason.
 
 `$GOALCUP_CONFIG_DIR` is the third, and it must agree with the daemon (next section).

@@ -1085,45 +1085,6 @@ impl From<ProtocolError> for ControlError {
     }
 }
 
-/// Whether a failed process registration can safely be treated as not admitted.
-///
-/// A [`ControlError::Malformed`] alone does not answer that question: it can be a daemon's
-/// framed `400` validation refusal before the handler touches process authority, or a client
-/// that could not interpret an acknowledgement after the daemon persisted it.  Transport
-/// implementations preserve that origin here; in-process clients use the conservative
-/// default below.
-#[derive(Debug)]
-pub enum ProcessRegistrationError {
-    DefinitelyRefused(ControlError),
-    PossiblyAdmitted(ControlError),
-}
-
-impl ProcessRegistrationError {
-    pub fn may_have_been_admitted(&self) -> bool {
-        matches!(self, Self::PossiblyAdmitted(_))
-    }
-
-    pub fn into_error(self) -> ControlError {
-        match self {
-            Self::DefinitelyRefused(error) | Self::PossiblyAdmitted(error) => error,
-        }
-    }
-
-    /// The trait's legacy `ControlError` result has no response-origin information.  Preserve
-    /// safety for transport and post-Prepare outcomes. Ordinary `Busy` is explicitly
-    /// pre-admission; `ProcessAdmissionBusy` carries the post-mutation retry case.
-    pub fn from_unclassified(error: ControlError) -> ProcessRegistrationError {
-        match error {
-            error @ (ControlError::Unreachable(_)
-            | ControlError::Malformed(_)
-            | ControlError::Internal(_)
-            | ControlError::ProcessAdmissionUncertain(_)
-            | ControlError::ProcessAdmissionBusy(_)) => Self::PossiblyAdmitted(error),
-            error => Self::DefinitelyRefused(error),
-        }
-    }
-}
-
 /// Whether a failed capture seal can have started the daemon's finish (H-10 4a).
 ///
 /// The classification decides what may be replayed, so it is narrow: only a failure that is
@@ -1198,20 +1159,6 @@ pub trait DaemonClient {
         entry_id: &str,
         request: &crate::process::ProcessRegistration,
     ) -> Result<(), ControlError>;
-    /// Register a process while retaining whether a failure might follow durable admission.
-    ///
-    /// The default keeps existing in-process implementations safe: their legacy
-    /// [`ControlError`] does not say whether `Malformed` came from a verified daemon refusal
-    /// or a response the client could not parse.  An HTTP client overrides this with the
-    /// response origin it observed on the wire.
-    fn register_process_with_admission(
-        &self,
-        entry_id: &str,
-        request: &crate::process::ProcessRegistration,
-    ) -> Result<(), ProcessRegistrationError> {
-        self.register_process(entry_id, request)
-            .map_err(ProcessRegistrationError::from_unclassified)
-    }
     /// `goalcup doctor` needs one call that answers "is the daemon there".
     fn health(&self) -> Result<DaemonHealth, ControlError>;
     /// `goalcup status` with no entry argument.

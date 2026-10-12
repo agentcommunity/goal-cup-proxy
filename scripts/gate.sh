@@ -4,7 +4,10 @@
 #
 #   fast  build, fmt, clippy, then every test except the slow `full` and `m2_cli_lifecycle`
 #         binaries.
-#   full  fast's checks, every test including `full`, the scripts' unit tests and the link check.
+#   full  fast's checks, every test including `full`, the CLI's `#[ignore]`d end-to-end tests
+#         (the `m2_synthetic_vertical` and `capture_failure_campaign` modules of its `full`
+#         binary, about 4.5 minutes), the scripts' unit tests and the link check. The other
+#         ignored tests need a real Hermes or a disk image and are run by hand.
 #
 # Tests run under cargo-nextest (one process per test, in parallel). Without it the gate falls
 # back to `cargo test`, which runs every tier.
@@ -54,12 +57,20 @@ if cargo nextest --version >/dev/null 2>&1; then
         fi
     else
         step cargo nextest run --offline --workspace
+        # The end-to-end guarantee tests are `#[ignore]`d so a plain run skips them; the
+        # release check runs them by name. The other ignored tests are not selected.
+        step cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
+            -E 'test(/^(m2_synthetic_vertical|capture_failure_campaign)::/)'
     fi
     # nextest does not run doctests; the compile_fail one in goalcup-protocol guards a promise.
     step cargo test --offline --workspace --doc
 else
     echo "cargo-nextest not found; falling back to cargo test (runs every tier, slower)"
     step cargo test --offline --workspace
+    if [ "$tier" = full ]; then
+        step cargo test --offline -p goalcup-cli --test full -- --ignored \
+            m2_synthetic_vertical:: capture_failure_campaign::
+    fi
 fi
 
 if [ "$tier" = full ]; then

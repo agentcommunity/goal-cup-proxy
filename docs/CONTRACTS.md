@@ -892,12 +892,15 @@ carry their own amendments and point here for shared text.
 >   run of either reads incomplete (exit 1), never valid, until native capture of that home is
 >   scoped (T24N, which replaces this rule with its own gap for an unavailable scoped source). A
 >   profile whose stores are all under `{home}/` launches with no gap.
-> - A restart reopens an unfinished entry for status and seal only and admits no producer again.
+> - A restart reopens an unfinished entry for status and seal only (and abandon, for an entry
+>   that never launched and handed nothing off; amended 2026-10-13) and admits no producer again.
 >   If its harness was registered (`last_process` set) or its launch recorded (the row
 >   `Started`), the reopen appends one stream-less `Gap { reason: IngestLost, lost_bytes: None }`:
 >   whatever the harness did while no daemon admitted its producers is lost. `goalcup start`
 >   registers the harness before the `Launch` append, so a crash between that append and the
->   row update still chains the gap.
+>   row update still chains the gap. A chain that already ends in its `LocalFinish` gets no gap
+>   (amended 2026-10-13): the next finish commits that terminal to the registry, as
+>   `SealWritten` when `seal.json` binds it and `SealWriteFailed` when it does not.
 > - A finish that writes `seal.json` records the entry's final `M2Status` on its row and releases
 >   the entry: its ingest authorization and chain descriptors are dropped. Its status is answered
 >   from the row, without `producers_consumed` or `admissions_refused`; a retried seal answers
@@ -977,7 +980,8 @@ carry their own amendments and point here for shared text.
 > workspace walk, (8) `LocalFinish` + sync + `seal.json` + registry row. Stages 2, 3, 4, 6, 7 and 8
 > begin only while more than `FINISH_RESPONSE_MARGIN` remains of `D' = D + τ`, where `τ` is time
 > already spent in stage 6; (5) proxy-counter and latched gaps are appended between 4 and 6. Once
-> stage 8 begins it completes under the existing no-retry terminal rule. A refusal is
+> stage 8 begins it completes under the existing no-retry terminal rule; only its registry row
+> update is retried, by the next finish, which then appends nothing (amended 2026-10-13). A refusal is
 > `DaemonError::FinishDeadline { stage }` and writes no terminal. A syscall begun inside the budget
 > may overrun it; it is checked on return and no later stage starts. No hard cancellation is
 > claimed. A standalone `goalcup seal` of a live harness, with the owner backlogged enough to
@@ -1172,13 +1176,19 @@ carry their own amendments and point here for shared text.
 > - `Loss { DecodeFailed }` for a fail-open tunnel is submitted **at the tunnel decision**, from a
 >   hook `connect::admit_observed` calls with the reason before the first byte is relayed (the
 >   tunnel runs inside `admit`, so a task cut or panicking mid-relay still has its loss chained).
->   The `tunneled_fail_open` counter still moves when the tunnel ends. An authentication host and a
+>   The `tunneled_fail_open` counter moves in the same hook (*amended 2026-10-13*; it moved when the
+>   tunnel ended, so one cut at stop is still counted). An authentication host and a
 >   host that is not approved are opaque by design and submit nothing.
 > - `Loss { DecodeFailed }` for an opaque fallback is submitted when the relay stops parsing.
 > - `Loss { LimitExceeded }` for a full capture table is submitted before the uncaptured relay starts.
 > - `Loss { ShutdownDeadline }` for a connection cut while unsettled (`Unsettled::drop`, not
 >   panicking), including one cut in admission before it relayed a byte. That is conservative and
 >   the same mapping the seal request's `cut_unsettled` always had; it is not to be narrowed.
+>   *Amendment 2026-10-13:* the pre-decision part is unchanged: every connection cut before a
+>   tunnel or interception was decided still submits this loss. Only a decided tunnel is exempt:
+>   it settles in the same hook, so one still open at the cut submits nothing here. A fail-open
+>   one was chained and counted (`tunneled_fail_open`) at its decision; an authentication host or
+>   a host that is not approved is opaque by design.
 >
 > `ProxyHandle::stop` remains the only production `try_close` and runs only after every connection
 > task has ended. `unterminated` and a lost accept loop submit nothing: their producer is never

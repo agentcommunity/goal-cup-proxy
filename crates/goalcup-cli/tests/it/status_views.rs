@@ -39,12 +39,6 @@ fn cfg_with_edited_record(
     let record = goalcup_cli::entries::EntryRecord {
         entry_id: entry_id.to_string(),
         process_generation: info.process_generation,
-        pending_process_registration: None,
-        pending_process_registration_origin: None,
-        pending_process_cleanup: None,
-        pending_process_cleanup_origin: None,
-        pending_unresolved_native_cleanup: None,
-        resume_recovery: None,
         connector_id: "claude-code-cli".to_string(),
         run_public_key: info.run_public_key.clone(),
         workspace: info.workspace.clone(),
@@ -754,7 +748,7 @@ fn launched_capture(
 ) -> control::CaptureWorkspaceInfo {
     let info = client
         .create_capture_workspace(&control::CaptureWorkspaceRequest {
-            workspace: root.join("workspace").display().to_string(),
+            workspace: root.join("runs/workspace").display().to_string(),
             profile_id: "codex-cli".to_string(),
             connector_dir_sha256: goalcup_protocol::pins::pinned_connector_dir_sha256("codex-cli")
                 .unwrap()
@@ -829,15 +823,9 @@ fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
     let record = goalcup_cli::entries::EntryRecord {
         entry_id: info.entry_id.clone(),
         process_generation: info.process_generation,
-        pending_process_registration: None,
-        pending_process_registration_origin: None,
-        pending_process_cleanup: None,
-        pending_process_cleanup_origin: None,
-        pending_unresolved_native_cleanup: None,
-        resume_recovery: None,
         connector_id: "codex-cli".to_string(),
         run_public_key: info.run_public_key.clone(),
-        workspace: root.join("workspace").display().to_string(),
+        workspace: root.join("runs/workspace").display().to_string(),
         artifact_root: config.artifact_root.display().to_string(),
         harness_home: root.join("config-home").display().to_string(),
         session_id: String::new(),

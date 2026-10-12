@@ -16,7 +16,7 @@ This first sub-project covers event registration, membership and team permission
 
 **Implementation-target review:** local `m2/wire` at `99352ed4`, worktree `/Users/team/dev/worktrees/goal-cup/m2-wire`, inspected 2026-10-05. The product decisions in this spec stand; the CLI/service plan must target the released successor of this M2 line rather than assume V1's active runtime. The observations below are a snapshot, not a claim that the branch is released or production-ready.
 
-- M2's default product records native plus wire evidence in v5 and is LocalOnly: no production server, receipt, or acknowledgement. `goalcup auth`, V1 `resume`, and the old upload/runtime path are behind `v1-compat`. Preserved auth code is a reuse candidate, not an enabled default M2 feature.
+- M2's default product records native plus wire evidence in v5 and is LocalOnly: no production server, receipt, or acknowledgement. `goalcup auth`, V1 `resume`, and the old upload/runtime path were deleted with D48 (and `v1-compat` with them); the old auth code in git history is a reuse candidate.
 - V5 entries currently cannot resume. Section 8 describes desired event behavior and requires separately designed and qualified M2 continuity support; turning on V1 compatibility does not supply it.
 - The v5 record format is frozen by D42/D43 and `docs/CONTRACTS.md`. Optional `Launch.run_public_key` and `Launch.connector_dir_sha256` already exist. Add event/identity/start and delivery claims through versioned server records or side artifacts where possible; do not add account/team/mode fields to frozen chain records without the format's explicit evolution decision.
 - Preserve the independent LocalOnly recorder. Community signup is required for Goal Cup participation and authenticated server testing, not for all standalone local recording. LocalOnly is neither automatically a registered practice entry nor a competition entry.
@@ -26,15 +26,15 @@ This first sub-project covers event registration, membership and team permission
 
 The following V1 foundations remain useful reference, with their behavior distinguished from M2:
 
-- `crates/goalcup-cli/src/commands/auth.rs` already implements browser-opening device authorization, bounded polling, `/v0/device` and `/v0/token`, and secret grant storage at mode `0600` outside the measured workspace. Its protocol is project-specific; do not call it fully RFC 8628 compliant without a compatibility audit.
+- A V1 `goalcup auth` command once implemented browser-opening device authorization, bounded polling, `/v0/device` and `/v0/token`, and secret grant storage at mode `0600` outside the measured workspace. It was deleted with D48 (`crates/goalcup-cli/src/commands/` has start, status, entries, seal and doctor); git history keeps it as a starting point.
 - `agentCommunity_PAGE/features/auth/AUTH.md` describes Supabase browser authentication using Google, GitHub, and email OTP. Human authentication and existing general agent credentials are separate issuers/flows. Goal Cup installation grants must not silently reuse general agent scopes or change that product's authorization contract.
 - Existing rules allow multiple parallel entries, require verified community accounts, and establish a global 24-hour starting window with a separate 168-hour clock per entry. Optional community endorsement is not a participation requirement.
 - Production organizer authentication, TLS ingestion, durable acknowledgements, private signing keys, and the eventual 168-hour qualification are V1.1 work. Existing development signing and loopback upload are not production proof.
 - `goalcup-protocol` owns exchanged and persisted byte definitions; the daemon records raw evidence and health, and the verifier interprets evidence. Preserve those boundaries.
 - Never set a harness model base URL or write app-wide harness configuration. Harness authentication remains separate from Goal Cup authorization.
-- Every cargo command requiring dependency resolution is offline; run the README's four-command gate before committing. Connector changes require regenerated pins. No raw spike output, harness installations, or build artifacts belong in commits.
+- Every cargo command requiring dependency resolution is offline; run `sh scripts/gate.sh fast` before committing. Connector changes require regenerated pins. No raw spike output, harness installations, or build artifacts belong in commits.
 
-Relevant authorities: `STATUS.md`, `docs/RULES.md`, `docs/DECISIONS.md`, `docs/TERMINATION.md`, the 2026-09-13 foundation/V1.1 boundary spec, and `docs/superpowers/plans/2026-09-18-ten-steps.md`. This is a proposed additive event design; discrepancies below require explicit reconciliation, not silent rewriting of historical contracts.
+Relevant authorities: `TODO.md`, `docs/RULES.md`, `docs/DECISIONS.md` and `docs/TERMINATION.md` (the older `STATUS.md`, boundary spec and ten-steps plan are in git history only). This is a proposed additive event design; discrepancies below require explicit reconciliation, not silent rewriting of historical contracts.
 
 ## 3. Official registration and participation funnel
 
@@ -89,7 +89,7 @@ Continuations use validated internal destinations and an opaque authorization re
 
 ## 6. Tracer authorization journey
 
-1. The participant runs `goalcup auth`.
+1. The participant runs `goalcup auth` (proposed; no such command ships today).
 2. The CLI asks them to press Enter, then opens the system browser on the official Goal Cup approval surface. It prints a fallback verification URL and user code for another-browser/headless use.
 3. The browser authenticates the person, completes missing registration/acceptances, and shows the installation request with eligible participant choices. Team requests require confirmed membership.
 4. The person verifies the matching code and explicitly approves the installation for the chosen participant.

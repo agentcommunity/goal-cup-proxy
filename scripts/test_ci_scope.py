@@ -21,7 +21,7 @@ SPEC.loader.exec_module(scope)
 
 # Fixture repositories ignore the caller's Git configuration, so a developer's hooks, signing
 # or templates cannot change what the tests see. Every inherited Git control (GIT_DIR,
-# GIT_WORK_TREE, GIT_CONFIG_COUNT and any future one) is dropped first, as in oss-cut.py.
+# GIT_WORK_TREE, GIT_CONFIG_COUNT and any future one) is dropped first.
 GIT_ENV = {
     **{name: value for name, value in os.environ.items() if not name.startswith("GIT_")},
     "GIT_CONFIG_GLOBAL": os.devnull,

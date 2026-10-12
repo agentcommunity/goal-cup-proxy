@@ -991,7 +991,8 @@ async fn a_registered_run_reopened_before_its_launch_chains_the_loss() {
 
 /// Reopening retains exactly enough authority to report and seal. Neither an unfinished entry
 /// that has no goal nor one whose goal was already recorded may regain any creation-time
-/// mutation authority after the daemon restarts.
+/// mutation authority after the daemon restarts. (Abandoning one that never launched is not a
+/// mutation of a run: `a_recovered_capture_that_never_launched_can_be_abandoned`.)
 #[tokio::test]
 async fn a_reopened_capture_accepts_only_status_and_seal() {
     let rig = Rig::start().await;
@@ -1035,10 +1036,6 @@ async fn a_reopened_capture_accepts_only_status_and_seal() {
         .launch(&post_goal.entry_id, &launch_request(&goal))
         .await;
     assert_error_identity(&response, &recovered_conflict(&post_goal.entry_id));
-    assert_unchanged();
-
-    let response = rig.abandon(&pre_goal.entry_id).await;
-    assert_error_identity(&response, &recovered_conflict(&pre_goal.entry_id));
     assert_unchanged();
 
     rig.status(&pre_goal.entry_id)
@@ -2378,4 +2375,211 @@ async fn a_default_daemons_loop_stays_pending() {
     )
     .await;
     assert!(ended.is_err(), "run_forever returned: {ended:?}");
+}
+
+/// Review R4 I1: `goalcup start` died between create and launch, and the daemon restarted. The
+/// entry never handed anything off, so it may still be abandoned: otherwise it holds its
+/// reservation and keeps a run-scoped daemon up forever.
+#[tokio::test]
+async fn a_recovered_capture_that_never_launched_can_be_abandoned() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let rig = rig.restart().await;
+    let abandoned = rig.abandon(&info.entry_id).await;
+    assert_eq!(abandoned.status(), 204, "{}", abandoned.body());
+    assert!(
+        !rig.artifact_dir(&info.entry_id).exists(),
+        "the reserved chain is gone"
+    );
+    assert!(rig.daemon.registry().get(&info.entry_id).unwrap().is_none());
+}
+
+/// Review R4 I1: the CLI died between create and launch, so nothing will ever seal or abandon
+/// the entry. The idle loop abandons a never-launched entry past its bound, and leaves a
+/// launched one alone.
+#[tokio::test]
+async fn a_stale_capture_that_never_launched_is_abandoned_by_the_daemon() {
+    let rig = Rig::start().await;
+    let stale = rig.created("codex-cli").await;
+    let launched = rig.created("codex-cli").await;
+    let goal = rig
+        .goal_accepted(&launched.entry_id, b"write hello.txt")
+        .await;
+    rig.launch(&launched.entry_id, &launch_request(&goal)).await;
+    let registered = rig.created("codex-cli").await;
+    let harness = Child::sleeping();
+    let response = rig
+        .register(
+            &registered.entry_id,
+            &harness.registration(registered.process_generation),
+        )
+        .await;
+    assert_eq!(response.status(), 204, "{}", response.body());
+
+    rig.daemon
+        .abandon_stale_unlaunched(std::time::Duration::from_secs(3600));
+    assert!(
+        rig.artifact_dir(&stale.entry_id).exists(),
+        "a young entry is kept"
+    );
+
+    let errors = format!("{:?}", rig.daemon.cycle_errors());
+    rig.daemon
+        .abandon_stale_unlaunched(std::time::Duration::ZERO);
+    assert!(
+        !rig.artifact_dir(&stale.entry_id).exists(),
+        "the reserved chain is gone"
+    );
+    assert!(
+        rig.artifact_dir(&registered.entry_id).exists(),
+        "a registered harness is left for `goalcup seal`"
+    );
+    assert_eq!(
+        format!("{:?}", rig.daemon.cycle_errors()),
+        errors,
+        "and it is not tried, so no refusal is noted"
+    );
+    assert!(
+        rig.daemon
+            .registry()
+            .get(&stale.entry_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        rig.trace_dir(&launched.entry_id)
+            .join("chain.jsonl")
+            .exists(),
+        "a launched entry is never abandoned"
+    );
+}
+
+/// Review R4 I3: the terminal is chained and synced, and then the registry row does not say so
+/// (its write failed, or the daemon died between the two). The next daemon reopens the entry
+/// and the next seal must commit that terminal as it stands: nothing appended after it, and
+/// never `SealWriteFailed`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_whose_registry_write_was_lost_is_committed_without_a_second_terminal() {
+    let (rig, _native, _connectors) = native_rig().await;
+    let info = rig.created("capture-dev").await;
+    let harness = Child::sleeping();
+    let registered = rig
+        .register(
+            &info.entry_id,
+            &harness.registration(info.process_generation),
+        )
+        .await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    clean_epoch(&info).await;
+    let sealed = rig
+        .seal(&info.entry_id, Some(ProxyCounters::default()))
+        .await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let first: CaptureFinishReport = sealed.json().unwrap();
+    assert_eq!(first.seal, LocalSealOutcome::SealWritten);
+    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+    let closed = std::fs::read(&chain).unwrap();
+
+    // The row as it stood before the registry write.
+    rig.daemon
+        .registry()
+        .update(&info.entry_id, |entry| {
+            entry.sealed_at = None;
+            if let Some(capture) = entry.capture.as_mut() {
+                capture.finished = None;
+                capture.sealed_status = None;
+            }
+        })
+        .unwrap();
+    let rig = rig.restart().await;
+    let again = rig
+        .seal(&info.entry_id, Some(ProxyCounters::default()))
+        .await;
+    assert_eq!(again.status(), 200, "{}", again.body());
+    let again: CaptureFinishReport = again.json().unwrap();
+    assert_eq!(again.seal, LocalSealOutcome::SealWritten);
+    assert_eq!(again.terminal_seq, first.terminal_seq);
+    assert_eq!(
+        std::fs::read(&chain).unwrap(),
+        closed,
+        "nothing after the terminal"
+    );
+    assert_eq!(local_finishes(&rig.records(&info.entry_id)), 1);
+    let status = rig.status(&info.entry_id).await;
+    assert_eq!(status.payload.capture.unwrap().run, RunState::Sealed);
+    let seal: goalcup_protocol::seal::SealManifest = serde_json::from_slice(
+        &std::fs::read(rig.trace_dir(&info.entry_id).join("seal.json")).unwrap(),
+    )
+    .unwrap();
+    let row = rig.daemon.registry().get(&info.entry_id).unwrap().unwrap();
+    assert_eq!(row.sealed_at.as_deref(), Some(seal.sealed_at.as_str()));
+}
+
+/// The same, with the terminal chained and `seal.json` never written (a crash between the
+/// two, or a full disk): the seal is a failed one, and stays one, and nothing is appended.
+#[tokio::test]
+async fn a_terminal_chained_without_its_seal_is_committed_as_a_failed_seal() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let first: CaptureFinishReport = rig.seal(&info.entry_id, None).await.json().unwrap();
+    assert_eq!(first.seal, LocalSealOutcome::SealWritten);
+    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+    let closed = std::fs::read(&chain).unwrap();
+    std::fs::remove_file(rig.trace_dir(&info.entry_id).join("seal.json")).unwrap();
+    rig.daemon
+        .registry()
+        .update(&info.entry_id, |entry| {
+            entry.sealed_at = None;
+            if let Some(capture) = entry.capture.as_mut() {
+                capture.finished = None;
+                capture.sealed_status = None;
+            }
+        })
+        .unwrap();
+    let rig = rig.restart().await;
+    let again = rig.seal(&info.entry_id, None).await;
+    assert_eq!(again.status(), 200, "{}", again.body());
+    let again: CaptureFinishReport = again.json().unwrap();
+    assert_eq!(again.seal, LocalSealOutcome::SealWriteFailed);
+    assert_eq!(again.terminal_seq, first.terminal_seq);
+    assert_eq!(
+        std::fs::read(&chain).unwrap(),
+        closed,
+        "nothing after the terminal"
+    );
+}
+
+/// Review R4 I5 / R5 I-5: the placement guard compared the workspace with this entry's own
+/// artifact directory only. A workspace inside the machine-wide artifact root (beside the
+/// registry and every other run's chain) or inside the configuration directory (`control.json`
+/// and its bearer) was accepted.
+#[tokio::test]
+async fn a_workspace_inside_the_tracker_roots_is_refused() {
+    let rig = Rig::start().await;
+    let beside = rig
+        .config
+        .artifact_root
+        .parent()
+        .unwrap()
+        .join("beside-the-roots");
+    for workspace in [
+        rig.config.artifact_root.join("goalcup-x/workspace"),
+        rig.config.config_dir.join("goalcup-x/workspace"),
+        beside,
+    ] {
+        let refused = rig.create("codex-cli", &workspace, RESERVE).await;
+        assert_eq!(
+            refused.status(),
+            409,
+            "{}: {}",
+            workspace.display(),
+            refused.body()
+        );
+        assert!(refused.body().contains("tracker's"), "{}", refused.body());
+        assert!(!workspace.exists(), "nothing is created for it");
+    }
+    let fine = rig.create("codex-cli", &rig.workspace("ok"), RESERVE).await;
+    assert_eq!(fine.status(), 200, "{}", fine.body());
 }

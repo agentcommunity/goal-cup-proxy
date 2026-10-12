@@ -39,18 +39,16 @@ fn the_shipped_binary_links_no_daemon() {
     );
 }
 
-/// `busy` is the daemon holding the entry for one asynchronous call, and the seal asks on
-/// its own four-attempt dephased schedule before it is reported.
+/// `busy` is the daemon holding the entry for one asynchronous call. The daemon never answers
+/// the bare seal `busy` (the route reads only the registry row), so the bare seal rides the
+/// generic retry like any other ordinary call.
 ///
-/// The seal must not inherit the generic three-attempt schedule: its own bounded policy is
-/// what escapes a 200 ms capture cadence while preserving a full slow-call reservation.
 /// Both ends of the rule are here: one `busy` is absorbed and the seal is asked again (the
 /// mock's second answer is a pre-v5 seal report, which this command refuses at rung 3), and a
-/// daemon that is STILL busy when its reservation is spent is rung 1 with the daemon's own
-/// words in it. Its one-second reservation envelope holds the 550 ms planned schedule plus
-/// ordinary scheduler overhead, so this real command path reaches all four bounded calls.
+/// daemon that is STILL busy when the retry is spent is rung 1 with the daemon's own words
+/// in it.
 #[test]
-fn one_busy_seal_is_asked_again_and_a_standing_busy_is_rung_one_after_four_asks() {
+fn one_busy_seal_is_asked_again_and_a_standing_busy_is_rung_one_after_the_bounded_asks() {
     let tmp = tempfile::tempdir().unwrap();
     let m = support::mock_sealable(&tmp, "claude-code-cli");
     let entry = m.info().entry_id;
@@ -114,8 +112,8 @@ fn one_busy_seal_is_asked_again_and_a_standing_busy_is_rung_one_after_four_asks(
     );
     assert_eq!(
         m.calls().iter().filter(|c| *c == "seal").count(),
-        goalcup_cli::retry::SEAL_BUSY_ATTEMPTS,
-        "the real command reaches all four bounded seal asks"
+        goalcup_cli::retry::BUSY_ATTEMPTS,
+        "the real command reaches every bounded seal ask"
     );
 }
 

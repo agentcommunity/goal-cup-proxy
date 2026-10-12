@@ -7,19 +7,36 @@ Until the server signs acknowledgements of the record, it is local only: the cha
 edit or corruption, but whoever controls the machine can edit a record, recompute the hashes after
 it and re-seal, and it still verifies ([checklist](docs/CHEAT-CHECKLIST.md)).
 
-## Quickstart
+## Install
 
-**You need** a Mac with Apple silicon, Rust 1.99 or later ([rustup](https://rustup.rs)), the Xcode
-command line tools, and a Claude or ChatGPT subscription. Install the exact harness build Goal Cup
-is pinned to, Claude Code 2.1.283 or Codex CLI 0.153.0: `goalcup start` refuses any other build.
+**With Homebrew** (macOS and Linux):
 
-<a id="build"></a>From the repository root, build and put the three binaries (`goalcup`,
-`goalcup-daemon`, `goalcup-verify`) on your `PATH`:
+```sh
+brew install agentcommunity/tap/goalcup
+```
+
+This installs the three binaries (`goalcup`, `goalcup-daemon`, `goalcup-verify`) and the pinned
+connectors they read. Releases and the tap are described in
+[packaging/README.md](packaging/README.md); until the first release is published, build from
+source.
+
+<a id="build"></a>**From source** (Rust 1.99 or later, [rustup](https://rustup.rs); on macOS the
+Xcode command line tools). From the repository root, build and put the three binaries on your
+`PATH`:
 
 ```sh
 cargo build --release
 export PATH="$PWD/target/release:$PATH"
-export GOALCUP_CONFIG_DIR="$HOME/goalcup"    # where the tracker keeps its state
+```
+
+## Quickstart
+
+**You need** a Mac with Apple silicon, Goal Cup [installed](#install), and a Claude or ChatGPT
+subscription. Install the exact harness build Goal Cup is pinned to, Claude Code 2.1.283 or Codex
+CLI 0.153.0: `goalcup start` refuses any other build. Choose where the tracker keeps its state:
+
+```sh
+export GOALCUP_CONFIG_DIR="$HOME/goalcup"
 ```
 
 There is no daemon to install or keep running: `goalcup start` starts `goalcup-daemon` for the
@@ -50,8 +67,9 @@ agree to as a participant: [docs/RULES.md](docs/RULES.md).
 
 **Adding a harness?** Start at [skills/adding-a-capture-harness](skills/adding-a-capture-harness/SKILL.md).
 
-Status: source only (v0.5.0); there is no binary release. Open work: [TODO.md](TODO.md). Terms:
-[docs/GLOSSARY.md](docs/GLOSSARY.md). Contributors running the tests also need `shasum` and
+Status: v0.5.0 is published as source; binary releases come from
+[release.yml](.github/workflows/release.yml) once a version is tagged. Open work:
+[TODO.md](TODO.md). Terms: [docs/GLOSSARY.md](docs/GLOSSARY.md). Contributors running the tests also need `shasum` and
 `python3`; never create a `.cargo/config.toml`.
 
 ## The gate
@@ -83,7 +101,8 @@ The gate runs cargo with `--offline`, which is why the one `cargo fetch --locked
   `cargo clippy --offline --workspace --all-targets -- -D warnings`, then every test under
   cargo-nextest (one process per test, in parallel) except the slow tier, then the doctests.
   It aims at under a minute warm.
-- **full** is the release check. It runs everything fast runs plus the slow tier, the scripts'
+- **full** is the release check. It runs everything fast runs plus the slow tier, the CLI's
+  `#[ignore]`d end-to-end tests (`m2_synthetic_vertical`, `capture_failure_campaign`), the scripts'
   unit tests (`python3 -m unittest discover -s scripts`) and the link check
   (`python3 scripts/check-links.py --root .`). Nothing else runs the slow tier, CI included, so
   run `full` before every tag or it rots unseen.
@@ -151,15 +170,16 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   With no run on record they answer without starting anything. If a run outlives its daemon (a
   crash, a reboot), the daemon any of these commands starts reopens the run for status and seal
   only, a run that had launched carries the lost interval as one gap, and that daemon **stays up
-  until `goalcup seal`** finishes the run rather than exiting after 30 seconds. While `daemon.toml` is the
+  until `goalcup seal`** finishes the run rather than exiting after 30 seconds. A run whose
+  `goalcup start` died before the launch, with nothing handed off, is abandoned after 15 minutes. While `daemon.toml` is the
   unedited default, `start` keeps its `connectors_dir` naming the connectors it loaded (binaries
   move); an edited file that names other connectors is refused, naming the file. A
   `daemon.toml` you wrote for an earlier build belongs at `$GOALCUP_CONFIG_DIR/daemon.toml`;
   otherwise the first `start` writes a default with other roots. The configuration's keys are in
   [OPERATING](docs/OPERATING.md#running-the-daemon).
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
-  `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. The macOS staging scripts in
-  [packaging/README.md](packaging/README.md) are private tooling, not a released installer.
+  `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. An installed one (Homebrew, or an unpacked
+  release tarball) finds them at `<bin>/../share/goalcup/connectors`.
 - **Hermes** (`hermes-cli`) needs a provider key and is run by the maintainer only, through
   `/bin/sh -p scripts/with-deepseek-key.sh <ENV_FILE> start --harness hermes-cli --goal-file <PATH>`
   with a mode 0600 file holding one `DEEPSEEK_API_KEY=` line. Never paste the key into a shell.

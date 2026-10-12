@@ -70,7 +70,8 @@
 //! again, and the gap count is read back from the chain, so gap history outlives the daemon. A
 //! run whose harness was registered or launched and that did not finish gets one stream-less
 //! `IngestLost` gap at reopen, since whatever it did while no daemon admitted its producers is
-//! lost.
+//! lost. A chain that already ends in its local finish takes nothing: the next finish only
+//! commits that terminal to the registry.
 
 use super::Daemon;
 
@@ -119,7 +120,10 @@ use goalcup_protocol::envelope::{Envelope, EventBody};
 
 use goalcup_protocol::events::HealthState;
 
-use goalcup_protocol::export::{ExportError, TraceExport, TraceRoot};
+use goalcup_protocol::export::{
+    ExportError, FixedTraceDocument, TraceExport, TraceRoot, manifest_sha256,
+};
+use goalcup_protocol::seal::SealManifest;
 
 use goalcup_protocol::harness::{CaptureSpec, HarnessManifest};
 use goalcup_protocol::manifest::RedactionPattern;
@@ -129,8 +133,6 @@ use goalcup_protocol::process::{ProcessRegistration, validate_live_process_handl
 use goalcup_protocol::provenance::{TerminationFailureV1, TerminationOutcomeV1};
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
-use std::io::{BufRead, BufReader};
 
 use std::path::{Path, PathBuf};
 
@@ -191,6 +193,11 @@ pub(crate) struct CaptureEntry {
     finishing: AtomicBool,
     /// What an expired finish left for the next one to chain; see [`ExpiredFinish`].
     expired: Mutex<Option<ExpiredFinish>>,
+    /// When this daemon created or reopened the entry, on a clock that does not count sleep: a
+    /// laptop asleep mid-start does not age it toward [`super::UNLAUNCHED_LIMIT`].
+    opened: std::time::Instant,
+    /// The local finish once it is chained, before and after its registry row says so.
+    pub(super) chained_finish: Mutex<Option<ChainedFinish>>,
     /// Test seam: a pause taken just before the named finish stage's admission check.
     #[cfg(any(test, feature = "test-hooks"))]
     stage_delay: Mutex<Option<(FinishStage, Duration)>>,
@@ -359,6 +366,13 @@ impl Daemon {
             workspace: workspace.to_path_buf(),
             artifact_root: artifact_dir.clone(),
         })?;
+        workspace::check_machine_roots(
+            workspace,
+            &[
+                ("artifact_root", &self.config().artifact_root),
+                ("config_dir", &self.config().config_dir),
+            ],
+        )?;
         let artifact = self
             .artifact_root()
             .create_entry(&entry_id)
@@ -560,9 +574,13 @@ impl Daemon {
     /// Abandon a v5 entry before its launch and before any process handoff is prepared: its
     /// reservation, row, artifacts and still-empty workspace go, as for a refused create, and
     /// only then its owner and ingest grant. After a launch or a handoff, it is sealed instead.
+    ///
+    /// A recovered entry may be abandoned too: what makes an abandon safe is that nothing was
+    /// handed off, which the checks below prove, and a never-launched entry the CLI can no
+    /// longer finish would otherwise hold its reservation and keep a run-scoped daemon up for
+    /// good (review R4 I1).
     pub(super) fn abandon_capture(&self, entry_id: &str) -> Result<(), DaemonError> {
         let capture = self.capture_entry(entry_id)?;
-        capture.require_live_capture_authority()?;
         let run = capture.lock();
         run.refuse_if_finished()?;
         let row = self
@@ -583,6 +601,37 @@ impl Daemon {
         self.discard_capture(entry_id, &artifact, Some(&row.workspace))?;
         self.captures().remove(entry_id);
         Ok(())
+    }
+
+    /// Abandon every entry that never launched, has handed nothing off (its registry row is
+    /// still `OpenInitial`) and was opened by this daemon more than `older_than` ago. A
+    /// `goalcup start` goes from create to launch in seconds, so such an entry's CLI died (it
+    /// was killed, or its terminal closed): nothing will ever seal or abandon it. An entry with
+    /// a registered harness is left for `goalcup seal`. The idle loop calls this; a failure is
+    /// noted and retried at the next poll.
+    pub fn abandon_stale_unlaunched(&self, older_than: std::time::Duration) {
+        let candidates: Vec<String> = self
+            .captures()
+            .values()
+            .filter(|capture| capture.opened.elapsed() >= older_than)
+            .filter_map(|capture| {
+                let run = capture.run.try_lock().ok()?;
+                (!run.launched() && run.finished().is_none()).then(|| run.entry.entry_id.clone())
+            })
+            .collect();
+        // Registration writes only the registry, so the row is what says nothing was handed off.
+        let stale = candidates.into_iter().filter(|entry_id| {
+            self.registry()
+                .get(entry_id)
+                .ok()
+                .flatten()
+                .is_some_and(|row| row.process_handoff_phase() == ProcessHandoffPhase::OpenInitial)
+        });
+        for entry_id in stale {
+            if let Err(error) = self.abandon_capture(&entry_id) {
+                self.inner.cycles.note(super::Cadence::Tick, &error);
+            }
+        }
     }
 
     /// Admit a v5 entry's harness process: at the generation its create answered, once, and
@@ -730,20 +779,29 @@ impl Daemon {
             .open_entry(&row.entry_id)
             .map_err(refused)?;
         let trace = artifact.open_trace().map_err(refused)?;
-        let mut export =
-            TraceExport::resume_from_root(TraceRoot::from_acquired(trace, row.trace_dir.clone()))?;
+        // One read of the chain: the resume validates every line and hands it to `facts`.
+        let mut chained = ChainFacts::default();
+        let mut export = TraceExport::resume_from_root_visiting(
+            TraceRoot::from_acquired(trace, row.trace_dir.clone()),
+            &mut |envelope| chained.observe(envelope),
+        )?;
         // Remeasures the retained allocation; a volume that cannot reserve keeps the quota.
         if export.reserve_capture(reserve_bytes).is_err() {
             export.configure_capture_quota(reserve_bytes)?;
         }
         export.sync_capture()?;
+        if let (Some(finish), Some(digest)) = (chained.finish.as_mut(), &chained.seal_digest) {
+            bind_seal(&export, finish, digest);
+        }
         let mut writer = ChainWriter::new(export, row.entry_id.clone());
-        let chained = scan_chain(&mut writer.export, &row.trace_dir)?;
         writer.gaps = chained.gaps;
-        let unfinished = row
-            .capture
-            .as_ref()
-            .is_some_and(|kept| kept.finished.is_none());
+        // A chain that already ends in its local finish takes nothing more, whatever the row
+        // says: the next finish only commits that terminal to the registry.
+        let unfinished = chained.finish.is_none()
+            && row
+                .capture
+                .as_ref()
+                .is_some_and(|kept| kept.finished.is_none());
         // A registered harness is running before its launch is appended, and the row is marked
         // started only after that append.
         let launched = row.state == EntryState::Started || row.last_process.is_some();
@@ -777,6 +835,7 @@ impl Daemon {
         if deferred {
             *lock(&capture.native_binding) = NativeBinding::Deferred;
         }
+        *lock(&capture.chained_finish) = chained.finish;
         self.captures().insert(entry_id, Arc::new(capture));
         Ok(())
     }
@@ -885,44 +944,89 @@ impl Daemon {
     }
 }
 
-/// What a resumed chain already holds that a reopened entry must not record again.
+/// What a reopen needs from the chain, gathered during the resume's own validation pass.
+#[derive(Default)]
 struct ChainFacts {
     /// Gap records: gap history outlives the daemon.
     gaps: u64,
     /// A stream-less `SourceChanged` gap after the `Launch`: the one gap a deferred native scope
     /// owes the run, already recorded.
     launch_source_gap: bool,
+    launched: bool,
+    /// The local finish, when the chain already ends in one, and the `seal.json` digest it
+    /// binds.
+    finish: Option<ChainedFinish>,
+    seal_digest: Option<String>,
 }
 
-/// Read the whole chain once for what a reopen needs.
-fn scan_chain(export: &mut TraceExport, trace_dir: &Path) -> Result<ChainFacts, DaemonError> {
-    let mut facts = ChainFacts {
-        gaps: 0,
-        launch_source_gap: false,
+/// Read `seal.json` back and mark `finish` written only when it is there whole and is the
+/// manifest the terminal binds; its `sealed_at` is then the seal's own. A terminal chained
+/// without its `seal.json` (a crash between the two, or a full disk) stays a failed seal.
+fn bind_seal(export: &TraceExport, finish: &mut ChainedFinish, digest: &str) {
+    use std::io::Read;
+    const SEAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
+    let Ok(Some(file)) = export.read_fixed(FixedTraceDocument::Seal) else {
+        return;
     };
-    let mut launched = false;
-    for line in BufReader::new(export.independent_chain_reader()?).lines() {
-        let envelope: Envelope =
-            serde_json::from_str(&line.map_err(|source| DaemonError::Io {
-                path: trace_dir.join("chain.jsonl").display().to_string(),
-                source,
-            })?)?;
-        match envelope.body {
+    let mut bytes = Vec::new();
+    if file.take(SEAL_MAX_BYTES).read_to_end(&mut bytes).is_err() {
+        return;
+    }
+    let Ok(manifest) = serde_json::from_slice::<SealManifest>(&bytes) else {
+        return;
+    };
+    if manifest_sha256(&manifest).is_ok_and(|bound| bound == digest) {
+        finish.sealed_at = manifest.sealed_at;
+        finish.seal_written = true;
+    }
+}
+
+impl ChainFacts {
+    fn observe(&mut self, envelope: &Envelope) {
+        match &envelope.body {
             EventBody::Capture {
                 record: CaptureRecord::Launch { .. },
-            } => launched = true,
+            } => self.launched = true,
             EventBody::Capture {
                 record: CaptureRecord::Gap { stream, reason, .. },
             } => {
-                facts.gaps += 1;
-                if launched && stream.is_none() && reason == GapReason::SourceChanged {
-                    facts.launch_source_gap = true;
+                self.gaps += 1;
+                if self.launched && stream.is_none() && *reason == GapReason::SourceChanged {
+                    self.launch_source_gap = true;
                 }
+            }
+            EventBody::Capture {
+                record:
+                    CaptureRecord::LocalFinish {
+                        termination,
+                        seal_manifest_sha256,
+                        ..
+                    },
+            } => {
+                self.finish = Some(ChainedFinish {
+                    seq: envelope.link.seq,
+                    termination: termination.clone(),
+                    // Until `seal.json` is read back and binds the terminal: see `bind_seal`.
+                    sealed_at: envelope.recorded_at.clone(),
+                    seal_written: false,
+                });
+                self.seal_digest = Some(seal_manifest_sha256.clone());
             }
             _ => {}
         }
     }
-    Ok(facts)
+}
+
+/// A local finish already chained and synced, whose registry row may not say so yet: a
+/// registry write that failed after the terminal, or a daemon that died between the two. A
+/// later finish commits it to the registry and appends nothing after the terminal.
+#[derive(Clone)]
+pub(super) struct ChainedFinish {
+    pub(super) seq: u64,
+    pub(super) termination: TerminationOutcomeV1,
+    pub(super) sealed_at: String,
+    /// Whether its `seal.json` is written and binds it; a finish without one is a failed seal.
+    pub(super) seal_written: bool,
 }
 
 /// Sign a v5 entry's status with `capture` as its capture projection and the receiver's
@@ -989,6 +1093,8 @@ impl CaptureEntry {
             thread: Mutex::new(None),
             finishing: AtomicBool::new(false),
             expired: Mutex::new(None),
+            opened: std::time::Instant::now(),
+            chained_finish: Mutex::new(None),
             #[cfg(any(test, feature = "test-hooks"))]
             stage_delay: Mutex::new(None),
         }
