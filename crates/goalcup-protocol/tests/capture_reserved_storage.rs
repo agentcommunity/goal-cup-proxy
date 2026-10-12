@@ -21,9 +21,13 @@
 //! The export-level refusals that need an unqualified filesystem or a short allocation run in
 //! the default gate through the platform's debug-only, fail-closed `ReservationFault` seam.
 //!
-//! Off macOS there is no qualified allocator: reservation is refused and never reported.
+//! Off macOS only a Linux ext4 or XFS volume has an allocator, measured in Docker on Linux 7.0.12
+//! (aarch64) loop-mounted images; every other filesystem refuses and reports nothing. The one
+//! off-macOS test classifies its temporary directory itself and expects whichever of the two
+//! follows.
 
-// The pilot fixtures below are macOS-only; elsewhere only the refusal test uses these helpers.
+// The pilot fixtures below are macOS-only; elsewhere only the refusal test and the ext4/XFS
+// reservation test use these helpers.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use goalcup_platform::tracecap::{RefusalKind, TraceCapError};
@@ -685,7 +689,9 @@ fn assistance_spends_the_terminal_allowance() {
     assert_eq!(assert_chain_is_whole_jsonl(tmp.path()), 2);
 }
 
-/// Off the qualified macOS/APFS allocator the refusal is real, typed, and claims nothing.
+/// Off macOS the refusal is real, typed, and claims nothing, unless the temporary directory is
+/// on Linux ext4 or XFS (classified here by `statfs(2)` `f_type`, not by the code under
+/// test): then the quota is reserved behind an unmoved logical end and reported as measured.
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn unsupported_allocator_never_claims_reserved_bytes() {
@@ -693,6 +699,24 @@ fn unsupported_allocator_never_claims_reserved_bytes() {
     let mut export = TraceExport::create(tmp.path()).unwrap();
     let before = snapshot(tmp.path());
     let refused = export.reserve_capture(QUOTA);
+    let qualified = linux_ext4_or_xfs(tmp.path());
+    println!("{}: ext4 or XFS {qualified}", tmp.path().display());
+    if qualified {
+        refused.unwrap();
+        let reserved = physical(tmp.path());
+        assert_eq!(reserved.size, 0, "reservation never moves logical EOF");
+        assert!(
+            reserved.allocated >= QUOTA && reserved.allocated < QUOTA + ROUNDING,
+            "one measured allocation of the quota: {reserved:?}"
+        );
+        let storage = export.capture_storage();
+        assert_eq!(
+            (storage.quota_bytes, storage.reserved_bytes),
+            (QUOTA, QUOTA)
+        );
+        assert_eq!(snapshot(tmp.path()), before, "no logical byte was written");
+        return;
+    }
     assert!(is_unsupported(&refused), "{refused:?}");
     let storage = export.capture_storage();
     assert_eq!((storage.quota_bytes, storage.reserved_bytes), (0, 0));
@@ -1174,6 +1198,28 @@ fn reserved_chains_survive_remount_and_exhaustion() {
     }
     assert!(TraceExport::resume(&b).is_ok());
     assert!(TraceExport::resume(&c).is_ok());
+}
+
+/// Whether `path` is on ext4 (`0xEF53`) or XFS (`0x58465342`), by a path-based `statfs(2)`.
+#[cfg(target_os = "linux")]
+fn linux_ext4_or_xfs(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let encoded = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    let mut volume = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: the path is NUL terminated and the output buffer is writable.
+    assert_eq!(
+        unsafe { libc::statfs(encoded.as_ptr(), volume.as_mut_ptr()) },
+        0
+    );
+    // SAFETY: statfs reported success, so it fully initialised the output buffer.
+    #[allow(clippy::unnecessary_cast)]
+    let magic = unsafe { volume.assume_init() }.f_type as u64;
+    matches!(magic, 0xEF53 | 0x5846_5342)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn linux_ext4_or_xfs(_: &Path) -> bool {
+    false
 }
 
 /// Review R6 I1: the link hash covers a record's decoded content only, so a v5 line that is

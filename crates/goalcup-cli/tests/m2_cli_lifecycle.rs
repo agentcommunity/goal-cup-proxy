@@ -2,11 +2,11 @@
 //! daemon in process, the real proxy and IPC sink inside `start_with`, and a fake headless
 //! harness (`fixtures/m2-fake-harness.sh`) that records what it was started with.
 //!
-//! macOS only: the daemon reserves a capture chain on APFS alone. Every test holds the
+//! macOS and Linux (the trace folder must be on APFS, ext4 or XFS). Every test holds the
 //! process-table lock: each runs a daemon, most spawn a harness, and one lowers this
 //! process's open-file limit.
 
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", target_os = "linux"))]
 
 #[path = "common/m2_cli_support/mod.rs"]
 mod m2_cli_support;

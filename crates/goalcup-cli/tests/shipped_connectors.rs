@@ -260,7 +260,7 @@ fn discovery_lists_what_ships_and_refuses_a_connector_that_does_not() {
             "{id}: no V1 manifest ships (OS-29)"
         );
     }
-    // "pick a connector this build ships" is rung 1, the rung `UnsupportedConnector` gets.
+    // "pick a connector this build ships" is rung 1, the rung `PreflightFailed` gets.
     let (code, said) = match connector::load_harness(&dir, "cursor-cli", false) {
         Ok(c) => (0, c.loaded.manifest.id),
         Err(e) => (e.exit_code(), e.to_string()),

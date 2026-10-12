@@ -38,7 +38,7 @@ author's half of that list, so say where the reviewer can check it.
 - [ ] Each file under `files/`, `args`, `env` value, seed, host, native pattern, identity source and
       CA or credential variable is justified in this description, with no model base URL or
       redirect (items 1 to 9).
-- [ ] Kit case under `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` and the output of
+- [ ] Kit case under `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` (the connector id) and the output of
       `cargo test -p goalcup-cli --test full harness_contract_kit::` after `cargo build`, run on macOS
       (on Linux it compiles to zero tests; say so if you could not run it). Fixtures went through
       `spikes/redact.py` (items 7 and 10).

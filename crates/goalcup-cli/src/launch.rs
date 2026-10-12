@@ -1673,7 +1673,7 @@ pub fn handle(p: &LaunchPlan, s: &Spawned, now: &str) -> Result<ProcessHandle, C
 /// the fork-time creation identity, which `exec` does not change.
 pub fn gated_handle(p: &LaunchPlan, g: &GatedSpawn, now: &str) -> Result<ProcessHandle, CliError> {
     // The only way this fails is that the parked child has no readable creation identity, which
-    // on macOS is a child that already died (a zombie has none): it never ran.
+    // is a child that already died (a zombie has none, on macOS and Linux alike): it never ran.
     build_handle(p, g.pid, &g.program, || (None, None), now).map_err(|_| {
         CliError::Internal(format!(
             "the parked child of {} ended before it could be registered, so it never ran",
@@ -1719,11 +1719,6 @@ fn build_handle(
         // process's environment is not portably readable after the fact anyway — what the
         // daemon can check is that a pinned key is still there.
         env_keys: p.env_set.keys().cloned().collect(),
-        // Never filled in here: this function is handed a child and a launch plan rather
-        // than a connector's `[home_seed]`. A capture launch seeds nothing and the daemon
-        // refuses a capture registration that carries a seed record, so this stays `None`.
-        // The V1 seeding that set it was removed by D48.
-        home_seed: None,
     })
 }
 

@@ -2,8 +2,9 @@
 //! physically reserved chain and no server, the one-shot goal, the launch record, and the
 //! signed status projection.
 //!
-//! macOS only: the chain reservation is qualified on APFS alone and refuses everywhere else,
-//! so every entry here is created on the temporary directory's APFS volume.
+//! Runs on macOS (APFS) and on Linux (ext4 or XFS): the chain reservation is qualified on those
+//! filesystems alone and refuses everywhere else, so every entry here is created on the
+//! temporary directory's volume, which must be one of them.
 
 use crate::common::capture_lifecycle_support;
 use crate::common::support;
@@ -2549,4 +2550,37 @@ async fn a_terminal_chained_without_its_seal_is_committed_as_a_failed_seal() {
         closed,
         "nothing after the terminal"
     );
+}
+
+/// Review R4 I5 / R5 I-5: the placement guard compared the workspace with this entry's own
+/// artifact directory only. A workspace inside the machine-wide artifact root (beside the
+/// registry and every other run's chain) or inside the configuration directory (`control.json`
+/// and its bearer) was accepted.
+#[tokio::test]
+async fn a_workspace_inside_the_tracker_roots_is_refused() {
+    let rig = Rig::start().await;
+    let beside = rig
+        .config
+        .artifact_root
+        .parent()
+        .unwrap()
+        .join("beside-the-roots");
+    for workspace in [
+        rig.config.artifact_root.join("goalcup-x/workspace"),
+        rig.config.config_dir.join("goalcup-x/workspace"),
+        beside,
+    ] {
+        let refused = rig.create("codex-cli", &workspace, RESERVE).await;
+        assert_eq!(
+            refused.status(),
+            409,
+            "{}: {}",
+            workspace.display(),
+            refused.body()
+        );
+        assert!(refused.body().contains("tracker's"), "{}", refused.body());
+        assert!(!workspace.exists(), "nothing is created for it");
+    }
+    let fine = rig.create("codex-cli", &rig.workspace("ok"), RESERVE).await;
+    assert_eq!(fine.status(), 200, "{}", fine.body());
 }

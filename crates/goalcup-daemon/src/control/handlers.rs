@@ -231,7 +231,7 @@ pub(super) async fn create_capture_workspace(
         match capture_profile(&state, &request.profile_id) {
             Ok(profile) => profile,
             Err(DaemonError::Missing(_)) => {
-                return ControlErrorResponse::new(ControlError::UnsupportedConnector(format!(
+                return ControlErrorResponse::new(ControlError::PreflightFailed(format!(
                     "this daemon ships no connector {:?}",
                     request.profile_id
                 )))

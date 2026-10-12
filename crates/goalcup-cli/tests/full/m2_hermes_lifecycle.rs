@@ -6,7 +6,7 @@
 //! Every key here is the synthetic one in `secret_support`. Nothing reads a credential file or
 //! resolves a real `HOME`; every directory is a temporary one.
 //!
-//! macOS only: the daemon reserves a capture chain on APFS alone. Every test holds the
+//! macOS and Linux (the trace folder must be on APFS, ext4 or XFS). Every test holds the
 //! process-table lock: each runs a daemon and spawns a harness.
 
 use crate::common::m2_cli_support;

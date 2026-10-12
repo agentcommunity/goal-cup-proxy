@@ -671,7 +671,6 @@ impl Sim {
             program: format!("/usr/bin/{}", root.comm),
             argv: vec![format!("/usr/bin/{}", root.comm)],
             env_keys: Vec::new(),
-            home_seed: None,
         }
     }
 
@@ -2150,7 +2149,7 @@ fn env_u64(name: &str, default: u64) -> u64 {
 /// set (B minus what had left the root's ppid walk before the call, D30), A the pids alive
 /// at return, K the kills sent, R the report.
 /// I1  R.observed_gone ⟹ A ∩ O ⊆ W, where W is the platform's stated residual window
-///     (Linux: same-poll orphans; macOS: ∅).
+///     (Linux: any orphan the ppid walk cannot see, see "RULED" below; macOS: ∅).
 /// I2  R.observed_gone ⟹ A ∩ R.targeted = ∅.
 /// I3  every k ∈ K names a pid ≥ 2 that was ours when sent, with SIGTERM or SIGKILL only;
 ///     every killpg names a group of ours under a live leader.

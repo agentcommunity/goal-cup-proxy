@@ -1,7 +1,7 @@
 //! The connector-directory digest: the one definition of what "this directory" means to a pin.
 //!
-//! It is shared by both manifest schemas, by the pins ([`crate::pins`]) and by the server
-//! allowlist (D43 ruling 5), so it lives here and not in the V1 module `manifest.rs`. The walk
+//! It is shared by the schema-1 loader ([`crate::harness`]), by the pins ([`crate::pins`]) and
+//! by the server allowlist (D43 ruling 5), so it lives in a module of its own. The walk
 //! also returns the bytes it hashed ([`DirListing::captured`]): a caller that parses or writes
 //! a file reads it from there, never a second time (a second read could authorize bytes the
 //! digest did not cover).
@@ -74,9 +74,8 @@ pub(crate) struct DirListing {
 
 /// [`connector_dir_sha256`] over `dir`, also returning the bytes of every file `capture` selects
 /// (by its relative path) and the file list. The schema-1 loader (`harness::load_dir`) parses
-/// the captured `harness.toml` bytes, checks the list and carries the captured seed bytes, the
-/// same discipline as `manifest::connector_dir_sha256_with_manifest`: no second read can
-/// authorize bytes the digest did not cover.
+/// the captured `harness.toml` bytes, checks the list and carries the captured seed bytes: no
+/// second read can authorize bytes the digest did not cover.
 pub(crate) fn hash_connector_dir_listing(
     dir: &Path,
     capture: impl Fn(&str) -> bool,

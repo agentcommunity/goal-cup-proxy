@@ -7,7 +7,7 @@
 //! binaries (checked by compiling each without the allow), and a helper that becomes so should
 //! be deleted.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod capture_lifecycle_support;
 #[path = "support/redaction.rs"]
 pub mod redaction;

@@ -10,7 +10,8 @@
 //! They exist in no shipped build. A real binary is not made to hold a permit or an owner; the
 //! campaign rows (`capture_failure_campaign.rs`) substitute a whole-daemon SIGSTOP and say so.
 //!
-//! macOS only: every entry is reserved on the temporary directory's APFS volume.
+//! Runs on macOS (APFS) and on Linux (ext4 or XFS): every entry is reserved on the temporary
+//! directory's volume, which must be one of them.
 
 use crate::common::capture_lifecycle_support;
 use crate::common::support;

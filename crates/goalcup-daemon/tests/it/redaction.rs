@@ -1252,23 +1252,35 @@ fn with_script(body: &str) -> String {
 }
 
 /// The script's rules where the shared set spells the regex differently, as
-/// `(kind, python regex, rust regex)`. Only two literals differ, and only in spelling. The
-/// block rule's end of input is `\Z` in Python and `\z` in Rust. In the shell/TOML literal the
+/// `(kind, python regex, rust regex)`. One literal differs in spelling: in the shell/TOML literal the
 /// script's groups capture, which does not matter to it (it replaces `m.group(0)`); the shared
 /// literal's are non-capturing, because in Rust a capture group
 /// *is* the span (`Pattern::span_group`) and this rule's span is the whole match. And the
 /// script writes the optional quote as `['\"]` inside a Python raw string, which is an escaped
 /// quote that means the same as Rust's `['"]`.
+///
+/// Two differ in a bound, because the daemon's stream holds an undecided run and the script
+/// holds nothing. The daemon's `email` local part is at most 1,024 units, so a bare token run does
+/// not hold to the hold bound (I-2); the script keeps `+` and redacts a longer local part whole.
+/// The daemon's PEM block ends at an END line that starts within 12,288 bytes, or is those
+/// bytes, so a lone BEGIN no longer redacts the rest of the stream (I-1); the script
+/// runs the block to its END line or the end of the text. In both the script redacts more,
+/// never less.
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "generic_secret_assignment",
-        r#"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*['\"]?([A-Za-z0-9_\-]{16,})"#,
-        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?(?:[A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
+    ),
+    (
+        "email",
+        r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+        r"[A-Za-z0-9._%+\-]{1,1024}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
     ),
     (
         "private_key",
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
     ),
 ];
 
@@ -1482,6 +1494,11 @@ fn shared_rule_probes() -> Vec<String> {
         }
     }
     add(format!("api_key = \"{}\"", a(16)));
+    // The quote escaped inside a JSON string (I-4): the span takes the backslash with it.
+    add(format!("db:\\n  password: \\\"{}\\\"", a(20)));
+    add(format!("token=\\'{}", a(16)));
+    add(format!("token=\\{}", a(16)));
+    add(format!("password:\\\\\\\"{}\\\\\\\"", a(20)));
     add(format!("token='{}", a(20)));
     add(format!("export MY_SECRET={}", a(24)));
     add(format!("api_key={}", a(15)));
@@ -2202,4 +2219,57 @@ fn a_pem_block_with_no_end_runs_to_the_end_of_the_record() {
         String::from_utf8(out.bytes).unwrap(),
         "<redacted:private_key>\nkept"
     );
+}
+
+/// I-4: tool output and file contents reach every native transcript and request body as JSON
+/// escaped inside a string, so a generic secret there is `\"api_key\": \"…\"`. Neither form of
+/// `generic_secret_assignment` fired on it. Both now take a backslash before a quote, and the
+/// redacted record is still JSON whose escaped string is still JSON: the JSON form's span is
+/// the value's interior, with a bare marker between the escaped quotes, and the shell form's
+/// span takes the escaped opening quote whole, so no backslash is left dangling.
+#[test]
+fn a_secret_in_json_escaped_text_is_redacted_and_the_record_stays_json() {
+    let m = "<redacted:generic_secret_assignment>";
+    let cases: [(&str, String); 3] = [
+        // A command's JSON argument inside a function call's arguments: escaped twice.
+        (
+            r#"{"type":"function_call","content":"{\"cmd\":[\"curl\",\"-d\",\"{\\\"password\\\":\\\"CorrectHorseBattery9\\\"}\"]}"}"#,
+            format!(
+                r#"{{"type":"function_call","content":"{{\"cmd\":[\"curl\",\"-d\",\"{{\\\"password\\\":\\\"{m}\\\"}}\"]}}"}}"#
+            ),
+        ),
+        (
+            r#"{"type":"tool_result","content":"{\n  \"api_key\": \"q8Zr2LmN0pX4vB7cT1yW\",\n  \"client_secret\": \"Zx9Yw8Vu7Ts6Rq5Po4Nm\"\n}"}"#,
+            format!(
+                r#"{{"type":"tool_result","content":"{{\n  \"api_key\": \"{m}\",\n  \"client_secret\": \"{m}\"\n}}"}}"#
+            ),
+        ),
+        (
+            r#"{"content":"db:\n  password: \"CorrectHorseBattery9x\"\n"}"#,
+            format!(r#"{{"content":"db:\n  {m}\"\n"}}"#),
+        ),
+    ];
+    for (record, want) in &cases {
+        let out = Redactor::new().apply(record.as_bytes());
+        let got = String::from_utf8(out.bytes).unwrap();
+        assert_eq!(&got, want, "{record}");
+        assert!(
+            out.spans
+                .iter()
+                .all(|s| s.kind == "generic_secret_assignment")
+        );
+        let outer: serde_json::Value = serde_json::from_str(&got).expect("the record is JSON");
+        let inner = outer["content"]
+            .as_str()
+            .or(outer["output"].as_str())
+            .unwrap();
+        if inner.starts_with('{') {
+            let inner: serde_json::Value =
+                serde_json::from_str(inner).expect("the escaped text is JSON");
+            if let Some(arg) = inner["cmd"].get(2).and_then(|a| a.as_str()) {
+                serde_json::from_str::<serde_json::Value>(arg)
+                    .expect("the twice-escaped text is JSON");
+            }
+        }
+    }
 }

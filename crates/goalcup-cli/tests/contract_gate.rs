@@ -158,14 +158,6 @@ fn the_control_file_this_cli_reads_is_the_five_field_document_the_daemon_writes(
 /// verdict's number off a CLI that could not open a file.
 #[test]
 fn every_variant_lands_on_a_rung_and_no_variant_lands_on_two() {
-    let control_gate = CliError::Control(goalcup_protocol::control::ControlError::ArmingTimeout {
-        detail: "the folder was never opened".to_string(),
-    });
-    assert_eq!(
-        control_gate.exit_code(),
-        4,
-        "an arming timeout is the gate saying no, and it leaves under 4"
-    );
     assert_eq!(
         CliError::Control(goalcup_protocol::control::ControlError::PreflightFailed(
             "the daemon ships a different manifest".to_string()
@@ -185,7 +177,6 @@ fn every_variant_lands_on_a_rung_and_no_variant_lands_on_two() {
         CliError::Control(goalcup_protocol::control::ControlError::Unreachable(
             "x".into(),
         )),
-        control_gate,
         CliError::Protocol(goalcup_protocol::ProtocolError::Signature("x".into())),
         CliError::Refused("a".into()),
         CliError::Gate("b".into()),
@@ -216,13 +207,6 @@ fn every_variant_lands_on_a_rung_and_no_variant_lands_on_two() {
 fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
     assert_eq!(
         CliError::Gate("the arming gate closed on entry e1".into()).exit_code(),
-        4
-    );
-    assert_eq!(
-        CliError::Control(goalcup_protocol::control::ControlError::ArmingTimeout {
-            detail: "the folder was never opened".to_string()
-        })
-        .exit_code(),
         4
     );
     // Everything else `goalcup start` can refuse with, and not one of them is a 4.
@@ -294,9 +278,8 @@ fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
         }
     }
     // The CLI raises no rung-4 site of its own since D48 removed the V1 arming wait and the
-    // `resume` gates: rung 4 reaches a participant only as the daemon's `arming_timeout`,
-    // which `CliError::exit_code` maps and only a pre-D48 daemon sends. A new site is a new
-    // gate; say which in `lib.rs`'s ladder, in `AFTER_HELP`, and here.
+    // `resume` gates, and control API v6 removed the daemon's `arming_timeout` code. A new
+    // site is a new gate; say which in `lib.rs`'s ladder, in `AFTER_HELP`, and here.
     assert!(sites.is_empty(), "an unexpected rung-4 site: {sites:#?}");
 }
 

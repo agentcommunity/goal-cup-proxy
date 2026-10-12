@@ -9,8 +9,8 @@
 //! * [`connector_dir`]: the connector-directory digest;
 //! * [`pins`]: the directory pins this build ships, as data;
 //! * [`hints`]: the protocol-hint grammar;
-//! * [`manifest`]: the V1 manifest types live code still borrows (`RedactionPattern`, the kill
-//!   and path-token vocabulary). No connector ships or loads a `manifest.toml` (OS-29).
+//! * [`manifest`]: the kill, launch-mode, scan-root and redaction-pattern vocabulary the
+//!   launch, daemon and registry share. No connector ships or loads a `manifest.toml` (OS-29).
 
 pub mod ack;
 pub mod capture;

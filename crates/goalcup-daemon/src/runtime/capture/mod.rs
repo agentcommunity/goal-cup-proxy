@@ -99,7 +99,7 @@ use crate::workspace::{self, Roots};
 
 use crate::{DAEMON_VERSION, DaemonError, now_rfc3339, now_unix, status};
 
-use goalcup_platform::tracecap::EntryArtifactRoot;
+use goalcup_platform::tracecap::{EntryArtifactRoot, RefusalKind, TraceCapError};
 
 use goalcup_protocol::capture::{
     AnalysisState, AnchorState, CaptureFrame, CaptureMeta, CaptureRecord, CaptureSink,
@@ -366,6 +366,13 @@ impl Daemon {
             workspace: workspace.to_path_buf(),
             artifact_root: artifact_dir.clone(),
         })?;
+        workspace::check_machine_roots(
+            workspace,
+            &[
+                ("artifact_root", &self.config().artifact_root),
+                ("config_dir", &self.config().config_dir),
+            ],
+        )?;
         let artifact = self
             .artifact_root()
             .create_entry(&entry_id)
@@ -423,9 +430,22 @@ impl Daemon {
         ))?;
         // Selects v5 on the empty chain, before the baseline.
         export.reserve_capture(reserve_bytes).map_err(|error| {
-            DaemonError::Config(format!(
-                "the capture chain cannot reserve {reserve_bytes} bytes: {error}"
-            ))
+            let mut message =
+                format!("the capture chain cannot reserve {reserve_bytes} bytes: {error}");
+            // Only this refusal is cured by moving the folder; a short volume or a failed
+            // allocation is not, and must not say so.
+            if matches!(
+                error,
+                ExportError::Capability(TraceCapError::Refused {
+                    reason: RefusalKind::UnsupportedFileSystem,
+                    ..
+                })
+            ) {
+                message.push_str(
+                    "; the trace folder must be on APFS (macOS) or ext4 or XFS (Linux); move artifact_root in daemon.toml",
+                );
+            }
+            DaemonError::Config(message)
         })?;
         std::fs::create_dir_all(workspace).map_err(|source| DaemonError::Io {
             path: workspace.display().to_string(),
@@ -629,11 +649,6 @@ impl Daemon {
             return Err(DaemonError::Refused(format!(
                 "entry {entry_id}'s launch is recorded, and its process is registered before it"
             )));
-        }
-        if registration.handle.home_seed.is_some() {
-            return Err(DaemonError::Refused(
-                "a capture launch carries no home seed".to_string(),
-            ));
         }
         let generation = registration.generation;
         let registry = self.registry();

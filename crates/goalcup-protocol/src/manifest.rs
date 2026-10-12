@@ -1,7 +1,7 @@
-//! The small vocabulary the launch, daemon and control code share with the harness schema:
-//! how a harness is killed, how it is launched, where a file may be installed, and a
-//! connector-declared redaction pattern. The v0 connector manifest that once held these is
-//! gone; `harness.toml` (schema 1, `harness.rs`) is the only manifest anything parses.
+//! The small vocabulary the launch, daemon and registry code share with the harness schema:
+//! how a harness is killed, how it is launched, which root a foreign-session scan starts at,
+//! and a connector-declared redaction pattern. No `manifest.toml` is parsed anywhere;
+//! `harness.toml` (schema 1, `harness.rs`) is the only connector manifest.
 
 use serde::{Deserialize, Serialize};
 
@@ -31,17 +31,6 @@ pub enum LaunchMode {
     /// Desktop attach mode: nothing is spawned; the folder is armed and the participant
     /// opens a session in it (D7).
     AttachOnly,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InstallScope {
-    /// Inside the tracker-created workspace. The agent can read it; that is expected.
-    Workspace,
-    /// Inside the artifact root, which is never an ancestor of the workspace.
-    ArtifactRoot,
-    /// Inside the dedicated per-run harness home. Never the participant's real home.
-    HarnessHome,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

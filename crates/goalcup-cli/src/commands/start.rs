@@ -39,7 +39,7 @@ use crate::proxy::connect::{
 use crate::proxy::ingest::{IngestSecret, IngestSink, SinkConfig, connect_sink};
 use crate::proxy::tls::UpstreamRoots;
 use crate::proxy::{MAX_CONNECTION_TASKS, ProxyConfig, ProxyHandle};
-use crate::retry::{retry_busy, retry_busy_entry, retry_busy_process_classified};
+use crate::retry::{retry_busy, retry_busy_entry, retry_busy_process};
 use goalcup_protocol::capture::CaptureSink;
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest, CaptureWorkspaceInfo,
@@ -886,12 +886,10 @@ fn create_and_gate<'a>(
         harness_home: config_home.display().to_string(),
         session_id: session_id.clone(),
         last_pid: None,
-        workspace_relative: Vec::new(),
         status_url: String::new(),
         // No daemon stamp comes back for a capture entry, so this machine's clock orders it.
         created_at: crate::launch::launched_at_now(),
         dev: opts.dev,
-        ..Default::default()
     };
 
     // Up to the spawn, a failure unmakes everything above.
@@ -994,18 +992,13 @@ fn register_and_release<'a>(
         generation: forked.info.process_generation,
         handle: handed.clone(),
     };
-    if let Err(failure) = retry_busy_process_classified(|| {
-        DaemonClient::register_process_with_admission(
-            forked.client,
-            &forked.info.entry_id,
-            &registration,
-        )
-    }) {
+    let (client, entry_id) = (forked.client, &forked.info.entry_id);
+    if let Err(error) = retry_busy_process(|| client.register_process(entry_id, &registration)) {
         // Definite or ambiguous, the child is never released: it ends at its gate without
         // having run a byte of the harness, and the seal reads a registration that names a
         // process that never exec'd.
         gated.abort();
-        return Err(forked.unlaunched(CliError::Control(failure.error), out));
+        return Err(forked.unlaunched(CliError::Control(error), out));
     }
     pause_at("capture-gate-registered");
     if let Err(e) = crate::launch::recheck_pinned_executable(&prep.executable) {

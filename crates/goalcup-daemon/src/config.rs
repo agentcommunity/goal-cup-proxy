@@ -74,7 +74,8 @@ pub struct DaemonConfig {
     /// Accepted for old configs; nothing reads it.
     #[serde(default = "default_ack_lag_seconds")]
     pub ack_lag_seconds: f64,
-    /// Accepted for old configs; nothing reads it.
+    /// Not read: the V1 arming gate it overrode is gone. Kept so an existing config that
+    /// sets it still loads under `deny_unknown_fields`.
     #[serde(default)]
     pub arming_timeout_seconds: Option<u64>,
     /// Accepted for old configs; nothing reads it. No heartbeat is chained.

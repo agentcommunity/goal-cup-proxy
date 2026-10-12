@@ -88,7 +88,7 @@ A common data-only harness PR contains:
   `skills/adding-a-capture-harness/templates/harness-facts.md` (see
   [docs/harnesses](docs/harnesses/README.md)); no readiness record is needed;
 - a new generic harness-kit fixture case under
-  `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` containing `harness.toml`, `stand-in.py`
+  `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` (named after the connector id) containing `harness.toml`, `stand-in.py`
   and `expect.toml` (plus only reviewed declared seeds) for this connector;
 - the last lines of `sh scripts/check-connector.sh <id>` (files, pins, schema, goldens and the
   harness kit with the six baseline cases plus yours) and `sh scripts/gate.sh fast`, on macOS.

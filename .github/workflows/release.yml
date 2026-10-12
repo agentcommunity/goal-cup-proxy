@@ -1,5 +1,6 @@
-# Release: build the three binaries for four targets, package each as a tarball, and attach the
-# tarballs, SHA256SUMS and the rendered Homebrew formula to a GitHub release.
+# Release: build the three binaries for four targets, package each as a tarball, smoke-test each
+# tarball on its own architecture, and attach the tarballs, SHA256SUMS and the rendered Homebrew
+# formula to a GitHub release.
 #
 # - A `v*` tag push builds and publishes the release for that tag. The tag must equal the
 #   workspace version in Cargo.toml (`v0.5.0` for `version = "0.5.0"`), because the formula's
@@ -25,19 +26,18 @@ defaults:
     shell: bash
 
 env:
-  # The pinned toolchain (Cargo.toml `rust-version`). It overrides rust-toolchain.toml's `stable`.
-  RUSTUP_TOOLCHAIN: "1.99.0"
   CARGO_INCREMENTAL: 0
 
 jobs:
   build:
     name: build ${{ matrix.target }}
+    # Every target builds on a runner of its own architecture, so its tarball is smoke-tested
+    # where it was built. macos-15-intel is GitHub's last Intel image.
     strategy:
       matrix:
         include:
           - { target: aarch64-apple-darwin, os: macos-14 }
-          # Cross-compiled on Apple silicon: the Intel runners are being retired.
-          - { target: x86_64-apple-darwin, os: macos-14 }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
           # Ubuntu 22.04 for glibc 2.35, so the binaries also run on Debian 12 and older WSL2
           # images; a 24.04 build would need glibc 2.39.
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
@@ -50,21 +50,25 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - id: version
+      - name: version
         run: |
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target "$TARGET"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      # The compiler the gate uses: rust-toolchain.toml's pinned channel.
+      - run: >-
+          rustup toolchain install --profile minimal --target "$TARGET"
+          "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
       - run: >-
           cargo build --release --locked --target "$TARGET"
           -p goalcup-cli -p goalcup-daemon -p goalcup-verifier
       - run: sh scripts/package-release.sh "$TARGET" "$VERSION" dist
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
+      # Unpacks the tarball and runs both binaries and `goalcup doctor` from it; a failure here
+      # fails the build, and with it the release.
+      - run: sh scripts/smoke-release.sh "dist/goalcup-$VERSION-$TARGET.tar.gz" "$VERSION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: goalcup-${{ matrix.target }}

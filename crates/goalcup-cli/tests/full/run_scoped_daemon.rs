@@ -6,8 +6,9 @@
 //! The daemon a row observes is found by its command line (`--config <cfg>/daemon.toml`), which
 //! is unique to the row's temporary directory. Each row ends every daemon it started.
 //!
-//! macOS only: the daemon reserves a capture chain on APFS alone. Slow (a row waits out the
-//! daemon's 30-second idle grace), so it is in the `full` tier.
+//! Runs on macOS (APFS) and on Linux (ext4 or XFS); the daemon refuses to reserve a capture
+//! chain anywhere else. Slow (a row waits out the daemon's 30-second idle grace), so it is in
+//! the `full` tier.
 
 use crate::common::m2_cli_support;
 use crate::common::support;

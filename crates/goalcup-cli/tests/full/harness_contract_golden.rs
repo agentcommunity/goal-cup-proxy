@@ -818,7 +818,6 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         "program": norm(&l, &program),
         "argv": h.argv.iter().map(|a| norm(&l, a)).collect::<Vec<_>>(),
         "env_keys": h.env_keys.iter().filter(|k| *k != "FAKE_HOLD").collect::<Vec<_>>(),
-        "home_seed": h.home_seed.is_some(),
     });
 
     // The per-run home, when the profile asks for one.

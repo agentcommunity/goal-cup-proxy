@@ -93,6 +93,25 @@ pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Resul
     Ok(())
 }
 
+/// The machine-wide roots against the workspace (review R4 I5): `check_artifact_placement`
+/// compares it with this entry's own artifact directory only, which a workspace inside the
+/// artifact root's other subtrees, or inside the configuration directory (`control.json` and
+/// its bearer), passes. Refused: the workspace equal to, inside, or an ancestor of a root
+/// (symlinks resolved), or its sibling, since an agent enumerates its parent first.
+pub fn check_machine_roots(workspace: &Path, roots: &[(&str, &Path)]) -> Result<(), DaemonError> {
+    for (name, root) in roots {
+        if crate::config::nests(workspace, root) || workspace.parent() == root.parent() {
+            return Err(DaemonError::Guard(format!(
+                "workspace {} is nested in, or beside, the tracker's {name} {}: the agent would \
+                 enumerate the tracker's own files",
+                workspace.display(),
+                root.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The nearest ancestor holding a `.git` entry, file or directory, or `None`. A `.git`
 /// *file* counts: that is what a linked worktree has.
 pub fn git_worktree_of(path: &Path) -> Option<PathBuf> {

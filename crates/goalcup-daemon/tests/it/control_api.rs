@@ -72,11 +72,11 @@ fn reopened_capture_snapshot(
     }
 }
 
-async fn create_capture(
+fn capture_request(
     h: &support::EmptyControlHarness,
     name: &str,
-) -> protocol::CaptureWorkspaceInfo {
-    let request = protocol::CaptureWorkspaceRequest {
+) -> protocol::CaptureWorkspaceRequest {
+    protocol::CaptureWorkspaceRequest {
         workspace: h.root.join("workspaces").join(name).display().to_string(),
         profile_id: "codex-cli".to_string(),
         connector_dir_sha256: goalcup_protocol::pins::pinned_connector_dir_sha256("codex-cli")
@@ -85,9 +85,56 @@ async fn create_capture(
         reserve_bytes: 4 * 1024 * 1024,
         run_home: h.root.join("run-home").display().to_string(),
         config_home: h.root.join("config-home").display().to_string(),
-    };
-    h.post_json(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
-        .await
+    }
+}
+
+async fn create_capture(
+    h: &support::EmptyControlHarness,
+    name: &str,
+) -> protocol::CaptureWorkspaceInfo {
+    h.post_json(
+        protocol::ROUTE_CAPTURE_WORKSPACES,
+        &capture_request(h, name),
+    )
+    .await
+}
+
+/// A volume the chain cannot be reserved on is refused with the sentence naming what does
+/// qualify, and only that refusal carries it: a reservation that fails for another reason must
+/// not send the participant to move their trace folder.
+///
+/// The fault is thread-local and one-shot; the control listener runs on this test's
+/// current-thread runtime, so the handler that consumes it is on the thread that set it.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn an_unqualified_filesystem_refusal_names_what_qualifies() {
+    use goalcup_platform::tracecap::{ReservationFault, inject_reservation_fault};
+    const QUALIFIED: &str = "the trace folder must be on APFS (macOS) or ext4 or XFS (Linux); move artifact_root in daemon.toml";
+    let h = support::empty_control_harness().await;
+    for (fault, names_qualified) in [
+        (ReservationFault::UnqualifiedFileSystem, true),
+        (ReservationFault::AllocatorGrantsNothing, false),
+    ] {
+        let request = capture_request(&h, &format!("refused-{fault:?}"));
+        inject_reservation_fault(fault);
+        let response = h
+            .post_body(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
+            .await;
+        assert_eq!(response.status(), 422, "{}", response.body());
+        let body: protocol::ErrorBody = response.json().unwrap();
+        assert_eq!(body.error.code, "preflight_failed");
+        assert!(
+            body.error.message.contains("cannot reserve"),
+            "{fault:?}: {}",
+            body.error.message
+        );
+        assert_eq!(
+            body.error.message.contains(QUALIFIED),
+            names_qualified,
+            "{fault:?}: {}",
+            body.error.message
+        );
+    }
 }
 
 /// The authentication rule, asserted from both sides of the same function: the CLI's
@@ -282,9 +329,7 @@ fn every_control_error_variant_maps_to_exactly_one_http_status() {
         ("not_found", 404),
         ("conflict", 409),
         ("unauthorized", 401),
-        ("arming_timeout", 408),
         ("preflight_failed", 422),
-        ("unsupported_connector", 422),
         ("internal", 500),
         ("malformed", 400),
         // `unsupported` is 426 and nothing else is. The version gate is the only
@@ -409,14 +454,12 @@ fn the_daemon_s_own_errors_become_the_contract_s_codes() {
     // And the codes the CLI can rebuild round-trip through `from_code`. `unreachable`,
     // `internal`, `malformed` and `unsupported` are not in that set — the protocol's
     // `from_code` collapses them to `Internal` by design, "never a silent success" — so
-    // the round trip is asserted over the six it does name.
+    // the round trip is asserted over the five it does name.
     for code in [
         "not_found",
         "conflict",
         "unauthorized",
-        "arming_timeout",
         "preflight_failed",
-        "unsupported_connector",
         "busy",
     ] {
         assert_eq!(protocol::ControlError::from_code(code, "m").code(), code);

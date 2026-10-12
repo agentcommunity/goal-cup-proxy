@@ -82,7 +82,7 @@ carries `codex-cli` and `claude-code-cli` as committed ([packaging/README.md](pa
 - The capture executable is SHA-256 pinned and re-opened with `O_NOFOLLOW|O_NONBLOCK`; after durable
   process registration the CLI requires a regular file and streams what it reads into SHA-256
   immediately before gate release. The harness environment is built from nothing.
-- Control API v5 requires its version on mutating requests. Capture creation refuses before daemon
+- Control API v6 requires its version on mutating requests. Capture creation refuses before daemon
   entry, artifact and workspace allocation when CLI and daemon loaded different connector bytes
   (D46); earlier CLI run/home/CA/seed preparation can exist and is cleaned on refusal.
 - A restarted unfinished v5 capture has status/seal-only authority; other authenticated mutators
