@@ -1,5 +1,5 @@
 use super::{AppendAllocation, CleanupBudget, RefusalKind, TraceCapError};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use super::{ReservationFault, take_reservation_fault};
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::File;
@@ -17,6 +17,18 @@ const RESERVE_OPERATION: &str = "reserve trace append stream";
 /// success and silently release it, so every other name is refused.
 #[cfg(target_os = "macos")]
 const QUALIFIED_ALLOCATOR: &[u8] = b"apfs";
+
+/// The `statfs(2)` `f_type` magics whose `fallocate(FALLOC_FL_KEEP_SIZE)` blocks a later write
+/// into the range is documented not to fail for space on: ext4 (`EXT4_SUPER_MAGIC`, shared with
+/// ext2 and ext3, whose non-extent files refuse the call) and XFS (`XFS_SUPER_MAGIC`). Measured in
+/// Docker on Linux 7.0.12 (aarch64) loop-mounted ext4 and XFS images. btrfs (copy-on-write), ZFS,
+/// tmpfs, overlayfs, NFS, FUSE and every other magic are refused.
+#[cfg(target_os = "linux")]
+const QUALIFIED_ALLOCATORS: [u64; 2] = [EXT4_SUPER_MAGIC, XFS_SUPER_MAGIC];
+#[cfg(target_os = "linux")]
+const EXT4_SUPER_MAGIC: u64 = 0xEF53;
+#[cfg(target_os = "linux")]
+const XFS_SUPER_MAGIC: u64 = 0x5846_5342;
 
 pub(super) struct TraceDirHandle {
     fd: OwnedFd,
@@ -1153,62 +1165,44 @@ impl AppendFileHandle {
             .map_err(|source| TraceCapError::io("sync trace append stream", source))
     }
 
-    /// Top this file's physical allocation up to `total_bytes` behind its logical end, then
-    /// remeasure it (the measured recipe; see `TraceDir::reserve_append`).
-    #[cfg(target_os = "macos")]
+    /// Top this file's physical allocation up to `total_bytes`, its logical length included,
+    /// without moving its logical end, then remeasure it (see `TraceDir::reserve_append`).
+    ///
+    /// One shape on both qualified platforms: a filesystem gate that refuses before anything
+    /// is allocated, a free-space precheck on the missing difference, the platform's allocator,
+    /// and the file's own `st_blocks × 512` as the only evidence. Only `allocate` and the gate's
+    /// allowlist differ per platform.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(super) fn reserve(&self, total_bytes: u64) -> Result<AppendAllocation, TraceCapError> {
         let fd = self.file.as_raw_fd();
         let fault = take_reservation_fault();
         let volume = fstatfs(fd, RESERVE_OPERATION)?;
-        let fstypename = match fault {
-            Some(ReservationFault::UnqualifiedFileSystem) => UNQUALIFIED_FSTYPENAME,
-            _ => volume.f_fstypename,
+        let qualified = match fault {
+            #[cfg(target_os = "macos")]
+            Some(ReservationFault::UnqualifiedFileSystem) => {
+                qualified_allocator(&UNQUALIFIED_FSTYPENAME)
+            }
+            #[cfg(target_os = "linux")]
+            Some(ReservationFault::UnqualifiedFileSystem) => qualified_allocator(UNQUALIFIED_MAGIC),
+            _ => qualified_volume(&volume),
         };
-        if !qualified_allocator(&fstypename) {
+        if !qualified {
             return Err(TraceCapError::refused(
                 RESERVE_OPERATION,
                 RefusalKind::UnsupportedFileSystem,
             ));
         }
         let before = measure_allocation(fd)?;
-        if let Some(missing) = total_bytes
-            .checked_sub(before.allocated_bytes)
-            .filter(|missing| *missing > 0)
-        {
-            // F_PEOFPOSMODE allocates from the physical end of file, so a repeated request adds
-            // to what is already there: only the missing difference is ever asked for.
-            let available = volume.f_bavail.saturating_mul(u64::from(volume.f_bsize));
-            let length = libc::off_t::try_from(missing)
-                .ok()
-                .filter(|_| missing <= available)
-                .ok_or_else(|| {
-                    TraceCapError::refused(RESERVE_OPERATION, RefusalKind::InsufficientSpace)
-                })?;
-            let mut store = libc::fstore_t {
-                fst_flags: libc::F_ALLOCATEALL | libc::F_ALLOCATEPERSIST,
-                fst_posmode: libc::F_PEOFPOSMODE,
-                fst_offset: 0,
-                fst_length: length,
-                fst_bytesalloc: 0,
-            };
-            let result = if fault == Some(ReservationFault::AllocatorGrantsNothing) {
-                0
-            } else {
-                unsafe {
-                    // SAFETY: the retained append descriptor is live and `store` is a valid,
-                    // writable fstore_t for the duration of the call. F_ALLOCATEALL grants all
-                    // or nothing; the call never changes the logical length.
-                    libc::fcntl(fd, libc::F_PREALLOCATE, &raw mut store)
-                }
-            };
-            if result == -1 {
-                return Err(TraceCapError::io(
-                    RESERVE_OPERATION,
-                    io::Error::last_os_error(),
-                ));
-            }
+        let missing = total_bytes.saturating_sub(before.allocated_bytes);
+        if missing > available_bytes(&volume) {
+            return Err(TraceCapError::refused(
+                RESERVE_OPERATION,
+                RefusalKind::InsufficientSpace,
+            ));
         }
-        // `fst_bytesalloc` echoes the request; the file's own block count is the evidence.
+        if fault != Some(ReservationFault::AllocatorGrantsNothing) {
+            allocate(fd, total_bytes, missing)?;
+        }
         let after = measure_allocation(fd)?;
         if after.logical_bytes != before.logical_bytes || after.allocated_bytes < total_bytes {
             return Err(TraceCapError::refused(
@@ -1219,8 +1213,8 @@ impl AppendFileHandle {
         Ok(after)
     }
 
-    /// No allocator is qualified off macOS (only APFS is measured): refuse, never approximate.
-    #[cfg(not(target_os = "macos"))]
+    /// No allocator is qualified off macOS and Linux: refuse, never approximate.
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(super) fn reserve(&self, _total_bytes: u64) -> Result<AppendAllocation, TraceCapError> {
         Err(TraceCapError::refused(
             RESERVE_OPERATION,
@@ -1229,7 +1223,82 @@ impl AppendFileHandle {
     }
 }
 
+/// macOS (the measured T01 recipe): `F_PREALLOCATE` with `F_ALLOCATEALL | F_ALLOCATEPERSIST`
+/// and `F_PEOFPOSMODE` grants all of the `missing` bytes or none, from the physical end of
+/// file. It is additive, so a satisfied target (`missing == 0`) asks for nothing.
 #[cfg(target_os = "macos")]
+fn allocate(fd: RawFd, _total_bytes: u64, missing: u64) -> Result<(), TraceCapError> {
+    if missing == 0 {
+        return Ok(());
+    }
+    let length = libc::off_t::try_from(missing)
+        .map_err(|_| TraceCapError::refused(RESERVE_OPERATION, RefusalKind::InsufficientSpace))?;
+    let mut store = libc::fstore_t {
+        fst_flags: libc::F_ALLOCATEALL | libc::F_ALLOCATEPERSIST,
+        fst_posmode: libc::F_PEOFPOSMODE,
+        fst_offset: 0,
+        fst_length: length,
+        fst_bytesalloc: 0,
+    };
+    let result = unsafe {
+        // SAFETY: the retained append descriptor is live and `store` is a valid, writable
+        // fstore_t for the duration of the call. F_ALLOCATEALL grants all or nothing; the
+        // call never changes the logical length.
+        libc::fcntl(fd, libc::F_PREALLOCATE, &raw mut store)
+    };
+    if result == -1 {
+        return Err(TraceCapError::io(
+            RESERVE_OPERATION,
+            io::Error::last_os_error(),
+        ));
+    }
+    // `fst_bytesalloc` echoes the request; the caller's remeasurement is the evidence.
+    Ok(())
+}
+
+/// Linux (measured in Docker on ext4 and XFS): `fallocate(FALLOC_FL_KEEP_SIZE)` over the byte
+/// range `[0, total_bytes)`. `KEEP_SIZE` is the macOS shape: blocks are granted behind the
+/// logical end as unwritten extents and `st_size` never moves. The range is absolute rather
+/// than "the missing difference from the physical end" because Linux has no physical-EOF mode;
+/// it is idempotent, so a satisfied range grants nothing, and it is issued even when the block
+/// count already looks sufficient because `st_blocks` also counts extent-map blocks, which
+/// could otherwise hide a short data range. Unlike `F_ALLOCATEALL` a failure is not all or
+/// nothing: ext4 and XFS may keep part of a failed request. That part is never logical content
+/// (the size is kept) and the next call tops it up, so the failure is still a plain refusal.
+///
+/// `EOPNOTSUPP` is the 0xEF53 magic's ext2 and ext3 cases (indirect-block files have no
+/// unwritten extents): an unsupported filesystem, not an I/O error.
+#[cfg(target_os = "linux")]
+fn allocate(fd: RawFd, total_bytes: u64, _missing: u64) -> Result<(), TraceCapError> {
+    if total_bytes == 0 {
+        return Ok(());
+    }
+    let length = libc::off_t::try_from(total_bytes)
+        .map_err(|_| TraceCapError::refused(RESERVE_OPERATION, RefusalKind::InsufficientSpace))?;
+    loop {
+        let result = unsafe {
+            // SAFETY: the retained append descriptor is live; KEEP_SIZE allocates blocks in
+            // the range and never changes the logical length or any byte of content.
+            libc::fallocate(fd, libc::FALLOC_FL_KEEP_SIZE, 0, length)
+        };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EOPNOTSUPP) => {
+                return Err(TraceCapError::refused(
+                    RESERVE_OPERATION,
+                    RefusalKind::UnsupportedFileSystem,
+                ));
+            }
+            _ => return Err(TraceCapError::io(RESERVE_OPERATION, error)),
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn fstatfs(fd: RawFd, operation: &'static str) -> Result<libc::statfs, TraceCapError> {
     let mut volume = MaybeUninit::<libc::statfs>::uninit();
     let result = unsafe {
@@ -1243,6 +1312,41 @@ fn fstatfs(fd: RawFd, operation: &'static str) -> Result<libc::statfs, TraceCapE
     Ok(unsafe { volume.assume_init() })
 }
 
+/// The bytes the volume reports available to this unprivileged writer: necessary for a
+/// reservation, never sufficient.
+#[cfg(target_os = "macos")]
+fn available_bytes(volume: &libc::statfs) -> u64 {
+    volume.f_bavail.saturating_mul(u64::from(volume.f_bsize))
+}
+
+/// Linux `statfs(2)` counts `f_bavail` in units of `f_bsize`. Both field types vary by libc
+/// and target, hence the conversions a 64-bit glibc build alone would not need.
+#[cfg(target_os = "linux")]
+#[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
+fn available_bytes(volume: &libc::statfs) -> u64 {
+    let blocks = u64::from(volume.f_bavail);
+    let size = u64::try_from(volume.f_bsize).unwrap_or(0);
+    blocks.saturating_mul(size)
+}
+
+#[cfg(target_os = "macos")]
+fn qualified_volume(volume: &libc::statfs) -> bool {
+    qualified_allocator(&volume.f_fstypename)
+}
+
+#[cfg(target_os = "linux")]
+fn qualified_volume(volume: &libc::statfs) -> bool {
+    qualified_allocator(statfs_magic(volume))
+}
+
+/// `f_type` is `__fsword_t` on glibc and unsigned elsewhere; every allowlisted magic is a
+/// positive 32-bit value, so a sign-extended unknown can never match one.
+#[cfg(target_os = "linux")]
+#[allow(clippy::unnecessary_cast)]
+fn statfs_magic(volume: &libc::statfs) -> u64 {
+    volume.f_type as u64
+}
+
 /// What an injected [`ReservationFault::UnqualifiedFileSystem`] makes the gate observe: HFS+'s
 /// measured `f_fstypename`.
 #[cfg(target_os = "macos")]
@@ -1253,6 +1357,11 @@ const UNQUALIFIED_FSTYPENAME: [libc::c_char; 16] = {
     name[2] = b's' as libc::c_char;
     name
 };
+
+/// What an injected [`ReservationFault::UnqualifiedFileSystem`] makes the gate observe on Linux:
+/// tmpfs's `f_type` (`TMPFS_MAGIC`).
+#[cfg(target_os = "linux")]
+const UNQUALIFIED_MAGIC: u64 = 0x0102_1994;
 
 /// The exact NUL-terminated measured name; an unterminated or differently spelled name is not.
 #[cfg(target_os = "macos")]
@@ -1268,7 +1377,14 @@ fn qualified_allocator(fstypename: &[libc::c_char]) -> bool {
         })
 }
 
-#[cfg(target_os = "macos")]
+/// Only an exact allowlisted `statfs(2)` `f_type` magic qualifies. Everything else —
+/// btrfs, ZFS, tmpfs, overlayfs, NFS, FUSE, F2FS, any magic not listed — is refused.
+#[cfg(target_os = "linux")]
+fn qualified_allocator(magic: u64) -> bool {
+    QUALIFIED_ALLOCATORS.contains(&magic)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn measure_allocation(fd: RawFd) -> Result<AppendAllocation, TraceCapError> {
     let stat = fstat(fd, RESERVE_OPERATION)?;
     let unmeasurable = || TraceCapError::refused(RESERVE_OPERATION, RefusalKind::NotRegularFile);
@@ -1502,15 +1618,21 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::under(
+                &std::env::current_dir()
+                    .unwrap()
+                    .join("target/tracecap-unit-tests"),
+            )
+        }
+
+        /// A fresh private directory beneath `base`, which may be on any filesystem.
+        fn under(base: &Path) -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
-            let path = std::env::current_dir()
-                .unwrap()
-                .join("target/tracecap-unit-tests")
-                .join(format!(
-                    "unix-{}-{}",
-                    std::process::id(),
-                    NEXT.fetch_add(1, Ordering::Relaxed)
-                ));
+            let path = base.join(format!(
+                "unix-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
             std::fs::create_dir_all(&path).unwrap();
             Self(path)
         }
@@ -1760,7 +1882,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[test]
     fn reservation_is_refused_off_the_qualified_platform() {
         let tmp = Fixture::new();
@@ -1774,5 +1896,269 @@ mod tests {
             })
         ));
         assert_eq!(on_disk(&path), before);
+    }
+
+    /// Linux: measured in Docker on Linux 7.0.12 (aarch64) loop-mounted ext4 and XFS images, and
+    /// refused on overlayfs, tmpfs and FUSE. Which filesystem a test lands on is the host's, so
+    /// every root is classified independently of the code under test (a path-based `statfs(2)`
+    /// against magics written out here) and the expected outcome follows from that: an ext4 or
+    /// XFS root must reserve, any other must refuse and allocate nothing. With
+    /// `GOALCUP_TRACECAP_REQUIRE_QUALIFIED` set, finding no ext4 or XFS root is a failure rather
+    /// than a skip.
+    /// The roots are this crate's `target/`, `std::env::temp_dir()`, `/dev/shm` (tmpfs), and
+    /// any directories listed in `GOALCUP_TRACECAP_TEST_ROOTS` (colon separated), which is how
+    /// a by-hand run points them at a loop-mounted ext4 or XFS image.
+    #[cfg(target_os = "linux")]
+    mod linux_reservation {
+        use super::*;
+
+        const EXT4: u64 = 0xEF53;
+        const XFS: u64 = 0x5846_5342;
+        /// One top-up may round to the filesystem block (4 KiB on ext4 and XFS) and may count
+        /// an extent-map block; far below a second target, so a doubled allocation cannot hide.
+        const ROUNDING: u64 = 64 * 1024;
+
+        fn magic_of(path: &Path) -> u64 {
+            let encoded = CString::new(path.as_os_str().as_bytes()).unwrap();
+            let mut volume = MaybeUninit::<libc::statfs>::uninit();
+            let result = unsafe {
+                // SAFETY: the path is NUL terminated and the output buffer is writable.
+                libc::statfs(encoded.as_ptr(), volume.as_mut_ptr())
+            };
+            assert_eq!(result, 0, "statfs {}", path.display());
+            // SAFETY: statfs reported success, so it fully initialised the output buffer.
+            #[allow(clippy::unnecessary_cast)]
+            let magic = unsafe { volume.assume_init() }.f_type as u64;
+            magic
+        }
+
+        fn expected_qualified(magic: u64) -> bool {
+            magic == EXT4 || magic == XFS
+        }
+
+        /// Every candidate root that exists and is a writable directory.
+        fn roots() -> Vec<PathBuf> {
+            let mut roots = vec![
+                std::env::current_dir()
+                    .unwrap()
+                    .join("target/tracecap-unit-tests"),
+                std::env::temp_dir(),
+                PathBuf::from("/dev/shm"),
+            ];
+            if let Some(extra) = std::env::var_os("GOALCUP_TRACECAP_TEST_ROOTS") {
+                roots.extend(std::env::split_paths(&extra));
+            }
+            roots.retain(|root| {
+                std::fs::create_dir_all(root).is_ok()
+                    && std::fs::metadata(root)
+                        .is_ok_and(|meta| meta.is_dir() && !meta.permissions().readonly())
+            });
+            roots
+        }
+
+        /// A seeded chain under a fresh fixture on the first ext4 or XFS root, if any.
+        fn qualified_fixture(test: &str) -> Option<Fixture> {
+            let root = roots()
+                .into_iter()
+                .find(|root| expected_qualified(magic_of(root)));
+            if root.is_none() && std::env::var_os("GOALCUP_TRACECAP_REQUIRE_QUALIFIED").is_some() {
+                panic!(
+                    "{test}: GOALCUP_TRACECAP_REQUIRE_QUALIFIED is set but no ext4 or XFS root is \
+                     reachable"
+                );
+            }
+            if root.is_none() {
+                println!(
+                    "{test}: no ext4 or XFS root is reachable here; set \
+                     GOALCUP_TRACECAP_TEST_ROOTS to one to run it"
+                );
+            }
+            root.map(|root| Fixture::under(&root))
+        }
+
+        #[test]
+        fn only_the_ext4_and_xfs_magics_qualify() {
+            assert!(qualified_allocator(EXT4));
+            assert!(qualified_allocator(XFS));
+            for magic in [
+                0x9123_683e, // btrfs
+                0x2fc1_2fc1, // zfs
+                0x0102_1994, // tmpfs
+                0x8584_58f6, // ramfs
+                0x794c_7630, // overlayfs
+                0x6969,      // nfs
+                0x6573_5546, // fuse (virtiofs included)
+                0xf2f5_2010, // f2fs
+                0xef51,      // ext2's old magic
+                0x5846_5343, // one off XFS
+                0x0000_ef53_0000_0000,
+                0xffff_ffff_ffff_ef53, // a sign-extended negative, never a magic
+                0,
+            ] {
+                assert!(!qualified_allocator(magic), "{magic:#x}");
+            }
+            assert!(!qualified_allocator(UNQUALIFIED_MAGIC));
+        }
+
+        #[test]
+        fn every_reachable_root_reserves_exactly_when_it_is_ext4_or_xfs() {
+            let mut visited_qualified = false;
+            for root in roots() {
+                let magic = magic_of(&root);
+                let qualified = expected_qualified(magic);
+                visited_qualified |= qualified;
+                println!(
+                    "{}: f_type {magic:#x}, qualified {qualified}",
+                    root.display()
+                );
+                let tmp = Fixture::under(&root);
+                let (chain, path) = seeded_chain(&tmp);
+                let (seed_size, seed_allocated) = on_disk(&path);
+                let target = 16 * 4096 * 3 + 123;
+                assert!(seed_allocated < target);
+
+                if !qualified {
+                    assert!(
+                        matches!(
+                            chain.reserve(target),
+                            Err(TraceCapError::Refused {
+                                reason: RefusalKind::UnsupportedFileSystem,
+                                ..
+                            })
+                        ),
+                        "{}",
+                        root.display()
+                    );
+                    assert_eq!(
+                        on_disk(&path),
+                        (seed_size, seed_allocated),
+                        "nothing was allocated on {}",
+                        root.display()
+                    );
+                    continue;
+                }
+
+                let reported = chain.reserve(target).unwrap();
+                let (size, allocated) = on_disk(&path);
+                assert_eq!(
+                    (reported.logical_bytes, reported.allocated_bytes),
+                    (size, allocated),
+                    "the reported allocation is the file's own measurement"
+                );
+                assert_eq!(size, seed_size, "logical EOF never moves");
+                assert!(
+                    allocated >= target && allocated < target + ROUNDING,
+                    "{allocated}"
+                );
+                assert_eq!(
+                    std::fs::read(&path).unwrap(),
+                    b"{\"seq\":0,\"seed\":true}\n",
+                    "no allocator fill reached the logical data"
+                );
+
+                // A satisfied range grants nothing; nor does a smaller one; a larger one tops up.
+                chain.reserve(target).unwrap();
+                assert_eq!(on_disk(&path), (size, allocated));
+                chain.reserve(target / 2).unwrap();
+                assert_eq!(on_disk(&path), (size, allocated));
+                let larger = target + 3 * 4096 + 1;
+                chain.reserve(larger).unwrap();
+                let (grown_size, grown) = on_disk(&path);
+                assert_eq!(grown_size, seed_size);
+                assert!(grown >= larger && grown < larger + ROUNDING, "{grown}");
+
+                // The blocks outlive the descriptor (close only; a remount is not tested here).
+                drop(chain);
+                assert_eq!(on_disk(&path), (seed_size, grown));
+            }
+            assert!(
+                visited_qualified
+                    || std::env::var_os("GOALCUP_TRACECAP_REQUIRE_QUALIFIED").is_none(),
+                "GOALCUP_TRACECAP_REQUIRE_QUALIFIED is set but no ext4 or XFS root was visited"
+            );
+        }
+
+        #[test]
+        fn appends_land_inside_the_reservation_without_growing_it() {
+            let Some(tmp) = qualified_fixture("appends_land_inside_the_reservation") else {
+                return;
+            };
+            let (mut chain, path) = seeded_chain(&tmp);
+            let (seed_size, _) = on_disk(&path);
+            let target = 256 * 1024;
+            chain.reserve(target).unwrap();
+            let (_, allocated) = on_disk(&path);
+            let line = [b'x'; 4095];
+            for _ in 0..32 {
+                chain.write_all(&line).unwrap();
+                chain.write_all(b"\n").unwrap();
+            }
+            chain.sync_all().unwrap();
+            let (size, after) = on_disk(&path);
+            assert_eq!(size, seed_size + 32 * 4096);
+            assert!(after >= target, "{after}");
+            assert!(after < allocated + ROUNDING, "{after} against {allocated}");
+            assert_eq!(chain.reserve(target).unwrap().allocated_bytes, after);
+        }
+
+        #[cfg(debug_assertions)]
+        #[test]
+        fn an_unqualified_filesystem_is_refused_before_any_allocation() {
+            let Some(tmp) = qualified_fixture("an_unqualified_filesystem_is_refused") else {
+                return;
+            };
+            let (chain, path) = seeded_chain(&tmp);
+            let before = on_disk(&path);
+            crate::tracecap::inject_reservation_fault(ReservationFault::UnqualifiedFileSystem);
+            assert!(matches!(
+                chain.reserve(256 * 1024),
+                Err(TraceCapError::Refused {
+                    reason: RefusalKind::UnsupportedFileSystem,
+                    ..
+                })
+            ));
+            assert_eq!(on_disk(&path), before, "nothing was allocated");
+            // The fault was one-shot: the real ext4/XFS gate then admits the same call.
+            chain.reserve(256 * 1024).unwrap();
+            assert!(on_disk(&path).1 >= 256 * 1024);
+        }
+
+        #[cfg(debug_assertions)]
+        #[test]
+        fn an_allocation_that_does_not_remeasure_is_refused() {
+            let Some(tmp) = qualified_fixture("an_allocation_that_does_not_remeasure") else {
+                return;
+            };
+            let (chain, path) = seeded_chain(&tmp);
+            let before = on_disk(&path);
+            crate::tracecap::inject_reservation_fault(ReservationFault::AllocatorGrantsNothing);
+            assert!(matches!(
+                chain.reserve(256 * 1024),
+                Err(TraceCapError::Refused {
+                    reason: RefusalKind::AllocationNotRetained,
+                    ..
+                })
+            ));
+            assert_eq!(on_disk(&path), before);
+        }
+
+        #[test]
+        fn a_request_beyond_available_space_is_refused_before_any_allocation() {
+            let Some(tmp) = qualified_fixture("a_request_beyond_available_space") else {
+                return;
+            };
+            let (chain, path) = seeded_chain(&tmp);
+            let before = on_disk(&path);
+            for impossible in [1u64 << 60, u64::MAX] {
+                assert!(matches!(
+                    chain.reserve(impossible),
+                    Err(TraceCapError::Refused {
+                        reason: RefusalKind::InsufficientSpace,
+                        ..
+                    })
+                ));
+                assert_eq!(on_disk(&path), before);
+            }
+        }
     }
 }
