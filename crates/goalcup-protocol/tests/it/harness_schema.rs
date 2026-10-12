@@ -20,7 +20,7 @@ use goalcup_protocol::capture_policy::{
     STARTUP_BASENAMES, STARTUP_COMPONENTS, arg_path_denied, env_key_denied, env_value_denied,
     is_interpreter_program, startup_file_problem,
 };
-use goalcup_protocol::harness::{HarnessManifest, NEWER_SENTENCE, Origin};
+use goalcup_protocol::harness::{HarnessManifest, NEWER_SENTENCE, Origin, PlatformKey};
 use std::path::{Path, PathBuf};
 use toml::{Table, Value};
 
@@ -2387,5 +2387,251 @@ fn the_closed_sets_are_non_exhaustive_so_a_downstream_match_must_end_in_a_wildca
             _ => 0,
         },
         2
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// `[capture.platform.<os>-<arch>]`: the per-platform executable pin and env
+// ---------------------------------------------------------------------------------------
+
+const LINUX_SHA: &str = "fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be";
+
+/// `t` with `[capture.platform.<key>]` holding `sha256` and `[capture.platform.<key>.env]`.
+fn with_platform(mut t: Table, key: &str, sha256: &str, env: &[(&str, &str)]) -> Table {
+    let mut over = Table::new();
+    over.insert("sha256".into(), sha256.into());
+    if !env.is_empty() {
+        let env: Table = env
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), Value::String((*v).to_string())))
+            .collect();
+        over.insert("env".into(), Value::Table(env));
+    }
+    let capture = tbl(&mut t, &["capture"]);
+    let platform = capture
+        .entry("platform")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("a table");
+    platform.insert(key.to_string(), Value::Table(over));
+    t
+}
+
+fn parsed(t: &Table) -> HarnessManifest {
+    let m = HarnessManifest::from_toml_str(&toml::to_string(t).unwrap()).expect("parses");
+    m.validate(PINNED).expect("validates");
+    m
+}
+
+#[test]
+fn a_platform_override_replaces_only_the_pin_and_env() {
+    let t = with_platform(
+        codex(),
+        "linux-x86_64",
+        LINUX_SHA,
+        &[("SHELL", "/bin/bash")],
+    );
+    let m = parsed(&t);
+    m.check_allowlists()
+        .expect("SHELL=/bin/bash is a reviewed row");
+    let base = &m.capture.executable;
+
+    let linux = m.capture.resolved_executable(PlatformKey::LinuxX86_64);
+    assert_eq!(linux.program, base.program);
+    assert_eq!(linux.version, base.version);
+    assert_eq!(linux.sha256, LINUX_SHA);
+    let env = m.capture.resolved_env(PlatformKey::LinuxX86_64);
+    assert_eq!(env.get("SHELL").map(String::as_str), Some("/bin/bash"));
+    assert_eq!(env.len(), m.capture.env.len());
+
+    for other in [PlatformKey::MacosAarch64, PlatformKey::LinuxAarch64] {
+        let exe = m.capture.resolved_executable(other);
+        assert_eq!(
+            (exe.program, exe.version, exe.sha256),
+            (
+                base.program.as_str(),
+                base.version.as_str(),
+                base.sha256.as_str()
+            )
+        );
+        assert_eq!(m.capture.resolved_env(other), m.capture.env);
+    }
+    // No platform, as on any target the closed set does not name: the base values.
+    let none = m.capture.resolved_executable(None);
+    assert_eq!(none.sha256, base.sha256);
+    assert_eq!(m.capture.resolved_env(None), m.capture.env);
+}
+
+#[test]
+fn the_platform_keys_are_the_os_and_arch_constants() {
+    let expected = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Some("linux-x86_64"),
+        ("linux", "aarch64") => Some("linux-aarch64"),
+        ("macos", "aarch64") => Some("macos-aarch64"),
+        ("macos", "x86_64") => Some("macos-x86_64"),
+        _ => None,
+    };
+    assert_eq!(PlatformKey::current().map(PlatformKey::as_str), expected);
+}
+
+#[test]
+fn an_unknown_platform_key_is_refused() {
+    for key in [
+        "linux-riscv64",
+        "darwin-arm64",
+        "windows-x86_64",
+        "Linux-x86_64",
+        "",
+    ] {
+        let t = with_platform(codex(), key, LINUX_SHA, &[]);
+        refused(&t, PINNED, &["capture.platform", NEWER_SENTENCE]);
+        refused(&t, DEV, &["capture.platform"]);
+    }
+}
+
+#[test]
+fn an_override_with_any_other_field_is_refused() {
+    let cases: Vec<(&str, Value)> = vec![
+        ("args", strings(&["exec", "--"])),
+        ("program", "bash".into()),
+        ("home", Value::Table(Table::new())),
+        ("hosts", Value::Array(vec![])),
+        ("auth_hosts", strings(&["evil.example"])),
+        ("goal_flag", "--goal".into()),
+        ("ca", Value::Table(Table::new())),
+        ("credential", Value::Table(Table::new())),
+        ("executable", Value::Table(Table::new())),
+    ];
+    for (key, value) in cases {
+        let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
+        set(&mut t, &["capture", "platform", "linux-x86_64"], key, value);
+        refused(
+            &t,
+            PINNED,
+            &[
+                &format!("`{key}`"),
+                "capture.platform.linux-x86_64",
+                NEWER_SENTENCE,
+            ],
+        );
+    }
+    // `sha256` is required: an override is a pin.
+    let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
+    tbl(&mut t, &["capture", "platform", "linux-x86_64"]).remove("sha256");
+    refused(&t, PINNED, &["sha256"]);
+}
+
+#[test]
+fn an_override_env_obeys_the_base_env_policy() {
+    // The base table's own refusal, word for word, for each value it refuses.
+    for (key, value) in [
+        ("SHELL", "/bin/fish"),
+        ("RUN_TAG", "https://example.org"),
+        ("RUN_TAG", "/etc/passwd"),
+        ("RUN_TAG", "$HOME"),
+        ("OPENAI_BASE_URL", "x"),
+        ("HTTPS_PROXY", "x"),
+        ("NODE_OPTIONS", "x"),
+        ("SSL_CERT_FILE", "x"),
+        ("CODEX_HOME", "x"),
+        ("HOME", "x"),
+        ("PATH", "x"),
+        ("GOALCUP_SERVER", "x"),
+        ("1BAD", "x"),
+    ] {
+        let mut base = codex();
+        set(&mut base, &["capture", "env"], key, value);
+        let base_msg = outcome(&base, PINNED)
+            .unwrap_or_else(|| panic!("the base table admitted {key}={value}"));
+        let reason = base_msg
+            .split_once(": ")
+            .map_or(base_msg.as_str(), |(_, r)| r);
+        let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
+        refused(&t, PINNED, &["capture.platform.linux-x86_64", reason]);
+        refused(&t, DEV, &["capture.platform.linux-x86_64", reason]);
+    }
+}
+
+#[test]
+fn an_override_env_key_outside_the_allowlist_is_refused() {
+    // Passes every deny list, as the base table's `RUN_TAG` does, and is on no reviewed row.
+    for (key, value) in [
+        ("RUN_TAG", "x"),
+        ("SHELL", "/bin/csh"),
+        ("DISABLE_AUTOUPDATER", "0"),
+    ] {
+        let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
+        let text = toml::to_string(&t).unwrap();
+        let m = HarnessManifest::from_toml_str(&text).unwrap();
+        let err = match m.validate(PINNED) {
+            Err(e) => e.to_string(),
+            Ok(()) => m
+                .check_allowlists()
+                .expect_err("not a reviewed row")
+                .to_string(),
+        };
+        assert!(err.contains("capture.platform.linux-x86_64"), "{err}");
+        assert!(err.contains(key), "{err}");
+    }
+    let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[("RUN_TAG", "x")]);
+    let m = parsed(&t);
+    let err = m
+        .check_allowlists()
+        .expect_err("RUN_TAG is not a reviewed row");
+    assert!(err.to_string().contains("CAPTURE_ENV_ALLOWLIST"), "{err}");
+}
+
+#[test]
+fn an_override_env_may_not_set_a_variable_the_manifest_pins() {
+    let mut t = codex();
+    let home = tbl(&mut t, &["capture", "home"])["env"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let t = with_platform(t, "linux-aarch64", LINUX_SHA, &[(&home, "x")]);
+    refused(&t, PINNED, &["capture.platform.linux-aarch64", &home]);
+}
+
+#[test]
+fn an_override_sha256_must_be_64_lowercase_hex() {
+    for bad in ["", "ABC", &"a".repeat(63), &"A".repeat(64), &"g".repeat(64)] {
+        let t = with_platform(codex(), "linux-x86_64", bad, &[]);
+        refused(
+            &t,
+            PINNED,
+            &["capture.platform.linux-x86_64.sha256", "64 lowercase hex"],
+        );
+    }
+}
+
+#[test]
+fn an_override_version_obeys_the_version_grammar() {
+    for bad in ["", "v1", "1 2", &format!("1{}", "0".repeat(32))] {
+        let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
+        set(
+            &mut t,
+            &["capture", "platform", "linux-x86_64"],
+            "version",
+            bad.to_string(),
+        );
+        refused(
+            &t,
+            PINNED,
+            &["capture.platform.linux-x86_64.version", "must match"],
+        );
+    }
+    let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
+    set(
+        &mut t,
+        &["capture", "platform", "linux-x86_64"],
+        "version",
+        "0.153.1",
+    );
+    let m = parsed(&t);
+    assert_eq!(
+        m.capture
+            .resolved_executable(PlatformKey::LinuxX86_64)
+            .version,
+        "0.153.1"
     );
 }

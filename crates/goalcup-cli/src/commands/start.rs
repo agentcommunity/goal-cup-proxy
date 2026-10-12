@@ -1136,7 +1136,11 @@ fn run_harness<'a>(
     let launch = CaptureLaunchRequest {
         goal_stream,
         spawned_at,
-        harness_version: cx.profile.executable.version.clone(),
+        harness_version: cx
+            .profile
+            .resolved_executable(goalcup_protocol::harness::PlatformKey::current())
+            .version
+            .to_string(),
         continuation: cx.profile.continuation.clone(),
         native_scope,
     };

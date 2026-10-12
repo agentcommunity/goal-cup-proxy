@@ -21,8 +21,9 @@
 //!    serde's own "unknown variant" text never reaches the user.
 //! 3. [`HarnessManifest::validate`] runs the checks in a fixed order, so the first refusal
 //!    is deterministic: executable, args and goal, env, home, credential, CA, identity,
-//!    native, argv guard, termination, hosts, redaction, the delivery-agnostic rule (F7), and
-//!    the cross-field rules.
+//!    native, argv guard, termination, hosts, redaction, the delivery-agnostic rule (F7), the
+//!    cross-field rules, and then every rule again on the recipe each `[capture.platform.<key>]`
+//!    resolves to (an override may replace only the executable pin and env entries).
 //!
 //! [`Origin`] is the one observable predicate that relaxes anything: `Dev` (an unpinned
 //! directory under `GOALCUP_CONNECTORS_DIR` loaded with `--dev`, for kit cases and the
@@ -92,7 +93,7 @@ macro_rules! closed_enum {
         $( $(#[$vmeta:meta])* $variant:ident = $text:literal ),+ $(,)?
     ) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
         #[non_exhaustive]
         pub enum $name { $( $(#[$vmeta])* $variant ),+ }
 
@@ -213,6 +214,30 @@ closed_enum! {
     NativePid = "native_pid",
 }
 
+closed_enum! {
+    /// The platform a `[capture.platform.<key>]` override applies to: `std::env::consts::OS`,
+    /// `-`, `std::env::consts::ARCH`.
+    PlatformKey, "capture.platform", special: &[];
+    LinuxX86_64 = "linux-x86_64",
+    LinuxAarch64 = "linux-aarch64",
+    MacosAarch64 = "macos-aarch64",
+    MacosX86_64 = "macos-x86_64",
+}
+
+impl PlatformKey {
+    /// The platform this build runs on, or `None` on a target the closed set does not name
+    /// (which then runs the base values).
+    pub fn current() -> Option<PlatformKey> {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("linux", "x86_64") => Some(Self::LinuxX86_64),
+            ("linux", "aarch64") => Some(Self::LinuxAarch64),
+            ("macos", "aarch64") => Some(Self::MacosAarch64),
+            ("macos", "x86_64") => Some(Self::MacosX86_64),
+            _ => None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // The manifest
 // ---------------------------------------------------------------------------------------
@@ -276,6 +301,10 @@ pub struct CaptureSpec {
     /// The hosts the proxy terminates TLS for.
     #[serde(default)]
     pub hosts: Vec<HostSpec>,
+    /// Per-platform replacements for the executable pin and env entries. Everything else is
+    /// the same recipe on every platform.
+    #[serde(default)]
+    pub platform: BTreeMap<PlatformKey, PlatformOverride>,
 }
 
 /// `[capture.executable]`.
@@ -289,6 +318,76 @@ pub struct ExecutableSpec {
     pub version: String,
     /// SHA-256 of the measured executable's bytes, lowercase hex.
     pub sha256: String,
+}
+
+/// `[capture.platform.<key>]`: what a platform may change. Only the executable's pin (and its
+/// version, should a platform's build carry another) and env entries; every other field, the
+/// program included, is the base table's. The resolved recipe is validated, and allowlisted,
+/// as a whole.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct PlatformOverride {
+    /// SHA-256 of this platform's executable bytes, lowercase hex.
+    pub sha256: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Entries added to `capture.env`, replacing a same-named one.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+/// The executable a platform runs: the base `program`, with the platform's pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedExecutable<'a> {
+    pub program: &'a str,
+    pub version: &'a str,
+    pub sha256: &'a str,
+}
+
+impl CaptureSpec {
+    /// The executable for `key`: the override's pin and version where it has them, the base
+    /// values otherwise. `None` (an unnamed platform) is the base.
+    pub fn resolved_executable(
+        &self,
+        key: impl Into<Option<PlatformKey>>,
+    ) -> ResolvedExecutable<'_> {
+        let over = key.into().and_then(|k| self.platform.get(&k));
+        ResolvedExecutable {
+            program: &self.executable.program,
+            version: over
+                .and_then(|o| o.version.as_deref())
+                .unwrap_or(&self.executable.version),
+            sha256: over.map_or(&self.executable.sha256, |o| &o.sha256),
+        }
+    }
+
+    /// `capture.env` for `key`: the base entries, then the override's, which replace a
+    /// same-named one.
+    pub fn resolved_env(&self, key: impl Into<Option<PlatformKey>>) -> BTreeMap<String, String> {
+        let mut env = self.env.clone();
+        if let Some(over) = key.into().and_then(|k| self.platform.get(&k)) {
+            env.extend(over.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        env
+    }
+
+    /// The base recipe with `key`'s override applied and no `platform` table: what the
+    /// validator and the allowlists see for that platform.
+    fn resolved_for(&self, key: PlatformKey) -> CaptureSpec {
+        let exe = self.resolved_executable(key);
+        let executable = ExecutableSpec {
+            program: exe.program.to_string(),
+            version: exe.version.to_string(),
+            sha256: exe.sha256.to_string(),
+        };
+        CaptureSpec {
+            env: self.resolved_env(key),
+            executable,
+            platform: BTreeMap::new(),
+            ..self.clone()
+        }
+    }
 }
 
 /// `[capture.home]`.
@@ -818,15 +917,54 @@ fn native_pattern_components(pattern: &str, source_has_id: bool) -> Result<Vec<S
     Ok(out)
 }
 
+/// A refusal of the recipe `key` resolves to, renamed to the override that caused it: the
+/// override changes only the executable pin and env, so the base table already passed every
+/// other rule, and the base rule's reason is kept.
+fn platform_refusal(key: PlatformKey, e: ProtocolError) -> ProtocolError {
+    let ProtocolError::Field { field, reason } = e else {
+        return e;
+    };
+    let at = format!("capture.platform.{}", key.as_str());
+    match field.strip_prefix("capture.executable.") {
+        Some(rest) => refuse(format!("{at}.{rest}"), reason),
+        None if field == "capture.env" => refuse(format!("{at}.env"), reason),
+        None => refuse(at, format!("{field}: {reason}")),
+    }
+}
+
 impl HarnessManifest {
     /// Refuse every manifest the refusal table names. The order is fixed, so the first
     /// refusal is deterministic: executable, args and goal, env, home, credential, CA,
     /// identity, native, argv guard, termination, hosts, redaction, the delivery-agnostic
-    /// rule, then the cross-field rules.
+    /// rule, the cross-field rules, and then each `[capture.platform.<key>]` in key order.
+    ///
+    /// A platform is checked as the whole recipe it resolves to, by these same rules, so an
+    /// override can reach nothing the base table could not; its refusal names
+    /// `capture.platform.<key>` and keeps the base rule's reason.
     ///
     /// The CLI calls it at load and again while building a launch; the daemon calls it in
     /// `capture_harness`. Neither trusts the other's check.
     pub fn validate(&self, origin: Origin) -> Result<(), ProtocolError> {
+        self.validate_recipe(origin)?;
+        self.for_each_platform(|resolved| resolved.validate_recipe(origin))
+    }
+
+    /// Run `check` on the recipe each `[capture.platform.<key>]` resolves to.
+    fn for_each_platform(
+        &self,
+        check: impl Fn(&HarnessManifest) -> Result<(), ProtocolError>,
+    ) -> Result<(), ProtocolError> {
+        for key in self.capture.platform.keys() {
+            let resolved = HarnessManifest {
+                capture: self.capture.resolved_for(*key),
+                ..self.clone()
+            };
+            check(&resolved).map_err(|e| platform_refusal(*key, e))?;
+        }
+        Ok(())
+    }
+
+    fn validate_recipe(&self, origin: Origin) -> Result<(), ProtocolError> {
         if !SUPPORTED_SCHEMA_VERSIONS.contains(&self.schema_version) {
             return Err(refuse(
                 "schema_version",
@@ -867,7 +1005,14 @@ impl HarnessManifest {
     /// `Origin::Pinned` after `validate`, so a deny-list refusal keeps its own reason, when this
     /// build pins the connector's id. An unpinned id is refused later by the pin gate and runs
     /// only under `--dev`.
+    ///
+    /// Each `[capture.platform.<key>]` is held to the same rows, as the recipe it resolves to.
     pub fn check_allowlists(&self) -> Result<(), ProtocolError> {
+        self.check_recipe_allowlists()?;
+        self.for_each_platform(HarnessManifest::check_recipe_allowlists)
+    }
+
+    fn check_recipe_allowlists(&self) -> Result<(), ProtocolError> {
         let c = &self.capture;
         if !capture_argv_allowed(&self.id, &c.args, c.goal_flag.as_deref()) {
             return Err(refuse(

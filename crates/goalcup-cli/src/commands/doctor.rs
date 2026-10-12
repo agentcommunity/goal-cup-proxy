@@ -186,7 +186,11 @@ fn connector_reports(
 /// hashed against the profile's pin, by the same function `start` calls. A harness that is not
 /// installed, or not the measured build, is a `Fail`: `start` would refuse it.
 fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
-    let executable = &c.loaded.manifest.capture.executable;
+    let executable = c
+        .loaded
+        .manifest
+        .capture
+        .resolved_executable(goalcup_protocol::harness::PlatformKey::current());
     match crate::launch::capture_executable(c, &c.loaded.manifest.capture, env) {
         Ok(pinned) => Check::pass(
             "harness_executable",

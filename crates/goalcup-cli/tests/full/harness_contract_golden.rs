@@ -224,10 +224,13 @@ fn repinned(id: &str, exe: &Path) -> Subject {
     subject
 }
 
-/// A copy of `c` whose executable pin names `exe`: the only change.
+/// A copy of `c` whose executable pin names `exe`, without its `capture.platform` table: the
+/// plan is the base recipe on every platform, so the golden bytes are the same wherever it
+/// runs. The declared overrides are in `capture_profile`.
 fn repin(c: &HarnessConnector, exe: &Path) -> HarnessConnector {
     let mut c = c.clone();
     c.loaded.manifest.capture.executable.sha256 = s::sha256_of(exe);
+    c.loaded.manifest.capture.platform.clear();
     c.loaded
         .manifest
         .validate(origin_of(&c.loaded.manifest.id))
@@ -598,6 +601,20 @@ fn profile_json(p: &CaptureSpec) -> Value {
     );
     if let Some(goal_flag) = &p.goal_flag {
         out.insert("goal_flag".into(), json!(goal_flag));
+    }
+    if !p.platform.is_empty() {
+        out.insert(
+            "platform".into(),
+            json!(
+                p.platform
+                    .iter()
+                    .map(|(key, over)| (
+                        key.as_str(),
+                        json!({"sha256": over.sha256, "version": over.version, "env": over.env}),
+                    ))
+                    .collect::<BTreeMap<_, _>>()
+            ),
+        );
     }
     out.insert("home".into(), json!(p.home.run_home.as_str()));
     out.insert(

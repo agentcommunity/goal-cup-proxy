@@ -76,11 +76,16 @@ pub fn shipped(id: &str) -> HarnessConnector {
         .expect("the shipped connector loads")
 }
 
-/// A shipped connector whose capture profile pins `exe` instead of the measured harness:
-/// the only change, so every other rule of the profile is the shipped one.
+/// A shipped connector whose capture profile pins `exe` instead of the measured harness, on
+/// every platform it names: the only change, so every other rule of the profile is the
+/// shipped one.
 pub fn repinned(id: &str, exe: &Path) -> HarnessConnector {
     let mut c = shipped(id);
-    c.loaded.manifest.capture.executable.sha256 = sha256_of(exe);
+    let sha256 = sha256_of(exe);
+    for over in c.loaded.manifest.capture.platform.values_mut() {
+        over.sha256 = sha256.clone();
+    }
+    c.loaded.manifest.capture.executable.sha256 = sha256;
     c.loaded
         .manifest
         .validate(goalcup_protocol::harness::Origin::Pinned)
