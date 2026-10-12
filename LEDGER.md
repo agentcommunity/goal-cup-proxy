@@ -267,10 +267,22 @@ V1 on `v1/trunk` (`main` at `0c5f477`) is covered in [STATUS.md](STATUS.md), not
   not block source-only `v0.5.0`.
 - ✅ **OS-30** D48 (owner, 2026-10-11): the `v1-compat` path, its tests, fixtures and
   `open`/`rusqlite`/`age` deps are deleted; docs describe the capture path; devserver stays.
-- ⬜ **OS-31** `[post-tag]` D48 follow-up: move `ENTRY_WINDOW_SECONDS`, `DEV_SERVER_SEED` and
-  `dev_server_public_key_hex` out of `goalcup-devserver`, drop the daemon's dev-dependency on it
-  (tests use it only for a placeholder key), consider deleting the crate, and remove the V1-only
-  registry functions D48 lists under "Kept" with their tests.
+- ✅ **OS-31** `[post-tag]` D48 follow-up, widened to the [PR #5](https://github.com/agentcommunity/goal-cup-tracer/pull/5) post-merge review, done
+  2026-10-12 on branch `os-31-dead-v1-code`. Removed the V1 `pub` items no production code
+  reached, with the tests that only exercised them:
+  - no caller at all: `launch::scrubbed_env`, `terminate::same_process`,
+    `DaemonError::submission_failure`, three `status` helpers, `ProcessHandoffPhase::as_wire`,
+    `StartPathIdentity`, `Daemon::uptime_seconds`, `process_handle_instance_status`;
+  - test-only: the six registry functions D48 kept (and the sealing validators behind them), the
+    D17 `health` module, the `hook_install[]` half of `workspace.rs`, `reload_manifests`,
+    `expand_foreign_glob`, `lock_path_is_held`, `repair_seal`, `shell_line`, `server_port_gate`,
+    `grant_path`, `relay_verdict`; the orphaned non-unix `fsutil` stubs; three unused re-exports.
+  - kept on purpose: the V1 `export::write_*` writers, which build the verifier's fixture traces
+    (`export.rs` says so).
+  - devserver: the daemon no longer dev-depends on it (tests pin the protocol's placeholder key).
+    Its constants had no other user, so nothing moved; the crate now has no dependent and stays
+    for the owner to delete or keep.
+  - `launch.rs` docs now describe the live D1/D23 enforcement only.
 
 ---
 
