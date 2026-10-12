@@ -13,8 +13,9 @@
 //!   outlives the `ProxyCa`: without the key it can sign nothing, and removing it belongs to
 //!   whoever owns the scoped home.
 //! - The CA is constrained: `pathLen 0`, and a critical NameConstraints extension that permits
-//!   exactly the approved (intercepted) host names, so even a leaked key could not mint a
-//!   certificate a validating client accepts for any other name. It is valid from
+//!   the approved (intercepted) host names and their subdomains (a dNSName subtree, RFC 5280
+//!   §4.2.1.10), so even a leaked key could not mint a certificate a validating client accepts
+//!   for any other name. It is valid from
 //!   [`CA_CLOCK_SKEW`] before generation until [`CA_VALIDITY`] after it. Leaves share that
 //!   window and carry the Authority Key Identifier (Python 3.13 rejects leaves without it),
 //!   one DNS SAN and the serverAuth EKU.
@@ -97,7 +98,8 @@ impl std::fmt::Debug for ProxyCa {
 
 impl ProxyCa {
     /// Generates a fresh CA key and self-signed certificate whose NameConstraints permit
-    /// exactly `approved_hosts`, each of which must pass [`is_config_host`]. Performs no I/O.
+    /// `approved_hosts` and their subdomains, each of which must pass [`is_config_host`].
+    /// Performs no I/O.
     pub fn generate(approved_hosts: &[String]) -> Result<Self, CaError> {
         if approved_hosts.is_empty() {
             return Err(CaError::NoApprovedHosts);
