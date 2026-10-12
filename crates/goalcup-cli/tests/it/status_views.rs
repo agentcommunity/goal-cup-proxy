@@ -437,8 +437,9 @@ fn cli_warns_on_v4_nonconfirmed_termination_even_without_the_legacy_harness_flag
     assert!(!text.contains("health: sealed"), "{text:?}");
 }
 
+/// A status document older than the protocol's staleness window renders as offline.
 #[test]
-fn staleness_is_the_shared_constant_and_never_a_literal() {
+fn a_status_past_the_staleness_window_renders_offline() {
     let tmp = tempfile::tempdir().unwrap();
     let m = support::mock_armed(&tmp, "claude-code-cli");
     let info = m.info();
@@ -452,7 +453,7 @@ fn staleness_is_the_shared_constant_and_never_a_literal() {
 }
 
 #[test]
-fn entries_lists_one_line_per_entry_and_json_is_an_array_and_no_command_notifies() {
+fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_the_list() {
     let tmp = tempfile::tempdir().unwrap();
     let m = support::mock_armed(&tmp, "codex-cli");
     let mut out = Vec::new();
