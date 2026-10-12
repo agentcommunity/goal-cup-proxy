@@ -205,6 +205,7 @@ fn append_real_home_node(
     relative: &Path,
     listing: &mut Vec<String>,
     volatile_database: Option<(&str, &OsStr)>,
+    volatile_dir_times: bool,
 ) -> bool {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -230,7 +231,18 @@ fn append_real_home_node(
     let include_metadata = volatile_database
         .map(|(app_name, entry_name)| !is_volatile_live_database(app_name, entry_name, &file_type))
         .unwrap_or(true);
-    let identity = if include_metadata {
+    let identity = if volatile_dir_times && file_type.is_dir() {
+        // The directory's own mtime and size move whenever an app rewrites an entry in it;
+        // its entries are listed one by one below, so nothing is lost by leaving them out.
+        #[cfg(unix)]
+        {
+            format!("mode={:o}", metadata.mode() & 0o7777)
+        }
+        #[cfg(not(unix))]
+        {
+            String::new()
+        }
+    } else if include_metadata {
         #[cfg(unix)]
         {
             format!(
@@ -281,6 +293,16 @@ fn is_volatile_live_database(
         || entry_name.ends_with(".sqlite-wal")
 }
 
+/// The ChatGPT/Codex desktop app rewrites its global state file and that file's backup
+/// continuously while it is open, so both are left out of the guard entirely (name, type and
+/// metadata), together with the `.codex` directory's own mtime. Nothing a kit stand-in writes
+/// lands under either name, and every other entry under `.codex` still counts.
+fn is_codex_app_state(app_name: &str, entry_name: &OsStr) -> bool {
+    app_name == ".codex"
+        && (entry_name == ".codex-global-state.json"
+            || entry_name == ".codex-global-state.json.bak")
+}
+
 /// The contract kit launches stand-ins, so bracket every launching test with the same
 /// real-HOME boundary that guards the H-17 refusal regression. The snapshot records each app
 /// directory and its immediate entries by name, file type, symlink target, and metadata only;
@@ -290,7 +312,7 @@ fn home_listing(home: &Path) -> String {
     let mut listing = Vec::new();
     for name in [".hermes", ".codex", ".claude"] {
         let path = home.join(name);
-        if !append_real_home_node(&path, Path::new(name), &mut listing, None) {
+        if !append_real_home_node(&path, Path::new(name), &mut listing, None, name == ".codex") {
             continue;
         }
         let mut children = Vec::new();
@@ -309,11 +331,15 @@ fn home_listing(home: &Path) -> String {
         }
         children.sort_by(|(left, _), (right, _)| left.cmp(right));
         for (entry_name, entry_path) in children {
+            if is_codex_app_state(name, &entry_name) {
+                continue;
+            }
             append_real_home_node(
                 &entry_path,
                 &Path::new(name).join(&entry_name),
                 &mut listing,
                 Some((name, &entry_name)),
+                false,
             );
         }
     }
@@ -742,6 +768,37 @@ fn home_listing_detects_nonvolatile_in_place_mutations_without_reading_contents(
         home_listing(home.path()),
         before_claude,
         "Claude settings mtime mutation was invisible"
+    );
+}
+
+#[test]
+fn home_listing_ignores_only_the_codex_app_state_files() {
+    let home = tempfile::tempdir().unwrap();
+    let codex = home.path().join(".codex");
+    std::fs::create_dir_all(&codex).unwrap();
+    let state = codex.join(".codex-global-state.json");
+    let backup = codex.join(".codex-global-state.json.bak");
+    std::fs::write(&state, b"{}").unwrap();
+    std::fs::write(codex.join("config.toml"), b"before").unwrap();
+    let before = home_listing(home.path());
+
+    // The desktop app's churn: the state file rewritten, its backup appearing and changing,
+    // and with them the directory's own mtime.
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(&state, b"{\"rewritten\":true}").unwrap();
+    std::fs::write(&backup, b"{}").unwrap();
+    assert_eq!(
+        home_listing(home.path()),
+        before,
+        "the desktop app's state file and backup must not trip the guard"
+    );
+
+    // Any other file under `.codex` still does.
+    std::fs::write(codex.join("auth.json"), b"{}").unwrap();
+    assert_ne!(
+        home_listing(home.path()),
+        before,
+        "a new file under .codex was invisible to the guard"
     );
 }
 
