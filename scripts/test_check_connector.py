@@ -22,11 +22,15 @@ SKIP_LINE = "SKIPPED: harness kit is macOS-only; a maintainer runs it"
 PINS = "crates/goalcup-protocol/pins/connector-dirs.txt"
 HEX = "a" * 64
 
+# Like the real golden tests, a set GOALCUP_REGEN_HARNESS_GOLDEN turns a differing golden into a
+# rewrite that passes; what the fake saw is logged to "$FAKE_CARGO_LOG.regen".
 FAKE_CARGO = """#!/bin/sh
 echo "$*" >>"$FAKE_CARGO_LOG"
+echo "${GOALCUP_REGEN_HARNESS_GOLDEN-unset}" >>"$FAKE_CARGO_LOG.regen"
 if [ -n "${FAKE_CARGO_FAIL:-}" ]; then
   case "$*" in *"$FAKE_CARGO_FAIL"*)
-    echo "loader-script.json differs from what the code now produces; first difference"
+    [ -n "${GOALCUP_REGEN_HARNESS_GOLDEN:-}" ] && exit 0
+    echo "enumeration.json differs from what the code now produces; first difference"
     exit 101 ;;
   esac
 fi
@@ -137,7 +141,23 @@ class CheckConnectorTest(unittest.TestCase):
         result = self.run_script("--help")
         self.assertEqual(result.returncode, 0)
         self.assertIn("--allow-no-kit", result.stdout)
+        self.assertIn("Exit status:", result.stdout)
         self.assertNotIn("set -u", result.stdout)
+        self.assertNotIn("#!/bin/sh", result.stdout)
+
+    def test_help_works_when_run_by_a_relative_path_from_a_subdirectory(self) -> None:
+        sub = self.repo / "connectors"
+        result = subprocess.run(
+            ["sh", "../scripts/" + SCRIPT.name, "--help"],
+            cwd=sub,
+            env=GIT_ENV,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertIn("--allow-no-kit", result.stdout)
 
     # The non-macOS kit skip.
 
@@ -184,8 +204,21 @@ class CheckConnectorTest(unittest.TestCase):
             result.stdout,
         )
         self.assertIn("PASS goldens (goalcup-cli)", result.stdout)
-        self.assertIn("FAIL goldens (goalcup-daemon): loader-script.json", result.stdout)
+        self.assertIn("FAIL goldens (goalcup-daemon): enumeration.json", result.stdout)
         self.assertIn("does not mention 'toy-cli'", result.stdout)
+
+    def test_an_exported_regeneration_variable_cannot_turn_a_failure_into_a_pass(self) -> None:
+        result = self.run_script(
+            "--allow-no-kit",
+            "toy-cli",
+            FAKE_CARGO_FAIL="goalcup-cli --test harness",
+            GOALCUP_REGEN_HARNESS_GOLDEN="1",
+        )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("FAIL goldens (goalcup-cli): enumeration.json", result.stdout)
+        seen = Path(f"{self.log}.regen").read_text().splitlines()
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {"unset"}, seen)
 
     def test_a_target_dir_outside_the_checkout_is_warned_about(self) -> None:
         result = self.run_script(
@@ -246,7 +279,8 @@ class CheckConnectorTest(unittest.TestCase):
         result = self.run_script("--allow-no-kit", "toy-cli", FAKE_PIN_LINE=f"hermes-cli {HEX}")
         self.assertEqual(result.returncode, 1)
         self.assertIn("other connectors changed: hermes-cli", result.stdout)
-        self.assertIn(f"run `git checkout -- {PINS}` to undo", result.stdout)
+        self.assertIn(f"`git checkout -- {PINS}` undoes that", result.stdout)
+        self.assertIn("re-run this script afterwards", result.stdout)
 
 
 class CiScopeTest(unittest.TestCase):

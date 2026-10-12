@@ -13,8 +13,9 @@
 #      when the diff touches another connector's line; a new or changed line for <id> is
 #      expected and must be committed with the connector.
 #   3. schema: `cargo test -p goalcup-protocol --test harness_conformance --test connector_pins`.
-#   4. goldens: the CLI and daemon `harness_contract_golden` tests, without regeneration. On a
-#      failure the regeneration command is printed; review its diff before committing.
+#   4. goldens: the CLI and daemon `harness_contract_golden` tests, without regeneration (an
+#      exported GOALCUP_REGEN_HARNESS_GOLDEN is unset first). On a failure the regeneration
+#      command is printed; review its diff before committing.
 #   5. kit (macOS only): `cargo build`, then `cargo test -p goalcup-cli --test
 #      harness_contract_kit`. Elsewhere the kit compiles to zero tests, so the step is SKIPPED
 #      and the script exits non-zero unless --allow-no-kit is given.
@@ -23,7 +24,13 @@
 # 1 when a step failed or the kit was skipped without --allow-no-kit, 2 on a usage error.
 # Cargo honours CARGO_TARGET_DIR and the rest of its environment as usual.
 set -u
+# The script's own path, made absolute before the `cd` so `--help` can still read the header.
+self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0") || exit 2
 cd "$(dirname "$0")/.." || exit 2
+# "Without regeneration" must hold even when the caller's shell still exports the variable
+# (the skill tells contributors to set it for one command): with it set, the golden tests
+# rewrite a differing golden and pass, so a broken golden would be reported as PASS.
+unset GOALCUP_REGEN_HARNESS_GOLDEN
 
 usage() {
   echo "usage: sh scripts/check-connector.sh [--allow-no-kit] <connector-id>" >&2
@@ -36,7 +43,8 @@ for arg in "$@"; do
   case $arg in
     --allow-no-kit) allow_no_kit=yes ;;
     -h | --help)
-      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+      # The comment block after the shebang, up to the first line that is not a comment.
+      awk 'NR == 1 { next } !/^#/ { exit } { print }' "$self" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     -*)
@@ -159,7 +167,8 @@ if sh scripts/pin-manifests.sh; then
       echo "the pin diff also changes: $others"
       # shellcheck disable=SC2086
       changed=$(git diff --name-only HEAD -- $pins | tr '\n' ' ')
-      echo "pin files were regenerated in place; run \`git checkout -- ${changed% }\` to undo"
+      echo "pin files were regenerated in place; \`git checkout -- ${changed% }\` undoes that,"
+      echo "and also drops your own uncommitted pin line: re-run this script afterwards"
       fail "pins (other connectors changed: $others)"
     else
       echo "pin changes above are for '$id' only: commit them with the connector"
@@ -192,9 +201,8 @@ for crate in goalcup-cli goalcup-daemon; do
     echo "golden files that differ: ${files:-(see the output above)}"
     echo "a file for '$id' (<id>.json, or a row for '$id'): regenerate, then review the diff:"
     echo "  GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p $crate --test harness_contract_golden"
-    echo "a file that does not mention '$id' (for example loader-script.json on Linux) is a"
-    echo "platform or tree difference, not your connector: do not commit its regenerated form;"
-    echo "restore it with git checkout and name it in the PR"
+    echo "a file that does not mention '$id' did not change because of your connector: do not"
+    echo "commit its regenerated form; restore it with git checkout and name it in the PR"
     fail "goldens ($crate): ${files:-see output}"
   fi
 done
