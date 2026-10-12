@@ -1182,7 +1182,7 @@ pub struct ErrorDetail {
 /// The whole surface between the CLI and the daemon. Implemented by `HttpDaemonClient` and by
 /// `MockDaemonClient`; served by `goalcup-daemon`. Adding a method means editing all three.
 pub trait DaemonClient {
-    /// The signed status cache for one entry (D25).
+    /// The signed status document for one entry (D25).
     fn status(&self, entry_id: &str) -> Result<SignedStatus, ControlError>;
     /// Every entry this daemon knows about.
     fn entries(&self) -> Result<Vec<EntrySummary>, ControlError>;

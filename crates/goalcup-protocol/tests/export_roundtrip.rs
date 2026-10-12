@@ -1457,8 +1457,8 @@ fn the_descriptor_round_trips_and_names_the_six_files_the_writer_owns() {
     assert_eq!(toml::from_str::<TraceDescriptorDoc>(&raw).unwrap(), bare);
 }
 
-/// `write_descriptor` must write tmp-then-rename, the same way
-/// `goalcup_daemon::status`'s own `write_atomic` does for the status cache, so a reader
+/// `write_descriptor` must write tmp-then-rename, the same way the daemon's
+/// `fsutil::write_atomic` does for `control.json`, so a reader
 /// that opens `trace.toml` mid-write sees the previous document whole rather than half of
 /// the next one.
 ///

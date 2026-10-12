@@ -182,10 +182,10 @@ for the same reason.
 
 ### Running the daemon
 
-You normally never start it yourself. `goalcup start` and `goalcup seal` start
+You normally never start it yourself. `goalcup start`, `seal`, `status` and `entries` start
 `goalcup-daemon --config $GOALCUP_CONFIG_DIR/daemon.toml --exit-when-idle` when no daemon answers
 on `control.json` (the README's [daemon](../README.md#the-daemon) note says how), and
-`goalcup start` writes a default `daemon.toml` the first time: the keys below, with
+`goalcup start` (or `status`, `entries`) writes a default `daemon.toml` the first time: the keys below, with
 `artifact_root` and `workspace_parent` beside the configuration directory
 (`<config dir>-artifacts`, `<config dir>-runs`). Edit that file to change them.
 
@@ -209,7 +209,7 @@ A minimal LocalOnly configuration, with every field that has no default. Paths m
 artifact_root = "/Users/you/goalcup-artifacts"
 # Schema-1 connector directories. In a checkout, this repository's `connectors/`.
 connectors_dir = "/Users/you/src/goal-cup/connectors"
-# `control.json` and the status-cache mirrors. It MUST be the directory the CLI looks in (the
+# `control.json`. It MUST be the directory the CLI looks in (the
 # CLI finds the daemon only through `control.json`): `~/Library/Application Support/goalcup`
 # on macOS, `$XDG_CONFIG_HOME/goalcup` (else `~/.config/goalcup`) elsewhere. Never a harness's.
 config_dir = "/Users/you/Library/Application Support/goalcup"
@@ -261,7 +261,7 @@ find that daemon.
 ```
 goalcup start --harness <id> --goal-file <PATH>   # launches, waits, seals, prints `verify:`
 goalcup status                                     # what the signed document says
-goalcup entries                                    # the runs this daemon holds
+goalcup entries                                    # every run the registry holds
 goalcup-verify --capture-integrity <trace-dir>     # the line `start` printed
 ```
 
@@ -310,7 +310,7 @@ usage error (exit 1).
 | Exit | Meaning |
 |---|---|
 | 0 | The command did what it was asked. |
-| 1 | Refused, and you can fix it: no daemon to ask (`status`, `entries`) or none could be started (`start`, `seal`), a tracker still busy with the entry after the retry is spent, an entry that is already sealed, a mistyped sub-command, a preflight check that said no. |
+| 1 | Refused, and you can fix it: no daemon to ask (`seal` with no `daemon.toml`) or none could be started, a tracker still busy with the entry after the retry is spent, an entry that is already sealed, a mistyped sub-command, a preflight check that said no. |
 | 2 | **Never this binary's.** It is "invalid evidence", and only `goalcup-verify` leaves under it. |
 | 3 | The CLI could not do its job: a file it could not read, an answer it could not parse. |
 | 4 | Not left by a capture run: it belonged to the removed V1 gates (D48). |

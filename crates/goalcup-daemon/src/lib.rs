@@ -32,7 +32,7 @@ pub mod registry;
 ///
 /// Where every module above is wired together.
 pub mod runtime;
-/// Building, signing and mirroring the signed status document (D25).
+/// Building and signing the status document (D25).
 pub mod status;
 mod submission_types;
 pub use submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};

@@ -169,8 +169,11 @@ fn wait_running(rig: &Rig, entry: &str) {
 
 /// `goalcup start` on a machine with no daemon and no `daemon.toml`: it writes the default
 /// configuration, starts a daemon, the run is recorded and sealed, and the daemon exits within
-/// its grace of the seal, withdrawing `control.json`. Afterwards `status` and `entries` say no
-/// daemon is running and start none, although `daemon.toml` would let them.
+/// its grace of the seal, withdrawing `control.json`.
+///
+/// Afterwards `goalcup status` starts a daemon again and shows that run, sealed, out of the
+/// registry; it creates no entry and changes nothing in the sealed trace; and the daemon it
+/// started exits on the same grace.
 #[test]
 fn start_with_no_daemon_starts_one_that_exits_after_the_seal() {
     let rig = Rig::run_scoped();
@@ -209,25 +212,117 @@ fn start_with_no_daemon_starts_one_that_exits_after_the_seal() {
         "an idle exit withdraws control.json"
     );
 
-    for args in [
-        vec!["status"],
-        vec!["status", entry.as_str()],
-        vec!["entries"],
-    ] {
-        let output = goalcup(&rig, &cli()).args(&args).output().unwrap();
-        assert_eq!(output.status.code(), Some(1), "{args:?}: {}", said(&output));
-        let text = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            text.contains("no daemon is running")
-                && text.contains(
-                    &goalcup_cli::config::control_path(&rig.cfg)
-                        .display()
-                        .to_string()
-                ),
-            "{args:?} says so and names control.json: {text}"
-        );
-        assert!(daemons(&rig).is_empty(), "{args:?} started a daemon");
+    let trace_before = files_under(&rig.trace(&entry));
+    let sealed = status(&rig, &entry);
+    assert_eq!(
+        sealed.payload.capture.as_ref().map(|c| c.run),
+        Some(RunState::Sealed),
+        "status shows the sealed run after its daemon exited"
+    );
+    let asked = Instant::now();
+    let respawned = the_daemon(&rig);
+    assert_ne!(respawned, daemon, "status started a daemon of its own");
+
+    // The bare command and the text rendering name the same run, and say it is sealed.
+    let output = goalcup(&rig, &cli()).arg("status").output().unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains(&entry) && text.contains("sealed"),
+        "the newest run, sealed: {text}"
+    );
+    let output = goalcup(&rig, &cli())
+        .args(["entries", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    let listed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let listed = listed.as_array().unwrap();
+    assert_eq!(listed.len(), 1, "no entry was created: {listed:?}");
+    assert_eq!(listed[0]["entry_id"], entry.as_str());
+    assert!(
+        !listed[0]["sealed_at"].is_null(),
+        "still sealed: {listed:?}"
+    );
+    assert_eq!(
+        files_under(&rig.trace(&entry)),
+        trace_before,
+        "a look changes nothing in a sealed trace"
+    );
+    assert_eq!(
+        daemons(&rig),
+        vec![respawned],
+        "one daemon answered all three"
+    );
+
+    wait_gone(respawned, GRACE + GRACE_SLACK);
+    assert!(
+        asked.elapsed() >= GRACE - Duration::from_secs(2),
+        "the status daemon left before its grace"
+    );
+    assert!(
+        !goalcup_cli::config::control_path(&rig.cfg).exists(),
+        "an idle exit withdraws control.json"
+    );
+}
+
+/// `goalcup status` on a machine where no run was ever started: it starts a daemon (writing
+/// the default configuration), says plainly that there is no run, and `entries` lists none.
+/// The daemon it started exits on its grace.
+#[test]
+fn status_with_no_runs_ever_says_so_and_its_daemon_exits_after_grace() {
+    let rig = Rig::run_scoped();
+    let _reaper = reaper(&rig);
+    assert!(daemons(&rig).is_empty());
+
+    let asked = Instant::now();
+    let output = goalcup(&rig, &cli()).arg("status").output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", said(&output));
+    assert!(
+        said(&output).contains("no run has been started from this machine"),
+        "a clear answer: {}",
+        said(&output)
+    );
+    let daemon = the_daemon(&rig);
+    assert!(rig.cfg.join("daemon.toml").is_file());
+
+    let output = goalcup(&rig, &cli())
+        .args(["entries", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    let listed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(listed, serde_json::json!([]), "no entries");
+    let output = goalcup(&rig, &cli()).arg("entries").output().unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("(none)"));
+    assert_eq!(daemons(&rig), vec![daemon], "the same one daemon");
+
+    wait_gone(daemon, GRACE + GRACE_SLACK);
+    assert!(
+        asked.elapsed() >= GRACE - Duration::from_secs(2),
+        "the daemon left before its grace"
+    );
+}
+
+/// Every file under `dir`, by relative path, with its bytes.
+fn files_under(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(here) = stack.pop() {
+        for item in std::fs::read_dir(&here).unwrap() {
+            let path = item.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.insert(
+                    path.strip_prefix(dir).unwrap().to_path_buf(),
+                    std::fs::read(&path).unwrap(),
+                );
+            }
+        }
     }
+    out
 }
 
 /// Two `goalcup start` at the same moment, with no daemon: both runs are recorded and sealed,

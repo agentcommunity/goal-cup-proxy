@@ -137,22 +137,16 @@ pub fn read_control_file(config_dir: &FsPath) -> Result<ControlFile, DaemonError
 /// file of the planter's choosing, at whatever mode that file already had. So the target is
 /// stat'd with `symlink_metadata` (which does not follow) and anything that is not a regular
 /// file is refused with nothing written: not a link, not a directory, not a fifo. A caller
-/// that meant to redirect this file redirects `config_dir`. That is
-/// [`crate::fsutil::TargetGuard::RegularFileOnly`].
+/// that meant to redirect this file redirects `config_dir`. [`crate::fsutil::write_atomic`]
+/// makes that check for every write.
 ///
 /// **The temp name is per-process**, not per-write, because it is a name a startup sweep
 /// has to be able to find again: see [`sweep_stale_control_temp`]. One writer per process
-/// writes this file, once, so the uniqueness a status mirror needs is not needed here.
+/// writes this file, once.
 ///
 /// The mode needs setting only once: the file that ends up at `path` is always one this
 /// call created, so the mode on the create is the whole of it and there is no earlier
 /// daemon's permission bits to correct.
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<(), DaemonError> {
-    crate::fsutil::write_atomic(
-        path,
-        &crate::fsutil::process_temp(path),
-        bytes,
-        0o600,
-        crate::fsutil::TargetGuard::RegularFileOnly,
-    )
+    crate::fsutil::write_atomic(path, &crate::fsutil::process_temp(path), bytes, 0o600)
 }

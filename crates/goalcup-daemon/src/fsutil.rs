@@ -1,11 +1,8 @@
 //! The three file mechanics every writer in this crate shares: a mode, a private atomic
 //! write, and the sweep that clears what a killed write left behind.
 //!
-//! Nothing here decides policy. Every knob a caller has an opinion about — the mode, the
-//! temp file's name, whether a non-regular target is a refusal, whether the parent
-//! directory is created — is an argument, because the call sites each have a different,
-//! documented answer and sharing the mechanics must not quietly share the answers as well.
-//! What is shared is the sequence: create a fresh temp file in the target's own directory,
+//! The mode and the temp file's name are arguments; a target that is not a regular file is
+//! always refused. What is shared is the sequence: create a fresh temp file in the target's own directory,
 //! write it, `fsync` it, and `rename` it over the target.
 //!
 //! # Why a temp file and a rename, every time
@@ -54,62 +51,49 @@
 use crate::DaemonError;
 use std::path::{Path, PathBuf};
 
-/// What a caller will accept finding at the target path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TargetGuard {
-    /// Refuse anything that is not a regular file — a symlink above all.
-    ///
-    /// `control.json` carries the CLI's bearer into a directory the participant can reach,
-    /// so a link planted at that name would take the bearer and write it through to a file
-    /// of the planter's choosing, at whatever mode that file already had. The check is
-    /// `symlink_metadata`, which does not follow: the question is what is at the path, not
-    /// what the path leads to, and a dangling link is exactly the plant that a "does it
-    /// exist?" test waves through.
-    RegularFileOnly,
-    /// Replace whatever is there. The rename is still atomic and the temp file is still
-    /// fresh; this only says the caller has no opinion about what it is replacing.
-    Any,
-}
-
 /// Write `bytes` to `path` through `temp`, at `mode`, atomically.
 ///
 /// `temp` must sit in the same directory as `path` — a rename across filesystems is not
-/// atomic — and naming it is the caller's, because the two naming schemes in this crate
-/// mean different things: a per-process name is one a startup sweep can find again, and a
-/// per-write name is what lets two threads publish to one shared target at once.
+/// atomic — and naming it is the caller's: a per-process name is one a startup sweep can
+/// find again.
 ///
-/// `temp` must also carry this process's pid, which is what [`process_temp`] and
-/// [`unique_temp`] are for and the reason this function may remove a file already at that
+/// `temp` must also carry this process's pid, which is what [`process_temp`] is for and the
+/// reason this function may remove a file already at that
 /// name. A caller that invents a name of its own breaks the reasoning in the module's "Why
 /// the temp of our own name is removed first"; there is no such caller.
 ///
 /// Every failure after the temp file exists removes it: a refused write leaves the
 /// directory as it found it, or the next write is refused by this one's leavings.
+///
+/// Anything at `path` that is not a regular file is refused, a symlink above all.
+/// `control.json` carries the CLI's bearer into a directory the participant can reach, so a
+/// link planted at that name would take the bearer and write it through to a file of the
+/// planter's choosing, at whatever mode that file already had. The check is
+/// `symlink_metadata`, which does not follow: the question is what is at the path, not what
+/// the path leads to, and a dangling link is exactly the plant that a "does it exist?" test
+/// waves through.
 pub(crate) fn write_atomic(
     path: &Path,
     temp: &Path,
     bytes: &[u8],
     mode: u32,
-    guard: TargetGuard,
 ) -> Result<(), DaemonError> {
-    if guard == TargetGuard::RegularFileOnly {
-        match std::fs::symlink_metadata(path) {
-            Ok(meta) if !meta.file_type().is_file() => {
-                return Err(DaemonError::Refused(format!(
-                    "{} is a {}, not a regular file: this daemon will not write through \
-                     something it did not create",
-                    path.display(),
-                    describe(meta.file_type())
-                )));
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(DaemonError::Io {
-                    path: path.display().to_string(),
-                    source,
-                });
-            }
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if !meta.file_type().is_file() => {
+            return Err(DaemonError::Refused(format!(
+                "{} is a {}, not a regular file: this daemon will not write through \
+                 something it did not create",
+                path.display(),
+                describe(meta.file_type())
+            )));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(DaemonError::Io {
+                path: path.display().to_string(),
+                source,
+            });
         }
     }
 
@@ -204,7 +188,7 @@ fn create_new(temp: &Path, mode: u32) -> std::io::Result<std::fs::File> {
 /// Apply the caller's exact mode through the open descriptor before the temp is published.
 ///
 /// The create mode is still important: a restrictive umask may make the initial inode more
-/// private than requested, but it must not make a public status document permanently private.
+/// private than requested, but it must not narrow the mode the caller asked for for good.
 /// Using the descriptor avoids reopening the temp pathname between the write and rename.
 #[cfg(unix)]
 fn set_open_file_mode(file: &std::fs::File, mode: u32) -> std::io::Result<()> {
@@ -222,26 +206,6 @@ pub(crate) fn process_temp(path: &Path) -> PathBuf {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "tmp".to_string());
     path.with_file_name(format!("{name}.{}.tmp", std::process::id()))
-}
-
-/// A temp name no other write anywhere can pick: `<name>.<pid>.<counter>.tmp`.
-///
-/// Needed wherever two writers share one target. `status-latest.json` is the same file for
-/// every entry in the process, so a name derived from the target alone is one name two
-/// mirrors both write and both rename — and the loser publishes the winner's bytes under
-/// its own rename, or fails on a file the other thread already moved away.
-pub(crate) fn unique_temp(path: &Path) -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "tmp".to_string());
-    path.with_file_name(format!(
-        "{name}.{}.{}.tmp",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ))
 }
 
 /// Remove the one temp file a process killed mid-write leaves behind, once, at startup.
@@ -275,8 +239,8 @@ mod tests {
     /// The killed write, and the daemon that draws its pid afterwards.
     ///
     /// A process killed between the create and the rename leaves its temp file on disk. The
-    /// next daemon to be handed that pid mints the same name — `unique_temp`'s counter
-    /// restarts at zero in a fresh process, and `process_temp` is the pid alone — and under
+    /// next daemon to be handed that pid mints the same name — `process_temp` is the pid
+    /// alone — and under
     /// `O_EXCL` on its own it would be refused by that file on every write it ever made.
     /// `status-line.txt` sits in the artifact root, which no sweep covers, so "every write"
     /// means every status refresh for the life of the run.
@@ -287,7 +251,7 @@ mod tests {
         let temp = process_temp(&target);
         std::fs::write(&temp, b"half of what a killed write meant to say")?;
 
-        let wrote = write_atomic(&target, &temp, b"fresh\n", 0o644, TargetGuard::Any);
+        let wrote = write_atomic(&target, &temp, b"fresh\n", 0o644);
         assert!(
             wrote.is_ok(),
             "a temp carrying our own pid refused the write: {wrote:?}"
@@ -311,13 +275,7 @@ mod tests {
         let neighbour = dir.path().join("status-line.txt.999999.0.tmp");
         std::fs::write(&neighbour, b"not ours")?;
 
-        let wrote = write_atomic(
-            &target,
-            &unique_temp(&target),
-            b"fresh\n",
-            0o644,
-            TargetGuard::Any,
-        );
+        let wrote = write_atomic(&target, &process_temp(&target), b"fresh\n", 0o644);
         assert!(wrote.is_ok(), "{wrote:?}");
         assert_eq!(std::fs::read(&neighbour)?, b"not ours");
         Ok(())
@@ -340,7 +298,7 @@ mod tests {
         assert!(held.is_ok(), "the first writer claims the name");
         std::fs::write(&temp, b"a write in progress")?;
 
-        let second = write_atomic(&target, &temp, b"{}", 0o600, TargetGuard::Any);
+        let second = write_atomic(&target, &temp, b"{}", 0o600);
         assert!(
             matches!(second, Err(DaemonError::Refused(_))),
             "a claimed temp must be refused, not joined: {second:?}"
@@ -354,7 +312,7 @@ mod tests {
         // And once the claim is dropped the name is writable again, so the refusal is a
         // retry and not a wedge.
         drop(held);
-        let third = write_atomic(&target, &temp, b"{}", 0o600, TargetGuard::Any);
+        let third = write_atomic(&target, &temp, b"{}", 0o600);
         assert!(third.is_ok(), "{third:?}");
         Ok(())
     }

@@ -1,23 +1,24 @@
-//! Building, signing and mirroring the status document (D25).
+//! Building and signing the status document (D25).
 //!
 //! The document itself is `goalcup_protocol::control::{StatusPayload, SignedStatus}`;
 //! **this module defines no second shape**, because a CLI that verified a signature over
 //! a document the daemon never promised would disagree with it only at run time.
 //!
-//! # The cache is the evidence, the page is a view (D25)
+//! # One signed document, served by the daemon that holds the registry (D25)
 //!
-//! One signed document, signed with the entry's own run key, verifiable by any reader —
-//! the CLI included — without asking the daemon anything.
+//! Signed with the entry's own run key, so any reader, the CLI included, can check it.
+//! There is no copy on disk: `goalcup status` starts the run-scoped daemon when none answers
+//! and asks it, so the registry is the one source of truth, sealed runs included.
 //! `SignedStatus::verify_with` takes the key the **caller** pinned from
 //! `WorkspaceInfo.run_public_key`; the `public_key` field on the document is a label, not
 //! a credential, and nothing in this crate verifies against it.
 //!
-//! # Two of the control contract's obligations are files, not routes
+//! # The status line is a file, not a route
 //!
-//! [`mirror`] writes the two cache copies a reader can open without a socket;
-//! [`write_entry_status_line_rooted`] writes the one plain line Claude's `statusLine` command `cat`s. **Neither may carry a token, a key,
-//! a seed or a path out of the participant's home**: the status route is unauthenticated by
-//! design, and the status line is rendered into a terminal a screen recording may catch.
+//! [`write_entry_status_line_rooted`] writes the one plain line Claude's `statusLine` command
+//! `cat`s. **It may not carry a token, a key, a seed or a path out of the participant's
+//! home**: the status route is unauthenticated by design, and the status line is rendered into
+//! a terminal a screen recording may catch.
 
 use crate::DaemonError;
 use crate::arming::{GateState, RefusalReason};
@@ -32,12 +33,6 @@ use goalcup_protocol::control::{
 };
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::provenance::TerminationOutcomeV1;
-#[cfg(any(test, feature = "test-hooks"))]
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-#[cfg(any(test, feature = "test-hooks"))]
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 
 /// Everything the daemon knows about one entry at one moment. The daemon's own gathering
 /// struct: it is never serialised and never reaches the wire.
@@ -318,177 +313,13 @@ pub fn sign_payload(
     Ok(SignedStatus::sign(payload, cached_at, key)?)
 }
 
-#[cfg(any(test, feature = "test-hooks"))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct StatusFaultCounts {
-    pub mirror_attempts: u64,
-    pub mirror_failures: u64,
-    pub latest_attempts: u64,
-    pub latest_failures: u64,
-    pub status_line_attempts: u64,
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-#[derive(Default)]
-struct StatusFaultState {
-    mirror_failures: BTreeSet<PathBuf>,
-    latest_failures: BTreeSet<PathBuf>,
-    mirror_counts: BTreeMap<PathBuf, StatusFaultCounts>,
-    status_line_attempts: BTreeMap<PathBuf, u64>,
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-fn status_fault_state() -> &'static Mutex<StatusFaultState> {
-    static STATE: OnceLock<Mutex<StatusFaultState>> = OnceLock::new();
-    STATE.get_or_init(|| Mutex::new(StatusFaultState::default()))
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-fn take_mirror_failure(config_dir: &Path) -> bool {
-    let mut state = status_fault_state()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let failed = state.mirror_failures.remove(config_dir);
-    let counts = state
-        .mirror_counts
-        .entry(config_dir.to_path_buf())
-        .or_default();
-    counts.mirror_attempts += 1;
-    if failed {
-        counts.mirror_failures += 1;
-    }
-    failed
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-fn take_latest_failure(config_dir: &Path) -> bool {
-    let mut state = status_fault_state()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let failed = state.latest_failures.remove(config_dir);
-    let counts = state
-        .mirror_counts
-        .entry(config_dir.to_path_buf())
-        .or_default();
-    counts.latest_attempts += 1;
-    if failed {
-        counts.latest_failures += 1;
-    }
-    failed
-}
-
-#[cfg(any(test, feature = "test-hooks"))]
-fn count_status_line_attempt(path: &Path) {
-    *status_fault_state()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .status_line_attempts
-        .entry(path.to_path_buf())
-        .or_default() += 1;
-}
-
-/// The status cache is a **file**, at
-/// `<config_dir>/cache/status-<entry_id>.json` and `<config_dir>/cache/status-latest.json`,
-/// both 0644, so a reader asking the time needs no socket and cannot be pointed at a
-/// network endpoint.
-///
-/// The write is atomic — temp file, then rename — because a reader that opens the cache
-/// while it is being replaced must see the previous document whole rather than half of
-/// the next one, and half a signed document does not verify.
-///
-/// `status-latest.json` is the pointer, and it is the **most recently started** run rather
-/// than the last writer. `Daemon::refresh_statuses` walks the entries in id order, so an
-/// unconditional write would make "latest" mean "the highest id", and a participant who
-/// abandoned `entry-0007` and started `entry-0003`'s workspace afterwards would get the
-/// older run every time they asked. [`ranks_above`] decides, on `started_at` first and on
-/// the id as the creation-order tiebreak, so the answer does not depend on the order the
-/// refresh happened to visit the map in.
-pub fn mirror(signed: &SignedStatus, config_dir: &Path) -> Result<(), DaemonError> {
-    mirror_entry(signed, config_dir)?;
-    mirror_latest(signed, config_dir)
-}
-
-/// Replace only this entry's offline document. Kept separate from the shared latest pointer
-/// so terminal review can attempt both sinks even when either filesystem operation fails.
-pub fn mirror_entry(signed: &SignedStatus, config_dir: &Path) -> Result<(), DaemonError> {
-    #[cfg(any(test, feature = "test-hooks"))]
-    if take_mirror_failure(config_dir) {
-        return Err(DaemonError::Refused(
-            "test-hooks: status mirror publication failed".to_string(),
-        ));
-    }
-    let entry_id = &signed.payload.entry_id;
-    // The id becomes a file name. It is minted by the daemon, so this refuses rather than
-    // sanitises: a caller that produced a traversing id has a bug worth seeing.
-    if entry_id.is_empty()
-        || entry_id.contains('/')
-        || entry_id.contains('\\')
-        || entry_id.contains("..")
-    {
-        return Err(DaemonError::Refused(format!(
-            "entry id {entry_id:?} is not a file name, and the status cache is a file"
-        )));
-    }
-    let bytes = serde_json::to_vec_pretty(signed)?;
-    let cache = config_dir.join("cache");
-    write_atomic(
-        &cache.join(format!("status-{entry_id}.json")),
-        &bytes,
-        0o644,
-    )
-}
-
-/// Replace the shared latest pointer if this status owns its rank. This is a separate
-/// fallible view: a terminal review attempt must not skip it merely because its per-entry
-/// document could not be replaced in the same pass.
-pub fn mirror_latest(signed: &SignedStatus, config_dir: &Path) -> Result<(), DaemonError> {
-    let _latest_guard = latest_view_lock();
-    mirror_latest_locked(signed, config_dir)
-}
-
-/// The ranked write half of [`mirror_latest`], for a caller which already owns the one
-/// process-local latest lock. Keeping this private prevents terminal replacement from
-/// releasing its compare/delete interval only to recursively deadlock when it writes review.
-fn mirror_latest_locked(signed: &SignedStatus, config_dir: &Path) -> Result<(), DaemonError> {
-    let bytes = serde_json::to_vec_pretty(signed)?;
-    let cache = config_dir.join("cache");
-    let latest = cache.join("status-latest.json");
-    match ranks_above(signed, &latest) {
-        true => {
-            #[cfg(any(test, feature = "test-hooks"))]
-            if take_latest_failure(config_dir) {
-                return Err(DaemonError::Refused(
-                    "test-hooks: status latest publication failed".to_string(),
-                ));
-            }
-            write_atomic(&latest, &bytes, 0o644)
-        }
-        false => Ok(()),
-    }
-}
-
-fn validate_status_entry_id(entry_id: &str) -> Result<(), DaemonError> {
-    let id_path = Path::new(entry_id);
-    if !matches!(
-        (id_path.components().count(), id_path.components().next()),
-        (1, Some(std::path::Component::Normal(_)))
-    ) {
-        return Err(DaemonError::Refused(format!(
-            "entry id {entry_id:?} is not one normal path component"
-        )));
-    }
-    Ok(())
-}
-
 /// Write a participant status line through the runtime's retained entry-artifact
-/// capability. The lexical path remains only a diagnostic/test-hook key; no write follows
-/// it after entry acquisition.
+/// capability. The lexical path remains only a diagnostic; no write follows it after entry
+/// acquisition.
 pub fn write_entry_status_line_rooted(
     signed: &SignedStatus,
     artifact: &EntryArtifactRoot,
 ) -> Result<(), DaemonError> {
-    #[cfg(any(test, feature = "test-hooks"))]
-    count_status_line_attempt(&artifact.display_path().join("status-line.txt"));
     artifact
         .replace_status_line(status_line_bytes(signed).as_bytes())
         .map_err(|error| {
@@ -496,69 +327,6 @@ pub fn write_entry_status_line_rooted(
                 "status line cannot be replaced through retained entry artifact authority: {error}"
             ))
         })
-}
-
-/// One serialized ownership boundary for the process-wide latest pointer. Do not call a
-/// function that takes this lock from inside another holder: terminal replacement retains
-/// one guard across invalidation and its following ranked write through private `_locked`
-/// helpers.
-fn latest_view_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-}
-
-/// Remove the shared latest pointer only if it still names this exact entry. Used by abandon
-/// as well as terminal invalidation, so all in-process readers/comparers/removers share the
-/// same lock with ordinary ranked writers.
-pub(crate) fn remove_latest_if_owned(entry_id: &str, config_dir: &Path) -> Result<(), DaemonError> {
-    validate_status_entry_id(entry_id)?;
-    let latest = config_dir.join("cache").join("status-latest.json");
-    let _latest_guard = latest_view_lock();
-    let owns_latest = std::fs::read_to_string(&latest)
-        .ok()
-        .and_then(|text| serde_json::from_str::<SignedStatus>(&text).ok())
-        .is_some_and(|signed| signed.payload.entry_id == entry_id);
-    if owns_latest {
-        remove_view_if_present(&latest)?;
-    }
-    Ok(())
-}
-
-fn remove_view_if_present(path: &Path) -> Result<(), DaemonError> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(DaemonError::Io {
-            path: path.display().to_string(),
-            source,
-        }),
-    }
-}
-
-/// Does `signed` belong in `status-latest.json`, given what is there now?
-///
-/// The rank is `(started_at, entry_id)`: the most recently started run wins, an unstarted
-/// one ranks below every started one, and the id breaks the tie — daemon-minted ids
-/// increase, so among runs that have not started (or started in the same second) the newest
-/// entry is the highest id, which is the creation-order fallback.
-///
-/// A pointer that is absent, unreadable or not a `SignedStatus` is one this daemon may
-/// claim, and so is one naming this same entry: a refresh must be able to replace its own
-/// document, or the pointer would freeze at the first publication of the run.
-fn ranks_above(signed: &SignedStatus, latest: &Path) -> bool {
-    let Some(current) = std::fs::read_to_string(latest)
-        .ok()
-        .and_then(|text| serde_json::from_str::<SignedStatus>(&text).ok())
-    else {
-        return true;
-    };
-    if current.payload.entry_id == signed.payload.entry_id {
-        return true;
-    }
-    let rank = |p: &StatusPayload| (p.started_at.clone(), p.entry_id.clone());
-    rank(&signed.payload) >= rank(&current.payload)
 }
 
 /// The status line is a file. One line of plain text, no token, no grant,
@@ -718,42 +486,4 @@ pub fn plain_words(health: HealthState, arming: GateState, started: bool) -> Str
                 .to_string()
         }
     }
-}
-
-/// Write `bytes` at `path`, through a temp file in the same directory, at `mode`.
-///
-/// The mechanics are [`crate::fsutil::write_atomic`]'s and are documented there. What this
-/// wrapper decides is the two things a status write has an opinion about.
-///
-/// # The temp name is per-write, not per-target
-///
-/// `status-latest.json` is the same target for every entry in the process. A temp name
-/// derived from the target — `status-latest.tmp` — is therefore one name two entries
-/// mirroring at once both write and both rename, and the loser publishes the winner's
-/// bytes under its own rename, or fails on a file the other thread already moved away.
-/// [`crate::fsutil::unique_temp`] carries the process id and a per-process counter, so no
-/// two writes anywhere can pick it.
-///
-/// # The parent is created, and the target is not guarded
-///
-/// `<config_dir>/cache/` is this daemon's own directory and the first mirror of a run is
-/// what creates it. And a status document is a published, unauthenticated read: it carries
-/// no token, no key and no path, so there is nothing here for a planted symlink to steal —
-/// which is why the guard `control.json` sets is deliberately not set here.
-fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), DaemonError> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).map_err(|source| DaemonError::Io {
-            path: parent.display().to_string(),
-            source,
-        })?;
-    }
-    crate::fsutil::write_atomic(
-        path,
-        &crate::fsutil::unique_temp(path),
-        bytes,
-        mode,
-        crate::fsutil::TargetGuard::Any,
-    )
 }

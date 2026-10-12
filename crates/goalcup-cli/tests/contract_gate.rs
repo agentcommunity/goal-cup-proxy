@@ -383,20 +383,24 @@ fn seal_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
 }
 
 /// The three participant surfaces are wired to real commands, and the first thing each of
-/// them needs is a daemon — so on a machine with none they all leave under rung 1 naming
-/// `control.json`, which is the same answer `goalcup doctor` and `goalcup start` give from
-/// the same file.
+/// them needs is a daemon: with none answering they start one from `<cfg>/daemon.toml`, as
+/// `start` and `seal` do. Here that daemon refuses its configuration, so each leaves under
+/// rung 1 naming `daemon.log`, where the daemon's own words are, and prints nothing.
 ///
-/// Rung 1 and not the rung of an unwritten command: "there is no daemon running" is a thing
-/// the participant fixes by starting one, and "this build never wrote the command" is not.
-/// Everything past that first refusal
-/// — the pinned key, the render, the URL that is opened — is driven against the in-process
-/// mock in `tests/it/status_views.rs`, where a test can assert what was printed without a
-/// daemon on the machine that runs it.
+/// Rung 1 and not the rung of an unwritten command: a daemon that will not start is a thing
+/// the participant fixes, and "this build never wrote the command" is not. Everything past that
+/// first refusal — the pinned key, the render — is driven against the in-process mock in
+/// `tests/it/status_views.rs`, and the daemon that does start is `tests/full/run_scoped_daemon.rs`.
 #[test]
-fn the_three_participant_surfaces_are_no_longer_stubs_and_no_daemon_is_rung_one() {
+fn the_three_participant_surfaces_start_a_daemon_and_one_that_will_not_start_is_rung_one() {
     let cfg = support::empty_cfg();
-    let expected = goalcup_cli::config::control_path(&cfg)
+    std::fs::write(
+        cfg.join(goalcup_cli::daemon::spawn::DAEMON_CONFIG_NAME),
+        "this is not = = toml\n",
+    )
+    .unwrap();
+    let log = cfg
+        .join(goalcup_cli::daemon::spawn::DAEMON_LOG_NAME)
         .display()
         .to_string();
     let commands = vec![vec!["status"], vec!["status", "--json"], vec!["entries"]];
@@ -412,13 +416,15 @@ fn the_three_participant_surfaces_are_no_longer_stubs_and_no_daemon_is_rung_one(
         assert_eq!(
             out.status.code(),
             Some(1),
-            "`goalcup {args:?}` with no daemon is a refusal the participant can fix, not a \
-             stub's rung 3"
+            "`goalcup {args:?}` whose daemon will not start is a refusal the participant can \
+             fix, not a stub's rung 3"
         );
         let said = String::from_utf8_lossy(&out.stderr).to_string();
         assert!(
-            said.starts_with("goalcup: ") && said.contains(&expected),
-            "and it names where the daemon's file would have been: {said:?}"
+            said.starts_with("goalcup: ")
+                && said.contains("no daemon is running")
+                && said.contains(&log),
+            "it started one, and names where that daemon's words are: {said:?}"
         );
         assert!(
             String::from_utf8_lossy(&out.stdout).is_empty(),

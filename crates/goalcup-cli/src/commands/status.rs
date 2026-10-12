@@ -9,7 +9,7 @@
 //! serve a document signed with its own key, and a document checked against the key it
 //! carries would report a forged deadline as trusted. The key this command checks with is
 //! the one `goalcup start` wrote into `<config_dir>/entries/<id>.json`
-//! ([`crate::entries`]) at the moment the daemon handed it over. That cache is the whole
+//! ([`crate::entries`]) at the moment the daemon handed it over. That record is the whole
 //! reason it survives: `start` is a process that exited, `status` is a fresh one, and a
 //! command with no pinned key has nothing to verify against at all. An entry this machine
 //! has no record of is refused by name (rung 1), never displayed on its own document's
@@ -28,7 +28,7 @@
 //! unauthenticated, so the bytes may be a rogue process's invention, and rendering them
 //! would put a deadline and a health state on a participant's screen in the daemon's voice
 //! while a sentence above says not to believe any of it. The evidence a participant acts on
-//! is the signed cache the verifier reads, which this command is not. A headline and rung 1
+//! is the sealed trace the verifier reads, which this command is not. A headline and rung 1
 //! is the whole answer.
 //!
 //! The entry-id check is the second half of the same rule and is not covered by the
@@ -56,8 +56,8 @@ use crate::entries::{self, EntryRecord};
 use crate::retry::retry_busy;
 use goalcup_protocol::capture::M2Status;
 use goalcup_protocol::control::{
-    ArmingState, ControlError, DaemonClient, EventStatusSource, STALE_AFTER_SECONDS, SignedStatus,
-    StatusPayload, WorkspaceFinalizationStatusV1, parse_z,
+    ArmingState, DaemonClient, EventStatusSource, STALE_AFTER_SECONDS, SignedStatus, StatusPayload,
+    WorkspaceFinalizationStatusV1, parse_z,
 };
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::provenance::TerminationOutcomeV1;
@@ -79,57 +79,25 @@ pub fn status_with(
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
     let record = pinned(cfg, entry)?;
-    let (document, from_disk) = match retry_busy(|| client.status(&record.entry_id)) {
-        Ok(document) => (document, None),
-        // A daemon that is not there is not the same answer as a run that has
-        // no document. `status::mirror` writes the last one it published to
-        // `<config_dir>/cache/status-<id>.json`, and it is signed with the run key this command
-        // already pins, so falling back to it changes nothing about what is checked before
-        // anything is shown. Only on `Unreachable`: every other refusal is the daemon
-        // answering, and answering is what this command asked it to do.
-        Err(ControlError::Unreachable(said)) => match cached_document(cfg, &record.entry_id) {
-            Some((document, path)) => (document, Some((said, path))),
-            None => return Err(CliError::Control(ControlError::Unreachable(said))),
-        },
-        Err(e) => return Err(CliError::Control(e)),
-    };
+    let document = retry_busy(|| client.status(&record.entry_id)).map_err(CliError::Control)?;
     if document.verify_with(&record.run_public_key).is_err() {
-        // Two readings of the same failure, and which one it is depends on where the
-        // document came from. Off the socket it is the alarming one:
-        // something other than the daemon that opened this run may be answering on an
-        // unauthenticated port. Off the cache it is almost always the dull one: entry ids
-        // are short, a participant who re-created one is reading a file the previous run
-        // with that id left behind, signed by a run key that no longer exists. The bytes
-        // cannot tell the two apart, so the words say which document was read and what the
-        // likely reason is instead of pointing at an intruder either way.
-        let (headline, said) = match &from_disk {
-            Some((_, path)) => (
-                "stale cached document for a previous run with this id".to_string(),
-                format!(
-                    "the tracker is not answering, and the cached document at {} does not \
-                     verify against the run key this machine pinned when entry {} was \
-                     created, so nothing in it has been shown. A cache file is named by the \
-                     entry id alone: this is what an id that was re-created looks like — an \
-                     earlier run's last document, signed by a run key that is gone. Delete \
-                     that file, or ask the daemon.",
-                    path.display(),
-                    record.entry_id
-                ),
+        // Something other than the daemon that opened this run may be answering on an
+        // unauthenticated port.
+        return refuse(
+            out,
+            json,
+            &record.entry_id,
+            "signature did not verify".to_string(),
+            format!(
+                "the status document for entry {} did not verify against the run key \
+                 this machine pinned when the entry was created, so nothing in it has \
+                 been shown. The status route is unauthenticated by ruling: something \
+                 other than the daemon that opened this run may be answering on the \
+                 control port, and a deadline printed off that document would be its \
+                 invention rather than this run's.",
+                record.entry_id
             ),
-            None => (
-                "signature did not verify".to_string(),
-                format!(
-                    "the status document for entry {} did not verify against the run key \
-                     this machine pinned when the entry was created, so nothing in it has \
-                     been shown. The status route is unauthenticated by ruling: something \
-                     other than the daemon that opened this run may be answering on the \
-                     control port, and a deadline printed off that document would be its \
-                     invention rather than this run's.",
-                    record.entry_id
-                ),
-            ),
-        };
-        return refuse(out, json, &record.entry_id, headline, said);
+        );
     }
     // Not covered by the check above: one run key signs every document of the run, so
     // another entry's payload verifies just as well as this one's.
@@ -160,49 +128,9 @@ pub fn status_with(
             &format!("{}\n", serde_json::to_string_pretty(&document)?),
         )?;
     } else {
-        if let Some((said, path)) = &from_disk {
-            put(
-                out,
-                &format!(
-                    "cached document, {}: the tracker is not answering ({said}), so what \
-                     follows is the last document it published, read from {}. It was \
-                     checked against the same pinned run key.\n",
-                    // The age in the same words the freshness line below uses, on the
-                    // banner itself, because the banner is the sentence that says the
-                    // document is not live and the age is what a reader does with that.
-                    age_words(&document, now),
-                    path.display()
-                ),
-            )?;
-        }
         put(out, &render_status(&document, now))?;
     }
     Ok(())
-}
-
-/// The signed document the daemon last mirrored for this entry, and the file it came from.
-///
-/// `<config_dir>/cache/status-<id>.json`, which is `goalcup_daemon::status::mirror`'s first
-/// obligation. A missing, unreadable or unparsable file is
-/// `None`, and so is one carrying another entry's document: the signature check below would
-/// pass on it — one run key signs every document of a run — and the entry-id check is what
-/// catches it, so this returns nothing rather than handing the caller a document to refuse.
-fn cached_document(cfg: &Path, entry_id: &str) -> Option<(SignedStatus, std::path::PathBuf)> {
-    use std::io::Read as _;
-
-    if Path::new(entry_id).file_name() != Some(std::ffi::OsStr::new(entry_id)) {
-        return None;
-    }
-    let path = cfg.join("cache").join(format!("status-{entry_id}.json"));
-    let file = goalcup_platform::readcap::open_regular(&path).ok()?;
-    let cap = crate::config::CONTROL_FILE_MAX_BYTES;
-    let mut text = String::new();
-    let read = file.take(cap + 1).read_to_string(&mut text).ok()?;
-    if read as u64 > cap {
-        return None;
-    }
-    let signed: SignedStatus = serde_json::from_str(&text).ok()?;
-    (signed.payload.entry_id == entry_id).then_some((signed, path))
 }
 
 /// One headline on stdout, and the reason on rung 1.
@@ -450,31 +378,6 @@ fn finalization_needs_harness_review(finalization: Option<&WorkspaceFinalization
         Some(WorkspaceFinalizationStatusV1::Terminal { termination, .. }) => {
             !matches!(termination, TerminationOutcomeV1::Confirmed { .. })
         }
-    }
-}
-
-/// How old this document is, in three words, for a sentence that has more to say after
-/// them.
-///
-/// [`freshness`] is the full line and says what a reader should do about the age; this is
-/// the same fact as a clause, for the cache banner, which is already a sentence about a
-/// document that is not live. The two read the same stamp through the same parser, so they
-/// cannot disagree about it.
-fn age_words(s: &SignedStatus, now: &str) -> String {
-    match (parse_z(&s.cached_at), parse_z(now)) {
-        // Subtracted in this order and not through `stale_seconds`, which saturates: a
-        // stamp from the future is a clock disagreement and is said out loud rather than
-        // rounded to "just now".
-        (Some(cached), Some(asked)) if asked >= cached => {
-            format!("published {}s ago", asked - cached)
-        }
-        (Some(cached), Some(asked)) => {
-            format!("published {}s in the future (clock skew)", cached - asked)
-        }
-        // Reads as a clause, because that is the slot it sits in: "cached document,
-        // published at an unreadable time: the tracker is not answering". `freshness` says
-        // the same fact at length, where it is a sentence of its own.
-        _ => "published at an unreadable time".to_string(),
     }
 }
 

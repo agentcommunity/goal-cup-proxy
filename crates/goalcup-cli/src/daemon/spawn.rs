@@ -1,6 +1,7 @@
 //! The daemon a command needs, started on demand: the run-scoped lifetime.
 //!
-//! There is no service. `goalcup start` and `goalcup seal` call [`ensure_daemon`]: a daemon
+//! There is no service. Every command that asks the daemon anything (`goalcup start`, `seal`,
+//! `status` and `entries`) calls [`ensure_daemon`]: a daemon
 //! that answers on `control.json` is used as it is, and otherwise this module starts
 //! `goalcup-daemon --config <cfg>/daemon.toml --exit-when-idle` detached and waits for it to
 //! answer. The daemon ends itself once no capture is unfinished (its `IDLE_GRACE`), so a
@@ -95,6 +96,11 @@ pub enum MissingConfig<'a> {
     /// connectors directory is the one this command resolved, so the daemon reads the same
     /// rulebook the CLI pinned.
     WriteDefault { connectors: &'a Path },
+    /// Write the default configuration only when there is none (`goalcup status` and
+    /// `goalcup entries`), naming [`crate::config::connectors_dir`]. A daemon that answers is
+    /// used whatever connectors it reads, and an existing file is used as it is: reading the
+    /// registry needs no connector, so there is nothing to keep in step and nothing to refuse.
+    WriteDefaultToRead,
     /// Start nothing and refuse "no daemon" (`goalcup seal` and the finish's restart path):
     /// with no configuration no daemon was ever started from this directory, so there is
     /// no unsealed run here to recover.
@@ -134,6 +140,15 @@ pub fn ensure_daemon(
                     )));
                 }
                 return Ok(client);
+            }
+        }
+        MissingConfig::WriteDefaultToRead => {
+            if let Some(client) = live {
+                return Ok(client);
+            }
+            if read_config(&config)?.is_none() {
+                let connectors = crate::config::connectors_dir()?;
+                create_config(&config, &default_config(cfg, &connectors)?)?;
             }
         }
         MissingConfig::Refuse => {

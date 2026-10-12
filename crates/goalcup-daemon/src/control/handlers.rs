@@ -1,6 +1,5 @@
 use super::{ControlErrorResponse, ControlState};
 use crate::registry::ProcessHandoffPhase;
-use crate::status;
 use crate::{DAEMON_VERSION, DaemonError};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -80,7 +79,7 @@ pub(super) async fn health(State(state): State<ControlState>) -> Response {
 /// the handler's own and not a second one in front of the authentication decision.
 ///
 /// It answers what the last publication left. Nothing signs a second copy on the way out,
-/// so `goalcup status` and the cache read the same bytes.
+/// so `goalcup status` reads the bytes the daemon signed.
 pub(super) async fn entry_status(
     State(state): State<ControlState>,
     Path(id): Path<String>,
@@ -549,18 +548,17 @@ fn uncertain_process_admission(error: DaemonError) -> ControlErrorResponse {
 ///
 /// `Daemon::abandon` drops the entry and its registry row, and refuses once `started_at`
 /// is stamped. This handler adds the half that makes "leaves no entry" true of the disk as
-/// well: the entry's artifact directory and its signed status cache.
+/// well: the entry's artifact directory.
 ///
-/// **Both removals are inside the entry's own roots and are checked to be.** The artifact
-/// directory has to sit under the daemon's configured `artifact_root` and the cache file
-/// has to be a plain file name under `config_dir/cache`, or nothing is removed. The
-/// workspace is deliberately left alone: it is the participant's directory, that rule
+/// **The removal is inside the entry's own root and is checked to be**: the artifact
+/// directory has to sit under the daemon's configured `artifact_root`, or nothing is
+/// removed. The workspace is deliberately left alone: it is the participant's directory, that rule
 /// is about the entry, and a daemon that deleted a directory a participant had been working
 /// in would be the worst possible reading of "abandon".
 ///
 /// Order matters. `Daemon::abandon` removes the artifact tree through its retained entry
 /// authority before deleting the registry row; a cleanup failure is therefore an error and
-/// never a successful abandon. This handler removes only cache views after that succeeds.
+/// never a successful abandon.
 pub(super) async fn abandon_entry(
     State(state): State<ControlState>,
     Path(id): Path<String>,
@@ -576,46 +574,14 @@ pub(super) async fn abandon_entry(
     if let Err(e) = state.daemon.abandon(&id, &reason) {
         return ControlErrorResponse::from(e).into_response();
     }
-    remove_entry_files(&state, &id);
     StatusCode::NO_CONTENT.into_response()
-}
-
-/// The cache views an abandoned entry leaves behind. Artifact cleanup is not best effort:
-/// it already completed through the runtime's retained capability before this is called.
-/// Cache removal remains best effort because these are derived, signed views and the entry
-/// is already gone from authoritative registry and runtime state.
-fn remove_entry_files(state: &ControlState, entry_id: &str) {
-    let config = state.daemon.config();
-    // `status::mirror` writes `<config_dir>/cache/status-<entry_id>.json`, and the same
-    // check it makes before writing is made here before removing: an id that is not a plain
-    // file name names no cache file this daemon wrote.
-    if FsPath::new(entry_id).file_name() == Some(std::ffi::OsStr::new(entry_id)) {
-        let _ = std::fs::remove_file(
-            config
-                .config_dir
-                .join("cache")
-                .join(format!("status-{entry_id}.json")),
-        );
-    }
-    // `status-latest.json` is the shared pointer — the one document a reader opens when it
-    // has not been told which entry it wants — and `mirror` may last have written
-    // it for the entry that has just gone.
-    //
-    // The document is parsed and its `entry_id` compared exactly. A substring test over the
-    // raw text answers "yes" for every id the pointer merely contains: `e1` is a substring
-    // of `e10`, and of a workspace path, and of the detail line — so abandoning `e1` would
-    // delete a pointer that named a live run, and a reader would then have nothing to
-    // read at all. Nothing re-claims the pointer here: it stays removed rather than
-    // answering, signed and whole, for a run that no longer exists.
-    let _ = status::remove_latest_if_owned(entry_id, &config.config_dir);
 }
 
 // ------------------------------------------------------ the workspace, end to end
 
 /// A fresh entry id: `e` and sixteen hex characters from the operating system's entropy.
 ///
-/// Hex, because this string names a directory, a registry key, a status cache file and a
-/// URL segment. A random id rather than a counter because two daemons that had each counted
+/// Hex, because this string names a directory, a registry key and a URL segment. A random id rather than a counter because two daemons that had each counted
 /// to three would name one entry twice on a shared server.
 fn mint_entry_id() -> String {
     use rand::RngCore;
