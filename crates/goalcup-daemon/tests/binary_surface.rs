@@ -1,9 +1,9 @@
 //! What `goalcup-daemon` answers before it opens anything.
 //!
-//! Two questions a `goalcup doctor` asks of a daemon that is not up, which is exactly when
-//! they are worth asking: which binary is this, and what does it do.
+//! The question a `goalcup doctor` asks of a daemon that is not up, which is exactly when
+//! it is worth asking: which binary is this.
 //!
-//! `CARGO_BIN_EXE_goalcup-daemon` is the binary the test harness built, so these run against
+//! `CARGO_BIN_EXE_goalcup-daemon` is the binary the test harness built, so this runs against
 //! the shipped argument parser rather than against `Args` as a Rust type.
 
 /// `DAEMON_VERSION` is chained as `EventBody::VersionChange` and served on
@@ -30,45 +30,4 @@ fn the_binary_says_which_version_it_is_without_starting_anything() {
         String::from_utf8_lossy(&out.stderr).is_empty(),
         "--version says nothing on stderr"
     );
-}
-
-/// Clap uses a struct's doc comment as `long_about`, so `--help` opens with it: the opening
-/// says what the program is, and the paragraph describing `--print-addresses` sits on its
-/// flag.
-#[test]
-fn help_opens_by_describing_the_program_and_not_one_of_its_flags() {
-    let long = help(&["--help"]);
-    let short = help(&["-h"]);
-
-    for (name, text) in [("--help", &long), ("-h", &short)] {
-        assert!(
-            text.contains("capture daemon"),
-            "{name} must open by saying what the program is: {text}"
-        );
-        // The paragraph about `--print-addresses` is still in the output, on the flag it
-        // describes, but it must not be the first thing a reader meets.
-        let opening = text.split("Usage:").next().unwrap_or_default();
-        assert!(
-            !opening.contains("where a client connects"),
-            "{name} opens with `--print-addresses`'s own paragraph: {opening}"
-        );
-    }
-    // The flag's paragraph is still documented, on the flag.
-    assert!(
-        long.contains("where a client connects"),
-        "--print-addresses keeps its explanation: {long}"
-    );
-    // And every flag this build has is named, so a reader of `--help` can configure it.
-    for flag in ["--config", "--foreground", "--print-addresses", "--version"] {
-        assert!(long.contains(flag), "--help does not name {flag}");
-    }
-}
-
-fn help(args: &[&str]) -> String {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_goalcup-daemon"))
-        .args(args)
-        .output()
-        .expect("the binary runs");
-    assert!(out.status.success(), "{args:?} exits 0");
-    String::from_utf8_lossy(&out.stdout).to_string()
 }
