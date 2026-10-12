@@ -1,0 +1,8 @@
+# cargo-nextest settings for `sh scripts/gate.sh`. One process per test, run in parallel.
+# Install once: cargo install cargo-nextest --locked
+[profile.default]
+# Report every failure in one run instead of stopping at the first.
+fail-fast = false
+# A test slower than 30 s is flagged; it is killed after six such periods (180 s).
+slow-timeout = { period = "30s", terminate-after = 6 }
+test-threads = "num-cpus"
