@@ -139,7 +139,6 @@ pub fn vars(layout: &Layout) -> TemplateVars {
     v.set("entry_id", "entry-0001");
     v.set("run_id", "entry-0001");
     v.set("artifact_root", "/nonexistent/artifact-root");
-    v.set("server_port", "");
     v.set("status_line_path", "/nonexistent/status-line");
     v
 }

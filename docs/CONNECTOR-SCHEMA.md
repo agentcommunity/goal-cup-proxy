@@ -69,8 +69,7 @@ next single argument, or `capture.goal_flag` is present and carries the goal as
 `--flag=<goal>`, never both. Every argument and `goal_flag` passes the core deny policy and the
 optional argument guard.
 
-Argument and `capture.env` value templates admit only `{workspace}`, `{port}` and
-`{session_id}`. `{{` and `}}` render literal braces. Any other token or unmatched brace is
+Argument and `capture.env` value templates admit only `{workspace}` and `{session_id}`. `{{` and `}}` render literal braces. Any other token or unmatched brace is
 refused. `{session_id}` has the identity rules described below.
 
 ### Executable

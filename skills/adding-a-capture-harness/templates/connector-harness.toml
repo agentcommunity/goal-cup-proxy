@@ -12,7 +12,7 @@ id = "<HARNESS_ID>"                     # must equal the folder name; ^[a-z][a-z
 
 [capture]
 # Headless argv WITHOUT the program and WITHOUT the goal. Templates allowed in values:
-# {workspace}, {port}, {session_id} (only with identity "preassigned"). No absolute paths.
+# {workspace}, {session_id} (only with identity "preassigned"). No absolute paths.
 # Goal placement, pick ONE:
 #   A) end args with "--": the goal is appended as the next single argument;
 #   B) set goal_flag: the goal is passed as --flag=<goal>, and args must NOT end in "--".
