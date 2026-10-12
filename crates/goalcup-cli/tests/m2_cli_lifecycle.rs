@@ -239,10 +239,8 @@ fn local_pilot_never_requests_receipt() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
     rig.tell("stop", "");
-    assert!(
-        !goalcup_cli::config::grant_path(&rig.cfg).exists(),
-        "no grant"
-    );
+    // No `grant.json`, the file the V1 `goalcup auth` wrote: the pilot runs without one.
+    assert!(!rig.cfg.join("grant.json").exists(), "no grant");
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);

@@ -168,7 +168,7 @@ pub struct LaunchPlan {
 /// [`spawn`] gives such a child `/dev/null` for stdin (both harnesses
 /// append piped stdin to the goal); its environment is exactly [`LaunchPlan::env_set`],
 /// because [`build_capture_launch`] leaves [`LaunchPlan::env_base`] empty (built from nothing, D38);
-/// and `argv[goal_index]` is the goal, which neither `Debug` nor [`shell_line`] prints.
+/// and `argv[goal_index]` is the goal, which `Debug` does not print.
 ///
 /// A recipe that names a `goal_flag` carries its goal inside that flag's own element
 /// (`--query=<goal>`), so the element is `goal_prefix` bytes of flag and `=` and then the goal;
@@ -1043,90 +1043,6 @@ fn owns_its_group(mode: LaunchMode) -> bool {
         // more than an arm that can.
         LaunchMode::AttachOnly => false,
     }
-}
-
-/// The launch as one shell line, the form the V1 `--print-launch` printed (D48 removed it).
-///
-/// Shell-quoted, because this one *is* shell-bound: template values are byte-exact, quoting
-/// belongs to whoever gives the string to something that parses it, and this is that
-/// place. The spawned child is not affected: [`spawn`] passes each element to
-/// `Command::arg` and no shell sees it at all.
-///
-/// **A `*_TOKEN` pin is withheld, and the line says so instead of standing in for it.**
-/// Printing a live bearer to a terminal — into scrollback, into a pasted issue report, into
-/// a screen recording — is not a thing this CLI does for any reason, including convenience.
-///
-/// A secret pin is therefore **not rendered as an assignment at all**. A
-/// `GOALCUP_TOKEN=<redacted>` in the middle of an otherwise runnable line reads as a value
-/// with a placeholder in it: paste the line, get a harness that starts, presents a bearer
-/// of `<redacted>`, is refused, and records nothing — a silent 168 hours. The
-/// key is named on a comment line that says what it is instead, so the reader learns both
-/// that the launch pins it and that this line is a description of a launch rather than a
-/// replacement for `goalcup start`.
-///
-/// **A capture plan** ([`build_capture_launch`]) is printed with `env -i` and `< /dev/null`, because
-/// that is what its child gets, and with two more things withheld the same way: a value
-/// carrying URL userinfo (the proxy credential in `HTTPS_PROXY`), and the goal, which is
-/// retained as a redacted evidence stream and printed nowhere.
-pub fn shell_line(p: &LaunchPlan) -> String {
-    let mut out = String::new();
-    let mut withheld: Vec<&str> = Vec::new();
-    out.push_str("cd ");
-    out.push_str(&quote(&p.cwd.display().to_string()));
-    out.push_str(" && env");
-    if p.capture.is_some() {
-        out.push_str(" -i");
-    }
-    for k in &p.env_remove {
-        out.push_str(" -u ");
-        out.push_str(&quote(k));
-    }
-    for (k, v) in &p.env_set {
-        if is_secret_key(k) || without_userinfo(v).is_some() {
-            withheld.push(k);
-            continue;
-        }
-        out.push(' ');
-        out.push_str(k);
-        out.push('=');
-        out.push_str(&quote(v));
-    }
-    out.push(' ');
-    out.push_str(&quote(&p.program));
-    let goal_index = p.capture.map(|c| c.goal_index);
-    let goal_prefix = p.capture.map_or(0, |c| c.goal_prefix);
-    for (i, a) in p.argv.iter().enumerate() {
-        if Some(i) == goal_index {
-            continue;
-        }
-        out.push(' ');
-        out.push_str(&quote(a));
-    }
-    if p.capture.is_some() {
-        out.push_str(" < /dev/null");
-    }
-    if !withheld.is_empty() {
-        out.push_str(&format!(
-            "\n# {} is pinned by this launch and is withheld here — a pasted line will not \
-             record. Run `goalcup start`.",
-            withheld.join(", ")
-        ));
-    }
-    if let Some(goal) = goal_index.and_then(|i| p.argv.get(i)) {
-        if goal_prefix > 0 {
-            let flag = goal.get(..goal_prefix.saturating_sub(1)).unwrap_or("");
-            out.push_str(&format!(
-                "\n# The goal ({} bytes) is the value of the `{flag}=` argument and is withheld here.",
-                goal.len().saturating_sub(goal_prefix)
-            ));
-        } else {
-            out.push_str(&format!(
-                "\n# The goal ({} bytes) is the final argument after `--` and is withheld here.",
-                goal.len()
-            ));
-        }
-    }
-    out
 }
 
 /// POSIX single-quoting, applied only where it changes anything.

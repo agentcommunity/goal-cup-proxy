@@ -21,7 +21,7 @@ mod table_lock;
 use goalcup_cli::commands::doctor::{DoctorOptions, run_with};
 use goalcup_cli::preflight::{
     Level, connector_checks, connector_checks_with_dev, required_paths_gate,
-    sample_harness_version_within, server_port_gate, tier_gate,
+    sample_harness_version_within, tier_gate,
 };
 use std::collections::BTreeMap;
 
@@ -90,8 +90,8 @@ fn the_tier_gate_is_d23s_measured_table_and_refuses_anything_but_full() {
 #[test]
 fn the_version_gate_is_d12_and_the_ports_gate_is_the_one_the_pinned_port_needs() {
     let mut c = support::connector("codex-cli");
-    // No shipped connector declares `free_ports`: the launch binds the daemon's reserved port,
-    // which `server_port_gate` checks. The GATE still has to work, so this test gives the
+    // No shipped connector declares `free_ports`: the launch binds the daemon's reserved port.
+    // The GATE still has to work, so this test gives the
     // connector a port it holds itself — a test that bound a fixed port would assert nothing
     // on a machine where something already had it, and a machine where something already has
     // it is precisely the machine this check is for.
@@ -456,31 +456,6 @@ fn an_unpinned_rulebook_is_refused_unless_the_one_door_is_open_and_then_it_says_
             "{id} did not come through the door, so nothing says it did"
         );
     }
-}
-
-/// The daemon REMEMBERS a reserved `server_port` and never re-reserves it, so the check that
-/// it is still free belongs here, before a resume relaunches into a port somebody else took
-/// while the run was stopped.
-#[test]
-fn a_remembered_server_port_is_checked_before_a_resume_and_a_held_one_is_refused() {
-    assert!(
-        server_port_gate(None).is_none(),
-        "a connector that reserves no port has nothing to check"
-    );
-    let free = server_port_gate(Some(0)).expect("port 0 is still a port the caller named");
-    assert_eq!(free.level, Level::Pass, "port 0 binds anywhere");
-
-    let held = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("a port to hold");
-    let port = held.local_addr().expect("the port it landed on").port();
-    let gate = server_port_gate(Some(port)).expect("a remembered port is checked");
-    assert_eq!(gate.level, Level::Fail, "somebody else has it now");
-    assert!(
-        gate.detail.contains(&port.to_string()),
-        "and the refusal names it: {:?}",
-        gate.detail
-    );
-    assert!(!gate.fix.is_empty(), "and says what to do about it");
-    drop(held);
 }
 
 /// D12's probe runs the harness, and it runs it in an environment with no base URL and no

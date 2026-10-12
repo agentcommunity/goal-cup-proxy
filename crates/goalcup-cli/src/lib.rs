@@ -20,7 +20,7 @@
 //! |---|---|
 //! | 0 | The command did what it was asked. |
 //! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. |
-//! | 2 | **Never produced by this CLI.** It is a `Fail` verdict, relayed unchanged from `goalcup-verify` by [`relay_verdict`]. |
+//! | 2 | **Never produced by this CLI.** It is `goalcup-verify`'s `Fail` exit; the V1 `goalcup doctor --verify` that relayed it was removed by D48. |
 //! | 3 | The CLI could not do its job: a file it could not read, a response it could not parse. |
 //! | 4 | **A gate said no.** Only the daemon's `arming_timeout` maps here, and no capture-run path raises it: the V1 arming and `goalcup resume` gates were removed (D48). |
 //!
@@ -124,27 +124,4 @@ impl CliError {
             },
         }
     }
-}
-
-/// A verdict's own exit code, unchanged — the one number this CLI reports without choosing
-/// it.
-///
-/// `goalcup-verify` is a separate binary and its exit codes are the verdict's:
-/// 0 `Pass`, 1 `Flag`, 2 `Fail`. Where this CLI reports a verdict it reports that number
-/// and does not re-derive it, so the two can never disagree about what a `Fail` is. A verdict
-/// is the one thing that exits with rung 2.
-///
-/// **The one number this CLI would report that it did not choose.** A verdict's `Flag` is
-/// `1`, and so is [`CliError::Refused`]: the same number for "your entry has a flag on it"
-/// and for "this machine could not run the check".
-/// They do not collide, because no invocation reaches both: the one mode that relayed a
-/// verdict, the V1 `goalcup doctor --verify <dir>`, was removed by D48, and no command calls
-/// this function now. Every invocation of every command reports the ladder above, where `2`
-/// does not exist, and `goalcup doctor --help` points at `goalcup-verify` for a verdict.
-///
-/// A verdict code outside a `u8` is not reachable — [`goalcup_verifier::Verdict::exit_code`]
-/// is a three-armed match over `Severity` — and the saturating conversion is here so this
-/// function cannot panic rather than because the case exists.
-pub fn relay_verdict(verdict: &goalcup_verifier::Verdict) -> u8 {
-    u8::try_from(verdict.exit_code()).unwrap_or(3)
 }

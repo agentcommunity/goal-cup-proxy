@@ -9,7 +9,7 @@ mod m2_profile_support;
 
 use goalcup_cli::CliError;
 use goalcup_cli::key_scan::{FragmentMatcher, ScanOutcome, scan_tree};
-use goalcup_cli::launch::{build_capture_launch, child_secret_for_harness, shell_line};
+use goalcup_cli::launch::{build_capture_launch, child_secret_for_harness};
 use goalcup_protocol::harness::Origin;
 use m2_profile_support as s;
 use std::collections::BTreeMap;
@@ -83,7 +83,6 @@ fn amp_child_secret_is_not_in_launch_debug_or_parent_env() {
         ("ChildSecret Debug", format!("{secret:?}")),
         ("ChildSecret pretty Debug", format!("{secret:#?}")),
         ("plan Debug", format!("{plan:?}")),
-        ("shell_line", shell_line(&plan)),
     ] {
         for form in forms() {
             assert!(!text.contains(&form), "{surface} shows a form of the token");
