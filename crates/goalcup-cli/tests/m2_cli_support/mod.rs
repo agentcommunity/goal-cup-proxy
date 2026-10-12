@@ -501,6 +501,12 @@ fn write_hermes_connector(connectors: &Path, capture_connectors: &Path, exe: &Pa
             "0444572f0bce8a805473fbcaa431beed399818528758b454fbf24825a51be325",
             goalcup_daemon::workspace::sha256_hex(&std::fs::read(exe).unwrap()),
         ),
+        // `goalcup start` probes every provider host that is not loopback before it creates
+        // anything; a test never reaches the network, and the fake never calls its provider.
+        (
+            "host = \"api.deepseek.com\"",
+            "host = \"api.deepseek.localhost\"".to_string(),
+        ),
     ] {
         assert!(
             harness.contains(from),

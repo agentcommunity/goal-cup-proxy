@@ -35,7 +35,8 @@
 //! Recovery re-observation belongs to the emitter: this root never re-emits anything.
 //! Refused admissions and failures emit nothing, and an authentication host or a host that is
 //! not approved stays opaque: a tunnel's bytes are never inspected. They are counted in
-//! [`ProxyHealth`]. What the proxy relays but does not capture is a different matter: each such
+//! [`ProxyHealth`], where failed upstream connects are also coalesced into outage windows
+//! ([`outage`]) that `goalcup start` reports at finish; the frozen v5 chain has no record for them. What the proxy relays but does not capture is a different matter: each such
 //! loss is also submitted as a stream-zero `Loss` frame ([`api::CaptureEmitter::loss`]) at the
 //! moment it happens, inside the connection task, so the producer's own stream carries it
 //! before any `Close` can attest the stream complete: a fail-open tunnel when it is decided
@@ -69,6 +70,8 @@ pub mod connect;
 pub mod http;
 pub mod ingest;
 pub mod metadata;
+pub mod outage;
+pub mod preflight;
 pub mod tls;
 pub mod websocket;
 
@@ -270,6 +273,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
         admission,
         emitter,
         counters,
+        outages: outage::OutageTracker::default(),
     });
     let (stop_tx, stop_rx) = oneshot::channel();
     let accept = tokio::spawn(accept_loop(
@@ -648,6 +652,13 @@ pub struct ProxyHealth {
     pub producers_admitted: u64,
     /// Connection tasks that panicked.
     pub task_panics: u64,
+    /// Upstream outage windows since start: stretches of consecutive admissions whose upstream
+    /// connect failed after every retry, each ended by the next one that reached an upstream
+    /// ([`outage`]). Zero on a run whose network never failed it.
+    pub upstream_outages: u64,
+    /// The most recent of those windows (at most [`outage::MAX_KEPT_OUTAGE_WINDOWS`]), oldest
+    /// first; one still open has no `recovered` time.
+    pub outage_windows: Vec<outage::OutageWindow>,
 }
 
 #[derive(Default)]
@@ -752,6 +763,9 @@ impl Counters {
             sink_refusals: read(&self.sink_refusals),
             producers_admitted: read(&self.producers_admitted),
             task_panics: read(&self.task_panics),
+            // Kept by `Shared::outages`; `Shared::health` fills them in.
+            upstream_outages: 0,
+            outage_windows: Vec::new(),
         }
     }
 
@@ -774,12 +788,13 @@ impl Counters {
     }
 }
 
-/// What every connection task shares: the immutable admission rules, the one emitter, and
-/// the counters.
+/// What every connection task shares: the immutable admission rules, the one emitter, the
+/// counters and the upstream outage windows.
 struct Shared {
     admission: AdmissionConfig,
     emitter: Arc<CaptureEmitter>,
     counters: Arc<Counters>,
+    outages: outage::OutageTracker,
 }
 
 impl Shared {
@@ -789,6 +804,7 @@ impl Shared {
         let mut health = self.counters.snapshot();
         health.sink_refusals += self.emitter.local_refusals();
         health.opaque_fallbacks = self.emitter.opaque_fallbacks();
+        (health.upstream_outages, health.outage_windows) = self.outages.snapshot();
         health
     }
 }
@@ -890,6 +906,11 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
     // relayed: the tunnel runs inside `admit`, so a task that is cut or panics mid-relay
     // never reaches the counters below.
     let admission = connect::admit_observed(tcp, &shared.admission, |reason| {
+        // A tunnel is decided only once its upstream is connected; every reason but a host
+        // that is not approved is a provider host's.
+        if reason != connect::TunnelReason::NotApproved {
+            shared.outages.success(&metadata::capture_time().wall);
+        }
         if is_fail_open(reason) {
             let _ = shared
                 .emitter
@@ -898,6 +919,7 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
     })
     .await;
     unsettled.settle();
+    record_upstream_reach(shared, &admission);
     match admission {
         Admission::Failed(failure) => {
             let class = match failure.class {
@@ -950,6 +972,39 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
             | connect::TunnelReason::ClientHelloUnparsed => &counters.tunneled_fail_open,
         }),
         Admission::Intercepted(intercepted) => relay_intercepted(intercepted, shared).await,
+    }
+}
+
+/// What a settled admission says about reaching a provider host (approved or authentication),
+/// for the outage windows. A tunnel is recorded when it is decided (it settles only when it
+/// ends); an interception, and a TLS or ALPN failure that came after the TCP connect, reached the
+/// upstream; a failed connect did not. A host that is not approved is the agent's own traffic and
+/// says nothing about the provider; nor does a refusal, a timeout or a client that went away.
+fn record_upstream_reach(shared: &Shared, admission: &Admission) {
+    let reached = match admission {
+        Admission::Intercepted(_) => true,
+        Admission::Failed(failure)
+            if !failure
+                .host
+                .as_deref()
+                .is_some_and(|host| shared.admission.is_provider_host(host)) =>
+        {
+            return;
+        }
+        Admission::Failed(failure) => match failure.class {
+            FailureClass::UpstreamConnect(_) => false,
+            FailureClass::UpstreamTls
+            | FailureClass::ClientTls
+            | FailureClass::AlpnIncompatible => true,
+            _ => return,
+        },
+        Admission::Tunneled(_) => return,
+    };
+    let at = metadata::capture_time().wall;
+    if reached {
+        shared.outages.success(&at);
+    } else {
+        shared.outages.failure(&at);
     }
 }
 

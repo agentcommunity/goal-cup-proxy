@@ -701,6 +701,10 @@ fn prepare(
         None => None,
     };
     let executable = capture_executable(c, profile, env)?;
+    // The provider hosts answer a TCP connect before anything is created (the proxy module's
+    // preflight; it names a firewall holding this binary when they do not).
+    crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
+        .map_err(|unreachable| CliError::Refused(unreachable.to_string()))?;
     // A per-run home is made inside the run directory below. A run directory beside a goal file
     // inside a Git work tree is refused before anything is created: it would hold what the
     // harness wrote, which can include a fragment of the provider key (D41).
@@ -1721,6 +1725,7 @@ fn proxy_admission_line(
         ("upstream_tls", a.upstream_tls),
         ("client_tls", a.client_tls),
         ("alpn_incompatible", a.alpn_incompatible),
+        ("upstream_outages", h.upstream_outages),
     ];
     let mut line = String::from("proxy admission:");
     for (name, count) in always
@@ -1767,6 +1772,9 @@ fn finish(
     let a = &h.admission_failures;
     // Diagnostics are fixed counters only. A failed stdout write must not prevent sealing.
     let _ = say(out, &proxy_admission_line(h, a));
+    for line in crate::proxy::outage::finish_lines(h.upstream_outages, &h.outage_windows) {
+        let _ = say(out, &line);
+    }
     let counters = ProxyCounters {
         tunneled_fail_open: h.tunneled_fail_open,
         opaque_fallbacks: h.opaque_fallbacks,

@@ -270,9 +270,12 @@ async fn refused_loopback_upstream_keeps_a_fixed_connect_failure_kind() {
     let port = reserved.local_addr().unwrap().port();
     drop(reserved);
     let pki = TestPki::new("unused");
+    // The default 30 s admission: a host that is not a provider's (the agent's own traffic) is
+    // never retried, so its refusal is answered at once, as it always was.
     let (_ca, config) = config(&["api.test"], &[], &roots(&pki));
     let proxy = serve_one(config).await;
     let target = format!("127.0.0.1:{port}");
+    let started = Instant::now();
     let mut client = TcpStream::connect(proxy.addr).await.unwrap();
     client
         .write_all(&connect_head(&target, Some(&good_auth())))
@@ -280,10 +283,50 @@ async fn refused_loopback_upstream_keeps_a_fixed_connect_failure_kind() {
         .unwrap();
     let response = read_to_end(&mut client).await;
     let failure = failed(proxy.outcome().await);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "a host that is not a provider's was retried: {:?}",
+        started.elapsed()
+    );
     assert_eq!(
         failure.class,
         FailureClass::UpstreamConnect(goalcup_cli::proxy::connect::ConnectFailureKind::TcpRefused)
     );
+    assert!(response.starts_with(b"HTTP/1.1 502 "));
+}
+
+/// A provider host (here an authentication host, whose failed connect is answered `502`) is
+/// retried until the connect deadline: five sixths of a 1.2 s admission is a full second.
+#[tokio::test]
+async fn a_refused_provider_host_is_retried_before_its_502() {
+    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = reserved.local_addr().unwrap().port();
+    drop(reserved);
+    let pki = TestPki::new("unused");
+    let (_ca, config) = config(&["api.test"], &["localhost"], &roots(&pki));
+    let config = Arc::new(
+        Arc::try_unwrap(config)
+            .unwrap()
+            .with_timeouts(Duration::from_millis(1200), Duration::from_millis(300)),
+    );
+    let proxy = serve_one(config).await;
+    let started = Instant::now();
+    let mut client = TcpStream::connect(proxy.addr).await.unwrap();
+    client
+        .write_all(&connect_head(
+            &format!("localhost:{port}"),
+            Some(&good_auth()),
+        ))
+        .await
+        .unwrap();
+    let response = read_to_end(&mut client).await;
+    let failure = failed(proxy.outcome().await);
+    assert!(
+        started.elapsed() >= Duration::from_millis(600),
+        "a provider host was not retried: {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(failure.class, FailureClass::UpstreamConnect(_)));
     assert!(response.starts_with(b"HTTP/1.1 502 "));
 }
 

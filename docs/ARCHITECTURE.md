@@ -154,6 +154,9 @@ serialized words remain pinned by research-report schema 1.
 - **Capture is a side channel:** a refused frame stops capture, never the relay; each loss is
   chained as a `Loss` when it begins (§6). Bounded by `MAX_OPEN_CONNECTIONS`,
   `MAX_CONNECTION_TASKS` and `MAX_CAPTURE_QUEUE_BYTES`; no ACK, no replay ([C2], [C3]).
+- **Outages:** a provider-host connect re-resolves and retries until 5/6 of the admission deadline;
+  upstream sockets get TCP keepalive, no idle timeout. Failed connects coalesce into outage
+  windows printed at finish, not chained ([outage.rs](../crates/goalcup-cli/src/proxy/outage.rs)).
 
 ## 8. Redaction
 

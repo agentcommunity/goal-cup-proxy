@@ -275,6 +275,22 @@ machine healthy" and the wrong one to "can I start this harness".
 | `goalcup seal --dry-run` | Walk this machine's workspace and print the self-check (what is there and what the exclusions take out) and seal nothing. It makes no call at all, so it answers on a machine whose daemon is not running. |
 | `--json` on `status`, `entries` and `doctor` | The signed document itself, the summaries as one array, and the report as one document, instead of a page of text. |
 
+**Network outages.** Before anything is created, `goalcup start` makes one TCP connect to port
+443 of each provider host the connector intercepts, all within 10 s (loopback hosts are skipped).
+A host that does not answer refuses the run, naming the host, the failure (DNS, refused, timed
+out, not permitted) and this binary's path: a per-app firewall such as Little Snitch holds a
+newly built binary's connections until someone allows that exact path. During a run, each
+provider-host connect is retried, re-resolving the name, with a 250 ms to 2 s backoff until 25 s
+of the 30 s admission deadline, and is never a replayed request; any other host (the agent's own
+pip, npm, git or curl traffic) gets one round and fails at once, as before. Upstream sockets get TCP keepalive
+(60 s idle, 15 s interval, 4 probes) and no idle timeout. Provider-host connects that still fail
+coalesce into outage windows: the finish adds `upstream_outages=N` to the `proxy admission:` line
+and one `proxy upstream outage:` line per window (first and last failure, count, recovery time).
+The frozen v5 chain has no record kind for an outage, so the windows are not in the trace. Nothing
+is said to the harness. The Claude connector sets `CLAUDE_CODE_RETRY_WATCHDOG=1` so a dropped
+connection is retried for hours rather than about ten times; Codex 0.153.0 has no retry key that
+does not require a custom provider with a base URL, so its budget stays its own.
+
 `goalcup --help` lists five commands (`start`, `status`, `entries`, `seal`, `doctor`) and says
 where verification is. There is no `goalcup verify`: one verifier, one set of flags, one
 set of exit codes. `auth`, `ui` and `resume` were V1 commands; they are hidden and refuse at
