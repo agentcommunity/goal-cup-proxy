@@ -98,6 +98,9 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    and must be named in `seed`; any other file in the folder is refused. Field rules:
    [CONNECTOR-SCHEMA](../../docs/CONNECTOR-SCHEMA.md). Check that no placeholder is left
    outside comments: `grep -nE '^[^#]*<[^>]+>' connectors/<id>/harness.toml`. Expect: no output.
+   Your exact `capture.args` + `goal_flag` and every `capture.env` entry must also be rows of
+   `CAPTURE_ARG_ALLOWLIST` / `CAPTURE_ENV_ALLOWLIST` in `capture_policy.rs` (decision table row
+   13): a core PR that lands first, or the pinned connector is refused at load.
 6. **Regenerate the pins.** `sh scripts/pin-manifests.sh`. Expect: no output, exit 0. Then
    `git diff --stat -- crates/*/pins`. Expect: `crates/goalcup-protocol/pins/connector-dirs.txt`
    with one line added for `<id>`, and nothing else. Re-run after every edit under

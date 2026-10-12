@@ -29,6 +29,7 @@ facts sheet, with `Status: facts only`, is still a complete PR.
 | 10 | Executable pin | one entry-point file (a binary, or a script with a shebang), not an interpreter | record per-arch |
 | 11 | Endpoint names | you set no endpoint variable at all | issue, not blocking |
 | 12 | Other refusals | no refused env name, argv path or custom regex is needed | core PR |
+| 13 | Reviewed argv and env | never: every pinned connector's exact `capture.args` + `goal_flag`, and each `capture.env` entry, is a row of `CAPTURE_ARG_ALLOWLIST` / `CAPTURE_ENV_ALLOWLIST` | core PR (one small row PR, before step 6) |
 
 ## How to tell, row by row
 
