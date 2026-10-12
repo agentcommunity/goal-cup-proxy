@@ -3,8 +3,9 @@
 Design for the server side of the tracer, for the event going live on **6 November 2026**. Written
 2026-10-13 from the owner's decisions, then revised after four reviews (builder check, security and
 privacy, scale and operations, Cloudflare product research). Replaces the draft `docs/SERVER-PLAN.md`
-(PR #25). Calls marked *(my call)* were made by the author and are open to correction. Items marked
-**OWNER** need the owner's answer and are listed in section 15.
+(PR #25). Calls marked *(my call)* were made by the author and are open to correction. The owner's answers to the
+open questions are recorded in section 15. Platforms for 6 November: macOS and Linux, plus Windows
+through WSL2; installation through Homebrew.
 
 ## 1. Why, and what success looks like
 
@@ -77,8 +78,30 @@ through Supabase with row-level security.
    - The first chunk uploads as soon as the agent launches.
    - Then one chunk every hour, or as soon as 32 MB (compressed) is waiting.
    - A heartbeat every 5 minutes.
-5. **Finish.** At seal the tracer uploads what's left and sends the seal. Late catch-up uploads after the
-   deadline are accepted for a grace period (**OWNER**: proposed 48 hours) and marked late.
+5. **If the run stops** (laptop crash, reboot, the agent process dies), the participant brings it
+   back:
+   - they run `goalcup continue`;
+   - the tracer reattaches to the **same server run**: same official start, same deadline, and the clock
+     kept running;
+   - the server issues a new `entry_id` for this next segment, and the tracer relaunches the harness
+     on its own session (Codex and Claude Code both resume sessions) with the message "keep going";
+   - the record shows the gap and that message, which the rules allow.
+
+   **Notifications:**
+   - if the server hears nothing from an open run for 20 minutes, it emails the participant: "your
+     run stopped; run `goalcup continue`";
+   - *(nice to have)* a small login item on the participant's machine notices an interrupted run after
+     a reboot and shows a notification that leads to `goalcup continue`.
+6. **The deadline.** At `deadline_at` the tracer stops the agent and seals, and the run is over.
+   - **The submission is the participant's GitHub repo.** Its URL is given when the run opens, and at
+     `deadline_at` the server records the latest commit on its default branch through the GitHub API.
+     That commit is what judges review; later pushes don't count.
+   - The tracer also notes the local repo's latest commit at the deadline, as a cross-check.
+   - Uploads that arrive late are accepted for 48 hours, but only records time-stamped before
+     `deadline_at`. That way a participant whose network dropped in the last hours doesn't lose the
+     evidence of those hours, and no work after the deadline counts. *(The owner's rule is "when the
+     timer is up it's over"; accepting late delivery of earlier recordings is the author's reading of it,
+     flagged for confirmation.)*
 
 ## 4. The calls
 
@@ -87,7 +110,8 @@ checks that the run belongs to the token's member.
 
 | Call | What it does |
 |---|---|
-| `POST /v1/runs` `{connector, harness_version, tracer_version, chain_head_at_create}` | Opens a run (section 3). Returns `{run_id, entry_id, official_start, deadline_at, start_receipt}`. Refuses unsupported tracer or connector versions. |
+| `POST /v1/runs` `{connector, harness_version, tracer_version, repo_url, chain_head_at_create}` | Opens a run (section 3). Returns `{run_id, entry_id, official_start, deadline_at, start_receipt}`. Refuses unsupported tracer or connector versions. |
+| `POST /v1/runs/{id}/continue` `{previous_entry_id, chain_head_at_create}` | After a stop: issues the next segment's `entry_id` for the same run, before the agent relaunches. Refused after `deadline_at`. |
 | `GET /v1/runs/{id}` | The server's position: `{offset, seq, head, status}`. Used to resume after a crash. |
 | `POST /v1/runs/{id}/heartbeat` | Every 5 minutes: `{at, seq, head, offset_local, tokens_in, tokens_out, tool_calls, model_requests, outage_open}`. The server stamps its receive time on `(seq, head)`, which commits the participant to that chain position before the bytes arrive. Totals are cumulative. |
 | `PUT /v1/runs/{id}/chunks/{offset}` + headers `{length, sha256, first_seq, last_seq, prev, head}`, body = zstd bytes | Stores bytes `[offset, offset+length)` of `chain.jsonl`, whole lines only. Returns a signed **acknowledgement** in the verifier's existing format (`AckCheckpoint` in `acks.jsonl`). |
@@ -103,7 +127,7 @@ checks that the run belongs to the token's member.
    - the per-token rate limit trips;
    - the maintenance switch is on.
 2. Check the headers: `offset` is the run's next offset, and `prev` equals the stored head.
-3. **Stream** the body into R2 with a create-only write under `traces/{event}/{run_id}/{offset:016}-{sha256}.zst`.
+3. **Stream** the body into R2 with a create-only write under `traces/{event}/{run_id}/{entry_id}/{offset:016}-{sha256}.zst`.
    R2 itself checks the sha256 and refuses to overwrite. The body is never held in memory.
 4. One Postgres function atomically advances the run's offset and head, and inserts the chunk row, only
    if they still match what step 2 saw.
@@ -156,8 +180,8 @@ out. These numbers are for the website and press, not judging; the raw trace sta
 **Publishing.** A scheduled Worker rebuilds `live.json` every minute from one Postgres query. It holds
 field totals, agents running now, runs started and runs sealed. It's served with caching, and browsers
 never touch the database.
-- Per-run figures appear only for participants who opt in on the site. Otherwise it's rounded
-  "top N" numbers.
+- Per-run figures are public (the owner's call); the terms say so. The site may show them every 5
+  minutes or as daily updates.
 - No client-supplied text ever appears in public data.
 
 ## 7. Data model (Supabase, schema `goalcup`, not exposed to the public API)
@@ -166,8 +190,9 @@ never touch the database.
 |---|---|
 | `events` | `id`, `mode` (competition, dry_run, practice), `start_window_opens`, `start_window_closes`, `run_hours` (168), `grace_hours` |
 | `tokens` | `member_id`, `token_hash`, `created_at`, `revoked_at` |
-| `runs` | `id`, `event_id`, `member_id`, `entry_id`, `official_start`, `deadline_at`, `status` (open, sealed, abandoned, flagged), `upload_offset`, `head`, `last_heartbeat_at`, `last_chunk_at`, latest totals, versions |
-| `chunks` | `run_id`, `offset` (unique per run), `length`, `sha256`, `first_seq`, `last_seq`, `prev`, `head`, `r2_key`, `received_at`, `ack` |
+| `runs` | `id`, `event_id`, `member_id`, `official_start`, `deadline_at`, `status` (open, sealed, abandoned, flagged), `repo_url`, `final_commit`, `final_commit_at`, `last_heartbeat_at`, latest totals, versions |
+| `entries` | `id` (the `entry_id`), `run_id`, `segment` (0, 1, 2 …), `opened_at`, `upload_offset`, `head`, `last_chunk_at`, `sealed_at` |
+| `chunks` | `entry_id`, `offset` (unique per entry), `length`, `sha256`, `first_seq`, `last_seq`, `prev`, `head`, `r2_key`, `received_at`, `ack` |
 | `heartbeats` | `run_id`, `received_at`, `seq`, `head`, totals |
 | `outages` | `run_id`, `first_failure`, `last_failure`, `failures`, `recovered`, `source` (proxy or server) |
 | `verify_results` | `run_id`, `checked_through_offset`, `exit`, `summary`, `checked_at` |
@@ -190,11 +215,10 @@ never touch the database.
 - **Organizers:** everything, with their own accounts.
 - **Researchers:** named people with expiring read-only credentials. R2 Data Access Logs record reads,
   on a best-effort basis. The redacted copy only, and no member IDs.
-- **Raw traces are never public.**
+- **Raw traces are never public.** They're kept 12 months, then archived; deletion on request.
 
 What the tracer redacts happens on the participant's machine before anything is written or uploaded.
-`RULES.md` promises a second redaction pass on the server, which this design doesn't build
-(**OWNER**: build it, or reword `RULES.md`).
+There is no second redaction pass on the server; `RULES.md` is reworded to say so (section 15).
 
 ## 9. Practice and dry runs
 
@@ -203,8 +227,7 @@ What the tracer redacts happens on the participant's machine before anything is 
 - **dry_run:** the 28 October run with friendly teams;
 - **competition:** 6 November.
 
-Only competition runs appear in `live.json`, and receipts carry the mode. *(My call; confirm under
-**OWNER**.)*
+Only competition runs appear in `live.json`, and receipts carry the mode. (Confirmed by the owner.)
 
 ## 10. Local disk
 
@@ -240,8 +263,8 @@ acknowledgement for it, so a 168-hour run never fills a laptop.
 | Supabase Pro | $25 plus usage |
 | Verify-job machine | $0–20 |
 
-**Total: about $185–200 for the event month.** Afterwards, traces move to a colder storage class
-(**OWNER**: retention period).
+**Total: about $185–200 for the event month.** After 12 months, traces move to archive storage (about
+$1 per TB per month), possibly kept for good.
 
 ## 13. What the tracer needs (small PRs, in order)
 
@@ -253,6 +276,10 @@ acknowledgement for it, so a 168-hour run never fills a laptop.
    <entry>` after a crash.
 4. Heartbeat with `(seq, head)` and live totals.
 5. Outage windows sent with chunks and at seal.
+5a. `goalcup continue`: reattach to the same run, a new segment `entry_id`, and resume the harness's own
+    session with "keep going" (a connector field for each harness's resume command).
+5b. The deadline stop: at `deadline_at`, stop the agent, note the local repo's latest commit, seal.
+5c. *(Nice to have)* the login-item notification after a reboot.
 6. Pruning after verified acknowledgements, and the rolling reservation.
 7. Verifier: pin two keys, report "pruned", report lateness.
 
@@ -266,26 +293,33 @@ acknowledgement for it, so a 168-hour run never fills a laptop.
 3. The upload Worker: six calls, header checks, create-only R2 writes, the atomic commit function and
    signing.
 4. The verify job and `live.json` builder.
+4a. The quiet-run email (20 minutes without a heartbeat), sent through the website's existing mail setup.
+4b. At each run's deadline, a scheduled job records the repo's latest default-branch commit through the
+    GitHub API (a token with read access to public repos).
 5. Monitoring, switches, staging, and the load test.
 6. The receipt keys, made offline, with two public keys pinned in the verifier.
 
-## 15. Questions for the owner (answer before building)
+## 15. The owner's answers (2026-10-13)
 
-1. **After a crash or a dead laptop, may the participant start a fresh run inside the window?** The
-   agent can't resume a v5 entry. And what closes a dead run: an "abandon" button on the site, an
-   automatic close after N hours without a heartbeat, or both?
-2. **Retention:** how long are raw traces kept, and how are deletion requests handled? This must be
-   published before consent is collected.
-3. **Second redaction on the server:** build it, or reword `RULES.md` to "redacted on your machine
-   before anything is written or uploaded"?
-4. **Practice and dry-run modes** as in section 9: confirm.
-5. **Public per-run numbers** only for participants who opt in, otherwise totals and rounded "top N":
-   confirm.
-6. **Grace period** for late uploads after the 168 hours: 48 hours?
+1. **Crash or reboot:** the run continues with `goalcup continue` (section 3, step 5), with an email after
+   20 minutes of silence and an optional notification after reboot. A run is never restarted from zero
+   inside the window. One open run per account; more agents need more accounts.
+2. **Retention:** keep raw traces for 12 months, then move them to cheap archive storage, possibly
+   forever if it stays cheap. Deletion on request. This goes in the terms before consent.
+3. **Second redaction on the server:** not built. `RULES.md` is reworded to "secrets are removed on your
+   machine before anything is saved or sent".
+4. **Practice and dry runs:** yes, as in section 9. Funding practice tokens is a separate question.
+5. **Public per-run numbers:** yes, shown publicly (the site may choose to show daily updates). The
+   infrastructure supports 5-minute updates. The terms say run statistics are public.
+6. **Deadline:** at 168 hours it's over. The submission is the repo's latest commit on its default branch,
+   recorded by the server at the deadline. Late delivery of records made before the deadline is accepted
+   for 48 hours *(author's reading; confirm)*.
 7. **Logistics:**
-   - who gives us the Cloudflare account and a domain (for example `ingest.agentcommunity.org`);
-   - whether Supabase is on Pro;
-   - which repository owns the `goalcup` migrations.
+   - Cloudflare: the existing paid ($5) account. Domain: e.g. `ingest.agentcommunity.org`.
+   - Supabase: the existing paid project (about 30,000 members).
+   - The **website repo owns** auth, the `goalcup` schema and its migrations, token minting, the connect
+     page, the terms checkbox and the live display; it's already connected to R2 and Cloudflare.
+   - This repo owns the tracer and the upload Worker.
 
 ## 16. Not before 6 November
 
@@ -295,7 +329,7 @@ acknowledgement for it, so a 168-hour run never fills a laptop.
 - The browser-approval connect flow.
 - Teams.
 - More than one open run per account.
-- Linux and Windows.
+- A native Windows build (Windows participants use WSL2).
 - Durable Objects, Queues, D1, Analytics Engine, Hyperdrive, Pipelines/Basin and Containers.
 
 ## 17. Left to the builder
