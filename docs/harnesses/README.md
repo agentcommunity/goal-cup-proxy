@@ -32,6 +32,23 @@ same. Replace each section's one-line prompt with the facts. Every fact has a so
 your docs, "measured on version X", or "unknown". Write "unknown" rather than guess; "same as
 macOS" is fine when it is true.
 
+The worked example is [codex-cli.md](codex-cli.md). The other sheets so far are
+[claude-code-cli.md](claude-code-cli.md), [hermes-cli.md](hermes-cli.md) and
+[amp.md](amp.md); Amp's is a draft written by Goal Cup for the Amp team to correct, and is
+named after the harness because no connector id exists yet.
+
+The `Status:` line takes one of three values:
+
+- **shipped connector**: `connectors/<id>/` is on main, or is added by the same PR as the sheet.
+- **core ready, connector pending**: no row of the
+  [decision table](../../skills/adding-a-capture-harness/decision-table.md) needs a core PR,
+  but no connector exists yet.
+- **facts only**: the tracer needs a core change first, or a key fact is unknown. The sheet is
+  the whole contribution for now.
+
+Section 8, "Things Goal Cup cannot isolate", lives only in the sheet. A connector PR links the
+sheet in its description rather than repeating it.
+
 ## How to update one
 
 When a release changes something a sheet says (a path, a variable, the session format, an auth

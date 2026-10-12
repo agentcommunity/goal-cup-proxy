@@ -4,6 +4,15 @@ Connector id: `<id>` · Facts for version: `<x.y.z>` · Written by: <name/team> 
 Public disclosure: <yes / partly — say what is withheld>
 Status: <shipped connector | core ready, connector pending | facts only>
 
+<!-- Delete this comment when you fill the sheet. Worked example: docs/harnesses/codex-cli.md.
+Status, pick one:
+- shipped connector: connectors/<id>/ is on main, or is added by the same PR as this sheet.
+- core ready, connector pending: no decision-table row needs a core PR, but no connector yet.
+- facts only: a core change is needed first, or a key fact is unknown; the sheet is the whole
+  contribution for now.
+Section 8 lives only in this sheet: the PR description links the sheet, it does not repeat it.
+Rules: docs/harnesses/README.md. -->
+
 ## 1. Run one prompt, headless
 The exact command and flags to run one prompt with no human input, and how it exits.
 
