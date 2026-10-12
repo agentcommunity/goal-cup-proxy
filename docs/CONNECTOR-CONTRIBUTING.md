@@ -24,17 +24,19 @@ A common data-only PR carries exactly these concerns:
 2. The regenerated directory pin. Run `sh scripts/pin-manifests.sh` after the edit; it rewrites
    the connector's line in `crates/goalcup-protocol/pins/connector-dirs.txt`. Never hand-edit or
    hand-merge that line.
-3. A readiness record at `docs/qualification/m2-<name>-readiness.md` (where `<name>` is the
-   harness name without `-cli`) with source-linked transport, native, isolation/auth and identity
-   evidence. If a maintainer runs a real row, link its exact qualification record; do not label a
-   contributor's source or synthetic result qualified.
+3. The harness's public facts sheet `docs/harnesses/<id>.md`, filled from the
+   [template](../skills/adding-a-capture-harness/templates/harness-facts.md) with a source for
+   every fact (see [docs/harnesses](harnesses/README.md) and
+   [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)). It replaces the old readiness record. Do not
+   label a contributor's source or synthetic result qualified.
 4. A new generic harness-kit fixture under
    `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` for this connector, containing
    `harness.toml`, `stand-in.py` and `expect.toml` (plus only reviewed declared seeds). The case
    exercises the connector's schema-1 path; do not substitute an existing baseline case.
 5. Evidence that the current baseline harness-kit suite passes. Build the workspace first, then
    run `cargo test -p goalcup-cli --test full harness_contract_kit::`; the six existing baseline cases
-   are listed in [HARNESS-ONBOARDING §3](HARNESS-ONBOARDING.md#3-generic-harness-contract-kit).
+   are listed in the [skill, step 8](../skills/adding-a-capture-harness/SKILL.md#checklist).
+   `sh scripts/check-connector.sh <id>` runs it with the pin, schema and golden checks.
 6. The regenerated harness goldens. The tests read the connector list from `connectors/`, so
    they need no edit. On macOS, run
    `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test full harness_contract_golden::`
@@ -51,7 +53,7 @@ The schema-1 loader admits one native source and the identity pairs exercised by
 `stderr_line` plus `deferred`. Native forms are `append_only` and `snapshot`; SQLite is refused
 as a schema-1 native form and needs a separate core decision. The manifest carries hosts, paths
 and protocol hints, not a transport field. Record the candidate's observed transport and body
-encoding in readiness evidence; HTTP/2-only or unknown body encoding is a blocker, not a support
+encoding in the facts sheet (section 6); HTTP/2-only or unknown body encoding is a blocker, not a support
 claim.
 
 A new policy row (CA variable, credential name, identity pair, native-store form or interpreter)
@@ -61,7 +63,7 @@ Do not add `.rs` files, policy changes or decoder code to an ordinary connector-
 
 ## Readiness gate
 
-Before editing the connector, fill the [capability worksheet](HARNESS-ONBOARDING.md#1-capability-worksheet)
+Before editing the connector, fill the facts sheet (`docs/harnesses/<id>.md`)
 from the exact candidate. Write `UNKNOWN`, never a guess. Phase 1 stops with a recorded blocker
 if any required fact is UNKNOWN in transport; native storage or scope; isolation or auth; or
 identity source or binding. A literal unsupported answer is also a blocker.
@@ -81,7 +83,7 @@ paths are forwarded and not retained. The protocol hint is declared data, never 
 | `capture.args`, executable | headless argv, goal placement, exact entry point, version and hash |
 | `capture.home`, `env` | private HOME/config home, real state dirs, seed contents and modes |
 | `capture.credential`, `capture.ca` | variable names and process scope; no secret values or app-wide trust |
-| `capture.hosts`, `auth_hosts` | provider host, narrow evidence paths and protocol hint; readiness records observed transport |
+| `capture.hosts`, `auth_hosts` | provider host, narrow evidence paths and protocol hint; the facts sheet records observed transport |
 | `capture.native` | one own-session store, form, root/pattern and scope; no request dump or credential store |
 | `capture.identity` | measured carrier, grammar/fields and binding to that own-session store |
 | `redaction.extra_patterns` | plan, billing, quota and key-fragment coverage from admitted sources |

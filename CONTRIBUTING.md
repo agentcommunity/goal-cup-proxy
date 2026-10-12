@@ -70,9 +70,9 @@ the harness kit. Maintainers re-run the gate, and the kit for a connector PR, on
 
 ## Adding a harness
 
-Start with the step-by-step [entry point](skills/adding-a-capture-harness/SKILL.md), then
-[HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), and the connector procedure in
-[CONNECTOR-CONTRIBUTING](docs/CONNECTOR-CONTRIBUTING.md). The source tree currently has three
+Start with the five-minute guide [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), then give
+your coding agent the step-by-step [skill](skills/adding-a-capture-harness/SKILL.md). The
+reviewer checklist is in [CONNECTOR-CONTRIBUTING](docs/CONNECTOR-CONTRIBUTING.md). The source tree currently has three
 connector directories and three pins: `codex-cli`, `claude-code-cli` and `hermes-cli`.
 Their `harness.toml` files are harness-contract schema 1; the directory pin is generated data,
 not a release or package publication record.
@@ -84,22 +84,19 @@ A common data-only harness PR contains:
 - the regenerated golden JSON in `crates/goalcup-cli/tests/fixtures/harness-golden/`: the new
   `<id>.json` and the changed `enumeration.json` and `redaction-extra-patterns.json`; on macOS
   also `<id>.daemon.json` and `native-stream-labels.json`;
-- a readiness record under `docs/qualification/m2-<name>-readiness.md` and, when a maintainer
-  has run a real row, links to that row's evidence (a source edit alone is not qualification);
+- the harness's public facts sheet `docs/harnesses/<id>.md`, filled from
+  `skills/adding-a-capture-harness/templates/harness-facts.md` (see
+  [docs/harnesses](docs/harnesses/README.md)); no readiness record is needed;
 - a new generic harness-kit fixture case under
   `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` containing `harness.toml`, `stand-in.py`
   and `expect.toml` (plus only reviewed declared seeds) for this connector;
-- evidence that the current baseline harness kit passed on macOS after a workspace build (the six
-  baseline cases plus the new connector case):
-  `cargo build`, then `cargo test -p goalcup-cli --test full harness_contract_kit::`.
-- the focused schema and generated-pin checks:
-  `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
+- the last lines of `sh scripts/check-connector.sh <id>` (files, pins, schema, goldens and the
+  harness kit with the six baseline cases plus yours) and `sh scripts/gate.sh fast`, on macOS.
 
 The harness kit test (`harness_contract_kit`) is macOS-only. On Linux it compiles to zero tests,
 so a Linux "pass" proves nothing about your connector; say so if you have no Mac, and a
 maintainer runs it. A maintainer acknowledges a connector PR within 7 days; that is not a promise
-to merge or qualify it
-([HARNESS-ONBOARDING, section 5](docs/HARNESS-ONBOARDING.md#5-prepare-a-contribution)).
+to merge it ([HARNESS-ONBOARDING, what goes in the PR](docs/HARNESS-ONBOARDING.md#what-goes-in-the-pr)).
 
 Pin note: the script changes exactly one line of
 `crates/goalcup-protocol/pins/connector-dirs.txt` per connector you add or edit. Commit what
