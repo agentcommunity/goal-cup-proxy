@@ -4,13 +4,8 @@ Can a coding agent add a connector end to end from the docs alone? A record of t
 of [the skill](../../skills/adding-a-capture-harness/SKILL.md), for maintainers who change the
 onboarding docs. Updated: 2026-10-12.
 
-> **Since this trial (2026-10-12).** The Linux key-loader fix it calls pending landed in PR #6
-> (`b3277f1`). A post-merge review ran `sh scripts/check-connector.sh toy-cli` on macOS against
-> `main` and got `toy-cli: 6 passed, 0 failed, 0 skipped` (local, no committed record). A kit
-> case may now name `credential_env`
-> ([amp-core-prep §3](amp-core-prep.md#3-teach-the-generic-kit-a-credential),
-> [decision table](../../skills/adding-a-capture-harness/decision-table.md) row 3). The tree
-> now sets `rust-version = "1.99"`, so cargo 1.97.0 no longer builds it.
+> **Historical (2026-10-12).** It records runs before PRs #6 and #8 landed; "Still needs" below
+> notes what changed since. Current: [the skill](../../skills/adding-a-capture-harness/SKILL.md).
 
 ## Setup
 
@@ -21,7 +16,9 @@ onboarding docs. Updated: 2026-10-12.
   symlink on `PATH`, hashed as the pinned executable and never launched by any test. Identity
   `stderr_line`/`deferred`, per-run `TOY_HOME` with one seed, one append-only JSONL native
   file, `NODE_EXTRA_CA_CERTS`, no credential.
-- Platform: Linux x86_64, cargo 1.97.0. Source: the onboarding docs before the fixes below.
+- Platform: Linux x86_64, cargo 1.97.0. Source: the onboarding docs before the fixes below. The
+  exact base tree is unknown: the trial's commits were later rebased onto `34db559`, which sets
+  `rust-version = "1.99"`, a version cargo 1.97.0 does not build.
   Each run used a throwaway worktree under a temp directory, removed afterwards.
 
 ## Final run (trial 3)

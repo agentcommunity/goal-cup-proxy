@@ -4,9 +4,8 @@ Updated: 2026-10-12.
 
 The ticket list for `m2/wire`: what exists, what is broken, what comes next. One line per
 ticket: status, ID, phase tag, SHA, a pointer. Where things stand overall: [STATUS.md](STATUS.md).
-Commit hashes and branch names cited here before 2026-10-11 refer to private development history
-not included in this repository; the merge commits of PRs #1 to #8 and later are on this
-repository's `main`.
+Commit hashes and branch names cited here are private development history not included in this
+repository, except commits from PR #1 onward, which are on this repository's `main`.
 The long bodies of the 2026-10-02 ledger are the private historical record discussed here.
 The supporting private historical record is intentionally omitted from this public OSS cut.
 
@@ -364,15 +363,14 @@ V1 on `v1/trunk` (the private V1 repository's `main` at `0c5f477`) is covered in
   checks. Audit: Connection marks wire; orphan Recovery retires all streams; reader rejects later
   native Segment pre-callback; exit-2 report covers preceding validated prefix. Direct nonvalidating
   DecodeSession consumes it. Post-tag test both-way rejection in CaptureState::apply; not PH-V/v0.5.
-- ✅ **H-30** PR #4, merged `7652eda`: the CLI and daemon contract goldens derive their connector
-  list from `connectors/`; a new schema-1 connector needs no `.rs` edit (proven in the CLI half).
+- ✅ **H-30** PR #4 `7652eda`: goldens read the connector list from `connectors/`; a new connector
+  needs no `.rs` edit (proven for the CLI half). [Record](docs/CONNECTOR-CONTRIBUTING.md).
 - ✅ **H-31** PR #6, merged `15f7b43`: Linux script fixes (the key loader reads the mode with BSD,
   then GNU `stat`) and [the portability note](docs/research/platform-portability.md).
-- ✅ **H-32** PR #7, merged `4835aa5`: the `adding-a-capture-harness` skill and
-  `scripts/check-connector.sh` as the contributor entry point. Outsider proof is OS-23.
-- ✅ **H-33** PR #8, merged `8703825`: Amp core prep. D49 `AMP_API_KEY`, D50 keyed `stdout_json`
-  identity, `*_URL` env refusal, keyed kit cases; no `connectors/amp-cli`.
-  [Record](docs/research/amp-core-prep.md).
+- ✅ **H-32** PR #7 `4835aa5`: the [skill](skills/adding-a-capture-harness/SKILL.md) and
+  `check-connector.sh` as the contributor entry point. Outsider proof is OS-23.
+- ✅ **H-33** PR #8 `8703825`: Amp core prep (D49, D50, `*_URL` env refusal, keyed kit cases); no
+  `connectors/amp-cli`. [Record](docs/research/amp-core-prep.md).
 - ❓ **H-34** `[next]` Amp key-fingerprint file: Amp writes `.legacy-state-owner.json` with a
   token-derived `identityKey`, which D41 forbids persisting. Owner picks: a setting that stops it,
   a D41 amendment confining it to the per-run directory, or Amp stays blocked. Needs the live probe.
@@ -394,8 +392,8 @@ V1 on `v1/trunk` (the private V1 repository's `main` at `0c5f477`) is covered in
   per target) before Amp's connector ([portability](docs/research/platform-portability.md), seam 7).
 - ⬜ **H-42** `[next]` Golden-test leftovers: `enumeration.json` hard-codes `manifest_files` as
   `["manifest.toml"]` (false for `hermes-cli`; derive or drop once OS-29/OS-31 decide the V1
-  manifests); the daemon golden keys `RECORDED_NATIVE_FILES` by id and duplicates `legacy()` as
-  `legacy_family`.
+  manifests); the daemon golden keys `RECORDED_NATIVE_FILES` by id, duplicates `legacy()` as
+  `legacy_family`, and its "no edit here" claim has no proof test (only the CLI half has one).
 - ⬜ **H-43** `[next]` `check-connector.sh` leftovers: no kit-id or `BODY` check (the skill greps
   by hand); a pin diff with non-pin lines is still called connector-only; the golden awk truncates
   a path with a space. Docs: the six-case count repeats across docs (DOCS-STANDARD: one place).

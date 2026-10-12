@@ -307,9 +307,10 @@ portable interface (existing or missing), the smallest next step, and the risk t
 - **Assumption.** The capture tests are macOS-only because of seam 1, not because of their own
   logic. The CI is lean by owner rule ([OPERATING, CI](../OPERATING.md#ci)): no matrix, no
   daemon or CLI suites.
-- **Linux.** On this branch, `python3 -m unittest discover -s scripts` is green on Linux
-  (`test_install_assisted.py` is skipped off macOS), and `cargo test -p goalcup-cli --test
-  loader_script` passes on Linux. Neither is in CI.
+- **Linux.** At PR #6, `python3 -m unittest discover -s scripts` was green on Linux
+  (`test_install_assisted.py` is skipped off macOS) and `cargo test -p goalcup-cli --test
+  loader_script` passed there; the three loader tests added later have no recorded Linux run.
+  CI runs three of the script test files, not the whole discovery run or the loader suite.
 - **Windows.** No CI; nothing builds.
 - **Smallest next step.** After seam 1 lands, widen the ten gates to
   `any(target_os = "macos", target_os = "linux")` one file at a time and fix what fails. Ask

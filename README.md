@@ -132,8 +132,9 @@ the termination, the `trace:` directory and the exact `verify:` line to run. Opt
 `--capture-reserve-bytes <BYTES>` (chain bytes reserved before launch) and
 `--capture-claude-allowed-tool <RULE>` (one bounded Claude Bash rule for this launch). The
 harness's environment is built from nothing: of the shell's own variables only `USER`,
-`LOGNAME` and `TMPDIR` reach it, so an exported `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or
-`*_PROXY` is dropped, not inherited (`start` does not refuse it). The tracker never sets a base
+`LOGNAME`, `TMPDIR` and a keyed connector's one credential (`DEEPSEEK_API_KEY` or `AMP_API_KEY`,
+below) reach it, so an exported `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `*_PROXY` is
+dropped, not inherited (`start` does not refuse it). The tracker never sets a base
 URL; the only proxy the harness is given is the tracker's own loopback capture proxy, and a
 connector cannot name a `*_URL` variable in `[capture.env]` or as its home variable
 (`capture.home.env`).

@@ -145,19 +145,26 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertNotIn("set -u", result.stdout)
         self.assertNotIn("#!/bin/sh", result.stdout)
 
-    def test_help_works_when_run_by_a_relative_path_from_a_subdirectory(self) -> None:
-        sub = self.repo / "connectors"
-        result = subprocess.run(
-            ["sh", "../scripts/" + SCRIPT.name, "--help"],
-            cwd=sub,
-            env=GIT_ENV,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr, "")
-        self.assertIn("--allow-no-kit", result.stdout)
+    def test_help_works_from_anywhere_even_under_cdpath(self) -> None:
+        # From a subdirectory by a relative path, and from the root with an exported CDPATH,
+        # under which a plain `cd scripts` prints the directory and corrupts a `$(...)`.
+        for cwd, path in (
+            (self.repo / "connectors", "../scripts/" + SCRIPT.name),
+            (self.repo, "scripts/" + SCRIPT.name),
+        ):
+            with self.subTest(cwd=cwd.name):
+                result = subprocess.run(
+                    ["sh", path, "--help"],
+                    cwd=cwd,
+                    env={**GIT_ENV, "CDPATH": "."},
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                self.assertIn("--allow-no-kit", result.stdout)
+                self.assertTrue(result.stdout.startswith("Run every local check"), result.stdout)
 
     # The non-macOS kit skip.
 
