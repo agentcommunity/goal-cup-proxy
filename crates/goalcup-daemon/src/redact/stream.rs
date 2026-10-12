@@ -23,8 +23,8 @@
 //! covers that. A block's `BEGIN` is a live candidate from its first byte until its `END`
 //! completes it, so nothing inside it is released, and a complete match of any rule that
 //! straddles a cut moves the cut back to its start, so a claim across an edge of the block
-//! is held with it. A block whose `END` does not start within 8,192 units of its `BEGIN` line
-//! is those units (fewer where a unit that is not ASCII or the stream's end comes first): its
+//! is held with it. A block whose `END` does not start within 12,288 bytes of its `BEGIN` line
+//! is those bytes (to the end of a character they cut, and fewer at the stream's end): its
 //! candidate ends there, below the hold, and the shared regexes take the same span.
 //!
 //! # Connector `extra_patterns` (D39)
@@ -425,7 +425,7 @@ static SHAPES: [Shape; 19] = [
     },
     Shape {
         kind: "private_key",
-        source: r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\x00-\x7F]{0,8192}?-----END [A-Z ]*PRIVATE KEY-----|[\x00-\x7F]{0,8192})",
+        source: r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
         form: Form::PrivateKey,
     },
     prefixed(
@@ -793,7 +793,7 @@ enum Pem {
     Header(HeaderTail),
     Dashes(u8),
     Body {
-        /// Units after the BEGIN line, this one included.
+        /// Bytes after the BEGIN line, this unit's included.
         n: u32,
         end: EndLine,
         /// Units of the END line in progress, from its first dash; zero when none is.
@@ -801,10 +801,10 @@ enum Pem {
     },
 }
 
-/// The most units the shared `private_key` literal takes after its BEGIN line, all ASCII: an
-/// END line must start within them, and without one the block is them. An RSA-8192 key is
-/// about 6.4 KiB, and a block this long fits the hold, so a lone BEGIN is decided below it.
-const PEM_BODY_MAX: u32 = 8192;
+/// The most bytes the shared `private_key` literal takes after its BEGIN line: an END line
+/// must start within them, and without one the block is them. An RSA-8192 key is about
+/// 6.4 KiB, and a block this long fits the hold, so a lone BEGIN is decided below it.
+const PEM_BODY_MAX: u32 = 12288;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum JsonPhase {
@@ -1170,11 +1170,12 @@ fn step_bearer(pos: &mut u8, spaced: &mut bool, count: &mut u8, u: Unit) -> bool
 }
 
 impl Pem {
-    /// `-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\x00-\x7F]{0,8192}?-----END [A-Z ]*PRIVATE
-    /// KEY-----|[\x00-\x7F]{0,8192})`: to an END line that starts within [`PEM_BODY_MAX`] units,
-    /// else those units (fewer at the end of the stream, which is decided there with every
-    /// other held byte by the shared regexes).
-    fn step(&mut self, u: Unit) -> Step {
+    /// `-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE
+    /// KEY-----|(?-u:[\x00-\xFF]){0,12288})`: to an END line that starts within
+    /// [`PEM_BODY_MAX`] bytes, else those bytes and the rest of a character they cut (fewer at
+    /// the end of the stream, which is decided there with every other held byte by the shared
+    /// regexes). `len` is this unit's length in bytes.
+    fn step(&mut self, u: Unit, len: usize) -> Step {
         let next = match self {
             Pem::Begin(p) => {
                 if !b"-----BEGIN ".get(*p as usize).is_some_and(|&b| is(u, b)) {
@@ -1208,25 +1209,29 @@ impl Pem {
                     Pem::Dashes(*n + 1)
                 }
             }
-            // The body is ASCII, so both arms end before any other unit; a completed END
-            // line finishes the lazy arm with this unit.
+            // The body is any bytes; a completed END line finishes the lazy arm with this unit.
             Pem::Body { n, end, since } => {
-                if ascii(u).is_none() {
-                    return Step::Dead;
-                }
                 if end.step(u) {
                     return Step::Last;
                 }
-                *n += 1;
+                let before = *n;
+                *n += len as u32;
                 *since = match end {
                     EndLine::Scan(d) => u32::from(*d),
                     EndLine::Lit(p) => 5 + u32::from(*p),
                     EndLine::Header(_) | EndLine::Tail(_) => *since + 1,
                 };
-                // Live while an END line may still start within the bound (the next unit is
-                // unit `n`), or one that did is still open. Otherwise the bounded arm ended
-                // before this unit.
-                return Step::of(*n <= PEM_BODY_MAX || (*since > 0 && *n - *since <= PEM_BODY_MAX));
+                // Live while an END line may still start within the bound (the next unit starts
+                // at byte `n`; an END line is ASCII, so `since` is bytes too), or one that did is
+                // still open. A unit the bound cuts ends the block with it; otherwise the bounded
+                // arm ended before this unit.
+                return if *n <= PEM_BODY_MAX || (*since > 0 && *n - *since <= PEM_BODY_MAX) {
+                    Step::Live
+                } else if before < PEM_BODY_MAX {
+                    Step::Last
+                } else {
+                    Step::Dead
+                };
             }
         };
         *self = next;
@@ -1509,7 +1514,7 @@ impl Candidate {
                 }
                 jwt_step(seg, count, u)
             }
-            (Walk::Pem(pem), _) => return pem.step(u),
+            (Walk::Pem(pem), _) => return pem.step(u, len),
             (Walk::Json(json), _) => json.step(u, off + len as u64),
             (Walk::Shell(shell), _) => shell.step(u),
             (Walk::Email(email), _) => {
@@ -2835,7 +2840,7 @@ mod tests {
             .as_str();
         // The END line of the lazy arm, without the bounded arm: a block with no END line is
         // the walk's unit count, not a line this detector completes.
-        let body = format!("[\\x00-\\x7F]{{0,{PEM_BODY_MAX}}}");
+        let body = format!("(?-u:[\\x00-\\xFF]){{0,{PEM_BODY_MAX}}}");
         let end_half = shared
             .split(&format!("(?:{body}?"))
             .nth(1)

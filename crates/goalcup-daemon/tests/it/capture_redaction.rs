@@ -1370,7 +1370,7 @@ fn long_secrets_are_chunking_invariant() {
     let b64ish = b"abcdefghijklmnopqrstuvwxyz0123456789/";
     let mut cases: Vec<(&str, Vec<u8>, bool, &[u8])> = Vec::new();
 
-    // A PEM block is at most 8,192 units after its BEGIN line, so a longer body is the bounded
+    // A PEM block is at most 12,288 bytes after its BEGIN line, so a longer body is the bounded
     // block and then text: the stream equals the whole-record policy.
     let mut pem = b"key follows: -----BEGIN RSA PRIVATE KEY-----\nSYNTHETICBODYMARK".to_vec();
     let body = lower(&mut rng, 40_000, b64ish);
@@ -1425,7 +1425,7 @@ fn long_secrets_are_chunking_invariant() {
     spaced.extend_from_slice(b"abcdefghijklmnopqrstuvwxyz end");
     cases.push(("bearer-spaces", spaced, false, b""));
 
-    // A PEM block with no END line: replaced for 8,192 units, not to the end of the stream.
+    // A PEM block with no END line: replaced for 12,288 bytes, not to the end of the stream.
     let mut open_pem = b"-----BEGIN PRIVATE KEY-----\nSYNTHETICOPENPEMMARK".to_vec();
     open_pem.extend_from_slice(&lower(&mut rng, 30_000, b64ish));
     cases.push(("pem-unterminated", open_pem, true, b"SYNTHETICOPENPEMMARK"));
@@ -1610,7 +1610,7 @@ fn a_pem_block_is_never_shadowed_at_any_split_point() {
     }
 }
 
-/// The same at the PEM bound: an END line must start within 8,192 units of the BEGIN line,
+/// The same at the PEM bound: an END line must start within 12,288 bytes of the BEGIN line,
 /// and without one the block is those units (I-1), which fit the hold. A block with a claim
 /// inside it is one redaction; a block whose END comes later, and a key with no END, are the
 /// bounded block with the claim inside it, and the text after the bound stays. The stream
@@ -1619,7 +1619,7 @@ fn a_pem_block_is_never_shadowed_at_any_split_point() {
 fn a_pem_block_with_a_claim_inside_is_one_redaction_at_the_pem_bound() {
     const BEGIN: &str = "-----BEGIN RSA PRIVATE KEY-----\n";
     const END: &str = "-----END RSA PRIVATE KEY-----";
-    const BOUND: usize = 8192;
+    const BOUND: usize = 12288;
     let mut rng = Rng(0xB10C);
     let filler = |rng: &mut Rng, n: usize| -> String {
         let set = b"abcdefghijklmnopqrstuvwxyz0123456789/";
@@ -2062,7 +2062,7 @@ fn metadata_is_redacted_without_retaining_query() {
     assert!(metadata.validate().is_ok());
 }
 
-/// A PEM body far past the bound (one MiB) never grows the hold: its first 8,192 units are
+/// A PEM body far past the bound (one MiB) never grows the hold: its first 12,288 bytes are
 /// the block, and the rest leaves as it streams past, exactly as the whole-record policy
 /// redacts it (I-1).
 #[test]
@@ -2114,7 +2114,7 @@ fn long_private_key_does_not_grow_pending_buffer() {
         RedactionAuditSpan {
             kind: "private_key".into(),
             start: key_start,
-            end: key_start + (begin.len() - 1 + 8192) as u64
+            end: key_start + (begin.len() - 1 + 12288) as u64
         }
     );
     assert_eq!((bytes, spans), legacy(&input));
@@ -3234,7 +3234,7 @@ fn a_long_codex_reasoning_item_streams_through_intact() {
 /// output limit) with no END used to redact the rest of the stream, a whole native session,
 /// because a capture stream is one text and the block ran to its end. The measured shape: one
 /// JSONL record mentioning `BEGIN`, then 2,000 ordinary records. The block is now at most
-/// 8,192 units, so the stream equals the whole-record policy, and every record past the bound
+/// 12,288 bytes, so the stream equals the whole-record policy, and every record past the bound
 /// leaves intact and parses.
 #[test]
 fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
@@ -3253,7 +3253,7 @@ fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
     }
     input.extend_from_slice(&later);
     let begin_at = 44;
-    let block_end = begin_at + "-----BEGIN PRIVATE KEY-----".len() + 8192;
+    let block_end = begin_at + "-----BEGIN PRIVATE KEY-----".len() + 12288;
     let want = legacy(&input);
     assert_eq!(
         want.1,
@@ -3373,6 +3373,78 @@ fn long_secret_keys_and_url_credentials_are_redacted_whole() {
         ] {
             let got = retained_of(&stream_through(StreamRedactor::new(), input, &chunks, 2), 1);
             assert_eq!(got, want, "{:?}", String::from_utf8_lossy(input));
+        }
+    }
+}
+
+/// I-1 review: Claude Code's Read tool prints a file with `N→` (U+2192) before every line, so a
+/// key read from disk reaches the native record as non-ASCII text between its BEGIN and END
+/// lines, JSON-escaped. The block is bounded in bytes, not ASCII characters, so it still runs
+/// to its END line: one redaction, at every split point, as the whole-record policy has it.
+#[test]
+fn a_key_printed_by_the_read_tool_is_one_redaction() {
+    let lines = [
+        "-----BEGIN RSA PRIVATE KEY-----",
+        "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gunVTLw",
+        "7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u+qKhbwKfBstIs+bMY2Zkp18gnTxKLxoS2tFc",
+        "zGkPLPgizskuemMghRniWaoLcyehkd3qqGElvW/VDL5AaWTg0nLVkjRo9z+40RQzuVaE",
+        "8AkAFmxZzow3x+VJYKdjykkJ0iT9wCS0DRTXu269V264Vf/3jvredZiKRkgwlL9xNAwx",
+        "-----END RSA PRIVATE KEY-----",
+    ];
+    let numbered: Vec<String> = (1..)
+        .zip(lines)
+        .map(|(n, line)| format!("{n:>6}\u{2192}{line}"))
+        .collect();
+    let input = format!(
+        "{{\"type\":\"tool_result\",\"content\":\"{}\"}}\n{{\"next\":1}}\n",
+        numbered.join("\\n")
+    );
+    let input = input.as_bytes();
+    let (want_bytes, want_spans) = legacy(input);
+    assert_eq!(
+        String::from_utf8(want_bytes.clone()).unwrap(),
+        "{\"type\":\"tool_result\",\"content\":\"     1\u{2192}<redacted:private_key>\"}\n{\"next\":1}\n"
+    );
+    assert_eq!(want_spans.len(), 1);
+    for split in 0..=input.len() {
+        let mut p = Producer::new(P1);
+        let mut records = p.open(1, CaptureSource::Native);
+        records.extend(p.bytes(1, &input[..split]));
+        records.extend(p.redactor.flush(daemon_time(1)).unwrap());
+        records.extend(p.bytes(1, &input[split..]));
+        records.extend(p.end(1, EndReason::Complete));
+        let got = retained_of(&records, 1);
+        assert_eq!(
+            got,
+            (want_bytes.clone(), want_spans.clone()),
+            "split at {split}"
+        );
+    }
+}
+
+/// A bounded block that ends inside a multi-byte character takes the whole character: the
+/// marker never leaves half of one behind, and the stream agrees at every chunking.
+#[test]
+fn a_pem_bound_inside_a_character_takes_the_character() {
+    let begin = "-----BEGIN PRIVATE KEY-----";
+    for pad in 0..4 {
+        let mut input = format!("x {begin}");
+        input.push_str(&"a".repeat(12288 - 1 - pad));
+        input.push_str(&"\u{1F511}".repeat(4));
+        input.push_str(" after\n");
+        let input = input.as_bytes();
+        let (bytes, spans) = legacy(input);
+        let text = String::from_utf8(bytes.clone()).expect("the marker cut no character");
+        assert!(text.starts_with("x <redacted:private_key>"), "pad {pad}");
+        assert!(text.ends_with(" after\n"), "pad {pad}");
+        let mut rng = Rng(0x1F511 + pad as u64);
+        for chunks in [
+            vec![MAX_SEGMENT_BYTES],
+            vec![1],
+            random_chunks(&mut rng, 64),
+        ] {
+            let got = retained_of(&stream_through(StreamRedactor::new(), input, &chunks, 2), 1);
+            assert_eq!(got, (bytes.clone(), spans.clone()), "pad {pad}");
         }
     }
 }

@@ -88,8 +88,8 @@ pub struct Pattern {
 pub(crate) const SOFT_KIND: &str = "masked_key";
 
 /// The kind of the one block rule in the shared set: a PEM private key, from its `BEGIN` line
-/// to the first `END` line that starts within 8,192 ASCII characters, else those characters (a
-/// key cut off before its `END`). Only [`compile`] reads this name. A block claim absorbs every hard
+/// to the first `END` line that starts within 12,288 bytes, else those bytes, extended to the
+/// end of a character they cut (a key cut off before its `END`). Only [`compile`] reads this name. A block claim absorbs every hard
 /// claim it contains or that crosses its edge, so a key is never left raw because something
 /// inside it, or touching it, was claimed first; see [`select`] and [`Pattern::block`].
 pub(crate) const BLOCK_KIND: &str = "private_key";
@@ -156,13 +156,17 @@ const SHARED: &[(&str, &str)] = &[
         r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}",
     ),
     // Bounded, because a capture stream is one text: an unbounded block with no END ran to the
-    // end of the stream, a whole session. A real key (RSA-8192 is about 6.4 KiB) ends within
-    // the bound; a key cut off before its END takes the next 8,192 characters, not the rest.
-    // The body is ASCII, as base64 and its escapes are: a bounded `[\s\S]` compiles past the
-    // regex crate's 10 MiB limit; `[\x00-\x7F]` fits it (about 7 MiB resident).
+    // end of the stream, a whole session. A real key ends within the bound: an RSA-8192 PKCS#8
+    // file is 6,388 bytes, and as Claude Code's Read tool prints it (`N→` on each of its 100
+    // lines), JSON-escaped, its body is 7,325. A key cut off before its END takes the next
+    // 12,288 bytes, not the rest. The bound counts bytes, any byte: a body may carry `→` or an
+    // invalid byte, and a bounded Unicode `[\s\S]` compiles past the regex crate's 10 MiB limit.
+    // `candidates` extends a match that ends inside a character to that character's end, so
+    // the marker never leaves half of one behind. 12 KiB keeps a lone BEGIN below the 16 KiB
+    // hold, so the stream decides it as this regex does.
     (
         "private_key",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\x00-\x7F]{0,8192}?-----END [A-Z ]*PRIVATE KEY-----|[\x00-\x7F]{0,8192})",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
     ),
     ("slack_token", r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
     // (i) the JSON form: a quoted key, a quoted value. The key word may sit inside an
@@ -538,7 +542,11 @@ pub(crate) fn candidates<'a>(
                 Some(((span.start(), span.end()), (whole.start(), whole.end())))
             }))
         };
-        for ((start, end), (whole_start, whole_end)) in found {
+        for ((start, mut end), (whole_start, mut whole_end)) in found {
+            if p.block {
+                end = char_end(bytes, end);
+                whole_end = whole_end.max(end);
+            }
             let quote = p.span_group != 0 && !span_is_a_json_string_interior(bytes, start, end);
             found_all.push(Claim {
                 priority,
@@ -554,6 +562,28 @@ pub(crate) fn candidates<'a>(
         }
     }
     found_all
+}
+
+/// The end of the UTF-8 character that `end` falls inside, or `end` on a boundary. The block
+/// rule bounds its body in bytes, so a match may end inside a character; the stream's PEM
+/// recognizer takes that character's unit whole, and so does the span.
+fn char_end(bytes: &[u8], end: usize) -> usize {
+    for p in end.saturating_sub(3)..end {
+        let width = match bytes[p] {
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => continue,
+        };
+        if p + width > end
+            && bytes
+                .get(p..p + width)
+                .is_some_and(|c| std::str::from_utf8(c).is_ok())
+        {
+            return p + width;
+        }
+    }
+    end
 }
 
 /// Resolve every rule's candidates into the claimed spans, in source order, never overlapping.

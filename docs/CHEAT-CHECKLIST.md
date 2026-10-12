@@ -91,13 +91,18 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   `spikes/codex-cli/fixtures/rollout-main-01a06614.jsonl`, largest 2,020 B; 8 in
   `spikes/codex-app/fixtures/rollout-main-01a06657.jsonl`, largest 2,276 B). The earlier
   "unreachable" counted wire client messages. Ticket: F-07.
-- **Redaction residuals.** A PEM block is ASCII and at most 8,192 characters after its `BEGIN`
-  line: an `END` line must start within them, and without one the block is those characters. A
-  lone `BEGIN` mention therefore redacts the next 8,192 characters, across record boundaries,
-  and breaks the JSON of every record it reaches; the stream after it is kept (before the bound
-  it redacted the rest of the stream, a whole session). A non-ASCII character or an invalid
-  UTF-8 byte inside a key body ends the block there and leaves the rest of the key raw (fix before
-  any raw-byte capture surface). Ticket: H-20.
+- **Redaction residuals.** A PEM block is at most 12,288 bytes after its `BEGIN` line: an `END`
+  line must start within them, and without one the block is those bytes. An RSA-8192 key fits:
+  one measured PKCS#8 file is 6,388 bytes, and 7,325 as Claude Code's Read tool prints it,
+  JSON-escaped. The trade, against the unbounded rule before it:
+  - a lone `BEGIN` mention redacts the next 12,288 bytes, across record boundaries, and breaks the
+    JSON of every record it reaches, where before it redacted the rest of the stream, a whole
+    session;
+  - a key body longer than the bound leaks its tail, where before the stream failed closed over
+    it. Larger keys and several keys between one `BEGIN` and one `END` do not fit;
+  - an `END` more than 12,288 bytes after its `BEGIN` is not this block's: the text between them
+    past the bound stays raw.
+  Ticket: H-20.
 
 ### Hermes reference row (D41): what the key scan cannot see
 

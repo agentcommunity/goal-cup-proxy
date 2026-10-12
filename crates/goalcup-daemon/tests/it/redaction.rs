@@ -1262,8 +1262,8 @@ fn with_script(body: &str) -> String {
 /// Two differ in a bound, because the daemon's stream holds an undecided run and the script
 /// holds nothing. The daemon's `email` local part is at most 1,024 units, so a bare token run does
 /// not hold to the hold bound (I-2); the script keeps `+` and redacts a longer local part whole.
-/// The daemon's PEM block is ASCII and ends at an END line that starts within 8,192 units, or
-/// is those units, so a lone BEGIN no longer redacts the rest of the stream (I-1); the script
+/// The daemon's PEM block ends at an END line that starts within 12,288 bytes, or is those
+/// bytes, so a lone BEGIN no longer redacts the rest of the stream (I-1); the script
 /// runs the block to its END line or the end of the text. In both the script redacts more,
 /// never less.
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
@@ -1280,7 +1280,7 @@ const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "private_key",
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\x00-\x7F]{0,8192}?-----END [A-Z ]*PRIVATE KEY-----|[\x00-\x7F]{0,8192})",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
     ),
 ];
 
