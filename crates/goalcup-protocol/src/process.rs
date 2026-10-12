@@ -326,7 +326,8 @@ impl ProcessRegistration {
 /// Linux's boot ID plus `/proc/<pid>/stat` start tick identifies one kernel process
 /// instance. macOS's `proc_pidinfo(PROC_PIDTBSDINFO)` supplies its creation timestamp down
 /// to microseconds. Neither value is itself a retained signal handle: callers must compare
-/// it while acquiring fresh authority. Numeric PID/group fallbacks still report the
+/// it while acquiring fresh authority. A zombie (a child that has exited but is not yet
+/// reaped) has no identity on either platform. Numeric PID/group fallbacks still report the
 /// check-to-signal race as unverified rather than claiming atomic containment.
 pub fn process_start_identity(pid: u32) -> Option<String> {
     #[cfg(target_os = "linux")]
@@ -335,12 +336,13 @@ pub fn process_start_identity(pid: u32) -> Option<String> {
         // Field 2 is parenthesized and may itself contain spaces or `)`, so split only
         // after its final delimiter. Field 22 (`starttime`) is index 19 after `state`.
         let close = stat.rfind(')')?;
-        let start = stat
-            .get(close + 2..)?
-            .split_whitespace()
-            .nth(19)?
-            .parse::<u64>()
-            .ok()?;
+        let mut fields = stat.get(close + 2..)?.split_whitespace();
+        // A zombie (`Z`) or dead (`X`) process keeps its `/proc` entry and start tick until
+        // reaped, but it is no running instance: like macOS's `proc_pidinfo`, report none.
+        if matches!(fields.next()?, "Z" | "X") {
+            return None;
+        }
+        let start = fields.nth(18)?.parse::<u64>().ok()?;
         let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
             .ok()?
             .trim()
@@ -403,9 +405,10 @@ pub fn process_instance_status(pid: u32, expected: Option<&str>) -> ProcessInsta
     let presence = if observed.is_some() {
         Some(true)
     } else {
-        snapshot()
-            .ok()
-            .map(|table| table.iter().any(|row| row.pid == pid))
+        // No identity, so ask the table: a row that is absent or a zombie (it has exited and
+        // only awaits its parent's reap, as on a Linux host whose reaper is slow) is gone;
+        // only a failure to ask is unknown.
+        liveness(pid).ok()
     };
     classify_process_instance(expected, observed.as_deref(), presence)
 }
@@ -623,6 +626,54 @@ mod tests {
                 home_seed: None,
             },
         }
+    }
+
+    /// A child that has exited but not been reaped is a zombie: its pid still answers
+    /// `kill(pid, 0)`, but it is no running process instance and has no creation identity
+    /// to compare. macOS's `proc_pidinfo` already says so; Linux must not read the dead
+    /// child's `/proc/<pid>/stat` start tick as though it were alive.
+    #[cfg(unix)]
+    #[test]
+    fn process_start_identity_is_none_for_an_unreaped_dead_child() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("spawn a child that exits at once");
+        let pid = child.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let zombie = || {
+            #[cfg(target_os = "linux")]
+            {
+                std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .and_then(|stat| {
+                        let close = stat.rfind(')')?;
+                        stat.get(close + 2..)?.chars().next()
+                    })
+                    == Some('Z')
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                matches!(liveness(pid), Ok(false))
+            }
+        };
+        while !zombie() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child never became a zombie"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let identity = process_start_identity(pid);
+        let status = process_instance_status(pid, Some("cached"));
+        child.wait().expect("reap the child");
+        assert_eq!(identity, None, "a zombie has no process-start identity");
+        assert_eq!(
+            status,
+            ProcessInstanceStatus::GoneOrReused,
+            "a zombie is a gone instance, not an unknown one"
+        );
     }
 
     #[test]

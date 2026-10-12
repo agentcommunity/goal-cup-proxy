@@ -1673,7 +1673,7 @@ pub fn handle(p: &LaunchPlan, s: &Spawned, now: &str) -> Result<ProcessHandle, C
 /// the fork-time creation identity, which `exec` does not change.
 pub fn gated_handle(p: &LaunchPlan, g: &GatedSpawn, now: &str) -> Result<ProcessHandle, CliError> {
     // The only way this fails is that the parked child has no readable creation identity, which
-    // on macOS is a child that already died (a zombie has none): it never ran.
+    // is a child that already died (a zombie has none, on macOS and Linux alike): it never ran.
     build_handle(p, g.pid, &g.program, || (None, None), now).map_err(|_| {
         CliError::Internal(format!(
             "the parked child of {} ended before it could be registered, so it never ran",
