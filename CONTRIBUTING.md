@@ -113,8 +113,8 @@ which still keep a V1 `manifest.toml`, also changes their line in
 Commit what the script writes; never hand-edit or hand-merge either file.
 
 The current baseline kit cases are `controlled-workload`, `synthetic-preassigned`,
-`synthetic-stderr-token`, `synthetic-credential-stderr`, `synthetic-stdout-json` and
-`synthetic-credential-stdout-json` (a keyed case names `credential_env` in `expect.toml`); the
+`synthetic-stderr-token`, `synthetic-keyed-stderr`, `synthetic-stdout-json` and
+`synthetic-keyed-stdout-json` (a keyed case names `credential_env` in `expect.toml`); the
 new connector fixture is an additional case, not a replacement. All use stand-ins, a test-owned
 proxy and private homes; they do not prove provider access, package publication, a release, or
 a qualified live harness. A passing kit is "synthetic tested"; a qualified claim needs a

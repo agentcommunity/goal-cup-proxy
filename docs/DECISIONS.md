@@ -1259,7 +1259,7 @@ No v5 record, control API or verifier change.
 **Reconsider when** a keyed harness needs `preassigned` or `none` identity (as D43 already says).
 
 **Evidence.** `crates/goalcup-cli/tests/credential_stdout_identity.rs` (Linux); kit case
-`synthetic-credential-stdout-json` (macOS); [amp-core-prep](research/amp-core-prep.md), change 4.
+`synthetic-keyed-stdout-json` (macOS); [amp-core-prep](research/amp-core-prep.md), change 4.
 
 ---
 

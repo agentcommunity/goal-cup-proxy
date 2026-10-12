@@ -24,7 +24,7 @@ record's "Mapping to Goal Cup policy" table and its "Core changes Amp would need
 **Merge gate (met).** Changes 2 and 4 amend D43 ruling 3. Their DECISIONS entries, D49 (admit
 `AMP_API_KEY`) and D50 (credential + `stdout_json` via one stdout reader), were carried as
 proposals and approved by the owner on 2026-10-12 before the code merged. Change 3's
-`synthetic-credential-stdout-json` kit case depends on change 4 and landed with it.
+`synthetic-keyed-stdout-json` kit case depends on change 4 and landed with it.
 
 Each numbered change is one commit on this branch, meant to be reviewed as its own pull request,
 smallest first. Changes 1, 2 and 4 were built test first: the new tests failed before the
@@ -93,7 +93,7 @@ owner on 2026-10-12.
   the launcher reported
   `key scan: clean`, and that the key scan finds no fragment in the sealed trace or the run
   directory and the forwarded stdout and stderr hold none. A new case,
-  `synthetic-credential-stderr`, uses the admitted `DEEPSEEK_API_KEY` with `stderr_line`
+  `synthetic-keyed-stderr`, uses the admitted `DEEPSEEK_API_KEY` with `stderr_line`
   identity, so it is testable before any Amp policy lands.
 - **The marker.** The stand-in proves which value it received by writing the SHA-256 of
   `kit-marker:` + the value to its marker, outside the run directory. That is a salted SHA-256
@@ -114,7 +114,7 @@ owner on 2026-10-12.
   field and supplied no synthetic key, so a keyed connector case could not run.
 - **Files.** `harness_contract_kit.rs`, `harness_kit_credential.rs`, `tests/support/mod.rs`;
   the new case under
-  `crates/goalcup-cli/tests/fixtures/harness-kit/synthetic-credential-stderr/`; the kit case
+  `crates/goalcup-cli/tests/fixtures/harness-kit/synthetic-keyed-stderr/`; the kit case
   lists in [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md), [OPERATING](../OPERATING.md),
   [ARCHITECTURE](../ARCHITECTURE.md) and the
   [harness skill](../../skills/adding-a-capture-harness/SKILL.md).
@@ -169,7 +169,7 @@ owner on 2026-10-12.
   withheld while the identity still binds. An init event whose `session_id` is the key, holds
   its last eight bytes, or spells the key in JSON `\u` escapes binds nothing, is a key hit, and
   forwards no fragment. `daemon_client.rs`'s gate sweep names the new call. A
-  macOS kit case, `synthetic-credential-stdout-json`, drives the whole `goalcup start` path
+  macOS kit case, `synthetic-keyed-stdout-json`, drives the whole `goalcup start` path
   (not run here).
 - **Risk.** Medium. It changes the launcher's tee wiring for keyed children, the one area D41
   depends on. Hermes's path (keyed, `stderr_line`) now goes through the new call with no stdout

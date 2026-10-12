@@ -85,8 +85,8 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
     Follow the comments in the three files: the case mirrors the connector's home, identity and
     native shape with a Python stand-in, uses id `kit-<id>`, and copies any seeds into
     `$k/files/`. The baseline cases beside it are `controlled-workload`,
-    `synthetic-preassigned`, `synthetic-stderr-token`, `synthetic-credential-stderr`,
-    `synthetic-stdout-json` and `synthetic-credential-stdout-json`; read the closest. Yours is
+    `synthetic-preassigned`, `synthetic-stderr-token`, `synthetic-keyed-stderr`,
+    `synthetic-stdout-json` and `synthetic-keyed-stdout-json`; read the closest. Yours is
     one more case of the same `harness_contract_kit` test. A keyed case names `credential_env`
     in `expect.toml` and copies the connector's `[capture.credential]`: the kit hands the
     stand-in an invented key, never a real one, and checks that no fragment of it leaks.

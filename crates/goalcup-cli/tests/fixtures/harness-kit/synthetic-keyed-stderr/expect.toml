@@ -1,4 +1,4 @@
-id = "kit-synthetic-credential-stderr"
+id = "kit-synthetic-keyed-stderr"
 identity_source = "stderr_line"
 identity_binding = "deferred"
 identity_id = "credential_token_7"

@@ -185,7 +185,7 @@ residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`): [checklist](C
   `DEEPSEEK_API_KEY`, replace-mode `HERMES_CA_BUNDLE`, deferred identity and a fail-closed key scan.
 - The six synthetic contract-kit cases are `controlled-workload` (no identity, append-only),
   `synthetic-preassigned` (launch identity), `synthetic-stderr-token` (deferred identity) and
-  `synthetic-stdout-json` (two snapshots), the last two each with a keyed `synthetic-credential-*`
+  `synthetic-stdout-json` (two snapshots), the last two each with a keyed `synthetic-keyed-*`
   twin. Each requires `--dev`; wrong-id decoys appear in all but `controlled-workload`.
 - Directory pins and the two transitional V1-manifest pins come from `pin-manifests.sh`; executables
   carry version/SHA-256 pins. Same-UID executable and non-atomic connector-namespace races remain

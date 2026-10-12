@@ -42,7 +42,7 @@ when policy moves). Never spell around a rule.
 3. A kit case may name the credential variable in `expect.toml` as `credential_env`. The runner
    then hands the stand-in an invented key and checks that no fragment of it leaks. Copy the
    connector's `[capture.credential]` into the case, and write the marker as
-   `synthetic-credential-stderr/stand-in.py` does. The kit is macOS-only: off macOS, say in the
+   `synthetic-keyed-stderr/stand-in.py` does. The kit is macOS-only: off macOS, say in the
    PR that it was not run.
 4. Admitted pairs: `none` (no binding); `preassigned` + `at_launch` (id passed in `args` as
    `{session_id}`); `stdout_json` + `at_launch`; `stderr_line` + `deferred` with grammar
@@ -76,7 +76,7 @@ hits, and why:
 - **1, credential name**: Amp reads `AMP_API_KEY`. Admitted by D49. Fits.
 - **2, credential with identity**: the likely carrier is a stdout JSON init event. Admitted by
   D50 with a per-run home. Fits once the live probe confirms the carrier.
-- **3, kit**: a keyed case names `credential_env`, as `synthetic-credential-stdout-json`
+- **3, kit**: a keyed case names `credential_env`, as `synthetic-keyed-stdout-json`
   already does. Fits.
 - **9, one native row**: no local own-session file was found; sessions appear to live on Amp's
   server. Core decision, possibly no schema-1 fit.

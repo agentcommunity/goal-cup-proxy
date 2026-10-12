@@ -1,4 +1,4 @@
-id = "kit-synthetic-credential-stdout-json"
+id = "kit-synthetic-keyed-stdout-json"
 identity_source = "stdout_json"
 identity_binding = "at_launch"
 identity_id = "json_credential_7"
