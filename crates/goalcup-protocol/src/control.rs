@@ -312,6 +312,8 @@ pub struct WorkspaceInfo {
     /// Hex Ed25519 verifying key for this run's signed status.
     pub run_public_key: String,
     pub status_url: String,
+    // TODO(status-cache removal): dead since PR #26 (no daemon writes the cache, nothing reads
+    // this path); kept for wire compatibility, drop with the next control API version.
     pub status_cache_path: String,
     /// One line of plain text the Claude status line `cat`s. Never holds a secret.
     pub status_line_path: String,
@@ -1182,7 +1184,7 @@ pub struct ErrorDetail {
 /// The whole surface between the CLI and the daemon. Implemented by `HttpDaemonClient` and by
 /// `MockDaemonClient`; served by `goalcup-daemon`. Adding a method means editing all three.
 pub trait DaemonClient {
-    /// The signed status cache for one entry (D25).
+    /// The signed status document for one entry (D25).
     fn status(&self, entry_id: &str) -> Result<SignedStatus, ControlError>;
     /// Every entry this daemon knows about.
     fn entries(&self) -> Result<Vec<EntrySummary>, ControlError>;

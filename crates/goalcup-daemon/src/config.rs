@@ -26,7 +26,7 @@ pub struct DaemonConfig {
     pub artifact_root: PathBuf,
     /// Where the shipped connector directories (`<id>/harness.toml`) live.
     pub connectors_dir: PathBuf,
-    /// Where `control.json` and the status-cache mirrors live. Separate from
+    /// Where `control.json` lives. Separate from
     /// `artifact_root` because the CLI reads it, and it may not see a capture buffer.
     pub config_dir: PathBuf,
     /// The default workspace parent when the caller does not choose one.

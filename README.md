@@ -141,10 +141,12 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   an environment built from nothing (`HOME`, `USER`, `LOGNAME`, `TMPDIR` and a system `PATH`;
   none of your API keys or proxy variables), and its output in
   `$GOALCUP_CONFIG_DIR/daemon.log`. It stays up while any run is unsealed and exits 30 seconds
-  after the last one is sealed. `goalcup status` and `goalcup entries` never start one: with no
-  daemon they say nothing is running. If a run outlives its daemon (a crash, a reboot), run
-  `goalcup seal`: it starts a daemon, which reopens the run for status and seal only and seals
-  it; a run that had launched carries the lost interval as a gap. While `daemon.toml` is the
+  after the last one is sealed. `goalcup status` and `goalcup entries` start one too from
+  `daemon.toml` and read its registry (sealed runs included): there is no status copy on disk.
+  With no run on record they answer without starting anything. If a run outlives its daemon (a
+  crash, a reboot), the daemon any of these commands starts reopens the run for status and seal
+  only, a run that had launched carries the lost interval as one gap, and that daemon **stays up
+  until `goalcup seal`** finishes the run rather than exiting after 30 seconds. While `daemon.toml` is the
   unedited default, `start` keeps its `connectors_dir` naming the connectors it loaded (binaries
   move); an edited file that names other connectors is refused, naming the file. A
   `daemon.toml` you wrote for an earlier build belongs at `$GOALCUP_CONFIG_DIR/daemon.toml`;

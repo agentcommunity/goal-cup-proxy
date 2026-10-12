@@ -468,9 +468,7 @@ fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_t
     let v: Vec<goalcup_protocol::control::EntrySummary> = serde_json::from_slice(&out).unwrap();
     assert_eq!(v.len(), m.entry_count());
 
-    // The list is the LIVE map. A sealed entry leaves it once its last ack
-    // lands, while `status <id>` still answers from the frozen cache — so the command must
-    // say which list this is, not imply the run is gone.
+    // However the list treats a sealed entry, the command names the way to reach one.
     let before = m.entry_count();
     m.seal(&m.info().entry_id).unwrap();
     let mut out = Vec::new();
@@ -550,19 +548,11 @@ fn a_control_character_in_a_daemon_string_is_not_handed_to_the_terminal() {
     assert!(doc.verify_with(&info.run_public_key).is_ok());
 }
 
-/// What `goalcup status` says when the daemon is not answering and it falls back to the file
-/// `status::mirror` left in `<config_dir>/cache/`.
-///
-/// Two sentences, because the fallback has two outcomes. A document that verifies is a
-/// CACHED one and its age is the thing a reader acts on, so the banner says both. A document
-/// that does NOT verify is not reported as "signature did not verify" — the sentence written
-/// for the socket, where it means something other than this daemon may be answering an
-/// unauthenticated port. Off the cache it almost always means something duller: a cache file
-/// is named by the entry id alone, so a re-created id reads the file the PREVIOUS run with
-/// that id left behind, signed by a run key that is gone. The bytes cannot tell the two
-/// apart; the words say which document was read.
+/// There is no offline copy: a daemon that does not answer is the answer, even with a
+/// status-shaped file where the old cache lived. `goalcup status` starts the daemon that holds
+/// the registry instead (`main`), so a file on disk is never a second source of truth.
 #[test]
-fn the_cache_fallback_says_it_is_cached_and_names_a_stale_document_for_a_reused_id() {
+fn an_unreachable_daemon_is_reported_and_no_file_on_disk_stands_in_for_it() {
     let tmp = tempfile::tempdir().unwrap();
     let m = support::mock_armed(&tmp, "claude-code-cli");
     let info = m.info();
@@ -570,110 +560,9 @@ fn the_cache_fallback_says_it_is_cached_and_names_a_stale_document_for_a_reused_
     let document = m.status(&info.entry_id).expect("the mock answers once");
     let cache = cfg.join("cache");
     std::fs::create_dir_all(&cache).unwrap();
-    let file = cache.join(format!("status-{}.json", info.entry_id));
-    std::fs::write(&file, serde_json::to_string(&document).unwrap()).unwrap();
-
-    m.fail_next(
-        "status",
-        control::ControlError::Unreachable("connection refused".to_string()),
-    );
-    let mut out = Vec::new();
-    status_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        support::NOW,
-        &mut out,
-    )
-    .expect("a cached document that verifies is an answer");
-    let text = String::from_utf8(out).unwrap();
-    assert!(
-        text.contains("cached document, published "),
-        "the banner says the document is cached and how old it is: {text:?}"
-    );
-    assert!(
-        text.contains("connection refused"),
-        "and why the socket was not used: {text:?}"
-    );
-
-    // The same file, edited so its signature no longer stands — which is what an entry id
-    // re-created after an earlier run's cache file was left behind looks like from here.
-    let mut stale: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    stale["payload"]["detail"] = serde_json::json!("from a run that is gone");
-    std::fs::write(&file, serde_json::to_string(&stale).unwrap()).unwrap();
-    m.fail_next(
-        "status",
-        control::ControlError::Unreachable("connection refused".to_string()),
-    );
-    let mut out = Vec::new();
-    let err = status_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        support::NOW,
-        &mut out,
-    )
-    .unwrap_err();
-    assert_eq!(err.exit_code(), 1);
-    let text = String::from_utf8(out).unwrap();
-    assert!(
-        text.contains("stale cached document for a previous run with this id"),
-        "the dull reading, which is the likely one off a cache: {text:?}"
-    );
-    assert!(
-        !text.contains("from a run that is gone"),
-        "and nothing out of the payload is rendered: {text:?}"
-    );
-}
-
-#[test]
-fn an_oversized_offline_status_cache_is_not_read_as_a_fallback_document() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    let cfg = support::cfg_with_entry(tmp.path(), &info);
-    let cache = cfg.join("cache");
-    std::fs::create_dir_all(&cache).unwrap();
-    let file = std::fs::File::create(cache.join(format!("status-{}.json", info.entry_id))).unwrap();
-    file.set_len(goalcup_cli::config::CONTROL_FILE_MAX_BYTES + 1)
-        .unwrap();
-
-    m.fail_next(
-        "status",
-        control::ControlError::Unreachable("connection refused".to_string()),
-    );
-    let error = status_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        support::NOW,
-        &mut Vec::new(),
-    )
-    .expect_err("an oversized cache is not an offline status document");
-    assert!(format!("{error}").contains("connection refused"));
-}
-
-#[cfg(unix)]
-#[test]
-fn a_symlink_is_not_read_as_an_offline_status_cache() {
-    use std::os::unix::fs::symlink;
-
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    let cfg = support::cfg_with_entry(tmp.path(), &info);
-    let cache = cfg.join("cache");
-    std::fs::create_dir_all(&cache).unwrap();
-    let outside = tmp.path().join("outside-status.json");
-    let document = m.status(&info.entry_id).unwrap();
-    std::fs::write(&outside, serde_json::to_vec(&document).unwrap()).unwrap();
-    symlink(
-        &outside,
+    std::fs::write(
         cache.join(format!("status-{}.json", info.entry_id)),
+        serde_json::to_string(&document).unwrap(),
     )
     .unwrap();
 
@@ -681,16 +570,18 @@ fn a_symlink_is_not_read_as_an_offline_status_cache() {
         "status",
         control::ControlError::Unreachable("connection refused".to_string()),
     );
+    let mut out = Vec::new();
     let error = status_with(
         &m,
         &cfg,
         Some(&info.entry_id),
         false,
         support::NOW,
-        &mut Vec::new(),
+        &mut out,
     )
-    .expect_err("a cache symlink is not an offline status document");
-    assert!(format!("{error}").contains("connection refused"));
+    .expect_err("an unreachable daemon is not answered from disk");
+    assert!(format!("{error}").contains("connection refused"), "{error}");
+    assert!(out.is_empty(), "nothing is rendered: {out:?}");
 }
 
 /// A v5 local capture's status as the daemon composes it: recording, nothing uploaded, no

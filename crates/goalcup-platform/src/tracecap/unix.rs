@@ -356,25 +356,55 @@ impl TraceDirHandle {
         self.open_child_dir(name.to_str().expect("validated component is UTF-8"))
     }
 
+    /// Open the child if it exists, else create it exclusively, and verify what was opened.
+    ///
+    /// Not one `O_CREAT` open: on macOS (APFS), two processes that `openat(O_CREAT)` the same
+    /// absent name at the same moment can see one of them fail with `ENOENT`. Two daemons
+    /// starting together on a fresh artifact root did exactly that on `registry.redb`, so the
+    /// loser exited with "No such file or directory" instead of reaching the registry lock.
+    /// Open-existing, then `O_CREAT | O_EXCL`, is race-free: `ENOENT` on the first means
+    /// "absent, try to create", `EEXIST` on the second means "someone else created it, open
+    /// theirs". A name that keeps flipping between the two is refused after a few rounds.
     pub(super) fn open_or_create_regular(&self, name: &str) -> Result<File, TraceCapError> {
+        const ROUNDS: usize = 8;
         let operation = "open contained regular file";
         let name = c_name(name);
-        let raw = unsafe {
-            // SAFETY: root is retained and name is one validated direct child.
-            libc::openat(
-                self.fd.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDWR
-                    | libc::O_CREAT
-                    | libc::O_NOFOLLOW
-                    | libc::O_CLOEXEC
-                    | libc::O_NONBLOCK,
-                0o600,
-            )
-        };
-        let fd = owned_fd(raw, operation)?;
-        validate_regular(fd.as_raw_fd(), operation)?;
-        Ok(File::from(fd))
+        let base = libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+        let mut last = io::Error::from(io::ErrorKind::NotFound);
+        for _ in 0..ROUNDS {
+            let raw = unsafe {
+                // SAFETY: root is retained and name is one validated direct child.
+                libc::openat(self.fd.as_raw_fd(), name.as_ptr(), base)
+            };
+            if raw >= 0 {
+                let fd = owned_fd(raw, operation)?;
+                validate_regular(fd.as_raw_fd(), operation)?;
+                return Ok(File::from(fd));
+            }
+            last = io::Error::last_os_error();
+            if last.kind() != io::ErrorKind::NotFound {
+                return Err(TraceCapError::io(operation, last));
+            }
+            let raw = unsafe {
+                // SAFETY: as above; O_EXCL makes absence part of the one create call.
+                libc::openat(
+                    self.fd.as_raw_fd(),
+                    name.as_ptr(),
+                    base | libc::O_CREAT | libc::O_EXCL,
+                    0o600,
+                )
+            };
+            if raw >= 0 {
+                let fd = owned_fd(raw, operation)?;
+                validate_regular(fd.as_raw_fd(), operation)?;
+                return Ok(File::from(fd));
+            }
+            last = io::Error::last_os_error();
+            if last.kind() != io::ErrorKind::AlreadyExists {
+                return Err(TraceCapError::io(operation, last));
+            }
+        }
+        Err(TraceCapError::io(operation, last))
     }
 
     pub(super) fn create_regular_exclusive(&self, name: &str) -> Result<File, TraceCapError> {

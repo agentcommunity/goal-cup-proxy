@@ -1,4 +1,4 @@
-//! The fifteen health states, the signed status cache, and the bundled page.
+//! The fifteen health states, the signed status document, and the bundled page.
 //!
 //! Two separate claims, and they fail for different reasons. (The D17 health ladder,
 //! `health::evaluate`, was V1-only and went with OS-31; the states it produced are still
@@ -25,7 +25,7 @@ use goalcup_daemon::registry::{
     WorkspaceSourceBindingV1,
 };
 use goalcup_daemon::status::{
-    build_payload, mirror, plain_words, sign_payload, write_entry_status_line_rooted,
+    build_payload, plain_words, sign_payload, write_entry_status_line_rooted,
 };
 use goalcup_protocol::control::{ArmingState, SignedStatus};
 use goalcup_protocol::events::HealthState;
@@ -38,15 +38,6 @@ use goalcup_protocol::submission::{
     SubmissionOutcomeV1, SubmissionProfileV1,
 };
 use std::collections::BTreeMap;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt as _;
-#[cfg(unix)]
-use std::process::Command;
-
-#[cfg(unix)]
-const STATUS_UMASK_CHILD_ROOT_ENV: &str = "GOALCUP_STATUS_UMASK_CHILD_ROOT";
 
 /// The fifteen, in the order `events.rs` declares them.
 const ALL_FIFTEEN: [HealthState; 15] = [
@@ -180,13 +171,6 @@ fn the_signed_status_verifies_against_the_run_key_and_carries_no_secret() {
         );
     }
     let t = tempfile::tempdir().unwrap();
-    mirror(&signed, t.path()).unwrap();
-    assert!(
-        t.path()
-            .join(format!("cache/status-{}.json", e.entry_id))
-            .exists()
-    );
-    assert!(t.path().join("cache/status-latest.json").exists());
     let artifact = EntryArtifactRoot::create(t.path(), &e.entry_id).unwrap();
     write_entry_status_line_rooted(&signed, &artifact).unwrap();
     let line = std::fs::read_to_string(artifact.display_path().join("status-line.txt")).unwrap();
@@ -382,8 +366,10 @@ fn every_one_of_the_fifteen_states_has_words_a_participant_can_act_on() {
     );
 }
 
+/// The document survives the trip a reader makes (JSON out of the daemon, back into a
+/// `SignedStatus`) and still verifies against the pinned run key.
 #[test]
-fn the_cache_is_mirrored_where_the_cli_the_mcp_server_and_the_page_read_it() {
+fn the_signed_document_round_trips_and_the_status_line_carries_no_secret() {
     let dir = tempfile::tempdir().unwrap();
     let e = support::started_entry();
     let key = e.keys.signing_key().unwrap();
@@ -394,25 +380,10 @@ fn the_cache_is_mirrored_where_the_cli_the_mcp_server_and_the_page_read_it() {
         &key,
     )
     .unwrap();
-    mirror(&signed, dir.path()).unwrap();
-    // Mirroring twice replaces rather than failing: the daemon writes this every second.
-    mirror(&signed, dir.path()).unwrap();
-
-    for name in ["status-entry-0001.json", "status-latest.json"] {
-        let path = dir.path().join("cache").join(name);
-        let back: SignedStatus =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        back.verify_with(&public).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o644,
-                "{name} is readable by other local readers, and holds no secret"
-            );
-        }
-    }
+    let back: SignedStatus =
+        serde_json::from_str(&serde_json::to_string_pretty(&signed).unwrap()).unwrap();
+    back.verify_with(&public).unwrap();
+    assert_eq!(back, signed);
 
     // The status line is one line, carries no credential, and names no absolute path from
     // the participant's home (D25).
@@ -427,59 +398,6 @@ fn the_cache_is_mirrored_where_the_cli_the_mcp_server_and_the_page_read_it() {
     }
 }
 
-/// The cache's public documents request 0644, even when the daemon inherits a restrictive
-/// umask.  The child process keeps this test's umask change out of the parallel test runner.
-#[cfg(unix)]
-#[test]
-fn status_cache_publication_preserves_requested_mode_under_restrictive_umask() {
-    if let Some(root) = std::env::var_os(STATUS_UMASK_CHILD_ROOT_ENV) {
-        let root = std::path::PathBuf::from(root);
-        let e = support::started_entry();
-        let key = e.keys.signing_key().unwrap();
-        let signed = sign_payload(
-            build_payload(&support::status_inputs(&e)),
-            "2026-09-04T09:00:00Z".to_string(),
-            &key,
-        )
-        .unwrap();
-        mirror(&signed, &root).unwrap();
-
-        for name in ["status-entry-0001.json", "status-latest.json"] {
-            let path = root.join("cache").join(name);
-            assert_eq!(
-                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o644,
-                "{name} must keep the requested public cache mode"
-            );
-        }
-        return;
-    }
-
-    let temp = tempfile::tempdir().unwrap();
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args([
-            "--exact",
-            "status_cache_publication_preserves_requested_mode_under_restrictive_umask",
-            "--nocapture",
-        ])
-        .env(STATUS_UMASK_CHILD_ROOT_ENV, temp.path());
-    // SAFETY: this closure runs after fork and before exec, and umask(2) is async-signal-safe.
-    unsafe {
-        command.pre_exec(|| {
-            libc::umask(0o077);
-            Ok(())
-        });
-    }
-    let output = command.output().unwrap();
-    assert!(
-        output.status.success(),
-        "child status cache test failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 #[test]
 fn the_summary_is_the_entry_a_reader_sees_in_a_list() {
     let e = support::started_entry();
@@ -492,185 +410,8 @@ fn the_summary_is_the_entry_a_reader_sees_in_a_list() {
 }
 
 // ---------------------------------------------------------------------------
-// The shared temp name, the page's copied threshold,
-// the refusal's wire state, and the last minute of the clock.
+// The page's copied threshold, the refusal's wire state, and the last minute of the clock.
 // ---------------------------------------------------------------------------
-
-/// Two entries writing the cache must not fight over one temp file.
-///
-/// `status-latest.json` is written from a temp file in the same directory, and a temp
-/// name derived from the target alone is the same name for every entry — so two mirrors
-/// in flight could publish one entry's document under the other's rename. The sequential
-/// half of the claim: nothing is left behind, and the last writer is what `status-latest`
-/// holds.
-#[test]
-fn mirroring_two_entries_leaves_no_temp_file_behind() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut first = support::started_entry();
-    first.entry_id = "entry-0001".to_string();
-    let mut second = support::started_entry();
-    second.entry_id = "entry-0002".to_string();
-
-    let mut last_public = String::new();
-    for e in [&first, &second] {
-        let signed = sign_payload(
-            build_payload(&support::status_inputs(e)),
-            "2026-09-04T09:00:00Z".to_string(),
-            &e.keys.signing_key().unwrap(),
-        )
-        .unwrap();
-        mirror(&signed, dir.path()).unwrap();
-        last_public = e.keys.public_key_hex().unwrap();
-    }
-
-    let cache = dir.path().join("cache");
-    let strays: Vec<String> = std::fs::read_dir(&cache)
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .filter(|name| name.ends_with(".tmp"))
-        .collect();
-    assert!(
-        strays.is_empty(),
-        "a temp file survived the rename: {strays:?}"
-    );
-
-    let latest: SignedStatus =
-        serde_json::from_str(&std::fs::read_to_string(cache.join("status-latest.json")).unwrap())
-            .unwrap();
-    assert_eq!(
-        latest.payload.entry_id, "entry-0002",
-        "two runs that started in the same second are ordered by their ids, and the newest \
-         entry is the highest id"
-    );
-    latest.verify_with(&last_public).unwrap();
-}
-
-/// `status-latest.json` is the one document a reader opens when
-/// it has not been told which entry it wants, and `Daemon::refresh_statuses` walks the entry
-/// map in ID order — so writing the pointer on every mirror would make "latest" mean "the
-/// highest id".
-///
-/// The pointer is the most recently started run. Here the lexically smaller id started
-/// later and is written first, which is the order the refresh visits them in: the second
-/// mirror must leave the pointer alone rather than take it.
-#[test]
-fn the_shared_pointer_names_the_most_recently_started_run_and_not_the_highest_id() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut newer = support::started_entry();
-    newer.entry_id = "entry-0001".to_string();
-    newer.started_at = Some("2026-09-04T11:00:00Z".to_string());
-    let mut older = support::started_entry();
-    older.entry_id = "entry-0002".to_string();
-    older.started_at = Some("2026-09-03T07:42:00Z".to_string());
-
-    for e in [&newer, &older] {
-        let signed = sign_payload(
-            build_payload(&support::status_inputs(e)),
-            "2026-09-04T11:00:05Z".to_string(),
-            &e.keys.signing_key().unwrap(),
-        )
-        .unwrap();
-        mirror(&signed, dir.path()).unwrap();
-    }
-
-    let cache = dir.path().join("cache");
-    let latest: SignedStatus =
-        serde_json::from_str(&std::fs::read_to_string(cache.join("status-latest.json")).unwrap())
-            .unwrap();
-    assert_eq!(
-        latest.payload.entry_id, "entry-0001",
-        "the pointer named the highest id rather than the run that started last"
-    );
-    latest
-        .verify_with(&newer.keys.public_key_hex().unwrap())
-        .unwrap();
-
-    // The per-entry files are untouched by this: each entry still has its own, and
-    // the older run's document is still where a caller that names it reads.
-    for (name, id) in [
-        ("status-entry-0001.json", "entry-0001"),
-        ("status-entry-0002.json", "entry-0002"),
-    ] {
-        let doc: SignedStatus =
-            serde_json::from_str(&std::fs::read_to_string(cache.join(name)).unwrap()).unwrap();
-        assert_eq!(doc.payload.entry_id, id);
-    }
-
-    // A refresh must be able to replace its own pointer, or it would freeze at the first
-    // publication of the run that holds it.
-    let signed = sign_payload(
-        build_payload(&support::status_inputs(&newer)),
-        "2026-09-04T11:00:10Z".to_string(),
-        &newer.keys.signing_key().unwrap(),
-    )
-    .unwrap();
-    mirror(&signed, dir.path()).unwrap();
-    let latest: SignedStatus =
-        serde_json::from_str(&std::fs::read_to_string(cache.join("status-latest.json")).unwrap())
-            .unwrap();
-    assert_eq!(latest.cached_at, "2026-09-04T11:00:10Z");
-}
-
-/// The concurrent half: two entries mirroring at once leave a document that parses and
-/// verifies against one of the two run keys — never a half-written one, and never one
-/// entry's bytes under the other's signature.
-#[test]
-fn two_entries_mirroring_at_once_leave_a_whole_document() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().to_path_buf();
-    let mut publics = Vec::new();
-    let mut handles = Vec::new();
-    for id in ["entry-0001", "entry-0002"] {
-        let mut e = support::started_entry();
-        e.entry_id = id.to_string();
-        publics.push(e.keys.public_key_hex().unwrap());
-        let root = root.clone();
-        handles.push(std::thread::spawn(move || {
-            let key = e.keys.signing_key().unwrap();
-            for _ in 0..50 {
-                let signed = sign_payload(
-                    build_payload(&support::status_inputs(&e)),
-                    "2026-09-04T09:00:00Z".to_string(),
-                    &key,
-                )
-                .unwrap();
-                mirror(&signed, &root).unwrap();
-            }
-        }));
-    }
-    // While they write, keep reading: a rename is atomic, so every read that returns
-    // bytes must return a document that verifies.
-    let cache = root.join("cache");
-    let latest = cache.join("status-latest.json");
-    while handles.iter().any(|h| !h.is_finished()) {
-        if let Ok(raw) = std::fs::read_to_string(&latest)
-            && let Ok(doc) = serde_json::from_str::<SignedStatus>(&raw)
-        {
-            assert!(
-                publics.iter().any(|p| doc.verify_with(p).is_ok()),
-                "a mirrored document did not verify against either run key"
-            );
-        }
-    }
-    for h in handles {
-        h.join().unwrap();
-    }
-
-    let strays: Vec<String> = std::fs::read_dir(&cache)
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .filter(|name| name.ends_with(".tmp"))
-        .collect();
-    assert!(strays.is_empty(), "a temp file survived: {strays:?}");
-    let doc: SignedStatus =
-        serde_json::from_str(&std::fs::read_to_string(&latest).unwrap()).unwrap();
-    assert!(
-        publics.iter().any(|p| doc.verify_with(p).is_ok()),
-        "the document left behind must verify"
-    );
-}
 
 /// A refused gate has its own wire state, `ArmingState::Refused`, so a machine reader
 /// keying on `arming` alone can tell a run waiting to arm from one that never will.

@@ -169,8 +169,11 @@ fn wait_running(rig: &Rig, entry: &str) {
 
 /// `goalcup start` on a machine with no daemon and no `daemon.toml`: it writes the default
 /// configuration, starts a daemon, the run is recorded and sealed, and the daemon exits within
-/// its grace of the seal, withdrawing `control.json`. Afterwards `status` and `entries` say no
-/// daemon is running and start none, although `daemon.toml` would let them.
+/// its grace of the seal, withdrawing `control.json`.
+///
+/// Afterwards `goalcup status` starts a daemon again and shows that run, sealed, out of the
+/// registry; it creates no entry and changes nothing in the sealed trace; and the daemon it
+/// started exits on the same grace.
 #[test]
 fn start_with_no_daemon_starts_one_that_exits_after_the_seal() {
     let rig = Rig::run_scoped();
@@ -209,25 +212,184 @@ fn start_with_no_daemon_starts_one_that_exits_after_the_seal() {
         "an idle exit withdraws control.json"
     );
 
-    for args in [
-        vec!["status"],
-        vec!["status", entry.as_str()],
-        vec!["entries"],
-    ] {
+    let trace_before = files_under(&rig.trace(&entry));
+    let sealed = status(&rig, &entry);
+    assert_eq!(
+        sealed.payload.capture.as_ref().map(|c| c.run),
+        Some(RunState::Sealed),
+        "status shows the sealed run after its daemon exited"
+    );
+    let asked = Instant::now();
+    let respawned = the_daemon(&rig);
+    assert_ne!(respawned, daemon, "status started a daemon of its own");
+
+    // The bare command and the text rendering name the same run, and say it is sealed.
+    let output = goalcup(&rig, &cli()).arg("status").output().unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains(&entry) && text.contains("sealed"),
+        "the newest run, sealed: {text}"
+    );
+    let output = goalcup(&rig, &cli())
+        .args(["entries", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    let listed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let listed = listed.as_array().unwrap();
+    assert_eq!(listed.len(), 1, "no entry was created: {listed:?}");
+    assert_eq!(listed[0]["entry_id"], entry.as_str());
+    assert!(
+        !listed[0]["sealed_at"].is_null(),
+        "still sealed: {listed:?}"
+    );
+    assert_eq!(
+        files_under(&rig.trace(&entry)),
+        trace_before,
+        "a look changes nothing in a sealed trace"
+    );
+    assert_eq!(
+        daemons(&rig),
+        vec![respawned],
+        "one daemon answered all three"
+    );
+
+    wait_gone(respawned, GRACE + GRACE_SLACK);
+    assert!(
+        asked.elapsed() >= GRACE - Duration::from_secs(2),
+        "the status daemon left before its grace"
+    );
+    assert!(
+        !goalcup_cli::config::control_path(&rig.cfg).exists(),
+        "an idle exit withdraws control.json"
+    );
+}
+
+/// `goalcup status` and `goalcup entries` on a machine where no run was ever started: a plain
+/// answer, and nothing written or started for it: no `daemon.toml`, no daemon.
+#[test]
+fn status_and_entries_with_no_runs_ever_answer_without_starting_anything() {
+    let rig = Rig::run_scoped();
+    let _reaper = reaper(&rig);
+    let config = rig.cfg.join(goalcup_cli::daemon::spawn::DAEMON_CONFIG_NAME);
+    assert!(daemons(&rig).is_empty());
+    assert!(!config.exists());
+
+    for args in [vec!["status"], vec!["status", "e0123456789abcdef"]] {
         let output = goalcup(&rig, &cli()).args(&args).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{args:?}: {}", said(&output));
-        let text = String::from_utf8_lossy(&output.stderr);
         assert!(
-            text.contains("no daemon is running")
-                && text.contains(
-                    &goalcup_cli::config::control_path(&rig.cfg)
-                        .display()
-                        .to_string()
-                ),
-            "{args:?} says so and names control.json: {text}"
+            said(&output).contains("no run has been started from this machine")
+                || said(&output).contains("e0123456789abcdef"),
+            "{args:?}: a clear answer: {}",
+            said(&output)
         );
-        assert!(daemons(&rig).is_empty(), "{args:?} started a daemon");
     }
+    let output = goalcup(&rig, &cli())
+        .args(["entries", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    let listed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(listed, serde_json::json!([]), "no entries");
+    let output = goalcup(&rig, &cli()).arg("entries").output().unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("(none)"));
+
+    // Long enough for a daemon a command had started to have shown itself.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(daemons(&rig).is_empty(), "no daemon was started");
+    assert!(!config.exists(), "no daemon.toml was written");
+    assert!(!goalcup_cli::config::control_path(&rig.cfg).exists());
+}
+
+/// The one write path a look may take. A run whose daemon was killed mid-run is unfinished, so
+/// the daemon `goalcup status` starts reopens it for status and seal only and chains the lost
+/// interval as exactly one `IngestLost` gap. That daemon then stays up past its 30-second grace,
+/// because an unfinished capture is work, and `goalcup seal` meets the same daemon, finishes the
+/// run and chains no second gap.
+#[test]
+fn status_after_a_mid_run_crash_reopens_the_run_keeps_its_daemon_up_and_seal_adds_no_gap() {
+    let rig = Rig::run_scoped();
+    let _reaper = reaper(&rig);
+    let start = start_in_background(&rig, &goal_in(&rig, "runs"));
+    let entry = latest_entry(&rig);
+    wait_running(&rig, &entry);
+    let killed = the_daemon(&rig);
+    // SAFETY: two integers; the pid was just seen running this row's daemon.
+    assert_eq!(unsafe { libc::kill(killed, libc::SIGKILL) }, 0);
+    wait_gone(killed, Duration::from_secs(10));
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(
+        daemons(&rig).is_empty(),
+        "nothing but the look below restarts it while the harness runs"
+    );
+
+    let reopened = status(&rig, &entry);
+    let capture = reopened.payload.capture.expect("a capture status");
+    assert_ne!(capture.run, RunState::Sealed, "status does not seal it");
+    let respawned = the_daemon(&rig);
+    assert_ne!(respawned, killed, "status started a daemon");
+
+    std::thread::sleep(GRACE + GRACE_SLACK);
+    assert_eq!(
+        daemons(&rig),
+        vec![respawned],
+        "the daemon holding the unfinished run is still up after its grace"
+    );
+
+    let output = goalcup(&rig, &cli())
+        .args(["seal", entry.as_str()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    let _ = start.wait_with_output().unwrap();
+    assert_eq!(daemons(&rig), vec![respawned], "seal met the same daemon");
+    let sealed = status(&rig, &entry);
+    assert_eq!(
+        sealed.payload.capture.map(|c| c.run),
+        Some(RunState::Sealed)
+    );
+    let (report, records) = rig.read_trace(&entry);
+    assert!(report.sealed, "{:?}", report.findings);
+    let lost = records
+        .iter()
+        .filter(|r| {
+            matches!(
+                r,
+                CaptureRecord::Gap {
+                    stream: None,
+                    reason: GapReason::IngestLost,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        lost, 1,
+        "one reopen, one IngestLost gap, and none from the seal"
+    );
+}
+
+/// Every file under `dir`, by relative path, with its bytes.
+fn files_under(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(here) = stack.pop() {
+        for item in std::fs::read_dir(&here).unwrap() {
+            let path = item.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.insert(
+                    path.strip_prefix(dir).unwrap().to_path_buf(),
+                    std::fs::read(&path).unwrap(),
+                );
+            }
+        }
+    }
+    out
 }
 
 /// Two `goalcup start` at the same moment, with no daemon: both runs are recorded and sealed,

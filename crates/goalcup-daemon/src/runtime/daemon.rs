@@ -151,11 +151,6 @@ impl Daemon {
                 owing.entry_id, owing.state
             )));
         }
-        // A status write is a temp file and a rename; a daemon killed between the two
-        // leaves the temp file. Nothing else ever removes it, and the next `read_dir` of
-        // the cache directory trips over a document that verifies as nothing.
-        sweep_stale_temp_files(&config.config_dir.join("cache"))?;
-
         let capture_clock = crate::ingest::monotonic_clock(fresh_capture_id());
         let ingest =
             IngestListener::bind_loopback(loopback(0), IngestConfig::new(capture_clock.clone()))
@@ -544,32 +539,6 @@ fn no_such_entry(entry_id: &str) -> DaemonError {
 
 fn loopback(port: u16) -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], port))
-}
-
-/// Remove the `*.tmp` files an atomic write left behind when the process died between the
-/// write and the rename.
-///
-/// A missing directory is not an error: the cache is created by the first status write.
-fn sweep_stale_temp_files(dir: &std::path::Path) -> Result<(), DaemonError> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => {
-            return Err(DaemonError::Io {
-                path: dir.display().to_string(),
-                source,
-            });
-        }
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "tmp") {
-            // Best effort: another daemon's live temp file is its business, and a sweep
-            // that refused to start over one would be a daemon that cannot start twice.
-            let _ = std::fs::remove_file(&path);
-        }
-    }
-    Ok(())
 }
 
 /// Create one participant-selected daemon root privately, or leave an existing one alone.

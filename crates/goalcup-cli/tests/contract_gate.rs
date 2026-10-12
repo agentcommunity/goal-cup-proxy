@@ -382,49 +382,57 @@ fn seal_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
     }
 }
 
-/// The three participant surfaces are wired to real commands, and the first thing each of
-/// them needs is a daemon — so on a machine with none they all leave under rung 1 naming
-/// `control.json`, which is the same answer `goalcup doctor` and `goalcup start` give from
-/// the same file.
+/// The three participant surfaces are wired to real commands, and each leaves under rung 1
+/// when it cannot answer, printing nothing on stdout.
 ///
-/// Rung 1 and not the rung of an unwritten command: "there is no daemon running" is a thing
-/// the participant fixes by starting one, and "this build never wrote the command" is not.
-/// Everything past that first refusal
-/// — the pinned key, the render, the URL that is opened — is driven against the in-process
-/// mock in `tests/it/status_views.rs`, where a test can assert what was printed without a
-/// daemon on the machine that runs it.
+/// - `status` and `status --json` with no run on record refuse before any daemon is started:
+///   the answer needs none, so nothing is written and `daemon.log` never appears.
+/// - `entries` with a `daemon.toml` the daemon refuses starts that daemon (as `start` and
+///   `seal` do) and refuses naming `daemon.log`, where the daemon's own words are.
+///
+/// Rung 1 and not the rung of an unwritten command: both are things the participant fixes.
+/// Everything past the first refusal is driven against the in-process mock in
+/// `tests/it/status_views.rs`, and the daemon that does start is `tests/full/run_scoped_daemon.rs`.
 #[test]
-fn the_three_participant_surfaces_are_no_longer_stubs_and_no_daemon_is_rung_one() {
+fn the_three_participant_surfaces_refuse_at_rung_one_and_status_starts_nothing_for_no_run() {
     let cfg = support::empty_cfg();
-    let expected = goalcup_cli::config::control_path(&cfg)
-        .display()
-        .to_string();
-    let commands = vec![vec!["status"], vec!["status", "--json"], vec!["entries"]];
-    for args in commands {
-        let out = goalcup()
-            .args(&args)
+    std::fs::write(
+        cfg.join(goalcup_cli::daemon::spawn::DAEMON_CONFIG_NAME),
+        "this is not = = toml\n",
+    )
+    .unwrap();
+    let log = cfg.join(goalcup_cli::daemon::spawn::DAEMON_LOG_NAME);
+    let run = |args: &[&str]| {
+        goalcup()
+            .args(args)
             .env_clear()
             .envs(support::clean_env())
             .env("GOALCUP_CONFIG_DIR", &cfg)
             .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
             .output()
-            .unwrap();
-        assert_eq!(
-            out.status.code(),
-            Some(1),
-            "`goalcup {args:?}` with no daemon is a refusal the participant can fix, not a \
-             stub's rung 3"
-        );
+            .unwrap()
+    };
+    for args in [vec!["status"], vec!["status", "--json"]] {
+        let out = run(&args);
+        assert_eq!(out.status.code(), Some(1), "`goalcup {args:?}`");
         let said = String::from_utf8_lossy(&out.stderr).to_string();
         assert!(
-            said.starts_with("goalcup: ") && said.contains(&expected),
-            "and it names where the daemon's file would have been: {said:?}"
+            said.starts_with("goalcup: ") && said.contains("no run has been started"),
+            "`goalcup {args:?}` says there is no run: {said:?}"
         );
-        assert!(
-            String::from_utf8_lossy(&out.stdout).is_empty(),
-            "`goalcup {args:?}` printed nothing before it refused"
-        );
+        assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+        assert!(!log.exists(), "`goalcup {args:?}` started a daemon");
     }
+    let out = run(&["entries"]);
+    assert_eq!(out.status.code(), Some(1), "a daemon that will not start");
+    let said = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        said.starts_with("goalcup: ")
+            && said.contains("no daemon is running")
+            && said.contains(&log.display().to_string()),
+        "it started one, and names where that daemon's words are: {said:?}"
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
 }
 
 /// No daemon running is the normal state between runs, and `goalcup doctor` reports it through

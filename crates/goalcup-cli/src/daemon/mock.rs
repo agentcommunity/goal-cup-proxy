@@ -566,15 +566,10 @@ impl DaemonClient for MockDaemonClient {
     /// A second seal is a `conflict` — already sealed is a state that will not change, and
     /// a conflict is the one `409` a client must never retry.
     ///
-    /// **The sealed entry leaves the live list.** `GET /v0/entries` walks the
-    /// daemon's in-memory entry map and a sealed entry is evicted from it once the ack
-    /// watermark reaches the chain head, while `signed_status` keeps answering for that
-    /// entry out of the frozen status cache. A mock whose `entries` still listed a sealed
-    /// run could not show that disagreement at all, and it is the disagreement `goalcup
-    /// entries` exists to explain: a participant must not read a finished run's absence
-    /// from this list as the run being gone. The eviction is immediate here rather than at
-    /// an ack watermark this mock has no chain to measure — the fact under test is that it
-    /// happens, not when.
+    /// **The sealed entry leaves this mock's list**, as a V1 daemon's live map evicted it,
+    /// while `status` keeps answering for it. The capture daemon lists sealed rows too; the
+    /// mock keeps the eviction so `goalcup entries` is shown pointing a reader at `goalcup
+    /// status <id>` either way.
     fn seal(&self, entry_id: &str) -> Result<SealResponse, ControlError> {
         let Ok(mut state) = self.state.lock() else {
             return Err(poisoned());
