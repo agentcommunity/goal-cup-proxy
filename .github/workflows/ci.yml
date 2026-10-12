@@ -15,7 +15,9 @@
 #   fails the job.
 # - It skips the goalcup-daemon and goalcup-cli test suites. They spawn real process trees,
 #   and on a 2-core Linux runner they hang or kill the VM (docs/OPERATING.md, "CI").
-#   Linux is best-effort and untested as a platform (README.md, "Build"), not a supported claim.
+#   The Linux chain reservation is measured in Docker on ext4 and XFS, not in the gate. The
+#   runner's checkout is on ext4, so the platform crate's Linux reservation tests reserve for
+#   real there; GOALCUP_TRACECAP_REQUIRE_QUALIFIED makes a missing ext4 or XFS root a failure.
 # - It holds no secrets and runs with a read-only token, so a pull request from a fork can run
 #   it. Keep it that way: never use `pull_request_target`, and never pass a secret to a step.
 
@@ -86,4 +88,6 @@ jobs:
       - if: steps.scope.outputs.rust == 'true'
         run: cargo clippy --workspace --all-targets -- -D warnings
       - if: steps.scope.outputs.rust == 'true'
+        env:
+          GOALCUP_TRACECAP_REQUIRE_QUALIFIED: "1"
         run: cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli

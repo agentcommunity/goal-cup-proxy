@@ -1589,9 +1589,10 @@ impl TraceExport {
     /// allowance, [`TERMINAL_RESERVE_BYTES`] included, never added. The chain file is then
     /// topped up, through the retained chain capability, until at least `bytes` of it are
     /// physically allocated, without moving its logical end ([`TraceDir::reserve_append`]:
-    /// macOS APFS only, `F_ALLOCATEALL | F_ALLOCATEPERSIST` recipe, measured from the
-    /// file's block count). Only after that remeasurement does [`Self::capture_storage`] report
-    /// the quota as `reserved_bytes`.
+    /// macOS APFS with the measured `F_ALLOCATEALL | F_ALLOCATEPERSIST` recipe, or Linux ext4
+    /// and XFS with `fallocate(FALLOC_FL_KEEP_SIZE)`, measured in Docker on loop-mounted images;
+    /// either is measured from the file's block count). Only after that remeasurement does
+    /// [`Self::capture_storage`] report the quota as `reserved_bytes`.
     ///
     /// Any refusal — unsupported filesystem or platform, insufficient space, a kernel error, a
     /// short remeasurement, or a chain length that is not this writer's — leaves the quota and
