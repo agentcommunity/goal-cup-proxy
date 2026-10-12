@@ -3294,13 +3294,15 @@ fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
 fn an_escaped_json_secret_is_redacted_at_every_split_point() {
     let input: &[u8] = br#"{"type":"function_call_output","output":"{\n  \"api_key\": \"q8Zr2LmN0pX4vB7cT1yW\",\n  \"client_secret\": \"Zx9Yw8Vu7Ts6Rq5Po4Nm\"\n}"}
 {"type":"function_call_output","output":"db:\n  password: \"CorrectHorseBattery9x\"\n"}
+{"type":"function_call","arguments":"{\"cmd\":[\"curl\",\"-d\",\"{\\\"api_key\\\":\\\"Q2w3E4r5T6y7U8i9O0pA\\\"}\"]}"}
 "#;
     let (want_bytes, want_spans) = legacy(input);
-    assert_eq!(want_spans.len(), 3, "{want_spans:?}");
+    assert_eq!(want_spans.len(), 4, "{want_spans:?}");
     for secret in [
         &b"q8Zr2LmN0pX4vB7cT1yW"[..],
         b"Zx9Yw8Vu7Ts6Rq5Po4Nm",
         b"CorrectHorseBattery9x",
+        b"Q2w3E4r5T6y7U8i9O0pA",
     ] {
         assert!(!contains(&want_bytes, secret));
     }

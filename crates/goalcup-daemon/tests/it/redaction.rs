@@ -1269,8 +1269,8 @@ fn with_script(body: &str) -> String {
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "generic_secret_assignment",
-        r#"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['\"])?([A-Za-z0-9_\-]{16,})"#,
-        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['"])?(?:[A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
     ),
     (
         "email",
@@ -1498,6 +1498,7 @@ fn shared_rule_probes() -> Vec<String> {
     add(format!("db:\\n  password: \\\"{}\\\"", a(20)));
     add(format!("token=\\'{}", a(16)));
     add(format!("token=\\{}", a(16)));
+    add(format!("password:\\\\\\\"{}\\\\\\\"", a(20)));
     add(format!("token='{}", a(20)));
     add(format!("export MY_SECRET={}", a(24)));
     add(format!("api_key={}", a(15)));
@@ -2229,7 +2230,14 @@ fn a_pem_block_with_no_end_runs_to_the_end_of_the_record() {
 #[test]
 fn a_secret_in_json_escaped_text_is_redacted_and_the_record_stays_json() {
     let m = "<redacted:generic_secret_assignment>";
-    let cases: [(&str, String); 2] = [
+    let cases: [(&str, String); 3] = [
+        // A command's JSON argument inside a function call's arguments: escaped twice.
+        (
+            r#"{"type":"function_call","content":"{\"cmd\":[\"curl\",\"-d\",\"{\\\"password\\\":\\\"CorrectHorseBattery9\\\"}\"]}"}"#,
+            format!(
+                r#"{{"type":"function_call","content":"{{\"cmd\":[\"curl\",\"-d\",\"{{\\\"password\\\":\\\"{m}\\\"}}\"]}}"}}"#
+            ),
+        ),
         (
             r#"{"type":"tool_result","content":"{\n  \"api_key\": \"q8Zr2LmN0pX4vB7cT1yW\",\n  \"client_secret\": \"Zx9Yw8Vu7Ts6Rq5Po4Nm\"\n}"}"#,
             format!(
@@ -2256,7 +2264,12 @@ fn a_secret_in_json_escaped_text_is_redacted_and_the_record_stays_json() {
             .or(outer["output"].as_str())
             .unwrap();
         if inner.starts_with('{') {
-            serde_json::from_str::<serde_json::Value>(inner).expect("the escaped text is JSON");
+            let inner: serde_json::Value =
+                serde_json::from_str(inner).expect("the escaped text is JSON");
+            if let Some(arg) = inner["cmd"].get(2).and_then(|a| a.as_str()) {
+                serde_json::from_str::<serde_json::Value>(arg)
+                    .expect("the twice-escaped text is JSON");
+            }
         }
     }
 }

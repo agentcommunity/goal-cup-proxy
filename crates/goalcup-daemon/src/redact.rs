@@ -174,19 +174,20 @@ const SHARED: &[(&str, &str)] = &[
     // whole segment of it, so `tokenizer` is not a token. Each side of the key word is at most
     // 1,000 units, so a key is at most 2,008: a base64url run after a quote (a Codex
     // `encrypted_content` value) is then not a key the stream must hold to its end. Each
-    // quote may follow a backslash: tool output and file contents reach every native
-    // transcript and request body as JSON escaped inside a string (`\"api_key\": \"…\"`).
+    // quote may follow up to seven backslashes: tool output and file contents reach every
+    // native transcript and request body as JSON escaped inside a string (`\"api_key\": \"…\"`),
+    // and a command's JSON argument inside that once more (`\\\"api_key\\\"`).
     (
         "generic_secret_assignment",
-        r#"(?i)\\?"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\?"\s*:\s*\\?"([^"\\]{16,})\\?""#,
+        r#"(?i)\\{0,7}"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}""#,
     ),
     // (ii) the shell/TOML form, with redact.py's own value class. Widening this one is what
     // put source lines in spans; the JSON form above is what catches base64 secrets. The
-    // opening quote may follow a backslash (`password: \"…\"` in an escaped string); the span
-    // takes both, so no backslash is left dangling.
+    // opening quote may follow up to seven backslashes (`password: \"…\"` in an escaped
+    // string); the span takes them, so no backslash is left dangling.
     (
         "generic_secret_assignment",
-        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['"])?(?:[A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
     ),
     // The local part is at most 1,024 units, for the same reason as the JSON key: a bare token
     // run is not an address the stream must hold to its end. Not RFC 5321's 64: a URL
@@ -254,7 +255,7 @@ fn disables_unicode(re: &str) -> bool {
 }
 
 /// True when `start..end` is the interior of a JSON string — a `"` immediately before it
-/// and a `"` (or an escaped `\"`) immediately after — so a bare marker dropped in its place is
+/// and a `"` (or one escaped by up to seven backslashes) immediately after — so a bare marker dropped in its place is
 /// still a JSON string and the record still parses. The escaped close is a string escaped
 /// inside another string (`\"api_key\": \"<redacted:…>\"`): a quoted marker there would end
 /// the outer string.
@@ -269,11 +270,12 @@ fn disables_unicode(re: &str) -> bool {
 /// the shell/TOML literal and the vendor prefixes, which are not JSON fields and whose
 /// bare markers the committed corpus already carries.
 fn span_is_a_json_string_interior(bytes: &[u8], start: usize, end: usize) -> bool {
-    let closes = match bytes.get(end) {
-        Some(b'"') => true,
-        Some(b'\\') => bytes.get(end + 1) == Some(&b'"'),
-        _ => false,
-    };
+    let slashes = bytes[end.min(bytes.len())..]
+        .iter()
+        .take(8)
+        .take_while(|&&b| b == b'\\')
+        .count();
+    let closes = slashes <= 7 && bytes.get(end + slashes) == Some(&b'"');
     start > 0 && bytes[start - 1] == b'"' && closes
 }
 

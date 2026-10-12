@@ -125,6 +125,9 @@ const SEGMENT_RECORD_BUDGET: usize = MAX_ENVELOPE_BYTES - ENVELOPE_RESERVE_BYTES
 /// an eight-unit key word. A longer `[A-Za-z0-9_\-]` run after a quote is no key, so its
 /// candidate ends there instead of holding the run.
 const JSON_KEY_MAX_UNITS: u16 = 2008;
+/// The most backslashes the generic-secret literals take before a quote: JSON escaped up to
+/// three levels deep (`\"`, `\\\"`, seven before the quote).
+const MAX_QUOTE_ESCAPES: u8 = 7;
 /// The longest local part the shared `email` literal matches, in units (all ASCII).
 const EMAIL_LOCAL_MAX: u16 = 1024;
 
@@ -438,12 +441,12 @@ static SHAPES: [Shape; 19] = [
     ),
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)\\?"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\?"\s*:\s*\\?"([^"\\]{16,})\\?""#,
+        source: r#"(?i)\\{0,7}"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}""#,
         form: Form::JsonAssignment,
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['"])?(?:[A-Za-z0-9_\-]{16,})"#,
+        source: r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
         form: Form::ShellAssignment,
     },
     Shape {
@@ -810,18 +813,18 @@ const PEM_BODY_MAX: u32 = 12288;
 enum JsonPhase {
     /// Before the key's opening quote.
     Open,
-    /// A backslash before the key's opening quote.
-    OpenQuote,
+    /// Backslashes (one to seven) before the key's opening quote.
+    OpenQuote(u8),
     Key,
-    /// A backslash before the key's closing quote.
-    KeyQuote,
+    /// Backslashes before the key's closing quote.
+    KeyQuote(u8),
     AfterKey,
     AfterColon,
-    /// A backslash before the value's opening quote.
-    ValueQuote,
+    /// Backslashes before the value's opening quote.
+    ValueQuote(u8),
     Value,
-    /// A backslash after the value: only a quote completes the match.
-    ValueEnd,
+    /// Backslashes after the value: only a quote completes the match.
+    ValueEnd(u8),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -849,8 +852,8 @@ enum Shell {
     ApiKey(u8),
     BeforeSep,
     AfterSep,
-    /// A backslash before the optional quote.
-    Escape,
+    /// Backslashes (one to seven) before the optional quote.
+    Escape(u8),
     Quoted,
     /// Value characters, capped at sixteen.
     Value(u8),
@@ -1240,14 +1243,21 @@ impl Pem {
 }
 
 impl Json {
-    /// `(?i)\\?"KEY\\?"\s*:\s*\\?"([^"\\]{16,})\\?"`; `after` is the offset after this unit.
+    /// `(?i)\\{0,7}"KEY\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}"`; `after` is the offset
+    /// after this unit.
     fn step(&mut self, u: Unit, after: u64) -> bool {
+        // One more backslash before a quote, while at most seven have been seen.
+        let more = |k: u8| (is(u, b'\\') && k < MAX_QUOTE_ESCAPES).then_some(k + 1);
         match self.phase {
             JsonPhase::Open if is(u, b'\\') => {
-                self.phase = JsonPhase::OpenQuote;
+                self.phase = JsonPhase::OpenQuote(1);
                 true
             }
-            JsonPhase::Open | JsonPhase::OpenQuote => {
+            JsonPhase::OpenQuote(k) if is(u, b'\\') => {
+                self.phase = JsonPhase::OpenQuote(k + 1);
+                more(k).is_some()
+            }
+            JsonPhase::Open | JsonPhase::OpenQuote(_) => {
                 self.phase = JsonPhase::Key;
                 is(u, b'"')
             }
@@ -1264,10 +1274,14 @@ impl Json {
                 true
             }
             JsonPhase::Key if is(u, b'\\') => {
-                self.phase = JsonPhase::KeyQuote;
+                self.phase = JsonPhase::KeyQuote(1);
                 !self.key.is_empty()
             }
-            JsonPhase::Key | JsonPhase::KeyQuote => {
+            JsonPhase::KeyQuote(k) if is(u, b'\\') => {
+                self.phase = JsonPhase::KeyQuote(k + 1);
+                more(k).is_some()
+            }
+            JsonPhase::Key | JsonPhase::KeyQuote(_) => {
                 if !is(u, b'"') {
                     return false;
                 }
@@ -1282,20 +1296,24 @@ impl Json {
                 true
             }
             JsonPhase::AfterColon if is(u, b'\\') => {
-                self.phase = JsonPhase::ValueQuote;
+                self.phase = JsonPhase::ValueQuote(1);
                 true
             }
-            JsonPhase::AfterColon | JsonPhase::ValueQuote if is(u, b'"') => {
+            JsonPhase::ValueQuote(k) if is(u, b'\\') => {
+                self.phase = JsonPhase::ValueQuote(k + 1);
+                more(k).is_some()
+            }
+            JsonPhase::AfterColon | JsonPhase::ValueQuote(_) if is(u, b'"') => {
                 self.phase = JsonPhase::Value;
                 self.value_start = after;
                 true
             }
             JsonPhase::AfterKey | JsonPhase::AfterColon => space(u),
-            JsonPhase::ValueQuote => false,
+            JsonPhase::ValueQuote(_) => false,
             JsonPhase::Value => match u {
                 // The closing quote may be escaped: hold the backslash until its quote.
                 Unit::Char('\\') => {
-                    self.phase = JsonPhase::ValueEnd;
+                    self.phase = JsonPhase::ValueEnd(1);
                     true
                 }
                 Unit::Char('"') | Unit::Invalid => false,
@@ -1304,14 +1322,21 @@ impl Json {
                     true
                 }
             },
-            // The quote completes the match, which the regex then sees; anything else ends it.
-            JsonPhase::ValueEnd => false,
+            // The quote completes the match, which the regex then sees; anything else but one
+            // more backslash ends it.
+            JsonPhase::ValueEnd(k) => match more(k) {
+                Some(k) => {
+                    self.phase = JsonPhase::ValueEnd(k);
+                    true
+                }
+                None => false,
+            },
         }
     }
 }
 
 impl Shell {
-    /// `(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['"])?[A-Za-z0-9_\-]{16,}`
+    /// `(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}`
     fn step(&mut self, u: Unit) -> bool {
         let next = match *self {
             Shell::Word { which, pos } => {
@@ -1359,8 +1384,9 @@ impl Shell {
             }
             Shell::BeforeSep if is(u, b'=') || is(u, b':') => Shell::AfterSep,
             Shell::BeforeSep | Shell::AfterSep if space(u) => return true,
-            Shell::AfterSep if is(u, b'\\') => Shell::Escape,
-            Shell::AfterSep | Shell::Escape if is(u, b'\'') || is(u, b'"') => Shell::Quoted,
+            Shell::AfterSep if is(u, b'\\') => Shell::Escape(1),
+            Shell::Escape(k) if is(u, b'\\') && k < MAX_QUOTE_ESCAPES => Shell::Escape(k + 1),
+            Shell::AfterSep | Shell::Escape(_) if is(u, b'\'') || is(u, b'"') => Shell::Quoted,
             Shell::AfterSep | Shell::Quoted if token_folded(u) => Shell::Value(1),
             Shell::Value(n) if token_folded(u) => Shell::Value((n + 1).min(16)),
             _ => return false,
@@ -1546,8 +1572,10 @@ impl Candidate {
             (Walk::Bearer { count, .. }, _) => (*count >= 1).then_some(self.start),
             (Walk::Jwt { pos, .. }, _) => (*pos == 3).then_some(self.start),
             (Walk::Pem(Pem::Body { .. }), _) => Some(self.start),
-            (Walk::Json(json), _) => matches!(json.phase, JsonPhase::Value | JsonPhase::ValueEnd)
-                .then_some(json.value_start),
+            (Walk::Json(json), _) => {
+                matches!(json.phase, JsonPhase::Value | JsonPhase::ValueEnd(_))
+                    .then_some(json.value_start)
+            }
             (Walk::Shell(Shell::Value(_)), _) => Some(self.start),
             // A connector field's value has begun: from there it is the rule's span.
             (Walk::Field(field), Form::Field { value, .. }) => match field.phase {
@@ -2695,6 +2723,7 @@ mod tests {
         b"\\\"api_key\\\": \\\"",
         b"\\\"",
         b"password: \\\"",
+        b"\\\\\\\"token\\\\\\\":\\\\\\\"",
         b"\"token\" : \"",
         "\"Secret\":\u{a0}\"".as_bytes(),
         b"token = '",
