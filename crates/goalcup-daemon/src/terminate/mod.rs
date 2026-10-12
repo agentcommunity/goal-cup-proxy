@@ -7,7 +7,7 @@
 //! `tests/it/terminate_sim.rs` so the two cannot drift. This header does not repeat it.
 //!
 //! The shape of the code: [`terminate_with`] is the whole algorithm over one [`ProcessOs`]
-//! seam (`os.rs`); [`terminate`] and [`terminate_within`] are it with [`LiveOs`]. The
+//! seam (`os.rs`); [`terminate`] and `terminate_within` are it with [`LiveOs`]. The
 //! identity guard, the ordering of the owned set and the fail-closed reports are in
 //! `authority.rs`; the macOS audit-token singleton path is in `darwin.rs`. Nothing in this
 //! module touches the filesystem: `lock_paths[]` are reported at seal, never deleted.
@@ -188,9 +188,9 @@ pub(crate) fn terminate_within(
     terminate_with(handle, walk_cap, &LiveOs)
 }
 
-/// [`terminate_within`], against whichever operating system `os` is.
+/// `terminate_within`, against whichever operating system `os` is.
 ///
-/// This is the whole algorithm; [`terminate`] and [`terminate_within`] are it with
+/// This is the whole algorithm; [`terminate`] and `terminate_within` are it with
 /// [`LiveOs`]. The seam exists because two of the module's confirmed defects cannot be
 /// provoked by any real fixture — `/bin/ps` is spawned by absolute path, so nothing a shell
 /// script does can make it fail to spawn — and because the ground truth a verification is

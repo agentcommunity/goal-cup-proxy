@@ -73,7 +73,7 @@ static HOOK: Once = Once::new();
 /// else reaches `previous`.
 ///
 /// A [`DecodeSession`] installs this over the hook current at its first use
-/// ([`install_quiet_panic_hook`]). A host that installs its own hook afterwards replaces it, and
+/// (`install_quiet_panic_hook`). A host that installs its own hook afterwards replaces it, and
 /// from then on its hook sees decoder panics, payload included; to keep them quiet, wrap it:
 /// `set_hook(quiet_panic_hook(take_hook()))`. The gate is shared, so wrapping again is safe.
 pub fn quiet_panic_hook(
@@ -211,7 +211,7 @@ pub struct Undecoded {
 pub struct DecodeOutcome {
     /// One per registered decoder, in registry order.
     pub decoders: Vec<DecoderOutcome>,
-    /// Capture-only streams, in first-seen order, at most [`MAX_UNDECODED_GROUPS`] groups.
+    /// Capture-only streams, in first-seen order, at most `MAX_UNDECODED_GROUPS` groups.
     /// The goal stream is not capture-only and is not listed.
     pub undecoded: Vec<Undecoded>,
     /// Capture-only streams of groups past the bound.

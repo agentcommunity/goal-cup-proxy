@@ -235,9 +235,9 @@ pub struct NativeCaptureLimits {
     pub poll_bytes: u64,
     /// Simultaneously open native streams; 1..=`MAX_OPEN_STREAMS`.
     pub max_open_streams: usize,
-    /// Files tracked (open, completed or waiting); 1..=[`MAX_NATIVE_FILES`].
+    /// Files tracked (open, completed or waiting); 1..=`MAX_NATIVE_FILES`.
     pub max_files: usize,
-    /// Directory entries examined by discovery per poll; 1..=[`MAX_NATIVE_DIR_ENTRIES`].
+    /// Directory entries examined by discovery per poll; 1..=`MAX_NATIVE_DIR_ENTRIES`.
     pub max_dir_entries: usize,
 }
 
@@ -311,12 +311,12 @@ pub trait NativeClock: Send {
 
 /// The process clock: `Instant` since construction and the daemon's RFC 3339 wall time.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SystemNativeClock {
+pub struct SystemNativeClock {
     origin: std::time::Instant,
 }
 
 impl SystemNativeClock {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         SystemNativeClock {
             origin: std::time::Instant::now(),
         }

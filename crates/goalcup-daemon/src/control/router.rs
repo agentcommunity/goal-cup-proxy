@@ -398,7 +398,7 @@ pub fn control_router(state: ControlState) -> Router {
 /// take it back down again.
 ///
 /// The handle exists for exactly one caller — [`crate::runtime::Daemon::start`], between
-/// the bind and `control.json` — and for one reason, written at [`ControlListener::abort`].
+/// the bind and `control.json` — and for one reason, written at `ControlListener::abort`.
 /// Dropping this struct detaches the task, which is what the success path wants: the
 /// listener outlives the handle and serves for the life of the process.
 pub struct ControlListener {

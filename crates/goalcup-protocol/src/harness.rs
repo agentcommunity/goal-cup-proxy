@@ -15,7 +15,7 @@
 //! # Parsing
 //!
 //! 1. The text is parsed as a generic TOML table and `schema_version` is read first
-//!    ([`SUPPORTED_SCHEMA_VERSIONS`]).
+//!    (`SUPPORTED_SCHEMA_VERSIONS`).
 //! 2. It is then deserialized with `deny_unknown_fields` everywhere. An unknown key, and an
 //!    unknown value of a closed-set field, are refused with one sentence ([`NEWER_SENTENCE`]):
 //!    serde's own "unknown variant" text never reaches the user.

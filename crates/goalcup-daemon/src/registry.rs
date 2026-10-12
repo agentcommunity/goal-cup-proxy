@@ -753,7 +753,7 @@ pub struct Entry {
     ///
     /// Only the three configurable fields are honoured from here. `publication_closes_at` is
     /// always recomputed, because the deadline is fixed by the receipt after this is written
-    /// — see [`crate::status::event_status_from`].
+    /// — see `crate::status::event_status_from`.
     #[serde(default)]
     pub event: Option<EventStatus>,
     /// `Some` for a protocol-v5 local capture entry, which is never armed, tailed, uploaded

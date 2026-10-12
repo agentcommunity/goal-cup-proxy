@@ -119,7 +119,7 @@ pub(crate) fn tokens(template: &str) -> Result<Vec<&str>, String> {
 
 /// `{name}` is replaced; `{{` is a literal `{` and `}}` a literal `}`; anything else between
 /// braces that is not a known variable is an error, and so is a lone `}` or an unterminated `{`
-/// (the rules of [`tokens`]).
+/// (the rules of `tokens`).
 pub fn render(template: &str, vars: &TemplateVars) -> Result<String, ProtocolError> {
     let pieces = lex(template).map_err(|why| ProtocolError::Field {
         field: "template".into(),

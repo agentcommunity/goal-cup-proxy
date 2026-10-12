@@ -49,7 +49,7 @@ pub use goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX as PLACEHOL
 
 /// Where the key that checked a signature came from.
 ///
-/// `Pinned` is this build's own allowlist ([`SERVER_PUBLIC_KEYS`]), `Supplied` a key the
+/// `Pinned` is this build's own allowlist (`SERVER_PUBLIC_KEYS`), `Supplied` a key the
 /// caller passed for this run (`goalcup-verify --dev-key`), and `None` no key at all. The
 /// capture-integrity report maps `Descriptor` to `none`: a v5 trace carries no descriptor
 /// key, so nothing produces it.
