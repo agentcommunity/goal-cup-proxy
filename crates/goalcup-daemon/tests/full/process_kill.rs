@@ -1229,7 +1229,6 @@ mod support {
             program: "/bin/sh".to_string(),
             argv: Vec::new(),
             env_keys: Vec::new(),
-            home_seed: None,
         }
     }
 }

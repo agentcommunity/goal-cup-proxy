@@ -8,7 +8,6 @@ use goalcup_protocol::control::{
     SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS, SealResponse, SignedStatus, WorkspaceInfo,
     entry_route, is_public_route,
 };
-use goalcup_protocol::manifest::InstallScope;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
 
 /// Every call site the CLI makes, in one function that must type-check.
@@ -27,16 +26,9 @@ fn the_trait_methods(c: &dyn DaemonClient, h: &ProcessHandle) {
     let _: Result<(), ControlError> = c.abandon("e1", "arming timed out");
 }
 
-/// The daemon renders and writes the config; the CLI is told what landed where.
 /// Every field the CLI reads, in one place that must compile.
 #[allow(dead_code)]
 fn the_cli_reads_but_never_writes(info: &WorkspaceInfo) {
-    let _settings: Option<&String> = info
-        .installed_files
-        .iter()
-        .find(|f| f.scope == InstallScope::ArtifactRoot)
-        .map(|f| &f.path);
-    let _: &Vec<String> = &info.workspace_relative;
     let (_, _, _) = (&info.workspace, &info.artifact_root, &info.harness_home);
     let _ = &info.run_public_key;
     let (_, _, _) = (
@@ -44,12 +36,12 @@ fn the_cli_reads_but_never_writes(info: &WorkspaceInfo) {
         &info.status_cache_path,
         &info.status_line_path,
     );
-    let (_, _): (&String, &Option<u16>) = (&info.session_id, &info.server_port);
+    let _: &String = &info.session_id;
 }
 
 #[test]
 fn the_routes_and_the_suffixes_are_the_ones_this_plan_calls() {
-    assert_eq!(CONTROL_API_VERSION, 5);
+    assert_eq!(CONTROL_API_VERSION, 6);
     assert_eq!(ROUTE_ENTRIES, "/v0/entries");
     assert_eq!(ROUTE_ENTRIES_CURRENT, "/v0/entries/current");
     assert_eq!(ROUTE_HEALTH, "/v0/health");
@@ -111,9 +103,7 @@ fn every_mapped_error_code_round_trips_and_unreachable_is_not_one_of_them() {
         "not_found",
         "conflict",
         "unauthorized",
-        "arming_timeout",
         "preflight_failed",
-        "unsupported_connector",
         "malformed",
         "unsupported",
         "process_admission_uncertain",

@@ -671,7 +671,6 @@ impl Sim {
             program: format!("/usr/bin/{}", root.comm),
             argv: vec![format!("/usr/bin/{}", root.comm)],
             env_keys: Vec::new(),
-            home_seed: None,
         }
     }
 

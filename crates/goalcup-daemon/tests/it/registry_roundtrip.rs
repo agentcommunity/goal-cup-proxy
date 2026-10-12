@@ -10,7 +10,6 @@ use goalcup_daemon::registry::{
     Entry, EntryState, ExpectedProcessHandoff, ProcessHandoffPhase, Registry, RunKeys,
     SealingIntent, WorkspaceSealingIntentV1,
 };
-use goalcup_protocol::events::{HomeSeedRecord, SeededFile, SeededKey};
 use goalcup_protocol::export::{
     ACKS_FILE, BASELINE_FILE, CHAIN_FILE, MANIFEST_FILE, SEAL_FILE, TraceDescriptorDoc,
 };
@@ -239,7 +238,6 @@ fn recorded_launch_handle() -> ProcessHandle {
         program: "codex".to_string(),
         argv: vec!["codex".to_string()],
         env_keys: Vec::new(),
-        home_seed: None,
     }
 }
 
@@ -395,63 +393,6 @@ fn process_handoff_requires_an_open_generation_and_exact_replays_are_idempotent(
             .expect("the exact accepted retry stays idempotent"),
         registered
     );
-}
-
-/// A prepared row is durable private recovery state, but it is still the source for a
-/// future public `HomeSeeded` event.  A direct authenticated caller therefore cannot smuggle
-/// a resolved account path into it: only the manifest's `{home}/…` spelling and relative
-/// file names are safe to retain across a daemon crash.
-#[test]
-fn prepared_seed_recovery_never_retains_resolved_or_escaping_paths() {
-    let tmp = tempfile::tempdir().unwrap();
-    let registry = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    let mut row = bound_entry_with_handoff(
-        tmp.path(),
-        "launch",
-        "2026.09-v1",
-        ExpectedProcessHandoff::Required,
-    );
-    row.state = EntryState::Armed;
-    registry.put(&row).unwrap();
-    registry.open_initial_process_handoff("launch").unwrap();
-    let before = registry.get("launch").unwrap().unwrap();
-
-    let seed = |from: &str, file: &str| HomeSeedRecord {
-        handoff_generation: None,
-        handoff_request_digest: None,
-        connector: "codex-cli".to_string(),
-        from: from.to_string(),
-        keys: vec![SeededKey::new("theme", &serde_json::json!("dark"))],
-        keys_unchanged: Vec::new(),
-        written: Vec::new(),
-        files: vec![SeededFile {
-            name: file.to_string(),
-            bytes: 42,
-        }],
-        files_kept: Vec::new(),
-        files_missing: Vec::new(),
-        wire_layout: Default::default(),
-    };
-
-    let mut resolved = registration(1);
-    resolved.handle.home_seed = Some(seed("/Users/participant/.codex", "auth.json"));
-    registry
-        .prepare_process_handoff("launch", resolved)
-        .expect_err("a resolved account path is never durable recovery evidence");
-    assert_eq!(registry.get("launch").unwrap().unwrap(), before);
-
-    let mut escaping = registration(1);
-    escaping.handle.home_seed = Some(seed("{home}/.codex", "../../auth.json"));
-    registry
-        .prepare_process_handoff("launch", escaping)
-        .expect_err("an escaping file name is not a safe relative seed record");
-    assert_eq!(registry.get("launch").unwrap().unwrap(), before);
-
-    let mut safe = registration(1);
-    safe.handle.home_seed = Some(seed("{home}/.codex", "auth.json"));
-    registry
-        .prepare_process_handoff("launch", safe)
-        .expect("the manifest spelling and relative name are safe recovery evidence");
 }
 
 #[test]

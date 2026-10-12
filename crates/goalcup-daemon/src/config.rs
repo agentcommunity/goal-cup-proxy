@@ -75,11 +75,8 @@ pub struct DaemonConfig {
     /// An unacknowledged head this old is `HealthState::UploadLagging`.
     #[serde(default = "default_ack_lag_seconds")]
     pub ack_lag_seconds: f64,
-    /// The **second** step of the arming-timeout precedence chain documented once on
-    /// `manifest::Arming`: connector default, then this per-machine override, then
-    /// `WorkspaceOpts.arming_timeout_seconds` from the CLI. `None` means "leave the
-    /// connector's number alone", which is the normal case — so it is the default, and a
-    /// machine that sets it is deliberately overriding every connector at once.
+    /// Not read: the V1 arming gate it overrode is gone. Kept so an existing config that
+    /// sets it still loads under `deny_unknown_fields`.
     #[serde(default)]
     pub arming_timeout_seconds: Option<u64>,
     /// How often an `EventBody::Heartbeat` is chained. Absence of heartbeats over a window is what makes

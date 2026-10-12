@@ -284,7 +284,6 @@ pub fn cfg_with_entry(tmp: &Path, info: &control::WorkspaceInfo) -> PathBuf {
         harness_home: info.harness_home.clone(),
         session_id: info.session_id.clone(),
         last_pid: None,
-        workspace_relative: info.workspace_relative.clone(),
         status_url: info.status_url.clone(),
         created_at: info.created_at.clone(),
         dev: false,
@@ -502,8 +501,7 @@ impl RecordingDaemon {
         }
     }
 
-    /// The body of the last request, so a test can assert that `POST /v0/workspaces`
-    /// carries a bare `WorkspaceOpts`.
+    /// The body of the last request, so a test can assert what went out.
     pub fn last_body(&self) -> Option<String> {
         match self.log.lock() {
             Ok(log) => log.last_body.clone(),

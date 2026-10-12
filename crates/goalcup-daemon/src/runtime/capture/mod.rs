@@ -637,11 +637,6 @@ impl Daemon {
                 "entry {entry_id}'s launch is recorded, and its process is registered before it"
             )));
         }
-        if registration.handle.home_seed.is_some() {
-            return Err(DaemonError::Refused(
-                "a capture launch carries no home seed".to_string(),
-            ));
-        }
         let generation = registration.generation;
         let registry = self.registry();
         let entry = registry.prepare_process_handoff(entry_id, registration)?;

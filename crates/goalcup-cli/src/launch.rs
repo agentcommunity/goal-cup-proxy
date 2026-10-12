@@ -1719,11 +1719,6 @@ fn build_handle(
         // process's environment is not portably readable after the fact anyway — what the
         // daemon can check is that a pinned key is still there.
         env_keys: p.env_set.keys().cloned().collect(),
-        // Never filled in here: this function is handed a child and a launch plan rather
-        // than a connector's `[home_seed]`. A capture launch seeds nothing and the daemon
-        // refuses a capture registration that carries a seed record, so this stays `None`.
-        // The V1 seeding that set it was removed by D48.
-        home_seed: None,
     })
 }
 
