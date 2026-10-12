@@ -169,16 +169,20 @@ const SHARED: &[(&str, &str)] = &[
     // `_`/`-`-joined compound (`refresh_token`, `client_secret`, `x-api-key`) but must be a
     // whole segment of it, so `tokenizer` is not a token. Each side of the key word is at most
     // sixty units, so a key is at most 128: a base64url run after a quote (a Codex
-    // `encrypted_content` value) is then not a key the stream must hold to its end.
+    // `encrypted_content` value) is then not a key the stream must hold to its end. Each
+    // quote may follow a backslash: tool output and file contents reach every native
+    // transcript and request body as JSON escaped inside a string (`\"api_key\": \"…\"`).
     (
         "generic_secret_assignment",
-        r#"(?i)"(?:[A-Za-z0-9_\-]{0,59}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,59})?"\s*:\s*"([^"\\]{16,})""#,
+        r#"(?i)\\?"(?:[A-Za-z0-9_\-]{0,59}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,59})?\\?"\s*:\s*\\?"([^"\\]{16,})\\?""#,
     ),
     // (ii) the shell/TOML form, with redact.py's own value class. Widening this one is what
-    // put source lines in spans; the JSON form above is what catches base64 secrets.
+    // put source lines in spans; the JSON form above is what catches base64 secrets. The
+    // opening quote may follow a backslash (`password: \"…\"` in an escaped string); the span
+    // takes both, so no backslash is left dangling.
     (
         "generic_secret_assignment",
-        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?(?:[A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['"])?(?:[A-Za-z0-9_\-]{16,})"#,
     ),
     // The local part is at most 64 units (RFC 5321's limit), for the same reason as the JSON
     // key: a bare token run is not an address the stream must hold to its end.
@@ -244,8 +248,10 @@ fn disables_unicode(re: &str) -> bool {
 }
 
 /// True when `start..end` is the interior of a JSON string — a `"` immediately before it
-/// and a `"` immediately after — so a bare marker dropped in its place is still a JSON
-/// string and the record still parses.
+/// and a `"` (or an escaped `\"`) immediately after — so a bare marker dropped in its place is
+/// still a JSON string and the record still parses. The escaped close is a string escaped
+/// inside another string (`\"api_key\": \"<redacted:…>\"`): a quoted marker there would end
+/// the outer string.
 ///
 /// When it is false the span was the whole value (`"credits_remaining": 17.5`,
 /// `"rate_limits": {…}`), and there is no pair of quotes left behind to hold the marker.
@@ -257,7 +263,12 @@ fn disables_unicode(re: &str) -> bool {
 /// the shell/TOML literal and the vendor prefixes, which are not JSON fields and whose
 /// bare markers the committed corpus already carries.
 fn span_is_a_json_string_interior(bytes: &[u8], start: usize, end: usize) -> bool {
-    start > 0 && bytes[start - 1] == b'"' && end < bytes.len() && bytes[end] == b'"'
+    let closes = match bytes.get(end) {
+        Some(b'"') => true,
+        Some(b'\\') => bytes.get(end + 1) == Some(&b'"'),
+        _ => false,
+    };
+    start > 0 && bytes[start - 1] == b'"' && closes
 }
 
 /// Group 1 when the pattern declares one, otherwise the whole match. See

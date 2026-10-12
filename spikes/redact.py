@@ -38,7 +38,7 @@ PATTERNS = [
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)")),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
-    ("generic_secret_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*['\"]?([A-Za-z0-9_\-]{16,})")),
+    ("generic_secret_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['\"])?([A-Za-z0-9_\-]{16,})")),
     ("email", re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
     # A provider key echoed back masked (D41): OpenAI's `sk-R7aMV` + 39 stars + `oKYo`, Hermes'
     # `sk-0...cdef` and `key[:8]...key[-4:]`. The daemon treats this rule as SOFT: it never

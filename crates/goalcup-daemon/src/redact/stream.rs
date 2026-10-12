@@ -438,12 +438,12 @@ static SHAPES: [Shape; 19] = [
     ),
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)"(?:[A-Za-z0-9_\-]{0,59}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,59})?"\s*:\s*"([^"\\]{16,})""#,
+        source: r#"(?i)\\?"(?:[A-Za-z0-9_\-]{0,59}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,59})?\\?"\s*:\s*\\?"([^"\\]{16,})\\?""#,
         form: Form::JsonAssignment,
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?(?:[A-Za-z0-9_\-]{16,})"#,
+        source: r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['"])?(?:[A-Za-z0-9_\-]{16,})"#,
         form: Form::ShellAssignment,
     },
     Shape {
@@ -810,10 +810,18 @@ const PEM_BODY_MAX: u32 = 8192;
 enum JsonPhase {
     /// Before the key's opening quote.
     Open,
+    /// A backslash before the key's opening quote.
+    OpenQuote,
     Key,
+    /// A backslash before the key's closing quote.
+    KeyQuote,
     AfterKey,
     AfterColon,
+    /// A backslash before the value's opening quote.
+    ValueQuote,
     Value,
+    /// A backslash after the value: only a quote completes the match.
+    ValueEnd,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -841,6 +849,8 @@ enum Shell {
     ApiKey(u8),
     BeforeSep,
     AfterSep,
+    /// A backslash before the optional quote.
+    Escape,
     Quoted,
     /// Value characters, capped at sixteen.
     Value(u8),
@@ -1225,10 +1235,14 @@ impl Pem {
 }
 
 impl Json {
-    /// `(?i)"KEY"\s*:\s*"([^"\\]{16,})"`; `after` is the offset after this unit.
+    /// `(?i)\\?"KEY\\?"\s*:\s*\\?"([^"\\]{16,})\\?"`; `after` is the offset after this unit.
     fn step(&mut self, u: Unit, after: u64) -> bool {
         match self.phase {
-            JsonPhase::Open => {
+            JsonPhase::Open if is(u, b'\\') => {
+                self.phase = JsonPhase::OpenQuote;
+                true
+            }
+            JsonPhase::Open | JsonPhase::OpenQuote => {
                 self.phase = JsonPhase::Key;
                 is(u, b'"')
             }
@@ -1244,7 +1258,11 @@ impl Json {
                 self.key_units += 1;
                 true
             }
-            JsonPhase::Key => {
+            JsonPhase::Key if is(u, b'\\') => {
+                self.phase = JsonPhase::KeyQuote;
+                !self.key.is_empty()
+            }
+            JsonPhase::Key | JsonPhase::KeyQuote => {
                 if !is(u, b'"') {
                     return false;
                 }
@@ -1258,25 +1276,37 @@ impl Json {
                 self.phase = JsonPhase::AfterColon;
                 true
             }
-            JsonPhase::AfterColon if is(u, b'"') => {
+            JsonPhase::AfterColon if is(u, b'\\') => {
+                self.phase = JsonPhase::ValueQuote;
+                true
+            }
+            JsonPhase::AfterColon | JsonPhase::ValueQuote if is(u, b'"') => {
                 self.phase = JsonPhase::Value;
                 self.value_start = after;
                 true
             }
             JsonPhase::AfterKey | JsonPhase::AfterColon => space(u),
+            JsonPhase::ValueQuote => false,
             JsonPhase::Value => match u {
-                Unit::Char('"' | '\\') | Unit::Invalid => false,
+                // The closing quote may be escaped: hold the backslash until its quote.
+                Unit::Char('\\') => {
+                    self.phase = JsonPhase::ValueEnd;
+                    true
+                }
+                Unit::Char('"') | Unit::Invalid => false,
                 Unit::Char(_) => {
                     self.n = (self.n + 1).min(16);
                     true
                 }
             },
+            // The quote completes the match, which the regex then sees; anything else ends it.
+            JsonPhase::ValueEnd => false,
         }
     }
 }
 
 impl Shell {
-    /// `(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?[A-Za-z0-9_\-]{16,}`
+    /// `(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['"])?[A-Za-z0-9_\-]{16,}`
     fn step(&mut self, u: Unit) -> bool {
         let next = match *self {
             Shell::Word { which, pos } => {
@@ -1324,7 +1354,8 @@ impl Shell {
             }
             Shell::BeforeSep if is(u, b'=') || is(u, b':') => Shell::AfterSep,
             Shell::BeforeSep | Shell::AfterSep if space(u) => return true,
-            Shell::AfterSep if is(u, b'\'') || is(u, b'"') => Shell::Quoted,
+            Shell::AfterSep if is(u, b'\\') => Shell::Escape,
+            Shell::AfterSep | Shell::Escape if is(u, b'\'') || is(u, b'"') => Shell::Quoted,
             Shell::AfterSep | Shell::Quoted if token_folded(u) => Shell::Value(1),
             Shell::Value(n) if token_folded(u) => Shell::Value((n + 1).min(16)),
             _ => return false,
@@ -1409,7 +1440,7 @@ impl Candidate {
             Form::Bearer => folded(u) == Some(b'b'),
             Form::Jwt => is(u, b'e'),
             Form::PrivateKey => is(u, b'-'),
-            Form::JsonAssignment => is(u, b'"'),
+            Form::JsonAssignment => is(u, b'"') || is(u, b'\\'),
             Form::ShellAssignment => matches!(folded(u), Some(b's' | b't' | b'p' | b'a')),
             // The leftmost-first email match starts where its local-part run starts, or
             // sixty-four units before its `@` in a longer run: one candidate per run, whose
@@ -1510,7 +1541,8 @@ impl Candidate {
             (Walk::Bearer { count, .. }, _) => (*count >= 1).then_some(self.start),
             (Walk::Jwt { pos, .. }, _) => (*pos == 3).then_some(self.start),
             (Walk::Pem(Pem::Body { .. }), _) => Some(self.start),
-            (Walk::Json(json), _) => (json.phase == JsonPhase::Value).then_some(json.value_start),
+            (Walk::Json(json), _) => matches!(json.phase, JsonPhase::Value | JsonPhase::ValueEnd)
+                .then_some(json.value_start),
             (Walk::Shell(Shell::Value(_)), _) => Some(self.start),
             // A connector field's value has begun: from there it is the rule's span.
             (Walk::Field(field), Form::Field { value, .. }) => match field.phase {
@@ -2654,6 +2686,10 @@ mod tests {
         b"%",
         b"+",
         b"\"api_key\":\"",
+        // Escaped inside a string (I-4).
+        b"\\\"api_key\\\": \\\"",
+        b"\\\"",
+        b"password: \\\"",
         b"\"token\" : \"",
         "\"Secret\":\u{a0}\"".as_bytes(),
         b"token = '",

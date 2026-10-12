@@ -284,6 +284,9 @@ const FRAGMENTS: &[&[u8]] = &[
     b"QWERTYUIOPASDFGH",
     b"deadbeef",
     b"\\",
+    b"\\\"",
+    b"\\\"client_secret\\\":\\\"",
+    b"token=\\'",
     b"'",
     "\u{e9}".as_bytes(),
     "\u{2003}".as_bytes(),
@@ -3270,5 +3273,37 @@ fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
             input.len()
         );
         assert!(input.len() - kept_from > 120_000);
+    }
+}
+
+/// I-4 in the stream: a generic secret in JSON-escaped text (tool output inside a native
+/// record) is redacted at every split point exactly as the whole-record policy redacts it.
+#[test]
+fn an_escaped_json_secret_is_redacted_at_every_split_point() {
+    let input: &[u8] = br#"{"type":"function_call_output","output":"{\n  \"api_key\": \"q8Zr2LmN0pX4vB7cT1yW\",\n  \"client_secret\": \"Zx9Yw8Vu7Ts6Rq5Po4Nm\"\n}"}
+{"type":"function_call_output","output":"db:\n  password: \"CorrectHorseBattery9x\"\n"}
+"#;
+    let (want_bytes, want_spans) = legacy(input);
+    assert_eq!(want_spans.len(), 3, "{want_spans:?}");
+    for secret in [
+        &b"q8Zr2LmN0pX4vB7cT1yW"[..],
+        b"Zx9Yw8Vu7Ts6Rq5Po4Nm",
+        b"CorrectHorseBattery9x",
+    ] {
+        assert!(!contains(&want_bytes, secret));
+    }
+    for split in 0..=input.len() {
+        let mut p = Producer::new(P1);
+        let mut records = p.open(1, CaptureSource::Native);
+        records.extend(p.bytes(1, &input[..split]));
+        records.extend(p.redactor.flush(daemon_time(1)).unwrap());
+        records.extend(p.bytes(1, &input[split..]));
+        records.extend(p.end(1, EndReason::Complete));
+        let (bytes, spans) = retained_of(&records, 1);
+        assert_eq!(spans, want_spans, "audit differs when split at {split}");
+        assert_eq!(bytes, want_bytes, "bytes differ when split at {split}");
+    }
+    for line in want_bytes.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
+        serde_json::from_slice::<serde_json::Value>(line).expect("each record is JSON");
     }
 }

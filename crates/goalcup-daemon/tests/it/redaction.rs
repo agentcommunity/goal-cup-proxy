@@ -1269,8 +1269,8 @@ fn with_script(body: &str) -> String {
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "generic_secret_assignment",
-        r#"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*['\"]?([A-Za-z0-9_\-]{16,})"#,
-        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?(?:[A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['\"])?([A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\?['"])?(?:[A-Za-z0-9_\-]{16,})"#,
     ),
     (
         "email",
@@ -1494,6 +1494,10 @@ fn shared_rule_probes() -> Vec<String> {
         }
     }
     add(format!("api_key = \"{}\"", a(16)));
+    // The quote escaped inside a JSON string (I-4): the span takes the backslash with it.
+    add(format!("db:\\n  password: \\\"{}\\\"", a(20)));
+    add(format!("token=\\'{}", a(16)));
+    add(format!("token=\\{}", a(16)));
     add(format!("token='{}", a(20)));
     add(format!("export MY_SECRET={}", a(24)));
     add(format!("api_key={}", a(15)));
@@ -2214,4 +2218,45 @@ fn a_pem_block_with_no_end_runs_to_the_end_of_the_record() {
         String::from_utf8(out.bytes).unwrap(),
         "<redacted:private_key>\nkept"
     );
+}
+
+/// I-4: tool output and file contents reach every native transcript and request body as JSON
+/// escaped inside a string, so a generic secret there is `\"api_key\": \"…\"`. Neither form of
+/// `generic_secret_assignment` fired on it. Both now take a backslash before a quote, and the
+/// redacted record is still JSON whose escaped string is still JSON: the JSON form's span is
+/// the value's interior, with a bare marker between the escaped quotes, and the shell form's
+/// span takes the escaped opening quote whole, so no backslash is left dangling.
+#[test]
+fn a_secret_in_json_escaped_text_is_redacted_and_the_record_stays_json() {
+    let m = "<redacted:generic_secret_assignment>";
+    let cases: [(&str, String); 2] = [
+        (
+            r#"{"type":"tool_result","content":"{\n  \"api_key\": \"q8Zr2LmN0pX4vB7cT1yW\",\n  \"client_secret\": \"Zx9Yw8Vu7Ts6Rq5Po4Nm\"\n}"}"#,
+            format!(
+                r#"{{"type":"tool_result","content":"{{\n  \"api_key\": \"{m}\",\n  \"client_secret\": \"{m}\"\n}}"}}"#
+            ),
+        ),
+        (
+            r#"{"content":"db:\n  password: \"CorrectHorseBattery9x\"\n"}"#,
+            format!(r#"{{"content":"db:\n  {m}\"\n"}}"#),
+        ),
+    ];
+    for (record, want) in &cases {
+        let out = Redactor::new().apply(record.as_bytes());
+        let got = String::from_utf8(out.bytes).unwrap();
+        assert_eq!(&got, want, "{record}");
+        assert!(
+            out.spans
+                .iter()
+                .all(|s| s.kind == "generic_secret_assignment")
+        );
+        let outer: serde_json::Value = serde_json::from_str(&got).expect("the record is JSON");
+        let inner = outer["content"]
+            .as_str()
+            .or(outer["output"].as_str())
+            .unwrap();
+        if inner.starts_with('{') {
+            serde_json::from_str::<serde_json::Value>(inner).expect("the escaped text is JSON");
+        }
+    }
 }
