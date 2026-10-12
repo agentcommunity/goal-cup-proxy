@@ -103,8 +103,8 @@ pub fn entry_route(entry_id: &str, suffix: &str) -> String {
 ///
 /// A path carrying a `.` or `..` segment is never public. `/v0/entries/e1/status/../../seal`
 /// carries the public route's text and resolves, at every normalising client and proxy
-/// between here and the socket, to an authed one — so matching on the unresolved text would hand the authed
-/// surface a free pass. (The rule was written for the `/v0/assets/` prefix, whose
+/// between here and the socket, to an authed one — so matching on the unresolved text would
+/// hand the authed surface a free pass. (The rule was written for the `/v0/assets/` prefix, whose
 /// `/v0/assets/../entries/e1/seal` was the sharpest case; the prefix is gone and the rule
 /// stays.) The rule is stated as a refusal
 /// rather than a normalisation: this function decides authentication, and a function that

@@ -14,8 +14,8 @@
 //!
 //! # Two of the control contract's obligations are files, not routes
 //!
-//! [`mirror`] writes the two cache copies a reader can open without a socket; [`write_entry_status_line_rooted`] writes the
-//! one plain line Claude's `statusLine` command `cat`s. **Neither may carry a token, a key,
+//! [`mirror`] writes the two cache copies a reader can open without a socket;
+//! [`write_entry_status_line_rooted`] writes the one plain line Claude's `statusLine` command `cat`s. **Neither may carry a token, a key,
 //! a seed or a path out of the participant's home**: the status route is unauthenticated by
 //! design, and the status line is rendered into a terminal a screen recording may catch.
 

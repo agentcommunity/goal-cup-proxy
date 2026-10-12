@@ -50,8 +50,8 @@ static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 ///
 /// The gate reads it, and so does every step of `goalcup start` between
 /// `create_capture_workspace` and `register_process` — the window in which a failure leaves no
-/// entry behind. A Ctrl-C inside that window has to unmake the entry, because the alternative is a workspace the
-/// daemon is watching for a run nobody is doing.
+/// entry behind. A Ctrl-C inside that window has to unmake the entry, because the
+/// alternative is a workspace the daemon is watching for a run nobody is doing.
 pub fn interrupted() -> bool {
     INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
 }
