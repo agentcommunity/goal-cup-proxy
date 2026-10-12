@@ -23,13 +23,10 @@
 //! exit code. Power loss, a crashed relay, peer-initiated disconnect with a live receiver and
 //! arbitrary v5 readmission are not measured here.
 //!
-//! macOS only (the chain is reserved on APFS alone), ignored by default because each row runs
-//! real processes for tens of seconds. Build the binaries first, then run by name and serially:
-//!
-//! ```text
-//! cargo build --offline
-//! cargo test -p goalcup-cli --offline --features test-support --test full capture_crash_campaign:: -- --ignored --test-threads=1
-//! ```
+//! macOS only (the chain is reserved on APFS alone). Each row runs real processes for tens of
+//! seconds, so the campaign is in the `full` tier, one row at a time (the `serial` test group in
+//! `.config/nextest.toml`); `sh scripts/gate.sh full` builds the binaries first and runs it. No
+//! row needs a real harness or the network.
 
 // Shared with the storage campaign; each campaign uses a subset.
 use crate::common::capture_campaign_support;
@@ -404,7 +401,6 @@ fn assert_no_readmission(v: &Vertical, entry: &str, row: &mut Row, crash: &Crash
 // ------------------------------------------------------------------ rows
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn daemon_exit_preserves_prefix_and_honest_recovery_limit() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("stream", json!({}));
@@ -503,7 +499,6 @@ fn daemon_exit_preserves_prefix_and_honest_recovery_limit() {
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn torn_tail_is_preserved_and_nonresumable() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("stream", json!({}));
@@ -724,7 +719,6 @@ fn stall_recovery(v: &Vertical, entry: &str, row: &mut Row) -> (f64, f64, Chain)
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn disconnect_reconnects_fresh_epoch_without_replay() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("stream", json!({}));
@@ -855,7 +849,6 @@ fn disconnect_reconnects_fresh_epoch_without_replay() {
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn capture_recovery_emits_no_assistance() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("stream", json!({}));
@@ -996,7 +989,6 @@ fn seal_observed(v: &Vertical, entry: &str, row: &mut Row, tag: &str) -> String 
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn capture_cli_killed_before_registration_never_execs() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("plain", json!({"hold": true}));
@@ -1031,7 +1023,6 @@ fn capture_cli_killed_before_registration_never_execs() {
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn capture_cli_killed_after_registration_before_release_never_execs() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("plain", json!({"hold": true}));
@@ -1065,7 +1056,6 @@ fn capture_cli_killed_after_registration_before_release_never_execs() {
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn capture_cli_killed_after_release_harness_is_owned() {
     let _lock = TableLock::acquire();
     // `stream` keeps going when its exchanges fail, so the harness outlives the launcher's
@@ -1109,7 +1099,6 @@ fn capture_cli_killed_after_release_harness_is_owned() {
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn capture_daemon_killed_during_gate_never_execs() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("plain", json!({"hold": true}));
@@ -1162,7 +1151,6 @@ fn capture_daemon_killed_during_gate_never_execs() {
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn capture_daemon_killed_after_registered_harness_is_owned_across_restart() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("plain", json!({"hold": true}));
@@ -1224,7 +1212,6 @@ fn capture_daemon_killed_after_registered_harness_is_owned_across_restart() {
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn capture_gated_child_killed_before_registration_is_refused() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("plain", json!({"hold": true}));
@@ -1271,7 +1258,6 @@ fn capture_gated_child_killed_before_registration_is_refused() {
 }
 
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn seal_while_parked_signals_nothing_then_cli_ends_released_child() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("plain", json!({"hold": true}));
@@ -1346,7 +1332,6 @@ fn seal_while_parked_signals_nothing_then_cli_ends_released_child() {
 /// producer's own stream can carry the fail-open tunnel the harness made; the verifier must
 /// not read a clean pass.
 #[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn a_standalone_seal_that_commits_first_keeps_the_proxys_loss() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("fail-open", json!({}));
