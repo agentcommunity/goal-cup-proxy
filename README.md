@@ -66,6 +66,10 @@ cargo fetch --locked
 export CARGO_TARGET_DIR=$HOME/.cache/goalcup-target   # optional: one build shared by every worktree
 ```
 
+Share one target directory only when gates in different worktrees never run at the same time:
+the CLI tests run the `target/debug` binaries by path, so a concurrent gate would test another
+worktree's build.
+
 The gate runs cargo with `--offline`, which is why the one `cargo fetch --locked` comes first;
 `--offline` on an empty cache fails.
 

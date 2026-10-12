@@ -135,8 +135,7 @@ pub const PROCESS_HANDOFF_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 /// into it, and a catch-up over a chain the daemon already holds, are both ordinary calls, and
 /// giving them the seal's deadline would give the retry helper a budget it could blow through.
 ///
-/// So this constant appears at exactly one call site, and `tests/it/daemon_client.rs` counts
-/// them.
+/// So this constant appears at exactly one call site. No test pins that count any more.
 pub const SLOW_CALL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// What [`HttpDaemonClient::wait_start_signal`] allows the daemon on top of the long-poll
