@@ -97,6 +97,11 @@ worktree's build.
 The gate runs cargo with `--offline`, which is why the one `cargo fetch --locked` comes first;
 `--offline` on an empty cache fails.
 
+On Linux the gate needs `nc`, `*.localhost` resolving to loopback (systemd-resolved or
+nss-myhostname), and `TMPDIR` on ext4 or XFS (capture refuses overlayfs, tmpfs and FUSE).
+`sh scripts/linux-check.sh` runs all of it in Docker from a Mac, after the `cargo fetch --locked`
+above.
+
 - **fast** runs `cargo build --offline --workspace`, `cargo fmt --all --check`,
   `cargo clippy --offline --workspace --all-targets -- -D warnings`, then every test under
   cargo-nextest (one process per test, in parallel) except the slow tier, then the doctests.

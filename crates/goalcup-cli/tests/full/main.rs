@@ -4,18 +4,18 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod capture_crash_campaign;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod capture_failure_campaign;
 #[cfg(unix)]
 mod harness_contract_golden;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod harness_contract_kit;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod m2_hermes_lifecycle;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod m2_synthetic_vertical;
 mod preflight_doctor;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod run_scoped_daemon;

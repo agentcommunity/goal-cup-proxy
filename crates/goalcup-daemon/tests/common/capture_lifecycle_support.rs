@@ -447,7 +447,10 @@ pub fn descriptors_on(path: &Path) -> usize {
             unsafe {
                 libc::fstat(fd, stat.as_mut_ptr()) == 0 && {
                     let stat = stat.assume_init();
-                    stat.st_dev as u64 == file.dev() && stat.st_ino == file.ino()
+                    // `st_dev` is an i32 on macOS and a u64 on Linux.
+                    #[allow(clippy::unnecessary_cast)]
+                    let same_device = stat.st_dev as u64 == file.dev();
+                    same_device && stat.st_ino == file.ino()
                 }
             }
         })

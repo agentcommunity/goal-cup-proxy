@@ -7,13 +7,13 @@
 //! `m2_profile_support`) repeat it for that binary. A helper that no binary uses is deleted.
 #![allow(dead_code, unused_imports)]
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod capture_campaign_support;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod capture_crash_support;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod capture_failure_support;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod m2_cli_support;
 pub mod m2_common;
 pub mod m2_http_support;
@@ -21,7 +21,7 @@ pub mod m2_profile_support;
 pub mod m2_proxy_support;
 pub mod m2_sender_support;
 pub mod m2_tls_support;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod m2_vertical_support;
 pub mod m2_ws_support;
 pub mod secret_support;
