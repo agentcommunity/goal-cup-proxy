@@ -27,7 +27,34 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
 - New harnesses (builders bring them: [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md))
 - Full registration and teams system
 - Qualification records
-- Decide: delete the unused `goalcup-devserver` crate
+- Decide: delete the unused `goalcup-devserver` crate (and its three test files): a dev-only
+  receipt, acknowledgement and chunk signer. Check first whether the verifier's V12/V13 round
+  trip still needs it; protocol `receipt.rs` and `ack.rs` stay either way, the verifier reads them.
+- Delete `goalcup-protocol/src/chunk.rs` (and its unit tests) with the devserver's chunk route: no
+  shipped binary reaches the chunk upload flow. Its integration tests went in the test diet, so
+  `CHUNK_DOMAIN`'s distinctness from the receipt, acknowledgement and chain domains is untested
+  now: if `chunk` stays, restore one distinctness assertion.
+- Remove the manifest `launch`, `resume` and `banned_args` fields from the V1 manifest schema
+  (`goalcup-protocol/src/manifest.rs`): parsed, read by no shipped binary (launch plans come from
+  `harness.toml`). Their snapshot tests went in the test diet.
+- Delete daemon `Registry::store_receipt` (test-hooks only, no caller left) with the
+  `ReceiptBindingPolicy` / `[receipt_binding]` config that only it reads, and `Entry::receipt` if
+  nothing else does.
+- Delete daemon `server_public_key` / `upload_url` and `placeholder_key_notice`: since D48 the key's
+  only consumer is a startup notice about receipts that no longer exist. Its test,
+  `tests/it/placeholder_notice.rs`, goes with it.
+- Delete the CLI's V1 daemon-client routes, now untested and unreachable from
+  `goalcup start|seal|status|entries|doctor`: `HttpDaemonClient::{create_workspace, arm,
+  wait_start_signal, resume, resume_preview, current_entry}`, `daemon::long_poll_read_timeout`,
+  `MockDaemonClient::{set_signal_delay, withhold_signal}`, with the V1 methods of
+  `goalcup_protocol::control::DaemonClient`.
+- Decide: retire the legacy `trace.toml` verify path (seal's legacy branch prints
+  `goalcup-verify <dir>`); about twelve verifier suites (`checks_*`, `parser_*`, `compliant`,
+  `adversarial`, `end_to_end`, ...) then go with it.
+- Speed up the two P1 redaction tests that each run over 30 s
+  (`capture_redaction::a_masked_key_around_the_hold_bound_is_never_retained`,
+  `capture_redaction_extra::seeded_random_chunking_matches_the_oracle_with_extra_patterns`); they
+  floor the fast gate.
 
 ## Known issues
 

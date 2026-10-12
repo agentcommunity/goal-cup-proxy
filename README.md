@@ -50,33 +50,75 @@ cargo build
 
 ## The gate
 
-A change passes these four commands, in this order, before it is committed. See
-[AGENTS.md](AGENTS.md) for the rules that bind every contributor.
+One script, two tiers. The last line it prints is `gate <tier>: PASS in <N>s` or
+`gate <tier>: FAIL`. See [AGENTS.md](AGENTS.md) for the rules that bind every contributor.
 
 ```
-cargo build
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+sh scripts/gate.sh fast   # every change, before it is committed
+sh scripts/gate.sh full   # before a release
 ```
 
-Maintainer variant: add `--offline` to the three cargo commands that take it, after one
-`cargo fetch --locked`, so that nothing can fetch; `--offline` on an empty cache fails.
+Once per machine:
 
-`cargo build` is step zero and is not redundant: the other three build dev-dependencies, which
+```
+cargo install cargo-nextest --locked
+cargo fetch --locked
+export CARGO_TARGET_DIR=$HOME/.cache/goalcup-target   # optional: one build shared by every worktree
+```
+
+Share one target directory only when gates in different worktrees never run at the same time:
+the CLI tests run the `target/debug` binaries by path, so a concurrent gate would test another
+worktree's build.
+
+The gate runs cargo with `--offline`, which is why the one `cargo fetch --locked` comes first;
+`--offline` on an empty cache fails.
+
+- **fast** runs `cargo build --offline --workspace`, `cargo fmt --all --check`,
+  `cargo clippy --offline --workspace --all-targets -- -D warnings`, then every test under
+  cargo-nextest (one process per test, in parallel) except the slow tier, then the doctests.
+  It aims at under a minute warm.
+- **full** is the release check. It runs everything fast runs plus the slow tier, the scripts'
+  unit tests (`python3 -m unittest discover -s scripts`) and the link check
+  (`python3 scripts/check-links.py --root .`). Nothing else runs the slow tier, CI included, so
+  run `full` before every tag or it rots unseen.
+- Without cargo-nextest the gate says so and falls back to `cargo test`, which runs every tier.
+
+Each crate's integration tests are modules of two binaries: `tests/it/` (fast) and `tests/full/`
+(slow). The slow tier is every `full` binary plus the CLI's standalone `m2_cli_lifecycle`
+(about 100 s). A few suites that change process state (umask, environment, the panic hook) stay
+standalone binaries in `tests/`. Suites that serialise through an in-process lock are put in
+one-at-a-time test groups in `.config/nextest.toml`.
+
+`cargo build` is step zero and is not redundant: the other steps build dev-dependencies, which
 turn on `goalcup-daemon`'s `test-hooks` feature, so none of them compiles the shipped,
-`test-hooks`-off library. This file carries no test count. Ignored tests, the by-hand suites and the CI
-smoke check are in [docs/OPERATING.md](docs/OPERATING.md#building-and-verifying).
+`test-hooks`-off library. **CLI tests also spawn the sibling `target/debug/goalcup-daemon`**, so
+a stale daemon would be tested without it. This file carries no test count. Ignored tests, the
+by-hand suites and the CI smoke check are in
+[docs/OPERATING.md](docs/OPERATING.md#building-and-verifying).
 
-The four commands gate the M2 capture product, which is the whole build: the V1/v4
+The gate covers the M2 capture product, which is the whole build: the V1/v4
 transcript-and-hook path was removed (D48), so there is no second feature set to gate. The build
 still parses the retained `manifest.toml` compatibility files in the Codex and Claude connector
 directories at startup; removing that parser dependency is ticket OS-29, not completed work.
 
-Narrower runs use the same runner, for example `cargo test -p goalcup-daemon`. Add
-`--test <file>` for one integration file. **CLI tests spawn the sibling
-`target/debug/goalcup-daemon`**, so run `cargo build --workspace` before a narrow
-`-p goalcup-cli` run.
+Narrower runs: `cargo nextest run --offline -p goalcup-daemon`, or one module with
+`cargo test --offline -p goalcup-daemon --test it control_api::`. Run
+`cargo build --offline --workspace` before a narrow `-p goalcup-cli` run.
+
+### The promises
+
+Tests guard what a participant relies on. A test guarding one of these is never deleted; it may
+only move tier.
+
+| | Promise | Where the tests are |
+|---|---|---|
+| P1 | No key fragment leaks | cli key scan, stderr tee, child-secret suites; daemon redaction suites |
+| P2 | The chain is tamper-evident | protocol chain golden and round trips; verifier capture integrity, v5 corpus, containment |
+| P3 | Capture policy refuses endpoints, proxies, credentials and bad args | protocol harness schema and conformance; cli launch plan, env resolution, dependency bans |
+| P4 | Connectors load and pins match | protocol connector pins and loader; cli shipped connectors |
+| P5 | The control API authenticates | daemon control API |
+| P6 | The proxy captures faithfully | cli TLS, HTTP and WebSocket relay; verifier decoders |
+| P7 | One end-to-end capture per harness, and termination | cli lifecycle suites and contract kit; daemon capture lifecycle and process kill |
 
 ## Run from source or stage a private candidate
 

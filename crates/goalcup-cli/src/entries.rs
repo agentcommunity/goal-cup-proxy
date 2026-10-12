@@ -23,7 +23,7 @@
 //! # It holds no secret, and is written like one
 //!
 //! There is no token and no grant in an [`EntryRecord`] — a status URL and a public key are
-//! not secrets, and `tests/start_launch.rs` greps the written bytes for the grant token
+//! not secrets, and `tests/it/start_launch.rs` greps the written bytes for the grant token
 //! to keep it that way. It still goes through [`crate::config::write_secret_file`] at
 //! `0600`, under a directory at `0700`: it names this participant's runs and where on their
 //! disk the work is, and the rule for a file this CLI writes into the tracker's own

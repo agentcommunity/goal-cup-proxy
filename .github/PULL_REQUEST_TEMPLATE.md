@@ -7,8 +7,7 @@
 
 - [ ] I, a human, read the whole diff and answer for it. Any AI assistance is disclosed here or
       in `Co-Authored-By:` trailers.
-- [ ] I ran the gate: `cargo build`, `cargo fmt --all --check`,
-      `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
+- [ ] I ran the gate, `sh scripts/gate.sh fast`, and it printed `gate fast: PASS`.
       Platform and Rust version used:
 - [ ] No credential, token, real transcript or trace is in this PR, its commits, or its description.
 - [ ] Any committed fixture went through `spikes/redact.py` and I reviewed it by eye. Nothing under
@@ -42,7 +41,7 @@ author's half of that list, so say where the reviewer can check it.
       CA or credential variable is justified in this description, with no model base URL or
       redirect (items 1 to 9).
 - [ ] Kit case under `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/` and the output of
-      `cargo test -p goalcup-cli --test harness_contract_kit` after `cargo build`, run on macOS
+      `cargo test -p goalcup-cli --test full harness_contract_kit::` after `cargo build`, run on macOS
       (on Linux it compiles to zero tests; say so if you could not run it). Fixtures went through
       `spikes/redact.py` (items 7 and 10).
 - [ ] The diff touches only `connectors/<id>/`, the pin lines above, `docs/qualification/` and the

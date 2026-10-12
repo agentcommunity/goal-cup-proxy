@@ -12,12 +12,12 @@
 #   2. pins: `sh scripts/pin-manifests.sh`, then the pin diff against HEAD is printed. It fails
 #      when the diff touches another connector's line; a new or changed line for <id> is
 #      expected and must be committed with the connector.
-#   3. schema: `cargo test -p goalcup-protocol --test harness_conformance --test connector_pins`.
+#   3. schema: `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
 #   4. goldens: the CLI and daemon `harness_contract_golden` tests, without regeneration (an
 #      exported GOALCUP_REGEN_HARNESS_GOLDEN is unset first). On a failure the regeneration
 #      command is printed; review its diff before committing.
-#   5. kit (macOS only): `cargo build`, then `cargo test -p goalcup-cli --test
-#      harness_contract_kit`. Elsewhere the kit compiles to zero tests, so the step is SKIPPED
+#   5. kit (macOS only): `cargo build`, then `cargo test -p goalcup-cli --test full
+#      harness_contract_kit::`. Elsewhere the kit compiles to zero tests, so the step is SKIPPED
 #      and the script exits non-zero unless --allow-no-kit is given.
 #
 # Exit status: 0 when every step passed (or only the kit was skipped with --allow-no-kit),
@@ -181,8 +181,8 @@ else
 fi
 
 # 3. Schema and pin tests.
-step "schema: cargo test -p goalcup-protocol --test harness_conformance --test connector_pins"
-if cargo test -p goalcup-protocol --test harness_conformance --test connector_pins; then
+step "schema: cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::"
+if cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::; then
   pass "schema"
 else
   fail "schema (field rules: docs/CONNECTOR-SCHEMA.md)"
@@ -192,8 +192,8 @@ fi
 log=$(mktemp "${TMPDIR:-/tmp}/check-connector.XXXXXX")
 trap 'rm -f "$log"' EXIT
 for crate in goalcup-cli goalcup-daemon; do
-  step "goldens: cargo test -p $crate --test harness_contract_golden"
-  { cargo test -p "$crate" --test harness_contract_golden 2>&1; echo "exit=$?"; } | tee "$log"
+  step "goldens: cargo test -p $crate --test full harness_contract_golden::"
+  { cargo test -p "$crate" --test full harness_contract_golden:: 2>&1; echo "exit=$?"; } | tee "$log"
   if [ "$(tail -n 1 "$log")" = exit=0 ]; then
     pass "goldens ($crate)"
   else
@@ -201,7 +201,7 @@ for crate in goalcup-cli goalcup-daemon; do
       n = $1; sub(/.*\//, "", n); print n }' "$log" | sort -u | tr '\n' ' ')
     echo "golden files that differ: ${files:-(see the output above)}"
     echo "a file for '$id' (<id>.json, or a row for '$id'): regenerate, then review the diff:"
-    echo "  GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p $crate --test harness_contract_golden"
+    echo "  GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p $crate --test full harness_contract_golden::"
     echo "a file that does not mention '$id' did not change because of your connector: do not"
     echo "commit its regenerated form; restore it with git checkout and name it in the PR"
     fail "goldens ($crate): ${files:-see output}"
@@ -211,8 +211,8 @@ done
 # 5. The harness kit, macOS only.
 os=$(uname -s 2>/dev/null || echo unknown)
 if [ "$os" = Darwin ]; then
-  step "kit: cargo build && cargo test -p goalcup-cli --test harness_contract_kit"
-  if cargo build && cargo test -p goalcup-cli --test harness_contract_kit; then
+  step "kit: cargo build && cargo test -p goalcup-cli --test full harness_contract_kit::"
+  if cargo build && cargo test -p goalcup-cli --test full harness_contract_kit::; then
     pass "kit"
   else
     fail "kit"

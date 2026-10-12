@@ -66,7 +66,7 @@ workspace before running it:
 
 ```text
 cargo build
-cargo test -p goalcup-cli --test harness_contract_kit
+cargo test -p goalcup-cli --test full harness_contract_kit::
 ```
 
 On macOS the current baseline suite runs six synthetic stand-ins, each with `harness.toml`,
@@ -115,9 +115,9 @@ the pin, schema, golden and kit checks below in one command.
   transport, native storage/scope, isolation/auth or identity source/binding.
 - [ ] `harness.toml` uses schema 1 and only admitted policy and identity values; seeds are safe.
 - [ ] `sh scripts/pin-manifests.sh` was run and the intended connector pin is the only pin diff.
-- [ ] `cargo test -p goalcup-protocol --test harness_conformance --test connector_pins` passed.
+- [ ] `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::` passed.
 - [ ] The harness goldens were regenerated on macOS, so the daemon's live goldens are written too:
-  `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test harness_contract_golden`, then
+  `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test full harness_contract_golden::`, then
   the same with `-p goalcup-daemon`. The JSON diff under
   `crates/goalcup-cli/tests/fixtures/harness-golden/` is in the PR: new files and rows for the
   new connector, and no change to another connector's values.

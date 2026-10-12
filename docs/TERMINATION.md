@@ -76,7 +76,7 @@ dies at once ends at the first clear poll; a member ignoring SIGTERM costs the f
 
 **Both.** A process that had already left the root's ppid walk when the call began is outside
 the owned set and never claimed (D30). A group handle is never confirmed. Closed by the fix wave
-(scenarios green in `tests/terminate_sim.rs`): F7 (the orphaned ignorer is SIGKILLed by identity and
+(scenarios green in `tests/it/terminate_sim.rs`): F7 (the orphaned ignorer is SIGKILLed by identity and
 named), F8 (an orphan alive holds the phase-A gate; `Closed` adopts from live members, the root's
 own exit included), F9 and the root unwitnessed in phase A (both below).
 
@@ -131,7 +131,7 @@ acknowledgement arrives after the 5 s gate timeout and the child `exec`s before 
 the launcher SIGKILLs it without grace: a harness that ran for milliseconds (CONTRACTS.md, gate
 amendment ¶5(f)).
 
-## The invariant (quoted verbatim from `tests/terminate_sim.rs`; keep the two identical)
+## The invariant (quoted verbatim from `tests/it/terminate_sim.rs`; keep the two identical)
 
 ```text
 Let B be every pid born under the root during the call (ground truth), O ⊆ B the owned

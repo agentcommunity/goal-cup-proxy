@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 # `trust-fixture` compiles `PinTables::fixture` and `Pipeline::load_with_pin_tables`: the seam
-# the frozen M2 legacy baseline (`tests/m2_legacy_baseline.rs`) uses to judge committed
+# the frozen M2 legacy baseline (`tests/it/m2_legacy_baseline.rs`) uses to judge committed
 # historical traces against fixture-owned pin tables. Only this crate's own dev-dependency
 # below enables it, so no shipped build can be asked to trust a table it does not ship.
 [features]

@@ -41,21 +41,20 @@ Build prerequisites are in [README, Build](README.md#build): Rust 1.99 or later,
 `shasum` or `sha256sum`, and `python3` when you regenerate connector pins. macOS is the
 supported, measured platform; Linux is best-effort.
 
-Every change passes these four commands, in this order
-([why the first is not redundant](README.md#the-gate)):
+Every change passes the fast gate; a release passes the full one
+([setup and what each tier runs](README.md#the-gate)):
 
 ```
-cargo build
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+sh scripts/gate.sh fast
+sh scripts/gate.sh full   # before a release
 ```
 
-Plain cargo works; `--offline` is an optional maintainer convention. Report the exact command
-exits, test counts, platform and Rust version in the PR.
+The gate runs cargo with `--offline`, so run `cargo fetch --locked` once first, and install
+cargo-nextest once (`cargo install cargo-nextest --locked`). Report the gate's last line, the
+platform and the Rust version in the PR.
 
 On Linux, run CI's form `cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli`
-instead of the last test command and say so in the PR; a maintainer runs the full gate on macOS.
+instead of `sh scripts/gate.sh fast` and say so in the PR; a maintainer runs the gate on macOS.
 
 ## Checks on your pull request
 
@@ -92,9 +91,9 @@ A common data-only harness PR contains:
   and `expect.toml` (plus only reviewed declared seeds) for this connector;
 - evidence that the current baseline harness kit passed on macOS after a workspace build (the six
   baseline cases plus the new connector case):
-  `cargo build`, then `cargo test -p goalcup-cli --test harness_contract_kit`.
+  `cargo build`, then `cargo test -p goalcup-cli --test full harness_contract_kit::`.
 - the focused schema and generated-pin checks:
-  `cargo test -p goalcup-protocol --test harness_conformance --test connector_pins`.
+  `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
 
 The harness kit test (`harness_contract_kit`) is macOS-only. On Linux it compiles to zero tests,
 so a Linux "pass" proves nothing about your connector; say so if you have no Mac, and a

@@ -33,16 +33,17 @@ A common data-only PR carries exactly these concerns:
    `harness.toml`, `stand-in.py` and `expect.toml` (plus only reviewed declared seeds). The case
    exercises the connector's schema-1 path; do not substitute an existing baseline case.
 5. Evidence that the current baseline harness-kit suite passes. Build the workspace first, then
-   run `cargo test -p goalcup-cli --test harness_contract_kit`; the six existing baseline cases
+   run `cargo test -p goalcup-cli --test full harness_contract_kit::`; the six existing baseline cases
    are listed in [HARNESS-ONBOARDING §3](HARNESS-ONBOARDING.md#3-generic-harness-contract-kit).
 6. The regenerated harness goldens. The tests read the connector list from `connectors/`, so
    they need no edit. On macOS, run
-   `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test harness_contract_golden`
+   `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test full harness_contract_golden::`
    and the same with `-p goalcup-daemon`, then commit the JSON diff under
    `crates/goalcup-cli/tests/fixtures/harness-golden/`: the new `<id>.json` and the new rows.
 
-After a connector edit, also run `cargo test -p goalcup-protocol --test harness_conformance
---test connector_pins`; these checks cover the schema and the generated directory pin. The
+After a connector edit, also run
+`cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`; these
+checks cover the schema and the generated directory pin. The
 workspace build must precede the harness kit because the kit launches the built binaries.
 
 The schema-1 loader admits one native source and the identity pairs exercised by the kit:

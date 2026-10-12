@@ -9,7 +9,7 @@
 #       child 2   ** own process group **, one of them `sleep 300`
 #       child 3   ** own process group **
 #
-# `codex` here is `tests/support/tree.rs`'s hard-linked test-binary helper: no `setsid(1)`
+# `codex` here is `tests/common/support/tree.rs`'s hard-linked test-binary helper: no `setsid(1)`
 # on macOS and a vacuous `set -m` under Linux's dash both rule out a pure-shell escape, so
 # the helper does it in Rust (`Command::process_group(0)`) and this script only has to
 # start it under a name that leaves `codex` in `ProcInfo::comm`.

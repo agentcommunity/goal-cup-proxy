@@ -40,7 +40,7 @@
 # script and the Rust walk write the same eight bytes on any host.
 #
 # `goalcup_protocol::manifest::connector_dir_sha256` computes the same stream in Rust, and
-# `crates/goalcup-verifier/tests/checks_v13.rs` runs this script's `--print` mode and
+# `crates/goalcup-verifier/tests/it/checks_v13.rs` runs this script's `--print` mode and
 # compares the two over every shipped connector — so the layout is written down twice
 # and measured once.
 #

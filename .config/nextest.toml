@@ -1,0 +1,45 @@
+# cargo-nextest settings for `sh scripts/gate.sh`. One process per test, run in parallel.
+# Install once: cargo install cargo-nextest --locked
+[profile.default]
+# Report every failure in one run instead of stopping at the first.
+fail-fast = false
+# A test slower than 30 s is flagged; it is killed after six such periods (180 s).
+slow-timeout = { period = "30s", terminate-after = 6 }
+test-threads = "num-cpus"
+
+# The two longest tests (each 30 s or more, both P1, so they stay in the fast tier) start first,
+# so the fast gate's wall time is not their run added to everything scheduled before them.
+[[profile.default.overrides]]
+filter = '''
+package(goalcup-daemon) & binary(it) & (
+    test(=capture_redaction::a_masked_key_around_the_hold_bound_is_never_retained)
+    | test(=capture_redaction_extra::seeded_random_chunking_matches_the_oracle_with_extra_patterns)
+)
+'''
+priority = 100
+
+# Some suites serialise through an in-process lock (the process-table `TableLock` in
+# crates/goalcup-daemon/tests/common/support/table_lock.rs, and capture_gate's static Mutex).
+# Under nextest every test is its own process, so those locks hold nothing; this group restores
+# one-at-a-time for exactly those modules.
+[test-groups]
+serial = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = '''
+package(goalcup-daemon) & (
+    (binary(it) & test(/^(capture_lifecycle|capture_deferred_scope|capture_harness_load)::/))
+    | (binary(full) & test(/^(capture_finish_budget|process_kill|harness_contract_golden)::/))
+)
+'''
+test-group = 'serial'
+
+[[profile.default.overrides]]
+filter = '''
+package(goalcup-cli) & (
+    (binary(it) & test(/^(capture_gate|process_handoff)::/))
+    | (binary(full) & test(/^(preflight_doctor|capture_crash_campaign|capture_failure_campaign|m2_hermes_lifecycle|m2_synthetic_vertical)::/))
+    | binary(m2_cli_lifecycle)
+)
+'''
+test-group = 'serial'

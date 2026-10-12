@@ -17,11 +17,11 @@
 # `/bin/sh` is dash, which turns job control off the moment it detects no controlling tty --
 # the helper never actually left the group, and only this fixture's own vacuity guard
 # (`assert_ne!(pgid_of(escaped), pgid_of(root), ...)` in `process_kill.rs`, kept exactly as
-# it was) caught it. macOS has no `setsid(1)` either. `tests/support/tree.rs` makes the same
+# it was) caught it. macOS has no `setsid(1)` either. `tests/common/support/tree.rs` makes the same
 # call in Rust instead (`Command::process_group(0)`, portable to both), re-entering this
 # compiled test binary itself under a hard-linked `codex` name -- see that file's module doc.
 #
-# $1 = the hard-linked "codex" helper `tests/support/tree.rs` built for this test.
+# $1 = the hard-linked "codex" helper `tests/common/support/tree.rs` built for this test.
 # $2 = the file the escaped grandchild's pid is written to, so the test names the process
 #      that must not survive rather than guessing at it.
 helper="$1"

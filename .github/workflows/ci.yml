@@ -1,5 +1,5 @@
-# Light CI: one Linux job, deliberately small. It is NOT the gate. The gate is the four commands
-# in README.md ("The gate"), run by hand on macOS together with the ignored real-daemon suite.
+# Light CI: one Linux job, deliberately small. It is NOT the gate. The gate is
+# `sh scripts/gate.sh fast|full` (README.md, "The gate"), run by hand on macOS.
 # See README.md and docs/OPERATING.md ("CI").
 #
 # Why it's this small (the owner's rule is that CI stays lean; do not add heavy jobs):

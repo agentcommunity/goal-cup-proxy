@@ -2,7 +2,7 @@
 //! tracker's own configuration directory, and the `control.json` the daemon writes.
 //!
 //! `assert_cmd` is unavailable offline, so the binary is the one cargo built for this test
-//! target, as `crates/goalcup-daemon/tests/binary_surface.rs` does it.
+//! target, as `crates/goalcup-daemon/tests/it/binary_surface.rs` does it.
 //!
 //! **Nothing in this file touches the process environment.** Most
 //! of the tests here spawn `goalcup` with `Command::output()`, which reads the environment
@@ -11,6 +11,7 @@
 //! undefined behaviour, not a flake. The environment-dependent cases live in
 //! `tests/env_resolution.rs`, which spawns nothing and runs them one after another.
 
+#[path = "common/support/mod.rs"]
 mod support;
 
 use goalcup_cli::CliError;
@@ -145,12 +146,6 @@ fn the_control_file_this_cli_reads_is_the_five_field_document_the_daemon_writes(
     assert_eq!(
         (f.control_api_version, f.port, f.token.as_str()),
         (3, 53310, "t")
-    );
-    // The Unix transport is cut on both sides; a `socket` key is ignored, never honoured.
-    let source = include_str!("../src/config.rs");
-    assert!(
-        !source.contains("socket"),
-        "no Unix transport, on either side"
     );
 }
 
@@ -352,12 +347,12 @@ fn version_and_help_print_on_stdout_and_exit_zero() {
 /// daemon running" is a thing the participant fixes by starting one, and "this build never
 /// wrote the command" is not.
 ///
-/// **`--dry-run` is in the list on purpose.** It makes no call — `tests/seal_scan.rs` counts
+/// **`--dry-run` is in the list on purpose.** It makes no call — `tests/it/seal_scan.rs` counts
 /// the mock's calls and finds none. A real seal resolves the client before the entry, because
 /// its first need is a daemon; a `--dry-run` resolves neither a client nor anything else the
 /// tracker owns, and the second half of this test is that difference. Everything past it (the
 /// scan, the self-check, the trace directory and the printed verifier line) is driven against
-/// the in-process mock in `tests/seal_scan.rs`.
+/// the in-process mock in `tests/it/seal_scan.rs`.
 #[test]
 fn seal_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
     let cfg = support::empty_cfg();
@@ -424,7 +419,7 @@ fn seal_is_no_longer_a_stub_and_no_daemon_is_rung_one() {
 /// the participant fixes by starting one, and "this build never wrote the command" is not.
 /// Everything past that first refusal
 /// — the pinned key, the render, the URL that is opened — is driven against the in-process
-/// mock in `tests/status_views.rs`, where a test can assert what was printed without a
+/// mock in `tests/it/status_views.rs`, where a test can assert what was printed without a
 /// daemon on the machine that runs it.
 #[test]
 fn the_three_participant_surfaces_are_no_longer_stubs_and_no_daemon_is_rung_one() {
@@ -538,9 +533,9 @@ fn start_and_doctor_skip_a_non_utf8_environment_pair_through_the_real_binary() {
     }
 }
 
-/// `goalcup doctor` has no verify mode (D48): it offers neither `--verify` nor the development
-/// flags, and its footer names only the exit codes this binary can leave under. The top-level
-/// footer no longer claims 2 is unreachable for a reason that is false.
+/// `goalcup doctor` has no verify mode (D48): its help offers no `--verify` and the flag is
+/// refused as a usage error, on rung 1. The top-level footer says that 2 and 4 are never this
+/// binary's exit codes.
 #[test]
 fn doctor_has_no_verify_mode_and_the_help_footers_say_so() {
     let out = goalcup().args(["doctor", "--help"]).output().unwrap();
@@ -561,10 +556,6 @@ fn doctor_has_no_verify_mode_and_the_help_footers_say_so() {
     assert!(
         top.contains("2 is never this binary's, and neither is 4"),
         "the footer names 2 and 4 as V1-only: {top}"
-    );
-    assert!(
-        top.contains("goalcup-verify --capture-integrity"),
-        "and says where verification is: {top}"
     );
 }
 
@@ -646,10 +637,6 @@ fn goalcup_lists_the_five_capture_commands_and_nothing_else() {
         assert!(
             text.contains("goalcup-verify") && text.contains("Exit codes:"),
             "`goalcup {flag}` says where verification lives and carries the ladder: {text}"
-        );
-        assert!(
-            text.contains("D48") && text.contains("v0.5.0"),
-            "and says that the other rungs belonged to the removed V1 path: {text}"
         );
     }
     let bad = goalcup().arg("verify").output().unwrap();

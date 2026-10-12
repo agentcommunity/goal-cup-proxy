@@ -4,7 +4,7 @@
 //! them, goes through one [`ProcessOs`]. The shipped implementation is [`LiveOs`], which
 //! is nothing but a thin dispatch onto the primitives — the `/bin/ps` readers in
 //! [`goalcup_protocol::process`], the signal helpers here, and libc. The other
-//! implementation is a simulated process table in `tests/terminate_sim.rs`, which is the
+//! implementation is a simulated process table in `tests/it/terminate_sim.rs`, which is the
 //! only way to provoke a `/bin/ps` that cannot be spawned (it is called by absolute path,
 //! so no shell fixture can) and the only way to hold the ground truth of what a tree
 //! forked, whether or not any snapshot ever showed it.

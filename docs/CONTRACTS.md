@@ -1288,9 +1288,9 @@ Decided by D43 ruling 7; the design is `.superpowers/sdd/2026-10-02-oss/harness-
   `docs/DECISIONS.md` row. The server is at least as new as the newest client: an unknown
   `protocol_version` is refused with `client_newer`, and the evidence stays Pending locally.
 - **The guards.** Writer: the per-record goldens, the field-set table and the pre-S1 round-trip
-  test in `goalcup-protocol/tests/m2_contract.rs`. Reader: the committed corpus
+  test in `goalcup-protocol/tests/it/m2_contract.rs`. Reader: the committed corpus
   `goalcup-verifier/tests/fixtures/v5-corpus/` with its exits, finding codes and report fields in
-  `expected.toml`, run by `goalcup-verifier/tests/v5_corpus.rs` against the real
+  `expected.toml`, run by `goalcup-verifier/tests/it/v5_corpus.rs` against the real
   `goalcup-verify` binary; CI runs it (the verifier tests are not excluded). A corpus expectation
   changes only in a pull request that carries the DECISIONS row.
 - **`Launch` fields.** `profile_digest` is the SHA-256 of the `harness.toml` bytes that declared
@@ -1315,7 +1315,7 @@ the rules themselves are in the files named, not restated here.
   [`capture_policy.rs`](../crates/goalcup-protocol/src/capture_policy.rs), the open hint grammar
   in [`hints.rs`](../crates/goalcup-protocol/src/hints.rs) and folder/id/digest admission in
   [`pins.rs`](../crates/goalcup-protocol/src/pins.rs). The refusal table is
-  [`tests/harness_schema.rs`](../crates/goalcup-protocol/tests/harness_schema.rs), one test per row.
+  [`tests/it/harness_schema.rs`](../crates/goalcup-protocol/tests/it/harness_schema.rs), one test per row.
 - **Evolution of `schema_version`.** A build reads exactly `SUPPORTED_SCHEMA_VERSIONS`. An unknown
   key or closed-set value is refused with the "newer goalcup" sentence. Schema 1 stays for a new
   optional field whose absence reproduces today's behaviour, a widened bound, a new closed-set
@@ -1326,7 +1326,7 @@ the rules themselves are in the files named, not restated here.
 - **Pins.** `crates/goalcup-protocol/pins/connector-dirs.txt`, data written only by
   `sh scripts/pin-manifests.sh`, read at build time by `pins.rs`. A pin is a tamper check after
   the build, not a defence against a malicious merge: review is (CODEOWNERS).
-- **Conformance.** `goalcup-protocol/tests/harness_conformance.rs` loads every connector folder
+- **Conformance.** `goalcup-protocol/tests/it/harness_conformance.rs` loads every connector folder
   with `load_dir` as `Origin::Pinned` and adds the checks `load_dir` does not own;
   `connector_pins.rs` compares every folder's directory digest with its pin, both ways. CI runs
   both on a fork PR (`ci.yml` excludes only the daemon and CLI suites).

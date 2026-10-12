@@ -96,7 +96,7 @@ Source: [capture_policy.rs](../../crates/goalcup-protocol/src/capture_policy.rs)
 [harness.rs](../../crates/goalcup-protocol/src/harness.rs) `check_cross_field`,
 [launch.rs](../../crates/goalcup-cli/src/launch.rs) `build_capture_launch` and
 `child_secret_for_harness`, and the generic kit
-[harness_contract_kit.rs](../../crates/goalcup-cli/tests/harness_contract_kit.rs). Field contracts:
+[harness_contract_kit.rs](../../crates/goalcup-cli/tests/full/harness_contract_kit.rs). Field contracts:
 [CONNECTOR-SCHEMA](../CONNECTOR-SCHEMA.md).
 
 | Fact | Goal Cup today | Result |

@@ -184,17 +184,17 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertIn("toy-cli: 5 passed, 0 failed, 1 skipped", result.stdout)
         calls = self.cargo_calls()
         self.assertIn(
-            "test -p goalcup-protocol --test harness_conformance --test connector_pins", calls
+            "test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::", calls
         )
-        self.assertIn("test -p goalcup-cli --test harness_contract_golden", calls)
-        self.assertIn("test -p goalcup-daemon --test harness_contract_golden", calls)
+        self.assertIn("test -p goalcup-cli --test full harness_contract_golden::", calls)
+        self.assertIn("test -p goalcup-daemon --test full harness_contract_golden::", calls)
 
     def test_macos_builds_then_runs_the_kit(self) -> None:
         result = self.run_script("toy-cli", uname="Darwin")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotIn("SKIPPED", result.stdout)
         calls = self.cargo_calls()
-        kit = "test -p goalcup-cli --test harness_contract_kit"
+        kit = "test -p goalcup-cli --test full harness_contract_kit::"
         self.assertIn(kit, calls)
         self.assertLess(calls.index("build"), calls.index(kit))
 
@@ -202,12 +202,12 @@ class CheckConnectorTest(unittest.TestCase):
 
     def test_a_golden_failure_prints_the_regeneration_hint(self) -> None:
         result = self.run_script(
-            "--allow-no-kit", "toy-cli", FAKE_CARGO_FAIL="goalcup-daemon --test harness"
+            "--allow-no-kit", "toy-cli", FAKE_CARGO_FAIL="goalcup-daemon --test full harness"
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn(
-            "GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test "
-            "harness_contract_golden",
+            "GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test full "
+            "harness_contract_golden::",
             result.stdout,
         )
         self.assertIn("PASS goldens (goalcup-cli)", result.stdout)
@@ -218,7 +218,7 @@ class CheckConnectorTest(unittest.TestCase):
         result = self.run_script(
             "--allow-no-kit",
             "toy-cli",
-            FAKE_CARGO_FAIL="goalcup-cli --test harness",
+            FAKE_CARGO_FAIL="goalcup-cli --test full harness",
             GOALCUP_REGEN_HARNESS_GOLDEN="1",
         )
         self.assertEqual(result.returncode, 1, result.stdout)

@@ -10,7 +10,7 @@ The executable authority is
 [`hints.rs`](../crates/goalcup-protocol/src/hints.rs) hint grammar and
 [`pins.rs`](../crates/goalcup-protocol/src/pins.rs) pin admission rule are part of this contract.
 The one-test-per-refusal table is
-[`harness_schema.rs`](../crates/goalcup-protocol/tests/harness_schema.rs). If this reference and
+[`harness_schema.rs`](../crates/goalcup-protocol/tests/it/harness_schema.rs). If this reference and
 those sources disagree, the sources refuse the manifest.
 
 ## Parse and load

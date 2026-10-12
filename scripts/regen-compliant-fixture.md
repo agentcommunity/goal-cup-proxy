@@ -2,12 +2,12 @@
 
 `crates/goalcup-verifier/tests/fixtures/compliant/` is **generated and committed**. It is
 written from nothing but the constants in
-`crates/goalcup-verifier/tests/support/compliant.rs` and one file it copies,
+`crates/goalcup-verifier/tests/common/compliant.rs` and one file it copies,
 `connectors/claude-code-cli/manifest.toml`.
 
 To regenerate:
 
-    GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test compliant -- --ignored regenerate
+    GOALCUP_REGEN=1 cargo test -p goalcup-verifier --test it -- --ignored compliant::regenerate
 
 Then read the diff before committing. Every byte is a pure function of the generator, so an
 unexpected diff means the generator changed, not the fixture.
@@ -37,14 +37,14 @@ Four rules:
 ## The pass claim needs `--dev`, and the file records what a plain run says
 
 The expectation is still one sentence — `overall` is `pass`, the review queue is empty, all
-thirteen checks are `pass` and the binary exits 0 — and `tests/compliant.rs` still asserts
+thirteen checks are `pass` and the binary exits 0 — and `tests/it/compliant.rs` still asserts
 exactly that, in
 `a_compliant_trace_passes_every_check_under_dev_and_the_queue_is_empty` and
 `the_binary_exits_zero_on_it_with_dev`. What moved on 2026-09-05 is the flag those two
 sentences need.
 
 This trace signs its receipt and its acknowledgements with the seed `[5u8; 32]`, which is
-written in `tests/support/compliant.rs` so the fixtures can sign at all. Its verifying key
+written in `tests/common/compliant.rs` so the fixtures can sign at all. Its verifying key
 is `PLACEHOLDER_SERVER_PUBLIC_KEY`, the single entry in `SERVER_PUBLIC_KEYS`, so anybody
 holding this repository can mint a receipt that resolves to `key_source: "pinned"` — the
 strongest provenance a verdict has. V13 raises `placeholder_server_key` whenever that key
@@ -76,4 +76,4 @@ positively accounts for. `clean_gap` became a Pass-level finding in task 13, and
 fixture is where that is measured. The cadence was hourly until the task-13 fix wave, which
 made the same point with 167 repetitions of one sentence and a 95 KB verdict.
 
-What the run is: see the doc comment at the top of `tests/support/compliant.rs`.
+What the run is: see the doc comment at the top of `tests/common/compliant.rs`.

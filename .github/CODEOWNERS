@@ -19,10 +19,10 @@
 /crates/goalcup-protocol/src/hints.rs               @nembal
 /crates/goalcup-protocol/src/capture.rs             @nembal
 /crates/goalcup-protocol/src/envelope.rs            @nembal
-/crates/goalcup-protocol/tests/harness_conformance.rs @nembal
-/crates/goalcup-protocol/tests/connector_pins.rs    @nembal
-/crates/goalcup-protocol/tests/harness_schema.rs    @nembal
-/crates/goalcup-protocol/tests/harness_loader.rs    @nembal
+/crates/goalcup-protocol/tests/it/harness_conformance.rs @nembal
+/crates/goalcup-protocol/tests/it/connector_pins.rs    @nembal
+/crates/goalcup-protocol/tests/it/harness_schema.rs    @nembal
+/crates/goalcup-protocol/tests/it/harness_loader.rs    @nembal
 /crates/goalcup-verifier/src/capture_analysis/        @nembal
 /crates/goalcup-verifier/pins/                      @nembal
 /skills/adding-a-capture-harness/                   @nembal
@@ -52,5 +52,5 @@
 # The v5 reader corpus: a changed expectation is a verdict change and needs a DECISIONS row
 # (D43 ruling 7). The record goldens are the writer's half of the same freeze.
 /crates/goalcup-verifier/tests/fixtures/v5-corpus/  @nembal
-/crates/goalcup-verifier/tests/v5_corpus.rs         @nembal
-/crates/goalcup-protocol/tests/m2_contract.rs       @nembal
+/crates/goalcup-verifier/tests/it/v5_corpus.rs         @nembal
+/crates/goalcup-protocol/tests/it/m2_contract.rs       @nembal

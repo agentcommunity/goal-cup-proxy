@@ -23,7 +23,7 @@ pub const START_RECEIPT_DIGEST_DOMAIN: &[u8] = b"goalcup:start-receipt-digest:v1
 /// **Anybody can sign a receipt or an acknowledgement under it**, so a run anchored to it is
 /// anchored to nothing until the project server's real key replaces it (V1.1). It lives in the
 /// protocol crate, which every side already links, so the daemon can say so at startup without
-/// linking the devserver (D3). `crates/goalcup-devserver/tests/placeholder_seed.rs` derives it
+/// linking the devserver (D3). `crates/goalcup-devserver/tests/full/placeholder_seed.rs` derives it
 /// from the seed, so the constant cannot drift from what signs under it.
 ///
 /// `goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY` aliases this constant; the one spelling

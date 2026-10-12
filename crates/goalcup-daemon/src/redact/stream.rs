@@ -42,8 +42,8 @@
 //! hold. From there an extra rule is one more literal: held, released, followed through a
 //! fail-closed redaction and replaced at a discontinuity exactly as a shared one is.
 //!
-//! Consequences, each pinned by `tests/capture_redaction.rs`,
-//! `tests/capture_redaction_extra.rs` and the unit tests below:
+//! Consequences, each pinned by `tests/it/capture_redaction.rs`,
+//! `tests/it/capture_redaction_extra.rs` and the unit tests below:
 //!
 //! * While no stream's held bytes reach [`MAX_HELD_BYTES`], the retained bytes and audit
 //!   of a completed stream are exactly `Redactor::apply(whole stream)` — `Redactor::new()`,
