@@ -29,7 +29,7 @@ use goalcup_protocol::control::{EventStatus, WorkspaceFinalizationStatusV1};
 use goalcup_protocol::cursor::StoreCursor;
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::events::{HealthState, HomeSeedRecord, SeededKey};
-use goalcup_protocol::export::{SEAL_FILE, TraceDescriptorDoc, manifest_sha256};
+use goalcup_protocol::export::{TraceDescriptorDoc, manifest_sha256};
 use goalcup_protocol::manifest::ForeignScanRoot;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
 use goalcup_protocol::provenance::{
@@ -186,17 +186,6 @@ pub enum WorkspaceSourceBindingV1 {
     UnavailableAtCutoff { reason: SubmissionFailureV1 },
 }
 
-impl WorkspaceSourceBindingV1 {
-    fn validate(&self) -> bool {
-        match self {
-            Self::Available { journal } => !journal.identity.is_empty(),
-            Self::UnavailableAtCutoff { reason } => {
-                *reason == SubmissionFailureV1::RecoveryAmbiguous
-            }
-        }
-    }
-}
-
 /// Exact V4 workspace finalization authority persisted in the existing sealing slot.
 ///
 /// Every optional field is controlled by `phase`; a restart reads the committed phase and
@@ -251,165 +240,7 @@ pub struct WorkspaceSealingIntentV1 {
     pub status_mirror_complete: bool,
 }
 
-fn valid_source_date(date: &[String; 3]) -> bool {
-    date[0].len() == 4
-        && date[1].len() == 2
-        && date[2].len() == 2
-        && date
-            .iter()
-            .all(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
-        && date[1]
-            .parse::<u8>()
-            .is_ok_and(|month| (1..=12).contains(&month))
-        && date[2]
-            .parse::<u8>()
-            .is_ok_and(|day| (1..=31).contains(&day))
-}
-
 impl WorkspaceSealingIntentV1 {
-    fn validate(&self, entry_id: &str) -> Result<(), DaemonError> {
-        if self.entry_id != entry_id {
-            return Err(DaemonError::Refused(format!(
-                "workspace finalization intent belongs to {}, not entry {entry_id}",
-                self.entry_id
-            )));
-        }
-        if self.trace_root_identity.is_empty()
-            || !valid_source_date(&self.source_date)
-            || !self.source_root.validate()
-            || self.capture_limits.validate_for_config().is_err()
-            || self
-                .excluded
-                .iter()
-                .any(|path| path.is_empty() || path.contains('\0'))
-            || self.limit_profile.id.is_empty()
-            || self.limit_profile.id.len() > 256
-            || self
-                .limit_profile
-                .id
-                .bytes()
-                .any(|byte| byte.is_ascii_control())
-            || [
-                self.limits.object_count,
-                self.limits.total_bytes,
-                self.limits.pre_cutoff_drain,
-                self.limits.process_walk,
-            ]
-            .contains(&0)
-        {
-            return Err(DaemonError::Refused(format!(
-                "workspace finalization intent for entry {entry_id} has invalid source/profile limits"
-            )));
-        }
-        if let Some(authority) = &self.accepted_handoff {
-            let expected = authority
-                .registration
-                .canonical_handle_digest(&self.entry_id);
-            if authority.registration.generation != self.generation
-                || authority.request_digest.as_str() != expected
-            {
-                return Err(DaemonError::Refused(format!(
-                    "workspace finalization intent for entry {entry_id} has mismatched handoff authority"
-                )));
-            }
-        }
-        self.validate_phase_presence(entry_id)?;
-        if let Some(cutoff) = &self.cutoff {
-            validate_successor(
-                &self.expected_cutoff_predecessor,
-                cutoff,
-                "cutoff",
-                entry_id,
-            )?;
-        }
-        if let Some(expected) = &self.expected_finalization_predecessor
-            && !matches!(
-                expected,
-                ChainPredecessorV1::Position(position)
-                    if self.cutoff.as_ref().is_some_and(|cutoff|
-                        cutoff.seq == position.seq && cutoff.hash == position.hash.as_str())
-            )
-        {
-            return Err(DaemonError::Refused(format!(
-                "workspace finalization intent for entry {entry_id} does not bind finalization to its cutoff"
-            )));
-        }
-        if let Some(finalization) = &self.finalization {
-            validate_successor(
-                &self.expected_finalization_predecessor,
-                finalization,
-                "finalization",
-                entry_id,
-            )?;
-        }
-        Ok(())
-    }
-
-    fn validate_phase_presence(&self, entry_id: &str) -> Result<(), DaemonError> {
-        let exact = [
-            (
-                FinalizationPhaseV1::DrainResolved,
-                self.drain.is_some(),
-                "drain",
-            ),
-            (
-                FinalizationPhaseV1::CutoffAppendPending,
-                self.expected_cutoff_predecessor.is_some(),
-                "cutoff predecessor",
-            ),
-            (
-                FinalizationPhaseV1::CutoffBound,
-                self.cutoff.is_some(),
-                "cutoff",
-            ),
-            (
-                FinalizationPhaseV1::Terminated,
-                self.termination.is_some(),
-                "termination outcome",
-            ),
-            (
-                FinalizationPhaseV1::SubmissionResolved,
-                self.submission.is_some(),
-                "submission outcome",
-            ),
-            (
-                FinalizationPhaseV1::FinalizationAppendPending,
-                self.finalization_at.is_some(),
-                "finalization timestamp",
-            ),
-            (
-                FinalizationPhaseV1::FinalizationAppendPending,
-                self.expected_finalization_predecessor.is_some(),
-                "finalization predecessor",
-            ),
-            (
-                FinalizationPhaseV1::FinalizationBound,
-                self.finalization.is_some(),
-                "finalization link",
-            ),
-            (
-                FinalizationPhaseV1::TerminalStatusPending,
-                self.terminal_status_at.is_some(),
-                "terminal status timestamp",
-            ),
-            (
-                FinalizationPhaseV1::Terminal,
-                self.status_mirror_complete,
-                "status mirror",
-            ),
-        ];
-        for (phase, present, fact) in exact {
-            let expected_present = phase.permits(self.phase);
-            if present != expected_present {
-                return Err(DaemonError::Refused(format!(
-                    "workspace finalization intent for entry {entry_id} has {fact} presence {present} at phase {:?}, expected {expected_present}",
-                    self.phase,
-                )));
-            }
-        }
-        Ok(())
-    }
-
     fn status_projection(&self) -> WorkspaceFinalizationStatusV1 {
         if matches!(
             self.phase,
@@ -450,39 +281,6 @@ impl WorkspaceSealingIntentV1 {
             WorkspaceFinalizationStatusV1::Finishing {}
         }
     }
-}
-
-fn validate_successor(
-    predecessor: &Option<ChainPredecessorV1>,
-    actual: &Link,
-    kind: &str,
-    entry_id: &str,
-) -> Result<(), DaemonError> {
-    let (seq, hash) = match predecessor {
-        Some(ChainPredecessorV1::Position(predecessor)) => (
-            predecessor.seq.checked_add(1).ok_or_else(|| {
-                DaemonError::Refused(format!(
-                    "workspace finalization intent for entry {entry_id} cannot append {kind} after u64::MAX"
-                ))
-            })?,
-            predecessor.hash.as_str(),
-        ),
-        Some(ChainPredecessorV1::Genesis) => (0, GENESIS),
-        None => {
-            return Err(DaemonError::Refused(format!(
-                "workspace finalization intent for entry {entry_id} has no prepared {kind} predecessor"
-            )));
-        }
-    };
-    if actual.seq != seq
-        || actual.prev != hash
-        || Sha256Digest::try_from(actual.hash.as_str()).is_err()
-    {
-        return Err(DaemonError::Refused(format!(
-            "workspace finalization intent for entry {entry_id} has an invalid {kind} link"
-        )));
-    }
-    Ok(())
 }
 
 impl EntryState {
@@ -585,49 +383,6 @@ impl LegacySealingIntent {
             terminal_hash: envelope.link.hash,
         })
     }
-
-    pub(crate) fn validate(&self, entry_id: &str) -> Result<(), DaemonError> {
-        if self.manifest.entry_id != entry_id || self.descriptor.entry_id != entry_id {
-            return Err(DaemonError::Refused(format!(
-                "sealing intent belongs to {} / {}, not entry {entry_id}",
-                self.manifest.entry_id, self.descriptor.entry_id
-            )));
-        }
-        if self.descriptor.workspace != self.manifest.workspace
-            || self.descriptor.seal.as_deref() != Some(SEAL_FILE)
-        {
-            return Err(DaemonError::Refused(format!(
-                "sealing intent for entry {entry_id} does not stage the exact sealed descriptor"
-            )));
-        }
-        let expected_seq = self
-            .pre_seal_seq
-            .map(|seq| seq.checked_add(1))
-            .unwrap_or(Some(0));
-        if self.trace_root_identity.is_empty()
-            || expected_seq.is_none()
-            || self.pre_seal_head.is_empty()
-            || self.terminal_seq != expected_seq.expect("checked above")
-            || self.terminal_prev != self.pre_seal_head
-        {
-            return Err(DaemonError::Refused(format!(
-                "sealing intent for entry {entry_id} has an invalid staged predecessor"
-            )));
-        }
-        let expected = Self::new(
-            self.manifest.clone(),
-            self.descriptor.clone(),
-            self.pre_seal_seq
-                .map(|seq| (seq, self.pre_seal_head.clone())),
-            self.trace_root_identity.clone(),
-        )?;
-        if self.terminal_hash != expected.terminal_hash {
-            return Err(DaemonError::Refused(format!(
-                "sealing intent for entry {entry_id} has an invalid staged terminal hash"
-            )));
-        }
-        Ok(())
-    }
 }
 
 /// The one durable sealing authority stored on an entry.
@@ -653,13 +408,6 @@ impl SealingIntent {
         LegacySealingIntent::new(manifest, descriptor, pre_seal_head, trace_root_identity)
             .map(Box::new)
             .map(Self::Legacy)
-    }
-
-    pub(crate) fn validate(&self, entry_id: &str) -> Result<(), DaemonError> {
-        match self {
-            Self::Workspace(intent) => intent.validate(entry_id),
-            Self::Legacy(intent) => intent.validate(entry_id),
-        }
     }
 }
 
@@ -964,11 +712,10 @@ pub struct Entry {
     /// The `HOME` (or `CODEX_HOME`) this run's harness is given, and `None` until the
     /// workspace setup has actually placed one.
     ///
-    /// An `Option` rather than a derived default, because [`Registry::in_harness_home`]
-    /// is the pre-arm scan: it asks "does another entry already live in this
-    /// home?", and a guessed-but-plausible default would have every unplaced entry claim
-    /// a directory nothing is in, so the scan would answer "nobody" confidently and
-    /// wrongly. An entry with `None` occupies no home and matches no scan.
+    /// An `Option` rather than a derived default, because the V1 pre-arm scan (removed by
+    /// D48 and OS-31) asked "does another entry already live in this home?", and a
+    /// guessed-but-plausible default would have every unplaced entry claim a directory
+    /// nothing is in. Rows written then still read back with `None` for an unplaced entry.
     pub harness_home: Option<PathBuf>,
     /// Same-harness own-config foreign identities observed before this entry bound a
     /// session. This is intentionally a bounded identity projection for crash recovery:
@@ -1320,16 +1067,6 @@ impl Entry {
         }))
     }
 
-    /// A start may proceed only after any required or unknown launch has supplied its
-    /// durable process handle. `LegacyUnknown` fails closed because its absent field says
-    /// nothing about whether the old invocation used `--attach`.
-    pub fn start_handoff_complete(&self) -> bool {
-        matches!(
-            self.expected_process_handoff,
-            ExpectedProcessHandoff::NotRequired
-        ) || matches!(self.process_handoff_phase, ProcessHandoffPhase::Registered)
-    }
-
     /// The process route may receive a handle only from a launch path that owes one.
     pub fn accepts_process_handoff(&self) -> bool {
         !matches!(
@@ -1661,76 +1398,6 @@ impl Registry {
         self.matching(|_| true)
     }
 
-    /// Remove an entry, refusing inside the same write transaction if the row has a
-    /// `started_at`. Removing an id that is not there is not an error: the contract is about the
-    /// end state, and a refusal that unwinds twice must not turn into a second failure.
-    ///
-    /// **The check has to be in the transaction.** Reading `started_at` off the runtime's
-    /// in-memory mirror and removing the row later would race the V1 `bind_start` (removed by
-    /// D48), which committed a start from a receipt round trip that held the runtime out of
-    /// its slot for up to `NETWORK_TIMEOUT`: a start committed between the read and the
-    /// removal would take the row with it, and the control API's file removal that follows
-    /// `remove_dir_all`s the artifact directory: `chain.jsonl`, `baseline.json` and
-    /// `receipt.json` of a run with a signed server receipt. redb serialises write
-    /// transactions, so a check on the row the same transaction removes is a check the
-    /// winner of that race cannot pass twice.
-    ///
-    /// The caller removes files only after this returns `Ok` — the row is the tombstone,
-    /// and evidence outlives a directory entry.
-    pub fn remove_if_unstarted(&self, entry_id: &str) -> Result<(), DaemonError> {
-        let txn = self
-            .db
-            .begin_write()
-            .map_err(|e| plain(e, "remove_if_unstarted"))?;
-        {
-            let mut table = txn
-                .open_table(ENTRIES)
-                .map_err(|e| plain(e, "remove_if_unstarted"))?;
-            // Scoped so the read borrow ends before the removal takes a mutable one.
-            let protected = {
-                let found = table
-                    .get(entry_id)
-                    .map_err(|e| plain(e, "remove_if_unstarted"))?;
-                // A row that is not there is already gone, which is what the caller wanted.
-                match found {
-                    Some(bytes) => {
-                        let row = serde_json::from_slice::<Entry>(bytes.value())?;
-                        Some((row.state, row.started_at, row.process_handoff_phase))
-                    }
-                    None => None,
-                }
-            };
-            if let Some((state, started_at, phase)) = protected {
-                if state.capture_closed() {
-                    return Err(DaemonError::Refused(format!(
-                        "entry {entry_id} is capture-closed and cannot be removed through the \
-                         ordinary unstarted path: its registry row is durable lifecycle state"
-                    )));
-                }
-                if let Some(at) = started_at {
-                    return Err(DaemonError::Refused(format!(
-                        "entry {entry_id} started at {at} and cannot be abandoned: a started \
-                         run has a signed receipt and a witnessed deadline, and it ends by \
-                         sealing"
-                    )));
-                }
-                if matches!(
-                    phase,
-                    ProcessHandoffPhase::Prepared | ProcessHandoffPhase::Registered
-                ) {
-                    return Err(DaemonError::Refused(format!(
-                        "entry {entry_id} has accepted an unstarted process handoff and cannot be abandoned \
-                         without a verified termination path"
-                    )));
-                }
-            }
-            table
-                .remove(entry_id)
-                .map_err(|e| plain(e, "remove_if_unstarted"))?;
-        }
-        txn.commit().map_err(|e| plain(e, "remove_if_unstarted"))
-    }
-
     pub fn remove(&self, entry_id: &str) -> Result<(), DaemonError> {
         let txn = self.db.begin_write().map_err(|e| plain(e, "remove"))?;
         {
@@ -1738,15 +1405,6 @@ impl Registry {
             table.remove(entry_id).map_err(|e| plain(e, "remove"))?;
         }
         txn.commit().map_err(|e| plain(e, "remove"))
-    }
-
-    /// Every entry whose harness home is this one. The pre-arm scan asks the registry
-    /// before it reads a byte of anyone's transcript.
-    ///
-    /// An entry whose `harness_home` is `None` has not been placed in a home yet and so
-    /// occupies none: it is skipped rather than compared against a guessed path.
-    pub fn in_harness_home(&self, home: &Path) -> Result<Vec<Entry>, DaemonError> {
-        self.matching(|e| e.harness_home.as_deref() == Some(home))
     }
 
     /// Read, modify, write, in one transaction, returning what was stored.
@@ -1806,91 +1464,6 @@ impl Registry {
     pub fn fail_next_terminal_drain_validation_persistence_for_test(&self) {
         self.fail_next_terminal_drain_validation_persistence
             .store(true, Ordering::SeqCst);
-    }
-
-    /// Reserve the cross-store seal transition before a terminal envelope is written.  The
-    /// private predecessor is the only state startup may restore when the trace has no seal;
-    /// `Prepared` is deliberately refused because its accepted child is not yet in
-    /// `last_process` and sealing it could orphan the authority.
-    pub fn begin_sealing(
-        &self,
-        entry_id: &str,
-        intent: SealingIntent,
-    ) -> Result<Entry, DaemonError> {
-        if matches!(&intent, SealingIntent::Workspace(_)) {
-            return Err(DaemonError::Refused(format!(
-                "entry {entry_id} workspace finalization must use the admission-closing CAS"
-            )));
-        }
-        intent.validate(entry_id)?;
-        self.modify_handoff(entry_id, "begin_sealing", |entry| {
-            if matches!(
-                entry.state,
-                EntryState::CleanupPending | EntryState::Sealed | EntryState::Refused
-            ) || entry.sealed_at.is_some()
-            {
-                return Err(DaemonError::Refused(format!(
-                    "entry {entry_id} is already terminal and cannot begin another seal"
-                )));
-            }
-            if matches!(entry.state, EntryState::Sealing) {
-                return Err(DaemonError::Refused(format!(
-                    "entry {entry_id} already has an unreconciled sealing intent"
-                )));
-            }
-            if matches!(entry.process_handoff_phase, ProcessHandoffPhase::Prepared) {
-                return Err(DaemonError::Refused(format!(
-                    "entry {entry_id} has a prepared process handoff; reconcile it before sealing"
-                )));
-            }
-            let previous = entry.state;
-            entry.state = EntryState::Sealing;
-            entry.sealing_from_state = Some(previous);
-            entry.sealing_intent = Some(intent);
-            entry.sealed_trace_root_identity = None;
-            Ok(())
-        })
-    }
-
-    /// Reopen an interrupted sealing intent only after recovery established that the
-    /// validated chain has no terminal envelope.  This does not decrement process
-    /// generation or otherwise mutate launch authority.
-    pub fn restore_unfinished_sealing(&self, entry_id: &str) -> Result<Entry, DaemonError> {
-        self.modify_handoff(entry_id, "restore_unfinished_sealing", |entry| {
-            if entry.state != EntryState::Sealing || entry.sealed_at.is_some() {
-                return Err(DaemonError::Refused(format!(
-                    "entry {entry_id} has no unfinished sealing intent to restore"
-                )));
-            }
-            let previous = entry.sealing_from_state.ok_or_else(|| {
-                DaemonError::Refused(format!(
-                    "entry {entry_id} is sealing without an open predecessor state"
-                ))
-            })?;
-            if matches!(
-                &entry.sealing_intent,
-                Some(SealingIntent::Workspace(_))
-            ) {
-                return Err(DaemonError::Refused(format!(
-                    "entry {entry_id} has a workspace finalization intent and can never reopen capture"
-                )));
-            }
-            if matches!(
-                previous,
-                EntryState::CleanupPending
-                    | EntryState::Sealing
-                    | EntryState::Sealed
-                    | EntryState::Refused
-            ) {
-                return Err(DaemonError::Refused(format!(
-                    "entry {entry_id} has an invalid sealing predecessor {previous:?}"
-                )));
-            }
-            entry.state = previous;
-            entry.sealing_from_state = None;
-            entry.sealing_intent = None;
-            Ok(())
-        })
     }
 
     /// Test-only fixture seam for the historical V1 sealed-row shape, which did not carry
@@ -2209,94 +1782,6 @@ impl Registry {
         Ok(entry
             .prepared_home_seed
             .map(|seed| (entry.process_handoff_digest.unwrap_or_default(), seed)))
-    }
-
-    /// Atomically consume an exactly named `Registered` generation and clear its old
-    /// process.  There is intentionally no idempotent success: a lost resume response is a
-    /// stranded pending launch in V1, not permission for a second caller to launch.
-    pub fn open_resume_process_handoff(
-        &self,
-        entry_id: &str,
-        expected_generation: u64,
-    ) -> Result<Entry, DaemonError> {
-        self.modify_handoff(entry_id, "open_resume_process_handoff", |entry| {
-            if !matches!(entry.state, EntryState::Started) {
-                return Err(handoff_conflict(
-                    entry_id,
-                    "only a started entry may open a resume handoff",
-                ));
-            }
-            if entry.session_id.as_deref().is_none_or(str::is_empty) {
-                return Err(handoff_conflict(
-                    entry_id,
-                    "only an entry with a committed session may open a resume handoff",
-                ));
-            }
-            let legacy = matches!(
-                entry.process_handoff_phase,
-                ProcessHandoffPhase::LegacyUnknown
-            );
-            let attached_origin = matches!(
-                entry.expected_process_handoff,
-                ExpectedProcessHandoff::NotRequired
-            ) && matches!(
-                entry.process_handoff_phase,
-                ProcessHandoffPhase::InitialClosed
-            );
-            if !legacy
-                && !attached_origin
-                && (!matches!(
-                    entry.process_handoff_phase,
-                    ProcessHandoffPhase::Registered | ProcessHandoffPhase::ResumeCancelled
-                ) || entry.process_handoff_generation != expected_generation)
-            {
-                return Err(handoff_conflict(
-                    entry_id,
-                    "the resume generation is stale or already consumed",
-                ));
-            }
-            if attached_origin && entry.process_handoff_generation != expected_generation {
-                return Err(handoff_conflict(
-                    entry_id,
-                    "the attached resume generation is stale",
-                ));
-            }
-            if legacy && expected_generation != 0 {
-                return Err(handoff_conflict(
-                    entry_id,
-                    "the legacy resume must begin from generation zero",
-                ));
-            }
-            if legacy
-                && matches!(
-                    entry.expected_process_handoff,
-                    ExpectedProcessHandoff::Required
-                )
-                && entry.last_process.is_none()
-            {
-                return Err(handoff_conflict(
-                    entry_id,
-                    "a legacy required entry has no durable termination handle and cannot resume",
-                ));
-            }
-            entry.process_handoff_generation = entry
-                .process_handoff_generation
-                .checked_add(1)
-                .ok_or_else(|| {
-                    DaemonError::Refused(format!("entry {entry_id} process generation overflowed"))
-                })?;
-            entry.process_handoff_phase = ProcessHandoffPhase::OpenResume;
-            entry.expected_process_handoff = ExpectedProcessHandoff::Required;
-            entry.process_handoff_digest = None;
-            entry.prepared_process_handle = None;
-            entry.prepared_home_seed = None;
-            entry.cancelled_process_handoff_digest = None;
-            // `last_process` remains the active termination authority throughout an issued
-            // resume permit.  A failed local relaunch can cancel this generation without
-            // leaving a seal with nothing safe to end; only `Registered` replacement swaps
-            // it for the new child.
-            Ok(())
-        })
     }
 
     /// Read/modify/write a process-authority transition in one redb write transaction.

@@ -398,59 +398,6 @@ fn process_handoff_requires_an_open_generation_and_exact_replays_are_idempotent(
     );
 }
 
-/// Seal is a two-store transition: the registry records intent before `chain.jsonl` gains
-/// its terminal link.  A crash before that link must restore exactly the old open state,
-/// never leave an unrehydratable pseudo-sealed row.
-#[test]
-fn sealing_intent_restores_its_exact_open_predecessor_when_no_terminal_exists() {
-    let tmp = tempfile::tempdir().unwrap();
-    let registry = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    let mut row = entry(tmp.path(), "sealing");
-    row.state = EntryState::Armed;
-    registry.put(&row).unwrap();
-
-    let intent = registry
-        .begin_sealing("sealing", sealing_intent(&row))
-        .unwrap();
-    assert_eq!(intent.state, EntryState::Sealing);
-    assert_eq!(intent.sealing_from_state, Some(EntryState::Armed));
-    assert!(intent.sealed_at.is_none());
-
-    let restored = registry.restore_unfinished_sealing("sealing").unwrap();
-    assert_eq!(restored.state, EntryState::Armed);
-    assert_eq!(restored.sealing_from_state, None);
-}
-
-#[test]
-fn sealing_refuses_an_unreconciled_prepared_process_handoff() {
-    let tmp = tempfile::tempdir().unwrap();
-    let registry = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    let mut row = bound_entry_with_handoff(
-        tmp.path(),
-        "prepared-seal",
-        "2026.09-v1",
-        ExpectedProcessHandoff::Required,
-    );
-    row.state = EntryState::Armed;
-    registry.put(&row).unwrap();
-    registry
-        .open_initial_process_handoff("prepared-seal")
-        .unwrap();
-    registry
-        .prepare_process_handoff("prepared-seal", registration(1))
-        .unwrap();
-
-    registry
-        .begin_sealing("prepared-seal", sealing_intent(&row))
-        .expect_err("a prepared child must become a durable termination target first");
-    let preserved = registry.get("prepared-seal").unwrap().unwrap();
-    assert_eq!(preserved.state, EntryState::Armed);
-    assert_eq!(
-        preserved.process_handoff_phase(),
-        ProcessHandoffPhase::Prepared
-    );
-}
-
 /// A prepared row is durable private recovery state, but it is still the source for a
 /// future public `HomeSeeded` event.  A direct authenticated caller therefore cannot smuggle
 /// a resolved account path into it: only the manifest's `{home}/…` spelling and relative
@@ -506,88 +453,6 @@ fn prepared_seed_recovery_never_retains_resolved_or_escaping_paths() {
     registry
         .prepare_process_handoff("launch", safe)
         .expect("the manifest spelling and relative name are safe recovery evidence");
-}
-
-/// Resume must consume one specific last generation atomically.  A stale second resume
-/// cannot clear the process that the first resume has just installed or mint another
-/// concurrent authority token.
-#[test]
-fn resume_generation_compare_and_swap_has_one_winner_and_legacy_is_fail_closed() {
-    let tmp = tempfile::tempdir().unwrap();
-    let registry = std::sync::Arc::new(Registry::open(&tmp.path().join("registry.redb")).unwrap());
-    let mut row = bound_entry_with_handoff(
-        tmp.path(),
-        "launch",
-        "2026.09-v1",
-        ExpectedProcessHandoff::Required,
-    );
-    row.state = EntryState::Armed;
-    registry.put(&row).unwrap();
-    registry.open_initial_process_handoff("launch").unwrap();
-    registry
-        .prepare_process_handoff("launch", registration(1))
-        .unwrap();
-    registry
-        .register_prepared_process_handoff("launch", 1)
-        .unwrap();
-    registry
-        .update("launch", |entry| {
-            entry.state = EntryState::Started;
-            entry.session_id = Some("s1".to_string());
-        })
-        .unwrap();
-
-    let left = std::sync::Arc::clone(&registry);
-    let right = std::sync::Arc::clone(&registry);
-    let a = std::thread::spawn(move || left.open_resume_process_handoff("launch", 1));
-    let b = std::thread::spawn(move || right.open_resume_process_handoff("launch", 1));
-    let results = [a.join().unwrap(), b.join().unwrap()];
-    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
-    let opened = results.into_iter().find_map(Result::ok).unwrap();
-    assert_eq!(opened.process_handoff_generation(), 2);
-    assert_eq!(
-        opened.process_handoff_phase(),
-        ProcessHandoffPhase::OpenResume
-    );
-    assert_eq!(
-        opened.last_process.as_ref().map(|handle| handle.pid),
-        Some(std::process::id()),
-        "an issued permit keeps the predecessor as seal authority until a replacement registers"
-    );
-
-    let mut legacy = bound_entry_with_handoff(
-        tmp.path(),
-        "legacy",
-        "2026.09-v1",
-        ExpectedProcessHandoff::LegacyUnknown,
-    );
-    legacy.state = EntryState::Armed;
-    let mut old = serde_json::to_value(&legacy).unwrap();
-    let object = old.as_object_mut().unwrap();
-    object.remove("process_handoff_phase");
-    object.remove("process_handoff_generation");
-    let legacy: Entry = serde_json::from_value(old).unwrap();
-    registry.put(&legacy).unwrap();
-    registry
-        .prepare_process_handoff("legacy", registration(1))
-        .expect_err("legacy required/no-phase rows cannot be opened by /process");
-    registry
-        .open_resume_process_handoff("legacy", 0)
-        .expect_err("only a Started legacy row may obtain its first fresh resume generation");
-    registry
-        .update("legacy", |entry| {
-            entry.state = EntryState::Started;
-            entry.session_id = Some("s1".to_string());
-        })
-        .unwrap();
-    let fresh = registry
-        .open_resume_process_handoff("legacy", 0)
-        .expect("a started legacy run can safely resume into a fresh generation");
-    assert_eq!(fresh.process_handoff_generation(), 1);
-    assert_eq!(
-        fresh.process_handoff_phase(),
-        ProcessHandoffPhase::OpenResume
-    );
 }
 
 /// The `[5u8; 32]` seed is the placeholder server key the devserver and the compliant
@@ -894,54 +759,15 @@ fn an_entry_can_only_be_born_without_a_receipt_and_update_cannot_add_one() {
 }
 
 #[test]
-fn remove_leaves_no_entry_and_in_harness_home_finds_the_occupant() {
+fn remove_leaves_no_entry() {
     let tmp = tempfile::tempdir().unwrap();
     let r = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    let home = tmp.path().join("home/codex");
-    let mut e = entry(tmp.path(), "e1");
-    e.harness_home = Some(home.clone());
-    r.put(&e).unwrap();
-
-    // The daemon must be able to ask "is this CODEX_HOME already mine?".
-    assert_eq!(r.in_harness_home(&home).unwrap().len(), 1);
+    r.put(&entry(tmp.path(), "e1")).unwrap();
     r.remove("e1").unwrap();
     assert!(
         r.get("e1").unwrap().is_none(),
         "R5: a refused start leaves no entry"
     );
-    assert!(r.in_harness_home(&home).unwrap().is_empty());
-}
-
-/// `harness_home` is `None` until workspace creation sets it. A default
-/// that guessed a plausible path would make the pre-arm scan answer "nobody lives
-/// here" for every entry that has not been placed yet, which is the wrong answer given
-/// confidently. An unset home matches nothing at all.
-#[test]
-fn in_harness_home_ignores_an_entry_that_has_no_home_yet() {
-    let tmp = tempfile::tempdir().unwrap();
-    let r = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    let home = tmp.path().join("homes").join("entry-0001");
-
-    let unplaced = entry(tmp.path(), "e1");
-    assert_eq!(unplaced.harness_home, None, "a fresh entry has no home");
-    r.put(&unplaced).unwrap();
-    assert!(
-        r.in_harness_home(&home).unwrap().is_empty(),
-        "an entry with no home occupies no home"
-    );
-    // Nor does it match the path a derived default would have guessed.
-    assert!(
-        r.in_harness_home(&unplaced.artifact_dir.join("home"))
-            .unwrap()
-            .is_empty()
-    );
-
-    let mut placed = entry(tmp.path(), "e2");
-    placed.harness_home = Some(home.clone());
-    r.put(&placed).unwrap();
-    let found = r.in_harness_home(&home).unwrap();
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].entry_id, "e2");
 }
 
 /// D4: entries are routed by working directory, so two entries bound to one workspace
