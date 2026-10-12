@@ -1,8 +1,8 @@
 //! Fixtures shared by the integration tests in this crate; it is compiled into every test
 //! binary that declares `mod support`.
 //!
-//! What is here directly: a registry with one entry, the shipped manifests, a devserver on a
-//! loopback socket and a daemon config file. The bigger harnesses are the submodules:
+//! What is here directly: a registry with one entry, the shipped manifests, a loopback upload
+//! target and a daemon config file. The bigger harnesses are the submodules:
 //! [`daemon`] (the process-level object), [`control`] (its control listener and a client) and
 //! [`status`] (a status document and the reader that checks its signature).
 
@@ -22,8 +22,8 @@ pub use control::*;
 // The process-group escape helper (re-exec this test binary as a hard-linked `codex`
 // under a pre-`main` role dispatch). Unix-only, matching `process_kill.rs`'s own gate;
 // `process_kill.rs` itself pulls this file in directly via `#[path = "support/tree.rs"]`
-// rather than through this module, so its binary does not also link the devserver
-// fixture's axum and tokio for a file that spawns `sh` and `sleep`.
+// rather than through this module, so its binary does not also link the async control
+// fixtures' tokio for a file that spawns `sh` and `sleep`.
 #[cfg(unix)]
 pub mod tree;
 // Re-exported so a test says `support::started_entry()`; the
@@ -33,7 +33,6 @@ pub use status::*;
 
 use goalcup_daemon::registry::{Entry, ExpectedProcessHandoff, Registry, RunKeys};
 use goalcup_protocol::manifest::ConnectorManifest;
-use std::sync::Arc;
 
 /// The shipped connector manifests, read from `connectors/<id>/manifest.toml`. Loading the
 /// real file rather than a hand-written stub is the whole point of the block-shape test:
@@ -96,32 +95,13 @@ fn pinned_start_secs() -> u64 {
     *PINNED.get_or_init(|| (goalcup_daemon::now_unix() as u64).saturating_sub(3_600))
 }
 
-/// The dev signer on a loopback port the OS chose, in this process, with its clock pinned
-/// to [`pinned_start`] so `started_at` is a string this process can name and `deadline_at`
-/// is that plus 168 hours.
-pub async fn devserver() -> (Arc<goalcup_devserver::DevServer>, String) {
-    devserver_with_authority(goalcup_devserver::ReceiptAuthority::Legacy).await
-}
-
-/// The same real loopback signer under an explicit, independently configured receipt
-/// contract.
-pub async fn devserver_with_authority(
-    authority: goalcup_devserver::ReceiptAuthority,
-) -> (Arc<goalcup_devserver::DevServer>, String) {
-    let server = Arc::new(
-        goalcup_devserver::DevServer::with_authority(authority)
-            .expect("the test receipt authority is valid"),
-    );
-    server.set_clock(&pinned_start());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("a loopback port");
-    let addr = listener.local_addr().expect("the bound address");
-    let routed = server.clone();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, goalcup_devserver::dev_router(routed)).await;
-    });
-    (server, format!("http://{addr}"))
+/// An upload URL on a loopback port the OS chose, with a listener held open behind it so
+/// nothing else can take the port while the test runs. Nothing connects: this tree has no
+/// uploader (D48), and `DaemonConfig` still parses the V1 `upload_url`.
+pub fn upload_target() -> (std::net::TcpListener, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let url = format!("http://{}", listener.local_addr().expect("the bound address"));
+    (listener, url)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -161,7 +141,7 @@ pub fn write_config_with(
         connectors = connectors,
         config = root.join("config"),
         workspaces = root.join("workspaces"),
-        key = goalcup_devserver::dev_server_public_key_hex(),
+        key = goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX,
     );
     let path = root.join("goalcup.toml");
     write(&path, edit(text).as_bytes());

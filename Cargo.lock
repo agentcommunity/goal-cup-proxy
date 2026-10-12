@@ -619,7 +619,6 @@ dependencies = [
  "clap",
  "ed25519-dalek",
  "goalcup-daemon",
- "goalcup-devserver",
  "goalcup-mcp",
  "goalcup-platform",
  "goalcup-protocol",

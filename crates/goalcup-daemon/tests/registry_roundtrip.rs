@@ -455,8 +455,8 @@ fn prepared_seed_recovery_never_retains_resolved_or_escaping_paths() {
         .expect("the manifest spelling and relative name are safe recovery evidence");
 }
 
-/// The `[5u8; 32]` seed is the placeholder server key the devserver and the compliant
-/// fixture both sign with, so a receipt made here is one a default dev daemon accepts.
+/// The `[5u8; 32]` seed is the published placeholder server key
+/// (`goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX`) the test daemons pin.
 fn server_key() -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[5u8; 32])
 }

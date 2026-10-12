@@ -989,7 +989,7 @@ async fn a_connector_directory_this_daemon_cannot_hash_refuses_daemon_start() {
         .expect("the symlink plants");
 
     let opts = support::workspace_opts("claude-code-cli");
-    let (_server, upload_url) = support::devserver().await;
+    let (_upload, upload_url) = support::upload_target();
     let mut config = support::config_at(connectors.path(), &upload_url);
     config.connectors_dir = connectors.path().to_path_buf();
     let error = match goalcup_daemon::runtime::Daemon::start(config).await {
