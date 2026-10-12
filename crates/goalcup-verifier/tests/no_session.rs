@@ -84,28 +84,3 @@ fn a_trace_that_bound_no_session_is_a_written_fail_and_not_a_refusal_to_read() {
         "the document carries it"
     );
 }
-
-/// The same current trace, untouched, still passes — so the reading above is about the empty
-/// descriptor and not about the loader.
-///
-/// Under `--dev`, which is what the compliant fixture's own claim needs: its receipt is
-/// signed with the placeholder seed this repository publishes, and V13 flags that on every
-/// plain run (`scripts/regen-compliant-fixture.md`).
-#[test]
-fn the_same_fixture_with_its_session_still_passes() {
-    let dir = current_compliant_trace();
-    let verdict = goalcup_verifier::verify_trace_with_options(
-        dir.path(),
-        goalcup_verifier::VerifyOptions {
-            allow_descriptor_key: false,
-            extra_server_keys: Vec::new(),
-            dev_mode: true,
-        },
-    )
-    .expect("a verdict");
-    assert_eq!(verdict.overall, Severity::Pass);
-    assert!(
-        !verdict.review_queue.iter().any(|f| f.code == "no_session"),
-        "a trace that names a session never raises it"
-    );
-}

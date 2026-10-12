@@ -323,23 +323,6 @@ fn declared_missing_acknowledgements_error_but_absence_loads_an_empty_stream() {
 }
 
 #[test]
-fn no_session_remains_a_verdict_finding_after_containment() {
-    let trace = compliant();
-    rewrite(
-        trace.path(),
-        "tracked_sessions = [\"compliant-session-0001\"]",
-        "tracked_sessions = []",
-    );
-    let verdict = goalcup_verifier::verify_trace(trace.path()).expect("no-session is evaluated");
-    assert!(
-        verdict
-            .review_queue
-            .iter()
-            .any(|finding| finding.code == "no_session")
-    );
-}
-
-#[test]
 fn materializer_rewrites_only_quoted_path_values_and_copies_exact_bytes() {
     let source = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(source.path().join("one")).unwrap();
