@@ -588,8 +588,9 @@ fn count_in(chain: &m2_vertical_support::Chain, pick: impl Fn(&CaptureRecord) ->
 /// (CONTRACTS.md, H-10 4a ¶10): a whole-daemon SIGSTOP, not a held owner append or a delayed
 /// blocking permit (those two holds are observed by the daemon's `capture_finish_budget`
 /// test-hook rows only). The real parts are the sustained `stream` backlog, the real binaries,
-/// and a real descendant that forked from the harness and holds its stdout (on Linux, until the
-/// launcher's sweep ends it, before the finish).
+/// and a real descendant that forked from the harness and holds its stdout. The held-stdout leg
+/// is covered on macOS only: on Linux the launcher's sweep removes the stdout holder before the
+/// finish, and the test asserts that instead.
 ///
 /// The one observer is this test, on its own clock: the launcher is held at its
 /// `capture-finish-started` point (before its deadline is taken), the daemon is frozen, the

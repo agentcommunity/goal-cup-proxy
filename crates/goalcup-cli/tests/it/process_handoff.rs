@@ -73,9 +73,14 @@ fn this_crate_never_terminates_anything() {
     // `wait` has returned and before the seal it sweeps what the harness left behind, which the
     // kernel reparented to it: SIGTERM, the connector's grace, SIGKILL, each one reaped. It
     // signals only this process's own unreaped children that started no earlier than the root
-    // and are not the daemon it started. The root is reaped by then, so the daemon's
-    // termination answers `AlreadyStopped` and walks nothing: no second killer races it, and the
-    // sweep is printed, never chained.
+    // and are not the daemon it started. The sweep is printed, never chained. In a run that ends
+    // on its own the root is reaped first, so the daemon's termination answers `AlreadyStopped`
+    // and walks nothing. A standalone `goalcup seal` while the harness runs is the one overlap:
+    // the daemon is mid-grace when the root dies, the members reparent to the launcher, and the
+    // sweep signals the same processes. That overlap is safe: both escalate on the handle's
+    // `grace_seconds`, the sweep's clock starts no earlier than the daemon's first SIGTERM, the
+    // daemon signals through pidfds, and the sweep signals only its own unreaped children, so
+    // neither can reach a recycled pid and nothing is SIGKILLed before the daemon's own grace.
     //
     // The `start.rs` exemption stays ONE file: a second file that signals a launched harness
     // would have to be exempted here as well, by name.
@@ -114,7 +119,7 @@ fn this_crate_never_terminates_anything() {
             "preflight/probe.rs",
             "commands/start.rs",
             "released_child.rs",
-            "subreaper.rs",
+            "src/subreaper.rs",
         ]
         .iter()
         .any(|tail| entry.ends_with(tail));

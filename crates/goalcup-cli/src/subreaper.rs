@@ -32,9 +32,19 @@
 //! under them, so an in-process start is never a subreaper and never sweeps.
 //!
 //! The daemon is unchanged and the trace and seal gain nothing: the sweep is printed on stdout.
-//! If this process dies, what it adopted goes to init as before; and a `goalcup seal` from
-//! another terminal while the harness runs can report `all_gone` while this sweep is still
-//! ending an orphan the daemon's walk could not see.
+//!
+//! **Where nothing is swept.** If this process dies, what it adopted goes to init as before. The
+//! sweep runs only after the root's own `wait` in `run_harness`, so the paths that end a released
+//! harness some other way never sweep: the sealed-launch ending (`Forked::sealed_launch`) and the
+//! post-release `Forked::unlaunched` paths (a tee that could not be started). What the harness
+//! left behind there stays this process's child until it exits, then goes to init.
+//!
+//! **A seal from another terminal.** A `goalcup seal` while the harness runs has the daemon end the
+//! tree; members that outlive the root reparent here and this sweep signals them too. The two
+//! overlap safely: both escalate on the handle's `grace_seconds`, this sweep's clock starts no
+//! earlier than the daemon's first SIGTERM, the daemon signals through pidfds, and this sweep only
+//! signals its own unreaped children. The daemon's report can say `all_gone` while this sweep is
+//! still ending an orphan the daemon's walk could not see.
 //!
 //! On every other platform this module does nothing: macOS has no child subreaper, and its
 //! kqueue witness covers the same shape in the daemon.
@@ -85,7 +95,8 @@ pub(crate) fn note_daemon(pid: u32) {
 pub(crate) struct Swept {
     /// Live processes signalled and then reaped.
     pub swept: usize,
-    /// Still alive when the sweep's bound ran out.
+    /// Still alive when the sweep's bound ran out; or, when `/proc` failed, signalled and not
+    /// yet seen to end.
     pub left: Vec<u32>,
     /// `/proc` (or the root's entry in it) could not be read, so the sweep stopped there.
     pub unlisted: bool,
@@ -94,6 +105,10 @@ pub(crate) struct Swept {
 impl Swept {
     /// What the launcher prints: nothing when there was nothing to sweep.
     pub fn lines(&self) -> Vec<String> {
+        let pids = || {
+            let pids: Vec<String> = self.left.iter().map(u32::to_string).collect();
+            pids.join(", ")
+        };
         let mut lines = Vec::new();
         if self.swept > 0 {
             lines.push(format!(
@@ -101,21 +116,29 @@ impl Swept {
                 self.swept
             ));
         }
-        if !self.left.is_empty() {
-            let pids: Vec<String> = self.left.iter().map(u32::to_string).collect();
-            lines.push(format!(
-                "  ({} process(es) the harness left behind outlived the sweep's grace and SIGKILL \
-                 and are still running (pids: {}); end them by hand.)",
-                self.left.len(),
-                pids.join(", ")
-            ));
-        }
         if self.unlisted {
-            lines.push(
+            let signalled = if self.left.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; {} process(es) it had signalled were not seen to end (pids: {})",
+                    self.left.len(),
+                    pids()
+                )
+            };
+            lines.push(format!(
                 "  (this command could not read its own children from /proc, so it cannot say \
-                 that nothing the harness left behind is still running.)"
-                    .to_string(),
-            );
+                 that nothing the harness left behind is still running{signalled}.)"
+            ));
+        } else if !self.left.is_empty() {
+            // Some of these may have been first seen in the last pass, and never signalled.
+            lines.push(format!(
+                "  ({} process(es) the harness left behind were still running when the sweep \
+                 stopped at its bound, the grace plus {} s (pids: {}); end them by hand.)",
+                self.left.len(),
+                SWEEP_SLACK.as_secs(),
+                pids()
+            ));
         }
         lines
     }
@@ -249,10 +272,11 @@ mod linux {
         let mut swept = 0;
         loop {
             let Ok(found) = children(me, root_start) else {
+                // What was signalled and not yet reaped is not known to be gone: named, not dropped.
                 return Swept {
                     swept,
+                    left: termed.union(&killed).copied().collect(),
                     unlisted: true,
-                    ..Swept::default()
                 };
             };
             // Done only when a pass finds no child at all: a child that died during the pass
@@ -329,6 +353,116 @@ mod linux {
             assert!(!me.dead);
             // SAFETY: `getppid` takes nothing and cannot fail.
             assert_eq!(me.ppid, unsafe { libc::getppid() } as u32);
+        }
+
+        /// Set only in the process [`the_bound_reports_what_keeps_arriving`] starts.
+        const HOST: &str = "GOALCUP_SUBREAPER_SWEEP_HOST";
+        /// The host's one result line.
+        const RESULT: &str = "subreaper-sweep-host:";
+
+        /// The bound and the straggler report, against a tree the sweep cannot finish. The sweep
+        /// runs in a process of its own (this test binary, re-run on [`sweep_host`] alone), so
+        /// this test runner never becomes a subreaper and no other test's child is ever swept.
+        #[test]
+        fn the_bound_reports_what_keeps_arriving() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "subreaper::linux::tests::sweep_host",
+                    "--exact",
+                    "--ignored",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(HOST, "1")
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&output.stdout);
+            let line = text
+                .lines()
+                // libtest prints the test's name on the same line, first.
+                .find_map(|line| Some(line.split_once(RESULT)?.1))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no result\n{text}{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )
+                });
+            let field = |name: &str| -> u64 {
+                line.split_whitespace()
+                    .find_map(|kv| kv.strip_prefix(name)?.strip_prefix('='))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| panic!("no {name} in {line}"))
+            };
+            let bound = (HOST_GRACE + SWEEP_SLACK).as_millis() as u64;
+            assert!(
+                field("took_ms") >= bound,
+                "stopped before its bound: {line}"
+            );
+            assert!(
+                field("took_ms") <= bound + 1_000,
+                "overran its bound: {line}"
+            );
+            assert!(field("left") >= 1, "no straggler reported: {line}");
+            assert!(field("swept") >= 1, "nothing was swept: {line}");
+            assert_eq!(field("unlisted"), 0, "{line}");
+            assert_eq!(
+                field("spawner_alive"),
+                1,
+                "a child older than the root was signalled: {line}"
+            );
+            assert_eq!(field("cleanup_left"), 0, "{line}");
+        }
+
+        /// The grace the host sweeps with: one second of SIGTERM that every orphan ignores.
+        const HOST_GRACE: Duration = Duration::from_secs(1);
+
+        /// The sweep's host, run only by [`the_bound_reports_what_keeps_arriving`]. A spawner
+        /// that ignores SIGTERM is started before the root, so the start filter never lets the
+        /// sweep touch it; from 300 ms on it keeps handing this process new orphans (each
+        /// `sh -c 'sleep 30 &'` exits at once and leaves its `sleep`, which ignores SIGTERM too).
+        /// The sweep can never find this process childless, so it must stop at its bound and
+        /// name what it last saw.
+        #[test]
+        #[ignore = "the sweep's host process; run by the_bound_reports_what_keeps_arriving"]
+        fn sweep_host() {
+            if std::env::var_os(HOST).is_none() {
+                return;
+            }
+            crate::subreaper::arm().expect("this process becomes a child subreaper");
+            let mut spawner = std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "trap '' TERM; sleep 0.3; while :; do sh -c 'sleep 30 &'; sleep 0.01; done",
+                ])
+                .spawn()
+                .unwrap();
+            // At least one clock tick (10 ms) after the spawner, so it is older than the root.
+            std::thread::sleep(Duration::from_millis(50));
+            let mut root = std::process::Command::new("/bin/sh")
+                .args(["-c", "exit 0"])
+                .spawn()
+                .unwrap();
+            let root_start = stat(root.id()).expect("the root's stat").start;
+            root.wait().unwrap();
+            // Until the spawner has started handing over orphans, so the first pass finds some.
+            std::thread::sleep(Duration::from_millis(400));
+            let began = Instant::now();
+            let swept = sweep(root_start, HOST_GRACE);
+            let took = began.elapsed();
+            let spawner_alive = spawner.try_wait().unwrap().is_none();
+            let _ = spawner.kill();
+            let _ = spawner.wait();
+            // Everything this process still holds, the spawner's last orphans included.
+            let cleanup = sweep(0, Duration::ZERO);
+            println!(
+                "{RESULT} took_ms={} swept={} left={} unlisted={} spawner_alive={} cleanup_left={}",
+                took.as_millis(),
+                swept.swept,
+                swept.left.len(),
+                u8::from(swept.unlisted),
+                u8::from(spawner_alive),
+                cleanup.left.len(),
+            );
         }
 
         #[test]

@@ -1108,6 +1108,10 @@ fn run_harness<'a>(
         goal_stream,
         scope_deadline,
     } = released;
+    // Linux: what the harness leaves behind is this process's own child (a subreaper, `main.rs`),
+    // and is swept between the root's exit and the seal. Armed first, while the root is certainly
+    // unreaped: Codex's scope wait below reaps a root that exits before its scope line.
+    let sweep = crate::subreaper::Sweep::for_root(handed.pid);
     let (client, entry_id) = (forked.client, forked.info.entry_id.clone());
     // A seal that raced in between the registration and the release cannot have ended a
     // harness that was still parked, so one that is sealed now is a harness running on a
@@ -1162,9 +1166,6 @@ fn run_harness<'a>(
         out,
         "Recording. The harness runs headless; this command ends with it.",
     );
-    // Linux: what the harness leaves behind is this process's own child (a subreaper, `main.rs`),
-    // and is swept between the root's exit and the seal. Armed while the root is still unreaped.
-    let sweep = crate::subreaper::Sweep::for_root(handed.pid);
     let status = child.wait().map_err(|source| CliError::Io {
         path: handed.program.clone(),
         source,

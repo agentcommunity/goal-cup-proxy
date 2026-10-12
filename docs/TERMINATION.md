@@ -218,17 +218,28 @@ Measured in Docker: `the_launcher_sweeps_an_orphan_forked_after_the_root_died_be
 controlled workload's `orphan-after-root` mode. Its member forks a detached `sleep 300` only after
 the root has died. The orphan is gone when `goalcup start` returns, the sweep line comes before the
 seal's report, and the trace verifies. Without the subreaper the same test fails with the orphan
-alive.
+alive. `a_root_reaped_by_the_scope_wait_still_has_its_orphans_swept` repeats it under a
+`stdout_json` identity (Codex's shape) whose root exits before any scope line, so the launcher's
+scope wait reaps the root before the launch is recorded; the sweep is armed before that wait.
 
 The residuals, stated plainly:
 
 - **The launcher dies.** If `goalcup start` itself dies (a crash, `kill -9`), it sweeps nothing,
   and what it adopted goes to init as before.
+- **Paths that end the harness some other way.** The sweep runs only after the root's own `wait`.
+  The sealed-launch ending ("The launcher's ending of a child it just released" above) and the
+  post-release failures that seal an unlaunched run (a tee that could not be started) never
+  sweep: what the harness left behind stays the launcher's child until it exits, then goes to
+  init.
 - **A seal from another terminal.** A standalone `goalcup seal` while the harness runs has the
   daemon end the tree, and an orphan forked after that is reparented to the launcher, which
   sweeps it once the root's `wait` returns. The daemon's report can say `all_gone` while that
-  sweep is still running. For an orphan that dies on SIGTERM the window is a few milliseconds;
-  for one that ignores SIGTERM it is up to the grace plus 5 s. This window is not measured.
+  sweep is still running. For an orphan that dies on SIGTERM the window is tens of milliseconds
+  (the sweep sleeps at least one 20 ms poll); for one that ignores SIGTERM it is up to the grace
+  plus 5 s. This window is not measured. The daemon and the sweep may signal the same members
+  here, and that is safe: both escalate on the handle's grace, the sweep's clock starts no
+  earlier than the daemon's first SIGTERM, the daemon signals through pidfds, and the sweep
+  signals only the launcher's own unreaped children.
 
 The daemon test stays `ignore`d on Linux, with its reason now pointing here: it calls the daemon's
 `terminate()` in-process with no launcher above the tree, so the daemon alone still cannot see the

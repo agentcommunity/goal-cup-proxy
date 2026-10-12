@@ -28,10 +28,13 @@ wait after the traffic) and `max_s` (the bound on either, default 60). Modes:
                  connections kept open, one native line a second, until `release` or `max_s`
 - load           the E02 Part B load (`schedule`), its report to `report`; `out/load-started.json`
                  marks its start
-- orphan-after-root  one echo, then a member that outlives the workload: once its parent has
-                 exited it forks a detached `sleep 300` (pid to `out/orphan.pid`) and exits. The
+- orphan-after-root  one echo, then a member that outlives the workload: 200 ms after its parent
+                 has exited it forks a detached `sleep 300` (pid to `out/orphan.pid`) and exits. The
                  workload exits only once the member defers SIGTERM (`out/member.ready`), so the
-                 orphan is always forked after the workload's death, whoever signals the member
+                 orphan is always forked after the workload's death, whoever signals the member.
+                 With `member_holds_stdout` true the member keeps the workload's stdout open and
+                 forks only 500 ms after the workload's death, so the launcher sees the workload
+                 exit before its stdout ends
 With `descendant` true the workload first forks one `sleep 300` that inherits its standard
 output and error and outlives it (a held stdout); its pid goes to `out/descendant.pid`.
 The pid goes to `out/pid` first, and `out/holding` marks a hold. Everything sent or received is
@@ -60,14 +63,16 @@ spec = importlib.util.spec_from_file_location("early_load", EARLY)
 E = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(E)
 
-# The `orphan-after-root` member: argv is the workload's pid and the report directory.
+# The `orphan-after-root` member: argv is the workload's pid, the report directory and how long
+# to linger after the workload's death before forking.
 MEMBER = r'''
 import os, signal, subprocess, sys, time
 signal.signal(signal.SIGTERM, lambda *_: None)
-root, out = int(sys.argv[1]), sys.argv[2]
+root, out, linger = int(sys.argv[1]), sys.argv[2], float(sys.argv[3])
 open(os.path.join(out, "member.ready"), "w").close()
 while os.getppid() == root:
     time.sleep(0.01)
+time.sleep(linger)
 orphan = subprocess.Popen(["/bin/sleep", "300"], stdin=subprocess.DEVNULL,
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                           start_new_session=True)
@@ -299,8 +304,10 @@ class Workload:
             self.stream()
         elif mode == "orphan-after-root":
             self.echo(E.filler(8, 1024))
-            subprocess.Popen([sys.executable, "-I", "-S", "-c", MEMBER, str(os.getpid()), self.out],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            held = self.cfg.get("member_holds_stdout", False)
+            subprocess.Popen([sys.executable, "-I", "-S", "-c", MEMBER, str(os.getpid()), self.out,
+                              "0.5" if held else "0.2"],
+                             stdin=subprocess.DEVNULL, stdout=None if held else subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
             while not os.path.exists(os.path.join(self.out, "member.ready")):
                 if time.monotonic() > self.deadline:
