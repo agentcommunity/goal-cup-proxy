@@ -30,7 +30,8 @@ contains exactly three pinned schema-1 connector directories: `codex-cli`, `clau
 macOS APFS.
 
 Connector discovery checks `$GOALCUP_CONNECTORS_DIR`, `<exe>/../share/goalcup/connectors`, then
-`<exe>/../../connectors`. It considers immediate child directories with a regular `harness.toml`,
+`<exe>/../../connectors`, beside the path `goalcup` was started by and then beside its resolved
+path, skipping a candidate that holds a link. It considers immediate child directories with a regular `harness.toml`,
 validates every discovered schema-1 profile, then selects by declared id. Every run gets a fresh
 `HOME`: Codex and Claude use shared isolated config homes (Claude links the checked Keychains
 directory); Hermes gets a seeded per-run `HERMES_HOME`.
@@ -58,7 +59,8 @@ Prerequisites:
 - **Rust 1.99 or later.** `Cargo.toml` sets `rust-version = "1.99"`, the latest stable release
   when v0.5.1 was cut. The code itself needs less: edition 2024 needs 1.85, it uses `let` chains,
   and the locked dependencies declare at most 1.88. Development and CI use 1.99.0.
-  `rust-toolchain.toml` asks for `stable`.
+  `rust-toolchain.toml` pins `1.99.0`, which rustup installs on first use; the release workflow
+  builds with the same pin.
 - **macOS or Linux.** `goalcup-platform` refuses to compile on anything else
   (`crates/goalcup-platform/src/lib.rs`). The V1 claim is one macOS target; Linux is a
   smoke check (see CI below).
@@ -173,8 +175,10 @@ in `goalcup-protocol` — so they live beside the binary and never under a direc
 participant writes. `goalcup` looks for them at `$GOALCUP_CONNECTORS_DIR`, then at
 `<exe dir>/../share/goalcup/connectors` for an installed layout, then at
 `<exe dir>/../../connectors`, which is what makes `target/release/goalcup` find this
-repository's `connectors/` with nothing exported at all. A binary copied to `~/bin` matches
-none of the three and refuses, naming the variable. `cargo install` lands in the same place
+repository's `connectors/` with nothing exported at all. Both are tried beside the path
+`goalcup` was started by, then beside its resolved path, so a link in `~/bin` to
+`target/release/goalcup` finds them too. A binary copied to `~/bin` matches none of them and
+refuses, naming the variable. `cargo install` lands in the same place
 for the same reason.
 
 `$GOALCUP_CONFIG_DIR` is the third, and it must agree with the daemon (next section).
