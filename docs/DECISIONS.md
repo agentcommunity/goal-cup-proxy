@@ -16,7 +16,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D1 | No API proxy; the transcript is the evidence | amended: forward proxy built; base-URL proxy still forbidden | [entry](#d1-no-api-proxy-the-harnesss-own-transcript-is-the-evidence) · wire-primary §2.3, §4 |
 | D2 | Two legs per harness, reconciled | amended: native + wire; hook leg removed | [entry](#d2-two-legs-per-harness-reconciled) · wire-primary §4; capture-first |
 | D3 | Record raw, interpret later | no m2 note; `doctor --verify` removed by D48 | [entry](#d3-record-raw-interpret-later) |
-| D4 | One daemon per machine | no m2 note (hook endpoint moot, D24) | [entry](#d4-one-daemon-per-machine) |
+| D4 | One daemon per machine | amended 2026-10-12: one at a time, run-scoped, no service (hook endpoint moot, D24) | [entry](#d4-one-daemon-per-machine) |
 | D5 | Only tracker-created folders are seen | no m2 note (hook-config part moot) | [entry](#d5-only-sessions-in-tracker-created-folders-are-ever-seen) |
 | D6 | Workspace config watched, not locked | no m2 note (hook-config part moot) | [entry](#d6-tracker-config-in-the-workspace-is-watched-not-locked) |
 | D7 | Start flow: first typed message is the goal | amended | [entry](#d7-start-flow-fresh-session-first-typed-message-is-the-goal) · wire-primary §11.6; D37 |
@@ -152,6 +152,8 @@ and is deleted, so `goalcup-verify` is the one verdict command; the `v0.5.0` tag
 **Decision.** A supervised background service owns all tailers, one local hook endpoint, the upload queue, and the signed status cache. `goalcup` CLI commands talk to it. Entries are records inside it, bound to workspace folders. Parallel entries are routed by working directory.
 
 **Why.** Parallel entries on the same harness are allowed; per-entry processes would collide on hook endpoints and duplicate tailers. Crash recovery becomes a service restart.
+
+**(2026-10-12) One daemon at a time, run-scoped; no service.** The daemon is no longer a supervised service (the launchd agent and its installer half are gone, closing H-19). `goalcup start` and `goalcup seal` start `goalcup-daemon --exit-when-idle` when none answers on `control.json`, detached and with an environment built from nothing, and it exits once no capture is unfinished. One per machine still holds, at a time: the registry's redb lock decides a start race. Crash recovery is `goalcup seal` (or the launcher's own finish, H-14) starting a daemon that reopens the entry for status and seal only, which is all a restarted daemon ever offered (a restart admits no producer). No contract, record or control route changed.
 
 ## D5. Only sessions in tracker-created folders are ever seen.
 

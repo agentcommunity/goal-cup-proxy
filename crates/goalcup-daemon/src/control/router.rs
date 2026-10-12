@@ -287,6 +287,9 @@ async fn authenticate(State(state): State<ControlState>, request: Request, next:
             true => gated_by_version(request, next).await,
             false => match presented_bearer(request.headers()) {
                 Some(token) if constant_time_eq(token.as_bytes(), state.token.as_bytes()) => {
+                    // A client that holds the bearer is using this daemon: a run-scoped one
+                    // restarts its idle grace (`Daemon::run_until_idle`). Nothing else changes.
+                    state.daemon.note_activity();
                     gated_by_version(request, next).await
                 }
                 _ => unauthorized(),

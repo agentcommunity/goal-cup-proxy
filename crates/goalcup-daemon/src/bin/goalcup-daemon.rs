@@ -7,7 +7,13 @@
 //! * **No daemonisation.** No `fork`, no `setsid`, no pidfile. This runs in the foreground
 //!   under whatever started it, and does not register itself as a service. `--foreground` is
 //!   accepted because callers and scripts will write it, and it names the only mode this
-//!   build has.
+//!   build has. `goalcup` starts it detached for a run (its own session, a clean
+//!   environment) with `--exit-when-idle`, and the detaching is the CLI's, not this file's.
+//! * **`--exit-when-idle` is a flag and not a configuration field.** The daemon the CLI
+//!   starts for a run ends itself once no capture is unfinished and no client has asked
+//!   anything for [`IDLE_GRACE`]: it withdraws its `control.json`, stops like a signal stops
+//!   it, and exits 0. `DaemonConfig` refuses unknown fields, and a run-scoped lifetime is
+//!   about who started this process, not about the machine.
 //! * **No logging.** This crate has no logger, deliberately: the control listener handles
 //!   the CLI's bearer token, and a component that can write a request to a log cannot
 //!   promise it never wrote one. What the daemon loses is counted on the signed status
@@ -34,6 +40,16 @@ use goalcup_daemon::config::DaemonConfig;
 use goalcup_daemon::runtime::Daemon;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
+
+/// How long a daemon started with `--exit-when-idle` stays up with nothing to do.
+///
+/// Thirty seconds, measured from the last authenticated control request or the last moment
+/// a capture was unfinished. Long enough that `goalcup start`, then `goalcup seal` or
+/// `goalcup status` typed straight after, finds the same daemon instead of racing its exit
+/// (each request restarts the grace). Short enough that a finished run leaves nothing
+/// running for long. An unfinished capture keeps the daemon up regardless.
+const IDLE_GRACE: Duration = Duration::from_secs(30);
 
 // clap takes a doc comment's first paragraph as `about` (which `#[command]` below overrides)
 // and the rest as `long_about`, which is what `--help` opens with. So what is written here
@@ -51,7 +67,7 @@ use std::process::ExitCode;
 #[command(
     name = "goalcup-daemon",
     version = goalcup_daemon::DAEMON_VERSION_TEXT,
-    about = "The /goal Cup capture daemon. Runs in the foreground; service registration is M4."
+    about = "The /goal Cup capture daemon. Runs in the foreground; `goalcup` starts it for a run."
 )]
 struct Args {
     /// The per-machine configuration file (`DaemonConfig`).
@@ -79,6 +95,13 @@ struct Args {
     /// stderr naming the path, and a non-zero exit.
     #[arg(long)]
     print_addresses: bool,
+
+    /// Exit once no capture is unfinished and no client has asked anything for 30 seconds.
+    ///
+    /// What `goalcup` passes when it starts the daemon for a run. Without it the daemon runs
+    /// until a signal, as before.
+    #[arg(long)]
+    exit_when_idle: bool,
 }
 
 fn main() -> ExitCode {
@@ -149,9 +172,22 @@ async fn run(args: Args) -> ExitCode {
     // The loop, until a signal. `run_forever` never returns `Ok`, so the only two ways out
     // are its own `Err` — which nothing inside it produces, because each cadence
     // counts its failures rather than propagating them — and the shutdown below.
+    let idle = async {
+        if args.exit_when_idle {
+            daemon.run_until_idle(IDLE_GRACE).await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
     let outcome = tokio::select! {
         ended = daemon.run_forever() => ended,
         () = signals.stopped() => Ok(()),
+        () = idle => {
+            // Before `stop`, while this process still holds the registry lock, so the file
+            // removed is this daemon's and not a successor's.
+            daemon.withdraw_control_file();
+            Ok(())
+        }
     };
     // **`stop`, not a drop.** Dropping a `Daemon` detaches the listener task rather than
     // ending it, which would leave a control port answering with a live bearer while

@@ -56,9 +56,11 @@
 
 #[cfg(feature = "test-support")]
 mod mock;
+pub mod spawn;
 
 #[cfg(feature = "test-support")]
 pub use mock::{MockCapture, MockDaemonClient, MockState};
+pub use spawn::{MissingConfig, ensure_daemon};
 
 use crate::CliError;
 use crate::config::read_control_file;
@@ -66,10 +68,10 @@ use goalcup_protocol::capture::StreamKey;
 use goalcup_protocol::control::{
     CONTROL_API_VERSION, CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest,
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
-    ControlError, DaemonClient, DaemonHealth, EntrySummary, ErrorBody, ProcessRegistrationError,
-    ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, SUFFIX_ABANDON,
-    SUFFIX_CAPTURE_GOAL, SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS,
-    SealResponse, SignedStatus, entry_route, is_public_route,
+    ControlError, DaemonClient, DaemonHealth, EntrySummary, ErrorBody, FINISH_COMMIT_RESERVE,
+    ProcessRegistrationError, ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT,
+    ROUTE_HEALTH, SUFFIX_ABANDON, SUFFIX_CAPTURE_GOAL, SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS,
+    SUFFIX_SEAL, SUFFIX_STATUS, SealResponse, SignedStatus, entry_route, is_public_route,
 };
 use goalcup_protocol::process::ProcessRegistration;
 use std::path::Path;
@@ -462,20 +464,28 @@ impl HttpDaemonClient {
     }
 }
 
-/// One capture seal that survives the daemon being restarted under the caller (H-14).
+/// One capture seal that survives the daemon being restarted under the caller (H-14), or
+/// dying under it.
 ///
 /// `goalcup start` builds its control client once, before the run, from `control.json`; the
 /// daemon re-mints that file's port and token at every start. A daemon restarted between the
 /// launch and the finish is therefore at another port or behind another token, and the first
 /// attempt is refused with `unauthorized` or a connection nobody accepted. Both are
-/// [`CaptureSealError::NotAdmitted`] (nothing of the finish began), so asking again is safe: this
-/// reads `control.json` under `cfg` once, builds a client from it, keeps it in `fresh`, and sends
-/// the same request there. Every other failure, a `busy` included, is returned as it came, and a
-/// control file that cannot be read leaves the first failure standing. Once `fresh` is set every
-/// later attempt goes to it.
+/// [`CaptureSealError::NotAdmitted`] (nothing of the finish began), so asking again is safe.
+///
+/// So this reads `control.json` under `cfg` once, builds a client from it and sends the same
+/// request there. When nobody answers there either, the daemon is gone, and there is no service
+/// to bring it back: [`ensure_daemon`] starts one from `<cfg>/daemon.toml`, which reopens the
+/// unfinished entry for status and seal, and the request goes to it. The time that start takes
+/// comes out of the one local-finish budget: the request's `remaining_finish_ms` and the read
+/// timeout both shrink by it, and a start that would leave less than [`FINISH_COMMIT_RESERVE`] is
+/// not attempted or not followed by a request. The client that answered is kept in `fresh` and
+/// every later attempt goes to it. Every other failure, a `busy` included, is
+/// returned as it came, and a daemon that cannot be found or started leaves the first failure
+/// standing.
 ///
 /// `cfg` is `None` where the caller has no configuration directory to re-read (a standalone
-/// `goalcup seal` builds its client moments before its one call).
+/// `goalcup seal` makes sure of its daemon moments before its one call).
 ///
 /// Called only from inside the capture seal's own retry (`retry_capture_seal`, in
 /// `commands::seal::finish_locally`): the one place a capture seal is sent.
@@ -501,11 +511,41 @@ pub fn seal_capture_following_restart(
     let Some(cfg) = cfg else {
         return Err(failure);
     };
-    let Ok(rebuilt) = HttpDaemonClient::from_config_dir(cfg) else {
+    // A daemon restarted under the run: `control.json` names it.
+    if let Ok(rebuilt) = HttpDaemonClient::from_config_dir(cfg) {
+        match rebuilt.seal_capture(entry_id, request, read_timeout) {
+            // Nobody there either: the daemon is gone, and one is started below.
+            Err(CaptureSealError::NotAdmitted(ControlError::Unreachable(_))) => {}
+            answer => {
+                *fresh = Some(rebuilt);
+                return answer;
+            }
+        }
+    }
+    // What of the budget a daemon start may spend: everything but the commit share.
+    let remaining = request.remaining_finish_ms.map_or(
+        goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET,
+        Duration::from_millis,
+    );
+    let spare = remaining.saturating_sub(FINISH_COMMIT_RESERVE);
+    if spare.is_zero() {
+        return Err(failure);
+    }
+    let began = std::time::Instant::now();
+    let deadline = began + spare.min(spawn::SPAWN_WAIT);
+    let Ok(started) = ensure_daemon(cfg, MissingConfig::Refuse, deadline) else {
         return Err(failure);
     };
-    let answer = rebuilt.seal_capture(entry_id, request, read_timeout);
-    *fresh = Some(rebuilt);
+    let spent = began.elapsed();
+    if remaining.saturating_sub(spent) < FINISH_COMMIT_RESERVE {
+        return Err(failure);
+    }
+    let mut request = request.clone();
+    request.remaining_finish_ms = request
+        .remaining_finish_ms
+        .map(|ms| ms.saturating_sub(u64::try_from(spent.as_millis()).unwrap_or(u64::MAX)));
+    let answer = started.seal_capture(entry_id, &request, read_timeout.saturating_sub(spent));
+    *fresh = Some(started);
     answer
 }
 

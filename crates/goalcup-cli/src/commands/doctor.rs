@@ -1,8 +1,10 @@
 //! `goalcup doctor` — is the daemon there, and what can it see.
 //!
 //! This command is [`crate::preflight`] run over every shipped connector's `harness.toml` with
-//! the daemon's reachability added, and it leaves under the CLI's own ladder: **0** when nothing failed,
-//! **1** when anything did — including on a machine with no daemon running. A sealed capture
+//! the daemon's state added, and it leaves under the CLI's own ladder: **0** when nothing failed,
+//! **1** when anything did. No daemon running is not a failure: the daemon is run-scoped, and
+//! `goalcup start` starts one for the run, so the check fails only when none could be started
+//! (no `goalcup-daemon` to find) or one answers that this build cannot speak to. A sealed capture
 //! is checked by `goalcup-verify --capture-integrity`, not here; the V1 `--verify` mode was
 //! removed with the rest of the V1 path (D48).
 //!
@@ -233,26 +235,34 @@ fn decoder_check(manifest: &goalcup_protocol::harness::HarnessManifest) -> Check
     }
 }
 
-/// Is the daemon there.
+/// Is the daemon there, and if not, can `goalcup start` start one.
 ///
 /// With a client, one `health()` call answers it. Without one, `control.json` is the only
-/// thing a second process can read to find out where a running daemon is listening — so a
-/// missing file is the answer `goalcup doctor` came for, and the check names the path,
-/// because "there is no daemon" without a path is not something a participant can act on.
+/// thing a second process can read to find out where a running daemon is listening, and the
+/// check names that path. A daemon that is not running is the normal state between runs, so
+/// it passes when the `goalcup-daemon` binary a run would start can be found, and fails
+/// naming where it was looked for when it cannot.
 fn daemon_check(client: Option<&dyn DaemonClient>, cfg: &Path) -> Check {
     let path = config::control_path(cfg);
-    let unreachable = |e: String| {
-        Check::new(
+    let unreachable = |e: String| match crate::daemon::spawn::daemon_binary() {
+        Ok(binary) => Check::pass(
             "daemon",
-            Level::Fail,
             // `{e}` and no prefix of this command's own: `ControlError::Unreachable` and
             // `read_control_file`'s "no daemon" both already say what happened.
-            e,
+            format!(
+                "{e} None is needed until a run: `goalcup start` starts {} for it.",
+                binary.display()
+            ),
+        ),
+        Err(cannot) => Check::new(
+            "daemon",
+            Level::Fail,
+            format!("{e} {cannot}"),
             &format!(
-                "start `goalcup-daemon`; it writes {} when it is up.",
+                "put goalcup-daemon beside goalcup; a daemon writes {} when it is up.",
                 path.display()
             ),
-        )
+        ),
     };
     let Some(client) = client else {
         return match config::read_control_file(cfg) {

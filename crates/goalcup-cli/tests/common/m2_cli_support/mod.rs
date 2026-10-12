@@ -69,34 +69,47 @@ impl Rig {
     /// [`HERMES_FAKE_ID`]): a per-run home, a goal flag, a child-only credential and a harness
     /// that prints its session identity on stderr.
     pub fn hermes() -> Rig {
-        Rig::build(true, Some(2), None, true)
+        Rig::build(true, Some(2), None, true, true)
     }
 
     /// [`Rig::hermes`] under the old family-oriented helper signature. Schema 1 has no family:
     /// the harness manifest proves that every credential-bearing connector is scanned.
     pub fn hermes_in_family(family: &str) -> Rig {
         let _ = family;
-        Rig::build(true, Some(2), None, true)
+        Rig::build(true, Some(2), None, true, true)
     }
 
     /// A rig whose connector has no `[capture]` section when `capture` is false.
     pub fn with_capture(capture: bool) -> Rig {
-        Rig::build(capture, None, None, false)
+        Rig::build(capture, None, None, false, true)
     }
 
     /// A capture rig whose connector gives a harness `grace_seconds` between SIGTERM and
     /// SIGKILL (the shipped connector's 10 s is too long for a test that ends a stubborn one).
     pub fn with_grace(grace_seconds: u64) -> Rig {
-        Rig::build(true, Some(grace_seconds), None, false)
+        Rig::build(true, Some(grace_seconds), None, false, true)
     }
 
     /// A capture rig whose connector says `family = "codex"`, so the launcher tees the child's
     /// stdout and waits for its scope identity, as it does for the shipped Codex connector.
     pub fn codex_family() -> Rig {
-        Rig::build(true, Some(2), Some("codex"), false)
+        Rig::build(true, Some(2), Some("codex"), false, true)
     }
 
-    fn build(capture: bool, grace: Option<u64>, family: Option<&str>, hermes: bool) -> Rig {
+    /// The capture rig with **no daemon running**, for the binary to start one: its roots are
+    /// the ones the default `<cfg>/daemon.toml` names (`<cfg>-artifacts`, `<cfg>-runs`), which
+    /// `goalcup start` writes on first use, so [`Rig::trace`] finds what that daemon wrote.
+    pub fn run_scoped() -> Rig {
+        Rig::build(true, Some(2), None, false, false)
+    }
+
+    fn build(
+        capture: bool,
+        grace: Option<u64>,
+        family: Option<&str>,
+        hermes: bool,
+        start_daemon: bool,
+    ) -> Rig {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let out = root.join("harness-out");
@@ -132,11 +145,16 @@ impl Rig {
         }
         let upload_trap = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         upload_trap.set_nonblocking(true).unwrap();
+        let (artifact_root, workspace_parent) = if start_daemon {
+            (root.join("artifacts"), root.join("workspaces"))
+        } else {
+            (root.join("cfg-artifacts"), root.join("cfg-runs"))
+        };
         let config = goalcup_daemon::config::DaemonConfig {
-            artifact_root: root.join("artifacts"),
+            artifact_root,
             connectors_dir: connectors.clone(),
             config_dir: root.join("cfg"),
-            workspace_parent: root.join("workspaces"),
+            workspace_parent,
             control_addr: "127.0.0.1:0".parse().unwrap(),
             upload_url: format!("http://{}", upload_trap.local_addr().unwrap()),
             server_public_key: goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY.to_string(),
@@ -160,9 +178,11 @@ impl Rig {
             .enable_all()
             .build()
             .unwrap();
-        let daemon = runtime
-            .block_on(goalcup_daemon::runtime::Daemon::start(config.clone()))
-            .unwrap();
+        let daemon = start_daemon.then(|| {
+            runtime
+                .block_on(goalcup_daemon::runtime::Daemon::start(config.clone()))
+                .unwrap()
+        });
         Rig {
             cfg: config.config_dir.clone(),
             root,
@@ -170,7 +190,7 @@ impl Rig {
             capture_connectors,
             out,
             runtime,
-            daemon: Some(daemon),
+            daemon,
             config,
             upload_trap,
             extra_env: Mutex::default(),

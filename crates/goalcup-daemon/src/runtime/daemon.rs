@@ -71,6 +71,10 @@ pub(super) struct DaemonInner {
     /// awaiting its result, and a `JoinHandle` can be awaited from exactly one place.
     pub(super) blocking: Arc<tokio::sync::Semaphore>,
     pub(super) started: Instant,
+    /// The last moment this daemon had work: an authenticated control request, or a poll of
+    /// [`Daemon::run_until_idle`] that found an unfinished capture. What the idle grace is
+    /// measured from.
+    last_activity: Mutex<Instant>,
 }
 
 /// The process-level daemon: the capture map, the loopback listeners and the registry.
@@ -179,6 +183,7 @@ impl Daemon {
             listeners: Mutex::new(Vec::new()),
             blocking: Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT)),
             started: Instant::now(),
+            last_activity: Mutex::new(Instant::now()),
             config,
         });
 
@@ -334,6 +339,68 @@ impl Daemon {
     pub fn clone_handle(&self) -> Daemon {
         Daemon {
             inner: self.inner.clone(),
+        }
+    }
+
+    /// Note that a client asked something of this daemon, so a run-scoped daemon gives it a
+    /// whole idle grace for its next call. Called by the control API's auth layer for every
+    /// request that presented the bearer: the public status route is readable by anything on
+    /// the loopback, and a page polling it must not keep the recorder up.
+    pub(crate) fn note_activity(&self) {
+        *self
+            .inner
+            .last_activity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Instant::now();
+    }
+
+    /// Whether this daemon has work: an unfinished capture, or blocking work still running.
+    fn has_work(&self) -> bool {
+        self.holds_unfinished_capture() || self.inner.blocking.available_permits() < MAX_IN_FLIGHT
+    }
+
+    /// Return once this daemon has had no work for `grace`: no unfinished capture, no blocking
+    /// work, and no authenticated control request. What `goalcup-daemon --exit-when-idle`
+    /// waits on, so the daemon the CLI starts for a run ends once every run is sealed.
+    ///
+    /// **An unfinished capture keeps it up however long it takes**, including one reopened
+    /// after a crash that nobody has sealed yet: a daemon that idled out over it would be
+    /// started again by the next `goalcup seal`, and every reopen of a launched entry chains
+    /// another `IngestLost` gap. The grace is measured from the last moment there was work,
+    /// so `goalcup start` followed at once by `goalcup seal` or `goalcup status` finds the
+    /// same daemon rather than racing its exit.
+    pub async fn run_until_idle(&self, grace: std::time::Duration) {
+        const POLL: std::time::Duration = std::time::Duration::from_millis(500);
+        loop {
+            tokio::time::sleep(POLL).await;
+            if self.has_work() {
+                self.note_activity();
+                continue;
+            }
+            let idle_for = self
+                .inner
+                .last_activity
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .elapsed();
+            if idle_for >= grace {
+                return;
+            }
+        }
+    }
+
+    /// Remove `control.json` if it names this daemon, so the next client is told "no daemon"
+    /// rather than handed a port nothing listens on. Called before [`Daemon::stop`], while
+    /// this process still holds the registry lock: no other daemon over the same roots can
+    /// have written its own file yet. The port is compared anyway, so a daemon sharing the
+    /// configuration directory over other roots keeps its file. Best effort: a stale file is
+    /// one every client already treats as no daemon.
+    pub fn withdraw_control_file(&self) {
+        let dir = &self.inner.config.config_dir;
+        if crate::control::read_control_file(dir)
+            .is_ok_and(|file| file.port == self.control_addr().port())
+        {
+            let _ = std::fs::remove_file(dir.join(crate::control::CONTROL_FILE_NAME));
         }
     }
 

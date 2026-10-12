@@ -801,6 +801,22 @@ impl Daemon {
         Ok(summaries)
     }
 
+    /// Whether any capture this daemon holds has not finished: what keeps a run-scoped daemon
+    /// alive (`Daemon::run_until_idle`). A run whose lock is held right now counts as
+    /// unfinished, because its holder may be finishing it or may not, and the poll that asks
+    /// must not block a runtime thread waiting to find out.
+    pub(crate) fn holds_unfinished_capture(&self) -> bool {
+        self.captures()
+            .values()
+            .any(|capture| match capture.run.try_lock() {
+                Ok(run) => run.finished().is_none(),
+                Err(std::sync::TryLockError::Poisoned(run)) => {
+                    run.into_inner().finished().is_none()
+                }
+                Err(std::sync::TryLockError::WouldBlock) => true,
+            })
+    }
+
     /// A freshly signed status for a v5 entry of this daemon, or `None` for any other entry.
     pub(crate) fn capture_status(
         &self,

@@ -49,20 +49,22 @@ struct Args {
 /// Every `goalcup --help` footer: where verification lives, and the rungs a capture run can
 /// leave under.
 const AFTER_HELP: &str = "\
-A run needs a running `goalcup-daemon --config <FILE>` (see the README). Then: \
-`goalcup start --harness <id> --goal-file <file>`.
+Start a run with `goalcup start --harness <id> --goal-file <file>`. It starts the recording \
+daemon (`goalcup-daemon`, beside this binary) for the run, and the daemon exits once every run \
+is sealed.
 
 To check a finished run, use the separate `goalcup-verify --capture-integrity <trace-dir>`; \
 `goalcup start` prints that line for you. There is no `goalcup verify`.
 
-Exit codes: 0 done; 1 refused, and you can fix it (no daemon running, the tracker still busy, \
+Exit codes: 0 done; 1 refused, and you can fix it (no daemon to ask, the tracker still busy, \
 the run already sealed, a mistyped command); 3 this command could not do its job (a file it \
 could not read, an answer it could not parse). This command never exits with 2 or 4.";
 
 /// What `goalcup doctor --help` says under its flags. There is no verify
 /// mode here: a sealed capture is checked by `goalcup-verify --capture-integrity`.
 const DOCTOR_AFTER_HELP: &str = "\
-Exit codes: 0 every check passed; 1 something failed (no daemon running counts as a failure).
+Exit codes: 0 every check passed; 1 something failed. No daemon running is not a failure: \
+`goalcup start` starts one.
 
 Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
 are not using can make this command exit 1.";
@@ -189,8 +191,9 @@ fn run(command: Command) -> Result<u8, CliError> {
 }
 
 /// `goalcup start`, with the four things it reads from this machine resolved here: the
-/// configuration directory, the connectors directory, the environment, and the client the
-/// running daemon's `control.json` describes.
+/// configuration directory, the connectors directory, the environment, and a client for the
+/// daemon — the one `control.json` names if it answers, else one started for this run from
+/// `<cfg>/daemon.toml`, which is written with local defaults if it is missing.
 ///
 /// The same division of labour `doctor` below takes, and for the same reason —
 /// `commands::start::start_with` takes all four as parameters, so it can be driven against
@@ -203,7 +206,13 @@ fn run(command: Command) -> Result<u8, CliError> {
 fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
-    let client = goalcup_cli::daemon::HttpDaemonClient::from_config_dir(&cfg)?;
+    let client = goalcup_cli::daemon::ensure_daemon(
+        &cfg,
+        goalcup_cli::daemon::MissingConfig::WriteDefault {
+            connectors: &connectors,
+        },
+        daemon_deadline(),
+    )?;
     let env = goalcup_cli::launch::process_env();
     #[cfg(feature = "test-support")]
     if let Some(pem) = std::env::var_os(TEST_UPSTREAM_ROOTS) {
@@ -268,6 +277,11 @@ fn test_upstream_roots(
 /// directory the pinned run key is in, the client the running daemon's `control.json`
 /// describes, and this machine's clock.
 ///
+/// **It starts no daemon**, and neither does `goalcup entries`. A daemon is up for as long as
+/// any run is unsealed, so "no daemon is running" is the true answer to "what is being
+/// recorded". Starting one here would reopen an unfinished run, and every reopen of a launched
+/// run chains a gap: a look must not write. `goalcup seal` is what recovers such a run.
+///
 /// The clock is read here and handed over as a string, so the rendering itself is a
 /// function of its arguments and a test can pin what a stale document looks like without
 /// waiting two minutes for one.
@@ -294,11 +308,17 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
 ///
 /// The client is built before the entry is resolved: a seal's first need is a daemon, so a
 /// machine with none is told about `control.json` rather than about which entry it failed to
-/// name, the same first answer `goalcup start` and `doctor` give.
+/// name. A run that outlived its daemon (a crash, a reboot) is why this starts one from
+/// `<cfg>/daemon.toml` when none answers: that daemon reopens the run for status and seal. It
+/// never writes the file: with no configuration, no daemon was ever started from here.
 fn seal(entry: Option<String>) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
-    let client = goalcup_cli::daemon::HttpDaemonClient::from_config_dir(&cfg)?;
+    let client = goalcup_cli::daemon::ensure_daemon(
+        &cfg,
+        goalcup_cli::daemon::MissingConfig::Refuse,
+        daemon_deadline(),
+    )?;
     let entry_id = resolve_entry(&cfg, entry)?;
     commands::seal::seal_with(
         &client,
@@ -334,6 +354,11 @@ fn entries(json: bool) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let client = goalcup_cli::daemon::HttpDaemonClient::from_config_dir(&cfg)?;
     commands::entries::entries_with(&client, json, &mut std::io::stdout())
+}
+
+/// How long `start` and `seal` wait for a daemon they had to start.
+fn daemon_deadline() -> std::time::Instant {
+    std::time::Instant::now() + goalcup_cli::daemon::spawn::SPAWN_WAIT
 }
 
 /// This machine's clock, in the one spelling this tree writes a time in.

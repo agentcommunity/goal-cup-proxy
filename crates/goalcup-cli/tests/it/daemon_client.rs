@@ -1103,10 +1103,12 @@ fn pause_points_exist_only_under_test_support() {
     assert!(source.contains("pause_at(\"capture-finish-started\")"));
 }
 
-/// The only place this crate starts a process is the launch module's one command builder
-/// (which the ordinary spawn and the gate both run); the V1 version probe that was the second
-/// went with the V1 manifest (OS-29). The child-only credential is set on the one builder, so a
-/// second site would be a second place a key could be forgotten or leaked.
+/// The only places this crate starts a process are the launch module's one command builder
+/// (which the ordinary spawn and the gate both run) and the run-scoped daemon's start
+/// (`daemon/spawn.rs`); the V1 version probe went with the V1 manifest (OS-29). The child-only
+/// credential is set on the one launch builder, so a third site would be another place a key
+/// could be forgotten or leaked. The daemon's start carries no key: it clears its environment,
+/// which `run_scoped_daemon::the_started_daemon_inherits_none_of_the_clis_secrets` observes.
 #[test]
 fn the_only_command_site_is_the_launch_builder() {
     fn sites(dir: &std::path::Path, found: &mut Vec<String>) {
@@ -1137,7 +1139,12 @@ fn the_only_command_site_is_the_launch_builder() {
     );
     found.sort();
     let files: Vec<&str> = found.iter().map(|f| f.split(':').next().unwrap()).collect();
-    assert_eq!(files, ["launch.rs"], "{found:?}");
+    assert_eq!(files, ["launch.rs", "spawn.rs"], "{found:?}");
+    let spawn = include_str!("../../src/daemon/spawn.rs");
+    assert!(
+        spawn.contains(".env_clear()"),
+        "the daemon starts from nothing"
+    );
 }
 
 /// D40 (CONTRACTS.md, C6 capture spawn gate): every capture child is spawned only through the pre-exec gate, whatever

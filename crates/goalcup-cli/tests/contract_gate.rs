@@ -427,18 +427,16 @@ fn the_three_participant_surfaces_are_no_longer_stubs_and_no_daemon_is_rung_one(
     }
 }
 
-/// "No daemon is rung 1" **through the binary**.
-///
-/// `read_control_file` returning `Refused` is the library's answer. This runs the shipped
-/// binary against a configuration directory with no `control.json` in it and asserts the
-/// number a script would read, and the path a participant would act on.
+/// No daemon running is the normal state between runs, and `goalcup doctor` reports it through
+/// the binary: the report names where the daemon's file would be and still covers every shipped
+/// connector. That it does not fail on it is the `--json` test below.
 ///
 /// The environment is cleared to `PATH` alone plus the two variables that point this run at
 /// a directory it owns: a developer with a daemon running would otherwise have this test
 /// answer about their machine. `Command::env` is not `set_var` — this file spawns children,
 /// and `tests/env_resolution.rs` says why that distinction is load-bearing.
 #[test]
-fn doctor_with_no_daemon_is_rung_one_through_the_binary_and_names_control_json() {
+fn doctor_with_no_daemon_names_control_json_through_the_binary() {
     let cfg = support::empty_cfg();
     let out = goalcup()
         .arg("doctor")
@@ -448,11 +446,6 @@ fn doctor_with_no_daemon_is_rung_one_through_the_binary_and_names_control_json()
         .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
         .output()
         .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "M1 acceptance: `goalcup doctor` on a machine with no daemon reports and exits 1"
-    );
     assert_ne!(out.status.code(), Some(2), "2 is a verdict's alone");
     let said = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
@@ -461,7 +454,7 @@ fn doctor_with_no_daemon_is_rung_one_through_the_binary_and_names_control_json()
                 .display()
                 .to_string()
         ),
-        "and it names where the daemon's file would have been: {said:?}"
+        "it names where the daemon's file would have been: {said:?}"
     );
     for id in ["claude-code-cli", "codex-cli"] {
         assert!(
@@ -567,17 +560,27 @@ fn doctor_json_is_one_parseable_document_on_stdout_through_the_binary() {
         .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
         .output()
         .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "no daemon is still rung 1 under --json"
-    );
     let text = String::from_utf8(out.stdout).unwrap();
     let document: serde_json::Value = serde_json::from_str(&text)
         .unwrap_or_else(|e| panic!("stdout must parse as one document ({e}): {text:?}"));
     assert!(
         document.get("daemon").is_some() && document.get("connectors").is_some(),
         "and it is the report: {text:?}"
+    );
+    assert_eq!(
+        document["daemon"]["level"], "pass",
+        "no daemon running is not a failure under --json either: {text:?}"
+    );
+    let failed = document["connectors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|report| report["checks"].as_array().unwrap())
+        .any(|check| check["level"] == "fail");
+    assert_eq!(
+        out.status.code(),
+        Some(u8::from(failed).into()),
+        "the number follows the connectors alone: {text:?}"
     );
 }
 
