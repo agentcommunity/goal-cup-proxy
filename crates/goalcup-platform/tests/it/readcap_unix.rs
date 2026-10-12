@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use goalcup_platform::filecap::{FileCapError, RefusalKind};
 use goalcup_platform::readcap::open_regular;
 use std::ffi::CString;

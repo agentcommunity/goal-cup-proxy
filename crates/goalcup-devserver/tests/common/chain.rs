@@ -7,8 +7,7 @@
 //! contain — so the hashes here come from `Envelope::expected_hash`, the protocol crate's
 //! own function, and nothing in this file computes a sha256.
 //!
-//! Included by `#[path]` from `dev_cli.rs` and `dev_http.rs`; this crate's tests have no
-//! `support/mod.rs`.
+//! Shared by `dev_cli.rs` and `dev_http.rs` through `tests/common/mod.rs`.
 
 #![allow(dead_code)]
 

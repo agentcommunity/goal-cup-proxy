@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use goalcup_platform::handle_budget::{MAX_GIT_LIVE_HANDLES_V1, NativeHandleBudgetV1};
 use goalcup_platform::sourcecap::{SourceDir, SourceKind, SourceLookup, SourceName};
 use std::fs;

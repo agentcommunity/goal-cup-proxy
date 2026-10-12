@@ -17,11 +17,7 @@
 //! it never opened (404) from a document that does not link (400) from a server that is
 //! merely down (503).
 
-/// The link and chunk builders, included by `#[path]`: this crate's tests have no `support`
-/// module.
-#[path = "support/chain.rs"]
-mod chain;
-
+use crate::common::chain;
 use goalcup_devserver::{DevServer, ReceiptAuthority, ReceiptRequest, dev_router};
 use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::receipt::StartReceipt;
