@@ -35,6 +35,12 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   starts at the first read: a same-UID writer can mutate the open file in place so the read sequence
   hashes to the pin while the file's final bytes differ. After the read, `exec` resolves the path,
   so a same-UID pathname replacement can change what runs. This does not bind exact bytes or inode.
+- **One run per shared home, by a lock with two gaps.** `goalcup start` holds an exclusive flock
+  on `capture-homes/<id>.lock` until its finish returns, and refuses a second start of the same
+  harness (D39). The lock dies with the launcher: if `goalcup start` is SIGKILLed while a
+  registered harness keeps running, a new start can share the home with it. A by-hand
+  `codex login` into that home takes no lock. A Ctrl-C that lands during the release itself
+  (milliseconds) still reaches only the parked child, and the harness runs.
 - **Shared-home validation has same-UID and ACL residuals.** The CLI preserves D39's exact leaf
   alias after checking and rechecking leaf/target identities, ownership and exact target mode
   `0700`; the daemon separately refuses every loaded connector's `real_dirs`. The CLI does not

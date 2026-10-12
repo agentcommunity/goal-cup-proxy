@@ -1211,6 +1211,47 @@ fn capture_daemon_killed_after_registered_harness_is_owned_across_restart() {
     assert_eq!(integrity["sealed"], true);
 }
 
+/// #7: a Ctrl-C that reaches the launcher after the registration and before the release. It
+/// is no longer swallowed: the parked child is ended without running, and the entry is sealed
+/// with no Launch.
+#[test]
+fn capture_ctrl_c_after_registration_never_releases_the_harness() {
+    let _lock = TableLock::acquire();
+    let v = Vertical::new("plain", json!({"hold": true}));
+    let mut row = Row::new(
+        "capture_ctrl_c_after_registration_never_releases_the_harness",
+        &v,
+        EVIDENCE,
+    );
+    let pause = gate_pause(&v, "capture-gate-registered");
+    let mut start = v.start_paused(RESERVE, &pause);
+    let entry = v.entry_id();
+    gate_reached(&pause, "capture-gate-registered");
+
+    // SAFETY: `kill` reads two integers; the pid is the launcher this test spawned.
+    assert_eq!(unsafe { libc::kill(start.pid(), libc::SIGINT) }, 0);
+    gate_go(&pause, "capture-gate-registered");
+    let exit = start.wait(RUN);
+    row.note("start_exit", exit.code());
+    row.note("start_output", start.output());
+    assert!(!exit.success(), "{}", start.output());
+    assert!(
+        start
+            .output()
+            .contains("interrupted before the harness started"),
+        "{}",
+        start.output()
+    );
+    assert_harness_never_ran(&v, &mut row);
+    let chain = v.chain(&entry);
+    assert_eq!(
+        launches(&chain),
+        0,
+        "no Launch for a harness that never ran"
+    );
+    assert_eq!(local_finishes(&chain), 1, "the launcher sealed the entry");
+}
+
 #[test]
 fn capture_gated_child_killed_before_registration_is_refused() {
     let _lock = TableLock::acquire();

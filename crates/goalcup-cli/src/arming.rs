@@ -15,13 +15,13 @@
 //! a run interrupted between `create_capture_workspace` and `register_process` has to leave
 //! nothing behind either way.
 //!
-//! **The window closes at `register_process`, and so does every read of the flag.** Past
-//! that the harness owns the terminal and owns the Ctrl-C typed into it: a TUI child shares
-//! this terminal, so an ordinary interrupt inside the harness latches this flag, and a gate
-//! that still read it afterwards would report a fully armed, recorded run as "interrupted
-//! before the run began" and ask the daemon to abandon a stamped entry. The V1 gate's
-//! `Watch` told the two moments apart until D48 removed it; the readers left are
-//! `goalcup start`'s abandon window and the busy backoffs in `retry.rs`.
+//! **The window closes when the harness is released, or when a Ctrl-C has been acted on**
+//! ([`close_window`]). Past the release the harness owns the terminal and owns the Ctrl-C
+//! typed into it: the child shares this terminal, so an ordinary interrupt meant for the
+//! harness reaches this process too. Once the window is closed the flag reads false and the
+//! handler records nothing, so the busy backoffs in `retry.rs` (the flag's other readers) run
+//! their full schedule for the launch record, the seal and the abandon that a Ctrl-C itself
+//! started.
 
 /// What the gate said. One answer is left.
 ///
@@ -38,13 +38,17 @@ pub enum GateOutcome {
 
 // ------------------------------------------------------------------ Ctrl-C
 
-/// Set by the `SIGINT` handler and read by everything inside the abandon window.
+/// The abandon window: [`OPEN`], [`INTERRUPTED`] by the `SIGINT` handler, or [`CLOSED`].
 ///
 /// A `static` and not a field, because a signal handler has nowhere else to put what it saw:
 /// it may not allocate, it may not lock, and it may not call back into anything that does.
-/// A relaxed store into an `AtomicBool` is the whole of what is allowed, and the whole of
-/// what is needed.
-static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// One compare-and-swap on a lock-free atomic is the whole of what is allowed, and the whole
+/// of what is needed. One state and not two flags, so a handler running on another thread can
+/// never latch an interrupt after [`close_window`] closed the window.
+static WINDOW: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(OPEN);
+const OPEN: u8 = 0;
+const INTERRUPTED: u8 = 1;
+const CLOSED: u8 = 2;
 
 /// Whether this process has been asked to stop since [`watch_for_interrupt`] was called.
 ///
@@ -53,7 +57,7 @@ static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// entry behind. A Ctrl-C inside that window has to unmake the entry, because the
 /// alternative is a workspace the daemon is watching for a run nobody is doing.
 pub(crate) fn interrupted() -> bool {
-    INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
+    WINDOW.load(std::sync::atomic::Ordering::SeqCst) == INTERRUPTED
 }
 
 /// Install the `SIGINT` handler, once per process.
@@ -88,7 +92,25 @@ pub(crate) fn watch_for_interrupt() {
 /// The handler itself: one atomic store, and nothing a signal handler may not do.
 #[cfg(unix)]
 extern "C" fn on_sigint(_signum: libc::c_int) {
-    INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = WINDOW.compare_exchange(
+        OPEN,
+        INTERRUPTED,
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+}
+
+/// Close the abandon window: the harness was released and owns every later Ctrl-C, or a
+/// Ctrl-C was acted on and the cleanup it started must not be cut short by it. From here
+/// [`interrupted`] is false until [`clear_interrupt`] reopens the window for the next start.
+pub(crate) fn close_window() {
+    WINDOW.store(CLOSED, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// What the `SIGINT` handler does, for a test that cannot send a real signal safely.
+#[cfg(test)]
+pub(crate) fn interrupt_for_test() {
+    on_sigint(libc::SIGINT);
 }
 
 /// Put the flag back, so what one `goalcup start` was told does not reach the next one.
@@ -102,7 +124,7 @@ extern "C" fn on_sigint(_signum: libc::c_int) {
 /// panic and an early `?` a later edit adds without reading to the end. A guard keeps the
 /// promise by construction.
 pub(crate) fn clear_interrupt() {
-    INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    WINDOW.store(OPEN, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Clears the interrupt flag when it goes out of scope, whichever way its holder left.
