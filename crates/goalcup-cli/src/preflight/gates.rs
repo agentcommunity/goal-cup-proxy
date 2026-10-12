@@ -85,8 +85,8 @@ pub(crate) struct PreflightReport {
 }
 
 impl PreflightReport {
-    /// Whether anything here refuses the run. `Warn` does not: a machine without the
-    /// harness installed is a report, not a broken tracker.
+    /// Whether anything here refuses the run. `Warn` does not; `Fail` does, and a harness
+    /// that is not installed, or is not the pinned build, is a `Fail` (`harness_executable`).
     pub(crate) fn failed(&self) -> bool {
         self.checks.iter().any(|c| c.level == Level::Fail)
     }

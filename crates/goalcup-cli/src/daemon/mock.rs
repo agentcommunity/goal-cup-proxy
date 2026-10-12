@@ -96,8 +96,8 @@ pub struct MockDaemonClient {
 // ------------------------------------------------------------------ the fixed key
 
 /// Lowercase hex, written out rather than pulling `hex` into this crate for one call. The
-/// protocol's own `SignedStatus::sign` produces the same alphabet, which is what makes
-/// [`MockDaemonClient::run_public_key`] comparable to `WorkspaceInfo.run_public_key`.
+/// protocol's own `SignedStatus::sign` produces the same alphabet, which is what makes the
+/// key the mock puts on `WorkspaceInfo.run_public_key` the one its documents verify with.
 fn hex_of(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
