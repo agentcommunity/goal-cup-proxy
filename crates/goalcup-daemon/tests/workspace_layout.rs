@@ -96,28 +96,24 @@ fn a_workspace_inside_a_git_worktree_or_holding_files_is_refused() {
 
     let roots = Roots {
         workspace: inside,
-        artifact_root: t.path().join("art"),
+        artifact_root: t.path().join("tracker/art"),
     };
-    assert!(
-        check_workspace_available(&roots).is_err(),
-        "R3: outside any Git worktree"
-    );
+    let err = check_workspace_available(&roots).expect_err("R3: outside any Git worktree");
+    assert!(format!("{err}").contains("Git worktree"), "got {err}");
 
     let ws = t.path().join("fresh");
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::write(ws.join("leftover.txt"), b"x").unwrap();
     let roots = Roots {
         workspace: ws,
-        artifact_root: t.path().join("art"),
+        artifact_root: t.path().join("tracker/art"),
     };
-    assert!(
-        check_workspace_available(&roots).is_err(),
-        "R3: zero entries"
-    );
+    let err = check_workspace_available(&roots).expect_err("R3: zero entries");
+    assert!(format!("{err}").contains("not empty"), "got {err}");
 
     let roots = Roots {
         workspace: t.path().join("not-yet"),
-        artifact_root: t.path().join("art"),
+        artifact_root: t.path().join("tracker/art"),
     };
     check_workspace_available(&roots).expect("a workspace that does not exist yet is empty");
 }
