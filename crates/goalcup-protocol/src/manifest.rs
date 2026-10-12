@@ -723,62 +723,6 @@ impl<'de> Deserialize<'de> for LegacyIgnored {
     }
 }
 
-/// Whether a `lock_paths[]` entry, rendered, is HELD right now.
-///
-/// **One rule, in one place, because two readers asked it.** The V1 daemon refused a resume
-/// on it (`control::handlers::free_of_held_locks`) and the V1 CLI refused one before the
-/// POST (`commands::resume::check_locks`); D48 removed both, and nothing calls it now. A
-/// directory the harness creates at startup and never removes must read as free to every
-/// reader, so the rule is written once, here.
-///
-/// The rule:
-///
-///   * a template ending in `/` — or a path that IS a directory on disk — is a DIRECTORY
-///     OF LOCK FILES, and it is held when it holds at least one entry that is not itself a
-///     directory. An empty one is a directory the harness made and left, not a lock;
-///   * anything else is one file, held when anything at all is AT the path.
-///
-/// A **dangling symlink counts as held**, in both shapes: the question is whether anything
-/// is at the name, and a link a killed harness left behind is still a name a relaunch will
-/// trip over.
-///
-/// The mirror of that, said out loud because it is a CHOICE and not a consequence: a lock
-/// directory holding only directories — or only symlinks that resolve to directories —
-/// reads as FREE, because `is_dir()` follows the link and neither shape is a lock file for
-/// either shipped connector (`codex-cli` names a plain file, `claude-code-cli` none). A
-/// harness that locked by making a directory, or by linking to one, would be read as
-/// unlocked here and would need its own rule.
-///
-/// A path this process cannot LOOK AT is reported as **held**, in either shape. It fails
-/// closed: the alternative answer, "no locks", is the silent pass.
-/// For a directory that is the `read_dir` refusal; for a file it is any `stat` error
-/// that is not `NotFound` — a lock file whose directory has become unreadable is a lock this
-/// process cannot rule out. The CLI says more about a directory it could not enumerate,
-/// because it has to look inside to name what it found; this function only ever answers the
-/// yes-or-no.
-pub fn lock_path_is_held(path: &str) -> bool {
-    let p = Path::new(path);
-    if path.ends_with('/') || p.is_dir() {
-        return match std::fs::read_dir(p) {
-            // `!is_dir()` and not `is_file()`: `is_dir` follows the link, so a dangling
-            // symlink answers false here and counts as a lock, which is the fail-closed
-            // reading.
-            Ok(entries) => entries.flatten().any(|e| !e.path().is_dir()),
-            // Not there at all is not held — the harness creates these directories, and a
-            // run that never started one has none. Anything else (a permission error) is a
-            // directory this process could not LOOK IN, which is not the same answer as
-            // "no locks".
-            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
-        };
-    }
-    match std::fs::symlink_metadata(p) {
-        Ok(_) => true,
-        // The same reading as the directory branch above, for the same reason: absent is
-        // free, and anything else is a name this process could not resolve.
-        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
-    }
-}
-
 /// The complete token set any **path** template may use.
 ///
 /// `workspace` is the tracker-created working directory; `home` is the participant's real
