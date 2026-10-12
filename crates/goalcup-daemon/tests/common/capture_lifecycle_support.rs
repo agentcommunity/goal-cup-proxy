@@ -107,6 +107,12 @@ impl Rig {
             .flatten()
             .find_map(|child| {
                 let dir = child.path();
+                // A symlinked child points outside the tree and must never be opened: a test
+                // plants a FIFO there. Directory order decides whether it is reached before
+                // the profile's own directory (ext4 hashes names, APFS sorts them).
+                if !child.file_type().ok()?.is_dir() {
+                    return None;
+                }
                 let text = std::fs::read_to_string(dir.join("harness.toml")).ok()?;
                 let manifest =
                     goalcup_protocol::harness::HarnessManifest::from_toml_str(&text).ok()?;
