@@ -30,7 +30,10 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
 
 - **Proxy loss is chained, but not counted per loss.** The proxy chains each loss when it begins
   (fail-open tunnel, table full, opaque fallback, unsettled cut) as a stream-zero `Loss` frame
-  written as a stream-less gap, so a lossy run reads incomplete (closed `76e88bad`). Residuals: an
+  written as a stream-less gap, so a lossy run reads incomplete (closed `76e88bad`). A
+  well-formed request that meets the upstream's clean close of an idle keep-alive is not a
+  fallback: it is not forwarded, the connection closes `Interrupted`, and the client retries on a
+  new connection. Residuals: an
   old CLI on a new daemon keeps the old behaviour (counters only on the seal request); gap counts
   count records, not individual losses; a handled finish shows doubled daemon-clocked gaps.
   Ticket: H-16.
@@ -43,7 +46,10 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   not approved (domain fronting on a provider's edge, an ECH outer name), names none, or is not
   TLS: an edge that answered the API that way would let it through uncaptured. Every tunnel now
   waits for the client's first bytes, inside the 30-second admission deadline, so a protocol
-  whose server speaks first, or a CONNECT held idle past the deadline, fails admission.
+  whose server speaks first, or a CONNECT held idle past the deadline, fails admission. A decided
+  tunnel still open at stop (a dev server or MCP server that outlived the harness) is cut without
+  a loss: a fail-open one was already chained at its decision. Only a connection cut before its
+  decision is chained as an unsettled cut.
 - **The seal walk lists what it cannot read, and has no time bound.** A symlink, FIFO, socket or
   device in the workspace is listed with the absent digest and never followed or read, so the
   agent cannot wedge the seal with one. A directory the agent makes unreadable (`chmod 000`) is

@@ -1114,6 +1114,45 @@ async fn eof_inside_a_body_is_unexpected_eof_and_interrupted() {
     assert_eq!(req_view.end, Some(EndReason::Interrupted));
 }
 
+/// The keep-alive reuse race: the upstream closes an idle connection cleanly just as the
+/// client sends its next request. Nothing was lost (the client retries on a new connection),
+/// so the request is not forwarded, the relay ends `UnexpectedEof`, and no loss is chained.
+#[tokio::test]
+async fn a_request_after_a_clean_upstream_close_is_not_a_loss() {
+    let sink = RecordingSink::new();
+    let mut h = start(emitter_for(sink.clone()), policy(&[("/v1/", true, None)]));
+    round_trip(
+        &mut h,
+        &request("GET", "/v1/models", &[], b""),
+        &response("HTTP/1.1 200 OK", &["Content-Length: 0"], b""),
+    )
+    .await;
+    h.upstream.shutdown().await.unwrap();
+    // The client sees the close, so the response direction has ended before the next request.
+    assert_eq!(read_to_end(&mut h.client).await, b"");
+    write(
+        &mut h.client,
+        &request("POST", "/v1/x", &[&length(b"next")], b"next"),
+    )
+    .await;
+    h.client.shutdown().await.unwrap();
+    let error = finish(h.relay).await.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        read_to_end(&mut h.upstream).await,
+        b"",
+        "the late request is not forwarded"
+    );
+    let frames = sink.frames();
+    assert!(
+        !frames
+            .iter()
+            .any(|f| matches!(f.event, FrameEvent::Loss { .. })),
+        "a clean upstream close is not a loss"
+    );
+    assert!(!has(&streams(&frames), WIRE_REQUEST, 2));
+}
+
 // ---------------------------------------------------------------------------------------
 // Upgrades.
 // ---------------------------------------------------------------------------------------

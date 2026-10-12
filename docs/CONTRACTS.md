@@ -1176,13 +1176,19 @@ carry their own amendments and point here for shared text.
 > - `Loss { DecodeFailed }` for a fail-open tunnel is submitted **at the tunnel decision**, from a
 >   hook `connect::admit_observed` calls with the reason before the first byte is relayed (the
 >   tunnel runs inside `admit`, so a task cut or panicking mid-relay still has its loss chained).
->   The `tunneled_fail_open` counter still moves when the tunnel ends. An authentication host and a
+>   The `tunneled_fail_open` counter moves in the same hook (*amended 2026-10-13*; it moved when the
+>   tunnel ended, so one cut at stop is still counted). An authentication host and a
 >   host that is not approved are opaque by design and submit nothing.
 > - `Loss { DecodeFailed }` for an opaque fallback is submitted when the relay stops parsing.
 > - `Loss { LimitExceeded }` for a full capture table is submitted before the uncaptured relay starts.
 > - `Loss { ShutdownDeadline }` for a connection cut while unsettled (`Unsettled::drop`, not
 >   panicking), including one cut in admission before it relayed a byte. That is conservative and
 >   the same mapping the seal request's `cut_unsettled` always had; it is not to be narrowed.
+>   *Amendment 2026-10-13:* the pre-decision part is unchanged: every connection cut before a
+>   tunnel or interception was decided still submits this loss. Only a decided tunnel is exempt:
+>   it settles in the same hook, so one still open at the cut submits nothing here. A fail-open
+>   one was chained and counted (`tunneled_fail_open`) at its decision; an authentication host or
+>   a host that is not approved is opaque by design.
 >
 > `ProxyHandle::stop` remains the only production `try_close` and runs only after every connection
 > task has ended. `unterminated` and a lost accept loop submit nothing: their producer is never
