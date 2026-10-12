@@ -395,7 +395,8 @@ not fabricated zeros. `fields` contains decoded supplied facts, not guessed inte
 native decoders; T20/T21 own provider decoders, each implementing Decoder. T22 consumes those
 merged implementations. Do not sum overlapping observations across sources, cumulative usage,
 or retry occurrences into unique totals. No universal lineage/authorship engine this release.
-Analysis and capture integrity have independent outcomes. Legacy verifier APIs/results remain.
+Analysis and capture integrity have independent outcomes. The legacy (pre-v5) verifier pipeline
+was removed on 2026-10-12; `goalcup-verify` reads protocol v5 only.
 
 T18 owns bounded integrity input and the explicit proposed CLI mode
 `goalcup-verify --capture-integrity TRACE`; T22 adds

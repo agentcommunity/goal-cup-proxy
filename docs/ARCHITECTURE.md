@@ -14,8 +14,8 @@ How do the M2 recorder's parts fit, and where is each guarantee tested? For cont
   signing, notarization or qualification claim is made. The qualification records are in git
   history at `6494030`.
 - **V1** lives on `v1/trunk`. Its hook leg is not in this tree
-  ([D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree)); the verifier still ships the
-  thirteen V1 checks for v4 traces (§3).
+  ([D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree)), and neither are the verifier's
+  V1 checks for pre-v5 traces: `goalcup-verify` reads protocol v5 only.
 
 ## 2. Crates and the dependency rule
 
@@ -26,7 +26,7 @@ non-member `goalcup-git`; the public OSS cut omits it.
 |---|---|---|---|
 | `goalcup-platform` | library | none | none |
 | `goalcup-protocol` | library | platform | none |
-| `goalcup-verifier` | `goalcup-verify` | protocol | itself (feature) |
+| `goalcup-verifier` | `goalcup-verify` | protocol | none |
 | `goalcup-daemon` | `goalcup-daemon` | protocol, platform | itself, mcp |
 | `goalcup-cli` | `goalcup` | protocol, verifier, platform | itself, daemon |
 | `goalcup-mcp` | `goalcup-mcp` | protocol, platform | none |
@@ -52,7 +52,7 @@ The daemon opens a registry written by either line and refuses only V1 rows that
 | `goalcup seal` | Standalone v5 finish of an entry | [commands/seal.rs](../crates/goalcup-cli/src/commands/seal.rs) |
 | Proxy | Loopback CONNECT proxy; relays bytes unchanged, tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Ingest, per-producer redaction, chain append, native capture, finish, termination | [runtime/capture/][rc] |
-| Verifier | v5 integrity reader and research report with five built-in decoders (two native: `codex-native`, `claude-code-native`; three wire: `openai-responses`, `anthropic-messages`, `openai-chat-completions`); V1 thirteen checks for v4 traces (library and `goalcup-verify`; no CLI relay since D48) | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
+| Verifier | v5 integrity reader and research report with five built-in decoders (two native: `codex-native`, `claude-code-native`; three wire: `openai-responses`, `anthropic-messages`, `openai-chat-completions`) (library and `goalcup-verify`; no CLI relay since D48) | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | MCP | Three read-only tools: `goalcup_event_status`, `goalcup_run_status`, `goalcup_entries` | [goalcup-mcp](../crates/goalcup-mcp/src/lib.rs) |
 | Devserver | Development-only signer of receipts and ACKs; the local pilot uses none | [goalcup-devserver](../crates/goalcup-devserver/src/lib.rs) |
 
