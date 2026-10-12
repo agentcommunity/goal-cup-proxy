@@ -287,9 +287,9 @@ newly built binary's connections until someone allows that exact path. During a 
 upstream connect is retried, re-resolving the name, with a 250 ms to 2 s backoff until 25 s of
 the 30 s admission deadline, and is never a replayed request. Upstream sockets get TCP keepalive
 (60 s idle, 15 s interval, 4 probes) and no idle timeout. Provider-host connects that still fail
-coalesce into outage windows: the finish adds `upstream_outages=N` to the `proxy admission:` line and one
-`proxy upstream outage:` line per window (first and last failure, count, recovery time). The
-frozen v5 chain has no record kind for an outage, so the windows are not in the trace. Nothing
+coalesce into outage windows: the finish adds `upstream_outages=N` to the `proxy admission:` line
+and one `proxy upstream outage:` line per window (first and last failure, count, recovery time).
+The frozen v5 chain has no record kind for an outage, so the windows are not in the trace. Nothing
 is said to the harness. The Claude connector sets `CLAUDE_CODE_RETRY_WATCHDOG=1` so a dropped
 connection is retried for hours rather than about ten times; Codex 0.153.0 has no retry key that
 does not require a custom provider with a base URL, so its budget stays its own.
