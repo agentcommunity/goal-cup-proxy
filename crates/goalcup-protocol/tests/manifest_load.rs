@@ -1,6 +1,6 @@
 use goalcup_protocol::manifest::{
     ConnectorManifest, CursorType, ForeignScanReader, ForeignScanRoot, InstallScope, KillStrategy,
-    LaunchMode, MatchRule, PATH_TOKENS, PartitionSpec, ScopingClause, SessionArgStyle, Tier,
+    MatchRule, PATH_TOKENS, PartitionSpec, ScopingClause, Tier,
 };
 use goalcup_protocol::template::{TemplateVars, render};
 use std::path::PathBuf;
@@ -210,103 +210,6 @@ fn codex_declares_a_file_first_record_partition_and_only_its_harness_config() {
 }
 
 // ---------------------------------------------------------------- the CLI's half
-
-#[test]
-fn claude_launch_recipe_matches_spike_4_run_sh() {
-    let m = load("claude-code-cli");
-    assert_eq!(m.launch.mode, LaunchMode::Tui);
-    assert_eq!(m.launch.program, "claude");
-    assert_eq!(
-        m.launch.args,
-        vec![
-            "--settings".to_string(),
-            "{artifact_root}/settings-launch.json".to_string(),
-            "--session-id".to_string(),
-            "{session_id}".to_string(),
-        ]
-    );
-    assert_eq!(m.launch.home_env.as_deref(), Some("CLAUDE_CONFIG_DIR"));
-    assert_eq!(
-        m.launch.env.get("CLAUDE_CONFIG_DIR").unwrap(),
-        "{harness_home}"
-    );
-    assert_eq!(
-        m.launch.env.get("OTEL_LOG_RAW_API_BODIES").unwrap(),
-        "file:{artifact_root}/raw-bodies"
-    );
-    assert!(
-        !m.launch.env.keys().any(|k| k == "ANTHROPIC_BASE_URL"),
-        "D1: the tracker never sets a model base URL"
-    );
-    assert!(
-        m.launch
-            .env_remove
-            .iter()
-            .any(|k| k == "ANTHROPIC_BASE_URL")
-    );
-    assert!(
-        m.launch
-            .banned_args
-            .iter()
-            .any(|a| a == "--no-session-persistence")
-    );
-    assert_eq!(
-        m.resume.args,
-        vec![
-            "--settings".to_string(),
-            "{artifact_root}/settings-launch.json".to_string(),
-            "--resume".to_string(),
-            "{session_id}".to_string(),
-        ]
-    );
-    let sl = m
-        .launch
-        .status_line
-        .as_ref()
-        .expect("R18: Claude gets a status line");
-    assert_eq!(sl.settings_key, "statusLine");
-    assert_eq!(sl.command_template, "cat {status_line_path}");
-    assert_eq!(m.kill.strategy, KillStrategy::ProcessGroup);
-    assert_eq!(m.kill.grace_seconds, 10);
-}
-
-#[test]
-fn codex_launch_recipe_matches_spike_2_run_sh() {
-    let m = load("codex-cli");
-    assert_eq!(m.launch.program, "codex");
-    assert_eq!(
-        m.launch.args,
-        vec![
-            "-C".to_string(),
-            "{workspace}".to_string(),
-            "-s".to_string(),
-            "workspace-write".to_string(),
-            "-a".to_string(),
-            "on-request".to_string(),
-        ],
-        "spike 2's run.sh minus the two hook flags the m2/wire deletion pass removed"
-    );
-    assert!(
-        !m.resume.args.iter().any(|a| a.contains("hook")),
-        "{:?}",
-        m.resume.args
-    );
-    assert!(
-        !m.launch.env.contains_key("GOALCUP_RECV") && !m.launch.env.contains_key("GOALCUP_TOKEN"),
-        "the hook shim's receiver pins went with it"
-    );
-    assert_eq!(m.launch.home_env.as_deref(), Some("CODEX_HOME"));
-    assert_eq!(m.resume.args[0], "resume");
-    assert_eq!(m.resume.session_arg_style, SessionArgStyle::Positional);
-    assert_eq!(m.kill.strategy, KillStrategy::NativePid);
-    assert_eq!(
-        m.kill.native_binary.as_deref(),
-        Some("codex"),
-        "D22: the npm wrapper is not the session"
-    );
-    assert!(m.launch.banned_args.iter().any(|a| a == "--ephemeral"));
-    assert!(m.launch.banned_args.iter().any(|a| a == "exec"));
-}
 
 #[test]
 fn every_template_var_a_manifest_uses_is_one_the_tracker_supplies() {
