@@ -26,7 +26,10 @@ const WITHHELD: &str = "[goalcup: output withheld: a fragment of the provider ke
 /// the way a harness might on an auth error. The key comes from its environment, never argv.
 /// The `*-id` branches put the key in the init event's `session_id` instead: whole, as a
 /// fragment inside a longer id, or whole but spelled entirely in JSON `\u` escapes so the line
-/// itself holds no scan form and only the decoded id does.
+/// itself holds no scan form and only the decoded id does. The `key-beside-id` branch keeps the
+/// id clean and puts the key's last eight bytes in another field of the same event, so only the
+/// check of the raw line can refuse it. `late-init` prints 64 other lines first, the matcher's
+/// line budget; `byte-by-byte` writes the init line one flushed byte at a time.
 const CHILD: &str = r#"
 import json, os, sys
 key = os.environ["DEEPSEEK_API_KEY"]
@@ -37,6 +40,17 @@ session = {
 if sys.argv[2] == "escaped-id":
     escaped = "".join("\\u%04x" % ord(c) for c in key)
     print('{"type": "system", "subtype": "init", "session_id": "' + escaped + '"}', flush=True)
+elif sys.argv[2] == "late-init":
+    for i in range(64):
+        print('{"type": "log", "n": %d}' % i, flush=True)
+    print(json.dumps({"type": "system", "subtype": "init", "session_id": session}), flush=True)
+elif sys.argv[2] == "byte-by-byte":
+    for c in json.dumps({"type": "system", "subtype": "init", "session_id": session}) + "\n":
+        sys.stdout.write(c)
+        sys.stdout.flush()
+elif sys.argv[2] == "key-beside-id":
+    event = {"type": "system", "subtype": "init", "session_id": session, "note": key[-8:]}
+    print(json.dumps(event), flush=True)
 else:
     print(json.dumps({"type": "system", "subtype": "init", "session_id": session}), flush=True)
 del key
@@ -233,4 +247,27 @@ fn an_init_event_whose_session_id_holds_a_key_fragment_binds_nothing_and_is_a_hi
 #[test]
 fn an_init_event_whose_escaped_session_id_decodes_to_the_key_binds_nothing_and_is_a_hit() {
     assert_key_in_the_identity_is_refused("escaped-id");
+}
+
+#[test]
+fn an_init_event_with_a_key_fragment_beside_a_clean_session_id_binds_nothing_and_is_a_hit() {
+    assert_key_in_the_identity_is_refused("key-beside-id");
+}
+
+/// The keyed path keeps the matcher's bounds: an init event after the 64-line budget binds
+/// nothing, and is no key hit.
+#[test]
+fn an_init_event_past_the_line_budget_binds_nothing_on_the_keyed_path() {
+    let run = run("late-init");
+    assert_eq!(run.scope, None);
+    assert!(!run.key_hit);
+    assert!(run.out.contains(ID), "the late event is still forwarded");
+}
+
+/// An init event written one byte at a time still binds on the keyed path.
+#[test]
+fn an_init_event_written_byte_by_byte_binds_on_the_keyed_path() {
+    let run = run("byte-by-byte");
+    assert_eq!(run.scope.as_deref(), Some(ID));
+    assert!(!run.key_hit);
 }

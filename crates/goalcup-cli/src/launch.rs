@@ -12,6 +12,10 @@
 //!
 //! # The environment is subtraction, never addition
 //!
+//! This section describes the V1 launch D48 removed. [`scrubbed_env`] is kept but has no
+//! caller; the live use of the D23 predicate is [`crate::preflight::probe_env`]. The capture
+//! launch (below) is built from nothing, so it inherits no `*_URL` name to strip.
+//!
 //! A launch environment is the participant's own, minus the D23 denylist, minus
 //! [`LaunchPlan::env_remove`], plus [`LaunchPlan::env_set`]. Nothing else is inherited and
 //! nothing else is added: [`spawn`] clears the child's environment and rebuilds it from
@@ -379,10 +383,9 @@ pub fn scrubbed_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> 
         .collect()
 }
 
-/// Whether D23's denylist names this variable. **The one predicate, and all three callers
-/// use it**: this module strips these from the launch environment and refuses a manifest
-/// that pins one in `[launch.env]`, and [`crate::preflight::probe_env`] strips them from the
-/// version probe. The same rule written out three times is a rule that agrees until someone
+/// Whether D23's denylist names this variable. **The one predicate**: [`scrubbed_env`] (no
+/// caller since D48) and [`crate::preflight::probe_env`], which strips these from the version
+/// probe, both use it. The same rule written out twice is a rule that agrees until someone
 /// widens one copy.
 pub(crate) fn is_denied(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();

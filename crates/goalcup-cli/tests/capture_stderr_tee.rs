@@ -609,3 +609,124 @@ fn a_real_childs_two_streams_are_withheld_before_they_reach_the_terminal() {
         ScopeMarker::One(ID.to_string())
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// A stderr marker that holds a fragment of the key is never bound (D50).
+// ---------------------------------------------------------------------------------------
+
+fn token_rule() -> StderrLineRule {
+    StderrLineRule {
+        prefix: "scope: ".into(),
+        grammar: IdGrammar::Token,
+    }
+}
+
+/// The `token` grammar's alphabet is a key's, so a keyed child can print `scope: <key>`. That
+/// id would be the daemon's deferred scope, written into the chain: a marker whose line holds
+/// any key-scan form is not bound, however the reads cut it and whatever marker follows, and it
+/// is a key hit. Its bytes are withheld from the terminal as any fragment is.
+#[test]
+fn a_marker_holding_a_key_form_is_never_bound() {
+    let n = KEY.len();
+    let ids = [
+        KEY.to_string(),
+        KEY[n - 8..].to_string(),
+        format!("run_{}_0001", &KEY[n - 8..]),
+    ];
+    for id in &ids {
+        for after in ["", "scope: clean_one\n"] {
+            let input = format!("before\nscope: {id}\n{after}after\n");
+            for size in [1usize, 7, 4096] {
+                let chunks: Vec<&[u8]> = input.as_bytes().chunks(size).collect();
+                let sink = Sink::default();
+                let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
+                let tee = tee_marked_with_rule(
+                    Chunks::new(&chunks),
+                    sink.clone(),
+                    Some(matcher),
+                    token_rule(),
+                )
+                .unwrap();
+                assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
+                let what = format!(
+                    "marker of {} bytes, then {after:?}, cut every {size}",
+                    id.len()
+                );
+                assert_eq!(
+                    tee.marker_until(Instant::now()),
+                    ScopeMarker::Absent,
+                    "{what}"
+                );
+                assert!(tee.key_hit(), "{what}");
+                assert_no_form(&what, &sink.0.lock().unwrap());
+            }
+        }
+    }
+}
+
+/// The same marker rule with the key matcher still binds a clean marker, and an unkeyed tee
+/// (no matcher) binds what it always bound.
+#[test]
+fn a_clean_marker_still_binds_on_a_keyed_tee() {
+    let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
+    let tee = tee_marked_with_rule(
+        Chunks::new(&[b"scope: Token_9-ok\n"]),
+        Sink::default(),
+        Some(matcher),
+        token_rule(),
+    )
+    .unwrap();
+    assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
+    assert_eq!(
+        tee.marker_until(Instant::now()),
+        ScopeMarker::One("Token_9-ok".into())
+    );
+    assert!(!tee.key_hit());
+}
+
+/// The launcher's keyed `stderr_line` path over a real child: `scope: <key>` on stderr binds
+/// nothing, is a hit, and no fragment reaches either destination.
+#[test]
+fn a_real_childs_key_bearing_stderr_marker_binds_nothing() {
+    use goalcup_cli::launch::{child_secret_for_harness, tee_marked_capture_with_identity_to};
+    let secret = {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
+        child_secret_for_harness(&hermes_profile(), &env)
+            .unwrap()
+            .unwrap()
+    };
+    let n = KEY.len();
+    for id in [KEY, &KEY[n - 8..]] {
+        let script = format!("printf 'hello\\n'; printf 'scope: {id}\\n' >&2");
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", &script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut spawned = Spawned {
+            child: command.spawn().unwrap(),
+            program: "/bin/sh".to_string(),
+        };
+        let (out, err) = (Sink::default(), Sink::default());
+        let (scope, tee) = tee_marked_capture_with_identity_to(
+            &mut spawned,
+            Some(&secret),
+            None,
+            Some(token_rule()),
+            out.clone(),
+            err.clone(),
+        )
+        .unwrap();
+        assert!(scope.is_none(), "no stdout rule, no scope receiver");
+        spawned.child.wait().unwrap();
+        assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
+        assert_eq!(tee.marker_until(Instant::now()), ScopeMarker::Absent);
+        assert!(tee.key_hit());
+        for (what, sink) in [("stdout", &out), ("stderr", &err)] {
+            assert_no_form(what, &sink.0.lock().unwrap());
+        }
+        assert_eq!(*out.0.lock().unwrap(), b"hello\n");
+    }
+}

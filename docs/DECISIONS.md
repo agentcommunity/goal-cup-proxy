@@ -1251,14 +1251,18 @@ and `none` stay refused.
 - **A key-bearing identity is not bound.** The identity matcher holds its own key-fragment
   matcher. When the matching event's line or its decoded id holds any key-scan form, no identity
   is bound (the same unbound path as an unusable id) and a key hit is recorded. The bound id is
-  written into the chain as the scope, so it can never carry a fragment of the key.
+  written into the chain as the scope, so it can never carry a fragment of the key. Decoded
+  (JSON `\u`) forms are checked for the bound id only; forwarded output is matched as raw bytes.
+- **The same holds for a keyed `stderr_line` marker** (final review, 2026-10-12). A marker line
+  that holds any key-scan form is not bound, whatever marker follows, and is a key hit.
 - The per-run config home stays required, so the run-directory scan covers the config home.
 
 No v5 record, control API or verifier change.
 
 **Reconsider when** a keyed harness needs `preassigned` or `none` identity (as D43 already says).
 
-**Evidence.** `crates/goalcup-cli/tests/credential_stdout_identity.rs` (Linux); kit case
+**Evidence.** `crates/goalcup-cli/tests/credential_stdout_identity.rs` and
+`capture_stderr_tee.rs` (any Unix); kit case
 `synthetic-keyed-stdout-json` (macOS); [amp-core-prep](research/amp-core-prep.md), change 4.
 
 ---

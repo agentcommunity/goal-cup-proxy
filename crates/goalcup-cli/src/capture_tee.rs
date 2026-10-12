@@ -16,6 +16,12 @@
 //! conflict is final. A marker on stdout is never read: stdout carries the model's answer, which
 //! anything may write.
 //!
+//! On a keyed tee, a marker line that holds any key-scan form is not bound (D50): the `token`
+//! grammar's alphabet is a key's, and the bound id is what the daemon writes into the chain as
+//! the scope. The answer is then [`ScopeMarker::Absent`], finally, whatever marker follows; a key
+//! hit is recorded, which fails the row; and the line is withheld from the terminal as any
+//! fragment is.
+//!
 //! # The wait
 //!
 //! [`CaptureStderr::marker_until`] waits for the end of stderr or for its deadline, whichever
@@ -79,6 +85,8 @@ pub enum ScopeMarker {
 struct State {
     first: Option<String>,
     conflicting: bool,
+    /// A marker line held a fragment of the key: nothing is bound, whatever else was seen.
+    key_bearing: bool,
     /// Stderr ended: nothing more will be read from it.
     stderr_ended: bool,
     /// Tees still running (stderr's, and stdout's for a capture child).
@@ -119,7 +127,9 @@ impl CaptureStderr {
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         }
-        if state.conflicting {
+        if state.key_bearing {
+            ScopeMarker::Absent
+        } else if state.conflicting {
             ScopeMarker::Conflicting
         } else if let Some(id) = &state.first {
             ScopeMarker::One(id.clone())
@@ -476,6 +486,7 @@ fn run(
                 // The tail the matcher held back: it completed no fragment, so it is forwarded.
                 send(&mut writer, &held, &mut forwarding);
                 crate::key_scan::wipe(&mut held);
+                crate::key_scan::wipe(&mut line);
                 return Ok(());
             }
             Ok(n) => n,
@@ -487,12 +498,26 @@ fn run(
             for &byte in chunk {
                 if byte == b'\n' {
                     if !overlong && let Some(id) = marker_id(rule, &line) {
-                        record(shared, id);
+                        // The stdout identity's rule (D50): a marker whose line holds a key-scan
+                        // form is never the scope. The tee's own matcher answers, on the raw line.
+                        if matcher.as_ref().is_some_and(|m| m.contains(&line)) {
+                            hit.store(true, Ordering::Release);
+                            crate::key_scan::wipe(&mut id.into_bytes());
+                            key_bearing_marker(shared);
+                        } else {
+                            record(shared, id);
+                        }
+                    }
+                    if matcher.is_some() {
+                        crate::key_scan::wipe(&mut line);
                     }
                     line.clear();
                     overlong = false;
                 } else if !overlong {
                     if line.len() == LINE_LIMIT {
+                        if matcher.is_some() {
+                            crate::key_scan::wipe(&mut line);
+                        }
                         line.clear();
                         overlong = true;
                     } else {
@@ -531,6 +556,11 @@ fn record(shared: &Shared, id: String) {
         Some(_) => {}
     }
     drop(state);
+    shared.changed.notify_all();
+}
+
+fn key_bearing_marker(shared: &Shared) {
+    shared.lock().key_bearing = true;
     shared.changed.notify_all();
 }
 
