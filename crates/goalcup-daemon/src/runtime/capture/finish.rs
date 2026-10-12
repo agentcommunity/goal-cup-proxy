@@ -319,7 +319,7 @@ impl Daemon {
         } else {
             tokio::time::Instant::now()
         };
-        let Some(mut run) = capture.lock_until(until) else {
+        let Some(run) = capture.lock_until(until) else {
             return match self.committed_finish(entry_id) {
                 Some(done) => Ok(done),
                 // Another finish owns the entry: this attempt latches nothing.
@@ -330,6 +330,23 @@ impl Daemon {
             return Ok(done.clone());
         }
         let entry_id = run.entry.entry_id.clone();
+        // The terminal is already chained (its registry write failed, or a daemon died between
+        // the two): commit it, and append nothing after it.
+        let chained = lock(&capture.chained_finish).clone();
+        if let Some(chained) = chained {
+            let report = CaptureFinishReport {
+                entry_id: entry_id.clone(),
+                trace_dir: run.entry.trace_dir.display().to_string(),
+                termination: chained.termination,
+                terminal_seq: Some(chained.seq),
+                seal: if chained.seal_written {
+                    LocalSealOutcome::SealWritten
+                } else {
+                    LocalSealOutcome::SealWriteFailed
+                },
+            };
+            return self.commit_finish(capture, run, report, chained.sealed_at);
+        }
 
         // Stage 4: stop the owner. Native finish gets the rest of the drain share; the owner's
         // exit is awaited until the last instant a stage may begin, and is never joined while it
@@ -402,7 +419,8 @@ impl Daemon {
             }
         };
 
-        // Stage 8: the terminal. Once it begins it completes under the existing no-retry rule.
+        // Stage 8: the terminal. Once it begins it completes under the existing no-retry rule;
+        // only its registry half (`commit_finish`) is retried as it stands.
         capture.pause_before(FinishStage::LocalFinish);
         if !budget.admits(excluded) {
             return Err(capture.expire(FinishStage::LocalFinish, None, Some(termination)));
@@ -418,15 +436,33 @@ impl Daemon {
         // A failed terminal write is reported as it stands, here and in every later status:
         // no retry and no further sync.
         let (seal, terminal_seq) = match written {
-            Ok((_, link)) => (LocalSealOutcome::SealWritten, Some(link.seq)),
-            Err(_) => (
-                LocalSealOutcome::SealWriteFailed,
-                writer
+            Ok((_, link)) => {
+                *lock(&capture.chained_finish) = Some(super::ChainedFinish {
+                    seq: link.seq,
+                    termination: termination.clone(),
+                    sealed_at: sealed_at.clone(),
+                    seal_written: true,
+                });
+                (LocalSealOutcome::SealWritten, Some(link.seq))
+            }
+            Err(_) => {
+                let terminal_seq = writer
                     .export
                     .head()
                     .map(|(seq, _)| seq)
-                    .filter(|seq| Some(*seq) != before),
-            ),
+                    .filter(|seq| Some(*seq) != before);
+                // A terminal chained without its `seal.json`: a retry commits the failure and
+                // appends nothing after it.
+                if let Some(seq) = terminal_seq {
+                    *lock(&capture.chained_finish) = Some(super::ChainedFinish {
+                        seq,
+                        termination: termination.clone(),
+                        sealed_at: sealed_at.clone(),
+                        seal_written: false,
+                    });
+                }
+                (LocalSealOutcome::SealWriteFailed, terminal_seq)
+            }
         };
         drop(writer);
         let report = CaptureFinishReport {
@@ -436,6 +472,19 @@ impl Daemon {
             terminal_seq,
             seal,
         };
+        self.commit_finish(capture, run, report, sealed_at)
+    }
+
+    /// The registry half of a finish: the row records the report, and a sealed entry leaves
+    /// the capture map. Retried as it stands by the next finish when it fails.
+    fn commit_finish(
+        &self,
+        capture: &CaptureEntry,
+        mut run: MutexGuard<'_, CaptureRun>,
+        report: CaptureFinishReport,
+        sealed_at: String,
+    ) -> Result<CaptureFinishReport, DaemonError> {
+        let entry_id = report.entry_id.clone();
         let sealed_status = (report.seal == LocalSealOutcome::SealWritten)
             .then(|| capture.snapshot(Some(&report), run.launched()));
         run.entry = self.registry().update(&entry_id, |entry| {

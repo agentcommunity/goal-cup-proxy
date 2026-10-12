@@ -624,7 +624,7 @@ impl HarnessManifest {
 
 /// Template variables an `args` element or an env value may use. `{session_id}` additionally
 /// needs `identity.source = "preassigned"` (a cross-field rule).
-const TEMPLATE_TOKENS: &[&str] = &["workspace", "port", "session_id"];
+const TEMPLATE_TOKENS: &[&str] = &["workspace", "session_id"];
 
 /// A template that may name only [`TEMPLATE_TOKENS`].
 fn check_template(field: &str, what: &str, value: &str) -> Result<(), ProtocolError> {

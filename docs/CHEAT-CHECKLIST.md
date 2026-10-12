@@ -44,6 +44,13 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   TLS: an edge that answered the API that way would let it through uncaptured. Every tunnel now
   waits for the client's first bytes, inside the 30-second admission deadline, so a protocol
   whose server speaks first, or a CONNECT held idle past the deadline, fails admission.
+- **The seal walk lists what it cannot read, and has no time bound.** A symlink, FIFO, socket or
+  device in the workspace is listed with the absent digest and never followed or read, so the
+  agent cannot wedge the seal with one. A directory the agent makes unreadable (`chmod 000`) is
+  listed the same way and its contents are not: an absent digest on a directory means "contents
+  unseen", a way to hide files from the seal manifest that stays visible as the marker. A
+  regular file is hashed whole with no size cap or deadline inside the walk, so a huge file or
+  one on a stalled network mount still holds the run lock while it is read.
 - **Two faults can leave a harness running on a sealed entry.** The spawn gate (4b) closes the
   spawn-to-registration window and the finish budget (4a) keeps the SIGTERM, grace, SIGKILL bound.
   A CLI crash after the gate released the child, combined with a raced manual `goalcup seal`, can

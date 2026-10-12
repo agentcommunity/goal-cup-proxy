@@ -898,7 +898,9 @@ carry their own amendments and point here for shared text.
 >   `Started`), the reopen appends one stream-less `Gap { reason: IngestLost, lost_bytes: None }`:
 >   whatever the harness did while no daemon admitted its producers is lost. `goalcup start`
 >   registers the harness before the `Launch` append, so a crash between that append and the
->   row update still chains the gap.
+>   row update still chains the gap. A chain that already ends in its `LocalFinish` gets no gap
+>   (amended 2026-10-13): the next finish commits that terminal to the registry, as
+>   `SealWritten` when `seal.json` binds it and `SealWriteFailed` when it does not.
 > - A finish that writes `seal.json` records the entry's final `M2Status` on its row and releases
 >   the entry: its ingest authorization and chain descriptors are dropped. Its status is answered
 >   from the row, without `producers_consumed` or `admissions_refused`; a retried seal answers
@@ -978,7 +980,8 @@ carry their own amendments and point here for shared text.
 > workspace walk, (8) `LocalFinish` + sync + `seal.json` + registry row. Stages 2, 3, 4, 6, 7 and 8
 > begin only while more than `FINISH_RESPONSE_MARGIN` remains of `D' = D + τ`, where `τ` is time
 > already spent in stage 6; (5) proxy-counter and latched gaps are appended between 4 and 6. Once
-> stage 8 begins it completes under the existing no-retry terminal rule. A refusal is
+> stage 8 begins it completes under the existing no-retry terminal rule; only its registry row
+> update is retried, by the next finish, which then appends nothing (amended 2026-10-13). A refusal is
 > `DaemonError::FinishDeadline { stage }` and writes no terminal. A syscall begun inside the budget
 > may overrun it; it is checked on return and no later stage starts. No hard cancellation is
 > claimed. A standalone `goalcup seal` of a live harness, with the owner backlogged enough to

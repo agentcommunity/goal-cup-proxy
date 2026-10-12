@@ -9,9 +9,9 @@ How do the M2 recorder's parts fit, and where is each guarantee tested? For cont
   traffic (wire leg) and its own session file (native leg) go into one protocol-v5 chain, sealed
   locally. Scope: [D37](DECISIONS.md#d37-m2-autonomous-runs-research-evidence-and-open-contributions);
   constraints D36–D41 are in [DECISIONS](DECISIONS.md).
-- **Status:** v0.5.0 is published as source only; a private unsigned staged three-binary pilot
-  candidate exists. No downloadable binary, installer, staged bundle, registry publication,
-  signing, notarization or qualification claim is made. The qualification records are in git
+- **Status:** v0.5.0 is published as source only. Later `v*` tags attach unsigned binary
+  tarballs, installed with Homebrew ([packaging/README.md](../packaging/README.md)). No signing,
+  notarization or qualification claim is made. The qualification records are in git
   history at `6494030`.
 - **V1** lives on `v1/trunk`. Its hook leg is not in this tree
   ([D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree)), and neither are the verifier's
@@ -180,9 +180,8 @@ residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`): [checklist](C
 - Discovery checks `$GOALCUP_CONNECTORS_DIR`, installed `share/goalcup/connectors`, then the source
   tree. It validates every immediate child with a regular `harness.toml` before selecting by id.
 - The source tree and OSS cut contain exactly three pinned directories: `codex-cli`,
-  `claude-code-cli`, `hermes-cli`. The private `m2-pilot` package allowlist contains only the first
-  two and stages each selected directory whole, including seeds and its retained V1 manifest. A
-  source pin is integrity metadata, not evidence that the connector is packaged.
+  `claude-code-cli`, `hermes-cli`. A release tarball carries `codex-cli` and `claude-code-cli` as
+  committed, under `share/goalcup/connectors` ([packaging/README.md](../packaging/README.md)).
 - Every run gets a fresh `HOME`. Codex and Claude use shared isolated config homes (Claude adds the
   checked Keychains link); Hermes uses a seeded per-run `HERMES_HOME`, child-only
   `DEEPSEEK_API_KEY`, replace-mode `HERMES_CA_BUNDLE`, deferred identity and a fail-closed key scan.

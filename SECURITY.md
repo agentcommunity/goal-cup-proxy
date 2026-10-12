@@ -7,8 +7,9 @@ the tracker or reviews a change to it. Updated: 2026-10-11.
 
 v0.5.0 is published as source only
 ([release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0), no attached
-files). There is no stable release, downloadable binary or installer, staged bundle, registry
-publication, signature, notarization or qualification.
+files). Later `v*` tags attach unsigned, unnotarized binary tarballs installed with Homebrew
+([packaging/README.md](packaging/README.md)). There is no stable release, signature, notarization
+or qualification.
 
 ## Reporting a vulnerability
 
@@ -70,9 +71,8 @@ malicious merge, because a connector PR regenerates them. Every connector change
 reviewed by a code owner against the checklist in
 [docs/CONNECTOR-CONTRIBUTING.md](docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr), and
 an unreviewed build must not be run. The source tree contains exactly three pinned
-schema-1 directories (`codex-cli`, `claude-code-cli`, `hermes-cli`). The private `m2-pilot` macOS
-package allowlist selects only Codex and Claude and copies each selected directory whole, including
-any seeds; a source pin does not prove package inclusion. The build has no V1 execution path
+schema-1 directories (`codex-cli`, `claude-code-cli`, `hermes-cli`). A release tarball
+carries `codex-cli` and `claude-code-cli` as committed ([packaging/README.md](packaging/README.md)). The build has no V1 execution path
 (D48) and no V1 `manifest.toml` (OS-29): a connector is its `harness.toml` and seeds.
 
 ## Guarantees the code aims to keep
