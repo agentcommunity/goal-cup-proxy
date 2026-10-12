@@ -39,7 +39,7 @@ pub const DEFAULT_CONFIG_DIR_NAME: &str = "goalcup";
 
 /// The file the daemon writes to say where it is. Its name, and its shape below, are the
 /// daemon's: `crates/goalcup-daemon/src/control/file.rs`.
-pub const CONTROL_FILE_NAME: &str = "control.json";
+pub(crate) const CONTROL_FILE_NAME: &str = "control.json";
 
 /// The most of `control.json` [`read_control_file`] will read.
 ///

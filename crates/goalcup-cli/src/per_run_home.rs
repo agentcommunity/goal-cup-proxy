@@ -42,7 +42,9 @@ use std::path::{Path, PathBuf};
 /// what a shell script that meant to compute a path and computed nothing leaves behind, and
 /// joining a seed candidate onto it would read a file out of the working directory, which
 /// during a run is the participant's repository.
-pub fn home_from(env: &std::collections::BTreeMap<String, String>) -> Result<PathBuf, CliError> {
+pub(crate) fn home_from(
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<PathBuf, CliError> {
     match env.get("HOME").filter(|h| !h.is_empty()) {
         Some(home) => Ok(PathBuf::from(home)),
         None => Err(CliError::Refused(
@@ -369,7 +371,7 @@ pub fn icloud_folder_synced(home: &Path, name: &str) -> bool {
 }
 
 /// The extended attribute File Provider puts on a folder it owns.
-pub const FILE_PROVIDER_ATTRIBUTE: &str = "com.apple.file-provider-domain-id";
+pub(crate) const FILE_PROVIDER_ATTRIBUTE: &str = "com.apple.file-provider-domain-id";
 
 /// [`icloud_folder_synced`] with the attribute named, because macOS refuses to set this one on a
 /// fake folder: a test exercises the mechanism with an attribute it can set.

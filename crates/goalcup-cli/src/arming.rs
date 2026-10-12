@@ -52,7 +52,7 @@ static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// `create_capture_workspace` and `register_process` — the window in which a failure leaves no
 /// entry behind. A Ctrl-C inside that window has to unmake the entry, because the
 /// alternative is a workspace the daemon is watching for a run nobody is doing.
-pub fn interrupted() -> bool {
+pub(crate) fn interrupted() -> bool {
     INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
@@ -68,7 +68,7 @@ pub fn interrupted() -> bool {
 /// crate's graph for `killpg`, which is the other half of what an interrupted launch has to
 /// do.
 #[cfg(unix)]
-pub fn watch_for_interrupt() {
+pub(crate) fn watch_for_interrupt() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         // SAFETY: `sigaction` reads the struct handed to it and writes nothing this process
@@ -91,17 +91,6 @@ extern "C" fn on_sigint(_signum: libc::c_int) {
     INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Raise `SIGINT` at this process, so a test can meet the handler rather than the flag.
-///
-/// Behind `test-support` with the rest of this crate's fakes: nothing a participant installs
-/// signals itself.
-#[cfg(all(unix, feature = "test-support"))]
-pub fn raise_sigint_for_tests() {
-    // SAFETY: `raise` takes one integer, delivers to the calling thread, and returns before
-    // this call does. The handler it reaches is the one above.
-    let _ = unsafe { libc::raise(libc::SIGINT) };
-}
-
 /// Put the flag back, so what one `goalcup start` was told does not reach the next one.
 ///
 /// The flag is process-global because a signal handler has nowhere else to put what it saw,
@@ -112,7 +101,7 @@ pub fn raise_sigint_for_tests() {
 /// promise about every path out of a function, and the paths out of `start_with` include a
 /// panic and an early `?` a later edit adds without reading to the end. A guard keeps the
 /// promise by construction.
-pub fn clear_interrupt() {
+pub(crate) fn clear_interrupt() {
     INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -120,7 +109,7 @@ pub fn clear_interrupt() {
 ///
 /// Built by [`clear_on_drop`] and never by a caller, so the only way to hold one is to have
 /// asked for it. It carries nothing: the flag it puts back is the `static` above.
-pub struct ClearOnDrop(());
+pub(crate) struct ClearOnDrop(());
 
 impl Drop for ClearOnDrop {
     fn drop(&mut self) {
@@ -132,12 +121,6 @@ impl Drop for ClearOnDrop {
 ///
 /// `let _clear = arming::clear_on_drop();` — and not `let _ =`, which drops it immediately
 /// and clears the flag before the command has read it once.
-pub fn clear_on_drop() -> ClearOnDrop {
+pub(crate) fn clear_on_drop() -> ClearOnDrop {
     ClearOnDrop(())
-}
-
-/// Put the flag back, so a test that raised one leaves the process as it found it.
-#[cfg(feature = "test-support")]
-pub fn clear_interrupt_for_tests() {
-    clear_interrupt();
 }

@@ -247,22 +247,6 @@ pub fn clean_env() -> BTreeMap<String, String> {
     env
 }
 
-// ------------------------------------------------------------------ control documents
-
-/// The options `goalcup start` sends, with a grant that is obviously not a real one.
-pub fn workspace_opts() -> control::WorkspaceOpts {
-    control::WorkspaceOpts {
-        connector_id: "claude-code-cli".to_string(),
-        manifest_sha256: "11".repeat(32),
-        workspace_parent: None,
-        attach: false,
-        deadline_hours: 168,
-        grant_token: "test-grant".to_string(),
-        arming_timeout_seconds: None,
-        harness_version: None,
-    }
-}
-
 // ------------------------------------------------------------------ a start, mocked
 
 /// A mock holding one armed entry for `id`, with `tmp` as its configuration directory.
@@ -283,7 +267,7 @@ pub fn mock_armed(tmp: &tempfile::TempDir, id: &str) -> goalcup_cli::daemon::Moc
 /// `connector_id` is the one field of [`goalcup_cli::entries::EntryRecord`] that
 /// `WorkspaceInfo` cannot answer for — the daemon does not echo it back on the workspace —
 /// so it is written as the shipped id `mock_armed` is called with in every caller of this
-/// helper. A caller that needs another id uses [`set_cached_connector`].
+/// helper.
 pub fn cfg_with_entry(tmp: &Path, info: &control::WorkspaceInfo) -> PathBuf {
     let record = goalcup_cli::entries::EntryRecord {
         entry_id: info.entry_id.clone(),
@@ -324,25 +308,6 @@ pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
         goal_file: None,
         capture_reserve_bytes: goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES,
         capture_claude_allowed_tool: None,
-    }
-}
-
-/// The same, for `connector_id`.
-///
-/// [`cfg_with_entry`] writes `claude-code-cli` because `WorkspaceInfo` carries no connector
-/// id, so the two-line rewrite a test of another connector needs is written once, here,
-/// instead of at each call site.
-pub fn set_cached_connector(cfg: &Path, entry_id: &str, connector_id: &str) {
-    let mut record = match goalcup_cli::entries::read_entry(cfg, entry_id) {
-        Ok(record) => record,
-        Err(e) => panic!(
-            "the cached record for {entry_id} under {}: {e}",
-            cfg.display()
-        ),
-    };
-    record.connector_id = connector_id.to_string();
-    if let Err(e) = goalcup_cli::entries::write_entry(cfg, &record) {
-        panic!("rewriting the cached record for {entry_id}: {e}");
     }
 }
 
@@ -476,7 +441,6 @@ struct Recorded {
     /// The raw request target — path AND query, exactly as it arrived — and the
     /// `Authorization` header, or `None` where the request carried none.
     last: Option<(String, Option<String>)>,
-    last_method: Option<String>,
     last_body: Option<String>,
     attempts: usize,
 }
@@ -533,18 +497,6 @@ impl RecordingDaemon {
         match self.log.lock() {
             Ok(log) => match &log.last {
                 Some(last) => last.clone(),
-                None => panic!("nothing has been asked of this recording daemon yet"),
-            },
-            Err(e) => panic!("the recording daemon's log: {e}"),
-        }
-    }
-
-    /// The HTTP method of the last request, so a read-only control call cannot be tested as
-    /// merely "a request with no body".
-    pub fn last_method(&self) -> String {
-        match self.log.lock() {
-            Ok(log) => match &log.last_method {
-                Some(method) => method.clone(),
                 None => panic!("nothing has been asked of this recording daemon yet"),
             },
             Err(e) => panic!("the recording daemon's log: {e}"),
@@ -656,14 +608,13 @@ fn serve(answer: Answer) -> RecordingDaemon {
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
-            let Some((method, target, authorization, body)) = read_request(&mut stream) else {
+            let Some((_method, target, authorization, body)) = read_request(&mut stream) else {
                 continue;
             };
             let count = match served.lock() {
                 Ok(mut log) => {
                     log.attempts += 1;
                     log.last = Some((target, authorization));
-                    log.last_method = Some(method);
                     log.last_body = body;
                     log.attempts
                 }

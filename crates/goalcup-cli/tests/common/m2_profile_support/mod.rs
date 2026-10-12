@@ -12,7 +12,6 @@ use goalcup_cli::launch::{CaptureLaunch, PinnedExecutable, pin_harness_executabl
 use goalcup_protocol::template::TemplateVars;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 /// The fake harness. It records, into `<cwd>/.probe/`:
 ///
@@ -121,10 +120,6 @@ impl Layout {
             bin,
         }
     }
-
-    pub fn probe(&self) -> PathBuf {
-        self.workspace.join(".probe")
-    }
 }
 
 pub const SESSION: &str = "5f0c2a8e-8a0e-4c1f-9d6b-2b7d2b0e9a11";
@@ -182,39 +177,4 @@ pub fn launch<'a>(
         parent_env: parent,
         allowed_tool_rule: None,
     }
-}
-
-/// Wait for `child` at most `limit`, killing it if it outlives that.
-pub fn wait(child: &mut std::process::Child, limit: Duration) -> std::process::ExitStatus {
-    let deadline = Instant::now() + limit;
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            return status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("the child did not exit within {limit:?}");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// The arguments the fake recorded, split on the NUL after each.
-pub fn recorded_argv(probe: &Path) -> Vec<Vec<u8>> {
-    let bytes = std::fs::read(probe.join("argv")).unwrap();
-    let mut out: Vec<Vec<u8>> = bytes.split(|b| *b == 0).map(<[u8]>::to_vec).collect();
-    assert_eq!(out.pop(), Some(Vec::new()), "every argument ends in a NUL");
-    out
-}
-
-/// An environment the fake recorded, minus the three names `/bin/sh` itself exports.
-pub fn recorded_env(probe: &Path, file: &str) -> BTreeMap<String, String> {
-    std::fs::read_to_string(probe.join(file))
-        .unwrap()
-        .lines()
-        .filter_map(|l| l.split_once('='))
-        .filter(|(k, _)| !matches!(*k, "PWD" | "SHLVL" | "_" | "OLDPWD"))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
 }

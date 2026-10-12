@@ -43,7 +43,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The one application protocol interception negotiates, on both TLS legs.
-pub const HTTP11_ALPN: &[u8] = b"http/1.1";
+pub(crate) const HTTP11_ALPN: &[u8] = b"http/1.1";
 
 /// The file name [`ProxyCa::write_certificate`] creates inside the caller's directory.
 pub const CA_CERT_FILE_NAME: &str = "goalcup-proxy-ca.pem";
@@ -55,7 +55,7 @@ pub const CA_VALIDITY: Duration = Duration::from_secs(8 * 24 * 60 * 60);
 
 /// How far before generation the validity window starts, so a slightly slow client clock
 /// still accepts a fresh certificate.
-pub const CA_CLOCK_SKEW: Duration = Duration::from_secs(60 * 60);
+pub(crate) const CA_CLOCK_SKEW: Duration = Duration::from_secs(60 * 60);
 
 /// Why CA, leaf or trust-root preparation failed. Messages are fixed text: no host, path or
 /// key material is ever formatted into one.
@@ -153,11 +153,6 @@ impl ProxyCa {
     /// The CA certificate, DER-encoded.
     pub fn certificate_der(&self) -> &CertificateDer<'static> {
         &self.cert_der
-    }
-
-    /// The host names this CA may issue for, in order.
-    pub fn hosts(&self) -> impl Iterator<Item = &str> {
-        self.hosts.iter().map(String::as_str)
     }
 
     /// Creates `dir/`[`CA_CERT_FILE_NAME`] containing only the PEM certificate, with mode

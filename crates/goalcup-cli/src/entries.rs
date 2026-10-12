@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// `<config_dir>/entries` — one JSON document per entry this machine started.
-pub const ENTRIES_DIR_NAME: &str = "entries";
+pub(crate) const ENTRIES_DIR_NAME: &str = "entries";
 
 /// A local CLI's durable proof that it may recover the `/resume` request it was about to
 /// send.  It is deliberately only an expected daemon generation: a random nonce would have
@@ -150,7 +150,7 @@ pub fn entries_dir(cfg: &Path) -> PathBuf {
 /// The id is checked where it is *used* — [`write_entry`], [`read_entry`] and
 /// [`remove_entry`] all go through [`one_path_component`] first — because a check that only
 /// this function made would be a check a caller could skip by joining the path themselves.
-pub fn entry_path(cfg: &Path, entry_id: &str) -> PathBuf {
+pub(crate) fn entry_path(cfg: &Path, entry_id: &str) -> PathBuf {
     entries_dir(cfg).join(format!("{entry_id}.json"))
 }
 
@@ -236,7 +236,7 @@ pub fn latest_entry(cfg: &Path) -> Result<Option<EntryRecord>, CliError> {
 /// This is the other half of `abandon`: the daemon deletes the entry and its artifact
 /// directory, and a record left behind here would be a pin every later command refuses on,
 /// for a run that no longer exists.
-pub fn remove_entry(cfg: &Path, entry_id: &str) -> Result<(), CliError> {
+pub(crate) fn remove_entry(cfg: &Path, entry_id: &str) -> Result<(), CliError> {
     one_path_component(entry_id)?;
     let path = entry_path(cfg, entry_id);
     match std::fs::remove_file(&path) {

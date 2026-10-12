@@ -13,8 +13,8 @@ publish = false
 # nowhere else.
 #
 # Every `feature = "test-support"` item is a fake or a seam that tests need and no
-# participant runs: `MockDaemonClient` (`src/daemon/`) and the Ctrl-C test seams
-# (`src/arming.rs`).
+# participant runs: `MockDaemonClient` (`src/daemon/`) and the narrower seams marked with it
+# (`grep -rn 'feature = "test-support"' src`).
 #
 # The shipped build compiles without the feature, and `cargo build --offline` (no features)
 # is step zero of the gate precisely so that stays true: every other gate command builds
@@ -97,22 +97,15 @@ goalcup-cli = { path = ".", features = ["test-support"] }
 tempfile.workspace = true
 # M2 proxy tests only: parse minted certificates.
 x509-parser.workspace = true
-# Tests only, and the one dependency in this file that exists to prove a property rather
-# than to provide one.
-#
-# `src/seal.rs` mirrors `goalcup_daemon::workspace::list_workspace`. Everything else in this
-# tree checks that mirror against a fixture, which proves the mirror agrees with a document
-# somebody typed — not that it agrees with the walker it mirrors. `tests/it/seal_scan.rs` runs
-# BOTH walkers over one tree and asserts `compare` yields nothing, which is the property the
-# self-check is for and the only way to hold the two implementations together as they change.
+# Tests only: the in-process daemon the capture rigs start (`tests/common/m2_cli_support`), the
+# registry lock `tests/full/run_scoped_daemon.rs` holds, and the hook-gated items
+# `m2_ipc_compose` drives (`IngestEntry::wait_outcome`), which is why `test-hooks` is named here:
+# a narrow `-p goalcup-cli` test build needs it without the workspace's feature unification.
 #
 # The shipped binary links none of it: `cargo build --offline` builds no dev-dependency, and
-# `grep -rn goalcup_daemon crates/goalcup-cli/src/` is empty — `tests/it/seal_scan.rs` asserts
-# both of those in `the_cli_binary_links_no_daemon`. There is no cycle: `goalcup-daemon`
-# depends on `goalcup-protocol` and `goalcup-platform`, its only dev-dependency is itself,
-# and neither depends on this crate.
-# `test-hooks`: `m2_ipc_compose` drives hook-gated daemon items (`IngestEntry::wait_outcome`), so
-# a narrow `-p goalcup-cli` test build needs the feature without the workspace's unification.
+# `tests/it/seal_scan.rs` (`the_shipped_binary_links_no_daemon`) asserts that `src/` names no
+# daemon in code and that this line stays under `[dev-dependencies]`. There is no cycle:
+# `goalcup-daemon` depends on neither this crate nor anything that does.
 goalcup-daemon = { path = "../goalcup-daemon", features = ["test-hooks"] }
 
 [[bin]]

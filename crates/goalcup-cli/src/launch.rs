@@ -115,12 +115,14 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
+pub(crate) use crate::capture_tee::{
+    CaptureStderr, ScopeReceiver, tee_marked_capture_with_identity, tee_stderr_capture_with_rule,
+};
 /// The tees of a Hermes capture child's streams live in their own file; they are part of this
 /// module's interface (D40, D41).
 pub use crate::capture_tee::{
-    CaptureStderr, ScopeMarker, ScopeReceiver, tee_marked, tee_marked_capture,
-    tee_marked_capture_to, tee_marked_capture_with_identity, tee_marked_capture_with_identity_to,
-    tee_marked_capture_with_rule, tee_marked_with_rule, tee_stderr_capture_with_rule,
+    ScopeMarker, tee_marked, tee_marked_capture, tee_marked_capture_to,
+    tee_marked_capture_with_identity_to, tee_marked_with_rule,
 };
 /// The ending of a child this process just released lives in its own file, which the
 /// "this crate never terminates anything" sweep exempts by name; it is part of this module's
@@ -388,10 +390,10 @@ pub const CAPTURE_NO_PROXY: &str = "127.0.0.1,localhost";
 
 /// The only names a capture launch carries across from the tracker's own environment
 /// (the allowlist; `HOME`, `PATH` and `SHELL` are set, not carried).
-pub const CAPTURE_IDENTITY_ENV: [&str; 3] = ["USER", "LOGNAME", "TMPDIR"];
+pub(crate) const CAPTURE_IDENTITY_ENV: [&str; 3] = ["USER", "LOGNAME", "TMPDIR"];
 
 /// The longest provider key a capture launch hands a child.
-pub const MAX_CHILD_SECRET_BYTES: usize = 256;
+pub(crate) const MAX_CHILD_SECRET_BYTES: usize = 256;
 
 /// The provider credential of a capture launch, held for the child alone (D40, D41).
 ///
@@ -512,14 +514,38 @@ pub struct PinnedExecutable {
 
 impl PinnedExecutable {
     /// The absolute path that was hashed, which is the path the capture launch runs.
-    pub fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         &self.path
     }
 
     /// The lowercase SHA-256 of its bytes.
-    pub fn sha256(&self) -> &str {
+    pub(crate) fn sha256(&self) -> &str {
         &self.sha256
     }
+}
+
+/// The connector's program as the `PATH` in `env` finds it, followed to the file an
+/// updater's link names, and accepted only if its bytes are the profile's pin. That file is
+/// the one the launch runs. It is hashed, never started: `goalcup start` and `goalcup doctor`
+/// both ask this one question.
+pub(crate) fn capture_executable(
+    c: &HarnessConnector,
+    profile: &CaptureSpec,
+    env: &BTreeMap<String, String>,
+) -> Result<PinnedExecutable, CliError> {
+    let program = &profile.executable.program;
+    let Some(found) = crate::preflight::resolve_on_path(program, env) else {
+        return Err(CliError::Refused(format!(
+            "`{program}` is not on PATH, so `{}`'s capture executable cannot be found. Nothing \
+             is launched.",
+            c.loaded.manifest.id
+        )));
+    };
+    let file = std::fs::canonicalize(&found).map_err(|source| CliError::Io {
+        path: found.display().to_string(),
+        source,
+    })?;
+    pin_harness_executable(profile, &file)
 }
 
 /// Hash the executable at `path` and accept it only if it is `profile`'s pinned one.
@@ -600,7 +626,7 @@ fn pin_executable_fields(
 
 /// Re-open the exact canonical path that was pinned, without canonicalising it again, and hash
 /// the whole regular file. This is the last check before the parked capture child is released.
-pub fn recheck_pinned_executable(executable: &PinnedExecutable) -> Result<(), CliError> {
+pub(crate) fn recheck_pinned_executable(executable: &PinnedExecutable) -> Result<(), CliError> {
     let path = Path::new(executable.path());
     let observed = sha256_regular_file_no_follow(path, executable.path()).map_err(|_| {
         CliError::Refused(format!(
@@ -972,7 +998,7 @@ fn is_loopback_proxy_url(url: &str) -> bool {
 ///
 /// The environment counted is the one [`spawn`] builds: [`LaunchPlan::env_base`] minus
 /// [`LaunchPlan::env_remove`], then [`LaunchPlan::env_set`].
-pub fn exec_footprint(p: &LaunchPlan) -> u64 {
+pub(crate) fn exec_footprint(p: &LaunchPlan) -> u64 {
     let mut env: BTreeMap<&str, &str> = p
         .env_base
         .iter()
@@ -996,7 +1022,7 @@ pub fn exec_footprint(p: &LaunchPlan) -> u64 {
 
 /// This system's `ARG_MAX`, the bound [`exec_footprint`] is held to. `_POSIX_ARG_MAX`
 /// (4096) where the system does not say, which refuses rather than guesses.
-pub fn exec_limit() -> u64 {
+pub(crate) fn exec_limit() -> u64 {
     #[cfg(unix)]
     {
         // SAFETY: `sysconf` takes an integer name and reads or writes no memory we own.
@@ -1324,7 +1350,7 @@ pub fn tee_capture_stdout(
 }
 
 /// Start the stdout tee with the identity paths declared by the harness manifest.
-pub fn tee_capture_stdout_with_rule(
+pub(crate) fn tee_capture_stdout_with_rule(
     reader: impl std::io::Read + Send + 'static,
     writer: impl std::io::Write + Send + 'static,
     rule: StdoutJsonRule,
@@ -1355,7 +1381,7 @@ pub fn tee_scoped_capture(spawned: &mut Spawned) -> Result<CaptureStdout, CliErr
 }
 
 /// Scope tee using the manifest's stdout JSON identity rule.
-pub fn tee_scoped_capture_with_rule(
+pub(crate) fn tee_scoped_capture_with_rule(
     spawned: &mut Spawned,
     rule: StdoutJsonRule,
 ) -> Result<CaptureStdout, CliError> {

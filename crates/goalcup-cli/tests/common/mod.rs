@@ -1,7 +1,10 @@
 //! Support shared by this crate's `it` and `full` test binaries. The standalone binaries
 //! (`tests/<name>.rs`) include the modules they need from here by `#[path]`.
 //!
-//! Each binary uses a different subset, so unused items and re-exports are expected.
+//! Each binary uses a different subset, so an item one binary leaves unused is expected, and
+//! this allow is the one place that says so for every module below. The four modules a
+//! standalone binary also includes by `#[path]` (`support`, `m2_common`, `m2_cli_support`,
+//! `m2_profile_support`) repeat it for that binary. A helper that no binary uses is deleted.
 #![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]

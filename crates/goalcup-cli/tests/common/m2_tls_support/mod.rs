@@ -15,8 +15,6 @@
 //! Every wait is bounded by `m2_common::DEADLINE` through [`within`]; every spawned task is
 //! joined or aborted (the `Drop` impls abort what a failing test leaves behind).
 
-#![allow(dead_code)]
-
 pub use super::m2_common::{TestPki, contains, provider, within};
 use goalcup_cli::proxy::connect::{Admission, AdmissionConfig, PROXY_USERNAME, admit};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
@@ -119,11 +117,6 @@ impl TlsUpstream {
         within("upstream handshake report", self.seen.recv())
             .await
             .expect("upstream server task ended")
-    }
-
-    /// Whether a handshake report is already waiting (none means no connection reached it).
-    pub fn try_seen(&mut self) -> Option<UpstreamSeen> {
-        self.seen.try_recv().ok()
     }
 
     /// Stops the server and every connection task; returns once they are gone.

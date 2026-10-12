@@ -7,7 +7,7 @@ use serde::Serialize;
 /// The one spelling of the one door. `goalcup start --dev` is the place a human types it
 /// (the V1 `goalcup doctor --verify-with-dev` was the other until D48), and the header of
 /// [`super`] lists the four things it admits.
-pub const DEV_DOOR: &str = "--dev";
+pub(crate) const DEV_DOOR: &str = "--dev";
 
 /// What one check can say.
 ///
@@ -55,7 +55,7 @@ impl Check {
     /// The one renderer. [`PreflightReport::render`] calls it for a connector's checks and
     /// `goalcup doctor` calls it for the daemon's, so the daemon's line and a connector's
     /// line cannot drift into two layouts that read as two reports.
-    pub fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         let mut out = format!("  {}  {:<16}{}\n", self.level.word(), self.id, self.detail);
         if !self.fix.is_empty() {
             out.push_str(&format!("        fix: {}\n", self.fix));
@@ -79,21 +79,21 @@ impl Check {
 
 /// Every check for one connector, in the order they are asked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PreflightReport {
+pub(crate) struct PreflightReport {
     pub connector_id: String,
     pub checks: Vec<Check>,
 }
 
 impl PreflightReport {
-    /// Whether anything here refuses the run. `Warn` does not: a machine without the
-    /// harness installed is a report, not a broken tracker.
-    pub fn failed(&self) -> bool {
+    /// Whether anything here refuses the run. `Warn` does not; `Fail` does, and a harness
+    /// that is not installed, or is not the pinned build, is a `Fail` (`harness_executable`).
+    pub(crate) fn failed(&self) -> bool {
         self.checks.iter().any(|c| c.level == Level::Fail)
     }
 
     /// The report as a participant reads it: the connector, then [`Check::render`] for each
     /// of its checks.
-    pub fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         let mut out = format!("{}\n", self.connector_id);
         for c in &self.checks {
             out.push_str(&c.render());

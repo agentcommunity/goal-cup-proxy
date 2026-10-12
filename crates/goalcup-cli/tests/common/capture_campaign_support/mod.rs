@@ -15,8 +15,8 @@
 //!   under `target/<evidence_dir>/rows/<test>/run-NN/` even when an assertion fails first. Each
 //!   run takes a directory that did not exist before and nothing earlier is overwritten.
 //!
-//! Each campaign uses a subset, so the module is declared `#[allow(dead_code)]` once, where it
-//! is declared, rather than by importing one campaign's support into the other.
+//! Each campaign uses a subset, which the one allow in `common/mod.rs` covers, rather than one
+//! campaign's support being imported into the other.
 
 use super::m2_vertical_support::{Vertical, wait_until};
 use goalcup_protocol::capture::M2Status;

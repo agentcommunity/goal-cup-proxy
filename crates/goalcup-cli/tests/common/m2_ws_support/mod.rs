@@ -11,8 +11,6 @@
 //! - [`Relay`]: `relay_websocket` between two in-memory duplex peers the test plays, with an
 //!   explicit deadline on every wait.
 
-#![allow(dead_code)]
-
 use flate2::{Compress, Compression, FlushCompress};
 use goalcup_cli::proxy::api::{CaptureEmitter, CapturePolicy, RelayContext, RelayPair, Upgrade};
 use goalcup_cli::proxy::websocket::relay_websocket;

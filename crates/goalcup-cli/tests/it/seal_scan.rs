@@ -44,12 +44,13 @@ fn the_shipped_binary_links_no_daemon() {
 ///
 /// The seal must not inherit the generic three-attempt schedule: its own bounded policy is
 /// what escapes a 200 ms capture cadence while preserving a full slow-call reservation.
-/// Both ends of the rule are here: one `busy` is absorbed and the seal succeeds, and a daemon
-/// that is STILL busy when its reservation is spent is rung 1 with the daemon's own words in
-/// it. Its one-second reservation envelope holds the 550 ms planned schedule plus ordinary
-/// scheduler overhead, so this real command path reaches all four bounded calls.
+/// Both ends of the rule are here: one `busy` is absorbed and the seal is asked again (the
+/// mock's second answer is a pre-v5 seal report, which this command refuses at rung 3), and a
+/// daemon that is STILL busy when its reservation is spent is rung 1 with the daemon's own
+/// words in it. Its one-second reservation envelope holds the 550 ms planned schedule plus
+/// ordinary scheduler overhead, so this real command path reaches all four bounded calls.
 #[test]
-fn a_busy_seal_is_asked_again_and_a_standing_busy_is_rung_one() {
+fn one_busy_seal_is_asked_again_and_a_standing_busy_is_rung_one_after_four_asks() {
     let tmp = tempfile::tempdir().unwrap();
     let m = support::mock_sealable(&tmp, "claude-code-cli");
     let entry = m.info().entry_id;

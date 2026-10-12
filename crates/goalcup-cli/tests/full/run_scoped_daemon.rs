@@ -263,6 +263,65 @@ fn two_concurrent_starts_end_with_exactly_one_daemon() {
     );
 }
 
+/// A daemon that refuses its configuration exits at once, and so does the command that started
+/// it: refused (1), naming the daemon's exit status and `daemon.log`, well before the 10-second
+/// wait for a daemon to answer runs out.
+#[test]
+fn a_daemon_that_refuses_its_configuration_fails_the_command_at_once() {
+    let rig = Rig::run_scoped();
+    let _reaper = reaper(&rig);
+    std::fs::create_dir_all(&rig.cfg).unwrap();
+    let config = rig.cfg.join(goalcup_cli::daemon::spawn::DAEMON_CONFIG_NAME);
+    std::fs::write(&config, "this is not = = toml\n").unwrap();
+
+    let began = Instant::now();
+    let output = goalcup(&rig, &cli()).arg("seal").output().unwrap();
+    let took = began.elapsed();
+    let text = said(&output);
+    assert_eq!(output.status.code(), Some(1), "refused: {text}");
+    assert!(text.contains("exit status: 1"), "its exit status: {text}");
+    let log = rig.cfg.join(goalcup_cli::daemon::spawn::DAEMON_LOG_NAME);
+    assert!(
+        text.contains(&log.display().to_string()),
+        "and where its words are: {text}"
+    );
+    assert!(
+        took < goalcup_cli::daemon::spawn::SPAWN_WAIT / 2,
+        "without waiting for an answer that cannot come: {took:?}"
+    );
+}
+
+/// The one early exit that is waited out: another process holds the registry lock (a daemon
+/// starting in a race, or one stopping). The started daemon refuses at the lock and is started
+/// again until the lock comes free, and then the run goes on.
+#[test]
+fn the_registry_lock_held_by_another_process_is_waited_out() {
+    let rig = Rig::run_scoped();
+    let _reaper = reaper(&rig);
+    rig.tell("stop", "");
+    let held = goalcup_daemon::registry::Registry::open(
+        &goalcup_daemon::registry::Registry::default_path(&rig.config.artifact_root),
+    )
+    .expect("the registry lock, held by this test");
+    let mut start = start_in_background(&rig, &goal_in(&rig, "runs"));
+    let log = rig.cfg.join(goalcup_cli::daemon::spawn::DAEMON_LOG_NAME);
+    support::wait_for("a started daemon to meet the held lock", || {
+        std::fs::read_to_string(&log)
+            .ok()
+            .filter(|said| said.contains("another daemon holds the registry"))
+    });
+    // Long enough for the command to have seen that daemon exit and started another.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        start.try_wait().unwrap().is_none(),
+        "the command is still waiting for the lock, not refused"
+    );
+    drop(held);
+
+    let output = start.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+}
+
 /// The daemon `goalcup` starts receives none of the CLI's environment: not a provider key, not a
 /// proxy, not a `GOALCUP_*` variable. Observed by putting a shim in place of the daemon binary,
 /// beside a copy of `goalcup`, that writes the environment it was given and then becomes the

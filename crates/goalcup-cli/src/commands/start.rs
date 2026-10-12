@@ -688,7 +688,7 @@ fn prepare(
         Some(secret) => Some(FragmentMatcher::new(secret.expose())?),
         None => None,
     };
-    let executable = capture_executable(c, profile, env)?;
+    let executable = crate::launch::capture_executable(c, profile, env)?;
     // The provider hosts answer a TCP connect before anything is created (the proxy module's
     // preflight; it names a firewall holding this binary when they do not).
     crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
@@ -712,7 +712,13 @@ fn prepare(
         match std::fs::symlink_metadata(&config_home) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                private_dir(&config_home, false)?;
+                match private_dir(&config_home, false) {
+                    // A concurrent `goalcup start` made it between the look and the create;
+                    // `SharedCaptureHome::load` below judges that directory like any other.
+                    Err(CliError::Io { source, .. })
+                        if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    made => made?,
+                }
             }
             Err(_) => {
                 return Err(shared_home_refusal(
@@ -1362,29 +1368,6 @@ fn read_goal(path: &Path) -> Result<Vec<u8>, CliError> {
         )));
     }
     Ok(goal)
-}
-
-/// The connector's program as the `PATH` in `env` finds it, followed to the file an
-/// updater's link names, and accepted only if its bytes are the profile's pin. That file is
-/// the one the launch runs.
-fn capture_executable(
-    c: &HarnessConnector,
-    profile: &CaptureSpec,
-    env: &BTreeMap<String, String>,
-) -> Result<crate::launch::PinnedExecutable, CliError> {
-    let program = &profile.executable.program;
-    let Some(found) = crate::preflight::resolve_on_path(program, env) else {
-        return Err(CliError::Refused(format!(
-            "`{program}` is not on PATH, so `{}`'s capture executable cannot be found. Nothing \
-             was created.",
-            c.loaded.manifest.id
-        )));
-    };
-    let file = std::fs::canonicalize(&found).map_err(|source| CliError::Io {
-        path: found.display().to_string(),
-        source,
-    })?;
-    crate::launch::pin_harness_executable(profile, &file)
 }
 
 /// The directory a run's own directory is made in: the goal file's.

@@ -36,7 +36,7 @@ use std::path::Path;
 ///
 /// A constant because it is printed to a participant as a command to run, and a binary
 /// spelled twice is a binary that is one day spelled wrong in the place somebody copies from.
-pub const VERIFIER_BIN: &str = "goalcup-verify";
+pub(crate) const VERIFIER_BIN: &str = "goalcup-verify";
 
 /// The testable half: everything except resolving a real client and a real config dir.
 ///

@@ -9,10 +9,8 @@
 //! retained is read back from the chain file line by line. Every wait is bounded, and every
 //! child is ended by its owner on drop.
 
-#[allow(dead_code)]
 mod wire;
 
-#[allow(dead_code)]
 mod endpoint;
 
 use base64::Engine as _;
@@ -199,7 +197,6 @@ impl Vertical {
 
     /// [`Vertical::start`] with `GOALCUP_TEST_PAUSE_DIR` naming `pause_dir`: the launcher holds
     /// at each point whose `<point>.arm` file is there (see `commands/start.rs::pause_at`).
-    #[allow(dead_code)]
     pub fn start_paused(&self, reserve: u64, pause_dir: &Path) -> Launcher {
         self.start_with(reserve, Some(pause_dir))
     }
@@ -378,7 +375,6 @@ impl Vertical {
 
     /// The controlled endpoint's own request counters: what reached the upstream, counted
     /// outside the workload, the proxy and the recorder. Only the crash campaign reads it.
-    #[allow(dead_code)]
     pub fn endpoint_counters(&self) -> endpoint::EndpointCounters {
         self.endpoint.as_ref().expect("the endpoint").counters()
     }

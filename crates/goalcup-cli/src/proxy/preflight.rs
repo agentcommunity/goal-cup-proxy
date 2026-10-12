@@ -18,14 +18,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// The whole preflight's bound, all hosts together.
-pub const PREFLIGHT_BUDGET: Duration = Duration::from_secs(10);
+pub(crate) const PREFLIGHT_BUDGET: Duration = Duration::from_secs(10);
 
 /// The port every provider host is probed on.
-pub const PREFLIGHT_PORT: u16 = 443;
+pub(crate) const PREFLIGHT_PORT: u16 = 443;
 
 /// A provider host the preflight could not reach. Its `Display` is the whole refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Unreachable {
+pub(crate) struct Unreachable {
     pub host: String,
     pub port: u16,
     pub kind: ConnectFailureKind,
@@ -78,7 +78,7 @@ fn is_loopback_host(host: &str) -> bool {
 
 /// The preflight `goalcup start` runs: every non-loopback host on [`PREFLIGHT_PORT`] within
 /// [`PREFLIGHT_BUDGET`]. Blocks the calling thread for at most the budget.
-pub fn upstreams_reachable<'a>(
+pub(crate) fn upstreams_reachable<'a>(
     hosts: impl IntoIterator<Item = &'a str>,
 ) -> Result<(), Unreachable> {
     let hosts: Vec<String> = hosts

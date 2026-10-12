@@ -2,7 +2,10 @@
 //!
 //! This command is [`crate::preflight`] run over every shipped connector's `harness.toml` with
 //! the daemon's state added, and it leaves under the CLI's own ladder: **0** when nothing failed,
-//! **1** when anything did. No daemon running is not a failure: the daemon is run-scoped, and
+//! **1** when anything did. Per connector it checks the connector files' pin, the harness
+//! executable `goalcup start` would run (found on `PATH` and hashed against the profile's pin,
+//! never started: [`crate::launch::capture_executable`], the check `start` itself makes) and the
+//! decoders. No daemon running is not a failure: the daemon is run-scoped, and
 //! `goalcup start` starts one for the run, so the check fails only when none could be started
 //! (no `goalcup-daemon` to find) or one answers that this build cannot speak to. A sealed capture
 //! is checked by `goalcup-verify --capture-integrity`, not here; the V1 `--verify` mode was
@@ -55,12 +58,16 @@ struct DoctorReport<'a> {
 /// or a control API this build does not speak), which is why the no-client branch reads
 /// `control.json` itself rather than reporting a failure it has not actually observed.
 ///
+/// `env` is the environment `goalcup start` would launch from: its `PATH` is where each
+/// harness executable is looked for.
+///
 /// Returns the exit code rather than taking it, so the caller builds the one `ExitCode`.
 /// `_err` is unused: nothing this command prints goes to standard error.
 pub fn run_with(
     client: Option<&dyn DaemonClient>,
     connectors: &Path,
     cfg: &Path,
+    env: &BTreeMap<String, String>,
     opts: &DoctorOptions,
     out: &mut dyn Write,
     _err: &mut dyn Write,
@@ -70,7 +77,7 @@ pub fn run_with(
     // diagnostic that goes looking at this directory is the right place to take it away.
     preflight::sweep_stale_probes(cfg);
     let daemon = daemon_check(client, cfg);
-    let mut reports = connector_reports(connectors)?;
+    let mut reports = connector_reports(connectors, env)?;
     // `--harness <id>` narrows both the report and the number. Everything is still
     // loaded first — `connector_reports` is what refuses two directories declaring one id,
     // and that refusal is about the installation rather than about the harness asked after —
@@ -118,7 +125,10 @@ pub fn run_with(
 ///
 /// One id declared by two directories is the whole roster's refusal rather than one
 /// connector's `Fail`: nothing here can say which of the two a `goalcup start` would run.
-fn connector_reports(connectors: &Path) -> Result<Vec<PreflightReport>, CliError> {
+fn connector_reports(
+    connectors: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<PreflightReport>, CliError> {
     let mut out: Vec<(PathBuf, PreflightReport)> = Vec::new();
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     for dir in connector::harness_dirs(connectors)? {
@@ -136,18 +146,17 @@ fn connector_reports(connectors: &Path) -> Result<Vec<PreflightReport>, CliError
                     )));
                 }
                 let decoder = decoder_check(&loaded.manifest);
-                let pin = harness_pin_gate(
-                    &HarnessConnector {
-                        dir: dir.clone(),
-                        loaded,
-                    },
-                    false,
-                );
+                let connector = HarnessConnector {
+                    dir: dir.clone(),
+                    loaded,
+                };
+                let pin = harness_pin_gate(&connector, false);
+                let executable = executable_check(&connector, env);
                 out.push((
                     dir,
                     PreflightReport {
                         connector_id: id,
-                        checks: vec![pin, decoder],
+                        checks: vec![pin, executable, decoder],
                     },
                 ));
             }
@@ -171,6 +180,34 @@ fn connector_reports(connectors: &Path) -> Result<Vec<PreflightReport>, CliError
             .then_with(|| a_dir.cmp(b_dir))
     });
     Ok(out.into_iter().map(|(_, report)| report).collect())
+}
+
+/// The harness executable `goalcup start` would run: found on `env`'s `PATH` and its bytes
+/// hashed against the profile's pin, by the same function `start` calls. A harness that is not
+/// installed, or not the measured build, is a `Fail`: `start` would refuse it.
+fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
+    let executable = &c.loaded.manifest.capture.executable;
+    match crate::launch::capture_executable(c, &c.loaded.manifest.capture, env) {
+        Ok(pinned) => Check::pass(
+            "harness_executable",
+            format!(
+                "`{}` is the pinned {} {} (sha256 {}).",
+                pinned.path(),
+                executable.program,
+                executable.version,
+                pinned.sha256()
+            ),
+        ),
+        Err(error) => Check::new(
+            "harness_executable",
+            Level::Fail,
+            error.to_string(),
+            &format!(
+                "install `{}` version {} on PATH: `goalcup start` runs that build and no other.",
+                executable.program, executable.version
+            ),
+        ),
+    }
 }
 
 fn decoder_check(manifest: &goalcup_protocol::harness::HarnessManifest) -> Check {

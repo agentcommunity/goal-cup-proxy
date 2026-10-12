@@ -63,8 +63,11 @@ could not read, an answer it could not parse). This command never exits with 2 o
 /// What `goalcup doctor --help` says under its flags. There is no verify
 /// mode here: a sealed capture is checked by `goalcup-verify --capture-integrity`.
 const DOCTOR_AFTER_HELP: &str = "\
-Exit codes: 0 every check passed; 1 something failed. No daemon running is not a failure: \
-`goalcup start` starts one.
+For each harness it checks that the connector files are the pinned ones and that the harness \
+executable on PATH is the exact build `goalcup start` runs (hashed, not started).
+
+Exit codes: 0 every check passed; 1 something failed, including a harness that is not installed \
+or is not the pinned build. No daemon running is not a failure: `goalcup start` starts one.
 
 Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
 are not using can make this command exit 1.";
@@ -126,7 +129,7 @@ enum Command {
         #[arg(value_name = "ENTRY")]
         entry: Option<String>,
     },
-    /// Check this machine: is the daemon running, and is each harness ready to run.
+    /// Check this machine: can a daemon run, and is each harness installed at its pinned build.
     #[command(after_help = DOCTOR_AFTER_HELP)]
     Doctor {
         /// Print the report as one JSON document instead of text.
@@ -399,5 +402,6 @@ fn doctor(opts: commands::doctor::DoctorOptions) -> Result<u8, CliError> {
     let client = client
         .as_ref()
         .map(|c| c as &dyn goalcup_protocol::control::DaemonClient);
-    commands::doctor::run_with(client, &connectors, &cfg, &opts, &mut out, &mut err)
+    let env = goalcup_cli::launch::process_env();
+    commands::doctor::run_with(client, &connectors, &cfg, &env, &opts, &mut out, &mut err)
 }
