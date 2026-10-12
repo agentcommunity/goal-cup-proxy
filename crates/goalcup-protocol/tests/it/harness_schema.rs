@@ -2487,6 +2487,24 @@ fn an_unknown_platform_key_is_refused() {
         refused(&t, PINNED, &["capture.platform", NEWER_SENTENCE]);
         refused(&t, DEV, &["capture.platform"]);
     }
+    // A key named twice, as two headers or as a header and an inline table, is refused at load.
+    let entry = format!("sha256 = \"{LINUX_SHA}\"\n");
+    for twice in [
+        format!(
+            "[capture.platform.linux-x86_64]\n{entry}\n[capture.platform.linux-x86_64]\n{entry}"
+        ),
+        format!(
+            "[capture.platform]\nlinux-x86_64 = {{ sha256 = \"{LINUX_SHA}\" }}\n\n\
+             [capture.platform.linux-x86_64]\n{entry}"
+        ),
+    ] {
+        let text = format!("{}\n{twice}", fixture_text("codex-cli"));
+        let err = HarnessManifest::from_toml_str(&text)
+            .expect_err("a platform key named twice")
+            .to_string();
+        assert!(err.contains("linux-x86_64"), "{err}");
+        assert!(err.contains("duplicate"), "{err}");
+    }
 }
 
 #[test]

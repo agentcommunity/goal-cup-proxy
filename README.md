@@ -75,10 +75,11 @@ Status: v0.5.0 is published as source; binary releases come from
 
 ## Linux
 
-The [quickstart](#quickstart) is the same on Linux, apart from two things below. The shipped
-connectors pin the Linux x86_64 and arm64 harness builds as well as the macOS ones, so install the
-exact versions the quickstart names. Linux is measured less than macOS, and no logged-in harness
-run has happened on Linux yet; the lists below say what was and was not measured.
+The [quickstart](#quickstart) works on Linux, apart from the three things below: how the harness
+is installed, the configuration directory and the Claude Code login. The shipped connectors pin
+the Linux x86_64 and arm64 harness builds as well as the macOS ones, as native binaries. Linux is
+measured less than macOS, and no logged-in harness run has happened on Linux yet; the lists below
+say what was and was not measured.
 
 **You need** Rust 1.99 or later, a C compiler (on Debian or Ubuntu, `build-essential`), and the
 trace folder (`artifact_root` in `daemon.toml`) on ext4 or XFS. btrfs, ZFS, NFS, tmpfs, overlayfs
@@ -90,6 +91,15 @@ other tools the tests need are in [the gate](#the-gate).
 
 **What differs from the macOS quickstart:**
 
+- **Installing the harness on Linux.** What was measured is the native binary from the npm
+  platform package, placed first on `PATH` (a symlink on `PATH` to it is fine). Codex:
+  `@openai/codex@0.153.0-linux-x64` or `-linux-arm64`, file
+  `package/vendor/<x86_64|aarch64>-unknown-linux-musl/bin/codex`. Claude Code:
+  `@anthropic-ai/claude-code-linux-x64@2.1.283` or `-linux-arm64`, file `package/claude`; these
+  are the glibc builds; the `-musl` (Alpine) builds are not pinned, so they are refused. Other
+  install routes are not measured: `npm i -g` puts the npm wrapper on `PATH`, which `goalcup
+  start` hashes in place of the binary and is likely to refuse, and Claude Code's native
+  installer on Linux was not tried.
 - **The configuration directory.** With `GOALCUP_CONFIG_DIR` unset it is `$XDG_CONFIG_HOME/goalcup`,
   else `~/.config/goalcup`; an empty `$XDG_CONFIG_HOME` counts as unset
   (`crates/goalcup-cli/src/config.rs`). The quickstart sets `GOALCUP_CONFIG_DIR` and skips this.
@@ -113,7 +123,8 @@ Docker: `goalcup doctor` passes the executable check; `goalcup start` launches t
 the harness fails on auth and gets no model reply (Codex receives 401 Unauthorized, Claude Code
 prints `Not logged in`, and both exit 1); the run seals; and
 `goalcup-verify --capture-integrity` exits 0. Neither binary left a child running after it
-exited on this path.
+exited on this path. The smoke needed network access: before it creates anything, `goalcup start`
+checks that the provider host answers, and with no network it refuses the run.
 
 **Not proven:**
 
