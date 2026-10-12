@@ -143,8 +143,8 @@ fn connector_reports(
                         "manifest",
                         Level::Fail,
                         format!(
-                            "the connector in {named} could not be loaded: {e}. It is a rulebook \
-                             this build cannot read, so nothing can be started under it."
+                            "the connector in {named} could not be loaded: {e}. This build \
+                             cannot read it, so nothing can be started under it."
                         ),
                         "reinstall the shipped `connectors/` beside the binary, or remove this \
                          directory.",
@@ -235,7 +235,7 @@ fn harness_only_check(id: &str) -> Check {
         "harness_manifest",
         Level::Warn,
         format!(
-            "`{id}` is described by harness-contract schema 1; V1 checks do not apply and \
+            "`{id}` uses the newer connector format, which has no install checks yet; \
              nothing was probed."
         ),
         "nothing is required for the capture path.",

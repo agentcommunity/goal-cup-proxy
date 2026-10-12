@@ -153,8 +153,7 @@ fn started(
     // of `start_with` can still reach.
     let _ = (client, connectors, cfg, env, out);
     Err(CliError::Refused(
-        "`goalcup start` without `--goal-file` was the V1 transcript path, which this tree no \
-         longer carries (D48; the v0.5.0 tag has it). Name the goal: \
+        "`goalcup start` needs a goal file: \
          `goalcup start --harness <id> --goal-file <file>`."
             .to_string(),
     ))

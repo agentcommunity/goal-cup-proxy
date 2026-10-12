@@ -247,8 +247,8 @@ fn pinned(cfg: &Path, entry: Option<&str>) -> Result<EntryRecord, CliError> {
         None => entries::latest_entry(cfg)?.ok_or_else(|| {
             CliError::Refused(format!(
                 "no run has been started from this machine: there is no record under {}. \
-                 Run `goalcup start --harness <id>`, or name an entry that was started \
-                 here.",
+                 Run `goalcup start --harness <id> --goal-file <file>`, or name an entry \
+                 that was started here.",
                 entries::entries_dir(cfg).display()
             ))
         }),
