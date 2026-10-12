@@ -4,9 +4,10 @@
 # and `cargo fetch --locked` run on the host first, because the container builds with --offline
 # from the host's cargo registry. The first run downloads the rust:1.99 image, Debian packages and
 # the cargo-nextest binary; the build cache is the volume goalcup-linux-check-target.
+# The script takes no lock itself: do not run it alongside other heavy test runs.
 # Usage: sh scripts/linux-check.sh      Last line: `linux-check: PASS` or `linux-check: FAIL <step>`.
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 img=goalcup-linux-check
 name=goalcup-linux-check-$$
 registry=${CARGO_HOME:-$HOME/.cargo}/registry
@@ -25,9 +26,13 @@ RUN case "$(uname -m)" in aarch64) n=linux-arm ;; *) n=linux ;; esac \
 ENV RUSTUP_TOOLCHAIN=1.99.0 CARGO_TARGET_DIR=/target CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0
 DOCKERFILE
 
+# A hard-killed earlier run (SIGKILL skips the trap) leaves its container; sweep it first.
+old=$(docker ps -aq --filter label=goalcup-linux-check)
+[ -z "$old" ] || docker rm -f $old >/dev/null 2>&1
+trap 'docker rm -f "$name" >/dev/null 2>&1' EXIT
+trap 'exit 130' INT HUP TERM
 # --init: something must reap orphans, as it does on a real host or WSL2.
-trap 'docker rm -f "$name" >/dev/null 2>&1' EXIT INT TERM
-docker run -d --name "$name" --privileged --init --cpus=6 -v "$PWD":/src \
+docker run -d --name "$name" --label goalcup-linux-check --privileged --init --cpus=6 -v "$PWD":/src \
     -v "$registry":/usr/local/cargo/registry -v goalcup-linux-check-target:/target \
     -w /src "$img" sleep infinity >/dev/null || { echo "linux-check: FAIL container"; exit 1; }
 docker exec "$name" sh -c 'set -e; chown dev /target; mkdir -p /mnt/ext4 /mnt/xfs
@@ -39,8 +44,9 @@ docker exec "$name" sh -c 'set -e; chown dev /target; mkdir -p /mnt/ext4 /mnt/xf
 # step NAME COMMAND: as dev, with TMPDIR on ext4 (/tmp is overlayfs, which captures refuse).
 step() {
     echo "linux-check: $1"
-    docker exec -u dev -e HOME=/home/dev -e TMPDIR=/mnt/ext4/tmp "$name" sh -c "$2" ||
-        { echo "linux-check: FAIL $1"; exit 1; }
+    # In the background plus `wait`, so a signal runs the trap now, not after the step ends.
+    docker exec -u dev -e HOME=/home/dev -e TMPDIR=/mnt/ext4/tmp "$name" sh -c "$2" &
+    wait $! || { echo "linux-check: FAIL $1"; exit 1; }
 }
 step "fast gate" 'sh scripts/gate.sh fast'
 step "reservation" '

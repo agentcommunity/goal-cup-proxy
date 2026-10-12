@@ -90,6 +90,8 @@ claims it. The connector's `[kill]` section says the same in a comment.
 interval — forker forks and exits between two snapshots — is in no snapshot under a live
 parent and no ppid walk can see it; the M0 §2.5 respawn, when the handler forks and exits
 within 50 ms, is this. The property runner allows exactly this set (`same_poll_orphans`).
+Linux's `W` is wider than that name: without a fork witness it covers any orphan the ppid walk
+cannot see, as ruled in "RULED: on Linux, `Confirmed` excludes fork-and-leave wrappers" below.
 
 **macOS** (numeric `kill`, kqueue witness per member from the root down, attached before phase
 A; audit token for the singleton). Each witness is read twice a poll — before the snapshot and
@@ -138,7 +140,7 @@ Let B be every pid born under the root during the call (ground truth), O ⊆ B t
 set (B minus what had left the root's ppid walk before the call, D30), A the pids alive
 at return, K the kills sent, R the report.
 I1  R.observed_gone ⟹ A ∩ O ⊆ W, where W is the platform's stated residual window
-    (Linux: same-poll orphans; macOS: ∅).
+    (Linux: any orphan the ppid walk cannot see, see "RULED" below; macOS: ∅).
 I2  R.observed_gone ⟹ A ∩ R.targeted = ∅.
 I3  every k ∈ K names a pid ≥ 2 that was ours when sent, with SIGTERM or SIGKILL only;
     every killpg names a group of ours under a live leader.
@@ -163,25 +165,30 @@ one of those happens.
 ## RULED: on Linux, `Confirmed` excludes fork-and-leave wrappers
 
 Owner ruling (1), 2026-10-13: say plainly that on Linux `observed_gone`, `all_gone` and
-`Confirmed` exclude a fork-and-leave wrapper, meaning a child forked before the root exits and
-never waited for. Linux has no fork witness, so such a child is in no snapshot under a live
-parent and no ppid walk can see it. A report over that tree can come back `observed_gone` with
-`all_gone: true`, and `Confirmed` can stand, while the orphan is still running. This is inside
-`W` as written above, so `I1` is not violated and the implementation behaves as documented; the
-ruling widens the stated limitation and changes no code.
+`Confirmed` exclude every orphan the ppid walk cannot see. Linux has no fork witness, so such a
+process is in no snapshot under a live parent. Three shapes are known: a same-poll orphan, a
+fork-and-leave child (forked before the root exits and never waited for), and a member's fork
+after the root has died. A report over a tree holding one can come back `observed_gone` with
+`all_gone: true`, and `Confirmed` can stand, while the orphan is still running. `W` for Linux is
+therefore that whole set, not only the same-poll orphan named above; `I1` holds against that
+widened `W`. The ruling widens the stated limitation and changes no code.
 
-It has been measured three times. `docs/qualification/2026-09-16-review.md` (in git history at
-`6494030`; 5/5 reproductions, and its section "seal.rs gate" recording that `Confirmed` *would
-be returned*), and again on 2026-09-18 while the CI death was being diagnosed,
-`docs/qualification/2026-09-18-f0-linux-residual.md` (also in git history at `6494030`). On
-2026-10-13, measured in Docker, `a_report_does_not_claim_the_harness_gone_while_a_post_root_death_orphan_lives`
-fails on Linux with `all_gone: true` and the orphan alive. That test is `ignore`d on Linux, with
-this section as its reason, and still runs and passes on macOS.
+What each run measured:
+
+- `docs/qualification/2026-09-16-review.md` (in git history at `6494030`): 5/5 reproductions of
+  an orphan invisible to the walk, and its section "seal.rs gate" recording that `Confirmed`
+  *would be returned*.
+- `docs/qualification/2026-09-18-f0-linux-residual.md` (also at `6494030`): the same residual,
+  found again while the CI death was being diagnosed.
+- 2026-10-13, in Docker: `a_report_does_not_claim_the_harness_gone_while_a_post_root_death_orphan_lives`
+  runs `wrapper-root-dies-first.sh`, where a member forks an orphan about 400 ms after the root
+  has died. On Linux the report said `all_gone: true` with the orphan alive. That test is
+  `ignore`d on Linux, with this section as its reason, and still runs and passes on macOS.
 
 "Same-poll orphan" understates the reach of the window. `fork()` immediately followed by
-`exit()` is two syscalls apart with nothing enforcing a gap, so *every* wrapper of the shape
-"hand off to a child and leave" lands in it *every time*. This repository already has a name and
-a fixture for that shape, "the ordinary shape — a launcher whose session is a child".
+`exit()` is two syscalls apart with nothing enforcing a gap, so a wrapper of the shape "hand off
+to a child and leave" has landed in it in every reproduction so far. This repository already has
+a name and a fixture for that shape, "the ordinary shape — a launcher whose session is a child".
 
 **The fix is due before the 168-hour dry run:** make the daemon a child subreaper
 (`PR_SET_CHILD_SUBREAPER`), so that an orphan of any member is re-parented to the daemon and
