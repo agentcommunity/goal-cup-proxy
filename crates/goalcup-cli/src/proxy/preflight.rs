@@ -13,7 +13,7 @@
 //! literal) has no network path to check and is skipped. Nothing here is said to the harness,
 //! which does not exist yet.
 
-use super::connect::{ConnectFailureKind, DEFAULT_CONNECT_ATTEMPT_TIMEOUT, connect_host};
+use super::connect::{ConnectFailureKind, DEFAULT_CONNECT_ATTEMPT_TIMEOUT, Retry, connect_host};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -116,7 +116,7 @@ fn probe(hosts: Vec<String>, port: u16, budget: Duration) -> Result<(), Unreacha
         let mut probes = tokio::task::JoinSet::new();
         for (index, host) in hosts.iter().cloned().enumerate() {
             probes.spawn(async move {
-                let reached = connect_host(&host, port, attempt, until).await;
+                let reached = connect_host(&host, port, attempt, until, Retry::UntilDeadline).await;
                 (index, reached.err())
             });
         }

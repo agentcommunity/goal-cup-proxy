@@ -33,10 +33,12 @@
 //! The CONNECT head is read into at most [`MAX_CONNECT_HEAD_BYTES`]; the ClientHello
 //! inspection buffers at most [`MAX_CLIENT_HELLO_PEEK_BYTES`]. Everything before the decision
 //! (head, inspection, upstream connect, both handshakes) runs under one admission deadline.
-//! The upstream connect is retried, re-resolving the name each round, until five sixths of
-//! that deadline (at most five seconds are kept back for the handshakes), so a short network
-//! outage costs the harness a slower answer rather than a `502`. Nothing has been sent
-//! upstream when it is retried: no request is ever replayed.
+//! The upstream connect to a provider host (approved or authentication) is retried,
+//! re-resolving the name each round, until five sixths of that deadline (at most five seconds
+//! are kept back for the handshakes), so a short network outage costs the harness a slower
+//! answer rather than a `502`. A host that is not approved (the agent's own traffic) gets one
+//! round, so its failure is answered at once. Nothing has been sent upstream when a connect is
+//! retried: no request is ever replayed.
 //! A tunnel, once decided, has no deadline: dropping the `admit` future (for example on the
 //! caller's shutdown) closes exactly the two sockets it owns and nothing else.
 
@@ -493,13 +495,12 @@ async fn negotiate<S: AsyncIo + 'static>(
         } else {
             TunnelReason::NotApproved
         };
-        let upstream =
-            match connect_upstream(&target, config.connect_attempt_timeout, connect_until).await {
-                Ok(upstream) => upstream,
-                Err(kind) => {
-                    return refuse(&mut inbound, FailureClass::UpstreamConnect(kind)).await;
-                }
-            };
+        let upstream = match connect_upstream(&target, config, connect_until).await {
+            Ok(upstream) => upstream,
+            Err(kind) => {
+                return refuse(&mut inbound, FailureClass::UpstreamConnect(kind)).await;
+            }
+        };
         if write_established(&mut inbound).await.is_err() {
             return Decision::Failed(FailureClass::ClientIo);
         }
@@ -529,7 +530,7 @@ async fn negotiate<S: AsyncIo + 'static>(
         HelloParse::NotTls => TunnelReason::NotTls,
         HelloParse::NeedMore | HelloParse::Malformed => TunnelReason::ClientHelloUnparsed,
     };
-    match connect_upstream(&target, config.connect_attempt_timeout, connect_until).await {
+    match connect_upstream(&target, config, connect_until).await {
         Ok(upstream) => Decision::Tunnel {
             inbound,
             upstream,
@@ -551,7 +552,7 @@ async fn intercept<S: AsyncIo + 'static>(
     config: &AdmissionConfig,
     connect_until: tokio::time::Instant,
 ) -> Decision<S> {
-    let tcp = match connect_upstream(&target, config.connect_attempt_timeout, connect_until).await {
+    let tcp = match connect_upstream(&target, config, connect_until).await {
         Ok(tcp) => tcp,
         Err(kind) => return Decision::Failed(FailureClass::UpstreamConnect(kind)),
     };
@@ -829,38 +830,69 @@ fn connect_reserve(admission: Duration) -> Duration {
     (admission / 6).min(Duration::from_secs(5))
 }
 
-/// Connects to the target before `until`, retrying through a short outage. Each round
-/// resolves the name afresh and tries every address in turn, IPv4 first, each attempt bounded
-/// by `attempt` (and by `until`) so one dead route cannot stall admission. A failed round is
-/// followed by a pause that starts at [`CONNECT_RETRY_FIRST`] and doubles up to
-/// [`CONNECT_RETRY_MAX`]; no round starts that could not begin before `until`. The error is the
-/// last round's last failure.
+/// Whether a connect retries through a short outage or makes one round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Retry {
+    /// Rounds until the deadline: a provider host (approved or authentication).
+    UntilDeadline,
+    /// One round, each address bounded by the attempt only: a host that is not a provider's,
+    /// which is the agent's own traffic (pip, npm, git, curl). Its refusal or `NXDOMAIN` is
+    /// answered at once, as it always was; retrying it would change the run being measured.
+    Once,
+}
+
+/// Connects to the target for admission: retried until `until` when it is a provider host,
+/// one round otherwise ([`connect_host`]).
+async fn connect_upstream(
+    target: &Target,
+    config: &AdmissionConfig,
+    until: tokio::time::Instant,
+) -> Result<TcpStream, ConnectFailureKind> {
+    let retry = if config.is_provider_host(&target.host) {
+        Retry::UntilDeadline
+    } else {
+        Retry::Once
+    };
+    connect_host(
+        &target.host,
+        target.port,
+        config.connect_attempt_timeout,
+        until,
+        retry,
+    )
+    .await
+}
+
+/// Connects to `host:port`. Each round resolves the name afresh and tries every address in
+/// turn, IPv4 first, each attempt bounded by `attempt` so one dead route cannot stall
+/// admission.
+///
+/// With [`Retry::UntilDeadline`], a failed round is followed by a pause that starts at
+/// [`CONNECT_RETRY_FIRST`] and doubles up to [`CONNECT_RETRY_MAX`], and no round starts that
+/// could not begin before `until`; the first round always runs, for at least one attempt's
+/// length, even when it starts at or after `until` (a ClientHello that came late). With
+/// [`Retry::Once`] there is one round and `until` is not consulted: the caller's own deadline
+/// bounds it, as before retries existed. The error is the last round's last failure.
 ///
 /// Nothing has been sent upstream when this runs, so a retry never replays a request: it only
 /// opens a TCP connection again. A connected socket gets `TCP_NODELAY` and upstream keepalive
 /// ([`UPSTREAM_KEEPALIVE_IDLE`], [`UPSTREAM_KEEPALIVE_INTERVAL`],
 /// [`UPSTREAM_KEEPALIVE_PROBES`]). There is no idle timeout: SSE and WebSocket streams idle
 /// legitimately, and keepalive is what notices a path that went dark under one.
-async fn connect_upstream(
-    target: &Target,
-    attempt: Duration,
-    until: tokio::time::Instant,
-) -> Result<TcpStream, ConnectFailureKind> {
-    connect_host(&target.host, target.port, attempt, until).await
-}
-
-/// [`connect_upstream`] for a host and port, so the start preflight can probe the same way.
 pub(crate) async fn connect_host(
     host: &str,
     port: u16,
     attempt: Duration,
     until: tokio::time::Instant,
+    retry: Retry,
 ) -> Result<TcpStream, ConnectFailureKind> {
     let mut pause = CONNECT_RETRY_FIRST;
-    // The first round always runs, for at least one attempt's length, even when it starts at or
-    // after `until` (a ClientHello that came late): only the retries are held to `until`, and
-    // the caller's own deadline still bounds everything.
-    let mut round_until = until.max(tokio::time::Instant::now() + attempt);
+    let now = tokio::time::Instant::now();
+    let mut round_until = match retry {
+        Retry::UntilDeadline => until.max(now + attempt),
+        // No bound of its own: one round as before retries existed.
+        Retry::Once => now + Duration::from_secs(24 * 60 * 60),
+    };
     loop {
         let lookup = tokio::net::lookup_host((host, port));
         let round = match tokio::time::timeout_at(round_until, lookup).await {
@@ -876,7 +908,7 @@ pub(crate) async fn connect_host(
             Err(kind) => kind,
         };
         let now = tokio::time::Instant::now();
-        if now + pause >= until {
+        if retry == Retry::Once || now + pause >= until {
             return Err(last);
         }
         tokio::time::sleep(pause).await;
@@ -1194,13 +1226,6 @@ mod tests {
         );
     }
 
-    fn loopback(port: u16) -> Target {
-        Target {
-            host: "127.0.0.1".into(),
-            port,
-        }
-    }
-
     /// A loopback port nothing listens on (yet).
     fn free_port() -> u16 {
         let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1217,7 +1242,14 @@ mod tests {
                 .unwrap()
         });
         let until = tokio::time::Instant::now() + Duration::from_secs(5);
-        let connected = connect_upstream(&loopback(port), Duration::from_secs(1), until).await;
+        let connected = connect_host(
+            "127.0.0.1",
+            port,
+            Duration::from_secs(1),
+            until,
+            Retry::UntilDeadline,
+        )
+        .await;
         let _listener = opener.await.unwrap();
         assert!(connected.is_ok(), "{:?}", connected.err());
     }
@@ -1227,12 +1259,38 @@ mod tests {
         let port = free_port();
         let started = tokio::time::Instant::now();
         let until = started + Duration::from_millis(800);
-        let failed = connect_upstream(&loopback(port), Duration::from_secs(1), until).await;
+        let failed = connect_host(
+            "127.0.0.1",
+            port,
+            Duration::from_secs(1),
+            until,
+            Retry::UntilDeadline,
+        )
+        .await;
         assert_eq!(failed.err(), Some(ConnectFailureKind::TcpRefused));
         let took = started.elapsed();
         // It went on past the first refusal, and it never outlived its deadline.
         assert!(took >= Duration::from_millis(400), "{took:?}");
         assert!(took <= Duration::from_millis(900), "{took:?}");
+    }
+
+    /// A host that is not a provider's gets one round: its refusal comes back at once.
+    #[tokio::test]
+    async fn a_single_round_connect_is_not_retried() {
+        let port = free_port();
+        let started = tokio::time::Instant::now();
+        let until = started + Duration::from_secs(5);
+        let failed = connect_host(
+            "127.0.0.1",
+            port,
+            Duration::from_secs(1),
+            until,
+            Retry::Once,
+        )
+        .await;
+        assert_eq!(failed.err(), Some(ConnectFailureKind::TcpRefused));
+        let took = started.elapsed();
+        assert!(took < CONNECT_RETRY_FIRST, "{took:?}");
     }
 
     /// A connect that starts after its deadline (a ClientHello that came late) still gets one
@@ -1244,7 +1302,14 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let until = tokio::time::Instant::now();
         tokio::time::sleep(Duration::from_millis(5)).await;
-        let connected = connect_upstream(&loopback(port), Duration::from_secs(1), until).await;
+        let connected = connect_host(
+            "127.0.0.1",
+            port,
+            Duration::from_secs(1),
+            until,
+            Retry::UntilDeadline,
+        )
+        .await;
         assert!(connected.is_ok(), "{:?}", connected.err());
     }
 
@@ -1253,9 +1318,15 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let until = tokio::time::Instant::now() + Duration::from_secs(5);
-        let stream = connect_upstream(&loopback(port), Duration::from_secs(1), until)
-            .await
-            .unwrap();
+        let stream = connect_host(
+            "127.0.0.1",
+            port,
+            Duration::from_secs(1),
+            until,
+            Retry::UntilDeadline,
+        )
+        .await
+        .unwrap();
         let socket = socket2::SockRef::from(&stream);
         assert!(socket.keepalive().unwrap());
         assert_eq!(

@@ -280,8 +280,9 @@ machine healthy" and the wrong one to "can I start this harness".
 A host that does not answer refuses the run, naming the host, the failure (DNS, refused, timed
 out, not permitted) and this binary's path: a per-app firewall such as Little Snitch holds a
 newly built binary's connections until someone allows that exact path. During a run, each
-upstream connect is retried, re-resolving the name, with a 250 ms to 2 s backoff until 25 s of
-the 30 s admission deadline, and is never a replayed request. Upstream sockets get TCP keepalive
+provider-host connect is retried, re-resolving the name, with a 250 ms to 2 s backoff until 25 s
+of the 30 s admission deadline, and is never a replayed request; any other host (the agent's own
+pip, npm, git or curl traffic) gets one round and fails at once, as before. Upstream sockets get TCP keepalive
 (60 s idle, 15 s interval, 4 probes) and no idle timeout. Provider-host connects that still fail
 coalesce into outage windows: the finish adds `upstream_outages=N` to the `proxy admission:` line
 and one `proxy upstream outage:` line per window (first and last failure, count, recovery time).
