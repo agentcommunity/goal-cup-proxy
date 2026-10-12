@@ -45,8 +45,12 @@ contribution on its own.
 
 - A Mac with Apple silicon. The test kit runs on macOS only.
 - Rust through [rustup](https://rustup.rs) (1.99 or later), the Xcode command line tools, and
-  `python3` (the one macOS ships is fine).
+  `python3` (the one macOS ships is fine). If Homebrew also installed Rust, make sure
+  `which cargo` shows `~/.cargo/bin/cargo`.
+- A network connection for the first build only, and about 3 GB of disk for `target/`.
 - Your harness installed at the exact version you want to support, and a GitHub account.
+
+<a id="1-capability-worksheet"></a>
 
 ## Steps
 
@@ -57,30 +61,37 @@ coding agent can follow it step by step, with the expected output of every comma
    [goal-cup-tracer](https://github.com/agentcommunity/goal-cup-tracer) on GitHub, then:
    ```sh
    git clone https://github.com/<you>/goal-cup-tracer.git && cd goal-cup-tracer
-   cargo install cargo-nextest --locked
+   cargo nextest --version || cargo install cargo-nextest --locked
    cargo fetch --locked
    cargo build
    ```
+   This is the only step that needs the network; the checks afterwards run offline.
 2. **Write the facts sheet.** Copy the template and fill it from your docs and from a run with
    a throwaway `HOME`. Write "unknown" rather than guess.
+   [codex-cli.md](harnesses/codex-cli.md) is a filled example.
    ```sh
    mkdir -p docs/harnesses
    cp skills/adding-a-capture-harness/templates/harness-facts.md docs/harnesses/<id>.md
    ```
 3. **Check the fit.** Walk the [decision table](../skills/adding-a-capture-harness/decision-table.md).
    If a row says "core PR", stop and open an issue with your facts sheet: we change the tracer
-   first. Amp is the worked example there.
+   first. Amp is the worked example there. Two early surprises: the session id must reach the
+   tracer as an id flag, a JSON line on stdout or a fixed-prefix line on stderr (plain text on
+   stdout is not enough), and a Python harness that trusts only `SSL_CERT_FILE` or
+   `REQUESTS_CA_BUNDLE` needs its own CA variable added first.
 4. **Write the connector.** Copy
    `skills/adding-a-capture-harness/templates/connector-harness.toml` to
-   `connectors/<id>/harness.toml` and fill it in. Pin your binary's version and SHA-256.
+   `connectors/<id>/harness.toml` and fill it in; `connectors/hermes-cli/` is the closest
+   example. Pin your binary's version and SHA-256 (`shasum -a 256 <binary>`). No local check
+   runs your real binary, so none can tell you the hash is wrong. The hash is copied into your
+   connector's test snapshot (`<id>.json`), where a reviewer sees it; a maintainer re-derives it
+   from your official release, and `goalcup start` refuses a binary whose hash differs.
 5. **Add a test case.** Copy `skills/adding-a-capture-harness/templates/kit-case/` to
    `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`. It is a small Python stand-in that
    behaves like your harness, so the tracer can be tested without a network or a key.
 6. **Regenerate the generated files.** `sh scripts/pin-manifests.sh` records the connector's
    hash; the skill gives the one command that refreshes the test snapshots ("goldens").
 7. **Check it and open the PR** (next two sections).
-
-<a id="1-capability-worksheet"></a><a id="3-generic-harness-contract-kit"></a>
 
 ## Check it locally
 
@@ -92,15 +103,15 @@ sh scripts/gate.sh fast
 The first runs every connector check: files, pin, schema, test snapshots, and the test kit with
 your stand-in. On a Mac its last line reads `check-connector: <id>: 6 passed, 0 failed, 0 skipped`.
 The second is the build, format, lint and test gate every change passes; its last line reads
-`gate fast: PASS in <N>s`.
+`gate fast: PASS in <N>s`. On a warm build expect about a minute for the first and two to
+three for the second. If the kit fails, the summary says only `FAIL kit`; the skill explains
+how to read the test output above it.
 
 A passing kit proves the tracer starts, isolates and records something shaped like your
 harness. It does not prove your real harness works under the tracer. If you want to try that,
 run one short goal on your own account as in the [README quickstart](../README.md#quickstart),
 with `--harness <id>`, and check it with `goalcup-verify --capture-integrity <trace>`. Never put
 anything from a real trace in the PR; it holds your transcript.
-
-<a id="5-prepare-a-contribution"></a>
 
 ## What goes in the PR
 
