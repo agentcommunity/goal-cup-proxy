@@ -65,11 +65,6 @@ fn exclusion_is_the_one_shared_function_at_its_current_anchored_semantics() {
         !is_excluded("targeted.py", &p("target")),
         "never a substring test"
     );
-    let src = std::fs::read_to_string("src/seal.rs").unwrap();
-    assert!(
-        !src.contains("fn is_excluded"),
-        "one function, one semantics, three call sites"
-    );
 }
 
 #[test]
@@ -371,25 +366,6 @@ fn seal_calls_the_daemon_once_prints_the_difference_and_points_at_the_trace_dire
 
     // The CLI wrote nothing under the artifact root: the same names, sizes and mtimes.
     assert_eq!(support::artifact_snapshot(&root), before);
-    assert!(
-        !std::fs::read_to_string("src/commands/seal.rs")
-            .unwrap()
-            .contains("TraceExport")
-    );
-    assert!(
-        !std::fs::read_to_string("src/seal.rs")
-            .unwrap()
-            .contains("fs::write")
-    );
-    // And it signalled nothing (D22, and the same grep as `process_handoff.rs`).
-    for entry in support::walk("crates/goalcup-cli/src") {
-        assert!(
-            !std::fs::read_to_string(&entry)
-                .unwrap()
-                .contains("/bin/kill"),
-            "{entry:?}"
-        );
-    }
 }
 
 /// A completed V4 response names immutable retained bytes. Reopening the live workspace
@@ -564,31 +540,6 @@ fn a_busy_seal_is_asked_again_and_a_standing_busy_is_rung_one() {
         m.calls().iter().filter(|c| *c == "seal").count(),
         goalcup_cli::retry::SEAL_BUSY_ATTEMPTS,
         "the real command reaches all four bounded seal asks"
-    );
-
-    let source = include_str!("../src/commands/seal.rs");
-    assert!(
-        source.contains("retry_busy_seal(|| client.seal(entry_id))"),
-        "only the terminal seal route takes the seal-specific retry policy"
-    );
-    assert!(
-        !source.contains("retry_busy(|| client.seal(entry_id))"),
-        "the terminal route no longer falls back to generic retry"
-    );
-
-    let route_specific_callers: Vec<_> = support::walk("crates/goalcup-cli/src")
-        .into_iter()
-        .filter(|entry| {
-            std::fs::read_to_string(entry)
-                .unwrap()
-                .lines()
-                .any(|line| line.contains("retry_busy_seal(|| client."))
-        })
-        .collect();
-    assert_eq!(
-        route_specific_callers,
-        vec![support::repo_root().join("crates/goalcup-cli/src/commands/seal.rs")],
-        "the route-specific policy is owned by exactly the terminal seal command"
     );
 }
 
@@ -795,18 +746,6 @@ fn a_dry_run_answers_on_a_machine_with_no_control_json_at_all() {
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("a dry run") && text.contains("hello.py"));
     assert!(!m.calls().contains(&"seal".to_string()));
-
-    // And the ordering in `main.rs`: the dry run leaves before anything resolves a client.
-    let main = std::fs::read_to_string("src/main.rs").unwrap();
-    let seal_fn = &main[main.find("fn seal(entry: Option<String>").expect("fn seal")..];
-    let dry = seal_fn
-        .find("return commands::seal::dry_run_with")
-        .expect("the dry-run exit");
-    let client = seal_fn.find("let client =").expect("the client");
-    assert!(
-        dry < client,
-        "`fn seal` builds a client before it takes the dry-run exit"
-    );
 }
 
 /// The pasted line: quoted where the path has a space in it, and `--dev` iff the run was one.

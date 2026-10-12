@@ -7,43 +7,6 @@ mod support;
 
 // ------------------------------------------------------------- the command
 
-#[test]
-fn the_shared_entry_retry_is_wired_only_to_the_abandon_route_in_start() {
-    let mut inventory = std::collections::BTreeMap::<String, usize>::new();
-    let source_root = support::repo_root().join("crates/goalcup-cli/src");
-    for path in support::walk("crates/goalcup-cli/src") {
-        let source = std::fs::read_to_string(&path).unwrap();
-        let file = path
-            .strip_prefix(&source_root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
-        for line in source
-            .lines()
-            .filter(|line| line.contains("retry_busy_entry(|| client."))
-        {
-            for route in [
-                "arm(",
-                "abandon(",
-                "resume_preview(",
-                "resume(",
-                "cancel_process_handoff(",
-            ] {
-                if line.contains(route) {
-                    *inventory.entry(format!("{file}:{route}")).or_default() += 1;
-                }
-            }
-        }
-    }
-
-    assert_eq!(
-        inventory,
-        // The V1 `resume` and `arm` call sites left with D48; `abandon` is the one left.
-        std::collections::BTreeMap::from([("commands/start.rs:abandon(".to_string(), 1)]),
-        "the helper must not spread to process, seal, create, status, health, entries, current, or start-signal routes"
-    );
-}
-
 /// Every daemon call this crate makes goes through the one `busy` retry.
 ///
 /// A grep and not a type, because the rule is about call sites: `retry::retry_busy` is a

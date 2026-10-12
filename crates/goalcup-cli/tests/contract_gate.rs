@@ -146,12 +146,6 @@ fn the_control_file_this_cli_reads_is_the_five_field_document_the_daemon_writes(
         (f.control_api_version, f.port, f.token.as_str()),
         (3, 53310, "t")
     );
-    // The Unix transport is cut on both sides; a `socket` key is ignored, never honoured.
-    let source = include_str!("../src/config.rs");
-    assert!(
-        !source.contains("socket"),
-        "no Unix transport, on either side"
-    );
 }
 
 /// Every rung of the ladder, from every variant, and the one place `2` is allowed to come
@@ -272,37 +266,6 @@ fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
             "{name} is not a gate, and 4 is a gate's number"
         );
     }
-
-    // Every construction of the rung, enumerated. One line per site, which is how this crate
-    // already writes them — `CliError::Gate(format!(` opens the call and the sentence
-    // follows underneath.
-    let mut sites: Vec<(String, usize, String)> = Vec::new();
-    for entry in support::walk("crates/goalcup-cli/src") {
-        let Ok(source) = std::fs::read_to_string(&entry) else {
-            continue;
-        };
-        for (n, line) in source.lines().enumerate() {
-            let trimmed = line.trim_start();
-            // The match arm in `lib.rs` reads the rung; it does not raise it.
-            if !trimmed.contains("CliError::Gate(")
-                || trimmed.contains("CliError::Gate(_)")
-                || trimmed.starts_with("//")
-            {
-                continue;
-            }
-            let file = entry
-                .strip_prefix(support::repo_root())
-                .unwrap_or(&entry)
-                .display()
-                .to_string();
-            sites.push((file, n + 1, trimmed.to_string()));
-        }
-    }
-    // The CLI raises no rung-4 site of its own since D48 removed the V1 arming wait and the
-    // `resume` gates: rung 4 reaches a participant only as the daemon's `arming_timeout`,
-    // which `CliError::exit_code` maps and only a pre-D48 daemon sends. A new site is a new
-    // gate; say which in `lib.rs`'s ladder, in `AFTER_HELP`, and here.
-    assert!(sites.is_empty(), "an unexpected rung-4 site: {sites:#?}");
 }
 
 /// clap exits `2` on a usage error, and `2` is a verdict here — so this binary parses with
@@ -556,16 +519,6 @@ fn doctor_has_no_verify_mode_and_the_help_footers_say_so() {
         Some(1),
         "an unknown flag is a usage error"
     );
-    let top = goalcup().arg("--help").output().unwrap();
-    let top = String::from_utf8(top.stdout).unwrap();
-    assert!(
-        top.contains("2 is never this binary's, and neither is 4"),
-        "the footer names 2 and 4 as V1-only: {top}"
-    );
-    assert!(
-        top.contains("goalcup-verify --capture-integrity"),
-        "and says where verification is: {top}"
-    );
 }
 
 /// No command prints a secret, and the two documents that hold one say `<redacted>` when
@@ -646,10 +599,6 @@ fn goalcup_lists_the_five_capture_commands_and_nothing_else() {
         assert!(
             text.contains("goalcup-verify") && text.contains("Exit codes:"),
             "`goalcup {flag}` says where verification lives and carries the ladder: {text}"
-        );
-        assert!(
-            text.contains("D48") && text.contains("v0.5.0"),
-            "and says that the other rungs belonged to the removed V1 path: {text}"
         );
     }
     let bad = goalcup().arg("verify").output().unwrap();

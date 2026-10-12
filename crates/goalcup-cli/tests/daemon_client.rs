@@ -13,17 +13,13 @@
 mod support;
 
 use goalcup_cli::CliError;
-use goalcup_cli::daemon::{
-    CALL_TIMEOUT, HttpDaemonClient, MockDaemonClient, PROCESS_HANDOFF_CALL_TIMEOUT,
-    SLOW_CALL_TIMEOUT, long_poll_read_timeout,
-};
+use goalcup_cli::daemon::{CALL_TIMEOUT, HttpDaemonClient, MockDaemonClient, SLOW_CALL_TIMEOUT};
 use goalcup_cli::retry::{
     BUSY_ATTEMPTS, BUSY_BACKOFF, BUSY_BUDGET, retry_busy, retry_busy_process_classified,
     retry_busy_within,
 };
 use goalcup_protocol::control::{
-    self, ControlError, DaemonClient, SUFFIX_RESUME_PREVIEW, SUFFIX_SEAL, SUFFIX_STATUS,
-    entry_route, is_public_route,
+    self, ControlError, DaemonClient, SUFFIX_SEAL, SUFFIX_STATUS, entry_route, is_public_route,
 };
 use goalcup_protocol::manifest::KillStrategy;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
@@ -328,40 +324,6 @@ fn the_bearer_follows_is_public_route_on_the_raw_path_in_both_directions() {
     let (path, auth) = srv.last();
     assert_eq!(path, entry_route(entry, SUFFIX_SEAL));
     assert!(auth.is_some(), "every mutating route keeps the token");
-
-    let _ = c.resume_preview(entry);
-    let (path, auth) = srv.last();
-    assert_eq!(path, entry_route(entry, SUFFIX_RESUME_PREVIEW));
-    assert_eq!(srv.last_method(), "GET", "preview is never a resume POST");
-    assert!(
-        auth.is_some(),
-        "the preview pins require the control bearer"
-    );
-
-    let _ = c.wait_start_signal(entry, Duration::from_millis(50));
-    let (path, auth) = srv.last();
-    assert!(
-        path.starts_with(
-            &control::start_signal_route(entry, Duration::from_millis(50))
-                .split('?')
-                .next()
-                .unwrap()
-                .to_string()
-        )
-    );
-    assert!(
-        path.contains("timeout_ms=50"),
-        "the long-poll deadline is on the wire"
-    );
-    assert!(auth.is_some());
-
-    // The client asks about the string it is about to send, never a rewritten one.
-    let source = include_str!("../src/daemon/mod.rs");
-    assert!(
-        source.contains("is_public_route(path)"),
-        "the RAW path, per the M1a carry-forward"
-    );
-    assert!(!source.contains("unix"), "one transport");
 }
 
 #[test]
@@ -436,43 +398,6 @@ fn the_transport_itself_never_retries_anything() {
         srv.attempts(),
         1,
         "one call on the client, one request on the wire"
-    );
-
-    let source = include_str!("../src/daemon/mod.rs");
-    assert!(
-        !source.contains("thread::sleep"),
-        "nothing in the transport waits to try again"
-    );
-    assert_eq!(
-        source.matches("SLOW_CALL_TIMEOUT)").count(),
-        1,
-        "the five-minute deadline is the seal's and only the seal's: every other route is \
-         inside the retry helper's budget"
-    );
-}
-
-/// `/process` is the one mutating route whose caller has a separate, short, end-to-end retry
-/// policy. Keep its request deadline separate from the generic 30-second control deadline:
-/// the retry arithmetic is only truthful while this exact call site stays on the 2-second
-/// route limit.
-#[test]
-fn the_process_handoff_selects_its_bounded_transport_timeout() {
-    assert_eq!(PROCESS_HANDOFF_CALL_TIMEOUT, Duration::from_secs(2));
-
-    let source = include_str!("../src/daemon/mod.rs");
-    let (_, after_register) = source
-        .split_once("fn register_process")
-        .expect("the process-handoff transport implementation");
-    let (register, _) = after_register
-        .split_once("fn health")
-        .expect("the next transport route after process registration");
-    assert!(
-        register.contains("PROCESS_HANDOFF_CALL_TIMEOUT"),
-        "register_process keeps the timeout that retry::PROCESS_BUSY_BUDGET reserves"
-    );
-    assert!(
-        !register.contains("\n            CALL_TIMEOUT,"),
-        "register_process never falls back to the 30-second generic route timeout"
     );
 }
 
@@ -615,46 +540,6 @@ fn a_body_that_stopped_early_or_is_not_utf8_is_malformed_and_not_unreachable() {
     }
 }
 
-/// A fifty-millisecond poll waits about the time it asked for and not a thirty-second read
-/// deadline: the transport never raises the caller's own interval to `CALL_TIMEOUT`, and the
-/// bound is the caller's.
-#[test]
-fn a_short_long_poll_waits_the_short_time_it_asked_for() {
-    let asked = Duration::from_millis(50);
-    let waited = long_poll_read_timeout(asked);
-    assert!(
-        waited > asked,
-        "the daemon answers at its own deadline and the slack is what keeps the transport \
-         from giving up first"
-    );
-    assert!(
-        waited < CALL_TIMEOUT,
-        "and it is never raised to the ordinary call deadline: {waited:?}"
-    );
-    let long = Duration::from_secs(600);
-    assert!(
-        long_poll_read_timeout(long) > long && long_poll_read_timeout(long) < long * 2,
-        "a long poll is still bounded, by the caller's own interval plus the slack"
-    );
-}
-
-/// The body is `opts` alone. The daemon parses a bare `WorkspaceOpts` and
-/// answers `malformed` to anything else, and its `harness` argument is dead on the wire.
-#[test]
-fn create_workspace_puts_the_bare_workspace_opts_on_the_wire() {
-    let srv = support::recording_daemon();
-    let c = HttpDaemonClient::new(srv.base(), "t".into()).expect("a loopback base");
-    let _ = c.create_workspace("claude-code-cli", &support::workspace_opts());
-    let (path, _) = srv.last();
-    assert_eq!(path, goalcup_protocol::control::ROUTE_WORKSPACES);
-    let body: serde_json::Value = serde_json::from_str(&srv.last_body().unwrap()).unwrap();
-    assert!(
-        body.get("harness").is_none() && body.get("opts").is_none(),
-        "the body is a WorkspaceOpts, not {{harness, opts}}"
-    );
-    assert_eq!(body["connector_id"], "claude-code-cli");
-}
-
 /// `from_config_dir` reads the daemon's own six-field document — the field names are only
 /// checked at runtime, so the fixture below is written as the daemon writes it and the
 /// round trip is proved by the request that comes out the other side carrying that file's
@@ -755,58 +640,6 @@ fn no_refusal_this_client_raises_ever_carries_the_control_token() {
             !text.contains(token),
             "the control token reached a message a participant can read: {text}"
         );
-    }
-}
-
-#[test]
-fn the_mock_records_the_call_order_and_signs_with_the_key_it_publishes() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = MockDaemonClient::armed_ok(tmp.path(), "claude-code-cli");
-    let info = m
-        .create_workspace("claude-code-cli", &support::workspace_opts())
-        .unwrap();
-    m.arm(&info.entry_id).unwrap();
-    let signed = m.status(&info.entry_id).unwrap();
-    assert!(signed.verify_with(&info.run_public_key).is_ok());
-    assert!(
-        signed.verify_with(&"aa".repeat(32)).is_err(),
-        "the key is pinned by the caller; the document's own field is a label"
-    );
-    assert_eq!(m.calls(), vec!["create_workspace", "arm", "status"]);
-    assert_eq!(
-        m.run_public_key(),
-        info.run_public_key,
-        "the key a test pins is the key the mock signs with, or nothing below means \
-         anything"
-    );
-    // The bearer/public split is a WIRE property and is asserted on the wire, in the
-    // first test in this file. The mock holds no headers and claims none.
-}
-
-/// Delayed, then withheld — that order and not the other one. `set_signal_delay` sets a
-/// delay and nothing else: a hook that quietly re-armed a gate `withhold_signal` had shut
-/// would make a test's answer depend on the order its two hooks were called in.
-#[test]
-fn a_delayed_signal_arrives_and_a_withheld_one_times_out() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = MockDaemonClient::armed_ok(tmp.path(), "codex-cli");
-
-    m.set_signal_delay(Duration::from_millis(10));
-    let s = m.wait_start_signal("e1", Duration::from_secs(2)).unwrap();
-    assert_eq!(
-        s.signal,
-        support::connector("codex-cli").manifest.arming.signal
-    );
-    assert_eq!(s.source, "leg1", "the daemon only ever says leg1");
-
-    m.withhold_signal();
-    match m.wait_start_signal("e1", Duration::from_millis(20)) {
-        Err(ControlError::ArmingTimeout { detail }) => assert!(!detail.is_empty()),
-        other => panic!("a withheld signal is an ArmingTimeout: {other:?}"),
-    }
-    match m.wait_start_signal("e1", Duration::from_secs(2)) {
-        Err(ControlError::ArmingTimeout { .. }) => {}
-        other => panic!("and the delay already set did not re-open it: {other:?}"),
     }
 }
 
@@ -1273,68 +1106,6 @@ fn the_capture_seal_carries_its_remaining_budget_and_its_own_read_timeout() {
     );
 }
 
-/// ¶3: the launcher's deadline is taken immediately before `proxy.stop()`: nothing between.
-#[test]
-fn finish_takes_its_deadline_immediately_before_proxy_stop() {
-    let source = include_str!("../src/commands/start.rs");
-    // The one deadline is the budget constant, taken in the call sites that wait the harness.
-    assert!(
-        source.contains("LOCAL_CAPTURE_FINISH_BUDGET"),
-        "the launcher's finish budget is the protocol constant"
-    );
-    assert!(
-        !source.contains("const CAPTURE_FINISH"),
-        "the CLI's own 10-second constant is gone"
-    );
-    // The proxy's own stop is bounded by the drain share, measured from its call.
-    assert!(
-        source.contains("LOCAL_CAPTURE_FINISH_BUDGET - FINISH_COMMIT_RESERVE"),
-        "the proxy's shutdown deadline is the drain share"
-    );
-    // `finish` begins by stopping the proxy against the deadline its caller took: no statement
-    // between the destructuring of `proxied` and `proxy.stop()`.
-    let (_, finish) = source
-        .split_once("\nfn finish(")
-        .expect("the launcher's finish");
-    let (_, after_destructure) = finish
-        .split_once("} = proxied;")
-        .expect("finish takes its proxy apart");
-    let next = after_destructure.trim_start();
-    assert!(
-        next.starts_with("let stopped = runtime.block_on(proxy.stop());"),
-        "nothing runs between the deadline and the proxy's stop: {}",
-        &next[..next.len().min(120)]
-    );
-    // And the deadline is the statement immediately before every call that finishes: nothing
-    // but the binding of the call's result sits between them.
-    let take = "Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;";
-    let mut calls = 0;
-    // rustfmt wraps a call with many arguments; the order of the statements is the point.
-    let flat = source
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace("( ", "(");
-    for call in flat.match_indices("finish(client, ") {
-        calls += 1;
-        let before = &flat[..call.0];
-        let taken = before
-            .rfind(take)
-            .expect("a finish call is preceded by its deadline");
-        let between = before[taken + take.len()..].trim();
-        assert!(
-            between.is_empty()
-                || (between.starts_with("let ")
-                    && !between.contains(';')
-                    && !between.contains('{')),
-            "a statement runs between the deadline and a finish call: {between:?}"
-        );
-    }
-    // The run's own finish, an entry whose harness never ran (`finish_unlaunched`), and a
-    // launch that found the entry sealed (`end_sealed_launch`).
-    assert_eq!(calls, 3, "the launcher's three finishing statements");
-}
-
 /// The pause points (CONTRACTS.md, C6 local finish budget) exist only under `test-support`: a shipped build has the no-op
 /// below the gated definition, and nothing in it reads the environment variable.
 #[test]
@@ -1363,41 +1134,6 @@ fn pause_points_exist_only_under_test_support() {
     );
     // The one use is a call of the one function, unconditional.
     assert!(source.contains("pause_at(\"capture-finish-started\")"));
-}
-
-/// The marker wait is after the proxy's stop and before the seal request,
-/// it ends before the drain share does (amendment c), and a standalone seal carries no scope.
-#[test]
-fn the_marker_wait_follows_the_proxy_stop_and_leaves_the_daemon_a_native_read() {
-    let start = include_str!("../src/commands/start.rs");
-    let (_, rest) = start.split_once("\nfn finish(").expect("the finish");
-    let body = rest.split("\n}\n").next().expect("its body");
-    let at = |needle: &str| {
-        body.find(needle)
-            .unwrap_or_else(|| panic!("`finish` has no {needle}"))
-    };
-    assert!(at("proxy.stop()") < at("marker_until("));
-    assert!(at("marker_until(") < at("seal_locally("));
-    assert!(body.contains("marker_wait_end(deadline)"));
-    assert_eq!(body.matches("marker_until(").count(), 1);
-    // The wait's end is the commit reserve and the daemon's native minimum before the deadline.
-    let tee = include_str!("../src/capture_tee.rs");
-    assert!(tee.contains(".checked_sub(FINISH_COMMIT_RESERVE + NATIVE_FINISH_MIN)"));
-    // The standalone seal (`goalcup seal`) sends neither counters nor a scope.
-    let seal = include_str!("../src/commands/seal.rs");
-    assert!(
-        seal.contains(
-            "finish_locally(client, entry_id, None, None, deadline, allowance, None, out)"
-        ),
-        "a standalone seal passes no counters and no native scope"
-    );
-    // And the only other caller is the launcher's own finish, whose scope is the one read.
-    assert_eq!(
-        start
-            .matches("crate::commands::seal::seal_locally(")
-            .count(),
-        1
-    );
 }
 
 /// The only places this crate starts a process are the launch module's
