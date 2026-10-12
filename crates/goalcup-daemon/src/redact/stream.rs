@@ -121,12 +121,12 @@ const MAX_TIME_MARKS: usize = 8;
 /// source, timestamps, link hashes, JSON framing and the trailing newline).
 const ENVELOPE_RESERVE_BYTES: usize = 4 * 1024;
 const SEGMENT_RECORD_BUDGET: usize = MAX_ENVELOPE_BYTES - ENVELOPE_RESERVE_BYTES;
-/// The longest key the shared JSON literal can match, in units: up to sixty on each side of
+/// The longest key the shared JSON literal can match, in units: up to 1,000 on each side of
 /// an eight-unit key word. A longer `[A-Za-z0-9_\-]` run after a quote is no key, so its
 /// candidate ends there instead of holding the run.
-const JSON_KEY_MAX_UNITS: u8 = 128;
+const JSON_KEY_MAX_UNITS: u16 = 2008;
 /// The longest local part the shared `email` literal matches, in units (all ASCII).
-const EMAIL_LOCAL_MAX: u8 = 64;
+const EMAIL_LOCAL_MAX: u16 = 1024;
 
 /// Positions of the two `generic_secret_assignment` literals in the shared list, counting
 /// `masked_key` at index 2. A rule inserted before them shifts both, which `policy_ready`
@@ -438,7 +438,7 @@ static SHAPES: [Shape; 19] = [
     ),
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)\\?"(?:[A-Za-z0-9_\-]{0,59}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,59})?\\?"\s*:\s*\\?"([^"\\]{16,})\\?""#,
+        source: r#"(?i)\\?"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\?"\s*:\s*\\?"([^"\\]{16,})\\?""#,
         form: Form::JsonAssignment,
     },
     Shape {
@@ -448,7 +448,7 @@ static SHAPES: [Shape; 19] = [
     },
     Shape {
         kind: "email",
-        source: r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+        source: r"[A-Za-z0-9._%+\-]{1,1024}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
         form: Form::Email,
     },
     prefixed(
@@ -830,7 +830,7 @@ struct Json {
     /// The key so far; empty after the key.
     key: Vec<u8>,
     /// Units of the key so far, at most [`JSON_KEY_MAX_UNITS`].
-    key_units: u8,
+    key_units: u16,
     value_start: u64,
     /// Value characters, capped at sixteen.
     n: u8,
@@ -859,7 +859,7 @@ enum Shell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Email {
     /// Local-part units, at most [`EMAIL_LOCAL_MAX`]: past that the window slides.
-    Local(u8),
+    Local(u16),
     Domain {
         /// At least one domain unit seen (capped).
         some: bool,
@@ -1366,7 +1366,7 @@ impl Shell {
 }
 
 impl Email {
-    /// `[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`. The domain stays live
+    /// `[A-Za-z0-9._%+\-]{1,1024}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`. The domain stays live
     /// while its run continues, since a later `.xx` can still extend the match.
     fn step(&mut self, u: Unit) -> bool {
         match self {
@@ -1443,7 +1443,7 @@ impl Candidate {
             Form::JsonAssignment => is(u, b'"') || is(u, b'\\'),
             Form::ShellAssignment => matches!(folded(u), Some(b's' | b't' | b'p' | b'a')),
             // The leftmost-first email match starts where its local-part run starts, or
-            // sixty-four units before its `@` in a longer run: one candidate per run, whose
+            // 1,024 units before its `@` in a longer run: one candidate per run, whose
             // start slides with the run (see `Candidate::step`).
             Form::Email => local_part(u) && !prev_local,
             Form::Field { key, .. } => key.first().is_some_and(|&b| is(u, b)),

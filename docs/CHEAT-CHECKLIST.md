@@ -86,7 +86,7 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
 - **A base64url run of 16 KiB or more can still redact the rest of its JSON line** (the redactor
   holds 16 KiB and fails closed), but only when a rule prefix inside it (`sk-`, `eyJ`, `AIza`,
   `glpat-`) lies more than 16 KiB before the run's end. A bare run holds nothing: the JSON key and
-  the email local part are bounded (128 and 64 units). The run is common: the native Codex rollout
+  the email local part are bounded (2,008 and 1,024 units). The run is common: the native Codex rollout
   persists `encrypted_content` on every reasoning item (9 in
   `spikes/codex-cli/fixtures/rollout-main-01a06614.jsonl`, largest 2,020 B; 8 in
   `spikes/codex-app/fixtures/rollout-main-01a06657.jsonl`, largest 2,276 B). The earlier

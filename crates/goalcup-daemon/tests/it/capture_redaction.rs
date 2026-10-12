@@ -914,8 +914,20 @@ fn fail_closed_cases() -> Vec<(String, Vec<u8>)> {
             b"\n-----END RSA PRIVATE KEY----- tail",
         ]),
     ));
-    // A JSON key is at most 128 units, so a key longer than the hold is no key: only a match
-    // inside the run is left to redact.
+    // A JSON key is at most 2,008 units, so a key longer than the hold is no key: only a match
+    // inside the run is left to redact. A key at the cap is one, and its value past the hold
+    // fails closed.
+    cases.push((
+        "PREFIX JSON key at the cap".into(),
+        cat(&[
+            b"{\"",
+            &long(b"abcdefghijklmnopqrstuvwxyz", 999),
+            b"_api_key\": \"",
+            &long(b"QZqz0123456789", h + 4096),
+            secret,
+            b"\"}",
+        ]),
+    ));
     cases.push((
         "PREFIX JSON key with a vendor key inside".into(),
         cat(&[
@@ -1396,7 +1408,7 @@ fn long_secrets_are_chunking_invariant() {
     dop.extend_from_slice(b" done");
     cases.push(("digitalocean", dop, false, &hex_probe));
 
-    // A local part and a JSON key are bounded (64 and 128 units), so a longer run is never
+    // A local part and a JSON key are bounded (1,024 and 2,008 units), so a longer run is never
     // held past the bound: the stream equals the whole-record policy.
     let mut email = lower(&mut rng, 40_000, b"abcdefghijklmnopqrstuvwxyz0123456789.");
     email.extend_from_slice(b"@example.com and more");
@@ -3305,5 +3317,62 @@ fn an_escaped_json_secret_is_redacted_at_every_split_point() {
     }
     for line in want_bytes.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
         serde_json::from_slice::<serde_json::Value>(line).expect("each record is JSON");
+    }
+}
+
+/// I-2's bounds are long enough for real shapes: a JSON key with a long compound prefix, and a
+/// URL credential, which the `email` rule sees as a local part (`git remote -v` prints
+/// Bitbucket `x-token-auth` tokens of about 190 characters, Azure DevOps tokens of 84). Each
+/// is redacted whole, and the stream equals the whole-record policy at every chunking.
+#[test]
+fn long_secret_keys_and_url_credentials_are_redacted_whole() {
+    let token = |n: usize| -> String {
+        let set = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        (0..n)
+            .map(|i| set[(i * 7 + 3) % set.len()] as char)
+            .collect()
+    };
+    let value = "abcdefghijklmnopqrstuvwxyz012345";
+    let cases: Vec<(String, String)> = vec![
+        (
+            format!("{{\"{}_api_key\": \"{value}\"}}\n", "a".repeat(61)),
+            value.to_string(),
+        ),
+        (
+            format!("{{\"{}_api_key\": \"{value}\"}}\n", "a".repeat(999)),
+            value.to_string(),
+        ),
+        (
+            format!("curl https://user:{}@artifacts.example.com/x\n", token(81)),
+            token(81),
+        ),
+        (
+            format!(
+                "origin\thttps://x-token-auth:{}@bitbucket.org/team/repo.git (fetch)\n",
+                token(190)
+            ),
+            token(190),
+        ),
+    ];
+    let mut rng = Rng(0x0C_A9);
+    for (input, secret) in &cases {
+        let input = input.as_bytes();
+        let want = legacy(input);
+        // No 16 characters of the secret survive.
+        for w in secret.as_bytes().windows(16) {
+            assert!(
+                !contains(&want.0, w),
+                "{input:?}: {:?}",
+                String::from_utf8_lossy(&want.0)
+            );
+        }
+        for chunks in [
+            vec![MAX_SEGMENT_BYTES],
+            vec![1],
+            random_chunks(&mut rng, 64),
+        ] {
+            let got = retained_of(&stream_through(StreamRedactor::new(), input, &chunks, 2), 1);
+            assert_eq!(got, want, "{:?}", String::from_utf8_lossy(input));
+        }
     }
 }

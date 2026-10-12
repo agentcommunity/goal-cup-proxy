@@ -1260,7 +1260,7 @@ fn with_script(body: &str) -> String {
 /// quote that means the same as Rust's `['"]`.
 ///
 /// Two differ in a bound, because the daemon's stream holds an undecided run and the script
-/// holds nothing. The daemon's `email` local part is at most 64 units, so a bare token run does
+/// holds nothing. The daemon's `email` local part is at most 1,024 units, so a bare token run does
 /// not hold to the hold bound (I-2); the script keeps `+` and redacts a longer local part whole.
 /// The daemon's PEM block is ASCII and ends at an END line that starts within 8,192 units, or
 /// is those units, so a lone BEGIN no longer redacts the rest of the stream (I-1); the script
@@ -1275,7 +1275,7 @@ const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "email",
         r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
-        r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+        r"[A-Za-z0-9._%+\-]{1,1024}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
     ),
     (
         "private_key",
