@@ -251,13 +251,9 @@ and the served `model` field of each response chunk.
 
 ## Records
 
-Update the harness row in `docs/HARNESS-ONBOARDING.md` and the harness
-bullet in `docs/CONNECTOR-CONTRIBUTING.md`, the decoder list in
-the research report format (`docs/research/m2-report-format.md`, git history at `6494030`), and a
-`docs/GLOSSARY.md` entry for any new term. Dated readiness records (`m2-*-readiness.md`) are history: add a
-dated note, do not rewrite them. Transitional V1 `capture_only = true` on the connector's
-`manifest.toml` is a separate fact (V1 refuses the connector); it is not a harness-manifest
-field, and a decoder does not change it.
+Update the harness's facts sheet (`docs/harnesses/<id>.md`, section 9) to name the decoder,
+the decoder list in the research report format (`docs/research/m2-report-format.md`), and add a
+`docs/GLOSSARY.md` entry for any new term.
 
 ## Rulings that closed old questions
 

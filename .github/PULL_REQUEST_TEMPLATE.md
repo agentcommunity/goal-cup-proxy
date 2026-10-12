@@ -25,9 +25,9 @@ Follow `skills/adding-a-capture-harness` and `docs/HARNESS-ONBOARDING.md`. The s
 to 10) in `docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr`; each box below is the
 author's half of that list, so say where the reviewer can check it.
 
-- [ ] Capability worksheet attached or linked (UNKNOWN where unknown), and
-      `docs/qualification/m2-<name>-readiness.md` with the exact harness version, install inventory
-      hashes and the harness's argv pre-scan source (or "none") (item 2).
+- [ ] Facts sheet `docs/harnesses/<id>.md` filled from the skill's template ("unknown" where
+      unknown), with the exact harness version, executable hash and the harness's argv pre-scan
+      source (or "none") (item 2).
 - [ ] I ran `sh scripts/pin-manifests.sh` in the same commit and the conformance tests as in
       `docs/CONNECTOR-CONTRIBUTING.md#add-or-change-a-connector`. The pin diff is one line of
       `crates/goalcup-protocol/pins/connector-dirs.txt` (item 10).
@@ -42,7 +42,8 @@ author's half of that list, so say where the reviewer can check it.
       `cargo test -p goalcup-cli --test full harness_contract_kit::` after `cargo build`, run on macOS
       (on Linux it compiles to zero tests; say so if you could not run it). Fixtures went through
       `spikes/redact.py` (items 7 and 10).
-- [ ] The diff touches only `connectors/<id>/`, the pin lines above, `docs/qualification/` and the
-      kit case `<case>`; no `.rs` file is changed and no policy row or decoder is added (item 10).
-- [ ] Claim sought: see `docs/HARNESS-ONBOARDING.md` section 6 ("Diagnose and claim only what
-      passed"). Without a maintainer live row it is "synthetic tested".
+- [ ] The diff touches only `connectors/<id>/`, the pin line above, the goldens, the kit case
+      `<case>` and `docs/harnesses/<id>.md`; no `.rs` file is changed and no policy row or decoder
+      is added (item 10).
+- [ ] Last lines of `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast` pasted.
+      Claim only what passed: the kit runs a stand-in, not the real harness.

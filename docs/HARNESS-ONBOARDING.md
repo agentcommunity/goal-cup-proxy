@@ -1,173 +1,143 @@
-# Harness onboarding
+# Bring your harness to Goal Cup
 
-How does a contributor establish a truthful schema-1 connector claim? For a fresh contributor
-or agent preparing harness data. This guide separates connector data, policy, native capture and
-semantic decoding; [CONNECTOR-CONTRIBUTING](CONNECTOR-CONTRIBUTING.md) owns the reviewer checklist
-and real-row procedure. Updated: 2026-10-12.
+For a team that builds a coding agent and wants it in Goal Cup. Read this in five minutes; hand
+the detailed checklist to your own coding agent. Updated: 2026-10-12.
 
-Read [CONTRIBUTING](../CONTRIBUTING.md), [TODO](../TODO.md), [GLOSSARY](GLOSSARY.md), and
-DECISIONS D1, D40, D41, D42 and D43 first. The source tree currently has exactly three connector
-directories and pins: `codex-cli`, `claude-code-cli` and `hermes-cli`. A source directory, pin or
-synthetic result is not a package, release or qualification record.
+## What Goal Cup is
 
-## 1. Capability worksheet
+Goal Cup is an agent hackathon with one rule: one person gives one coding agent one prompt,
+then leaves it alone for 168 hours. Judges score the product the agent ships. The organizers
+need to know afterwards that no human helped, so every participant runs an open-source
+**tracer** on their own Mac.
 
-Fill this from the exact candidate's source and install metadata before editing a profile. Write
-`UNKNOWN`, never a guess. Phase 1 stops: record `BLOCKED`, preserve the evidence and do not wire
-the connector if any required fact is UNKNOWN in transport; native storage or scope; isolation
-or auth; or identity source or binding. A literal unsupported answer is a blocker too.
+The tracer starts your harness on the participant's goal and records two things while it runs:
 
-| Capability | Record | Where it lands |
-|---|---|---|
-| Executable | resolved entry point, version, SHA-256, and provenance if evidenced | `[capture.executable]` |
-| Headless launch | exact argv, goal placement and continuation | `[capture].args`, `goal_flag` or `--` |
-| Transport | provider/auth hosts, paths, observed transport/body encoding, CA variable | readiness evidence; related manifest data is `[capture.ca]`, `hosts`, `auth_hosts` |
-| Isolation/auth | HOME, config-home variable, real state dirs, credential lifecycle and scope | `[capture.home]`, `credential`, `env` |
-| Native storage/scope | JSONL/snapshot, own-session root/pattern and cross-run binding | `[[capture.native]]` |
-| Identity source/binding | where the own-session ID appears and when it binds | `[capture.identity]` |
-| Semantics | event shapes and an existing decoder, or explicit unknown/capture-only | verifier claim; no decoder in this PR |
-| Privacy | possible secrets in headers, bodies, seeds and native files | redaction and key-fragment review |
+- the session files your harness writes for that run (its own transcript), and
+- its model traffic, through a local proxy set (`HTTPS_PROXY`) for that one process only. The
+  proxy's certificate is trusted by that process only, through your harness's own CA variable
+  (for example `NODE_EXTRA_CA_CERTS`).
 
-Definitions are in [harness.rs](../crates/goalcup-protocol/src/harness.rs),
-[CONTRACTS harness contract v1](CONTRACTS.md#harness-contract-v1),
-[capture_policy.rs](../crates/goalcup-protocol/src/capture_policy.rs),
-[launch.rs](../crates/goalcup-cli/src/launch.rs),
-[native_scope.rs](../crates/goalcup-daemon/src/runtime/capture/native_scope.rs), and the
-[Decoder v1 API](../crates/goalcup-verifier/src/capture_analysis/api.rs).
+When the run ends, the tracer seals both into one hash-linked trace, which the organizers check
+offline with `goalcup-verify --capture-integrity <trace>`. Traces are never published.
 
-## 2. Schema-1 seam map
+What the tracer never does:
 
-`connectors/<id>/harness.toml` is harness-contract schema 1 (`schema_version = 1`), the complete
-data recipe for one connector. The loader requires one native source and an admitted identity pair.
-It accepts native `append_only` or `snapshot`; the manifest carries hosts, paths and protocol
-hints, not a transport field. Transport and body encoding are required readiness evidence, and
-an UNKNOWN there is a Phase 1 blocker.
-SQLite is refused by schema 1 and needs a separate core decision. Optional extra redaction rules
-must use admitted recognizers.
+- It never changes your harness's model base URL or any endpoint setting.
+- It never writes app-wide config (`~/.claude`, `~/.codex`, your harness's own dot-folder).
+- It gives every run its own private home folder, so the run does not touch the user's normal
+  setup. An API key is handed to your process only, and the tracer checks that no piece of it
+  reaches the trace. Sign-in hosts are passed through without being recorded.
 
-| Need | Contribution boundary |
-|---|---|
-| Existing argv, host/path, CA, credential, home, native form or identity pair | connector data plus regenerated directory pin |
-| New CA/credential/identity/native-store/interpreter policy row | separate core PR with a DECISIONS row |
-| Meaning of retained bytes | separate verifier decoder PR; a connector may be capture-only |
-| Exact candidate readiness and a live result | readiness/qualification evidence, never an inferred claim |
+## What we ask of you
 
-The common data-only PR is `connectors/<id>/` (manifest and reviewed seeds), its generated line
-in `crates/goalcup-protocol/pins/connector-dirs.txt`, the regenerated harness goldens, a new
-generic harness-kit fixture case under `crates/goalcup-cli/tests/fixtures/harness-kit/<case>/`
-containing `harness.toml`, `stand-in.py` and `expect.toml`, a readiness record, and evidence that
-the current baseline kit passes. Do not add `.rs` files, policy rows or decoder code to that PR.
-The tests read the connector list from `connectors/`, so a new folder needs no test edit.
+1. **A connector PR.** A connector is a small folder, `connectors/<id>/`, with one data file,
+   `harness.toml`, and any seed files it needs. It tells the tracer how to start your harness
+   headless, where its session file lands, and which hosts carry model traffic. No Rust code.
+2. **A public facts sheet**, `docs/harnesses/<id>.md`: where your harness keeps sessions,
+   config and logins on macOS, Linux and Windows, how it authenticates and what it talks to.
+   [Why it exists](harnesses/README.md).
 
-## 3. Generic harness-contract kit
+If your harness does not fit the tracer yet (for example, sessions live only on your server),
+send the facts sheet alone. It tells us exactly what to build, and it is a complete
+contribution on its own.
 
-The kit is the current schema-1 acceptance fixture, not a provider or release test. Build the
-workspace before running it:
+## What you need
 
-```text
-cargo build
-cargo test -p goalcup-cli --test full harness_contract_kit::
+- A Mac with Apple silicon. The test kit runs on macOS only.
+- Rust through [rustup](https://rustup.rs) (1.99 or later), the Xcode command line tools, and
+  `python3` (the one macOS ships is fine). If Homebrew also installed Rust, make sure
+  `which cargo` shows `~/.cargo/bin/cargo`.
+- A network connection for the first build only, and about 3 GB of disk for `target/`.
+- Your harness installed at the exact version you want to support, and a GitHub account.
+
+<a id="1-capability-worksheet"></a>
+
+## Steps
+
+The [skill](../skills/adding-a-capture-harness/SKILL.md) is the full checklist, written so your
+coding agent can follow it step by step, with the expected output of every command. In short:
+
+1. **Get the code and build it.** Fork
+   [goal-cup-tracer](https://github.com/agentcommunity/goal-cup-tracer) on GitHub, then:
+   ```sh
+   git clone https://github.com/<you>/goal-cup-tracer.git && cd goal-cup-tracer
+   cargo nextest --version || cargo install cargo-nextest --locked
+   cargo fetch --locked
+   cargo build
+   ```
+   This is the only step that needs the network; the checks afterwards run offline.
+2. **Write the facts sheet.** Copy the template and fill it from your docs and from a run with
+   a throwaway `HOME`. Write "unknown" rather than guess.
+   [codex-cli.md](harnesses/codex-cli.md) is a filled example.
+   ```sh
+   mkdir -p docs/harnesses
+   cp skills/adding-a-capture-harness/templates/harness-facts.md docs/harnesses/<id>.md
+   ```
+3. **Check the fit.** Walk the [decision table](../skills/adding-a-capture-harness/decision-table.md).
+   If a row says "core PR", stop and open an issue with your facts sheet: we change the tracer
+   first. Amp is the worked example there. Two early surprises: the session id must reach the
+   tracer as an id flag, a JSON line on stdout or a fixed-prefix line on stderr (plain text on
+   stdout is not enough), and a Python harness that trusts only `SSL_CERT_FILE` or
+   `REQUESTS_CA_BUNDLE` needs its own CA variable added first.
+4. **Write the connector.** Copy
+   `skills/adding-a-capture-harness/templates/connector-harness.toml` to
+   `connectors/<id>/harness.toml` and fill it in; `connectors/hermes-cli/` is the closest
+   example. Pin your binary's version and SHA-256 (`shasum -a 256 <binary>`). No local check
+   runs your real binary, so none can tell you the hash is wrong. The hash is copied into your
+   connector's test snapshot (`<id>.json`), where a reviewer sees it; a maintainer re-derives it
+   from your official release, and `goalcup start` refuses a binary whose hash differs.
+5. **Add a test case.** Copy `skills/adding-a-capture-harness/templates/kit-case/` to
+   `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`. It is a small Python stand-in that
+   behaves like your harness, so the tracer can be tested without a network or a key.
+6. **Regenerate the generated files.** `sh scripts/pin-manifests.sh` records the connector's
+   hash; the skill gives the one command that refreshes the test snapshots ("goldens").
+7. **Check it and open the PR** (next two sections).
+
+## Check it locally
+
+```sh
+sh scripts/check-connector.sh <id>
+sh scripts/gate.sh fast
 ```
 
-On macOS the current baseline suite runs six synthetic stand-ins, each with `harness.toml`,
-`stand-in.py` and `expect.toml`; a connector PR adds a new fixture case for its own path:
+The first runs every connector check: files, pin, schema, test snapshots, and the test kit with
+your stand-in. On a Mac its last line reads `check-connector: <id>: 6 passed, 0 failed, 0 skipped`.
+The second is the build, format, lint and test gate every change passes; its last line reads
+`gate fast: PASS in <N>s`. On a warm build expect about a minute for the first and two to
+three for the second. If the kit fails, the summary says only `FAIL kit`; the skill explains
+how to read the test output above it.
 
-- `controlled-workload`: no identity binding and an append-only native file;
-- `synthetic-preassigned`: launch-assigned identity and `{id}`-scoped append-only file;
-- `synthetic-stderr-token`: deferred `stderr_line` identity and append-only file;
-- `synthetic-keyed-stderr`: the same with a credential. Its `expect.toml` names
-  `credential_env`; the runner hands an invented value through the child-secret path, then
-  checks the stand-in received it and that no fragment is in the trace, run directory or output;
-- `synthetic-stdout-json`: launch-assigned `stdout_json` identity and a snapshot, including a
-  seeded file and argv guard;
-- `synthetic-keyed-stdout-json`: a keyed `stdout_json` case; one stdout reader binds the
-  identity and scans for the key.
+A passing kit proves the tracer starts, isolates and records something shaped like your
+harness. It does not prove your real harness works under the tracer. If you want to try that,
+run one short goal on your own account as in the [README quickstart](../README.md#quickstart),
+with `--harness <id>`, and check it with `goalcup-verify --capture-integrity <trace>`. Never put
+anything from a real trace in the PR; it holds your transcript.
 
-A kit case name becomes part of the stand-in path, which is a capture argument, so it must not
-hold a word `capture_arg_denied` refuses (`credential`, `apikey`, `proxy`, ...); that is why keyed
-cases say `keyed`.
+## What goes in the PR
 
-The kit uses a test-owned proxy, `Origin::Dev`, private homes and Python stand-ins. It does not
-read a participant home, provider credential or package registry. A passing kit proves only
-synthetic schema-1 wiring and isolation checks. It does not prove provider access, a published
-package, a release, a semantic decoder or a qualified live row.
+- `connectors/<id>/harness.toml` and any seed files under `connectors/<id>/files/`;
+- the one new line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
+- the regenerated snapshots under `crates/goalcup-cli/tests/fixtures/harness-golden/`;
+- the test case under `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`;
+- `docs/harnesses/<id>.md`.
 
-## 4. Evidence and privacy
+In the description, paste the last lines of both checks, and say which parts an agent wrote and
+that a person on your team read the whole diff. No keys, tokens or real transcripts anywhere. A
+maintainer replies within 7 days and runs the checks again on a Mac.
 
-Record the exact candidate executable version and SHA-256 only when the source or an official
-artifact proves them. Package/dependency provenance, publication and release state are separate
-facts; write `UNKNOWN` when their evidence is absent. Keep raw output in ignored directories.
-Committed fixtures go through `spikes/redact.py` and an eye review; never commit keys, real
-transcripts, `harnesses/`, `target/` or `spikes/*/out/`.
+## What is not ready yet
 
-Every probe, test and row uses a private HOME and harness home. Never set a model base URL, copy
-an app-wide config or trust root, or retain a credential. Auth hosts tunnel opaquely. The key
-value never enters a manifest, argv, log, record or evidence. A new provider key or CA name is a
-policy change, not a connector-data shortcut.
+- **No installer.** The tracer is source only; participants build it with cargo.
+- **No server.** Traces stay on the participant's machine; upload to the organizers is
+  planned, not built.
+- **macOS only.** Linux and Windows are not measured. The test kit does not run there, which is
+  why the facts sheet asks for their paths now.
+- **One local session store.** A harness that keeps its sessions only on a server, or in a
+  database file, needs a tracer change first (decision table, rows 8 and 9).
 
-## 5. Prepare a contribution
+## Reach us
 
-The ordered steps with expected output are in the
-[skill](../skills/adding-a-capture-harness/SKILL.md); `sh scripts/check-connector.sh <id>` runs
-the pin, schema, golden and kit checks below in one command.
-
-- [ ] Worksheet has source-linked values, or explicit UNKNOWN/blockers; Phase 1 has no UNKNOWN in
-  transport, native storage/scope, isolation/auth or identity source/binding.
-- [ ] `harness.toml` uses schema 1 and only admitted policy and identity values; seeds are safe.
-- [ ] `sh scripts/pin-manifests.sh` was run and the intended connector pin is the only pin diff.
-- [ ] `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::` passed.
-- [ ] The harness goldens were regenerated on macOS, so the daemon's live goldens are written too:
-  `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test full harness_contract_golden::`, then
-  the same with `-p goalcup-daemon`. The JSON diff under
-  `crates/goalcup-cli/tests/fixtures/harness-golden/` is in the PR: new files and rows for the
-  new connector, and no change to another connector's values.
-- [ ] The workspace build ran before `harness_contract_kit`; all discovered cases passed (the six
-  baseline cases plus the new connector case).
-- [ ] Readiness evidence names source revision, candidate path/version/hash, transport/native/
-  isolation/auth/identity facts and remaining unknown semantics without secrets.
-- [ ] If a maintainer ran a real row, the PR links the exact record; otherwise claim only
-  synthetic tested. Do not edit TODO or DECISIONS in an outside PR.
-- [ ] A human read the whole diff, AI assistance is disclosed, and the connector reviewer
-  checklist is complete.
-
-Anyone may send a connector PR. A maintainer reviews trusted connector data and acknowledges a
-PR within 7 days; acknowledgement is not a promise to merge or qualify it. An outside contributor
-stops after the data, readiness, generic kit and review gates. A live row uses the maintainer's
-own subscription or key; the contributor never opens the key file.
-
-## 6. Diagnose and claim only what passed
-
-| Finding | Permitted conclusion |
-|---|---|
-| Unknown readiness fact | Phase 1 blocked; preserve UNKNOWN and stop |
-| Pin/version/preflight refusal | compare installed bytes; source is not an install |
-| Unsupported transport/body or no response | unsupported/partial capture; not qualified |
-| Missing or unbound native source | wire-only partial; no own-session claim |
-| Gap, stale recorder or unknown accounting | incomplete; never call it clean |
-| Bytes retained but semantics unknown | capture-only for stated coverage; no decoder claim |
-| Task fails while recorder passes, or reverse | report task and recorder outcomes separately |
-
-Claim levels are **planned**, **implemented**, **installed**, **synthetic tested**, **short real
-capture-qualified** and **short decoded-qualified**. A synthetic kit result is the named fixture
-only. Qualification requires its own source-linked evidence and maintainer review; nothing here
-implies restart reliability, long autonomy, delivery, package publication or release.
-
-## 7. Handoff record
-
-Copy this into the readiness or qualification record. Never include secret values or fingerprints.
-
-```text
-Claim sought / actual outcome:
-Source revision; dirty inputs:
-Candidate executable path/version/SHA-256; package provenance (or UNKNOWN):
-Connector directory pin; harness-contract schema:
-Transport hosts/paths/version/body; native storage/form/scope:
-Isolation roots (metadata only); auth variable names and lifecycle:
-Identity source/binding and crosscheck; semantic decoder or UNKNOWN:
-Generic kit command, build/test exits and all discovered case results (six baseline plus the new
-connector case):
-Real-row ENTRY/RUN_DIR/TRACE and start/status/integrity/research/checker exits (if any):
-Independent result bytes and hash (if any):
-Redaction, gaps, unknowns, private artifact paths and deferred coverage:
-Reviewer, permitted claim and qualification evidence link (or UNKNOWN):
-```
+Open an issue on [goal-cup-tracer](https://github.com/agentcommunity/goal-cup-tracer/issues)
+for anything public, including "this step did not work". For anything private, or a security
+problem, email goalhack@agentcommunity.org ([SECURITY](../SECURITY.md)). The maintainer is
+Balazs Nemethi.

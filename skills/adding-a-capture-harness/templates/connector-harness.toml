@@ -2,7 +2,7 @@
 # Copy: mkdir -p connectors/<HARNESS_ID> && cp <this file> connectors/<HARNESS_ID>/harness.toml
 # Replace every <PLACEHOLDER>. Delete the options you do not use. Comment lines are optional
 # (they are pinned bytes too); keep one first-line provenance comment like the shipped ones:
-# <Harness name> <VERSION>, capture only. Provenance: docs/qualification/m2-<NAME>-readiness.md.
+# <Harness name> <VERSION>, capture only. Facts: docs/harnesses/<HARNESS_ID>.md.
 # Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: decision-table.md next to this file.
 # No argument, goal flag, env key or value, host or auth host may name the tracker
 # (docs/CONNECTOR-SCHEMA.md, "Cross-field rules", rule 10).
