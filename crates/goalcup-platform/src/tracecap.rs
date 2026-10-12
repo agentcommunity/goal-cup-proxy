@@ -939,6 +939,9 @@ impl fmt::Debug for TraceAppendFile {
 }
 
 impl TraceAppendFile {
+    /// The file's byte length: a fallible handle query, not a collection size, so there is no
+    /// `is_empty` to pair it with.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&mut self) -> Result<u64, TraceCapError> {
         if self.poisoned {
             return Err(TraceCapError::Poisoned {
