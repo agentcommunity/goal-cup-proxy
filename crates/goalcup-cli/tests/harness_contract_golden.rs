@@ -1662,7 +1662,8 @@ fn the_shipped_connector_enumeration_is_pinned() {
 /// The id of the synthetic connector the data-only proof adds.
 const EXTRA: &str = "synthetic-extra-cli";
 
-/// A folder with no `harness.toml` the data-only proof adds, which is not a connector.
+/// A folder with no `harness.toml` the data-only proof adds. The golden derivation skips it, as
+/// `goalcup start` does; shipping one under `connectors/` still fails `harness_conformance`.
 const STRAY: &str = "notes-not-a-connector";
 
 /// A connectors directory holding a copy of every shipped connector, one synthetic schema-1
