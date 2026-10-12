@@ -29,7 +29,9 @@
 //! module adds no second mechanism. Two commands that race both start a daemon; the loser
 //! refuses at `Registry::open` and exits 1, and both commands then find the winner through
 //! `control.json`. A daemon that is stopping holds the lock until it has stopped, so a start
-//! that lost to it is tried again, with a growing pause, until the wait's deadline.
+//! that lost to it is tried again, with a growing pause, until the wait's deadline. A daemon
+//! that exits for any other reason before it answers (a configuration it refuses) ends the
+//! wait at once, naming its exit status and `daemon.log`.
 //!
 //! # The configuration names this command's connectors
 //!
@@ -70,10 +72,9 @@ pub const DAEMON_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 /// tree's hardware that is well under a second.
 pub const SPAWN_WAIT: Duration = Duration::from_secs(10);
 
-/// The pause before starting a daemon again after the last one exited, doubling up to
-/// [`RESPAWN_PAUSE_MAX`]. A daemon that is idling out holds the registry lock until it has
-/// stopped, and a start that met it refuses; one that refuses its configuration would refuse
-/// again, and the pause keeps that from filling `daemon.log`.
+/// The pause before starting a daemon again after the last one lost the registry lock,
+/// doubling up to [`RESPAWN_PAUSE_MAX`]. A daemon that is idling out holds the lock until it
+/// has stopped, and a start that met it refuses.
 const RESPAWN_PAUSE: Duration = Duration::from_millis(100);
 const RESPAWN_PAUSE_MAX: Duration = Duration::from_secs(1);
 
@@ -147,7 +148,7 @@ pub fn ensure_daemon(
     }
     let binary = daemon_binary()?;
     let log = cfg.join(DAEMON_LOG_NAME);
-    let mut child = spawn(&binary, &config, &log)?;
+    let (mut child, mut said_from) = spawn(&binary, &config, &log)?;
     let mut pause = RESPAWN_PAUSE;
     let mut respawn_at: Option<Instant> = None;
     loop {
@@ -172,11 +173,22 @@ pub fn ensure_daemon(
         match respawn_at {
             Some(at) if now >= at => {
                 respawn_at = None;
-                child = spawn(&binary, &config, &log)?;
+                (child, said_from) = spawn(&binary, &config, &log)?;
             }
             Some(_) => {}
             None => {
-                if let Ok(Some(_exited)) = child.try_wait() {
+                if let Ok(Some(status)) = child.try_wait() {
+                    // Lost the registry lock to a daemon that is starting or stopping: start
+                    // again after a pause. Any other exit (a refused configuration, a root it
+                    // cannot open) would only repeat, so it ends the wait now.
+                    if !lost_the_registry_lock(&log, said_from) {
+                        return Err(not_started(
+                            &binary,
+                            &config,
+                            &log,
+                            &format!("it exited ({status}) before answering"),
+                        ));
+                    }
                     respawn_at = Some(now + pause);
                     pause = (pause * 2).min(RESPAWN_PAUSE_MAX);
                 }
@@ -215,13 +227,39 @@ fn live_daemon(cfg: &Path) -> Result<Option<HttpDaemonClient>, CliError> {
     }
 }
 
-/// `goalcup-daemon --config <config> --exit-when-idle`, detached as the module note says.
-fn spawn(binary: &Path, config: &Path, log: &Path) -> Result<Child, CliError> {
+/// What `goalcup-daemon` says when another daemon holds the registry's file lock (its
+/// `Registry::from_file`, D4). The one early exit that is worth waiting out: the holder is a
+/// daemon starting (a start race) or stopping (idling out), and the lock comes free.
+/// `the_registry_lock_held_by_another_process_is_waited_out` in
+/// `tests/full/run_scoped_daemon.rs` holds the two crates' wording together.
+const LOST_REGISTRY_LOCK: &str = "another daemon holds the registry";
+
+/// Whether the daemon that just exited said it lost the registry lock: in what `log` gained
+/// from `from` on, which is the exited daemon's output (and any racing command's daemon's,
+/// started from the same configuration).
+fn lost_the_registry_lock(log: &Path, from: u64) -> bool {
+    use std::io::{Read, Seek};
+    let Ok(mut file) = std::fs::File::open(log) else {
+        return false;
+    };
+    let mut said = Vec::new();
+    if file.seek(std::io::SeekFrom::Start(from)).is_err()
+        || file.take(CONFIG_MAX_BYTES).read_to_end(&mut said).is_err()
+    {
+        return false;
+    }
+    String::from_utf8_lossy(&said).contains(LOST_REGISTRY_LOCK)
+}
+
+/// `goalcup-daemon --config <config> --exit-when-idle`, detached as the module note says, and
+/// the length of `log` before it, from which on the log is this daemon's output.
+fn spawn(binary: &Path, config: &Path, log: &Path) -> Result<(Child, u64), CliError> {
     let output = open_log(log)?;
     let errors = output.try_clone().map_err(|source| CliError::Io {
         path: log.display().to_string(),
         source,
     })?;
+    let said_from = output.metadata().map(|m| m.len()).unwrap_or(0);
     let mut command = Command::new(binary);
     command
         .arg("--config")
@@ -263,10 +301,11 @@ fn spawn(binary: &Path, config: &Path, log: &Path) -> Result<Child, CliError> {
             });
         }
     }
-    command.spawn().map_err(|source| CliError::Io {
+    let child = command.spawn().map_err(|source| CliError::Io {
         path: binary.display().to_string(),
         source,
-    })
+    })?;
+    Ok((child, said_from))
 }
 
 /// One past the highest descriptor the child sweeps: this process's open-file limit, kept between
