@@ -9,7 +9,7 @@ use std::path::Path;
 
 /// A validated descriptor-relative evidence name. Its host-path representation is private.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TracePath(String);
+pub(crate) struct TracePath(String);
 
 impl TracePath {
     pub(crate) fn parse(value: impl AsRef<str>) -> Result<Self, VerifierError> {
@@ -43,7 +43,7 @@ impl TracePath {
         Ok(Self(value.to_owned()))
     }
 
-    pub fn display(&self) -> &str {
+    pub(crate) fn display(&self) -> &str {
         &self.0
     }
 }
@@ -60,10 +60,6 @@ pub(crate) struct PrivateDir {
     file: std::fs::File,
     display: String,
 }
-
-#[cfg(not(unix))]
-#[derive(Debug)]
-pub(crate) struct PrivateDir;
 
 #[cfg(unix)]
 fn selected_root_name(root: &Path) -> Result<std::path::PathBuf, VerifierError> {
@@ -456,57 +452,6 @@ fn set_errno_zero() {
 fn set_errno_zero() {
     // SAFETY: the platform errno accessor returns a valid, writable thread-local pointer.
     unsafe { *libc::___errno() = 0 };
-}
-
-#[cfg(not(unix))]
-impl PrivateDir {
-    pub(crate) fn child_names(&self, _limit: u64) -> Result<Vec<String>, VerifierError> {
-        Err(VerifierError::Trace(
-            "handle-relative directory enumeration is unsupported on this platform".into(),
-        ))
-    }
-
-    pub(crate) fn open_private_regular_child(
-        &self,
-        _name: &str,
-    ) -> Result<std::fs::File, VerifierError> {
-        Err(VerifierError::Trace(
-            "private submission storage is unsupported on this platform".into(),
-        ))
-    }
-
-    pub(crate) fn open_private_dir_child(&self, _name: &str) -> Result<PrivateDir, VerifierError> {
-        Err(VerifierError::Trace(
-            "private submission storage is unsupported on this platform".into(),
-        ))
-    }
-}
-
-#[cfg(not(unix))]
-impl TraceRoot {
-    pub(crate) fn open_private_dir(&self, _path: &TracePath) -> Result<PrivateDir, VerifierError> {
-        Err(VerifierError::Trace(
-            "private submission storage requires Unix capability and mode validation".into(),
-        ))
-    }
-}
-
-#[cfg(not(unix))]
-#[derive(Debug, Clone)]
-pub(crate) struct TraceRoot;
-
-#[cfg(not(unix))]
-impl TraceRoot {
-    pub fn open(_root: &Path) -> Result<Self, VerifierError> {
-        Err(VerifierError::Trace(
-            "trace containment is unsupported on this platform".into(),
-        ))
-    }
-    pub fn open_reader(&self, _path: &TracePath) -> Result<std::fs::File, VerifierError> {
-        Err(VerifierError::Trace(
-            "trace containment is unsupported on this platform".into(),
-        ))
-    }
 }
 
 #[cfg(all(test, unix))]

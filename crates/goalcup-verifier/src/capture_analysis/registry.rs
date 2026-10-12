@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 /// Makes a fresh decoder for one trace. A closure, so a host can capture configuration (a
 /// tenant's limits); `Send + Sync` so one registry serves every thread.
-pub type DecoderFactory = Arc<dyn Fn() -> Box<dyn DecoderV1> + Send + Sync>;
+pub(crate) type DecoderFactory = Arc<dyn Fn() -> Box<dyn DecoderV1> + Send + Sync>;
 
 /// One registered decoder: a factory and what the registry knows of it. Its id and version are
 /// read once, from one instance, at registration; every instance a session makes must report

@@ -1,80 +1,16 @@
-//! Recorded V1 capture keys are accepted and ignored; schema 1 owns capture behavior, and
-//! doctor describes a connector from its `harness.toml` without spawning it.
+//! Schema 1 owns capture behavior, and doctor describes a connector from its `harness.toml`
+//! without spawning it.
 
 use crate::common::support;
 
 use goalcup_cli::commands::doctor::{DoctorOptions, run_with};
 use goalcup_cli::commands::start::start_with;
 
-const MANIFEST: &str = r#"
-id = "hermes-test"
-family = "hermes"
-tier = "elevated_review"
-tested_version_range = "=0.19.0"
-capture_only = true
-
-[detection]
-binary = "hermes"
-version_command = "hermes --version"
-
-[arming]
-signal = "none"
-timeout_seconds = 1
-
-[kill]
-strategy = "process_group"
-grace_seconds = 10
-
-[launch]
-mode = "server"
-program = "hermes"
-home_env = "HERMES_HOME"
-
-[resume]
-session_arg_style = "flag"
-
-[version]
-self_updating = false
-sample_interval_seconds = 300
-record_field = "version"
-
-[normalisation]
-trailing_newline = true
-
-[capture]
-automatic_goal = true
-goal_flag = "--query"
-home = "empty"
-config_home = "shared"
-ca_env = ["HERMES_CA_BUNDLE"]
-continuation = "none: one chat turn"
-args = ["chat", "-Q", "--provider", "deepseek", "--model", "deepseek-v4-flash"]
-
-[capture.executable]
-version = "0.19.0"
-sha256 = "0444572f0bce8a805473fbcaa431beed399818528758b454fbf24825a51be325"
-
-[[capture.hosts]]
-host = "api.deepseek.com"
-evidence_paths = ["/v1/chat/completions"]
-protocol_hint = "openai-chat-completions"
-"#;
-
 fn opts(harness: Option<&str>) -> DoctorOptions {
     DoctorOptions {
         json: false,
         harness: harness.map(str::to_string),
     }
-}
-
-/// A recorded legacy value is consumed rather than treated as an executable switch.
-#[test]
-fn recorded_capture_keys_are_ignored_by_the_v1_parser() {
-    let manifest = goalcup_protocol::manifest::ConnectorManifest::from_toml_str(MANIFEST)
-        .expect("recorded capture values parse");
-    let json = serde_json::to_string(&manifest).unwrap();
-    assert!(!json.contains("capture_only"), "{json}");
-    assert!(!json.contains("automatic_goal"), "{json}");
 }
 
 /// `start` of a Hermes-shaped connector: with no family refusal left, a `--goal-file` start of

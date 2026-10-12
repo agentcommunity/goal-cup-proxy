@@ -56,11 +56,6 @@ impl WireSpec {
         self
     }
 
-    pub fn hint(mut self, hint: Option<&str>) -> Self {
-        self.meta.protocol_hint = hint.map(str::to_string);
-        self
-    }
-
     pub fn open(&self) -> CaptureRecord {
         self.open_at(0)
     }

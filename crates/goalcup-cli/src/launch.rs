@@ -1798,12 +1798,6 @@ fn heads_its_own_group(pid: u32) -> bool {
     unsafe { libc::getpgid(raw) == raw }
 }
 
-/// A platform with no process groups records none.
-#[cfg(not(unix))]
-fn heads_its_own_group(_pid: u32) -> bool {
-    false
-}
-
 /// The native process the wrapper hides (D22), best-effort.
 ///
 /// `None` is a legitimate answer at launch and not a failure: the npm wrapper spawns the
@@ -2173,33 +2167,4 @@ unsafe fn gate_read(fd: i32, buffer: &mut [u8]) -> bool {
             return false;
         }
     }
-}
-
-/// A platform without the fork-and-park gate cannot start a capture child at all.
-#[cfg(not(unix))]
-pub struct GatedSpawn {
-    pub pid: u32,
-    pub program: String,
-}
-
-#[cfg(not(unix))]
-pub fn spawn_gated(
-    _p: &LaunchPlan,
-    _pipes: Pipes,
-    _ready_within: std::time::Duration,
-    _secret: Option<&ChildSecret>,
-) -> Result<GatedSpawn, CliError> {
-    Err(CliError::Refused(
-        "a capture launch needs a unix platform, so nothing was started.".to_string(),
-    ))
-}
-
-#[cfg(not(unix))]
-impl GatedSpawn {
-    pub fn release(self) -> Result<Spawned, CliError> {
-        Err(CliError::Refused(
-            "a capture launch needs a unix platform".to_string(),
-        ))
-    }
-    pub fn abort(self) {}
 }

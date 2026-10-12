@@ -85,11 +85,6 @@ pub(crate) fn watch_for_interrupt() {
     });
 }
 
-/// A platform with no `sigaction` has nothing to install; [`interrupted`] simply never
-/// answers `true`.
-#[cfg(not(unix))]
-pub fn watch_for_interrupt() {}
-
 /// The handler itself: one atomic store, and nothing a signal handler may not do.
 #[cfg(unix)]
 extern "C" fn on_sigint(_signum: libc::c_int) {

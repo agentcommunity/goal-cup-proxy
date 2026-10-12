@@ -23,7 +23,6 @@ mod fsutil;
 pub mod ingest;
 /// Bounded, scoped native byte capture.
 pub mod native_capture;
-pub mod paths;
 pub mod redact;
 pub mod registry;
 /// The process-level [`runtime::Daemon`] and the local captures it holds: the loopback
@@ -58,14 +57,6 @@ pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// What `goalcup-daemon --version` prints.
 pub const DAEMON_VERSION_TEXT: &str = env!("CARGO_PKG_VERSION");
-
-/// The per-line cap: a single line longer than this is discarded and reported as
-/// `TailNotice::OverlongLine`.
-pub const MAX_LINE_BYTES: u64 = 1 << 20;
-
-/// The largest whole-file capture the daemon will take in one piece — a config file it
-/// baselines or restores, never a transcript it tails.
-pub const MAX_FILE_BYTES: u64 = 8 << 20;
 
 /// Wall-clock seconds since the epoch, fractional. Used for intervals and for the
 /// daemon's own bookkeeping; anything that reaches a chained envelope goes through

@@ -49,7 +49,7 @@
 //! to remove for process groups. See that function's own doc.
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 /// Set by a fixture script (or by Rust code building one directly) to select a role. Read
@@ -279,14 +279,4 @@ pub fn hardlink_codex_helper(test_name: &str) -> PathBuf {
         )
     });
     dest
-}
-
-/// `hardlink_codex_helper`'s directory, so a caller that wants to set `PATH` rather than
-/// pass a full path can. Unused by this module's own fixtures (`comm` resolves to the
-/// basename either way) but kept for a fixture that wants the bare-name shape explicitly.
-#[allow(dead_code)]
-pub fn codex_helper_dir(codex_path: &Path) -> &Path {
-    codex_path
-        .parent()
-        .expect("the hard link has a parent directory")
 }

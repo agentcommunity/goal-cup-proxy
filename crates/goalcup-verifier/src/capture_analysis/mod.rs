@@ -19,7 +19,7 @@ pub mod native;
 /// The OpenAI Responses decoder.
 pub mod openai;
 /// The bounded facts a decode keeps about the records it read.
-pub mod operations;
+pub(crate) mod operations;
 /// The bounded capture-integrity reader.
 pub mod reader;
 /// Which decoders a decode runs.

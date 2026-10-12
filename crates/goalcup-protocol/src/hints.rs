@@ -16,7 +16,7 @@
 //! format needs no protocol edit.
 
 /// The longest hint, in bytes.
-pub const MAX_HINT_BYTES: usize = 64;
+pub(crate) const MAX_HINT_BYTES: usize = 64;
 
 /// The one hint grammar: `^[a-z][a-z0-9.-]{0,63}$`.
 pub fn valid_hint(hint: &str) -> bool {

@@ -459,17 +459,6 @@ fn observe_shared_capture_home(
     })
 }
 
-#[cfg(not(unix))]
-fn observe_shared_capture_home(
-    alias: &Path,
-    _owner: u32,
-) -> Result<SharedHomeObservation, CliError> {
-    Err(shared_home_refusal(
-        alias,
-        "secure shared-home identity checks are unavailable on this platform",
-    ))
-}
-
 /// Test seam for the ownership decision without requiring a privileged `chown` fixture.
 #[cfg(feature = "test-support")]
 pub fn validate_shared_capture_home_for_uid(path: &Path, uid: u32) -> Result<(), CliError> {
@@ -1469,14 +1458,6 @@ fn symlink(target: &Path, link: &Path) -> Result<(), CliError> {
     })
 }
 
-#[cfg(not(unix))]
-fn symlink(_target: &Path, link: &Path) -> Result<(), CliError> {
-    Err(CliError::Refused(format!(
-        "{} cannot be made on this platform",
-        link.display()
-    )))
-}
-
 /// A fresh version-4 UUID, the form a pre-assigned harness session id takes.
 fn fresh_uuid() -> String {
     let bits = (rand::random::<u128>() & !(0xf << 76) & !(0x3 << 62)) | (0x4 << 76) | (0x2 << 62);
@@ -1523,11 +1504,6 @@ fn raise_open_file_limit(out: &mut dyn std::io::Write) -> Result<(), CliError> {
             ),
         )?;
     }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn raise_open_file_limit(_out: &mut dyn std::io::Write) -> Result<(), CliError> {
     Ok(())
 }
 

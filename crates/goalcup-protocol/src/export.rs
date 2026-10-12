@@ -546,7 +546,7 @@ impl ChainPhaseReplay {
     }
 
     /// The version/body admission alone, without advancing the replay.
-    pub fn check_envelope(&self, env: &Envelope) -> Result<(), ExportError> {
+    pub(crate) fn check_envelope(&self, env: &Envelope) -> Result<(), ExportError> {
         admit_for_format(self.format, env)
     }
 
@@ -783,17 +783,6 @@ impl TraceRoot {
     ) -> Result<Option<TraceReadFile>, ExportError> {
         Ok(self.dir.read_fixed(document.platform())?)
     }
-
-    pub fn display_path(&self) -> &Path {
-        &self.display
-    }
-
-    /// The opaque identity of the directory capability this root owns.  A crash-recovery
-    /// intent may bind itself to this value so reopening the same display path cannot
-    /// silently adopt a replacement trace directory.
-    pub fn identity(&self) -> Result<String, ExportError> {
-        Ok(self.dir.identity()?)
-    }
 }
 
 /// One entry's on-disk export. The native directory handle, rather than `root()`'s
@@ -859,11 +848,6 @@ impl PreparedTraceResume {
         self.next_seq
             .checked_sub(1)
             .map(|seq| (seq, self.head.clone()))
-    }
-
-    /// The directory identity retained while this resume capability was validated.
-    pub fn root_identity(&self) -> Result<String, ExportError> {
-        self.root.identity()
     }
 
     /// Open one fixed document through the retained root as a checked opaque reader.
@@ -1931,11 +1915,6 @@ impl TraceExport {
     /// not identify the directory capability and is never used for this writer's I/O.
     pub fn root(&self) -> &Path {
         &self.root.display
-    }
-
-    /// The directory identity retained by this writer's root capability.
-    pub fn root_identity(&self) -> Result<String, ExportError> {
-        self.root.identity()
     }
 
     /// Open an independent reader at offset zero and require the directory entry to be

@@ -60,7 +60,7 @@ pub enum PinProblem {
 
 impl PinProblem {
     /// The sentence a refusal carries at run time.
-    pub fn describe(self) -> &'static str {
+    pub(crate) fn describe(self) -> &'static str {
         match self {
             PinProblem::NoPins => "holds no pin line, so it would pin nothing",
             PinProblem::NoTrailingNewline => "does not end with a newline",
@@ -317,7 +317,7 @@ const fn text(data: &'static str, start: usize, len: usize) -> &'static str {
 }
 
 /// The number of pins in `data`, or a build failure.
-pub const fn count_pins(data: &'static str) -> usize {
+pub(crate) const fn count_pins(data: &'static str) -> usize {
     let mut none: [Row; 0] = [];
     match scan(data.as_bytes(), &mut none, false) {
         Ok(n) => n,
@@ -326,7 +326,9 @@ pub const fn count_pins(data: &'static str) -> usize {
 }
 
 /// The pins in `data`, or a build failure. `N` is [`count_pins`] of the same text.
-pub const fn parse_pins<const N: usize>(data: &'static str) -> [(&'static str, &'static str); N] {
+pub(crate) const fn parse_pins<const N: usize>(
+    data: &'static str,
+) -> [(&'static str, &'static str); N] {
     let mut rows = [ZERO_ROW; N];
     match scan(data.as_bytes(), &mut rows, true) {
         Ok(_) => {}
@@ -402,7 +404,7 @@ pub fn connector_dir_is_pinned(connector_id: &str, sha256: &str) -> bool {
 /// Whether a discovered connector is the one build-pinned directory for its id, or an
 /// unpinned development connector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConnectorFolderAdmission {
+pub(crate) enum ConnectorFolderAdmission {
     Pinned,
     Unpinned,
 }
@@ -414,7 +416,7 @@ pub enum ConnectorFolderAdmission {
 /// or digest names a shipped connector, all four facts must agree. This makes a byte-identical
 /// copy under an alias a refusal rather than a second name for trusted bytes. A connector for
 /// which none of the three facts names a pin is development/unpinned.
-pub fn connector_folder_admission(
+pub(crate) fn connector_folder_admission(
     folder_name: &OsStr,
     declared_id: &str,
     connector_dir_sha256: &str,

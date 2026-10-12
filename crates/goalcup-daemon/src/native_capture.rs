@@ -156,13 +156,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Most native sources one adapter reads.
-pub const MAX_NATIVE_SOURCES: usize = 8;
+pub(crate) const MAX_NATIVE_SOURCES: usize = 8;
 /// Most components in one source pattern.
-pub const MAX_NATIVE_PATTERN_DEPTH: usize = 8;
+pub(crate) const MAX_NATIVE_PATTERN_DEPTH: usize = 8;
 /// Hard ceiling on [`NativeCaptureLimits::max_files`].
-pub const MAX_NATIVE_FILES: usize = 20_000;
+pub(crate) const MAX_NATIVE_FILES: usize = 20_000;
 /// Hard ceiling on [`NativeCaptureLimits::max_dir_entries`].
-pub const MAX_NATIVE_DIR_ENTRIES: usize = 65_536;
+pub(crate) const MAX_NATIVE_DIR_ENTRIES: usize = 65_536;
 
 const MAX_SOURCE_NAME_BYTES: usize = 64;
 const MAX_PATTERN_BYTES: usize = 1024;
@@ -235,9 +235,9 @@ pub struct NativeCaptureLimits {
     pub poll_bytes: u64,
     /// Simultaneously open native streams; 1..=`MAX_OPEN_STREAMS`.
     pub max_open_streams: usize,
-    /// Files tracked (open, completed or waiting); 1..=[`MAX_NATIVE_FILES`].
+    /// Files tracked (open, completed or waiting); 1..=`MAX_NATIVE_FILES`.
     pub max_files: usize,
-    /// Directory entries examined by discovery per poll; 1..=[`MAX_NATIVE_DIR_ENTRIES`].
+    /// Directory entries examined by discovery per poll; 1..=`MAX_NATIVE_DIR_ENTRIES`.
     pub max_dir_entries: usize,
 }
 
@@ -1164,8 +1164,7 @@ fn parse_pattern(pattern: &str) -> Result<Vec<Component>, NativeCaptureError> {
 }
 
 /// One component against one glob: `*` matches any run (including none), `?` exactly one
-/// character, anything else itself. These are the semantics of the private matcher in
-/// `paths.rs` the V1 tailers used, applied here to capability-enumerated names.
+/// character, anything else itself. Applied to capability-enumerated names.
 fn glob_matches(name: &str, pattern: &str) -> bool {
     let name: Vec<char> = name.chars().collect();
     let pattern: Vec<char> = pattern.chars().collect();
