@@ -988,9 +988,26 @@ impl TraceExport {
         Self::resume_prepared(Self::prepare_resume_from_root(root)?)
     }
 
+    /// [`Self::resume_from_root`], handing every validated envelope to `visit` in chain order,
+    /// so a caller that needs facts from the chain reads it once rather than twice.
+    pub fn resume_from_root_visiting(
+        root: TraceRoot,
+        visit: &mut dyn FnMut(&Envelope),
+    ) -> Result<TraceExport, ExportError> {
+        Self::resume_prepared(Self::prepare_resume_from_root_visiting(root, visit)?)
+    }
+
     /// Validate an existing chain through one retained root and append handle without
     /// changing any directory entry or file bytes.
     pub fn prepare_resume_from_root(root: TraceRoot) -> Result<PreparedTraceResume, ExportError> {
+        Self::prepare_resume_from_root_visiting(root, &mut |_| {})
+    }
+
+    /// [`Self::prepare_resume_from_root`], handing every validated envelope to `visit`.
+    pub fn prepare_resume_from_root_visiting(
+        root: TraceRoot,
+        visit: &mut dyn FnMut(&Envelope),
+    ) -> Result<PreparedTraceResume, ExportError> {
         let mut chain = root.dir.open_chain_for_resume()?;
         let chain_path = root.display.join(CHAIN_FILE);
         let mut reader = BufReader::new(&mut chain);
@@ -1066,6 +1083,7 @@ impl TraceExport {
                 return Err(corrupt("hash does not cover this envelope".to_string()));
             }
             replay.push(&env)?;
+            visit(&env);
             head = env.link.hash;
             next_seq = next_seq
                 .checked_add(1)
