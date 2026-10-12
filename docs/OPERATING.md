@@ -290,8 +290,8 @@ does not require a custom provider with a base URL, so its budget stays its own.
 
 `goalcup --help` lists five commands (`start`, `status`, `entries`, `seal`, `doctor`) and says
 where verification is. There is no `goalcup verify`: one verifier, one set of flags, one
-set of exit codes. `auth`, `ui` and `resume` were V1 commands; they are hidden and refuse at
-rung 1, naming D48.
+set of exit codes. The V1 commands `auth`, `ui` and `resume` are gone (D48); typing one is a
+usage error (exit 1).
 
 `goalcup`'s own exit codes, which `goalcup --help` also carries:
 

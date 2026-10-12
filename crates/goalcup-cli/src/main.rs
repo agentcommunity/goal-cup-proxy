@@ -114,24 +114,6 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Not in this build: the removed V1 sign-in command (D48).
-    #[command(hide = true, disable_help_flag = true)]
-    Auth {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-        _args: Vec<std::ffi::OsString>,
-    },
-    /// Not in this build: the removed V1 status page (D48).
-    #[command(hide = true, disable_help_flag = true)]
-    Ui {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-        _args: Vec<std::ffi::OsString>,
-    },
-    /// Not in this build: the removed V1 relaunch (D48).
-    #[command(hide = true, disable_help_flag = true)]
-    Resume {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-        _args: Vec<std::ffi::OsString>,
-    },
     /// Record the workspace manifest and end the run.
     Seal {
         /// The entry. Defaults to the newest run started from this machine.
@@ -199,24 +181,11 @@ fn run(command: Command) -> Result<u8, CliError> {
         .map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),
         Command::Entries { json } => entries(json).map(|()| 0),
-        Command::Auth { .. } => Err(v1_only("auth")),
-        Command::Ui { .. } => Err(v1_only("ui")),
-        Command::Resume { .. } => Err(v1_only("resume")),
         Command::Seal { entry, dry_run } => seal(entry, dry_run).map(|()| 0),
         Command::Doctor { json, harness } => {
             doctor(commands::doctor::DoctorOptions { json, harness })
         }
     }
-}
-
-/// The refusal a removed V1 command gets (D48): rung 1, naming the way back.
-fn v1_only(command: &str) -> CliError {
-    CliError::Refused(format!(
-        "`goalcup {command}` belonged to the V1 transcript path, which this tree no longer \
-         carries (D48; the v0.5.0 tag has it). A local capture run \
-         is `goalcup start --harness <id> --goal-file <file>`; then `goalcup status`, \
-         `goalcup entries` and `goalcup seal`."
-    ))
 }
 
 /// `goalcup start`, with the four things it reads from this machine resolved here: the

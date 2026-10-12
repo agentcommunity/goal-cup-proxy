@@ -51,8 +51,8 @@ The daemon opens a registry written by either line and refuses only V1 rows that
 | Daemon | Ingest, per-producer redaction, chain append, native capture, finish, termination | [runtime/capture/][rc] |
 | Verifier | v5 integrity reader and research report with five built-in decoders (two native: `codex-native`, `claude-code-native`; three wire: `openai-responses`, `anthropic-messages`, `openai-chat-completions`); V1 thirteen checks for v4 traces (library and `goalcup-verify`; no CLI relay since D48) | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 
-`goalcup` has five commands (`start --goal-file`, `status`, `entries`, `seal`, `doctor`); `auth`,
-`ui` and `resume` are hidden stubs naming D48 ([C5 amendments][cont]: a v5 entry cannot resume).
+`goalcup` has five commands (`start --goal-file`, `status`, `entries`, `seal`, `doctor`); a v5
+entry cannot resume ([C5 amendments][cont]).
 Control API v5 requires the version on mutating requests; create binds the directory digest.
 
 The open protocol-hint grammar validates metadata only. `DecoderRegistry::builtin()` and each
