@@ -37,7 +37,6 @@ fn process_registration() -> ProcessRegistration {
             program: "/usr/bin/true".to_string(),
             argv: vec!["true".to_string()],
             env_keys: Vec::new(),
-            home_seed: None,
         },
     }
 }
@@ -535,14 +534,12 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
     // shows only in JSON are readable here.
     assert!(!m.status_detail().is_empty());
     m.set_cycle_error("upload", "the upload is behind");
-    m.set_posts_dropped(3);
     let signed = m.status(&info.entry_id).unwrap();
     assert_eq!(signed.payload.cycles.upload, 1);
     assert_eq!(
         signed.payload.cycles.last.as_deref(),
         Some("the upload is behind")
     );
-    assert_eq!(signed.payload.posts_dropped, 3);
     assert!(
         signed.verify_with(&info.run_public_key).is_ok(),
         "a hook that edits the payload re-signs it"
@@ -576,7 +573,6 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
         program: "/usr/bin/true".to_string(),
         argv: vec!["true".to_string()],
         env_keys: vec!["GOALCUP_RECEIVER_TOKEN".to_string()],
-        home_seed: None,
     };
     assert_eq!(m.last_registered_pid(), None);
     m.register_process(

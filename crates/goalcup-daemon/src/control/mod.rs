@@ -121,8 +121,8 @@ pub struct ControlState {
 }
 
 /// Nothing but the shape. A derived `Debug` would put the CLI's bearer into every
-/// interpolated error that carries the state, which is the leak `WorkspaceOpts`,
-/// `WorkspaceInfo` and `RunKeys` all hand-write their `Debug` to close.
+/// interpolated error that carries the state, which is the leak `RunKeys` hand-writes its
+/// `Debug` to close.
 impl std::fmt::Debug for ControlState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControlState")
@@ -174,11 +174,9 @@ macro_rules! control_error_table {
         /// | `unauthorized` | 401 | the bearer was absent or wrong |
         /// | `malformed` | 400 | the request or a document in it did not parse |
         /// | `not_found` | 404 | no such entry, no such route |
-        /// | `arming_timeout` | 408 | the long poll waited and the signal did not come |
         /// | `conflict` | 409 | the entry itself refuses: already sealed, already started, a lock still on disk. **Permanent. A client reports it and does not retry** |
         /// | `busy` | 409 | the entry is held for the length of one pump. **Transient, and the only code a client retries** |
-        /// | `preflight_failed` | 422 | the request was well formed and the machine said no |
-        /// | `unsupported_connector` | 422 | likewise: this daemon does not ship that connector |
+        /// | `preflight_failed` | 422 | the request was well formed and the machine said no, including a connector this daemon does not ship |
         /// | `unsupported` | 426 | the client speaks a control API version this build does not |
         /// | `internal` | 500 | the daemon broke |
         /// | `unreachable` | 503 | the daemon cannot answer right now |
@@ -219,20 +217,10 @@ control_error_table! {
         StatusCode::UNAUTHORIZED,
         ControlError::Unauthorized(SAMPLE_MESSAGE.to_string())
     ),
-    ControlError::ArmingTimeout { .. } => (
-        "arming_timeout",
-        StatusCode::REQUEST_TIMEOUT,
-        ControlError::ArmingTimeout { detail: SAMPLE_MESSAGE.to_string() }
-    ),
     ControlError::PreflightFailed(_) => (
         "preflight_failed",
         StatusCode::UNPROCESSABLE_ENTITY,
         ControlError::PreflightFailed(SAMPLE_MESSAGE.to_string())
-    ),
-    ControlError::UnsupportedConnector(_) => (
-        "unsupported_connector",
-        StatusCode::UNPROCESSABLE_ENTITY,
-        ControlError::UnsupportedConnector(SAMPLE_MESSAGE.to_string())
     ),
     ControlError::Internal(_) => (
         "internal",

@@ -46,7 +46,6 @@ fn cfg_with_edited_record(
         harness_home: info.harness_home.clone(),
         session_id: info.session_id.clone(),
         last_pid: None,
-        workspace_relative: info.workspace_relative.clone(),
         status_url: status_url.to_string(),
         created_at: info.created_at.clone(),
         dev: false,
@@ -323,16 +322,15 @@ fn arming_refused_is_printed_as_refused_with_the_daemons_own_reason() {
     );
 }
 
-/// Three `#[serde(default)]` fields the page shows only in its JSON. This is the
+/// Two `#[serde(default)]` fields the page shows only in its JSON. This is the
 /// only human surface for the daemon's own lost work, and for whether the round's dates were
 /// configured or invented.
 #[test]
-fn status_prints_the_cycle_errors_the_dropped_posts_and_a_fallback_event_source() {
+fn status_prints_the_cycle_errors_and_a_fallback_event_source() {
     let tmp = tempfile::tempdir().unwrap();
     let m = support::mock_armed(&tmp, "claude-code-cli");
     let info = m.info();
     m.set_cycle_error("upload", "connection refused");
-    m.set_posts_dropped(3);
     let cfg = support::cfg_with_entry(tmp.path(), &info);
     let mut out = Vec::new();
     status_with(
@@ -348,10 +346,6 @@ fn status_prints_the_cycle_errors_the_dropped_posts_and_a_fallback_event_source(
     assert!(
         text.contains("connection refused"),
         "cycles.last is JSON-only on the page"
-    );
-    assert!(
-        text.contains('3'),
-        "posts_dropped is the only place a lost hook post surfaces"
     );
     assert!(
         text.to_lowercase().contains("fallback") || text.contains("not configured"),
@@ -830,7 +824,6 @@ fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
         harness_home: root.join("config-home").display().to_string(),
         session_id: String::new(),
         last_pid: None,
-        workspace_relative: Vec::new(),
         status_url: String::new(),
         created_at: support::NOW.to_string(),
         dev: false,

@@ -21,7 +21,7 @@
 //! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. |
 //! | 2 | **Never produced by this CLI.** It is `goalcup-verify`'s "invalid evidence" exit; the V1 `goalcup doctor --verify` that relayed it was removed by D48. |
 //! | 3 | The CLI could not do its job: a file it could not read, a response it could not parse. |
-//! | 4 | **A gate said no.** Only the daemon's `arming_timeout` maps here, and no capture-run path raises it: the V1 arming and `goalcup resume` gates were removed (D48). |
+//! | 4 | **A gate said no.** Only [`CliError::Gate`] maps here, and no capture-run path raises it: the V1 arming and `goalcup resume` gates were removed (D48), and control API v6 removed the daemon's `arming_timeout` code. |
 //!
 //! [`CliError::exit_code`] is the only place a command decides its number, and `main.rs` is
 //! the only place an `ExitCode` is built.
@@ -94,10 +94,8 @@ impl CliError {
             CliError::Refused(_) => 1,
             CliError::Gate(_) => 4,
             CliError::Control(e) => match e {
-                // A gate the daemon reported directly: the arming window closing.
-                ControlError::ArmingTimeout { .. } => 4,
                 // Actionable: start the daemon, name an entry that exists, pick a connector
-                // this build ships, install the matching build, wait and retry.
+                // this build ships or install the matching build, wait and retry.
                 // `PreflightFailed` is raised before an entry exists and asks for a matching
                 // build, not an arming step. `Busy` is here on every command: a daemon
                 // holding an entry has decided nothing about this run.
@@ -105,7 +103,6 @@ impl CliError {
                 | ControlError::NotFound(_)
                 | ControlError::Conflict(_)
                 | ControlError::Unauthorized(_)
-                | ControlError::UnsupportedConnector(_)
                 | ControlError::PreflightFailed(_)
                 | ControlError::ProcessAdmissionBusy(_)
                 | ControlError::FinishDeadline(_)

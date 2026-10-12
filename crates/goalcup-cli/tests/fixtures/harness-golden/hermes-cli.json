@@ -1126,7 +1126,6 @@
       ],
       "grace_seconds": 10,
       "has_process_start": true,
-      "home_seed": false,
       "native_binary": null,
       "native_pid_found": false,
       "pgid_is_pid": false,

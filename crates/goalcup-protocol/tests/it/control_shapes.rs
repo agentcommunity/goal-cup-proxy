@@ -1,12 +1,12 @@
 use ed25519_dalek::SigningKey;
 use goalcup_protocol::control::{
     ArmingState, CONTROL_API_VERSION, ControlError, CycleErrors, DaemonHealth, EntrySummary,
-    EventStatus, EventStatusSource, InstalledFile, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT,
-    ROUTE_HEALTH, STALE_AFTER_SECONDS, SignedStatus, StatusPayload, WorkspaceFinalizationStatusV1,
-    WorkspaceInfo, WorkspaceOpts, entry_route, is_public_route,
+    EventStatus, EventStatusSource, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH,
+    STALE_AFTER_SECONDS, SignedStatus, StatusPayload, WorkspaceFinalizationStatusV1, WorkspaceInfo,
+    entry_route, is_public_route,
 };
 use goalcup_protocol::events::HealthState;
-use goalcup_protocol::manifest::{InstallScope, KillStrategy};
+use goalcup_protocol::manifest::KillStrategy;
 use goalcup_protocol::process::ProcessHandle;
 
 fn payload() -> StatusPayload {
@@ -25,7 +25,6 @@ fn payload() -> StatusPayload {
         last_sync_at: Some("2026-09-04T09:00:12Z".into()),
         events_uploaded: 206,
         events_pending: 0,
-        arming_recipe: None,
         detail: "capturing".into(),
         event: EventStatus {
             t0: "2026-09-04T00:00:00Z".into(),
@@ -35,9 +34,6 @@ fn payload() -> StatusPayload {
         },
         event_status_source: EventStatusSource::Config,
         cycles: CycleErrors::default(),
-        posts_dropped: 0,
-        posts_dropped_after_seal: 0,
-        pins_dropped: 0,
         polls_capped: 0,
         cursor_restore_failures: 0,
         skipped_replayed: 0,
@@ -132,36 +128,7 @@ fn signed_status_adds_an_exact_optional_workspace_finalization_projection() {
 }
 
 #[test]
-fn workspace_opts_and_info_use_the_documented_field_names() {
-    let opts = WorkspaceOpts {
-        connector_id: "codex-cli".into(),
-        manifest_sha256: "ab".repeat(32),
-        workspace_parent: None,
-        attach: false,
-        deadline_hours: 168,
-        grant_token: "grant-abc".into(),
-        arming_timeout_seconds: None,
-        // The CLI's own measurement, which the daemon writes onto the entry row
-        // rather than probing for itself.
-        harness_version: Some("0.153.0".into()),
-    };
-    let v: serde_json::Value = serde_json::to_value(&opts).unwrap();
-    for key in [
-        "connector_id",
-        "manifest_sha256",
-        "workspace_parent",
-        "attach",
-        "deadline_hours",
-        "grant_token",
-        "arming_timeout_seconds",
-        "harness_version",
-    ] {
-        assert!(
-            v.get(key).is_some(),
-            "WorkspaceOpts must carry {key}, got {v}"
-        );
-    }
-
+fn workspace_info_uses_the_documented_field_names() {
     let info = WorkspaceInfo {
         entry_id: "entry-0001".into(),
         process_generation: 1,
@@ -171,39 +138,23 @@ fn workspace_opts_and_info_use_the_documented_field_names() {
         harness_home: "/Users/team/Library/Application Support/goalcup/homes/entry-0001".into(),
         run_public_key: "ef".repeat(32),
         status_url: "http://127.0.0.1:53310/v0/ui?entry=entry-0001".into(),
-        status_cache_path: "/Users/team/Library/Application Support/goalcup/cache/status-entry-0001.json".into(),
-        status_line_path: "/Users/team/Library/Application Support/goalcup/runs/entry-0001/status-line.txt".into(),
+        status_cache_path:
+            "/Users/team/Library/Application Support/goalcup/cache/status-entry-0001.json".into(),
+        status_line_path:
+            "/Users/team/Library/Application Support/goalcup/runs/entry-0001/status-line.txt".into(),
         session_id: "95addb64-9dac-4046-8ef6-8aa53fa0c7f1".into(),
-        server_port: Some(7788),
-        installed_files: vec![
-            InstalledFile {
-                path: "/Users/team/Library/Application Support/goalcup/runs/entry-0001/settings-launch.json".into(),
-                scope: InstallScope::ArtifactRoot,
-                relative_path: "settings-launch.json".into(),
-                sha256: "11".repeat(32),
-                bytes: 4_096,
-            },
-            InstalledFile {
-                path: "/Users/team/goalcup/ws-0001/.claude/settings.json".into(),
-                scope: InstallScope::Workspace,
-                relative_path: ".claude/settings.json".into(),
-                sha256: "22".repeat(32),
-                bytes: 512,
-            },
-        ],
-        workspace_relative: vec![".claude/settings.json".into()],
         created_at: "2026-09-04T08:59:00Z".into(),
     };
     let back: WorkspaceInfo = serde_json::from_str(&serde_json::to_string(&info).unwrap()).unwrap();
     assert_eq!(info, back);
-    // The daemon renders and writes; the CLI is told what landed where.
-    assert_eq!(
-        info.workspace_relative,
-        vec![".claude/settings.json".to_string()]
-    );
-    assert!(info.installed_files.iter().any(
-        |f| f.scope == InstallScope::ArtifactRoot && f.relative_path == "settings-launch.json"
-    ));
+    // Control API v6 removed the V1 hook-install fields.
+    let v: serde_json::Value = serde_json::to_value(&info).unwrap();
+    for gone in ["server_port", "installed_files", "workspace_relative"] {
+        assert!(
+            v.get(gone).is_none(),
+            "WorkspaceInfo no longer carries {gone}"
+        );
+    }
 }
 
 #[test]
@@ -414,9 +365,10 @@ fn arming_state_and_error_codes_serialise_as_the_contract_spells_them() {
         ArmingState::Refused
     );
 
-    let e = ControlError::from_code("arming_timeout", "no SessionStart in 300 s");
-    assert!(matches!(e, ControlError::ArmingTimeout { .. }));
-    assert_eq!(e.code(), "arming_timeout");
+    // Control API v6 removed the V1 codes; a stale daemon's spelling is unrecognised.
+    for gone in ["arming_timeout", "unsupported_connector"] {
+        assert_eq!(ControlError::from_code(gone, "x").code(), "internal");
+    }
     assert_eq!(ControlError::from_code("weird", "x").code(), "internal");
 }
 
@@ -434,9 +386,7 @@ fn from_code_round_trips_every_wire_code_except_unreachable() {
         ControlError::NotFound("x".into()),
         ControlError::Conflict("x".into()),
         ControlError::Unauthorized("x".into()),
-        ControlError::ArmingTimeout { detail: "x".into() },
         ControlError::PreflightFailed("x".into()),
-        ControlError::UnsupportedConnector("x".into()),
         ControlError::Malformed("x".into()),
         ControlError::Unsupported("x".into()),
         ControlError::ProcessAdmissionUncertain("x".into()),
@@ -514,7 +464,6 @@ fn the_remaining_types_round_trip() {
             "/runs/entry-0001/settings-launch.json".into(),
         ],
         env_keys: vec!["CLAUDE_CONFIG_DIR".into(), "OTEL_LOG_RAW_API_BODIES".into()],
-        home_seed: None,
     };
     assert_eq!(
         handle,
@@ -559,8 +508,8 @@ fn the_remaining_types_round_trip() {
         serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap()
     );
     assert_eq!(
-        CONTROL_API_VERSION, 5,
-        "the capture workspace request changed and requires a coordinated control boundary",
+        CONTROL_API_VERSION, 6,
+        "v6 removed the V1 hook-path fields and codes, a coordinated control boundary",
     );
 }
 
@@ -631,24 +580,6 @@ fn a_dot_segment_never_reaches_a_public_route() {
     // `.` and `..`, not percent-encoding.
     assert!(is_public_route("/v0/entries/id%20a/status"));
     assert!(!is_public_route("/v0/entries/current"));
-}
-
-#[test]
-fn debug_never_prints_a_live_token() {
-    use goalcup_protocol::control::WorkspaceOpts;
-    let opts = WorkspaceOpts {
-        connector_id: "codex-cli".to_string(),
-        manifest_sha256: "ab".repeat(32),
-        workspace_parent: None,
-        attach: false,
-        deadline_hours: 168,
-        grant_token: "gt_SUPERSECRET".to_string(),
-        arming_timeout_seconds: None,
-        harness_version: Some("0.153.0".to_string()),
-    };
-    let printed = format!("{opts:?}");
-    assert!(!printed.contains("SUPERSECRET"));
-    assert!(printed.contains("<redacted>"));
 }
 
 /// `format_z` is `parse_z`'s inverse, and the pair is asserted against fixed points rather

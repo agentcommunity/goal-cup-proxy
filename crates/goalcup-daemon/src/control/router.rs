@@ -84,7 +84,7 @@ const BEARER_SCHEME: &str = "Bearer";
 
 /// The most bytes any control request body may be. Bounded memory is a constraint on the
 /// whole daemon, and the largest thing the CLI posts is a
-/// `WorkspaceOpts` or a `ProcessHandle` — kilobytes, not megabytes. Applied as a layer, so
+/// `CaptureWorkspaceRequest` or a `ProcessRegistration` — kilobytes, not megabytes. Applied as a layer, so
 /// it covers every handler.
 pub const MAX_CONTROL_BODY_BYTES: usize = 1 << 20;
 

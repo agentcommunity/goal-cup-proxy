@@ -7,38 +7,9 @@
 
 use crate::ProtocolError;
 use std::collections::BTreeMap;
-use std::fmt;
 
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TemplateVars(pub BTreeMap<String, String>);
-
-/// Prints every key, and every value except a `*_token` one, which prints `<redacted>`.
-///
-/// The map can hold `receiver_token` (the V1 `vars::build` in `goalcup-cli`, removed by D48,
-/// put this run's live bearer token in it so a launch recipe could render
-/// `{receiver_token}`), and a derived `Debug` would put such a token into whatever a `{:?}`
-/// on a launch failure reaches: a terminal, a log file, an issue report. Redacting on the
-/// type is the only place the guarantee holds for every caller; a wrapper at one call site
-/// is a guarantee that lasts until the second call site.
-///
-/// The key is never redacted and no other value is touched, so a `{:?}` still says which
-/// variables were supplied and what the rest of them rendered to — which is the whole
-/// reason to print the map at all. The suffix and not an exact name, because any variable
-/// named `*_token` is a secret and should not have to remember to come back here.
-impl fmt::Debug for TemplateVars {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("TemplateVars ")?;
-        let mut m = f.debug_map();
-        for (k, v) in &self.0 {
-            if k.ends_with("_token") {
-                m.entry(k, &"<redacted>");
-            } else {
-                m.entry(k, v);
-            }
-        }
-        m.finish()
-    }
-}
 
 impl TemplateVars {
     pub fn new() -> TemplateVars {
@@ -144,28 +115,6 @@ pub fn render(template: &str, vars: &TemplateVars) -> Result<String, ProtocolErr
 #[cfg(test)]
 mod tests {
     use super::{TemplateVars, render, tokens};
-
-    /// A `{:?}` on a launch failure is the obvious thing to write in an error path, and the
-    /// map it prints carries this run's bearer token.
-    #[test]
-    fn debug_redacts_token_values_and_prints_everything_else() {
-        let mut v = TemplateVars::new();
-        v.set("receiver_token", "live-secret-abc123");
-        v.set("receiver_http", "http://127.0.0.1:53311");
-        v.set("session_id", "session-0000");
-        let printed = format!("{v:?}");
-        assert!(
-            !printed.contains("live-secret-abc123"),
-            "a token survived a `{{:?}}`: {printed}"
-        );
-        // The key stays: a reader has to be able to see that the variable was supplied.
-        assert!(printed.contains("receiver_token"));
-        assert!(printed.contains("<redacted>"));
-        assert!(printed.contains("http://127.0.0.1:53311"));
-        assert!(printed.contains("session-0000"));
-        // The value is what is hidden, not the fact that a token was there.
-        assert_eq!(v.get("receiver_token"), Some("live-secret-abc123"));
-    }
 
     /// The renderer before `tokens` existed, kept here as the reference the new one is compared to.
     fn old_render(template: &str, vars: &TemplateVars) -> Result<String, ()> {

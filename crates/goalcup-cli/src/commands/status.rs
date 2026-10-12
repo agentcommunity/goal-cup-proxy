@@ -42,8 +42,8 @@
 //!
 //! # What only this surface prints
 //!
-//! The bundled page carries `cycles`, `posts_dropped` and `event_status_source` in its JSON
-//! and shows none of the three, so `goalcup status` is the only human surface for the
+//! The bundled page carries `cycles` and `event_status_source` in its JSON
+//! and shows neither, so `goalcup status` is the only human surface for the
 //! daemon's own lost work — and for whether the round's dates were configured by an
 //! organiser or are the entry's own timeline standing in for them
 //! ([`EventStatusSource::Fallback`]). Staleness is
@@ -229,9 +229,6 @@ pub fn render_status(s: &SignedStatus, now: &str) -> String {
         ArmingState::Refused => lines.push(format!("  arming: refused — {detail}")),
         other => lines.push(format!("  arming: {}", wire_word(&other))),
     }
-    if let Some(recipe) = &p.arming_recipe {
-        lines.push(format!("  arming step: {}", plain(recipe)));
-    }
     // D25: the health state in the daemon's own plain words, which is the same sentence the
     // page shows. A second vocabulary here would be a second story about one daemon.
     lines.push(format!(
@@ -279,20 +276,14 @@ pub fn render_status(s: &SignedStatus, now: &str) -> String {
         lines.push(format!("  last sync: {}", plain(sync)));
     }
 
-    // The three facts the page carries in JSON alone, and the two beside them that nothing
+    // The two facts the page carries in JSON alone, and the two beside them that nothing
     // else says either. Each is printed only when it has something to report: a run with
-    // none of them is a run whose participant should not have to read five zeroes.
+    // none of them is a run whose participant should not have to read four zeroes.
     if p.event_status_source == EventStatusSource::Fallback {
         lines.push(format!(
             "  round dates: not configured (fallback) — t0 {} and the close at {} are this \
              entry's own timeline standing in for an organiser's.",
             p.event.t0, p.event.publication_closes_at
-        ));
-    }
-    if p.posts_dropped > 0 {
-        lines.push(format!(
-            "  posts dropped: {} — hook posts that never reached this entry's chain.",
-            p.posts_dropped
         ));
     }
     let c = &p.cycles;

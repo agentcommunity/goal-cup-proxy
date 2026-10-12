@@ -281,7 +281,6 @@ fn an_unreconciled_sealing_intent_is_not_reported_as_live_or_sealed() {
     assert_eq!(payload.health, HealthState::SealingRecoveryNeeded);
     assert_eq!(payload.sealed_at, None);
     assert_eq!(payload.seconds_remaining, Some(0));
-    assert!(payload.arming_recipe.is_none());
     assert!(payload.detail.contains("Capture is closed"));
 }
 
@@ -312,12 +311,11 @@ fn an_unprobed_harness_version_is_absent_from_the_document_rather_than_empty() {
 }
 
 #[test]
-fn the_payload_counts_down_and_hides_the_arming_recipe_once_the_gate_clears() {
+fn the_payload_counts_down_once_the_gate_clears() {
     let e = support::started_entry();
     let started = build_payload(&support::status_inputs(&e));
     assert_eq!(started.arming, ArmingState::Started);
     assert_eq!(started.seconds_remaining, Some(10_000));
-    assert_eq!(started.arming_recipe, None, "the gate has cleared");
     assert_eq!(started.entry_id, e.entry_id);
     assert_eq!(started.harness_version.as_deref(), Some("2.1.259"));
 
@@ -331,10 +329,6 @@ fn the_payload_counts_down_and_hides_the_arming_recipe_once_the_gate_clears() {
         waiting.seconds_remaining,
         Some(0),
         "a passed deadline saturates at zero rather than going negative"
-    );
-    assert_eq!(
-        waiting.arming_recipe, None,
-        "no connector has a human arming step since the hook leg was cut"
     );
     assert_eq!(
         waiting.detail,

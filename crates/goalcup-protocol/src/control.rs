@@ -19,7 +19,6 @@
 
 use crate::ProtocolError;
 use crate::events::HealthState;
-use crate::manifest::InstallScope;
 use crate::provenance::{PreCutoffDrainOutcomeV1, TerminationOutcomeV1};
 use crate::seal::SealManifest;
 use crate::submission::SubmissionOutcomeV1;
@@ -43,7 +42,12 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// V5 adds the required connector-directory digest to capture workspace creation, so two
 /// separately installed halves cannot silently create a run from different connector bytes.
 /// This is only the local control boundary; it does not change `M2_PROTOCOL_VERSION`.
-pub const CONTROL_API_VERSION: u32 = 5;
+/// V6 removes the retired V1 hook-path shapes: `WorkspaceInfo`'s `server_port`,
+/// `installed_files` and `workspace_relative`, the always-constant `StatusPayload` fields
+/// `arming_recipe`, `posts_dropped`, `posts_dropped_after_seal` and `pins_dropped`, the
+/// `arming_timeout` and `unsupported_connector` error codes, and `ProcessHandle.home_seed`.
+/// An unknown connector is now refused `preflight_failed`.
+pub const CONTROL_API_VERSION: u32 = 6;
 
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
 pub const ROUTE_ENTRIES_CURRENT: &str = "/v0/entries/current";
@@ -172,111 +176,7 @@ fn percent_decode(seg: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-// ------------------------------------------------------------------ requests
-
-/// `Debug` is written out below rather than derived: this struct holds a live credential.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceOpts {
-    pub connector_id: String,
-    /// SHA-256 of the connector manifest the CLI loaded, so the daemon refuses a
-    /// manifest that is not the one in the signed release.
-    ///
-    /// Of the **file's** bytes, and it stays that way: this is the digest the daemon puts
-    /// on the arming receipt's `manifest_sha256` claim, and the verifier recomputes it
-    /// from the `manifest.toml` the trace carries. A trace does not carry the rest of the
-    /// connector directory, so this is the one digest the two sides can both take.
-    ///
-    /// **There is deliberately no `connector_dir_sha256` beside it.** The whole-directory
-    /// digest — the one that covers the hook bodies under `files/` — is computed by the
-    /// **daemon**, over its own `connectors_dir`, at workspace creation, and compared
-    /// against `pins::CONNECTOR_DIR_SHA256S`. A digest the CLI sent would be a digest
-    /// the checked process supplied, which checks nothing: the daemon is what renders those
-    /// bodies and then guards them, so it is what has to hash them. It travels from there
-    /// onto the start receipt (`StartReceiptClaims::connector_dir_sha256`), where V13 reads
-    /// it. The CLI keeps its own directory check for `goalcup doctor`, where it answers a
-    /// question about the CLI's own installation.
-    pub manifest_sha256: String,
-    /// Where the workspace directory is created. `None` means the daemon's default,
-    /// which is never an ancestor of the artifact root.
-    pub workspace_parent: Option<String>,
-    /// Desktop attach mode: arm the folder and wait rather than expecting a launch.
-    pub attach: bool,
-    /// **Nothing reads this, and a daemon must not honour it**.
-    ///
-    /// The window is a RULE, not a preference: 168 hours, and the clock never pauses. The
-    /// V1 daemon derived the deadline from the development server's entry window and
-    /// compared its re-derivation against the receipt the server signed; D48 removed that
-    /// receipt path, and the current daemon sets no deadline from this field. So the number a
-    /// CLI puts here reaches no deadline anywhere. The shipped CLI always sends the constant
-    /// `DEFAULT_DEADLINE_HOURS = 168`.
-    ///
-    /// It stays on the wire because removing a field breaks version skew in the direction
-    /// that matters — an older daemon deserialising a newer CLI's request. It is said HERE,
-    /// and not only in the CLI that sends it, because this is where the next implementer
-    /// looks: a daemon that honoured this in good faith would turn a participant's number
-    /// into the run's window.
-    pub deadline_hours: u32,
-    /// The grant the V1 `goalcup auth` stored (D48 removed the command). The V1 daemon
-    /// exchanged it with the server.
-    pub grant_token: String,
-    /// Third and last step of the arming-timeout precedence chain documented on
-    /// `manifest::Arming`: manifest default, daemon-config override, CLI flag. `None`
-    /// leaves the first two in force.
-    pub arming_timeout_seconds: Option<u64>,
-    /// What the CLI's own D12 preflight MEASURED the harness at, seconds before this call.
-    ///
-    /// The daemon runs no version probe of its own — `detection.version_command` is the
-    /// CLI's to run, and the CLI has just run it to decide whether this machine is inside
-    /// `tested_version_range` at all. Without it the signed status document would say
-    /// `harness: unknown` about a harness `goalcup doctor` had printed a version for
-    /// seconds earlier.
-    ///
-    /// `None` means genuinely not probed — the binary is not on `PATH`, or it would not
-    /// answer — and the status document then says nothing rather than an empty string, which
-    /// is a measurement of nothing dressed as one.
-    ///
-    /// `#[serde(default)]`, so a CLI older than this field still creates a workspace: the
-    /// two halves are installed separately, and a daemon that refused the older request
-    /// would turn a cosmetic gap into a broken machine.
-    #[serde(default)]
-    pub harness_version: Option<String>,
-}
-
-/// Every field as a derive would print it, except `grant_token`, which prints
-/// `<redacted>`. `WorkspaceOpts` reaches the daemon's request log and is interpolated
-/// into `ControlError::PreflightFailed`; a `{:?}` that carried the grant would hand a
-/// reader the credential the V1 `goalcup auth` stored, which is the one that exchanges for
-/// everything else.
-impl std::fmt::Debug for WorkspaceOpts {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WorkspaceOpts")
-            .field("connector_id", &self.connector_id)
-            .field("manifest_sha256", &self.manifest_sha256)
-            .field("workspace_parent", &self.workspace_parent)
-            .field("attach", &self.attach)
-            .field("deadline_hours", &self.deadline_hours)
-            .field("grant_token", &"<redacted>")
-            .field("arming_timeout_seconds", &self.arming_timeout_seconds)
-            .field("harness_version", &self.harness_version)
-            .finish()
-    }
-}
-
 // ------------------------------------------------------------------ responses
-
-/// One file the **daemon** rendered and wrote. The CLI writes none of
-/// these; it is told where they landed so it can pass `--settings` on the command line
-/// and so `goalcup seal` can exclude exactly what the tracker put in the workspace.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstalledFile {
-    /// Absolute path as written.
-    pub path: String,
-    pub scope: InstallScope,
-    /// Path relative to `scope`'s root, forward slashes.
-    pub relative_path: String,
-    pub sha256: String,
-    pub bytes: u64,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
@@ -319,14 +219,6 @@ pub struct WorkspaceInfo {
     pub status_line_path: String,
     /// The session id the launch recipe pins where the harness accepts one.
     pub session_id: String,
-    /// The port the daemon reserved for a `Server`-mode launch, if the connector needs one.
-    pub server_port: Option<u16>,
-    /// Every file the daemon rendered from the connector's `hook_install[]`, in
-    /// manifest order. The CLI reads the `ArtifactRoot`-scoped ones to build launch argv.
-    pub installed_files: Vec<InstalledFile>,
-    /// The `Workspace`-scoped subset, workspace-relative and sorted: exactly what the
-    /// seal excludes and the public entry discloses (`RULES.md`).
-    pub workspace_relative: Vec<String>,
     pub created_at: String,
 }
 
@@ -467,8 +359,6 @@ pub struct StatusPayload {
     pub last_sync_at: Option<String>,
     pub events_uploaded: u64,
     pub events_pending: u64,
-    /// The connector's `arming.recipe` while the gate is unmet; `None` once it clears.
-    pub arming_recipe: Option<String>,
     /// The health state in plain words, for the status page and the terminal (D25).
     pub detail: String,
     pub event: EventStatus,
@@ -487,29 +377,6 @@ pub struct StatusPayload {
     /// refuses is worse than one whose counters read zero.
     #[serde(default)]
     pub cycles: CycleErrors,
-    /// Hook posts that never reached this entry's chain.
-    ///
-    /// A post that arrives while the entry is held by an asynchronous call is queued rather
-    /// than refused, and the queue is bounded so a stuck pump cannot grow it without limit.
-    /// Anything over the bound is lost, and so is a post the chain then refused — both are
-    /// the same fact from a reader's side, and this is the only place either surfaces.
-    #[serde(default)]
-    pub posts_dropped: u64,
-    /// Hook posts that arrived for a run this daemon had already sealed and evicted.
-    ///
-    /// Daemon-level, unlike [`StatusPayload::posts_dropped`], because by then the entry is
-    /// out of the map and there is no per-entry counter left to hold it. A participant whose
-    /// harness is still posting after the seal has a harness the kill did not reach, and
-    /// this is the only place that says so.
-    #[serde(default)]
-    pub posts_dropped_after_seal: u64,
-    /// Reported hook pins beyond the memo's bound that were counted and chained nowhere.
-    ///
-    /// The shim reports the hook-set hash it is running; the daemon remembers a bounded
-    /// number of distinct ones. A peer varying the value cannot grow that memo, and what it
-    /// costs is counted here rather than dropped silently.
-    #[serde(default)]
-    pub pins_dropped: u64,
     /// How many times a tick stopped at the per-tick poll cap with a store still holding
     /// more (`MAX_POLLS_PER_TICK`).
     ///
@@ -981,12 +848,8 @@ pub enum ControlError {
     Conflict(String),
     #[error("unauthorized: {0}")]
     Unauthorized(String),
-    #[error("arming timed out: {detail}")]
-    ArmingTimeout { detail: String },
     #[error("preflight failed: {0}")]
     PreflightFailed(String),
-    #[error("unsupported connector: {0}")]
-    UnsupportedConnector(String),
     #[error("daemon error: {0}")]
     Internal(String),
     #[error("malformed control response: {0}")]
@@ -1042,9 +905,7 @@ impl ControlError {
             ControlError::NotFound(_) => "not_found",
             ControlError::Conflict(_) => "conflict",
             ControlError::Unauthorized(_) => "unauthorized",
-            ControlError::ArmingTimeout { .. } => "arming_timeout",
             ControlError::PreflightFailed(_) => "preflight_failed",
-            ControlError::UnsupportedConnector(_) => "unsupported_connector",
             ControlError::Malformed(_) => "malformed",
             ControlError::Unsupported(_) => "unsupported",
             ControlError::ProcessAdmissionUncertain(_) => "process_admission_uncertain",
@@ -1061,11 +922,7 @@ impl ControlError {
             "not_found" => ControlError::NotFound(message.to_string()),
             "conflict" => ControlError::Conflict(message.to_string()),
             "unauthorized" => ControlError::Unauthorized(message.to_string()),
-            "arming_timeout" => ControlError::ArmingTimeout {
-                detail: message.to_string(),
-            },
             "preflight_failed" => ControlError::PreflightFailed(message.to_string()),
-            "unsupported_connector" => ControlError::UnsupportedConnector(message.to_string()),
             "malformed" => ControlError::Malformed(message.to_string()),
             "unsupported" => ControlError::Unsupported(message.to_string()),
             "process_admission_uncertain" => {
