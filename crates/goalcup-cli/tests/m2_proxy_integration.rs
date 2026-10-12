@@ -2249,47 +2249,57 @@ fn stop_report_never_calls_unclassified_cuts_clean() {
     assert!(!with(&|r| r.health.closed_transport_error = 1).capture_loss());
 }
 
-/// Connections refused while the upstream is dark are one outage window, not one per
-/// connection, and the next admission that reaches an upstream closes it.
+/// Connections to a provider host refused while it is dark are one outage window, not one per
+/// connection; a dead host that is not a provider's (the agent's own traffic) is not an outage;
+/// and the next admission that reaches a provider host closes the window.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_upstream_outage_is_one_window_closed_by_the_next_reach() {
     let pki = TestPki::new("upstream test CA");
     let sink = DirectSink::new(QUEUE_BYTES);
-    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    let mut config = RigConfig::new(&pki);
+    // An authentication host is a provider host whose failed connect is answered `502`.
+    config.approved = vec![approved("api.test", policy(&[("/", true, None)]))];
+    config.auth_hosts = vec!["localhost".into()];
+    let mut rig = Rig::start(config, sink.clone()).await;
     let dark = {
         let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         reserved.local_addr().unwrap().port()
     };
-    // A host that is not approved, so the failed connect is answered `502`.
-    let refused = |addr| async move {
+    let refused = |addr, target: String| async move {
         let mut tcp = TcpStream::connect(addr).await.unwrap();
-        tcp.write_all(&connect_head(&format!("127.0.0.1:{dark}")))
-            .await
-            .unwrap();
+        tcp.write_all(&connect_head(&target)).await.unwrap();
         let (answer, _) = read_to_end(&mut tcp).await;
         assert!(answer.starts_with(b"HTTP/1.1 502 "), "{answer:?}");
     };
-    tokio::join!(refused(rig.addr), refused(rig.addr));
+    tokio::join!(
+        refused(rig.addr, format!("localhost:{dark}")),
+        refused(rig.addr, format!("localhost:{dark}")),
+        refused(rig.addr, format!("127.0.0.1:{dark}")),
+    );
     let handle = rig.handle();
-    eventually("both failures counted", || {
-        handle.health().admission_failures.upstream_connect == 2
+    eventually("all three failures counted", || {
+        handle.health().admission_failures.upstream_connect == 3
     })
     .await;
     let dark_health = handle.health();
     assert_eq!(dark_health.upstream_outages, 1);
     assert_eq!(dark_health.outage_windows.len(), 1);
-    let open = &dark_health.outage_windows[0];
-    assert_eq!(open.failures, 2);
+    let open = dark_health.outage_windows[0].clone();
+    assert_eq!(
+        open.failures, 2,
+        "the host that is not a provider's counted"
+    );
     assert!(open.first_failure <= open.last_failure);
     assert_eq!(open.recovered, None);
 
-    // The upstream is back: the next interception closes the window.
-    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
-    let mut client = rig.client(upstream.addr.port()).await;
-    let mut up = upstream.accept().await.tls;
-    exchange(&mut client, &mut up, "/v1/responses", b"back", b"{}").await;
-    close_both(client, up).await;
-    rig.wait_closed(1).await;
+    // The provider host is back: the next tunnel to it closes the window when it is decided.
+    let upstream = Upstream::start(&pki, &["localhost"]).await;
+    let tunnel = connect_via(rig.addr, &format!("localhost:{}", upstream.addr.port())).await;
+    eventually("the window closes", || {
+        handle.health().outage_windows[0].recovered.is_some()
+    })
+    .await;
+    drop(tunnel);
     let report = rig.stop().await;
     assert_eq!(report.health.upstream_outages, 1);
     let closed = &report.health.outage_windows[0];

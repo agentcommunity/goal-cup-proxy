@@ -906,8 +906,11 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
     // relayed: the tunnel runs inside `admit`, so a task that is cut or panics mid-relay
     // never reaches the counters below.
     let admission = connect::admit_observed(tcp, &shared.admission, |reason| {
-        // A tunnel is decided only once its upstream is connected.
-        shared.outages.success(&metadata::capture_time().wall);
+        // A tunnel is decided only once its upstream is connected; every reason but a host
+        // that is not approved is a provider host's.
+        if reason != connect::TunnelReason::NotApproved {
+            shared.outages.success(&metadata::capture_time().wall);
+        }
         if is_fail_open(reason) {
             let _ = shared
                 .emitter
@@ -916,7 +919,7 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
     })
     .await;
     unsettled.settle();
-    record_upstream_reach(&shared.outages, &admission);
+    record_upstream_reach(shared, &admission);
     match admission {
         Admission::Failed(failure) => {
             let class = match failure.class {
@@ -972,13 +975,22 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
     }
 }
 
-/// What a settled admission says about reaching an upstream, for the outage windows. A tunnel is
-/// recorded when it is decided (it settles only when it ends); an interception, and a TLS or ALPN
-/// failure that came after the TCP connect, reached the upstream; a failed connect did not.
-/// Everything else (a refusal, a timeout, a client that went away) says nothing either way.
-fn record_upstream_reach(outages: &outage::OutageTracker, admission: &Admission) {
+/// What a settled admission says about reaching a provider host (approved or authentication),
+/// for the outage windows. A tunnel is recorded when it is decided (it settles only when it
+/// ends); an interception, and a TLS or ALPN failure that came after the TCP connect, reached the
+/// upstream; a failed connect did not. A host that is not approved is the agent's own traffic and
+/// says nothing about the provider; nor does a refusal, a timeout or a client that went away.
+fn record_upstream_reach(shared: &Shared, admission: &Admission) {
     let reached = match admission {
         Admission::Intercepted(_) => true,
+        Admission::Failed(failure)
+            if !failure
+                .host
+                .as_deref()
+                .is_some_and(|host| shared.admission.is_provider_host(host)) =>
+        {
+            return;
+        }
         Admission::Failed(failure) => match failure.class {
             FailureClass::UpstreamConnect(_) => false,
             FailureClass::UpstreamTls
@@ -990,9 +1002,9 @@ fn record_upstream_reach(outages: &outage::OutageTracker, admission: &Admission)
     };
     let at = metadata::capture_time().wall;
     if reached {
-        outages.success(&at);
+        shared.outages.success(&at);
     } else {
-        outages.failure(&at);
+        shared.outages.failure(&at);
     }
 }
 

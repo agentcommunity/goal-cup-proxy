@@ -1,8 +1,9 @@
 //! Upstream outage windows: when the proxy could not reach an upstream, and when it could again.
 //!
-//! An admission whose upstream TCP connect failed after every retry (`upstream_connect`) is a
-//! failure; any admission that reached an upstream over TCP (an interception, a tunnel decided,
-//! or a TLS or ALPN failure after the connect) is a success. Consecutive failures, across all
+//! Only provider hosts count (approved and authentication hosts; a host that is not approved is
+//! the agent's own traffic). An admission whose upstream TCP connect failed after every retry
+//! (`upstream_connect`) is a failure; any admission that reached an upstream over TCP (an
+//! interception, a tunnel decided, or a TLS or ALPN failure after the connect) is a success. Consecutive failures, across all
 //! hosts and connections, coalesce into one [`OutageWindow`]: its first and last failure, how
 //! many there were, and the first success after them. A window is never one record per failed
 //! connect, and at most [`MAX_KEPT_OUTAGE_WINDOWS`] of them are kept (the most recent); the

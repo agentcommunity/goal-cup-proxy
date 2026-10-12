@@ -258,6 +258,14 @@ impl AdmissionConfig {
     }
 }
 
+impl AdmissionConfig {
+    /// Whether `host` is a provider's: an approved or an authentication host. Only these say
+    /// anything about an upstream outage; a host that is not approved is the agent's own traffic.
+    pub(crate) fn is_provider_host(&self, host: &str) -> bool {
+        self.approved.contains_key(host) || self.auth_hosts.contains(host)
+    }
+}
+
 /// How one accepted connection was settled.
 #[derive(Debug)]
 pub enum Admission {
@@ -849,16 +857,20 @@ pub(crate) async fn connect_host(
     until: tokio::time::Instant,
 ) -> Result<TcpStream, ConnectFailureKind> {
     let mut pause = CONNECT_RETRY_FIRST;
+    // The first round always runs, for at least one attempt's length, even when it starts at or
+    // after `until` (a ClientHello that came late): only the retries are held to `until`, and
+    // the caller's own deadline still bounds everything.
+    let mut round_until = until.max(tokio::time::Instant::now() + attempt);
     loop {
-        let round =
-            match tokio::time::timeout_at(until, tokio::net::lookup_host((host, port))).await {
-                Ok(Ok(resolved)) => {
-                    let mut addresses: Vec<std::net::SocketAddr> = resolved.collect();
-                    addresses.sort_by_key(|address| address.is_ipv6());
-                    connect_addresses(addresses, attempt, until).await
-                }
-                Ok(Err(_)) | Err(_) => Err(ConnectFailureKind::Dns),
-            };
+        let lookup = tokio::net::lookup_host((host, port));
+        let round = match tokio::time::timeout_at(round_until, lookup).await {
+            Ok(Ok(resolved)) => {
+                let mut addresses: Vec<std::net::SocketAddr> = resolved.collect();
+                addresses.sort_by_key(|address| address.is_ipv6());
+                connect_addresses(addresses, attempt, round_until).await
+            }
+            Ok(Err(_)) | Err(_) => Err(ConnectFailureKind::Dns),
+        };
         let last = match round {
             Ok(stream) => return Ok(stream),
             Err(kind) => kind,
@@ -869,6 +881,7 @@ pub(crate) async fn connect_host(
         }
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(CONNECT_RETRY_MAX);
+        round_until = until;
     }
 }
 
@@ -1220,6 +1233,19 @@ mod tests {
         // It went on past the first refusal, and it never outlived its deadline.
         assert!(took >= Duration::from_millis(400), "{took:?}");
         assert!(took <= Duration::from_millis(900), "{took:?}");
+    }
+
+    /// A connect that starts after its deadline (a ClientHello that came late) still gets one
+    /// round, bounded by the attempt; only the retries are held to the deadline. Otherwise a
+    /// slow client would read as an upstream that could not be reached.
+    #[tokio::test]
+    async fn a_connect_deadline_already_passed_still_gets_one_round() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let until = tokio::time::Instant::now();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let connected = connect_upstream(&loopback(port), Duration::from_secs(1), until).await;
+        assert!(connected.is_ok(), "{:?}", connected.err());
     }
 
     #[tokio::test]

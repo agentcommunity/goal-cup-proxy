@@ -286,8 +286,8 @@ out, not permitted) and this binary's path: a per-app firewall such as Little Sn
 newly built binary's connections until someone allows that exact path. During a run, each
 upstream connect is retried, re-resolving the name, with a 250 ms to 2 s backoff until 25 s of
 the 30 s admission deadline, and is never a replayed request. Upstream sockets get TCP keepalive
-(60 s idle, 15 s interval, 4 probes) and no idle timeout. Connects that still fail coalesce into
-outage windows: the finish adds `upstream_outages=N` to the `proxy admission:` line and one
+(60 s idle, 15 s interval, 4 probes) and no idle timeout. Provider-host connects that still fail
+coalesce into outage windows: the finish adds `upstream_outages=N` to the `proxy admission:` line and one
 `proxy upstream outage:` line per window (first and last failure, count, recovery time). The
 frozen v5 chain has no record kind for an outage, so the windows are not in the trace. Nothing
 is said to the harness. The Claude connector sets `CLAUDE_CODE_RETRY_WATCHDOG=1` so a dropped
