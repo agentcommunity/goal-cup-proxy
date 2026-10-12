@@ -134,8 +134,8 @@ is the guard; a server refuses an unknown `protocol_version` with `client_newer`
 **Integrity exits** ([reader.rs][rdr] `exit_code`): **0** valid, sealed, coverage complete;
 **1** incomplete (a gap, unsealed, a Recovery, no Launch, a missing manifest); **2** invalid,
 including a torn tail (kept, never repaired; the entry cannot resume, [C2]); **3** no usable
-report. Research output: `goalcup-verify --research-json`; the report format document is in git history at
-`6494030` (`docs/research/m2-report-format.md`).
+report. Research output: `goalcup-verify --research-json`, format in
+[m2-report-format.md](research/m2-report-format.md).
 
 Integrity, anchor, key-source and terminal status facts are typed Rust values. The full research
 summary is assembled JSON, not one typed Rust document. Typed names may be idiomatic while their
