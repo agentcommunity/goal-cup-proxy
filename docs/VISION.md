@@ -1,8 +1,8 @@
 # Vision
 
-> **Scope (2026-10-02).** V1 on `v1/trunk` is one short Codex CLI/macOS lifecycle; V1.1 expands it;
-> the 168-hour event is untested. On `m2/wire` the recorder (native leg plus proxy wire leg) is built
-> and measured on short rows, not qualified. Current: [TODO](../TODO.md), [ARCHITECTURE](ARCHITECTURE.md).
+> **Where it stands (2026-10-12).** The tracer works on macOS with Codex and Claude Code and is
+> tested on short runs; long unattended runs and upload to the organizers' servers come next. What is
+> planned: [TODO](../TODO.md). How it works: [ARCHITECTURE](ARCHITECTURE.md).
 
 ## The event
 
@@ -23,7 +23,7 @@ disqualification decision. Traces are never public.
 
 ## What the tracker must guarantee
 
-1. **Bounded capture.** The declared transcript and hook evidence for the bound entry is
+1. **Bounded capture.** The agent's own session record and its model traffic for the run are
    captured, including the tool calls, results, subagent activity, and model identity those
    surfaces expose. Coverage is bounded by the supported harness and its declared evidence;
    unavailable or incomplete evidence is a limitation or finding, not an inferred record.
@@ -36,13 +36,15 @@ disqualification decision. Traces are never public.
    persistence; it does not retain ordinary sessions, other terminals, browser history, or
    unrelated machine activity.
 5. **Silence.** The tracker never speaks to the agent. No reminders, no nudges. The agent may ask how much time is left; that is the builder's problem to solve in their prompt.
-6. **Expandability.** Nine harnesses were measured and three CLI connectors exist in the M1 code. V1 defines Codex CLI as the reference qualification surface without deleting the other candidates. V1.1 promotes additional CLI and Desktop surfaces against the same lifecycle and artifact contracts; M2 may later make launch-mode additions smaller through wire/PTY evidence.
+6. **Expandability.** Nine harnesses were measured and three connectors ship today (Codex, Claude Code,
+   Hermes). A harness team adds its own as a small data file, following
+   [the harness guide](HARNESS-ONBOARDING.md); no tracer code changes.
 
 ## What it is not
 
 Not an API proxy that changes where the harness talks or what it sends. Not a sandbox. Not device
-surveillance. Not a judge. Current V1 uses bounded transcript/hook evidence; a future M2 passive
-loopback path, if implemented, remains process-scoped and disclosed. It is a recorder with a
+surveillance. Not a judge. The recording proxy is set for the agent's process only, never changes where it
+connects, and is disclosed to every participant. It is a recorder with a
 public verifier, and the honesty of the whole event rests on stating its evidence boundaries
 plainly.
 
