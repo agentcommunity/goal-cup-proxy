@@ -29,10 +29,11 @@ goalcup-<version>-<target>/
   LICENSE  NOTICE  THIRD-PARTY-LICENSES.md
 ```
 
-`goalcup` finds the connectors as `<its own directory>/../share/goalcup/connectors`, beside its
-resolved path first, so a link such as `/opt/homebrew/bin/goalcup` leads to the keg's own copy
-(`connectors_dir` in `crates/goalcup-cli/src/config.rs`), and starts `goalcup-daemon` from beside
-itself, so nothing is configured and nothing is written outside the install. The formula installs
+`goalcup` finds the connectors as `<its own directory>/../share/goalcup/connectors`: beside the
+path it was started by (`/opt/homebrew/bin/goalcup`, which survives upgrades), else beside its
+resolved path in the keg (`connectors_dir` in `crates/goalcup-cli/src/config.rs`). It starts
+`goalcup-daemon` from beside itself, so nothing is configured and nothing is written outside the
+install. The formula installs
 the binaries into `bin` and the connectors into `share/goalcup/connectors` (`pkgshare`).
 `hermes-cli` is left out on purpose: it needs a provider key and is run by the maintainer only
 (H-21 in [TODO.md](../TODO.md)).
