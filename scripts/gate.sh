@@ -2,7 +2,8 @@
 # The test gate. `sh scripts/gate.sh fast` before every commit; `sh scripts/gate.sh full`
 # before a release. The last line of output is `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`.
 #
-#   fast  build, fmt, clippy, then every test except the slow `full` binaries.
+#   fast  build, fmt, clippy, then every test except the slow `full` and `m2_cli_lifecycle`
+#         binaries.
 #   full  fast's checks, every test including `full`, the scripts' unit tests and the link check.
 #
 # Tests run under cargo-nextest (one process per test, in parallel). Without it the gate falls
@@ -39,13 +40,16 @@ step cargo clippy --offline --workspace --all-targets -- -D warnings
 
 if cargo nextest --version >/dev/null 2>&1; then
     if [ "$tier" = fast ]; then
-        # nextest rejects a filter that names a binary that does not exist, so the exclusion is
-        # applied only once a `full` binary does.
+        # The slow binaries the fast tier skips: every crate's `full`, and the CLI's standalone
+        # end-to-end lifecycle (about 100 s). nextest rejects a filter that names a binary that
+        # does not exist, so the exclusion is probed first; each operator must match a binary.
+        slow='binary(full) | binary(m2_cli_lifecycle)'
         if cargo nextest list --offline --workspace --list-type binaries-only \
-            -E 'binary(full)' >/dev/null 2>&1; then
-            step cargo nextest run --offline --workspace -E 'not binary(full)'
+            -E "$slow" >/dev/null 2>&1; then
+            step cargo nextest run --offline --workspace -E "not ($slow)"
         else
-            echo "no 'full' test binary in the workspace; running every test"
+            echo "gate fast: WARNING: no test binary named 'full' or 'm2_cli_lifecycle' was" \
+                "found (renamed?), so the fast tier is running EVERY test, slow ones included" >&2
             step cargo nextest run --offline --workspace
         fi
     else

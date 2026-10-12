@@ -78,16 +78,18 @@ class GateTests(unittest.TestCase):
         self.run_gate("fast")
         runs = self.nextest_runs()
         self.assertEqual(len(runs), 1, runs)
-        self.assertIn("-E not binary(full)", runs[0])
+        self.assertIn("-E not (binary(full) | binary(m2_cli_lifecycle))", runs[0])
 
     def test_fast_runs_everything_while_no_full_binary_exists(self) -> None:
-        # nextest refuses `-E 'not binary(full)'` when no binary has that name.
+        # nextest refuses a `binary(...)` filter when no binary has that name. The fallback is
+        # announced on stderr, so a renamed binary does not silently slow the fast tier.
         result = self.run_gate("fast", STUB_FAIL_ON="nextest list")
         self.assertEqual(result.returncode, 0, result.stderr)
         runs = self.nextest_runs()
         self.assertEqual(len(runs), 1, runs)
         self.assertNotIn("binary(full)", runs[0])
-        self.assertIn("no 'full' test binary", result.stdout)
+        self.assertIn("running EVERY test", result.stderr)
+        self.assertNotIn("running EVERY test", result.stdout)
 
     def test_full_runs_everything(self) -> None:
         result = self.run_gate("full")
