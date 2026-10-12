@@ -268,7 +268,7 @@ fn two_concurrent_starts_end_with_exactly_one_daemon() {
 /// beside a copy of `goalcup`, that writes the environment it was given and then becomes the
 /// real daemon, so the run goes on as usual.
 #[test]
-fn the_started_daemon_inherits_none_of_the_clis_secrets() {
+fn the_started_daemon_inherits_none_of_the_clis_secrets_or_descriptors() {
     let rig = Rig::run_scoped();
     let _reaper = reaper(&rig);
     rig.tell("stop", "");
@@ -277,11 +277,13 @@ fn the_started_daemon_inherits_none_of_the_clis_secrets() {
     let copied = bin.join("goalcup");
     std::fs::copy(cli(), &copied).unwrap();
     let dump = rig.root.join("daemon-env");
+    let fds = rig.root.join("daemon-fds");
     let shim = bin.join("goalcup-daemon");
     std::fs::write(
         &shim,
         format!(
-            "#!/bin/sh\n/usr/bin/env > '{}'\nexec '{}' \"$@\"\n",
+            "#!/bin/sh\n/bin/ls /dev/fd > '{}'\n/usr/bin/env > '{}'\nexec '{}' \"$@\"\n",
+            fds.display(),
             dump.display(),
             support::daemon_binary().display()
         ),
@@ -303,8 +305,32 @@ fn the_started_daemon_inherits_none_of_the_clis_secrets() {
     for (name, value) in planted {
         command.env(name, value);
     }
+    // A descriptor the CLI inherits without close-on-exec, as a careless parent would hand one
+    // over: `dup2` onto PLANTED_FD in the CLI's child clears the flag.
+    const PLANTED_FD: i32 = 47;
+    let held = std::fs::File::create(rig.root.join("planted-descriptor")).unwrap();
+    let raw = std::os::fd::AsRawFd::as_raw_fd(&held);
+    // SAFETY: the closure runs in the forked child before `exec` and calls only `dup2`.
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(&mut command, move || {
+            if libc::dup2(raw, PLANTED_FD) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let output = command.output().unwrap();
+    drop(held);
     assert!(output.status.success(), "{}", said(&output));
+    let open: Vec<String> = std::fs::read_to_string(&fds)
+        .expect("the shim listed its descriptors")
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert!(
+        !open.contains(&PLANTED_FD.to_string()),
+        "the CLI's inherited descriptor {PLANTED_FD} reached the daemon: {open:?}"
+    );
 
     let env = std::fs::read_to_string(&dump).expect("the shim ran as the daemon");
     for (name, value) in planted {
@@ -420,4 +446,100 @@ fn a_daemon_killed_mid_run_is_started_again_by_the_finish_and_the_run_seals_with
         "sealed and incomplete: {:?}",
         report.findings
     );
+}
+
+/// The default `daemon.toml` names the connectors directory of the `goalcup start` that wrote
+/// it, and binaries move. Here the first run's connectors directory is moved away:
+///
+/// - a `start` from the new directory while the first daemon still runs rewrites the unedited
+///   default to name the new directory and refuses, naming the file, because that daemon reads
+///   the old one;
+/// - once that daemon is gone, the next `start` starts one from the rewritten file and the run
+///   is recorded and sealed;
+/// - a file someone edited is never rewritten: a `start` it disagrees with is refused naming
+///   the file, and no daemon is asked anything.
+#[test]
+fn a_moved_connectors_directory_rewrites_the_default_config_and_refuses_an_edited_one() {
+    let rig = Rig::run_scoped();
+    let _reaper = reaper(&rig);
+    rig.tell("stop", "");
+    let config = rig.cfg.join(goalcup_cli::daemon::spawn::DAEMON_CONFIG_NAME);
+    let output = start_command(&rig, &cli(), &goal_in(&rig, "runs-a"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", said(&output));
+    let first = the_daemon(&rig);
+    let named = |path: &Path| {
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains(&serde_json::to_string(path.to_str().unwrap()).unwrap())
+    };
+    assert!(
+        named(&rig.capture_connectors),
+        "the default names the first directory"
+    );
+
+    // The binaries' connectors moved: the old directory is gone.
+    let moved = rig.root.join("connectors-moved");
+    std::fs::rename(&rig.capture_connectors, &moved).unwrap();
+    let from_moved = |goal: &str| {
+        let mut command = start_command(&rig, &cli(), &goal_in(&rig, goal));
+        command.env("GOALCUP_CONNECTORS_DIR", &moved);
+        command.output().unwrap()
+    };
+
+    let output = from_moved("runs-b");
+    assert_eq!(output.status.code(), Some(1), "{}", said(&output));
+    assert!(
+        said(&output).contains(&config.display().to_string()),
+        "the refusal names the file: {}",
+        said(&output)
+    );
+    assert!(
+        named(&moved),
+        "the unedited default now names the moved directory"
+    );
+    assert_eq!(
+        daemons(&rig),
+        vec![first],
+        "and the running daemon was left alone"
+    );
+
+    // SAFETY: two integers; the pid was just seen running this row's daemon.
+    assert_eq!(unsafe { libc::kill(first, libc::SIGTERM) }, 0);
+    wait_gone(first, Duration::from_secs(15));
+    let output = from_moved("runs-c");
+    assert!(output.status.success(), "{}", said(&output));
+    let (report, _) = rig.read_trace(&latest_entry(&rig));
+    assert!(report.sealed, "{:?}", report.findings);
+    let second = the_daemon(&rig);
+
+    // Edited by hand: a comment, and a connectors_dir that is neither directory.
+    let text = std::fs::read_to_string(&config).unwrap();
+    let edited: String = text
+        .lines()
+        .map(|line| {
+            if line.starts_with("connectors_dir") {
+                "connectors_dir = \"/nonexistent/goalcup-connectors\" # mine".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .map(|line| line + "\n")
+        .collect();
+    std::fs::write(&config, &edited).unwrap();
+    let output = from_moved("runs-d");
+    assert_eq!(output.status.code(), Some(1), "{}", said(&output));
+    let text = said(&output);
+    assert!(
+        text.contains(&config.display().to_string())
+            && text.contains("/nonexistent/goalcup-connectors"),
+        "the refusal names the file and what it says: {text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        edited,
+        "an edited file is never rewritten"
+    );
+    assert_eq!(daemons(&rig), vec![second]);
 }

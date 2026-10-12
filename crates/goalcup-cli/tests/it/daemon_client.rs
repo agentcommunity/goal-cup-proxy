@@ -1108,7 +1108,7 @@ fn pause_points_exist_only_under_test_support() {
 /// (`daemon/spawn.rs`); the V1 version probe went with the V1 manifest (OS-29). The child-only
 /// credential is set on the one launch builder, so a third site would be another place a key
 /// could be forgotten or leaked. The daemon's start carries no key: it clears its environment,
-/// which `run_scoped_daemon::the_started_daemon_inherits_none_of_the_clis_secrets` observes.
+/// which `run_scoped_daemon::the_started_daemon_inherits_none_of_the_clis_secrets_or_descriptors` observes.
 #[test]
 fn the_only_command_site_is_the_launch_builder() {
     fn sites(dir: &std::path::Path, found: &mut Vec<String>) {

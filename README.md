@@ -144,7 +144,11 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   after the last one is sealed. `goalcup status` and `goalcup entries` never start one: with no
   daemon they say nothing is running. If a run outlives its daemon (a crash, a reboot), run
   `goalcup seal`: it starts a daemon, which reopens the run for status and seal only and seals
-  it; a run that had launched carries the lost interval as a gap. The configuration's keys are in
+  it; a run that had launched carries the lost interval as a gap. While `daemon.toml` is the
+  unedited default, `start` keeps its `connectors_dir` naming the connectors it loaded (binaries
+  move); an edited file that names other connectors is refused, naming the file. A
+  `daemon.toml` you wrote for an earlier build belongs at `$GOALCUP_CONFIG_DIR/daemon.toml`;
+  otherwise the first `start` writes a default with other roots. The configuration's keys are in
   [OPERATING](docs/OPERATING.md#running-the-daemon).
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
   `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. The macOS staging scripts in
