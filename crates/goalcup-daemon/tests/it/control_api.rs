@@ -1005,6 +1005,104 @@ async fn a_reopened_capture_refuses_registered_process_replay() {
     let _ = child.wait();
 }
 
+/// A `codex-cli` capture create under the harness root, shaped like the one
+/// `support::capture_control_harness` sends.
+#[cfg(unix)]
+fn capture_create_request(
+    h: &support::EmptyControlHarness,
+    name: &str,
+) -> protocol::CaptureWorkspaceRequest {
+    protocol::CaptureWorkspaceRequest {
+        workspace: h.root.join("workspaces").join(name).display().to_string(),
+        profile_id: "codex-cli".to_string(),
+        connector_dir_sha256: goalcup_protocol::pins::pinned_connector_dir_sha256("codex-cli")
+            .unwrap()
+            .to_string(),
+        reserve_bytes: 4 * 1024 * 1024,
+        run_home: h
+            .root
+            .join(format!("{name}-run-home"))
+            .display()
+            .to_string(),
+        config_home: h
+            .root
+            .join(format!("{name}-config-home"))
+            .display()
+            .to_string(),
+    }
+}
+
+/// What a refused capture create must leave: a `409`, the outside directory holding only its
+/// sentinel, and no entry registered.
+#[cfg(unix)]
+fn assert_refused_and_outside_untouched(
+    h: &support::EmptyControlHarness,
+    response: &support::Response,
+    outside: &std::path::Path,
+) {
+    assert_eq!(response.status(), 409, "{}", response.body());
+    let names: Vec<_> = std::fs::read_dir(outside)
+        .expect("the outside directory remains readable")
+        .map(|entry| entry.expect("an outside entry reads").file_name())
+        .collect();
+    assert_eq!(
+        names,
+        vec![std::ffi::OsString::from("sentinel.txt")],
+        "the create wrote below the outside directory"
+    );
+    assert_eq!(
+        std::fs::read(outside.join("sentinel.txt")).unwrap(),
+        b"outside"
+    );
+    assert!(
+        h.daemon.entries().unwrap().is_empty(),
+        "a refused create registered an entry"
+    );
+}
+
+/// A capture create acquires every component beneath the configured artifact root through
+/// the artifact-root authority, never through a path: an `artifacts` component swapped for a
+/// symlink to an outside directory is refused, and nothing is written through it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_create_refuses_a_symlinked_artifacts_component() {
+    let h = support::empty_control_harness().await;
+    let outside = h.root.join("outside-artifacts");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("sentinel.txt"), b"outside").unwrap();
+    let artifacts = h.config.artifact_root.join("artifacts");
+    let _ = std::fs::remove_dir_all(&artifacts);
+    std::os::unix::fs::symlink(&outside, &artifacts).unwrap();
+
+    let response = h
+        .post_body(
+            protocol::ROUTE_CAPTURE_WORKSPACES,
+            &capture_create_request(&h, "swapped-artifacts"),
+        )
+        .await;
+    assert_refused_and_outside_untouched(&h, &response, &outside);
+}
+
+/// The same, with the whole configured artifact root moved away and replaced by a symlink.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_create_refuses_a_symlinked_artifact_root() {
+    let h = support::empty_control_harness().await;
+    let outside = h.root.join("outside-root");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("sentinel.txt"), b"outside").unwrap();
+    std::fs::rename(&h.config.artifact_root, h.root.join("detached-root")).unwrap();
+    std::os::unix::fs::symlink(&outside, &h.config.artifact_root).unwrap();
+
+    let response = h
+        .post_body(
+            protocol::ROUTE_CAPTURE_WORKSPACES,
+            &capture_create_request(&h, "swapped-root"),
+        )
+        .await;
+    assert_refused_and_outside_untouched(&h, &response, &outside);
+}
+
 /// Every one of these routes is behind the bearer, and an id this daemon does not hold
 /// is a `404` in the contract's shape on each of them.
 #[tokio::test]
@@ -1352,14 +1450,16 @@ async fn the_host_refusal_carries_the_version_header_and_quotes_nothing_it_was_s
         Some(protocol::CONTROL_API_VERSION.to_string().as_str())
     );
 
+    // The public status route, so the bearer check cannot be what refuses it: only the Host
+    // check can.
+    let status_path = protocol::entry_route(&h.entry_id, control::SUFFIX_STATUS);
     let addr = h.client.addr.to_string();
     let body = tokio::task::spawn_blocking(move || {
         use std::io::{Read, Write};
         let mut s = std::net::TcpStream::connect(&addr).expect("connect");
         write!(
             s,
-            "GET {} HTTP/1.1\r\nHost: evil-marker.example:{port}\r\nConnection: close\r\n\r\n",
-            protocol::ROUTE_HEALTH
+            "GET {status_path} HTTP/1.1\r\nHost: evil-marker.example:{port}\r\nConnection: close\r\n\r\n",
         )
         .expect("write");
         let mut raw = String::new();

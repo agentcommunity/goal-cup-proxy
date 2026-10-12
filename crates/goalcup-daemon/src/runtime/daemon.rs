@@ -298,7 +298,7 @@ impl Daemon {
         let _ = self.inner.blocking.acquire_many(MAX_IN_FLIGHT as u32).await;
     }
 
-    /// Where the CLI, the page and `goalcup doctor` connect. Loopback, always.
+    /// Where the CLI and `goalcup doctor` connect. Loopback, always.
     pub fn control_addr(&self) -> SocketAddr {
         self.inner
             .control_addr

@@ -1212,7 +1212,7 @@ pub trait DaemonClient {
     }
     /// `goalcup doctor` needs one call that answers "is the daemon there".
     fn health(&self) -> Result<DaemonHealth, ControlError>;
-    /// `goalcup status` with no entry argument, and the status page's default view.
+    /// `goalcup status` with no entry argument.
     fn current_entry(&self) -> Result<Option<String>, ControlError>;
     /// The participant wants the run to stop early; also the path `start` takes when the
     /// arming gate times out and the entry must not exist. A v5 capture entry is abandoned

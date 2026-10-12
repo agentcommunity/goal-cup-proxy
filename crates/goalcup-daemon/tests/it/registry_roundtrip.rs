@@ -750,7 +750,7 @@ fn run_keys_never_print_their_secrets() {
 }
 
 /// The signing seed is the run key. `public_key_hex` is what `WorkspaceInfo.run_public_key`
-/// carries and what `SignedStatus::verify_with` and `Chunk::verify` are pinned against, so
+/// carries and what `SignedStatus::verify_with` is pinned against, so
 /// it must be the verifying key of the seed and nothing else.
 #[test]
 fn the_run_key_is_the_signing_seed() {

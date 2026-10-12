@@ -940,8 +940,7 @@ pub fn plain_words(health: HealthState, arming: GateState, started: bool) -> Str
                 .to_string()
         }
         HealthState::AgentExited => {
-            "Your agent is no longer running. Run `goalcup resume` to continue this entry."
-                .to_string()
+            "Your agent is no longer running. Run `goalcup seal` to finish this entry.".to_string()
         }
         HealthState::TrackerInterrupted => {
             "The tracker restarted. It has picked up where it left off.".to_string()
