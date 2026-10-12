@@ -1175,3 +1175,43 @@ fn reserved_chains_survive_remount_and_exhaustion() {
     assert!(TraceExport::resume(&b).is_ok());
     assert!(TraceExport::resume(&c).is_ok());
 }
+
+/// Review R6 I1: the link hash covers a record's decoded content only, so a v5 line that is
+/// not its own canonical serialization (an unknown key, a carriage return, whitespace) keeps
+/// its hash and still fails the verifier (`record_not_canonical`). A resume must refuse it
+/// rather than append to a chain that can never verify.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_resume_refuses_a_v5_line_that_is_not_canonical() {
+    type Respell = fn(&str) -> String;
+    let respell: [(&str, Respell); 3] = [
+        ("an unknown key", |line| {
+            format!("{},\"note\":\"unhashed\"}}", &line[..line.len() - 1])
+        }),
+        ("a carriage return", |line| format!("{line}\r")),
+        ("whitespace", |line| format!("{line} ")),
+    ];
+    for (what, respell) in respell {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut export = TraceExport::create(tmp.path()).unwrap();
+        export.reserve_capture(QUOTA).unwrap();
+        export
+            .write_baseline_for_protocol(M2_PROTOCOL_VERSION, &manifest())
+            .unwrap();
+        export.append_chain(&mut segment(0, 64)).unwrap();
+        export.sync_capture().unwrap();
+        drop(export);
+        TraceExport::resume(tmp.path()).expect("the written chain resumes");
+
+        let path = tmp.path().join(CHAIN_FILE);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let rewritten = format!("{}\n{}\n", lines[0], respell(lines[1]));
+        std::fs::write(&path, rewritten).unwrap();
+        let refused = TraceExport::resume(tmp.path());
+        assert!(
+            matches!(refused, Err(ExportError::ChainCorrupt { seq: 1, .. })),
+            "{what}: {refused:?}"
+        );
+    }
+}

@@ -1050,11 +1050,14 @@ impl TraceExport {
                 ));
             }
             line.pop();
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
+            // JSON allows a trailing carriage return, so the header parses either way.
             let header: EnvelopeVersionSeq = serde_json::from_slice(&line)
                 .map_err(|source| corrupt(format!("not an envelope header: {source}")))?;
+            // A legacy record keeps its historical tolerance of a carriage return; a v5 record
+            // must be exactly its canonical serialization (checked below).
+            if header.protocol_version != M2_PROTOCOL_VERSION && line.last() == Some(&b'\r') {
+                line.pop();
+            }
             replay.check_version(header.seq, header.protocol_version)?;
             if header.protocol_version == M2_PROTOCOL_VERSION && read > capture_line_limit {
                 return Err(corrupt(
@@ -1063,6 +1066,19 @@ impl TraceExport {
             }
             let env: Envelope = serde_json::from_slice(&line)
                 .map_err(|source| corrupt(format!("not an envelope: {source}")))?;
+            // The link hash covers the decoded content only, so another spelling of a v5 line
+            // (an unknown key, whitespace, a carriage return) is bytes nothing covers, and the
+            // verifier refuses it (`record_not_canonical`). A chain it can never verify is not
+            // one to append to.
+            if header.protocol_version == M2_PROTOCOL_VERSION
+                && !serde_json::to_vec(&env).is_ok_and(|canonical| canonical == line)
+            {
+                return Err(corrupt(
+                    "record is not its canonical serialization (a carriage return, extra \
+                     whitespace or an unknown key was added to the line)"
+                        .to_string(),
+                ));
+            }
             replay.check_envelope(&env)?;
             if env.link.seq != next_seq {
                 return Err(corrupt(format!(
