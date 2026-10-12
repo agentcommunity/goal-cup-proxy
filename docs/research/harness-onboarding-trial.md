@@ -44,9 +44,9 @@ Step numbers are the skill's. Step 2 was skipped: the harness is made up.
 - 10: kit templates copied to `harness-kit/toy-cli/` and edited per their comments. The
   placeholder grep printed nothing.
 - 11: `sh scripts/check-connector.sh --allow-no-kit toy-cli` ended `4 passed, 1 failed,
-  1 skipped`; the one failure was `loader-script.json`. With the pending Linux loader-golden fix
-  (BSD `stat` in `scripts/with-deepseek-key.sh`) applied, it ended `5 passed, 0 failed,
-  1 skipped`, exit 0.
+  1 skipped`; the one failure was `loader-script.json`. With the Linux loader-golden fix (BSD
+  `stat` in `scripts/with-deepseek-key.sh`; then pending, since landed in PR #6) applied, it
+  ended `5 passed, 0 failed, 1 skipped`, exit 0.
 - 12: in trial 2, with that fix applied: `cargo build`, `cargo fmt --all --check`, clippy and
   `cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli` all exit 0.
 - 14: `git status --short` showed exactly the files step 14 lists.

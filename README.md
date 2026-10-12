@@ -135,7 +135,8 @@ harness's environment is built from nothing: of the shell's own variables only `
 `LOGNAME` and `TMPDIR` reach it, so an exported `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or
 `*_PROXY` is dropped, not inherited (`start` does not refuse it). The tracker never sets a base
 URL; the only proxy the harness is given is the tracker's own loopback capture proxy, and a
-connector cannot add a `*_URL` name through `[capture.env]` or `[home.env]`.
+connector cannot name a `*_URL` variable in `[capture.env]` or as its home variable
+(`capture.home.env`).
 
 **Integrity exit codes** of `goalcup-verify --capture-integrity`: 0 complete and valid, 1
 incomplete or unsealed, 2 invalid (a torn tail included), 3 no usable report. A LocalOnly seal

@@ -5,7 +5,8 @@ release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0) 
 files, and its tag, commit and tree are in [the v0.5.1 cleanup
 record](docs/qualification/v0.5.1-public-release-cleanup.md). Built binaries print `0.1.0`: the
 package version is independent of source release tags. Commit hashes and branch names cited here
-refer to private development history not included in this repository. Tickets:
+before 2026-10-11 refer to private development history not included in this repository; the merge
+commits of PRs #1 to #8 and later are on this repository's `main`. Tickets:
 [LEDGER.md](LEDGER.md). How the parts fit: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The words:
 [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
@@ -61,8 +62,8 @@ Detail and the test for each guarantee: [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 - **Connector onboarding (2026-10-12).** The contributor entry point is the
   [skill](skills/adding-a-capture-harness/SKILL.md) with `sh scripts/check-connector.sh <id>`
   (PR #7, `4835aa5`); the contract goldens derive their connector list from `connectors/`, so a
-  data-only connector needs no `.rs` edit (PR #4, `7652eda`). The skill's one trial was run by
-  its author ([record](docs/research/harness-onboarding-trial.md)), not an outsider (OS-23).
+  data-only connector needs no `.rs` edit (PR #4, `7652eda`). The skill had three trial runs,
+  all by its author ([record](docs/research/harness-onboarding-trial.md)), not an outsider (OS-23).
 - **Amp core preparation (2026-10-12).** D49 (`AMP_API_KEY` is a child credential) and D50 (a
   credential with `stdout_json` identity, read by one stdout reader) are in force; every `*_URL`
   name is refused in a connector's env tables and dropped from inherited environments (PR #8,
@@ -113,14 +114,14 @@ By LEDGER ID. No eight-hour, 168-hour, production, public or acknowledged-delive
   managed settings, token grammar, identity carrier). H-39 and H-40 (private `TMPDIR`, settings
   seed) are optional hardening, not started; H-41 (the per-target executable pin shape) is to be
   decided before Amp's connector.
-- **Other open work:** H-11, H-12, H-04, F-16, H-18, H-20 through H-24, H-26, H-42 and older OS
-  tickets stay open until their own evidence closes them.
+- **Other open work:** H-11, H-12, H-04, F-16, H-18, H-20 through H-24, H-26, H-42, H-43 and
+  older OS tickets stay open until their own evidence closes them.
 
 ## Gate
 
 The current gate is **PASS** on macOS 26.6.2 arm64 with rustc and cargo 1.99.0, at `d2c42de`
-(branch `post-v060-review-fixes`, the code head on top of main `8703825`; the STATUS/LEDGER
-commit after it changes these two files only). `cargo build`, `cargo fmt --all --check` and
+(branch `post-v060-review-fixes`, the Rust head on top of main `8703825`; the commits after it
+change Markdown and `scripts/check-connector.sh`, which no cargo test runs). `cargo build`, `cargo fmt --all --check` and
 `cargo clippy --workspace --all-targets -- -D warnings` exit 0; `cargo test --workspace` exits 0
 with 2,307 passed, 0 failed and 40 ignored across 141 test targets. The ignored by-hand suites
 were not run. An earlier run of the same tree, with the Python script tests running beside it,

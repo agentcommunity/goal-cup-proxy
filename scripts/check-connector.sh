@@ -25,7 +25,8 @@
 # Cargo honours CARGO_TARGET_DIR and the rest of its environment as usual.
 set -u
 # The script's own path, made absolute before the `cd` so `--help` can still read the header.
-self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0") || exit 2
+script_dir=$(cd "$(dirname "$0")" && pwd -P) || exit 2
+self=$script_dir/$(basename "$0")
 cd "$(dirname "$0")/.." || exit 2
 # "Without regeneration" must hold even when the caller's shell still exports the variable
 # (the skill tells contributors to set it for one command): with it set, the golden tests

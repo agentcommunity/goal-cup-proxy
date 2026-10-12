@@ -4,8 +4,9 @@ Updated: 2026-10-12.
 
 The ticket list for `m2/wire`: what exists, what is broken, what comes next. One line per
 ticket: status, ID, phase tag, SHA, a pointer. Where things stand overall: [STATUS.md](STATUS.md).
-Commit hashes and branch names cited here refer to private development history not included in
-this repository.
+Commit hashes and branch names cited here before 2026-10-11 refer to private development history
+not included in this repository; the merge commits of PRs #1 to #8 and later are on this
+repository's `main`.
 The long bodies of the 2026-10-02 ledger are the private historical record discussed here.
 The supporting private historical record is intentionally omitted from this public OSS cut.
 
@@ -250,8 +251,8 @@ V1 on `v1/trunk` (the private V1 repository's `main` at `0c5f477`) is covered in
   [Record](docs/qualification/v0.5.1-public-release-cleanup.md#local-validation).
 - ⬜ **OS-23** `[OS]` Outsider Gemini proof: an outsider agent enters through only the shipped
   skill for the Gemini scenario and the sources it names, with no hidden maintainer context; any
-  fix becomes a reviewed wave and the proof repeats. The skill shipped (H-32); its one
-  [trial](docs/research/harness-onboarding-trial.md) was by its author. Evidence not yet linked.
+  fix becomes a reviewed wave and the proof repeats. The skill shipped (H-32); its three
+  [trial runs](docs/research/harness-onboarding-trial.md) were all by its author. Not yet linked.
 - ⬜ **OS-24** `[OS]` Fresh-clone proof of the public cut: source identity, link check,
   dependency-fetch boundary, build/test commands and results, without the private worktree or its
   `target/`, saying whether the dependency cache was warm. Evidence not yet linked.
@@ -391,7 +392,10 @@ V1 on `v1/trunk` (the private V1 repository's `main` at `0c5f477`) is covered in
   live probe shows Amp needs one. Not started.
 - ❓ **H-41** `[next]` Decide the per-target executable pin shape (schema-2 map, or one directory
   per target) before Amp's connector ([portability](docs/research/platform-portability.md), seam 7).
-- ⬜ **H-42** `[next]` Post-merge review leftovers: `enumeration.json` hard-codes `manifest_files`
-  as `["manifest.toml"]` (false for `hermes-cli`; derive or drop after OS-29/OS-31 decide the V1
-  manifests); `check-connector.sh` does not check the kit id or `BODY` (the skill greps by hand)
-  and calls a pin diff with non-pin lines connector-only; the six-case count repeats across docs.
+- ⬜ **H-42** `[next]` Golden-test leftovers: `enumeration.json` hard-codes `manifest_files` as
+  `["manifest.toml"]` (false for `hermes-cli`; derive or drop once OS-29/OS-31 decide the V1
+  manifests); the daemon golden keys `RECORDED_NATIVE_FILES` by id and duplicates `legacy()` as
+  `legacy_family`.
+- ⬜ **H-43** `[next]` `check-connector.sh` leftovers: no kit-id or `BODY` check (the skill greps
+  by hand); a pin diff with non-pin lines is still called connector-only; the golden awk truncates
+  a path with a space. Docs: the six-case count repeats across docs (DOCS-STANDARD: one place).
