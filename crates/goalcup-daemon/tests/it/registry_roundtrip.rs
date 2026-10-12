@@ -867,7 +867,7 @@ fn a_pre_server_port_row_loads_with_server_port_and_seal_outcome_both_none() {
 
 /// The mode the registry sets on its parent is the registry's to set only when the
 /// parent is the registry's. Handed a path inside a directory that holds somebody else's
-/// files — a shared `config_dir`, say, which the CLI and the MCP server both read — the
+/// files — a shared `config_dir`, say, which the CLI reads — the
 /// daemon tightens the file and leaves the directory exactly as it found it.
 #[cfg(unix)]
 #[test]

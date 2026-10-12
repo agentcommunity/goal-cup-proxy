@@ -3,7 +3,6 @@ resolver = "3"
 members = [
     "crates/goalcup-cli",
     "crates/goalcup-daemon",
-    "crates/goalcup-mcp",
     "crates/goalcup-platform",
     "crates/goalcup-protocol",
     "crates/goalcup-verifier",

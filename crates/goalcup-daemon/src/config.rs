@@ -27,8 +27,7 @@ pub struct DaemonConfig {
     /// Where the shipped `manifest.toml` files live.
     pub connectors_dir: PathBuf,
     /// Where `control.json` and the status-cache mirrors live. Separate from
-    /// `artifact_root` because the CLI and the MCP server read it, and neither may see a
-    /// capture buffer.
+    /// `artifact_root` because the CLI reads it, and it may not see a capture buffer.
     pub config_dir: PathBuf,
     /// Where `create_workspace` puts a workspace when the caller does not choose one.
     pub workspace_parent: PathBuf,
@@ -122,8 +121,8 @@ pub struct DaemonConfig {
 ///
 /// # Why this is configuration and not something the daemon can work out
 ///
-/// `EventStatus` is the one part of the status document an agent may trust: it asks the MCP
-/// server when the start window closes and is answered with a number signed by the run key.
+/// `EventStatus` is the one part of the status document a reader may trust about the round:
+/// when the start window closes, as a number signed by the run key.
 /// The daemon has no way to know that number, so these three fields are how a machine is
 /// told, and `event_status_source` on the status document is how a reader learns whether it
 /// was. Without them the document would assert three numbers nobody had supplied.

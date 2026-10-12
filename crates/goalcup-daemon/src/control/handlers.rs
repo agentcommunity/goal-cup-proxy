@@ -108,7 +108,7 @@ pub(super) async fn health(State(state): State<ControlState>) -> Response {
 /// the handler's own and not a second one in front of the authentication decision.
 ///
 /// It answers what the last publication left. Nothing signs a second copy on the way out,
-/// so the page, `goalcup status` and the MCP server read the same bytes.
+/// so `goalcup status` and the cache read the same bytes.
 pub(super) async fn entry_status(
     State(state): State<ControlState>,
     Path(id): Path<String>,
@@ -636,14 +636,14 @@ fn remove_entry_files(state: &ControlState, entry_id: &str) {
                 .join(format!("status-{entry_id}.json")),
         );
     }
-    // `status-latest.json` is the shared pointer — the one document `goalcup-mcp` reads
-    // when it has not been told which entry it wants — and `mirror` may last have written
+    // `status-latest.json` is the shared pointer — the one document a reader opens when it
+    // has not been told which entry it wants — and `mirror` may last have written
     // it for the entry that has just gone.
     //
     // The document is parsed and its `entry_id` compared exactly. A substring test over the
     // raw text answers "yes" for every id the pointer merely contains: `e1` is a substring
     // of `e10`, and of a workspace path, and of the detail line — so abandoning `e1` would
-    // delete a pointer that named a live run, and the MCP server would then have nothing to
+    // delete a pointer that named a live run, and a reader would then have nothing to
     // read at all. Nothing re-claims the pointer here: it stays removed rather than
     // answering, signed and whole, for a run that no longer exists.
     let _ = status::remove_latest_if_owned(entry_id, &config.config_dir);

@@ -1161,8 +1161,8 @@ pub struct Registry {
 impl Registry {
     /// Where the registry belongs: `<artifact_root>/registry/registry.redb`.
     ///
-    /// A directory of its own, and not the shared `config_dir` the CLI and the MCP server
-    /// both read, because [`Registry::open`] tightens the directory it owns to `0o700`
+    /// A directory of its own, and not the shared `config_dir` the CLI reads,
+    /// because [`Registry::open`] tightens the directory it owns to `0o700`
     /// and a directory shared with other readers is not the registry's to close.
     pub fn default_path(artifact_root: &Path) -> PathBuf {
         artifact_root.join("registry").join("registry.redb")

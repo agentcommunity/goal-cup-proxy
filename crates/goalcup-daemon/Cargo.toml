@@ -74,7 +74,4 @@ libc.workspace = true
 # as an ordinary dependency, so this is the only way to hand the integration tests a
 # feature the shipped build does not carry.
 goalcup-daemon = { path = ".", features = ["test-hooks"] }
-# The terminal-publication regressions read the exact offline interface participants' agents
-# use, rather than treating a hand-parsed cache file as a substitute for goalcup-mcp.
-goalcup-mcp = { path = "../goalcup-mcp" }
 tempfile.workspace = true

@@ -64,7 +64,7 @@ The latest possible run ends 192 hours after T0. The latest publication window e
 - Any instruction file your harness reads from the workspace at the start (`AGENTS.md`, `CLAUDE.md` and the like) is part of the prompt: it is recorded with it and published with it. Prepared context is allowed; hidden context is not, and there is nowhere to hide it.
 - After the start, every message a human sends to the agent, by any channel, is recorded, published with the entry, and counted as an intervention. `keep going` after an outage or a crash counts too and is labelled as a resume. Nothing is banned; the count is the score.
 - An entry with zero interventions carries a label that says so. That label is a detection, not a proof: the tracker records what the model saw and works out who said it from what was typed and how the harness structures its messages. A message it cannot explain is published as unexplained and reviewed by an organizer.
-- The tracker never sends anything to the agent, and never relays, edits or blocks your input: no reminders, no automatic continuation. `goalcup-mcp`, the read-only status server, is shipped and never registered for you; if you register it, your prompt may refer to it.
+- The tracker never sends anything to the agent, and never relays, edits or blocks your input: no reminders, no automatic continuation.
 
 ## Prepared agent setups are allowed
 

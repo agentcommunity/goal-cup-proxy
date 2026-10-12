@@ -224,7 +224,7 @@ and is deleted, so `goalcup-verify` is the one verdict command; the `v0.5.0` tag
 
 **(M0) Absence of `keep going` is not a violation by itself.** After a restart the OpenClaw Gateway re-runs the interrupted turn on its own, with an `internal_system` user message and no human input at all (spike 8, A5). A resumed turn with no human message is normal on that harness.
 
-**The tracker never speaks.** No injected reminders, no auto-continue, no wrap-up nudges in v1. A participant who wants their agent to manage time writes it into the prompt or a prepared skill. The tracker ships `goalcup status --json`, a read-only MCP server, and a small skill; the participant decides whether to register them. Scheduled reminders are on the later list.
+**The tracker never speaks.** No injected reminders, no auto-continue, no wrap-up nudges in v1. A participant who wants their agent to manage time writes it into the prompt or a prepared skill. The tracker ships `goalcup status --json`, a read-only MCP server, and a small skill; the participant decides whether to register them. (The MCP server and its skill were deleted on 2026-10-12; nothing shipped them.) Scheduled reminders are on the later list.
 
 **Crash.** `goalcup resume` first catches up the tail, then relaunches the same session in resume mode; the participant then types `keep going`.
 

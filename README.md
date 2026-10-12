@@ -197,7 +197,7 @@ that command and refuses any other. This run is owner-run and the agent never op
 | For | Read |
 |---|---|
 | How the parts fit | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| Daemon config, every CLI flag and exit code, MCP server, verifier, fixtures, pins | [docs/OPERATING.md](docs/OPERATING.md) |
+| Daemon config, every CLI flag and exit code, verifier, fixtures, pins | [docs/OPERATING.md](docs/OPERATING.md) |
 | Adding a harness | [docs/HARNESS-ONBOARDING.md](docs/HARNESS-ONBOARDING.md) |
 | What is next | [TODO.md](TODO.md) |
 | What a participant agrees to | [docs/RULES.md](docs/RULES.md) |

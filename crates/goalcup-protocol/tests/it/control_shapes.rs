@@ -292,7 +292,7 @@ fn signed_status_reports_staleness_against_a_supplied_now() {
 
 #[test]
 fn one_staleness_threshold_and_the_three_unauthenticated_routes() {
-    // The MCP server, `goalcup status` and the bundled page read one number.
+    // `goalcup status` reads this one number.
     assert_eq!(STALE_AFTER_SECONDS, 120);
     let key = SigningKey::from_bytes(&[9u8; 32]);
     let signed = SignedStatus::sign(payload(), "2026-09-04T09:00:00Z".into(), &key).unwrap();

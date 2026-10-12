@@ -54,10 +54,8 @@ pub const ROUTE_UI: &str = "/v0/ui";
 /// `POST` a [`CaptureWorkspaceRequest`]: create a protocol-v5 local capture entry.
 pub const ROUTE_CAPTURE_WORKSPACES: &str = "/v0/capture-workspaces";
 
-/// A status document older than this is reported as **stale** — by the MCP server
-/// (`goalcup-mcp`), by `goalcup status`, and by the bundled page's `render()`. One number,
-/// here, because a threshold that two surfaces disagree about is a threshold that tells the
-/// participant two different stories about the same daemon.
+/// A status document older than this is reported as **stale** by `goalcup status`. One
+/// number, here, so any later reader of the status document uses the same threshold.
 pub const STALE_AFTER_SECONDS: u64 = 120;
 
 /// Route suffixes, as constants rather than as string literals typed on both sides.
@@ -431,8 +429,8 @@ pub enum EventStatusSource {
     Fallback,
 }
 
-/// The competition-wide facts, signed with the entry so an agent asking the time
-/// through the MCP server gets a number it can trust.
+/// The competition-wide facts, signed with the entry so a reader asking the time gets a
+/// number it can trust.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventStatus {
     pub t0: String,
@@ -688,7 +686,7 @@ impl SignedStatus {
     }
 
     /// Verify against the run key the **caller** pinned — `WorkspaceInfo.run_public_key`,
-    /// which the CLI and the MCP server both hold from `create_workspace`.
+    /// which the CLI holds from the entry record it pinned at creation.
     ///
     /// There is deliberately no `verify(&self)`. The status route is unauthenticated by
     /// ruling (`is_public_route`), so a local process that binds the control port first

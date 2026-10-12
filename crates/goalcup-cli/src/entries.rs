@@ -1,8 +1,8 @@
 //! The entry cache: what one `goalcup start` leaves behind for the processes that come
 //! after it.
 //!
-//! `goalcup start` is a process that exits. `goalcup status`, `goalcup seal`, `goalcup
-//! resume` and `goalcup-mcp` are fresh processes with no memory of it, and the one thing
+//! `goalcup start` is a process that exits. `goalcup status` and `goalcup seal` are
+//! fresh processes with no memory of it, and the one thing
 //! they cannot do without is the run public key the participant pinned from
 //! `WorkspaceInfo.run_public_key` at creation. Without this file that key lives only in the
 //! memory of a process that has already gone, and every later command would have to trust

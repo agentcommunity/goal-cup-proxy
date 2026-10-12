@@ -7,15 +7,14 @@
 //! # The cache is the evidence, the page is a view (D25)
 //!
 //! One signed document, signed with the entry's own run key, verifiable by any reader —
-//! the CLI, the MCP server, the page's caller — without asking the daemon anything.
+//! the CLI included — without asking the daemon anything.
 //! `SignedStatus::verify_with` takes the key the **caller** pinned from
 //! `WorkspaceInfo.run_public_key`; the `public_key` field on the document is a label, not
 //! a credential, and nothing in this crate verifies against it.
 //!
 //! # Two of the control contract's obligations are files, not routes
 //!
-//! [`mirror`] writes the two cache copies the MCP server reads, so an agent asking how
-//! much time is left never opens a socket; [`write_entry_status_line_rooted`] writes the
+//! [`mirror`] writes the two cache copies a reader can open without a socket; [`write_entry_status_line_rooted`] writes the
 //! one plain line Claude's `statusLine` command `cat`s. **Neither may carry a token, a key,
 //! a seed or a path out of the participant's home**: the status route is unauthenticated by
 //! design, and the status line is rendered into a terminal a screen recording may catch.
@@ -594,8 +593,8 @@ fn count_status_line_attempt(path: &Path) {
 
 /// The status cache is a **file**, at
 /// `<config_dir>/cache/status-<entry_id>.json` and `<config_dir>/cache/status-latest.json`,
-/// both 0644. `goalcup-mcp` reads only these two and never opens a socket, so an agent
-/// asking the time cannot be pointed at a network endpoint.
+/// both 0644, so a reader asking the time needs no socket and cannot be pointed at a
+/// network endpoint.
 ///
 /// The write is atomic — temp file, then rename — because a reader that opens the cache
 /// while it is being replaced must see the previous document whole rather than half of

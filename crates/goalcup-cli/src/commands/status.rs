@@ -47,8 +47,8 @@
 //! daemon's own lost work — and for whether the round's dates were configured by an
 //! organiser or are the entry's own timeline standing in for them
 //! ([`EventStatusSource::Fallback`]). Staleness is
-//! [`goalcup_protocol::control::STALE_AFTER_SECONDS`], the one threshold the page, the MCP
-//! server and this command all read, and `now` is a parameter so the rendering is
+//! [`goalcup_protocol::control::STALE_AFTER_SECONDS`], the one threshold every reader of the
+//! status document uses, and `now` is a parameter so the rendering is
 //! deterministic.
 
 use crate::CliError;
@@ -83,8 +83,7 @@ pub fn status_with(
         Ok(document) => (document, None),
         // A daemon that is not there is not the same answer as a run that has
         // no document. `status::mirror` writes the last one it published to
-        // `<config_dir>/cache/status-<id>.json` — the same file `goalcup-mcp` reads and
-        // never opens a socket for — and it is signed with the run key this command
+        // `<config_dir>/cache/status-<id>.json`, and it is signed with the run key this command
         // already pins, so falling back to it changes nothing about what is checked before
         // anything is shown. Only on `Unreachable`: every other refusal is the daemon
         // answering, and answering is what this command asked it to do.
@@ -184,7 +183,7 @@ pub fn status_with(
 /// The signed document the daemon last mirrored for this entry, and the file it came from.
 ///
 /// `<config_dir>/cache/status-<id>.json`, which is `goalcup_daemon::status::mirror`'s first
-/// obligation and the file `goalcup-mcp` reads. A missing, unreadable or unparsable file is
+/// obligation. A missing, unreadable or unparsable file is
 /// `None`, and so is one carrying another entry's document: the signature check below would
 /// pass on it — one run key signs every document of a run — and the entry-id check is what
 /// catches it, so this returns nothing rather than handing the caller a document to refuse.
@@ -481,9 +480,8 @@ fn age_words(s: &SignedStatus, now: &str) -> String {
 
 /// How old this document is, in the words a reader acts on.
 ///
-/// The threshold is [`STALE_AFTER_SECONDS`], read from the protocol crate: the page, the
-/// MCP server and this command report the same daemon, and a threshold two of them
-/// disagreed about would tell a participant two different stories about it. A `cached_at`
+/// The threshold is [`STALE_AFTER_SECONDS`], read from the protocol crate, so every reader
+/// of the status document calls the same document stale. A `cached_at`
 /// that does not parse is "unknown", never "fresh" — the one answer that would be a guess.
 ///
 /// The two timestamps are subtracted here rather than through
