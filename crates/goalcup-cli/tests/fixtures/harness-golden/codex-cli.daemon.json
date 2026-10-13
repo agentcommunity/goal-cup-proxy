@@ -3,7 +3,7 @@
   "launched_with_a_native_scope": {
     "gaps_after_launch": [],
     "launch_allowed_tool_rule": null,
-    "launch_connector_dir_sha256": "ce97823f60c6749564464cb9421ed7d0268934d9be40f6ec78489deafa655683",
+    "launch_connector_dir_sha256": "31ccb9fbd0d5f28293fa77bb770bebb636714a87083c427c92cf5624d3bb12b7",
     "launch_process_handoff_digest": null,
     "launch_profile_digest_is_sha256_of_harness_toml": true,
     "launch_profile_id": "codex-cli",
@@ -15,7 +15,7 @@
       "streamless:SourceChanged"
     ],
     "launch_allowed_tool_rule": null,
-    "launch_connector_dir_sha256": "ce97823f60c6749564464cb9421ed7d0268934d9be40f6ec78489deafa655683",
+    "launch_connector_dir_sha256": "31ccb9fbd0d5f28293fa77bb770bebb636714a87083c427c92cf5624d3bb12b7",
     "launch_process_handoff_digest": null,
     "launch_profile_digest_is_sha256_of_harness_toml": true,
     "launch_profile_id": "codex-cli",

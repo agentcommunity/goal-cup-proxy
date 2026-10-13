@@ -16,7 +16,8 @@
 //! [`LaunchPlan::env_base`] is empty and [`LaunchPlan::env_remove`] is empty; [`spawn`] clears
 //! the child's environment, so what reaches the harness is exactly [`LaunchPlan::env_set`]:
 //!
-//! * the profile's own `capture.env`, rendered;
+//! * the profile's own `capture.env`, with the running platform's `capture.platform` entries
+//!   over it, rendered;
 //! * the allowlist [`CAPTURE_IDENTITY_ENV`] (`USER`, `LOGNAME`, `TMPDIR`), carried across
 //!   from the tracker's environment and nothing else from it;
 //! * `HOME` (the per-run home), `PATH` ([`CAPTURE_PATH`]) and the profile's home variable;
@@ -101,7 +102,7 @@ use crate::CliError;
 use crate::connector::HarnessConnector;
 use crate::proxy::connect::PROXY_USERNAME;
 use goalcup_protocol::capture::MAX_GOAL_BYTES;
-use goalcup_protocol::harness::{CaptureSpec, IdGrammar, IdentitySource, Strategy};
+use goalcup_protocol::harness::{CaptureSpec, IdGrammar, IdentitySource, PlatformKey, Strategy};
 use goalcup_protocol::manifest::{Kill, LaunchMode};
 use goalcup_protocol::process::{ProcessHandle, find_named, process_start_identity, snapshot};
 use goalcup_protocol::template::{TemplateVars, render};
@@ -508,7 +509,9 @@ pub(crate) fn capture_executable(
     pin_harness_executable(profile, &file)
 }
 
-/// Hash the executable at `path` and accept it only if it is `profile`'s pinned one.
+/// Hash the executable at `path` and accept it only if it is `profile`'s pinned one: the pin of
+/// the running platform's `[capture.platform.<key>]` where the profile has one, the base
+/// `capture.executable` pin otherwise.
 ///
 /// `path` is resolved by the caller: the measured recipes run the native binary (not the
 /// Codex npm wrapper) and the versioned Claude Code binary (not the symlink its updater
@@ -529,11 +532,8 @@ pub fn pin_harness_executable(
     profile: &CaptureSpec,
     path: &Path,
 ) -> Result<PinnedExecutable, CliError> {
-    pin_executable_fields(
-        &profile.executable.version,
-        &profile.executable.sha256,
-        path,
-    )
+    let executable = profile.resolved_executable(PlatformKey::current());
+    pin_executable_fields(executable.version, executable.sha256, path)
 }
 
 fn pin_executable_fields(
@@ -757,10 +757,11 @@ pub fn build_capture_launch(
 ) -> Result<LaunchPlan, CliError> {
     let id = &c.loaded.manifest.id;
     let profile = &c.loaded.manifest.capture;
+    let platform = PlatformKey::current();
     if !launch
         .executable
         .sha256
-        .eq_ignore_ascii_case(&profile.executable.sha256)
+        .eq_ignore_ascii_case(profile.resolved_executable(platform).sha256)
     {
         return Err(CliError::Refused(format!(
             "the executable was pinned for another capture profile, not `{id}`'s. Nothing is \
@@ -828,8 +829,8 @@ pub fn build_capture_launch(
     let goal_index = argv.len() - 1;
 
     let mut env = BTreeMap::new();
-    for (key, template) in &profile.env {
-        env.insert(key.clone(), render(template, v)?);
+    for (key, template) in profile.resolved_env(platform) {
+        env.insert(key, render(&template, v)?);
     }
     for key in CAPTURE_IDENTITY_ENV {
         if let Some(value) = launch.parent_env.get(key) {

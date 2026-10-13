@@ -75,31 +75,41 @@ Status: v0.5.0 is published as source; binary releases come from
 
 ## Linux
 
-The [quickstart](#quickstart) would be the same on Linux, apart from two things below, but it
-cannot be followed yet: both shipped connectors pin the macOS executables by sha256, so until Linux
-pins land in them, `goalcup doctor` fails `harness_executable` and `goalcup start` refuses every
-Linux harness build. Linux is measured less than macOS; the lists below say what was and was not.
+The [quickstart](#quickstart) works on Linux, apart from the three things below: how the harness
+is installed, the configuration directory and the Claude Code login. The shipped connectors pin
+the Linux x86_64 and arm64 harness builds as well as the macOS ones, as native binaries. Linux is
+measured less than macOS, and no logged-in harness run has happened on Linux yet; the lists below
+say what was and was not measured.
 
 **You need** Rust 1.99 or later, a C compiler (on Debian or Ubuntu, `build-essential`), and the
 trace folder (`artifact_root` in `daemon.toml`) on ext4 or XFS. btrfs, ZFS, NFS, tmpfs, overlayfs
 and FUSE are refused before anything runs, with this message:
 `the trace folder must be on APFS (macOS) or ext4 or XFS (Linux); move artifact_root in daemon.toml`.
 Check the folder, or its parent before the first run, with `stat -f -c %T ~/goalcup-artifacts`
-(or `stat -f -c %T ~`): `xfs` is XFS, and `ext2/ext3` is what GNU `stat` prints for ext4. The other tools the tests need are in [the gate](#the-gate).
+(or `stat -f -c %T ~`): `xfs` is XFS, and `ext2/ext3` is what GNU `stat` prints for ext4. The
+other tools the tests need are in [the gate](#the-gate).
 
 **What differs from the macOS quickstart:**
 
+- **Installing the harness on Linux.** What was measured is the native binary from the npm
+  platform package, placed first on `PATH` (a symlink on `PATH` to it is fine). Codex:
+  `@openai/codex@0.153.0-linux-x64` or `-linux-arm64`, file
+  `package/vendor/<x86_64|aarch64>-unknown-linux-musl/bin/codex`. Claude Code:
+  `@anthropic-ai/claude-code-linux-x64@2.1.283` or `-linux-arm64`, file `package/claude`; these
+  are the glibc builds; the `-musl` (Alpine) builds are not pinned, so they are refused. Other
+  install routes are not measured: `npm i -g` puts the npm wrapper on `PATH`, which `goalcup
+  start` hashes in place of the binary and is likely to refuse, and Claude Code's native
+  installer on Linux was not tried.
 - **The configuration directory.** With `GOALCUP_CONFIG_DIR` unset it is `$XDG_CONFIG_HOME/goalcup`,
   else `~/.config/goalcup`; an empty `$XDG_CONFIG_HOME` counts as unset
   (`crates/goalcup-cli/src/config.rs`). The quickstart sets `GOALCUP_CONFIG_DIR` and skips this.
-- **The Claude Code login, once Linux pins land.** Linux has no Keychain, and the Claude Code
+- **The Claude Code login.** Linux has no Keychain, and the Claude Code
   connector links only the macOS Keychains directory into the run. Its login is expected in its
   config directory, so sign in once to the tracker's own:
   `mkdir -p -m 700 "$GOALCUP_CONFIG_DIR/capture-homes/claude-code-cli"`, then
   `CLAUDE_CONFIG_DIR="$GOALCUP_CONFIG_DIR/capture-homes/claude-code-cli" claude`.
   **This is not yet measured:** where Claude Code 2.1.283 keeps its login on Linux has not been
-  checked, and nor has the Codex login location (the Codex command above is unchanged). Neither
-  can be tried while the pins refuse the Linux builds.
+  checked, and nor has the Codex login location (the Codex command above is unchanged).
 
 **Measured, in Docker** (rust:1.99, Linux 7.0.12, arm64): the full workspace builds and the fast
 gate passes; the reservation reserves on ext4 and XFS and refuses overlayfs, tmpfs and FUSE; the
@@ -107,14 +117,23 @@ six synthetic contract-kit captures seal and verify. `sh scripts/linux-check.sh`
 from a Mac ([what it runs](#the-gate)). On x86_64, CI on ubuntu-24.04 runs the reservation tests on
 ext4 and they pass; the end-to-end suites were run only on arm64.
 
+The shipped Codex and Claude Code connectors pin the Linux x86_64 and arm64 builds
+(`[capture.platform.*]` in each `harness.toml`). With the arm64 builds and no login, measured in
+Docker: `goalcup doctor` passes the executable check; `goalcup start` launches the pinned binary;
+the harness fails on auth and gets no model reply (Codex receives 401 Unauthorized, Claude Code
+prints `Not logged in`, and both exit 1); the run seals; and
+`goalcup-verify --capture-integrity` exits 0. Neither binary left a child running after it
+exited on this path. The smoke needed network access: before it creates anything, `goalcup start`
+checks that the provider host answers, and with no network it refuses the run.
+
 **Not proven:**
 
 - Termination of an orphan the process walk cannot see, such as a wrapper that forks a child and
   leaves. Measured, and it fails: on Linux, `Confirmed` can be claimed while such an orphan still
   runs. A child-subreaper fix is due before the 168-hour dry run
   ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
-- A real harness capture on Linux. The shipped Codex and Claude Code connectors pin macOS
-  binaries, so a Linux harness build is refused today and a Linux capture is not measured.
+- A successful, logged-in harness run on Linux, and the Linux x86_64 harness builds, which are
+  pinned but were not run.
 - The end-to-end suites on x86_64, and any real Linux host or distribution kernel (only Docker
   Desktop's was run).
 - Long runs, and termination against a real harness's process tree on Linux.

@@ -1,6 +1,6 @@
 # Connector directory pins: `<id> <sha256 of connectors/<id>/>`, one per connector, sorted by id.
 # Written by `sh scripts/pin-manifests.sh`; never edited by hand. Read at build time by
 # crates/goalcup-protocol/src/pins.rs, which refuses a malformed file (the crate does not build).
-claude-code-cli 1c3df90ef98f5066d18b9f3e85de2850699b87f2b72488d568f72d5f3ceedd4f
-codex-cli ce97823f60c6749564464cb9421ed7d0268934d9be40f6ec78489deafa655683
+claude-code-cli 53312c9a4b8c619d697661cce28e312bd7231474709bb8e7baebd2bf60354e1d
+codex-cli 31ccb9fbd0d5f28293fa77bb770bebb636714a87083c427c92cf5624d3bb12b7
 hermes-cli 3891298ab7029f33f6004d0ac436d9e0510b64043ea10f8304520b02297517d6

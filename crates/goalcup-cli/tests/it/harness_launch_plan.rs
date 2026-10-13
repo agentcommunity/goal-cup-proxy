@@ -303,8 +303,7 @@ fn launch_uses_the_harness_bytes_captured_at_load_time() {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     let path = dir.join("harness.toml");
-    let before = std::fs::read_to_string(&path)
-        .unwrap()
+    let before = without_platform(&std::fs::read_to_string(&path).unwrap())
         .replace("program = \"claude\"", "program = \"example-cli\"")
         .replace(
             "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
@@ -350,4 +349,112 @@ fn launch_uses_the_harness_bytes_captured_at_load_time() {
         plan.env_set.get("SHELL").map(String::as_str),
         Some("/bin/zsh")
     );
+}
+
+/// `text` without its `[capture.platform.*]` tables, so a test can add its own.
+fn without_platform(text: &str) -> String {
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in text.lines() {
+        if line.starts_with('[') {
+            skipping = line.starts_with("[capture.platform.");
+        }
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+#[test]
+fn the_pin_and_env_follow_the_running_platform() {
+    use goalcup_cli::launch::{CaptureLaunch, build_capture_launch, pin_harness_executable};
+    use goalcup_protocol::harness::PlatformKey;
+    use sha2::{Digest, Sha256};
+
+    let Some(key) = PlatformKey::current() else {
+        return;
+    };
+    let hex = |bytes: &[u8]| -> String {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let dir = write_unpinned(&root, "example", "example-cli");
+    let exe = root.join("example-cli");
+    std::fs::write(&exe, b"this platform's build\n").unwrap();
+    let other = root.join("other-build");
+    std::fs::write(&other, b"the base platform's build\n").unwrap();
+    let (this_sha, base_sha) = (
+        hex(b"this platform's build\n"),
+        hex(b"the base platform's build\n"),
+    );
+    let path = dir.join("harness.toml");
+    let text = without_platform(&std::fs::read_to_string(&path).unwrap())
+        .replace("program = \"claude\"", "program = \"example-cli\"")
+        .replace(
+            "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
+            &base_sha,
+        );
+    std::fs::write(
+        &path,
+        format!(
+            "{text}\n[capture.platform.{k}]\nsha256 = \"{this_sha}\"\nversion = \"9.9.9\"\n\n\
+             [capture.platform.{k}.env]\nSHELL = \"/bin/sh\"\n",
+            k = key.as_str()
+        ),
+    )
+    .unwrap();
+    let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
+    let profile = &connector.loaded.manifest.capture;
+
+    // The base platform's bytes are not this platform's pin, and the refusal names the pin.
+    let refusal = pin_harness_executable(profile, &other).expect_err("the base build");
+    let refusal = refusal.to_string();
+    assert!(refusal.contains(&this_sha), "{refusal}");
+    assert!(refusal.contains("version 9.9.9"), "{refusal}");
+
+    let pinned = pin_harness_executable(profile, &exe).expect("this platform's build");
+    let workspace = root.join("workspace");
+    let run_home = root.join("run-home");
+    let config_home = root.join("config-home");
+    for dir in [&workspace, &run_home, &config_home] {
+        std::fs::create_dir(dir).unwrap();
+    }
+    let ca = root.join("ca.pem");
+    std::fs::write(&ca, b"test CA\n").unwrap();
+    let mut vars = TemplateVars::new();
+    vars.set("workspace", workspace.display().to_string());
+    vars.set("session_id", "00000000-0000-4000-8000-000000000001");
+    let parent = BTreeMap::new();
+    let plan = build_capture_launch(
+        &connector,
+        &vars,
+        &workspace,
+        &CaptureLaunch {
+            goal: b"one goal",
+            executable: &pinned,
+            run_home: &run_home,
+            config_home: &config_home,
+            proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
+            ca_certificate: &ca,
+            parent_env: &parent,
+            allowed_tool_rule: None,
+        },
+    )
+    .expect("an executable pinned with the resolved sha256 builds");
+    assert_eq!(
+        plan.env_set.get("SHELL").map(String::as_str),
+        Some("/bin/sh")
+    );
+    // The rest of the base table is unchanged.
+    for (k, v) in &profile.env {
+        if k != "SHELL" {
+            assert_eq!(plan.env_set.get(k), Some(v), "{k}");
+        }
+    }
 }
