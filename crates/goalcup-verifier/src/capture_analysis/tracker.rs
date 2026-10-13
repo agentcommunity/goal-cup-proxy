@@ -69,6 +69,8 @@ pub(super) trait Protocol {
     fn discarded(state: &mut Self::SseState, span: &Span);
 
     /// The span a gap at the end of an SSE body is reported over when no event was pending.
+    /// The two decoders differ on purpose and the reports pin it: Responses reports over the
+    /// stream's whole `history`, Chat Completions over the reply it had assembled.
     fn stream_span(state: &Self::SseState, history: &Span) -> Span;
 
     /// The SSE body ended (or `finish` found it still open). A trailing gap has already been
