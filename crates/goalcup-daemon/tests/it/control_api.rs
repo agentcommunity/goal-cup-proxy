@@ -1064,8 +1064,8 @@ async fn a_capture_create_takes_a_server_issued_entry_id_and_reports_its_head() 
         std::fs::read_to_string(std::path::Path::new(&info.trace_dir).join("chain.jsonl")).unwrap();
     let first: serde_json::Value = serde_json::from_str(chain.lines().next().unwrap()).unwrap();
     assert_eq!(first["entry_id"], "e0123456789abcdef");
-    assert_eq!(first["link"]["seq"], 0);
-    assert_eq!(first["link"]["hash"], info.chain_head.as_str());
+    assert_eq!(first["seq"], 0);
+    assert_eq!(first["hash"], info.chain_head.as_str());
 
     for bad in ["E0123456789ABCDEF", "e0123", "../e0123456789abcd", ""] {
         let mut request = capture_create_request(&h, &format!("bad-{}", bad.len()));

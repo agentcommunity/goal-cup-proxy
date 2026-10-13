@@ -1916,14 +1916,14 @@ fn uploading(
         )));
     };
     Ok(Some(Uploading {
-        client: crate::upload::http::ServerClient::new(&server),
+        server: crate::upload::http::ServerClient::new(&server),
         repo_url: crate::upload::checked_repo_url(repo)?,
     }))
 }
 
 /// A run's upload server, for `goalcup start`.
 struct Uploading {
-    client: crate::upload::http::ServerClient,
+    server: crate::upload::http::ServerClient,
     repo_url: String,
 }
 
@@ -1956,7 +1956,7 @@ impl Uploading {
             tracer_version: crate::CLI_VERSION.to_string(),
             repo_url: self.repo_url.clone(),
         };
-        let run = crate::upload::open_run(&self.client, &request)?;
+        let run = crate::upload::open_run(&self.server, &request)?;
         Ok(OpenedRun { run, request })
     }
 
@@ -1976,7 +1976,7 @@ impl Uploading {
             )));
         }
         let receipt = crate::upload::fetch_receipt(
-            &self.client,
+            &self.server,
             &opened.run,
             &opened.request,
             &info.chain_head,
@@ -1984,7 +1984,7 @@ impl Uploading {
         let record = crate::upload::UploadRecord {
             run_id: opened.run.run_id.clone(),
             entry_id: opened.run.entry_id.clone(),
-            server_url: self.client.base().to_string(),
+            server_url: self.server.base().to_string(),
             trace_dir: info.trace_dir.clone(),
             official_start: opened.run.official_start.clone(),
             deadline_at: opened.run.deadline_at.clone(),
@@ -2002,7 +2002,7 @@ impl Uploading {
     /// Give the run back to the server: this start failed before its launch.
     fn give_back(&self, opened: &OpenedRun, cause: &CliError) {
         let _ = crate::upload::abandon_run(
-            &self.client,
+            &self.server,
             &opened.run.run_id,
             &format!("goalcup start failed before the launch: {cause}"),
         );
