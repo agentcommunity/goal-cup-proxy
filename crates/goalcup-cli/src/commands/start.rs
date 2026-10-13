@@ -647,6 +647,9 @@ struct Exited<'a> {
     forked: Forked<'a>,
     tees: Tees,
     status: Result<ExitStatus, CliError>,
+    /// Linux: the refusal the command ends with, after the seal, when the sweep left a process
+    /// running or could not read `/proc` after it had signalled one.
+    left_running: Option<CliError>,
 }
 
 /// A v5 local capture run.
@@ -1170,15 +1173,23 @@ fn run_harness<'a>(
         path: handed.program.clone(),
         source,
     });
-    if let Some(sweep) = sweep {
-        for line in sweep.run(Duration::from_secs(handed.grace_seconds)).lines() {
+    // What was swept is said on stdout; what may still be running goes to stderr now, and makes
+    // the command exit 1 after the seal (`finish_and_scan`), so a script that reads only the exit
+    // code still learns of it. The trace is unchanged either way.
+    let swept = sweep.map(|sweep| sweep.run(Duration::from_secs(handed.grace_seconds)));
+    if let Some(swept) = &swept {
+        if let Some(line) = swept.swept_line() {
             let _ = say(out, &line);
+        }
+        for line in swept.warnings() {
+            eprintln!("{line}");
         }
     }
     Ok(Exited {
         forked,
         tees,
         status,
+        left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
     })
 }
 
@@ -1195,6 +1206,7 @@ fn finish_and_scan(
         forked,
         tees,
         status,
+        left_running,
     } = exited;
     let Forked {
         client,
@@ -1270,6 +1282,9 @@ fn finish_and_scan(
             }
             return Err(error);
         }
+    }
+    if let Some(refusal) = left_running {
+        return Err(refusal);
     }
     Ok(StartOutcome {
         entry_id: info.entry_id.clone(),

@@ -13,7 +13,7 @@
 //! started: SIGTERM, the connector's grace, SIGKILL, and each one reaped by its own pid. A child
 //! that forks again hands its children to this process when it dies, so the sweep repeats until
 //! a pass finds no child at all, within the grace plus [`SWEEP_SLACK`]. What outlives that is
-//! reported by pid, never hidden.
+//! named by pid on stderr, and `goalcup start` exits 1 after the seal ([`Swept::refusal`]).
 //!
 //! **What is never swept.**
 //! - The daemon: [`note_daemon`] records each one this process starts, by pid and start tick, and
@@ -31,7 +31,8 @@
 //! other tests on other threads, each with `Command`s in flight that a sweep would reap from
 //! under them, so an in-process start is never a subreaper and never sweeps.
 //!
-//! The daemon is unchanged and the trace and seal gain nothing: the sweep is printed on stdout.
+//! The daemon is unchanged and the trace and seal gain nothing: what was swept is printed on
+//! stdout, what may still be running on stderr.
 //!
 //! **Where nothing is swept.** If this process dies, what it adopted goes to init as before. The
 //! sweep runs only after the root's own `wait` in `run_harness`, so the paths that end a released
@@ -103,19 +104,22 @@ pub(crate) struct Swept {
 }
 
 impl Swept {
-    /// What the launcher prints: nothing when there was nothing to sweep.
-    pub fn lines(&self) -> Vec<String> {
+    /// The stdout line: what was swept, when anything was.
+    pub fn swept_line(&self) -> Option<String> {
+        (self.swept > 0).then(|| {
+            format!(
+                "swept {} process(es) the harness left behind after it exited.",
+                self.swept
+            )
+        })
+    }
+
+    /// The stderr lines: what may still be running, or why that cannot be said.
+    pub fn warnings(&self) -> Vec<String> {
         let pids = || {
             let pids: Vec<String> = self.left.iter().map(u32::to_string).collect();
             pids.join(", ")
         };
-        let mut lines = Vec::new();
-        if self.swept > 0 {
-            lines.push(format!(
-                "swept {} process(es) the harness left behind after it exited.",
-                self.swept
-            ));
-        }
         if self.unlisted {
             let signalled = if self.left.is_empty() {
                 String::new()
@@ -126,21 +130,39 @@ impl Swept {
                     pids()
                 )
             };
-            lines.push(format!(
-                "  (this command could not read its own children from /proc, so it cannot say \
-                 that nothing the harness left behind is still running{signalled}.)"
-            ));
+            vec![format!(
+                "goalcup: this command could not read its own children from /proc, so it cannot \
+                 say that nothing the harness left behind is still running{signalled}."
+            )]
         } else if !self.left.is_empty() {
             // Some of these may have been first seen in the last pass, and never signalled.
-            lines.push(format!(
-                "  ({} process(es) the harness left behind were still running when the sweep \
-                 stopped at its bound, the grace plus {} s (pids: {}); end them by hand.)",
+            vec![format!(
+                "goalcup: {} process(es) the harness left behind were still running when the \
+                 sweep stopped at its bound, the grace plus {} s (pids: {}); end them by hand.",
                 self.left.len(),
                 SWEEP_SLACK.as_secs(),
                 pids()
-            ));
+            )]
+        } else {
+            Vec::new()
         }
-        lines
+    }
+
+    /// Whether the run must not exit 0: something was still running at the bound, or `/proc`
+    /// failed after the sweep had signalled something.
+    pub fn still_running(&self) -> bool {
+        !self.left.is_empty() || (self.unlisted && self.swept > 0)
+    }
+
+    /// The refusal `goalcup start` ends with, after the seal, when [`Swept::still_running`]:
+    /// exit 1, the participant's to act on, as a key scan that failed after the seal is.
+    pub fn refusal(&self, entry_id: &str) -> Option<crate::CliError> {
+        self.still_running().then(|| {
+            crate::CliError::Refused(format!(
+                "entry {entry_id} is sealed, but a process the harness left behind may still be \
+                 running (the line above names it); end it by hand."
+            ))
+        })
     }
 }
 
@@ -287,15 +309,15 @@ mod linux {
                     ..Swept::default()
                 };
             }
-            let (mut live, mut unreaped) = (Vec::new(), false);
+            // Alive, or a zombie this pass could not reap: a thread-group leader that exited while
+            // its other threads run is `Z` and still running, and is signalled and named like any.
+            let mut live = Vec::new();
             for (pid, dead) in found {
-                if !dead {
-                    live.push(pid);
-                } else if reap(pid) {
+                if dead && reap(pid) {
                     // Forgotten once reaped, so a recycled pid is a stranger again.
                     swept += usize::from(termed.remove(&pid) | killed.remove(&pid));
                 } else {
-                    unreaped = true;
+                    live.push(pid);
                 }
             }
             let now = Instant::now();
@@ -307,7 +329,7 @@ mod linux {
                 };
             }
             // Only zombies, all reaped: look again at once for what they handed over.
-            if live.is_empty() && !unreaped {
+            if live.is_empty() {
                 continue;
             }
             for &pid in &live {
@@ -411,6 +433,7 @@ mod linux {
                 "a child older than the root was signalled: {line}"
             );
             assert_eq!(field("cleanup_left"), 0, "{line}");
+            assert_eq!(field("exit"), 1, "a straggler at the bound exits 1: {line}");
         }
 
         /// The grace the host sweeps with: one second of SIGTERM that every orphan ignores.
@@ -428,8 +451,12 @@ mod linux {
 
         /// The sweep's host, run only by [`the_bound_reports_what_keeps_arriving`]. A spawner
         /// that ignores SIGTERM is started before the root, so the start filter never lets the
-        /// sweep touch it; from 300 ms on it keeps handing this process new orphans (each
-        /// `sh -c 'sleep 30 &'` exits at once and leaves its `sleep`, which ignores SIGTERM too).
+        /// sweep touch it; from 300 ms on it keeps handing this process new orphans, four per
+        /// `sh -c 'sleep 30 & …'` that exits at once and leaves its `sleep`s (which ignore SIGTERM
+        /// too), every few milliseconds: about twenty per 20 ms poll (measured in Docker: some 6000
+        /// in a run, 20 to 24 named at the bound), so no pass that reaps only zombies, and looks
+        /// again at once, finds this process childless. Without the 2 ms pause the loop forked
+        /// some 52 000 in a run, a load the parallel fast tier does not need.
         /// The sweep can never find this process childless, so it must stop at its bound and
         /// name what it last saw.
         #[test]
@@ -448,7 +475,7 @@ mod linux {
                         "-c",
                         "trap '' TERM; sleep 0.3; \
                          while read -r _ _ _ parent _ < /proc/$$/stat && [ \"$parent\" = \"$PPID\" ]; \
-                         do sh -c 'sleep 30 &'; sleep 0.01; done",
+                         do sh -c 'sleep 30 & sleep 30 & sleep 30 & sleep 30 &'; sleep 0.002; done",
                     ])
                     .spawn()
                     .unwrap(),
@@ -471,13 +498,15 @@ mod linux {
             // Everything this process still holds, the spawner's last orphans included.
             let cleanup = sweep(0, Duration::ZERO);
             println!(
-                "{RESULT} took_ms={} swept={} left={} unlisted={} spawner_alive={} cleanup_left={}",
+                "{RESULT} took_ms={} swept={} left={} unlisted={} spawner_alive={} cleanup_left={} \
+                 exit={}",
                 took.as_millis(),
                 swept.swept,
                 swept.left.len(),
                 u8::from(swept.unlisted),
                 u8::from(spawner_alive),
                 cleanup.left.len(),
+                swept.refusal("e").map_or(0, |e| e.exit_code()),
             );
         }
 
@@ -496,5 +525,47 @@ mod linux {
             );
             assert!(!is_daemon(u32::MAX - 3, 7));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Swept;
+
+    #[test]
+    fn a_process_still_running_after_the_sweep_makes_start_exit_1() {
+        let exit = |swept: Swept| swept.refusal("e1").map(|e| e.exit_code());
+        assert_eq!(exit(Swept::default()), None, "nothing to sweep");
+        let clean = Swept {
+            swept: 3,
+            ..Swept::default()
+        };
+        assert_eq!(exit(clean), None, "everything swept");
+        let straggler = Swept {
+            swept: 3,
+            left: vec![42],
+            unlisted: false,
+        };
+        assert!(straggler.warnings()[0].contains("pids: 42"));
+        assert_eq!(exit(straggler), Some(1));
+        let unread_after_signals = Swept {
+            swept: 1,
+            left: Vec::new(),
+            unlisted: true,
+        };
+        assert_eq!(exit(unread_after_signals), Some(1));
+        let unread_signalled = Swept {
+            swept: 0,
+            left: vec![7],
+            unlisted: true,
+        };
+        assert!(unread_signalled.warnings()[0].contains("not seen to end (pids: 7)"));
+        assert_eq!(exit(unread_signalled), Some(1));
+        let unread_before_any_signal = Swept {
+            unlisted: true,
+            ..Swept::default()
+        };
+        assert_eq!(unread_before_any_signal.warnings().len(), 1);
+        assert_eq!(exit(unread_before_any_signal), None);
     }
 }

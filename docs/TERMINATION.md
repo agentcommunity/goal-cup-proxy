@@ -207,8 +207,11 @@ child subreaper (`crates/goalcup-cli/src/subreaper.rs`):
   no child, because an orphan may fork again, within the grace plus 5 s. These are the
   launcher's unreaped children, so their pids cannot be recycled and a signal cannot reach a
   stranger.
-- It prints `swept N process(es) the harness left behind after it exited.` when it swept
-  something, and names by pid anything still alive at the bound. The daemon is unchanged, and the
+- It prints `swept N process(es) the harness left behind after it exited.` on stdout when it
+  swept something. Anything still alive at the bound is named by pid on stderr, as is a `/proc`
+  it could not read; and `goalcup start` then exits 1 after the seal when a process may still be
+  running (one alive at the bound, or `/proc` unreadable after the sweep signalled one), so a
+  script that checks only the exit code learns of it. The daemon is unchanged, and the
   trace and the seal gain no field: the daemon's report still answers `AlreadyStopped` for a
   reaped root, and in a run whose sweep ended everything that is now true when it is written.
 - It runs only from the `goalcup` binary, never from a `start_with` driven in-process.
@@ -226,6 +229,9 @@ The residuals, stated plainly:
 
 - **The launcher dies.** If `goalcup start` itself dies (a crash, `kill -9`), it sweeps nothing,
   and what it adopted goes to init as before.
+- **Stragglers.** A process still alive at the grace plus 5 s (one in uninterruptible sleep, or a
+  tree that keeps handing over new orphans) is left running. It is named on stderr and the command
+  exits 1 after the seal, but the trace and the seal do not record it.
 - **Paths that end the harness some other way.** The sweep runs only after the root's own `wait`.
   The sealed-launch ending ("The launcher's ending of a child it just released" above) and the
   post-release failures that seal an unlaunched run (a tee that could not be started) never

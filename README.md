@@ -131,9 +131,10 @@ checks that the provider host answers, and with no network it refuses the run.
 - Termination of an orphan the process walk cannot see, such as a wrapper that forks a child and
   leaves, by the daemon alone. On Linux the daemon's `Confirmed` can still be claimed while such
   an orphan runs. `goalcup start` is a child subreaper there and sweeps what the harness left
-  behind after it exits and before the seal; measured in Docker on a synthetic harness only. It
-  sweeps nothing if `goalcup start` itself dies, and a `goalcup seal` from another terminal can
-  report `all_gone` while the sweep is still running
+  behind after it exits and before the seal; measured in Docker on a synthetic harness only. A
+  process still running at the sweep's bound is named on stderr and `goalcup start` exits 1
+  after the seal. It sweeps nothing if `goalcup start` itself dies, and a `goalcup seal` from
+  another terminal can report `all_gone` while the sweep is still running
   ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
 - A successful, logged-in harness run on Linux, and the Linux x86_64 harness builds, which are
   pinned but were not run.

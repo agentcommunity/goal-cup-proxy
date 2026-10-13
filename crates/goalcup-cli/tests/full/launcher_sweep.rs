@@ -33,8 +33,8 @@ impl Drop for Orphan {
     }
 }
 
-/// The line the launcher prints for this workload: the member and its orphan, both alive when the
-/// sweep first saw them (the member lingers 200 ms or more after the root's death).
+/// The line the launcher prints for this workload, exactly: the member, which forks its orphan
+/// only once it has received SIGTERM and so is alive at the sweep's first pass, and that orphan.
 const SWEPT_TWO: &str = "swept 2 process(es) the harness left behind after it exited.";
 
 /// Run `v`'s `orphan-after-root` workload to its end under the real `goalcup start`, and hold the

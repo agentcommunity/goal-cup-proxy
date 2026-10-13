@@ -58,7 +58,8 @@ To check a finished run, use the separate `goalcup-verify --capture-integrity <t
 `goalcup start` prints that line for you. There is no `goalcup verify`.
 
 Exit codes: 0 done; 1 refused, and you can fix it (no daemon to ask, the tracker still busy, \
-the run already sealed, a mistyped command); 3 this command could not do its job (a file it \
+the run already sealed, a mistyped command, or on Linux a sealed run that left a process \
+running); 3 this command could not do its job (a file it \
 could not read, an answer it could not parse). This command never exits with 2 or 4.";
 
 /// What `goalcup doctor --help` says under its flags. There is no verify
