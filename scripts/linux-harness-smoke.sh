@@ -1,13 +1,17 @@
 #!/bin/sh
-# No-login smoke of the pinned Linux harness builds (x86_64 or arm64, from `uname -m`).
+# No-login smoke of the measured Linux harness builds (x86_64 or arm64, from `uname -m`): Codex
+# 0.153.0 and Claude Code 2.1.283, the builds docs/harnesses/ describes.
 # For each harness: download its npm platform package, check the package's and the binary's
 # SHA-256, put the binary first on PATH, then `goalcup doctor` must pass and one `goalcup start`
 # with a never-logged-in home must launch it, stop at auth, seal and verify (exit 0), and leave
-# no harness process running. Nothing here signs in; no model reply is expected.
+# no process named codex or claude running (so run it where no other one runs, as
+# linux-check.sh's container does). Nothing here signs in; no model reply is expected.
 # Needs: Linux, goalcup, goalcup-daemon and goalcup-verify on PATH, GOALCUP_CONNECTORS_DIR set
 # when the binaries are not beside a connectors/ directory, TMPDIR on ext4 or XFS, curl,
 # sha256sum, pgrep, and network (the npm registry, and `goalcup start` checks the provider host
 # answers). `sh scripts/linux-check.sh` runs it in Docker when LINUX_CHECK_HARNESSES=1.
+# Meant for CI or a container: `timeout` puts goalcup in a background process group, which a
+# terminal would stop on a read, and the leftover-process check sees any process of that name.
 # Usage: sh scripts/linux-harness-smoke.sh [codex-cli] [claude-code-cli]   (default: both)
 # Last line: `harness smoke: PASS` or `harness smoke: FAIL <harness> <step>`.
 set -u
@@ -22,8 +26,9 @@ work=$(mktemp -d) || fail "mktemp"
 trap 'rm -rf "$work"' EXIT
 trap 'exit 130' INT HUP TERM
 
-# The npm tarball and the binary inside it, with both SHA-256s. The binary hashes are the
-# connectors' [capture.platform.linux-*] pins; `goalcup doctor` checks those again.
+# The npm tarball and the binary inside it, with both SHA-256s, as measured in docs/harnesses/.
+# The connectors record the build that runs rather than pin one (D53), so these checks are what
+# makes this smoke run exactly that build.
 package() {
     case $1-$arch in
     codex-cli-x64)
@@ -56,29 +61,36 @@ smoke() {
     d=$work/$h
     mkdir -p "$d/pkg" "$d/bin" "$d/home" "$d/goal" || fail "$h mkdir"
     echo "harness smoke: $h ($arch) fetch"
-    curl -fsSL -o "$d/pkg.tgz" "$url" || fail "$h download"
+    curl -fsSL --retry 3 --max-time 600 -o "$d/pkg.tgz" "$url" || fail "$h download"
     echo "$tgz  $d/pkg.tgz" | sha256sum -c --quiet || fail "$h tarball sha256"
     tar xzf "$d/pkg.tgz" -C "$d/pkg" || fail "$h extract"
     echo "$bin  $d/pkg/$file" | sha256sum -c --quiet || fail "$h binary sha256"
     ln -s "$d/pkg/$file" "$d/bin/$prog" || fail "$h link"
-    echo "harness smoke: $h version: $("$d/bin/$prog" --version 2>&1 | head -n 1)"
 
-    # A home and a tracker directory nobody signed in to; the trace folder defaults under HOME,
-    # which is on TMPDIR's filesystem. Unset the variables that could point at a real login.
-    echo "Print the word hello." >"$d/goal/goal.txt"
+    # A home and a tracker directory nobody signed in to, both under TMPDIR (the trace folder
+    # is <GOALCUP_CONFIG_DIR>-artifacts beside it). Every harness call, `--version` included,
+    # runs here: Codex writes into its home even for `--version`. Unset what could name a login.
     run() {
         env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
             HOME="$d/home" GOALCUP_CONFIG_DIR="$d/cfg" PATH="$d/bin:$PATH" "$@"
     }
+    echo "harness smoke: $h version: $(run "$prog" --version 2>/dev/null | head -n 1)"
+    echo "Print the word hello." >"$d/goal/goal.txt"
     run goalcup doctor --harness "$h" || fail "$h doctor"
     echo "harness smoke: $h start"
-    run goalcup start --harness "$h" --goal-file "$d/goal/goal.txt" >"$d/start.out" 2>&1
+    # 256 MiB of chain reserved, not the 10 GiB default: linux-check's ext4 volume is 4 GiB.
+    # `timeout` bounds a harness that keeps retrying. `goalcup start` exits 0 once the run
+    # seals, whatever the harness's own exit code.
+    run timeout 600 goalcup start --harness "$h" --goal-file "$d/goal/goal.txt" \
+        --capture-reserve-bytes 268435456 >"$d/start.out" 2>&1
     rc=$?
     cat "$d/start.out"
     echo "harness smoke: $h start exit $rc"
+    [ "$rc" -eq 0 ] || { cat "$d/cfg/daemon.log" 2>/dev/null; fail "$h start exit $rc"; }
     trace=$(sed -n 's/^trace:  *//p' "$d/start.out" | tail -n 1)
     [ -n "$trace" ] && [ -d "$trace" ] || fail "$h no trace folder (the run did not seal)"
     goalcup-verify --capture-integrity "$trace" || fail "$h verify"
+    # Only the harness's own name; run this where no other $prog runs (the Docker container).
     if pgrep -x "$prog" >/dev/null; then
         ps -eo pid,ppid,pgid,comm
         fail "$h a $prog process is still running"
