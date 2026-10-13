@@ -139,6 +139,10 @@ impl ServerClient {
         // nothing in `src/` panics, so a failure falls back to an agent that refuses https.
         .map(|builder| Arc::new(builder.with_root_certificates(store).with_no_client_auth()));
         let mut agent = ureq::AgentBuilder::new()
+            // One connection per call: calls are minutes apart, and a kept connection to a
+            // server that has since restarted is one more way for a call to hang.
+            .max_idle_connections(0)
+            .max_idle_connections_per_host(0)
             // A redirect would carry the bearer token to an address nobody configured.
             .redirects(0)
             .timeout_connect(CONNECT_TIMEOUT)
