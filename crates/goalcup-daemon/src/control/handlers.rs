@@ -67,7 +67,8 @@ pub(super) async fn health(State(state): State<ControlState>) -> Response {
         daemon_version: DAEMON_VERSION.to_string(),
         uptime_seconds: state.started_at.elapsed().as_secs(),
         entries_open: u32::try_from(open).unwrap_or(u32::MAX),
-        upload_ok: state.daemon.upload_ok(),
+        // Wire field only: this tree has no uploader (D48), so none is failing.
+        upload_ok: true,
     })
     .into_response()
 }
@@ -337,9 +338,16 @@ pub(super) async fn record_capture_launch(
         return ControlErrorResponse::new(ControlError::Malformed(format!("launch {error}")))
             .into_response();
     }
-    match state.daemon.record_capture_launch(&id, &request) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => ControlErrorResponse::from(e).into_response(),
+    // The launch hashes the harness's binaries (D53), seconds of file reads at worst, so it runs
+    // on the blocking pool rather than on a control-API worker.
+    let daemon = state.daemon.clone();
+    match tokio::task::spawn_blocking(move || daemon.record_capture_launch(&id, &request)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => ControlErrorResponse::from(e).into_response(),
+        Err(join) => ControlErrorResponse::new(ControlError::Internal(format!(
+            "the launch did not complete: {join}"
+        )))
+        .into_response(),
     }
 }
 
@@ -403,9 +411,8 @@ pub(super) async fn register_process(
     };
     if let Some(phase) = exact_accepted_replay {
         if phase == ProcessHandoffPhase::Registered {
-            // A live runtime does not need to be acquired for an idempotent registry ACK;
-            // a concurrent pump hold must not turn the lost-204 retry ambiguous. If there
-            // is no runtime, only a sealed row may acknowledge without monitoring.
+            // A live runtime does not need to be acquired for an idempotent registry ACK.
+            // If there is no runtime, only a sealed row may acknowledge without monitoring.
             if state.daemon.has_entry_runtime(&id) {
                 return StatusCode::NO_CONTENT.into_response();
             }
@@ -419,12 +426,6 @@ pub(super) async fn register_process(
         }
         return match state.daemon.register_process(&id, registration.clone()) {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
-            // Prepared Busy is the one transient post-mutation result whose stable wire
-            // identity is itself useful: the client keeps retrying the immutable request.
-            Err(e @ DaemonError::Busy(_)) if phase == ProcessHandoffPhase::Prepared => {
-                ControlErrorResponse::new(ControlError::ProcessAdmissionBusy(e.to_string()))
-                    .into_response()
-            }
             Err(e) => uncertain_process_admission(e).into_response(),
         };
     }

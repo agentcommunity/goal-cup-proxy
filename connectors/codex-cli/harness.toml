@@ -4,15 +4,15 @@ id = "codex-cli"
 
 [capture]
 auth_hosts = ["auth.openai.com"]
-continuation = "none: codex exec one turn, approval_policy=never, workspace-write without network, stdin /dev/null"
+# No model, effort or sandbox limit (owner direction, 2026-10-14): the harness's own defaults,
+# full access with network. `danger-full-access` because `codex exec` alone is read-only.
+continuation = "none: codex exec one turn, approval_policy=never, full access with network, stdin /dev/null"
 args = [
   "exec", "--json",
-  "-m", "gpt-5.6-luna",
-  "-c", 'model_reasoning_effort="low"',
   "-c", 'approval_policy="never"',
   "-c", "check_for_update_on_startup=false",
   "-c", 'projects={{ "{workspace}" = {{ trust_level = "trusted" }} }}',
-  "-s", "workspace-write",
+  "-s", "danger-full-access",
   "--skip-git-repo-check",
   "-C", "{workspace}",
   "--",
@@ -20,22 +20,13 @@ args = [
 
 [capture.executable]
 program = "codex"
-version = "0.153.0"
-sha256 = "a29d9e86eef88cbbd69f97ce8c590b1d0a287c8f77424f5eef226b883d7eaa22"
+version_args = ["--version"]
 
 [capture.env]
 SHELL = "/bin/zsh"
 
-# npm @openai/codex@0.153.0-linux-x64: vendor/x86_64-unknown-linux-musl/bin/codex
-[capture.platform.linux-x86_64]
-sha256 = "fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be"
-
 [capture.platform.linux-x86_64.env]
 SHELL = "/bin/bash"
-
-# npm @openai/codex@0.153.0-linux-arm64: vendor/aarch64-unknown-linux-musl/bin/codex
-[capture.platform.linux-aarch64]
-sha256 = "c92824b2e068b8cb15eecba45271f7e3dd35a5b3929383593284a36074d40aec"
 
 [capture.platform.linux-aarch64.env]
 SHELL = "/bin/bash"

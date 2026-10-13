@@ -1,5 +1,5 @@
 //! Fixtures for the capture-launch tests: a fake harness that records what it was
-//! launched with, the shipped connectors re-pinned to it, and readers for what it recorded.
+//! launched with, the shipped connectors launching it, and readers for what it recorded.
 //!
 //! Everything is test-owned: the workspace, the per-run home, the harness home and the CA
 //! path live in a temporary directory, and the fake writes only into its working directory.
@@ -8,7 +8,7 @@
 #![allow(dead_code)]
 
 use goalcup_cli::connector::HarnessConnector;
-use goalcup_cli::launch::{CaptureLaunch, PinnedExecutable, pin_harness_executable};
+use goalcup_cli::launch::{CaptureLaunch, ResolvedExecutable, resolve_harness_executable};
 use goalcup_protocol::template::TemplateVars;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -56,16 +56,6 @@ pub fn fake_harness(dir: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap()
 }
 
-/// The lowercase SHA-256 of a file, computed here rather than by the code under test.
-pub fn sha256_of(path: &Path) -> String {
-    use sha2::{Digest, Sha256};
-    hex(&Sha256::digest(std::fs::read(path).unwrap()))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 pub fn connectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors")
 }
@@ -74,23 +64,6 @@ pub fn connectors_dir() -> PathBuf {
 pub fn shipped(id: &str) -> HarnessConnector {
     goalcup_cli::connector::load_harness(&connectors_dir(), id, false)
         .expect("the shipped connector loads")
-}
-
-/// A shipped connector whose capture profile pins `exe` instead of the measured harness, on
-/// every platform it names: the only change, so every other rule of the profile is the
-/// shipped one.
-pub fn repinned(id: &str, exe: &Path) -> HarnessConnector {
-    let mut c = shipped(id);
-    let sha256 = sha256_of(exe);
-    for over in c.loaded.manifest.capture.platform.values_mut() {
-        over.sha256 = sha256.clone();
-    }
-    c.loaded.manifest.capture.executable.sha256 = sha256;
-    c.loaded
-        .manifest
-        .validate(goalcup_protocol::harness::Origin::Pinned)
-        .expect("still a valid manifest");
-    c
 }
 
 /// One test's directories, all under one temporary root.
@@ -160,14 +133,16 @@ pub fn parent_env() -> BTreeMap<String, String> {
     .collect()
 }
 
-pub fn pinned(c: &HarnessConnector, exe: &Path) -> PinnedExecutable {
-    pin_harness_executable(&c.loaded.manifest.capture, exe).expect("the fake is the pinned one")
+/// `exe` resolved the way a launch resolves the program it finds on `PATH`: any build is
+/// accepted (D53).
+pub fn resolved(exe: &Path) -> ResolvedExecutable {
+    resolve_harness_executable(exe).expect("the fake is a regular file")
 }
 
 pub fn launch<'a>(
     layout: &'a Layout,
     goal: &'a [u8],
-    exe: &'a PinnedExecutable,
+    exe: &'a ResolvedExecutable,
     proxy: &'a str,
     parent: &'a BTreeMap<String, String>,
 ) -> CaptureLaunch<'a> {
@@ -179,6 +154,5 @@ pub fn launch<'a>(
         proxy_url: proxy,
         ca_certificate: &layout.ca,
         parent_env: parent,
-        allowed_tool_rule: None,
     }
 }

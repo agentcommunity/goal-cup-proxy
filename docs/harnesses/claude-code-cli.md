@@ -1,19 +1,18 @@
 # Claude Code CLI harness facts
 
 Connector id: `claude-code-cli` · Facts for version: `2.1.283` · Written by: Goal Cup team · Last checked: 2026-10-13
-Public disclosure: yes. Everything here comes from the public connector, the public decision log and Goal Cup's own measurements on macOS and, for Linux arm64 with no login, in Docker; no account data, tokens or personal paths are included.
+Public disclosure: yes. Everything here comes from the public connector, the public decision log and Goal Cup's own measurements on macOS and, for Linux with no login, in Docker (arm64) and on a GitHub-hosted runner (x86_64); no account data, tokens or personal paths are included.
 Status: shipped connector
 
-Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64; Claude Code 2.1.283 unless another version is named); "vendor docs" means a quote that Goal Cup's research file took from Anthropic's Claude Code documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux was measured only on arm64 under Docker Desktop (Debian 13 container, Linux 7.0.12, 2026-10-13, Claude Code 2.1.283, no login, so no model call); the Linux x86_64 binary was hashed but never run, and a logged-in Linux run was not measured. Windows was not measured. Cells for what is still unmeasured say "unknown" or "not measured".
+Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64; Claude Code 2.1.283 unless another version is named); "vendor docs" means a quote that Goal Cup's research file took from Anthropic's Claude Code documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux was measured only on arm64 under Docker Desktop (Debian 13 container, Linux 7.0.12, 2026-10-13, Claude Code 2.1.283, no login, so no model call); the Linux x86_64 binary was run with no login on a GitHub-hosted `ubuntu-24.04` runner (2026-10-13); a logged-in Linux run was not measured on either architecture. Windows was not measured. Cells for what is still unmeasured say "unknown" or "not measured".
 
 ## 1. Run one prompt, headless
 
 The capture argv (code: [connectors/claude-code-cli/harness.toml](../../connectors/claude-code-cli/harness.toml)), goal appended as the single element after `--`:
 
 ```
-claude -p --model haiku --effort low --permission-mode acceptEdits --permission-prompts none \
-  --session-id <uuid minted before spawn> --output-format json \
-  --strict-mcp-config --mcp-config '{"mcpServers":{}}' -- "<goal>"
+claude -p --permission-mode bypassPermissions \
+  --session-id <uuid minted before spawn> --output-format json -- "<goal>"
 ```
 
 - stdin is `/dev/null`; stdout is one JSON result object at exit (measured). Exit 0 after `end_turn` (measured).
@@ -26,14 +25,16 @@ claude -p --model haiku --effort low --permission-mode acceptEdits --permission-
 
 ## 2. Install and pin a version
 
-- Installed form on macOS: `~/.local/bin/claude` is a symlink to `~/.local/share/claude/versions/2.1.283`, a single native executable (measured). Other installs' updaters move the symlink (2.1.281 to 2.1.283 in three days, measured), so Goal Cup execs and pins the versioned file by SHA-256 (code: `[capture.executable]`).
-- Print the version: `claude --version`. The pinned version is `[executable] version` in `connectors/claude-code-cli/harness.toml`.
+- Installed form on macOS: `~/.local/bin/claude` is a symlink to `~/.local/share/claude/versions/2.1.283`, a single native executable (measured). Other installs' updaters move the symlink (2.1.281 to 2.1.283 in three days, measured), so Goal Cup execs the versioned file and records its digest; no build is pinned (D53).
+- Print the version: `claude --version`. The connector's `version_args = ["--version"]` asks it once per run and records the line as `Launch.harness_version` (D53); no version is pinned.
 - Install an exact version: unknown (not recorded by Goal Cup).
 - Stop self-update: `DISABLE_AUTOUPDATER=1` (code: connector env).
 - Version lock: while a run is going Claude creates and removes `~/.local/state/claude/locks/2.1.283.lock`; `XDG_STATE_HOME` redirects it (measured).
-- Linux packages (measured: tarballs fetched with `npm pack` and hashed, 2026-10-13): `@anthropic-ai/claude-code-linux-x64@2.1.283` and `@anthropic-ai/claude-code-linux-arm64@2.1.283`, each holding the native executable at `package/claude`. The packages without a `-musl` suffix are the ones pinned (assumed glibc builds; linkage not checked). The `-musl` packages are not pinned, so the pin check should refuse them (code; not run). Goal Cup pins the SHA-256 of that file per architecture (code: `[capture.platform.linux-x86_64]` and `[capture.platform.linux-aarch64]` in the connector): x86_64 `1859583c...804ae2`, arm64 `346d294f...15e697`. The arm64 hash was re-measured on a Mac with `shasum -a 256` and in the container with `sha256sum`; the x86_64 binary was only hashed, never run. `claude --version` on Linux prints `2.1.283 (Claude Code)` and exits 0 (measured, Docker `rust:1.99` image on arm64, `--network none`, empty temporary `HOME` and `CLAUDE_CONFIG_DIR`, 2026-10-13). Linux install locations of the native installer: unknown (not tried).
-- Linux, no login (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login): `goalcup doctor` passes the executable check on the pinned arm64 binary, reached through a symlink on `PATH` (the pin is checked on the file behind the link). Claude returns `{"is_error":true,"result":"Not logged in · Please run /login","terminal_reason":"api_error"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in about 49 ms, and exits 1; the proxy saw one intercepted connection, closed `interrupted`, with no wire stream. The run seals (`AlreadyStopped`) and `goalcup-verify --capture-integrity` exits 0.
-- Windows install locations: unknown. A pinned SHA-256 matches one platform and one architecture only (design note in goal-cup-tracer history, `docs/research/platform-portability.md`, seam 7).
+- Linux packages (measured: tarballs fetched with `npm pack` and hashed, 2026-10-13): `@anthropic-ai/claude-code-linux-x64@2.1.283` and `@anthropic-ai/claude-code-linux-arm64@2.1.283`, each holding the native executable at `package/claude`. The packages without a `-musl` suffix are the ones measured (assumed glibc builds; linkage not checked); the `-musl` packages were not measured. Measured SHA-256 of that file per architecture (the connector pinned these until D53; it now pins no build): x86_64 `1859583c...804ae2`, arm64 `346d294f...15e697`. The arm64 hash was re-measured on a Mac with `shasum -a 256` and in the container with `sha256sum`; the x86_64 hash was re-checked with `sha256sum` on an x86_64 runner before it ran. `claude --version` on Linux prints `2.1.283 (Claude Code)` and exits 0 (measured, Docker `rust:1.99` image on arm64, `--network none`, empty temporary `HOME` and `CLAUDE_CONFIG_DIR`, 2026-10-13). Linux install locations of the native installer: unknown (not tried).
+- Linux, no login (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login): `goalcup doctor` passes the executable check on the then-pinned arm64 binary, reached through a symlink on `PATH` (the file behind the link is what is hashed). Claude returns `{"is_error":true,"result":"Not logged in · Please run /login","terminal_reason":"api_error"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in about 49 ms, and exits 1; the proxy saw one intercepted connection, closed `interrupted`, with no wire stream. The run seals (`AlreadyStopped`) and `goalcup-verify --capture-integrity` exits 0.
+- Linux x86_64, no login (measured, GitHub-hosted `ubuntu-24.04` runner, 4 vCPU, ext4, 2026-10-13, [run 38448817041](https://github.com/agentcommunity/goal-cup-tracer/actions/runs/38448817041), `scripts/linux-harness-smoke.sh`): `claude --version` prints `2.1.283 (Claude Code)`, `goalcup doctor` passes, Claude returns `{"is_error":true,"result":"Not logged in · Please run /login"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in 126 ms and exits 1, `goalcup start` prints `proxy admission: accepted=5 intercepted=5`, the run seals `AlreadyStopped`, `goalcup-verify --capture-integrity` exits 0, and no `claude` process is left.
+- macOS Intel (hashed from the npm tarball, 2026-10-14; not run): `@anthropic-ai/claude-code-darwin-x64@2.1.283` holds `package/claude`. The same method on `-darwin-arm64` reproduces the former base pin.
+- Windows install locations: unknown. A SHA-256 matches one platform and one architecture only, which is why builds are recorded rather than pinned (D53) (design note in goal-cup-tracer history, `docs/research/platform-portability.md`, seam 7).
 
 ## 3. Where it keeps things, per OS
 
@@ -68,7 +69,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 
 - **Model host.** `api.anthropic.com`, `POST /v1/messages`, HTTP/1.1, 200 `text/event-stream` (measured, 2.1.283, 2026-09-28 wire capture). Request 2 was a threaded continuation.
 - **Auth host.** `platform.claude.com` (code: `auth_hosts`).
-- **Connectors and sync.** At each launch Claude starts the account's claude.ai connectors and account-synced plugin MCP servers unless `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1` and `--strict-mcp-config` are set (measured; which one suffices alone was not isolated). Hosts: unknown. Plugins and skills are refreshed from the account at each launch (measured).
+- **Connectors and sync.** At each launch Claude starts the account's claude.ai connectors and account-synced plugin MCP servers unless `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1` and `--strict-mcp-config` are set (measured; which one suffices alone was not isolated). The capture launch sets none of them since 2026-10-14 (owner direction: no MCP limit), so their traffic is tunnelled and not recorded. Earlier measured runs used all three, with `--model haiku --effort low --permission-mode acceptEdits`; the default-model, bypassed-permission launch is not yet measured. Hosts: unknown. Plugins and skills are refreshed from the account at each launch (measured).
 - **Telemetry.** OpenTelemetry export is opt-in via `CLAUDE_CODE_ENABLE_TELEMETRY=1` and `OTEL_*` (vendor docs). Any default telemetry hosts: unknown.
 - **Update host.** unknown (the updater is disabled with `DISABLE_AUTOUPDATER=1`).
 - **Proxy.** `HTTPS_PROXY` is honoured; a loopback forward proxy captured the exchange above (measured, 2.1.283). Transport is plain HTTP/1.1 with server-sent events; no WebSocket seen.
@@ -80,7 +81,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - **Tree.** One native executable. The Bash tool starts `zsh -c -l <script>`; MCP servers are children; subagents run in-process and write sidechain transcript files (measured).
 - **Kill.** Goal Cup signals the process group, 10 s grace, then SIGKILL (code: `strategy = process_group`). SIGTERM-specific behaviour of Claude: unknown.
 - **Hard kill.** `kill -9` leaves no session-end record; request body files written through the OTel raw-body switch were complete JSON up to the kill (measured, 2.1.259).
-- **Exit codes.** 0 after a finished turn, 1 for a missing goal (measured). 1 on Linux arm64 with no login (measured). Others: unknown.
+- **Exit codes.** 0 after a finished turn, 1 for a missing goal (measured). 1 on Linux arm64 and x86_64 with no login (measured). Others: unknown.
 - **Orphans.** On Linux there was no fork-and-leave on the no-login path: Claude's three short-lived children exited before it did, nothing stayed in its process group afterwards, and nothing but the tracker's daemon was reparented to init (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login, 0.1 s sampling; a child that lived and died between samples would not show, so this holds at that sampling interval). A logged-in Linux run, which runs tools, is not measured.
 
 ## 8. Things Goal Cup cannot isolate
@@ -98,5 +99,5 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - `USER` must be in the environment or login reports false (measured).
 - The MCP cache path is `$HOME/Library/Caches/claude-cli-nodejs`; `XDG_CACHE_HOME` is not consulted (read from the bundle, not separately measured).
 - Whether another install's updater could prune 2.1.283 while an unlocked run uses it: not measured.
-- Open: every "unknown" still above for Linux and Windows (a logged-in run, the config-dir default, the x86_64 binary's behaviour); the Linux credential store; the managed-settings paths; the update and connector hosts; how to install an exact version.
-- Compiled from records dated 2026-09-03 to 2026-10-07 and the public connector; none of the runs were repeated for this sheet. The Linux facts come from the 2026-10-13 arm64 Docker run (PR #55).
+- Open: every "unknown" still above for Linux and Windows (a logged-in run, the config-dir default); the Linux credential store; the managed-settings paths; the update and connector hosts; how to install an exact version.
+- Compiled from records dated 2026-09-03 to 2026-10-07 and the public connector; none of the runs were repeated for this sheet. The Linux facts come from the 2026-10-13 arm64 Docker run (PR #55) and the x86_64 runner smoke (PR #81).

@@ -50,12 +50,12 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D35 | Fail is a broken rule; inference is a Flag | no m2 note | [entry](#d35-dogfood-a-fail-is-a-rule-broken-an-inference-from-incomplete-information-is-a-flag-unexplained_seal_file-is-a-flag) |
 | D36 | Two-tier redaction on the wire leg | in force (m2); amended by D37 | [entry](#d36-m2-two-tier-redaction-on-the-wire-leg-and-a-harness-agnostic-recorder) · capture-first |
 | D37 | Autonomous runs, research evidence, contributions | in force (m2) | [entry](#d37-m2-autonomous-runs-research-evidence-and-open-contributions) · capture-first |
-| D38 | Fresh per-run HOME for Claude Code | in force (m2) | [entry](#d38-m2-fresh-per-run-home-for-claude-code-cheapest-models-for-live-tests) · qualification/m2/launch-recipes |
+| D38 | Fresh per-run HOME for Claude Code | in force (m2); cheapest-model clause superseded by D52 | [entry](#d38-m2-fresh-per-run-home-for-claude-code-cheapest-models-for-live-tests) · qualification/m2/launch-recipes |
 | D39 | Headless launches, ported patterns, Codex home | in force (m2) | [entry](#d39-m2-headless-capture-launches-ported-extra-redaction-patterns-shared-isolated-codex-home) |
 | D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2) | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
-| D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2) | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
+| D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2); model and thinking clause superseded by D52 | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
 | D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47; V1-path clause replaced by D48 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
-| D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2); ruling 3 amended by D49 and D50 | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
+| D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2); ruling 3 amended by D49 and D50; ruling 5 by D51; ruling 7 by D53 | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
 | D44 | OpenCode native = read-only own-session SQLite snapshot; public repo goal-cup-tracer | in force (m2); DCO clause amended by D47 | [entry](#d44-m2-opencodes-native-leg-is-a-read-only-snapshot-of-its-own-sessions-rows-the-public-repo-is-goal-cup-tracer) |
 | D45 | Integrity exit judges the record, not the run: interrupted, undecoded and unconfirmed-stop runs stay exit 0 | in force (m2) | [entry](#d45-m2-the-integrity-exit-judges-the-record-not-the-run) |
 | D46 | Capture creation binds the CLI and daemon to identical connector bytes | in force (m2) | [entry](#d46-m2-capture-creation-binds-both-local-halves-to-identical-connector-bytes) |
@@ -63,6 +63,9 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D48 | The V1 path and its `v1-compat` feature leave the tree; history keeps them | in force (m2) | [entry](#d48-m2-the-v1-path-leaves-the-tree) · LEDGER OS-30 |
 | D49 | Admit `AMP_API_KEY` as a child credential | in force (m2) | [entry](#d49-m2-admit-amp_api_key-as-a-child-credential) |
 | D50 | D43 ruling 3: credential + `stdout_json` via one stdout reader | in force (m2) | [entry](#d50-m2-amend-d43-ruling-3-for-stdout_json-identity) |
+| D51 | A connector's argv and env are data; review is the control; credential, CA and redaction lists stay closed | in force (m2) once merged | [entry](#d51-m2-a-connectors-argv-and-env-are-data-review-is-the-control) |
+| D52 | Shipped connectors set no model, effort, sandbox, permission or MCP limit | in force (m2) once merged | [entry](#d52-m2-the-shipped-connectors-set-no-model-effort-sandbox-permission-or-mcp-limit) |
+| D53 | Record the harness build in v5 (`Launch.harness_build`); v0.5.0 readers refuse such traces | in force (m2) once merged | [entry](#d53-m2-record-the-harness-build-in-v5-accepting-that-v050-readers-refuse-it) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -413,7 +416,7 @@ The app-wide check becomes "no change to a named `config_allowlist[]` of files t
 
 ## D24. **(M0)** The local hook receiver is authenticated.
 
-> **Superseded on `m2/wire` by the wire-primary spec (§4 "Dies"); in force on `v1/trunk` and `v0.1.0`.** Replaced by: nothing yet. `m2/wire` has no hook receiver, and the hook-hash pin went with it (`17e962b`, `051f485`). No manifest carries `[receiver]` or renders a receiver token any more (`8b37e91`), and `WorkspaceInfo`, `ResumeInfo` and `ResumePreviewInfo` no longer hand one to the CLI (`4039138`). The daemon still mints `RunKeys.receiver_token` internally (`crates/goalcup-daemon/src/registry.rs:1163`), unused by any connector; cutting or renaming it is a follow-up. The recording proxy's per-launch authentication is its successor (probe write-up, "Phase 0 code review"), and it is not built.
+> **Superseded on `m2/wire` by the wire-primary spec (§4 "Dies"); in force on `v1/trunk` and `v0.1.0`.** Replaced by: nothing yet. `m2/wire` has no hook receiver, and the hook-hash pin went with it (`17e962b`, `051f485`). No manifest carries `[receiver]` or renders a receiver token any more (`8b37e91`), and `WorkspaceInfo`, `ResumeInfo` and `ResumePreviewInfo` no longer hand one to the CLI (`4039138`). The daemon no longer mints `RunKeys.receiver_token` (2026-10-13); a new row carries it empty only so a v0.5.0 daemon can read the row. The recording proxy's per-launch authentication is its successor (probe write-up, "Phase 0 code review"), and it is not built.
 
 **Decision.** The daemon's hook endpoint requires a per-run token, carried in the manifest as `receiver.token` and written into the folder-scoped hook config and shims. Unauthenticated posts are dropped without persisting.
 
@@ -1272,6 +1275,132 @@ No v5 record, control API or verifier change.
 **Evidence.** `crates/goalcup-cli/tests/credential_stdout_identity.rs` and
 `capture_stderr_tee.rs` (any Unix); kit case
 `synthetic-keyed-stdout-json` (macOS); [amp-core-prep](research/amp-core-prep.md), change 4.
+
+---
+
+## D51. **(M2)** A connector's argv and env are data; review is the control.
+
+**Decision (drafted 2026-10-14 for the owner; taken when its PR merges).** The per-connector
+rows `CAPTURE_ARG_ALLOWLIST` and `CAPTURE_ENV_ALLOWLIST` (review R7 I-1, I-2) leave
+`capture_policy.rs`. A pinned connector's `capture.args`, `goal_flag` and `capture.env` are held
+to generic rules that bind every connector, and a new connector, a model bump or a new variable
+is a data-only PR. This amends D43 ruling 5's "a harness PR has no `.rs` file", which the
+allowlists had made false.
+- **Why it is safe.** At run time only pinned bytes load, and the pins are compiled in, so a
+  changed argv or env already needs a merged PR. `connectors/` and `pins/` are code-owned and the
+  `main` ruleset requires a code owner's approval, so an outside PR is a reviewed diff. The
+  maintainer's own PRs may use the temporary single-maintainer bypass
+  (`docs/REPOSITORY-GOVERNANCE.md`) and then have no second reviewer; the allowlists did not
+  change that, since the maintainer wrote their rows too.
+- **What became a rule.** The R7 cases each have a rule: in env, `OPENSSL_*`, `*KEYLOG*`, the
+  runtime variables that name code to load (`PYTHONBREAKPOINT`, `NODE_REPL_EXTERNAL_MODULE`,
+  `PERL5DB` and their siblings, by name, so `PYTHONUNBUFFERED` and `NODE_ENV` stay data) and
+  server names (`*_BASE`, `*_HOST`, `*_HOSTNAME`, `*_ADDR`, `*_ADDRESS`, `*_SERVER`,
+  `*_ORIGIN`, `*_REGISTRY`, beside `*_URL`); in argv, certificate-verification switches
+  (including `cafile`, `capath`), `keylog`, `notify`, `command`, `hook`, an API base or host
+  without a scheme, and the whole flags `--host`, `--server`, `--url`; and a `goal_flag` with a
+  word that says it runs, evaluates or loads its value (`--exec`, `--script`, `--prompt-file`;
+  `--execute` is a word of its own and passes). How much the harness may do (model, sandbox,
+  permissions, directories) is not a capture rule and has none (owner direction, 2026-10-14).
+- **What only review sees.** A dropped flag that capture needs (one headless turn, the session
+  file kept) and a value that re-enables self-update (`DISABLE_AUTOUPDATER = "0"`) are
+  harness-specific facts.
+  They are on the reviewer checklist (`docs/CONNECTOR-CONTRIBUTING.md`, step 3), and the
+  loader tests that asserted them under the allowlist were narrowed to the rule cases.
+- **What stays closed, as security boundaries.** `CREDENTIAL_ENV` names the variables the
+  launcher copies from the participant's shell into the harness, so a new name decides which
+  of their secrets a connector may receive. `CA_REGISTRY` is a trust statement per variable
+  (D41, D43 ruling 4). `EXTRA_PATTERN_SOURCES` mirrors recognizers compiled into the signed
+  daemon. Each stays a core PR with a DECISIONS entry.
+
+**Reconsider when** a connector PR is merged without code-owner review (then the rows come
+back as data beside `pins/connector-dirs.txt`, not Rust).
+
+**Evidence.** `crates/goalcup-protocol/tests/it/harness_loader.rs`
+(`a_pinned_connector_needs_no_rust_row_for_its_argv_or_env`) and `harness_schema.rs`
+(`a_new_connector_needs_no_rust`, `argv_that_loosens_the_run_is_refused_by_rule`).
+
+---
+
+## D52. **(M2)** The shipped connectors set no model, effort, sandbox, permission or MCP limit.
+
+**Decision (owner direction relayed 2026-10-14; taken when its PR merges).** A participant's
+harness runs as the participant would run it: model free, network on, nothing limited. A shipped
+connector keeps only what capture needs: one headless turn (the launch mode, decided
+separately), the isolated config home, the proxy and CA variables, the session file, and
+self-update off (the binary is pinned). So Codex drops `-m`, `model_reasoning_effort` and
+`-s workspace-write` for `-s danger-full-access` (`codex exec` alone is read-only); Claude Code
+drops `--model`, `--effort`, `--strict-mcp-config`, the empty `--mcp-config` and the two MCP
+variables, and uses `--permission-mode bypassPermissions` (nobody is there to answer a prompt);
+Hermes drops `--model` and `agent.reasoning_effort`, and keeps `--provider deepseek` because
+`DEEPSEEK_API_KEY` is its one admitted credential.
+- **Kept, and why.** Codex `approval_policy="never"` (nobody answers), the per-process
+  `projects` trust override (measured to stop a `config.toml` write) and `--skip-git-repo-check`
+  (a non-git workspace); `check_for_update_on_startup=false` and Claude's `DISABLE_AUTOUPDATER`
+  (the binary is pinned); Claude's `CLAUDE_CODE_RETRY_WATCHDOG` (a network blip does not end a
+  long run); Hermes's compression and title generation off (one session id), `tirith` off (secret
+  review I-2) and the model catalogue off.
+- **"Model free" means the vendor default, not the participant's choice.** The launch env is
+  allowlisted and argv is the connector's, so a participant cannot pick a model; Hermes's default
+  is `deepseek-v4-pro`. A supported model choice is an open owner decision. Live tests now pay
+  default-model prices (D38's and D41's cheapest-model clauses are superseded here).
+- **Consequences.** A tool command runs with the participant's full access and network. It can
+  reach the tracer's own control file, its session file, the shared config homes later runs load,
+  and the real `~/.codex` and `~/.claude`; traffic to an unlisted host is tunnelled and noted, and
+  a tool that ignores `HTTPS_PROXY` is not seen at all (`docs/CHEAT-CHECKLIST.md`, `docs/RULES.md`).
+  The Claude tool allowance (`--capture-claude-allowed-tool`) needed `acceptEdits` and was refused
+  for the shipped profile; the flag, its launch splice and the daemon's argv check were removed.
+  The v5 `Launch` fields `allowed_tool_rule` and `process_handoff_digest` stay readable (and are
+  now always written empty) so traces that carry them still verify. None of the three
+  default-model launches is measured yet.
+
+**Reconsider when** a measured run shows a default that breaks capture (a session file not
+written, a second session id).
+
+---
+
+## D53. **(M2)** Record the harness build in v5, accepting that v0.5.0 readers refuse it.
+
+**Decision (owner direction relayed by the coordinator, 2026-10-14).** The tracer records which
+harness build ran instead of refusing builds it has not pinned. `Launch` gains one optional,
+skip-if-none field, `harness_build`: `program_sha256` (the program file the launcher resolved and
+registered; for a script or wrapper the only digest that names the harness), `image_sha256` (the
+running process's executable image, read by the daemon at the launch post, which follows `exec`:
+`/proc/<pid>/exe` on Linux, the path `proc_pidpath` names on macOS) and `platform`
+(`<os>-<arch>`). The daemon takes both digests itself, outside the run lock, only while the pid is
+the registered instance; a digest it cannot take is absent, never guessed.
+
+**The trade, plainly.** `v0.5.0` is tagged and froze the v5 records (D43 ruling 7). Every record
+refuses unknown fields, so the released v0.5.0 verifier, and any server reader built from it,
+reports `record_malformed` on a trace that carries `harness_build`. This row accepts that instead
+of opening protocol v6: nobody depends on a v0.5.0 verifier before the event, and the tracer and
+the server ship their own. Traces without the field stay valid for every reader, old and new.
+
+**What the digests cover.** `program_sha256` names a script or wrapper harness; `image_sha256` is
+what the registered pid runs at the launch post: for an interpreted harness the interpreter, for
+a wrapper that `exec`s again either stage depending on timing, and never a native binary a
+wrapper spawns as a child (Codex's npm wrapper). On Linux a non-dumpable process leaves its image
+unreadable, and the field is then absent.
+
+**What it is not.** The reader checks only the field's shape (canonical hex, bounded platform);
+it never compares a digest with a list. Matching against known builds, and the "unlisted" note
+for judges, belong to the server. Removing the pin refusal is the next PR; the recording lands
+first so the tree never has neither (done: see the amendment below).
+
+**Reconsider when** the server's build list exists, or a second post-tag field is wanted (then
+open v6 rather than another exception).
+
+**Amended (2026-10-14, "core: record harness builds, pin none").** The pin refusal is gone: a
+connector's `[capture.executable]` names only `program` and, optionally, `version_args`, and a
+manifest that still carries `sha256` or `version` (base or per-platform) is refused with one
+sentence telling the author to delete the line. `goalcup start` runs whatever build `program`
+resolves to on `PATH`, keeping only a consistency check that the file did not change between
+resolution and release. `Launch.harness_version` now carries the harness's own `version_args`
+output (first line of stdout, printable ASCII, at most 128 bytes, from a probe with an empty
+environment but `PATH` and a throwaway `HOME` removed afterwards, ten-second timeout) or `unreported`, where it
+used to carry the connector's pinned version: a change of meaning this row accepts, since the
+field was always display text and the digests are the record. The connector-directory pin
+(`pins/connector-dirs.txt`) stays: it is what stops a connector smuggling a base URL.
 
 ---
 

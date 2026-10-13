@@ -330,6 +330,8 @@ fn spawn(binary: &Path, config: &Path, log: &Path) -> Result<(Child, u64), CliEr
         path: binary.display().to_string(),
         source,
     })?;
+    // A launcher that is a child subreaper sweeps its children before the seal, never this one.
+    crate::subreaper::note_daemon(child.id());
     Ok((child, said_from))
 }
 

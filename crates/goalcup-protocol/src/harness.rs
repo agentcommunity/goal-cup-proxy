@@ -15,7 +15,9 @@
 //! # Parsing
 //!
 //! 1. The text is parsed as a generic TOML table and `schema_version` is read first
-//!    (`SUPPORTED_SCHEMA_VERSIONS`).
+//!    (`SUPPORTED_SCHEMA_VERSIONS`). The executable pin's retired keys (`sha256`, `version`) are
+//!    refused here with their own sentence (D53), before the strict deserialization would call
+//!    them a newer schema's.
 //! 2. It is then deserialized with `deny_unknown_fields` everywhere. An unknown key, and an
 //!    unknown value of a closed-set field, are refused with one sentence ([`NEWER_SENTENCE`]):
 //!    serde's own "unknown variant" text never reaches the user.
@@ -23,22 +25,23 @@
 //!    is deterministic: executable, args and goal, env, home, credential, CA, identity,
 //!    native, argv guard, termination, hosts, redaction, the delivery-agnostic rule (F7), the
 //!    cross-field rules, and then every rule again on the recipe each `[capture.platform.<key>]`
-//!    resolves to (an override may replace only the executable pin and env entries).
+//!    resolves to (an override may replace only env entries).
 //!
 //! [`Origin`] is the one observable predicate that relaxes anything: `Dev` (an unpinned
 //! directory under `GOALCUP_CONNECTORS_DIR` loaded with `--dev`, for kit cases and the
-//! controlled workload) skips the interpreter refusal and the absolute-path `args` refusal.
-//! Env values, seeds, the deny lists and every cross-field rule stay strict for both.
+//! controlled workload) skips the interpreter refusal, the absolute-path `args` refusal and the
+//! loopback-host refusal (the kit's stand-ins are `*.localhost`). Env values, seeds, the deny
+//! lists and every cross-field rule stay strict for both.
 
 use crate::ProtocolError;
 use crate::capture_policy::{
     CREDENTIAL_ENV, CaMode, EXTRA_PATTERN_SOURCES, EnvContext, MAX_CAPTURE_ARG_BYTES,
     MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV, MAX_CAPTURE_ENV_KEY_BYTES, MAX_CAPTURE_ENV_VALUE_BYTES,
     MAX_CAPTURE_HOSTS, MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, MAX_GOAL_FLAG_BYTES,
-    arg_path_denied, ca_registry_mode, capture_arg_denied, capture_argv_allowed,
-    capture_env_allowed, capture_path_problem, env_key_denied, env_value_denied, has_duplicate,
-    is_capture_host, is_interpreter_program, is_tracker_host, mentions_goalcup,
-    seed_content_problem, startup_file_problem,
+    arg_path_denied, ca_registry_mode, capture_arg_denied, capture_path_problem, env_key_denied,
+    env_value_denied, goal_flag_denied, has_duplicate, is_capture_host, is_interpreter_program,
+    is_tracker_host, local_host_problem, mentions_goalcup, seed_content_problem,
+    startup_file_problem,
 };
 use crate::connector_dir::hash_connector_dir_listing;
 use crate::hints::valid_hint;
@@ -250,8 +253,8 @@ pub enum Origin {
     /// An in-tree or pin-checked connector directory.
     Pinned,
     /// An unpinned directory under `GOALCUP_CONNECTORS_DIR`, loaded with `--dev` (kit cases,
-    /// the controlled workload). Relaxes the interpreter refusal and the absolute-path `args`
-    /// refusal, and nothing else.
+    /// the controlled workload). Relaxes the interpreter refusal, the absolute-path `args`
+    /// refusal and the loopback-host refusal, and nothing else.
     Dev,
 }
 
@@ -286,6 +289,11 @@ pub struct CaptureSpec {
     /// Process-scoped settings, keys literal and values templated.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Name prefixes of the harness's own variables (`HERMES_`) that `env` may not set: switches
+    /// such as a safe mode that would silently stop capture. Data, so no harness is named in the
+    /// policy; `home.env`, `ca.env` and `credential.env` are pinned by the launch and unaffected.
+    #[serde(default)]
+    pub reserved_env_prefixes: Vec<String>,
     pub executable: ExecutableSpec,
     pub home: HomeSpec,
     #[serde(default)]
@@ -302,8 +310,8 @@ pub struct CaptureSpec {
     /// The hosts the proxy terminates TLS for.
     #[serde(default)]
     pub hosts: Vec<HostSpec>,
-    /// Per-platform replacements for the executable pin and env entries. Everything else is
-    /// the same recipe on every platform.
+    /// Per-platform replacements for env entries. Everything else is the same recipe on every
+    /// platform.
     #[serde(default)]
     pub platform: BTreeMap<PlatformKey, PlatformOverride>,
 }
@@ -313,57 +321,30 @@ pub struct CaptureSpec {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ExecutableSpec {
-    /// A bare name resolved on `PATH`.
+    /// A bare name resolved on `PATH`. Whatever build it names runs: the tracer records that
+    /// build's digests (`Launch.harness_build`, D53) and pins none.
     pub program: String,
-    /// The version the recipe was measured at; recorded as `Launch.harness_version`.
-    pub version: String,
-    /// SHA-256 of the measured executable's bytes, lowercase hex.
-    pub sha256: String,
+    /// The arguments that make the program print its version on the first line of stdout
+    /// (`["--version"]`); empty when the harness has no such command. The launcher runs them
+    /// once before the harness and records the line as `Launch.harness_version`, reported by
+    /// the harness rather than proven; without them it records `unreported`.
+    #[serde(default)]
+    pub version_args: Vec<String>,
 }
 
-/// `[capture.platform.<key>]`: what a platform may change. Only the executable's pin (and its
-/// version, should a platform's build carry another) and env entries; every other field, the
-/// program included, is the base table's. The resolved recipe is validated, and allowlisted,
-/// as a whole.
+/// `[capture.platform.<key>]`: what a platform may change. Only env entries; every other
+/// field, the executable included, is the base table's. The resolved recipe is validated as a
+/// whole.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct PlatformOverride {
-    /// SHA-256 of this platform's executable bytes, lowercase hex.
-    pub sha256: String,
-    #[serde(default)]
-    pub version: Option<String>,
     /// Entries added to `capture.env`, replacing a same-named one.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
 
-/// The executable a platform runs: the base `program`, with the platform's pin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ResolvedExecutable<'a> {
-    pub program: &'a str,
-    pub version: &'a str,
-    pub sha256: &'a str,
-}
-
 impl CaptureSpec {
-    /// The executable for `key`: the override's pin and version where it has them, the base
-    /// values otherwise. `None` (an unnamed platform) is the base.
-    pub fn resolved_executable(
-        &self,
-        key: impl Into<Option<PlatformKey>>,
-    ) -> ResolvedExecutable<'_> {
-        let over = key.into().and_then(|k| self.platform.get(&k));
-        ResolvedExecutable {
-            program: &self.executable.program,
-            version: over
-                .and_then(|o| o.version.as_deref())
-                .unwrap_or(&self.executable.version),
-            sha256: over.map_or(&self.executable.sha256, |o| &o.sha256),
-        }
-    }
-
     /// `capture.env` for `key`: the base entries, then the override's, which replace a
     /// same-named one.
     pub fn resolved_env(&self, key: impl Into<Option<PlatformKey>>) -> BTreeMap<String, String> {
@@ -375,17 +356,10 @@ impl CaptureSpec {
     }
 
     /// The base recipe with `key`'s override applied and no `platform` table: what the
-    /// validator and the allowlists see for that platform.
+    /// validator sees for that platform.
     fn resolved_for(&self, key: PlatformKey) -> CaptureSpec {
-        let exe = self.resolved_executable(key);
-        let executable = ExecutableSpec {
-            program: exe.program.to_string(),
-            version: exe.version.to_string(),
-            sha256: exe.sha256.to_string(),
-        };
         CaptureSpec {
             env: self.resolved_env(key),
-            executable,
             platform: BTreeMap::new(),
             ..self.clone()
         }
@@ -399,8 +373,11 @@ impl CaptureSpec {
 pub struct HomeSpec {
     pub run_home: RunHome,
     pub config_home: ConfigHome,
-    /// The variable pointed at the config home.
-    pub env: String,
+    /// The variable pointed at the config home. Absent for a harness with no such variable: it
+    /// then keeps its state under the private run `HOME`, so its native root is `{run_home}/...`,
+    /// it takes no seeds or dirs, and its config home is `per_run`.
+    #[serde(default)]
+    pub env: Option<String>,
     /// The per-run config home's directory name; `per_run` only. Default `harness-home`.
     #[serde(default)]
     pub per_run_dir: Option<String>,
@@ -481,6 +458,24 @@ pub struct IdentitySpec {
     /// `stderr_line` only: the identity's grammar.
     #[serde(default)]
     pub grammar: Option<IdGrammar>,
+    /// `stdout_json` only: how long the launch waits for the identity event before recording
+    /// the launch without one, 1 to [`MAX_STDOUT_WAIT_SECONDS`]. Default
+    /// [`DEFAULT_STDOUT_WAIT_SECONDS`].
+    #[serde(default)]
+    pub wait_seconds: Option<u64>,
+}
+
+/// The default of `capture.identity.wait_seconds`: the two minutes Codex's `thread.started`
+/// was measured to need at worst.
+pub const DEFAULT_STDOUT_WAIT_SECONDS: u64 = 120;
+/// The bound of `capture.identity.wait_seconds`.
+pub const MAX_STDOUT_WAIT_SECONDS: u64 = 600;
+
+impl IdentitySpec {
+    /// How long a `stdout_json` launch waits for its identity event.
+    pub fn stdout_wait(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.wait_seconds.unwrap_or(DEFAULT_STDOUT_WAIT_SECONDS))
+    }
 }
 
 /// `[[capture.native]]`.
@@ -715,8 +710,47 @@ impl HarnessManifest {
                 ));
             }
         }
+        refuse_retired_pin_keys(&table)?;
         toml::from_str::<HarnessManifest>(text).map_err(|e| map_toml_error(text, &e))
     }
+}
+
+/// The keys the executable pin used to need, refused by name (D53): the tracer records the
+/// build that runs, so a manifest that still pins one is told to drop the line, not that it is
+/// from a newer schema.
+const RETIRED_PIN_KEYS: &[&str] = &["sha256", "version"];
+
+/// Refuse `capture.executable.{sha256,version}` and `capture.platform.<key>.{sha256,version}`
+/// with one sentence each, read from the generic table before the strict deserialization.
+fn refuse_retired_pin_keys(table: &toml::Table) -> Result<(), ProtocolError> {
+    let Some(capture) = table.get("capture").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    let mut places: Vec<(String, &toml::Table)> = Vec::new();
+    if let Some(executable) = capture.get("executable").and_then(toml::Value::as_table) {
+        places.push(("capture.executable".to_string(), executable));
+    }
+    if let Some(platforms) = capture.get("platform").and_then(toml::Value::as_table) {
+        for (key, value) in platforms {
+            if let Some(over) = value.as_table() {
+                places.push((format!("capture.platform.{key}"), over));
+            }
+        }
+    }
+    for (at, keys) in places {
+        for retired in RETIRED_PIN_KEYS {
+            if keys.contains_key(*retired) {
+                return Err(refuse(
+                    format!("{at}.{retired}"),
+                    format!(
+                        "`{retired}` is no longer a connector field (D53): the tracer records the \
+                         build that runs instead of pinning one; delete the line."
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------
@@ -831,11 +865,10 @@ fn glob_matches(name: &str, pattern: &str) -> bool {
     j == pattern.len()
 }
 
-fn is_hex64(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
+/// The only `capture.executable.version_args` a connector may name: one of these, alone. A
+/// wider grammar would let a reviewed connector run `update`, `login` or `mcp` through the
+/// probe, which runs before the capture with no proxy and no record.
+const VERSION_ARGS: &[&str] = &["--version", "-v", "-V", "version"];
 
 /// How a native `root` splits: which home it names and the relative path under it.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -920,17 +953,17 @@ fn native_pattern_components(pattern: &str, source_has_id: bool) -> Result<Vec<S
 }
 
 /// A refusal of the recipe `key` resolves to, renamed to the override that caused it: the
-/// override changes only the executable pin and env, so the base table already passed every
-/// other rule, and the base rule's reason is kept.
+/// override changes only env, so the base table already passed every other rule, and the base
+/// rule's reason is kept.
 fn platform_refusal(key: PlatformKey, e: ProtocolError) -> ProtocolError {
     let ProtocolError::Field { field, reason } = e else {
         return e;
     };
     let at = format!("capture.platform.{}", key.as_str());
-    match field.strip_prefix("capture.executable.") {
-        Some(rest) => refuse(format!("{at}.{rest}"), reason),
-        None if field == "capture.env" => refuse(format!("{at}.env"), reason),
-        None => refuse(at, format!("{field}: {reason}")),
+    if field == "capture.env" {
+        refuse(format!("{at}.env"), reason)
+    } else {
+        refuse(at, format!("{field}: {reason}"))
     }
 }
 
@@ -995,51 +1028,10 @@ impl HarnessManifest {
         self.check_native()?;
         self.check_argv_guard()?;
         self.check_termination()?;
-        self.check_hosts()?;
+        self.check_hosts(origin)?;
         self.check_redaction()?;
         self.check_delivery_agnostic()?;
         self.check_cross_field()?;
-        Ok(())
-    }
-
-    /// The reviewed allowlists a pinned connector is held to on top of [`Self::validate`]:
-    /// every `capture.env` entry must be a row of [`crate::capture_policy::CAPTURE_ENV_ALLOWLIST`],
-    /// and `capture.args` with `goal_flag` must be exactly the connector's row of
-    /// [`crate::capture_policy::CAPTURE_ARG_ALLOWLIST`]. The loader calls it for
-    /// `Origin::Pinned` after `validate`, so a deny-list refusal keeps its own reason, when this
-    /// build pins the connector's id. An unpinned id is refused later by the pin gate and runs
-    /// only under `--dev`.
-    ///
-    /// Each `[capture.platform.<key>]` is held to the same rows, as the recipe it resolves to.
-    pub fn check_allowlists(&self) -> Result<(), ProtocolError> {
-        self.check_recipe_allowlists()?;
-        self.for_each_platform(HarnessManifest::check_recipe_allowlists)
-    }
-
-    fn check_recipe_allowlists(&self) -> Result<(), ProtocolError> {
-        let c = &self.capture;
-        if !capture_argv_allowed(&self.id, &c.args, c.goal_flag.as_deref()) {
-            return Err(refuse(
-                "capture.args",
-                format!(
-                    "`capture.args` and `goal_flag` of `{}` are not exactly its reviewed row \
-                     (capture_policy::CAPTURE_ARG_ALLOWLIST); a new or changed argument is a \
-                     core PR",
-                    self.id
-                ),
-            ));
-        }
-        for (k, v) in &c.env {
-            if !capture_env_allowed(k, v) {
-                return Err(refuse(
-                    "capture.env",
-                    format!(
-                        "`{k} = {v:?}` is not on the reviewed list \
-                         (capture_policy::CAPTURE_ENV_ALLOWLIST); a new variable is a core PR"
-                    ),
-                ));
-            }
-        }
         Ok(())
     }
 
@@ -1070,24 +1062,23 @@ impl HarnessManifest {
                 ),
             ));
         }
-        let mut v = exe.version.bytes();
-        let version_ok = exe.version.len() <= 32
-            && v.next().is_some_and(|b| b.is_ascii_digit())
-            && v.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-'));
-        if !version_ok {
-            return Err(refuse(
-                "capture.executable.version",
-                format!(
-                    "`{}` must match `^[0-9][0-9A-Za-z.+-]{{0,31}}$`",
-                    exe.version
-                ),
-            ));
-        }
-        if !is_hex64(&exe.sha256) {
-            return Err(refuse(
-                "capture.executable.sha256",
-                "must be 64 lowercase hex characters",
-            ));
+        match exe.version_args.as_slice() {
+            [] => {}
+            [one] if VERSION_ARGS.contains(&one.as_str()) => {}
+            _ => {
+                return Err(refuse(
+                    "capture.executable.version_args",
+                    format!(
+                        "must be empty or exactly one of {}: the probe runs before the capture, \
+                         with no proxy and no record",
+                        VERSION_ARGS
+                            .iter()
+                            .map(|a| format!("`{a}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
         }
         Ok(())
     }
@@ -1107,7 +1098,11 @@ impl HarnessManifest {
                     "an argument is longer than the bound or contains a control character",
                 ));
             }
-            if let Some(why) = capture_arg_denied(a) {
+            // A `Dev` argument that is an absolute path is one the kit or the controlled
+            // workload substituted (`@STAND_IN@`); its directory names (a checkout under
+            // `.../hook-fix/`) are not flags, so the word rules do not read them.
+            let substituted_path = origin == Origin::Dev && a.starts_with('/');
+            if !substituted_path && let Some(why) = capture_arg_denied(a) {
                 return Err(refuse("capture.args", format!("`{a}` {why}")));
             }
             // N1: the one observable predicate. A pinned connector never needs an absolute
@@ -1136,7 +1131,7 @@ impl HarnessManifest {
                     ),
                 ));
             }
-            if let Some(why) = capture_arg_denied(flag) {
+            if let Some(why) = capture_arg_denied(flag).or_else(|| goal_flag_denied(flag)) {
                 return Err(refuse("capture.goal_flag", format!("`{flag}` {why}")));
             }
         }
@@ -1172,6 +1167,26 @@ impl HarnessManifest {
                 format!("holds more than {MAX_CAPTURE_ENV} entries"),
             ));
         }
+        let reserved = &self.capture.reserved_env_prefixes;
+        if reserved.len() > 4 {
+            return Err(refuse(
+                "capture.reserved_env_prefixes",
+                "holds more than 4 prefixes",
+            ));
+        }
+        for p in reserved {
+            let mut b = p.bytes();
+            let ok = (2..=32).contains(&p.len())
+                && p.ends_with('_')
+                && b.next().is_some_and(|x| x.is_ascii_uppercase())
+                && b.all(|x| x.is_ascii_uppercase() || x.is_ascii_digit() || x == b'_');
+            if !ok {
+                return Err(refuse(
+                    "capture.reserved_env_prefixes",
+                    format!("`{p}` must match `^[A-Z][A-Z0-9_]{{0,30}}_$`"),
+                ));
+            }
+        }
         for (k, v) in env {
             let mut b = k.bytes();
             let well_formed = k.len() <= MAX_CAPTURE_ENV_KEY_BYTES
@@ -1184,8 +1199,34 @@ impl HarnessManifest {
                     format!("`{k}` is not a variable name"),
                 ));
             }
+            // The connector's own home variable keeps the cross-field reason, which names the
+            // field that pins it, ahead of the generic home-relocator rule.
+            let upper = k.to_ascii_uppercase();
+            if self
+                .capture
+                .home
+                .env
+                .as_deref()
+                .is_some_and(|h| h.eq_ignore_ascii_case(&upper))
+            {
+                return Err(refuse(
+                    "capture.env",
+                    format!(
+                        "`{upper}` is pinned by `capture.home.env`, so `capture.env` may not set it"
+                    ),
+                ));
+            }
             if let Some(why) = env_key_denied(k, EnvContext::CaptureEnv) {
                 return Err(refuse("capture.env", format!("`{k}` {why}")));
+            }
+            if let Some(p) = reserved.iter().find(|p| upper.starts_with(p.as_str())) {
+                return Err(refuse(
+                    "capture.env",
+                    format!(
+                        "`{k}` is in `{p}`, the harness's own namespace, which this connector \
+                         reserves (`capture.reserved_env_prefixes`)"
+                    ),
+                ));
             }
             if v.len() > MAX_CAPTURE_ENV_VALUE_BYTES || has_control(v) {
                 return Err(refuse(
@@ -1204,18 +1245,20 @@ impl HarnessManifest {
 
     fn check_home(&self) -> Result<(), ProtocolError> {
         let h = &self.capture.home;
-        let mut b = h.env.bytes();
-        let env_ok = h.env.len() <= 64
-            && b.next().is_some_and(|x| x.is_ascii_uppercase())
-            && b.all(|x| x.is_ascii_uppercase() || x.is_ascii_digit() || x == b'_');
-        if !env_ok {
-            return Err(refuse(
-                "capture.home.env",
-                format!("`{}` must match `^[A-Z][A-Z0-9_]{{0,63}}$`", h.env),
-            ));
-        }
-        if let Some(why) = env_key_denied(&h.env, EnvContext::HomeEnv) {
-            return Err(refuse("capture.home.env", format!("`{}` {why}", h.env)));
+        if let Some(env) = &h.env {
+            let mut b = env.bytes();
+            let env_ok = env.len() <= 64
+                && b.next().is_some_and(|x| x.is_ascii_uppercase())
+                && b.all(|x| x.is_ascii_uppercase() || x.is_ascii_digit() || x == b'_');
+            if !env_ok {
+                return Err(refuse(
+                    "capture.home.env",
+                    format!("`{env}` must match `^[A-Z][A-Z0-9_]{{0,63}}$`"),
+                ));
+            }
+            if let Some(why) = env_key_denied(env, EnvContext::HomeEnv) {
+                return Err(refuse("capture.home.env", format!("`{env}` {why}")));
+            }
         }
         if let Some(dir) = &h.per_run_dir {
             let mut b = dir.bytes();
@@ -1369,6 +1412,14 @@ impl HarnessManifest {
                         "`prefix` and `grammar` belong to `stderr_line`, not `stdout_json`",
                     ));
                 }
+                if i.wait_seconds
+                    .is_some_and(|w| !(1..=MAX_STDOUT_WAIT_SECONDS).contains(&w))
+                {
+                    return Err(refuse(
+                        "capture.identity.wait_seconds",
+                        format!("must be 1 to {MAX_STDOUT_WAIT_SECONDS} seconds"),
+                    ));
+                }
             }
             IdentitySource::StderrLine => {
                 let (Some(prefix), Some(_)) = line else {
@@ -1386,11 +1437,15 @@ impl HarnessManifest {
                         "must be 1 to 32 printable ASCII bytes",
                     ));
                 }
-                if json.0.is_some() || json.1.is_some() || json.2.is_some() {
+                if json.0.is_some()
+                    || json.1.is_some()
+                    || json.2.is_some()
+                    || i.wait_seconds.is_some()
+                {
                     return Err(refuse(
                         "capture.identity",
-                        "`match_field`, `match_value` and `id_field` belong to `stdout_json`, \
-                         not `stderr_line`",
+                        "`match_field`, `match_value`, `id_field` and `wait_seconds` belong to \
+                         `stdout_json`, not `stderr_line`",
                     ));
                 }
             }
@@ -1400,11 +1455,13 @@ impl HarnessManifest {
                     || json.2.is_some()
                     || line.0.is_some()
                     || line.1.is_some()
+                    || i.wait_seconds.is_some()
                 {
                     return Err(refuse(
                         "capture.identity",
                         format!(
-                            "`{}` takes no `match_*`, `id_field`, `prefix` or `grammar`",
+                            "`{}` takes no `match_*`, `id_field`, `prefix`, `grammar` or \
+                             `wait_seconds`",
                             i.source.as_str()
                         ),
                     ));
@@ -1589,7 +1646,7 @@ impl HarnessManifest {
         Ok(())
     }
 
-    fn check_hosts(&self) -> Result<(), ProtocolError> {
+    fn check_hosts(&self, origin: Origin) -> Result<(), ProtocolError> {
         let c = &self.capture;
         if c.hosts.is_empty() || c.hosts.len() > MAX_CAPTURE_HOSTS {
             return Err(refuse(
@@ -1622,6 +1679,11 @@ impl HarnessManifest {
                     format!("`{a}` is not a lowercase DNS name without port or trailing dot"),
                 ));
             }
+            if origin == Origin::Pinned
+                && let Some(why) = local_host_problem(a)
+            {
+                return Err(refuse("capture.auth_hosts", format!("`{a}` {why}")));
+            }
         }
         for h in &c.hosts {
             if !is_capture_host(&h.host) {
@@ -1632,6 +1694,12 @@ impl HarnessManifest {
                         h.host
                     ),
                 ));
+            }
+            // The kit and the controlled workload (`Origin::Dev`) serve `*.localhost` stand-ins.
+            if origin == Origin::Pinned
+                && let Some(why) = local_host_problem(&h.host)
+            {
+                return Err(refuse("capture.hosts", format!("`{}` {why}", h.host)));
             }
             if c.auth_hosts.contains(&h.host) {
                 return Err(refuse(
@@ -1860,6 +1928,36 @@ impl HarnessManifest {
             ));
         }
 
+        // Without `home.env` nothing points the harness at the config home, so anything the
+        // manifest puts there, or expects to read from there, would never be used. Refused
+        // rather than admitted to record nothing.
+        if h.env.is_none() {
+            const WHY: &str = "requires `capture.home.env`: without it nothing points the harness \
+                               at the config home, so the harness keeps its state under the \
+                               private run `HOME`";
+            if !per_run {
+                return Err(refuse(
+                    "capture.home.config_home",
+                    format!("`shared` {WHY}"),
+                ));
+            }
+            for (field, present) in [
+                ("seed", !h.seed.is_empty()),
+                ("dirs", !h.dirs.is_empty()),
+                ("per_run_dir", h.per_run_dir.is_some()),
+            ] {
+                if present {
+                    return Err(refuse(format!("capture.home.{field}"), WHY));
+                }
+            }
+            if root_home == RootHome::Config {
+                return Err(refuse(
+                    "capture.native.root",
+                    format!("a `{{config_home}}` root {WHY}: use `{{run_home}}/...`"),
+                ));
+            }
+        }
+
         // M10 and S2 review M-5: a native pattern may not sweep a seed file or a credential the
         // manifest seeds. A `{config_home}` root is the seeds' own directory. A `{run_home}` root
         // is another directory while the homes are disjoint, but where the per-run config home
@@ -1910,8 +2008,10 @@ impl HarnessManifest {
         }
 
         // The variables this manifest pins are distinct, and none is a `capture.env` key.
-        let mut pinned: Vec<(&str, String)> =
-            vec![("capture.home.env", c.home.env.to_ascii_uppercase())];
+        let mut pinned: Vec<(&str, String)> = Vec::new();
+        if let Some(env) = &c.home.env {
+            pinned.push(("capture.home.env", env.to_ascii_uppercase()));
+        }
         if let Some(cr) = &c.credential {
             pinned.push(("capture.credential.env", cr.env.to_ascii_uppercase()));
         }
@@ -2163,12 +2263,6 @@ fn load_dir_resolving_origin_fallible(
         refuse_dev_for_a_pinned_directory(&manifest.id, &listing.sha256)?;
     }
     manifest.validate(origin)?;
-    // Only a connector this build pins: an unpinned one is refused at the pin gate with its own
-    // reason, and runs only under `--dev`.
-    if origin == Origin::Pinned && crate::pins::pinned_connector_dir_sha256(&manifest.id).is_some()
-    {
-        manifest.check_allowlists()?;
-    }
 
     let seeds: Vec<String> = manifest
         .capture

@@ -148,7 +148,7 @@ fn a_hermes_run_ends_with_its_snapshot_captured_and_a_clean_verdict() {
     let argv = rig.harness_file("argv").unwrap();
     assert_eq!(
         argv,
-        format!("chat\n-Q\n--provider\ndeepseek\n--model\ndeepseek-v4-flash\n--query={GOAL}\n")
+        format!("chat\n-Q\n--provider\ndeepseek\n--query={GOAL}\n")
     );
     let env = rig.harness_file("env").unwrap();
     let has = |line: &str| env.lines().any(|l| l == line);

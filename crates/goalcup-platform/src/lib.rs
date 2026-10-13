@@ -10,6 +10,9 @@ compile_error!(
     "goalcup-platform builds on unix targets only; Windows is not yet supported (it is planned)"
 );
 
+/// The calling thread's `errno`, for the `readdir` end-of-directory idiom.
+#[cfg(unix)]
+pub mod errno;
 /// Contained file access rooted in an owned directory capability.
 pub mod filecap;
 pub mod handle_budget;

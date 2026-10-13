@@ -13,6 +13,8 @@ mod harness_contract_golden;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod harness_contract_kit;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod launcher_sweep;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod m2_hermes_lifecycle;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod m2_synthetic_vertical;
