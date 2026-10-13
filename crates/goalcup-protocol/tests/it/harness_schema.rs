@@ -2872,3 +2872,42 @@ fn the_stdout_identity_wait_is_a_bounded_connector_field() {
         &["capture.identity", "wait_seconds", "stdout_json"],
     );
 }
+
+/// A connector reserves its harness's own namespace as data (`reserved_env_prefixes`), so a
+/// switch that would silently stop capture is refused without a harness name in the policy.
+#[test]
+fn a_connector_reserves_its_own_env_namespace_as_data() {
+    for name in [
+        "HERMES_SAFE_MODE",
+        "HERMES_IGNORE_USER_CONFIG",
+        "hermes_yolo_mode",
+    ] {
+        let mut t = hermes();
+        set(&mut t, &["capture", "env"], name, "1");
+        refused(
+            &t,
+            PINNED,
+            &["capture.env", "HERMES_", "reserved_env_prefixes"],
+        );
+    }
+    // Another connector is not bound by Hermes's reservation.
+    let mut t = codex();
+    set(&mut t, &["capture", "env"], "HERMES_SAFE_MODE", "1");
+    admitted(&t, PINNED);
+    // The prefix grammar.
+    for bad in [
+        "hermes_",
+        "HERMES",
+        "_X_",
+        "A_B_C_D_E_F_G_H_I_J_K_L_M_N_O_P_Q_",
+    ] {
+        let mut t = hermes();
+        set(
+            &mut t,
+            &["capture"],
+            "reserved_env_prefixes",
+            strings(&[bad]),
+        );
+        refused(&t, PINNED, &["capture.reserved_env_prefixes"]);
+    }
+}

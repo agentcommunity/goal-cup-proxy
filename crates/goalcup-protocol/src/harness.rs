@@ -287,6 +287,11 @@ pub struct CaptureSpec {
     /// Process-scoped settings, keys literal and values templated.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Name prefixes of the harness's own variables (`HERMES_`) that `env` may not set: switches
+    /// such as a safe mode that would silently stop capture. Data, so no harness is named in the
+    /// policy; `home.env`, `ca.env` and `credential.env` are pinned by the launch and unaffected.
+    #[serde(default)]
+    pub reserved_env_prefixes: Vec<String>,
     pub executable: ExecutableSpec,
     pub home: HomeSpec,
     #[serde(default)]
@@ -1157,6 +1162,26 @@ impl HarnessManifest {
                 format!("holds more than {MAX_CAPTURE_ENV} entries"),
             ));
         }
+        let reserved = &self.capture.reserved_env_prefixes;
+        if reserved.len() > 4 {
+            return Err(refuse(
+                "capture.reserved_env_prefixes",
+                "holds more than 4 prefixes",
+            ));
+        }
+        for p in reserved {
+            let mut b = p.bytes();
+            let ok = (2..=32).contains(&p.len())
+                && p.ends_with('_')
+                && b.next().is_some_and(|x| x.is_ascii_uppercase())
+                && b.all(|x| x.is_ascii_uppercase() || x.is_ascii_digit() || x == b'_');
+            if !ok {
+                return Err(refuse(
+                    "capture.reserved_env_prefixes",
+                    format!("`{p}` must match `^[A-Z][A-Z0-9_]{{0,30}}_$`"),
+                ));
+            }
+        }
         for (k, v) in env {
             let mut b = k.bytes();
             let well_formed = k.len() <= MAX_CAPTURE_ENV_KEY_BYTES
@@ -1188,6 +1213,15 @@ impl HarnessManifest {
             }
             if let Some(why) = env_key_denied(k, EnvContext::CaptureEnv) {
                 return Err(refuse("capture.env", format!("`{k}` {why}")));
+            }
+            if let Some(p) = reserved.iter().find(|p| upper.starts_with(p.as_str())) {
+                return Err(refuse(
+                    "capture.env",
+                    format!(
+                        "`{k}` is in `{p}`, the harness's own namespace, which this connector \
+                         reserves (`capture.reserved_env_prefixes`)"
+                    ),
+                ));
             }
             if v.len() > MAX_CAPTURE_ENV_VALUE_BYTES || has_control(v) {
                 return Err(refuse(

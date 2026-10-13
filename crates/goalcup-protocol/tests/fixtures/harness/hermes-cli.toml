@@ -6,6 +6,9 @@ id = "hermes-cli"
 # hermes chat -Q --provider deepseek --model deepseek-v4-flash --query=<goal>
 args = ["chat", "-Q", "--provider", "deepseek", "--model", "deepseek-v4-flash"]
 goal_flag = "--query"
+# Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the
+# session snapshot; `capture.env` may set none of them.
+reserved_env_prefixes = ["HERMES_"]
 continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
 
 [capture.executable]

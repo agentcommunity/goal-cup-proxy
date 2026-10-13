@@ -922,7 +922,8 @@ carry their own amendments and point here for shared text.
 > Codex binds the first complete `thread.started.thread_id` on stdout; Claude binds its
 > preassigned session id. Codex's stdout tee scans lines up to 1 MiB, forwards every byte
 > unchanged throughout the child's lifetime and drains/discards on destination closure. The
-> identity wait ends by 120 seconds from spawn, stdout EOF or child exit. After child exit,
+> identity wait ends by 120 seconds from spawn (since 2026-10-14, the connector's
+> `capture.identity.wait_seconds`, default 120), stdout EOF or child exit. After child exit,
 > tee completion is observed within the existing 10-second finish deadline, concurrently with
 > local finish; no unbounded thread join is used. Completion confirms EOF and final forwarding
 > (or draining/discarding for a closed destination). Expiry or read failure is reported to the
@@ -1107,7 +1108,8 @@ carry their own amendments and point here for shared text.
 > read never ends the child. A `Conflict` on an entry that is still open (an invalid allowance, a
 > wrong goal stream) never ends the child. The ending is not chained into the seal. The status
 > read uses the 30 s `CALL_TIMEOUT`; one that times out falls back to the look after the `Launch`
-> error, which can come after Codex's native-scope wait of up to 120 s, so a seal that raced in
+> error, which can come after a `stdout_json` harness's identity wait (the connector's
+`wait_seconds`, default 120 s, at most 600 s), so a seal that raced in
 > can leave the harness running for that long before the launcher looks again. The final refusal
 > is worded from the outcome: it says the harness is no longer running only for `Ended` and
 > `AlreadyGone`, and for `NativeUnverified` and `StillRunning` it says the harness may still be

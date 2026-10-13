@@ -154,10 +154,15 @@ only ASCII letters, digits or `_`. Names compare uppercase for policy. The valid
 - CA registry names and global trust overrides;
 - injection/startup variables and names ending in command suffixes such as `_COMMAND`, `_CMD`,
   `EDITOR`, `PAGER`, `ASKPASS`, `_WRAPPER` or `_RUNNER`;
-- injection, provider and harness-reserved prefixes, including `DYLD_`, `LD_`, `OTEL_`,
-  `CLAUDE_CODE_USE_`, `GIT_`, `NPM_CONFIG_`, `PIP_`, `XDG_`, `GOALCUP_`, the cloud-provider
-  prefixes and `HERMES_`; and
-- any name pinned by this manifest's home, credential or CA fields.
+- injection and provider prefixes, including `DYLD_`, `LD_`, `OTEL_`, `CLAUDE_CODE_USE_`,
+  `GIT_`, `NPM_CONFIG_`, `PIP_`, `XDG_`, `GOALCUP_` and the cloud-provider prefixes;
+- any `*_HOME`, `*_CONFIG_DIR` or `*_CONFIG_HOME` name: a harness's own relocator is
+  `capture.home.env`, and any other would move some program's state out of the run's isolation;
+- any name pinned by this manifest's home, credential or CA fields; and
+- any name under one of this connector's `capture.reserved_env_prefixes` (up to 4, each
+  `^[A-Z][A-Z0-9_]{0,30}_$`): the harness's own namespace, declared as data, so that switches
+  such as Hermes's `HERMES_SAFE_MODE` cannot silently stop capture. No harness is named in the
+  policy itself.
 
 R-3 is an intentional over-refusal: `NO_PAGER` ends in `PAGER`, so schema 1 refuses it even when
 the harness treats it as a boolean. A harness that needs that name requires a reviewed core policy
