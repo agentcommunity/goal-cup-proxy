@@ -15,10 +15,10 @@
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
-    CA_REGISTRY, CREDENTIAL_ENV, EXTRA_PATTERN_SOURCES, EnvContext, HARNESS_RESERVED_PREFIXES,
-    INJECTION_ENV, INJECTION_PREFIXES, INTERPRETER_PROGRAMS, PROVIDER_PREFIXES, SHELL_VALUES,
-    STARTUP_BASENAMES, STARTUP_COMPONENTS, arg_path_denied, env_key_denied, env_value_denied,
-    is_interpreter_program, startup_file_problem,
+    CA_REGISTRY, CREDENTIAL_ENV, EXTRA_PATTERN_SOURCES, EnvContext, INJECTION_ENV,
+    INJECTION_PREFIXES, INTERPRETER_PROGRAMS, PROVIDER_PREFIXES, SHELL_VALUES, STARTUP_BASENAMES,
+    STARTUP_COMPONENTS, arg_path_denied, env_key_denied, env_value_denied, is_interpreter_program,
+    startup_file_problem,
 };
 use goalcup_protocol::harness::{HarnessManifest, NEWER_SENTENCE, Origin, PlatformKey};
 use std::path::{Path, PathBuf};
@@ -1148,15 +1148,24 @@ fn hermes_home_passes_as_home_env_and_fails_as_a_capture_env_key() {
     ] {
         assert_eq!(env_key_denied(home, EnvContext::HomeEnv), None, "{home}");
     }
-    assert!(
-        env_key_denied("HERMES_HOME", EnvContext::CaptureEnv)
-            .is_some_and(|why| why.contains("reserved")),
-    );
-    assert_eq!(HARNESS_RESERVED_PREFIXES.len(), 1);
+    // In `capture.env` every home or config-dir name is refused, by shape, not by harness name.
+    for name in ["HERMES_HOME", "GH_CONFIG_DIR", "EXAMPLE_CONFIG_HOME"] {
+        assert!(
+            env_key_denied(name, EnvContext::CaptureEnv)
+                .is_some_and(|why| why.contains("capture.home.env")),
+            "{name}"
+        );
+    }
+    // A name in another harness's namespace is not refused for that reason alone.
+    assert_eq!(env_key_denied("HERMES_QUIET", EnvContext::CaptureEnv), None);
     // Through the manifest: Codex with HERMES_HOME in `env`.
     let mut t = codex();
     set(&mut t, &["capture", "env"], "HERMES_HOME", "x");
-    refused(&t, PINNED, &["capture.env", "HERMES_HOME", "reserved"]);
+    refused(
+        &t,
+        PINNED,
+        &["capture.env", "HERMES_HOME", "capture.home.env"],
+    );
     // And Hermes itself, whose home.env is HERMES_HOME, validates (the fixture test above).
     admitted(&hermes(), PINNED);
 }
@@ -2832,5 +2841,73 @@ fn a_pinned_connector_names_no_loopback_or_single_label_host() {
         if host.ends_with("localhost") {
             admitted(&t, DEV);
         }
+    }
+}
+
+/// The stdout identity wait is connector data, not a constant named after one harness.
+#[test]
+fn the_stdout_identity_wait_is_a_bounded_connector_field() {
+    let m = parsed(&codex());
+    assert_eq!(
+        m.capture.identity.stdout_wait(),
+        std::time::Duration::from_secs(120)
+    );
+    let mut t = codex();
+    set(&mut t, &["capture", "identity"], "wait_seconds", 300);
+    let m = parsed(&t);
+    assert_eq!(
+        m.capture.identity.stdout_wait(),
+        std::time::Duration::from_secs(300)
+    );
+    for bad in [0, 601] {
+        let mut t = codex();
+        set(&mut t, &["capture", "identity"], "wait_seconds", bad);
+        refused(&t, PINNED, &["capture.identity.wait_seconds", "1 to 600"]);
+    }
+    let mut t = hermes();
+    set(&mut t, &["capture", "identity"], "wait_seconds", 60);
+    refused(
+        &t,
+        PINNED,
+        &["capture.identity", "wait_seconds", "stdout_json"],
+    );
+}
+
+/// A connector reserves its harness's own namespace as data (`reserved_env_prefixes`), so a
+/// switch that would silently stop capture is refused without a harness name in the policy.
+#[test]
+fn a_connector_reserves_its_own_env_namespace_as_data() {
+    for name in [
+        "HERMES_SAFE_MODE",
+        "HERMES_IGNORE_USER_CONFIG",
+        "hermes_yolo_mode",
+    ] {
+        let mut t = hermes();
+        set(&mut t, &["capture", "env"], name, "1");
+        refused(
+            &t,
+            PINNED,
+            &["capture.env", "HERMES_", "reserved_env_prefixes"],
+        );
+    }
+    // Another connector is not bound by Hermes's reservation.
+    let mut t = codex();
+    set(&mut t, &["capture", "env"], "HERMES_SAFE_MODE", "1");
+    admitted(&t, PINNED);
+    // The prefix grammar.
+    for bad in [
+        "hermes_",
+        "HERMES",
+        "_X_",
+        "A_B_C_D_E_F_G_H_I_J_K_L_M_N_O_P_Q_",
+    ] {
+        let mut t = hermes();
+        set(
+            &mut t,
+            &["capture"],
+            "reserved_env_prefixes",
+            strings(&[bad]),
+        );
+        refused(&t, PINNED, &["capture.reserved_env_prefixes"]);
     }
 }

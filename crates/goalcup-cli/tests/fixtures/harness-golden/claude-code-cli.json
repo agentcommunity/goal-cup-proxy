@@ -619,11 +619,11 @@
       "name": "TERMINAL_HOME_MODE"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "CODEX_HOME"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "codex_home"
     },
     {
@@ -635,15 +635,15 @@
       "name": "claude_config_dir"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "HERMES_HOME"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "hermes_home"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "WORKLOAD_HOME"
     },
     {
@@ -875,7 +875,7 @@
       "name": "LD_LIBRARY_PATH"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": null,
       "name": "HERMES_X"
     },
     {

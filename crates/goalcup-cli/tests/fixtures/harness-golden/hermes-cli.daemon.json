@@ -3,7 +3,7 @@
   "launched_with_a_native_scope": {
     "gaps_after_launch": [],
     "launch_allowed_tool_rule": null,
-    "launch_connector_dir_sha256": "204a51cefea3f58d409ed59c000130c2248b4c95be7c078d86a1b6cdbcdcadd8",
+    "launch_connector_dir_sha256": "c82dd8053a473e1e250640a91282228a279d6e93c06cc11534d36c4c21ea7dad",
     "launch_process_handoff_digest": null,
     "launch_profile_digest_is_sha256_of_harness_toml": true,
     "launch_profile_id": "hermes-cli",
@@ -13,7 +13,7 @@
   "launched_without_a_native_scope": {
     "gaps_after_launch": [],
     "launch_allowed_tool_rule": null,
-    "launch_connector_dir_sha256": "204a51cefea3f58d409ed59c000130c2248b4c95be7c078d86a1b6cdbcdcadd8",
+    "launch_connector_dir_sha256": "c82dd8053a473e1e250640a91282228a279d6e93c06cc11534d36c4c21ea7dad",
     "launch_process_handoff_digest": null,
     "launch_profile_digest_is_sha256_of_harness_toml": true,
     "launch_profile_id": "hermes-cli",

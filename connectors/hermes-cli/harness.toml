@@ -7,6 +7,9 @@ id = "hermes-cli"
 # credential (DEEPSEEK_API_KEY); the model is Hermes's own default (owner direction, 2026-10-14).
 args = ["chat", "-Q", "--provider", "deepseek"]
 goal_flag = "--query"
+# Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the
+# session snapshot; `capture.env` may set none of them.
+reserved_env_prefixes = ["HERMES_"]
 continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
 
 [capture.executable]
