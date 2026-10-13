@@ -74,9 +74,8 @@
 //! entry owner's appended `CaptureRecord`s and synced frontier. A `Disabled` answer latches
 //! the loss for this producer: no further frame is submitted, the rejected frame is never
 //! retried, polls stop doing I/O, and no `Close` is ever sent, so the receiver records unknown
-//! tail loss. There is no wire-style recovery. A loss stays latched until an explicit resume
-//! builds a fresh adapter ([`NativeCapture::resume`]) with a fresh producer, which opens each
-//! resumed file as the next generation with an unknown-loss `Gap` before any byte.
+//! tail loss. There is no wire-style recovery. A loss stays latched for the life of the
+//! adapter; nothing in this tree resumes a lost producer.
 //!
 //! Losses that have no stream to carry a `Gap` frame — discovery stopped at its entry cap,
 //! an entry refused or unavailable, a file over `max_files`, a file that never got a stream —
@@ -89,8 +88,6 @@
 //!
 //! - `NativeCapture::new(config: NativeCaptureConfig, sink: Arc<dyn CaptureSink>,
 //!   clock: Box<dyn NativeClock>) -> Result<NativeCapture, NativeCaptureError>`
-//! - `NativeCapture::resume(config, sink, clock, points: Vec<NativeResumePoint>)
-//!   -> Result<NativeCapture, NativeCaptureError>` — explicit resume only; never automatic.
 //! - `NativeCapture::poll(&mut self) -> NativePollReport` — one bounded cadence step.
 //! - `NativeCapture::finish(&mut self, budget: NativeFinishBudget) -> NativeFinishReport` —
 //!   once-only drain, stream termination and ordered producer close.
@@ -339,55 +336,15 @@ impl NativeClock for SystemNativeClock {
     }
 }
 
-/// A durable coordinate from the entry owner, for an explicit resume only.
-///
-/// The owner derives it from records it appended and synced — the native `Open` label
-/// ([`NativeLabel::parse`]) and the end of that stream's last retained segment — never from
-/// anything this adapter reported as queued.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NativeResumePoint {
-    /// The [`NativeSourceSpec::name`] the label names.
-    pub source: String,
-    /// The label's relative path, exactly as rendered.
-    pub relative_path: String,
-    /// The highest generation any earlier producer opened for this path (at least one).
-    pub generation: u64,
-    /// End offset of the last durably retained byte range of that generation, or `None`
-    /// when no range is known durable. The resumed generation starts here when the file is
-    /// at least this long, and at zero otherwise; either way after an unknown-loss `Gap`.
-    pub durable_end: Option<u64>,
-}
-
 /// A native stream label: `<source>:<relative path>#g<generation>`.
 ///
-/// Display text for people and for the explicit-resume coordinate above; it is not a join
-/// key between streams. Path bytes that are not printable UTF-8 are escaped (`\\`, `\u{..}`,
+/// Display text for people; it is not a join key between streams. Path bytes that are not printable UTF-8 are escaped (`\\`, `\u{..}`,
 /// `\xNN`), so distinct names render distinctly and no control byte reaches metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeLabel {
     pub source: String,
     pub relative_path: String,
     pub generation: u64,
-}
-
-impl NativeLabel {
-    pub fn parse(label: &str) -> Option<NativeLabel> {
-        let (source, rest) = label.split_once(':')?;
-        let (relative_path, generation) = rest.rsplit_once("#g")?;
-        if !valid_source_name(source)
-            || relative_path.is_empty()
-            || generation.is_empty()
-            || generation.starts_with('0')
-            || !generation.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return None;
-        }
-        Some(NativeLabel {
-            source: source.to_string(),
-            relative_path: relative_path.to_string(),
-            generation: generation.parse().ok()?,
-        })
-    }
 }
 
 impl fmt::Display for NativeLabel {
@@ -526,7 +483,6 @@ pub struct NativeCapture {
     limits: NativeCaptureLimits,
     emitter: Emitter,
     files: BTreeMap<FileKey, Tracked>,
-    resume: BTreeMap<FileKey, ResumePlan>,
     rotate_after: Option<FileKey>,
     buffer: Vec<u8>,
     source_changes: u64,
@@ -557,28 +513,6 @@ impl NativeCapture {
         config: NativeCaptureConfig,
         sink: Arc<dyn CaptureSink>,
         clock: Box<dyn NativeClock>,
-    ) -> Result<NativeCapture, NativeCaptureError> {
-        Self::build(config, sink, clock, Vec::new())
-    }
-
-    /// An explicit resume after a daemon restart: a fresh producer whose files named by
-    /// `points` open as `generation + 1` with an unknown-loss `Gap` before any byte, starting
-    /// at the durable end. Unnamed files start at generation one, offset zero. Nothing is
-    /// continued automatically and no earlier stream is reused.
-    pub fn resume(
-        config: NativeCaptureConfig,
-        sink: Arc<dyn CaptureSink>,
-        clock: Box<dyn NativeClock>,
-        points: Vec<NativeResumePoint>,
-    ) -> Result<NativeCapture, NativeCaptureError> {
-        Self::build(config, sink, clock, points)
-    }
-
-    fn build(
-        config: NativeCaptureConfig,
-        sink: Arc<dyn CaptureSink>,
-        clock: Box<dyn NativeClock>,
-        points: Vec<NativeResumePoint>,
     ) -> Result<NativeCapture, NativeCaptureError> {
         let NativeCaptureConfig { sources, limits } = config;
         limits.validate()?;
@@ -627,35 +561,6 @@ impl NativeCapture {
             });
         }
 
-        if points.len() > limits.max_files {
-            return Err(self::config("more resume points than max_files"));
-        }
-        let mut resume = BTreeMap::new();
-        for point in points {
-            let Some(index) = built.iter().position(|source| source.name == point.source) else {
-                return Err(self::config("a resume point names an unknown source"));
-            };
-            if point.relative_path.is_empty()
-                || point.relative_path.len() > MAX_METADATA_STRING_BYTES
-            {
-                return Err(self::config("a resume point needs a bounded relative path"));
-            }
-            if point.generation == 0 {
-                return Err(self::config(
-                    "a resume point names a generation of at least one",
-                ));
-            }
-            let plan = ResumePlan {
-                generation: point.generation,
-                start: ResumeStart {
-                    durable_end: point.durable_end,
-                },
-            };
-            if resume.insert((index, point.relative_path), plan).is_some() {
-                return Err(self::config("two resume points name the same file"));
-            }
-        }
-
         Ok(NativeCapture {
             sources: built,
             limits,
@@ -671,7 +576,6 @@ impl NativeCapture {
                 open_streams: 0,
             },
             files: BTreeMap::new(),
-            resume,
             rotate_after: None,
             buffer: vec![0; MAX_SEGMENT_BYTES],
             source_changes: 0,
@@ -792,7 +696,6 @@ impl NativeCapture {
                 index,
                 source,
                 files: &mut self.files,
-                resume: &self.resume,
                 max_files: self.limits.max_files,
                 entries_left: &mut entries_left,
                 report: &mut *report,
@@ -851,7 +754,7 @@ impl NativeCapture {
                         self.interrupted_streams += 1;
                     }
                 }
-                FileState::Pending { .. } => report.uncaptured_files += 1,
+                FileState::Pending => report.uncaptured_files += 1,
                 // A snapshot a pass already read to its length and ended `Complete`: complete
                 // at this boundary, and counted as such so a source captured whole is never
                 // read as one that completed nothing.
@@ -1030,17 +933,6 @@ enum Component {
 /// Source index and rendered relative path.
 type FileKey = (usize, String);
 
-#[derive(Debug, Clone, Copy)]
-struct ResumePlan {
-    generation: u64,
-    start: ResumeStart,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ResumeStart {
-    durable_end: Option<u64>,
-}
-
 struct Tracked {
     components: Vec<SourceName>,
     /// The last generation opened for this path (zero before the first).
@@ -1052,9 +944,7 @@ struct Tracked {
 
 enum FileState {
     /// Known, without a stream: newly discovered, changed, or waiting for a slot.
-    Pending {
-        resume: Option<ResumeStart>,
-    },
+    Pending,
     Open(OpenStream),
     /// A snapshot read completely at these facts.
     Done {
@@ -1234,7 +1124,6 @@ struct Walker<'a> {
     index: usize,
     source: &'a Source,
     files: &'a mut BTreeMap<FileKey, Tracked>,
-    resume: &'a BTreeMap<FileKey, ResumePlan>,
     max_files: usize,
     entries_left: &'a mut usize,
     report: &'a mut NativePollReport,
@@ -1333,15 +1222,12 @@ impl Walker<'_> {
             *self.file_limit_reached = true;
             return;
         }
-        let plan = self.resume.get(&key).copied();
         self.files.insert(
             key,
             Tracked {
                 components: components.to_vec(),
-                generation: plan.map_or(0, |plan| plan.generation),
-                state: FileState::Pending {
-                    resume: plan.map(|plan| plan.start),
-                },
+                generation: 0,
+                state: FileState::Pending,
                 caught_up: false,
             },
         );
@@ -1450,7 +1336,7 @@ fn process(pass: &mut Pass<'_>, source: &Source, relative: &str, tracked: &mut T
             tracked.caught_up = false;
             return false;
         };
-        if matches!(tracked.state, FileState::Pending { .. })
+        if matches!(tracked.state, FileState::Pending)
             && !open_generation(pass, source, relative, tracked, &observed)
         {
             tracked.caught_up = false;
@@ -1479,7 +1365,7 @@ fn process(pass: &mut Pass<'_>, source: &Source, relative: &str, tracked: &mut T
                 ReadEnd::Failed => return pass.unavailable(tracked),
                 ReadEnd::SnapshotChanged => {
                     let id = stream.stream;
-                    tracked.state = FileState::Pending { resume: None };
+                    tracked.state = FileState::Pending;
                     tracked.caught_up = false;
                     *pass.source_changes += 1;
                     if pass.emitter.interrupt(id, GapReason::SourceChanged) {
@@ -1535,17 +1421,15 @@ fn settle(
                 return false;
             }
             *pass.interrupted += 1;
-            observed.map(|_| FileState::Pending { resume: None })
+            observed.map(|_| FileState::Pending)
         }
         FileState::Done { facts } => match observed {
             None => Some(FileState::Gone),
-            Some(observed) if observed.facts() != *facts => {
-                Some(FileState::Pending { resume: None })
-            }
+            Some(observed) if observed.facts() != *facts => Some(FileState::Pending),
             Some(_) => None,
         },
-        FileState::Gone => observed.map(|_| FileState::Pending { resume: None }),
-        FileState::Pending { .. } => None,
+        FileState::Gone => observed.map(|_| FileState::Pending),
+        FileState::Pending => None,
     };
     if let Some(next) = next {
         tracked.state = next;
@@ -1562,9 +1446,9 @@ fn open_generation(
     tracked: &mut Tracked,
     observed: &SourceObservation,
 ) -> bool {
-    let FileState::Pending { resume } = tracked.state else {
+    if !matches!(tracked.state, FileState::Pending) {
         return true;
-    };
+    }
     if pass.emitter.open_streams >= pass.max_open_streams {
         pass.report.waiting_files += 1;
         return false;
@@ -1590,28 +1474,10 @@ fn open_generation(
     };
     tracked.generation = generation;
     let facts = observed.facts();
-    let mut offset = 0;
-    if let Some(ResumeStart { durable_end }) = resume {
-        let reason = match durable_end {
-            Some(end) if end <= facts.length => {
-                offset = end;
-                GapReason::ProducerLost
-            }
-            Some(_) => GapReason::SourceChanged,
-            None => GapReason::ProducerLost,
-        };
-        let gap = FrameEvent::Gap {
-            reason,
-            lost_bytes: None,
-        };
-        if !pass.emitter.submit(stream, gap) {
-            return false;
-        }
-    }
     tracked.state = FileState::Open(OpenStream {
         stream,
         identity: facts.identity.clone(),
-        offset,
+        offset: 0,
         snapshot: (source.form == NativeStoreForm::Snapshot).then_some(facts),
     });
     true

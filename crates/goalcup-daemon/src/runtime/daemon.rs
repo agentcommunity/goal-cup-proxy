@@ -499,12 +499,6 @@ impl Daemon {
             .acknowledge_sealed_process_replay(entry_id, registration)
     }
 
-    /// Whether every open entry's last upload reached the server. Always `true`: this tree has
-    /// no uploader (D48), so none is failing.
-    pub(crate) fn upload_ok(&self) -> bool {
-        true
-    }
-
     // -------------------------------------------------------------------------------
     // The map, and the one place each lock is taken.
     // -------------------------------------------------------------------------------
