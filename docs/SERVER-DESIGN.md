@@ -1,7 +1,6 @@
 # Goal Cup server: upload, storage and live numbers
 
-**Status:** working design, merged so the build can start. Owner still to confirm: late delivery of
-pre-deadline records (section 3, step 6).
+**Status:** working design, merged so the build can start.
 
 Design for the server side of the tracer, for the event going live on **6 November 2026**. Written
 2026-10-13 from the owner's decisions, then revised after four reviews (builder check, security and
@@ -102,8 +101,8 @@ through Supabase with row-level security.
    **Notifications:**
    - if the server hears nothing from an open run for 20 minutes, it emails the participant: "your
      run stopped; run `goalcup continue`". One email per silence, not repeated every 20 minutes, and none
-     once the run is sealed or past `deadline_at`. A run with no seal 48 hours after `deadline_at` is
-     marked abandoned;
+     once the run is sealed or past `deadline_at`. A run with no seal by the end of the transfer window
+     (step 6) is marked abandoned;
    - *(nice to have)* a small login item on the participant's machine notices an interrupted run after
      a reboot and shows a notification that leads to `goalcup continue`.
 6. **The deadline.** At `deadline_at` the tracer stops the agent and seals, and the run is over.
@@ -111,11 +110,10 @@ through Supabase with row-level security.
      `deadline_at` the server records the latest commit on its default branch through the GitHub API.
      That commit is what judges review; later pushes don't count.
    - The tracer also notes the local repo's latest commit at the deadline, as a cross-check.
-   - Uploads that arrive late are accepted for 48 hours, but only records time-stamped before
-     `deadline_at`. That way a participant whose network dropped in the last hours doesn't lose the
-     evidence of those hours, and no work after the deadline counts. *(The owner's rule is "when the
-     timer is up it's over"; accepting late delivery of earlier recordings is the author's reading of it,
-     flagged for confirmation.)*
+   - **Hard stop, no late uploads** (owner). The run ends in whatever state the agent is in. The only
+     thing accepted after `deadline_at` is the final chunk and seal the tracer makes at the deadline,
+     delivered within a fixed 15-minute transfer window. Records stamped after `deadline_at` are refused.
+     Anything not uploaded by then (for example because the network was down) doesn't count.
 
 ## 4. The calls
 
@@ -135,7 +133,8 @@ checks that the run belongs to the token's member.
 **Acceptance of a chunk, step by step.**
 1. Reject early, before reading the body, if:
    - the token is wrong;
-   - the run isn't open, or is past its grace period;
+   - the run isn't open, or is past `deadline_at` (only the final chunk and seal, within the 15-minute
+     transfer window, are accepted after it);
    - `Content-Length` is over 32 MB;
    - the run is over its storage quota;
    - the per-token rate limit trips;
@@ -163,7 +162,7 @@ because recording never waits.
 - **Every hour, and at seal:** the verify job reassembles the run from R2 and runs `goalcup-verify`. It
   checks the full hash chain, that every record carries the server-issued `entry_id`, that the heads
   committed in heartbeats appear in the chain at the right place, record times against `official_start`
-  and `deadline_at`, and late arrivals. Results go to Supabase.
+  and `deadline_at`, and that nothing is stamped after `deadline_at`. Results go to Supabase.
 - **Where the verify job runs:** *(my call)* on an organizer's always-on machine or a small VPS, pulling
   from R2, for 6 November. It runs hourly from cron, checks only the new chunks of each open run, and
   does a full pass at seal; a $5–20/month VPS is enough. Cloudflare Containers can host it later. It
@@ -208,7 +207,7 @@ never touch the database.
 
 | Table | Key columns |
 |---|---|
-| `events` | `id`, `mode` (competition, dry_run, practice), `start_window_opens`, `start_window_closes`, `run_hours` (168), `grace_hours` |
+| `events` | `id`, `mode` (competition, dry_run, practice), `start_window_opens`, `start_window_closes`, `run_hours` (168) |
 | `tokens` | `member_id`, `token_hash`, `created_at`, `revoked_at` |
 | `runs` | `id`, `event_id`, `member_id`, `official_start`, `deadline_at`, `status` (open, sealed, abandoned, flagged), `repo_url`, `final_commit`, `final_commit_at`, `last_heartbeat_at`, latest totals, versions |
 | `entries` | `id` (the `entry_id`), `run_id`, `segment` (0, 1, 2 …), `opened_at`, `upload_offset`, `head`, `last_chunk_at`, `sealed_at` |
@@ -303,7 +302,7 @@ $1 per TB per month), possibly kept for good.
 5b. The deadline stop: at `deadline_at`, stop the agent, note the local repo's latest commit, seal.
 5c. *(Nice to have)* the login-item notification after a reboot.
 6. Pruning after verified acknowledgements, and the rolling reservation.
-7. Daemon config, receipt and acknowledgement verification: pin two keys. Verifier: report "pruned", report lateness. Export the `usage` and `tool_call` decoders.
+7. Daemon config, receipt and acknowledgement verification: pin two keys. Verifier: report "pruned", report any record stamped after `deadline_at`. Export the `usage` and `tool_call` decoders.
 
 ## 14. What the server needs
 
@@ -331,14 +330,13 @@ $1 per TB per month), possibly kept for good.
 3. **Second redaction on the server:** not built. `RULES.md` is reworded to "secrets are removed on your
    machine before anything is saved or sent".
    - Two more `RULES.md` rewordings come from this design. Line 54 allows several parallel entries;
-     the design allows one open run per account. Line 43 says "no build grace period"; the design adds a
-     48-hour window for late delivery of records made before the deadline *(owner to confirm)*.
+     the design allows one open run per account. Line 43 ("no build grace period") stays as it is.
 4. **Practice and dry runs:** yes, as in section 9. Funding practice tokens is a separate question.
 5. **Public per-run numbers:** yes, shown publicly (the site may choose to show daily updates). The
    infrastructure supports 5-minute updates. The terms say run statistics are public.
 6. **Deadline:** at 168 hours it's over. The submission is the repo's latest commit on its default branch,
-   recorded by the server at the deadline. Late delivery of records made before the deadline is accepted
-   for 48 hours *(author's reading; confirm)*.
+   recorded by the server at the deadline. No late uploads: only the final chunk and seal made at the
+   deadline, within a 15-minute transfer window (section 3, step 6).
 7. **Logistics:**
    - Cloudflare: the existing paid ($5) account. Domain: e.g. `ingest.agentcommunity.org`.
    - Supabase: the existing paid project (about 30,000 members).
