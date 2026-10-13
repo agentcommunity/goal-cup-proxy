@@ -17,8 +17,8 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
    [docs/SERVER-DESIGN.md](docs/SERVER-DESIGN.md). Done: `goalcup login` (section 13, item 1); the run opened on the server before the
    launch, with the server's entry id and a signed start receipt (item 2,
    [UPLOAD-API](docs/UPLOAD-API.md)); the uploader in `goalcup start` and `goalcup upload`
-   (item 3). Next: heartbeats, outages, `goalcup continue`, the deadline stop and pruning
-   (items 4 to 7). The Worker is built and tested locally
+   (item 3); heartbeats and the deadline stop (items 4 and 5b, without live totals). Next:
+   outages, `goalcup continue`, live totals, pruning and pinned keys (items 4 to 7). The Worker is built and tested locally
    ([server/worker](server/worker/README.md)); what the owner must create before it is deployed
    is listed there.
 3. **One admin page.** Entries, first prompt, last upload, outage flags. Researchers read R2

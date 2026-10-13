@@ -309,6 +309,16 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   on stderr, when the server refuses the request itself (a revoked token, a closed run, a TLS
   certificate it cannot trust) or the local chain no longer continues the server's copy; the
   run is still complete on this machine.
+- <a id="deadline"></a>**The deadline.** A run on the server lasts until its `deadline_at` (168
+  hours after its official start) and not a second longer, in whatever state the agent is in.
+  While it records, `goalcup start` sends the server a heartbeat every 5 minutes; once the server
+  answers that the deadline has come, or, without a network, once the run's length has passed
+  on this machine's clock (which keeps counting while the machine sleeps), it stops the agent
+  there and then and seals the run. It then tells the server where the chain ends and which
+  commit the workspace repository had checked out (the final heartbeat), and uploads the rest
+  up to that end; `goalcup upload <entry>` finishes that later if the network was down. The
+  server accepts nothing past that end, and a run not sealed on the server 24 hours after its
+  deadline is abandoned. There is no late window.
 - <a id="server"></a>**The server.** The upload Worker (Cloudflare Workers, R2, Supabase) is in
   [server/worker](server/worker/README.md), TypeScript, runnable on this machine with
   `wrangler dev` (`cd server/worker && npm install && npm test`); nothing is deployed. The
