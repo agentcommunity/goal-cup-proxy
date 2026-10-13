@@ -874,7 +874,7 @@ fn create_and_gate<'a>(
     // With a server, the run is opened there before the daemon creates anything: the
     // server issues the entry id every record carries.
     let opened = match upload {
-        Some(upload) => match upload.open(cx, &run, &session_id) {
+        Some(upload) => match upload.open(cx, &run, &session_id, &harness_version) {
             Ok(opened) => Some(opened),
             Err(error) => {
                 let _ = run.remove();
@@ -1979,6 +1979,7 @@ impl Uploading {
         cx: &CaptureRun<'_>,
         run: &RunDir,
         session_id: &str,
+        harness_version: &str,
     ) -> Result<OpenedRun, CliError> {
         let c = cx.connector;
         let request = crate::upload::api::OpenRunRequest {
@@ -1987,11 +1988,7 @@ impl Uploading {
             connector_dir_sha256: c.loaded.connector_dir_sha256.clone(),
             workspace: run.workspace.display().to_string(),
             session_id: session_id.to_string(),
-            harness_version: cx
-                .profile
-                .resolved_executable(goalcup_protocol::harness::PlatformKey::current())
-                .version
-                .to_string(),
+            harness_version: harness_version.to_string(),
             tracer_version: crate::CLI_VERSION.to_string(),
             repo_url: self.repo_url.clone(),
         };
