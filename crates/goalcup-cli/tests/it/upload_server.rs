@@ -944,7 +944,7 @@ fn a_seal_after_the_deadline_needs_the_chain_up_to_the_committed_end() {
 }
 
 #[test]
-fn a_seal_after_the_deadline_with_no_final_is_409() {
+fn a_seal_after_the_deadline_with_no_final_waits_for_it() {
     let rig = short_run();
     let (run, entry) = rig.open_ok();
     rig.wait_for_stop(&run);
@@ -954,7 +954,8 @@ fn a_seal_after_the_deadline_with_no_final_is_409() {
         TOKEN,
         &seal_body(&entry),
     );
-    assert_err(&r, 409, "conflict");
+    assert_err(&r, 503, "awaiting_final");
+    assert_eq!(r.retry_after.as_deref(), Some("1"));
 }
 
 #[test]

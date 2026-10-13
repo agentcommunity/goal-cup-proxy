@@ -42,7 +42,7 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   //    has committed where the chain ends (until then: wait, 503). Once an end is committed, whether
   //    or not the deadline has passed, nothing may go beyond it (410).
   if (run.final === null && isStopped(ctx, run)) {
-    throw new ApiError(503, "maintenance", "The run is past its deadline: send the final heartbeat, then upload the rest.", {
+    throw new ApiError(503, "awaiting_final", "The run is past its deadline: send the final heartbeat, then upload the rest.", {
       "retry-after": String(FINAL_RETRY_AFTER),
     });
   }

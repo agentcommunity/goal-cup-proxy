@@ -565,14 +565,14 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
 
   test("a chunk past the deadline with no final heartbeat is 503 with Retry-After, and nothing is stored", async () => {
     const r = await put(alice, ALICE, a2, a1.length);
-    assertError(r, 503, "maintenance");
+    assertError(r, 503, "awaiting_final");
     assert.equal(r.headers.get("retry-after"), "60");
     assert.equal((await get(alice, ALICE)).body.offset, a1.length);
   });
 
   test("the seal past the deadline with no final heartbeat is 503 with Retry-After", async () => {
     const r = await seal(bob, BOB);
-    assertError(r, 503, "maintenance");
+    assertError(r, 503, "awaiting_final");
     assert.equal(r.headers.get("retry-after"), "60");
   });
 

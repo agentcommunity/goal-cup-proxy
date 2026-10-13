@@ -32,6 +32,7 @@ tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests r
   | 422 | `digest_mismatch` | The body's SHA-256 is not `Goalcup-Sha256`. Nothing was stored. | retries with backoff |
   | 429 | `rate_limited` | Too many calls. `Retry-After` says when. | retries with backoff |
   | 503 | `maintenance` | The server asks every tracer to wait. `Retry-After` says when. | retries with backoff |
+  | 503 | `awaiting_final` | Past `deadline_at`, and the final heartbeat has not arrived. | sends it, then retries |
 
   Any other 5xx, and any network failure, is retried with backoff. Backoff starts at 60 s,
   doubles to at most 15 min, with up to 25 % random jitter, and never waits less than a
@@ -188,9 +189,10 @@ no late window.
   end.** After `deadline_at`, a chunk is accepted only once a final heartbeat has committed
   `(seq, head)`, and only if its `Goalcup-Last-Seq` is at most that `seq` (and the chunk ending at
   that `seq` has that `head`); anything else is `410 closed`. Before the final heartbeat arrives,
-  a chunk after `deadline_at` is `503` with `Retry-After`, so a tracer still uploading asks again
-  after it has sent its final heartbeat. The seal is accepted after `deadline_at` only when the
-  server holds the chain up to the committed end.
+  a chunk after `deadline_at` is `503 awaiting_final` with `Retry-After`, so a tracer still
+  uploading asks again after it has sent its final heartbeat. The seal after `deadline_at` is
+  likewise `503 awaiting_final` before the final heartbeat, and `409` until the server holds the
+  chain up to the committed end.
 - **Before `deadline_at`** a run that has a committed end accepts nothing past it either.
 - **Abandoned.** A run with no seal 24 hours after `deadline_at` is abandoned: it accepts
   nothing more (`410`), and it no longer counts as the account's open run.

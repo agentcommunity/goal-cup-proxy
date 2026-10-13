@@ -299,7 +299,7 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   // committed end, so a check against this snapshot cannot be overtaken.)
   if (isStopped(ctx, run)) {
     if (run.final === null) {
-      throw new ApiError(503, "maintenance", "Send the final heartbeat before sealing a run past its deadline.", { "retry-after": String(FINAL_RETRY_AFTER) });
+      throw new ApiError(503, "awaiting_final", "Send the final heartbeat before sealing a run past its deadline.", { "retry-after": String(FINAL_RETRY_AFTER) });
     }
     if (run.next_seq - 1 !== run.final.seq || run.head !== run.final.head) {
       throw conflict("The server does not hold the chain up to the end the final heartbeat committed yet; read the position and upload the rest.");
