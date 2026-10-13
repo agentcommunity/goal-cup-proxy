@@ -915,7 +915,9 @@ carry their own amendments and point here for shared text.
 > for the shipped `codex` and `claude-code` families. `CaptureWorkspaceRequest` requires
 > `config_home: String` alongside `run_home`; both are absolute. The daemon rejects participant
 > HOME itself and HOME/.codex or HOME/.claude descendants, including canonical/symlink aliases,
-> before creating capture artifacts or reading sources. The tracker prepares isolated source
+> before creating capture artifacts or reading sources. (Since 2026-10-14 those descendants are
+> every loaded connector's `real_dirs`, which name `.codex`, `.claude` and `.hermes`; no harness
+> home is spelled in the daemon.) The tracker prepares isolated source
 > roots before spawn. `CaptureLaunchRequest` gains serde-default `native_scope: Option<String>`.
 > Codex binds the first complete `thread.started.thread_id` on stdout; Claude binds its
 > preassigned session id. Codex's stdout tee scans lines up to 1 MiB, forwards every byte

@@ -269,13 +269,6 @@ pub const PROVIDER_PREFIXES: &[(&str, &str)] = &[
     ("CLOUD_ML_", "configures a model or cloud provider"),
 ];
 
-/// Namespaces reserved for one harness, which the capture launch configures itself. Not applied
-/// to `home.env`, which is the harness's own home variable (`HERMES_HOME`).
-pub const HARNESS_RESERVED_PREFIXES: &[(&str, &str)] = &[(
-    "HERMES_",
-    "is reserved for the Hermes harness, which the capture launch configures itself",
-)];
-
 /// Which field an environment name is being checked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -284,9 +277,9 @@ pub enum EnvContext {
     /// [`env_value_denied`].
     CaptureEnv,
     /// `capture.home.env`, the variable pointed at the config home. The substring rules, the
-    /// pinned, trust and injection lists and the injection and provider prefixes apply;
-    /// [`HARNESS_RESERVED_PREFIXES`] and the self-pin row do not (so `HERMES_HOME` passes), and
-    /// `SHELL` is refused.
+    /// pinned, trust and injection lists and the injection and provider prefixes apply; the
+    /// home-relocator rule and the self-pin row do not (so `HERMES_HOME` passes), and `SHELL` is
+    /// refused.
     HomeEnv,
 }
 
@@ -437,8 +430,8 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
     if upper.contains("KEYLOG") {
         return Some("writes TLS secrets to a file");
     }
-    // The exact names come before the prefixes, so a name that is both (`HERMES_CA_BUNDLE` is
-    // a trust variable and in the `HERMES_` namespace) is told the more specific reason.
+    // The exact names come before the prefixes and suffixes, so a name that matches both is
+    // told the more specific reason.
     let registry_row = ca_registry_mode(&upper).is_some();
     if registry_row || TRUST_ONLY.contains(&upper.as_str()) {
         return Some(if registry_row {
@@ -467,14 +460,7 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
     if PINNED_ENV.contains(&upper.as_str()) {
         return Some("is pinned by the capture launch itself");
     }
-    let prefixes = INJECTION_PREFIXES
-        .iter()
-        .chain(PROVIDER_PREFIXES.iter())
-        .chain(
-            HARNESS_RESERVED_PREFIXES
-                .iter()
-                .filter(|_| ctx == EnvContext::CaptureEnv),
-        );
+    let prefixes = INJECTION_PREFIXES.iter().chain(PROVIDER_PREFIXES.iter());
     for (prefix, why) in prefixes {
         if upper.starts_with(prefix) {
             return Some(why);
@@ -485,6 +471,19 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
     // refuses (`AUTH_URL`, `GOALCUP_UPLOAD_URL`, `PIP_INDEX_URL`) keeps its more specific reason.
     if upper.ends_with("_URL") {
         return Some("redirects an endpoint (D1)");
+    }
+    // A harness's own state relocator is `capture.home.env`, which the launch points at the
+    // isolated config home; in `capture.env` any home or config-dir name (`HERMES_HOME`,
+    // `GH_CONFIG_DIR`) would move some program's state somewhere the run does not isolate. Last,
+    // so a more specific reason (`XDG_CONFIG_HOME`, a `GIT_` name) wins.
+    if ctx == EnvContext::CaptureEnv
+        && ["_HOME", "_CONFIG_DIR", "_CONFIG_HOME"]
+            .iter()
+            .any(|s| upper.ends_with(s))
+    {
+        return Some(
+            "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
+        );
     }
     // A server named without a scheme (`DEEPSEEK_API_BASE = "api.example.org"`): the value rule
     // refuses `://`, not a bare host, so the name is refused too (D51).

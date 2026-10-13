@@ -238,10 +238,6 @@ const CAPTURE_STARTUP: Duration = Duration::from_secs(5);
 /// bounds a different thing, even though both are five seconds.
 const GATE_READY_WITHIN: Duration = Duration::from_secs(5);
 
-/// How long Codex's launch waits for its scope identity (the `thread.started` event on stdout)
-/// before recording the launch without one.
-const CODEX_SCOPE_WAIT: Duration = Duration::from_secs(120);
-
 /// A named point in the capture launch where a test can hold this process (CONTRACTS.md, C6 local finish budget and capture spawn gate).
 ///
 /// Compiled only under `test-support`: a shipped build has the no-op below and nothing reads
@@ -910,7 +906,9 @@ fn create_and_gate<'a>(
         if crate::arming::interrupted() {
             return Err(interrupted_refusal());
         }
-        let scope_deadline = std::time::Instant::now() + CODEX_SCOPE_WAIT;
+        // A `stdout_json` launch waits this long for its identity event (`thread.started` for
+        // Codex) before recording the launch without one; the connector may set it.
+        let scope_deadline = std::time::Instant::now() + profile.identity.stdout_wait();
         // The only way a capture child is spawned (D40): forked and parked before `exec`,
         // and released only once its registration is durable. Its pipes are the one
         // manifest-derived `StreamPlan` decision.

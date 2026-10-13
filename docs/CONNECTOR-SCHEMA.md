@@ -234,6 +234,7 @@ DECISIONS change, not a connector field value.
 | `capture.identity.match_field` | `stdout_json` only; required there | Dot path of 1–4 nonempty `[A-Za-z0-9_]+` segments. |
 | `capture.identity.match_value` | `stdout_json` only; required there | 1–64 bytes, no control character. |
 | `capture.identity.id_field` | `stdout_json` only; required there | Same dot-path grammar as `match_field`. |
+| `capture.identity.wait_seconds` | `stdout_json` only; default 120 | 1–600: how long the launch waits for the identity event before recording the launch without one. |
 | `capture.identity.prefix` | `stderr_line` only; required there | 1–32 printable ASCII bytes. |
 | `capture.identity.grammar` | `stderr_line` only; required there | Closed values: `timestamp-hex`, `token`. |
 
