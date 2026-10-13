@@ -398,8 +398,9 @@ impl Uploader {
     /// Send every complete line, chunk by chunk, once, within `deadline` if one is given.
     fn attempt(&mut self, deadline: Option<Instant>) -> Attempt {
         loop {
+            // Only a finish has a deadline; once it has passed, the rest is `goalcup upload`'s.
             let Some(timeout) = left(deadline, self.policy.put_timeout) else {
-                return Attempt::Retry(None, "the time left to finish ran out".to_string());
+                return Attempt::Stop("the time left to finish ran out".to_string());
             };
             let chunk = match build_chunk(&self.chain(), &self.pos, &self.spool) {
                 Ok(Some(chunk)) => chunk,
