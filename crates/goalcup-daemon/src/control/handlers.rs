@@ -394,9 +394,8 @@ pub(super) async fn register_process(
     };
     if let Some(phase) = exact_accepted_replay {
         if phase == ProcessHandoffPhase::Registered {
-            // A live runtime does not need to be acquired for an idempotent registry ACK;
-            // a concurrent pump hold must not turn the lost-204 retry ambiguous. If there
-            // is no runtime, only a sealed row may acknowledge without monitoring.
+            // A live runtime does not need to be acquired for an idempotent registry ACK.
+            // If there is no runtime, only a sealed row may acknowledge without monitoring.
             if state.daemon.has_entry_runtime(&id) {
                 return StatusCode::NO_CONTENT.into_response();
             }

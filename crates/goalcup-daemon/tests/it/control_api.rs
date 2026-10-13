@@ -401,11 +401,14 @@ fn every_control_error_variant_maps_to_exactly_one_http_status() {
 /// every `DaemonError` variant, not over the five a handler happens to raise today.
 ///
 /// `control::every_daemon_error()` is generated from the same rows `control::control_error`
-/// matches on, and that match has no `_` arm. A seventeenth variant therefore does not
+/// matches on, and that match has no `_` arm. A new variant therefore does not
 /// compile until it is mapped, and the mapping hands this test a sample of it.
 ///
 /// `ControlError::Busy` stays on the wire (the CLI retries on it) but no `DaemonError`
-/// maps to it any more; `Refused` is the entry's own state saying no and stays `conflict`.
+/// maps to it any more, and that is pinned below: the CLI's `NotAdmitted` is exactly `busy`,
+/// `unauthorized` and a refused connection, which holds only while no daemon error, a capture
+/// finish stage's included, answers `busy`. `Refused` is the entry's own state saying no and
+/// stays `conflict`.
 #[test]
 fn the_daemon_s_own_errors_become_the_contract_s_codes() {
     use goalcup_daemon::DaemonError;
@@ -444,6 +447,7 @@ fn the_daemon_s_own_errors_become_the_contract_s_codes() {
             "{} is not a code this daemon can give a status",
             mapped.code()
         );
+        assert_ne!(mapped.code(), "busy", "no daemon error answers `busy`");
     }
 
     // And the codes the CLI can rebuild round-trip through `from_code`. `unreachable`,
