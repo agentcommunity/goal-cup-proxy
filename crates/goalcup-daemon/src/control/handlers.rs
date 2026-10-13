@@ -327,9 +327,16 @@ pub(super) async fn record_capture_launch(
         return ControlErrorResponse::new(ControlError::Malformed(format!("launch {error}")))
             .into_response();
     }
-    match state.daemon.record_capture_launch(&id, &request) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => ControlErrorResponse::from(e).into_response(),
+    // The launch hashes the harness's binaries (D53), seconds of file reads at worst, so it runs
+    // on the blocking pool rather than on a control-API worker.
+    let daemon = state.daemon.clone();
+    match tokio::task::spawn_blocking(move || daemon.record_capture_launch(&id, &request)).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => ControlErrorResponse::from(e).into_response(),
+        Err(join) => ControlErrorResponse::new(ControlError::Internal(format!(
+            "the launch did not complete: {join}"
+        )))
+        .into_response(),
     }
 }
 

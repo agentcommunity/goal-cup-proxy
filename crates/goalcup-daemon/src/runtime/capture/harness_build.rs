@@ -12,7 +12,10 @@
 //!
 //! The image is read only while the pid is still the registered instance, checked before and
 //! after the read. A digest that cannot be taken is absent, never guessed; nothing here refuses
-//! a launch.
+//! a launch. Stated residuals: the image is whatever the registered pid runs at the launch
+//! post, so a wrapper that `exec`s again (`#!/usr/bin/env node`) may be seen before or after
+//! that second `exec`, and a native binary a wrapper spawns as a child is not hashed; on Linux a
+//! process that made itself non-dumpable leaves `/proc/<pid>/exe` unreadable to the daemon.
 
 use goalcup_protocol::capture::HarnessBuildV1;
 use goalcup_protocol::process::{ProcessHandle, ProcessInstanceStatus, process_instance_status};
@@ -20,8 +23,9 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// The largest file hashed: a harness binary is 100 to 200 MB today.
-const MAX_HASHED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// The largest file hashed: a harness binary is 100 to 200 MB today, and a larger file the
+/// launcher registered would only keep the launch post waiting.
+const MAX_HASHED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Observe the build `handle` names. Slow (it reads whole binaries), so callers hold no lock.
 pub(super) fn observe(handle: &ProcessHandle) -> HarnessBuildV1 {
@@ -80,9 +84,15 @@ fn image_path(_pid: u32) -> Option<PathBuf> {
 }
 
 /// The SHA-256 of a regular file, read to its end, or `None` when it is not one, cannot be
-/// read, or is larger than [`MAX_HASHED_BYTES`].
+/// read, or is larger than [`MAX_HASHED_BYTES`]. Opened non-blocking, so a path the launcher
+/// registered that names a FIFO or a device cannot stall the daemon before the check.
 fn sha256_file(path: &Path) -> Option<String> {
-    let file = std::fs::File::open(path).ok()?;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)
+        .ok()?;
     let metadata = file.metadata().ok()?;
     if !metadata.is_file() || metadata.len() > MAX_HASHED_BYTES {
         return None;
@@ -147,6 +157,17 @@ mod tests {
         child.wait().unwrap();
         // Gone: no image digest, and no guess.
         assert_eq!(observe(&handle(child.id(), "sleep")).image_sha256, None);
+    }
+
+    #[test]
+    fn a_fifo_or_a_directory_is_no_digest_and_does_not_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("fifo");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert_eq!(sha256_file(&fifo), None);
+        assert_eq!(sha256_file(dir.path()), None);
     }
 
     #[test]

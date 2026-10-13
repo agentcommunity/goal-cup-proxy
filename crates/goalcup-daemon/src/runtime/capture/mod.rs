@@ -673,11 +673,19 @@ impl Daemon {
         capture.require_live_capture_authority()?;
         // D53: which build ran, read before the run lock is taken, because it reads whole
         // binaries. The launch post follows the release, so the registered process has `exec`ed.
-        let harness_build = self
-            .registry()
-            .get(entry_id)?
-            .and_then(|row| row.last_process)
-            .map(|handle| Box::new(harness_build::observe(&handle)));
+        // A retried post of a launch already chained is answered below without a second read.
+        let already_launched = matches!(
+            &capture.lock().goal,
+            Goal::Launched(key) if *key == request.goal_stream
+        );
+        let harness_build = if already_launched {
+            None
+        } else {
+            self.registry()
+                .get(entry_id)?
+                .and_then(|row| row.last_process)
+                .map(|handle| Box::new(harness_build::observe(&handle)))
+        };
         let mut run = capture.lock();
         capture.record_launch(&mut run, request, harness_build)?;
         run.entry = self.registry().update(entry_id, |entry| {

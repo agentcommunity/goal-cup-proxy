@@ -328,8 +328,9 @@ pub struct HarnessBuildV1 {
     pub program_sha256: Option<String>,
     /// SHA-256 of the running process's executable image, 64 lowercase hex: on Linux the file
     /// `/proc/<pid>/exe` opens, on macOS the path `proc_pidpath` names. For an interpreted
-    /// harness this is the interpreter. Absent when the process had already gone or was not the
-    /// registered instance.
+    /// harness this is the interpreter, and for a wrapper that `exec`s again it may be either
+    /// stage. Absent when the process had already gone, was not the registered instance, or its
+    /// image could not be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_sha256: Option<String>,
     /// The daemon's platform, `<os>-<arch>` as Rust spells them (`macos-aarch64`).
