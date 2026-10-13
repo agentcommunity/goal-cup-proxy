@@ -9,14 +9,19 @@
 //     reports why not and changes nothing.
 
 import type { Ack, StartReceipt } from "./sign.ts";
-import { addHours, parseTime } from "./util.ts";
+import { addSeconds, parseTime } from "./util.ts";
 
-/** A run that is still unsealed this many hours after its `deadline_at` is abandoned. */
-export const ABANDON_AFTER_HOURS = 24;
+/** A run that is still unsealed this long (24 hours) after its `deadline_at` is abandoned. */
+export const ABANDON_AFTER_SECONDS = 24 * 3600;
 
-/** True once `now` is more than ABANDON_AFTER_HOURS past `deadlineAt`. */
-export function isAbandonable(deadlineAt: string, now: Date): boolean {
-  return now.getTime() > addHours(parseTime(deadlineAt), ABANDON_AFTER_HOURS).getTime();
+/** True once `now` is more than `afterSeconds` past `deadlineAt`. (Only tests pass a shorter time.) */
+export function isAbandonable(deadlineAt: string, now: Date, afterSeconds: number = ABANDON_AFTER_SECONDS): boolean {
+  return now.getTime() > addSeconds(parseTime(deadlineAt), afterSeconds).getTime();
+}
+
+/** True once the server's clock is at or past `deadlineAt`: the run is over. */
+export function isPastDeadline(deadlineAt: string, now: Date): boolean {
+  return now.getTime() >= parseTime(deadlineAt).getTime();
 }
 
 export type RunStatus = "open" | "sealed" | "abandoned";
@@ -25,6 +30,12 @@ export type RunStatus = "open" | "sealed" | "abandoned";
 export const FIRST_SEQ = 0;
 /** The head before any record: 64 zeros, the chain's genesis. */
 export const GENESIS = "0".repeat(64);
+
+/** The end of the run, committed by the final heartbeat: the last record the server will ever accept. */
+export interface FinalRow {
+  seq: number;
+  head: string;
+}
 
 export interface RunRow {
   run_id: string;
@@ -46,6 +57,8 @@ export interface RunRow {
   next_seq: number;
   head: string;
   last_ack: Ack | null;
+  /** Set once, by the final heartbeat. */
+  final: FinalRow | null;
   // Set once.
   receipt: StartReceipt | null;
   seal_sha256: string | null;
@@ -102,8 +115,29 @@ export interface CommitChunkArgs {
   run_id: string;
   chunk: ChunkRecord;
 }
-/** `conflict`: offset, prev or first_seq no longer match the run (someone advanced it first). */
-export type CommitChunkResult = "committed" | "conflict" | "closed" | "not_found";
+/**
+ * `conflict`: offset, prev or first_seq no longer match the run (someone advanced it first).
+ * `beyond_final`: the chunk goes past the end the final heartbeat committed.
+ */
+export type CommitChunkResult = "committed" | "conflict" | "beyond_final" | "closed" | "not_found";
+
+export interface HeartbeatArgs {
+  member_id: string;
+  run_id: string;
+  entry_id: string;
+  seq: number;
+  head: string;
+  offset_local: number;
+  final: boolean;
+  repo_head: string | null; // 40 hex, final only
+  at: string;
+}
+/**
+ * `recorded`: an ordinary heartbeat was noted. `final_committed` / `final_existing`: the final
+ * heartbeat's (seq, head) is now / already was the committed end. `final_conflict`: a different
+ * end is committed, or the chain the server holds already contradicts this one. `closed`: abandoned.
+ */
+export type HeartbeatResult = "recorded" | "final_committed" | "final_existing" | "final_conflict" | "closed" | "not_found";
 
 export interface SealArgs {
   member_id: string;
@@ -122,6 +156,10 @@ export interface Db {
   memberForToken(tokenSha256: string): Promise<string | null>;
   openRun(args: OpenRunArgs): Promise<OpenRunResult>;
   getRun(memberId: string, runId: string): Promise<RunRow | null>;
+  /** Note a heartbeat; a final one commits the end of the run (once). */
+  recordHeartbeat(args: HeartbeatArgs): Promise<HeartbeatResult>;
+  /** Abandon an open, unsealed run whose time ran out; true if it was abandoned now. */
+  expireRun(memberId: string, runId: string, at: string): Promise<boolean>;
   /** A stored chunk that starts at `offset`, or null. */
   getChunk(memberId: string, runId: string, offset: number): Promise<ChunkRecord | null>;
   storeReceipt(memberId: string, runId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult>;

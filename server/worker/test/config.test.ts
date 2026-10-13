@@ -66,13 +66,27 @@ test("an unknown backend is refused", async () => {
 });
 
 test("config defaults and validation", () => {
-  assert.deepEqual(readConfig(baseEnv), { eventId: "practice", runHours: 168, graceHours: 48, githubCheck: false });
+  assert.deepEqual(readConfig(baseEnv), { eventId: "practice", runSeconds: 168 * 3600, abandonAfterSeconds: 86400, githubCheck: false });
+  assert.equal(readConfig({ ...baseEnv, RUN_HOURS: "2" }).runSeconds, 7200);
   assert.equal(readConfig({ ...baseEnv, GITHUB_CHECK: "on" }).githubCheck, true);
   assert.equal(readConfig({ ...baseEnv, GITHUB_CHECK: "yes" }).githubCheck, false);
   assert.throws(() => readConfig({ ...baseEnv, EVENT_ID: "../x" }), ApiError);
   assert.throws(() => readConfig({ ...baseEnv, RUN_HOURS: "0" }), ApiError);
   assert.throws(() => readConfig({ ...baseEnv, RUN_HOURS: "abc" }), ApiError);
-  assert.equal(readConfig({ ...baseEnv, GRACE_HOURS: "0" }).graceHours, 0);
+});
+
+test("RUN_SECONDS and ABANDON_AFTER_SECONDS are honoured only with the local backend", () => {
+  const local = { ...baseEnv, DB_BACKEND: "local" };
+  assert.equal(readConfig({ ...local, RUN_SECONDS: "3" }).runSeconds, 3);
+  assert.equal(readConfig({ ...local, RUN_SECONDS: "3", RUN_HOURS: "1" }).runSeconds, 3);
+  assert.equal(readConfig({ ...local, ABANDON_AFTER_SECONDS: "5" }).abandonAfterSeconds, 5);
+  // On any other backend their presence is a mistake, so the Worker refuses rather than ignoring them.
+  for (const name of ["RUN_SECONDS", "ABANDON_AFTER_SECONDS"] as const) {
+    assert.throws(() => readConfig({ ...baseEnv, [name]: "3" }), (e) => e instanceof ApiError && e.code === "misconfigured");
+    assert.throws(() => readConfig({ ...baseEnv, DB_BACKEND: "supabase", [name]: "3" }), ApiError);
+  }
+  assert.throws(() => readConfig({ ...local, RUN_SECONDS: "0" }), ApiError);
+  assert.throws(() => readConfig({ ...local, RUN_SECONDS: "x" }), ApiError);
 });
 
 test("repo_url shape", () => {

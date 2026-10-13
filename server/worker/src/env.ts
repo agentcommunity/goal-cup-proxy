@@ -6,9 +6,11 @@ export interface Env {
 
   /** Event that new runs belong to, e.g. "practice". */
   EVENT_ID: string;
-  /** Run length in hours (default 168) and grace for late uploads after the deadline (default 48). */
+  /** Run length in hours (default 168). */
   RUN_HOURS?: string;
-  GRACE_HOURS?: string;
+  /** Tests only, DB_BACKEND=local only: run length in seconds, and seconds after the deadline until an unsealed run is abandoned (default 24 h). */
+  RUN_SECONDS?: string;
+  ABANDON_AFTER_SECONDS?: string;
 
   /** "supabase" (default) or "local" (wrangler dev and tests only). */
   DB_BACKEND?: string;

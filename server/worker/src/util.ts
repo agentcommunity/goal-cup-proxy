@@ -43,8 +43,8 @@ export function parseTime(s: string): Date {
   return new Date(s);
 }
 
-export function addHours(d: Date, hours: number): Date {
-  return new Date(d.getTime() + Math.round(hours * 3600) * 1000);
+export function addSeconds(d: Date, seconds: number): Date {
+  return new Date(d.getTime() + Math.round(seconds) * 1000);
 }
 
 /** Prefix + 16 lowercase hex digits from the platform CSPRNG: "r…" run ids, "e…" entry ids. */

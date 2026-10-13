@@ -98,11 +98,10 @@ test("abandonRun -> upload_abandon_run", async () => {
 });
 
 test("commitChunk -> upload_commit_chunk(p_chunk)", async () => {
-  const calls = stub("committed", "conflict", "closed", "not_found");
-  assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk }), "committed");
-  assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk }), "conflict");
-  assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk }), "closed");
-  assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk }), "not_found");
+  const calls = stub("committed", "conflict", "beyond_final", "closed", "not_found");
+  for (const want of ["committed", "conflict", "beyond_final", "closed", "not_found"]) {
+    assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk }), want);
+  }
   assert.deepEqual(calls[0], { fn: "upload_commit_chunk", args: { p_member_id: "m", p_run_id: "r1", p_chunk: chunk } });
 });
 
@@ -119,6 +118,28 @@ test("sealRun -> upload_seal_run", async () => {
       p_seal_key: "sk", p_baseline_key: "bk", p_sealed_at: "t",
     },
   });
+});
+
+test("recordHeartbeat -> upload_heartbeat", async () => {
+  const calls = stub("recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found");
+  const a = { member_id: "m", run_id: "r1", entry_id: "e1", seq: 9, head: H("9"), offset_local: 1234, final: true, repo_head: "f".repeat(40), at: "t" };
+  for (const want of ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"]) {
+    assert.equal(await db().recordHeartbeat(a), want);
+  }
+  assert.deepEqual(calls[0], {
+    fn: "upload_heartbeat",
+    args: {
+      p_member_id: "m", p_run_id: "r1", p_entry_id: "e1", p_seq: 9, p_head: H("9"), p_offset_local: 1234,
+      p_final: true, p_repo_head: "f".repeat(40), p_at: "t",
+    },
+  });
+});
+
+test("expireRun -> upload_expire_run", async () => {
+  const calls = stub("expired", "not_expired");
+  assert.equal(await db().expireRun("m", "r1", "t"), true);
+  assert.equal(await db().expireRun("m", "r1", "t"), false);
+  assert.deepEqual(calls[0], { fn: "upload_expire_run", args: { p_member_id: "m", p_run_id: "r1", p_at: "t" } });
 });
 
 test("an answer outside the agreed words is a 502, not a guess", async () => {

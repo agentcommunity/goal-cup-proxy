@@ -58,12 +58,13 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 |---|---|---|
 | `EVENT_ID` | none (required) | Event that new runs belong to, e.g. `practice`. Lowercase letters, digits, dashes; it becomes part of every R2 key. One deployment serves one event for now. |
 | `RUN_HOURS` | `168` | `deadline_at` = `official_start` + this many hours. |
-| `GRACE_HOURS` | `48` | After `deadline_at` plus this, chunks, receipts and seals get `410`. Which records count as late is the verify job's business. |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local`. `local` is for `wrangler dev` and tests; it refuses to work without `DEV_TOKENS`. Never set it in the deployed `wrangler.toml`. |
 | `DEV_TOKENS` | none | Local backend only: `token1:member1,token2:member2`. |
 | `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask the GitHub API that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off so they need no network). A missing or private repository is `400`; GitHub being unreachable or rate-limiting is `502`, which the tracer retries. |
 | `MAINTENANCE` | off | `on` makes every call answer `503 maintenance` with `Retry-After`, before authentication and before any body is read. |
 | `MAINTENANCE_RETRY_AFTER` | `300` | Seconds for that header. |
+| `RUN_SECONDS` | none | **Tests only, honoured only with `DB_BACKEND=local`** (anywhere else the Worker answers `500 misconfigured`): run length in seconds, replacing `RUN_HOURS`, so a test can run a whole deadline in seconds. |
+| `ABANDON_AFTER_SECONDS` | `86400` | **Tests only, same rule as `RUN_SECONDS`:** how long after `deadline_at` an unsealed run is abandoned (production: 24 hours, fixed). |
 
 Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 
@@ -76,8 +77,9 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 
 ## What is checked where
 
-- **Before a chunk body is read:** token, run exists and is this member's, run is open and inside
-  its grace period, `Content-Length` present and at most 33,554,432, `Content-Type` and all seven
+- **Before a chunk body is read:** token, run exists and is this member's, run is open, the deadline rules
+  below allow it (after `deadline_at`: `503` until the final heartbeat, then nothing past the committed
+  end), `Content-Length` present and at most 33,554,432, `Content-Type` and all seven
   `Goalcup-*` headers well formed, entry id matches, maintenance switch.
 - **Then:** a chunk at an offset the server already holds with the same `Goalcup-Length` and
   `Goalcup-Head` is answered `200` with the stored ack (body unread); otherwise offset, `prev` and
@@ -125,19 +127,19 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
      the proposed SQL) that can execute the `goalcup.upload_*` functions and nothing else.
    - Optionally `GITHUB_TOKEN` (read access to public repositories).
 4. **Supabase, in the website repo** (the website repo owns the schema): migrations for schema
-   `goalcup` with row-level security, and the eight `upload_*` functions. `sql/proposed-goalcup-functions.sql`
+   `goalcup` with row-level security, and the ten `upload_*` functions. `sql/proposed-goalcup-functions.sql`
    is a proposal to start from. It was run only against a throwaway local PostgreSQL, never against Supabase.
    The owner also has to decide or provide:
-   - the `events` rows (start window, `run_hours`, `grace_hours`) and the `EVENT_ID` the Worker
+   - the `events` rows (start window, `run_hours`) and the `EVENT_ID` the Worker
      is deployed with; the proposal checks that the event exists and that now is inside its start
-     window, while `RUN_HOURS` and `GRACE_HOURS` come from the Worker's variables;
+     window, while `RUN_HOURS` comes from the Worker's variables;
    - where "accepted the current terms" lives (the proposal assumes `goalcup.consents`);
    - token minting (only `sha256(token)` is stored);
    - exposing schema `goalcup` to PostgREST (RPC needs it) while revoking everything from `anon`
      and `authenticated`, as the proposal does.
 5. **Not built yet** (SERVER-DESIGN sections 4, 11): per-token rate limiting (`429`; do it with a
-   Cloudflare rate-limiting rule on the route), the per-run storage quota, heartbeats, outages,
-   `continue`, the verify job, `live.json`, monitoring. The organizer pause on new starts is not a
+   Cloudflare rate-limiting rule on the route), the per-run storage quota, live totals in the
+   heartbeat, outages, `continue`, the verify job, `live.json`, monitoring. The organizer pause on new starts is not a
    separate switch; `MAINTENANCE=on` stops everything.
 
 ## Decisions where the contract is silent
@@ -152,8 +154,8 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
 - `Content-Length` missing, malformed or zero is `400 malformed` (the contract's table has no 411).
   `Content-Type` other than `application/zstd` is `400`.
 - A `repo_url` that GitHub says is private or missing is `400 malformed`.
-- Receipt, seal and chunk calls on a run past `deadline_at` + `GRACE_HOURS` are `410 closed`;
-  `GET /v1/runs/{id}` always answers, whatever the status.
+- `GET /v1/runs/{id}` always answers, whatever the status. Receipts are still issued after
+  `deadline_at` (nothing in the contract forbids it and nothing depends on it).
 - Malformed run ids in a path (not `r` + 16 hex) are `404`; an unparseable chunk offset is `400`.
 - A wrong HTTP method on a known path is `405 method_not_allowed` (not in the contract's table).
 - The seal documents are stored in R2 as `seal-{sha256}.json` and `baseline-{sha256}.json` beside
@@ -162,5 +164,26 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
 - Database or storage failures are `502 upstream_error` and misconfiguration is
   `500 misconfigured` (the same generic sentence for every cause: the detail, which may hold
   configuration, goes to the Worker's log only); the tracer retries any 5xx.
-- An unsealed run more than 24 hours past its `deadline_at` is abandoned when its member next opens
-  a run, which frees the member's one open slot.
+- An unsealed run more than 24 hours past its `deadline_at` is abandoned the first time anyone
+  looks at it (any call naming the run) or its member opens a new run; it then answers `410` and
+  no longer holds the member's one open slot. There is no scheduled job.
+
+## The deadline, as implemented
+
+(`docs/UPLOAD-API.md`, "The deadline" and the heartbeat call.)
+
+- `POST /v1/runs/{id}/heartbeat` stores the last heartbeat and answers
+  `{"stop": <now >= deadline_at>, "deadline_at": …}`. `GET` reports the same `stop` and `final`.
+- The final heartbeat commits `(seq, head, repo_head)` once. The same `(seq, head)` again is `200`
+  (a different `repo_head` is ignored); a different one is `409`. It is also `409` if the server
+  already holds chain past that `seq`, or holds that `seq` with another head: such a final names a
+  chain that is not the one stored. It is accepted on an open or sealed run, never on an abandoned one.
+- A chunk after `deadline_at` while no final is committed is `503` (error code `maintenance`, the
+  contract's only 503 code) with `Retry-After: 60`. Once a final is committed, before or after the
+  deadline, a chunk ending after the committed `seq`, or ending at it with another head, is `410`.
+  The same rule runs again inside the atomic commit, so a final committed during an upload wins.
+- Seal after `deadline_at`: `503` with `Retry-After: 60` if no final is committed; `409` if the
+  stored chain has not reached the committed `(seq, head)` yet (the tracer reads the position and
+  uploads the rest); `200` otherwise. Before the deadline the seal has no such condition.
+- There is no grace period and no late window.
+- Testing a deadline takes seconds with the local-only `RUN_SECONDS` and `ABANDON_AFTER_SECONDS`.

@@ -1,6 +1,6 @@
 // Per-request context: parsed configuration, the database, the signer.
 
-import type { Db } from "./db.ts";
+import { ABANDON_AFTER_SECONDS, type Db } from "./db.ts";
 import { LocalDb } from "./db-local.ts";
 import { SupabaseDb } from "./db-supabase.ts";
 import type { Env } from "./env.ts";
@@ -9,8 +9,10 @@ import { Signer } from "./sign.ts";
 
 export interface Config {
   eventId: string;
-  runHours: number;
-  graceHours: number;
+  /** deadline_at = official_start + this. RUN_HOURS * 3600, or RUN_SECONDS (local backend only). */
+  runSeconds: number;
+  /** Unsealed this long after deadline_at -> abandoned. 24 h, or ABANDON_AFTER_SECONDS (local backend only). */
+  abandonAfterSeconds: number;
   githubCheck: boolean;
 }
 
@@ -24,13 +26,23 @@ export interface Ctx {
 
 const misconfigured = (message: string) => new ApiError(500, "misconfigured", message);
 
-function positiveNumber(name: string, raw: string | undefined, fallback: number, allowZero = false): number {
+function positiveNumber(name: string, raw: string | undefined, fallback: number, unit: string, max: number): number {
   if (raw === undefined || raw === "") return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0 || (n === 0 && !allowZero) || n > 24 * 365) {
-    throw misconfigured(`${name} must be a number of hours.`);
-  }
+  if (!Number.isFinite(n) || n <= 0 || n > max) throw misconfigured(`${name} must be a positive number of ${unit}.`);
   return n;
+}
+
+/**
+ * RUN_SECONDS and ABANDON_AFTER_SECONDS exist so tests can run a whole deadline in seconds.
+ * They are honoured only with DB_BACKEND=local; anywhere else their presence is a mistake worth
+ * stopping for, not a value to ignore.
+ */
+function testOnlySeconds(env: Env, name: "RUN_SECONDS" | "ABANDON_AFTER_SECONDS"): number | undefined {
+  const raw = env[name];
+  if (raw === undefined || raw === "") return undefined;
+  if (env.DB_BACKEND !== "local") throw misconfigured(`${name} is for DB_BACKEND=local (tests) only.`);
+  return positiveNumber(name, raw, 0, "seconds", 365 * 24 * 3600);
 }
 
 export function readConfig(env: Env): Config {
@@ -40,8 +52,8 @@ export function readConfig(env: Env): Config {
   }
   return {
     eventId: env.EVENT_ID,
-    runHours: positiveNumber("RUN_HOURS", env.RUN_HOURS, 168),
-    graceHours: positiveNumber("GRACE_HOURS", env.GRACE_HOURS, 48, true),
+    runSeconds: testOnlySeconds(env, "RUN_SECONDS") ?? positiveNumber("RUN_HOURS", env.RUN_HOURS, 168, "hours", 24 * 365) * 3600,
+    abandonAfterSeconds: testOnlySeconds(env, "ABANDON_AFTER_SECONDS") ?? ABANDON_AFTER_SECONDS,
     githubCheck: env.GITHUB_CHECK === "on",
   };
 }
@@ -65,7 +77,7 @@ export async function getDb(env: Env): Promise<Db> {
   const backend = env.DB_BACKEND ?? "supabase";
   try {
     if (backend === "supabase") return new SupabaseDb(env.SUPABASE_URL, env.SUPABASE_KEY);
-    if (backend === "local") return await LocalDb.create(env.TRACES, env.DEV_TOKENS);
+    if (backend === "local") return await LocalDb.create(env.TRACES, env.DEV_TOKENS, readConfig(env).abandonAfterSeconds);
   } catch (e) {
     // The detail goes to the Worker's log only: a caller without a token gets this answer too,
     // and a configuration error must not echo configuration (DEV_TOKENS holds tokens).

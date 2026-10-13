@@ -24,7 +24,7 @@ function ctxWith(githubCheck: boolean, token?: string) {
   const ctx = {
     env: { GITHUB_TOKEN: token },
     db,
-    cfg: { eventId: "practice", runHours: 168, graceHours: 48, githubCheck },
+    cfg: { eventId: "practice", runSeconds: 168 * 3600, abandonAfterSeconds: 86400, githubCheck },
     now: () => new Date("2026-11-06T09:00:00Z"),
   } as unknown as Ctx;
   return { ctx, opened };
