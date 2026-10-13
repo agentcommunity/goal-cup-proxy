@@ -25,6 +25,7 @@ mod key_scan;
 mod key_scan_run;
 #[cfg(unix)]
 mod loader_script;
+mod login;
 mod m2_capture_sender;
 mod m2_emitter;
 mod m2_http_relay;

@@ -19,6 +19,7 @@
 //! | `daemon.log` | a daemon the CLI started | its startup lines and any refusal |
 //! | `grant.json` | the V1 `goalcup auth` (removed by D48) | nothing: a leftover one is ignored |
 //! | `entries/` | the CLI | one record per entry `goalcup start` created |
+//! | `server.json` | `goalcup login` | the upload server and the participant's token, mode 0600 (`crate::server`) |
 
 use crate::CliError;
 use goalcup_platform::Platform;

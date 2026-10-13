@@ -35,10 +35,10 @@ use std::process::ExitCode;
     after_help = AFTER_HELP,
     subcommand_required = true,
     arg_required_else_help = true,
-    // So the list under `Commands:` is exactly the five sub-commands below. clap's built-in
-    // `help` sub-command would be a sixth line in it, indistinguishable to a reader — and to a
+    // So the list under `Commands:` is exactly the six sub-commands below. clap's built-in
+    // `help` sub-command would be a seventh line in it, indistinguishable to a reader — and to a
     // test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
-    // the same help by the route the other five already take.
+    // the same help by the route the other six already take.
     disable_help_subcommand = true
 )]
 struct Args {
@@ -73,7 +73,7 @@ or is not the pinned build. No daemon running is not a failure: `goalcup start` 
 Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
 are not using can make this command exit 1.";
 
-/// The sub-commands: five. `verify` is deliberately absent:
+/// The sub-commands: six. `verify` is deliberately absent:
 /// see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
@@ -143,6 +143,16 @@ enum Command {
         #[arg(long, value_name = "ID")]
         harness: Option<String>,
     },
+    /// Connect this tracker to the Goal Cup server: paste the token the site gave you.
+    ///
+    /// The token is read from stdin (paste it and press Enter; it is not shown), stored in the
+    /// tracker's configuration directory readable by you alone, and never given to the agent.
+    /// Without a login, runs stay on this machine only.
+    Login {
+        /// The server's address, for example `https://ingest.agentcommunity.org`.
+        #[arg(long, value_name = "URL")]
+        server: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -192,6 +202,75 @@ fn run(command: Command) -> Result<u8, CliError> {
         Command::Seal { entry } => seal(entry).map(|()| 0),
         Command::Doctor { json, harness } => {
             doctor(commands::doctor::DoctorOptions { json, harness })
+        }
+        Command::Login { server } => login(&server).map(|()| 0),
+    }
+}
+
+/// `goalcup login`: the token is read from stdin with terminal echo off when stdin is a
+/// terminal, so a pasted token is never on the screen. Piped input is read as it is.
+fn login(server: &str) -> Result<(), CliError> {
+    let cfg = goalcup_cli::config::config_dir()?;
+    // Checked before the prompt, so a mistyped address is refused before anything is pasted.
+    goalcup_cli::server::checked_server_url(server)?;
+    let echo = EchoOff::on_terminal_stdin();
+    if echo.is_some() {
+        eprint!("Paste your Goal Cup token and press Enter (it is not shown): ");
+    }
+    let result = commands::login::login_with(
+        &cfg,
+        server,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+    );
+    if echo.is_some() {
+        // The Enter that ended the paste was not echoed either.
+        eprintln!();
+    }
+    result
+}
+
+/// Terminal echo turned off on stdin until this is dropped. `None` when stdin is not a
+/// terminal (piped input), or on a platform without termios.
+struct EchoOff {
+    #[cfg(unix)]
+    saved: libc::termios,
+}
+
+impl EchoOff {
+    #[cfg(unix)]
+    fn on_terminal_stdin() -> Option<EchoOff> {
+        // SAFETY: `isatty`, `tcgetattr` and `tcsetattr` on fd 0 read or write only the
+        // `termios` value handed to them, which lives on this stack frame.
+        unsafe {
+            if libc::isatty(libc::STDIN_FILENO) != 1 {
+                return None;
+            }
+            let mut saved: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(libc::STDIN_FILENO, &mut saved) != 0 {
+                return None;
+            }
+            let mut quiet = saved;
+            quiet.c_lflag &= !libc::ECHO;
+            if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &quiet) != 0 {
+                return None;
+            }
+            Some(EchoOff { saved })
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn on_terminal_stdin() -> Option<EchoOff> {
+        None
+    }
+}
+
+impl Drop for EchoOff {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        // SAFETY: restores the settings `tcgetattr` read into `self.saved`.
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.saved);
         }
     }
 }

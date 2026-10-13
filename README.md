@@ -266,6 +266,12 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   `daemon.toml` you wrote for an earlier build belongs at `$GOALCUP_CONFIG_DIR/daemon.toml`;
   otherwise the first `start` writes a default with other roots. The configuration's keys are in
   [OPERATING](docs/OPERATING.md#running-the-daemon).
+- <a id="login"></a>**Connecting to the Goal Cup server.** `goalcup login --server <URL>` asks
+  for the token the Goal Cup site gives you (paste it; it is not shown) and stores the address
+  and token in `$GOALCUP_CONFIG_DIR/server.json`, readable by you alone. The token is never
+  printed, never given to the agent and never written into a trace. A `server.json` other users
+  can read is refused. Run it again to replace the token. Uploading runs to the server is being
+  built ([TODO](TODO.md), step 2): until it lands, the login is stored and runs stay local.
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
   `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. An installed one (Homebrew, or an unpacked
   release tarball) finds them at `<bin>/../share/goalcup/connectors`.
