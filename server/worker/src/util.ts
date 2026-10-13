@@ -8,7 +8,9 @@ const ENTRY_ID = /^e[0-9a-f]{16}$/;
 export const RUN_ID = /^r[0-9a-f]{16}$/;
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 // Exactly what the contract allows: a public GitHub repository URL, no trailing slash, no .git.
-export const REPO_URL = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
+// docs/UPLOAD-API.md: the owner is ASCII letters, digits and `-`; the repository also `.` and
+// `_`, and is never `.` or `..`.
+export const REPO_URL = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/(?!\.{1,2}$)[A-Za-z0-9._-]+$/;
 
 export const isHex64 = (s: unknown): s is string => typeof s === "string" && HEX64.test(s);
 export const isEntryId = (s: unknown): s is string => typeof s === "string" && ENTRY_ID.test(s);

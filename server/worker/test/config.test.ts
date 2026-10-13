@@ -50,6 +50,9 @@ test("repo_url shape", () => {
     "https://gitlab.com/a/b",
     "https://github.com/a/b c",
     "https://github.com.evil.example/a/b",
+    "https://github.com/a/..",
+    "https://github.com/a/.",
+    "https://github.com/a_b/c",
   ]) {
     assert.equal(REPO_URL.test(bad), false, bad);
   }

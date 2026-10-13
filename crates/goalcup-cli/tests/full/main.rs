@@ -23,3 +23,5 @@ mod preflight_doctor;
 mod run_scoped_daemon;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod upload_e2e;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod upload_worker;
