@@ -296,7 +296,8 @@ struct CapturePrep {
     /// The scan of this run's artifacts for fragments of that key (D41), derived once, in
     /// memory, from the same bytes the child receives.
     matcher: Option<FragmentMatcher>,
-    executable: crate::launch::PinnedExecutable,
+    /// The harness file this run resolved and hashed; the release refuses it if it changed.
+    executable: crate::launch::ResolvedExecutable,
     /// The harness home every run of this connector shares (D39); `None` when each run makes its
     /// own inside its run directory.
     shared_home: Option<SharedCaptureHome>,
@@ -584,6 +585,8 @@ impl Forked<'_> {
 /// What the gate holds for the phases after the fork.
 struct Gate {
     plan: LaunchPlan,
+    /// What the harness reported for its `version_args`, or `unreported` (D53).
+    harness_version: String,
     goal_stream: goalcup_protocol::capture::StreamKey,
     gated: crate::launch::GatedSpawn,
     scope_deadline: std::time::Instant,
@@ -628,6 +631,7 @@ struct Released<'a> {
     tees: Tees,
     goal_stream: goalcup_protocol::capture::StreamKey,
     scope_deadline: std::time::Instant,
+    harness_version: String,
 }
 
 /// A harness that has exited.
@@ -828,6 +832,16 @@ fn create_and_gate<'a>(
         }
     };
 
+    // The harness's own account of its version, asked once with nothing but `PATH` and a
+    // throwaway `HOME` beside the run's own, removed afterwards: a probe may write state (Codex
+    // creates `~/.codex/tmp/arg0`), and the run's `HOME` stays as the profile made it. Reported,
+    // not proven, and `unreported` when it does not say (D53).
+    let harness_version = crate::harness_version::reported_version_in_scratch_home(
+        &prep.executable,
+        &profile.executable.version_args,
+        &run.dir.join("version-probe-home"),
+    );
+
     // The last alias/target identity check is directly before the create request. Preserve the
     // exact D39 leaf spelling in the request, local entry and child environment.
     if let Some(home) = prep.shared_home.as_ref() {
@@ -938,6 +952,7 @@ fn create_and_gate<'a>(
     };
     let gate = Gate {
         plan,
+        harness_version,
         goal_stream,
         gated,
         scope_deadline,
@@ -957,6 +972,7 @@ fn register_and_release<'a>(
     pause_at("capture-gate-forked");
     let Gate {
         plan,
+        harness_version,
         goal_stream,
         gated,
         scope_deadline,
@@ -981,7 +997,7 @@ fn register_and_release<'a>(
         return Err(forked.unlaunched(CliError::Control(error), out));
     }
     pause_at("capture-gate-registered");
-    if let Err(e) = crate::launch::recheck_pinned_executable(&prep.executable) {
+    if let Err(e) = crate::launch::recheck_resolved_executable(&prep.executable) {
         gated.abort();
         return Err(forked.unlaunched(e, out));
     }
@@ -1067,6 +1083,7 @@ fn register_and_release<'a>(
         },
         goal_stream,
         scope_deadline,
+        harness_version,
     })
 }
 
@@ -1087,6 +1104,7 @@ fn run_harness<'a>(
         tees,
         goal_stream,
         scope_deadline,
+        harness_version,
     } = released;
     // Linux: what the harness leaves behind is this process's own child (a subreaper, `main.rs`),
     // and is swept between the root's exit and the seal. Armed first, while the root is certainly
@@ -1120,11 +1138,7 @@ fn run_harness<'a>(
     let launch = CaptureLaunchRequest {
         goal_stream,
         spawned_at,
-        harness_version: cx
-            .profile
-            .resolved_executable(goalcup_protocol::harness::PlatformKey::current())
-            .version
-            .to_string(),
+        harness_version,
         continuation: cx.profile.continuation.clone(),
         native_scope,
     };

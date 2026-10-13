@@ -65,11 +65,12 @@ could not read, an answer it could not parse). This command never exits with 2 o
 /// What `goalcup doctor --help` says under its flags. There is no verify
 /// mode here: a sealed capture is checked by `goalcup-verify --capture-integrity`.
 const DOCTOR_AFTER_HELP: &str = "\
-For each harness it checks that the connector files are the pinned ones and that the harness \
-executable on PATH is the exact build `goalcup start` runs (hashed, not started).
+For each harness it checks that the connector files are the pinned ones and finds the harness \
+executable on PATH that `goalcup start` runs (hashed, not started). Any build is accepted: the \
+run records which one ran.
 
-Exit codes: 0 every check passed; 1 something failed, including a harness that is not installed \
-or is not the pinned build. No daemon running is not a failure: `goalcup start` starts one.
+Exit codes: 0 every check passed; 1 something failed, including a harness that is not \
+installed. No daemon running is not a failure: `goalcup start` starts one.
 
 Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
 are not using can make this command exit 1.";
@@ -129,7 +130,7 @@ enum Command {
         #[arg(value_name = "ENTRY")]
         entry: Option<String>,
     },
-    /// Check this machine: can a daemon run, and is each harness installed at its pinned build.
+    /// Check this machine: can a daemon run, and is each harness installed.
     #[command(after_help = DOCTOR_AFTER_HELP)]
     Doctor {
         /// Print the report as one JSON document instead of text.

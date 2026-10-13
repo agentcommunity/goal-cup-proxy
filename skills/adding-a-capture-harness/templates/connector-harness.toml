@@ -25,8 +25,7 @@ continuation = "none: <HOW ONE HEADLESS TURN RUNS>"
 
 [capture.executable]
 program = "<PROGRAM>"                   # bare name on PATH; not an interpreter (python3, node, sh)
-version = "<VERSION>"                   # the number only ("1.2.3", not "toy 1.2.3"); ^[0-9]
-sha256 = "<SHA256_OF_CANONICAL_FILE>"   # 64 lowercase hex of the symlink-resolved regular file
+version_args = ["--version"]            # how the harness prints its version; delete if it has none
 
 # Child-only extra variables. Delete the table if none. No endpoint, proxy, credential,
 # provider, XDG_*, GIT_*, OPENSSL_*, CA, *KEYLOG*, *_COMMAND/*PAGER or server names (*_URL,

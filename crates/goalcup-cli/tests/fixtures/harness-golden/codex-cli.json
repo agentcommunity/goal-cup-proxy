@@ -500,8 +500,9 @@
       "SHELL": "/bin/zsh"
     },
     "executable": {
-      "sha256": "a29d9e86eef88cbbd69f97ce8c590b1d0a287c8f77424f5eef226b883d7eaa22",
-      "version": "0.153.0"
+      "version_args": [
+        "--version"
+      ]
     },
     "home": "empty",
     "hosts": [
@@ -518,21 +519,12 @@
       "linux-aarch64": {
         "env": {
           "SHELL": "/bin/bash"
-        },
-        "sha256": "c92824b2e068b8cb15eecba45271f7e3dd35a5b3929383593284a36074d40aec",
-        "version": null
+        }
       },
       "linux-x86_64": {
         "env": {
           "SHELL": "/bin/bash"
-        },
-        "sha256": "fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be",
-        "version": null
-      },
-      "macos-x86_64": {
-        "env": {},
-        "sha256": "2a13d23097031d374c070df40c765abb7f336c99b3946697739a68335747ded8",
-        "version": null
+        }
       }
     }
   },

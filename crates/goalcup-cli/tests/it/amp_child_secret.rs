@@ -19,11 +19,8 @@ const AMP_TOKEN: &str = "amp-synthetic_7Qx2Lm9Rt4Vw8Yz1Bc5Df3Gh";
 
 /// A shipped keyed profile (Hermes: per-run home, `stderr_line` identity) that names
 /// `AMP_API_KEY` instead of its own key, and still validates.
-fn amp_keyed(exe: Option<&std::path::Path>) -> goalcup_cli::connector::HarnessConnector {
-    let mut c = match exe {
-        Some(exe) => s::repinned("hermes-cli", exe),
-        None => s::shipped("hermes-cli"),
-    };
+fn amp_keyed() -> goalcup_cli::connector::HarnessConnector {
+    let mut c = s::shipped("hermes-cli");
     c.loaded
         .manifest
         .capture
@@ -57,7 +54,7 @@ fn amp_child_secret_is_not_in_launch_debug_or_parent_env() {
     assert!(goalcup_protocol::capture_policy::CREDENTIAL_ENV.contains(&"AMP_API_KEY"));
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
-    let c = amp_keyed(Some(&exe));
+    let c = amp_keyed();
     let profile = &c.loaded.manifest.capture;
 
     let mut parent = s::parent_env();
@@ -69,13 +66,13 @@ fn amp_child_secret_is_not_in_launch_debug_or_parent_env() {
         .expect("the profile names a credential");
     assert_eq!(secret.name(), "AMP_API_KEY");
 
-    let pinned = s::pinned(&c, &exe);
+    let resolved = s::resolved(&exe);
     let proxy = s::proxy_url();
     let plan = build_capture_launch(
         &c,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, b"hello", &pinned, &proxy, &parent),
+        &s::launch(&l, b"hello", &resolved, &proxy, &parent),
     )
     .expect("the plan builds");
 
@@ -95,7 +92,7 @@ fn amp_child_secret_is_not_in_launch_debug_or_parent_env() {
 
 #[test]
 fn an_unusable_amp_token_is_refused_by_name_without_echo() {
-    let c = amp_keyed(None);
+    let c = amp_keyed();
     let profile = &c.loaded.manifest.capture;
     let long = "a".repeat(257);
     let cases: [(&str, BTreeMap<String, String>); 5] = [

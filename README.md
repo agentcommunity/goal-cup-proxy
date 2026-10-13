@@ -31,11 +31,12 @@ export PATH="$PWD/target/release:$PATH"
 
 ## Quickstart
 
-**You need** a Mac (Apple silicon, or Intel: pinned, but no Intel run is measured yet; on Apple
+**You need** a Mac (Apple silicon, or Intel: no Intel run is measured yet; on Apple
 silicon install the arm64 Goal Cup and harness, not an Intel build under Rosetta), or Linux
 (x86_64 or arm64) with the trace folder on ext4 or XFS ([Linux](#linux)); Goal Cup [installed](#install); and a Claude or ChatGPT subscription.
-Install the exact harness build Goal Cup is pinned to, Claude Code 2.1.283 or Codex CLI 0.153.0:
-`goalcup start` refuses any other build. Choose where the tracker keeps its state:
+Install Claude Code or Codex CLI (the recipes were measured at Claude Code 2.1.283 and Codex CLI
+0.153.0). Builds are recorded, not pinned: `goalcup start` runs the build it finds on `PATH` and
+the trace records its digests and the version it reports. Choose where the tracker keeps its state:
 
 ```sh
 export GOALCUP_CONFIG_DIR="$HOME/goalcup"
@@ -77,8 +78,8 @@ Status: v0.5.0 is published as source; binary releases come from
 ## Linux
 
 The [quickstart](#quickstart) works on Linux, apart from the three things below: how the harness
-is installed, the configuration directory and the Claude Code login. The shipped connectors pin
-the Linux x86_64 and arm64 harness builds as well as the macOS ones, as native binaries. Linux is
+is installed, the configuration directory and the Claude Code login. The harness build is
+recorded, not pinned, on Linux as on macOS. Linux is
 measured less than macOS, and no logged-in harness run has happened on Linux yet; the lists below
 say what was and was not measured.
 
@@ -97,10 +98,9 @@ other tools the tests need are in [the gate](#the-gate).
   `@openai/codex@0.153.0-linux-x64` or `-linux-arm64`, file
   `package/vendor/<x86_64|aarch64>-unknown-linux-musl/bin/codex`. Claude Code:
   `@anthropic-ai/claude-code-linux-x64@2.1.283` or `-linux-arm64`, file `package/claude`; these
-  are the glibc builds; the `-musl` (Alpine) builds are not pinned, so they are refused. Other
-  install routes are not measured: `npm i -g` puts the npm wrapper on `PATH`, which `goalcup
-  start` hashes in place of the binary and is likely to refuse, and Claude Code's native
-  installer on Linux was not tried.
+  are the glibc builds; the `-musl` (Alpine) builds were not measured. Other install routes are
+  not measured: `npm i -g` puts the npm wrapper on `PATH`, which `goalcup start` then runs and
+  records in place of the binary, and Claude Code's native installer on Linux was not tried.
 - **The configuration directory.** With `GOALCUP_CONFIG_DIR` unset it is `$XDG_CONFIG_HOME/goalcup`,
   else `~/.config/goalcup`; an empty `$XDG_CONFIG_HOME` counts as unset
   (`crates/goalcup-cli/src/config.rs`). The quickstart sets `GOALCUP_CONFIG_DIR` and skips this.
@@ -118,9 +118,8 @@ six synthetic contract-kit captures seal and verify. `sh scripts/linux-check.sh`
 from a Mac ([what it runs](#the-gate)). On x86_64, CI on ubuntu-24.04 runs the reservation tests on
 ext4 and they pass; the end-to-end suites were run only on arm64.
 
-The shipped Codex and Claude Code connectors pin the Linux x86_64 and arm64 builds
-(`[capture.platform.*]` in each `harness.toml`). With the arm64 builds and no login, measured in
-Docker: `goalcup doctor` passes the executable check; `goalcup start` launches the pinned binary;
+With the arm64 builds and no login, measured in Docker (when the connectors still pinned
+builds): `goalcup doctor` passes the executable check; `goalcup start` launches the binary;
 the harness fails on auth and gets no model reply (Codex receives 401 Unauthorized, Claude Code
 prints `Not logged in`, and both exit 1); the run seals; and
 `goalcup-verify --capture-integrity` exits 0. Neither binary left a child running after it
@@ -137,8 +136,8 @@ checks that the provider host answers, and with no network it refuses the run.
   after the seal. It sweeps nothing if `goalcup start` itself dies, and a `goalcup seal` from
   another terminal can report `all_gone` while the sweep is still running
   ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
-- A successful, logged-in harness run on Linux, and the Linux x86_64 harness builds, which are
-  pinned but were not run.
+- A successful, logged-in harness run on Linux, and the Linux x86_64 harness builds, which were
+  not run.
 - The end-to-end suites on x86_64, and any real Linux host or distribution kernel (only Docker
   Desktop's was run).
 - Long runs, and termination against a real harness's process tree on Linux.

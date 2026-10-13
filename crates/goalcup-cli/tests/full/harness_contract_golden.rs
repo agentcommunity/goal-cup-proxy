@@ -167,7 +167,7 @@ struct Subject {
     _dir: Option<tempfile::TempDir>,
 }
 
-/// The controlled workload's manifest, with synthetic values for its four placeholders.
+/// The controlled workload's manifest, with synthetic values for its two placeholders.
 fn controlled_connector() -> (HarnessConnector, tempfile::TempDir) {
     let template = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -175,8 +175,6 @@ fn controlled_connector() -> (HarnessConnector, tempfile::TempDir) {
     )
     .unwrap();
     let rendered = template
-        .replace("@PYTHON3_SHA256@", &"ab".repeat(32))
-        .replace("@PYTHON3_VERSION@", "3.12.0")
         .replace("@WORKLOAD@", "/synthetic/workload.py")
         .replace("@CONFIG@", "/synthetic/config.json");
     let dir = tempfile::tempdir().unwrap();
@@ -216,19 +214,18 @@ fn declared(id: &str) -> Subject {
     }
 }
 
-/// The connector with its executable pin naming `exe`, as the launch tests use it.
-fn repinned(id: &str, exe: &Path) -> Subject {
+/// The connector as the launch tests use it: its base recipe ([`base_recipe`]).
+fn base_subject(id: &str) -> Subject {
     let mut subject = declared(id);
-    subject.connector = repin(&subject.connector, exe);
+    subject.connector = base_recipe(&subject.connector);
     subject
 }
 
-/// A copy of `c` whose executable pin names `exe`, without its `capture.platform` table: the
-/// plan is the base recipe on every platform, so the golden bytes are the same wherever it
-/// runs. The declared overrides are in `capture_profile`.
-fn repin(c: &HarnessConnector, exe: &Path) -> HarnessConnector {
+/// A copy of `c` without its `capture.platform` table: the plan is the base recipe on every
+/// platform, so the golden bytes are the same wherever it runs. The declared overrides are in
+/// `capture_profile`.
+fn base_recipe(c: &HarnessConnector) -> HarnessConnector {
     let mut c = c.clone();
-    c.loaded.manifest.capture.executable.sha256 = s::sha256_of(exe);
     c.loaded.manifest.capture.platform.clear();
     c.loaded
         .manifest
@@ -596,7 +593,7 @@ fn profile_json(p: &CaptureSpec) -> Value {
     out.insert("env".into(), json!(p.env));
     out.insert(
         "executable".into(),
-        json!({"version": p.executable.version, "sha256": p.executable.sha256}),
+        json!({"version_args": p.executable.version_args}),
     );
     if let Some(goal_flag) = &p.goal_flag {
         out.insert("goal_flag".into(), json!(goal_flag));
@@ -607,10 +604,7 @@ fn profile_json(p: &CaptureSpec) -> Value {
             json!(
                 p.platform
                     .iter()
-                    .map(|(key, over)| (
-                        key.as_str(),
-                        json!({"sha256": over.sha256, "version": over.version, "env": over.env}),
-                    ))
+                    .map(|(key, over)| (key.as_str(), json!({"env": over.env}),))
                     .collect::<BTreeMap<_, _>>()
             ),
         );
@@ -726,12 +720,12 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
     let id = dc.loaded.manifest.id.as_str();
     let dp = profile(dc);
 
-    // The plan, built against a fake executable pinned in place of the measured one.
+    // The plan, built against a fake executable in place of the harness.
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
-    let repinned = repin(dc, &exe);
-    let c = &repinned;
-    let pinned = s::pinned(c, &exe);
+    let base = base_recipe(dc);
+    let c = &base;
+    let resolved = s::resolved(&exe);
     let proxy = s::proxy_url();
     let parent = s::parent_env();
     let goal = b"write result.txt";
@@ -739,7 +733,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         c,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, goal, &pinned, &proxy, &parent),
+        &s::launch(&l, goal, &resolved, &proxy, &parent),
     )
     .unwrap_or_else(|e| panic!("{id}: {e}"));
 
@@ -749,7 +743,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         c,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, hostile, &pinned, &proxy, &parent),
+        &s::launch(&l, hostile, &resolved, &proxy, &parent),
     )
     .unwrap();
     let placement = json!({
@@ -1338,15 +1332,15 @@ fn the_identity_grammars_are_pinned() {
     // Claude Code is told its identity rather than reading it: the plan carries the id.
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
-    let claude = repinned("claude-code-cli", &exe);
-    let pinned = s::pinned(&claude.connector, &exe);
+    let claude = base_subject("claude-code-cli");
+    let resolved = s::resolved(&exe);
     let proxy = s::proxy_url();
     let parent = s::parent_env();
     let plan = build_capture_launch(
         &claude.connector,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, b"g", &pinned, &proxy, &parent),
+        &s::launch(&l, b"g", &resolved, &proxy, &parent),
     )
     .unwrap();
     let at = plan.argv.iter().position(|a| a == "--session-id").unwrap();
@@ -1650,8 +1644,6 @@ fn connectors_plus_one() -> tempfile::TempDir {
             "program = \"python3\"",
             "program = \"synthtool\"".to_string(),
         ),
-        ("@PYTHON3_VERSION@", "1.0.0".to_string()),
-        ("@PYTHON3_SHA256@", "cd".repeat(32)),
         // A pinned connector names no loopback host; the kit's stand-in host is Dev-only.
         (
             "host = \"api.e00.localhost\"",

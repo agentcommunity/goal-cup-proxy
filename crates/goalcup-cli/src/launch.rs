@@ -460,40 +460,43 @@ fn child_secret_named(
     }))
 }
 
-/// A harness executable whose bytes were hashed and matched a capture profile's pin.
+/// A harness executable as a launch resolved it: the canonical path it runs and the SHA-256 of
+/// its bytes at resolution.
 ///
-/// Only [`pin_harness_executable`] makes one, so a capture launch cannot be built for an
-/// executable nobody checked. After durable process registration and immediately before gate
-/// release, the launcher re-opens this exact canonical path and streams it into SHA-256 again.
-/// That read is neither a coherent snapshot nor inode-bound execution: same-UID mutation from
-/// the first read or pathname replacement before `exec` remains a stated residual.
+/// The build is recorded, never pinned (D53): nothing compares the digest with the connector,
+/// and the daemon hashes the registered program and the running image into
+/// `Launch.harness_build` itself. The digest is kept for one consistency check: after durable
+/// process registration and immediately before gate release, the launcher re-opens this exact
+/// canonical path and streams it into SHA-256 again ([`recheck_resolved_executable`]), so a file
+/// swapped mid-launch is refused. That read is neither a coherent snapshot nor inode-bound
+/// execution: same-UID mutation from the first read or pathname replacement before `exec`
+/// remains a stated residual.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PinnedExecutable {
+pub struct ResolvedExecutable {
     path: String,
     sha256: String,
 }
 
-impl PinnedExecutable {
+impl ResolvedExecutable {
     /// The absolute path that was hashed, which is the path the capture launch runs.
-    pub(crate) fn path(&self) -> &str {
+    pub fn path(&self) -> &str {
         &self.path
     }
 
-    /// The lowercase SHA-256 of its bytes.
-    pub(crate) fn sha256(&self) -> &str {
+    /// The lowercase SHA-256 of its bytes when it was resolved.
+    pub fn sha256(&self) -> &str {
         &self.sha256
     }
 }
 
-/// The connector's program as the `PATH` in `env` finds it, followed to the file an
-/// updater's link names, and accepted only if its bytes are the profile's pin. That file is
-/// the one the launch runs. It is hashed, never started: `goalcup start` and `goalcup doctor`
-/// both ask this one question.
+/// The connector's program as the `PATH` in `env` finds it, followed to the file an updater's
+/// link names. That file is the one the launch runs. It is hashed, never started here:
+/// `goalcup start` and `goalcup doctor` both ask this one question.
 pub(crate) fn capture_executable(
     c: &HarnessConnector,
     profile: &CaptureSpec,
     env: &BTreeMap<String, String>,
-) -> Result<PinnedExecutable, CliError> {
+) -> Result<ResolvedExecutable, CliError> {
     let program = &profile.executable.program;
     let Some(found) = crate::preflight::resolve_on_path(program, env) else {
         return Err(CliError::Refused(format!(
@@ -506,41 +509,26 @@ pub(crate) fn capture_executable(
         path: found.display().to_string(),
         source,
     })?;
-    pin_harness_executable(profile, &file)
+    resolve_harness_executable(&file)
 }
 
-/// Hash the executable at `path` and accept it only if it is `profile`'s pinned one: the pin of
-/// the running platform's `[capture.platform.<key>]` where the profile has one, the base
-/// `capture.executable` pin otherwise.
+/// Hash the regular file at `path` and keep the digest, so the release can refuse a swap.
 ///
 /// `path` is resolved by the caller: the measured recipes run the native binary (not the
 /// Codex npm wrapper) and the versioned Claude Code binary (not the symlink its updater
-/// moves), whose location depends on how the harness was installed. The bytes decide, and
-/// the kind of file is checked on the open handle.
+/// moves), whose location depends on how the harness was installed. The kind of file is
+/// checked on the open handle.
 ///
-/// **A symlink is refused, not followed** (exec the versioned path
-/// directly). `~/.local/bin/claude` hashes right today and is retargeted by the next
-/// updater, so a pin over the link would bless whatever it names at spawn time. Directory
-/// links above the file (`/var` → `/private/var`) are resolved, and the pinned path is the
-/// canonical one; the file itself is then opened without following a link, so a name
-/// swapped for a link after the check is refused by the open.
+/// **A symlink is refused, not followed** (exec the versioned path directly).
+/// `~/.local/bin/claude` is retargeted by the next updater, so a link would run whatever it
+/// names at spawn time rather than the file that was hashed. Directory links above the file
+/// (`/var` → `/private/var`) are resolved, and the resolved path is the canonical one; the file
+/// itself is then opened without following a link, so a name swapped for a link after the
+/// check is refused by the open.
 ///
-/// Refusals: a relative or non-UTF-8 path, a symlink, anything but a regular file, or bytes
-/// that are not the pinned ones — [`CliError::Refused`], naming the path (and both digests
-/// for a mismatch); a file this process cannot read — [`CliError::Io`].
-pub fn pin_harness_executable(
-    profile: &CaptureSpec,
-    path: &Path,
-) -> Result<PinnedExecutable, CliError> {
-    let executable = profile.resolved_executable(PlatformKey::current());
-    pin_executable_fields(executable.version, executable.sha256, path)
-}
-
-fn pin_executable_fields(
-    version: &str,
-    expected_sha256: &str,
-    path: &Path,
-) -> Result<PinnedExecutable, CliError> {
+/// Refusals: a relative or non-UTF-8 path, a symlink, or anything but a regular file —
+/// [`CliError::Refused`], naming the path; a file this process cannot read — [`CliError::Io`].
+pub fn resolve_harness_executable(path: &Path) -> Result<ResolvedExecutable, CliError> {
     let Some(given) = path.to_str().filter(|_| path.is_absolute()) else {
         return Err(CliError::Refused(format!(
             "the capture executable must be an absolute UTF-8 path, and `{}` is not. Nothing is \
@@ -570,35 +558,28 @@ fn pin_executable_fields(
         )));
     };
     let sha256 = sha256_regular_file_no_follow(&canonical, given)?;
-    if !sha256.eq_ignore_ascii_case(expected_sha256) {
-        return Err(CliError::Refused(format!(
-            "`{text}` is not the harness executable this capture profile was measured with \
-             (version {}): its sha256 is {sha256}, the profile pins {}. Install that exact \
-             version and try again. Nothing is launched.",
-            version, expected_sha256
-        )));
-    }
-    Ok(PinnedExecutable {
+    Ok(ResolvedExecutable {
         path: text.to_string(),
         sha256,
     })
 }
 
-/// Re-open the exact canonical path that was pinned, without canonicalising it again, and hash
-/// the whole regular file. This is the last check before the parked capture child is released.
-pub(crate) fn recheck_pinned_executable(executable: &PinnedExecutable) -> Result<(), CliError> {
+/// Re-open the exact canonical path that was resolved, without canonicalising it again, and
+/// hash the whole regular file. This is the last check before the parked capture child is
+/// released: it refuses a file swapped since resolution, not a build.
+pub fn recheck_resolved_executable(executable: &ResolvedExecutable) -> Result<(), CliError> {
     let path = Path::new(executable.path());
     let observed = sha256_regular_file_no_follow(path, executable.path()).map_err(|_| {
         CliError::Refused(format!(
-            "the capture executable `{}` changed after process registration and could not be \
-             re-opened as the pinned regular file. Nothing is launched.",
+            "the capture executable `{}` was replaced after it was resolved: it could not be \
+             re-opened as the same regular file. Nothing is launched.",
             executable.path()
         ))
     })?;
     if observed != executable.sha256() {
         return Err(CliError::Refused(format!(
-            "the capture executable `{}` changed after process registration: its sha256 is \
-             {observed}, the pinned sha256 is {}. Nothing is launched.",
+            "the capture executable `{}` was replaced after it was resolved: its sha256 is now \
+             {observed}, and it was {} when this launch resolved it. Nothing is launched.",
             executable.path(),
             executable.sha256()
         )));
@@ -659,7 +640,7 @@ pub struct CaptureLaunch<'a> {
     /// closing `--`, or as the value of the profile's one `--flag=<goal>` element: no shell, no
     /// quoting, no splitting.
     pub goal: &'a [u8],
-    pub executable: &'a PinnedExecutable,
+    pub executable: &'a ResolvedExecutable,
     /// The per-run `HOME`, created by the caller in the shape the profile's `home` names.
     pub run_home: &'a Path,
     /// The isolated harness home `launch.home_env` points at (the profile's `config_home`).
@@ -723,16 +704,6 @@ pub fn build_capture_launch(
     let id = &c.loaded.manifest.id;
     let profile = &c.loaded.manifest.capture;
     let platform = PlatformKey::current();
-    if !launch
-        .executable
-        .sha256
-        .eq_ignore_ascii_case(profile.resolved_executable(platform).sha256)
-    {
-        return Err(CliError::Refused(format!(
-            "the executable was pinned for another capture profile, not `{id}`'s. Nothing is \
-             launched."
-        )));
-    }
     let goal = checked_goal(launch.goal)?;
     for (what, value) in [
         ("workspace", Some(workspace.to_string_lossy())),

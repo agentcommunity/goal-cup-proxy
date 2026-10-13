@@ -487,8 +487,7 @@
     "continuation": "none: one fixed traffic plan, no input after the goal",
     "env": {},
     "executable": {
-      "sha256": "abababababababababababababababababababababababababababababababab",
-      "version": "3.12.0"
+      "version_args": []
     },
     "home": "empty",
     "hosts": [

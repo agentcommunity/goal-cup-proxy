@@ -969,11 +969,13 @@ fn pause_points_exist_only_under_test_support() {
 }
 
 /// The only places this crate starts a process are the launch module's one command builder
-/// (which the ordinary spawn and the gate both run) and the run-scoped daemon's start
-/// (`daemon/spawn.rs`); the V1 version probe went with the V1 manifest (OS-29). The child-only
-/// credential is set on the one launch builder, so a third site would be another place a key
-/// could be forgotten or leaked. The daemon's start carries no key: it clears its environment,
-/// which `run_scoped_daemon::the_started_daemon_inherits_none_of_the_clis_secrets_or_descriptors` observes.
+/// (which the ordinary spawn and the gate both run), the run-scoped daemon's start
+/// (`daemon/spawn.rs`) and the D53 version probe (`harness_version.rs`); the V1 version probe
+/// went with the V1 manifest (OS-29). The child-only credential is set on the one launch
+/// builder, so a fourth site would be another place a key could be forgotten or leaked. The
+/// daemon's start and the version probe carry no key: both clear their environment, which
+/// `run_scoped_daemon::the_started_daemon_inherits_none_of_the_clis_secrets_or_descriptors`
+/// observes for the daemon and `harness_version_probe` for the probe.
 #[test]
 fn the_only_command_site_is_the_launch_builder() {
     fn sites(dir: &std::path::Path, found: &mut Vec<String>) {
@@ -1004,11 +1006,20 @@ fn the_only_command_site_is_the_launch_builder() {
     );
     found.sort();
     let files: Vec<&str> = found.iter().map(|f| f.split(':').next().unwrap()).collect();
-    assert_eq!(files, ["launch.rs", "spawn.rs"], "{found:?}");
+    assert_eq!(
+        files,
+        ["harness_version.rs", "launch.rs", "spawn.rs"],
+        "{found:?}"
+    );
     let spawn = include_str!("../../src/daemon/spawn.rs");
     assert!(
         spawn.contains(".env_clear()"),
         "the daemon starts from nothing"
+    );
+    let probe = include_str!("../../src/harness_version.rs");
+    assert!(
+        probe.contains(".env_clear()") && !probe.contains("secret"),
+        "the version probe starts from nothing and carries no key"
     );
 }
 
@@ -1055,8 +1066,8 @@ fn capture_children_spawn_only_through_the_gate() {
     // executable recheck, only then release.
     assert!(at("spawn_gated(") < at("gated_handle("));
     assert!(at("gated_handle(") < at("register_process("));
-    assert!(at("register_process(") < at("recheck_pinned_executable("));
-    assert!(at("recheck_pinned_executable(") < at("gated.release()"));
+    assert!(at("register_process(") < at("recheck_resolved_executable("));
+    assert!(at("recheck_resolved_executable(") < at("gated.release()"));
     // A failed registration aborts the gate; it never reaches the release.
     let (failed, _) = body
         .split_once("gated.release()")

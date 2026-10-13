@@ -53,8 +53,8 @@ itself changes, so send the facts sheet alone (below).
 - **Subagents with their own transcript files.** Exactly one session file pattern is recorded;
   separate subagent files are seen only as model traffic.
 - **A binary that updates itself** with no flag or variable to turn that off. The tracer hashes
-  the binary before it runs and again just before the goal is released; a later update goes
-  unrecorded, and the next run is refused because the binary no longer matches its pin.
+  the binary before it runs and again just before the goal is released, and records the build
+  that ran; an update during the run goes unrecorded.
 - **More than 16 model hosts, or a wildcard host.** Traffic to a host the connector does not
   list passes through unrecorded.
 
@@ -85,7 +85,7 @@ contribution on its own.
   `python3` (the one macOS ships is fine). If Homebrew also installed Rust, make sure
   `which cargo` shows `~/.cargo/bin/cargo`.
 - A network connection for the first build only, and about 3 GB of disk for `target/`.
-- Your harness installed at the exact version you want to support, and a GitHub account.
+- Your harness installed (note the version you measured), and a GitHub account.
 
 <a id="1-capability-worksheet"></a>
 
@@ -119,10 +119,9 @@ coding agent can follow it step by step, with the expected output of every comma
 4. **Write the connector.** Copy
    `skills/adding-a-capture-harness/templates/connector-harness.toml` to
    `connectors/<id>/harness.toml` and fill it in; `connectors/hermes-cli/` is the closest
-   example. Pin your binary's version and SHA-256 (`shasum -a 256 <binary>`). No local check
-   runs your real binary, so none can tell you the hash is wrong. The hash is copied into your
-   connector's test snapshot (`<id>.json`), where a reviewer sees it; a maintainer re-derives it
-   from your official release, and `goalcup start` refuses a binary whose hash differs.
+   example. Builds are recorded, not pinned (D53): name the program, and if it prints its
+   version on one line, the arguments that ask for it (`version_args = ["--version"]`). The
+   tracer records the build's digests and that line in every trace.
 5. **Add a test case.** Copy `skills/adding-a-capture-harness/templates/kit-case/` to
    `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`. It is a small Python stand-in that
    behaves like your harness, so the tracer can be tested without a network or a key.

@@ -62,12 +62,23 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   A CLI crash after the gate released the child, combined with a raced manual `goalcup seal`, can
   still leave a harness running. Needs both faults. Ticket: H-10; record
   m2-h10-finish-and-spawn-gate.
-- **The final executable check is neither a coherent snapshot nor inode-bound execution on macOS.**
-  After durable registration the CLI re-opens the exact canonical path with
-  `O_NOFOLLOW|O_NONBLOCK`, requires a regular file and streams it into SHA-256. The residual window
-  starts at the first read: a same-UID writer can mutate the open file in place so the read sequence
-  hashes to the pin while the file's final bytes differ. After the read, `exec` resolves the path,
-  so a same-UID pathname replacement can change what runs. This does not bind exact bytes or inode.
+- **The release-time swap check is neither a coherent snapshot nor inode-bound execution on
+  macOS.** No build is pinned (D53): the CLI resolves `program` on `PATH`, hashes the regular file
+  once, and after durable registration re-opens the exact canonical path with
+  `O_NOFOLLOW|O_NONBLOCK`, requires a regular file and streams it into SHA-256 again, refusing a
+  file swapped mid-launch. The residual window starts at the first read: a same-UID writer can
+  mutate the open file in place so the second read hashes to the first while the file's final
+  bytes differ. After the read, `exec` resolves the path, so a same-UID pathname replacement can
+  change what runs. The daemon's `Launch.harness_build` digests (the registered program and, on
+  Linux, the running image) are the record of what ran; on macOS the image digest reads a path,
+  so the same replacement is a residual there too.
+- **An unpinned build may be anything on PATH** (a wrapper that unsets `HTTPS_PROXY`, a fake that
+  writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the
+  judges comparing the native session's model turns with the wire leg's model calls; the verifier
+  does not yet flag native turns with no wire model call. `Launch.harness_version` is what the
+  harness printed for its own `version_args` (or `unreported`): reported, not proven. That probe
+  runs the unpinned binary once before the daemon registers anything, with no proxy, no record and
+  a throwaway `HOME`; `version_args` is limited to `--version`, `-v`, `-V` or `version`.
 - **One run per shared home, by a lock with two gaps.** `goalcup start` holds an exclusive flock
   on `capture-homes/<id>.lock` until its finish returns, and refuses a second start of the same
   harness (D39). The lock dies with the launcher: if `goalcup start` is SIGKILLed while a

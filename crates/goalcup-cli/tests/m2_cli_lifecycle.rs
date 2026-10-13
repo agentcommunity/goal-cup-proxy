@@ -735,7 +735,7 @@ fn executable_replacement_after_registration_never_releases_gate(
         std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
     let error = result.expect_err("changed executable bytes must keep the child parked");
     assert!(
-        format!("{error}").contains("changed after process registration"),
+        format!("{error}").contains("was replaced after it was resolved"),
         "{error}\n{out}"
     );
     let pid = client.book().registered[0];

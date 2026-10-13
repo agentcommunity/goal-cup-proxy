@@ -1385,10 +1385,22 @@ unreadable, and the field is then absent.
 **What it is not.** The reader checks only the field's shape (canonical hex, bounded platform);
 it never compares a digest with a list. Matching against known builds, and the "unlisted" note
 for judges, belong to the server. Removing the pin refusal is the next PR; the recording lands
-first so the tree never has neither.
+first so the tree never has neither (done: see the amendment below).
 
 **Reconsider when** the server's build list exists, or a second post-tag field is wanted (then
 open v6 rather than another exception).
+
+**Amended (2026-10-14, "core: record harness builds, pin none").** The pin refusal is gone: a
+connector's `[capture.executable]` names only `program` and, optionally, `version_args`, and a
+manifest that still carries `sha256` or `version` (base or per-platform) is refused with one
+sentence telling the author to delete the line. `goalcup start` runs whatever build `program`
+resolves to on `PATH`, keeping only a consistency check that the file did not change between
+resolution and release. `Launch.harness_version` now carries the harness's own `version_args`
+output (first line of stdout, printable ASCII, at most 128 bytes, from a probe with an empty
+environment but `PATH` and a throwaway `HOME` removed afterwards, ten-second timeout) or `unreported`, where it
+used to carry the connector's pinned version: a change of meaning this row accepts, since the
+field was always display text and the digests are the record. The connector-directory pin
+(`pins/connector-dirs.txt`) stays: it is what stops a connector smuggling a base URL.
 
 ---
 

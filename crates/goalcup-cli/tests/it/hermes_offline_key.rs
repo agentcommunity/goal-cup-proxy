@@ -1,4 +1,4 @@
-//! The real pinned Hermes, offline, with a synthetic key.
+//! The real installed Hermes, offline, with a synthetic key.
 //!
 //! These tests run the installed `hermes-agent` 0.19.0 against a **test-owned fake CONNECT
 //! proxy** and nothing else. They are `#[ignore]`d and run by name:
@@ -43,7 +43,7 @@ use crate::common::m2_common;
 use goalcup_cli::key_scan::{FragmentMatcher, ScanOutcome, scan_tree};
 use goalcup_cli::launch::{
     CAPTURE_PATH, CaptureLaunch, Pipes, ScopeMarker, build_capture_launch,
-    child_secret_for_harness, pin_harness_executable, spawn_gated, tee_marked_capture,
+    child_secret_for_harness, resolve_harness_executable, spawn_gated, tee_marked_capture,
 };
 use goalcup_protocol::template::TemplateVars;
 use m2_common::{TestPki, provider, read_head};
@@ -310,7 +310,7 @@ fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
     let exe = hermes_exe();
     assert!(
         exe.is_file(),
-        "the pinned Hermes is not at {}",
+        "the installed Hermes is not at {}",
         exe.display()
     );
     let before = real_hermes_listing();
@@ -351,7 +351,7 @@ fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
         proxy.addr.port()
     );
 
-    let pinned = pin_harness_executable(&profile, &exe).expect("the pinned executable");
+    let resolved = resolve_harness_executable(&exe).expect("the installed Hermes");
     let parent: BTreeMap<String, String> = [
         ("USER", "participant"),
         ("LOGNAME", "participant"),
@@ -369,7 +369,7 @@ fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
         &dir.join("workspace"),
         &CaptureLaunch {
             goal: b"hi",
-            executable: &pinned,
+            executable: &resolved,
             run_home: &dir.join("home"),
             config_home: &hermes_home,
             proxy_url: &proxy_url,
@@ -483,7 +483,7 @@ fn shipped_seed() -> Vec<u8> {
 /// reached the request; the run is clean under the scan; one session snapshot carries the
 /// marker's id; nothing reached anything but the fake proxy.
 #[test]
-#[ignore = "runs the real pinned Hermes against a fake CONNECT proxy; run by name"]
+#[ignore = "runs the real installed Hermes against a fake CONNECT proxy; run by name"]
 fn the_corrected_seed_keeps_the_key_out_of_the_store_while_it_reaches_the_request() {
     let run = run_hermes(Reply::Ok200, None);
     let connects = run.proxy.connects();
@@ -561,7 +561,7 @@ fn the_corrected_seed_keeps_the_key_out_of_the_store_while_it_reaches_the_reques
 /// fragment scan finds it. The positive control for the scan, on the residue Hermes really
 /// leaves.
 #[test]
-#[ignore = "runs the real pinned Hermes against a fake CONNECT proxy; run by name"]
+#[ignore = "runs the real installed Hermes against a fake CONNECT proxy; run by name"]
 fn a_401_leaves_a_request_dump_and_the_fragment_scan_finds_it() {
     let run = run_hermes(Reply::Unauthorized401, None);
     eprintln!(
@@ -597,7 +597,7 @@ fn a_401_leaves_a_request_dump_and_the_fragment_scan_finds_it() {
 /// the key into a fingerprinted entry and the byte-identical oracle fails. This test passes by
 /// asserting the failure's shape, which is how the correction stays enforced.
 #[test]
-#[ignore = "runs the real pinned Hermes against a fake CONNECT proxy; run by name"]
+#[ignore = "runs the real installed Hermes against a fake CONNECT proxy; run by name"]
 fn d41s_literal_seed_fails_the_byte_identical_oracle() {
     let literal = br#"{"version":1,"providers":{}}"#;
     let run = run_hermes(Reply::Ok200, Some(literal));
