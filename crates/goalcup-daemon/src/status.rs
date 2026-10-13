@@ -13,178 +13,93 @@
 //! `WorkspaceInfo.run_public_key`; the `public_key` field on the document is a label, not
 //! a credential, and nothing in this crate verifies against it.
 //!
-//! # The status line is a file, not a route
-//!
-//! [`write_entry_status_line_rooted`] writes the one plain line Claude's `statusLine` command
-//! `cat`s. **It may not carry a token, a key, a seed or a path out of the participant's
-//! home**: the status route is unauthenticated by design, and the status line is rendered into
-//! a terminal a screen recording may catch.
+//! Every document is a v5 local capture's: the upload, deadline and hook fields the wire
+//! shape still carries are reported empty or zero, and `detail` is the capture's sentence.
 
 use crate::DaemonError;
-use crate::arming::{GateState, RefusalReason};
 use crate::config::EventConfig;
 use crate::registry::{Entry, EntryState};
 use ed25519_dalek::SigningKey;
-use goalcup_platform::tracecap::EntryArtifactRoot;
 use goalcup_protocol::capture::{CaptureState, M2Status, RunState};
 use goalcup_protocol::control::{
-    CycleErrors, EntrySummary, EventStatus, EventStatusSource, SignedStatus, StatusPayload,
-    WorkspaceFinalizationStatusV1,
+    ArmingState, CycleErrors, EntrySummary, EventStatus, EventStatusSource, SignedStatus,
+    StatusPayload,
 };
 use goalcup_protocol::events::HealthState;
-use goalcup_protocol::provenance::TerminationOutcomeV1;
 
 /// Everything the daemon knows about one entry at one moment. The daemon's own gathering
 /// struct: it is never serialised and never reaches the wire.
 pub struct StatusInputs<'a> {
     pub entry: &'a Entry,
-    pub arming: GateState,
-    pub health: HealthState,
-    pub events_uploaded: u64,
-    pub events_pending: u64,
-    pub last_sync_at: Option<String>,
-    pub now: f64,
+    pub arming: ArmingState,
     pub event: EventStatus,
-    /// What the daemon's own four cadences lost. Gathered here rather than computed from
+    /// What the daemon's own cadences lost. Gathered here rather than computed from
     /// the entry, because the failures belong to the loop around the entry and not to the
     /// run: the runtime is handed the daemon's counters at registration.
     pub cycles: CycleErrors,
-    /// The three counters the tick keeps and nothing else states.
-    pub polls_capped: u64,
-    pub cursor_restore_failures: u64,
-    pub skipped_replayed: u64,
-    /// The first hole in the write-ahead buffer the last pump could not close.
-    pub buffer_gap_at: Option<u64>,
-    /// Polls that stopped at the seen-file bound with uncaptured files still in front of
-    /// them. Its notice chains nothing, so this is the only place
-    /// the fact reaches a reader.
-    pub files_capped: u64,
-    /// The seal could not vouch for the harness tree. Taken from the entry's
-    /// `SealOutcome`, so it is `false` until there is a seal to read it off.
-    pub harness_unverified: bool,
+    /// The capture's state, which also supplies `detail`.
+    pub capture: M2Status,
 }
 
-fn finalization_needs_harness_review(finalization: Option<&WorkspaceFinalizationStatusV1>) -> bool {
-    match finalization {
-        None | Some(WorkspaceFinalizationStatusV1::Finishing {}) => false,
-        Some(WorkspaceFinalizationStatusV1::Incomplete { termination, .. }) => termination
-            .as_ref()
-            .is_some_and(|outcome| !matches!(outcome, TerminationOutcomeV1::Confirmed { .. })),
-        Some(WorkspaceFinalizationStatusV1::Terminal { termination, .. }) => {
-            !matches!(termination, TerminationOutcomeV1::Confirmed { .. })
-        }
-    }
-}
-
-/// The payload, from the entry and the moment. No I/O, no clock: `now` is an argument, so a
-/// test can ask the same inputs about two moments.
-///
-/// # A refusal is `ArmingState::Refused`
-///
-/// Given a refused gate, the payload reports `ArmingState::Refused`, so a machine reader that
-/// keys on `arming` alone can tell a run that is waiting to be armed from one that will never
-/// arm; `health` reports `ArmingPending` and `detail` says which refusal it was, in words a
-/// participant can act on. No current producer builds `GateState::Refused`: the V1 arming
-/// poll that did was removed by D48, and the capture runtime never refuses a gate. The
-/// mapping stays because the status type still carries the variant. `GateState::to_control`
-/// is total, so there is no fallback here to
-/// hide a future `GateState` variant behind — an unmapped variant is a compile error.
-pub fn build_payload(inputs: &StatusInputs) -> StatusPayload {
-    let arming = inputs.arming.to_control();
-    let finalization = inputs.entry.workspace_finalization_status();
-    let finalization_needs_review = finalization_needs_harness_review(finalization.as_ref());
-    // A sealed entry reports `sealed`, and its countdown stops.
-    //
-    // The seal is the chain's last link, so the entry's own row is the authority and this
-    // is read off it rather than off `inputs.health` — which is the last state the tick
-    // evaluated, and the tick stops at the seal.
-    let sealed_at = inputs.entry.sealed_at.clone();
+/// Whether the row's own durable state says capture is closed without a sealed terminal it
+/// can vouch for: an interrupted `Sealing` row, or a terminal drain that needs review.
+fn recovery_needed(entry: &Entry) -> bool {
     // `Sealing` is deliberately neither open nor sealed: an interrupted intent has closed
     // capture, but until recovery validates and promotes its one terminal link it cannot
-    // honestly claim the run is sealed.  Its status is the durable quarantine rather than
-    // the stale live health/counted-down deadline the last tick happened to publish.
-    let sealing_recovery_needed = inputs.entry.state == EntryState::Sealing && sealed_at.is_none();
-    let terminal_drain_needs_review = inputs.entry.terminal_drain_needs_review();
-    let capture_closed_recovery_needed =
-        sealing_recovery_needed || terminal_drain_needs_review || finalization_needs_review;
-    let health = match (&sealed_at, capture_closed_recovery_needed) {
+    // honestly claim the run is sealed.
+    (entry.state == EntryState::Sealing && entry.sealed_at.is_none())
+        || entry.terminal_drain_needs_review()
+}
+
+/// The payload, from the entry and the moment. No I/O, no clock.
+///
+/// A sealed entry reports `sealed`: the seal is the chain's last link, so the entry's own row
+/// is the authority. A local capture has no signed deadline, so `seconds_remaining` is `None`
+/// before and after its finish. `detail` is the capture's sentence, so no surface that reads
+/// only that sentence can show a legacy health sentence (uploads, a countdown).
+pub fn build_payload(inputs: &StatusInputs) -> StatusPayload {
+    let entry = inputs.entry;
+    let health = match (&entry.sealed_at, recovery_needed(entry)) {
         (_, true) => HealthState::SealingRecoveryNeeded,
         (Some(_), false) => HealthState::Sealed,
-        (None, false) => inputs.health,
-    };
-    let seconds_remaining = match (&sealed_at, capture_closed_recovery_needed) {
-        // Not `None`: a reader that has to tell "no deadline" from "the deadline no longer
-        // matters" gets two different answers, and every surface already renders `Some(0)`
-        // as time being up.
-        (Some(_), _) | (None, true) => Some(0),
-        (None, false) => inputs
-            .entry
-            .deadline_unix
-            .map(|d| (d - inputs.now).max(0.0) as u64),
+        (None, false) => HealthState::Online,
     };
     StatusPayload {
-        entry_id: inputs.entry.entry_id.clone(),
-        connector_id: inputs.entry.connector_id.clone(),
-        workspace: inputs.entry.workspace.to_string_lossy().to_string(),
-        session_id: inputs.entry.session_id.clone(),
+        entry_id: entry.entry_id.clone(),
+        connector_id: entry.connector_id.clone(),
+        workspace: entry.workspace.to_string_lossy().to_string(),
+        session_id: None,
         // `None` where nothing measured it, and never `Some("")`. The registry row's field is a
-        // `String` because the version-drift event on it is a pair of strings; the document's is
-        // an `Option`, and an empty string in the `Some` arm is a claim that a version was read
-        // whose value happens to be nothing.
-        harness_version: Some(inputs.entry.harness_version.clone()).filter(|v| !v.is_empty()),
-        arming,
+        // `String`; the document's is an `Option`, and an empty string in the `Some` arm is a
+        // claim that a version was read whose value happens to be nothing.
+        harness_version: Some(entry.harness_version.clone()).filter(|v| !v.is_empty()),
+        arming: inputs.arming,
         health,
-        started_at: inputs.entry.started_at.clone(),
-        deadline_at: inputs.entry.deadline_at.clone(),
-        sealed_at: sealed_at.clone(),
-        seconds_remaining,
-        last_sync_at: inputs.last_sync_at.clone(),
-        events_uploaded: inputs.events_uploaded,
-        // A quarantine means the ordinary byte/count view cannot prove completion. The
-        // buffer can be behind a registry terminal mirror (or the registry can be beyond
-        // terminal), both of which otherwise render zero here. Keep a real pending count
-        // when there is one, but never publish elevated review as a completed all-clear.
-        events_pending: if terminal_drain_needs_review {
-            inputs.events_pending.max(1)
-        } else {
-            inputs.events_pending
-        },
-        detail: if terminal_drain_needs_review {
-            "Capture is closed: terminal upload validation failed. This entry requires elevated \
-             review and must not be treated as fully acknowledged."
-                .to_string()
-        } else if finalization_needs_review {
-            "Capture is closed: termination could not be confirmed. This entry requires elevated \
-             review and must not be treated as fully acknowledged."
-                .to_string()
-        } else {
-            plain_words(health, inputs.arming, inputs.entry.started_at.is_some())
-        },
-        event_status_source: source_of(inputs.entry, &inputs.event),
+        started_at: None,
+        deadline_at: None,
+        sealed_at: entry.sealed_at.clone(),
+        seconds_remaining: None,
+        last_sync_at: None,
+        events_uploaded: 0,
+        // A quarantine means the ordinary count view cannot prove completion, so it is never
+        // published as a completed all-clear.
+        events_pending: u64::from(entry.terminal_drain_needs_review()),
+        detail: capture_words(&inputs.capture).to_string(),
+        event_status_source: source_of(entry, &inputs.event),
         event: inputs.event.clone(),
         cycles: inputs.cycles.clone(),
-        polls_capped: inputs.polls_capped,
-        cursor_restore_failures: inputs.cursor_restore_failures,
-        skipped_replayed: inputs.skipped_replayed,
-        buffer_gap_at: inputs.buffer_gap_at,
-        files_capped: inputs.files_capped,
-        harness_unverified: inputs.harness_unverified || finalization_needs_review,
-        finalization,
-        // The capture projection; this builder leaves it unset.
-        capture: None,
+        polls_capped: 0,
+        cursor_restore_failures: 0,
+        skipped_replayed: 0,
+        buffer_gap_at: None,
+        files_capped: 0,
+        harness_unverified: false,
+        finalization: None,
+        capture: Some(inputs.capture.clone()),
+        // The receiver's admission counts; the caller sets them when it holds them.
         producers_consumed: None,
         admissions_refused: None,
     }
-}
-
-/// Project a v5 entry's capture state onto a payload before it is signed. `Some` also
-/// replaces `detail`, so no surface that reads only that sentence can show a legacy health
-/// sentence (uploads, a countdown) for a local capture. Pure: no I/O and no clock.
-pub(crate) fn apply_capture_snapshot(payload: &mut StatusPayload, capture: Option<M2Status>) {
-    if let Some(snapshot) = &capture {
-        payload.detail = capture_words(snapshot).to_string();
-    }
-    payload.capture = capture;
 }
 
 /// One sentence per capture state, in the words a participant acts on. A failure is named
@@ -213,38 +128,27 @@ fn capture_words(snapshot: &M2Status) -> &'static str {
 
 /// The event timeline an entry falls back to when no round was configured.
 ///
-/// **What each field means here, and why none of it is a claim about a round.** `t0` and
-/// `start_window_closes_at` are the moment the entry's row was created: the entry could not
-/// have started before it existed, and it started as soon as it was allowed to, so its own
-/// creation is the only window this daemon can measure without being told one.
-/// `publication_closes_at` is the entry's `deadline_at` — the number the start receipt
-/// fixed, which is a real bound rather than a stand-in — and `created_at` again only before
-/// a receipt has fixed one. `rules_version` is this build's version, which says which binary
-/// wrote the document and nothing about which rulebook the run is judged under.
+/// **What each field means here, and why none of it is a claim about a round.** `t0`,
+/// `start_window_closes_at` and `publication_closes_at` are the moment the entry's row was
+/// created: the entry could not have started before it existed, and a local capture has no
+/// signed deadline, so its own creation is the only window this daemon can measure without
+/// being told one. `rules_version` is this build's version, which says which binary wrote the
+/// document and nothing about which rulebook the run is judged under.
 ///
 /// A reader is not asked to work any of that out: [`StatusPayload::event_status_source`] is
 /// `fallback` on exactly the documents this built.
-///
-/// **This is the one definition.** The V1 per-entry runtime held a copy of it, and D48
-/// removed that runtime with its tests, so every caller left is in this module.
 pub(crate) fn fallback_event_status(entry: &Entry) -> EventStatus {
     EventStatus {
         t0: entry.created_at.clone(),
         start_window_closes_at: entry.created_at.clone(),
-        publication_closes_at: entry
-            .deadline_at
-            .clone()
-            .unwrap_or_else(|| entry.created_at.clone()),
+        publication_closes_at: entry.created_at.clone(),
         rules_version: crate::DAEMON_VERSION.to_string(),
     }
 }
 
 /// The event status one entry should carry, given three configured fields from anywhere.
 ///
-/// `publication_closes_at` is taken from the entry in every case: it is the deadline the
-/// receipt fixed, and that is immutable. A caller that restated a stored
-/// `publication_closes_at` verbatim would regress it to `created_at`, because `deadline_at`
-/// is `None` until a start receipt sets it, which is later than the round is resolved.
+/// `publication_closes_at` is the fallback's in every case: no configured value replaces it.
 pub(crate) fn event_status_from(entry: &Entry, configured: Option<&EventStatus>) -> EventStatus {
     let fallback = fallback_event_status(entry);
     match configured {
@@ -277,8 +181,7 @@ pub(crate) fn event_status_for(entry: &Entry, configured: Option<&EventConfig>) 
 /// by the literals in this module; a fifth field on it would be a field those literals do not
 /// set. So the three fields `[event]` supplies are compared against what the fallback would
 /// have put there, on `created_at` and `DAEMON_VERSION`, both of which are fixed for the life
-/// of the entry — `publication_closes_at` is deliberately not compared, because the deadline
-/// moves when the receipt fixes it and the runtime's copy is taken at construction.
+/// of the entry — `publication_closes_at` is not compared, because `[event]` does not set it.
 ///
 /// The one inaccuracy is benign and worth naming: a `[event]` section that declares exactly
 /// the entry's creation instant and this build's version reads as `fallback`. The numbers in
@@ -304,177 +207,20 @@ pub fn sign_payload(
     Ok(SignedStatus::sign(payload, cached_at, key)?)
 }
 
-/// Write a participant status line through the runtime's retained entry-artifact
-/// capability. The lexical path remains only a diagnostic; no write follows it after entry
-/// acquisition.
-pub fn write_entry_status_line_rooted(
-    signed: &SignedStatus,
-    artifact: &EntryArtifactRoot,
-) -> Result<(), DaemonError> {
-    artifact
-        .replace_status_line(status_line_bytes(signed).as_bytes())
-        .map_err(|error| {
-            DaemonError::Refused(format!(
-                "status line cannot be replaced through retained entry artifact authority: {error}"
-            ))
-        })
-}
-
-/// The status line is a file. One line of plain text, no token, no grant,
-/// no key and no path — the harness `cat`s it into a surface the participant sees and the
-/// agent does not (D25).
-///
-/// The workspace path is deliberately **not** in it: the line is rendered in a terminal
-/// the participant may be recording, and it would say nothing the participant does not
-/// already know.
-fn status_line_bytes(signed: &SignedStatus) -> String {
-    let p = &signed.payload;
-    let remaining = match p.seconds_remaining {
-        Some(0) => "time is up".to_string(),
-        // The last 59 seconds are not "0h 0m left": that reads as a rounding artefact
-        // beside a run that genuinely has forty minutes, and this is the minute a
-        // participant most needs told apart from the others.
-        Some(s) if s < 60 => "<1m left".to_string(),
-        Some(s) => format!("{}h {}m left", s / 3_600, (s % 3_600) / 60),
-        None => "not started".to_string(),
-    };
-    // One line: the detail is one sentence and carries no newline, and the format string
-    // ends with the only `\n` in the file.
-    format!(
-        "/goal Cup — {} — {remaining}\n",
-        p.detail.replace(['\n', '\r'], " ")
-    )
-}
-
 /// The row `goalcup entries` prints and `GET /v0/entries` returns.
-///
-/// A refused gate would report `ArmingState::Refused` here, for the same reason as
-/// [`build_payload`] (which also says why no current producer refuses one).
-pub fn summary(entry: &Entry, arming: GateState, health: HealthState) -> EntrySummary {
-    let finalization_needs_review =
-        finalization_needs_harness_review(entry.workspace_finalization_status().as_ref());
+pub fn summary(entry: &Entry, arming: ArmingState, health: HealthState) -> EntrySummary {
     EntrySummary {
         entry_id: entry.entry_id.clone(),
         connector_id: entry.connector_id.clone(),
         workspace: entry.workspace.to_string_lossy().to_string(),
-        arming: arming.to_control(),
-        health: if entry.terminal_drain_needs_review() || finalization_needs_review {
+        arming,
+        health: if entry.terminal_drain_needs_review() {
             HealthState::SealingRecoveryNeeded
         } else {
             health
         },
-        started_at: entry.started_at.clone(),
-        deadline_at: entry.deadline_at.clone(),
+        started_at: None,
+        deadline_at: None,
         sealed_at: entry.sealed_at.clone(),
-    }
-}
-
-/// The health state in plain words. No enum names, no jargon, and every line says what — if
-/// anything — the participant should do about it.
-///
-/// `started` is `Entry::started_at.is_some()`, the entry's own row and the same question
-/// the V1 drain eviction asked before D48 removed it. Reading `arming != Started` instead
-/// would disagree on exactly one entry — one that started, sealed, and whose gate was
-/// rebuilt `pending` by a daemon restart — and that entry would read "sealed, never
-/// started — nothing to upload" over a run with a chain full of records. `started_at` is
-/// the durable fact: the start receipt stamped it, and no restart forgets it. The gate is
-/// runtime state, rebuilt from what the tick has seen since.
-pub fn plain_words(health: HealthState, arming: GateState, started: bool) -> String {
-    match health {
-        HealthState::Online => "Recording. Everything is being captured and synced.".to_string(),
-        HealthState::UploadLagging => {
-            "Recording. The upload is behind, which is normal on a slow link; nothing is lost."
-                .to_string()
-        }
-        HealthState::ConnectionLost => {
-            "Recording locally. The tracker cannot reach the server; everything is buffered and \
-             will sync when it comes back."
-                .to_string()
-        }
-        HealthState::AgentExited => {
-            "Your agent is no longer running. Run `goalcup seal` to finish this entry.".to_string()
-        }
-        HealthState::TrackerInterrupted => {
-            "The tracker restarted. It has picked up where it left off.".to_string()
-        }
-        HealthState::CaptureStalled => {
-            "Your agent is running but has written nothing for a while. If it looks stuck, run \
-             `goalcup doctor`."
-                .to_string()
-        }
-        HealthState::HooksSilent => {
-            "The tracker has stopped receiving events from your harness while its transcript \
-             keeps growing. Run `goalcup doctor`."
-                .to_string()
-        }
-        HealthState::ConfigRestored => {
-            "A tracker file in the workspace changed and was put back. The change is recorded."
-                .to_string()
-        }
-        HealthState::DeadlineReached => "Time is up. This entry is being sealed.".to_string(),
-        // The second sentence is the one difference that matters to a participant reading
-        // it: a run that never started has nothing on the server, and saying so is what
-        // tells "finished" from "finished with nothing in it".
-        //
-        // Read off `started_at` and not off the gate: see [`plain_words`].
-        HealthState::Sealed => {
-            if started {
-                "This entry is sealed. Nothing more will be recorded, and what was recorded \
-                 is on disk beside the chain."
-                    .to_string()
-            } else {
-                "sealed, never started — nothing to upload".to_string()
-            }
-        }
-        HealthState::SealingRecoveryNeeded => {
-            "Capture is closed while the tracker verifies an interrupted seal. This entry is \
-             not yet claimed as sealed; inspect or restart the tracker before continuing."
-                .to_string()
-        }
-        HealthState::ArmingPending => match arming {
-            GateState::Refused(RefusalReason::ArmingTimedOut) => {
-                "The tracker saw your harness start but no transcript followed, so nothing was \
-                 recorded. Run `goalcup start` again and open a NEW session in the folder it \
-                 creates."
-                    .to_string()
-            }
-            GateState::Refused(RefusalReason::StartSignalMissing) => {
-                "The tracker never saw your harness start in this folder, so nothing was \
-                 recorded. Run `goalcup start` again and open a NEW session in the folder it \
-                 creates."
-                    .to_string()
-            }
-            _ => "Not recording yet. Open your harness in the folder the tracker created; the \
-                  clock starts when you type your goal."
-                .to_string(),
-        },
-        HealthState::ArmingLost => {
-            "A hook file was put back, and on this harness that cancels its trust. Re-arm before \
-             continuing, or the rest of the run will not be captured."
-                .to_string()
-        }
-        HealthState::VersionChanged => {
-            "Your harness updated itself mid-run. That is recorded and is not a violation."
-                .to_string()
-        }
-        HealthState::ConfigMismatch => {
-            "Your harness is running with a different hook configuration than the tracker wrote. \
-             Capture may be incomplete. Run `goalcup doctor`."
-                .to_string()
-        }
-        // The participant may well have done nothing — a harness that rotates its own
-        // transcript looks identical from here — so the words say what was seen and what
-        // follows, not what was done.
-        HealthState::StoreReplaced => {
-            "One of the files your harness writes was replaced or shortened. The tracker recorded \
-             that and is still capturing; a reviewer will see it in your trace."
-                .to_string()
-        }
-        // Said while there is still room to act on it.
-        HealthState::DiskPressure => {
-            "This disk is nearly full. The tracker is still capturing, but it will stop when the \
-             disk runs out. Free some space."
-                .to_string()
-        }
     }
 }

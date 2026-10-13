@@ -8,7 +8,6 @@
 //! Every wire and store type comes from `goalcup-protocol`; this crate defines none of
 //! them and extends none of them.
 
-pub mod arming;
 pub mod config;
 /// The control API's server side: the state its handlers share, the one authentication
 /// rule — `control::is_public_route` on the raw request path — the `control.json` the CLI
@@ -35,7 +34,7 @@ pub mod runtime;
 /// Building and signing the status document (D25).
 pub mod status;
 mod submission_types;
-pub use submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};
+pub use submission_types::CaptureResourceLimitsV1;
 /// Terminating the harness process tree at seal (D22).
 ///
 /// Unix only, like `goalcup_protocol::process`, which owns the discovery half. A module
@@ -44,12 +43,6 @@ pub use submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};
 #[cfg(unix)]
 pub mod terminate;
 pub mod workspace;
-
-// `status`'s public status-line writer takes an `EntryArtifactRoot`, so a caller of it needs
-// no direct `goalcup-platform` dependency. The V1 immutable-submission writer whose
-// signature also needed `SourceDir`, `TraceDir` and `NativeHandleBudgetV1` was removed by
-// D48, and those re-exports went with OS-31.
-pub use goalcup_platform::tracecap::EntryArtifactRoot;
 
 /// This build's version, for `trace.toml` and for the `VersionChange` the daemon chains
 /// when it observes its own binary change under a running entry.

@@ -75,8 +75,6 @@
 
 use super::Daemon;
 
-use crate::arming::GateState;
-
 use crate::config::{EventConfig, ReceiptBindingPolicy};
 
 use crate::ingest::{
@@ -97,7 +95,7 @@ use crate::registry::{
 
 use crate::workspace::{self, Roots};
 
-use crate::{DAEMON_VERSION, DaemonError, now_rfc3339, now_unix, status};
+use crate::{DAEMON_VERSION, DaemonError, now_rfc3339, status};
 
 use goalcup_platform::tracecap::{EntryArtifactRoot, RefusalKind, TraceCapError};
 
@@ -112,8 +110,9 @@ use goalcup_protocol::capture::{
 use goalcup_protocol::chain::Link;
 
 use goalcup_protocol::control::{
-    CaptureFinishReport, CaptureLaunchRequest, CaptureSealRequest, CaptureWorkspaceInfo,
-    CycleErrors, FINISH_COMMIT_RESERVE, LocalSealOutcome, ProxyCounters, SignedStatus,
+    ArmingState, CaptureFinishReport, CaptureLaunchRequest, CaptureSealRequest,
+    CaptureWorkspaceInfo, CycleErrors, FINISH_COMMIT_RESERVE, LocalSealOutcome, ProxyCounters,
+    SignedStatus,
 };
 
 use goalcup_protocol::envelope::{Envelope, EventBody};
@@ -845,9 +844,9 @@ impl Daemon {
             .map(|capture| {
                 let run = capture.lock();
                 let (gate, health) = match (run.finished(), run.launched()) {
-                    (Some(_), _) => (GateState::Started, HealthState::Sealed),
-                    (None, true) => (GateState::Started, HealthState::Online),
-                    (None, false) => (GateState::Armed, HealthState::Online),
+                    (Some(_), _) => (ArmingState::Started, HealthState::Sealed),
+                    (None, true) => (ArmingState::Started, HealthState::Online),
+                    (None, false) => (ArmingState::Armed, HealthState::Online),
                 };
                 status::summary(&run.entry, gate, health)
             })
@@ -860,7 +859,7 @@ impl Daemon {
             if sealed && !captures.contains_key(&row.entry_id) {
                 summaries.push(status::summary(
                     &row,
-                    GateState::Started,
+                    ArmingState::Started,
                     HealthState::Sealed,
                 ));
             }
@@ -1036,27 +1035,14 @@ fn sign_capture_status(
     let mut payload = status::build_payload(&status::StatusInputs {
         entry,
         arming: if entry.state == EntryState::Started {
-            GateState::Started
+            ArmingState::Started
         } else {
-            GateState::Armed
+            ArmingState::Armed
         },
-        health: HealthState::Online,
-        events_uploaded: 0,
-        events_pending: 0,
-        last_sync_at: None,
-        now: now_unix(),
         event: status::event_status_for(entry, event),
         cycles,
-        polls_capped: 0,
-        cursor_restore_failures: 0,
-        skipped_replayed: 0,
-        buffer_gap_at: None,
-        files_capped: 0,
-        harness_unverified: false,
+        capture,
     });
-    status::apply_capture_snapshot(&mut payload, Some(capture));
-    // A local capture has no signed deadline, before or after its finish.
-    payload.seconds_remaining = None;
     payload.producers_consumed = admission.map(|a| a.producers_consumed as u64);
     payload.admissions_refused = admission.map(|a| a.admissions_refused);
     status::sign_payload(payload, now_rfc3339(), &entry.keys.signing_key()?)
