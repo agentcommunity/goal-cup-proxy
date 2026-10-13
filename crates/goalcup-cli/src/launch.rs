@@ -839,7 +839,10 @@ pub fn build_capture_launch(
     }
     env.insert("HOME".into(), run_home.to_string());
     env.insert("PATH".into(), CAPTURE_PATH.into());
-    env.insert(profile.home.env.clone(), config_home.to_string());
+    // A harness without a home variable keeps its state under the private `HOME` above.
+    if let Some(home_env) = &profile.home.env {
+        env.insert(home_env.clone(), config_home.to_string());
+    }
     for key in ["HTTPS_PROXY", "https_proxy"] {
         env.insert(key.into(), launch.proxy_url.to_string());
     }

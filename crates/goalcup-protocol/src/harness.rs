@@ -37,7 +37,8 @@ use crate::capture_policy::{
     MAX_CAPTURE_HOSTS, MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, MAX_GOAL_FLAG_BYTES,
     arg_path_denied, ca_registry_mode, capture_arg_denied, capture_path_problem, env_key_denied,
     env_value_denied, goal_flag_denied, has_duplicate, is_capture_host, is_interpreter_program,
-    is_tracker_host, mentions_goalcup, seed_content_problem, startup_file_problem,
+    is_tracker_host, local_host_problem, mentions_goalcup, seed_content_problem,
+    startup_file_problem,
 };
 use crate::connector_dir::hash_connector_dir_listing;
 use crate::hints::valid_hint;
@@ -398,8 +399,11 @@ impl CaptureSpec {
 pub struct HomeSpec {
     pub run_home: RunHome,
     pub config_home: ConfigHome,
-    /// The variable pointed at the config home.
-    pub env: String,
+    /// The variable pointed at the config home. Absent for a harness with no such variable: it
+    /// then keeps its state under the private run `HOME`, so its native root is `{run_home}/...`,
+    /// it takes no seeds or dirs, and its config home is `per_run`.
+    #[serde(default)]
+    pub env: Option<String>,
     /// The per-run config home's directory name; `per_run` only. Default `harness-home`.
     #[serde(default)]
     pub per_run_dir: Option<String>,
@@ -994,7 +998,7 @@ impl HarnessManifest {
         self.check_native()?;
         self.check_argv_guard()?;
         self.check_termination()?;
-        self.check_hosts()?;
+        self.check_hosts(origin)?;
         self.check_redaction()?;
         self.check_delivery_agnostic()?;
         self.check_cross_field()?;
@@ -1166,18 +1170,20 @@ impl HarnessManifest {
 
     fn check_home(&self) -> Result<(), ProtocolError> {
         let h = &self.capture.home;
-        let mut b = h.env.bytes();
-        let env_ok = h.env.len() <= 64
-            && b.next().is_some_and(|x| x.is_ascii_uppercase())
-            && b.all(|x| x.is_ascii_uppercase() || x.is_ascii_digit() || x == b'_');
-        if !env_ok {
-            return Err(refuse(
-                "capture.home.env",
-                format!("`{}` must match `^[A-Z][A-Z0-9_]{{0,63}}$`", h.env),
-            ));
-        }
-        if let Some(why) = env_key_denied(&h.env, EnvContext::HomeEnv) {
-            return Err(refuse("capture.home.env", format!("`{}` {why}", h.env)));
+        if let Some(env) = &h.env {
+            let mut b = env.bytes();
+            let env_ok = env.len() <= 64
+                && b.next().is_some_and(|x| x.is_ascii_uppercase())
+                && b.all(|x| x.is_ascii_uppercase() || x.is_ascii_digit() || x == b'_');
+            if !env_ok {
+                return Err(refuse(
+                    "capture.home.env",
+                    format!("`{env}` must match `^[A-Z][A-Z0-9_]{{0,63}}$`"),
+                ));
+            }
+            if let Some(why) = env_key_denied(env, EnvContext::HomeEnv) {
+                return Err(refuse("capture.home.env", format!("`{env}` {why}")));
+            }
         }
         if let Some(dir) = &h.per_run_dir {
             let mut b = dir.bytes();
@@ -1551,7 +1557,7 @@ impl HarnessManifest {
         Ok(())
     }
 
-    fn check_hosts(&self) -> Result<(), ProtocolError> {
+    fn check_hosts(&self, origin: Origin) -> Result<(), ProtocolError> {
         let c = &self.capture;
         if c.hosts.is_empty() || c.hosts.len() > MAX_CAPTURE_HOSTS {
             return Err(refuse(
@@ -1584,6 +1590,11 @@ impl HarnessManifest {
                     format!("`{a}` is not a lowercase DNS name without port or trailing dot"),
                 ));
             }
+            if origin == Origin::Pinned
+                && let Some(why) = local_host_problem(a)
+            {
+                return Err(refuse("capture.auth_hosts", format!("`{a}` {why}")));
+            }
         }
         for h in &c.hosts {
             if !is_capture_host(&h.host) {
@@ -1594,6 +1605,12 @@ impl HarnessManifest {
                         h.host
                     ),
                 ));
+            }
+            // The kit and the controlled workload (`Origin::Dev`) serve `*.localhost` stand-ins.
+            if origin == Origin::Pinned
+                && let Some(why) = local_host_problem(&h.host)
+            {
+                return Err(refuse("capture.hosts", format!("`{}` {why}", h.host)));
             }
             if c.auth_hosts.contains(&h.host) {
                 return Err(refuse(
@@ -1822,6 +1839,32 @@ impl HarnessManifest {
             ));
         }
 
+        // Without `home.env` nothing points the harness at the config home, so anything the
+        // manifest puts there, or expects to read from there, would never be used. Refused
+        // rather than admitted to record nothing.
+        if h.env.is_none() {
+            const WHY: &str = "requires `capture.home.env`: without it nothing points the harness \
+                               at the config home, so the harness keeps its state under the \
+                               private run `HOME`";
+            if !per_run {
+                return Err(refuse(
+                    "capture.home.config_home",
+                    format!("`shared` {WHY}"),
+                ));
+            }
+            for (field, present) in [("seed", !h.seed.is_empty()), ("dirs", !h.dirs.is_empty())] {
+                if present {
+                    return Err(refuse(format!("capture.home.{field}"), WHY));
+                }
+            }
+            if root_home == RootHome::Config {
+                return Err(refuse(
+                    "capture.native.root",
+                    format!("a `{{config_home}}` root {WHY}: use `{{run_home}}/...`"),
+                ));
+            }
+        }
+
         // M10 and S2 review M-5: a native pattern may not sweep a seed file or a credential the
         // manifest seeds. A `{config_home}` root is the seeds' own directory. A `{run_home}` root
         // is another directory while the homes are disjoint, but where the per-run config home
@@ -1872,8 +1915,10 @@ impl HarnessManifest {
         }
 
         // The variables this manifest pins are distinct, and none is a `capture.env` key.
-        let mut pinned: Vec<(&str, String)> =
-            vec![("capture.home.env", c.home.env.to_ascii_uppercase())];
+        let mut pinned: Vec<(&str, String)> = Vec::new();
+        if let Some(env) = &c.home.env {
+            pinned.push(("capture.home.env", env.to_ascii_uppercase()));
+        }
         if let Some(cr) = &c.credential {
             pinned.push(("capture.credential.env", cr.env.to_ascii_uppercase()));
         }

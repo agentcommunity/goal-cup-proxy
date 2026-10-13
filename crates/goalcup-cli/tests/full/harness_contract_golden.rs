@@ -735,8 +735,8 @@ fn allowance_json(c: &HarnessConnector) -> Value {
     json!(rows)
 }
 
-fn legacy_env_refusal(key: &str, home_env: &str) -> Option<&'static str> {
-    if key.eq_ignore_ascii_case(home_env) {
+fn legacy_env_refusal(key: &str, home_env: Option<&str>) -> Option<&'static str> {
+    if home_env.is_some_and(|h| key.eq_ignore_ascii_case(h)) {
         return Some("is pinned by the capture launch itself");
     }
     match env_key_denied(key, EnvContext::CaptureEnv) {
@@ -874,7 +874,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         }
     };
 
-    let home_env = dp.home.env.as_str();
+    let home_env = dp.home.env.as_deref();
     let argv_deny: Vec<Value> = ARGV_PROBES
         .iter()
         .map(|arg| {

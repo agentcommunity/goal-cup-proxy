@@ -104,8 +104,8 @@ pub const EXTRA_PATTERN_SOURCES: &[&str] = &[
 
 /// Hosts that belong to the tracker's own delivery path. A harness may name none of them, nor a
 /// subdomain (the delivery-agnostic rule, F7). Empty until a project domain is chosen; a host
-/// containing `goalcup` is refused anyway ([`mentions_goalcup`]), and a loopback address such
-/// as `127.0.0.1` is already refused by [`is_capture_host`].
+/// containing `goalcup` is refused anyway ([`mentions_goalcup`]), an IPv4 literal such as
+/// `127.0.0.1` by [`is_capture_host`], and a loopback name by [`local_host_problem`].
 pub(crate) const TRACKER_HOSTS: &[&str] = &[];
 
 /// Whether `host` equals, or is a subdomain of, a [`TRACKER_HOSTS`] entry.
@@ -365,11 +365,13 @@ pub(crate) const TOOL_HOME_PREFIXES: &[&str] = &[
 /// home variable is ONE word, then `_HOME` or `_CONFIG_DIR` (`CODEX_HOME`, `HERMES_HOME`,
 /// `CLAUDE_CONFIG_DIR`), `^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$`. The shape keeps a new harness
 /// out of core PRs while keeping every multi-word tool relocator out of schema 1; a harness
-/// whose home variable has another shape is a core PR with a DECISIONS entry.
+/// whose home variable has another shape is a core PR with a DECISIONS entry, or omits
+/// `home.env` and keeps its state under the private run `HOME`.
 fn home_env_problem(upper: &str) -> Option<&'static str> {
     if TOOL_HOME_NAMES.contains(&upper) || TOOL_HOME_PREFIXES.iter().any(|p| upper.starts_with(p)) {
         return Some(
-            "is another tool's home, config or cache variable: pointing it at the config home              would make that tool read the connector's seeds as its own configuration",
+            "is another tool's home, config or cache variable: pointing it at the config home \
+             would make that tool read the connector's seeds as its own configuration",
         );
     }
     let word = upper
@@ -384,7 +386,8 @@ fn home_env_problem(upper: &str) -> Option<&'static str> {
         None
     } else {
         Some(
-            "is not the shape of a harness's own home variable: one word, then `_HOME` or              `_CONFIG_DIR` (`^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$`)",
+            "is not the shape of a harness's own home variable: one word, then `_HOME` or \
+             `_CONFIG_DIR` (`^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$`)",
         )
     }
 }
@@ -986,6 +989,27 @@ pub fn is_capture_host(host: &str) -> bool {
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         })
         && host.parse::<std::net::Ipv4Addr>().is_err()
+}
+
+/// Why a configured host is refused for a pinned connector although [`is_capture_host`] admits
+/// its spelling, or `None`. A capture launch sets `NO_PROXY=127.0.0.1,localhost`, so a harness
+/// talking to `localhost` (a local model server) bypasses the recording proxy: the host would
+/// validate and record nothing. `*.localhost` is loopback by RFC 6761. A single-label name
+/// resolves through `/etc/hosts` or a search domain, never to a public provider.
+pub fn local_host_problem(host: &str) -> Option<&'static str> {
+    if host == "localhost" || host.ends_with(".localhost") || host == "localhost.localdomain" {
+        return Some(
+            "is a loopback name: the capture launch never proxies loopback, so nothing sent \
+             there is recorded (a local model is not supported by schema 1)",
+        );
+    }
+    if !host.contains('.') {
+        return Some(
+            "is a single-label name, which resolves through `/etc/hosts` or a search domain, \
+             not to a public model provider",
+        );
+    }
+    None
 }
 
 /// Why a capture path is refused, or `None`.
