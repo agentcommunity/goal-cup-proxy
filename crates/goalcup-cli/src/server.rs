@@ -9,12 +9,17 @@
 //! section 3, step 2). It lives in this one file, at mode 0600 under the tracker's own
 //! configuration directory, and nowhere else:
 //!
-//! - never in a harness's environment: the harness environment is built from nothing
-//!   (`launch::process_env` and the launch plan), and nothing reads this file into it;
+//! - never in a harness's environment or on its command line: the harness environment is
+//!   built from nothing (`launch::process_env` and the launch plan), and nothing reads this
+//!   file into it;
 //! - never on a command line: `goalcup login` reads it from stdin;
 //! - never printed or logged: [`ServerConfig`]'s `Debug` prints `<redacted>`, and no message
 //!   in this crate formats the token;
 //! - never in a trace: the daemon, which writes the trace, never reads this file.
+//!
+//! Mode 0600 keeps other users out, not the agent: the harness runs as the participant and can
+//! read any file they can. The token only uploads this member's runs and the member can revoke
+//! it on the site (docs/CHEAT-CHECKLIST.md).
 
 use crate::CliError;
 use crate::config::write_secret_file;
@@ -58,52 +63,79 @@ pub fn server_path(cfg: &Path) -> PathBuf {
 }
 
 /// `url` checked and normalised: an `https://` URL, or `http://` to `127.0.0.1`, `[::1]` or
-/// `localhost` (a local test server), with no user info, query or fragment, and the trailing
-/// slashes removed. Anything else is refused naming the rule.
+/// `localhost` (a local test server). The host is letters, digits, `.` and `-`, or a bracketed
+/// IPv6 address; a port, if given, is 1 to 65535; there is no user info, query or fragment.
+/// The scheme and host are lowercased and trailing slashes removed. Anything else is refused
+/// naming the rule, and a refusal never repeats a URL that carries user info (a password).
 pub fn checked_server_url(url: &str) -> Result<String, CliError> {
+    let shown = if url.contains('@') {
+        "given".to_string()
+    } else {
+        format!("{url:?}")
+    };
     let refused = |why: &str| {
         CliError::Refused(format!(
-            "the server URL {url:?} {why}. Give the https:// address you were told to use."
+            "the server URL {shown} {why}. Give the https:// address you were told to use."
         ))
     };
-    if url.contains(['@', '?', '#']) || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if url.contains(['@', '?', '#', '%', '\\'])
+        || url.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
         return Err(refused(
-            "carries user info, a query, a fragment or whitespace",
+            "carries user info, a query, a fragment, an escape or whitespace",
         ));
     }
-    let (secure, rest) = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
-        (Some(rest), _) => (true, rest),
-        (None, Some(rest)) => (false, rest),
-        (None, None) => return Err(refused("does not start with https://")),
+    let lower = url.to_ascii_lowercase();
+    let (secure, scheme_len) = if lower.starts_with("https://") {
+        (true, "https://".len())
+    } else if lower.starts_with("http://") {
+        (false, "http://".len())
+    } else {
+        return Err(refused("does not start with https://"));
     };
-    let authority = rest.split('/').next().unwrap_or_default();
+    let rest = &url[scheme_len..];
+    let authority_len = rest.find('/').unwrap_or(rest.len());
+    let authority = rest[..authority_len].to_ascii_lowercase();
+    let path = &rest[authority_len..];
     // The host, and what follows it in the authority: nothing, or `:<port>`.
-    let (host, port) = match authority.strip_prefix('[') {
+    let (host, port, bracketed) = match authority.strip_prefix('[') {
         Some(inner) => match inner.split_once(']') {
-            Some((host, port)) => (host, port),
+            Some((host, port)) => (host, port, true),
             None => return Err(refused("has an unclosed [ in its host")),
         },
         None => match authority.split_once(':') {
-            Some((host, _)) => (host, &authority[host.len()..]),
-            None => (authority, ""),
+            Some((host, _)) => (host, &authority[host.len()..], false),
+            None => (authority.as_str(), "", false),
         },
     };
-    if host.is_empty() {
-        return Err(refused("names no host"));
+    let host_ok = if bracketed {
+        host.contains(':') && host.bytes().all(|b| b.is_ascii_hexdigit() || b == b':')
+    } else {
+        !host.is_empty()
+            && host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    };
+    if !host_ok {
+        return Err(refused("does not name a host"));
     }
     let port_ok = port.is_empty()
-        || port.strip_prefix(':').is_some_and(|p| {
-            !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit())
-        });
+        || port
+            .strip_prefix(':')
+            .and_then(|p| p.parse::<u16>().ok())
+            .is_some_and(|p| p != 0);
     if !port_ok {
-        return Err(refused("has a port that is not a number"));
+        return Err(refused("has a port that is not 1 to 65535"));
     }
     if !secure && !matches!(host, "127.0.0.1" | "localhost" | "::1") {
         return Err(refused(
             "is plain http to a host that is not this machine; only https is accepted",
         ));
     }
-    Ok(url.trim_end_matches('/').to_string())
+    let scheme = if secure { "https://" } else { "http://" };
+    Ok(format!("{scheme}{authority}{path}")
+        .trim_end_matches('/')
+        .to_string())
 }
 
 /// `token` as pasted, checked: surrounding whitespace removed, then [`TOKEN_MIN_LEN`] to

@@ -145,9 +145,10 @@ enum Command {
     },
     /// Connect this tracker to the Goal Cup server: paste the token the site gave you.
     ///
-    /// The token is read from stdin (paste it and press Enter; it is not shown), stored in the
-    /// tracker's configuration directory readable by you alone, and never given to the agent.
-    /// Without a login, runs stay on this machine only.
+    /// The token is read from stdin (paste it and press Enter; it is not shown) and stored in
+    /// the tracker's configuration directory, readable by your user alone. It is never put in
+    /// the agent's environment or on its command line. Without a login, runs stay on this
+    /// machine only.
     Login {
         /// The server's address, for example `https://ingest.agentcommunity.org`.
         #[arg(long, value_name = "URL")]
@@ -210,38 +211,67 @@ fn run(command: Command) -> Result<u8, CliError> {
 /// `goalcup login`: the token is read from stdin with terminal echo off when stdin is a
 /// terminal, so a pasted token is never on the screen. Piped input is read as it is.
 fn login(server: &str) -> Result<(), CliError> {
+    use std::io::{BufRead, Read};
     let cfg = goalcup_cli::config::config_dir()?;
     // Checked before the prompt, so a mistyped address is refused before anything is pasted.
     goalcup_cli::server::checked_server_url(server)?;
-    let echo = EchoOff::on_terminal_stdin();
-    if echo.is_some() {
-        eprint!("Paste your Goal Cup token and press Enter (it is not shown): ");
+    let mut line = String::new();
+    {
+        let echo = EchoOff::on_terminal_stdin();
+        if echo.is_some() {
+            eprint!("Paste your Goal Cup token and press Enter (it is not shown): ");
+        }
+        // Bounded, as `login_with` bounds it: a paste of a whole file is not read whole.
+        let read = std::io::stdin()
+            .lock()
+            .take(4 * goalcup_cli::server::TOKEN_MAX_LEN as u64)
+            .read_line(&mut line);
+        if echo.is_some() {
+            // The Enter that ended the paste was not echoed either.
+            eprintln!();
+        }
+        read.map_err(|source| CliError::Io {
+            path: "stdin".to_string(),
+            source,
+        })?;
     }
-    let result = commands::login::login_with(
-        &cfg,
-        server,
-        &mut std::io::stdin().lock(),
-        &mut std::io::stdout(),
-    );
-    if echo.is_some() {
-        // The Enter that ended the paste was not echoed either.
-        eprintln!();
-    }
-    result
+    commands::login::login_with(&cfg, server, &mut line.as_bytes(), &mut std::io::stdout())
 }
 
-/// Terminal echo turned off on stdin until this is dropped. `None` when stdin is not a
-/// terminal (piped input), or on a platform without termios.
-struct EchoOff {
-    #[cfg(unix)]
-    saved: libc::termios,
+/// Terminal echo turned off on stdin until this is dropped, or until SIGINT, SIGTERM or SIGHUP
+/// arrives: those restore it before the process ends on the signal's default action, so a
+/// Ctrl-C at the prompt never leaves the participant's terminal silent. `None` when stdin is
+/// not a terminal (piped input), or on a platform without termios.
+struct EchoOff;
+
+/// The terminal settings to restore, for the signal handler. Set once, before the handler is
+/// installed; reading an initialised `OnceLock` takes no lock.
+#[cfg(unix)]
+static SAVED_TERMIOS: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
+
+#[cfg(unix)]
+const ECHO_SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+
+/// Restore the saved settings, then end the process the way the signal would have.
+/// `tcsetattr`, `signal` and `raise` are async-signal-safe.
+#[cfg(unix)]
+extern "C" fn restore_echo_and_reraise(signal: libc::c_int) {
+    // SAFETY: async-signal-safe calls on a value initialised before this handler existed.
+    unsafe {
+        if let Some(saved) = SAVED_TERMIOS.get() {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved);
+        }
+        libc::signal(signal, libc::SIG_DFL);
+        libc::raise(signal);
+    }
 }
 
 impl EchoOff {
     #[cfg(unix)]
     fn on_terminal_stdin() -> Option<EchoOff> {
         // SAFETY: `isatty`, `tcgetattr` and `tcsetattr` on fd 0 read or write only the
-        // `termios` value handed to them, which lives on this stack frame.
+        // `termios` values handed to them; `signal` installs a handler that only makes
+        // async-signal-safe calls.
         unsafe {
             if libc::isatty(libc::STDIN_FILENO) != 1 {
                 return None;
@@ -250,12 +280,19 @@ impl EchoOff {
             if libc::tcgetattr(libc::STDIN_FILENO, &mut saved) != 0 {
                 return None;
             }
+            let saved = *SAVED_TERMIOS.get_or_init(|| saved);
+            for signal in ECHO_SIGNALS {
+                libc::signal(
+                    signal,
+                    restore_echo_and_reraise as *const () as libc::sighandler_t,
+                );
+            }
             let mut quiet = saved;
             quiet.c_lflag &= !libc::ECHO;
             if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &quiet) != 0 {
                 return None;
             }
-            Some(EchoOff { saved })
+            Some(EchoOff)
         }
     }
 
@@ -268,9 +305,14 @@ impl EchoOff {
 impl Drop for EchoOff {
     fn drop(&mut self) {
         #[cfg(unix)]
-        // SAFETY: restores the settings `tcgetattr` read into `self.saved`.
+        // SAFETY: restores the settings `tcgetattr` read, then the default signal actions.
         unsafe {
-            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.saved);
+            if let Some(saved) = SAVED_TERMIOS.get() {
+                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved);
+            }
+            for signal in ECHO_SIGNALS {
+                libc::signal(signal, libc::SIG_DFL);
+            }
         }
     }
 }

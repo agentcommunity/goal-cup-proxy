@@ -46,8 +46,8 @@ pub fn login_with(
     say(
         out,
         format!(
-            "The token is stored in {}, readable by you alone. It is never shown, never given \
-             to the agent, and never written into a trace.",
+            "The token is in {}, readable by your user alone. It is never shown, never put in \
+             the agent's environment or on its command line, and never written into a trace.",
             path.display()
         ),
     )

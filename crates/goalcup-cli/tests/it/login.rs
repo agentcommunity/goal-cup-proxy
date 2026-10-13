@@ -64,6 +64,11 @@ fn a_bad_server_address_or_token_is_refused_and_nothing_is_written() {
         "https://ingest.example.org/?t=1",
         "https://ingest.example.org:80x",
         "http://127.0.0.1.evil.example",
+        "http://[127.0.0.1]",
+        "https://ingest.example.org:0",
+        "https://ingest.example.org:99999",
+        "https://a_b.example.org",
+        "https://ingest.example.org/%2e%2e",
     ] {
         let (result, _) = login(&cfg, server, &format!("{TOKEN}\n"));
         assert!(result.is_err(), "{server:?} was accepted");
@@ -85,6 +90,60 @@ fn a_bad_server_address_or_token_is_refused_and_nothing_is_written() {
     }
     assert!(!server_path(&cfg).exists(), "a refused login wrote a file");
     assert!(read_server_config(&cfg).unwrap().is_none());
+}
+
+#[test]
+fn local_test_servers_and_paths_are_accepted_and_normalised() {
+    use goalcup_cli::server::checked_server_url;
+    for (given, stored) in [
+        ("http://localhost:8787", "http://localhost:8787"),
+        ("http://[::1]:8787/", "http://[::1]:8787"),
+        (
+            "HTTPS://Ingest.Example.org/Goal/Cup/",
+            "https://ingest.example.org/Goal/Cup",
+        ),
+        ("http://127.0.0.1", "http://127.0.0.1"),
+    ] {
+        assert_eq!(checked_server_url(given).unwrap(), stored);
+    }
+    // A refusal never repeats a URL that carries a password.
+    let refusal = checked_server_url("https://me:hunter2@ingest.example.org").unwrap_err();
+    assert!(!refusal.to_string().contains("hunter2"), "{refusal}");
+}
+
+#[test]
+fn a_corrupt_or_oversized_server_file_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    for bytes in [b"not json".to_vec(), vec![b' '; 64 * 1024]] {
+        goalcup_cli::config::write_secret_file(&server_path(tmp.path()), &bytes).unwrap();
+        let refusal = read_server_config(tmp.path()).unwrap_err();
+        assert_eq!(refusal.exit_code(), 1, "{refusal}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_new_login_replaces_a_loose_file_with_one_for_the_owner_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(server_path(tmp.path()), b"{}").unwrap();
+    std::fs::set_permissions(
+        server_path(tmp.path()),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    login(
+        tmp.path(),
+        "https://ingest.example.org",
+        &format!("{TOKEN}\n"),
+    )
+    .0
+    .unwrap();
+    let mode = std::fs::metadata(server_path(tmp.path()))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "mode {:o}", mode & 0o777);
 }
 
 #[cfg(unix)]
