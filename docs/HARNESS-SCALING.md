@@ -111,6 +111,25 @@ would take:
 | Self-update mid-run | Re-hash the binary when the run ends and record a mismatch |
 | More than 16 hosts or wildcards | Raise the bound; wildcard hosts need a reviewed suffix rule |
 
+### Which row-0 items matter most
+
+A survey of the top coding agents by use (October 2026; vendor and community pages, so hints to
+measure before building) ranks Claude Code, GitHub Copilot, Codex, Cursor, Antigravity
+(`agy`, which replaced Gemini CLI), OpenCode, Hermes, Kilo Code, Windsurf/Devin, Warp, Cline,
+Pi, Mistral Vibe, Continue and OpenHands, with Goose next. Against row 0:
+
+- **A SQLite session snapshot is the biggest unlock**: OpenCode, Goose, Cline's CLI, Cursor's
+  CLI and part of Hermes keep their sessions in SQLite. A read-only snapshot of the run's own
+  rows (D44's design for OpenCode) is one native form for all of them.
+- **A wire-only claim level** covers agents whose sessions live on a server (Amp, Warp, cloud
+  Devin): the wire leg alone, rated lower, rather than no fit.
+- **HTTP/2** matters for Cursor (Connect over protobuf). First check whether its HTTP/1.1
+  fallback can be forced per process; only then build an `h2` path.
+- **Desktop and IDE agents** are steered to their CLI where one exists (Copilot CLI,
+  `cursor-agent`, `agy`); no desktop capture is planned.
+- **A local-model recorder** (below) serves about eleven of the fifteen, which accept a local or
+  OpenAI-compatible endpoint.
+
 ### Local models
 
 A participant may run their own model (Ollama, LM Studio) on loopback; the owner accepts it.
@@ -152,4 +171,6 @@ server's own claim.
 6. The server-side known-builds list, its refresh script and the "unlisted" note.
 7. The local-model relay, with its DECISIONS amendment to D1.
 8. Measure one real run per harness and platform family, recorded in its facts sheet.
-9. The other row-0 items, by demand: subagent files, database snapshots, wire-only.
+9. Row-0 items by the survey above: the SQLite snapshot form first (OpenCode, Goose, Cline,
+   Cursor CLI), then the wire-only claim level (Amp, Warp), then a forced-HTTP/1.1 check and
+   only if needed an `h2` path (Cursor), then subagent files.
