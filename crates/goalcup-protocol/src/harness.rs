@@ -27,18 +27,19 @@
 //!
 //! [`Origin`] is the one observable predicate that relaxes anything: `Dev` (an unpinned
 //! directory under `GOALCUP_CONNECTORS_DIR` loaded with `--dev`, for kit cases and the
-//! controlled workload) skips the interpreter refusal and the absolute-path `args` refusal.
-//! Env values, seeds, the deny lists and every cross-field rule stay strict for both.
+//! controlled workload) skips the interpreter refusal, the absolute-path `args` refusal and the
+//! loopback-host refusal (the kit's stand-ins are `*.localhost`). Env values, seeds, the deny
+//! lists and every cross-field rule stay strict for both.
 
 use crate::ProtocolError;
 use crate::capture_policy::{
     CREDENTIAL_ENV, CaMode, EXTRA_PATTERN_SOURCES, EnvContext, MAX_CAPTURE_ARG_BYTES,
     MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV, MAX_CAPTURE_ENV_KEY_BYTES, MAX_CAPTURE_ENV_VALUE_BYTES,
     MAX_CAPTURE_HOSTS, MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, MAX_GOAL_FLAG_BYTES,
-    arg_path_denied, ca_registry_mode, capture_arg_denied, capture_argv_allowed,
-    capture_env_allowed, capture_path_problem, env_key_denied, env_value_denied, has_duplicate,
-    is_capture_host, is_interpreter_program, is_tracker_host, mentions_goalcup,
-    seed_content_problem, startup_file_problem,
+    arg_path_denied, ca_registry_mode, capture_arg_denied, capture_path_problem, env_key_denied,
+    env_value_denied, goal_flag_denied, has_duplicate, is_capture_host, is_interpreter_program,
+    is_tracker_host, local_host_problem, mentions_goalcup, seed_content_problem,
+    startup_file_problem,
 };
 use crate::connector_dir::hash_connector_dir_listing;
 use crate::hints::valid_hint;
@@ -250,8 +251,8 @@ pub enum Origin {
     /// An in-tree or pin-checked connector directory.
     Pinned,
     /// An unpinned directory under `GOALCUP_CONNECTORS_DIR`, loaded with `--dev` (kit cases,
-    /// the controlled workload). Relaxes the interpreter refusal and the absolute-path `args`
-    /// refusal, and nothing else.
+    /// the controlled workload). Relaxes the interpreter refusal, the absolute-path `args`
+    /// refusal and the loopback-host refusal, and nothing else.
     Dev,
 }
 
@@ -323,7 +324,7 @@ pub struct ExecutableSpec {
 
 /// `[capture.platform.<key>]`: what a platform may change. Only the executable's pin (and its
 /// version, should a platform's build carry another) and env entries; every other field, the
-/// program included, is the base table's. The resolved recipe is validated, and allowlisted,
+/// program included, is the base table's. The resolved recipe is validated
 /// as a whole.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -375,7 +376,7 @@ impl CaptureSpec {
     }
 
     /// The base recipe with `key`'s override applied and no `platform` table: what the
-    /// validator and the allowlists see for that platform.
+    /// validator sees for that platform.
     fn resolved_for(&self, key: PlatformKey) -> CaptureSpec {
         let exe = self.resolved_executable(key);
         let executable = ExecutableSpec {
@@ -399,8 +400,11 @@ impl CaptureSpec {
 pub struct HomeSpec {
     pub run_home: RunHome,
     pub config_home: ConfigHome,
-    /// The variable pointed at the config home.
-    pub env: String,
+    /// The variable pointed at the config home. Absent for a harness with no such variable: it
+    /// then keeps its state under the private run `HOME`, so its native root is `{run_home}/...`,
+    /// it takes no seeds or dirs, and its config home is `per_run`.
+    #[serde(default)]
+    pub env: Option<String>,
     /// The per-run config home's directory name; `per_run` only. Default `harness-home`.
     #[serde(default)]
     pub per_run_dir: Option<String>,
@@ -995,51 +999,10 @@ impl HarnessManifest {
         self.check_native()?;
         self.check_argv_guard()?;
         self.check_termination()?;
-        self.check_hosts()?;
+        self.check_hosts(origin)?;
         self.check_redaction()?;
         self.check_delivery_agnostic()?;
         self.check_cross_field()?;
-        Ok(())
-    }
-
-    /// The reviewed allowlists a pinned connector is held to on top of [`Self::validate`]:
-    /// every `capture.env` entry must be a row of [`crate::capture_policy::CAPTURE_ENV_ALLOWLIST`],
-    /// and `capture.args` with `goal_flag` must be exactly the connector's row of
-    /// [`crate::capture_policy::CAPTURE_ARG_ALLOWLIST`]. The loader calls it for
-    /// `Origin::Pinned` after `validate`, so a deny-list refusal keeps its own reason, when this
-    /// build pins the connector's id. An unpinned id is refused later by the pin gate and runs
-    /// only under `--dev`.
-    ///
-    /// Each `[capture.platform.<key>]` is held to the same rows, as the recipe it resolves to.
-    pub fn check_allowlists(&self) -> Result<(), ProtocolError> {
-        self.check_recipe_allowlists()?;
-        self.for_each_platform(HarnessManifest::check_recipe_allowlists)
-    }
-
-    fn check_recipe_allowlists(&self) -> Result<(), ProtocolError> {
-        let c = &self.capture;
-        if !capture_argv_allowed(&self.id, &c.args, c.goal_flag.as_deref()) {
-            return Err(refuse(
-                "capture.args",
-                format!(
-                    "`capture.args` and `goal_flag` of `{}` are not exactly its reviewed row \
-                     (capture_policy::CAPTURE_ARG_ALLOWLIST); a new or changed argument is a \
-                     core PR",
-                    self.id
-                ),
-            ));
-        }
-        for (k, v) in &c.env {
-            if !capture_env_allowed(k, v) {
-                return Err(refuse(
-                    "capture.env",
-                    format!(
-                        "`{k} = {v:?}` is not on the reviewed list \
-                         (capture_policy::CAPTURE_ENV_ALLOWLIST); a new variable is a core PR"
-                    ),
-                ));
-            }
-        }
         Ok(())
     }
 
@@ -1107,7 +1070,11 @@ impl HarnessManifest {
                     "an argument is longer than the bound or contains a control character",
                 ));
             }
-            if let Some(why) = capture_arg_denied(a) {
+            // A `Dev` argument that is an absolute path is one the kit or the controlled
+            // workload substituted (`@STAND_IN@`); its directory names (a checkout under
+            // `.../hook-fix/`) are not flags, so the word rules do not read them.
+            let substituted_path = origin == Origin::Dev && a.starts_with('/');
+            if !substituted_path && let Some(why) = capture_arg_denied(a) {
                 return Err(refuse("capture.args", format!("`{a}` {why}")));
             }
             // N1: the one observable predicate. A pinned connector never needs an absolute
@@ -1136,7 +1103,7 @@ impl HarnessManifest {
                     ),
                 ));
             }
-            if let Some(why) = capture_arg_denied(flag) {
+            if let Some(why) = capture_arg_denied(flag).or_else(|| goal_flag_denied(flag)) {
                 return Err(refuse("capture.goal_flag", format!("`{flag}` {why}")));
             }
         }
@@ -1204,18 +1171,20 @@ impl HarnessManifest {
 
     fn check_home(&self) -> Result<(), ProtocolError> {
         let h = &self.capture.home;
-        let mut b = h.env.bytes();
-        let env_ok = h.env.len() <= 64
-            && b.next().is_some_and(|x| x.is_ascii_uppercase())
-            && b.all(|x| x.is_ascii_uppercase() || x.is_ascii_digit() || x == b'_');
-        if !env_ok {
-            return Err(refuse(
-                "capture.home.env",
-                format!("`{}` must match `^[A-Z][A-Z0-9_]{{0,63}}$`", h.env),
-            ));
-        }
-        if let Some(why) = env_key_denied(&h.env, EnvContext::HomeEnv) {
-            return Err(refuse("capture.home.env", format!("`{}` {why}", h.env)));
+        if let Some(env) = &h.env {
+            let mut b = env.bytes();
+            let env_ok = env.len() <= 64
+                && b.next().is_some_and(|x| x.is_ascii_uppercase())
+                && b.all(|x| x.is_ascii_uppercase() || x.is_ascii_digit() || x == b'_');
+            if !env_ok {
+                return Err(refuse(
+                    "capture.home.env",
+                    format!("`{env}` must match `^[A-Z][A-Z0-9_]{{0,63}}$`"),
+                ));
+            }
+            if let Some(why) = env_key_denied(env, EnvContext::HomeEnv) {
+                return Err(refuse("capture.home.env", format!("`{env}` {why}")));
+            }
         }
         if let Some(dir) = &h.per_run_dir {
             let mut b = dir.bytes();
@@ -1589,7 +1558,7 @@ impl HarnessManifest {
         Ok(())
     }
 
-    fn check_hosts(&self) -> Result<(), ProtocolError> {
+    fn check_hosts(&self, origin: Origin) -> Result<(), ProtocolError> {
         let c = &self.capture;
         if c.hosts.is_empty() || c.hosts.len() > MAX_CAPTURE_HOSTS {
             return Err(refuse(
@@ -1622,6 +1591,11 @@ impl HarnessManifest {
                     format!("`{a}` is not a lowercase DNS name without port or trailing dot"),
                 ));
             }
+            if origin == Origin::Pinned
+                && let Some(why) = local_host_problem(a)
+            {
+                return Err(refuse("capture.auth_hosts", format!("`{a}` {why}")));
+            }
         }
         for h in &c.hosts {
             if !is_capture_host(&h.host) {
@@ -1632,6 +1606,12 @@ impl HarnessManifest {
                         h.host
                     ),
                 ));
+            }
+            // The kit and the controlled workload (`Origin::Dev`) serve `*.localhost` stand-ins.
+            if origin == Origin::Pinned
+                && let Some(why) = local_host_problem(&h.host)
+            {
+                return Err(refuse("capture.hosts", format!("`{}` {why}", h.host)));
             }
             if c.auth_hosts.contains(&h.host) {
                 return Err(refuse(
@@ -1860,6 +1840,36 @@ impl HarnessManifest {
             ));
         }
 
+        // Without `home.env` nothing points the harness at the config home, so anything the
+        // manifest puts there, or expects to read from there, would never be used. Refused
+        // rather than admitted to record nothing.
+        if h.env.is_none() {
+            const WHY: &str = "requires `capture.home.env`: without it nothing points the harness \
+                               at the config home, so the harness keeps its state under the \
+                               private run `HOME`";
+            if !per_run {
+                return Err(refuse(
+                    "capture.home.config_home",
+                    format!("`shared` {WHY}"),
+                ));
+            }
+            for (field, present) in [
+                ("seed", !h.seed.is_empty()),
+                ("dirs", !h.dirs.is_empty()),
+                ("per_run_dir", h.per_run_dir.is_some()),
+            ] {
+                if present {
+                    return Err(refuse(format!("capture.home.{field}"), WHY));
+                }
+            }
+            if root_home == RootHome::Config {
+                return Err(refuse(
+                    "capture.native.root",
+                    format!("a `{{config_home}}` root {WHY}: use `{{run_home}}/...`"),
+                ));
+            }
+        }
+
         // M10 and S2 review M-5: a native pattern may not sweep a seed file or a credential the
         // manifest seeds. A `{config_home}` root is the seeds' own directory. A `{run_home}` root
         // is another directory while the homes are disjoint, but where the per-run config home
@@ -1910,8 +1920,10 @@ impl HarnessManifest {
         }
 
         // The variables this manifest pins are distinct, and none is a `capture.env` key.
-        let mut pinned: Vec<(&str, String)> =
-            vec![("capture.home.env", c.home.env.to_ascii_uppercase())];
+        let mut pinned: Vec<(&str, String)> = Vec::new();
+        if let Some(env) = &c.home.env {
+            pinned.push(("capture.home.env", env.to_ascii_uppercase()));
+        }
         if let Some(cr) = &c.credential {
             pinned.push(("capture.credential.env", cr.env.to_ascii_uppercase()));
         }
@@ -2163,12 +2175,6 @@ fn load_dir_resolving_origin_fallible(
         refuse_dev_for_a_pinned_directory(&manifest.id, &listing.sha256)?;
     }
     manifest.validate(origin)?;
-    // Only a connector this build pins: an unpinned one is refused at the pin gate with its own
-    // reason, and runs only under `--dev`.
-    if origin == Origin::Pinned && crate::pins::pinned_connector_dir_sha256(&manifest.id).is_some()
-    {
-        manifest.check_allowlists()?;
-    }
 
     let seeds: Vec<String> = manifest
         .capture

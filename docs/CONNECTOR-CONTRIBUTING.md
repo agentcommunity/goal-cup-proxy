@@ -100,9 +100,12 @@ refuses many invalid values, but validation is not a substitute for review.
 2. Check `capture.args`: no endpoint, settings indirection, native-store disablement or absolute
    path. If argv is pre-scanned, `argv_guard` covers every acted option and abbreviation.
 3. Check `capture.env`: justify every value; `SHELL` is only `/bin/zsh`, `/bin/bash` or `/bin/sh`.
-   Every variable of a pinned connector is a row of `CAPTURE_ENV_ALLOWLIST`, and its whole argv
-   and `goal_flag` are its row of `CAPTURE_ARG_ALLOWLIST`, in `capture_policy.rs`: a new
-   connector or any change to these is a core change reviewed as such.
+   No Rust list names a connector's argv or env any more (D51): this step is the control for
+   what the generic rules cannot see. Check that no flag capture needs was dropped (one headless
+   turn, the session file kept, self-update off: `DISABLE_AUTOUPDATER = "0"` turns it back on),
+   and that no argument or variable names a command, a hook, an MCP server, a host or a file
+   outside the run. How much the harness may do (model, sandbox, permissions) is the
+   participant's, not the connector's: a connector does not limit it.
    Look for telemetry exporters and code loaders. Do not request a `NO_PAGER` exception: the
    `PAGER` suffix rule refuses it.
 4. Re-derive `capture.executable.sha256` from an official artifact of exactly the declared version.

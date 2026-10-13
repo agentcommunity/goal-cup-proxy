@@ -8,13 +8,13 @@
 //!   exemption or startup-file class is a core PR, not a harness PR;
 //! * **tightening a row that a shipped connector uses migrates that connector in the same
 //!   PR**, and `tests/it/harness_conformance.rs` fails until it does;
-//! * the lists that name *spellings* (interpreters, startup files, env names) slow an
-//!   attacker down; they do not stop one. The env and argument allowlists
-//!   ([`CAPTURE_ENV_ALLOWLIST`], [`CAPTURE_ARG_ALLOWLIST`]) make any change to a pinned
-//!   connector's environment or argv a core change: a CI tripwire for a PR that re-pins an
-//!   edited connector, since at run time only pinned bytes load. The rest of the control is the
-//!   reviewer's re-derivation of the executable's `sha256` and the reviewer checklist
-//!   (`docs/DECISIONS.md` D43, ruling 6).
+//! * the lists that name *spellings* (interpreters, startup files, env names, argument words)
+//!   slow an attacker down; they do not stop one. No row here names a connector: what a
+//!   connector passes (its argv, its `capture.env`) is held to the generic rules below, and the
+//!   rest of the control is review. A connector's bytes are pinned by directory digest
+//!   (`pins/connector-dirs.txt`), `connectors/` and `pins/` are code-owned, so every argv or env
+//!   change is a reviewed diff; the reviewer re-derives the executable's `sha256` and works the
+//!   reviewer checklist (`docs/DECISIONS.md` D43, ruling 6; D51).
 //!
 //! The harness manifest's loader and validator (schema 1) are in `harness.rs`.
 
@@ -104,8 +104,8 @@ pub const EXTRA_PATTERN_SOURCES: &[&str] = &[
 
 /// Hosts that belong to the tracker's own delivery path. A harness may name none of them, nor a
 /// subdomain (the delivery-agnostic rule, F7). Empty until a project domain is chosen; a host
-/// containing `goalcup` is refused anyway ([`mentions_goalcup`]), and a loopback address such
-/// as `127.0.0.1` is already refused by [`is_capture_host`].
+/// containing `goalcup` is refused anyway ([`mentions_goalcup`]), an IPv4 literal such as
+/// `127.0.0.1` by [`is_capture_host`], and a loopback name by [`local_host_problem`].
 pub(crate) const TRACKER_HOSTS: &[&str] = &[];
 
 /// Whether `host` equals, or is a subdomain of, a [`TRACKER_HOSTS`] entry.
@@ -186,6 +186,16 @@ pub const INJECTION_ENV: &[&str] = &[
     "BASHOPTS",
     "PS1",
     "PS2",
+    // D51: runtime variables that name code to load or run (a whole `PYTHON*` or `NODE_*`
+    // prefix would also refuse `PYTHONUNBUFFERED` and `NODE_ENV`).
+    "PYTHONBREAKPOINT",
+    "PYTHONINSPECT",
+    "PYTHONEXECUTABLE",
+    "NODE_REPL_EXTERNAL_MODULE",
+    "BUN_CONFIG_PRELOAD",
+    "PERL5DB",
+    "PERLDB_OPTS",
+    "RUBYGEMS_GEMDEPS",
 ];
 
 /// Name SUFFIXES that make a tool run a command: `GIT_PROXY_COMMAND`, `GIT_EDITOR`,
@@ -239,6 +249,10 @@ pub const INJECTION_PREFIXES: &[(&str, &str)] = &[
     (
         "GOALCUP_",
         "is the tracker's own namespace, and a harness is delivery-agnostic",
+    ),
+    (
+        "OPENSSL_",
+        "configures OpenSSL, which can load a configuration file, an engine or a module",
     ),
 ];
 
@@ -351,11 +365,13 @@ pub(crate) const TOOL_HOME_PREFIXES: &[&str] = &[
 /// home variable is ONE word, then `_HOME` or `_CONFIG_DIR` (`CODEX_HOME`, `HERMES_HOME`,
 /// `CLAUDE_CONFIG_DIR`), `^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$`. The shape keeps a new harness
 /// out of core PRs while keeping every multi-word tool relocator out of schema 1; a harness
-/// whose home variable has another shape is a core PR with a DECISIONS entry.
+/// whose home variable has another shape is a core PR with a DECISIONS entry, or omits
+/// `home.env` and keeps its state under the private run `HOME`.
 fn home_env_problem(upper: &str) -> Option<&'static str> {
     if TOOL_HOME_NAMES.contains(&upper) || TOOL_HOME_PREFIXES.iter().any(|p| upper.starts_with(p)) {
         return Some(
-            "is another tool's home, config or cache variable: pointing it at the config home              would make that tool read the connector's seeds as its own configuration",
+            "is another tool's home, config or cache variable: pointing it at the config home \
+             would make that tool read the connector's seeds as its own configuration",
         );
     }
     let word = upper
@@ -370,10 +386,23 @@ fn home_env_problem(upper: &str) -> Option<&'static str> {
         None
     } else {
         Some(
-            "is not the shape of a harness's own home variable: one word, then `_HOME` or              `_CONFIG_DIR` (`^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$`)",
+            "is not the shape of a harness's own home variable: one word, then `_HOME` or \
+             `_CONFIG_DIR` (`^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$`)",
         )
     }
 }
+
+/// Name suffixes that name a server, refused like `*_URL` (D51).
+const SERVER_SUFFIXES: &[&str] = &[
+    "_BASE",
+    "_HOST",
+    "_HOSTNAME",
+    "_ADDR",
+    "_ADDRESS",
+    "_SERVER",
+    "_ORIGIN",
+    "_REGISTRY",
+];
 
 const CA_REASON_V2: &str =
     "changes certificate trust: a CA variable belongs in `capture.ca`, not `capture.env`";
@@ -404,6 +433,9 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
     }
     if upper.contains("PROVIDER") {
         return Some("switches to another model provider");
+    }
+    if upper.contains("KEYLOG") {
+        return Some("writes TLS secrets to a file");
     }
     // The exact names come before the prefixes, so a name that is both (`HERMES_CA_BUNDLE` is
     // a trust variable and in the `HERMES_` namespace) is told the more specific reason.
@@ -453,6 +485,11 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
     // refuses (`AUTH_URL`, `GOALCUP_UPLOAD_URL`, `PIP_INDEX_URL`) keeps its more specific reason.
     if upper.ends_with("_URL") {
         return Some("redirects an endpoint (D1)");
+    }
+    // A server named without a scheme (`DEEPSEEK_API_BASE = "api.example.org"`): the value rule
+    // refuses `://`, not a bare host, so the name is refused too (D51).
+    if SERVER_SUFFIXES.iter().any(|s| upper.ends_with(s)) {
+        return Some("names a server (D1)");
     }
     None
 }
@@ -742,110 +779,6 @@ pub(crate) fn has_duplicate<'a>(names: impl IntoIterator<Item = &'a str>) -> Opt
     names.into_iter().find(|n| !seen.insert(*n))
 }
 
-// ---------------------------------------------------------------------------------------
-// Allowlists: what a pinned connector may pass (review R7 I-1, I-2)
-// ---------------------------------------------------------------------------------------
-
-/// Every `capture.env` entry a pinned connector may set: the name and its exact values.
-///
-/// The deny lists above refuse first and say why; this list is what decides, because a deny
-/// list of spellings always has holes (`OPENSSL_CONF`, `SSLKEYLOGFILE`, `DEEPSEEK_API_BASE`).
-/// A new row is a core PR and a DECISIONS entry, like a [`CA_REGISTRY`] row. A `--dev`
-/// connector (`Origin::Dev`) is not held to it.
-pub const CAPTURE_ENV_ALLOWLIST: &[(&str, &[&str])] = &[
-    ("SHELL", SHELL_VALUES),
-    ("DISABLE_AUTOUPDATER", &["1"]),
-    ("ENABLE_CLAUDEAI_MCP_SERVERS", &["false"]),
-    ("CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS", &["1"]),
-    ("CLAUDE_CODE_RETRY_WATCHDOG", &["1"]),
-    ("TERMINAL_HOME_MODE", &["profile"]),
-];
-
-/// Whether `key = value` is a row of [`CAPTURE_ENV_ALLOWLIST`].
-pub fn capture_env_allowed(key: &str, value: &str) -> bool {
-    CAPTURE_ENV_ALLOWLIST
-        .iter()
-        .any(|(name, values)| *name == key && values.contains(&value))
-}
-
-/// The exact launch every pinned connector makes, per connector id: its whole `capture.args`,
-/// in order and exactly as `harness.toml` spells it (templates unrendered), and its `goal_flag`.
-/// A new connector, or any change to one's arguments (a model name included), is a row here,
-/// reviewed like a [`CA_REGISTRY`] row: an argument such as Codex's `-c notify=[...]` runs a
-/// program, `--insecure` turns verification off, and dropping `--strict-mcp-config` or
-/// `-s workspace-write` loosens the run.
-pub const CAPTURE_ARG_ALLOWLIST: &[(&str, &[&str], Option<&str>)] = &[
-    (
-        "codex-cli",
-        &[
-            "exec",
-            "--json",
-            "-m",
-            "gpt-5.6-luna",
-            "-c",
-            r#"model_reasoning_effort="low""#,
-            "-c",
-            r#"approval_policy="never""#,
-            "-c",
-            "check_for_update_on_startup=false",
-            "-c",
-            r#"projects={{ "{workspace}" = {{ trust_level = "trusted" }} }}"#,
-            "-s",
-            "workspace-write",
-            "--skip-git-repo-check",
-            "-C",
-            "{workspace}",
-            "--",
-        ],
-        None,
-    ),
-    (
-        "claude-code-cli",
-        &[
-            "-p",
-            "--model",
-            "haiku",
-            "--effort",
-            "low",
-            "--permission-mode",
-            "acceptEdits",
-            "--permission-prompts",
-            "none",
-            "--session-id",
-            "{session_id}",
-            "--output-format",
-            "json",
-            "--strict-mcp-config",
-            "--mcp-config",
-            r#"{{"mcpServers":{{}}}}"#,
-            "--",
-        ],
-        None,
-    ),
-    (
-        "hermes-cli",
-        &[
-            "chat",
-            "-Q",
-            "--provider",
-            "deepseek",
-            "--model",
-            "deepseek-v4-flash",
-        ],
-        Some("--query"),
-    ),
-];
-
-/// Whether `args` and `goal_flag` are exactly [`CAPTURE_ARG_ALLOWLIST`]'s row for connector `id`.
-pub fn capture_argv_allowed(id: &str, args: &[String], goal_flag: Option<&str>) -> bool {
-    CAPTURE_ARG_ALLOWLIST.iter().any(|(name, row, flag)| {
-        *name == id
-            && *flag == goal_flag
-            && row.len() == args.len()
-            && row.iter().zip(args).all(|(r, a)| *r == a.as_str())
-    })
-}
-
 /// Why a seed file's bytes are refused, or `None`. Every origin, `--dev` included.
 ///
 /// A seed is copied into the harness's home before it starts, so for Hermes `config.yaml` is
@@ -952,6 +885,9 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
             "loads a configuration profile from outside the capture profile",
         ),
         ("--plugin-dir", "loads plugin code into the harness"),
+        ("--host", "names a server (D1)"),
+        ("--server", "names a server (D1)"),
+        ("--url", "names a server (D1)"),
     ];
     const SUBSTRING: &[(&str, &str)] = &[
         ("baseurl", "redirects the model endpoint (D1)"),
@@ -973,6 +909,8 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
         ("cacert", "changes which certificates the harness trusts"),
         ("cabundle", "changes which certificates the harness trusts"),
         ("certfile", "changes which certificates the harness trusts"),
+        ("cafile", "changes which certificates the harness trusts"),
+        ("capath", "changes which certificates the harness trusts"),
         ("rejectunauthorized", "turns certificate verification off"),
         (
             "otel",
@@ -982,6 +920,27 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
         ("ldpreload", "injects code into the harness"),
         ("nodeoptions", "injects code into the harness"),
         ("bunoptions", "injects code into the harness"),
+        // D51: what the per-connector argv rows used to stop (Codex `-c notify=[...]`, an MCP
+        // server's `command`, `--insecure`), as rules. How much the harness may do (its
+        // sandbox, permissions, directories, model) is the participant's, not a capture rule.
+        ("insecure", "turns certificate verification off"),
+        ("noverify", "turns certificate verification off"),
+        ("skipverify", "turns certificate verification off"),
+        ("sslverif", "turns certificate verification off"),
+        ("tlsverif", "turns certificate verification off"),
+        ("verifyssl", "turns certificate verification off"),
+        ("verifytls", "turns certificate verification off"),
+        ("strictssl", "turns certificate verification off"),
+        ("checkcertificate", "turns certificate verification off"),
+        ("ignorecertificate", "turns certificate verification off"),
+        // A server named without a scheme (`--api-base evil.example`), as in env.
+        ("apibase", "redirects the model endpoint (D1)"),
+        ("apihost", "redirects the model endpoint (D1)"),
+        ("apiserver", "redirects the model endpoint (D1)"),
+        ("keylog", "writes TLS secrets to a file"),
+        ("notify", "runs a program on an event"),
+        ("command", "names a command the harness runs"),
+        ("hook", "names a command the harness runs"),
     ];
     let lower = arg.to_ascii_lowercase();
     for (flag, why) in WHOLE {
@@ -994,6 +953,23 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
         .iter()
         .find(|(needle, _)| normal.contains(needle))
         .map(|(_, why)| *why)
+}
+
+/// Why a `goal_flag` is refused beyond [`capture_arg_denied`], or `None` (D51). The goal is a
+/// prompt the harness reads: an option whose name says it runs, evaluates or loads its value
+/// (`--exec`, `--command`, `--script`, `--file`, `--config`) would hand the goal text to
+/// something other than the model. Compared lower-cased, word by word (`-` and `_` split).
+pub fn goal_flag_denied(flag: &str) -> Option<&'static str> {
+    const WORDS: &[&str] = &[
+        "exec", "eval", "shell", "cmd", "command", "script", "run", "file", "path", "load",
+        "config", "import", "plugin", "hook",
+    ];
+    // Whole words only: `--exec` and `--prompt-file` are refused, `--execute` (Amp's goal
+    // flag) and `--payload` are not.
+    flag.to_ascii_lowercase()
+        .split(['-', '_'])
+        .any(|part| WORDS.contains(&part))
+        .then_some("names an option that runs, evaluates or loads its value; the goal is a prompt")
 }
 
 /// A configured host: lowercase ASCII letters, digits and hyphens in dot-separated labels
@@ -1013,6 +989,36 @@ pub fn is_capture_host(host: &str) -> bool {
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         })
         && host.parse::<std::net::Ipv4Addr>().is_err()
+}
+
+/// Why a configured host is refused for a pinned connector although [`is_capture_host`] admits
+/// its spelling, or `None`. A capture launch sets `NO_PROXY=127.0.0.1,localhost`, so a harness
+/// talking to `localhost` (a local model server) bypasses the recording proxy: the host would
+/// validate and record nothing. `*.localhost` is loopback by RFC 6761. A single-label name
+/// resolves through `/etc/hosts` or a search domain, never to a public provider. A numeric or
+/// hexadecimal last label (`127.1`, `0x7f.1`, `127.0.0.01`) is an address the resolver accepts
+/// though `Ipv4Addr` does not; no real top-level domain is numeric.
+pub fn local_host_problem(host: &str) -> Option<&'static str> {
+    if host == "localhost" || host.ends_with(".localhost") || host == "localhost.localdomain" {
+        return Some(
+            "is a loopback name: the capture launch never proxies loopback, so nothing sent \
+             there is recorded (a local model is not supported by schema 1)",
+        );
+    }
+    let last = host.rsplit('.').next().unwrap_or(host);
+    if last.bytes().all(|b| b.is_ascii_digit()) || last.starts_with("0x") {
+        return Some(
+            "is an address spelled as a name (a numeric or `0x` last label), not a public \
+             provider's DNS name",
+        );
+    }
+    if !host.contains('.') {
+        return Some(
+            "is a single-label name, which resolves through `/etc/hosts` or a search domain, \
+             not to a public model provider",
+        );
+    }
+    None
 }
 
 /// Why a capture path is refused, or `None`.

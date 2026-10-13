@@ -458,3 +458,79 @@ fn the_pin_and_env_follow_the_running_platform() {
         }
     }
 }
+
+/// A connector without `home.env` gets no home variable: the harness keeps its state under the
+/// private run `HOME` the launch pins.
+#[test]
+fn a_harness_without_a_home_variable_gets_only_the_private_home() {
+    use goalcup_cli::launch::{CaptureLaunch, build_capture_launch, pin_harness_executable};
+    use sha2::{Digest, Sha256};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let dir = write_unpinned(&root, "example", "example-cli");
+    let exe = root.join("example-cli");
+    std::fs::write(&exe, b"example executable\n").unwrap();
+    let digest: String = Sha256::digest(std::fs::read(&exe).unwrap())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let path = dir.join("harness.toml");
+    let text = without_platform(&std::fs::read_to_string(&path).unwrap())
+        .replace("program = \"claude\"", "program = \"example-cli\"")
+        .replace(
+            "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
+            &digest,
+        )
+        .replace("env = \"CLAUDE_CONFIG_DIR\"\n", "")
+        .replace("config_home = \"shared\"", "config_home = \"per_run\"")
+        .replace(
+            "root = \"{config_home}/projects\"",
+            "root = \"{run_home}/.claude/projects\"",
+        );
+    assert!(!text.contains("CLAUDE_CONFIG_DIR"));
+    std::fs::write(&path, &text).unwrap();
+    let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
+    assert_eq!(connector.loaded.manifest.capture.home.env, None);
+    let pinned = pin_harness_executable(&connector.loaded.manifest.capture, &exe).unwrap();
+
+    let workspace = root.join("workspace");
+    let run_home = root.join("run-home");
+    let config_home = root.join("config-home");
+    for dir in [&workspace, &run_home, &config_home] {
+        std::fs::create_dir(dir).unwrap();
+    }
+    let ca = root.join("ca.pem");
+    std::fs::write(&ca, b"test CA\n").unwrap();
+    let mut vars = TemplateVars::new();
+    vars.set("workspace", workspace.display().to_string());
+    vars.set("session_id", "00000000-0000-4000-8000-000000000001");
+    let parent = BTreeMap::new();
+    let plan = build_capture_launch(
+        &connector,
+        &vars,
+        &workspace,
+        &CaptureLaunch {
+            goal: b"one goal",
+            executable: &pinned,
+            run_home: &run_home,
+            config_home: &config_home,
+            proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
+            ca_certificate: &ca,
+            parent_env: &parent,
+            allowed_tool_rule: None,
+        },
+    )
+    .unwrap();
+    assert!(!plan.env_set.contains_key("CLAUDE_CONFIG_DIR"));
+    let config_home = config_home.display().to_string();
+    assert!(
+        plan.env_set.values().all(|v| *v != config_home),
+        "nothing points at the config home: {:?}",
+        plan.env_set
+    );
+    assert_eq!(
+        plan.env_set.get("HOME").map(String::as_str),
+        Some(run_home.display().to_string().as_str())
+    );
+}

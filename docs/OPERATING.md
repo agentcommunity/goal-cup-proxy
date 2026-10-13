@@ -291,7 +291,7 @@ machine healthy" and the wrong one to "can I start this harness".
 | Flag | What it does |
 |---|---|
 | `goalcup start --capture-reserve-bytes <BYTES>` | The chain bytes the daemon reserves on disk before the launch. |
-| `goalcup start --capture-claude-allowed-tool <RULE>` | One bounded Claude Bash command rule for this launch only. |
+| `goalcup start --capture-claude-allowed-tool <RULE>` | Refused since D52: the shipped Claude Code profile bypasses permission prompts, so there is nothing to allow. To be removed. |
 | `--json` on `status`, `entries` and `doctor` | The signed document itself, the summaries as one array, and the report as one document, instead of a page of text. |
 
 **Network outages.** Before anything is created, `goalcup start` makes one TCP connect to port

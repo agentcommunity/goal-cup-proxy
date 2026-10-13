@@ -6,7 +6,15 @@
 # Unpacks it, checks that all three binaries print <version>, and checks through
 # `goalcup doctor --json` what the Homebrew formula's test checks: the unpacked goalcup finds
 # the connectors it ships, and every one's pin passes. doctor exits 1 when no pinned harness is
-# installed, so only its report is judged. It runs with an environment built from nothing, so
+# installed, so only its report is judged. Then it checks that every shipped connector can pin
+# the harness on this machine's platform: the harness is not installed here, so this reads the
+# manifests. A connector with `[capture.platform.*]` tables pins one native build per platform,
+# its base pin being the macOS arm64 build (a convention, not a manifest field), so it must name
+# this platform unless that is macos-aarch64. A connector without any is exempt: Hermes's pin is
+# a console script whose shebang names one install's interpreter, so it is not portable to any
+# other machine either way (docs/harnesses/hermes-cli.md, section 2). The gate holds the same
+# rule in Rust (`every_per_platform_connector_pins_every_release_platform`); this is the
+# release-time backstop. It runs with an environment built from nothing, so
 # neither $GOALCUP_CONNECTORS_DIR nor a real config directory can stand in for the tarball's.
 set -eu
 
@@ -46,5 +54,27 @@ pins = {c["connector_id"]: next((k["level"] for k in c["checks"] if k["id"] == "
         for c in report["connectors"]}
 if sorted(pins) != shipped or set(pins.values()) != {"pass"}:
     sys.exit(f"smoke: shipped connectors {shipped}, doctor manifest_pin {pins}")
+PY
+case "$(uname -s) $(uname -m)" in
+"Darwin arm64") platform=macos-aarch64 ;;
+"Darwin x86_64") platform=macos-x86_64 ;;
+"Linux x86_64") platform=linux-x86_64 ;;
+"Linux aarch64" | "Linux arm64") platform=linux-aarch64 ;;
+*)
+    echo "smoke: no connector platform for $(uname -s) $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+python3 - "$root/share/goalcup/connectors" "$platform" <<'PY'
+import os, re, sys
+root, platform = sys.argv[1], sys.argv[2]
+missing = []
+for cid in sorted(os.listdir(root)):
+    text = open(os.path.join(root, cid, "harness.toml")).read()
+    declared = set(re.findall(r"^\[capture\.platform\.([a-z0-9_-]+)\]$", text, re.M))
+    if declared and platform != "macos-aarch64" and platform not in declared:
+        missing.append(cid)
+if missing:
+    sys.exit(f"smoke: no {platform} executable pin in: {', '.join(missing)}")
 PY
 echo "smoke: $(basename "$tarball") ok"

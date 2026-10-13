@@ -11,9 +11,8 @@ Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm
 The capture argv (code: [connectors/claude-code-cli/harness.toml](../../connectors/claude-code-cli/harness.toml)), goal appended as the single element after `--`:
 
 ```
-claude -p --model haiku --effort low --permission-mode acceptEdits --permission-prompts none \
-  --session-id <uuid minted before spawn> --output-format json \
-  --strict-mcp-config --mcp-config '{"mcpServers":{}}' -- "<goal>"
+claude -p --permission-mode bypassPermissions \
+  --session-id <uuid minted before spawn> --output-format json -- "<goal>"
 ```
 
 - stdin is `/dev/null`; stdout is one JSON result object at exit (measured). Exit 0 after `end_turn` (measured).
@@ -33,6 +32,7 @@ claude -p --model haiku --effort low --permission-mode acceptEdits --permission-
 - Version lock: while a run is going Claude creates and removes `~/.local/state/claude/locks/2.1.283.lock`; `XDG_STATE_HOME` redirects it (measured).
 - Linux packages (measured: tarballs fetched with `npm pack` and hashed, 2026-10-13): `@anthropic-ai/claude-code-linux-x64@2.1.283` and `@anthropic-ai/claude-code-linux-arm64@2.1.283`, each holding the native executable at `package/claude`. The packages without a `-musl` suffix are the ones pinned (assumed glibc builds; linkage not checked). The `-musl` packages are not pinned, so the pin check should refuse them (code; not run). Goal Cup pins the SHA-256 of that file per architecture (code: `[capture.platform.linux-x86_64]` and `[capture.platform.linux-aarch64]` in the connector): x86_64 `1859583c...804ae2`, arm64 `346d294f...15e697`. The arm64 hash was re-measured on a Mac with `shasum -a 256` and in the container with `sha256sum`; the x86_64 binary was only hashed, never run. `claude --version` on Linux prints `2.1.283 (Claude Code)` and exits 0 (measured, Docker `rust:1.99` image on arm64, `--network none`, empty temporary `HOME` and `CLAUDE_CONFIG_DIR`, 2026-10-13). Linux install locations of the native installer: unknown (not tried).
 - Linux, no login (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login): `goalcup doctor` passes the executable check on the pinned arm64 binary, reached through a symlink on `PATH` (the pin is checked on the file behind the link). Claude returns `{"is_error":true,"result":"Not logged in · Please run /login","terminal_reason":"api_error"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in about 49 ms, and exits 1; the proxy saw one intercepted connection, closed `interrupted`, with no wire stream. The run seals (`AlreadyStopped`) and `goalcup-verify --capture-integrity` exits 0.
+- macOS Intel (hashed from the npm tarball, 2026-10-14; not run): `@anthropic-ai/claude-code-darwin-x64@2.1.283` holds `package/claude`. The same method on `-darwin-arm64` reproduces the base pin.
 - Windows install locations: unknown. A pinned SHA-256 matches one platform and one architecture only (design note in goal-cup-tracer history, `docs/research/platform-portability.md`, seam 7).
 
 ## 3. Where it keeps things, per OS
@@ -68,7 +68,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 
 - **Model host.** `api.anthropic.com`, `POST /v1/messages`, HTTP/1.1, 200 `text/event-stream` (measured, 2.1.283, 2026-09-28 wire capture). Request 2 was a threaded continuation.
 - **Auth host.** `platform.claude.com` (code: `auth_hosts`).
-- **Connectors and sync.** At each launch Claude starts the account's claude.ai connectors and account-synced plugin MCP servers unless `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1` and `--strict-mcp-config` are set (measured; which one suffices alone was not isolated). Hosts: unknown. Plugins and skills are refreshed from the account at each launch (measured).
+- **Connectors and sync.** At each launch Claude starts the account's claude.ai connectors and account-synced plugin MCP servers unless `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1` and `--strict-mcp-config` are set (measured; which one suffices alone was not isolated). The capture launch sets none of them since 2026-10-14 (owner direction: no MCP limit), so their traffic is tunnelled and not recorded. Earlier measured runs used all three, with `--model haiku --effort low --permission-mode acceptEdits`; the default-model, bypassed-permission launch is not yet measured. Hosts: unknown. Plugins and skills are refreshed from the account at each launch (measured).
 - **Telemetry.** OpenTelemetry export is opt-in via `CLAUDE_CODE_ENABLE_TELEMETRY=1` and `OTEL_*` (vendor docs). Any default telemetry hosts: unknown.
 - **Update host.** unknown (the updater is disabled with `DISABLE_AUTOUPDATER=1`).
 - **Proxy.** `HTTPS_PROXY` is honoured; a loopback forward proxy captured the exchange above (measured, 2.1.283). Transport is plain HTTP/1.1 with server-sent events; no WebSocket seen.

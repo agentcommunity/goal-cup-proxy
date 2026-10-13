@@ -79,6 +79,16 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   `0700`; the daemon separately refuses every loaded connector's `real_dirs`. The CLI does not
   inspect ACLs, and a process under the same UID can replace the alias or target after the final
   pre-create check. Those are residuals, not permissions or inode-binding claims.
+- **An unlimited agent can reach the tracer's own state (D52).** The shipped connectors no longer
+  sandbox the agent, so a tool command runs with the participant's full access and network. It
+  can read `control.json` and call the daemon's loopback control API with its token, rewrite its
+  own native session file, write `config.toml` or `settings.json` into the shared Codex or Claude
+  Code config home (which later runs then load, a base URL included; nothing checks those homes'
+  contents), read and write the real `~/.codex` and `~/.claude`, and reach the network directly
+  with any tool that ignores `HTTPS_PROXY`, so a second model called that way is not recorded.
+  The proxy's CA key stays in process memory. Bounded by: the wire leg records every model call
+  that goes through the proxy, and the chain and seal are the daemon's; a tampered session file
+  or home shows only as a disagreement between the legs. Ticket: none yet.
 - **Open assumptions.** One proxy per entry (CP-A4); the 8 MiB queue holds about 2 MiB of payload, so
   one stall can lose up to about 2.1 MiB; `seal.json` sits outside the reservation, so a failed seal
   write reads `incomplete` with no further policy; the network-filter rule is bound to the E01

@@ -202,7 +202,7 @@ fn the_controlled_workload_is_admitted_under_dev_and_refused_under_pinned() {
 #[test]
 fn the_parsed_fixtures_carry_the_values_the_design_gives() {
     let h = HarnessManifest::from_toml_str(&fixture_text("hermes-cli")).unwrap();
-    assert_eq!(h.capture.home.env, "HERMES_HOME");
+    assert_eq!(h.capture.home.env.as_deref(), Some("HERMES_HOME"));
     assert_eq!(h.capture.home.seed.len(), 3);
     assert_eq!(h.capture.native[0].pattern, "session_{id}.json");
     assert_eq!(
@@ -2432,8 +2432,6 @@ fn a_platform_override_replaces_only_the_pin_and_env() {
         &[("SHELL", "/bin/bash")],
     );
     let m = parsed(&t);
-    m.check_allowlists()
-        .expect("SHELL=/bin/bash is a reviewed row");
     let base = &m.capture.executable;
 
     let linux = m.capture.resolved_executable(PlatformKey::LinuxX86_64);
@@ -2570,33 +2568,108 @@ fn an_override_env_obeys_the_base_env_policy() {
     }
 }
 
+/// D51: an override's env is held to the same generic rules as the base table (there is no
+/// per-connector list of reviewed rows any more), and a plain new variable is data.
 #[test]
-fn an_override_env_key_outside_the_allowlist_is_refused() {
-    // Passes every deny list, as the base table's `RUN_TAG` does, and is on no reviewed row.
+fn an_override_env_is_held_to_the_generic_rules() {
     for (key, value) in [
-        ("RUN_TAG", "x"),
         ("SHELL", "/bin/csh"),
-        ("DISABLE_AUTOUPDATER", "0"),
+        ("OPENSSL_CONF", "x"),
+        ("SSLKEYLOGFILE", "x"),
+        ("DEEPSEEK_API_BASE", "api.example.org"),
+        ("MODEL_HOST", "api.example.org"),
     ] {
         let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
-        let text = toml::to_string(&t).unwrap();
-        let m = HarnessManifest::from_toml_str(&text).unwrap();
-        let err = match m.validate(PINNED) {
-            Err(e) => e.to_string(),
-            Ok(()) => m
-                .check_allowlists()
-                .expect_err("not a reviewed row")
-                .to_string(),
-        };
-        assert!(err.contains("capture.platform.linux-x86_64"), "{err}");
-        assert!(err.contains(key), "{err}");
+        refused(&t, PINNED, &["capture.platform.linux-x86_64", key]);
     }
-    let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[("RUN_TAG", "x")]);
-    let m = parsed(&t);
-    let err = m
-        .check_allowlists()
-        .expect_err("RUN_TAG is not a reviewed row");
-    assert!(err.to_string().contains("CAPTURE_ENV_ALLOWLIST"), "{err}");
+    for (key, value) in [
+        ("RUN_TAG", "x"),
+        ("DISABLE_AUTOUPDATER", "0"),
+        ("PYTHONUNBUFFERED", "1"),
+        ("NODE_ENV", "production"),
+    ] {
+        let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
+        let m = parsed(&t);
+        let env = m.capture.resolved_env(PlatformKey::LinuxX86_64);
+        assert_eq!(env.get(key).map(String::as_str), Some(value));
+    }
+}
+
+/// D51: the rules that replaced the per-connector argv rows. Each word is refused anywhere in
+/// an argument, for every origin.
+#[test]
+fn argv_that_loosens_the_run_is_refused_by_rule() {
+    for (arg, needle) in [
+        ("--insecure", "verification off"),
+        ("--tls-no-verify", "verification off"),
+        ("--ssl-verify=false", "verification off"),
+        ("--keylog-file=x", "TLS secrets"),
+        (r#"notify=["x"]"#, "runs a program"),
+        (r#"mcp_servers.x.command="sh""#, "names a command"),
+        (
+            r#"{"mcpServers":{"x":{"command":"sh"}}}"#,
+            "names a command",
+        ),
+        ("--hooks=x", "names a command"),
+        ("--no-ssl-verification", "verification off"),
+        ("--no-check-certificate", "verification off"),
+        ("--openai-api-base=evil.example.org", "endpoint"),
+        ("--host", "names a server"),
+    ] {
+        let mut t = codex();
+        set(&mut t, &["capture"], "args", strings(&["exec", arg, "--"]));
+        refused(&t, PINNED, &["capture.args", needle]);
+        refused(&t, DEV, &["capture.args", needle]);
+    }
+}
+
+/// D51: the goal flag rule reads whole words, so Amp's `--execute` is a goal flag and `--exec`
+/// is not.
+#[test]
+fn goal_flag_words_are_whole_words() {
+    for (flag, ok) in [
+        ("--execute", true),
+        ("--query", true),
+        ("--prompt", true),
+        ("--payload", true),
+        ("--exec", false),
+        ("--prompt-file", false),
+        ("--run", false),
+        ("--load-config", false),
+    ] {
+        let mut t = hermes();
+        set(&mut t, &["capture"], "goal_flag", flag);
+        if ok {
+            admitted(&t, PINNED);
+        } else {
+            refused(&t, PINNED, &["capture.goal_flag", "the goal is a prompt"]);
+        }
+    }
+}
+
+/// D51: a new connector is data. An id, a model, flags and variables that no Rust file names
+/// pass validation as `Pinned`; nothing in `capture_policy.rs` lists connectors.
+#[test]
+fn a_new_connector_needs_no_rust() {
+    let mut t = codex();
+    t.insert("id".into(), Value::String("example-cli".into()));
+    set(
+        &mut t,
+        &["capture"],
+        "args",
+        strings(&[
+            "run",
+            "--model",
+            "example-model-1",
+            "--non-interactive",
+            "--cwd",
+            "{workspace}",
+            "--",
+        ]),
+    );
+    set(&mut t, &["capture", "env"], "EXAMPLE_NO_UPDATE", "1");
+    set(&mut t, &["capture", "env"], "EXAMPLE_TELEMETRY", "off");
+    admitted(&t, PINNED);
 }
 
 #[test]
@@ -2652,4 +2725,112 @@ fn an_override_version_obeys_the_version_grammar() {
             .version,
         "0.153.1"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// A harness with no home variable, and loopback hosts
+// ---------------------------------------------------------------------------------------
+
+/// `codex` without `home.env`: a per-run config home nothing points at, and a native root under
+/// the private run `HOME`, where such a harness keeps its sessions.
+fn without_home_env() -> Table {
+    let mut t = codex();
+    let home = tbl(&mut t, &["capture", "home"]);
+    home.remove("env");
+    home.insert("config_home".into(), Value::String("per_run".into()));
+    let native = t["capture"]["native"].as_array().unwrap().clone();
+    let mut native0 = native[0].as_table().unwrap().clone();
+    native0.insert(
+        "root".into(),
+        Value::String("{run_home}/.example/sessions".into()),
+    );
+    tbl(&mut t, &["capture"]).insert("native".into(), Value::Array(vec![Value::Table(native0)]));
+    t
+}
+
+#[test]
+fn home_env_is_optional_and_then_the_harness_lives_in_the_run_home() {
+    let t = without_home_env();
+    admitted(&t, PINNED);
+    let m = parsed(&t);
+    assert_eq!(m.capture.home.env, None);
+
+    // Anything that only a home variable would make the harness read is refused, not admitted to
+    // record nothing.
+    let mut shared = without_home_env();
+    set(&mut shared, &["capture", "home"], "config_home", "shared");
+    refused(
+        &shared,
+        PINNED,
+        &["capture.home.config_home", "requires `capture.home.env`"],
+    );
+
+    let mut root = without_home_env();
+    let mut native = root["capture"]["native"].as_array().unwrap()[0]
+        .as_table()
+        .unwrap()
+        .clone();
+    native.insert(
+        "root".into(),
+        Value::String("{config_home}/sessions".into()),
+    );
+    tbl(&mut root, &["capture"]).insert("native".into(), Value::Array(vec![Value::Table(native)]));
+    refused(&root, PINNED, &["capture.native.root", "{run_home}/..."]);
+
+    for (field, value) in [
+        ("per_run_dir", Value::String("example".into())),
+        ("dirs", strings(&["sessions"])),
+        (
+            "seed",
+            Value::Array(vec![Value::Table(
+                toml::from_str::<Table>("file = \"config.toml\"").unwrap(),
+            )]),
+        ),
+    ] {
+        let mut t = without_home_env();
+        set(&mut t, &["capture", "home"], field, value);
+        refused(
+            &t,
+            PINNED,
+            &[
+                &format!("capture.home.{field}"),
+                "requires `capture.home.env`",
+            ],
+        );
+    }
+}
+
+/// A capture launch sets `NO_PROXY=127.0.0.1,localhost`, so a loopback model host would validate
+/// and record nothing. Pinned connectors are refused one; the kit's `*.localhost` stand-ins load
+/// as `Dev`.
+#[test]
+fn a_pinned_connector_names_no_loopback_or_single_label_host() {
+    for host in [
+        "localhost",
+        "api.localhost",
+        "localhost.localdomain",
+        "ollama",
+        "127.1",
+        "0x7f.1",
+        "127.0.0.01",
+    ] {
+        let mut t = codex();
+        let mut hosts = t["capture"]["hosts"].as_array().unwrap().clone();
+        hosts[0]
+            .as_table_mut()
+            .unwrap()
+            .insert("host".into(), Value::String(host.into()));
+        tbl(&mut t, &["capture"]).insert("hosts".into(), Value::Array(hosts.clone()));
+        refused(&t, PINNED, &["capture.hosts", host]);
+        if host.ends_with("localhost") {
+            admitted(&t, DEV);
+        }
+
+        let mut t = codex();
+        set(&mut t, &["capture"], "auth_hosts", strings(&[host]));
+        refused(&t, PINNED, &["capture.auth_hosts", host]);
+        if host.ends_with("localhost") {
+            admitted(&t, DEV);
+        }
+    }
 }

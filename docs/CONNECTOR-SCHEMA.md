@@ -28,14 +28,12 @@ All public schema structs and enums are non-exhaustive. A manifest cannot select
 
 - `Origin::Pinned` is an in-tree or pin-checked connector. It refuses an interpreter as the
   executable and refuses an absolute, home-relative, parent-relative or expanding path in an
-  argument. When this build pins its id, on top of every deny rule below, each `capture.env`
-  entry must be a reviewed row of `CAPTURE_ENV_ALLOWLIST` (name and exact value), and
-  `capture.args` with `goal_flag` must be exactly the connector's row of `CAPTURE_ARG_ALLOWLIST`
-  (in order, as written) in `capture_policy.rs`. A new connector, variable or argument, a model
-  name included, is a core PR. An unpinned id is refused at the pin gate and runs only under
-  `--dev`.
+  argument. There is no per-connector list in Rust (D51): `capture.args`, `goal_flag` and
+  `capture.env` are held to the generic rules below, and a new connector, variable or argument,
+  a model name included, is a data change reviewed in its PR. An unpinned id is refused at the
+  pin gate and runs only under `--dev`.
 - `Origin::Dev` is an unpinned directory under `GOALCUP_CONNECTORS_DIR` selected through
-  `--dev`. It relaxes those two refusals and the two allowlists. Environment values, seeds,
+  `--dev`. It relaxes those two refusals and the loopback-host refusal. Environment values, seeds,
   trust tables, all bounds and all cross-field rules remain strict.
 
 The CLI and daemon both use the same loader and each validates again at its own trust boundary.
@@ -111,8 +109,7 @@ its base values everywhere.
 
 Each entry is validated as the whole recipe it resolves to: the base table with that platform's
 digest, version and env applied. Every rule in this document applies to that recipe, including
-the env deny lists, value rules, bounds, cross-field rules and, for a pinned id,
-`CAPTURE_ENV_ALLOWLIST`. An override cannot set a variable, value or name that the base table
+the env deny lists, value rules, bounds and cross-field rules. An override cannot set a variable, value or name that the base table
 could not. A refusal names `capture.platform.<key>` (`.sha256`, `.version` or `.env`) and keeps
 the base rule's reason.
 
@@ -177,7 +174,7 @@ path component. `Origin::Dev` does not relax environment values.
 |---|---|---|
 | `capture.home.run_home` | required | Closed values: `empty`, `keychain_link`. |
 | `capture.home.config_home` | required | Closed values: `shared`, `per_run`. |
-| `capture.home.env` | required | 1–64 bytes; `^[A-Z][A-Z0-9_]{0,63}$`, then the home-variable policy below. |
+| `capture.home.env` | optional, default absent | 1–64 bytes; `^[A-Z][A-Z0-9_]{0,63}$`, then the home-variable policy below. |
 | `capture.home.per_run_dir` | optional; effective default `harness-home` | `per_run` only; 1–32 bytes; `^[a-z0-9][a-z0-9-]{0,31}$`. |
 | `capture.home.dirs` | optional, default `[]` | `per_run` only; at most 8 relative paths, created mode `0700`. |
 | `capture.home.seed` | optional, default `[]` | `per_run` only; at most 16 seed rows. |
@@ -202,6 +199,11 @@ reviewer still reads every seed.
 followed by `_HOME` or `_CONFIG_DIR`, such as `CODEX_HOME`, `HERMES_HOME` or
 `CLAUDE_CONFIG_DIR`. Other tools' home/config/cache variables, `SHELL`, and the shared name-deny
 rules are refused.
+
+Without `capture.home.env` the launch points no variable at the config home, so the harness keeps
+its state under the private run `HOME`. Then `config_home` must be `per_run`, `seed` and `dirs`
+must be empty, and the native `root` must be `{run_home}/...`: anything else would be a home the
+harness never reads, admitted to record nothing.
 
 ## Credential and CA
 
@@ -312,7 +314,11 @@ A host has 1–32 paths across the two arrays. Paths are unique across both arra
 are at most 1024 bytes, contain no query or fragment, no ASCII byte from `0x00` through `0x20`,
 and no `0x7f` byte, `.` segment or `..` segment. This is a literal byte rule; it does not classify
 non-ASCII Unicode whitespace or control characters. Hosts have no scheme, port, userinfo, wildcard
-or trailing dot and cannot be IPv4 literals. An authentication host and intercepted host cannot
+or trailing dot and cannot be IPv4 literals. For a pinned connector a host and an authentication
+host also cannot be `localhost`, `*.localhost`, `localhost.localdomain` or a single-label name:
+a capture launch sets `NO_PROXY=127.0.0.1,localhost`, so loopback traffic is never recorded
+(`capture_policy::local_host_problem`). Kit cases and the controlled workload (`Origin::Dev`)
+keep their `*.localhost` stand-ins. An authentication host and intercepted host cannot
 overlap; model hosts belong in `capture.hosts`, not `auth_hosts`.
 
 ## `[redaction]`
@@ -350,7 +356,7 @@ In addition to the local rules above, all of these apply:
 5. The native root plus pattern, compared case-insensitively with `{id}` treated as `*`, cannot
    match a seed destination. A `{run_home}` root is checked both with the config home coincident
    with the run home and nested below `per_run_dir`.
-6. `capture.home.env`, `capture.credential.env` and all `capture.ca.env` names are pairwise
+6. `capture.home.env` (when present), `capture.credential.env` and all `capture.ca.env` names are pairwise
    distinct case-insensitively. No `capture.env` key may duplicate one.
 7. Every CA variable's registry mode equals the single declared `capture.ca.mode`.
 8. Authentication and intercepted host sets are disjoint; every intercepted host has at least one
@@ -424,8 +430,8 @@ schema_version = 1
 id = "hermes-cli"
 
 [capture]
-# hermes chat -Q --provider deepseek --model deepseek-v4-flash --query=<goal>
-args = ["chat", "-Q", "--provider", "deepseek", "--model", "deepseek-v4-flash"]
+# hermes chat -Q --provider deepseek --query=<goal>
+args = ["chat", "-Q", "--provider", "deepseek"]
 goal_flag = "--query"
 continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
 

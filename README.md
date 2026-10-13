@@ -31,8 +31,9 @@ export PATH="$PWD/target/release:$PATH"
 
 ## Quickstart
 
-**You need** a Mac with Apple silicon, or Linux (x86_64 or arm64) with the trace folder on ext4 or
-XFS ([Linux](#linux)); Goal Cup [installed](#install); and a Claude or ChatGPT subscription.
+**You need** a Mac (Apple silicon, or Intel: pinned, but no Intel run is measured yet; on Apple
+silicon install the arm64 Goal Cup and harness, not an Intel build under Rosetta), or Linux
+(x86_64 or arm64) with the trace folder on ext4 or XFS ([Linux](#linux)); Goal Cup [installed](#install); and a Claude or ChatGPT subscription.
 Install the exact harness build Goal Cup is pinned to, Claude Code 2.1.283 or Codex CLI 0.153.0:
 `goalcup start` refuses any other build. Choose where the tracker keeps its state:
 

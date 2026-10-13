@@ -2,7 +2,7 @@
   "allowance_refusals": [
     {
       "args": "profile_args",
-      "refusal": null,
+      "refusal": "the profile is not in the pinned mode (`--permission-mode acceptEdits`, `--permission-prompts none`)",
       "rule": "Bash(python3 demo.py *)"
     },
     {
@@ -562,21 +562,12 @@
   "capture_profile": {
     "args": [
       "-p",
-      "--model",
-      "haiku",
-      "--effort",
-      "low",
       "--permission-mode",
-      "acceptEdits",
-      "--permission-prompts",
-      "none",
+      "bypassPermissions",
       "--session-id",
       "{session_id}",
       "--output-format",
       "json",
-      "--strict-mcp-config",
-      "--mcp-config",
-      "{{\"mcpServers\":{{}}}}",
       "--"
     ],
     "auth_hosts": [
@@ -587,12 +578,10 @@
       "NODE_EXTRA_CA_CERTS"
     ],
     "config_home": "shared",
-    "continuation": "none: claude -p one turn, acceptEdits, permission prompts denied, stdin /dev/null",
+    "continuation": "none: claude -p one turn, permissions bypassed, stdin /dev/null",
     "env": {
       "CLAUDE_CODE_RETRY_WATCHDOG": "1",
-      "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS": "1",
       "DISABLE_AUTOUPDATER": "1",
-      "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
       "SHELL": "/bin/zsh"
     },
     "executable": {
@@ -623,6 +612,11 @@
           "SHELL": "/bin/bash"
         },
         "sha256": "1859583ce32920595c61ef868bee52e1b1594f7486db209935e01f1e5e804ae2",
+        "version": null
+      },
+      "macos-x86_64": {
+        "env": {},
+        "sha256": "c896d2aee12ff4d95861033d9730d3d22dc19e4f32779134d3399ef3dfb0e77a",
         "version": null
       }
     }
@@ -1023,8 +1017,8 @@
     }
   ],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 18,
-    "goal_index": 17,
+    "argv_len": 9,
+    "goal_index": 8,
     "goal_prefix": 0,
     "tail": [
       "--",
@@ -1038,26 +1032,17 @@
   "plan": {
     "argv": [
       "-p",
-      "--model",
-      "haiku",
-      "--effort",
-      "low",
       "--permission-mode",
-      "acceptEdits",
-      "--permission-prompts",
-      "none",
+      "bypassPermissions",
       "--session-id",
       "5f0c2a8e-8a0e-4c1f-9d6b-2b7d2b0e9a11",
       "--output-format",
       "json",
-      "--strict-mcp-config",
-      "--mcp-config",
-      "{\"mcpServers\":{}}",
       "--",
       "write result.txt"
     ],
     "capture": {
-      "goal_index": 17,
+      "goal_index": 8,
       "goal_prefix": 0
     },
     "cwd": "<TMP>/workspace",
@@ -1065,10 +1050,8 @@
     "env_remove": [],
     "env_set": {
       "CLAUDE_CODE_RETRY_WATCHDOG": "1",
-      "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS": "1",
       "CLAUDE_CONFIG_DIR": "<TMP>/harness-home",
       "DISABLE_AUTOUPDATER": "1",
-      "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
       "HOME": "<TMP>/run-home",
       "HTTPS_PROXY": "<PROXY_URL>",
       "LOGNAME": "participant",
@@ -1090,12 +1073,7 @@
     "program": "<TMP>/bin/fake-harness"
   },
   "plan_with_claude_tool_allowance": {
-    "argv_tail": [
-      "--allowedTools",
-      "Bash(python3 demo.py *)",
-      "--",
-      "write result.txt"
-    ]
+    "refused": "exit1"
   },
   "redaction": {
     "extra_patterns": [
@@ -1121,30 +1099,19 @@
     "registered_handle": {
       "argv": [
         "-p",
-        "--model",
-        "haiku",
-        "--effort",
-        "low",
         "--permission-mode",
-        "acceptEdits",
-        "--permission-prompts",
-        "none",
+        "bypassPermissions",
         "--session-id",
         "5f0c2a8e-8a0e-4c1f-9d6b-2b7d2b0e9a11",
         "--output-format",
         "json",
-        "--strict-mcp-config",
-        "--mcp-config",
-        "{\"mcpServers\":{}}",
         "--",
         "<goal>"
       ],
       "env_keys": [
         "CLAUDE_CODE_RETRY_WATCHDOG",
-        "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS",
         "CLAUDE_CONFIG_DIR",
         "DISABLE_AUTOUPDATER",
-        "ENABLE_CLAUDEAI_MCP_SERVERS",
         "HOME",
         "HTTPS_PROXY",
         "LOGNAME",

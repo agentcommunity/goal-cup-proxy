@@ -29,7 +29,8 @@ version = "<VERSION>"                   # the number only ("1.2.3", not "toy 1.2
 sha256 = "<SHA256_OF_CANONICAL_FILE>"   # 64 lowercase hex of the symlink-resolved regular file
 
 # Child-only extra variables. Delete the table if none. No endpoint, proxy, credential,
-# provider, XDG_*, GIT_*, CA or *_COMMAND/*PAGER names; no value with "/" "~" "$" or "://".
+# provider, XDG_*, GIT_*, OPENSSL_*, CA, *KEYLOG*, *_COMMAND/*PAGER or server names (*_URL,
+# *_BASE, *_HOST, *_ADDR, *_SERVER, ...); no value with "/" "~" "$" or "://".
 # SHELL is the one path value allowed: "/bin/zsh", "/bin/bash" or "/bin/sh".
 [capture.env]
 # <HARNESS>_DISABLE_UPDATES = "1"
@@ -39,6 +40,9 @@ run_home = "empty"                      # "empty", or "keychain_link" (macOS key
 # "per_run": a fresh config home per run (needed for seeds, dirs and any credential).
 # "shared": one isolated config home reused across serialized runs; no seeds or dirs.
 config_home = "per_run"
+# Optional: delete when the harness has no variable that moves its config. It then keeps its
+# state under the private run HOME: native root "{run_home}/...", config_home "per_run", and no
+# seeds or dirs.
 env = "<HARNESS>_HOME"                  # own home var: ^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$
 per_run_dir = "<harness>-home"          # per_run only; folder name below the run home
 dirs = []                               # per_run only; relative dirs created mode 0700
@@ -104,7 +108,7 @@ grace_seconds = 10                      # 1-60
 
 # One to 16 intercepted model hosts. Each needs at least one recorded path.
 [[capture.hosts]]
-host = "<api.provider.example>"         # lowercase DNS name; no scheme, port or wildcard
+host = "<api.provider.example>"         # public DNS name; no scheme, port, wildcard or localhost
 evidence_paths = ["</v1/chat/completions>"]
 # prefix_paths = ["/v1/"]               # path prefixes; "/" alone is refused
 protocol_hint = "<openai-chat-completions>"

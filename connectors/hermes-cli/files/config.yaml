@@ -3,8 +3,6 @@
 # no `fallback_providers`, no `model.base_url`, no `providers:` block, no auxiliary override.
 sessions:
   write_json_snapshots: true
-agent:
-  reasoning_effort: "none"
 auxiliary:
   title_generation:
     enabled: false
