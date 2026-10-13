@@ -199,7 +199,9 @@ or XFS (capture refuses overlayfs, tmpfs, btrfs and FUSE). `sh scripts/linux-che
 Linux part in Docker, after the `cargo fetch --locked` above: the registry check, `gate.sh fast`,
 the capture-reservation tests on ext4 and XFS, the CLI's `full` and `m2_cli_lifecycle` suites,
 the `#[ignore]`d `m2_synthetic_vertical` and `capture_failure_campaign` suites, and the daemon's
-`full` suite. It is not `gate.sh full`: the other crates' `full` binaries, the scripts' unit tests
+`full` suite. With `LINUX_CHECK_HARNESSES=1` it then runs `scripts/linux-harness-smoke.sh`,
+which fetches the pinned harness builds for the machine's architecture from npm and launches each
+with no login to the auth step (it needs network). It is not `gate.sh full`: the other crates' `full` binaries, the scripts' unit tests
 and the link check are not run there. It has been measured on Docker Desktop on an arm64 Mac only.
 
 Each crate's integration tests are modules of two binaries: `tests/it/` (fast) and `tests/full/`

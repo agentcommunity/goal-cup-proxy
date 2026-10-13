@@ -1,0 +1,40 @@
+# Manual only: the Linux check on an x86_64 host. Never runs on push or pull request (CI stays
+# lean; ci.yml is the only automatic job). Start it from the Actions tab or with
+# `gh workflow run linux-x86_64.yml`.
+#
+# It runs `sh scripts/linux-check.sh` (README.md, "The gate") on ubuntu-latest, which is x86_64,
+# with LINUX_CHECK_HARNESSES=1, so after the suites it fetches the pinned x86_64 Codex and Claude
+# Code builds from npm and launches each with no login to the auth step
+# (scripts/linux-harness-smoke.sh). No secret is used and nobody signs in.
+
+name: linux-x86_64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux-check:
+    name: linux-check (x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - run: uname -m && docker info --format '{{.NCPU}} CPUs, {{.MemTotal}} bytes, {{.ServerVersion}}' && df -h /
+      # The runner's preinstalled SDKs the check never uses; the image and the build need the room.
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      # linux-check.sh builds offline inside the container from the host's registry.
+      - run: cargo fetch --locked
+      # The container works as uid 1000 (`dev`); the runner's files belong to another uid.
+      - run: sudo chown -R 1000:1000 "$GITHUB_WORKSPACE" "$HOME/.cargo/registry"
+      - env:
+          LINUX_CHECK_HARNESSES: "1"
+        run: sh scripts/linux-check.sh
