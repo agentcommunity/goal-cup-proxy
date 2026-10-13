@@ -8,8 +8,8 @@ record of what is built.
 The principle: a harness is data in `connectors/<id>/`, reviewed by a code owner. The tracer's
 code knows capture *mechanisms* (a proxy, a session-file reader, an identity carrier, a decoder
 family), never a harness by name. A harness rarely changes how it sends tokens or writes its
-transcript from one day to the next, so a new build of a known harness should cost nothing more
-than a reviewed list entry.
+transcript from one day to the next, so a new build of a known harness should cost nothing: it is
+recorded, not pinned.
 
 ## 1. Per-connector rows in Rust
 
@@ -51,53 +51,49 @@ stand-in's. `expect.toml` shrinks to what the
 stand-in writes (session path, first bytes, wire request). The per-connector golden becomes a
 short projection of the fields a reviewer checks, or a digest of the long one.
 
-## 4. Versions, pins and new connectors
+## 4. Builds: record everything, pin nothing
 
-Today each connector pins one build per platform by SHA-256, and `goalcup start` refuses any
-other. At 30 harnesses × 4 platforms that is 120 hashes, each redone on every vendor release.
-And because connector directories are pinned by digests compiled into the signed binaries, a new
-connector, or any change to one, is a new tracer release that participants must install.
+Owner decision (2026-10-14): `goalcup start` never refuses a harness build. A harness rarely
+changes how it sends tokens or writes its transcript between builds, and 30 harnesses × 4
+platforms of exact pins, redone on every vendor release, is not maintainable. So the tracer
+records which build ran, and judges read that record. What stays pinned and reviewed is the
+connector directory: that is what stops a connector smuggling a base URL, a proxy or a command.
 
-The proposal: keep a list of accepted builds per harness and platform; refresh it with a script
-from official releases (npm, GitHub releases, PyPI); let an unknown build run with its hash and
-version recorded, flagged "unlisted build" for review instead of refused. Checked against the
-code, it is sound only like this:
+- **Three digests, because one is not enough.** The CLI hashes the program file it resolved
+  (for a script or npm/pip wrapper, the only digest that names the harness). The daemon, at the
+  launch post, which comes after `exec`, hashes the registered process's running image (on Linux
+  through `/proc/<pid>/exe`, the executed file itself; on macOS through `proc_pidpath`, a name
+  that a replacement can change) and, when the connector declares a `native_binary`, that
+  process's image too. For an interpreted harness the image is `node` or `python`, which says
+  nothing about the harness. The daemon hashes outside the run lock: the files are 100–200 MB.
+- **Recording them in the trace needs a DECISIONS row.** `v0.5.0` is tagged and the v5 records
+  are frozen (D43 ruling 7): every record refuses unknown fields, so a v0.5.0 verifier or server
+  rejects a trace that carries new `Launch` fields. Either the row accepts that (the server and
+  verifier upgrade first), or the build goes into protocol v6. Owner decision.
+- **The version is the harness's own word.** A connector may name `version_args` (Codex and
+  Claude Code: `--version`). The CLI runs it once with a minimal environment, no credential and
+  a timeout, keeps the first line, and sends it as `harness_version`; without `version_args`
+  the field says "unreported". It is reported, not proven: only the digests are evidence. Today
+  the field holds the connector's pinned version, so its meaning changes; that belongs in the
+  same DECISIONS row.
+- **A known-builds list is advisory and lives on the server**, matched on (connector, platform,
+  digest), the way the server matches `connector_dir_sha256` (D43 ruling 5), filled by a script
+  from official releases with each source URL and the registry's integrity value. "Unlisted" is a
+  note for judges, never a refusal; an offline verifier shows only the digests.
+- **Recording is enough only with a cross-leg check.** An exact pin never stopped a determined
+  participant, but it stopped a cheap one: a three-line wrapper on `PATH` that unsets
+  `HTTPS_PROXY` now gets a recorded run, and the verifier has no check that the session file's
+  model turns match model calls on the wire. Before refusal goes, the verifier must note "native
+  turns with no wire model call" (or, until it does, a CHEAT-CHECKLIST row tells judges to look).
+- **The launch-time consistency check stays**: a file swapped between registration and release
+  is still refused. It refuses a swap, not a build.
 
-1. **The list lives on the server, not in the connector.** Matched on (connector, platform,
-   executable digest), the way the server already matches `connector_dir_sha256` (D43 ruling 5).
-   In the connector directory it would change the directory's compiled pin, so every refresh
-   would be a release. The local copy that `doctor` reads is a hint, not the authority.
-2. **The daemon hashes what actually runs.** Today the CLI hashes the binary, checks it and drops
-   the result; the trace holds only the directory digest. The CLI is the participant's own
-   process, so a modified CLI can report any hash, and the same is true of today's pin. The daemon
-   should hash the registered process's own executable after `exec` (`proc_pidpath` on macOS,
-   `/proc/<pid>/exe` on Linux) and record it, beside the CLI's hash, as an optional skip-if-none
-   v5 launch field. The version comes from the build list match, not from the connector, which
-   only declares one. The gap between hash and `exec` (`docs/CHEAT-CHECKLIST.md`) remains.
-3. **"Unlisted" is set where the list is.** An offline verifier reads no list, so it shows only
-   the digest; the server, or a verifier given the list as an input, sets the flag. An unlisted
-   build can be anything on `PATH`: a wrapper that unsets `HTTPS_PROXY` or rewrites the base URL,
-   or a fake that writes a session file and makes no model call, with both legs still looking
-   consistent. So a judge must see the flag in the verdict, with three outcomes: cleared
-   (the build is later listed, automatically), downgraded, or disqualified. `doctor` and `start`
-   warn in plain words before the run, not after 168 hours.
-4. **The refresh script does not trust the registry blindly.** A hash cannot be reviewed by eye.
-   Each entry records its source URL and the registry's integrity value, prefers vendor
-   checksums, provenance or signatures where they exist, waits a short soak period, and can be
-   delisted later.
-5. **One file hash proves little for a script harness.** Hermes's pin is a console script that
-   imports a Python package tree, and npm wrappers spawn a platform binary. Pin the file that
-   actually runs (Codex already pins its vendor binary), or a package-tree digest (a wheel's
-   `RECORD`, npm's integrity), or record "script; not proven".
+New connectors during the 24-hour window still need a tracer release, because connector
+directories are pinned by digests compiled into the binaries. Moving accepted connector digests
+to the server too would remove that, at the cost of trusting a downloaded list; owner decision.
 
-The same move answers new connectors during the 24-hour window: if the server also holds the
-accepted connector-directory digests, a connector reviewed and listed there can run on an
-installed tracer with `--dev` semantics replaced by "unlisted connector" review. That trades the
-local refusal for review, as above, and is an owner decision.
-
-Evidence per harness × platform (120 combinations) cannot come from CI, which stays lean. Each
-harness needs one measured real run per platform family before the hack, recorded in its facts
-sheet; until then a platform is "pinned, not measured" (Intel and Linux today).
+Evidence per harness × platform cannot come from CI, which stays lean. Each harness needs one
+measured real run per platform family before the hack, recorded in its facts sheet.
 
 ## 5. What cannot be captured yet
 
@@ -109,25 +105,72 @@ would take:
 | No local session file (server-side sessions) | A wire-only claim level: schema allows zero native rows, the verifier rates it lower |
 | Database store (SQLite, LevelDB) | A read-only snapshot native form for the run's own rows (D44 plans this for OpenCode) |
 | HTTP/2-only or gRPC | An `h2` proxy path, plus a decoder for its framing; the largest item here |
-| Local or loopback model | Recording plain HTTP to loopback; a different evidence claim, since no vendor sees the call |
+| Local or loopback model | A loopback relay the tracer records (below) |
 | Desktop or IDE app | V1.1 scope: launch and isolation of an app, not a CLI |
 | Subagent transcripts in own files | A `children` pattern beside the one native row |
 | Self-update mid-run | Re-hash the binary when the run ends and record a mismatch |
 | More than 16 hosts or wildcards | Raise the bound; wildcard hosts need a reviewed suffix rule |
 
+### Which row-0 items matter most
+
+A survey of the top coding agents by use (October 2026; vendor and community pages, so hints to
+measure before building) ranks Claude Code, GitHub Copilot, Codex, Cursor, Antigravity
+(`agy`, which replaced Gemini CLI), OpenCode, Hermes, Kilo Code, Windsurf/Devin, Warp, Cline,
+Pi, Mistral Vibe, Continue and OpenHands, with Goose next. Against row 0:
+
+- **A SQLite session snapshot is the biggest unlock**: OpenCode, Goose, Cline's CLI, Cursor's
+  CLI and part of Hermes keep their sessions in SQLite. A read-only snapshot of the run's own
+  rows (D44's design for OpenCode) is one native form for all of them.
+- **A wire-only claim level** covers agents whose sessions live on a server (Amp, Warp, cloud
+  Devin): the wire leg alone, rated lower, rather than no fit.
+- **HTTP/2** matters for Cursor (Connect over protobuf). First check whether its HTTP/1.1
+  fallback can be forced per process; only then build an `h2` path.
+- **Desktop and IDE agents** are steered to their CLI where one exists (Copilot CLI,
+  `cursor-agent`, `agy`); no desktop capture is planned.
+- **A local-model recorder** (below) serves about eleven of the fifteen, which accept a local or
+  OpenAI-compatible endpoint.
+
+### Local models
+
+A participant may run their own model (Ollama, LM Studio) on loopback; the owner accepts it.
+Today the launch exempts loopback from the proxy (`NO_PROXY=127.0.0.1,localhost`), so that
+traffic is not recorded, and a pinned connector may not name a loopback host.
+
+The plan: `goalcup start --local-model http://127.0.0.1:11434` names the participant's server
+(loopback only). The tracer starts a recording relay on another loopback port, plain HTTP, that
+forwards to it and records each request and response as a wire stream, as the proxy does for a
+vendor host. A local-model connector (its own connector, beside the vendor one) names a new
+launch token, `{local_model_url}`, which only the tracer renders; the connector never writes the
+URL. Today's rules refuse that: the template tokens are `workspace` and `session_id`, and any
+`*_URL` or `*_BASE` name is refused. So the change is a new token plus one narrow exemption: a
+server-named variable or argument is admitted when its whole value is that token.
+
+This sets a base URL. The "never set a model base URL" rule (AGENTS.md, D1) exists to protect
+vendor endpoints, and none is replaced here; but the rule is written as absolute, so the
+exemption needs its own DECISIONS amendment.
+
+The evidence claim is weaker and says so: "participant-operated endpoint". The record shows what
+the harness sent and received, in order and in time, not what answered: a loopback port can be
+a local model, a tunnel to a vendor API, or a person typing. Judges weigh it; the verdict names
+the claim level. Anything the tracer asks the server about itself (Ollama's `/api/tags`) is the
+server's own claim.
+
 ## Order of work
 
-1. Land D51 (argv and env are data) and the optional `home.env`, then the kit docs with row 0.
-2. Land D52 (no model, sandbox or permission limits in the shipped connectors) and the Intel pins
-   in today's shape, so every release target can capture.
-3. Remove the harness names from core: delete the Claude allowance flag and daemon path, make
-   the stdout scope wait a connector field, drop the three hard-coded home folders.
-4. Make the kit case derive from the connector and shrink the per-connector golden. Both are
-   cheap and should land before most of the 30 connectors do.
-5. Have the daemon hash the running executable and record it (condition 2).
-6. Move accepted builds, and then accepted connector digests, to a server list with the refresh
-   script, the "unlisted" verdict flag and the doctor warning (conditions 1, 3–5). Owner decision
-   first.
-7. Declare native decoder families a connector picks by hint.
+1. Landing now: D51 (argv and env are data), the optional `home.env`, the kit docs with row 0,
+   D52 (no model, sandbox or permission limits). The Intel pins of #72 become moot under step 2.
+2. Record the build, then stop pinning, in this order: the DECISIONS row for the v5 freeze (or
+   v6); the three digests and `version_args`; the verifier's cross-leg note (or the
+   CHEAT-CHECKLIST row); then `executable.sha256`, the per-platform pins and their refusal path
+   go, leaving `[capture.platform.<key>]` for env overrides only.
+3. No harness names in core: delete the Claude allowance flag and daemon path (keep the v5 field
+   and the reader check), make the stdout scope wait a connector field, drop the three
+   hard-coded home folders and the `HERMES_` reserved prefix.
+4. Declare native decoder families a connector picks by `protocol_hint`.
+5. Make the kit case derive from the connector and shrink the per-connector golden.
+6. The server-side known-builds list, its refresh script and the "unlisted" note.
+7. The local-model relay, with its DECISIONS amendment to D1.
 8. Measure one real run per harness and platform family, recorded in its facts sheet.
-9. Take row-0 items one at a time, by demand: subagent files, database snapshots, wire-only.
+9. Row-0 items by the survey above: the SQLite snapshot form first (OpenCode, Goose, Cline,
+   Cursor CLI), then the wire-only claim level (Amp, Warp), then a forced-HTTP/1.1 check and
+   only if needed an `h2` path (Cursor), then subagent files.
