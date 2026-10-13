@@ -1710,6 +1710,11 @@ fn connectors_plus_one() -> tempfile::TempDir {
         ),
         ("@PYTHON3_VERSION@", "1.0.0".to_string()),
         ("@PYTHON3_SHA256@", "cd".repeat(32)),
+        // A pinned connector names no loopback host; the kit's stand-in host is Dev-only.
+        (
+            "host = \"api.e00.localhost\"",
+            "host = \"api.synthetic-extra.example\"".to_string(),
+        ),
     ] {
         assert!(text.contains(from), "{from} is not in the kit fixture");
         text = text.replace(from, &to);

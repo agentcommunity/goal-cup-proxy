@@ -2778,6 +2778,7 @@ fn home_env_is_optional_and_then_the_harness_lives_in_the_run_home() {
     refused(&root, PINNED, &["capture.native.root", "{run_home}/..."]);
 
     for (field, value) in [
+        ("per_run_dir", Value::String("example".into())),
         ("dirs", strings(&["sessions"])),
         (
             "seed",
@@ -2809,6 +2810,9 @@ fn a_pinned_connector_names_no_loopback_or_single_label_host() {
         "api.localhost",
         "localhost.localdomain",
         "ollama",
+        "127.1",
+        "0x7f.1",
+        "127.0.0.01",
     ] {
         let mut t = codex();
         let mut hosts = t["capture"]["hosts"].as_array().unwrap().clone();
@@ -2825,5 +2829,8 @@ fn a_pinned_connector_names_no_loopback_or_single_label_host() {
         let mut t = codex();
         set(&mut t, &["capture"], "auth_hosts", strings(&[host]));
         refused(&t, PINNED, &["capture.auth_hosts", host]);
+        if host.ends_with("localhost") {
+            admitted(&t, DEV);
+        }
     }
 }

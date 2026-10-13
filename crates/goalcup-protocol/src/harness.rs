@@ -27,8 +27,9 @@
 //!
 //! [`Origin`] is the one observable predicate that relaxes anything: `Dev` (an unpinned
 //! directory under `GOALCUP_CONNECTORS_DIR` loaded with `--dev`, for kit cases and the
-//! controlled workload) skips the interpreter refusal and the absolute-path `args` refusal.
-//! Env values, seeds, the deny lists and every cross-field rule stay strict for both.
+//! controlled workload) skips the interpreter refusal, the absolute-path `args` refusal and the
+//! loopback-host refusal (the kit's stand-ins are `*.localhost`). Env values, seeds, the deny
+//! lists and every cross-field rule stay strict for both.
 
 use crate::ProtocolError;
 use crate::capture_policy::{
@@ -250,8 +251,8 @@ pub enum Origin {
     /// An in-tree or pin-checked connector directory.
     Pinned,
     /// An unpinned directory under `GOALCUP_CONNECTORS_DIR`, loaded with `--dev` (kit cases,
-    /// the controlled workload). Relaxes the interpreter refusal and the absolute-path `args`
-    /// refusal, and nothing else.
+    /// the controlled workload). Relaxes the interpreter refusal, the absolute-path `args`
+    /// refusal and the loopback-host refusal, and nothing else.
     Dev,
 }
 
@@ -1852,7 +1853,11 @@ impl HarnessManifest {
                     format!("`shared` {WHY}"),
                 ));
             }
-            for (field, present) in [("seed", !h.seed.is_empty()), ("dirs", !h.dirs.is_empty())] {
+            for (field, present) in [
+                ("seed", !h.seed.is_empty()),
+                ("dirs", !h.dirs.is_empty()),
+                ("per_run_dir", h.per_run_dir.is_some()),
+            ] {
                 if present {
                     return Err(refuse(format!("capture.home.{field}"), WHY));
                 }

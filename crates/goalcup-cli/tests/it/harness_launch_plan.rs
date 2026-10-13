@@ -522,6 +522,7 @@ fn a_harness_without_a_home_variable_gets_only_the_private_home() {
         },
     )
     .unwrap();
+    assert!(!plan.env_set.contains_key("CLAUDE_CONFIG_DIR"));
     let config_home = config_home.display().to_string();
     assert!(
         plan.env_set.values().all(|v| *v != config_home),

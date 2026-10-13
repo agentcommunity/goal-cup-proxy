@@ -995,12 +995,21 @@ pub fn is_capture_host(host: &str) -> bool {
 /// its spelling, or `None`. A capture launch sets `NO_PROXY=127.0.0.1,localhost`, so a harness
 /// talking to `localhost` (a local model server) bypasses the recording proxy: the host would
 /// validate and record nothing. `*.localhost` is loopback by RFC 6761. A single-label name
-/// resolves through `/etc/hosts` or a search domain, never to a public provider.
+/// resolves through `/etc/hosts` or a search domain, never to a public provider. A numeric or
+/// hexadecimal last label (`127.1`, `0x7f.1`, `127.0.0.01`) is an address the resolver accepts
+/// though `Ipv4Addr` does not; no real top-level domain is numeric.
 pub fn local_host_problem(host: &str) -> Option<&'static str> {
     if host == "localhost" || host.ends_with(".localhost") || host == "localhost.localdomain" {
         return Some(
             "is a loopback name: the capture launch never proxies loopback, so nothing sent \
              there is recorded (a local model is not supported by schema 1)",
+        );
+    }
+    let last = host.rsplit('.').next().unwrap_or(host);
+    if last.bytes().all(|b| b.is_ascii_digit()) || last.starts_with("0x") {
+        return Some(
+            "is an address spelled as a name (a numeric or `0x` last label), not a public \
+             provider's DNS name",
         );
     }
     if !host.contains('.') {
