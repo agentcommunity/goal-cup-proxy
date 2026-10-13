@@ -27,7 +27,7 @@ fn location() -> *mut libc::c_int {
     target_os = "linux",
     target_os = "android"
 )))]
-compile_error!("directory enumeration needs a target errno accessor");
+compile_error!("goalcup-platform::errno has no accessor for this target");
 
 /// Set the calling thread's `errno` to zero.
 pub fn clear() {

@@ -11,6 +11,7 @@ compile_error!(
 );
 
 /// The calling thread's `errno`, for the `readdir` end-of-directory idiom.
+#[cfg(unix)]
 pub mod errno;
 /// Contained file access rooted in an owned directory capability.
 pub mod filecap;
