@@ -41,7 +41,7 @@ fn the_cli_reads_but_never_writes(info: &WorkspaceInfo) {
 
 #[test]
 fn the_routes_and_the_suffixes_are_the_ones_this_plan_calls() {
-    assert_eq!(CONTROL_API_VERSION, 6);
+    assert_eq!(CONTROL_API_VERSION, 7);
     assert_eq!(ROUTE_ENTRIES, "/v0/entries");
     assert_eq!(ROUTE_ENTRIES_CURRENT, "/v0/entries/current");
     assert_eq!(ROUTE_HEALTH, "/v0/health");

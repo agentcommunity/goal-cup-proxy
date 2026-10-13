@@ -3,8 +3,9 @@
 //! This command is [`crate::preflight`] run over every shipped connector's `harness.toml` with
 //! the daemon's state added, and it leaves under the CLI's own ladder: **0** when nothing failed,
 //! **1** when anything did. Per connector it checks the connector files' pin, the harness
-//! executable `goalcup start` would run (found on `PATH` and hashed against the profile's pin,
-//! never started: [`crate::launch::capture_executable`], the check `start` itself makes) and the
+//! executable `goalcup start` would run (found on `PATH` and hashed, never started, and any build
+//! accepted, since it is recorded rather than pinned (D53): [`crate::launch::capture_executable`],
+//! the check `start` itself makes) and the
 //! decoders. No daemon running is not a failure: the daemon is run-scoped, and
 //! `goalcup start` starts one for the run, so the check fails only when none could be started
 //! (no `goalcup-daemon` to find) or one answers that this build cannot speak to. A sealed capture
@@ -182,24 +183,19 @@ fn connector_reports(
     Ok(out.into_iter().map(|(_, report)| report).collect())
 }
 
-/// The harness executable `goalcup start` would run: found on `env`'s `PATH` and its bytes
-/// hashed against the profile's pin, by the same function `start` calls. A harness that is not
-/// installed, or not the measured build, is a `Fail`: `start` would refuse it.
+/// The harness executable `goalcup start` would run: found on `env`'s `PATH` and hashed, by the
+/// same function `start` calls. Any build passes: it is recorded, not pinned (D53). A harness
+/// that is not installed, or not a regular file, is a `Fail`: `start` would refuse it.
 fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
-    let executable = c
-        .loaded
-        .manifest
-        .capture
-        .resolved_executable(goalcup_protocol::harness::PlatformKey::current());
+    let program = &c.loaded.manifest.capture.executable.program;
     match crate::launch::capture_executable(c, &c.loaded.manifest.capture, env) {
-        Ok(pinned) => Check::pass(
+        Ok(resolved) => Check::pass(
             "harness_executable",
             format!(
-                "`{}` is the pinned {} {} (sha256 {}).",
-                pinned.path(),
-                executable.program,
-                executable.version,
-                pinned.sha256()
+                "`{program}` resolves to `{}` (sha256 {}); the build that runs is recorded, not \
+                 pinned.",
+                resolved.path(),
+                resolved.sha256()
             ),
         ),
         Err(error) => Check::new(
@@ -207,8 +203,8 @@ fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Che
             Level::Fail,
             error.to_string(),
             &format!(
-                "install `{}` version {} on PATH: `goalcup start` runs that build and no other.",
-                executable.program, executable.version
+                "install `{program}` on PATH: `goalcup start` runs whichever build it finds and \
+                 records it."
             ),
         ),
     }

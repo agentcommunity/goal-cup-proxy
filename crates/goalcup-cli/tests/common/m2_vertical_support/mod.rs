@@ -388,18 +388,6 @@ fn subprocess(program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
-fn python_version(python: &Path) -> std::process::Output {
-    subprocess(python)
-        .args([
-            "-I",
-            "-S",
-            "-c",
-            "import os, platform, sys; assert 'HOME' not in os.environ; assert 'PYTHONPATH' not in os.environ; assert sys.flags.isolated and sys.flags.no_site; print(platform.python_version())",
-        ])
-        .output()
-        .unwrap()
-}
-
 impl Drop for Vertical {
     fn drop(&mut self) {
         // A workload a failed test left running: ended only while its pid still runs Python.
@@ -490,18 +478,8 @@ impl Drop for Launcher {
     }
 }
 
-/// The fixture harness, with this machine's `python3` pinned and the workload and its
-/// configuration named.
+/// The fixture harness, with the workload and its configuration named.
 fn write_connector(connectors: &Path, config: &Path) {
-    let python = Path::new("/usr/bin/python3");
-    let version = python_version(python);
-    assert!(
-        version.status.success(),
-        "isolated Python version probe failed: {}",
-        String::from_utf8_lossy(&version.stderr)
-    );
-    let sha256 = goalcup_daemon::workspace::sha256_hex(&std::fs::read(python).unwrap());
-    let version = String::from_utf8(version.stdout).unwrap();
     // Schema 1 refuses tracker-named paths in launch arguments. Give the workload a neutral
     // private spelling while preserving its source location and relative helper layout through
     // symlinks. The vertical's file-leak sweep deliberately does not follow these links.
@@ -524,8 +502,6 @@ fn write_connector(connectors: &Path, config: &Path) {
         let fixture = format!("m2-controlled-workload/{name}");
         std::fs::read_to_string(super::support::fixture(&fixture))
             .unwrap()
-            .replace("@PYTHON3_SHA256@", &sha256)
-            .replace("@PYTHON3_VERSION@", version.trim())
             .replace("@WORKLOAD@", &workload.display().to_string())
             .replace("@CONFIG@", &config.display().to_string())
     };
@@ -771,16 +747,5 @@ mod subprocess_environment_tests {
             String::from_utf8(output.stdout).unwrap(),
             "PATH=/usr/bin:/bin:/usr/sbin:/sbin\n"
         );
-    }
-
-    #[test]
-    fn python_version_probe_disables_user_startup_state() {
-        let output = python_version(Path::new("/usr/bin/python3"));
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(!output.stdout.is_empty());
     }
 }

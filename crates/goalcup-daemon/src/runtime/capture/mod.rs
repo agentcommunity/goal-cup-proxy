@@ -75,8 +75,6 @@
 
 use super::Daemon;
 
-use crate::arming::GateState;
-
 use crate::config::{EventConfig, ReceiptBindingPolicy};
 
 use crate::ingest::{
@@ -97,7 +95,7 @@ use crate::registry::{
 
 use crate::workspace::{self, Roots};
 
-use crate::{DAEMON_VERSION, DaemonError, now_rfc3339, now_unix, status};
+use crate::{DAEMON_VERSION, DaemonError, now_rfc3339, status};
 
 use goalcup_platform::tracecap::{EntryArtifactRoot, RefusalKind, TraceCapError};
 
@@ -112,8 +110,9 @@ use goalcup_protocol::capture::{
 use goalcup_protocol::chain::Link;
 
 use goalcup_protocol::control::{
-    CaptureFinishReport, CaptureLaunchRequest, CaptureSealRequest, CaptureWorkspaceInfo,
-    CycleErrors, FINISH_COMMIT_RESERVE, LocalSealOutcome, ProxyCounters, SignedStatus,
+    ArmingState, CaptureFinishReport, CaptureLaunchRequest, CaptureSealRequest,
+    CaptureWorkspaceInfo, CycleErrors, FINISH_COMMIT_RESERVE, LocalSealOutcome, ProxyCounters,
+    SignedStatus,
 };
 
 use goalcup_protocol::envelope::{Envelope, EventBody};
@@ -146,6 +145,7 @@ use std::time::{Duration, Instant};
 
 mod finish;
 mod harness;
+mod harness_build;
 mod native_scope;
 mod owner;
 mod sink;
@@ -288,55 +288,6 @@ pub(super) fn fresh_capture_id() -> String {
     hex::encode(bytes)
 }
 
-/// The refusal for a registered process whose tool allowance is not exactly the one Claude's
-/// capture launch passes.
-const INVALID_ALLOWANCE: &str = "invalid capture tool allowance argv";
-
-/// The tool allowance a Claude capture launch registered, as the `Launch` record carries it.
-struct ToolAllowance {
-    /// The one `--allowedTools` rule.
-    rule: String,
-    /// The digest of the process handoff that authorised it.
-    handoff_digest: String,
-}
-
-/// The allowance read from the registered process, never the create snapshot: `None` when the
-/// process carries none, and a refusal when it carries anything but exactly
-/// `--allowedTools <rule> -- <goal>` at the end of a `claude-code-cli` argv.
-fn registered_tool_allowance(row: &Entry) -> Result<Option<ToolAllowance>, DaemonError> {
-    let has_allowance = row
-        .last_process
-        .as_ref()
-        .is_some_and(|handle| handle.argv.iter().any(|arg| arg == "--allowedTools"));
-    if !has_allowance {
-        return Ok(None);
-    }
-    let authority = row
-        .verified_registered_termination_registration()?
-        .ok_or_else(|| DaemonError::Refused("the capture process is not registered".into()))?;
-    let argv = &authority.registration.handle.argv;
-    let [flag, rule, separator, goal] = &argv[argv.len().saturating_sub(4)..] else {
-        return Err(DaemonError::Refused(INVALID_ALLOWANCE.into()));
-    };
-    let valid = row.connector_id == "claude-code-cli"
-        && flag == "--allowedTools"
-        && separator == "--"
-        && goal == "<goal>"
-        && argv
-            .iter()
-            .filter(|arg| arg.as_str() == "--allowedTools")
-            .count()
-            == 1
-        && goalcup_protocol::capture::is_claude_capture_allowed_tool_rule(rule);
-    if !valid {
-        return Err(DaemonError::Refused(INVALID_ALLOWANCE.into()));
-    }
-    Ok(Some(ToolAllowance {
-        rule: rule.clone(),
-        handoff_digest: authority.request_digest.as_str().to_string(),
-    }))
-}
-
 impl Daemon {
     /// Create a v5 local capture entry for `manifest`'s capture profile: preflight the
     /// profile's redaction, reserve the chain, chain the v5 baseline of the fresh workspace,
@@ -459,6 +410,10 @@ impl Daemon {
         export.write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)?;
         export.sync_capture()?;
         let reserved_bytes = export.capture_storage().reserved_bytes;
+        let chain_head = export
+            .head()
+            .map(|(_, hash)| hash)
+            .ok_or_else(|| DaemonError::Refused("the baseline was not chained".into()))?;
 
         let keys = RunKeys::generate();
         let run_public_key = keys.public_key_hex()?;
@@ -547,6 +502,8 @@ impl Daemon {
             ingest_secret: secret.expose().to_string(),
             producer_id: fresh_capture_id(),
             run_public_key,
+            chain_head,
+            trace_dir: artifact_dir.join("trace").display().to_string(),
         })
     }
 
@@ -629,7 +586,7 @@ impl Daemon {
         });
         for entry_id in stale {
             if let Err(error) = self.abandon_capture(&entry_id) {
-                self.inner.cycles.note(super::Cadence::Tick, &error);
+                self.inner.cycles.note(&error);
             }
         }
     }
@@ -719,14 +676,23 @@ impl Daemon {
     ) -> Result<(), DaemonError> {
         let capture = self.capture_entry(entry_id)?;
         capture.require_live_capture_authority()?;
+        // D53: which build ran, read before the run lock is taken, because it reads whole
+        // binaries. The launch post follows the release, so the registered process has `exec`ed.
+        // A retried post of a launch already chained is answered below without a second read.
+        let already_launched = matches!(
+            &capture.lock().goal,
+            Goal::Launched(key) if *key == request.goal_stream
+        );
+        let harness_build = if already_launched {
+            None
+        } else {
+            self.registry()
+                .get(entry_id)?
+                .and_then(|row| row.last_process)
+                .map(|handle| Box::new(harness_build::observe(&handle)))
+        };
         let mut run = capture.lock();
-        // The default Launch remains independent of handoff authority validation. An
-        // allowance is read only from the registered process, never the create snapshot.
-        let registered = self.registry().get(entry_id)?.ok_or_else(|| {
-            DaemonError::Missing(format!("no capture entry {entry_id} in this daemon"))
-        })?;
-        let allowance = registered_tool_allowance(&registered)?;
-        capture.record_launch(&mut run, request, allowance)?;
+        capture.record_launch(&mut run, request, harness_build)?;
         run.entry = self.registry().update(entry_id, |entry| {
             entry.state = EntryState::Started;
             entry.harness_version = request.harness_version.clone();
@@ -739,7 +705,7 @@ impl Daemon {
     pub(super) fn reopen_captures(&self) {
         let rows = match self.registry().all() {
             Ok(rows) => rows,
-            Err(error) => return self.inner.cycles.note(super::Cadence::Tick, &error),
+            Err(error) => return self.inner.cycles.note(&error),
         };
         let unsealed = |row: &Entry| {
             row.capture
@@ -749,13 +715,10 @@ impl Daemon {
         for row in rows.into_iter().filter(unsealed) {
             let entry_id = row.entry_id.clone();
             if let Err(error) = self.reopen_capture(row) {
-                self.inner.cycles.note(
-                    super::Cadence::Tick,
-                    &DaemonError::Refused(format!(
-                        "capture entry {entry_id} was not reopened: {}",
-                        super::path_free(&error)
-                    )),
-                );
+                self.inner.cycles.note(&DaemonError::Refused(format!(
+                    "capture entry {entry_id} was not reopened: {}",
+                    super::path_free(&error)
+                )));
             }
         }
     }
@@ -845,9 +808,9 @@ impl Daemon {
             .map(|capture| {
                 let run = capture.lock();
                 let (gate, health) = match (run.finished(), run.launched()) {
-                    (Some(_), _) => (GateState::Started, HealthState::Sealed),
-                    (None, true) => (GateState::Started, HealthState::Online),
-                    (None, false) => (GateState::Armed, HealthState::Online),
+                    (Some(_), _) => (ArmingState::Started, HealthState::Sealed),
+                    (None, true) => (ArmingState::Started, HealthState::Online),
+                    (None, false) => (ArmingState::Armed, HealthState::Online),
                 };
                 status::summary(&run.entry, gate, health)
             })
@@ -860,7 +823,7 @@ impl Daemon {
             if sealed && !captures.contains_key(&row.entry_id) {
                 summaries.push(status::summary(
                     &row,
-                    GateState::Started,
+                    ArmingState::Started,
                     HealthState::Sealed,
                 ));
             }
@@ -1036,27 +999,14 @@ fn sign_capture_status(
     let mut payload = status::build_payload(&status::StatusInputs {
         entry,
         arming: if entry.state == EntryState::Started {
-            GateState::Started
+            ArmingState::Started
         } else {
-            GateState::Armed
+            ArmingState::Armed
         },
-        health: HealthState::Online,
-        events_uploaded: 0,
-        events_pending: 0,
-        last_sync_at: None,
-        now: now_unix(),
         event: status::event_status_for(entry, event),
         cycles,
-        polls_capped: 0,
-        cursor_restore_failures: 0,
-        skipped_replayed: 0,
-        buffer_gap_at: None,
-        files_capped: 0,
-        harness_unverified: false,
+        capture,
     });
-    status::apply_capture_snapshot(&mut payload, Some(capture));
-    // A local capture has no signed deadline, before or after its finish.
-    payload.seconds_remaining = None;
     payload.producers_consumed = admission.map(|a| a.producers_consumed as u64);
     payload.admissions_refused = admission.map(|a| a.admissions_refused);
     status::sign_payload(payload, now_rfc3339(), &entry.keys.signing_key()?)
@@ -1197,7 +1147,7 @@ impl CaptureEntry {
         &self,
         run: &mut CaptureRun,
         request: &CaptureLaunchRequest,
-        allowance: Option<ToolAllowance>,
+        harness_build: Option<Box<goalcup_protocol::capture::HarnessBuildV1>>,
     ) -> Result<(), DaemonError> {
         run.refuse_if_finished()?;
         match &run.goal {
@@ -1214,13 +1164,6 @@ impl CaptureEntry {
                 ));
             }
         }
-        let (allowed_tool_rule, process_handoff_digest) = match allowance {
-            Some(ToolAllowance {
-                rule,
-                handoff_digest,
-            }) => (Some(rule), Some(handoff_digest)),
-            None => (None, None),
-        };
         let record = CaptureRecord::Launch {
             observed: request.spawned_at.clone(),
             goal_stream: request.goal_stream.clone(),
@@ -1229,8 +1172,10 @@ impl CaptureEntry {
             harness_version: request.harness_version.clone(),
             recorder_revision: DAEMON_VERSION.to_string(),
             continuation: request.continuation.clone(),
-            allowed_tool_rule,
-            process_handoff_digest,
+            // The tracer no longer registers a tool allowance (D52); the v5 fields stay in the
+            // record shape so traces that carry them still verify.
+            allowed_tool_rule: None,
+            process_handoff_digest: None,
             // The key the daemon minted at create, never one the CLI supplied (contract S1).
             run_public_key: Some(run.entry.keys.public_key_hex()?),
             // Forwarded from the row. `create_capture` stores the directory digest carried by
@@ -1240,6 +1185,7 @@ impl CaptureEntry {
                 .connector_dir_sha256
                 .as_ref()
                 .map(|digest| digest.to_ascii_lowercase()),
+            harness_build,
         };
         let mut writer = lock(&self.writer);
         let now = (self.clock)();

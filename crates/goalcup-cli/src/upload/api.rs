@@ -1,0 +1,95 @@
+//! The upload API's documents, field for field as docs/UPLOAD-API.md spells them.
+
+use goalcup_protocol::ack::AckCheckpoint;
+use goalcup_protocol::receipt::StartReceipt;
+use serde::{Deserialize, Serialize};
+
+/// An error answer's body. Missing fields read as empty: a proxy's HTML error page is still an
+/// error, with the status code alone.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ErrorBody {
+    pub error: String,
+    pub message: String,
+}
+
+/// `POST /v1/runs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenRunRequest {
+    pub connector_id: String,
+    pub manifest_sha256: String,
+    pub connector_dir_sha256: String,
+    pub workspace: String,
+    pub session_id: String,
+    pub harness_version: String,
+    pub tracer_version: String,
+    pub repo_url: String,
+}
+
+/// The answer to [`OpenRunRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenRun {
+    pub run_id: String,
+    pub entry_id: String,
+    pub official_start: String,
+    pub deadline_at: String,
+}
+
+/// `POST /v1/runs/{run_id}/receipt`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptRequest {
+    pub entry_id: String,
+    pub chain_head: String,
+}
+
+/// The answer to [`ReceiptRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptAnswer {
+    pub start_receipt: StartReceipt,
+}
+
+/// `POST /v1/runs/{run_id}/abandon`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbandonRequest {
+    pub reason: String,
+}
+
+/// `GET /v1/runs/{run_id}`: where the server is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunPosition {
+    pub run_id: String,
+    pub entry_id: String,
+    pub status: String,
+    pub official_start: String,
+    pub deadline_at: String,
+    /// Bytes of the entry's `chain.jsonl` the server holds.
+    pub offset: u64,
+    /// The `seq` the next chunk starts at: 0 before the first chunk.
+    pub next_seq: u64,
+    /// The chain hash of the last stored record; the genesis hash before any.
+    pub head: String,
+    pub last_ack: Option<AckCheckpoint>,
+}
+
+/// The answer to a stored chunk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChunkAnswer {
+    pub ack: AckCheckpoint,
+    pub offset: u64,
+    pub next_seq: u64,
+    pub head: String,
+}
+
+/// `POST /v1/runs/{run_id}/seal`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealRequest {
+    pub entry_id: String,
+    pub seal_json: String,
+    pub baseline_json: String,
+}
+
+/// A bare `{"status": …}` answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusAnswer {
+    pub status: String,
+}

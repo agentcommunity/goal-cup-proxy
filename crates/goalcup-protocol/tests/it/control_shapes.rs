@@ -508,8 +508,9 @@ fn the_remaining_types_round_trip() {
         serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap()
     );
     assert_eq!(
-        CONTROL_API_VERSION, 6,
-        "v6 removed the V1 hook-path fields and codes, a coordinated control boundary",
+        CONTROL_API_VERSION, 7,
+        "v7 added the server-issued entry id and the chain head and trace directory a \
+         capture create answers; v6 removed the V1 hook-path fields and codes",
     );
 }
 
@@ -548,6 +549,8 @@ fn capture_workspace_requires_one_canonical_connector_directory_digest() {
         ingest_secret: "not-printed".into(),
         producer_id: "b2".repeat(16),
         run_public_key: "cd".repeat(32),
+        chain_head: "ab".repeat(32),
+        trace_dir: "/artifacts/e0/trace".to_string(),
     };
     let response = serde_json::to_value(response).unwrap();
     assert!(response.get("connector_dir_sha256").is_none());

@@ -99,7 +99,8 @@ pub enum CaptureRecord {
              profile_digest: String, harness_version: String, recorder_revision: String,
              continuation: String,
              // later optional, skip-if-none additions: allowed_tool_rule,
-             // process_handoff_digest, run_public_key, connector_dir_sha256 (S1)
+             // process_handoff_digest, run_public_key, connector_dir_sha256 (S1);
+             // harness_build (D53, after the v0.5.0 tag)
            },
     Assistance { observed: CaptureTime, action: String },
     LocalFinish { observed: CaptureTime, reason: String,
@@ -443,9 +444,9 @@ T05 without requiring semantic decoding; unknown family/store uses None. Provide
 hints are `openai-responses` and `anthropic-messages`, consumed exactly by T20/T21. Strings
 remain open: an unknown hint is capturable and reported as unsupported semantics.
 
-T15 publishes `apply_capture_snapshot(payload: &mut StatusPayload, capture: Option<M2Status>)`
-as a pure pre-sign projection helper in daemon status.rs. T15 calls it with actual snapshots in
-every live/closed/restart path; never mutate an already signed document.
+T15's daemon `status::build_payload` takes the capture's `M2Status` snapshot as an input and
+projects it before signing, in every live/closed/restart path; never mutate an already signed
+document.
 
 ## C6. Explicit local lifecycle and verified report facts
 
@@ -915,12 +916,15 @@ carry their own amendments and point here for shared text.
 > for the shipped `codex` and `claude-code` families. `CaptureWorkspaceRequest` requires
 > `config_home: String` alongside `run_home`; both are absolute. The daemon rejects participant
 > HOME itself and HOME/.codex or HOME/.claude descendants, including canonical/symlink aliases,
-> before creating capture artifacts or reading sources. The tracker prepares isolated source
+> before creating capture artifacts or reading sources. (Since 2026-10-14 those descendants are
+> every loaded connector's `real_dirs`, which name `.codex`, `.claude` and `.hermes`; no harness
+> home is spelled in the daemon.) The tracker prepares isolated source
 > roots before spawn. `CaptureLaunchRequest` gains serde-default `native_scope: Option<String>`.
 > Codex binds the first complete `thread.started.thread_id` on stdout; Claude binds its
 > preassigned session id. Codex's stdout tee scans lines up to 1 MiB, forwards every byte
 > unchanged throughout the child's lifetime and drains/discards on destination closure. The
-> identity wait ends by 120 seconds from spawn, stdout EOF or child exit. After child exit,
+> identity wait ends by 120 seconds from spawn (since 2026-10-14, the connector's
+> `capture.identity.wait_seconds`, default 120), stdout EOF or child exit. After child exit,
 > tee completion is observed within the existing 10-second finish deadline, concurrently with
 > local finish; no unbounded thread join is used. Completion confirms EOF and final forwarding
 > (or draining/discarding for a closed destination). Expiry or read failure is reported to the
@@ -1105,7 +1109,8 @@ carry their own amendments and point here for shared text.
 > read never ends the child. A `Conflict` on an entry that is still open (an invalid allowance, a
 > wrong goal stream) never ends the child. The ending is not chained into the seal. The status
 > read uses the 30 s `CALL_TIMEOUT`; one that times out falls back to the look after the `Launch`
-> error, which can come after Codex's native-scope wait of up to 120 s, so a seal that raced in
+> error, which can come after a `stdout_json` harness's identity wait (the connector's
+`wait_seconds`, default 120 s, at most 600 s), so a seal that raced in
 > can leave the harness running for that long before the launcher looks again. The final refusal
 > is worded from the outcome: it says the harness is no longer running only for `Ended` and
 > `AlreadyGone`, and for `NativeUnverified` and `StillRunning` it says the harness may still be
@@ -1278,10 +1283,15 @@ Decided by D43 ruling 7; the design is `.superpowers/sdd/2026-10-02-oss/harness-
   holds a field it does not know. That turns a valid trace invalid, which the reader rule below
   forbids. Wanting additive v5 fields after the tag needs its own DECISIONS row that accepts
   older verifiers failing newer traces.
+- **The one exception so far (D53, 2026-10-14).** `Launch.harness_build` (`program_sha256`,
+  `image_sha256`, `platform`; optional, skip-if-none) joined v5 after the tag, so the tracer can
+  record the build that ran instead of pinning one. The cost is stated, not hidden: the released
+  v0.5.0 verifier refuses (`record_malformed`) any trace that carries it, and verifiers from this
+  change on read both. A second such field opens v6 instead.
 - **What is frozen.** `M2_PROTOCOL_VERSION = 5` (`capture.rs`) is the only switch. Frozen are the
   `Envelope`, the bodies a v5 chain carries, the ten `CaptureRecord` kinds and their sub-types,
   the trace layout files `chain.jsonl`, `baseline.json` and `seal.json`, and `Launch` as S1 left
-  it. Two shapes inside `seal.json` are frozen knowingly (owner decision 7): `SealManifest.workspace`
+  it plus D53's `harness_build`. Two shapes inside `seal.json` are frozen knowingly (owner decision 7): `SealManifest.workspace`
   is an absolute path, often personal data, and `SealManifest.files` has no count bound. Bounding
   `files` later tightens the reader, so it needs a DECISIONS row, and changing either needs v6.
 - **Side artifacts.** `receipt.json`, `acks.jsonl` and the `StartReceipt`, `AckCheckpoint` and
@@ -1404,3 +1414,8 @@ this section is a reading of it and the function wins.
   `arming_timeout` and `unsupported_connector` error codes (an unknown connector is now
   `422 preflight_failed`); and `ProcessHandle.home_seed`, which a v6 `ProcessRegistration`
   refuses as an unknown field. It does not change the frozen v5 chain or its export.
+- **Control API v7.** `CaptureWorkspaceRequest` may carry `entry_id`, the id an upload server
+  issued (`e` and 16 lowercase hex digits; any other shape is `400 malformed` before anything is
+  created); without it the daemon mints one as before. `CaptureWorkspaceInfo` adds `chain_head`
+  (the baseline's link hash, which a start receipt signs) and `trace_dir`. It does not change the
+  frozen v5 chain or its export.

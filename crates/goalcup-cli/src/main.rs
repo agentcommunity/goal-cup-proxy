@@ -35,10 +35,10 @@ use std::process::ExitCode;
     after_help = AFTER_HELP,
     subcommand_required = true,
     arg_required_else_help = true,
-    // So the list under `Commands:` is exactly the five sub-commands below. clap's built-in
-    // `help` sub-command would be a sixth line in it, indistinguishable to a reader — and to a
+    // So the list under `Commands:` is exactly the seven sub-commands below. clap's built-in
+    // `help` sub-command would be an eighth line in it, indistinguishable to a reader — and to a
     // test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
-    // the same help by the route the other five already take.
+    // the same help by the route the other seven already take.
     disable_help_subcommand = true
 )]
 struct Args {
@@ -65,16 +65,17 @@ could not read, an answer it could not parse). This command never exits with 2 o
 /// What `goalcup doctor --help` says under its flags. There is no verify
 /// mode here: a sealed capture is checked by `goalcup-verify --capture-integrity`.
 const DOCTOR_AFTER_HELP: &str = "\
-For each harness it checks that the connector files are the pinned ones and that the harness \
-executable on PATH is the exact build `goalcup start` runs (hashed, not started).
+For each harness it checks that the connector files are the pinned ones and finds the harness \
+executable on PATH that `goalcup start` runs (hashed, not started). Any build is accepted: the \
+run records which one ran.
 
-Exit codes: 0 every check passed; 1 something failed, including a harness that is not installed \
-or is not the pinned build. No daemon running is not a failure: `goalcup start` starts one.
+Exit codes: 0 every check passed; 1 something failed, including a harness that is not \
+installed. No daemon running is not a failure: `goalcup start` starts one.
 
 Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
 are not using can make this command exit 1.";
 
-/// The sub-commands: five. `verify` is deliberately absent:
+/// The sub-commands: seven. `verify` is deliberately absent:
 /// see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
@@ -101,10 +102,10 @@ enum Command {
             default_value_t = goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES
         )]
         capture_reserve_bytes: u64,
-        /// claude-code-cli only: let the agent run one Python script without asking, written
-        /// `Bash(python3 <name>.py *)`. Applies to this run only.
-        #[arg(long, value_name = "RULE", requires = "goal_file")]
-        capture_claude_allowed_tool: Option<String>,
+        /// The public GitHub repository your agent pushes to, `https://github.com/<owner>/<repo>`.
+        /// Required once `goalcup login` has connected this tracker to the Goal Cup server.
+        #[arg(long, value_name = "URL")]
+        repo: Option<String>,
     },
     /// Show how a run is doing: recording state, health, storage and any gaps. Starts the
     /// daemon if none is running, so a sealed run is shown too.
@@ -133,7 +134,7 @@ enum Command {
         #[arg(value_name = "ENTRY")]
         entry: Option<String>,
     },
-    /// Check this machine: can a daemon run, and is each harness installed at its pinned build.
+    /// Check this machine: can a daemon run, and is each harness installed.
     #[command(after_help = DOCTOR_AFTER_HELP)]
     Doctor {
         /// Print the report as one JSON document instead of text.
@@ -143,6 +144,24 @@ enum Command {
         /// shipped harness is checked and any failure makes the exit code 1.
         #[arg(long, value_name = "ID")]
         harness: Option<String>,
+    },
+    /// Connect this tracker to the Goal Cup server: paste the token the site gave you.
+    ///
+    /// The token is read from stdin (paste it and press Enter; it is not shown) and stored in
+    /// the tracker's configuration directory, readable by your user alone. It is never put in
+    /// the agent's environment or on its command line. Without a login, runs stay on this
+    /// machine only.
+    Login {
+        /// The server's address, for example `https://ingest.agentcommunity.org`.
+        #[arg(long, value_name = "URL")]
+        server: String,
+    },
+    /// Finish uploading a run to the Goal Cup server, after `goalcup start` could not: the
+    /// server was away, the laptop slept, or the process was killed. Safe to run again.
+    Upload {
+        /// The entry id (`goalcup entries` lists them).
+        #[arg(value_name = "ENTRY")]
+        entry: String,
     },
 }
 
@@ -179,13 +198,14 @@ fn run(command: Command) -> Result<u8, CliError> {
             dev,
             goal_file,
             capture_reserve_bytes,
-            capture_claude_allowed_tool,
+            repo,
         } => start(commands::start::StartOptions {
             harness,
             dev,
             goal_file,
             capture_reserve_bytes,
-            capture_claude_allowed_tool,
+            repo,
+            upload_policy: upload_policy()?,
         })
         .map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),
@@ -193,6 +213,136 @@ fn run(command: Command) -> Result<u8, CliError> {
         Command::Seal { entry } => seal(entry).map(|()| 0),
         Command::Doctor { json, harness } => {
             doctor(commands::doctor::DoctorOptions { json, harness })
+        }
+        Command::Login { server } => login(&server).map(|()| 0),
+        Command::Upload { entry } => {
+            let cfg = goalcup_cli::config::config_dir()?;
+            commands::upload::upload_with(&cfg, &entry, upload_policy()?, &mut std::io::stdout())
+                .map(|()| 0)
+        }
+    }
+}
+
+/// When chunks go and how failures wait: the shipped policy, or in a test build one named by
+/// [`TEST_UPLOAD_POLICY`].
+fn upload_policy() -> Result<goalcup_cli::upload::uploader::Policy, CliError> {
+    #[cfg(feature = "test-support")]
+    if let Ok(spec) = std::env::var(TEST_UPLOAD_POLICY) {
+        return goalcup_cli::upload::uploader::Policy::from_test_spec(&spec)
+            .ok_or_else(|| CliError::Refused(format!("{TEST_UPLOAD_POLICY} is malformed")));
+    }
+    Ok(goalcup_cli::upload::uploader::Policy::default())
+}
+
+/// A test build's upload timing, so a test can see an hour's cadence in a second.
+#[cfg(feature = "test-support")]
+const TEST_UPLOAD_POLICY: &str = "GOALCUP_TEST_UPLOAD_POLICY";
+
+/// `goalcup login`: the token is read from stdin with terminal echo off when stdin is a
+/// terminal, so a pasted token is never on the screen. Piped input is read as it is.
+fn login(server: &str) -> Result<(), CliError> {
+    use std::io::{BufRead, Read};
+    let cfg = goalcup_cli::config::config_dir()?;
+    // Checked before the prompt, so a mistyped address is refused before anything is pasted.
+    goalcup_cli::server::checked_server_url(server)?;
+    let mut line = String::new();
+    {
+        let echo = EchoOff::on_terminal_stdin();
+        if echo.is_some() {
+            eprint!("Paste your Goal Cup token and press Enter (it is not shown): ");
+        }
+        // Bounded, as `login_with` bounds it: a paste of a whole file is not read whole.
+        let read = std::io::stdin()
+            .lock()
+            .take(4 * goalcup_cli::server::TOKEN_MAX_LEN as u64)
+            .read_line(&mut line);
+        if echo.is_some() {
+            // The Enter that ended the paste was not echoed either.
+            eprintln!();
+        }
+        read.map_err(|source| CliError::Io {
+            path: "stdin".to_string(),
+            source,
+        })?;
+    }
+    commands::login::login_with(&cfg, server, &mut line.as_bytes(), &mut std::io::stdout())
+}
+
+/// Terminal echo turned off on stdin until this is dropped, or until SIGINT (Ctrl-C) or SIGHUP
+/// arrives: both restore it before the process ends on the signal's default action, so a
+/// Ctrl-C at the prompt never leaves the participant's terminal silent. `None` when stdin is
+/// not a terminal (piped input), or on a platform without termios.
+struct EchoOff;
+
+/// The terminal settings to restore, for the signal handler. Set once, before the handler is
+/// installed; reading an initialised `OnceLock` takes no lock.
+#[cfg(unix)]
+static SAVED_TERMIOS: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
+
+#[cfg(unix)]
+const ECHO_SIGNALS: [libc::c_int; 2] = [libc::SIGINT, libc::SIGHUP];
+
+/// Restore the saved settings, then end the process the way the signal would have.
+/// `tcsetattr`, `signal` and `raise` are async-signal-safe.
+#[cfg(unix)]
+extern "C" fn restore_echo_and_reraise(signal: libc::c_int) {
+    // SAFETY: async-signal-safe calls on a value initialised before this handler existed.
+    unsafe {
+        if let Some(saved) = SAVED_TERMIOS.get() {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved);
+        }
+        libc::signal(signal, libc::SIG_DFL);
+        libc::raise(signal);
+    }
+}
+
+impl EchoOff {
+    #[cfg(unix)]
+    fn on_terminal_stdin() -> Option<EchoOff> {
+        // SAFETY: `isatty`, `tcgetattr` and `tcsetattr` on fd 0 read or write only the
+        // `termios` values handed to them; `signal` installs a handler that only makes
+        // async-signal-safe calls.
+        unsafe {
+            if libc::isatty(libc::STDIN_FILENO) != 1 {
+                return None;
+            }
+            let mut saved: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(libc::STDIN_FILENO, &mut saved) != 0 {
+                return None;
+            }
+            let saved = *SAVED_TERMIOS.get_or_init(|| saved);
+            for signal in ECHO_SIGNALS {
+                libc::signal(
+                    signal,
+                    restore_echo_and_reraise as *const () as libc::sighandler_t,
+                );
+            }
+            let mut quiet = saved;
+            quiet.c_lflag &= !libc::ECHO;
+            if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &quiet) != 0 {
+                return None;
+            }
+            Some(EchoOff)
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn on_terminal_stdin() -> Option<EchoOff> {
+        None
+    }
+}
+
+impl Drop for EchoOff {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        // SAFETY: restores the settings `tcgetattr` read, then the default signal actions.
+        unsafe {
+            if let Some(saved) = SAVED_TERMIOS.get() {
+                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved);
+            }
+            for signal in ECHO_SIGNALS {
+                libc::signal(signal, libc::SIG_DFL);
+            }
         }
     }
 }

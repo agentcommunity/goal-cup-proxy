@@ -405,8 +405,20 @@ pub(super) fn guard_registered(
             handle.pid, expected_start, observed_start
         ))));
     }
+    // **A root that is exiting has no argv.** Linux frees an exiting process's memory before
+    // it becomes a zombie, and in that window its state and start tick still read as live
+    // while `ps` prints its argv as `[comm]`, which names no registered program. Measured:
+    // a SIGTERMed Python root read `[python3.13]` here, and the seal reported a lost
+    // authority instead of `Confirmed`. Ask the liveness question again, as above: no longer
+    // live is the exit, and a number still live running another program stays refused. So
+    // does one still mid-exit at this second read, which is fail-closed (docs/TERMINATION.md,
+    // the Linux residual).
     if !argv_matches(handle, &args) {
-        return Err(Refused::ArgvRenamed);
+        return match os.liveness(handle.pid) {
+            Ok(false) => Ok(Presence::Absent),
+            Ok(true) => Err(Refused::ArgvRenamed),
+            Err(e) => Err(Refused::Unavailable(e)),
+        };
     }
     Ok(Presence::Live)
 }
@@ -422,7 +434,8 @@ pub(super) fn guard_registered(
 pub(super) enum Presence {
     /// In the table, with the registered creation identity and argv.
     Live,
-    /// Not in the table at all: the harness exited, which is the ordinary seal.
+    /// Not in the table at all, or no longer live when asked again after a read that found
+    /// it exiting: the harness exited, which is the ordinary seal.
     Absent,
 }
 

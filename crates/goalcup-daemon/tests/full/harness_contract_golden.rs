@@ -260,8 +260,6 @@ mod live {
         )
         .unwrap();
         let rendered = template
-            .replace("@PYTHON3_SHA256@", &"ab".repeat(32))
-            .replace("@PYTHON3_VERSION@", "3.12.0")
             .replace("@WORKLOAD@", "/synthetic/workload.py")
             .replace("@CONFIG@", "/synthetic/config.json");
         let controlled = dir.path().join(CONTROLLED);

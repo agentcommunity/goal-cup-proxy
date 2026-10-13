@@ -212,6 +212,9 @@ impl MockDaemonClient {
                     ingest_secret: "mock-ingest-secret-0123456789abcdef".to_string(),
                     producer_id: "6d6f636b70726f787970726f64756365".to_string(),
                     run_public_key: info.run_public_key.clone(),
+                    // The mock chains nothing; a fixed head and no trace directory.
+                    chain_head: "ab".repeat(32),
+                    trace_dir: String::new(),
                 },
                 finish: Rfc3339Utc::try_from(NOW)
                     .ok()

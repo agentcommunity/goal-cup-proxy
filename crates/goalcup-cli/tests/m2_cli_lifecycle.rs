@@ -398,42 +398,6 @@ fn invalid_goals_refuse_before_any_capture_side_effect() {
     }
 }
 
-#[test]
-fn a_tool_allowance_in_legacy_or_unpinned_capture_mode_refuses_before_entry_creation() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::new();
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let mut legacy = rig.options(&goal, RESERVE);
-    legacy.goal_file = None;
-    legacy.capture_claude_allowed_tool = Some("Bash(python3 demo.py *)".into());
-    let (result, _) = std::thread::scope(|s| joined(rig.start(s, &client, legacy, None)));
-    let error = result.unwrap_err();
-    assert_eq!(error.exit_code(), 1);
-    assert!(
-        error.to_string().contains("requires --goal-file"),
-        "{error}"
-    );
-    assert!(client.names().is_empty());
-
-    let mut unpinned = rig.options(&goal, RESERVE);
-    unpinned.capture_claude_allowed_tool = Some("Bash(python3 demo.py *)".into());
-    let (result, _) = std::thread::scope(|s| joined(rig.start(s, &client, unpinned, None)));
-    let error = result.unwrap_err();
-    assert_eq!(error.exit_code(), 1);
-    // A development run is named as such; a build-pinned run of a connector that is not Claude's
-    // is named for the profile instead.
-    assert!(error.to_string().contains("--dev"), "{error}");
-    assert!(
-        error.to_string().contains("Nothing was created."),
-        "{error}"
-    );
-    assert!(client.names().is_empty());
-    assert!(rig.run_dirs().is_empty());
-    assert!(!rig.harness_started());
-}
-
 /// A provider host that cannot be reached refuses the start before the daemon is asked for
 /// anything: the refusal names the host, the failure subtype and this binary.
 #[test]
@@ -771,7 +735,7 @@ fn executable_replacement_after_registration_never_releases_gate(
         std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
     let error = result.expect_err("changed executable bytes must keep the child parked");
     assert!(
-        format!("{error}").contains("changed after process registration"),
+        format!("{error}").contains("was replaced after it was resolved"),
         "{error}\n{out}"
     );
     let pid = client.book().registered[0];

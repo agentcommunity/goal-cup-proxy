@@ -21,3 +21,5 @@ mod m2_synthetic_vertical;
 mod preflight_doctor;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod run_scoped_daemon;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod upload_e2e;

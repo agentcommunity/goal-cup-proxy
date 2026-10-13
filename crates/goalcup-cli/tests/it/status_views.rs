@@ -750,6 +750,7 @@ fn launched_capture(
             reserve_bytes: 4 * 1024 * 1024,
             run_home: root.join("run-home").display().to_string(),
             config_home: root.join("config-home").display().to_string(),
+            entry_id: None,
         })
         .unwrap();
     let goal = client

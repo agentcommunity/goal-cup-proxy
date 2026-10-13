@@ -22,20 +22,19 @@ argument guard; termination; hosts; redaction; delivery independence; cross-fiel
 `capture.platform` entry, in the fixed order `linux-x86_64`, `linux-aarch64`, `macos-aarch64`,
 `macos-x86_64`, whatever order the file uses. The first refusal is deterministic. Unknown keys and
 unknown closed values use the same message: a newer schema needs a newer `goalcup`, while a
-misspelling is refused rather than ignored.
+misspelling is refused rather than ignored. The retired executable pin keys (`sha256`, `version`)
+are the exception: they are refused before deserialization with their own sentence (D53).
 
 All public schema structs and enums are non-exhaustive. A manifest cannot select its load origin:
 
 - `Origin::Pinned` is an in-tree or pin-checked connector. It refuses an interpreter as the
   executable and refuses an absolute, home-relative, parent-relative or expanding path in an
-  argument. When this build pins its id, on top of every deny rule below, each `capture.env`
-  entry must be a reviewed row of `CAPTURE_ENV_ALLOWLIST` (name and exact value), and
-  `capture.args` with `goal_flag` must be exactly the connector's row of `CAPTURE_ARG_ALLOWLIST`
-  (in order, as written) in `capture_policy.rs`. A new connector, variable or argument, a model
-  name included, is a core PR. An unpinned id is refused at the pin gate and runs only under
-  `--dev`.
+  argument. There is no per-connector list in Rust (D51): `capture.args`, `goal_flag` and
+  `capture.env` are held to the generic rules below, and a new connector, variable or argument,
+  a model name included, is a data change reviewed in its PR. An unpinned id is refused at the
+  pin gate and runs only under `--dev`.
 - `Origin::Dev` is an unpinned directory under `GOALCUP_CONNECTORS_DIR` selected through
-  `--dev`. It relaxes those two refusals and the two allowlists. Environment values, seeds,
+  `--dev`. It relaxes those two refusals and the loopback-host refusal. Environment values, seeds,
   trust tables, all bounds and all cross-field rules remain strict.
 
 The CLI and daemon both use the same loader and each validates again at its own trust boundary.
@@ -56,8 +55,8 @@ optional field or table is absent.
 | `capture.continuation` | required | Non-blank, one line, 1–512 bytes; declarative provenance for unattended continuation. |
 | `capture.auth_hosts` | optional, default `[]` | At most 16 unique lowercase DNS hosts; always opaque tunnels. |
 | `capture.env` | optional, default `{}` | At most 32 string-to-string entries; the child-only process environment additions. |
-| `capture.executable` | required table | Exact executable name, measured version and byte digest. |
-| `capture.platform` | optional, default `{}` | Per-platform executable digest, version and env entries; see below. |
+| `capture.executable` | required table | The executable name on `PATH`, and how to ask it its version. |
+| `capture.platform` | optional, default `{}` | Per-platform env entries; see below. |
 | `capture.home` | required table | Run `HOME`, isolated harness home and any seeds. |
 | `capture.credential` | optional, default absent | One core-allowlisted child credential variable. |
 | `capture.ca` | required table | One CA mode and its core-allowlisted variables. |
@@ -80,54 +79,56 @@ refused. `{session_id}` has the identity rules described below.
 | Field | Required/default | Contract |
 |---|---|---|
 | `capture.executable.program` | required | Bare `PATH` name, 1–64 bytes of `[A-Za-z0-9._-]`; no path. |
-| `capture.executable.version` | required | 1–32 bytes; `^[0-9][0-9A-Za-z.+-]{0,31}$`. |
-| `capture.executable.sha256` | required | Exactly 64 lowercase hexadecimal characters. |
+| `capture.executable.version_args` | optional, default `[]` | Empty, or exactly one of `--version`, `-v`, `-V`, `version`: the probe runs before the capture, with no proxy and no record. |
+
+No build is pinned (D53). `goalcup start` resolves `program` on `PATH`, follows the symlinks above
+the file, refuses a symlink or anything but a regular file at the end, hashes that file, and runs
+it; before releasing the parked child it hashes the same path again and refuses a file swapped in
+between. The daemon records the build that ran in `Launch.harness_build`. With `version_args`,
+the launcher runs `<program> <version_args>` once before the harness, with an empty environment
+except `PATH` and a throwaway `HOME` beside the run's own (made for the probe and removed after
+it, so whatever the probe writes never reaches the run's `HOME`), stdin `/dev/null` and a ten-second timeout, and records
+the first line of its stdout (trimmed, printable ASCII, at most 128 bytes) as
+`Launch.harness_version`; without them, or when that fails, it records `unreported`. The version
+is reported by the harness, not proven.
+
+`capture.executable.sha256` and `capture.executable.version` (and the same keys in a
+`capture.platform.<key>` table) are retired: a manifest that still carries one is refused with
+one sentence telling the author to delete the line.
 
 A pinned connector's `program` cannot be an interpreter or launcher named by
 `INTERPRETER_PROGRAMS`. Matching is ASCII-case-insensitive and also catches a listed name with a
 numeric version suffix, such as `python3.13`. The current table includes shells, `env`, privilege
 and command wrappers, script runtimes, package launchers, `git`, `find`, `make`, Java and
-PowerShell. A development kit case may use one, but its executable digest is still checked by the
-runtime.
+PowerShell. A development kit case may use one.
 
-### Per-platform executable pin and environment
+### Per-platform environment
 
-A harness ships a different build per platform, so `[capture.platform.<key>]` may replace the
-executable's digest and add env entries for one platform. Nothing else differs between
-platforms.
+`[capture.platform.<key>]` may add env entries for one platform. Nothing else differs between
+platforms; the executable is the same `program` everywhere.
 
 | Field | Required/default | Contract |
 |---|---|---|
 | `<key>` | closed set | `linux-x86_64`, `linux-aarch64`, `macos-aarch64` or `macos-x86_64`: Rust's `std::env::consts::OS` and `ARCH`, joined by `-`. Any other key is refused. |
-| `capture.platform.<key>.sha256` | required | That platform's executable digest; exactly 64 lowercase hexadecimal characters. |
-| `capture.platform.<key>.version` | optional, default the base `version` | Same grammar as `capture.executable.version`. |
 | `capture.platform.<key>.env` | optional, default `{}` | Entries added to `capture.env`; one with the same name replaces the base entry. |
 
 Any other field inside an override, such as `program`, `args`, `home` or `hosts`, is refused as
-not part of schema 1. The running platform's entry applies to `goalcup start` and `goalcup
-doctor`. Without one, including on a platform outside the closed set, the base
-`capture.executable` and `capture.env` apply, so a connector with no `capture.platform` table runs
-its base values everywhere.
+not part of schema 1. The running platform's entry applies to `goalcup start`. Without one,
+including on a platform outside the closed set, the base `capture.env` applies.
 
 Each entry is validated as the whole recipe it resolves to: the base table with that platform's
-digest, version and env applied. Every rule in this document applies to that recipe, including
-the env deny lists, value rules, bounds, cross-field rules and, for a pinned id,
-`CAPTURE_ENV_ALLOWLIST`. An override cannot set a variable, value or name that the base table
-could not. A refusal names `capture.platform.<key>` (`.sha256`, `.version` or `.env`) and keeps
-the base rule's reason.
+env applied. Every rule in this document applies to that recipe, including the env deny lists,
+value rules, bounds and cross-field rules. An override cannot set a variable, value or name that
+the base table could not. A refusal names `capture.platform.<key>` (or `.env`) and keeps the base
+rule's reason.
 
 ```toml
 [capture.executable]
 program = "codex"
-version = "0.153.0"
-sha256 = "a29d9e86eef88cbbd69f97ce8c590b1d0a287c8f77424f5eef226b883d7eaa22"
+version_args = ["--version"]
 
 [capture.env]
 SHELL = "/bin/zsh"
-
-# npm @openai/codex@0.153.0-linux-arm64: vendor/aarch64-unknown-linux-musl/bin/codex
-[capture.platform.linux-aarch64]
-sha256 = "c92824b2e068b8cb15eecba45271f7e3dd35a5b3929383593284a36074d40aec"
 
 [capture.platform.linux-aarch64.env]
 SHELL = "/bin/bash"
@@ -157,10 +158,15 @@ only ASCII letters, digits or `_`. Names compare uppercase for policy. The valid
 - CA registry names and global trust overrides;
 - injection/startup variables and names ending in command suffixes such as `_COMMAND`, `_CMD`,
   `EDITOR`, `PAGER`, `ASKPASS`, `_WRAPPER` or `_RUNNER`;
-- injection, provider and harness-reserved prefixes, including `DYLD_`, `LD_`, `OTEL_`,
-  `CLAUDE_CODE_USE_`, `GIT_`, `NPM_CONFIG_`, `PIP_`, `XDG_`, `GOALCUP_`, the cloud-provider
-  prefixes and `HERMES_`; and
-- any name pinned by this manifest's home, credential or CA fields.
+- injection and provider prefixes, including `DYLD_`, `LD_`, `OTEL_`, `CLAUDE_CODE_USE_`,
+  `GIT_`, `NPM_CONFIG_`, `PIP_`, `XDG_`, `GOALCUP_` and the cloud-provider prefixes;
+- any `*_HOME`, `*_CONFIG_DIR` or `*_CONFIG_HOME` name: a harness's own relocator is
+  `capture.home.env`, and any other would move some program's state out of the run's isolation;
+- any name pinned by this manifest's home, credential or CA fields; and
+- any name under one of this connector's `capture.reserved_env_prefixes` (up to 4, each
+  `^[A-Z][A-Z0-9_]{0,30}_$`): the harness's own namespace, declared as data, so that switches
+  such as Hermes's `HERMES_SAFE_MODE` cannot silently stop capture. No harness is named in the
+  policy itself.
 
 R-3 is an intentional over-refusal: `NO_PAGER` ends in `PAGER`, so schema 1 refuses it even when
 the harness treats it as a boolean. A harness that needs that name requires a reviewed core policy
@@ -177,7 +183,7 @@ path component. `Origin::Dev` does not relax environment values.
 |---|---|---|
 | `capture.home.run_home` | required | Closed values: `empty`, `keychain_link`. |
 | `capture.home.config_home` | required | Closed values: `shared`, `per_run`. |
-| `capture.home.env` | required | 1–64 bytes; `^[A-Z][A-Z0-9_]{0,63}$`, then the home-variable policy below. |
+| `capture.home.env` | optional, default absent | 1–64 bytes; `^[A-Z][A-Z0-9_]{0,63}$`, then the home-variable policy below. |
 | `capture.home.per_run_dir` | optional; effective default `harness-home` | `per_run` only; 1–32 bytes; `^[a-z0-9][a-z0-9-]{0,31}$`. |
 | `capture.home.dirs` | optional, default `[]` | `per_run` only; at most 8 relative paths, created mode `0700`. |
 | `capture.home.seed` | optional, default `[]` | `per_run` only; at most 16 seed rows. |
@@ -202,6 +208,11 @@ reviewer still reads every seed.
 followed by `_HOME` or `_CONFIG_DIR`, such as `CODEX_HOME`, `HERMES_HOME` or
 `CLAUDE_CONFIG_DIR`. Other tools' home/config/cache variables, `SHELL`, and the shared name-deny
 rules are refused.
+
+Without `capture.home.env` the launch points no variable at the config home, so the harness keeps
+its state under the private run `HOME`. Then `config_home` must be `per_run`, `seed` and `dirs`
+must be empty, and the native `root` must be `{run_home}/...`: anything else would be a home the
+harness never reads, admitted to record nothing.
 
 ## Credential and CA
 
@@ -232,6 +243,7 @@ DECISIONS change, not a connector field value.
 | `capture.identity.match_field` | `stdout_json` only; required there | Dot path of 1–4 nonempty `[A-Za-z0-9_]+` segments. |
 | `capture.identity.match_value` | `stdout_json` only; required there | 1–64 bytes, no control character. |
 | `capture.identity.id_field` | `stdout_json` only; required there | Same dot-path grammar as `match_field`. |
+| `capture.identity.wait_seconds` | `stdout_json` only; default 120 | 1–600: how long the launch waits for the identity event before recording the launch without one. |
 | `capture.identity.prefix` | `stderr_line` only; required there | 1–32 printable ASCII bytes. |
 | `capture.identity.grammar` | `stderr_line` only; required there | Closed values: `timestamp-hex`, `token`. |
 
@@ -312,7 +324,11 @@ A host has 1–32 paths across the two arrays. Paths are unique across both arra
 are at most 1024 bytes, contain no query or fragment, no ASCII byte from `0x00` through `0x20`,
 and no `0x7f` byte, `.` segment or `..` segment. This is a literal byte rule; it does not classify
 non-ASCII Unicode whitespace or control characters. Hosts have no scheme, port, userinfo, wildcard
-or trailing dot and cannot be IPv4 literals. An authentication host and intercepted host cannot
+or trailing dot and cannot be IPv4 literals. For a pinned connector a host and an authentication
+host also cannot be `localhost`, `*.localhost`, `localhost.localdomain` or a single-label name:
+a capture launch sets `NO_PROXY=127.0.0.1,localhost`, so loopback traffic is never recorded
+(`capture_policy::local_host_problem`). Kit cases and the controlled workload (`Origin::Dev`)
+keep their `*.localhost` stand-ins. An authentication host and intercepted host cannot
 overlap; model hosts belong in `capture.hosts`, not `auth_hosts`.
 
 ## `[redaction]`
@@ -350,7 +366,7 @@ In addition to the local rules above, all of these apply:
 5. The native root plus pattern, compared case-insensitively with `{id}` treated as `*`, cannot
    match a seed destination. A `{run_home}` root is checked both with the config home coincident
    with the run home and nested below `per_run_dir`.
-6. `capture.home.env`, `capture.credential.env` and all `capture.ca.env` names are pairwise
+6. `capture.home.env` (when present), `capture.credential.env` and all `capture.ca.env` names are pairwise
    distinct case-insensitively. No `capture.env` key may duplicate one.
 7. Every CA variable's registry mode equals the single declared `capture.ca.mode`.
 8. Authentication and intercepted host sets are disjoint; every intercepted host has at least one
@@ -424,15 +440,13 @@ schema_version = 1
 id = "hermes-cli"
 
 [capture]
-# hermes chat -Q --provider deepseek --model deepseek-v4-flash --query=<goal>
-args = ["chat", "-Q", "--provider", "deepseek", "--model", "deepseek-v4-flash"]
+# hermes chat -Q --provider deepseek --query=<goal>
+args = ["chat", "-Q", "--provider", "deepseek"]
 goal_flag = "--query"
 continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
 
 [capture.executable]
 program = "hermes"
-version = "0.19.0"
-sha256 = "0444572f0bce8a805473fbcaa431beed399818528758b454fbf24825a51be325"
 
 [capture.env]
 TERMINAL_HOME_MODE = "profile"

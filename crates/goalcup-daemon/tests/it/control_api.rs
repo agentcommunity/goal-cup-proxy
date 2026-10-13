@@ -85,6 +85,7 @@ fn capture_request(
         reserve_bytes: 4 * 1024 * 1024,
         run_home: h.root.join("run-home").display().to_string(),
         config_home: h.root.join("config-home").display().to_string(),
+        entry_id: None,
     }
 }
 
@@ -401,22 +402,20 @@ fn every_control_error_variant_maps_to_exactly_one_http_status() {
 /// every `DaemonError` variant, not over the five a handler happens to raise today.
 ///
 /// `control::every_daemon_error()` is generated from the same rows `control::control_error`
-/// matches on, and that match has no `_` arm. A seventeenth variant therefore does not
+/// matches on, and that match has no `_` arm. A new variant therefore does not
 /// compile until it is mapped, and the mapping hands this test a sample of it.
 ///
-/// The pair that matters is `Refused` and `Busy`. Both are `409` and they mean opposite
-/// things: `Refused` is the entry's own state saying no, and `Busy` is the entry held for
-/// the length of one pump. A client retries `busy` and reports `conflict`, which it can
-/// only do because the two carry different codes in the body of a status they share.
+/// `ControlError::Busy` stays on the wire (the CLI retries on it) but no `DaemonError`
+/// maps to it any more, and that is pinned below: the CLI's `NotAdmitted` is exactly `busy`,
+/// `unauthorized` and a refused connection, which holds only while no daemon error, a capture
+/// finish stage's included, answers `busy`. `Refused` is the entry's own state saying no and
+/// stays `conflict`.
 #[test]
 fn the_daemon_s_own_errors_become_the_contract_s_codes() {
     use goalcup_daemon::DaemonError;
     for (error, code) in [
-        // The pair that matters. A permanent refusal — already sealed, a lock on
-        // disk — stays `conflict`; the transient hold is `busy`, and `busy` is the only
-        // code the contract lets a client retry on.
+        // A permanent refusal — already sealed, a lock on disk — is `conflict`.
         (DaemonError::Refused("already sealed".into()), "conflict"),
-        (DaemonError::Busy("mid-upload".into()), "busy"),
         // The v5 finish's expiry is neither: its own code, carrying the stage token alone.
         (
             DaemonError::FinishDeadline {
@@ -449,6 +448,7 @@ fn the_daemon_s_own_errors_become_the_contract_s_codes() {
             "{} is not a code this daemon can give a status",
             mapped.code()
         );
+        assert_ne!(mapped.code(), "busy", "no daemon error answers `busy`");
     }
 
     // And the codes the CLI can rebuild round-trip through `from_code`. `unreachable`,
@@ -1041,6 +1041,45 @@ fn capture_create_request(
             .join(format!("{name}-config-home"))
             .display()
             .to_string(),
+        entry_id: None,
+    }
+}
+
+/// A capture create may carry the entry id an upload server issued: the entry, its chain and
+/// every record carry that id, and the answer names the trace directory and the head the
+/// baseline left, which is what a start receipt signs. An id in any other shape is refused
+/// before anything is created.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_create_takes_a_server_issued_entry_id_and_reports_its_head() {
+    let h = support::empty_control_harness().await;
+    let mut request = capture_create_request(&h, "server-issued");
+    request.entry_id = Some("e0123456789abcdef".to_string());
+    let info: protocol::CaptureWorkspaceInfo = h
+        .post_json(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
+        .await;
+    assert_eq!(info.entry_id, "e0123456789abcdef");
+    let chain =
+        std::fs::read_to_string(std::path::Path::new(&info.trace_dir).join("chain.jsonl")).unwrap();
+    let first: serde_json::Value = serde_json::from_str(chain.lines().next().unwrap()).unwrap();
+    assert_eq!(first["entry_id"], "e0123456789abcdef");
+    assert_eq!(first["seq"], 0);
+    assert_eq!(first["hash"], info.chain_head.as_str());
+
+    for bad in ["E0123456789ABCDEF", "e0123", "../e0123456789abcd", ""] {
+        let mut request = capture_create_request(&h, &format!("bad-{}", bad.len()));
+        request.entry_id = Some(bad.to_string());
+        let response = h
+            .post_body(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
+            .await;
+        assert_eq!(response.status(), 400, "{bad:?}: {}", response.body());
+        assert!(
+            !h.root
+                .join("workspaces")
+                .join(format!("bad-{}", bad.len()))
+                .exists(),
+            "a refused id created its workspace"
+        );
     }
 }
 

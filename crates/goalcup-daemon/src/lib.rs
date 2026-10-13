@@ -8,7 +8,6 @@
 //! Every wire and store type comes from `goalcup-protocol`; this crate defines none of
 //! them and extends none of them.
 
-pub mod arming;
 pub mod config;
 /// The control API's server side: the state its handlers share, the one authentication
 /// rule — `control::is_public_route` on the raw request path — the `control.json` the CLI
@@ -35,7 +34,7 @@ pub mod runtime;
 /// Building and signing the status document (D25).
 pub mod status;
 mod submission_types;
-pub use submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};
+pub use submission_types::CaptureResourceLimitsV1;
 /// Terminating the harness process tree at seal (D22).
 ///
 /// Unix only, like `goalcup_protocol::process`, which owns the discovery half. A module
@@ -44,12 +43,6 @@ pub use submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};
 #[cfg(unix)]
 pub mod terminate;
 pub mod workspace;
-
-// `status`'s public status-line writer takes an `EntryArtifactRoot`, so a caller of it needs
-// no direct `goalcup-platform` dependency. The V1 immutable-submission writer whose
-// signature also needed `SourceDir`, `TraceDir` and `NativeHandleBudgetV1` was removed by
-// D48, and those re-exports went with OS-31.
-pub use goalcup_platform::tracecap::EntryArtifactRoot;
 
 /// This build's version, for `trace.toml` and for the `VersionChange` the daemon chains
 /// when it observes its own binary change under a running entry.
@@ -95,14 +88,6 @@ pub fn unix_to_rfc3339(t: f64) -> String {
 /// message in this crate is ever a bare "No such file or directory" with no path in it.
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
-    /// A typed capture outcome. Callers must map this enum value directly into the protocol
-    /// finalization document; string matching an operating-system error would make a restart
-    /// path non-deterministic and duplicate capture policy outside the V1 `submission`
-    /// module (removed by D48).
-    #[error("submission capture incomplete: {reason:?}")]
-    SubmissionCapture {
-        reason: goalcup_protocol::submission::SubmissionFailureV1,
-    },
     #[error("io {path}: {source}")]
     Io {
         path: String,
@@ -125,10 +110,6 @@ pub enum DaemonError {
     Db(String),
     #[error("missing: {0}")]
     Missing(String),
-    #[error("sqlite: {0}")]
-    Sqlite(String),
-    #[error("http: {0}")]
-    Http(String),
     #[error("crypto: {0}")]
     Crypto(String),
     #[error("config: {0}")]
@@ -137,24 +118,8 @@ pub enum DaemonError {
     Refused(String),
     #[error("guard: {0}")]
     Guard(String),
-    /// The entry is held, and only for as long as one asynchronous call takes.
-    ///
-    /// Distinct from `Refused`, which is the entry itself saying no — already sealed, a
-    /// lock still on disk, a second seal — and that distinction is the whole variant: both
-    /// reach the control API as `409`, and a client cannot tell "try again in a moment"
-    /// from "this will never work" out of a status code two opposite answers share. This
-    /// one maps to pre-admission `ControlError::Busy`. The process route relabels the same
-    /// runtime hold after durable Prepare as `ProcessAdmissionBusy`, so clients can retry
-    /// without treating the child as definitely refused.
-    ///
-    /// Its producer was the V1 `runtime::held_elsewhere`, raised while a runtime was out of
-    /// the entry map for the length of a pump. D48 removed it, so no runtime path raises
-    /// `Busy` now.
-    #[error("busy: {0}")]
-    Busy(String),
     /// The v5 local finish ran out of its one budget before `stage` (a `FinishStage` token),
-    /// wrote no terminal and left the entry open. Distinct from [`Self::Busy`], which is the
-    /// legacy pump hold a client retries, and from [`Self::Refused`], the entry's own state.
+    /// wrote no terminal and left the entry open. Distinct from [`Self::Refused`], the entry's own state.
     #[error("finish_deadline: {stage}")]
     FinishDeadline { stage: &'static str },
 }

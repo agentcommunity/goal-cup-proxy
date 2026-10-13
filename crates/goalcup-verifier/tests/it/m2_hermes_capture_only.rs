@@ -188,6 +188,7 @@ fn trace(records: &[CaptureRecord]) -> tempfile::TempDir {
             process_handoff_digest: None,
             run_public_key: None,
             connector_dir_sha256: None,
+            harness_build: None,
         },
     );
     for record in records {

@@ -1793,6 +1793,14 @@ enum RootRead {
     /// The identity cannot be read although the process is still live (not a recycle, but
     /// not provably an exit either).
     UnreadableWhileLive,
+    /// Linux's exit window: once `after_kills` signals have been delivered, the root's argv
+    /// read answers `[sh]` (its memory is freed, so `ps` prints only its name) while its
+    /// creation identity still reads as registered, and it is gone by the next `liveness`.
+    ArgvGoneThenExits { after_kills: usize },
+    /// The argv read answers a program the launch never registered, and the root stays live.
+    RenamedWhileLive,
+    /// The same, but only once `after_kills` signals have been delivered.
+    RenamedAfterKills { after_kills: usize },
 }
 
 /// [`Sim`] with one deterministic interleaving injected into `guard_registered`'s two reads
@@ -1803,6 +1811,8 @@ struct RacingRoot {
     sim: Sim,
     read: RootRead,
     fired: std::sync::atomic::AtomicBool,
+    /// Set by the `[sh]` argv read: the root exits before the next `liveness` read.
+    exiting: std::sync::atomic::AtomicBool,
 }
 
 impl RacingRoot {
@@ -1811,6 +1821,7 @@ impl RacingRoot {
             sim: sim.clone(),
             read,
             fired: std::sync::atomic::AtomicBool::new(false),
+            exiting: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -1820,10 +1831,35 @@ impl ProcessOs for RacingRoot {
         self.sim.snapshot()
     }
     fn liveness(&self, pid: u32) -> Result<bool, ProcessError> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if pid == ROOT && self.exiting.swap(false, SeqCst) {
+            self.sim.world().exit(ROOT);
+        }
         self.sim.liveness(pid)
     }
     fn identity(&self, pid: u32) -> Option<(u64, String)> {
-        self.sim.identity(pid)
+        use std::sync::atomic::Ordering::SeqCst;
+        let read = self.sim.identity(pid);
+        if pid != ROOT {
+            return read;
+        }
+        match self.read {
+            RootRead::ArgvGoneThenExits { after_kills }
+                if !self.fired.load(SeqCst) && self.sim.world().kills.len() >= after_kills =>
+            {
+                self.fired.store(true, SeqCst);
+                self.exiting.store(true, SeqCst);
+                read.map(|(age, _)| (age, "[sh]".to_string()))
+            }
+            RootRead::RenamedWhileLive => read.map(|(age, _)| (age, "/usr/bin/vim".to_string())),
+            RootRead::RenamedAfterKills { after_kills }
+                if self.sim.world().kills.len() >= after_kills =>
+            {
+                self.fired.store(true, SeqCst);
+                read.map(|(age, _)| (age, "/usr/bin/vim".to_string()))
+            }
+            _ => read,
+        }
     }
     fn start_identity(&self, pid: u32) -> Option<String> {
         use std::sync::atomic::Ordering::SeqCst;
@@ -1840,6 +1876,9 @@ impl ProcessOs for RacingRoot {
             }
             RootRead::Stranger => Some("sim:stranger".to_string()),
             RootRead::UnreadableWhileLive => None,
+            RootRead::ArgvGoneThenExits { .. }
+            | RootRead::RenamedWhileLive
+            | RootRead::RenamedAfterKills { .. } => self.sim.start_identity(pid),
         }
     }
     fn leads_group(&self, pid: u32) -> bool {
@@ -1960,6 +1999,84 @@ fn an_unreadable_creation_identity_on_a_live_root_is_still_refused() {
             .expect_err("a live root with no readable identity is not signalled");
         assert!(err.to_string().contains("recycled"), "{platform:?}: {err}");
         assert!(sim.world().kills.is_empty(), "{platform:?}");
+    }
+}
+
+/// Linux's exit window after a signal: the root's argv reads as `[sh]` while its creation
+/// identity still matches, and it is gone a moment later. That is the kill working, as for a
+/// root that exits between the two identity reads, not a renamed program.
+#[test]
+fn a_root_whose_argv_is_gone_because_it_is_exiting_after_a_signal_is_not_a_loss() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        // After the worker's signal. The measured case was the root's own SIGTERM; both reach
+        // the guard through `sweep_anchor`, and this root exits once its worker is signalled.
+        let os = RacingRoot::new(&sim, RootRead::ArgvGoneThenExits { after_kills: 1 });
+        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let w = sim.world();
+        assert!(
+            os.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "{platform:?}: the interleaving was never injected\n{}",
+            w.describe()
+        );
+        assert!(
+            report.observed_gone && !report.harness_unverified,
+            "{platform:?}: an exiting root's empty argv lost the chase: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(w.alive_born().is_empty(), "{platform:?}:\n{}", w.describe());
+    }
+}
+
+/// The fix must not weaken the argv refusal: a live root whose argv names another program is
+/// still refused, and nothing is signalled.
+#[test]
+fn a_live_root_running_another_program_is_still_refused() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        let os = RacingRoot::new(&sim, RootRead::RenamedWhileLive);
+        let report = terminate_with(&handle, WALK_CAP, &os)
+            .expect("a renamed root is reported, not an error");
+        // `guard_degraded` is what only the renamed-argv report sets for a handle with an
+        // argv; an absent root's report would pass every other assertion here.
+        assert!(
+            report.harness_unverified
+                && report.guard_degraded
+                && !report.observed_gone
+                && report.targeted.is_empty(),
+            "{platform:?}: {report:?}"
+        );
+        assert!(sim.world().kills.is_empty(), "{platform:?}");
+    }
+}
+
+/// After a signal, a root that stays live while its argv names another program is a lost
+/// anchor: nothing is claimed, and the root itself is never signalled.
+#[test]
+fn a_live_root_renamed_after_a_signal_is_still_a_loss() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        let os = RacingRoot::new(&sim, RootRead::RenamedAfterKills { after_kills: 1 });
+        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let w = sim.world();
+        assert!(
+            os.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "{platform:?}: the interleaving was never injected\n{}",
+            w.describe()
+        );
+        assert!(
+            report.harness_unverified && !report.observed_gone,
+            "{platform:?}: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(
+            w.kills.iter().all(|k| k.pid != ROOT),
+            "{platform:?}: a renamed root was signalled: {:?}",
+            w.kills
+        );
     }
 }
 

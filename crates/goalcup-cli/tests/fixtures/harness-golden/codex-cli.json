@@ -1,81 +1,4 @@
 {
-  "allowance_refusals": [
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    }
-  ],
   "argv_deny": [
     {
       "arg": "--remote",
@@ -551,10 +474,6 @@
     "args": [
       "exec",
       "--json",
-      "-m",
-      "gpt-5.6-luna",
-      "-c",
-      "model_reasoning_effort=\"low\"",
       "-c",
       "approval_policy=\"never\"",
       "-c",
@@ -562,7 +481,7 @@
       "-c",
       "projects={{ \"{workspace}\" = {{ trust_level = \"trusted\" }} }}",
       "-s",
-      "workspace-write",
+      "danger-full-access",
       "--skip-git-repo-check",
       "-C",
       "{workspace}",
@@ -576,13 +495,14 @@
       "CODEX_CA_CERTIFICATE"
     ],
     "config_home": "shared",
-    "continuation": "none: codex exec one turn, approval_policy=never, workspace-write without network, stdin /dev/null",
+    "continuation": "none: codex exec one turn, approval_policy=never, full access with network, stdin /dev/null",
     "env": {
       "SHELL": "/bin/zsh"
     },
     "executable": {
-      "sha256": "a29d9e86eef88cbbd69f97ce8c590b1d0a287c8f77424f5eef226b883d7eaa22",
-      "version": "0.153.0"
+      "version_args": [
+        "--version"
+      ]
     },
     "home": "empty",
     "hosts": [
@@ -599,16 +519,12 @@
       "linux-aarch64": {
         "env": {
           "SHELL": "/bin/bash"
-        },
-        "sha256": "c92824b2e068b8cb15eecba45271f7e3dd35a5b3929383593284a36074d40aec",
-        "version": null
+        }
       },
       "linux-x86_64": {
         "env": {
           "SHELL": "/bin/bash"
-        },
-        "sha256": "fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be",
-        "version": null
+        }
       }
     }
   },
@@ -707,23 +623,23 @@
       "name": "codex_home"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "CLAUDE_CONFIG_DIR"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "claude_config_dir"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "HERMES_HOME"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "hermes_home"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "WORKLOAD_HOME"
     },
     {
@@ -955,7 +871,7 @@
       "name": "LD_LIBRARY_PATH"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": null,
       "name": "HERMES_X"
     },
     {
@@ -1008,8 +924,8 @@
     }
   ],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 19,
-    "goal_index": 18,
+    "argv_len": 15,
+    "goal_index": 14,
     "goal_prefix": 0,
     "tail": [
       "--",
@@ -1024,10 +940,6 @@
     "argv": [
       "exec",
       "--json",
-      "-m",
-      "gpt-5.6-luna",
-      "-c",
-      "model_reasoning_effort=\"low\"",
       "-c",
       "approval_policy=\"never\"",
       "-c",
@@ -1035,7 +947,7 @@
       "-c",
       "projects={ \"<TMP>/workspace\" = { trust_level = \"trusted\" } }",
       "-s",
-      "workspace-write",
+      "danger-full-access",
       "--skip-git-repo-check",
       "-C",
       "<TMP>/workspace",
@@ -1043,7 +955,7 @@
       "write result.txt"
     ],
     "capture": {
-      "goal_index": 18,
+      "goal_index": 14,
       "goal_prefix": 0
     },
     "cwd": "<TMP>/workspace",
@@ -1070,9 +982,6 @@
     },
     "mode": "Server",
     "program": "<TMP>/bin/fake-harness"
-  },
-  "plan_with_claude_tool_allowance": {
-    "refused": "exit1"
   },
   "redaction": {
     "extra_patterns": [
@@ -1107,10 +1016,6 @@
       "argv": [
         "exec",
         "--json",
-        "-m",
-        "gpt-5.6-luna",
-        "-c",
-        "model_reasoning_effort=\"low\"",
         "-c",
         "approval_policy=\"never\"",
         "-c",
@@ -1118,7 +1023,7 @@
         "-c",
         "projects={ \"<TMP>/workspace\" = { trust_level = \"trusted\" } }",
         "-s",
-        "workspace-write",
+        "danger-full-access",
         "--skip-git-repo-check",
         "-C",
         "<TMP>/workspace",
