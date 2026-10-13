@@ -613,6 +613,11 @@
         },
         "sha256": "1859583ce32920595c61ef868bee52e1b1594f7486db209935e01f1e5e804ae2",
         "version": null
+      },
+      "macos-x86_64": {
+        "env": {},
+        "sha256": "c896d2aee12ff4d95861033d9730d3d22dc19e4f32779134d3399ef3dfb0e77a",
+        "version": null
       }
     }
   },

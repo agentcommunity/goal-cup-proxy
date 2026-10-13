@@ -40,6 +40,11 @@ sha256 = "c92824b2e068b8cb15eecba45271f7e3dd35a5b3929383593284a36074d40aec"
 [capture.platform.linux-aarch64.env]
 SHELL = "/bin/bash"
 
+# npm @openai/codex@0.153.0-darwin-x64: vendor/x86_64-apple-darwin/bin/codex (the base pin is
+# @openai/codex@0.153.0-darwin-arm64: vendor/aarch64-apple-darwin/bin/codex)
+[capture.platform.macos-x86_64]
+sha256 = "2a13d23097031d374c070df40c765abb7f336c99b3946697739a68335747ded8"
+
 # D39 R10: one shared isolated CODEX_HOME; never seeded; runs serialized.
 [capture.home]
 run_home = "empty"

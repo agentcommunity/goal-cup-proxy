@@ -43,6 +43,11 @@ sha256 = "346d294f0103d6fc0de11ac953579b5c62dfa90698a4cfc486b6f927c615e697"
 [capture.platform.linux-aarch64.env]
 SHELL = "/bin/bash"
 
+# npm @anthropic-ai/claude-code-darwin-x64@2.1.283: package/claude (the base pin is
+# @anthropic-ai/claude-code-darwin-arm64@2.1.283: package/claude)
+[capture.platform.macos-x86_64]
+sha256 = "c896d2aee12ff4d95861033d9730d3d22dc19e4f32779134d3399ef3dfb0e77a"
+
 # D38: HOME holds only Library/Keychains; CLAUDE_CONFIG_DIR is the shared isolated dir.
 [capture.home]
 run_home = "keychain_link"

@@ -605,6 +605,11 @@
         },
         "sha256": "fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be",
         "version": null
+      },
+      "macos-x86_64": {
+        "env": {},
+        "sha256": "2a13d23097031d374c070df40c765abb7f336c99b3946697739a68335747ded8",
+        "version": null
       }
     }
   },
