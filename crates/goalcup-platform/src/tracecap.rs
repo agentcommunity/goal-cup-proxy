@@ -263,18 +263,6 @@ impl TraceDir {
         self.inner.read_regular(name)
     }
 
-    /// Atomically replace a regular direct child through this retained directory handle.
-    pub(crate) fn replace_regular(&self, name: &str, bytes: &[u8]) -> Result<(), TraceCapError> {
-        validate_component(name)?;
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let temporary = format!(
-            ".{name}.{}.{}.tmp",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
-        self.inner.replace_regular(&temporary, name, bytes)
-    }
-
     /// A stable identity for the acquired directory capability.  It is intentionally
     /// opaque outside the capability layer: callers may bind a durable operation to the
     /// root they acquired, but cannot manufacture an identity from a path string.
@@ -597,9 +585,8 @@ fn restrict_regular(file: &File, mode: u32) -> Result<(), TraceCapError> {
 
 /// The retained authority for one configured `artifacts/<entry-id>` directory.
 ///
-/// The display paths are diagnostics only. Every returned trace root, buffer/cursor file,
-/// and participant status line is opened relative to the native directory capability held
-/// here, so a later rename or reparse-point swap of an ancestor cannot redirect it.
+/// The display paths are diagnostics only. Every returned trace root is opened relative to
+/// the native directory capability held here, so a later rename or reparse-point swap of an ancestor cannot redirect it.
 pub struct EntryArtifactRoot {
     artifacts: TraceDir,
     entry: TraceDir,
@@ -662,10 +649,6 @@ impl EntryArtifactRoot {
     /// Open the existing final `trace` child for restart/recovery.
     pub fn open_trace(&self) -> Result<TraceDir, TraceCapError> {
         self.entry.open_child_dir("trace")
-    }
-
-    pub fn replace_status_line(&self, bytes: &[u8]) -> Result<(), TraceCapError> {
-        self.entry.replace_regular("status-line.txt", bytes)
     }
 
     /// Recursively remove this exact acquired entry without following child links or a

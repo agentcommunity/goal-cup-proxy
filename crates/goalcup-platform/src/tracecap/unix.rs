@@ -382,15 +382,6 @@ impl TraceDirHandle {
         Ok(Some(File::from(fd)))
     }
 
-    pub(super) fn replace_regular(
-        &self,
-        temporary: &str,
-        target_name: &str,
-        bytes: &[u8],
-    ) -> Result<(), TraceCapError> {
-        self.replace_named(temporary, target_name, bytes)
-    }
-
     fn remove_regular(&self, name: &str) -> Result<(), TraceCapError> {
         let operation = "remove contained regular file";
         let name = c_name(name);
