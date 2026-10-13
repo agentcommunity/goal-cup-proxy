@@ -1,81 +1,4 @@
 {
-  "allowance_refusals": [
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    }
-  ],
   "argv_deny": [
     {
       "arg": "--remote",
@@ -1024,9 +947,6 @@
     },
     "mode": "Server",
     "program": "<TMP>/bin/fake-harness"
-  },
-  "plan_with_claude_tool_allowance": {
-    "refused": "exit1"
   },
   "redaction": {
     "extra_patterns": []

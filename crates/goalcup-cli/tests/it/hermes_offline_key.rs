@@ -375,7 +375,6 @@ fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
             proxy_url: &proxy_url,
             ca_certificate: &ca,
             parent_env: &parent,
-            allowed_tool_rule: None,
         },
     )
     .expect("the capture plan");

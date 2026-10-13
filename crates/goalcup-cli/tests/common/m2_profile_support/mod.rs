@@ -179,6 +179,5 @@ pub fn launch<'a>(
         proxy_url: proxy,
         ca_certificate: &layout.ca,
         parent_env: parent,
-        allowed_tool_rule: None,
     }
 }

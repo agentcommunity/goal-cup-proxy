@@ -101,10 +101,6 @@ enum Command {
             default_value_t = goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES
         )]
         capture_reserve_bytes: u64,
-        /// claude-code-cli only: let the agent run one Python script without asking, written
-        /// `Bash(python3 <name>.py *)`. Applies to this run only.
-        #[arg(long, value_name = "RULE", requires = "goal_file")]
-        capture_claude_allowed_tool: Option<String>,
     },
     /// Show how a run is doing: recording state, health, storage and any gaps. Starts the
     /// daemon if none is running, so a sealed run is shown too.
@@ -179,13 +175,11 @@ fn run(command: Command) -> Result<u8, CliError> {
             dev,
             goal_file,
             capture_reserve_bytes,
-            capture_claude_allowed_tool,
         } => start(commands::start::StartOptions {
             harness,
             dev,
             goal_file,
             capture_reserve_bytes,
-            capture_claude_allowed_tool,
         })
         .map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),

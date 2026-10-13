@@ -341,7 +341,6 @@ fn launch_uses_the_harness_bytes_captured_at_load_time() {
             proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
             ca_certificate: &ca,
             parent_env: &parent,
-            allowed_tool_rule: None,
         },
     )
     .unwrap();
@@ -443,7 +442,6 @@ fn the_pin_and_env_follow_the_running_platform() {
             proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
             ca_certificate: &ca,
             parent_env: &parent,
-            allowed_tool_rule: None,
         },
     )
     .expect("an executable pinned with the resolved sha256 builds");
@@ -518,7 +516,6 @@ fn a_harness_without_a_home_variable_gets_only_the_private_home() {
             proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
             ca_certificate: &ca,
             parent_env: &parent,
-            allowed_tool_rule: None,
         },
     )
     .unwrap();
