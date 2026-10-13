@@ -29,6 +29,7 @@ use goalcup_protocol::provenance::Sha256Digest;
 use goalcup_protocol::receipt::StartReceipt;
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// One JSON document per entry, keyed by `entry_id`. JSON rather than a hand-rolled
@@ -53,8 +54,8 @@ pub enum EntryState {
     /// runtime after any artifact may already have been removed.
     CleanupPending,
     /// A V1 seal had reserved the durable state transition but not yet reconciled it against
-    /// the terminal chain link. No current path enters it; a row an older daemon left here is
-    /// reported as needing recovery.
+    /// the terminal chain link. No current path enters it; `Daemon::start` refuses a registry
+    /// that holds such a V1 row.
     Sealing,
     Sealed,
     Refused,
@@ -123,12 +124,19 @@ pub enum ProcessHandoffPhase {
 
 /// The per-run secret: the signing seed every `SignedStatus` is signed with.
 ///
-/// Minted once per entry and never leaves this machine. Rows written by older daemons also
-/// carry a buffer key and a receiver token, which nothing reads; serde ignores them.
+/// Minted once per entry and never leaves this machine.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunKeys {
     /// 32 random bytes, hex: the Ed25519 seed, not the expanded key.
     pub signing_seed_hex: String,
+    /// The V1 buffer key and receiver token. Nothing in this build reads them, and a new
+    /// entry writes them empty: no secret is minted for them. They stay on the row because
+    /// a v0.5.0 daemon, which `Daemon::start` names as the way to finish a V1 entry on the
+    /// same artifact root, requires both keys to read any row.
+    #[serde(default)]
+    buffer_key_hex: String,
+    #[serde(default)]
+    receiver_token: String,
 }
 
 /// Nothing but the shape. The seed is a secret, and a derived `Debug` would put it in every
@@ -161,6 +169,8 @@ impl RunKeys {
     pub fn from_seed(signing: [u8; 32]) -> RunKeys {
         RunKeys {
             signing_seed_hex: hex::encode(signing),
+            buffer_key_hex: String::new(),
+            receiver_token: String::new(),
         }
     }
 
@@ -251,6 +261,15 @@ pub struct Entry {
     #[serde(default)]
     pub terminal_drain_validation_failed: bool,
     pub sealed_at: Option<String>,
+    /// Three V1 fields nothing in this build reads. They stay on the row, at the values a new
+    /// entry always had, because a v0.5.0 daemon (which `Daemon::start` names as the way to
+    /// finish a V1 entry on the same artifact root) requires them to read any row.
+    #[serde(default)]
+    events_uploaded: u64,
+    #[serde(default)]
+    expected_config: BTreeMap<String, String>,
+    #[serde(default)]
+    status_line_path: PathBuf,
     /// The actual workspace-creation invocation determines this, not the connector's
     /// launch mode: `--attach` is possible on a normal `tui` connector.
     #[serde(default)]
@@ -345,6 +364,7 @@ impl Entry {
             connector_id: connector_id.to_string(),
             workspace,
             trace_dir: artifact_dir.join("trace"),
+            status_line_path: artifact_dir.join("status-line.txt"),
             artifact_dir,
             manifest_sha256: manifest_sha256.to_string(),
             // Not a constructor argument: the directory digest is taken by the control
@@ -361,6 +381,8 @@ impl Entry {
             last_ack_seq: None,
             terminal_drain_validation_failed: false,
             sealed_at: None,
+            events_uploaded: 0,
+            expected_config: BTreeMap::new(),
             expected_process_handoff,
             process_handoff_generation: 0,
             process_handoff_phase: ProcessHandoffPhase::InitialClosed,

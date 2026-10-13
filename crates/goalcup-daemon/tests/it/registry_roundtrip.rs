@@ -646,6 +646,24 @@ fn a_row_carrying_keys_this_build_no_longer_reads_still_loads() {
     assert_eq!(registry.all().unwrap(), vec![row]);
 }
 
+/// A v0.5.0 daemon is the documented way to finish a V1 entry on the same artifact root
+/// (`Daemon::start`'s refusal names it), and its `Entry` requires five keys this build no longer
+/// reads. A row this build writes keeps them, so that daemon can still read the registry.
+#[test]
+fn a_new_row_keeps_the_keys_a_v0_5_0_daemon_requires() {
+    let tmp = tempfile::tempdir().unwrap();
+    let row = serde_json::to_value(entry(tmp.path(), "e1")).unwrap();
+    for key in ["events_uploaded", "expected_config", "status_line_path"] {
+        assert!(row.get(key).is_some(), "{key} missing from {row}");
+    }
+    for key in ["buffer_key_hex", "receiver_token"] {
+        assert_eq!(
+            row["keys"][key], "",
+            "{key}: present, and no secret is minted for it"
+        );
+    }
+}
+
 /// The mode the registry sets on its parent is the registry's to set only when the
 /// parent is the registry's. Handed a path inside a directory that holds somebody else's
 /// files — a shared `config_dir`, say, which the CLI reads — the

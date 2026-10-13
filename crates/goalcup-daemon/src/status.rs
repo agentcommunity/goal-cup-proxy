@@ -51,7 +51,7 @@ fn recovery_needed(entry: &Entry) -> bool {
         || entry.terminal_drain_needs_review()
 }
 
-/// The payload, from the entry and the moment. No I/O, no clock.
+/// The payload, from the entry and the capture snapshot. No I/O, no clock.
 ///
 /// A sealed entry reports `sealed`: the seal is the chain's last link, so the entry's own row
 /// is the authority. A local capture has no signed deadline, so `seconds_remaining` is `None`

@@ -443,9 +443,9 @@ T05 without requiring semantic decoding; unknown family/store uses None. Provide
 hints are `openai-responses` and `anthropic-messages`, consumed exactly by T20/T21. Strings
 remain open: an unknown hint is capturable and reported as unsupported semantics.
 
-T15 publishes `apply_capture_snapshot(payload: &mut StatusPayload, capture: Option<M2Status>)`
-as a pure pre-sign projection helper in daemon status.rs. T15 calls it with actual snapshots in
-every live/closed/restart path; never mutate an already signed document.
+T15's daemon `status::build_payload` takes the capture's `M2Status` snapshot as an input and
+projects it before signing, in every live/closed/restart path; never mutate an already signed
+document.
 
 ## C6. Explicit local lifecycle and verified report facts
 
