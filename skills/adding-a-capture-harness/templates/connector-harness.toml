@@ -29,7 +29,8 @@ version = "<VERSION>"                   # the number only ("1.2.3", not "toy 1.2
 sha256 = "<SHA256_OF_CANONICAL_FILE>"   # 64 lowercase hex of the symlink-resolved regular file
 
 # Child-only extra variables. Delete the table if none. No endpoint, proxy, credential,
-# provider, XDG_*, GIT_*, CA or *_COMMAND/*PAGER names; no value with "/" "~" "$" or "://".
+# provider, XDG_*, GIT_*, OPENSSL_*, CA, *KEYLOG*, *_COMMAND/*PAGER or server names (*_URL,
+# *_BASE, *_HOST, *_ADDR, *_SERVER, ...); no value with "/" "~" "$" or "://".
 # SHELL is the one path value allowed: "/bin/zsh", "/bin/bash" or "/bin/sh".
 [capture.env]
 # <HARNESS>_DISABLE_UPDATES = "1"

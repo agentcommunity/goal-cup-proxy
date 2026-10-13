@@ -37,7 +37,8 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
 0. **Can it be captured at all?** Read row 0, the
    [check-first list](../../docs/HARNESS-ONBOARDING.md#row-0): no local session file, a database
    store, HTTP/2-only or gRPC traffic, a local model, a desktop app. STOP on any match, before
-   building anything.
+   building anything. Its known gaps (subagent files, self-update, many hosts) do not stop you;
+   record them in the facts sheet.
 1. **Set up.** Fork and branch as in
    [CONTRIBUTING](../../CONTRIBUTING.md#from-fork-to-pull-request) and read the rules in
    [AGENTS.md](../../AGENTS.md) once. Check `which cargo` is `~/.cargo/bin/cargo` (rustup), not
@@ -166,9 +167,11 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
 11. **Review your own diff** against the
     [reviewer checklist](../../docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr): every
     field and seed justified, no base URL or endpoint variable, no secrets, one pin line.
-    Optional, on your own account: `cargo build` (the pins from step 6 are compiled in), then run
-    one short goal with `target/debug/goalcup start --harness <id>` as in the README quickstart.
-    No `--dev` is needed for a pinned id.
+    Optional, on your own account (a trial, not a judged entry): `cargo build` (the pins from
+    step 6 are compiled in), then run one short goal with
+    `target/debug/goalcup start --harness <id>` as in the README quickstart, and check it with
+    `target/debug/goalcup-verify --capture-integrity <trace>`. No `--dev` is needed for a
+    pinned id.
 12. **Open the PR** holding exactly: `connectors/<id>/`, the one new line in
     `connector-dirs.txt`, the golden JSON from step 7, the kit case from step 8, and
     `docs/harnesses/<id>.md`. Check with `git status --short`. In the body, paste the last line

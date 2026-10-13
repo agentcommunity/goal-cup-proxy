@@ -10,7 +10,8 @@ are in [CONNECTOR-SCHEMA](../../docs/CONNECTOR-SCHEMA.md).
 
 **Row 0 comes first**: the [check-first list](../../docs/HARNESS-ONBOARDING.md#row-0) names the
 harnesses no row below can fit (no local session file, a database store, HTTP/2-only or gRPC
-traffic, a local model, a desktop app). Stop there before this table.
+traffic, a local model, a desktop app). Stop there before this table; its known gaps do not
+stop you.
 
 **Core PR** means: STOP. Open an issue that names the row and links your facts sheet
 (`docs/harnesses/<id>.md`, step 2). Write no connector until a maintainer lands the change (with
@@ -31,11 +32,11 @@ facts sheet, with `Status: facts only`, is still a complete PR.
 | 8 | Native form | the own-session file is appended JSONL or rewritten whole | core decision |
 | 9 | One native row | exactly one local own-session store | core decision |
 | 10 | Executable pin | one entry-point file (a binary, or a script with a shebang), not an interpreter | record per-arch |
-| 11 | Endpoint names and hosts | you set no endpoint variable at all; every host is a public DNS name | issue, not blocking |
+| 11 | Endpoint names | you set no endpoint variable at all | issue, not blocking |
 | 12 | Other refusals | no refused env name, argv path or custom regex is needed | core PR |
-| 13 | Argv and env | always, when no generic rule refuses them (D51): no Rust row, a model change included | the reviewer reads every value |
+| 13 | Argv and env | always, when no generic rule refuses them (D51): no Rust row, a model change included; the reviewer reads every value | refused: row 12 |
 
-Rows 1, 7 and 12 (the regex part) are closed on purpose; they are security boundaries, not
+Rows 1, 7 and 12 (the redaction regex) are closed on purpose; they are security boundaries, not
 missing features. A credential name decides which secret the tracer copies from the
 participant's shell into your process. A CA variable is a trust statement about the
 participant's machine. A redaction regex runs inside the signed daemon. Each new one is a core
@@ -74,8 +75,9 @@ PR with a DECISIONS entry.
    `NPM_*` and so on) are refused. A harness with no such variable, or one with another shape,
    leaves `home.env` out: it then keeps its state under the private run `HOME`, its native
    `root` is `{run_home}/...`, `config_home` is `per_run`, and it takes no seeds or `dirs`
-   (nothing would read them). A login then lasts one run, so such a harness signs in with a
-   credential (row 1) or once per run.
+   (nothing would read them). A login kept in that home lasts one run, and the run has no
+   terminal for an interactive sign-in, so such a harness needs a credential (row 1) or keeps
+   its login in the macOS Keychain (`run_home = "keychain_link"`).
 6. Every `XDG_*` name is refused in `capture.env` and as `home.env`. The launch env starts
    empty, so XDG is unset and the harness uses `$HOME`, the private run home. Seeds land only in
    the config home that `home.env` names.
@@ -92,16 +94,19 @@ PR with a DECISIONS entry.
     script with a shebang is fine: you hash the script, and its interpreter is not pinned. Per-arch
     binaries hash differently: pin the platform you measured and list the others in the facts
     sheet.
-11. Names ending `_URL` (including `_BASE_URL` and `_API_URL`), `_BASE`, `_HOST`, `_ADDR`,
-    `_SERVER`, `_ORIGIN` or `_REGISTRY`, or containing `ENDPOINT`, are refused, and so is any
-    value with `://`. A harness endpoint variable with another name is not refused by name:
-    never set it, record it in the facts sheet and open an issue to refuse it. A pinned
-    connector's `hosts` and `auth_hosts` may not be `localhost`, `*.localhost` or a single-label
-    name (row 0: a local model).
-12. For example `NO_PAGER` (the `PAGER` suffix rule), a language runtime's variable (`NODE_*`,
-    `PYTHON*`), an absolute path in `args`, an argument that turns verification, the sandbox or
-    permission checks off, a `goal_flag` such as `--exec` or `--file`, or a redaction regex
-    that is not one of the four core recognizers.
+11. Names ending `_URL` (including `_BASE_URL` and `_API_URL`), `_BASE`, `_HOST`,
+    `_HOSTNAME`, `_ADDR`, `_ADDRESS`, `_SERVER`, `_ORIGIN` or `_REGISTRY`, or containing
+    `ENDPOINT`, are refused, and so is any value with `://`. A harness endpoint variable with
+    another name is not refused by name: never set it, record it in the facts sheet and open an
+    issue to refuse it.
+12. For example `NO_PAGER` (the `PAGER` suffix rule), a runtime variable that loads code
+    (`PYTHONBREAKPOINT`, `NODE_REPL_EXTERNAL_MODULE`), an absolute path in `args`, an argument
+    that turns certificate verification off or names a command, hook or server, a `goal_flag`
+    with the word `exec`, `file`, `run` or `config` (`--execute` is fine), a host that is
+    `localhost`, `*.localhost`, single-label or numeric (row 0: a local model), or a redaction
+    regex that is not one of the four core recognizers. How much the harness may do (model,
+    sandbox, permissions) is never refused: that is the participant's, and a connector does not
+    limit it.
 13. There is no list of reviewed arguments or variables. A refused value is refused with the
     rule's reason at step 9. What no rule can see (a dropped safety flag, a value that turns
     self-update back on) is the reviewer's job, so write in the facts sheet why each flag and
@@ -112,7 +117,7 @@ PR with a DECISIONS entry.
 Amp is a coding agent CLI, installed from npm, that talks to Amp's own server. The rows below
 come from Goal Cup's own key-free, network-less probe of Amp `0.0.1791676897-g77c125` on Linux
 in October 2026, not from the Amp team; anything here that Amp's facts sheet
-([amp.md](../../docs/harnesses/amp.md), a draft for the Amp team to confirm) corrects wins. It stops at step 3. The rows it hits, and why:
+([amp.md](../../docs/harnesses/amp.md), a draft for the Amp team to confirm) corrects wins. The rows it hits, and why:
 
 - **1, credential name**: Amp reads `AMP_API_KEY`. Admitted by D49. Fits.
 - **2, credential with identity**: the likely carrier is a stdout JSON init event. Admitted by
@@ -131,7 +136,8 @@ in October 2026, not from the Amp team; anything here that Amp's facts sheet
 - **10, executable pin**: npm symlinks lead to one native binary, so `program = "amp"` pins the
   regular file. Darwin hashes differ per architecture and need a Mac.
 
-One core row is enough to stop. Amp stops at step 3 until row 9 is settled: either a local
-own-session file Goal Cup did not find, or a core decision for server-side sessions. Until then
-its facts sheet, with `Status: facts only`, is the whole contribution, and it is exactly what
-that decision needs.
+Amp most likely stops at row 0, before this table: no local own-session file was found, and
+row 9 is the same fact seen from the schema. The rows above assume a facts sheet that finds one.
+Until a local own-session file turns up, or a core decision admits server-side sessions, Amp's
+facts sheet, with `Status: facts only`, is the whole contribution, and it is exactly what that
+decision needs. Its goal flag, `--execute`, passes the D51 goal-flag rule (whole words only).
