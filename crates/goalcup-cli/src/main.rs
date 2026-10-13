@@ -238,8 +238,8 @@ fn login(server: &str) -> Result<(), CliError> {
     commands::login::login_with(&cfg, server, &mut line.as_bytes(), &mut std::io::stdout())
 }
 
-/// Terminal echo turned off on stdin until this is dropped, or until SIGINT, SIGTERM or SIGHUP
-/// arrives: those restore it before the process ends on the signal's default action, so a
+/// Terminal echo turned off on stdin until this is dropped, or until SIGINT (Ctrl-C) or SIGHUP
+/// arrives: both restore it before the process ends on the signal's default action, so a
 /// Ctrl-C at the prompt never leaves the participant's terminal silent. `None` when stdin is
 /// not a terminal (piped input), or on a platform without termios.
 struct EchoOff;
@@ -250,7 +250,7 @@ struct EchoOff;
 static SAVED_TERMIOS: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
 
 #[cfg(unix)]
-const ECHO_SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+const ECHO_SIGNALS: [libc::c_int; 2] = [libc::SIGINT, libc::SIGHUP];
 
 /// Restore the saved settings, then end the process the way the signal would have.
 /// `tcsetattr`, `signal` and `raise` are async-signal-safe.
