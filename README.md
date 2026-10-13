@@ -126,6 +126,11 @@ prints `Not logged in`, and both exit 1); the run seals; and
 exited on this path. The smoke needed network access: before it creates anything, `goalcup start`
 checks that the provider host answers, and with no network it refuses the run.
 
+The same no-login path was measured with the x86_64 builds on a GitHub-hosted ubuntu-24.04 runner
+(the `harness-smoke` job of the manual `linux-x86_64` workflow, `scripts/linux-harness-smoke.sh`,
+2026-10-13): both binaries run, stop at auth and exit 1, both runs seal, verify exits 0, and no
+harness process is left ([facts sheets](docs/harnesses/README.md)).
+
 **Not proven:**
 
 - Termination of an orphan the process walk cannot see, such as a wrapper that forks a child and
@@ -136,10 +141,13 @@ checks that the provider host answers, and with no network it refuses the run.
   after the seal. It sweeps nothing if `goalcup start` itself dies, and a `goalcup seal` from
   another terminal can report `all_gone` while the sweep is still running
   ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
-- A successful, logged-in harness run on Linux, and the Linux x86_64 harness builds, which were
-  not run.
-- The end-to-end suites on x86_64, and any real Linux host or distribution kernel (only Docker
-  Desktop's was run).
+- A successful, logged-in harness run on Linux, on either architecture.
+- The end-to-end suites on x86_64. On the 4-vCPU runner `linux-check.sh` stops in its fast-gate
+  step before them: the daemon's `capture_redaction::seeded_long_inputs_*` tests hit the 180 s
+  timeout, and the CLI's `subreaper::linux::tests::the_bound_reports_what_keeps_arriving` stops
+  before its bound (workflow runs 38448817041 and 38450660369, 2026-10-13).
+- Any real Linux host or distribution kernel: only Docker Desktop's and the hosted runner's were
+  run.
 - Long runs, and termination against a real harness's process tree on Linux.
 
 ## Windows: use WSL2
