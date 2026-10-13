@@ -142,9 +142,12 @@ harness process is left ([facts sheets](docs/harnesses/README.md)).
   another terminal can report `all_gone` while the sweep is still running
   ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
 - A successful, logged-in harness run on Linux, on either architecture.
-- The end-to-end suites on x86_64: on the 4-vCPU runner `linux-check.sh` stops in its fast-gate
-  step on two timing-sensitive tests. Any real Linux host or distribution kernel (only Docker
-  Desktop's and the hosted runner's were run).
+- The end-to-end suites on x86_64. On the 4-vCPU runner `linux-check.sh` stops in its fast-gate
+  step before them: the daemon's `capture_redaction::seeded_long_inputs_*` tests hit the 180 s
+  timeout, and the CLI's `subreaper::linux::tests::the_bound_reports_what_keeps_arriving` stops
+  before its bound (workflow runs 38448817041 and 38450660369, 2026-10-13).
+- Any real Linux host or distribution kernel: only Docker Desktop's and the hosted runner's were
+  run.
 - Long runs, and termination against a real harness's process tree on Linux.
 
 ## Windows: use WSL2
