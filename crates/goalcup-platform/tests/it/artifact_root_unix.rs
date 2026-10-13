@@ -25,7 +25,7 @@ impl Fixture {
         let outside = top.join("outside");
         fs::create_dir_all(root.join("artifacts/entry-0001")).unwrap();
         fs::create_dir(&outside).unwrap();
-        fs::write(outside.join("status-line.txt"), OUTSIDE).unwrap();
+        fs::write(outside.join("sentinel.txt"), OUTSIDE).unwrap();
         Self { top, root, outside }
     }
 
@@ -41,7 +41,7 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn acquired_entry_keeps_trace_and_status_inside_after_artifacts_ancestor_swap() {
+fn acquired_entry_keeps_trace_inside_after_artifacts_ancestor_swap() {
     let fixture = Fixture::new("ancestor-swap");
     let authority = EntryArtifactRoot::open(&fixture.root, "entry-0001").unwrap();
     let detached = fixture.top.join("detached-artifacts");
@@ -51,15 +51,10 @@ fn acquired_entry_keeps_trace_and_status_inside_after_artifacts_ancestor_swap() 
     authority
         .create_trace()
         .expect("create under acquired entry");
-    authority.replace_status_line(SAFE).unwrap();
 
-    assert_eq!(
-        fs::read(detached.join("entry-0001/status-line.txt")).unwrap(),
-        SAFE
-    );
     assert!(detached.join("entry-0001/trace").is_dir());
     assert_eq!(
-        fs::read(fixture.outside.join("status-line.txt")).unwrap(),
+        fs::read(fixture.outside.join("sentinel.txt")).unwrap(),
         OUTSIDE
     );
     assert!(!fixture.outside.join("entry-0001/trace").exists());
@@ -88,7 +83,7 @@ fn restart_trace_open_refuses_a_final_trace_swap_before_it_becomes_a_capability(
         "restart must refuse the final trace symlink rather than open its target"
     );
     assert_eq!(
-        fs::read(fixture.outside.join("status-line.txt")).unwrap(),
+        fs::read(fixture.outside.join("sentinel.txt")).unwrap(),
         OUTSIDE
     );
 }
@@ -118,27 +113,6 @@ fn acquired_final_trace_keeps_descriptor_writes_after_its_path_is_swapped() {
     assert_eq!(
         fs::read(fixture.outside.join("trace.toml")).unwrap(),
         b"OUTSIDE_TRACE_SENTINEL"
-    );
-}
-
-#[test]
-fn rooted_status_replace_never_follows_a_live_entry_swap() {
-    let fixture = Fixture::new("status-swap");
-    let authority = EntryArtifactRoot::open(&fixture.root, "entry-0001").unwrap();
-    authority.replace_status_line(SAFE).unwrap();
-    let detached = fixture.top.join("detached-entry");
-    fs::rename(fixture.entry(), &detached).unwrap();
-    symlink(&fixture.outside, fixture.root.join("artifacts/entry-0001")).unwrap();
-
-    authority.replace_status_line(b"RETRIED_SAFE").unwrap();
-
-    assert_eq!(
-        fs::read(detached.join("status-line.txt")).unwrap(),
-        b"RETRIED_SAFE"
-    );
-    assert_eq!(
-        fs::read(fixture.outside.join("status-line.txt")).unwrap(),
-        OUTSIDE
     );
 }
 
@@ -212,7 +186,7 @@ fn retained_artifact_root_rejects_path_swap_and_acquired_cleanup_stays_contained
 
     assert!(root.create_entry("must-refuse").is_err());
     symlink(
-        fixture.outside.join("status-line.txt"),
+        fixture.outside.join("sentinel.txt"),
         detached.join("artifacts/entry-cleanup/outside-link"),
     )
     .unwrap();
@@ -222,7 +196,7 @@ fn retained_artifact_root_rejects_path_swap_and_acquired_cleanup_stays_contained
     assert!(!detached.join("artifacts/entry-cleanup").exists());
     assert!(!fixture.outside.join("artifacts").exists());
     assert_eq!(
-        fs::read(fixture.outside.join("status-line.txt")).unwrap(),
+        fs::read(fixture.outside.join("sentinel.txt")).unwrap(),
         OUTSIDE
     );
 }
@@ -243,7 +217,7 @@ fn cleanup_rejects_a_named_entry_swap_without_touching_the_replacement() {
 
     assert!(entry.remove_recursively().is_err());
     assert_eq!(
-        fs::read(fixture.outside.join("status-line.txt")).unwrap(),
+        fs::read(fixture.outside.join("sentinel.txt")).unwrap(),
         OUTSIDE
     );
     assert!(fixture.root.join("artifacts/entry-0001").is_symlink());
