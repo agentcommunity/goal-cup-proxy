@@ -177,14 +177,16 @@ pub struct ObservationCounts {
     pub over_budget: u64,
     /// Kept `model_request` observations of wire streams: model calls the proxy recorded.
     pub wire_model_requests: u64,
-    /// Kept `model` observations of native streams: model turns the harness's own session file
-    /// names. A harness may write several per call (one per content block), so this is compared
-    /// with `wire_model_requests` only for zero against non-zero.
-    pub native_model_turns: u64,
+    /// Kept native-stream observations of model activity: a `model` that is not a switch, a
+    /// `tool_call` or a `usage`. A session file that names model work has some; a harness may
+    /// write several per call, so this is compared with the wire leg only for zero against
+    /// non-zero.
+    pub native_model_activity: u64,
     /// The model identities kept `model` observations supply (`fields.model`), with how many
     /// observations name each: at most [`MAX_MODEL_NAMES`] names of at most
     /// [`MAX_MODEL_NAME_BYTES`] bytes; the rest are counted in `models_omitted`.
     pub models: BTreeMap<String, u64>,
+    /// `model` observations whose name was not kept: past the bound, too long or empty.
     pub models_omitted: u64,
 }
 
@@ -196,10 +198,11 @@ pub const MAX_MODEL_NAME_BYTES: usize = 128;
 impl ObservationCounts {
     /// Counts one kept observation of a stream that is a wire stream (`Some(true)`), a native
     /// one (`Some(false)`), or no longer routed (`None`, counted in neither leg).
-    fn tally(&mut self, kind: &str, model: Option<&str>, wire: Option<bool>) {
+    fn tally(&mut self, kind: &str, model: Option<&str>, switch: bool, wire: Option<bool>) {
         match (kind, wire) {
             (kinds::MODEL_REQUEST, Some(true)) => self.wire_model_requests += 1,
-            (kinds::MODEL, Some(false)) => self.native_model_turns += 1,
+            (kinds::MODEL, Some(false)) if !switch => self.native_model_activity += 1,
+            (kinds::TOOL_CALL | kinds::USAGE, Some(false)) => self.native_model_activity += 1,
             _ => {}
         }
         if kind != kinds::MODEL {
@@ -542,18 +545,25 @@ impl<'a, S: ObservationSink> Delivery<'a, S> {
         // The sink takes the observation, so the leg tally keeps the two small facts it needs.
         let wire = self.routed.get(&observation.source.stream).copied();
         let kind = observation.kind.clone();
-        let model = observation
-            .fields
-            .get("model")
-            .and_then(|m| m.as_str())
-            .map(str::to_owned);
+        let (model, switch) = if kind == kinds::MODEL {
+            let fields = &observation.fields;
+            (
+                fields
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_owned),
+                fields.get("via").and_then(|v| v.as_str()) == Some("switch"),
+            )
+        } else {
+            (None, false)
+        };
         match quiet(|| sink.observe(decoder, observation)) {
             Err(Panicked) => self.error = Some(io::Error::other("the observation sink panicked")),
             Ok(Err(error)) => self.error = Some(error),
             Ok(Ok(Disposition::OverBudget)) => self.counts.over_budget += 1,
             Ok(Ok(_)) => {
                 self.counts.kept += 1;
-                self.counts.tally(&kind, model.as_deref(), wire);
+                self.counts.tally(&kind, model.as_deref(), switch, wire);
             }
         }
     }
@@ -837,35 +847,40 @@ mod tally_tests {
     #[test]
     fn model_counts_are_per_leg_and_bounded() {
         let mut counts = ObservationCounts::default();
-        counts.tally(kinds::MODEL_REQUEST, None, Some(true));
-        counts.tally(kinds::MODEL_REQUEST, None, Some(false));
-        counts.tally(kinds::MODEL, Some("m-0"), Some(false));
-        counts.tally(kinds::MODEL, Some("m-0"), Some(true));
-        counts.tally(kinds::MODEL, Some("m-x"), None);
+        counts.tally(kinds::MODEL_REQUEST, None, false, Some(true));
+        counts.tally(kinds::MODEL_REQUEST, None, false, Some(false));
+        counts.tally(kinds::MODEL, Some("m-0"), false, Some(false));
+        counts.tally(kinds::MODEL, Some("m-0"), true, Some(false));
+        counts.tally(kinds::TOOL_CALL, None, false, Some(false));
+        counts.tally(kinds::USAGE, None, false, Some(true));
+        counts.tally(kinds::MODEL, Some("m-x"), false, None);
         assert_eq!(
             counts.wire_model_requests, 1,
             "a request counts on the wire leg only"
         );
+        // A native model (not the switch), a native tool call; not the wire usage.
+        assert_eq!(counts.native_model_activity, 2);
         assert_eq!(
-            counts.native_model_turns, 1,
-            "a model turn counts on the native leg only"
+            counts.models.get("m-0"),
+            Some(&2),
+            "a switch still names a model"
         );
-        assert_eq!(counts.models.get("m-0"), Some(&2));
         assert_eq!(
             counts.models.get("m-x"),
             Some(&1),
             "names are kept whatever the leg"
         );
         for i in 1..=MAX_MODEL_NAMES {
-            counts.tally(kinds::MODEL, Some(&format!("m-{i}")), Some(true));
+            counts.tally(kinds::MODEL, Some(&format!("m-{i}")), false, Some(true));
         }
         assert_eq!(counts.models.len(), MAX_MODEL_NAMES);
         counts.tally(
             kinds::MODEL,
             Some(&"x".repeat(MAX_MODEL_NAME_BYTES + 1)),
+            false,
             Some(true),
         );
-        counts.tally(kinds::MODEL, Some(""), Some(true));
+        counts.tally(kinds::MODEL, Some(""), false, Some(true));
         // Two names past the bound (m-15, m-16), one too long, one empty.
         assert_eq!(counts.models_omitted, 4);
     }

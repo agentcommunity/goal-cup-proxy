@@ -272,7 +272,7 @@ pub fn research_summary(
             "state": analysis,
             "decoders": decoders.iter().map(entry).collect::<Vec<_>>(),
             "models": models(decoders),
-            "models_omitted": decoders.iter().map(|d| d.observations.models_omitted).sum::<u64>(),
+            "models_omitted": models_omitted(decoders),
             "cross_leg": cross_leg(outcome),
         },
         "references": operations.references(),
@@ -296,41 +296,52 @@ fn models(decoders: &[DecoderOutcome]) -> Vec<Value> {
         .collect()
 }
 
-/// Whether the harness's own session file and the recorded traffic agree that model calls
-/// happened. Only zero against non-zero is judged: a harness may write several native model
-/// entries per call. `native_turns_without_wire_calls` is a note for judges (a session that
-/// names model turns while the proxy recorded no model call: a harness that bypassed the
-/// proxy, or a fake), never a change to the exit code. `unchecked` when there is no native
-/// model turn to compare, or a wire stream no decoder read could hold the calls.
+/// The names each decoder could not keep, for the decoders that dropped any.
+fn models_omitted(decoders: &[DecoderOutcome]) -> Value {
+    Value::Object(
+        decoders
+            .iter()
+            .filter(|d| d.observations.models_omitted > 0)
+            .map(|d| (d.id.to_string(), json!(d.observations.models_omitted)))
+            .collect(),
+    )
+}
+
+/// Whether the harness's own session file and the recorded traffic agree that model work
+/// happened. Only zero against non-zero is judged: a harness may write several native entries
+/// per call. `native_activity_without_wire_streams` is a note for judges: the session file names
+/// model work while the proxy recorded no wire stream at all (a harness that bypassed the
+/// proxy, or a fake). It never changes the exit code. `unchecked` when there is no native model
+/// activity to compare, or wire streams were recorded but no model request was decoded from
+/// them (a compressed or oversized body, a degraded decoder): the calls may be there unread.
 fn cross_leg(outcome: &DecodeOutcome) -> Value {
     let native: u64 = outcome
         .decoders
         .iter()
-        .map(|d| d.observations.native_model_turns)
+        .map(|d| d.observations.native_model_activity)
         .sum();
-    let wire: u64 = outcome
+    let wire_requests: u64 = outcome
         .decoders
         .iter()
         .map(|d| d.observations.wire_model_requests)
         .sum();
-    let unread_wire = outcome.undecoded_omitted > 0
-        || outcome
-            .undecoded
-            .iter()
-            .any(|u| super::session::is_wire(u.source));
+    let wire_streams = outcome.operations.wire_opens();
     json!({
-        "native_model_turns": native,
-        "wire_model_requests": wire,
-        "state": cross_leg_state(native, wire, unread_wire),
+        "native_model_activity": native,
+        "wire_streams": wire_streams,
+        "wire_model_requests": wire_requests,
+        "state": cross_leg_state(native, wire_streams, wire_requests),
     })
 }
 
 /// The one rule behind `analysis.cross_leg.state`.
-fn cross_leg_state(native: u64, wire: u64, unread_wire: bool) -> &'static str {
-    if native == 0 || unread_wire {
+fn cross_leg_state(native: u64, wire_streams: u64, wire_requests: u64) -> &'static str {
+    if native == 0 {
         "unchecked"
-    } else if wire == 0 {
-        "native_turns_without_wire_calls"
+    } else if wire_streams == 0 {
+        "native_activity_without_wire_streams"
+    } else if wire_requests == 0 {
+        "unchecked"
     } else {
         "consistent"
     }
@@ -380,16 +391,17 @@ mod tests {
 
     #[test]
     fn the_cross_leg_note_judges_zero_against_non_zero_only() {
-        assert_eq!(cross_leg_state(3, 1, false), "consistent");
-        assert_eq!(cross_leg_state(1, 9, false), "consistent");
+        assert_eq!(cross_leg_state(3, 2, 1), "consistent");
+        assert_eq!(cross_leg_state(1, 9, 9), "consistent");
+        // The session names model work and the proxy recorded nothing at all.
         assert_eq!(
-            cross_leg_state(5, 0, false),
-            "native_turns_without_wire_calls"
+            cross_leg_state(5, 0, 0),
+            "native_activity_without_wire_streams"
         );
-        assert_eq!(cross_leg_state(0, 4, false), "unchecked");
-        assert_eq!(cross_leg_state(0, 0, false), "unchecked");
-        // A wire stream no decoder read could hold the calls.
-        assert_eq!(cross_leg_state(5, 0, true), "unchecked");
+        // Wire streams with no decoded request may hold calls unread: not an accusation.
+        assert_eq!(cross_leg_state(5, 3, 0), "unchecked");
+        assert_eq!(cross_leg_state(0, 4, 4), "unchecked");
+        assert_eq!(cross_leg_state(0, 0, 0), "unchecked");
     }
     use crate::capture_analysis::api::{
         DecoderFailure, DecoderSummary, DecoderV1, ObservationTimeRange, SourceRef, StreamOpen,

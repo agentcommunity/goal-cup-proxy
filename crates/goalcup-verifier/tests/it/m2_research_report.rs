@@ -924,7 +924,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(&bytes)),
-        "791f8812bcee99eb897497cdc94142346e1f5c684def4725930e7ea27f170ad6"
+        "79ba47046eda71666ff5d90c45cc841850b4d8a75196cc03c2b6c576bdda8a92"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];
@@ -1551,6 +1551,28 @@ fn unknown_protocol_is_integrity_valid_analysis_unavailable() {
     }
 }
 
+/// D53: builds are recorded, not pinned, so a session file that names model work while the proxy
+/// recorded no wire stream at all is noted for judges: a harness that bypassed the proxy, or a
+/// fake. The note never changes the exit code.
+#[test]
+fn a_session_with_model_work_and_no_wire_stream_is_noted_not_failed() {
+    let trace = make_report_trace(GOAL_TEXT, &codex_records(), Some(confirmed()));
+    let (result, _, lines) = report_bytes(trace.path());
+    let summary = summary_of(&lines);
+    assert_eq!(result.exit_code, 0, "{summary:#}");
+    let cross_leg = &summary["analysis"]["cross_leg"];
+    assert_eq!(
+        cross_leg["state"], "native_activity_without_wire_streams",
+        "{cross_leg:#}"
+    );
+    assert_eq!(cross_leg["wire_streams"], 0);
+    assert!(cross_leg["native_model_activity"].as_u64().unwrap() > 0);
+    assert_eq!(
+        summary["analysis"]["models"],
+        json!([{"decoder": "codex-native", "model": "gpt-5.6-luna", "count": 1}])
+    );
+}
+
 #[test]
 fn native_and_wire_counts_remain_distinct() {
     // The same model is named by the native transcript twice and by the wire traffic of two
@@ -1601,28 +1623,24 @@ fn native_and_wire_counts_remain_distinct() {
             .count();
         assert_eq!(decoder_entry(summary, decoder)["written"], written);
     }
-    // Schema 2 compares the legs (`analysis.cross_leg`) and lists the models each decoder saw
-    // (`analysis.models`); it still forms no total across decoders or legs.
-    const SCHEMA_2_MODEL_KEYS: &[&str] = &[
-        "models",
-        "models_omitted",
-        "model",
-        "native_model_turns",
-        "wire_model_requests",
-    ];
-    for key in keys(summary) {
-        assert!(!key.contains("total"), "{key}");
-        assert!(
-            !key.contains("model") || SCHEMA_2_MODEL_KEYS.contains(&key.as_str()),
-            "{key}"
-        );
+    // Per decoder, no key names a total or a model, outside the two schema-2 analysis keys
+    // that compare the legs (`analysis.cross_leg`, which sums each leg across its decoders) and
+    // list the models each decoder saw (`analysis.models`, `analysis.models_omitted`).
+    let mut analysis = summary["analysis"].as_object().unwrap().clone();
+    let cross_leg = analysis.remove("cross_leg").unwrap();
+    let models = analysis.remove("models").unwrap();
+    analysis.remove("models_omitted").unwrap();
+    let mut rest = summary.clone();
+    rest["analysis"] = Value::Object(analysis);
+    for key in keys(&rest) {
+        assert!(!key.contains("total") && !key.contains("model"), "{key}");
     }
-    // The native session names model turns and the proxy recorded model calls.
-    let cross_leg = &summary["analysis"]["cross_leg"];
+    // The native session names model work and the proxy recorded model calls.
     assert_eq!(cross_leg["state"], "consistent", "{cross_leg:#}");
     assert_eq!(cross_leg["wire_model_requests"], 2);
-    assert!(cross_leg["native_model_turns"].as_u64().unwrap() > 0);
-    let models = summary["analysis"]["models"].as_array().unwrap();
+    assert!(cross_leg["wire_streams"].as_u64().unwrap() > 0);
+    assert!(cross_leg["native_model_activity"].as_u64().unwrap() > 0);
+    let models = models.as_array().unwrap();
     assert!(
         models.iter().any(|m| m["decoder"] == "codex-native"),
         "{models:#?}"
