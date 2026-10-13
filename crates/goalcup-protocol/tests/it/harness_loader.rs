@@ -486,15 +486,16 @@ fn shipped_dir(id: &str, edit: impl Fn(String) -> String) -> tempfile::TempDir {
     tmp
 }
 
-/// Review R7 I-2: env names the deny lists missed. A pinned connector sets only reviewed rows.
+/// Review R7 I-2: env names the deny lists missed, refused by rule since D51 (there is no
+/// per-connector list of reviewed rows; a value only a reviewer can judge, such as
+/// `DISABLE_AUTOUPDATER = "0"`, is on the reviewer checklist).
 #[test]
-fn a_pinned_connector_sets_only_reviewed_env() {
+fn a_pinned_connector_sets_no_env_the_rules_refuse() {
     for (name, value) in [
         ("OPENSSL_CONF", "{workspace}/o.cnf"),
         ("SSLKEYLOGFILE", "{workspace}/keys"),
         ("DEEPSEEK_API_BASE", "evil.example.com"),
         ("PYTHONBREAKPOINT", "os.system"),
-        ("DISABLE_AUTOUPDATER", "0"),
     ] {
         let tmp = shipped_dir("codex-cli", |toml| {
             toml.replace(
@@ -506,13 +507,14 @@ fn a_pinned_connector_sets_only_reviewed_env() {
         assert!(msg.contains("capture.env"), "{name}: {msg}");
     }
     load_dir(shipped_dir("codex-cli", |toml| toml).path(), Origin::Pinned)
-        .expect("the shipped env is reviewed");
+        .expect("the shipped env passes the rules");
 }
 
-/// Review R7 I-2: arguments the deny lists missed. A pinned connector's argv and `goal_flag` are
-/// exactly its reviewed row: nothing added, nothing dropped.
+/// Review R7 I-2: arguments the deny lists missed, refused by rule since D51. A dropped
+/// argument (Claude Code without `--strict-mcp-config`) is a harness-specific fact no rule can
+/// see: it is on the reviewer checklist, and the reviewed diff is the control.
 #[test]
-fn a_pinned_connector_passes_only_reviewed_args() {
+fn a_pinned_connector_passes_no_args_the_rules_refuse() {
     for extra in [
         "--insecure",
         "--cafile",
@@ -534,16 +536,11 @@ fn a_pinned_connector_passes_only_reviewed_args() {
     });
     let msg = refusal(tmp.path(), Origin::Pinned);
     assert!(msg.contains("goal_flag"), "{msg}");
-    let tmp = shipped_dir("claude-code-cli", |toml| {
-        toml.replace("  \"--strict-mcp-config\",\n", "")
-    });
-    let msg = refusal(tmp.path(), Origin::Pinned);
-    assert!(msg.contains("capture.args"), "dropping an argument: {msg}");
     load_dir(
         shipped_dir("claude-code-cli", |toml| toml).path(),
         Origin::Pinned,
     )
-    .expect("the shipped argv is reviewed");
+    .expect("the shipped argv passes the rules");
 }
 
 /// Review R7 I-1: a seed's bytes are the harness's own configuration, so they are checked: no
@@ -598,4 +595,48 @@ fn a_dev_seed_carrying_an_endpoint_is_refused() {
     std::fs::write(&path, bytes).unwrap();
     let msg = refusal(tmp.path(), Origin::Dev);
     assert!(msg.contains("capture.home.seed"), "{msg}");
+}
+
+/// D51: a connector's argv and env are data. A pinned connector whose model changes and which
+/// sets a variable no Rust file names loads as `Pinned`: the only gates are the generic rules
+/// in `capture_policy.rs`, the directory pin and review. (Until D51 this was refused unless
+/// `capture_policy.rs` carried a matching per-connector row.)
+#[test]
+fn a_pinned_connector_needs_no_rust_row_for_its_argv_or_env() {
+    let (_keep, dir) = shipped_copy("codex-cli");
+    let path = dir.join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\"gpt-5.6-luna\""), "the fixture moved");
+    let text = text
+        .replace("\"gpt-5.6-luna\"", "\"gpt-example-model\"")
+        .replace(
+            "[capture.env]\n",
+            "[capture.env]\nEXAMPLE_NO_RUST_ROW = \"1\"\n",
+        );
+    std::fs::write(&path, text).unwrap();
+
+    let loaded = load_dir(&dir, Origin::Pinned).unwrap_or_else(|e| panic!("{e}"));
+    let c = &loaded.manifest.capture;
+    assert!(c.args.iter().any(|a| a == "gpt-example-model"));
+    assert_eq!(
+        c.env.get("EXAMPLE_NO_RUST_ROW").map(String::as_str),
+        Some("1")
+    );
+    // The bytes moved, so the pin gate (not the loader) is what refuses this copy at `start`
+    // until `sh scripts/pin-manifests.sh` re-pins it in the same, reviewed PR.
+    assert_ne!(
+        Some(loaded.connector_dir_sha256.as_str()),
+        pinned_connector_dir_sha256("codex-cli")
+    );
+
+    // The generic rules still bind a pinned connector.
+    let text = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"workspace-write\"", "\"danger-full-access\"");
+    std::fs::write(&path, text).unwrap();
+    let msg = refusal(&dir, Origin::Pinned);
+    assert!(
+        msg.contains("danger-full-access") && msg.contains("sandbox"),
+        "{msg}"
+    );
 }
