@@ -70,7 +70,7 @@ smoke() {
         env -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
             HOME="$d/home" GOALCUP_CONFIG_DIR="$d/cfg" PATH="$d/bin:$PATH" "$@"
     }
-    echo "harness smoke: $h version: $(run "$prog" --version 2>&1 | head -n 1)"
+    echo "harness smoke: $h version: $(run "$prog" --version 2>/dev/null | head -n 1)"
     echo "Print the word hello." >"$d/goal/goal.txt"
     run goalcup doctor --harness "$h" || fail "$h doctor"
     echo "harness smoke: $h start"
