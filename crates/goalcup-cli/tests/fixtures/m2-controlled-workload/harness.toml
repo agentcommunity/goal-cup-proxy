@@ -1,14 +1,12 @@
 # NON-SHIPPING development connector: the controlled synthetic workload of the M2 local
 # production vertical (tests/m2_synthetic_vertical.rs, spikes/m2-first-release/t23/run.sh).
-# It is never a real Codex or Claude Code harness, and no build pins it, so `goalcup start`
+# It is never a real Codex or Claude Code harness, and no build pins its directory, so `goalcup start`
 # admits it only through `--dev`, which loads it as `Origin::Dev` (an interpreter and absolute
 # paths in `args` are allowed there, and nothing else is relaxed).
 #
 # This file is a template. Its user writes a copy into a private connectors directory, read by
-# both `goalcup` (GOALCUP_CONNECTORS_DIR) and `goalcup-daemon` (connectors_dir), with four
+# both `goalcup` (GOALCUP_CONNECTORS_DIR) and `goalcup-daemon` (connectors_dir), with two
 # placeholders filled from the machine it runs on:
-#   @PYTHON3_SHA256@   sha256 of /usr/bin/python3, the pinned capture executable
-#   @PYTHON3_VERSION@  its dotted version, as `python3 --version` prints it
 #   @WORKLOAD@         absolute path of tests/fixtures/m2-controlled-workload.py
 #   @CONFIG@           absolute path of the workload's JSON configuration
 #
@@ -26,8 +24,6 @@ auth_hosts = ["auth.e00.localhost"]
 
 [capture.executable]
 program = "python3"
-version = "@PYTHON3_VERSION@"
-sha256 = "@PYTHON3_SHA256@"
 
 [capture.home]
 run_home = "empty"

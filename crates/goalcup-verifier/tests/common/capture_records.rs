@@ -167,6 +167,7 @@ pub fn launch(
         process_handoff_digest: None,
         run_public_key: run_public_key.map(str::to_string),
         connector_dir_sha256: connector_dir_sha256.map(str::to_string),
+        harness_build: None,
     }
 }
 

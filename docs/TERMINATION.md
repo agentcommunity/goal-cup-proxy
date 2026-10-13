@@ -19,8 +19,8 @@ set (D30). Code: `terminate_with` in `mod.rs`; guard, ordering and fail-closed r
 | Anchor | When | What a poll does |
 |---|---|---|
 | `Rooted(table)` | The guard says the root is live with its recorded creation identity and argv, and a fresh snapshot lists it. | Adopts newcomers (below) from the root and from every live identity-verified member; authorises a signal against the root's ppid tree **or** a live member's (`Owned`). |
-| `Closed(table)` | The root is not in the table (it exited), or was live at the guard and absent one read later, including an exit between the guard's own two reads (`liveness` live, then no creation identity: the guard asks `liveness` again and reads "no longer live" as an exit). | Adopts from every targeted member alive with its recorded creation identity, never from the root; authorises a signal against a live member's ppid tree alone, so an orphaned member and what it forks are still SIGKILLed; a live pid ours by nothing returns `containment_unverified`. |
-| `Lost` | The guard refused the root (a *different* creation identity, or no readable identity on a root that is still live, or a renamed argv) or `/bin/ps` could not be spawned. | Nothing may be claimed; the call returns `containment_unverified` at once. |
+| `Closed(table)` | The root is not in the table (it exited), or was live at the guard and absent one read later, including an exit between the guard's own reads (`liveness` live, then no creation identity, or an argv that names no registered program, as Linux prints `[comm]` for a process that is exiting but not yet a zombie: the guard asks `liveness` again and reads "no longer live" as an exit). | Adopts from every targeted member alive with its recorded creation identity, never from the root; authorises a signal against a live member's ppid tree alone, so an orphaned member and what it forks are still SIGKILLed; a live pid ours by nothing returns `containment_unverified`. |
+| `Lost` | The guard refused the root (a *different* creation identity, or no readable identity on a root that is still live, or a renamed argv on a root that is still live) or `/bin/ps` could not be spawned. | Nothing may be claimed; the call returns `containment_unverified` at once. |
 
 Under every anchor a targeted pid is asked **by number with its recorded creation identity**, never
 by lineage — the phase gate, the SIGKILL selection, the forkers adoption walks from, `still_alive` —
@@ -92,6 +92,12 @@ parent and no ppid walk can see it; the M0 §2.5 respawn, when the handler forks
 within 50 ms, is this. The property runner allows exactly this set (`same_poll_orphans`).
 Linux's `W` is wider than that name: without a fork witness it covers any orphan the ppid walk
 cannot see, as ruled in "RULED: on Linux, `Confirmed` excludes fork-and-leave wrappers" below.
+`W` is the daemon's and the launcher's sweep described there does not narrow it: the sweep ends
+such orphans in a `goalcup start` run before its seal, outside this contract.
+A root that `liveness` still reads as live while its argv already reads `[comm]` (exiting, not
+yet a zombie) at both of the guard's `liveness` reads is refused as renamed: the anchor is
+`Lost` and the seal `Unresolved`, fail-closed. The second read narrows that window to the
+time one `/bin/ps` takes; it does not close it.
 
 **macOS** (numeric `kill`, kqueue witness per member from the root down, attached before phase
 A; audit token for the singleton). Each witness is read twice a poll — before the snapshot and
@@ -190,12 +196,64 @@ What each run measured:
 to a child and leave" has landed in it in every reproduction so far. This repository already has
 a name and a fixture for that shape, "the ordinary shape — a launcher whose session is a child".
 
-**The fix is due before the 168-hour dry run:** a child subreaper (`PR_SET_CHILD_SUBREAPER`)
-that is an ancestor of the harness, which is the launcher (`goalcup start`), so that orphans
-stay inside a tree the termination walk can reach. The daemon is not that process: it is
-detached into its own session and is not an ancestor of the harness, so it would never see a
-harness orphan. The design and its caveats come in a follow-up PR. When it lands, the Linux
-`ignore` comes off the test and this section is rewritten.
+**The launcher sweeps them on Linux.** The fix the ruling asked for before the 168-hour dry run
+is a child subreaper (`PR_SET_CHILD_SUBREAPER`) that is an ancestor of the harness. The daemon is
+not that process: it is detached into its own session and is not an ancestor of the harness, so
+it would never see a harness orphan. The launcher (`goalcup start`) is, and on Linux it now is a
+child subreaper (`crates/goalcup-cli/src/subreaper.rs`):
+
+- It sets `PR_SET_CHILD_SUBREAPER` before the gated spawn, so a process the harness forks and
+  leaves is reparented to the launcher, not to init. If `prctl` fails it says so once on stderr
+  and sweeps nothing; the residual is then as stated above.
+- After the root's `wait` returns and before the seal, it sweeps its own children: those that
+  started no earlier than the root and are not the daemon it started. It sends SIGTERM, waits the
+  connector's grace, sends SIGKILL, and reaps each one by its pid. It repeats until a pass finds
+  no child, because an orphan may fork again, within the grace plus 5 s. These are the
+  launcher's unreaped children, so their pids cannot be recycled and a signal cannot reach a
+  stranger.
+- It prints `swept N process(es) the harness left behind after it exited.` on stdout when it
+  swept something. Anything still alive at the bound is named by pid on stderr, as is a `/proc`
+  it could not read; and `goalcup start` then exits 1 after the seal when a process may still be
+  running (one alive at the bound, or `/proc` unreadable after the sweep signalled one), so a
+  script that checks only the exit code learns of it. The daemon is unchanged, and the
+  trace and the seal gain no field: the daemon's report still answers `AlreadyStopped` for a
+  reaped root, and in a run whose sweep ended everything that is now true when it is written.
+- It runs only from the `goalcup` binary, never from a `start_with` driven in-process.
+
+Measured in Docker: `the_launcher_sweeps_an_orphan_forked_after_the_root_died_before_the_seal`
+(`crates/goalcup-cli/tests/full/launcher_sweep.rs`) runs the real `goalcup start --dev` on the
+controlled workload's `orphan-after-root` mode. Its member forks a detached `sleep 300` only after
+the root has died. The orphan is gone when `goalcup start` returns, the sweep line comes before the
+seal's report, and the trace verifies. Without the subreaper the same test fails with the orphan
+alive. `a_root_reaped_by_the_scope_wait_still_has_its_orphans_swept` repeats it under a
+`stdout_json` identity (Codex's shape) whose root exits before any scope line, so the launcher's
+scope wait reaps the root before the launch is recorded; the sweep is armed before that wait.
+
+The residuals, stated plainly:
+
+- **The launcher dies.** If `goalcup start` itself dies (a crash, `kill -9`), it sweeps nothing,
+  and what it adopted goes to init as before.
+- **Stragglers.** A process still alive at the grace plus 5 s (one in uninterruptible sleep, or a
+  tree that keeps handing over new orphans) is left running. It is named on stderr and the command
+  exits 1 after the seal, but the trace and the seal do not record it.
+- **Paths that end the harness some other way.** The sweep runs only after the root's own `wait`.
+  The sealed-launch ending ("The launcher's ending of a child it just released" above) and the
+  post-release failures that seal an unlaunched run (a tee that could not be started) never
+  sweep: what the harness left behind stays the launcher's child until it exits, then goes to
+  init.
+- **A seal from another terminal.** A standalone `goalcup seal` while the harness runs has the
+  daemon end the tree, and an orphan forked after that is reparented to the launcher, which
+  sweeps it once the root's `wait` returns. The daemon's report can say `all_gone` while that
+  sweep is still running. For an orphan that dies on SIGTERM the window is tens of milliseconds
+  (the sweep sleeps at least one 20 ms poll); for one that ignores SIGTERM it is up to the grace
+  plus 5 s. This window is not measured. The daemon and the sweep may signal the same members
+  here, and that is safe: both escalate on the handle's grace, the sweep's clock starts no
+  earlier than the daemon's first SIGTERM, the daemon signals through pidfds, and the sweep
+  signals only the launcher's own unreaped children.
+
+The daemon test stays `ignore`d on Linux, with its reason now pointing here: it calls the daemon's
+`terminate()` in-process with no launcher above the tree, so the daemon alone still cannot see the
+orphan. The CLI-level test above is what proves the sweep.
 
 **This is not a V1 blocker.** Linux is not a V1 row; V1 claims one macOS target, where the
 kqueue witness closes this.

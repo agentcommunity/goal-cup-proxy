@@ -260,6 +260,40 @@ async fn accepted_goal_cannot_be_replaced() {
     );
 }
 
+/// D53: the daemon records the build of the registered process that ran. The test child is
+/// `/bin/sleep`, registered as the relative program `sleep`, so only its image is hashed.
+#[tokio::test]
+async fn the_launch_records_the_running_harness_build() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let harness = Child::sleeping();
+    let registration = harness.registration(info.process_generation);
+    assert_eq!(
+        rig.register(&info.entry_id, &registration).await.status(),
+        204
+    );
+    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    let records = rig.records(&info.entry_id);
+    let Some(CaptureRecord::Launch { harness_build, .. }) = records
+        .iter()
+        .find(|record| matches!(record, CaptureRecord::Launch { .. }))
+    else {
+        panic!("the launch is chained");
+    };
+    let build = harness_build.as_ref().expect("the build is recorded");
+    assert_eq!(build.program_sha256, None);
+    assert_eq!(
+        build.image_sha256.as_deref(),
+        Some(hex::encode(Sha256::digest(std::fs::read("/bin/sleep").unwrap())).as_str())
+    );
+    assert_eq!(
+        build.platform,
+        format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+    );
+}
+
 #[tokio::test]
 async fn the_launch_record_names_the_goal_and_the_harness_profile() {
     let rig = Rig::start().await;
@@ -285,6 +319,7 @@ async fn the_launch_record_names_the_goal_and_the_harness_profile() {
         process_handoff_digest,
         run_public_key,
         connector_dir_sha256,
+        harness_build,
         ..
     }) = records
         .iter()
@@ -292,6 +327,8 @@ async fn the_launch_record_names_the_goal_and_the_harness_profile() {
     else {
         panic!("the launch is chained");
     };
+    // D53: no process was registered here, so no build was observed, and none is guessed.
+    assert_eq!(harness_build, &None);
     assert_eq!(goal_stream, &goal);
     assert_eq!(profile_id, "codex-cli");
     let harness =
@@ -314,120 +351,6 @@ async fn the_launch_record_names_the_goal_and_the_harness_profile() {
 
     let after_launch = rig.status(&info.entry_id).await.payload.capture.unwrap();
     assert!(after_launch.storage.used_bytes > goal_frontier.chain_bytes);
-}
-
-#[tokio::test]
-async fn a_claude_launch_records_only_the_verified_registered_allowance() {
-    let rig = Rig::start().await;
-    let info = rig.created("claude-code-cli").await;
-    let goal = rig.goal_accepted(&info.entry_id, b"private goal").await;
-    let harness = Child::sleeping();
-    let mut registration = harness.registration(info.process_generation);
-    // Child::registration is Codex-shaped; Claude's pinned process-group profile has no
-    // native_binary hint.
-    registration.handle.native_binary = None;
-    registration.handle.argv = vec![
-        "--permission-mode".into(),
-        "acceptEdits".into(),
-        "--permission-prompts".into(),
-        "none".into(),
-        "--allowedTools".into(),
-        "Bash(python3 demo.py *)".into(),
-        "--".into(),
-        "<goal>".into(),
-    ];
-    let registered = rig.register(&info.entry_id, &registration).await;
-    assert_eq!(registered.status(), 204, "{}", registered.body());
-    assert_eq!(
-        rig.launch(&info.entry_id, &launch_request(&goal))
-            .await
-            .status(),
-        204
-    );
-    let records = rig.records(&info.entry_id);
-    let launch = records
-        .iter()
-        .find_map(|record| match record {
-            CaptureRecord::Launch {
-                allowed_tool_rule,
-                process_handoff_digest,
-                profile_digest,
-                ..
-            } => Some((allowed_tool_rule, process_handoff_digest, profile_digest)),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(launch.0.as_deref(), Some("Bash(python3 demo.py *)"));
-    assert_eq!(
-        launch.1.as_deref(),
-        Some(
-            registration
-                .canonical_handle_digest(&info.entry_id)
-                .as_str()
-        )
-    );
-    assert!(
-        rig.daemon
-            .registry()
-            .is_exact_accepted_process_replay(&info.entry_id, &registration)
-            .unwrap(),
-        "the persisted handoff still matches the registered process and its digest"
-    );
-    assert_ne!(launch.1.as_deref(), Some(launch.2.as_str()));
-}
-
-#[tokio::test]
-async fn a_misplaced_registered_allowance_refuses_before_launch_append() {
-    let rig = Rig::start().await;
-    let info = rig.created("claude-code-cli").await;
-    let goal = rig.goal_accepted(&info.entry_id, b"private goal").await;
-    let harness = Child::sleeping();
-    let mut registration = harness.registration(info.process_generation);
-    registration.handle.native_binary = None;
-    registration.handle.argv = vec![
-        "--allowedTools".into(),
-        "Bash(python3 demo.py *)".into(),
-        "extra".into(),
-        "--".into(),
-        "<goal>".into(),
-    ];
-    let registered = rig.register(&info.entry_id, &registration).await;
-    assert_eq!(registered.status(), 204, "{}", registered.body());
-    assert_eq!(
-        rig.launch(&info.entry_id, &launch_request(&goal))
-            .await
-            .status(),
-        409
-    );
-    assert!(
-        !rig.records(&info.entry_id)
-            .iter()
-            .any(|record| matches!(record, CaptureRecord::Launch { .. }))
-    );
-}
-
-#[tokio::test]
-async fn a_short_registered_allowance_refuses_without_a_launch_or_panic() {
-    let rig = Rig::start().await;
-    let info = rig.created("claude-code-cli").await;
-    let goal = rig.goal_accepted(&info.entry_id, b"private goal").await;
-    let harness = Child::sleeping();
-    let mut registration = harness.registration(info.process_generation);
-    registration.handle.native_binary = None;
-    registration.handle.argv = vec!["--allowedTools".into()];
-    let registered = rig.register(&info.entry_id, &registration).await;
-    assert_eq!(registered.status(), 204, "{}", registered.body());
-    assert_eq!(
-        rig.launch(&info.entry_id, &launch_request(&goal))
-            .await
-            .status(),
-        409
-    );
-    assert!(
-        !rig.records(&info.entry_id)
-            .iter()
-            .any(|record| matches!(record, CaptureRecord::Launch { .. }))
-    );
 }
 
 #[tokio::test]

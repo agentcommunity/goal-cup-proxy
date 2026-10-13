@@ -764,7 +764,8 @@ pub struct CaptureLaunchRequest {
     pub goal_stream: crate::capture::StreamKey,
     /// When the launcher observed the spawn, on its own capture clock.
     pub spawned_at: crate::capture::CaptureTime,
-    /// The harness version the launcher measured.
+    /// What the harness printed for its own `version_args`, or `unreported` (D53): reported by
+    /// the harness, not proven. The build's digests are what the daemon records.
     pub harness_version: String,
     /// The profile's declarative continuation, as the launch resolved it.
     pub continuation: String,

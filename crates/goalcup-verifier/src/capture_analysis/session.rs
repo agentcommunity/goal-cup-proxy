@@ -175,6 +175,52 @@ pub struct ObservationCounts {
     pub kept: u64,
     /// Observations the sink dropped as over its size bound ([`Disposition::OverBudget`]).
     pub over_budget: u64,
+    /// Kept `model_request` observations of wire streams: model calls the proxy recorded.
+    pub wire_model_requests: u64,
+    /// Kept native-stream observations of model activity: a `model` that is not a switch, a
+    /// `tool_call` or a `usage`. A session file that names model work has some; a harness may
+    /// write several per call, so this is compared with the wire leg only for zero against
+    /// non-zero.
+    pub native_model_activity: u64,
+    /// The model identities kept `model` observations supply (`fields.model`), with how many
+    /// observations name each: at most [`MAX_MODEL_NAMES`] names of at most
+    /// [`MAX_MODEL_NAME_BYTES`] bytes; the rest are counted in `models_omitted`.
+    pub models: BTreeMap<String, u64>,
+    /// `model` observations whose name was not kept: past the bound, too long or empty.
+    pub models_omitted: u64,
+}
+
+/// The most distinct model names one decoder's counts keep.
+pub const MAX_MODEL_NAMES: usize = 16;
+/// The longest model name kept.
+pub const MAX_MODEL_NAME_BYTES: usize = 128;
+
+impl ObservationCounts {
+    /// Counts one kept observation of a stream that is a wire stream (`Some(true)`), a native
+    /// one (`Some(false)`), or no longer routed (`None`, counted in neither leg).
+    fn tally(&mut self, kind: &str, model: Option<&str>, switch: bool, wire: Option<bool>) {
+        match (kind, wire) {
+            (kinds::MODEL_REQUEST, Some(true)) => self.wire_model_requests += 1,
+            (kinds::MODEL, Some(false)) if !switch => self.native_model_activity += 1,
+            (kinds::TOOL_CALL | kinds::USAGE, Some(false)) => self.native_model_activity += 1,
+            _ => {}
+        }
+        if kind != kinds::MODEL {
+            return;
+        }
+        let Some(name) = model else {
+            return;
+        };
+        if name.is_empty() || name.len() > MAX_MODEL_NAME_BYTES {
+            self.models_omitted += 1;
+        } else if let Some(count) = self.models.get_mut(name) {
+            *count += 1;
+        } else if self.models.len() < MAX_MODEL_NAMES {
+            self.models.insert(name.to_string(), 1);
+        } else {
+            self.models_omitted += 1;
+        }
+    }
 }
 
 /// One decoder's result over one trace.
@@ -224,7 +270,7 @@ pub struct DecodeOutcome {
 // The session.
 // ---------------------------------------------------------------------------------------
 
-fn is_wire(source: CaptureSource) -> bool {
+pub(crate) fn is_wire(source: CaptureSource) -> bool {
     matches!(
         source,
         CaptureSource::WireRequest
@@ -350,7 +396,7 @@ impl Slot {
         let Some(decoder) = self.decoder.as_mut() else {
             return Ok(());
         };
-        let mut delivery = Delivery::new(sink, self.id, &mut self.counts);
+        let mut delivery = Delivery::new(sink, self.id, &mut self.counts, &self.routed);
         let pushed = quiet(|| decoder.push(record, &mut |o| delivery.observe(o)));
         if delivery.result()? {
             self.fail(
@@ -380,7 +426,7 @@ impl Slot {
         let Some(decoder) = self.decoder.as_mut() else {
             return Ok(());
         };
-        let mut delivery = Delivery::new(sink, self.id, &mut self.counts);
+        let mut delivery = Delivery::new(sink, self.id, &mut self.counts, &self.routed);
         let pushed =
             quiet(|| decoder.push_recovery(record, lost_streams, &mut |o| delivery.observe(o)));
         if delivery.result()? {
@@ -405,7 +451,7 @@ impl Slot {
         let Some(decoder) = self.decoder.take() else {
             return Ok(());
         };
-        let mut delivery = Delivery::new(sink, self.id, &mut self.counts);
+        let mut delivery = Delivery::new(sink, self.id, &mut self.counts, &self.routed);
         let finished = quiet(|| decoder.finish(&mut |o| delivery.observe(o)));
         if delivery.result()? {
             self.fail(
@@ -464,16 +510,24 @@ struct Delivery<'a, S> {
     sink: &'a mut S,
     decoder: &'static str,
     counts: &'a mut ObservationCounts,
+    /// The decoder's routed streams, so a kept observation is counted for its leg.
+    routed: &'a BTreeMap<StreamKey, bool>,
     error: Option<io::Error>,
     invalid_kind: bool,
 }
 
 impl<'a, S: ObservationSink> Delivery<'a, S> {
-    fn new(sink: &'a mut S, decoder: &'static str, counts: &'a mut ObservationCounts) -> Self {
+    fn new(
+        sink: &'a mut S,
+        decoder: &'static str,
+        counts: &'a mut ObservationCounts,
+        routed: &'a BTreeMap<StreamKey, bool>,
+    ) -> Self {
         Self {
             sink,
             decoder,
             counts,
+            routed,
             error: None,
             invalid_kind: false,
         }
@@ -488,11 +542,29 @@ impl<'a, S: ObservationSink> Delivery<'a, S> {
             return;
         }
         let (sink, decoder) = (&mut *self.sink, self.decoder);
+        // The sink takes the observation, so the leg tally keeps the two small facts it needs.
+        let wire = self.routed.get(&observation.source.stream).copied();
+        let kind = observation.kind.clone();
+        let (model, switch) = if kind == kinds::MODEL {
+            let fields = &observation.fields;
+            (
+                fields
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_owned),
+                fields.get("via").and_then(|v| v.as_str()) == Some("switch"),
+            )
+        } else {
+            (None, false)
+        };
         match quiet(|| sink.observe(decoder, observation)) {
             Err(Panicked) => self.error = Some(io::Error::other("the observation sink panicked")),
             Ok(Err(error)) => self.error = Some(error),
             Ok(Ok(Disposition::OverBudget)) => self.counts.over_budget += 1,
-            Ok(Ok(_)) => self.counts.kept += 1,
+            Ok(Ok(_)) => {
+                self.counts.kept += 1;
+                self.counts.tally(&kind, model.as_deref(), switch, wire);
+            }
         }
     }
 
@@ -766,4 +838,50 @@ where
         session.push(&record?)?;
     }
     session.finish()
+}
+
+#[cfg(test)]
+mod tally_tests {
+    use super::*;
+
+    #[test]
+    fn model_counts_are_per_leg_and_bounded() {
+        let mut counts = ObservationCounts::default();
+        counts.tally(kinds::MODEL_REQUEST, None, false, Some(true));
+        counts.tally(kinds::MODEL_REQUEST, None, false, Some(false));
+        counts.tally(kinds::MODEL, Some("m-0"), false, Some(false));
+        counts.tally(kinds::MODEL, Some("m-0"), true, Some(false));
+        counts.tally(kinds::TOOL_CALL, None, false, Some(false));
+        counts.tally(kinds::USAGE, None, false, Some(true));
+        counts.tally(kinds::MODEL, Some("m-x"), false, None);
+        assert_eq!(
+            counts.wire_model_requests, 1,
+            "a request counts on the wire leg only"
+        );
+        // A native model (not the switch), a native tool call; not the wire usage.
+        assert_eq!(counts.native_model_activity, 2);
+        assert_eq!(
+            counts.models.get("m-0"),
+            Some(&2),
+            "a switch still names a model"
+        );
+        assert_eq!(
+            counts.models.get("m-x"),
+            Some(&1),
+            "names are kept whatever the leg"
+        );
+        for i in 1..=MAX_MODEL_NAMES {
+            counts.tally(kinds::MODEL, Some(&format!("m-{i}")), false, Some(true));
+        }
+        assert_eq!(counts.models.len(), MAX_MODEL_NAMES);
+        counts.tally(
+            kinds::MODEL,
+            Some(&"x".repeat(MAX_MODEL_NAME_BYTES + 1)),
+            false,
+            Some(true),
+        );
+        counts.tally(kinds::MODEL, Some(""), false, Some(true));
+        // Two names past the bound (m-15, m-16), one too long, one empty.
+        assert_eq!(counts.models_omitted, 4);
+    }
 }

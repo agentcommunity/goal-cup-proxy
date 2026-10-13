@@ -28,5 +28,7 @@ pub mod registry;
 pub mod report;
 /// One decode of one trace, with per-decoder isolation.
 pub mod session;
+/// The stream tracker shared by the OpenAI Responses and Chat Completions decoders.
+mod tracker;
 /// Shared plumbing of the wire decoders: segment assembler, SSE framer, field helpers.
 mod wire;

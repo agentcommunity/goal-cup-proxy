@@ -33,7 +33,7 @@ use tokio::io::AsyncWriteExt;
 pub const FAKE_ID: &str = "m2-fake";
 
 /// The Hermes-shaped development connector: the shipped `hermes-cli` manifest and seed files
-/// under this id, with its program and executable pin replaced by `fixtures/m2-fake-hermes.sh`.
+/// under this id, with its program replaced by `fixtures/m2-fake-hermes.sh`.
 pub const HERMES_FAKE_ID: &str = "m2-fake-hermes";
 
 /// The exact path the fake connector records on `localhost`, the host the proxy intercepts.
@@ -448,8 +448,6 @@ args = ["run", "-C", "{{workspace}}", "--"]
 
 [capture.executable]
 program = "m2-fake-harness"
-version = "1.0.0"
-sha256 = "{sha256}"
 
 [capture.home]
 run_home = "empty"
@@ -479,15 +477,14 @@ host = "localhost"
 evidence_paths = ["{EVIDENCE_PATH}"]
 protocol_hint = "openai-responses"
 "#,
-            sha256 = goalcup_daemon::workspace::sha256_hex(&std::fs::read(exe).unwrap()),
             grace = grace.unwrap_or(10),
         );
         std::fs::write(capture_dir.join("harness.toml"), harness).unwrap();
     }
 }
 
-/// The shipped `hermes-cli` connector rendered into the shared schema-1 test root, with its id,
-/// program and executable pin replaced. The fake's report directory is injected into its private
+/// The shipped `hermes-cli` connector rendered into the shared schema-1 test root, with its id
+/// and program replaced. The fake's report directory is injected into its private
 /// script, not the manifest. A new id is unpinned and admitted only through `--dev`.
 fn write_hermes_connector(connectors: &Path, capture_connectors: &Path, exe: &Path, out: &Path) {
     assert_eq!(connectors, capture_connectors, "the schema root is shared");
@@ -516,10 +513,6 @@ fn write_hermes_connector(connectors: &Path, capture_connectors: &Path, exe: &Pa
         (
             "program = \"hermes\"",
             "program = \"m2-fake-harness\"".to_string(),
-        ),
-        (
-            "0444572f0bce8a805473fbcaa431beed399818528758b454fbf24825a51be325",
-            goalcup_daemon::workspace::sha256_hex(&std::fs::read(exe).unwrap()),
         ),
         // `goalcup start` probes every provider host that is not loopback before it creates
         // anything; a test never reaches the network, and the fake never calls its provider.
@@ -565,11 +558,11 @@ pub enum LaunchFault {
 /// A replacement made after durable process registration while the child is still parked.
 #[derive(Clone, Copy)]
 pub enum ExecutableFault {
-    /// Atomically replace the pinned regular file with different regular-file bytes.
+    /// Atomically replace the resolved regular file with different regular-file bytes.
     Atomic,
-    /// Replace the pinned regular file with a symlink to another executable.
+    /// Replace the resolved regular file with a symlink to another executable.
     Symlink,
-    /// Replace the pinned regular file with a FIFO whose delayed writer exposes blocking opens.
+    /// Replace the resolved regular file with a FIFO whose delayed writer exposes blocking opens.
     Fifo,
 }
 

@@ -26,7 +26,7 @@ use std::io;
 /// contract.
 pub const DECODER_API_VERSION: u32 = 1;
 
-/// The closed observation-kind vocabulary of research-report schema 1 and Decoder v1.
+/// The closed observation-kind vocabulary of research-report schemas 1 and 2 and Decoder v1.
 pub mod kinds {
     pub(crate) const MODEL_REQUEST: &str = "model_request";
     pub(crate) const MODEL: &str = "model";

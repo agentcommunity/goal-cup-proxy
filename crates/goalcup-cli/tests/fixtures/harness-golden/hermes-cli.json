@@ -1,81 +1,4 @@
 {
-  "allowance_refusals": [
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    }
-  ],
   "argv_deny": [
     {
       "arg": "--remote",
@@ -552,9 +475,7 @@
       "chat",
       "-Q",
       "--provider",
-      "deepseek",
-      "--model",
-      "deepseek-v4-flash"
+      "deepseek"
     ],
     "auth_hosts": [],
     "automatic_goal": true,
@@ -568,8 +489,7 @@
       "TERMINAL_HOME_MODE": "profile"
     },
     "executable": {
-      "sha256": "0444572f0bce8a805473fbcaa431beed399818528758b454fbf24825a51be325",
-      "version": "0.19.0"
+      "version_args": []
     },
     "goal_flag": "--query",
     "home": "empty",
@@ -599,9 +519,9 @@
         "sha256": "4f91563bdf8e30e3023507aa8d209e32dd052a041374f1fddaf9e820ade5702e"
       },
       {
-        "bytes": 1026,
+        "bytes": 992,
         "name": "config.yaml",
-        "sha256": "7b8f737d6ed2fa838cf259cf47c9b98308dd1f380f8271d84170e553a870579e"
+        "sha256": "bbc59adb9d704c0218caa9fdbd99b111fdc12bac4fe3edcc16b14c97a6d50fec"
       }
     ],
     "id": "hermes-cli",
@@ -687,19 +607,19 @@
       "name": "TERMINAL_HOME_MODE"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "CODEX_HOME"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "codex_home"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "CLAUDE_CONFIG_DIR"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "claude_config_dir"
     },
     {
@@ -711,7 +631,7 @@
       "name": "hermes_home"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "WORKLOAD_HOME"
     },
     {
@@ -943,7 +863,7 @@
       "name": "LD_LIBRARY_PATH"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": null,
       "name": "HERMES_X"
     },
     {
@@ -996,11 +916,11 @@
     }
   ],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 7,
-    "goal_index": 6,
+    "argv_len": 5,
+    "goal_index": 4,
     "goal_prefix": 8,
     "tail": [
-      "deepseek-v4-flash",
+      "deepseek",
       "--query=--profile evil -p x"
     ]
   },
@@ -1029,10 +949,10 @@
         "type": "file"
       },
       {
-        "bytes": 1026,
+        "bytes": 992,
         "mode": "0600",
         "path": "config.yaml",
-        "sha256": "7b8f737d6ed2fa838cf259cf47c9b98308dd1f380f8271d84170e553a870579e",
+        "sha256": "bbc59adb9d704c0218caa9fdbd99b111fdc12bac4fe3edcc16b14c97a6d50fec",
         "type": "file"
       },
       {
@@ -1048,12 +968,10 @@
       "-Q",
       "--provider",
       "deepseek",
-      "--model",
-      "deepseek-v4-flash",
       "--query=write result.txt"
     ],
     "capture": {
-      "goal_index": 6,
+      "goal_index": 4,
       "goal_prefix": 8
     },
     "cwd": "<TMP>/workspace",
@@ -1081,9 +999,6 @@
     "mode": "Server",
     "program": "<TMP>/bin/fake-harness"
   },
-  "plan_with_claude_tool_allowance": {
-    "refused": "exit1"
-  },
   "redaction": {
     "extra_patterns": []
   },
@@ -1106,8 +1021,6 @@
         "-Q",
         "--provider",
         "deepseek",
-        "--model",
-        "deepseek-v4-flash",
         "--query=<goal>"
       ],
       "env_keys": [

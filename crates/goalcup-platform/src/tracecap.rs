@@ -7,7 +7,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -51,7 +51,6 @@ pub enum RefusalKind {
     NotRegularFile,
     NotDiskFile,
     MultipleLinks,
-    NotPrivate,
     IdentityChanged,
     EntryAlreadyExists,
     DirectoryEntryLimit,
@@ -167,20 +166,6 @@ pub struct TraceDir {
     inner: imp::TraceDirHandle,
 }
 
-/// An OS-held exclusive lock on the fixed private capture lock child.
-///
-/// The lock file intentionally remains in place after this guard drops; ownership is the
-/// native advisory lock, and a process crash releases that lock without a stale-name race.
-pub struct TraceLock {
-    _inner: imp::TraceLockHandle,
-}
-
-impl fmt::Debug for TraceLock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("TraceLock").finish_non_exhaustive()
-    }
-}
-
 impl fmt::Debug for TraceDir {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("TraceDir").finish_non_exhaustive()
@@ -241,63 +226,7 @@ impl TraceDir {
         self.inner.open_or_create_regular(name)
     }
 
-    /// Exclusively create one private regular child through this retained directory.
-    /// Snapshot staging uses this rather than the resume-oriented open-or-create surface so a
-    /// recovery attempt cannot silently adopt another attempt's bytes.
-    pub fn create_regular_exclusive(&self, name: &str) -> Result<File, TraceCapError> {
-        validate_component(name)?;
-        self.inner.create_regular_exclusive(name)
-    }
-
-    /// Promote an already-synced private child only when the destination is absent.
-    /// Both names remain direct children of this retained directory capability.
-    pub fn promote_child_exclusive(
-        &self,
-        staged: &str,
-        final_name: &str,
-    ) -> Result<(), TraceCapError> {
-        validate_component(staged)?;
-        validate_component(final_name)?;
-        self.inner.promote_child_exclusive(staged, final_name)
-    }
-
-    /// Promote an already-synced private directory only when the destination is absent.
-    /// A complete workspace snapshot is assembled beneath a private staging directory, then
-    /// made visible in one no-replacement namespace operation.
-    pub fn promote_child_dir_exclusive(
-        &self,
-        staged: &str,
-        final_name: &str,
-    ) -> Result<(), TraceCapError> {
-        validate_component(staged)?;
-        validate_component(final_name)?;
-        self.inner.promote_child_dir_exclusive(staged, final_name)
-    }
-
-    /// Promote a private directory only when the named stage is the same directory as the
-    /// retained stage capability and the destination is absent. The retained capability keeps
-    /// the expected identity bound across the final no-replacement promotion window.
-    pub fn promote_child_dir_matching_exclusive(
-        &self,
-        staged: &str,
-        expected_stage: &TraceDir,
-        final_name: &str,
-    ) -> Result<(), TraceCapError> {
-        validate_component(staged)?;
-        validate_component(final_name)?;
-        self.inner
-            .promote_child_dir_matching_exclusive(staged, &expected_stage.inner, final_name)
-    }
-
-    /// Acquire the fixed private `capture.lock` child with a blocking exclusive advisory lock.
-    /// The child is created on first use and reopened by concurrent or recovery callers.
-    pub fn acquire_capture_lock(&self) -> Result<TraceLock, TraceCapError> {
-        self.inner
-            .acquire_capture_lock()
-            .map(|inner| TraceLock { _inner: inner })
-    }
-
-    /// Flush this retained directory's metadata after a child create or promotion.
+    /// Flush this retained directory's metadata after a child create or replacement.
     pub fn sync(&self) -> Result<(), TraceCapError> {
         self.inner.sync()
     }
@@ -332,44 +261,6 @@ impl TraceDir {
     pub fn read_regular(&self, name: &str) -> Result<Option<File>, TraceCapError> {
         validate_component(name)?;
         self.inner.read_regular(name)
-    }
-
-    /// Atomically replace a regular direct child through this retained directory handle.
-    pub(crate) fn replace_regular(&self, name: &str, bytes: &[u8]) -> Result<(), TraceCapError> {
-        validate_component(name)?;
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let temporary = format!(
-            ".{name}.{}.{}.tmp",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
-        self.inner.replace_regular(&temporary, name, bytes)
-    }
-
-    /// Replace a direct child at an explicit private mode. This remains private to the
-    /// narrow entry-artifact surface below: arbitrary callers must not gain a general
-    /// capability writer merely because Claude has one launch settings file.
-    fn replace_regular_with_mode(
-        &self,
-        name: &str,
-        bytes: &[u8],
-        mode: u32,
-    ) -> Result<(), TraceCapError> {
-        validate_component(name)?;
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let temporary = format!(
-            ".{name}.{}.{}.tmp",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
-        self.inner
-            .replace_regular_with_mode(&temporary, name, bytes, mode)
-    }
-
-    /// Remove a regular direct child only after acquiring and validating that exact leaf.
-    pub fn remove_regular(&self, name: &str) -> Result<(), TraceCapError> {
-        validate_component(name)?;
-        self.inner.remove_regular(name)
     }
 
     /// A stable identity for the acquired directory capability.  It is intentionally
@@ -694,9 +585,8 @@ fn restrict_regular(file: &File, mode: u32) -> Result<(), TraceCapError> {
 
 /// The retained authority for one configured `artifacts/<entry-id>` directory.
 ///
-/// The display paths are diagnostics only. Every returned trace root, buffer/cursor file,
-/// and participant status line is opened relative to the native directory capability held
-/// here, so a later rename or reparse-point swap of an ancestor cannot redirect it.
+/// The display paths are diagnostics only. Every returned trace root is opened relative to
+/// the native directory capability held here, so a later rename or reparse-point swap of an ancestor cannot redirect it.
 pub struct EntryArtifactRoot {
     artifacts: TraceDir,
     entry: TraceDir,
@@ -759,145 +649,6 @@ impl EntryArtifactRoot {
     /// Open the existing final `trace` child for restart/recovery.
     pub fn open_trace(&self) -> Result<TraceDir, TraceCapError> {
         self.entry.open_child_dir("trace")
-    }
-
-    /// Create the immutable source-root journal before cutoff. This deliberately has no
-    /// replacement operation: a later recovery must reconcile the original journal rather than
-    /// manufacture a new source identity.
-    pub fn create_sealing_source(&self) -> Result<File, TraceCapError> {
-        self.entry.create_regular_exclusive("sealing-source.json")
-    }
-
-    /// Atomically install the immutable source-root journal exactly once.
-    /// The caller names only its private temporary; the final name is fixed here.
-    pub fn install_sealing_source_once(&self, bytes: &[u8]) -> Result<(), TraceCapError> {
-        self.install_sealing_source_once_with_hook(bytes, || {})
-    }
-
-    #[cfg(all(test, unix))]
-    fn install_sealing_source_once_with_hook_for_test(
-        &self,
-        bytes: &[u8],
-        after_promotion: impl FnMut(),
-    ) -> Result<(), TraceCapError> {
-        self.install_sealing_source_once_with_hook(bytes, after_promotion)
-    }
-
-    fn install_sealing_source_once_with_hook(
-        &self,
-        bytes: &[u8],
-        mut after_promotion: impl FnMut(),
-    ) -> Result<(), TraceCapError> {
-        static NEXT_SOURCE_TEMP: AtomicU64 = AtomicU64::new(0);
-        let mut created = None;
-        for _ in 0..16 {
-            let temporary = format!(
-                ".sealing-source.{}.{}.tmp",
-                std::process::id(),
-                NEXT_SOURCE_TEMP.fetch_add(1, Ordering::Relaxed)
-            );
-            match self.entry.create_regular_exclusive(&temporary) {
-                Ok(output) => {
-                    created = Some((temporary, output));
-                    break;
-                }
-                Err(TraceCapError::Refused {
-                    reason: RefusalKind::EntryAlreadyExists,
-                    ..
-                }) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        let (temporary, mut output) = created.ok_or_else(|| {
-            TraceCapError::refused(
-                "create sealing-source temporary",
-                RefusalKind::EntryAlreadyExists,
-            )
-        })?;
-        output
-            .write_all(bytes)
-            .map_err(|source| TraceCapError::io("write sealing-source temporary", source))?;
-        output
-            .sync_all()
-            .map_err(|source| TraceCapError::io("sync sealing-source temporary", source))?;
-        drop(output);
-        match self
-            .entry
-            .promote_child_exclusive(&temporary, "sealing-source.json")
-        {
-            Ok(()) => {
-                self.entry.sync()?;
-                after_promotion();
-                self.authenticate_sealing_source(bytes)
-            }
-            Err(
-                error @ TraceCapError::Refused {
-                    reason: RefusalKind::EntryAlreadyExists,
-                    ..
-                },
-            ) => {
-                self.entry.remove_regular(&temporary)?;
-                self.entry.sync()?;
-                Err(error)
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    fn authenticate_sealing_source(&self, expected: &[u8]) -> Result<(), TraceCapError> {
-        let mut retained = self
-            .entry
-            .read_regular("sealing-source.json")?
-            .ok_or_else(|| {
-                TraceCapError::refused(
-                    "authenticate sealing-source bytes",
-                    RefusalKind::NotRegularFile,
-                )
-            })?;
-        let limit = u64::try_from(expected.len())
-            .ok()
-            .and_then(|length| length.checked_add(1))
-            .ok_or_else(|| {
-                TraceCapError::refused(
-                    "authenticate sealing-source bytes",
-                    RefusalKind::NameTooLong,
-                )
-            })?;
-        let mut actual = Vec::with_capacity(expected.len());
-        std::io::Read::by_ref(&mut retained)
-            .take(limit)
-            .read_to_end(&mut actual)
-            .map_err(|source| TraceCapError::io("read sealing-source bytes", source))?;
-        if actual != expected {
-            return Err(TraceCapError::refused(
-                "authenticate sealing-source bytes",
-                RefusalKind::IdentityChanged,
-            ));
-        }
-        Ok(())
-    }
-
-    /// Read the once-created source-root journal through the retained entry capability.
-    pub fn read_sealing_source(&self) -> Result<Option<File>, TraceCapError> {
-        self.entry.read_regular("sealing-source.json")
-    }
-
-    /// Replace Claude's process-scoped launch settings through the held entry directory.
-    /// This name is deliberately fixed: it is the only artifact-root file V1 ships, and
-    /// adding another artifact file needs a separately reviewed capability method rather
-    /// than a pathname fallback. The mode is `0o600` because the file is the participant's
-    /// own.
-    pub fn replace_launch_settings(&self, bytes: &[u8]) -> Result<(), TraceCapError> {
-        self.entry
-            .replace_regular_with_mode("settings-launch.json", bytes, 0o600)
-    }
-
-    pub fn replace_status_line(&self, bytes: &[u8]) -> Result<(), TraceCapError> {
-        self.entry.replace_regular("status-line.txt", bytes)
-    }
-
-    pub fn remove_status_line(&self) -> Result<(), TraceCapError> {
-        self.entry.remove_regular("status-line.txt")
     }
 
     /// Recursively remove this exact acquired entry without following child links or a
@@ -1339,31 +1090,5 @@ mod tests {
             root.reserve_append(&mut chain, 256 * 1024),
             Err(TraceCapError::Poisoned { .. })
         ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn sealing_source_install_refuses_bytes_changed_after_promotion_before_readback() {
-        let tmp = Fixture::new();
-        let configured = tmp.path().join("configured");
-        std::fs::create_dir(&configured).unwrap();
-        let artifact = EntryArtifactRoot::create(&configured, "entry-1").unwrap();
-        let final_path = configured.join("artifacts/entry-1/sealing-source.json");
-
-        let error = artifact
-            .install_sealing_source_once_with_hook_for_test(b"original", || {
-                std::fs::remove_file(&final_path).unwrap();
-                std::fs::write(&final_path, b"tampered").unwrap();
-            })
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            TraceCapError::Refused {
-                reason: RefusalKind::IdentityChanged,
-                ..
-            }
-        ));
-        assert_eq!(std::fs::read(final_path).unwrap(), b"tampered");
     }
 }

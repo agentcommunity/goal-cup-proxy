@@ -1,6 +1,6 @@
 //! The entry registry: every run this daemon knows about, and what it knows about it.
 //!
-//! An entry holds a workspace path, harness, manifest hash, session binding, signed receipt,
+//! An entry holds a workspace path, harness, manifest hash, signed receipt,
 //! per-run keys and health. The receipt is here as an `Option<StartReceipt>` that is written
 //! only after the document verified against the key this build pins, so a stored receipt is
 //! a verified one by construction.
@@ -11,36 +11,22 @@
 //! mid-run must still leave the daemon able to say what it was running, whose keys it
 //! held and which receipt it had.
 //!
-//! **The file is a secret store.** It holds [`RunKeys`] in plaintext — the buffer key, the
-//! per-run bearer and the signing seed that is
-//! the run key itself. On unix the file is created `0o600` and a file found looser than
+//! **The file is a secret store.** It holds [`RunKeys`] in plaintext — the signing seed that
+//! is the run key itself. On unix the file is created `0o600` and a file found looser than
 //! that is tightened on open; the directory [`Registry::default_path`] gives it is
 //! `0o700`, and a directory the registry merely happens to sit in is left alone.
 //! `RunKeys` redacts its own `Debug`, the way `control::WorkspaceInfo` already does, so
-//! the same secrets cannot reach a log through an error message either.
+//! the same secret cannot reach a log through an error message either.
 
 use crate::config::ReceiptBindingPolicy;
-use crate::submission_types::{CaptureResourceLimitsV1, SourceRootJournalV1};
 use crate::{DaemonError, now_rfc3339};
 use goalcup_platform::tracecap::ArtifactRoot;
 use goalcup_protocol::chain::GENESIS;
-use goalcup_protocol::chain::Link;
-use goalcup_protocol::control::{EventStatus, WorkspaceFinalizationStatusV1};
-use goalcup_protocol::cursor::StoreCursor;
-use goalcup_protocol::envelope::{Envelope, EventBody};
+use goalcup_protocol::control::EventStatus;
 use goalcup_protocol::events::HealthState;
-use goalcup_protocol::export::{TraceDescriptorDoc, manifest_sha256};
-use goalcup_protocol::manifest::ForeignScanRoot;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
-use goalcup_protocol::provenance::{
-    PreCutoffDrainOutcomeV1, Rfc3339Utc, Sha256Digest, TerminationOutcomeV1,
-};
+use goalcup_protocol::provenance::Sha256Digest;
 use goalcup_protocol::receipt::StartReceipt;
-use goalcup_protocol::seal::SealManifest;
-use goalcup_protocol::submission::{
-    EffectiveSubmissionLimitsV1, FinishReasonV1, LimitProfileV1, SubmissionFailureV1,
-    SubmissionOutcomeV1, SubmissionProfileV1,
-};
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -50,10 +36,6 @@ use std::path::{Path, PathBuf};
 /// encoding so an added field cannot silently shift the meaning of the bytes already on
 /// disk.
 const ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("entries");
-
-/// Daemon-wide scalars that are not any one entry's. The table is created so a registry
-/// written by an older daemon opens unchanged.
-const META: TableDefinition<&str, u16> = TableDefinition::new("meta");
 
 /// Where an entry is in its life, from created to sealed.
 ///
@@ -71,73 +53,12 @@ pub enum EntryState {
     /// This is capture-closed and restart-recoverable; it is never restored to an ordinary
     /// runtime after any artifact may already have been removed.
     CleanupPending,
-    /// A seal has reserved the durable state transition but has not yet been reconciled
-    /// against the terminal chain link.  Startup either restores `sealing_from_state` when
-    /// no link exists or promotes this to `Sealed` after re-buffering that exact link.
+    /// A V1 seal had reserved the durable state transition but not yet reconciled it against
+    /// the terminal chain link. No current path enters it; `Daemon::start` refuses a registry
+    /// that holds such a V1 row.
     Sealing,
     Sealed,
     Refused,
-}
-
-/// Durable, monotone workspace-finalization checkpoints.
-///
-/// Every phase names the inclusive fact already committed. In particular,
-/// `SubmissionResolved` covers both a captured submission and an explicit incomplete
-/// outcome; calling that checkpoint "artifact verified" would overstate negative evidence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FinalizationPhaseV1 {
-    AdmissionClosed,
-    DrainResolved,
-    CutoffAppendPending,
-    CutoffBound,
-    HandoffReconciled,
-    Terminated,
-    SubmissionResolved,
-    FinalizationAppendPending,
-    FinalizationBound,
-    TerminalStatusPending,
-    Terminal,
-}
-
-/// Exact V1 discriminator for the workspace arm of the untagged registry intent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceIntentVersionV1 {
-    WorkspaceSubmissionV1,
-}
-
-/// Positions that were admitted when the registry transaction closed capture.
-///
-/// `tailers` are the record-count positions for every declared leg-1 store. Receiver
-/// sources are kept separately because their counter spaces are independent. The chain
-/// predecessor binds both legs to the exact durable history they had produced at the
-/// boundary; none of these values contain unredacted record bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdmissionWatermarksV1 {
-    pub tailers: Vec<StoreCursor>,
-    pub receiver_sources: BTreeMap<String, u64>,
-    pub queued_receiver_posts: u64,
-    pub admitted_chain_predecessor: Option<ChainPositionV1>,
-}
-
-/// The identity of a chain head already validated by the retained writer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ChainPositionV1 {
-    pub seq: u64,
-    pub hash: Sha256Digest,
-}
-
-/// A planned append predecessor must distinguish "not prepared yet" from genesis.
-/// The containing `Option` carries the former; this enum carries the latter or the exact
-/// link already read from the validated chain.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChainPredecessorV1 {
-    Genesis,
-    Position(ChainPositionV1),
 }
 
 /// The registered launch authority latched by the same transaction as finalization.
@@ -147,230 +68,6 @@ pub enum ChainPredecessorV1 {
 pub struct AcceptedProcessHandoffV1 {
     pub request_digest: Sha256Digest,
     pub registration: ProcessRegistration,
-}
-
-/// Source authority fixed by the same transaction that closes V4 admission. A daemon
-/// present at cutoff retains the writer's opaque source journal; a restart that first
-/// observes the signed cutoff can only persist that no source capability survived.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "availability", rename_all = "snake_case", deny_unknown_fields)]
-pub enum WorkspaceSourceBindingV1 {
-    Available { journal: SourceRootJournalV1 },
-    UnavailableAtCutoff { reason: SubmissionFailureV1 },
-}
-
-/// Exact V4 workspace finalization authority persisted in the existing sealing slot.
-///
-/// Every optional field is controlled by `phase`; a restart reads the committed phase and
-/// reconciles only the immediately corresponding side effect. No field is inferred from a
-/// live pathname, a missing process, or the current wall clock.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkspaceSealingIntentV1 {
-    pub version: WorkspaceIntentVersionV1,
-    pub entry_id: String,
-    pub generation: u64,
-    pub reason: FinishReasonV1,
-    pub receipt_sha256: Sha256Digest,
-    pub cutoff_at: Rfc3339Utc,
-    /// Opaque identity of the retained trace-root capability that owned admission.
-    pub trace_root_identity: String,
-    /// Exact date tokens used to render the admitted tailer paths. Recovery reuses these
-    /// bytes and never substitutes its current calendar day.
-    #[serde(default)]
-    pub source_date: [String; 3],
-    pub source_root: WorkspaceSourceBindingV1,
-    pub submission_profile: SubmissionProfileV1,
-    pub limits: EffectiveSubmissionLimitsV1,
-    pub limit_profile: LimitProfileV1,
-    pub capture_limits: CaptureResourceLimitsV1,
-    pub excluded: Vec<String>,
-    pub phase: FinalizationPhaseV1,
-    pub admission_watermarks: AdmissionWatermarksV1,
-    pub expected_cutoff_predecessor: Option<ChainPredecessorV1>,
-    pub drain: Option<PreCutoffDrainOutcomeV1>,
-    pub cutoff: Option<Link>,
-    pub accepted_handoff: Option<AcceptedProcessHandoffV1>,
-    pub termination: Option<TerminationOutcomeV1>,
-    /// What the kill actually did, in one line, written in the same transaction as
-    /// `termination`.
-    ///
-    /// The typed outcome is a verdict with three values; this is the measurement it was
-    /// read from — which pids were owned, which were still alive at the end, how long the
-    /// escalation took, and whether containment or the walk budget held. The daemon records
-    /// facts and the verifier judges them, so an `Unresolved` record that named no survivor
-    /// would be a judgement with its evidence thrown away.
-    ///
-    /// `default` because rows written before this field existed are still valid rows: an
-    /// absent measurement is an older daemon, not a damaged authority.
-    #[serde(default)]
-    pub termination_report: Option<String>,
-    pub submission: Option<SubmissionOutcomeV1>,
-    pub finalization_at: Option<Rfc3339Utc>,
-    pub expected_finalization_predecessor: Option<ChainPredecessorV1>,
-    pub finalization: Option<Link>,
-    pub terminal_status_at: Option<Rfc3339Utc>,
-    // TODO(status-cache removal): dead since PR #26 (nothing sets or reads it); kept so stored
-    // rows keep their shape, drop with the next registry row version.
-    pub status_mirror_complete: bool,
-}
-
-impl WorkspaceSealingIntentV1 {
-    fn status_projection(&self) -> WorkspaceFinalizationStatusV1 {
-        if matches!(
-            self.phase,
-            FinalizationPhaseV1::TerminalStatusPending | FinalizationPhaseV1::Terminal
-        ) {
-            return match (&self.drain, &self.termination, &self.submission) {
-                (Some(pre_cutoff_drain), Some(termination), Some(submission)) => {
-                    WorkspaceFinalizationStatusV1::Terminal {
-                        pre_cutoff_drain: pre_cutoff_drain.clone(),
-                        termination: termination.clone(),
-                        submission: submission.clone(),
-                    }
-                }
-                _ => WorkspaceFinalizationStatusV1::Incomplete {
-                    pre_cutoff_drain: self.drain.clone(),
-                    termination: self.termination.clone(),
-                    submission: self.submission.clone(),
-                },
-            };
-        }
-
-        let drain_incomplete = matches!(self.drain, Some(PreCutoffDrainOutcomeV1::Degraded { .. }));
-        let termination_incomplete = self
-            .termination
-            .as_ref()
-            .is_some_and(|outcome| !matches!(outcome, TerminationOutcomeV1::Confirmed { .. }));
-        let submission_incomplete = matches!(
-            self.submission,
-            Some(SubmissionOutcomeV1::Incomplete { .. })
-        );
-        if drain_incomplete || termination_incomplete || submission_incomplete {
-            WorkspaceFinalizationStatusV1::Incomplete {
-                pre_cutoff_drain: self.drain.clone(),
-                termination: self.termination.clone(),
-                submission: self.submission.clone(),
-            }
-        } else {
-            WorkspaceFinalizationStatusV1::Finishing {}
-        }
-    }
-}
-
-/// The immutable terminal payload staged before a seal can append its last chain link.
-///
-/// The registry owns this transient copy because a terminal link can reach `chain.jsonl`
-/// before `seal.json`, `trace.toml`, the encrypted buffer, or the row's terminal state. A
-/// restart repairs those stores only when the validated link matches every staged fact.
-/// The manifest is already terminal evidence once recovery succeeds; retaining it privately
-/// while `Sealing` is the smallest way to rebuild its missing fixed document without
-/// guessing from a digest.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LegacySealingIntent {
-    pub manifest: SealManifest,
-    pub descriptor: TraceDescriptorDoc,
-    /// Opaque identity of the acquired trace-root capability. The display path is not an
-    /// authority: a restart must refuse if that path now resolves to another directory.
-    #[serde(default)]
-    trace_root_identity: String,
-    /// The validated head the live writer held before it was permitted to append the
-    /// terminal link. It binds recovery to this history rather than to a merely
-    /// self-consistent replacement chain at the path.
-    #[serde(default)]
-    pre_seal_seq: Option<u64>,
-    #[serde(default)]
-    pre_seal_head: String,
-    /// The complete link identity the staged manifest may append, computed before the
-    /// registry enters `Sealing`. Body equality alone is insufficient: another chain can
-    /// carry the same body at a different predecessor.
-    #[serde(default)]
-    terminal_seq: u64,
-    #[serde(default)]
-    terminal_prev: String,
-    #[serde(default)]
-    terminal_hash: String,
-}
-
-impl LegacySealingIntent {
-    /// Stage a seal from the live writer's already-validated head. The expected terminal
-    /// link is computed here, before the registry state changes, so recovery never infers
-    /// an authority-bearing predecessor from a path it opens after a crash.
-    pub fn new(
-        manifest: SealManifest,
-        descriptor: TraceDescriptorDoc,
-        pre_seal_head: Option<(u64, String)>,
-        trace_root_identity: String,
-    ) -> Result<Self, DaemonError> {
-        let (pre_seal_seq, pre_seal_head) = match pre_seal_head {
-            Some((seq, head)) => (Some(seq), head),
-            None => (None, GENESIS.to_string()),
-        };
-        let terminal_seq = match pre_seal_seq {
-            Some(seq) => seq.checked_add(1).ok_or_else(|| {
-                DaemonError::Refused(
-                    "a chain at u64::MAX cannot stage another terminal link".to_string(),
-                )
-            })?,
-            None => 0,
-        };
-        let digest = manifest_sha256(&manifest)?;
-        let mut envelope = Envelope {
-            protocol_version: goalcup_protocol::PROTOCOL_VERSION,
-            entry_id: manifest.entry_id.clone(),
-            source: "daemon".to_string(),
-            recorded_at: manifest.sealed_at.clone(),
-            link: goalcup_protocol::chain::Link {
-                seq: terminal_seq,
-                prev: pre_seal_head.clone(),
-                hash: String::new(),
-            },
-            body: EventBody::Seal {
-                manifest_sha256: digest,
-                sealed_at: manifest.sealed_at.clone(),
-                file_count: manifest.files.len() as u64,
-            },
-            redaction: None,
-        };
-        envelope.link.hash = envelope.expected_hash(&pre_seal_head)?;
-        Ok(Self {
-            manifest,
-            descriptor,
-            trace_root_identity,
-            pre_seal_seq,
-            pre_seal_head,
-            terminal_seq,
-            terminal_prev: envelope.link.prev.clone(),
-            terminal_hash: envelope.link.hash,
-        })
-    }
-}
-
-/// The one durable sealing authority stored on an entry.
-///
-/// The workspace arm is deliberately first and closed. The historical arm stays an
-/// unwrapped object with exactly its old fields, so reading and rewriting a V1-V3 row does
-/// not add a tag or otherwise reinterpret its recovery authority.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum SealingIntent {
-    Workspace(Box<WorkspaceSealingIntentV1>),
-    Legacy(Box<LegacySealingIntent>),
-}
-
-impl SealingIntent {
-    /// Preserve the legacy constructor and its serialized bytes for every existing caller.
-    pub fn new(
-        manifest: SealManifest,
-        descriptor: TraceDescriptorDoc,
-        pre_seal_head: Option<(u64, String)>,
-        trace_root_identity: String,
-    ) -> Result<Self, DaemonError> {
-        LegacySealingIntent::new(manifest, descriptor, pre_seal_head, trace_root_identity)
-            .map(Box::new)
-            .map(Self::Legacy)
-    }
 }
 
 /// Whether the daemon must receive the process the CLI launched before it can make this
@@ -425,37 +122,36 @@ pub enum ProcessHandoffPhase {
     ResumeCancelled,
 }
 
-/// The three per-run secrets.
+/// The per-run secret: the signing seed every `SignedStatus` is signed with.
 ///
-/// They are minted once per entry and never leave this machine: the buffer key encrypts
-/// the write-ahead store, the signing seed is the run key every `SignedStatus` is
-/// signed with, and the receiver token is the per-run bearer a rendered tracker
-/// file may carry.
+/// Minted once per entry and never leaves this machine.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunKeys {
-    /// 32 random bytes, hex: the age passphrase recipient.
-    pub buffer_key_hex: String,
     /// 32 random bytes, hex: the Ed25519 seed, not the expanded key.
     pub signing_seed_hex: String,
-    /// 16 random bytes, hex (32 characters). D24's per-run bearer.
-    pub receiver_token: String,
+    /// The V1 buffer key and receiver token. Nothing in this build reads them, and a new
+    /// entry writes them empty: no secret is minted for them. They stay on the row because
+    /// a v0.5.0 daemon, which `Daemon::start` names as the way to finish a V1 entry on the
+    /// same artifact root, requires both keys to read any row.
+    #[serde(default)]
+    buffer_key_hex: String,
+    #[serde(default)]
+    receiver_token: String,
 }
 
-/// Nothing but the shape. All three fields are secrets, and a derived `Debug` would put
-/// them in every log line and every interpolated error that carries an `Entry` — the same
-/// leak `control::WorkspaceInfo` hand-writes its `Debug` to close.
+/// Nothing but the shape. The seed is a secret, and a derived `Debug` would put it in every
+/// log line and every interpolated error that carries an `Entry` — the same leak
+/// `control::WorkspaceInfo` hand-writes its `Debug` to close.
 impl std::fmt::Debug for RunKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunKeys")
-            .field("buffer_key_hex", &"<redacted>")
             .field("signing_seed_hex", &"<redacted>")
-            .field("receiver_token", &"<redacted>")
             .finish()
     }
 }
 
 impl RunKeys {
-    /// Three fresh secrets from the operating system's entropy source.
+    /// A fresh seed from the operating system's entropy source.
     ///
     /// `fill_bytes` rather than `try_fill_bytes` because the signature returns
     /// `RunKeys` and not a `Result`: on every platform this daemon targets, a failing
@@ -463,23 +159,18 @@ impl RunKeys {
     /// predictable run key would be worse than the abort `rand` raises.
     pub fn generate() -> RunKeys {
         use rand::RngCore;
-        let mut buffer = [0u8; 32];
         let mut signing = [0u8; 32];
-        let mut token = [0u8; 16];
-        let mut rng = rand::rngs::OsRng;
-        rng.fill_bytes(&mut buffer);
-        rng.fill_bytes(&mut signing);
-        rng.fill_bytes(&mut token);
-        RunKeys::from_seeds(buffer, signing, token)
+        rand::rngs::OsRng.fill_bytes(&mut signing);
+        RunKeys::from_seed(signing)
     }
 
-    /// The same keys from bytes a caller chose. Tests use it for reproducible runs; no
+    /// The same key from bytes a caller chose. Tests use it for reproducible runs; no
     /// production path does.
-    pub fn from_seeds(buffer: [u8; 32], signing: [u8; 32], token: [u8; 16]) -> RunKeys {
+    pub fn from_seed(signing: [u8; 32]) -> RunKeys {
         RunKeys {
-            buffer_key_hex: hex::encode(buffer),
             signing_seed_hex: hex::encode(signing),
-            receiver_token: hex::encode(token),
+            buffer_key_hex: String::new(),
+            receiver_token: String::new(),
         }
     }
 
@@ -503,68 +194,6 @@ impl RunKeys {
             "the run signing seed is not 64 hex characters decoding to 32 bytes".to_string(),
         )
     }
-}
-
-/// What one seal left behind, kept on the entry so a restarted daemon can read it.
-///
-/// The V1 seal's live answer (`runtime::SealReport`, removed by D48) went to its caller;
-/// this is the durable half. A daemon killed between `write_seal` and `terminate` leaves a
-/// sealed entry with its harness still running and nothing in memory saying so, and the next
-/// process has to be able to finish the job: it reaps the survivor and writes what that
-/// cost here.
-///
-/// A **summary** of the termination rather than the report itself, because
-/// `TerminationReport` is unix-only and this row is read on every platform. What a reader
-/// needs from it is whether the tree is gone and what was signalled, and both are words.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SealOutcome {
-    /// The connector's `lock_paths[]`, resolved through the entry's own path variables.
-    /// Empty when the templates would not resolve — see `lock_paths_error`.
-    pub lock_paths: Vec<String>,
-    /// Why the paths above are empty, when they are. `None` on a clean resolution.
-    pub lock_paths_error: Option<String>,
-    /// The kill guard could ask the age question and not the identity one.
-    pub guard_degraded: bool,
-    /// The guard refused the registered pid, so nothing in the tree was signalled by number
-    /// and neither this seal nor any later reader of this row may say the harness is gone.
-    ///
-    /// The durable half of the V1 `SealReport::harness_unverified` (removed by D48), and what
-    /// `StatusPayload::harness_unverified` is built from. `#[serde(default)]` because rows
-    /// written before this field existed are read by this build, and `false` is what they
-    /// meant: a field they did not have claimed nothing.
-    #[serde(default)]
-    pub harness_unverified: bool,
-    /// What the kill did, in one line. `None` on an entry that registered no process.
-    pub termination: Option<String>,
-    /// Why the harness was not terminated, when it was not.
-    pub termination_error: Option<String>,
-}
-
-/// The strict bound on pending foreign identities retained in the entry registry.
-///
-/// Pending rows carry only the bounded identity projection below; they never retain
-/// transcript bytes. The bound is shared by the registry validator and the runtime's
-/// in-memory retention so a malformed or stale row cannot turn restart recovery into an
-/// unbounded allocation.
-pub(crate) const MAX_FOREIGN_PENDING_SIGHTINGS: usize = 256;
-/// Durable pending identities are projections of bounded scan fields, not an alternate
-/// transcript store. This is a retained-state bound applied after serde decodes the registry
-/// row; it is deliberately not described as a pre-deserialization allocation guard.
-const MAX_FOREIGN_PENDING_FIELD_BYTES: usize = 16 * 1024;
-
-/// The crash-recovery projection of one deferred own-config foreign sighting.
-///
-/// This is registry state, not protocol/wire state. It deliberately contains identifiers,
-/// the store path, first-seen timestamp and trusted scan-root provenance only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingForeignSighting {
-    pub family: String,
-    pub harness: String,
-    pub session_id: String,
-    pub store_path: String,
-    pub first_seen: String,
-    #[serde(default)]
-    pub scan_root: ForeignScanRoot,
 }
 
 /// Everything the daemon knows about one run.
@@ -605,11 +234,6 @@ pub struct Entry {
     pub harness_version: String,
     pub state: EntryState,
     pub health: HealthState,
-    pub session_id: Option<String>,
-    pub armed_at: Option<f64>,
-    pub start_signal_at: Option<f64>,
-    pub started_at: Option<String>,
-    pub deadline_at: Option<String>,
     /// The signed start receipt.
     ///
     /// **Private on purpose.** The registry's checked receipt writers are the only code
@@ -631,73 +255,21 @@ pub struct Entry {
     /// The genesis link until the first append.
     pub chain_head: String,
     pub last_ack_seq: Option<u64>,
-    pub last_ack_at: Option<f64>,
-    pub events_uploaded: u64,
     /// A capture-closed terminal buffer or trace failed its recovery validation.  The chain
     /// cannot carry a post-seal health event, so this durable quarantine is the authority
     /// the signed status reads until an operator resolves the evidence failure.
     #[serde(default)]
     pub terminal_drain_validation_failed: bool,
-    pub expected_config: BTreeMap<String, String>,
-    pub deadline_unix: Option<f64>,
-    /// Exact UTC date tokens used when this entry's store templates were first rendered.
-    /// Missing legacy rows may continue ordinary capture, but V4 finalization refuses
-    /// rather than guessing a recovery pathname.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    source_date: Option<[String; 3]>,
-    /// Forward-only observation that this daemon has reached the signed deadline. Private
-    /// and omitted until true so legacy row bytes remain unchanged.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    deadline_observed: bool,
-    /// Forward-only time authority for choosing a V4 cutoff. Persisting the high-water,
-    /// rather than only the at-deadline bit, survives daemon restart plus wall rollback.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    finalization_observed_unix: Option<u64>,
     pub sealed_at: Option<String>,
-    /// The open lifecycle state a durable seal intent must restore if the daemon dies before
-    /// `write_seal` reaches its terminal chain link.  It is never a caller-supplied state
-    /// transition: only the dedicated sealing transactions below write it.
+    /// Three V1 fields nothing in this build reads. They stay on the row, at the values a new
+    /// entry always had, because a v0.5.0 daemon (which `Daemon::start` names as the way to
+    /// finish a V1 entry on the same artifact root) requires them to read any row.
     #[serde(default)]
-    pub sealing_from_state: Option<EntryState>,
-    /// The exact manifest and descriptor staged with `Sealing`. Generic writers cannot
-    /// replace or discard it; only the dedicated recovery transaction consumes it.
+    events_uploaded: u64,
     #[serde(default)]
-    sealing_intent: Option<SealingIntent>,
-    /// The root capability identity that produced the terminal chain. A sealed drain
-    /// rechecks it before it resumes through the display path, so a post-promotion root
-    /// swap cannot make a later daemon upload another directory's bytes.
+    expected_config: BTreeMap<String, String>,
     #[serde(default)]
-    sealed_trace_root_identity: Option<String>,
-    pub status_line_path: PathBuf,
-    /// The `HOME` (or `CODEX_HOME`) this run's harness is given, and `None` until the
-    /// workspace setup has actually placed one.
-    ///
-    /// An `Option` rather than a derived default, because the V1 pre-arm scan (removed by
-    /// D48 and OS-31) asked "does another entry already live in this home?", and a
-    /// guessed-but-plausible default would have every unplaced entry claim a directory
-    /// nothing is in. Rows written then still read back with `None` for an unplaced entry.
-    pub harness_home: Option<PathBuf>,
-    /// Same-harness own-config foreign identities observed before this entry bound a
-    /// session. This is intentionally a bounded identity projection for crash recovery:
-    /// no transcript bytes or scan directory are retained, and an empty vector is omitted
-    /// so legacy rows keep their serialized shape.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub foreign_pending: Vec<PendingForeignSighting>,
-    /// The port `create` reserved for a connector whose launch or resume recipe names
-    /// `{server_port}`, and `None` for one that names it nowhere. The launch mode does not
-    /// decide this: a `Tui` connector may pin the port of a server it embeds.
-    ///
-    /// Remembered on the row rather than only handed to the `WorkspaceInfo` the create
-    /// answered with, because `Daemon::catch_up` has to give a relaunch the same port: a
-    /// resume that answered `None` would render `--port ""`, which is a launch the CLI
-    /// refuses.
-    ///
-    /// `#[serde(default)]`, so a row written before this field existed still reads. The
-    /// registry is a file that outlives an upgrade, and an entry a daemon cannot open is a
-    /// run it cannot finish.
-    #[serde(default)]
-    pub server_port: Option<u16>,
-    pub arming_timeout_seconds: Option<u64>,
+    status_line_path: PathBuf,
     /// The actual workspace-creation invocation determines this, not the connector's
     /// launch mode: `--attach` is possible on a normal `tui` connector.
     #[serde(default)]
@@ -721,19 +293,7 @@ pub struct Entry {
     /// response from turning a later caller's different digest into a success.
     #[serde(default)]
     cancelled_process_handoff_digest: Option<String>,
-    /// A verified unstarted-handoff termination committed before artifact removal. This
-    /// closes the crash window where the process is gone but a restarted daemon would
-    /// otherwise attempt to verify the now-absent PID again.
-    #[serde(default)]
-    cleanup_termination_complete: bool,
     pub last_process: Option<ProcessHandle>,
-    /// What the seal left behind, once there has been one.
-    ///
-    /// `#[serde(default)]` so every row written before this field existed still reads: the
-    /// registry is a file that outlives an upgrade, and an entry a daemon cannot open is a
-    /// run it cannot finish.
-    #[serde(default)]
-    pub seal_outcome: Option<SealOutcome>,
     /// The round this run was told about, resolved once at creation from `[event]`.
     ///
     /// Held on the row because the terminal composers have no config and no runtime: the
@@ -775,73 +335,6 @@ pub struct CaptureRowV1 {
     pub sealed_status: Option<goalcup_protocol::capture::M2Status>,
 }
 
-pub(crate) fn validate_foreign_pending(entry: &Entry) -> Result<(), DaemonError> {
-    if entry.foreign_pending.len() > MAX_FOREIGN_PENDING_SIGHTINGS {
-        return Err(DaemonError::Refused(format!(
-            "entry {} retains {} pending foreign identities, above the {}-identity bound",
-            entry.entry_id,
-            entry.foreign_pending.len(),
-            MAX_FOREIGN_PENDING_SIGHTINGS
-        )));
-    }
-    let mut identities = std::collections::BTreeSet::new();
-    for pending in &entry.foreign_pending {
-        if pending.scan_root != ForeignScanRoot::OwnConfigDir {
-            return Err(DaemonError::Refused(format!(
-                "entry {} retains pending foreign identity without own-config provenance",
-                entry.entry_id
-            )));
-        }
-        if pending.harness != entry.connector_id {
-            return Err(DaemonError::Refused(format!(
-                "entry {} retains pending foreign identity for harness {}, not its trusted connector {}",
-                entry.entry_id, pending.harness, entry.connector_id
-            )));
-        }
-        for (field, value) in [
-            ("family", pending.family.as_str()),
-            ("harness", pending.harness.as_str()),
-            ("session_id", pending.session_id.as_str()),
-            ("store_path", pending.store_path.as_str()),
-            ("first_seen", pending.first_seen.as_str()),
-        ] {
-            if value.is_empty()
-                || value.len() > MAX_FOREIGN_PENDING_FIELD_BYTES
-                || value.bytes().any(|byte| byte.is_ascii_control())
-            {
-                return Err(DaemonError::Refused(format!(
-                    "entry {} has an invalid pending foreign {field} field",
-                    entry.entry_id
-                )));
-            }
-        }
-        if !Path::new(&pending.store_path).is_absolute() {
-            return Err(DaemonError::Refused(format!(
-                "entry {} has a relative pending foreign store path",
-                entry.entry_id
-            )));
-        }
-        if Rfc3339Utc::try_from(pending.first_seen.clone()).is_err() {
-            return Err(DaemonError::Refused(format!(
-                "entry {} has an invalid pending foreign first-seen timestamp",
-                entry.entry_id
-            )));
-        }
-        let identity = (
-            pending.family.clone(),
-            pending.harness.clone(),
-            pending.session_id.clone(),
-        );
-        if !identities.insert(identity) {
-            return Err(DaemonError::Refused(format!(
-                "entry {} contains duplicate pending foreign identity",
-                entry.entry_id
-            )));
-        }
-    }
-    Ok(())
-}
-
 impl Entry {
     /// A created entry: bound to a workspace and a connector, holding its keys, and
     /// carrying nothing that only a later stage can know.
@@ -850,10 +343,8 @@ impl Entry {
     /// nothing yet. Arming is what turns it into `ArmingPending`, and arming has not
     /// happened: `state` is [`EntryState::Created`].
     ///
-    /// `status_line_path` defaults inside `artifact_dir`; workspace setup owns its final value
-    /// and overwrites it. `harness_home` gets no such
-    /// default — see the field — and `receipt` cannot be given one at all: it is `None`
-    /// here and only the registry's checked receipt writers can change that.
+    /// `receipt` cannot be given a value here: it is `None` and only the registry's checked
+    /// receipt writers can change that.
     // The persisted receipt policy is intentionally explicit at every birth site; hiding
     // it in a default would let a new production constructor silently create legacy rows.
     #[allow(clippy::too_many_arguments)]
@@ -874,7 +365,6 @@ impl Entry {
             workspace,
             trace_dir: artifact_dir.join("trace"),
             status_line_path: artifact_dir.join("status-line.txt"),
-            harness_home: None,
             artifact_dir,
             manifest_sha256: manifest_sha256.to_string(),
             // Not a constructor argument: the directory digest is taken by the control
@@ -884,40 +374,22 @@ impl Entry {
             harness_version: harness_version.to_string(),
             state: EntryState::Created,
             health: HealthState::Online,
-            session_id: None,
-            armed_at: None,
-            start_signal_at: None,
-            started_at: None,
-            deadline_at: None,
             receipt: None,
             receipt_binding,
             chain_seq: None,
             chain_head: GENESIS.to_string(),
             last_ack_seq: None,
-            last_ack_at: None,
-            events_uploaded: 0,
             terminal_drain_validation_failed: false,
-            expected_config: BTreeMap::new(),
-            deadline_unix: None,
-            source_date: None,
-            deadline_observed: false,
-            finalization_observed_unix: None,
             sealed_at: None,
-            sealing_from_state: None,
-            sealing_intent: None,
-            sealed_trace_root_identity: None,
-            server_port: None,
-            foreign_pending: Vec::new(),
-            arming_timeout_seconds: None,
+            events_uploaded: 0,
+            expected_config: BTreeMap::new(),
             expected_process_handoff,
             process_handoff_generation: 0,
             process_handoff_phase: ProcessHandoffPhase::InitialClosed,
             process_handoff_digest: None,
             prepared_process_handle: None,
             cancelled_process_handoff_digest: None,
-            cleanup_termination_complete: false,
             last_process: None,
-            seal_outcome: None,
             event: None,
             capture: None,
             created_at: now_rfc3339(),
@@ -942,20 +414,6 @@ impl Entry {
         self.process_handoff_generation
     }
 
-    pub(crate) fn workspace_sealing_intent(&self) -> Option<&WorkspaceSealingIntentV1> {
-        match self.sealing_intent.as_ref() {
-            Some(SealingIntent::Workspace(intent)) => Some(intent),
-            Some(SealingIntent::Legacy(_)) | None => None,
-        }
-    }
-
-    /// A signed status sees only the read-only projection of the durable workspace
-    /// finalization authority. Legacy rows omit the additive status field entirely.
-    pub(crate) fn workspace_finalization_status(&self) -> Option<WorkspaceFinalizationStatusV1> {
-        self.workspace_sealing_intent()
-            .map(WorkspaceSealingIntentV1::status_projection)
-    }
-
     /// A capture-closed terminal record must never be rendered as a clean completed upload
     /// when either recovery persisted a buffer/trace validation failure or its own durable
     /// acknowledgement watermark exceeds the immutable terminal head.  The latter is an
@@ -973,44 +431,6 @@ impl Entry {
     /// tests but changed only by the dedicated authority transactions below.
     pub fn process_handoff_phase(&self) -> ProcessHandoffPhase {
         self.process_handoff_phase
-    }
-
-    /// The complete generation/digest/handle authority a finalization intent must latch
-    /// before it prepares a termination attempt. This is the same validation as the
-    /// legacy handle accessor, but it does not throw away the generation boundary.
-    pub(crate) fn verified_registered_termination_registration(
-        &self,
-    ) -> Result<Option<AcceptedProcessHandoffV1>, DaemonError> {
-        if self.process_handoff_phase != ProcessHandoffPhase::Registered {
-            return Ok(None);
-        }
-        let handle = self.last_process.clone().ok_or_else(|| {
-            DaemonError::Refused(format!(
-                "entry {} is registered without a persisted termination handle",
-                self.entry_id
-            ))
-        })?;
-        let registration = ProcessRegistration {
-            generation: self.process_handoff_generation,
-            handle: handle.clone(),
-        };
-        let expected = registration.canonical_handle_digest(&self.entry_id);
-        if self.process_handoff_digest.as_deref() != Some(expected.as_str()) {
-            return Err(DaemonError::Refused(format!(
-                "entry {} has a registered process without its matching canonical authority digest",
-                self.entry_id
-            )));
-        }
-        let request_digest = Sha256Digest::try_from(expected).map_err(|error| {
-            DaemonError::Refused(format!(
-                "entry {} has a non-canonical process authority digest: {error}",
-                self.entry_id
-            ))
-        })?;
-        Ok(Some(AcceptedProcessHandoffV1 {
-            request_digest,
-            registration,
-        }))
     }
 
     /// The process route may receive a handle only from a launch path that owes one.
@@ -1124,8 +544,6 @@ impl Registry {
                 .map_err(|e| db_err(path, "opening the registry", e))?;
             txn.open_table(ENTRIES)
                 .map_err(|e| db_err(path, "creating the entries table", e))?;
-            txn.open_table(META)
-                .map_err(|e| db_err(path, "creating the meta table", e))?;
             txn.commit()
                 .map_err(|e| db_err(path, "creating the registry tables", e))?;
         }
@@ -1144,7 +562,6 @@ impl Registry {
     ///   carries the *stored* receipt forward: a new entry starts with none and an
     ///   existing one keeps the one the registry verified.
     pub fn put(&self, entry: &Entry) -> Result<(), DaemonError> {
-        validate_foreign_pending(entry)?;
         let txn = self.db.begin_write().map_err(|e| plain(e, "put"))?;
         {
             let mut table = txn.open_table(ENTRIES).map_err(|e| plain(e, "put"))?;
@@ -1163,18 +580,11 @@ impl Registry {
                     to_write.prepared_process_handle = stored.prepared_process_handle;
                     to_write.cancelled_process_handoff_digest =
                         stored.cancelled_process_handoff_digest;
-                    to_write.sealing_from_state = stored.sealing_from_state;
-                    to_write.sealing_intent = stored.sealing_intent;
-                    to_write.sealed_trace_root_identity = stored.sealed_trace_root_identity;
                     // Terminal-drain validation is capture-closed evidence. A broad row
                     // replacement cannot erase an elevated-review outcome; only the
                     // dedicated monotonic validation transaction may set it.
                     to_write.terminal_drain_validation_failed =
                         stored.terminal_drain_validation_failed;
-                    to_write.deadline_observed = stored.deadline_observed;
-                    to_write.finalization_observed_unix = stored.finalization_observed_unix;
-                    to_write.source_date = stored.source_date;
-                    to_write.foreign_pending = stored.foreign_pending;
                     // `last_process` is the public, termination-facing half of the
                     // accepted handoff.  A broad `put` must not replace it independently
                     // of the private authority fields above.
@@ -1251,7 +661,6 @@ impl Registry {
         match found {
             Some(bytes) => {
                 let entry: Entry = serde_json::from_slice(bytes.value())?;
-                validate_foreign_pending(&entry)?;
                 Ok(Some(entry))
             }
             None => Ok(None),
@@ -1295,13 +704,7 @@ impl Registry {
             let process_handoff_digest = e.process_handoff_digest.clone();
             let prepared_process_handle = e.prepared_process_handle.clone();
             let cancelled_process_handoff_digest = e.cancelled_process_handoff_digest.clone();
-            let sealing_from_state = e.sealing_from_state;
-            let sealing_intent = e.sealing_intent.clone();
-            let sealed_trace_root_identity = e.sealed_trace_root_identity.clone();
             let terminal_drain_validation_failed = e.terminal_drain_validation_failed;
-            let deadline_observed = e.deadline_observed;
-            let finalization_observed_unix = e.finalization_observed_unix;
-            let source_date = e.source_date.clone();
             let last_process = e.last_process.clone();
             f(e);
             e.receipt = verified;
@@ -1312,13 +715,7 @@ impl Registry {
             e.process_handoff_digest = process_handoff_digest;
             e.prepared_process_handle = prepared_process_handle;
             e.cancelled_process_handoff_digest = cancelled_process_handoff_digest;
-            e.sealing_from_state = sealing_from_state;
-            e.sealing_intent = sealing_intent;
-            e.sealed_trace_root_identity = sealed_trace_root_identity;
             e.terminal_drain_validation_failed = terminal_drain_validation_failed;
-            e.deadline_observed = deadline_observed;
-            e.finalization_observed_unix = finalization_observed_unix;
-            e.source_date = source_date;
             e.last_process = last_process;
         })
     }
@@ -1574,7 +971,6 @@ impl Registry {
                 }
             };
             f(&mut entry)?;
-            validate_foreign_pending(&entry)?;
             let bytes = serde_json::to_vec(&entry)?;
             table
                 .insert(entry_id, bytes.as_slice())
@@ -1609,7 +1005,6 @@ impl Registry {
                     entry.entry_id
                 )));
             }
-            validate_foreign_pending(&entry)?;
             let bytes = serde_json::to_vec(&entry)?;
             table
                 .insert(entry_id, bytes.as_slice())
@@ -1633,7 +1028,6 @@ impl Registry {
         for row in table.iter().map_err(|e| plain(e, "scan"))? {
             let (_, bytes) = row.map_err(|e| plain(e, "scan"))?;
             let entry: Entry = serde_json::from_slice(bytes.value())?;
-            validate_foreign_pending(&entry)?;
             if keep(&entry) {
                 found.push(entry);
             }
@@ -1685,171 +1079,4 @@ pub(crate) fn restrict(path: &Path, mode: u32) -> Result<(), DaemonError> {
             source,
         }
     })
-}
-
-#[cfg(test)]
-mod foreign_pending_registry_tests {
-    use super::*;
-
-    fn pending(path: &str) -> PendingForeignSighting {
-        PendingForeignSighting {
-            family: "codex".to_string(),
-            harness: "codex-cli".to_string(),
-            session_id: "session-1".to_string(),
-            store_path: path.to_string(),
-            first_seen: "2026-09-04T00:00:00Z".to_string(),
-            scan_root: ForeignScanRoot::OwnConfigDir,
-        }
-    }
-
-    fn entry_with_pending(temp: &tempfile::TempDir, row: PendingForeignSighting) -> Entry {
-        let mut entry = Entry::new(
-            "pending",
-            "codex-cli",
-            temp.path().join("workspace"),
-            temp.path().join("artifact"),
-            &"ab".repeat(32),
-            "0.0.0-test",
-            ReceiptBindingPolicy::Legacy,
-            ExpectedProcessHandoff::NotRequired,
-            RunKeys::from_seeds([1; 32], [2; 32], [3; 16]),
-        );
-        entry.foreign_pending = vec![row];
-        entry
-    }
-
-    #[test]
-    fn pending_projection_defaults_empty_omits_empty_and_enforces_bound() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = Registry::open(&Registry::default_path(temp.path())).unwrap();
-        let entry = Entry::new(
-            "pending",
-            "codex-cli",
-            temp.path().join("workspace"),
-            temp.path().join("artifact"),
-            &"ab".repeat(32),
-            "0.0.0-test",
-            ReceiptBindingPolicy::Legacy,
-            ExpectedProcessHandoff::NotRequired,
-            RunKeys::from_seeds([1; 32], [2; 32], [3; 16]),
-        );
-        let mut old_row = serde_json::to_value(&entry).unwrap();
-        assert!(
-            old_row
-                .as_object()
-                .unwrap()
-                .get("foreign_pending")
-                .is_none(),
-            "empty pending state is omitted"
-        );
-        let decoded: Entry = serde_json::from_value(old_row.clone()).unwrap();
-        assert!(decoded.foreign_pending.is_empty());
-
-        registry.put(&entry).unwrap();
-        let mut over = entry;
-        over.foreign_pending = (0..=MAX_FOREIGN_PENDING_SIGHTINGS)
-            .map(|index| PendingForeignSighting {
-                family: "cli".to_string(),
-                harness: "codex-cli".to_string(),
-                session_id: format!("session-{index}"),
-                store_path: "/tmp/store.jsonl".to_string(),
-                first_seen: "2026-09-04T00:00:00Z".to_string(),
-                scan_root: ForeignScanRoot::OwnConfigDir,
-            })
-            .collect();
-        assert!(
-            registry.put(&over).is_err(),
-            "the registry refuses rows over the strict pending bound"
-        );
-
-        old_row["foreign_pending"] = serde_json::json!([]);
-        assert!(serde_json::from_value::<Entry>(old_row).is_ok());
-    }
-
-    #[test]
-    fn pending_rows_validate_provenance_identity_path_timestamp_and_duplicates() {
-        let cases = [
-            ("home provenance", {
-                let mut row = pending("/tmp/store.jsonl");
-                row.scan_root = ForeignScanRoot::Home;
-                row
-            }),
-            ("mismatched harness", {
-                let mut row = pending("/tmp/store.jsonl");
-                row.harness = "other-harness".to_string();
-                row
-            }),
-            ("relative path", pending("relative/store.jsonl")),
-            ("nul path", pending("/tmp/store\0.jsonl")),
-            ("invalid timestamp", {
-                let mut row = pending("/tmp/store.jsonl");
-                row.first_seen = "not-a-timestamp".to_string();
-                row
-            }),
-            ("oversized family", {
-                let mut row = pending("/tmp/store.jsonl");
-                row.family = "x".repeat(MAX_FOREIGN_PENDING_FIELD_BYTES + 1);
-                row
-            }),
-        ];
-        for (name, row) in cases {
-            let temp = tempfile::tempdir().unwrap();
-            let registry = Registry::open(&Registry::default_path(temp.path())).unwrap();
-            let entry = entry_with_pending(&temp, row);
-            assert!(
-                registry.put(&entry).is_err(),
-                "malformed pending row: {name}"
-            );
-        }
-
-        let temp = tempfile::tempdir().unwrap();
-        let registry = Registry::open(&Registry::default_path(temp.path())).unwrap();
-        let row = pending("/tmp/store.jsonl");
-        let mut entry = entry_with_pending(&temp, row.clone());
-        entry.foreign_pending.push(row);
-        assert!(
-            registry.put(&entry).is_err(),
-            "duplicate durable identity rows are refused rather than collapsed"
-        );
-    }
-
-    #[test]
-    fn pending_rows_missing_scan_root_are_rejected_but_legacy_empty_rows_decode() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = Registry::open(&Registry::default_path(temp.path())).unwrap();
-        let entry = Entry::new(
-            "pending",
-            "codex-cli",
-            temp.path().join("workspace"),
-            temp.path().join("artifact"),
-            &"ab".repeat(32),
-            "0.0.0-test",
-            ReceiptBindingPolicy::Legacy,
-            ExpectedProcessHandoff::NotRequired,
-            RunKeys::from_seeds([1; 32], [2; 32], [3; 16]),
-        );
-        let mut raw = serde_json::to_value(&entry).unwrap();
-        raw["foreign_pending"] = serde_json::json!([{
-            "family": "codex",
-            "harness": "codex-cli",
-            "session_id": "legacy",
-            "store_path": "/tmp/legacy.jsonl",
-            "first_seen": "2026-09-04T00:00:00Z"
-        }]);
-        let decoded: Entry = serde_json::from_value(raw.clone()).unwrap();
-        assert_eq!(decoded.foreign_pending[0].scan_root, ForeignScanRoot::Home);
-        registry
-            .replace_raw_json_for_test("pending", &serde_json::to_vec(&raw).unwrap())
-            .unwrap();
-        assert!(
-            registry.get("pending").is_err(),
-            "a legacy pending row without provenance fails closed"
-        );
-
-        raw["foreign_pending"] = serde_json::json!([]);
-        registry
-            .replace_raw_json_for_test("pending", &serde_json::to_vec(&raw).unwrap())
-            .unwrap();
-        assert!(registry.get("pending").unwrap().is_some());
-    }
 }

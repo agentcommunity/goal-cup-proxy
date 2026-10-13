@@ -334,26 +334,8 @@ impl Staged {
         std::fs::copy(case.dir.join("stand-in.py"), &stand_in).unwrap();
         let marker = markers.join(&case.name);
 
-        let python = Path::new("/usr/bin/python3");
-        let version = Command::new(python)
-            .env_clear()
-            .args([
-                "-I",
-                "-S",
-                "-c",
-                "import os, platform, sys; assert 'HOME' not in os.environ; assert 'PYTHONPATH' not in os.environ; assert sys.flags.isolated and sys.flags.no_site; print(platform.python_version())",
-            ])
-            .output()
-            .unwrap();
-        assert!(version.status.success());
-        let sha256 = goalcup_daemon::workspace::sha256_hex(&std::fs::read(python).unwrap());
         let manifest = std::fs::read_to_string(case.dir.join("harness.toml"))
             .unwrap()
-            .replace("@PYTHON3_SHA256@", &sha256)
-            .replace(
-                "@PYTHON3_VERSION@",
-                String::from_utf8_lossy(&version.stdout).trim(),
-            )
             .replace("@STAND_IN@", &toml_fragment(&stand_in))
             .replace("@MARKER@", &toml_fragment(&marker))
             .replace("@PORT@", &endpoint["port"].as_u64().unwrap().to_string())

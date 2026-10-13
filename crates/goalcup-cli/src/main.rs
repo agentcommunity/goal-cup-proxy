@@ -58,17 +58,19 @@ To check a finished run, use the separate `goalcup-verify --capture-integrity <t
 `goalcup start` prints that line for you. There is no `goalcup verify`.
 
 Exit codes: 0 done; 1 refused, and you can fix it (no daemon to ask, the tracker still busy, \
-the run already sealed, a mistyped command); 3 this command could not do its job (a file it \
+the run already sealed, a mistyped command, or on Linux a sealed run that left a process \
+running); 3 this command could not do its job (a file it \
 could not read, an answer it could not parse). This command never exits with 2 or 4.";
 
 /// What `goalcup doctor --help` says under its flags. There is no verify
 /// mode here: a sealed capture is checked by `goalcup-verify --capture-integrity`.
 const DOCTOR_AFTER_HELP: &str = "\
-For each harness it checks that the connector files are the pinned ones and that the harness \
-executable on PATH is the exact build `goalcup start` runs (hashed, not started).
+For each harness it checks that the connector files are the pinned ones and finds the harness \
+executable on PATH that `goalcup start` runs (hashed, not started). Any build is accepted: the \
+run records which one ran.
 
-Exit codes: 0 every check passed; 1 something failed, including a harness that is not installed \
-or is not the pinned build. No daemon running is not a failure: `goalcup start` starts one.
+Exit codes: 0 every check passed; 1 something failed, including a harness that is not \
+installed. No daemon running is not a failure: `goalcup start` starts one.
 
 Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
 are not using can make this command exit 1.";
@@ -100,10 +102,6 @@ enum Command {
             default_value_t = goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES
         )]
         capture_reserve_bytes: u64,
-        /// claude-code-cli only: let the agent run one Python script without asking, written
-        /// `Bash(python3 <name>.py *)`. Applies to this run only.
-        #[arg(long, value_name = "RULE", requires = "goal_file")]
-        capture_claude_allowed_tool: Option<String>,
         /// The public GitHub repository your agent pushes to, `https://github.com/<owner>/<repo>`.
         /// Required once `goalcup login` has connected this tracker to the Goal Cup server.
         #[arg(long, value_name = "URL")]
@@ -136,7 +134,7 @@ enum Command {
         #[arg(value_name = "ENTRY")]
         entry: Option<String>,
     },
-    /// Check this machine: can a daemon run, and is each harness installed at its pinned build.
+    /// Check this machine: can a daemon run, and is each harness installed.
     #[command(after_help = DOCTOR_AFTER_HELP)]
     Doctor {
         /// Print the report as one JSON document instead of text.
@@ -200,14 +198,12 @@ fn run(command: Command) -> Result<u8, CliError> {
             dev,
             goal_file,
             capture_reserve_bytes,
-            capture_claude_allowed_tool,
             repo,
         } => start(commands::start::StartOptions {
             harness,
             dev,
             goal_file,
             capture_reserve_bytes,
-            capture_claude_allowed_tool,
             repo,
             upload_policy: upload_policy()?,
         })
@@ -374,6 +370,15 @@ fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
         },
         daemon_deadline(),
     )?;
+    // Linux: before the gated spawn, so what the harness leaves behind is reparented here and
+    // swept before the seal (`subreaper.rs`). Only this binary arms it, never an in-process start.
+    if let Err(e) = goalcup_cli::subreaper::arm() {
+        eprintln!(
+            "goalcup: this command could not become a child subreaper ({e}), so a process the \
+             harness leaves behind after it exits is not swept before the seal, and the daemon's \
+             walk may not see it (docs/TERMINATION.md)."
+        );
+    }
     let env = goalcup_cli::launch::process_env();
     #[cfg(feature = "test-support")]
     if let Some(pem) = std::env::var_os(TEST_UPSTREAM_ROOTS) {
