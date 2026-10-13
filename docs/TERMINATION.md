@@ -19,8 +19,8 @@ set (D30). Code: `terminate_with` in `mod.rs`; guard, ordering and fail-closed r
 | Anchor | When | What a poll does |
 |---|---|---|
 | `Rooted(table)` | The guard says the root is live with its recorded creation identity and argv, and a fresh snapshot lists it. | Adopts newcomers (below) from the root and from every live identity-verified member; authorises a signal against the root's ppid tree **or** a live member's (`Owned`). |
-| `Closed(table)` | The root is not in the table (it exited), or was live at the guard and absent one read later, including an exit between the guard's own two reads (`liveness` live, then no creation identity: the guard asks `liveness` again and reads "no longer live" as an exit). | Adopts from every targeted member alive with its recorded creation identity, never from the root; authorises a signal against a live member's ppid tree alone, so an orphaned member and what it forks are still SIGKILLed; a live pid ours by nothing returns `containment_unverified`. |
-| `Lost` | The guard refused the root (a *different* creation identity, or no readable identity on a root that is still live, or a renamed argv) or `/bin/ps` could not be spawned. | Nothing may be claimed; the call returns `containment_unverified` at once. |
+| `Closed(table)` | The root is not in the table (it exited), or was live at the guard and absent one read later, including an exit between the guard's own reads (`liveness` live, then no creation identity, or an argv that names no registered program, as Linux prints `[comm]` for a process that is exiting but not yet a zombie: the guard asks `liveness` again and reads "no longer live" as an exit). | Adopts from every targeted member alive with its recorded creation identity, never from the root; authorises a signal against a live member's ppid tree alone, so an orphaned member and what it forks are still SIGKILLed; a live pid ours by nothing returns `containment_unverified`. |
+| `Lost` | The guard refused the root (a *different* creation identity, or no readable identity on a root that is still live, or a renamed argv on a root that is still live) or `/bin/ps` could not be spawned. | Nothing may be claimed; the call returns `containment_unverified` at once. |
 
 Under every anchor a targeted pid is asked **by number with its recorded creation identity**, never
 by lineage — the phase gate, the SIGKILL selection, the forkers adoption walks from, `still_alive` —
@@ -94,6 +94,10 @@ Linux's `W` is wider than that name: without a fork witness it covers any orphan
 cannot see, as ruled in "RULED: on Linux, `Confirmed` excludes fork-and-leave wrappers" below.
 `W` is the daemon's and the launcher's sweep described there does not narrow it: the sweep ends
 such orphans in a `goalcup start` run before its seal, outside this contract.
+A root that `liveness` still reads as live while its argv already reads `[comm]` (exiting, not
+yet a zombie) at both of the guard's `liveness` reads is refused as renamed: the anchor is
+`Lost` and the seal `Unresolved`, fail-closed. The second read narrows that window to the
+time one `/bin/ps` takes; it does not close it.
 
 **macOS** (numeric `kill`, kqueue witness per member from the root down, attached before phase
 A; audit token for the singleton). Each witness is read twice a poll — before the snapshot and
