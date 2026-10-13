@@ -24,6 +24,13 @@ receipt or ACK) is a valid local outcome. Nothing on m2 is qualified for long ru
   hourly upload (TODO step 2) and a production server key; until then even a signed receipt can
   be forged ([SECURITY](../SECURITY.md)).
 
+- **The agent can read the upload token.** `goalcup login` stores it at mode 0600 in the
+  tracker's configuration directory and never puts it in the harness's environment or argv, but
+  the harness runs as the participant and can read any file they can. With it an agent could
+  upload to this member's own runs, nothing else. Bounded by: the server binds every chunk to the
+  run's chain position and the verify job re-checks the whole chain, and the member can revoke
+  the token on the site.
+
 Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it in git history at `6494030`. Open issues that still matter are in [TODO](../TODO.md#known-issues).
 
 ### Wire leg, finish and storage

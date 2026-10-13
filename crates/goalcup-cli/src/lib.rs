@@ -1,6 +1,7 @@
 //! `goalcup` — the participant's command line.
 //!
-//! The five sub-commands live in [`commands`]; the tracker's own configuration directory
+//! The six sub-commands live in [`commands`]; the upload server and the participant's token
+//! for it live in [`server`]; the tracker's own configuration directory
 //! and the documents in it live in [`config`]; the shipped connector manifests and the
 //! release-hash allowlist over them live in [`connector`], and the version grammar those
 //! manifests declare their tested range in lives in [`version`]; the one client that speaks
@@ -42,6 +43,7 @@ pub mod preflight;
 pub mod proxy;
 mod released_child;
 pub mod retry;
+pub mod server;
 pub mod subreaper;
 
 use goalcup_protocol::ProtocolError;
