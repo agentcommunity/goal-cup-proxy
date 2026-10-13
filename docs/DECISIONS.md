@@ -1376,6 +1376,12 @@ reports `record_malformed` on a trace that carries `harness_build`. This row acc
 of opening protocol v6: nobody depends on a v0.5.0 verifier before the event, and the tracer and
 the server ship their own. Traces without the field stay valid for every reader, old and new.
 
+**What the digests cover.** `program_sha256` names a script or wrapper harness; `image_sha256` is
+what the registered pid runs at the launch post: for an interpreted harness the interpreter, for
+a wrapper that `exec`s again either stage depending on timing, and never a native binary a
+wrapper spawns as a child (Codex's npm wrapper). On Linux a non-dumpable process leaves its image
+unreadable, and the field is then absent.
+
 **What it is not.** The reader checks only the field's shape (canonical hex, bounded platform);
 it never compares a digest with a list. Matching against known builds, and the "unlisted" note
 for judges, belong to the server. Removing the pin refusal is the next PR; the recording lands

@@ -99,7 +99,8 @@ pub enum CaptureRecord {
              profile_digest: String, harness_version: String, recorder_revision: String,
              continuation: String,
              // later optional, skip-if-none additions: allowed_tool_rule,
-             // process_handoff_digest, run_public_key, connector_dir_sha256 (S1)
+             // process_handoff_digest, run_public_key, connector_dir_sha256 (S1);
+             // harness_build (D53, after the v0.5.0 tag)
            },
     Assistance { observed: CaptureTime, action: String },
     LocalFinish { observed: CaptureTime, reason: String,
@@ -1290,7 +1291,7 @@ Decided by D43 ruling 7; the design is `.superpowers/sdd/2026-10-02-oss/harness-
 - **What is frozen.** `M2_PROTOCOL_VERSION = 5` (`capture.rs`) is the only switch. Frozen are the
   `Envelope`, the bodies a v5 chain carries, the ten `CaptureRecord` kinds and their sub-types,
   the trace layout files `chain.jsonl`, `baseline.json` and `seal.json`, and `Launch` as S1 left
-  it. Two shapes inside `seal.json` are frozen knowingly (owner decision 7): `SealManifest.workspace`
+  it plus D53's `harness_build`. Two shapes inside `seal.json` are frozen knowingly (owner decision 7): `SealManifest.workspace`
   is an absolute path, often personal data, and `SealManifest.files` has no count bound. Bounding
   `files` later tightens the reader, so it needs a DECISIONS row, and changing either needs v6.
 - **Side artifacts.** `receipt.json`, `acks.jsonl` and the `StartReceipt`, `AckCheckpoint` and
