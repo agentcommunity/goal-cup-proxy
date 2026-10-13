@@ -404,19 +404,14 @@ fn every_control_error_variant_maps_to_exactly_one_http_status() {
 /// matches on, and that match has no `_` arm. A seventeenth variant therefore does not
 /// compile until it is mapped, and the mapping hands this test a sample of it.
 ///
-/// The pair that matters is `Refused` and `Busy`. Both are `409` and they mean opposite
-/// things: `Refused` is the entry's own state saying no, and `Busy` is the entry held for
-/// the length of one pump. A client retries `busy` and reports `conflict`, which it can
-/// only do because the two carry different codes in the body of a status they share.
+/// `ControlError::Busy` stays on the wire (the CLI retries on it) but no `DaemonError`
+/// maps to it any more; `Refused` is the entry's own state saying no and stays `conflict`.
 #[test]
 fn the_daemon_s_own_errors_become_the_contract_s_codes() {
     use goalcup_daemon::DaemonError;
     for (error, code) in [
-        // The pair that matters. A permanent refusal — already sealed, a lock on
-        // disk — stays `conflict`; the transient hold is `busy`, and `busy` is the only
-        // code the contract lets a client retry on.
+        // A permanent refusal — already sealed, a lock on disk — is `conflict`.
         (DaemonError::Refused("already sealed".into()), "conflict"),
-        (DaemonError::Busy("mid-upload".into()), "busy"),
         // The v5 finish's expiry is neither: its own code, carrying the stage token alone.
         (
             DaemonError::FinishDeadline {

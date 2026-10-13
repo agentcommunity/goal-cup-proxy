@@ -629,7 +629,7 @@ impl Daemon {
         });
         for entry_id in stale {
             if let Err(error) = self.abandon_capture(&entry_id) {
-                self.inner.cycles.note(super::Cadence::Tick, &error);
+                self.inner.cycles.note(&error);
             }
         }
     }
@@ -739,7 +739,7 @@ impl Daemon {
     pub(super) fn reopen_captures(&self) {
         let rows = match self.registry().all() {
             Ok(rows) => rows,
-            Err(error) => return self.inner.cycles.note(super::Cadence::Tick, &error),
+            Err(error) => return self.inner.cycles.note(&error),
         };
         let unsealed = |row: &Entry| {
             row.capture
@@ -749,13 +749,10 @@ impl Daemon {
         for row in rows.into_iter().filter(unsealed) {
             let entry_id = row.entry_id.clone();
             if let Err(error) = self.reopen_capture(row) {
-                self.inner.cycles.note(
-                    super::Cadence::Tick,
-                    &DaemonError::Refused(format!(
-                        "capture entry {entry_id} was not reopened: {}",
-                        super::path_free(&error)
-                    )),
-                );
+                self.inner.cycles.note(&DaemonError::Refused(format!(
+                    "capture entry {entry_id} was not reopened: {}",
+                    super::path_free(&error)
+                )));
             }
         }
     }

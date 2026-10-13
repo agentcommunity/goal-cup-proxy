@@ -67,7 +67,8 @@ pub(super) async fn health(State(state): State<ControlState>) -> Response {
         daemon_version: DAEMON_VERSION.to_string(),
         uptime_seconds: state.started_at.elapsed().as_secs(),
         entries_open: u32::try_from(open).unwrap_or(u32::MAX),
-        upload_ok: state.daemon.upload_ok(),
+        // Wire field only: this tree has no uploader (D48), so none is failing.
+        upload_ok: true,
     })
     .into_response()
 }
@@ -409,12 +410,6 @@ pub(super) async fn register_process(
         }
         return match state.daemon.register_process(&id, registration.clone()) {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
-            // Prepared Busy is the one transient post-mutation result whose stable wire
-            // identity is itself useful: the client keeps retrying the immutable request.
-            Err(e @ DaemonError::Busy(_)) if phase == ProcessHandoffPhase::Prepared => {
-                ControlErrorResponse::new(ControlError::ProcessAdmissionBusy(e.to_string()))
-                    .into_response()
-            }
             Err(e) => uncertain_process_admission(e).into_response(),
         };
     }
