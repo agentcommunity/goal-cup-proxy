@@ -30,8 +30,9 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::Path;
 
-/// The research-report schema version governing every observation and summary line.
-const RESEARCH_SCHEMA_VERSION: u32 = 1;
+/// The research-report schema version governing every observation and summary line. Version 2
+/// adds `analysis.models` and `analysis.cross_leg` to the summary; observation lines are as in 1.
+const RESEARCH_SCHEMA_VERSION: u32 = 2;
 /// The longest observation line written, newline included.
 const MAX_OBSERVATION_LINE_BYTES: usize = 2 * 1024 * 1024;
 /// The longest summary line written, newline included.
@@ -270,12 +271,80 @@ pub fn research_summary(
         "analysis": {
             "state": analysis,
             "decoders": decoders.iter().map(entry).collect::<Vec<_>>(),
+            "models": models(decoders),
+            "models_omitted": models_omitted(decoders),
+            "cross_leg": cross_leg(outcome),
         },
         "references": operations.references(),
         "references_omitted": operations.references_omitted(),
     });
     summary.sort_all_objects();
     (exit_code, summary)
+}
+
+/// The model identities each decoder's kept `model` observations named, with counts, in
+/// decoder then name order. What the harness's session file and its traffic say the run used.
+fn models(decoders: &[DecoderOutcome]) -> Vec<Value> {
+    decoders
+        .iter()
+        .flat_map(|d| {
+            d.observations
+                .models
+                .iter()
+                .map(|(model, count)| json!({"decoder": d.id, "model": model, "count": count}))
+        })
+        .collect()
+}
+
+/// The names each decoder could not keep, for the decoders that dropped any.
+fn models_omitted(decoders: &[DecoderOutcome]) -> Value {
+    Value::Object(
+        decoders
+            .iter()
+            .filter(|d| d.observations.models_omitted > 0)
+            .map(|d| (d.id.to_string(), json!(d.observations.models_omitted)))
+            .collect(),
+    )
+}
+
+/// Whether the harness's own session file and the recorded traffic agree that model work
+/// happened. Only zero against non-zero is judged: a harness may write several native entries
+/// per call. `native_activity_without_wire_streams` is a note for judges: the session file names
+/// model work while the proxy recorded no wire stream at all (a harness that bypassed the
+/// proxy, or a fake). It never changes the exit code. `unchecked` when there is no native model
+/// activity to compare, or wire streams were recorded but no model request was decoded from
+/// them (a compressed or oversized body, a degraded decoder): the calls may be there unread.
+fn cross_leg(outcome: &DecodeOutcome) -> Value {
+    let native: u64 = outcome
+        .decoders
+        .iter()
+        .map(|d| d.observations.native_model_activity)
+        .sum();
+    let wire_requests: u64 = outcome
+        .decoders
+        .iter()
+        .map(|d| d.observations.wire_model_requests)
+        .sum();
+    let wire_streams = outcome.operations.wire_opens();
+    json!({
+        "native_model_activity": native,
+        "wire_streams": wire_streams,
+        "wire_model_requests": wire_requests,
+        "state": cross_leg_state(native, wire_streams, wire_requests),
+    })
+}
+
+/// The one rule behind `analysis.cross_leg.state`.
+fn cross_leg_state(native: u64, wire_streams: u64, wire_requests: u64) -> &'static str {
+    if native == 0 {
+        "unchecked"
+    } else if wire_streams == 0 {
+        "native_activity_without_wire_streams"
+    } else if wire_requests == 0 {
+        "unchecked"
+    } else {
+        "consistent"
+    }
 }
 
 /// User-visible connector provenance inferred from a validated Launch. A digest that is
@@ -319,6 +388,21 @@ fn entry(decoder: &DecoderOutcome) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cross_leg_note_judges_zero_against_non_zero_only() {
+        assert_eq!(cross_leg_state(3, 2, 1), "consistent");
+        assert_eq!(cross_leg_state(1, 9, 9), "consistent");
+        // The session names model work and the proxy recorded nothing at all.
+        assert_eq!(
+            cross_leg_state(5, 0, 0),
+            "native_activity_without_wire_streams"
+        );
+        // Wire streams with no decoded request may hold calls unread: not an accusation.
+        assert_eq!(cross_leg_state(5, 3, 0), "unchecked");
+        assert_eq!(cross_leg_state(0, 4, 4), "unchecked");
+        assert_eq!(cross_leg_state(0, 0, 0), "unchecked");
+    }
     use crate::capture_analysis::api::{
         DecoderFailure, DecoderSummary, DecoderV1, ObservationTimeRange, SourceRef, StreamOpen,
     };

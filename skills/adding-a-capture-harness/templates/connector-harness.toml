@@ -22,6 +22,9 @@ args = ["<SUBCOMMAND>", "<FLAG>", "--"]
 continuation = "none: <HOW ONE HEADLESS TURN RUNS>"
 # Sign-in/token-refresh hosts, tunnelled opaquely and never recorded. Delete if none.
 # auth_hosts = ["<AUTH_HOST>"]
+# Your harness's own variable namespace, if it has switches that would silently stop capture
+# (a safe mode, "ignore config"): capture.env may then set no name under it. Delete if none.
+# reserved_env_prefixes = ["<HARNESS>_"]
 
 [capture.executable]
 program = "<PROGRAM>"                   # bare name on PATH; not an interpreter (python3, node, sh)

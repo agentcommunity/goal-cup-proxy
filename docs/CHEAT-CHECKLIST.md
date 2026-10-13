@@ -74,8 +74,11 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   so the same replacement is a residual there too.
 - **An unpinned build may be anything on PATH** (a wrapper that unsets `HTTPS_PROXY`, a fake that
   writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the
-  judges comparing the native session's model turns with the wire leg's model calls; the verifier
-  does not yet flag native turns with no wire model call. `Launch.harness_version` is what the
+  judges comparing the native session's model turns with the wire leg's model calls. The research
+  report's `analysis.cross_leg` notes `native_activity_without_wire_streams` (schema 2) when the
+  session file names model work and the proxy recorded no wire stream at all; it is `unchecked`
+  for a harness with no native decoder, or when wire streams were recorded but no request was
+  decoded, and a fake that writes no session file at all shows only as an absent native leg. `Launch.harness_version` is what the
   harness printed for its own `version_args` (or `unreported`): reported, not proven. That probe
   runs the unpinned binary once before the daemon registers anything, with no proxy, no record and
   a throwaway `HOME`; `version_args` is limited to `--version`, `-v`, `-V` or `version`.
