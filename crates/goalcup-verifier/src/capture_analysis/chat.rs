@@ -87,22 +87,21 @@
 //! open stream, counting the text kept for aggregation; at most `MAX_OPEN_STREAMS` tracked streams.
 //! Kept text is cut at [`MAX_TEXT_BYTES`] with its full length and a `*_truncated` flag; at most 16
 //! choices and 64 tool calls per stream are kept.
+//!
+//! **Shared plumbing.** The stream tracking (open streams, framing choice, losses, ends) is
+//! `tracker.rs`, shared with the Responses decoder; this file supplies only what a Chat
+//! Completions record means and how a streamed completion's chunks add up.
 
 use super::api::{DecoderFailure, DecoderSummary, DecoderV1, Observation, StreamOpen, kinds};
-use super::wire::{
-    Close, LossCauses, MAX_ID_BYTES, MAX_LISTED, MAX_NAMES, MAX_TEXT_BYTES, Origin, Out,
-    ResyncCause, SegmentView, Span, Sse, SseItem, Tally, classify_close, cut, id, is_token, names,
-    parse_object, put_error, put_id, put_output, put_token, put_usage, token,
-};
+use super::tracker::{Protocol, SseEnd, Tracker};
 pub use super::wire::{MAX_BUFFERED_BYTES, MAX_EVENT_BYTES};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-use goalcup_protocol::capture::{
-    CaptureMeta, CaptureRecord, CaptureSource, MAX_OPEN_STREAMS, StreamKey, WireIdentity,
+use super::wire::{
+    MAX_ID_BYTES, MAX_LISTED, MAX_NAMES, MAX_TEXT_BYTES, Origin, Out, Span, cut, id, is_token,
+    names, parse_object, put_error, put_id, put_output, put_token, put_usage, token,
 };
+use goalcup_protocol::capture::{CaptureRecord, CaptureSource, StreamKey};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io;
 
 /// The decoder identity declared in its summary.
 pub const DECODER_ID: &str = "openai-chat-completions";
@@ -147,388 +146,12 @@ const DELTA_MEMBERS: &[&str] = &[
 /// The bounded streaming decoder of OpenAI Chat Completions traffic.
 #[derive(Debug, Default)]
 pub struct ChatCompletionsDecoder {
-    streams: BTreeMap<StreamKey, Tracked>,
-    buffered: usize,
-    tally: Tally,
+    tracker: Tracker<ChatCompletions>,
 }
 
 impl ChatCompletionsDecoder {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    fn open(&mut self, stream: &StreamKey, source: CaptureSource, metadata: &CaptureMeta) {
-        // `accepts` selected this stream; this is a guard, not the selection.
-        if !selects(source, metadata.protocol_hint.as_deref()) {
-            debug_assert!(false, "a stream `accepts` refused was routed here");
-            return;
-        }
-        let content_type = metadata.content_type.as_deref();
-        let framing = match source {
-            CaptureSource::WireRequest | CaptureSource::WireResponse
-                if content_type == Some("application/json") =>
-            {
-                Framing::Json(Vec::new())
-            }
-            CaptureSource::WireResponse if content_type == Some("text/event-stream") => {
-                Framing::Sse(Box::default())
-            }
-            CaptureSource::WireRequest | CaptureSource::WireResponse => {
-                Framing::Unsupported(metadata.content_type.clone())
-            }
-            // Refused by `selects` above; the arm only keeps the match exhaustive.
-            _ => return,
-        };
-        if self.streams.contains_key(stream) {
-            // A reused stream key is invalid evidence (the reader refuses it); the first stays.
-            return;
-        }
-        if self.streams.len() >= MAX_OPEN_STREAMS {
-            // Untracked, so its records are lost to this analysis: counted, never guessed.
-            self.tally.unknown += 1;
-            self.tally.incomplete = true;
-            return;
-        }
-        self.streams.insert(
-            stream.clone(),
-            Tracked {
-                source,
-                wire: metadata.wire.clone(),
-                status: metadata.status,
-                framing,
-                span: Span::default(),
-                loss: LossCauses::default(),
-                invalid_audit_loss: false,
-                resync_cause: None,
-            },
-        );
-    }
-
-    fn segment(
-        &mut self,
-        stream: &StreamKey,
-        view: &SegmentView<'_>,
-        data_b64: &str,
-        emit: &mut dyn FnMut(Observation),
-    ) {
-        let Self {
-            streams,
-            buffered,
-            tally,
-        } = self;
-        let Some(tracked) = streams.get_mut(stream) else {
-            return;
-        };
-        let Ok(data) = STANDARD.decode(data_b64) else {
-            tracked.span.touch_unprojected(view);
-            tracked.damage(buffered, tally, "undecodable_segment");
-            return;
-        };
-        let view = view.with_retained(&data);
-        if view.invalid_audit() {
-            tracked.span.touch(&view);
-            if let Framing::Sse(body) = &mut tracked.framing {
-                body.reply.discarded(&tracked.span);
-            }
-            let origin = Origin {
-                stream,
-                source: tracked.source,
-                wire: tracked.wire.as_ref(),
-                status: tracked.status,
-            };
-            Out {
-                tally,
-                buffered,
-                emit,
-            }
-            .unknown(
-                &origin,
-                &tracked.span,
-                "invalid_redaction_audit",
-                Map::new(),
-            );
-            tracked.damage(buffered, tally, "invalid_redaction_audit");
-            return;
-        }
-        let Tracked {
-            source,
-            wire,
-            status,
-            framing,
-            span,
-            loss,
-            invalid_audit_loss: _,
-            resync_cause,
-        } = tracked;
-        match framing {
-            Framing::Json(buf) => {
-                span.touch(&view);
-                if !loss.is_empty() {
-                    return;
-                }
-                if buf.len() + data.len() > MAX_EVENT_BYTES
-                    || *buffered + data.len() > MAX_BUFFERED_BYTES
-                {
-                    *buffered -= buf.len();
-                    *buf = Vec::new();
-                    loss.remember("over_budget");
-                    tally.incomplete = true;
-                } else {
-                    buf.extend_from_slice(&data);
-                    *buffered += data.len();
-                }
-            }
-            Framing::Unsupported(_) => span.touch(&view),
-            Framing::Sse(body) => {
-                let origin = Origin {
-                    stream,
-                    source: *source,
-                    wire: wire.as_ref(),
-                    status: *status,
-                };
-                let mut out = Out {
-                    tally,
-                    buffered,
-                    emit,
-                };
-                let SseBody { sse, reply } = &mut **body;
-                sse.feed(
-                    span,
-                    &view,
-                    &data,
-                    &mut out,
-                    &mut |item, span, out| match item {
-                        SseItem::Data { data, .. } => reply.event(data, span, &origin, out),
-                        SseItem::Gap => {
-                            let findings = resync_cause
-                                .take()
-                                .map(ResyncCause::findings)
-                                .unwrap_or([None, Some("gap"), None]);
-                            for reason in findings.into_iter().flatten() {
-                                reply.lost(reason, span, &origin, out);
-                            }
-                        }
-                        SseItem::OverBudget => reply.lost("over_budget", span, &origin, out),
-                    },
-                );
-            }
-        }
-    }
-
-    fn gap(&mut self, stream: &StreamKey) {
-        let Self {
-            streams,
-            buffered,
-            tally,
-        } = self;
-        if let Some(tracked) = streams.get_mut(stream) {
-            tracked.damage(buffered, tally, "gap");
-        }
-    }
-
-    fn recovery(&mut self, lost_streams: &[StreamKey], emit: &mut dyn FnMut(Observation)) {
-        self.tally.incomplete = true;
-        for key in lost_streams {
-            if let Some(tracked) = self.streams.remove(key) {
-                self.close(key, tracked, Close::ProducerLost, emit);
-            }
-        }
-    }
-
-    fn close(
-        &mut self,
-        stream: &StreamKey,
-        tracked: Tracked,
-        how: Close,
-        emit: &mut dyn FnMut(Observation),
-    ) {
-        let Tracked {
-            source,
-            wire,
-            status,
-            framing,
-            span,
-            loss,
-            invalid_audit_loss,
-            resync_cause,
-        } = tracked;
-        let origin = Origin {
-            stream,
-            source,
-            wire: wire.as_ref(),
-            status,
-        };
-        let mut out = Out {
-            tally: &mut self.tally,
-            buffered: &mut self.buffered,
-            emit,
-        };
-        let close = classify_close(how);
-        let cut = close.finding;
-        // D45: an interrupted or decode-error end is reported, and the bytes that arrived stay
-        // decoded; a lost producer or a stream nobody ended is a loss.
-        if close.loss {
-            out.tally.incomplete = true;
-        }
-        match framing {
-            Framing::Json(buf) => {
-                *out.buffered -= buf.len();
-                if !loss.is_empty() {
-                    for reason in loss.findings().into_iter().flatten() {
-                        if reason != "invalid_redaction_audit" || !invalid_audit_loss {
-                            out.unknown(&origin, &span, reason, Map::new());
-                        }
-                    }
-                    if let Some(cut) = cut {
-                        out.unknown(&origin, &span, cut, Map::new());
-                    }
-                } else if let Some(reason) = cut {
-                    out.unknown(&origin, &span, reason, Map::new());
-                } else if span.first.is_some() {
-                    let role = match source {
-                        CaptureSource::WireRequest => Role::HttpRequest,
-                        _ => Role::HttpJsonResponse,
-                    };
-                    decode_record(&buf, role, &span, &origin, &mut out);
-                }
-            }
-            Framing::Unsupported(content_type) => {
-                if span.first.is_some() || !loss.is_empty() || cut.is_some() {
-                    for reason in loss.findings().into_iter().flatten() {
-                        if reason != "invalid_redaction_audit" || !invalid_audit_loss {
-                            let mut extra = Map::new();
-                            if let Some(content_type) = &content_type {
-                                extra.insert(
-                                    "content_type".into(),
-                                    Value::String(content_type.clone()),
-                                );
-                            }
-                            out.unknown(&origin, &span, reason, extra);
-                        }
-                    }
-                    let mut extra = Map::new();
-                    if let Some(content_type) = content_type {
-                        extra.insert("content_type".into(), Value::String(content_type));
-                    }
-                    out.unknown(&origin, &span, "unsupported_content_type", extra);
-                    if let Some(cut) = cut {
-                        out.unknown(&origin, &span, cut, Map::new());
-                    }
-                }
-            }
-            Framing::Sse(body) => {
-                let SseBody { sse, mut reply } = *body;
-                let pending_data = sse.pending_has_data();
-                let mut leftover = sse.finish(out.buffered, &span, cut);
-                if leftover == Some("gap") {
-                    let loss_span = if span.first.is_some() {
-                        span.clone()
-                    } else {
-                        reply.all.clone()
-                    };
-                    let findings = resync_cause.map(ResyncCause::findings).unwrap_or([
-                        None,
-                        Some("gap"),
-                        None,
-                    ]);
-                    for reason in findings.into_iter().flatten() {
-                        reply.lost(reason, &loss_span, &origin, &mut out);
-                    }
-                    leftover = None;
-                }
-                if let Some(reason) = loss.first() {
-                    out.unknown(&origin, &span, reason, Map::new());
-                } else {
-                    reply.close(cut, leftover, pending_data, &span, &origin, &mut out);
-                }
-            }
-        }
-    }
-}
-
-impl ChatCompletionsDecoder {
-    fn read(
-        &mut self,
-        record: &CaptureRecord,
-        emit: &mut dyn FnMut(Observation),
-    ) -> io::Result<()> {
-        match record {
-            CaptureRecord::Open {
-                stream,
-                source,
-                metadata,
-                ..
-            } => self.open(stream, *source, metadata),
-            CaptureRecord::Segment {
-                stream,
-                part,
-                source_offset,
-                source_len,
-                first,
-                last,
-                data_b64,
-                audit,
-            } => {
-                let view = SegmentView {
-                    part: *part,
-                    first,
-                    last,
-                    audit: &audit.spans,
-                    source_offset: *source_offset,
-                    source_len: *source_len,
-                };
-                self.segment(stream, &view, data_b64, emit);
-            }
-            CaptureRecord::Gap {
-                stream: Some(stream),
-                ..
-            } => self.gap(stream),
-            // A stream-less loss may have taken selected traffic with it.
-            CaptureRecord::Gap { stream: None, .. } => self.tally.incomplete = true,
-            CaptureRecord::End { stream, reason, .. } => {
-                if let Some(tracked) = self.streams.remove(stream) {
-                    self.close(stream, tracked, Close::End(*reason), emit);
-                }
-            }
-            CaptureRecord::Recovery {
-                previous_producer, ..
-            } => {
-                let lost: Vec<StreamKey> = self
-                    .streams
-                    .keys()
-                    .filter(|key| &key.producer == previous_producer)
-                    .cloned()
-                    .collect();
-                self.recovery(&lost, emit);
-            }
-            CaptureRecord::ProducerClosed { producer, .. } => {
-                let open: Vec<StreamKey> = self
-                    .streams
-                    .keys()
-                    .filter(|key| &key.producer == producer)
-                    .cloned()
-                    .collect();
-                for key in open {
-                    if let Some(tracked) = self.streams.remove(&key) {
-                        self.close(&key, tracked, Close::Unterminated, emit);
-                    }
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn summarize(&mut self, emit: &mut dyn FnMut(Observation)) -> io::Result<DecoderSummary> {
-        let open = std::mem::take(&mut self.streams);
-        for (key, tracked) in open {
-            self.close(&key, tracked, Close::Unterminated, emit);
-        }
-        Ok(DecoderSummary::new(
-            self.tally.observations,
-            self.tally.unknown,
-            self.tally.incomplete,
-        ))
     }
 }
 
@@ -550,8 +173,7 @@ impl DecoderV1 for ChatCompletionsDecoder {
         record: &CaptureRecord,
         emit: &mut dyn FnMut(Observation),
     ) -> Result<(), DecoderFailure> {
-        self.read(record, emit)
-            .map_err(|error| DecoderFailure::from_io(&error))
+        self.tracker.push(record, emit)
     }
 
     fn push_recovery(
@@ -560,80 +182,69 @@ impl DecoderV1 for ChatCompletionsDecoder {
         lost_streams: &[StreamKey],
         emit: &mut dyn FnMut(Observation),
     ) -> Result<(), DecoderFailure> {
-        if !matches!(record, CaptureRecord::Recovery { .. }) {
-            return Err(DecoderFailure::new("recovery_scope_unsupported"));
-        }
-        self.recovery(lost_streams, emit);
-        Ok(())
+        self.tracker.push_recovery(record, lost_streams, emit)
     }
 
     fn finish(
         mut self: Box<Self>,
         emit: &mut dyn FnMut(Observation),
     ) -> Result<DecoderSummary, DecoderFailure> {
-        self.summarize(emit)
-            .map_err(|error| DecoderFailure::from_io(&error))
+        self.tracker.finish(emit)
     }
 }
 
-/// One selected stream and its current logical record.
+/// What the Chat Completions wire means, at the points the shared stream tracker asks.
 #[derive(Debug)]
-struct Tracked {
-    source: CaptureSource,
-    wire: Option<WireIdentity>,
-    status: Option<u16>,
-    framing: Framing,
-    /// The segments contributing to the current record (for SSE: the event being framed).
-    span: Span,
-    /// Why the current whole-stream record can no longer be decoded.
-    loss: LossCauses,
-    /// An invalid audit discarded bytes and permanently limits this stream's coverage.
-    invalid_audit_loss: bool,
-    /// The cause whose discard boundary the shared SSE framer has not consumed yet.
-    resync_cause: Option<ResyncCause>,
-}
+struct ChatCompletions;
 
-impl Tracked {
-    /// A loss inside the current record: release what it buffered and never parse it.
-    fn damage(&mut self, buffered: &mut usize, tally: &mut Tally, reason: &'static str) {
-        tally.incomplete = true;
-        if reason == "invalid_redaction_audit" {
-            self.invalid_audit_loss = true;
-        }
-        match &mut self.framing {
-            Framing::Json(buf) => {
-                *buffered -= buf.len();
-                *buf = Vec::new();
-                self.loss.remember(reason);
-            }
-            Framing::Unsupported(_) => {
-                self.loss.remember(reason);
-            }
-            Framing::Sse(body) => {
-                let pending_over_budget = body.sse.lose(buffered);
-                if pending_over_budget {
-                    ResyncCause::remember(&mut self.resync_cause, "over_budget");
-                }
-                ResyncCause::remember(&mut self.resync_cause, reason);
-            }
-        }
+impl Protocol for ChatCompletions {
+    /// What the chunks of a streamed completion add up to.
+    type SseState = Reply;
+
+    fn selects(source: CaptureSource, hint: Option<&str>) -> bool {
+        selects(source, hint)
     }
-}
 
-#[derive(Debug)]
-enum Framing {
-    /// A whole-stream JSON document: an HTTP request or JSON response body.
-    Json(Vec<u8>),
-    /// An HTTP `text/event-stream` body: the framer and what the chunks add up to.
-    Sse(Box<SseBody>),
-    /// A selected HTTP body of another (or no) content type, with that type.
-    Unsupported(Option<String>),
-}
+    fn json(
+        bytes: &[u8],
+        source: CaptureSource,
+        span: &Span,
+        origin: &Origin<'_>,
+        out: &mut Out<'_>,
+    ) {
+        let role = match source {
+            CaptureSource::WireRequest => Role::HttpRequest,
+            _ => Role::HttpJsonResponse,
+        };
+        decode_record(bytes, role, span, origin, out);
+    }
 
-#[derive(Debug, Default)]
-struct SseBody {
-    sse: Sse,
-    reply: Reply,
+    fn event(reply: &mut Reply, data: &[u8], span: &Span, origin: &Origin<'_>, out: &mut Out<'_>) {
+        reply.event(data, span, origin, out);
+    }
+
+    fn lost(reply: &mut Reply, reason: &str, span: &Span, origin: &Origin<'_>, out: &mut Out<'_>) {
+        reply.lost(reason, span, origin, out);
+    }
+
+    fn discarded(reply: &mut Reply, span: &Span) {
+        reply.discarded(span);
+    }
+
+    fn stream_span(reply: &Reply, _: &Span) -> Span {
+        reply.all.clone()
+    }
+
+    fn close(mut reply: Reply, end: &SseEnd<'_>, origin: &Origin<'_>, out: &mut Out<'_>) {
+        reply.close(
+            end.cut,
+            end.leftover,
+            end.pending_data,
+            end.pending,
+            origin,
+            out,
+        );
+    }
 }
 
 #[derive(Clone, Copy)]
