@@ -67,8 +67,6 @@ pub struct StartOptions {
     pub goal_file: Option<PathBuf>,
     /// `--capture-reserve-bytes`: the chain bytes the daemon reserves before a v5 launch.
     pub capture_reserve_bytes: u64,
-    /// One explicitly supplied Claude M2 Bash rule; absent on ordinary runs.
-    pub capture_claude_allowed_tool: Option<String>,
 }
 
 /// What one `goalcup start` did.
@@ -136,12 +134,6 @@ fn started(
     //    nothing but set a flag; the four places that read it are the four moments this
     //    command can act on one.
     crate::arming::watch_for_interrupt();
-
-    if opts.capture_claude_allowed_tool.is_some() && opts.goal_file.is_none() {
-        return Err(CliError::Refused(
-            "a Claude capture tool allowance requires --goal-file".into(),
-        ));
-    }
 
     if let Some(goal_file) = &opts.goal_file {
         let roots = roots.unwrap_or_else(UpstreamRoots::webpki);
@@ -718,18 +710,6 @@ fn prepare(
         profile,
         ..
     } = *cx;
-    if let Some(rule) = opts.capture_claude_allowed_tool.as_deref() {
-        let why = if opts.dev {
-            Some("a development run (--dev) cannot carry one")
-        } else {
-            crate::launch::allowance_refusal(c, &profile.args, rule)
-        };
-        if let Some(why) = why {
-            return Err(CliError::Refused(format!(
-                "the Claude capture tool allowance cannot be used: {why}. Nothing was created."
-            )));
-        }
-    }
     // The rulebook the proxy's host rules and the launch come from, through the one door.
     let pin = crate::preflight::harness_pin_gate(c, opts.dev);
     match pin.level {
@@ -917,7 +897,6 @@ fn create_and_gate<'a>(
                 proxy_url: &proxied.proxy_url,
                 ca_certificate: proxied.proxy.ca_certificate(),
                 parent_env: env,
-                allowed_tool_rule: opts.capture_claude_allowed_tool.as_deref(),
             },
         )?;
         // Offered once. `busy` is the daemon's refusal before it reads a request and is

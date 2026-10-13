@@ -14,7 +14,7 @@
 //!   fields), the `CaptureStreams` decision and its pipes, the per-run home tree where there is
 //!   one (every path, type, mode and file SHA-256), the CA variables and their mode, the
 //!   credential variable and the verdicts on its value, the argv and environment deny
-//!   decisions over fixed probe lists, the tool-allowance refusals, the registered
+//!   decisions over fixed probe lists, the registered
 //!   `ProcessHandle` fields that come from the manifest, the termination settings and the
 //!   redaction patterns the profile carries;
 //! * across families (`cross-family.json`): the CA, credential and argv-guard decisions over
@@ -41,12 +41,11 @@
 
 use crate::common::m2_profile_support;
 
-use goalcup_cli::CliError;
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::key_scan::FragmentMatcher;
 use goalcup_cli::launch::{
-    LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, allowance_refusal,
-    build_capture_launch, child_secret_for_harness, handle, spawn, stdout_tee, tee_marked,
+    LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, build_capture_launch,
+    child_secret_for_harness, handle, spawn, stdout_tee, tee_marked,
 };
 use goalcup_cli::per_run_home::create_per_run_home;
 use goalcup_protocol::ProtocolError;
@@ -689,52 +688,6 @@ fn ca_json(l: &s::Layout, p: &CaptureSpec, plan: &LaunchPlan) -> Value {
     })
 }
 
-/// The allowance refusals of this connector over fixed rules and argument shapes.
-fn allowance_json(c: &HarnessConnector) -> Value {
-    let p = profile(c);
-    let mut with_flag = p.args.clone();
-    with_flag.insert(0, "--allowedTools".to_string());
-    let mut no_separator = p.args.clone();
-    if no_separator.last().map(String::as_str) == Some("--") {
-        no_separator.pop();
-    }
-    let shapes: [(&str, Vec<String>); 3] = [
-        ("profile_args", p.args.clone()),
-        ("profile_args_with_allowedtools", with_flag),
-        ("profile_args_without_separator", no_separator),
-    ];
-    let rules = [
-        "Bash(python3 demo.py *)",
-        "Bash(python3 ../x.py *)",
-        "Bash(python3 demo.py)",
-        "Bash(*)",
-        "",
-    ];
-    let mut rows = Vec::new();
-    for (label, args) in &shapes {
-        for rule in rules {
-            rows.push(json!({
-                "args": label, "rule": rule,
-                "refusal": allowance_refusal(c, args, rule),
-            }));
-        }
-    }
-    // The two halves of the id-and-family predicate, separately.
-    if c.loaded.manifest.id == "claude-code-cli" {
-        let mut other_id = c.clone();
-        other_id.loaded.manifest.id = "claude-code-clone".to_string();
-        rows.push(json!({
-            "args": "profile_args", "rule": rules[0], "variant": "family_changed",
-            "refusal": "only the pinned claude-code-cli profile may carry one",
-        }));
-        rows.push(json!({
-            "args": "profile_args", "rule": rules[0], "variant": "id_changed",
-            "refusal": allowance_refusal(&other_id, &p.args, rules[0]),
-        }));
-    }
-    json!(rows)
-}
-
 fn legacy_env_refusal(key: &str, home_env: Option<&str>) -> Option<&'static str> {
     if home_env.is_some_and(|h| key.eq_ignore_ascii_case(h)) {
         return Some("is pinned by the capture launch itself");
@@ -805,15 +758,6 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         "goal_prefix": hostile_plan.capture.map(|h| h.goal_prefix),
         "argv_len": hostile_plan.argv.len(),
     });
-
-    // The tool allowance in the plan: spliced before the goal, or refused.
-    let mut with_rule = s::launch(&l, goal, &pinned, &proxy, &parent);
-    with_rule.allowed_tool_rule = Some("Bash(python3 demo.py *)");
-    let allowance_plan = match build_capture_launch(c, &s::vars(&l), &l.workspace, &with_rule) {
-        Ok(p) => json!({"argv_tail": p.argv[p.argv.len().saturating_sub(4)..].to_vec()}),
-        Err(CliError::Refused(_)) => json!({"refused": "exit1"}),
-        Err(e) => json!({"error": format!("exit{}", e.exit_code())}),
-    };
 
     // The handle the manifest's kill fields end up in, from a live fake child.
     let mut live = plan.clone();
@@ -907,7 +851,6 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         "capture_profile": profile_json(dp),
         "plan": plan_json(&l, &plan),
         "goal_placement_for_an_option_shaped_goal": placement,
-        "plan_with_claude_tool_allowance": allowance_plan,
         "streams": connector_streams_json(dp),
         "home": home,
         "ca": ca_json(&l, dp, &plan),
@@ -918,7 +861,6 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         },
         "argv_deny": argv_deny,
         "env_deny": env_deny,
-        "allowance_refusals": allowance_json(dc),
         "redaction": {
             "extra_patterns": dc.loaded.manifest.redaction.as_ref()
                 .map(|r| r.extra_patterns.iter().map(|p| json!({"kind": p.kind, "regex": p.regex})).collect::<Vec<_>>())

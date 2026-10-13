@@ -671,8 +671,6 @@ pub struct CaptureLaunch<'a> {
     pub ca_certificate: &'a Path,
     /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`] is read from it.
     pub parent_env: &'a BTreeMap<String, String>,
-    /// The one validated Claude command-text allowance for this launch.
-    pub allowed_tool_rule: Option<&'a str>,
 }
 
 impl fmt::Debug for CaptureLaunch<'_> {
@@ -688,40 +686,7 @@ impl fmt::Debug for CaptureLaunch<'_> {
             )
             .field("ca_certificate", &self.ca_certificate)
             .field("parent_env", &Keys(self.parent_env))
-            .field("allowed_tool_rule", &self.allowed_tool_rule)
             .finish()
-    }
-}
-
-/// Why the Claude capture tool allowance `rule` cannot be used with connector `c`, whose capture
-/// arguments are `args` (the profile's own, or the same rendered): `None` when it can. The one
-/// predicate behind both the refusal before anything is created and the plan's own check, so the
-/// two cannot drift, and each refusal says which condition failed.
-/// The connector id is the only retained product-specific allowance; every other condition is
-/// checked against the manifest argv.
-pub fn allowance_refusal(
-    c: &HarnessConnector,
-    args: &[String],
-    rule: &str,
-) -> Option<&'static str> {
-    let has = |flag: &str, value: &str| {
-        args.windows(2)
-            .any(|pair| pair[0] == flag && pair[1] == value)
-    };
-    if c.loaded.manifest.id != "claude-code-cli" {
-        Some("only the pinned claude-code-cli profile may carry one")
-    } else if !goalcup_protocol::capture::is_claude_capture_allowed_tool_rule(rule) {
-        Some("the rule is not one bounded `Bash(python3 <name>.py *)`")
-    } else if args.iter().any(|arg| arg == "--allowedTools") {
-        Some("the profile already has an --allowedTools of its own")
-    } else if args.last().map(String::as_str) != Some("--") {
-        Some("the profile's arguments do not end at `--`, so the allowance has no place to go")
-    } else if !has("--permission-mode", "acceptEdits") || !has("--permission-prompts", "none") {
-        Some(
-            "the profile is not in the pinned mode (`--permission-mode acceptEdits`, `--permission-prompts none`)",
-        )
-    } else {
-        None
     }
 }
 
@@ -808,18 +773,6 @@ pub fn build_capture_launch(
         return Err(CliError::Internal(format!(
             "`{id}`'s capture args place the goal neither one way nor the other"
         )));
-    }
-    if let Some(rule) = launch.allowed_tool_rule {
-        if let Some(why) = allowance_refusal(c, &argv, rule) {
-            return Err(CliError::Refused(format!(
-                "the Claude capture tool allowance cannot be used: {why}. Nothing is launched."
-            )));
-        }
-        let before_goal = argv.len() - 1;
-        argv.splice(
-            before_goal..before_goal,
-            ["--allowedTools".into(), rule.into()],
-        );
     }
     let goal_prefix = profile.goal_flag.as_ref().map_or(0, |flag| flag.len() + 1);
     match &profile.goal_flag {

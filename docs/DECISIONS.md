@@ -1347,9 +1347,11 @@ Hermes drops `--model` and `agent.reasoning_effort`, and keeps `--provider deeps
   reach the tracer's own control file, its session file, the shared config homes later runs load,
   and the real `~/.codex` and `~/.claude`; traffic to an unlisted host is tunnelled and noted, and
   a tool that ignores `HTTPS_PROXY` is not seen at all (`docs/CHEAT-CHECKLIST.md`, `docs/RULES.md`).
-  The Claude tool allowance (`--capture-claude-allowed-tool`) needs `acceptEdits` and is refused
-  for the shipped profile; it is dead code until removed. None of the three default-model
-  launches is measured yet.
+  The Claude tool allowance (`--capture-claude-allowed-tool`) needed `acceptEdits` and was refused
+  for the shipped profile; the flag, its launch splice and the daemon's argv check were removed.
+  The v5 `Launch` fields `allowed_tool_rule` and `process_handoff_digest` stay readable (and are
+  now always written empty) so traces that carry them still verify. None of the three
+  default-model launches is measured yet.
 
 **Reconsider when** a measured run shows a default that breaks capture (a session file not
 written, a second session id).

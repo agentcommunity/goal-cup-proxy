@@ -288,55 +288,6 @@ pub(super) fn fresh_capture_id() -> String {
     hex::encode(bytes)
 }
 
-/// The refusal for a registered process whose tool allowance is not exactly the one Claude's
-/// capture launch passes.
-const INVALID_ALLOWANCE: &str = "invalid capture tool allowance argv";
-
-/// The tool allowance a Claude capture launch registered, as the `Launch` record carries it.
-struct ToolAllowance {
-    /// The one `--allowedTools` rule.
-    rule: String,
-    /// The digest of the process handoff that authorised it.
-    handoff_digest: String,
-}
-
-/// The allowance read from the registered process, never the create snapshot: `None` when the
-/// process carries none, and a refusal when it carries anything but exactly
-/// `--allowedTools <rule> -- <goal>` at the end of a `claude-code-cli` argv.
-fn registered_tool_allowance(row: &Entry) -> Result<Option<ToolAllowance>, DaemonError> {
-    let has_allowance = row
-        .last_process
-        .as_ref()
-        .is_some_and(|handle| handle.argv.iter().any(|arg| arg == "--allowedTools"));
-    if !has_allowance {
-        return Ok(None);
-    }
-    let authority = row
-        .verified_registered_termination_registration()?
-        .ok_or_else(|| DaemonError::Refused("the capture process is not registered".into()))?;
-    let argv = &authority.registration.handle.argv;
-    let [flag, rule, separator, goal] = &argv[argv.len().saturating_sub(4)..] else {
-        return Err(DaemonError::Refused(INVALID_ALLOWANCE.into()));
-    };
-    let valid = row.connector_id == "claude-code-cli"
-        && flag == "--allowedTools"
-        && separator == "--"
-        && goal == "<goal>"
-        && argv
-            .iter()
-            .filter(|arg| arg.as_str() == "--allowedTools")
-            .count()
-            == 1
-        && goalcup_protocol::capture::is_claude_capture_allowed_tool_rule(rule);
-    if !valid {
-        return Err(DaemonError::Refused(INVALID_ALLOWANCE.into()));
-    }
-    Ok(Some(ToolAllowance {
-        rule: rule.clone(),
-        handoff_digest: authority.request_digest.as_str().to_string(),
-    }))
-}
-
 impl Daemon {
     /// Create a v5 local capture entry for `manifest`'s capture profile: preflight the
     /// profile's redaction, reserve the chain, chain the v5 baseline of the fresh workspace,
@@ -720,13 +671,7 @@ impl Daemon {
         let capture = self.capture_entry(entry_id)?;
         capture.require_live_capture_authority()?;
         let mut run = capture.lock();
-        // The default Launch remains independent of handoff authority validation. An
-        // allowance is read only from the registered process, never the create snapshot.
-        let registered = self.registry().get(entry_id)?.ok_or_else(|| {
-            DaemonError::Missing(format!("no capture entry {entry_id} in this daemon"))
-        })?;
-        let allowance = registered_tool_allowance(&registered)?;
-        capture.record_launch(&mut run, request, allowance)?;
+        capture.record_launch(&mut run, request)?;
         run.entry = self.registry().update(entry_id, |entry| {
             entry.state = EntryState::Started;
             entry.harness_version = request.harness_version.clone();
@@ -1197,7 +1142,6 @@ impl CaptureEntry {
         &self,
         run: &mut CaptureRun,
         request: &CaptureLaunchRequest,
-        allowance: Option<ToolAllowance>,
     ) -> Result<(), DaemonError> {
         run.refuse_if_finished()?;
         match &run.goal {
@@ -1214,13 +1158,6 @@ impl CaptureEntry {
                 ));
             }
         }
-        let (allowed_tool_rule, process_handoff_digest) = match allowance {
-            Some(ToolAllowance {
-                rule,
-                handoff_digest,
-            }) => (Some(rule), Some(handoff_digest)),
-            None => (None, None),
-        };
         let record = CaptureRecord::Launch {
             observed: request.spawned_at.clone(),
             goal_stream: request.goal_stream.clone(),
@@ -1229,8 +1166,10 @@ impl CaptureEntry {
             harness_version: request.harness_version.clone(),
             recorder_revision: DAEMON_VERSION.to_string(),
             continuation: request.continuation.clone(),
-            allowed_tool_rule,
-            process_handoff_digest,
+            // The tracer no longer registers a tool allowance (D52); the v5 fields stay in the
+            // record shape so traces that carry them still verify.
+            allowed_tool_rule: None,
+            process_handoff_digest: None,
             // The key the daemon minted at create, never one the CLI supplied (contract S1).
             run_public_key: Some(run.entry.keys.public_key_hex()?),
             // Forwarded from the row. `create_capture` stores the directory digest carried by

@@ -1,93 +1,4 @@
 {
-  "allowance_refusals": [
-    {
-      "args": "profile_args",
-      "refusal": "the profile is not in the pinned mode (`--permission-mode acceptEdits`, `--permission-prompts none`)",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the profile already has an --allowedTools of its own",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the profile's arguments do not end at `--`, so the allowance has no place to go",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": ""
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)",
-      "variant": "family_changed"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)",
-      "variant": "id_changed"
-    }
-  ],
   "argv_deny": [
     {
       "arg": "--remote",
@@ -1071,9 +982,6 @@
     },
     "mode": "Server",
     "program": "<TMP>/bin/fake-harness"
-  },
-  "plan_with_claude_tool_allowance": {
-    "refused": "exit1"
   },
   "redaction": {
     "extra_patterns": [

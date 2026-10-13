@@ -975,44 +975,6 @@ impl Entry {
         self.process_handoff_phase
     }
 
-    /// The complete generation/digest/handle authority a finalization intent must latch
-    /// before it prepares a termination attempt. This is the same validation as the
-    /// legacy handle accessor, but it does not throw away the generation boundary.
-    pub(crate) fn verified_registered_termination_registration(
-        &self,
-    ) -> Result<Option<AcceptedProcessHandoffV1>, DaemonError> {
-        if self.process_handoff_phase != ProcessHandoffPhase::Registered {
-            return Ok(None);
-        }
-        let handle = self.last_process.clone().ok_or_else(|| {
-            DaemonError::Refused(format!(
-                "entry {} is registered without a persisted termination handle",
-                self.entry_id
-            ))
-        })?;
-        let registration = ProcessRegistration {
-            generation: self.process_handoff_generation,
-            handle: handle.clone(),
-        };
-        let expected = registration.canonical_handle_digest(&self.entry_id);
-        if self.process_handoff_digest.as_deref() != Some(expected.as_str()) {
-            return Err(DaemonError::Refused(format!(
-                "entry {} has a registered process without its matching canonical authority digest",
-                self.entry_id
-            )));
-        }
-        let request_digest = Sha256Digest::try_from(expected).map_err(|error| {
-            DaemonError::Refused(format!(
-                "entry {} has a non-canonical process authority digest: {error}",
-                self.entry_id
-            ))
-        })?;
-        Ok(Some(AcceptedProcessHandoffV1 {
-            request_digest,
-            registration,
-        }))
-    }
-
     /// The process route may receive a handle only from a launch path that owes one.
     pub(crate) fn accepts_process_handoff(&self) -> bool {
         !matches!(
