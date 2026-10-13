@@ -1,5 +1,8 @@
 # Goal Cup server: upload, storage and live numbers
 
+**Status:** working design, merged so the build can start. Owner still to confirm: late delivery of
+pre-deadline records (section 3, step 6).
+
 Design for the server side of the tracer, for the event going live on **6 November 2026**. Written
 2026-10-13 from the owner's decisions, then revised after four reviews (builder check, security and
 privacy, scale and operations, Cloudflare product research). Replaces the draft `docs/SERVER-PLAN.md`
@@ -71,7 +74,12 @@ through Supabase with row-level security.
 
    **The server issues the `entry_id`**, stamps `official_start` from its own clock, and sets
    `deadline_at` = `official_start` + 168 hours. It returns a **signed start receipt** in the verifier's
-   existing format (`StartReceipt`, with `started_at` and `deadline_at`). The tracer writes that
+   existing format (`StartReceipt`, with `started_at` and `deadline_at`). The receipt signs the connector,
+   manifest and connector-directory digests, the workspace, the `session_id` and the chain head, so the
+   open call sends all of them. *(My call: one call, not two. `goalcup start` already makes the
+   `session_id` itself, a fresh UUID, before the harness launches, so it exists when the call is made.
+   Harnesses that only report their own session id later don't change this; the receipt carries the
+   tracker's id.)* The tracer writes that
    `entry_id` into every record, so the trace is bound to this server run and can't be a recording made
    earlier. If the Worker refuses or can't be reached, nothing starts and the message says why.
 4. **Run, up to 168 hours.**
@@ -83,13 +91,19 @@ through Supabase with row-level security.
    - they run `goalcup continue`;
    - the tracer reattaches to the **same server run**: same official start, same deadline, and the clock
      kept running;
-   - the server issues a new `entry_id` for this next segment, and the tracer relaunches the harness
+   - `goalcup continue` is a new command (the old `goalcup resume` was removed, D48). Each segment is its
+     own entry: a new `entry_id` and its own fresh v5 chain from genesis, verified on its own. The server
+     links segments by run and segment number; the run's record is the ordered list of segments, and the
+     gap between two segments is the server's heartbeat gap;
+   - the server issues the new `entry_id` for this next segment, and the tracer relaunches the harness
      on its own session (Codex and Claude Code both resume sessions) with the message "keep going";
    - the record shows the gap and that message, which the rules allow.
 
    **Notifications:**
    - if the server hears nothing from an open run for 20 minutes, it emails the participant: "your
-     run stopped; run `goalcup continue`";
+     run stopped; run `goalcup continue`". One email per silence, not repeated every 20 minutes, and none
+     once the run is sealed or past `deadline_at`. A run with no seal 48 hours after `deadline_at` is
+     marked abandoned;
    - *(nice to have)* a small login item on the participant's machine notices an interrupted run after
      a reboot and shows a notification that leads to `goalcup continue`.
 6. **The deadline.** At `deadline_at` the tracer stops the agent and seals, and the run is over.
@@ -110,13 +124,13 @@ checks that the run belongs to the token's member.
 
 | Call | What it does |
 |---|---|
-| `POST /v1/runs` `{connector, harness_version, tracer_version, repo_url, chain_head_at_create}` | Opens a run (section 3). Returns `{run_id, entry_id, official_start, deadline_at, start_receipt}`. Refuses unsupported tracer or connector versions. |
-| `POST /v1/runs/{id}/continue` `{previous_entry_id, chain_head_at_create}` | After a stop: issues the next segment's `entry_id` for the same run, before the agent relaunches. Refused after `deadline_at`. |
+| `POST /v1/runs` `{connector_id, manifest_sha256, connector_dir_sha256, workspace, session_id, chain_head_at_create, harness_version, tracer_version, repo_url}` | Opens a run (section 3). `repo_url` must be `https://github.com/<owner>/<repo>` and public; the Worker checks it with the GitHub API and refuses otherwise. Returns `{run_id, entry_id, official_start, deadline_at, start_receipt}`. Refuses unsupported tracer or connector versions. |
+| `POST /v1/runs/{id}/continue` `{previous_entry_id, connector_id, manifest_sha256, connector_dir_sha256, workspace, session_id, chain_head_at_create}` | After a stop: issues the next segment's `entry_id` and start receipt for the same run, before the agent relaunches. Refused after `deadline_at`. |
 | `GET /v1/runs/{id}` | The server's position: `{offset, seq, head, status}`. Used to resume after a crash. |
 | `POST /v1/runs/{id}/heartbeat` | Every 5 minutes: `{at, seq, head, offset_local, tokens_in, tokens_out, tool_calls, model_requests, outage_open}`. The server stamps its receive time on `(seq, head)`, which commits the participant to that chain position before the bytes arrive. Totals are cumulative. |
 | `PUT /v1/runs/{id}/chunks/{offset}` + headers `{length, sha256, first_seq, last_seq, prev, head}`, body = zstd bytes | Stores bytes `[offset, offset+length)` of `chain.jsonl`, whole lines only. Returns a signed **acknowledgement** in the verifier's existing format (`AckCheckpoint` in `acks.jsonl`). |
 | `POST /v1/runs/{id}/outages` | Outage windows the proxy already tracks, sent with chunks and at seal. Server-measured heartbeat gaps are the authority; these add detail. |
-| `POST /v1/runs/{id}/seal` `{seal_json, baseline_json}` | Last call. Triggers the full verify job. |
+| `POST /v1/runs/{id}/seal` `{seal_json, baseline_json}` | Last call. Triggers the full verify job. The Worker only stores both documents; the verify job checks them. |
 
 **Acceptance of a chunk, step by step.**
 1. Reject early, before reading the body, if:
@@ -151,22 +165,28 @@ because recording never waits.
   committed in heartbeats appear in the chain at the right place, record times against `official_start`
   and `deadline_at`, and late arrivals. Results go to Supabase.
 - **Where the verify job runs:** *(my call)* on an organizer's always-on machine or a small VPS, pulling
-  from R2, for 6 November. Cloudflare Containers can host it later. It runs the same binary participants
-  run.
-- **Receipts:** the start receipt and acknowledgements reuse the verifier's existing signed formats, so
-  verifier work shrinks to pinning keys.
+  from R2, for 6 November. It runs hourly from cron, checks only the new chunks of each open run, and
+  does a full pass at seal; a $5–20/month VPS is enough. Cloudflare Containers can host it later. It
+  runs the same binary participants run.
+- **Receipts:** the start receipt and acknowledgements reuse the existing signed formats
+  (`StartReceiptClaims`, `AckCheckpoint`), which stay unchanged.
   - They're signed with an Ed25519 key held only as a Worker secret.
-  - **Two public keys** (active and standby) are pinned in the verifier release, so a key can rotate
-    mid-event without re-releasing the tracer.
+  - **Two public keys** (active and standby) are pinned, so a key can rotate mid-event without
+    re-releasing the tracer. Today the daemon config holds a single `server_public_key`, so two keys
+    change the daemon config, the receipt verification and the acknowledgement verification, not only
+    the verifier.
   - The key is made offline. A short runbook covers rotation and compromise.
   - The old published placeholder key is no longer trusted (tracer hardening, already in progress).
-  - Each receipt names its event and mode, so practice and dry-run receipts can never pass as
-    competition ones.
+  - The signed formats have no event or mode field, and adding one would change them. Instead the server
+    maps every `entry_id` to its event, so a practice or dry-run entry can never be scored as
+    competition. *(My call.)*
 
 ## 6. Live numbers
 
 **Counted on the participant's machine.** Before each heartbeat, the tracer runs the verifier's existing
-decoders (`usage` and `tool_call`) over the records written since the last count. Each model request and
+decoders (`usage` and `tool_call`) over the records written since the last count. Those decoders and
+their record-kind constants are crate-private in `capture_analysis` today (`api.rs` and its siblings), so
+exporting them is a small change. Each model request and
 tool call counts once, from the model traffic only.
 
 **Sanity checks on the server:**
@@ -227,7 +247,7 @@ There is no second redaction pass on the server; `RULES.md` is reworded to say s
 - **dry_run:** the 28 October run with friendly teams;
 - **competition:** 6 November.
 
-Only competition runs appear in `live.json`, and receipts carry the mode. (Confirmed by the owner.)
+Only competition runs appear in `live.json`, and the server tells the mode from the `entry_id` (section 5). (Confirmed by the owner.)
 
 ## 10. Local disk
 
@@ -269,19 +289,21 @@ $1 per TB per month), possibly kept for good.
 ## 13. What the tracer needs (small PRs, in order)
 
 1. `goalcup login`, and token storage that's never in the harness environment.
-2. Open the run before launch: adopt the server's `entry_id`, `official_start` and `deadline_at`, and keep
-   the start receipt. Depends on the sleep-proof clock fix (in progress).
+2. Open the run before launch: send the connector, manifest and directory digests, workspace,
+   `session_id` and chain head; adopt the server's `entry_id`, `official_start` and `deadline_at`, and
+   keep the start receipt. Depends on the sleep-proof clock fix (in progress).
 3. The uploader in `goalcup start`: first chunk at launch, then hourly or at 32 MB, streaming, backoff
    with `Retry-After`, idempotent retries, acknowledgements kept in `acks.jsonl`, and `goalcup upload
    <entry>` after a crash.
 4. Heartbeat with `(seq, head)` and live totals.
 5. Outage windows sent with chunks and at seal.
-5a. `goalcup continue`: reattach to the same run, a new segment `entry_id`, and resume the harness's own
-    session with "keep going" (a connector field for each harness's resume command).
+5a. `goalcup continue` (a new command): reattach to the same run, a new segment `entry_id` with its own
+    fresh chain from genesis, and resume the harness's own session with "keep going" (a connector field
+    for each harness's resume command).
 5b. The deadline stop: at `deadline_at`, stop the agent, note the local repo's latest commit, seal.
 5c. *(Nice to have)* the login-item notification after a reboot.
 6. Pruning after verified acknowledgements, and the rolling reservation.
-7. Verifier: pin two keys, report "pruned", report lateness.
+7. Daemon config, receipt and acknowledgement verification: pin two keys. Verifier: report "pruned", report lateness. Export the `usage` and `tool_call` decoders.
 
 ## 14. What the server needs
 
@@ -297,7 +319,7 @@ $1 per TB per month), possibly kept for good.
 4b. At each run's deadline, a scheduled job records the repo's latest default-branch commit through the
     GitHub API (a token with read access to public repos).
 5. Monitoring, switches, staging, and the load test.
-6. The receipt keys, made offline, with two public keys pinned in the verifier.
+6. The receipt keys, made offline, with two public keys pinned in the daemon and verifier.
 
 ## 15. The owner's answers (2026-10-13)
 
@@ -308,6 +330,9 @@ $1 per TB per month), possibly kept for good.
    forever if it stays cheap. Deletion on request. This goes in the terms before consent.
 3. **Second redaction on the server:** not built. `RULES.md` is reworded to "secrets are removed on your
    machine before anything is saved or sent".
+   - Two more `RULES.md` rewordings come from this design. Line 54 allows several parallel entries;
+     the design allows one open run per account. Line 43 says "no build grace period"; the design adds a
+     48-hour window for late delivery of records made before the deadline *(owner to confirm)*.
 4. **Practice and dry runs:** yes, as in section 9. Funding practice tokens is a separate question.
 5. **Public per-run numbers:** yes, shown publicly (the site may choose to show daily updates). The
    infrastructure supports 5-minute updates. The terms say run statistics are public.
@@ -327,7 +352,7 @@ $1 per TB per month), possibly kept for good.
 - Server-side decoding or cleaning (job 3).
 - A custom admin dashboard: organizers use Supabase's table view.
 - The browser-approval connect flow.
-- Teams.
+- Teams. (The teams in `docs/registration-and-auth-design.md` are also after 6 November.)
 - More than one open run per account.
 - A native Windows build (Windows participants use WSL2).
 - Durable Objects, Queues, D1, Analytics Engine, Hyperdrive, Pipelines/Basin and Containers.
@@ -335,5 +360,4 @@ $1 per TB per month), possibly kept for good.
 ## 17. Left to the builder
 
 Exact chunk boundaries and compression settings (no long-window zstd); backoff constants; the pruning
-mechanism (within section 10); code structure; migration tooling; where the verify job is triggered
-from.
+mechanism (within section 10); code structure; migration tooling.
