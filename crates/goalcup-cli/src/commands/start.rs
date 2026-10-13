@@ -69,6 +69,9 @@ pub struct StartOptions {
     pub capture_reserve_bytes: u64,
     /// One explicitly supplied Claude M2 Bash rule; absent on ordinary runs.
     pub capture_claude_allowed_tool: Option<String>,
+    /// `--repo`: the public GitHub repository the agent pushes to. Required when the tracker
+    /// uploads to a server (`goalcup login`), which records its final commit at the deadline.
+    pub repo: Option<String>,
 }
 
 /// What one `goalcup start` did.
@@ -289,6 +292,8 @@ const CAPTURE_HOMES_DIR: &str = "capture-homes";
 /// What every phase of one capture run is given and none changes.
 struct CaptureRun<'a> {
     client: &'a (dyn DaemonClient + Sync),
+    /// The upload server this run opens with, or `None` for a local-only run.
+    upload: Option<&'a Uploading>,
     cfg: &'a Path,
     env: &'a BTreeMap<String, String>,
     opts: &'a StartOptions,
@@ -680,8 +685,10 @@ fn capture(
     let goal = read_goal(goal_file)?;
     let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;
     let profile = &c.loaded.manifest.capture;
+    let upload = uploading(cfg, opts, profile.credential.is_some(), out)?;
     let cx = CaptureRun {
         client,
+        upload: upload.as_ref(),
         cfg,
         env,
         opts,
@@ -820,6 +827,7 @@ fn create_and_gate<'a>(
 ) -> Result<(Forked<'a>, Gate), CliError> {
     let CaptureRun {
         client,
+        upload,
         cfg,
         env,
         opts,
@@ -859,6 +867,24 @@ fn create_and_gate<'a>(
         }
     }
 
+    let session_id = fresh_uuid();
+    // With a server, the run is opened there before the daemon creates anything: the
+    // server issues the entry id every record carries.
+    let opened = match upload {
+        Some(upload) => match upload.open(cx, &run, &session_id) {
+            Ok(opened) => Some(opened),
+            Err(error) => {
+                let _ = run.remove();
+                return Err(error);
+            }
+        },
+        None => None,
+    };
+    let give_back = |cause: &CliError| {
+        if let (Some(upload), Some(opened)) = (upload, opened.as_ref()) {
+            upload.give_back(opened, cause);
+        }
+    };
     let request = CaptureWorkspaceRequest {
         workspace: run.workspace.display().to_string(),
         profile_id: c.loaded.manifest.id.clone(),
@@ -866,15 +892,17 @@ fn create_and_gate<'a>(
         reserve_bytes: opts.capture_reserve_bytes,
         run_home: run.home.display().to_string(),
         config_home: config_home.display().to_string(),
+        entry_id: opened.as_ref().map(|o| o.run.entry_id.clone()),
     };
     let info = match retry_busy(|| client.create_capture_workspace(&request)) {
         Ok(info) => info,
         Err(e) => {
             let _ = run.remove();
-            return Err(e.into());
+            let error = e.into();
+            give_back(&error);
+            return Err(error);
         }
     };
-    let session_id = fresh_uuid();
     let template = EntryRecord {
         entry_id: info.entry_id.clone(),
         process_generation: info.process_generation,
@@ -894,6 +922,9 @@ fn create_and_gate<'a>(
 
     // Up to the spawn, a failure unmakes everything above.
     let launched = write_entry(cfg, &template).and_then(|()| {
+        if let (Some(upload), Some(opened)) = (upload, opened.as_ref()) {
+            upload.bind(cfg, opened, &info, out)?;
+        }
         say(out, &format!("entry {}", info.entry_id))?;
         say(out, &format!("run directory: {}", run.dir.display()))?;
         raise_open_file_limit(out)?;
@@ -944,6 +975,7 @@ fn create_and_gate<'a>(
         Ok(launched) => launched,
         Err(error) => {
             unmake(client, cfg, &info.entry_id, &run, &error, out);
+            give_back(&error);
             return Err(error);
         }
     };
@@ -1854,6 +1886,133 @@ fn finish(
             .await;
     });
     sealed
+}
+
+/// The upload server this run opens with: `None` with no `goalcup login`, for a `--dev` run,
+/// and for a harness handed a provider key (`keyed`), whose run must pass the key scan at its
+/// end before anything leaves the machine. With a server, `--repo` is required, checked here
+/// before anything is created.
+fn uploading(
+    cfg: &Path,
+    opts: &StartOptions,
+    keyed: bool,
+    out: &mut dyn std::io::Write,
+) -> Result<Option<Uploading>, CliError> {
+    let Some(server) = crate::server::read_server_config(cfg)? else {
+        return Ok(None);
+    };
+    let local_only = if opts.dev {
+        Some("A development run (--dev)")
+    } else if keyed {
+        Some("A run of a harness given a provider key")
+    } else {
+        None
+    };
+    if let Some(what) = local_only {
+        say(
+            out,
+            &format!("{what} is not uploaded: it stays on this machine."),
+        )?;
+        return Ok(None);
+    }
+    let Some(repo) = opts.repo.as_deref() else {
+        return Err(CliError::Refused(format!(
+            "this tracker uploads to {} (`goalcup login`), so `goalcup start` needs --repo              https://github.com/<owner>/<repo>: the public repository your agent pushes to.              Nothing was created.",
+            server.url
+        )));
+    };
+    Ok(Some(Uploading {
+        client: crate::upload::http::ServerClient::new(&server),
+        repo_url: crate::upload::checked_repo_url(repo)?,
+    }))
+}
+
+/// A run's upload server, for `goalcup start`.
+struct Uploading {
+    client: crate::upload::http::ServerClient,
+    repo_url: String,
+}
+
+/// The run as the server opened it, and what it was asked.
+struct OpenedRun {
+    run: crate::upload::api::OpenRun,
+    request: crate::upload::api::OpenRunRequest,
+}
+
+impl Uploading {
+    /// Open the run on the server, before the daemon creates anything.
+    fn open(
+        &self,
+        cx: &CaptureRun<'_>,
+        run: &RunDir,
+        session_id: &str,
+    ) -> Result<OpenedRun, CliError> {
+        let c = cx.connector;
+        let request = crate::upload::api::OpenRunRequest {
+            connector_id: c.loaded.manifest.id.clone(),
+            manifest_sha256: c.loaded.profile_sha256(),
+            connector_dir_sha256: c.loaded.connector_dir_sha256.clone(),
+            workspace: run.workspace.display().to_string(),
+            session_id: session_id.to_string(),
+            harness_version: cx
+                .profile
+                .resolved_executable(goalcup_protocol::harness::PlatformKey::current())
+                .version
+                .to_string(),
+            tracer_version: crate::CLI_VERSION.to_string(),
+            repo_url: self.repo_url.clone(),
+        };
+        let run = crate::upload::open_run(&self.client, &request)?;
+        Ok(OpenedRun { run, request })
+    }
+
+    /// The daemon made the entry under the server's id: fetch the start receipt over its
+    /// baseline, keep it, and say what the server stamped.
+    fn bind(
+        &self,
+        cfg: &Path,
+        opened: &OpenedRun,
+        info: &goalcup_protocol::control::CaptureWorkspaceInfo,
+        out: &mut dyn std::io::Write,
+    ) -> Result<(), CliError> {
+        if info.entry_id != opened.run.entry_id {
+            return Err(CliError::Internal(format!(
+                "the daemon created entry {} for the server's entry {}",
+                info.entry_id, opened.run.entry_id
+            )));
+        }
+        let receipt = crate::upload::fetch_receipt(
+            &self.client,
+            &opened.run,
+            &opened.request,
+            &info.chain_head,
+        )?;
+        let record = crate::upload::UploadRecord {
+            run_id: opened.run.run_id.clone(),
+            entry_id: opened.run.entry_id.clone(),
+            server_url: self.client.base().to_string(),
+            trace_dir: info.trace_dir.clone(),
+            official_start: opened.run.official_start.clone(),
+            deadline_at: opened.run.deadline_at.clone(),
+        };
+        crate::upload::keep_run(cfg, &record, &receipt)?;
+        say(
+            out,
+            &format!(
+                "run {} opened on {}: official start {}, deadline {}",
+                record.run_id, record.server_url, record.official_start, record.deadline_at
+            ),
+        )
+    }
+
+    /// Give the run back to the server: this start failed before its launch.
+    fn give_back(&self, opened: &OpenedRun, cause: &CliError) {
+        let _ = crate::upload::abandon_run(
+            &self.client,
+            &opened.run.run_id,
+            &format!("goalcup start failed before the launch: {cause}"),
+        );
+    }
 }
 
 /// Abandon an entry nothing was launched into, and remove what this command made for it: the

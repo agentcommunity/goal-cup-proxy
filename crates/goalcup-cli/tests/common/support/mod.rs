@@ -306,6 +306,7 @@ pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
         goal_file: None,
         capture_reserve_bytes: goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES,
         capture_claude_allowed_tool: None,
+        repo: None,
     }
 }
 

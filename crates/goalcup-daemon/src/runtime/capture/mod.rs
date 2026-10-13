@@ -459,6 +459,10 @@ impl Daemon {
         export.write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)?;
         export.sync_capture()?;
         let reserved_bytes = export.capture_storage().reserved_bytes;
+        let chain_head = export
+            .head()
+            .map(|(_, hash)| hash)
+            .ok_or_else(|| DaemonError::Refused("the baseline was not chained".into()))?;
 
         let keys = RunKeys::generate();
         let run_public_key = keys.public_key_hex()?;
@@ -547,6 +551,8 @@ impl Daemon {
             ingest_secret: secret.expose().to_string(),
             producer_id: fresh_capture_id(),
             run_public_key,
+            chain_head,
+            trace_dir: artifact_dir.join("trace").display().to_string(),
         })
     }
 

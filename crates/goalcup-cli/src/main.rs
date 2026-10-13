@@ -104,6 +104,10 @@ enum Command {
         /// `Bash(python3 <name>.py *)`. Applies to this run only.
         #[arg(long, value_name = "RULE", requires = "goal_file")]
         capture_claude_allowed_tool: Option<String>,
+        /// The public GitHub repository your agent pushes to, `https://github.com/<owner>/<repo>`.
+        /// Required once `goalcup login` has connected this tracker to the Goal Cup server.
+        #[arg(long, value_name = "URL")]
+        repo: Option<String>,
     },
     /// Show how a run is doing: recording state, health, storage and any gaps. Starts the
     /// daemon if none is running, so a sealed run is shown too.
@@ -190,12 +194,14 @@ fn run(command: Command) -> Result<u8, CliError> {
             goal_file,
             capture_reserve_bytes,
             capture_claude_allowed_tool,
+            repo,
         } => start(commands::start::StartOptions {
             harness,
             dev,
             goal_file,
             capture_reserve_bytes,
             capture_claude_allowed_tool,
+            repo,
         })
         .map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),

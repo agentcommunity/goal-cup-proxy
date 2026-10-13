@@ -127,6 +127,7 @@ impl Rig {
             reserve_bytes,
             run_home: self.run_home().display().to_string(),
             config_home: self.root.join("config-home").display().to_string(),
+            entry_id: None,
         }
     }
 
