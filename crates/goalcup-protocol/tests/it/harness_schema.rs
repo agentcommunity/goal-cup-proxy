@@ -2635,7 +2635,7 @@ fn goal_flag_words_are_whole_words() {
         ("--exec", false),
         ("--prompt-file", false),
         ("--run", false),
-        ("--load_config", false),
+        ("--load-config", false),
     ] {
         let mut t = hermes();
         set(&mut t, &["capture"], "goal_flag", flag);
