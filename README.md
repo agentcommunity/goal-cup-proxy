@@ -272,8 +272,14 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   never printed, never put in the agent's environment or on its command line, and never written
   into a trace; the agent runs as you, so it could still read the file, and you can revoke the
   token on the site ([checklist](docs/CHEAT-CHECKLIST.md)). A `server.json` other users can
-  read is refused. Run it again to replace the token. Uploading runs to the server is being
-  built ([TODO](TODO.md), step 2): until it lands, the login is stored and runs stay local.
+  read is refused. Run it again to replace the token; delete the file to go back to local-only
+  runs. Once logged in, `goalcup start` needs `--repo https://github.com/<owner>/<repo>` (the
+  public repository the agent pushes to) and opens the run on the server before anything is
+  created: the server issues the entry id, the official start and the deadline, and signs a start
+  receipt that is kept as the trace's `receipt.json` (and in `$GOALCUP_CONFIG_DIR/uploads/`). If
+  the server refuses or cannot be reached, nothing starts and the message says why. A harness
+  given a provider key (Hermes) is never uploaded. Uploading the trace itself is the next step
+  ([TODO](TODO.md), step 2); the wire contract is [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
   `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. An installed one (Homebrew, or an unpacked
   release tarball) finds them at `<bin>/../share/goalcup/connectors`.

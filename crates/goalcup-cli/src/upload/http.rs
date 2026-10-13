@@ -104,6 +104,24 @@ impl ServerClient {
     pub fn new(config: &ServerConfig) -> ServerClient {
         let mut store = rustls::RootCertStore::empty();
         store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        ServerClient::with_store(config, store)
+    }
+
+    /// A client trusting exactly `roots`, for a test server with a certificate of its own. A
+    /// shipped build has no such door.
+    #[cfg(feature = "test-support")]
+    pub fn with_roots(
+        config: &ServerConfig,
+        roots: impl IntoIterator<Item = rustls::pki_types::CertificateDer<'static>>,
+    ) -> ServerClient {
+        let mut store = rustls::RootCertStore::empty();
+        for root in roots {
+            let _ = store.add(root);
+        }
+        ServerClient::with_store(config, store)
+    }
+
+    fn with_store(config: &ServerConfig, store: rustls::RootCertStore) -> ServerClient {
         let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))

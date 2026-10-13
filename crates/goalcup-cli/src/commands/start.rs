@@ -1888,10 +1888,11 @@ fn finish(
     sealed
 }
 
-/// The upload server this run opens with: `None` with no `goalcup login`, for a `--dev` run,
-/// and for a harness handed a provider key (`keyed`), whose run must pass the key scan at its
-/// end before anything leaves the machine. With a server, `--repo` is required, checked here
-/// before anything is created.
+/// The upload server this run opens with: `None` with no `goalcup login`, and for a harness
+/// handed a provider key (`keyed`), whose run must pass the key scan at its end before
+/// anything leaves the machine. With a server, `--repo` is required, checked here before
+/// anything is created. A `--dev` run is uploaded like any other; the server refuses a
+/// connector it does not accept.
 fn uploading(
     cfg: &Path,
     opts: &StartOptions,
@@ -1901,17 +1902,10 @@ fn uploading(
     let Some(server) = crate::server::read_server_config(cfg)? else {
         return Ok(None);
     };
-    let local_only = if opts.dev {
-        Some("A development run (--dev)")
-    } else if keyed {
-        Some("A run of a harness given a provider key")
-    } else {
-        None
-    };
-    if let Some(what) = local_only {
+    if keyed {
         say(
             out,
-            &format!("{what} is not uploaded: it stays on this machine."),
+            "A run of a harness given a provider key is not uploaded: it stays on this machine.",
         )?;
         return Ok(None);
     }

@@ -1404,3 +1404,8 @@ this section is a reading of it and the function wins.
   `arming_timeout` and `unsupported_connector` error codes (an unknown connector is now
   `422 preflight_failed`); and `ProcessHandle.home_seed`, which a v6 `ProcessRegistration`
   refuses as an unknown field. It does not change the frozen v5 chain or its export.
+- **Control API v7.** `CaptureWorkspaceRequest` may carry `entry_id`, the id an upload server
+  issued (`e` and 16 lowercase hex digits; any other shape is `400 malformed` before anything is
+  created); without it the daemon mints one as before. `CaptureWorkspaceInfo` adds `chain_head`
+  (the baseline's link hash, which a start receipt signs) and `trace_dir`. It does not change the
+  frozen v5 chain or its export.
