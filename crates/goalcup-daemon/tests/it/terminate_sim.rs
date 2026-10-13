@@ -1799,6 +1799,8 @@ enum RootRead {
     ArgvGoneThenExits { after_kills: usize },
     /// The argv read answers a program the launch never registered, and the root stays live.
     RenamedWhileLive,
+    /// The same, but only once `after_kills` signals have been delivered.
+    RenamedAfterKills { after_kills: usize },
 }
 
 /// [`Sim`] with one deterministic interleaving injected into `guard_registered`'s two reads
@@ -1850,6 +1852,12 @@ impl ProcessOs for RacingRoot {
                 read.map(|(age, _)| (age, "[sh]".to_string()))
             }
             RootRead::RenamedWhileLive => read.map(|(age, _)| (age, "/usr/bin/vim".to_string())),
+            RootRead::RenamedAfterKills { after_kills }
+                if self.sim.world().kills.len() >= after_kills =>
+            {
+                self.fired.store(true, SeqCst);
+                read.map(|(age, _)| (age, "/usr/bin/vim".to_string()))
+            }
             _ => read,
         }
     }
@@ -1868,9 +1876,9 @@ impl ProcessOs for RacingRoot {
             }
             RootRead::Stranger => Some("sim:stranger".to_string()),
             RootRead::UnreadableWhileLive => None,
-            RootRead::ArgvGoneThenExits { .. } | RootRead::RenamedWhileLive => {
-                self.sim.start_identity(pid)
-            }
+            RootRead::ArgvGoneThenExits { .. }
+            | RootRead::RenamedWhileLive
+            | RootRead::RenamedAfterKills { .. } => self.sim.start_identity(pid),
         }
     }
     fn leads_group(&self, pid: u32) -> bool {
@@ -2002,6 +2010,8 @@ fn a_root_whose_argv_is_gone_because_it_is_exiting_after_a_signal_is_not_a_loss(
     for platform in [Platform::Macos, Platform::Linux] {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
+        // After the worker's signal. The measured case was the root's own SIGTERM; both reach
+        // the guard through `sweep_anchor`, and this root exits once its worker is signalled.
         let os = RacingRoot::new(&sim, RootRead::ArgvGoneThenExits { after_kills: 1 });
         let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
         let w = sim.world();
@@ -2029,11 +2039,44 @@ fn a_live_root_running_another_program_is_still_refused() {
         let os = RacingRoot::new(&sim, RootRead::RenamedWhileLive);
         let report = terminate_with(&handle, WALK_CAP, &os)
             .expect("a renamed root is reported, not an error");
+        // `guard_degraded` is what only the renamed-argv report sets for a handle with an
+        // argv; an absent root's report would pass every other assertion here.
         assert!(
-            report.harness_unverified && !report.observed_gone && report.targeted.is_empty(),
+            report.harness_unverified
+                && report.guard_degraded
+                && !report.observed_gone
+                && report.targeted.is_empty(),
             "{platform:?}: {report:?}"
         );
         assert!(sim.world().kills.is_empty(), "{platform:?}");
+    }
+}
+
+/// After a signal, a root that stays live while its argv names another program is a lost
+/// anchor: nothing is claimed, and the root itself is never signalled.
+#[test]
+fn a_live_root_renamed_after_a_signal_is_still_a_loss() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        let os = RacingRoot::new(&sim, RootRead::RenamedAfterKills { after_kills: 1 });
+        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let w = sim.world();
+        assert!(
+            os.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "{platform:?}: the interleaving was never injected\n{}",
+            w.describe()
+        );
+        assert!(
+            report.harness_unverified && !report.observed_gone,
+            "{platform:?}: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(
+            w.kills.iter().all(|k| k.pid != ROOT),
+            "{platform:?}: a renamed root was signalled: {:?}",
+            w.kills
+        );
     }
 }
 
