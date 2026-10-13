@@ -800,15 +800,13 @@ impl TraceDirHandle {
 
         let mut outcome = Ok(());
         loop {
-            // SAFETY: the platform errno accessor returns a valid, writable thread-local pointer.
-            unsafe { *errno_location() = 0 };
+            crate::errno::clear();
             let entry = unsafe {
                 // SAFETY: directory remains live until closed below; readdir owns its buffer.
                 libc::readdir(directory)
             };
             if entry.is_null() {
-                // SAFETY: the platform errno accessor returns a valid thread-local pointer to read.
-                let errno = unsafe { *errno_location() };
+                let errno = crate::errno::get();
                 if errno != 0 {
                     outcome = Err(TraceCapError::io(
                         "enumerate trace directory",
@@ -1218,32 +1216,6 @@ fn validate_same_regular(
     }
     Ok(())
 }
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-/// # Safety
-///
-/// Returns the address of this thread's `errno`; the pointer is valid only on the calling thread.
-unsafe fn errno_location() -> *mut libc::c_int {
-    // SAFETY: the platform errno accessor takes no arguments and returns the calling thread's errno location, which is valid for the thread's lifetime.
-    unsafe { libc::__error() }
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-/// # Safety
-///
-/// Returns the address of this thread's `errno`; the pointer is valid only on the calling thread.
-unsafe fn errno_location() -> *mut libc::c_int {
-    // SAFETY: the platform errno accessor takes no arguments and returns the calling thread's errno location, which is valid for the thread's lifetime.
-    unsafe { libc::__errno_location() }
-}
-
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "linux",
-    target_os = "android"
-)))]
-compile_error!("trace directory enumeration needs a target errno accessor");
 
 #[cfg(test)]
 thread_local! {
