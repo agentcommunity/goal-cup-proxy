@@ -1,10 +1,10 @@
 # Codex CLI harness facts
 
-Connector id: `codex-cli` · Facts for version: `0.153.0` · Written by: Goal Cup team · Last checked: 2026-10-12
-Public disclosure: yes. Everything here comes from the public connector, the public decision log and Goal Cup's own measurements on macOS; no account data, tokens or personal paths are included.
+Connector id: `codex-cli` · Facts for version: `0.153.0` · Written by: Goal Cup team · Last checked: 2026-10-13
+Public disclosure: yes. Everything here comes from the public connector, the public decision log and Goal Cup's own measurements on macOS and, for Linux arm64 with no login, in Docker; no account data, tokens or personal paths are included.
 Status: shipped connector
 
-Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64, Codex 0.153.0, 2026-09 and 2026-10 runs); "vendor docs" means a quote that Goal Cup's research file took from OpenAI's Codex documentation or source tree, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux and Windows were not measured for this harness, so most cells in those columns say "unknown".
+Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64, Codex 0.153.0, 2026-09 and 2026-10 runs); "vendor docs" means a quote that Goal Cup's research file took from OpenAI's Codex documentation or source tree, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux was measured only on arm64 under Docker Desktop (Debian 13 container, Linux 7.0.12, 2026-10-13, Codex 0.153.0, no login, so no model reply); the Linux x86_64 binary was hashed but never run, and a logged-in Linux run has not happened. Windows was not measured. Cells for what is still unmeasured say "unknown".
 
 ## 1. Run one prompt, headless
 
@@ -30,7 +30,9 @@ codex exec --json -m gpt-5.6-luna -c model_reasoning_effort="low" -c approval_po
 - Exact version: install the npm package at the wanted version with the normal npm `@<version>` syntax (not run for this sheet). The repository's install script installs the latest tag, not a pinned one.
 - Binary: `codex` on `PATH` is an npm wrapper (`node`). The native binary lives in the platform package, `@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex` on macOS arm64 (measured). Goal Cup pins the native binary by SHA-256 (code: `[capture.executable]` in the connector), not the wrapper.
 - Version: `codex --version` prints `codex-cli 0.153.0` (measured).
-- Linux and Windows package names and paths: unknown. Whether the native binary has the same bytes on another OS or architecture: it does not; one SHA-256 pins one platform and one architecture (design note in goal-cup-tracer history, `docs/research/platform-portability.md`, seam 7).
+- Linux package names and paths (measured: tarballs fetched with `npm pack` and hashed, 2026-10-13): `@openai/codex@0.153.0-linux-x64` holds `package/vendor/x86_64-unknown-linux-musl/bin/codex`, and `@openai/codex@0.153.0-linux-arm64` holds `package/vendor/aarch64-unknown-linux-musl/bin/codex`. Both are musl builds. Goal Cup pins the SHA-256 of that file per architecture (code: `[capture.platform.linux-x86_64]` and `[capture.platform.linux-aarch64]` in the connector): x86_64 `fce63502...4974be`, arm64 `c92824b2...d40aec`. The arm64 hash was re-measured on a Mac with `shasum -a 256` and in the container with `sha256sum`; the x86_64 binary was only hashed, never run.
+- Windows package names and paths: unknown. Whether the native binary has the same bytes on another OS or architecture: it does not; one SHA-256 pins one platform and one architecture (design note in goal-cup-tracer history, `docs/research/platform-portability.md`, seam 7).
+- Linux, no login (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login): `goalcup doctor` passes the executable check on the pinned arm64 binary, reached through a symlink on `PATH` (the pin is checked on the file behind the link). Codex tries `wss://api.openai.com/v1/responses` 6 times and gets `401 Unauthorized`, falls back to HTTPS and gets 401 five more times, then emits `turn.failed` and exits 1 about 18 s after exec. The run seals (`AlreadyStopped`) and `goalcup-verify --capture-integrity` exits 0. `codex --version` on Linux was not recorded.
 - Update prompt: Codex 0.153.0 opens an "Update available" selector whose default item runs `npm install -g @openai/codex`. `check_for_update_on_startup = false` stops the prompt and stops Codex writing `version.json` (measured A/B on 0.153.0).
 
 ## 3. Where it keeps things, per OS
@@ -39,7 +41,7 @@ codex exec --json -m gpt-5.6-luna -c model_reasoning_effort="low" -c approval_po
 |---|---|---|---|
 | Config dir | `$CODEX_HOME`, default `~/.codex` (vendor docs; measured with an isolated `CODEX_HOME`). Holds `config.toml`, `auth.json`, optional `hooks.json`, `requirements.toml` | unknown (vendor docs name `~/.codex`; not measured on Linux) | unknown |
 | Session / transcript store | `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<local time>-<thread_id>.jsonl`; date directory and file name use local time, so glob by thread id (measured). Side files: `history.jsonl`, `session_index.jsonl`, `state_5.sqlite` (measured in a store copy, 2026-09-03) | unknown | unknown |
-| Logs / cache | Inside `$CODEX_HOME`: SQLite state, log, memory, queue, goal and thread-history databases; `models_cache.json`; `cache/`; `plugins/cache/`; `shell_snapshots/<thread>.sh`; `thread-writer-locks/`; `tmp/arg0/` (measured, 51 changed paths in one run). `version.json` when the update check is on (measured) | unknown | unknown |
+| Logs / cache | Inside `$CODEX_HOME`: SQLite state, log, memory, queue, goal and thread-history databases; `models_cache.json`; `cache/`; `plugins/cache/`; `shell_snapshots/<thread>.sh`; `thread-writer-locks/`; `tmp/arg0/` (measured, 51 changed paths in one run). `version.json` when the update check is on (measured) | On first start in an empty `CODEX_HOME`, Codex shallow-clones a plugin marketplace with `git` and `git-remote-http` into `CODEX_HOME/.tmp/plugins` (plus `plugins.sha` and `plugins.sync.lock`) and writes `.sandbox_migration` (measured, arm64, no login). The rest: unknown | unknown |
 | Env vars that move these | `CODEX_HOME` moves everything above and `auth.json` (measured). `HOME` moves user skills: Codex 0.153.0 reads `$HOME/.agents/skills` and a login shell snapshot of the user's shell startup files (measured). `CODEX_CA_CERTIFICATE` is the CA variable (code) | same variable names are expected; behaviour not measured on Linux | unknown. Goal Cup's own design note says Windows tools read `USERPROFILE`/`APPDATA` rather than `HOME`; whether Codex does is unknown |
 
 Compressed rollouts: vendor docs (research file, from Codex source) say a background job compresses rollouts older than 7 days to `.jsonl.zst`. Not observed by Goal Cup.
@@ -79,8 +81,8 @@ Compressed rollouts: vendor docs (research file, from Codex source) say a backgr
 - **Kill.** Killing the wrapper does not stop the native binary; it survives, reparented, and keeps the thread writer lock (measured, `kill -9`). Goal Cup signals the native binary (`kill.strategy = native_pid`, `native_binary = "codex"`, 10 s grace; code).
 - **SIGTERM.** A SIGTERM run left `thread-writer-locks/<thread>.lock`, a `tmp/arg0/` directory and a shell snapshot behind in one measurement; the next launch deleted the first two (measured 2026-09-27). An earlier spike measured that a clean SIGTERM removes the lock. The two measurements disagree; treat residue after SIGTERM as possible.
 - **Subagents.** Separate rollout files and a spawn tool in the `exec` family (measured). Hooks fire inside subagents with an `agent_id` (measured).
-- **Exit codes.** 0 after a completed `exec` turn (measured). Others: unknown.
-- **Orphans.** A shell command the agent started (`sleep`) can outlive the sweep and reparent to init (measured 2026-09-15; see [TERMINATION](../TERMINATION.md) for the current claim).
+- **Exit codes.** 0 after a completed `exec` turn (measured). 1 on Linux arm64 with no login, after repeated 401 and `turn.failed` (measured). Others: unknown.
+- **Orphans.** A shell command the agent started (`sleep`) can outlive the sweep and reparent to init (measured 2026-09-15; see [TERMINATION](../TERMINATION.md) for the current claim). On Linux there was no fork-and-leave on the no-login path: the `git` children Codex forks on first start exited before Codex did, nothing stayed in its process group afterwards, and nothing but the tracker's daemon was reparented to init (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login, 1 s sampling). A logged-in Linux run, which runs tools, is not measured.
 
 ## 8. Things Goal Cup cannot isolate
 
@@ -96,5 +98,5 @@ Compressed rollouts: vendor docs (research file, from Codex source) say a backgr
 - Untrusted hook definitions are skipped silently, with exit 0 and no warning (measured, spike 2).
 - Hooks are discovered from the working directory, not the git root (measured).
 - Rollout file and directory names use local time, not UTC (measured).
-- Open: everything marked "unknown" above for Linux and Windows; the managed-config path; the API-key path; the hosts for model lists, apps and updates; whether SIGTERM removes the writer lock.
-- Compiled from records dated 2026-09-03 to 2026-10-07 and the public connector; none of the runs were repeated for this sheet.
+- Open: everything still marked "unknown" above for Linux and Windows (a logged-in run, the login location, the config-dir default, the x86_64 binary's behaviour); the managed-config path; the API-key path; the hosts for model lists, apps and updates; whether SIGTERM removes the writer lock.
+- Compiled from records dated 2026-09-03 to 2026-10-07 and the public connector; none of the runs were repeated for this sheet. The Linux facts come from the 2026-10-13 arm64 Docker run (PR #55).
