@@ -2,7 +2,7 @@
 # lean; ci.yml is the only automatic job). Start it from the Actions tab or with
 # `gh workflow run linux-x86_64.yml`.
 #
-# It runs `sh scripts/linux-check.sh` (README.md, "The gate") on ubuntu-latest, which is x86_64,
+# It runs `sh scripts/linux-check.sh` (README.md, "The gate") on ubuntu-24.04, which is x86_64,
 # with LINUX_CHECK_HARNESSES=1, so after the suites it fetches the pinned x86_64 Codex and Claude
 # Code builds from npm and launches each with no login to the auth step
 # (scripts/linux-harness-smoke.sh). No secret is used and nobody signs in.
@@ -22,7 +22,7 @@ defaults:
 jobs:
   linux-check:
     name: linux-check (x86_64)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
