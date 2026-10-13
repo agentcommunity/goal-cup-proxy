@@ -18,7 +18,7 @@
 //! | Exit | Meaning |
 //! |---|---|
 //! | 0 | The command did what it was asked. |
-//! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. |
+//! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. Also, after the seal, a run whose key scan was not clean, and on Linux a run whose launcher sweep left a process running (`subreaper.rs`). |
 //! | 2 | **Never produced by this CLI.** It is `goalcup-verify`'s "invalid evidence" exit; the V1 `goalcup doctor --verify` that relayed it was removed by D48. |
 //! | 3 | The CLI could not do its job: a file it could not read, a response it could not parse. |
 //! | 4 | **A gate said no.** Only [`CliError::Gate`] maps here, and no capture-run path raises it: the V1 arming and `goalcup resume` gates were removed (D48), and control API v6 removed the daemon's `arming_timeout` code. |
@@ -40,6 +40,7 @@ pub mod preflight;
 pub mod proxy;
 mod released_child;
 pub mod retry;
+pub mod subreaper;
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::control::ControlError;

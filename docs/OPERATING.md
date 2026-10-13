@@ -314,7 +314,7 @@ usage error (exit 1).
 | Exit | Meaning |
 |---|---|
 | 0 | The command did what it was asked. |
-| 1 | Refused, and you can fix it: no daemon to ask (`seal` with no `daemon.toml`) or none could be started, a tracker still busy with the entry after the retry is spent, an entry that is already sealed, a mistyped sub-command, a preflight check that said no. |
+| 1 | Refused, and you can fix it: no daemon to ask (`seal` with no `daemon.toml`) or none could be started, a tracker still busy with the entry after the retry is spent, an entry that is already sealed, a mistyped sub-command, a preflight check that said no. Also `start` after its seal, on Linux, when the launcher's sweep left a process the harness started still running at its bound, or could not read `/proc` after it had signalled one: stderr names the pids, and the run is sealed and its trace unchanged ([TERMINATION.md](TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)). |
 | 2 | **Never this binary's.** It is "invalid evidence", and only `goalcup-verify` leaves under it. |
 | 3 | The CLI could not do its job: a file it could not read, an answer it could not parse. |
 | 4 | Not left by a capture run: it belonged to the removed V1 gates (D48). |

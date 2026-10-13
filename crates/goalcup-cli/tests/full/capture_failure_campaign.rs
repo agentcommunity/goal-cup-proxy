@@ -588,7 +588,9 @@ fn count_in(chain: &m2_vertical_support::Chain, pick: impl Fn(&CaptureRecord) ->
 /// (CONTRACTS.md, H-10 4a ¶10): a whole-daemon SIGSTOP, not a held owner append or a delayed
 /// blocking permit (those two holds are observed by the daemon's `capture_finish_budget`
 /// test-hook rows only). The real parts are the sustained `stream` backlog, the real binaries,
-/// and a real descendant that forked from the harness and holds its stdout.
+/// and a real descendant that forked from the harness and holds its stdout. The held-stdout leg
+/// is covered on macOS only: on Linux the launcher's sweep removes the stdout holder before the
+/// finish, and the test asserts that instead.
 ///
 /// The one observer is this test, on its own clock: the launcher is held at its
 /// `capture-finish-started` point (before its deadline is taken), the daemon is frozen, the
@@ -664,9 +666,21 @@ fn local_finish_under_backlog_has_one_deadline() {
         "a frozen daemon wrote nothing"
     );
 
-    // The descendant is outside the owned set: still the same live process, never signalled.
-    assert!(running(descendant));
-    assert_eq!(ps_started(descendant), descendant_started);
+    // macOS: the descendant is outside the owned set, still the same live process and never
+    // signalled. Linux: the launcher is a child subreaper and swept it before the finish.
+    if cfg!(target_os = "linux") {
+        assert!(!running(descendant), "{}", start.output());
+        assert!(
+            start
+                .output()
+                .contains("swept 1 process(es) the harness left behind after it exited."),
+            "{}",
+            start.output()
+        );
+    } else {
+        assert!(running(descendant));
+        assert_eq!(ps_started(descendant), descendant_started);
+    }
 
     // Hold the daemon frozen for 20 s in all, then let it go and watch what it does alone.
     if let Some(rest) = Duration::from_secs(20).checked_sub(frozen_at.elapsed()) {
@@ -717,11 +731,13 @@ fn local_finish_under_backlog_has_one_deadline() {
         "the root was reaped before any signal; nothing was ended: {first_out}"
     );
     assert!(!first_out.contains("Confirmed"), "{first_out}");
-    assert!(
-        running(descendant),
-        "a seal never signals an orphaned descendant"
-    );
-    assert_eq!(ps_started(descendant), descendant_started);
+    if !cfg!(target_os = "linux") {
+        assert!(
+            running(descendant),
+            "a seal never signals an orphaned descendant"
+        );
+        assert_eq!(ps_started(descendant), descendant_started);
+    }
 
     let (code, integrity) = v.verify(&entry);
     row.note("verifier_exit", code);
