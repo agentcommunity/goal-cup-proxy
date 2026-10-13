@@ -36,10 +36,6 @@ pub(super) struct TraceDirHandle {
     fd: OwnedFd,
 }
 
-pub(super) struct TraceLockHandle {
-    _file: File,
-}
-
 pub(super) struct AppendFileHandle {
     file: File,
     identity: Identity,
@@ -88,79 +84,6 @@ impl TraceDirHandle {
             ));
         }
         Ok(format!("unix:{}:{}", stat.st_dev, stat.st_ino))
-    }
-
-    pub(super) fn acquire_capture_lock(&self) -> Result<TraceLockHandle, TraceCapError> {
-        const NAME: &str = "capture.lock";
-        let operation = "acquire capture lock";
-        let name = c_name(NAME);
-        let raw = unsafe {
-            // SAFETY: the retained parent and fixed NUL-terminated name remain live; no final
-            // symlink is followed, and the newly-created lock is private from the first inode.
-            libc::openat(
-                self.fd.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                0o600,
-            )
-        };
-        let fd = owned_fd(raw, operation)?;
-        let (identity, stat) = validate_regular(fd.as_raw_fd(), operation)?;
-        if stat.st_mode & 0o7777 != 0o600 {
-            return Err(TraceCapError::refused(operation, RefusalKind::NotPrivate));
-        }
-        let file = File::from(fd);
-        loop {
-            let locked = unsafe {
-                // SAFETY: the lock file descriptor is live and flock blocks until this caller
-                // owns the exclusive advisory lock, releasing when `file` is dropped.
-                libc::flock(file.as_raw_fd(), libc::LOCK_EX)
-            };
-            if locked == 0 {
-                break;
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(TraceCapError::io(operation, error));
-            }
-        }
-        let (current, stat) = validate_regular(file.as_raw_fd(), operation)?;
-        if current != identity {
-            return Err(TraceCapError::refused(
-                operation,
-                RefusalKind::IdentityChanged,
-            ));
-        }
-        if stat.st_mode & 0o7777 != 0o600 {
-            return Err(TraceCapError::refused(operation, RefusalKind::NotPrivate));
-        }
-        let mut named = MaybeUninit::<libc::stat>::uninit();
-        let observed = unsafe {
-            // SAFETY: the retained parent and fixed name are live, and stat is writable output.
-            libc::fstatat(
-                self.fd.as_raw_fd(),
-                name.as_ptr(),
-                named.as_mut_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        };
-        if observed != 0 {
-            return Err(TraceCapError::io(operation, io::Error::last_os_error()));
-        }
-        // SAFETY: the preceding system call reported success, so it fully initialised the output buffer.
-        let named = unsafe { named.assume_init() };
-        if named.st_mode & libc::S_IFMT != libc::S_IFREG
-            || named.st_nlink != 1
-            || named.st_dev != identity.device
-            || named.st_ino != identity.inode
-            || named.st_mode & 0o7777 != 0o600
-        {
-            return Err(TraceCapError::refused(
-                operation,
-                RefusalKind::IdentityChanged,
-            ));
-        }
-        Ok(TraceLockHandle { _file: file })
     }
 
     pub(super) fn restrict(&self, mode: u32) -> Result<(), TraceCapError> {
@@ -421,192 +344,6 @@ impl TraceDirHandle {
         Err(TraceCapError::io(operation, last))
     }
 
-    pub(super) fn create_regular_exclusive(&self, name: &str) -> Result<File, TraceCapError> {
-        let operation = "create exclusive contained regular file";
-        let name = c_name(name);
-        let raw = unsafe {
-            // SAFETY: the retained parent and one validated direct component remain live.
-            libc::openat(
-                self.fd.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDWR
-                    | libc::O_CREAT
-                    | libc::O_EXCL
-                    | libc::O_NOFOLLOW
-                    | libc::O_CLOEXEC
-                    | libc::O_NONBLOCK,
-                0o600,
-            )
-        };
-        if raw < 0 && io::Error::last_os_error().kind() == io::ErrorKind::AlreadyExists {
-            return Err(TraceCapError::refused(
-                operation,
-                RefusalKind::EntryAlreadyExists,
-            ));
-        }
-        let fd = owned_fd(raw, operation)?;
-        let (identity, _) = validate_regular(fd.as_raw_fd(), operation)?;
-        let chmod = unsafe {
-            // SAFETY: the newly opened file descriptor is live and the fixed private mode is
-            // only permission bits.
-            libc::fchmod(fd.as_raw_fd(), 0o600)
-        };
-        if chmod != 0 {
-            return Err(TraceCapError::io(operation, io::Error::last_os_error()));
-        }
-        validate_same_regular(fd.as_raw_fd(), identity, operation)?;
-        Ok(File::from(fd))
-    }
-
-    pub(super) fn promote_child_exclusive(
-        &self,
-        staged: &str,
-        final_name: &str,
-    ) -> Result<(), TraceCapError> {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        {
-            let operation = "promote exclusive trace child";
-            let staged = c_name(staged);
-            let final_name = c_name(final_name);
-            let raw = unsafe {
-                // SAFETY: the retained parent and direct staged name remain live.
-                libc::openat(
-                    self.fd.as_raw_fd(),
-                    staged.as_ptr(),
-                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-                )
-            };
-            let fd = owned_fd(raw, operation)?;
-            let (identity, _) = validate_regular(fd.as_raw_fd(), operation)?;
-            let mut named = MaybeUninit::<libc::stat>::uninit();
-            let observed = unsafe {
-                // SAFETY: the retained parent, staged name, and writable stat output are live.
-                libc::fstatat(
-                    self.fd.as_raw_fd(),
-                    staged.as_ptr(),
-                    named.as_mut_ptr(),
-                    libc::AT_SYMLINK_NOFOLLOW,
-                )
-            };
-            if observed != 0 {
-                return Err(TraceCapError::io(operation, io::Error::last_os_error()));
-            }
-            // SAFETY: the preceding system call reported success, so it fully initialised the output buffer.
-            let named = unsafe { named.assume_init() };
-            if identity
-                != (Identity {
-                    device: named.st_dev,
-                    inode: named.st_ino,
-                })
-            {
-                return Err(TraceCapError::refused(
-                    operation,
-                    RefusalKind::IdentityChanged,
-                ));
-            }
-            rename_exclusive(self.fd.as_raw_fd(), &staged, &final_name, operation)?;
-            self.sync()
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        {
-            let _ = (staged, final_name);
-            Err(TraceCapError::refused(
-                "promote exclusive trace child",
-                RefusalKind::UnsupportedFileSystem,
-            ))
-        }
-    }
-
-    pub(super) fn promote_child_dir_exclusive(
-        &self,
-        staged: &str,
-        final_name: &str,
-    ) -> Result<(), TraceCapError> {
-        self.promote_child_dir_with_expected(staged, None, final_name)
-    }
-
-    pub(super) fn promote_child_dir_matching_exclusive(
-        &self,
-        staged: &str,
-        expected_stage: &Self,
-        final_name: &str,
-    ) -> Result<(), TraceCapError> {
-        self.promote_child_dir_with_expected(staged, Some(expected_stage), final_name)
-    }
-
-    fn promote_child_dir_with_expected(
-        &self,
-        staged: &str,
-        expected_stage: Option<&Self>,
-        final_name: &str,
-    ) -> Result<(), TraceCapError> {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        {
-            let operation = "promote exclusive trace directory";
-            let staged = c_name(staged);
-            let final_name = c_name(final_name);
-            let raw = unsafe {
-                // SAFETY: the retained parent and direct staged name remain live.
-                libc::openat(
-                    self.fd.as_raw_fd(),
-                    staged.as_ptr(),
-                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                )
-            };
-            let fd = owned_fd(raw, operation)?;
-            let identity = fstat(fd.as_raw_fd(), operation)?;
-            if identity.st_mode & libc::S_IFMT != libc::S_IFDIR {
-                return Err(TraceCapError::refused(operation, RefusalKind::NotDirectory));
-            }
-            let mut named = MaybeUninit::<libc::stat>::uninit();
-            let observed = unsafe {
-                // SAFETY: the retained parent, staged name, and writable stat output are live.
-                libc::fstatat(
-                    self.fd.as_raw_fd(),
-                    staged.as_ptr(),
-                    named.as_mut_ptr(),
-                    libc::AT_SYMLINK_NOFOLLOW,
-                )
-            };
-            if observed != 0 {
-                return Err(TraceCapError::io(operation, io::Error::last_os_error()));
-            }
-            // SAFETY: the preceding system call reported success, so it fully initialised the output buffer.
-            let named = unsafe { named.assume_init() };
-            if identity.st_dev != named.st_dev
-                || identity.st_ino != named.st_ino
-                || named.st_mode & libc::S_IFMT != libc::S_IFDIR
-            {
-                return Err(TraceCapError::refused(
-                    operation,
-                    RefusalKind::IdentityChanged,
-                ));
-            }
-            if let Some(expected_stage) = expected_stage {
-                let expected = fstat(expected_stage.fd.as_raw_fd(), operation)?;
-                if expected.st_mode & libc::S_IFMT != libc::S_IFDIR {
-                    return Err(TraceCapError::refused(operation, RefusalKind::NotDirectory));
-                }
-                if identity.st_dev != expected.st_dev || identity.st_ino != expected.st_ino {
-                    return Err(TraceCapError::refused(
-                        operation,
-                        RefusalKind::IdentityChanged,
-                    ));
-                }
-            }
-            rename_exclusive(self.fd.as_raw_fd(), &staged, &final_name, operation)?;
-            self.sync()
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        {
-            let _ = (staged, expected_stage, final_name);
-            Err(TraceCapError::refused(
-                "promote exclusive trace directory",
-                RefusalKind::UnsupportedFileSystem,
-            ))
-        }
-    }
-
     pub(super) fn sync(&self) -> Result<(), TraceCapError> {
         let result = unsafe {
             // SAFETY: the retained directory descriptor is live for the call.
@@ -651,17 +388,7 @@ impl TraceDirHandle {
         target_name: &str,
         bytes: &[u8],
     ) -> Result<(), TraceCapError> {
-        self.replace_named(temporary, target_name, bytes, None)
-    }
-
-    pub(super) fn replace_regular_with_mode(
-        &self,
-        temporary: &str,
-        target_name: &str,
-        bytes: &[u8],
-        mode: u32,
-    ) -> Result<(), TraceCapError> {
-        self.replace_named(temporary, target_name, bytes, Some(mode))
+        self.replace_named(temporary, target_name, bytes)
     }
 
     pub(super) fn remove_regular(&self, name: &str) -> Result<(), TraceCapError> {
@@ -923,7 +650,7 @@ impl TraceDirHandle {
         target_name: &'static str,
         bytes: &[u8],
     ) -> Result<(), TraceCapError> {
-        self.replace_named(temporary, target_name, bytes, None)
+        self.replace_named(temporary, target_name, bytes)
     }
 
     fn replace_named(
@@ -931,13 +658,10 @@ impl TraceDirHandle {
         temporary: &str,
         target_name: &str,
         bytes: &[u8],
-        requested_mode: Option<u32>,
     ) -> Result<(), TraceCapError> {
         let temporary = c_name(temporary);
         let target = c_name(target_name);
-        let mode = requested_mode
-            .map(|mode| mode as libc::mode_t)
-            .or(self.fixed_document_mode(&target)?);
+        let mode = self.fixed_document_mode(&target)?;
         let mut created_temporary = false;
         let result = (|| {
             let operation = "create fixed-document temporary";
@@ -1452,89 +1176,6 @@ fn fstat(fd: RawFd, operation: &'static str) -> Result<libc::stat, TraceCapError
     }
     // SAFETY: fstat reported success, so it fully initialised the output buffer.
     Ok(unsafe { stat.assume_init() })
-}
-
-/// Rename one direct child onto another inside the same retained directory, refusing rather
-/// than replacing when the destination name already exists.
-///
-/// Destination absence is part of the single kernel operation: there is no check-then-rename
-/// window a concurrent writer could win. Both platforms spell the same primitive differently --
-/// macOS as `renameatx_np(RENAME_EXCL)`, Linux as `renameat2(RENAME_NOREPLACE)` -- so only the
-/// call itself is per-platform and the error mapping below is shared, which is what keeps
-/// `EntryAlreadyExists` meaning exactly the same thing on both.
-///
-/// There is deliberately no non-exclusive fallback. This primitive is the guarantee that a
-/// promoted submission cannot be overwritten; where the kernel or the filesystem cannot provide
-/// it, the only correct answer is to refuse.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn rename_exclusive(
-    dir_fd: RawFd,
-    staged: &CStr,
-    final_name: &CStr,
-    operation: &'static str,
-) -> Result<(), TraceCapError> {
-    #[cfg(target_os = "macos")]
-    let promoted = unsafe {
-        // SAFETY: both names are direct children of the same retained directory, and
-        // RENAME_EXCL makes destination absence part of the kernel operation.
-        libc::renameatx_np(
-            dir_fd,
-            staged.as_ptr(),
-            dir_fd,
-            final_name.as_ptr(),
-            libc::RENAME_EXCL,
-        )
-    };
-    #[cfg(target_os = "linux")]
-    let promoted = unsafe {
-        // SAFETY: both names are direct children of the same retained directory, and
-        // RENAME_NOREPLACE makes destination absence part of the kernel operation.
-        libc::renameat2(
-            dir_fd,
-            staged.as_ptr(),
-            dir_fd,
-            final_name.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if promoted != 0 {
-        let source = io::Error::last_os_error();
-        if source.kind() == io::ErrorKind::AlreadyExists {
-            return Err(TraceCapError::refused(
-                operation,
-                RefusalKind::EntryAlreadyExists,
-            ));
-        }
-        #[cfg(target_os = "linux")]
-        {
-            // The arguments handed to `renameat2` above are always well formed: two live
-            // descriptors for the same retained directory, two validated direct names, and the
-            // single flag `RENAME_NOREPLACE`. Nothing here can be rejected as invalid input, so
-            // these three errno values can only mean the flag is unavailable where this trace
-            // root lives:
-            //
-            //   ENOSYS      the kernel predates the syscall (before 3.15), or it is filtered.
-            //   EINVAL      the filesystem's rename does not honour flags (older overlayfs and
-            //               some FUSE backends), and glibc also reports a missing syscall this
-            //               way -- its wrapper only translates ENOSYS into a flagless
-            //               `renameat` when `flags == 0`, which this call never passes.
-            //   EOPNOTSUPP  the filesystem refuses the flag outright (some NFS versions).
-            //
-            // Each refuses with UnsupportedFileSystem.
-            // ENOTSUP is the same value as EOPNOTSUPP on Linux and so is not listed separately.
-            if matches!(
-                source.raw_os_error(),
-                Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP)
-            ) {
-                return Err(TraceCapError::refused(
-                    operation,
-                    RefusalKind::UnsupportedFileSystem,
-                ));
-            }
-        }
-        return Err(TraceCapError::io(operation, source));
-    }
-    Ok(())
 }
 
 fn validate_regular(

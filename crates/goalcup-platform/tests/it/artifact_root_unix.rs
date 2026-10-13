@@ -122,7 +122,7 @@ fn acquired_final_trace_keeps_descriptor_writes_after_its_path_is_swapped() {
 }
 
 #[test]
-fn rooted_status_replace_and_remove_never_follow_a_live_entry_swap() {
+fn rooted_status_replace_never_follows_a_live_entry_swap() {
     let fixture = Fixture::new("status-swap");
     let authority = EntryArtifactRoot::open(&fixture.root, "entry-0001").unwrap();
     authority.replace_status_line(SAFE).unwrap();
@@ -130,7 +130,6 @@ fn rooted_status_replace_and_remove_never_follow_a_live_entry_swap() {
     fs::rename(fixture.entry(), &detached).unwrap();
     symlink(&fixture.outside, fixture.root.join("artifacts/entry-0001")).unwrap();
 
-    authority.remove_status_line().unwrap();
     authority.replace_status_line(b"RETRIED_SAFE").unwrap();
 
     assert_eq!(
@@ -200,7 +199,11 @@ fn retained_artifact_root_rejects_path_swap_and_acquired_cleanup_stays_contained
     fs::create_dir(&selected).unwrap();
     let root = ArtifactRoot::open(&selected).unwrap();
     let entry = root.create_entry("entry-cleanup").unwrap();
-    entry.replace_launch_settings(b"bearer material").unwrap();
+    fs::write(
+        selected.join("artifacts/entry-cleanup/settings-launch.json"),
+        b"bearer material",
+    )
+    .unwrap();
     fs::write(selected.join("artifacts/entry-cleanup/ordinary.txt"), SAFE).unwrap();
 
     let detached = fixture.top.join("detached-selected");
@@ -229,7 +232,11 @@ fn cleanup_rejects_a_named_entry_swap_without_touching_the_replacement() {
     let fixture = Fixture::new("cleanup-entry-swap");
     let root = ArtifactRoot::open(&fixture.root).unwrap();
     let entry = root.open_entry("entry-0001").unwrap();
-    entry.replace_launch_settings(b"bearer material").unwrap();
+    fs::write(
+        fixture.entry().join("settings-launch.json"),
+        b"bearer material",
+    )
+    .unwrap();
     let detached = fixture.top.join("detached-entry-for-cleanup");
     fs::rename(fixture.entry(), &detached).unwrap();
     symlink(&fixture.outside, fixture.root.join("artifacts/entry-0001")).unwrap();
