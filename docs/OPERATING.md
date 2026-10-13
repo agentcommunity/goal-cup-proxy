@@ -146,9 +146,11 @@ Every runner minute costs something on every pull request. Keep this file small:
   process trees that hang or kill a 2-core Linux runner. CI runs the reservation tests on x86_64
   ext4; the daemon and CLI suites run on Linux in Docker via `scripts/linux-check.sh`, not in CI.
 - `.github/workflows/linux-x86_64.yml` is manual only (`workflow_dispatch`, never on a push or
-  pull request). It runs `scripts/linux-check.sh` on an x86_64 `ubuntu-latest` runner with
+  pull request). It runs `scripts/linux-check.sh` on an x86_64 `ubuntu-24.04` runner with
   `LINUX_CHECK_HARNESSES=1`, which ends with `scripts/linux-harness-smoke.sh`: the pinned x86_64
-  Codex and Claude Code builds launched with no login to the auth step. Start it by hand.
+  Codex and Claude Code builds launched with no login to the auth step. The suites above run
+  there because a public repository's hosted runner has 4 vCPUs and they run in Docker with
+  `--init`; how long a run takes is not yet measured. Start it by hand.
 - A green `ci` run proves nothing about the macOS target. `sh scripts/gate.sh fast` above (and `full` before a
   release), plus the ignored synthetic vertical suite, runs by hand before a merge.
 
