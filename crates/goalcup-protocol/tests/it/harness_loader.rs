@@ -638,3 +638,37 @@ fn a_pinned_connector_needs_no_rust_row_for_its_argv_or_env() {
         "{msg}"
     );
 }
+
+/// Every release target can capture: a shipped connector that pins per platform names every
+/// platform the release builds, beside its base pin (the macOS arm64 build, by convention). A
+/// connector with no platform table (Hermes, a console script pinned to one install) is exempt.
+/// `scripts/smoke-release.sh` repeats this at release time.
+#[test]
+fn every_per_platform_connector_pins_every_release_platform() {
+    use goalcup_protocol::harness::PlatformKey;
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(repo_root().join("connectors"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    dirs.sort();
+    assert!(dirs.len() >= 3, "the shipped connectors moved");
+    for dir in dirs {
+        let id = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let loaded = load_dir(&dir, Origin::Pinned).unwrap_or_else(|e| panic!("{id}: {e}"));
+        let platform = &loaded.manifest.capture.platform;
+        if platform.is_empty() {
+            continue;
+        }
+        for key in [
+            PlatformKey::LinuxX86_64,
+            PlatformKey::LinuxAarch64,
+            PlatformKey::MacosX86_64,
+        ] {
+            assert!(
+                platform.contains_key(&key),
+                "{id} has no {} pin",
+                key.as_str()
+            );
+        }
+    }
+}
