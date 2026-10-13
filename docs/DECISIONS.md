@@ -416,7 +416,7 @@ The app-wide check becomes "no change to a named `config_allowlist[]` of files t
 
 ## D24. **(M0)** The local hook receiver is authenticated.
 
-> **Superseded on `m2/wire` by the wire-primary spec (§4 "Dies"); in force on `v1/trunk` and `v0.1.0`.** Replaced by: nothing yet. `m2/wire` has no hook receiver, and the hook-hash pin went with it (`17e962b`, `051f485`). No manifest carries `[receiver]` or renders a receiver token any more (`8b37e91`), and `WorkspaceInfo`, `ResumeInfo` and `ResumePreviewInfo` no longer hand one to the CLI (`4039138`). The daemon still mints `RunKeys.receiver_token` internally (`crates/goalcup-daemon/src/registry.rs:1163`), unused by any connector; cutting or renaming it is a follow-up. The recording proxy's per-launch authentication is its successor (probe write-up, "Phase 0 code review"), and it is not built.
+> **Superseded on `m2/wire` by the wire-primary spec (§4 "Dies"); in force on `v1/trunk` and `v0.1.0`.** Replaced by: nothing yet. `m2/wire` has no hook receiver, and the hook-hash pin went with it (`17e962b`, `051f485`). No manifest carries `[receiver]` or renders a receiver token any more (`8b37e91`), and `WorkspaceInfo`, `ResumeInfo` and `ResumePreviewInfo` no longer hand one to the CLI (`4039138`). The daemon no longer mints `RunKeys.receiver_token` (2026-10-13); a new row carries it empty only so a v0.5.0 daemon can read the row. The recording proxy's per-launch authentication is its successor (probe write-up, "Phase 0 code review"), and it is not built.
 
 **Decision.** The daemon's hook endpoint requires a per-run token, carried in the manifest as `receiver.token` and written into the folder-scoped hook config and shims. Unauthenticated posts are dropped without persisting.
 

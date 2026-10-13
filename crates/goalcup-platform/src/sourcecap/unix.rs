@@ -343,15 +343,11 @@ impl Entries {
             return Ok(None);
         }
         loop {
-            // SAFETY: the platform errno accessor returns a valid, writable thread-local pointer.
-            unsafe {
-                *errno_location() = 0;
-            }
+            crate::errno::clear();
             // SAFETY: the stream is non-null, open and used only by this thread; a null return is distinguished from an error through errno.
             let entry = unsafe { libc::readdir(self.directory) };
             if entry.is_null() {
-                // SAFETY: the platform errno accessor returns a valid thread-local pointer to read.
-                let errno = unsafe { *errno_location() };
+                let errno = crate::errno::get();
                 if errno != 0 {
                     return Err(SourceCapError::io(
                         "enumerate source directory",
@@ -655,30 +651,6 @@ fn descriptor_readlink(fd: RawFd, destination: &mut [u8]) -> Result<usize, Sourc
         SourceCapError::refused("read matching symbolic link", RefusalKind::BufferLimit)
     })
 }
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-/// # Safety
-///
-/// Returns the address of this thread's `errno`; the pointer is valid only on the calling thread.
-unsafe fn errno_location() -> *mut libc::c_int {
-    // SAFETY: the platform errno accessor takes no arguments and returns the calling thread's errno location, which is valid for the thread's lifetime.
-    unsafe { libc::__error() }
-}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-/// # Safety
-///
-/// Returns the address of this thread's `errno`; the pointer is valid only on the calling thread.
-unsafe fn errno_location() -> *mut libc::c_int {
-    // SAFETY: the platform errno accessor takes no arguments and returns the calling thread's errno location, which is valid for the thread's lifetime.
-    unsafe { libc::__errno_location() }
-}
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "linux",
-    target_os = "android"
-)))]
-compile_error!("source directory enumeration needs a target errno accessor");
 
 #[cfg(test)]
 thread_local! {

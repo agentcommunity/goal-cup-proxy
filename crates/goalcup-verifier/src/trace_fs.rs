@@ -368,7 +368,7 @@ impl PrivateDir {
 
         let mut names = Vec::new();
         loop {
-            set_errno_zero();
+            goalcup_platform::errno::clear();
             // SAFETY: the stream is non-null, open and used only by this thread; a null return is distinguished from an error through errno.
             let entry = unsafe { libc::readdir(stream) };
             if entry.is_null() {
@@ -427,31 +427,6 @@ impl PrivateDir {
         names.sort();
         Ok(names)
     }
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn set_errno_zero() {
-    // SAFETY: the platform errno accessor returns a valid, writable thread-local pointer.
-    unsafe { *libc::__errno_location() = 0 };
-}
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "netbsd",
-    target_os = "openbsd"
-))]
-fn set_errno_zero() {
-    // SAFETY: the platform errno accessor returns a valid, writable thread-local pointer.
-    unsafe { *libc::__error() = 0 };
-}
-
-#[cfg(any(target_os = "solaris", target_os = "illumos"))]
-fn set_errno_zero() {
-    // SAFETY: the platform errno accessor returns a valid, writable thread-local pointer.
-    unsafe { *libc::___errno() = 0 };
 }
 
 #[cfg(all(test, unix))]

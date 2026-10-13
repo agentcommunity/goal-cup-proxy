@@ -8,14 +8,9 @@
 use goalcup_daemon::config::ReceiptBindingPolicy;
 use goalcup_daemon::registry::{
     Entry, EntryState, ExpectedProcessHandoff, ProcessHandoffPhase, Registry, RunKeys,
-    SealingIntent, WorkspaceSealingIntentV1,
-};
-use goalcup_protocol::export::{
-    ACKS_FILE, BASELINE_FILE, CHAIN_FILE, MANIFEST_FILE, SEAL_FILE, TraceDescriptorDoc,
 };
 use goalcup_protocol::manifest::KillStrategy;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
-use goalcup_protocol::seal::SealManifest;
 
 fn entry(tmp: &std::path::Path, id: &str) -> Entry {
     Entry::new(
@@ -27,171 +22,8 @@ fn entry(tmp: &std::path::Path, id: &str) -> Entry {
         "2.1.259",
         goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
         ExpectedProcessHandoff::NotRequired,
-        RunKeys::from_seeds([1u8; 32], [2u8; 32], [3u8; 16]),
+        RunKeys::from_seed([2u8; 32]),
     )
-}
-
-fn sealing_intent(entry: &Entry) -> SealingIntent {
-    let manifest = SealManifest {
-        entry_id: entry.entry_id.clone(),
-        sealed_at: "2026-09-11T00:00:00Z".to_string(),
-        workspace: entry.workspace.display().to_string(),
-        files: Vec::new(),
-        excluded: Vec::new(),
-    };
-    SealingIntent::new(
-        manifest,
-        TraceDescriptorDoc {
-            connector: entry.connector_id.clone(),
-            entry_id: entry.entry_id.clone(),
-            workspace: entry.workspace.display().to_string(),
-            tracked_sessions: Vec::new(),
-            harness_version: entry.harness_version.clone(),
-            connector_manifest: MANIFEST_FILE.to_string(),
-            chain: Some(CHAIN_FILE.to_string()),
-            receipt: None,
-            baseline: Some(BASELINE_FILE.to_string()),
-            acks: Some(ACKS_FILE.to_string()),
-            seal: Some(SEAL_FILE.to_string()),
-            server_public_key: None,
-            expected_reread: false,
-        },
-        None,
-        "registry-roundtrip-root".to_string(),
-    )
-    .unwrap()
-}
-
-/// Workspace finalization adds a new discriminated arm beside this document.  It must not
-/// add a wrapper or discriminator to the historical registry bytes: old `Sealing` rows are
-/// recovery authority, and changing their shape would make the daemon lose the exact
-/// terminal predecessor it already promised to reconcile.
-#[test]
-fn legacy_sealing_intent_bytes_stay_bare_when_the_workspace_arm_is_added() {
-    let tmp = tempfile::tempdir().unwrap();
-    let row = entry(tmp.path(), "legacy-intent");
-    let intent = sealing_intent(&row);
-
-    let wire = serde_json::to_value(&intent).expect("the legacy intent serializes");
-    let object = wire
-        .as_object()
-        .expect("the legacy intent stays a bare object");
-    assert_eq!(
-        object
-            .keys()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>(),
-        [
-            "descriptor",
-            "manifest",
-            "pre_seal_head",
-            "pre_seal_seq",
-            "terminal_hash",
-            "terminal_prev",
-            "terminal_seq",
-            "trace_root_identity",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect(),
-        "the untagged legacy arm adds no version key or enum wrapper",
-    );
-    let decoded: SealingIntent =
-        serde_json::from_value(wire.clone()).expect("the historical bytes still decode");
-    assert_eq!(
-        serde_json::to_value(decoded).unwrap(),
-        wire,
-        "reading and rewriting an old registry row is byte-shape stable",
-    );
-}
-
-#[test]
-fn workspace_sealing_intent_is_discriminated_exact_and_roundtrips_without_inference() {
-    let wire = serde_json::json!({
-        "version": "workspace_submission_v1",
-        "entry_id": "workspace-intent",
-        "generation": 9,
-        "reason": "deadline",
-        "receipt_sha256": "ab".repeat(32),
-        "cutoff_at": "2026-09-14T00:00:02Z",
-        "trace_root_identity": "trace-root-v1:4:2",
-        "source_root": {
-            "availability": "available",
-            "journal": { "identity": "source-root-v1:17:9" }
-        },
-        "source_date": ["2026", "09", "14"],
-        "submission_profile": "workspace_snapshot_v1",
-        "limits": {
-            "object_count": 4096,
-            "total_bytes": 1073741824,
-            "pre_cutoff_drain": 5000,
-            "process_walk": 64
-        },
-        "limit_profile": { "id": "goal-cup-v1-local" },
-        "capture_limits": {
-            "version": 1,
-            "namespace_nodes": 8192,
-            "inventory_bytes": 8388608,
-            "manifest_bytes": 8388608
-        },
-        "excluded": [".goalcup"],
-        "phase": "admission_closed",
-        "admission_watermarks": {
-            "tailers": [],
-            "receiver_sources": {},
-            "queued_receiver_posts": 0,
-            "admitted_chain_predecessor": null
-        },
-        "expected_cutoff_predecessor": null,
-        "drain": null,
-        "cutoff": null,
-        "accepted_handoff": null,
-        "termination": null,
-        "termination_report": null,
-        "submission": null,
-        "finalization_at": null,
-        "expected_finalization_predecessor": null,
-        "finalization": null,
-        "terminal_status_at": null,
-        "status_mirror_complete": false
-    });
-
-    let decoded: WorkspaceSealingIntentV1 =
-        serde_json::from_value(wire.clone()).expect("the exact workspace intent decodes");
-    assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
-    let decoded: SealingIntent =
-        serde_json::from_value(wire.clone()).expect("the discriminated arm wins");
-    assert!(matches!(decoded, SealingIntent::Workspace(_)));
-
-    let mut unknown = wire.clone();
-    unknown
-        .as_object_mut()
-        .unwrap()
-        .insert("future_phase_hint".to_string(), serde_json::json!(true));
-    assert!(serde_json::from_value::<SealingIntent>(unknown).is_err());
-
-    let mut unknown_nested = wire;
-    unknown_nested["source_root"]["journal"]["reopen_path"] =
-        serde_json::json!("/tmp/not-authority");
-    assert!(serde_json::from_value::<SealingIntent>(unknown_nested).is_err());
-}
-
-#[test]
-fn workspace_source_binding_distinguishes_lost_cutoff_authority_exactly() {
-    let wire = serde_json::json!({
-        "availability": "unavailable_at_cutoff",
-        "reason": "recovery_ambiguous"
-    });
-    let binding: goalcup_daemon::registry::WorkspaceSourceBindingV1 =
-        serde_json::from_value(wire.clone()).unwrap();
-    assert_eq!(serde_json::to_value(binding).unwrap(), wire);
-
-    let mut unknown = wire;
-    unknown["source_path"] = serde_json::json!("/must/not/reopen");
-    assert!(
-        serde_json::from_value::<goalcup_daemon::registry::WorkspaceSourceBindingV1>(unknown)
-            .is_err()
-    );
 }
 
 fn bound_entry(tmp: &std::path::Path, id: &str, version: &str) -> Entry {
@@ -215,7 +47,7 @@ fn bound_entry_with_handoff(
             questionnaire_version: version.to_string(),
         },
         expected_process_handoff,
-        RunKeys::from_seeds([1u8; 32], [2u8; 32], [3u8; 16]),
+        RunKeys::from_seed([2u8; 32]),
     );
     entry.connector_dir_sha256 = Some("ef".repeat(32));
     entry
@@ -638,9 +470,7 @@ fn the_registry_survives_a_restart() {
     e.state = EntryState::Started;
     e.chain_seq = Some(0);
     e.chain_head = "ef".repeat(32);
-    e.harness_home = Some(tmp.path().join("homes").join("e1"));
-    e.expected_config
-        .insert("settings.json".to_string(), "aa".repeat(32));
+    e.connector_dir_sha256 = Some("cd".repeat(32));
 
     {
         let r = Registry::open(&path).unwrap();
@@ -663,30 +493,24 @@ fn a_fresh_registry_is_empty() {
     r.remove("nobody").unwrap();
 }
 
-/// `RunKeys` holds two secrets and a bearer token. None of the three may reach a log, and
-/// `Debug` is how they would: `Entry` derives it, and a `DaemonError` message interpolates
-/// whatever it is handed. This is the same redaction `WorkspaceInfo` already applies.
+/// `RunKeys` holds the run's signing seed, which may not reach a log, and `Debug` is how it
+/// would: `Entry` derives it, and a `DaemonError` message interpolates whatever it is handed.
+/// This is the same redaction `WorkspaceInfo` already applies.
 #[test]
 fn run_keys_never_print_their_secrets() {
-    let keys = RunKeys::from_seeds([1u8; 32], [2u8; 32], [3u8; 16]);
+    let keys = RunKeys::from_seed([2u8; 32]);
     let printed = format!("{keys:?}");
-    for secret in [
-        &keys.buffer_key_hex,
-        &keys.signing_seed_hex,
-        &keys.receiver_token,
-    ] {
-        assert!(
-            !printed.contains(secret.as_str()),
-            "RunKeys Debug leaked a secret: {printed}"
-        );
-    }
+    assert!(
+        !printed.contains(keys.signing_seed_hex.as_str()),
+        "RunKeys Debug leaked the seed: {printed}"
+    );
     assert!(printed.contains("<redacted>"));
 
     let tmp = tempfile::tempdir().unwrap();
     let entry_printed = format!("{:?}", entry(tmp.path(), "e1"));
     assert!(
-        !entry_printed.contains(keys.receiver_token.as_str()),
-        "Entry Debug leaked the receiver token: {entry_printed}"
+        !entry_printed.contains(keys.signing_seed_hex.as_str()),
+        "Entry Debug leaked the seed: {entry_printed}"
     );
 }
 
@@ -695,7 +519,7 @@ fn run_keys_never_print_their_secrets() {
 /// it must be the verifying key of the seed and nothing else.
 #[test]
 fn the_run_key_is_the_signing_seed() {
-    let keys = RunKeys::from_seeds([1u8; 32], [2u8; 32], [3u8; 16]);
+    let keys = RunKeys::from_seed([2u8; 32]);
     let expected = ed25519_dalek::SigningKey::from_bytes(&[2u8; 32]);
     assert_eq!(
         keys.public_key_hex().unwrap(),
@@ -707,21 +531,16 @@ fn the_run_key_is_the_signing_seed() {
         "signing_key rebuilds the key the seed names"
     );
 
-    // Generated keys are distinct, per run, in all three secrets.
+    // Generated seeds are distinct, per run.
     let a = RunKeys::generate();
     let b = RunKeys::generate();
-    assert_ne!(a.buffer_key_hex, b.buffer_key_hex);
     assert_ne!(a.signing_seed_hex, b.signing_seed_hex);
-    assert_ne!(a.receiver_token, b.receiver_token);
-    assert_eq!(a.buffer_key_hex.len(), 64);
     assert_eq!(a.signing_seed_hex.len(), 64);
-    assert_eq!(a.receiver_token.len(), 32);
     a.public_key_hex().unwrap();
 }
 
-/// The registry file holds `RunKeys` in plaintext: the receiver token grants write access
-/// to this run's capture stream, and the signing seed is the run key itself. On a shared
-/// machine that makes the file a bearer-token store, so it is `0o600` inside a `0o700`
+/// The registry file holds `RunKeys` in plaintext: the signing seed is the run key itself.
+/// On a shared machine that makes the file a secret store, so it is `0o600` inside a `0o700`
 /// directory — and a file that was created loose is tightened on open, not left.
 #[cfg(unix)]
 #[test]
@@ -754,13 +573,13 @@ fn the_registry_file_is_readable_only_by_its_owner() {
     assert_eq!(r.get("e1").unwrap().unwrap().entry_id, "e1");
 }
 
-/// A row written by a build before `server_port` and `seal_outcome` existed (pre-21ad712)
-/// has neither key at all. Both fields carry `#[serde(default)]` precisely so such a row
-/// still loads; this pins that a row missing both keys deserialises with both `None`
-/// rather than refusing to load, which is the failure a dropped `#[serde(default)]` would
-/// cause the next time this test runs.
+/// A row written by an older daemon still loads: it carries the V1-era keys this build no
+/// longer reads (session and deadline stamps, the hook config digests, a sealing intent,
+/// pending foreign sightings, a seal outcome, the buffer key and receiver token), and serde
+/// ignores them rather than refusing the row. A registry a daemon cannot open is a run it
+/// cannot finish.
 #[test]
-fn a_pre_server_port_row_loads_with_server_port_and_seal_outcome_both_none() {
+fn a_row_carrying_keys_this_build_no_longer_reads_still_loads() {
     let json = r#"{
         "entry_id": "e1",
         "connector_id": "claude-code-cli",
@@ -769,27 +588,39 @@ fn a_pre_server_port_row_loads_with_server_port_and_seal_outcome_both_none() {
         "trace_dir": "/art/e1/trace",
         "manifest_sha256": "ab",
         "harness_version": "2.1.259",
-        "state": "created",
+        "state": "sealed",
         "health": "online",
-        "session_id": null,
-        "armed_at": null,
-        "start_signal_at": null,
-        "started_at": null,
-        "deadline_at": null,
+        "session_id": "95addb64",
+        "armed_at": 1.0,
+        "start_signal_at": 2.0,
+        "started_at": "2026-09-01T00:00:01Z",
+        "deadline_at": "2026-09-08T00:00:01Z",
         "receipt": null,
-        "chain_seq": null,
+        "chain_seq": 3,
         "chain_head": "0000000000000000000000000000000000000000000000000000000000000000",
-        "last_ack_seq": null,
-        "last_ack_at": null,
-        "events_uploaded": 0,
-        "expected_config": {},
+        "last_ack_seq": 3,
+        "last_ack_at": 3.0,
+        "events_uploaded": 4,
+        "expected_config": {"settings.json": "aa"},
         "pinned_hook_hash": null,
-        "deadline_unix": null,
-        "sealed_at": null,
+        "deadline_unix": 4.0,
+        "source_date": ["2026", "09", "01"],
+        "deadline_observed": true,
+        "finalization_observed_unix": 5,
+        "sealed_at": "2026-09-02T00:00:00Z",
+        "sealing_from_state": "started",
+        "sealing_intent": {"anything": "the old arms held"},
+        "sealed_trace_root_identity": "trace-root-v1:old",
         "status_line_path": "/art/e1/status-line.txt",
-        "harness_home": null,
-        "arming_timeout_seconds": null,
+        "harness_home": "/homes/e1",
+        "foreign_pending": [{"family": "f", "harness": "h", "session_id": "s",
+                             "store_path": "relative", "first_seen": "not a time"}],
+        "server_port": 4100,
+        "arming_timeout_seconds": 60,
+        "cleanup_termination_complete": true,
         "last_process": null,
+        "seal_outcome": {"lock_paths": [], "lock_paths_error": null, "guard_degraded": false,
+                         "termination": null, "termination_error": null},
         "created_at": "2026-09-01T00:00:00Z",
         "keys": {
             "buffer_key_hex": "01",
@@ -798,12 +629,39 @@ fn a_pre_server_port_row_loads_with_server_port_and_seal_outcome_both_none() {
         }
     }"#;
 
-    let row: Entry = serde_json::from_str(json).expect(
-        "a row missing server_port and seal_outcome must still deserialise: both fields \
-         are #[serde(default)] precisely so a pre-upgrade row keeps loading",
-    );
-    assert_eq!(row.server_port, None);
-    assert_eq!(row.seal_outcome, None);
+    let row: Entry = serde_json::from_str(json)
+        .expect("a row carrying keys this build no longer reads must still deserialise");
+    assert_eq!(row.entry_id, "e1");
+    assert_eq!(row.state, EntryState::Sealed);
+    assert_eq!(row.sealed_at.as_deref(), Some("2026-09-02T00:00:00Z"));
+    assert_eq!(row.last_ack_seq, Some(3));
+    assert_eq!(row.keys.signing_seed_hex, "02");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let registry = Registry::open(&tmp.path().join("registry.redb")).unwrap();
+    registry
+        .replace_raw_json_for_test("e1", json.as_bytes())
+        .unwrap();
+    assert_eq!(registry.get("e1").unwrap().unwrap(), row);
+    assert_eq!(registry.all().unwrap(), vec![row]);
+}
+
+/// A v0.5.0 daemon is the documented way to finish a V1 entry on the same artifact root
+/// (`Daemon::start`'s refusal names it), and its `Entry` requires five keys this build no longer
+/// reads. A row this build writes keeps them, so that daemon can still read the registry.
+#[test]
+fn a_new_row_keeps_the_keys_a_v0_5_0_daemon_requires() {
+    let tmp = tempfile::tempdir().unwrap();
+    let row = serde_json::to_value(entry(tmp.path(), "e1")).unwrap();
+    for key in ["events_uploaded", "expected_config", "status_line_path"] {
+        assert!(row.get(key).is_some(), "{key} missing from {row}");
+    }
+    for key in ["buffer_key_hex", "receiver_token"] {
+        assert_eq!(
+            row["keys"][key], "",
+            "{key}: present, and no secret is minted for it"
+        );
+    }
 }
 
 /// The mode the registry sets on its parent is the registry's to set only when the
