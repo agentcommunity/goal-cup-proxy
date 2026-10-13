@@ -33,7 +33,7 @@ All public schema structs and enums are non-exhaustive. A manifest cannot select
   a model name included, is a data change reviewed in its PR. An unpinned id is refused at the
   pin gate and runs only under `--dev`.
 - `Origin::Dev` is an unpinned directory under `GOALCUP_CONNECTORS_DIR` selected through
-  `--dev`. It relaxes those two refusals. Environment values, seeds,
+  `--dev`. It relaxes those two refusals and the loopback-host refusal. Environment values, seeds,
   trust tables, all bounds and all cross-field rules remain strict.
 
 The CLI and daemon both use the same loader and each validates again at its own trust boundary.
