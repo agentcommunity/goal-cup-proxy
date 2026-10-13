@@ -294,7 +294,7 @@ fn connector_mutation_after_load_cannot_change_written_seed_bytes() {
 /// The written configuration holds the settings the recipe depends on, and none that
 /// names a provider, host, key or base URL.
 #[test]
-fn the_written_config_has_snapshots_no_thinking_and_no_compression() {
+fn the_written_config_has_snapshots_and_no_compression() {
     let (_tmp, run) = run_dir();
     let home = create_home(&run).unwrap();
     let config = std::fs::read_to_string(home.join("config.yaml")).unwrap();
@@ -305,7 +305,6 @@ fn the_written_config_has_snapshots_no_thinking_and_no_compression() {
         .collect();
     for wanted in [
         "write_json_snapshots: true",
-        r#"reasoning_effort: "none""#,
         "compression:",
         "title_generation:",
         // No scanner binary is fetched from GitHub and run with the key in

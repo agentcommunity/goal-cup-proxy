@@ -9,7 +9,7 @@ Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm
 ## 1. Run one prompt, headless
 
 ```
-hermes chat -Q --provider deepseek --model deepseek-v4-flash --query=<goal>
+hermes chat -Q --provider deepseek --query=<goal>
 ```
 
 (code: [connectors/hermes-cli/harness.toml](../../connectors/hermes-cli/harness.toml).)
@@ -85,8 +85,8 @@ hermes chat -Q --provider deepseek --model deepseek-v4-flash --query=<goal>
 ## 9. Quirks and open questions
 
 - The pre-spike research file was wrong on this version: schema 22 not 27, 23 hook names not 26 or more, no separate system-prompts table (measured, spike 7).
-- Hermes `0.19.0` requires `agent.reasoning_effort: "none"` quoted so YAML does not read it as a boolean (code comment).
-- Title generation and compression are turned off so there is one session id and no auxiliary model call (code).
+- No model or reasoning effort is set since 2026-10-14 (owner direction); the provider stays `deepseek` because `DEEPSEEK_API_KEY` is the one admitted credential. The reference row used `--model deepseek-v4-flash` and `agent.reasoning_effort: "none"` (which must be quoted so YAML does not read it as a boolean). Without `--model`, Hermes 0.19.0 falls back to the first entry of its DeepSeek model list, `deepseek-v4-pro`, with the provider's default thinking (source: `cli_agent_setup_mixin.py`, `models.py`; not measured).
+- Title generation and compression stay off so there is one session id and no auxiliary model call (code); compression off is a real limit on very long runs. The `tirith` scanner stays off (secret review I-2), and the remote model catalogue stays off.
 - The first reference row passed capture integrity but its trace has not been re-decoded; the claim stays capture-only ([reference row, D41](../DECISIONS.md#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules)).
 - Open: every "unknown" above; the Linux and Windows `HERMES_HOME`; the version command; the update-check host; failure exit codes; whether the console script bytes are portable.
 - Compiled from records dated 2026-09-03 to 2026-10-05 and the public connector; none of the runs were repeated for this sheet.

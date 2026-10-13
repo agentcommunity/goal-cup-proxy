@@ -430,8 +430,8 @@ schema_version = 1
 id = "hermes-cli"
 
 [capture]
-# hermes chat -Q --provider deepseek --model deepseek-v4-flash --query=<goal>
-args = ["chat", "-Q", "--provider", "deepseek", "--model", "deepseek-v4-flash"]
+# hermes chat -Q --provider deepseek --query=<goal>
+args = ["chat", "-Q", "--provider", "deepseek"]
 goal_flag = "--query"
 continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
 

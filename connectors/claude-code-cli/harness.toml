@@ -4,17 +4,14 @@ id = "claude-code-cli"
 
 [capture]
 auth_hosts = ["platform.claude.com"]
-continuation = "none: claude -p one turn, acceptEdits, permission prompts denied, stdin /dev/null"
+# No model, effort, permission or MCP limit (owner direction, 2026-10-14): the harness's own
+# defaults, and nothing asks for permission, because nobody is there to answer.
+continuation = "none: claude -p one turn, permissions bypassed, stdin /dev/null"
 args = [
   "-p",
-  "--model", "haiku",
-  "--effort", "low",
-  "--permission-mode", "acceptEdits",
-  "--permission-prompts", "none",
+  "--permission-mode", "bypassPermissions",
   "--session-id", "{session_id}",
   "--output-format", "json",
-  "--strict-mcp-config",
-  "--mcp-config", '{{"mcpServers":{{}}}}',
   "--",
 ]
 
@@ -26,8 +23,6 @@ sha256 = "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e"
 [capture.env]
 SHELL = "/bin/zsh"
 DISABLE_AUTOUPDATER = "1"
-ENABLE_CLAUDEAI_MCP_SERVERS = "false"
-CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS = "1"
 # Documented for unattended sessions (Claude Code 2.1.186+, raised defaults 2.1.199+): a dropped
 # connection, timeout or server error is retried up to 300 times (about three hours of backoff)
 # instead of 10, and 429/529 capacity errors indefinitely, so a network outage of minutes does

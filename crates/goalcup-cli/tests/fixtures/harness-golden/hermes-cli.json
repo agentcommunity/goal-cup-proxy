@@ -552,9 +552,7 @@
       "chat",
       "-Q",
       "--provider",
-      "deepseek",
-      "--model",
-      "deepseek-v4-flash"
+      "deepseek"
     ],
     "auth_hosts": [],
     "automatic_goal": true,
@@ -599,9 +597,9 @@
         "sha256": "4f91563bdf8e30e3023507aa8d209e32dd052a041374f1fddaf9e820ade5702e"
       },
       {
-        "bytes": 1026,
+        "bytes": 992,
         "name": "config.yaml",
-        "sha256": "7b8f737d6ed2fa838cf259cf47c9b98308dd1f380f8271d84170e553a870579e"
+        "sha256": "bbc59adb9d704c0218caa9fdbd99b111fdc12bac4fe3edcc16b14c97a6d50fec"
       }
     ],
     "id": "hermes-cli",
@@ -996,11 +994,11 @@
     }
   ],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 7,
-    "goal_index": 6,
+    "argv_len": 5,
+    "goal_index": 4,
     "goal_prefix": 8,
     "tail": [
-      "deepseek-v4-flash",
+      "deepseek",
       "--query=--profile evil -p x"
     ]
   },
@@ -1029,10 +1027,10 @@
         "type": "file"
       },
       {
-        "bytes": 1026,
+        "bytes": 992,
         "mode": "0600",
         "path": "config.yaml",
-        "sha256": "7b8f737d6ed2fa838cf259cf47c9b98308dd1f380f8271d84170e553a870579e",
+        "sha256": "bbc59adb9d704c0218caa9fdbd99b111fdc12bac4fe3edcc16b14c97a6d50fec",
         "type": "file"
       },
       {
@@ -1048,12 +1046,10 @@
       "-Q",
       "--provider",
       "deepseek",
-      "--model",
-      "deepseek-v4-flash",
       "--query=write result.txt"
     ],
     "capture": {
-      "goal_index": 6,
+      "goal_index": 4,
       "goal_prefix": 8
     },
     "cwd": "<TMP>/workspace",
@@ -1106,8 +1102,6 @@
         "-Q",
         "--provider",
         "deepseek",
-        "--model",
-        "deepseek-v4-flash",
         "--query=<goal>"
       ],
       "env_keys": [

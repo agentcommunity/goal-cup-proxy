@@ -551,10 +551,6 @@
     "args": [
       "exec",
       "--json",
-      "-m",
-      "gpt-5.6-luna",
-      "-c",
-      "model_reasoning_effort=\"low\"",
       "-c",
       "approval_policy=\"never\"",
       "-c",
@@ -562,7 +558,7 @@
       "-c",
       "projects={{ \"{workspace}\" = {{ trust_level = \"trusted\" }} }}",
       "-s",
-      "workspace-write",
+      "danger-full-access",
       "--skip-git-repo-check",
       "-C",
       "{workspace}",
@@ -576,7 +572,7 @@
       "CODEX_CA_CERTIFICATE"
     ],
     "config_home": "shared",
-    "continuation": "none: codex exec one turn, approval_policy=never, workspace-write without network, stdin /dev/null",
+    "continuation": "none: codex exec one turn, approval_policy=never, full access with network, stdin /dev/null",
     "env": {
       "SHELL": "/bin/zsh"
     },
@@ -1008,8 +1004,8 @@
     }
   ],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 19,
-    "goal_index": 18,
+    "argv_len": 15,
+    "goal_index": 14,
     "goal_prefix": 0,
     "tail": [
       "--",
@@ -1024,10 +1020,6 @@
     "argv": [
       "exec",
       "--json",
-      "-m",
-      "gpt-5.6-luna",
-      "-c",
-      "model_reasoning_effort=\"low\"",
       "-c",
       "approval_policy=\"never\"",
       "-c",
@@ -1035,7 +1027,7 @@
       "-c",
       "projects={ \"<TMP>/workspace\" = { trust_level = \"trusted\" } }",
       "-s",
-      "workspace-write",
+      "danger-full-access",
       "--skip-git-repo-check",
       "-C",
       "<TMP>/workspace",
@@ -1043,7 +1035,7 @@
       "write result.txt"
     ],
     "capture": {
-      "goal_index": 18,
+      "goal_index": 14,
       "goal_prefix": 0
     },
     "cwd": "<TMP>/workspace",
@@ -1107,10 +1099,6 @@
       "argv": [
         "exec",
         "--json",
-        "-m",
-        "gpt-5.6-luna",
-        "-c",
-        "model_reasoning_effort=\"low\"",
         "-c",
         "approval_policy=\"never\"",
         "-c",
@@ -1118,7 +1106,7 @@
         "-c",
         "projects={ \"<TMP>/workspace\" = { trust_level = \"trusted\" } }",
         "-s",
-        "workspace-write",
+        "danger-full-access",
         "--skip-git-repo-check",
         "-C",
         "<TMP>/workspace",

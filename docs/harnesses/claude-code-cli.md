@@ -11,9 +11,8 @@ Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm
 The capture argv (code: [connectors/claude-code-cli/harness.toml](../../connectors/claude-code-cli/harness.toml)), goal appended as the single element after `--`:
 
 ```
-claude -p --model haiku --effort low --permission-mode acceptEdits --permission-prompts none \
-  --session-id <uuid minted before spawn> --output-format json \
-  --strict-mcp-config --mcp-config '{"mcpServers":{}}' -- "<goal>"
+claude -p --permission-mode bypassPermissions \
+  --session-id <uuid minted before spawn> --output-format json -- "<goal>"
 ```
 
 - stdin is `/dev/null`; stdout is one JSON result object at exit (measured). Exit 0 after `end_turn` (measured).
@@ -68,7 +67,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 
 - **Model host.** `api.anthropic.com`, `POST /v1/messages`, HTTP/1.1, 200 `text/event-stream` (measured, 2.1.283, 2026-09-28 wire capture). Request 2 was a threaded continuation.
 - **Auth host.** `platform.claude.com` (code: `auth_hosts`).
-- **Connectors and sync.** At each launch Claude starts the account's claude.ai connectors and account-synced plugin MCP servers unless `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1` and `--strict-mcp-config` are set (measured; which one suffices alone was not isolated). Hosts: unknown. Plugins and skills are refreshed from the account at each launch (measured).
+- **Connectors and sync.** At each launch Claude starts the account's claude.ai connectors and account-synced plugin MCP servers unless `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1` and `--strict-mcp-config` are set (measured; which one suffices alone was not isolated). The capture launch sets none of them since 2026-10-14 (owner direction: no MCP limit), so their traffic is tunnelled and not recorded. Earlier measured runs used all three, with `--model haiku --effort low --permission-mode acceptEdits`; the default-model, bypassed-permission launch is not yet measured. Hosts: unknown. Plugins and skills are refreshed from the account at each launch (measured).
 - **Telemetry.** OpenTelemetry export is opt-in via `CLAUDE_CODE_ENABLE_TELEMETRY=1` and `OTEL_*` (vendor docs). Any default telemetry hosts: unknown.
 - **Update host.** unknown (the updater is disabled with `DISABLE_AUTOUPDATER=1`).
 - **Proxy.** `HTTPS_PROXY` is honoured; a loopback forward proxy captured the exchange above (measured, 2.1.283). Transport is plain HTTP/1.1 with server-sent events; no WebSocket seen.

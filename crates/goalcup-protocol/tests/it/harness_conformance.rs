@@ -263,8 +263,8 @@ fn sensitivity_f7_catches_a_value_validate_does_not_scan() {
     let (_tmp, dir) = copy_connector("codex-cli");
     mutate(
         &dir.join("harness.toml"),
-        "workspace-write without network",
-        "workspace-write without network, see goalcup",
+        "full access with network, stdin",
+        "full access with network, see goalcup, stdin",
     );
     // The loader accepts it, so only the raw-text rule can refuse.
     load_dir(&dir, Origin::Pinned).expect("validate does not scan `continuation`");
