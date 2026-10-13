@@ -99,7 +99,7 @@ create table goalcup.entries (
   segment       integer not null default 0,
   opened_at     timestamptz not null default now(),
   upload_offset bigint not null default 0,
-  next_seq      bigint not null default 1,                          -- the first record has seq 1
+  next_seq      bigint not null default 0,                          -- the first record (the baseline) has seq 0
   head          text not null default repeat('0', 64),              -- genesis before any record
   last_ack      jsonb,
   last_chunk_at timestamptz,

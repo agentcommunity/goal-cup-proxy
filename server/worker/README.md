@@ -130,8 +130,8 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
 
 ## Decisions where the contract is silent
 
-- The first record's `seq` is **1** (the Rust `Chain` starts at 0 and increments before use), so
-  a fresh run reports `next_seq: 1` and `head` = 64 zeros.
+- The first record's `seq` is **0** (the baseline link of a v5 chain; this follows the contract), so
+  a fresh run reports `next_seq: 0` and `head` = 64 zeros.
 - `POST /v1/runs` repeated with the same `session_id` returns the existing run only while it has
   no receipt; after the receipt it is `409` (the account has an open run), as the contract says.
 - A repeated `abandon` of an already abandoned run is `200`. Abandoning a sealed run is `410`.

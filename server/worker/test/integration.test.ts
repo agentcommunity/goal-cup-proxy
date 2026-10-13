@@ -134,7 +134,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.notEqual(r.body.run_id, runId);
       assertError(await api.call("GET", `/v1/runs/${runId}`, { token: BOB }), 404, "not_found");
       assertError(await api.call("POST", `/v1/runs/${runId}/abandon`, { token: BOB, json: { reason: "x" } }), 404, "not_found");
-      assertError(await api.call("PUT", `/v1/runs/${runId}/chunks/0`, { token: BOB, body: new Uint8Array([1]), headers: makeChunk(entryId, 1, 1, GENESIS, "x").headers }), 404, "not_found");
+      assertError(await api.call("PUT", `/v1/runs/${runId}/chunks/0`, { token: BOB, body: new Uint8Array([1]), headers: makeChunk(entryId, 0, 1, GENESIS, "x").headers }), 404, "not_found");
     });
   });
 
@@ -180,19 +180,19 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
   });
 
   describe("position", () => {
-    test("a fresh run: offset 0, next_seq 1, genesis head, no ack", async () => {
+    test("a fresh run: offset 0, next_seq 0, genesis head, no ack", async () => {
       const r = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
       assert.equal(r.status, 200);
       assert.deepEqual(r.body, {
         run_id: runId, entry_id: entryId, status: "open",
         official_start: r.body.official_start, deadline_at: r.body.deadline_at,
-        offset: 0, next_seq: 1, head: GENESIS, last_ack: null,
+        offset: 0, next_seq: 0, head: GENESIS, last_ack: null,
       });
     });
   });
 
   describe("chunks", () => {
-    const chunk1 = () => makeChunk(entryId, 1, 5, GENESIS, "one");
+    const chunk1 = () => makeChunk(entryId, 0, 5, GENESIS, "one");
     let c1: ReturnType<typeof chunk1>;
     let ack1: Ack;
 
@@ -248,7 +248,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(r.body.head, c1.head);
       const p = await position();
       assert.equal(p.offset, c1.length);
-      assert.equal(p.next_seq, 6);
+      assert.equal(p.next_seq, 5);
       assert.equal(p.head, c1.head);
       assert.deepEqual(p.last_ack, ack1);
     });
@@ -259,7 +259,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(r.status, 200, JSON.stringify(r.body));
       assert.deepEqual(r.body.ack, ack1);
       assert.equal(r.body.offset, c1.length);
-      assert.equal(r.body.next_seq, 6);
+      assert.equal(r.body.next_seq, 5);
       assert.equal(r.body.head, c1.head);
       assert.equal((await position()).offset, c1.length);
     });
@@ -267,22 +267,22 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
     test("the same offset with a different length or head is 409", async () => {
       assertError(await put({ body: c1.body, headers: { ...c1.headers, "goalcup-length": String(c1.length + 1) } }, 0), 409, "conflict");
       assertError(await put({ body: c1.body, headers: { ...c1.headers, "goalcup-head": "f".repeat(64) } }, 0), 409, "conflict");
-      assertError(await put(makeChunk(entryId, 1, 5, GENESIS, "other"), 0), 409, "conflict");
+      assertError(await put(makeChunk(entryId, 0, 5, GENESIS, "other"), 0), 409, "conflict");
     });
 
     test("wrong offset, prev or first_seq is 409 and nothing moves", async () => {
-      const good = makeChunk(entryId, 6, 3, c1.head, "two");
+      const good = makeChunk(entryId, 5, 3, c1.head, "two");
       assertError(await put(good, c1.length + 10), 409, "conflict"); // a gap
       assertError(await put({ body: good.body, headers: { ...good.headers, "goalcup-prev": "9".repeat(64) } }, c1.length), 409, "conflict");
-      assertError(await put({ body: good.body, headers: { ...good.headers, "goalcup-first-seq": "7", "goalcup-last-seq": "9" } }, c1.length), 409, "conflict");
+      assertError(await put({ body: good.body, headers: { ...good.headers, "goalcup-first-seq": "6", "goalcup-last-seq": "8" } }, c1.length), 409, "conflict");
       const p = await position();
       assert.equal(p.offset, c1.length);
-      assert.equal(p.next_seq, 6);
+      assert.equal(p.next_seq, 5);
       assert.equal(p.head, c1.head);
     });
 
     test("a body that does not match Goalcup-Sha256 is 422, nothing is committed, and the right body then succeeds", async () => {
-      const good = makeChunk(entryId, 6, 3, c1.head, "two");
+      const good = makeChunk(entryId, 5, 3, c1.head, "two");
       const tampered = Buffer.from(good.body);
       tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 0xff; // same length, different bytes
       assert.equal(tampered.length, good.body.length);
@@ -294,7 +294,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.ok(!traceKeys().some((o) => o.sha256 === sha256(tampered)), "tampered bytes were stored");
       let p = await position();
       assert.equal(p.offset, c1.length);
-      assert.equal(p.next_seq, 6);
+      assert.equal(p.next_seq, 5);
       assert.equal(p.head, c1.head);
       assert.deepEqual(p.last_ack, ack1);
       // A shorter body than Content-Length cannot happen over HTTP, but a *different* body of a
@@ -304,7 +304,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       const ok = await put(good, c1.length);
       assert.equal(ok.status, 200, JSON.stringify(ok.body));
       assert.equal(ok.body.offset, c1.length + good.length);
-      assert.equal(ok.body.next_seq, 9);
+      assert.equal(ok.body.next_seq, 8);
       p = await position();
       assert.equal(p.head, good.head);
       assert.equal(await verifyAck(ok.body.ack, publicKey), true);
@@ -349,7 +349,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
         "goalcup-entry-id": bobRun.entry_id,
         "goalcup-length": "100000000",
         "goalcup-sha256": sha256(body),
-        "goalcup-first-seq": "1",
+        "goalcup-first-seq": "0",
         "goalcup-last-seq": "2000",
         "goalcup-prev": GENESIS,
         "goalcup-head": "a".repeat(64),

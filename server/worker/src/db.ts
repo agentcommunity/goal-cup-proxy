@@ -12,8 +12,8 @@ import type { Ack, StartReceipt } from "./sign.ts";
 
 export type RunStatus = "open" | "sealed" | "abandoned";
 
-/** The first record of a chain has seq 1 (Chain::new() starts at 0 and increments before use). */
-export const FIRST_SEQ = 1;
+/** The first record of a v5 chain (the baseline) has seq 0; a fresh run's next_seq is 0. */
+export const FIRST_SEQ = 0;
 /** The head before any record: 64 zeros, the chain's genesis. */
 export const GENESIS = "0".repeat(64);
 
