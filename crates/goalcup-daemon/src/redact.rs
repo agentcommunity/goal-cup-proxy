@@ -88,7 +88,8 @@ pub struct Pattern {
 pub(crate) const SOFT_KIND: &str = "masked_key";
 
 /// The kind of the one block rule in the shared set: a PEM private key, from its `BEGIN` line
-/// to the first `END` line. Only [`compile`] reads this name. A block claim absorbs every hard
+/// to the first `END` line that starts within 12,288 bytes, else those bytes, extended to the
+/// end of a character they cut (a key cut off before its `END`). Only [`compile`] reads this name. A block claim absorbs every hard
 /// claim it contains or that crosses its edge, so a key is never left raw because something
 /// inside it, or touching it, was claimed first; see [`select`] and [`Pattern::block`].
 pub(crate) const BLOCK_KIND: &str = "private_key";
@@ -154,25 +155,48 @@ const SHARED: &[(&str, &str)] = &[
         "jwt",
         r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}",
     ),
+    // Bounded, because a capture stream is one text: an unbounded block with no END ran to the
+    // end of the stream, a whole session. A real key ends within the bound: an RSA-8192 PKCS#8
+    // file is 6,388 bytes, and as Claude Code's Read tool prints it (`N→` on each of its 100
+    // lines), JSON-escaped, its body is 7,325. A key cut off before its END takes the next
+    // 12,288 bytes, not the rest. The bound counts bytes, any byte: a body may carry `→` or an
+    // invalid byte, and a bounded Unicode `[\s\S]` compiles past the regex crate's 10 MiB limit.
+    // `candidates` extends a match that ends inside a character to that character's end, so
+    // the marker never leaves half of one behind. 12 KiB keeps a lone BEGIN below the 16 KiB
+    // hold, so the stream decides it as this regex does.
     (
         "private_key",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
     ),
     ("slack_token", r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
     // (i) the JSON form: a quoted key, a quoted value. The key word may sit inside an
     // `_`/`-`-joined compound (`refresh_token`, `client_secret`, `x-api-key`) but must be a
-    // whole segment of it, so `tokenizer` is not a token.
+    // whole segment of it, so `tokenizer` is not a token. Each side of the key word is at most
+    // 1,000 units, so a key is at most 2,008: a base64url run after a quote (a Codex
+    // `encrypted_content` value) is then not a key the stream must hold to its end. Each
+    // quote may follow up to seven backslashes: tool output and file contents reach every
+    // native transcript and request body as JSON escaped inside a string (`\"api_key\": \"…\"`),
+    // and a command's JSON argument inside that once more (`\\\"api_key\\\"`).
     (
         "generic_secret_assignment",
-        r#"(?i)"(?:[A-Za-z0-9]+[_\-])*(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9]+)*"\s*:\s*"([^"\\]{16,})""#,
+        r#"(?i)\\{0,7}"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}""#,
     ),
     // (ii) the shell/TOML form, with redact.py's own value class. Widening this one is what
-    // put source lines in spans; the JSON form above is what catches base64 secrets.
+    // put source lines in spans; the JSON form above is what catches base64 secrets. The
+    // opening quote may follow up to seven backslashes (`password: \"…\"` in an escaped
+    // string); the span takes them, so no backslash is left dangling.
     (
         "generic_secret_assignment",
-        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?(?:[A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
     ),
-    ("email", r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
+    // The local part is at most 1,024 units, for the same reason as the JSON key: a bare token
+    // run is not an address the stream must hold to its end. Not RFC 5321's 64: a URL
+    // credential (`https://user:<token>@host`, a `git remote -v` line) is a local part here,
+    // and its tokens run to about 200 characters.
+    (
+        "email",
+        r"[A-Za-z0-9._%+\-]{1,1024}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+    ),
     // ── then the seven fixed vendor prefixes ───────────────────────────────────────────
     ("google_key", r"AIza[A-Za-z0-9_\-]{30,}"),
     ("huggingface_token", r"hf_[A-Za-z0-9]{20,}"),
@@ -231,8 +255,10 @@ fn disables_unicode(re: &str) -> bool {
 }
 
 /// True when `start..end` is the interior of a JSON string — a `"` immediately before it
-/// and a `"` immediately after — so a bare marker dropped in its place is still a JSON
-/// string and the record still parses.
+/// and a `"` (or one escaped by up to seven backslashes) immediately after — so a bare marker dropped in its place is
+/// still a JSON string and the record still parses. The escaped close is a string escaped
+/// inside another string (`\"api_key\": \"<redacted:…>\"`): a quoted marker there would end
+/// the outer string.
 ///
 /// When it is false the span was the whole value (`"credits_remaining": 17.5`,
 /// `"rate_limits": {…}`), and there is no pair of quotes left behind to hold the marker.
@@ -244,7 +270,13 @@ fn disables_unicode(re: &str) -> bool {
 /// the shell/TOML literal and the vendor prefixes, which are not JSON fields and whose
 /// bare markers the committed corpus already carries.
 fn span_is_a_json_string_interior(bytes: &[u8], start: usize, end: usize) -> bool {
-    start > 0 && bytes[start - 1] == b'"' && end < bytes.len() && bytes[end] == b'"'
+    let slashes = bytes[end.min(bytes.len())..]
+        .iter()
+        .take(8)
+        .take_while(|&&b| b == b'\\')
+        .count();
+    let closes = slashes <= 7 && bytes.get(end + slashes) == Some(&b'"');
+    start > 0 && bytes[start - 1] == b'"' && closes
 }
 
 /// Group 1 when the pattern declares one, otherwise the whole match. See
@@ -512,7 +544,11 @@ pub(crate) fn candidates<'a>(
                 Some(((span.start(), span.end()), (whole.start(), whole.end())))
             }))
         };
-        for ((start, end), (whole_start, whole_end)) in found {
+        for ((start, mut end), (whole_start, mut whole_end)) in found {
+            if p.block {
+                end = char_end(bytes, end);
+                whole_end = whole_end.max(end);
+            }
             let quote = p.span_group != 0 && !span_is_a_json_string_interior(bytes, start, end);
             found_all.push(Claim {
                 priority,
@@ -528,6 +564,28 @@ pub(crate) fn candidates<'a>(
         }
     }
     found_all
+}
+
+/// The end of the UTF-8 character that `end` falls inside, or `end` on a boundary. The block
+/// rule bounds its body in bytes, so a match may end inside a character; the stream's PEM
+/// recognizer takes that character's unit whole, and so does the span.
+fn char_end(bytes: &[u8], end: usize) -> usize {
+    for p in end.saturating_sub(3)..end {
+        let width = match bytes[p] {
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => continue,
+        };
+        if p + width > end
+            && bytes
+                .get(p..p + width)
+                .is_some_and(|c| std::str::from_utf8(c).is_ok())
+        {
+            return p + width;
+        }
+    }
+    end
 }
 
 /// Resolve every rule's candidates into the claimed spans, in source order, never overlapping.

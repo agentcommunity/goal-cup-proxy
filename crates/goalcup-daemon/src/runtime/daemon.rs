@@ -244,8 +244,11 @@ impl Daemon {
     /// that is merely dropped does not release them: the control router holds an `Arc` of
     /// this one, and dropping a `JoinHandle` detaches its task rather than ending it. So
     /// the listener is aborted and awaited — awaited, because `abort` only marks a task
-    /// and the socket is closed when the task is dropped — and only then is `self` gone,
-    /// which is the last `Arc` and so the moment the locks are released.
+    /// and the socket is closed when the task is dropped — and only then is `self` gone.
+    /// That drops this handle's `Arc`, and the locks go with the last one. It is not always
+    /// the last: `axum::serve` spawns each accepted connection as its own task, which the
+    /// abort does not reach, so a keep-alive connection still open holds the router's
+    /// `Arc<Daemon>`, and the locks, until the client closes it.
     ///
     /// By value, because a stopped daemon has nothing left to answer with: the port is
     /// closed and the registry handle is released, and a caller holding one afterwards

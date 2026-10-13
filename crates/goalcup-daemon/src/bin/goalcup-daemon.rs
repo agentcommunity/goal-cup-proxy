@@ -31,8 +31,9 @@
 //!
 //! **There is no poll to finish.** [`Daemon::run_forever`] drives nothing: a capture entry's
 //! work is done by its ingest and control calls, and D48 removed the V1 tick with its
-//! receipt requests and uploads. The chain is durable per envelope, so nothing in flight is
-//! evidence that was lost.
+//! receipt requests and uploads. Each capture's owner thread syncs the chain every 800 ms
+//! (`SYNC_EVERY`), so a process that dies loses at most the envelopes appended since its
+//! last sync.
 
 use clap::Parser;
 use goalcup_daemon::config::DaemonConfig;
@@ -105,8 +106,8 @@ struct Args {
 
 fn main() -> ExitCode {
     let args = Args::parse();
-    // `enable_all` because the loop wants both the timer and the IO drivers: four
-    // `tokio::time::interval`s and the loopback control listener.
+    // `enable_all` because the daemon wants both the timer and the IO drivers: the idle
+    // poll's and the ingest's sleeps and timeouts, and the loopback listeners.
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

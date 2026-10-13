@@ -152,7 +152,7 @@ fn a_bad_server_key_and_a_workspace_parent_beside_the_artifact_root_are_both_ref
             .unwrap_err()
             .to_string()
             .contains("server_public_key"),
-        "an unparseable key would make every acknowledgement silently unverifiable"
+        "a malformed key is still refused, as it was when the key was read"
     );
     // Agents enumerate the parent directory on their first tool call.
     let adjacent =
@@ -258,26 +258,24 @@ fn a_relative_root_is_refused_by_name() {
     }
 }
 
-/// A zero poll interval is a tailer that spins without waiting; a zero chunk maximum is
-/// an uploader whose chunks carry nothing and never drain the buffer. Both are configs
-/// that load cleanly and then do no work, so both are refused by name.
+/// The V1 cadences and thresholds are accepted for old configs and read by nothing, so no
+/// value of theirs is refused: a `daemon.toml` that set any of them, zero included, loads.
 #[test]
-fn a_zero_cadence_or_chunk_maximum_is_refused_by_name() {
-    for (field, extra) in [
-        ("poll_interval_ms", "poll_interval_ms = 0"),
-        ("upload_chunk_max", "upload_chunk_max = 0"),
-    ] {
-        let e = DaemonConfig::from_toml_str(&base(extra))
-            .unwrap()
-            .validate()
-            .expect_err("zero must be refused")
-            .to_string();
-        assert!(e.contains(field), "the refusal must name {field}: {e}");
-    }
+fn the_v1_fields_nothing_reads_load_with_any_value() {
+    let old = base(
+        "poll_interval_ms = 0\nupload_interval_ms = 0\nupload_chunk_max = 0\n\
+         status_interval_ms = 0\nstall_after_seconds = 0.0\nsilence_window_seconds = 0.0\n\
+         ack_lag_seconds = 0.0\narming_timeout_seconds = 0\nheartbeat_seconds = 0\n\
+         clock_skew_seconds = 0.0\ndisk_reserve_bytes = 0\n",
+    );
+    DaemonConfig::from_toml_str(&old)
+        .expect("an old config parses")
+        .validate()
+        .expect("nothing reads these fields, so no value of theirs is refused");
 }
 
-/// The uploader speaks HTTP. A `file://` or bare-host `upload_url` would be a chunk
-/// destination the signing path cannot reach, discovered only once a run is under way.
+/// Nothing reads `upload_url`, but a config refused for a non-http one before is still
+/// refused, so the set of configs that load does not move.
 #[test]
 fn an_upload_url_that_is_not_http_is_refused_by_name() {
     for bad in ["file:///tmp/gc/uploads", "127.0.0.1:9000", ""] {

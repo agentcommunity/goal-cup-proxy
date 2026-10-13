@@ -23,9 +23,9 @@
 //! covers that. A block's `BEGIN` is a live candidate from its first byte until its `END`
 //! completes it, so nothing inside it is released, and a complete match of any rule that
 //! straddles a cut moves the cut back to its start, so a claim across an edge of the block
-//! is held with it. A block that never gets its `END` ends with the stream: it is held until
-//! the hold fills (then the stream fails closed from its `BEGIN`) or until the stream ends,
-//! where the shared regexes take the open block to the end, as they do a record.
+//! is held with it. A block whose `END` does not start within 12,288 bytes of its `BEGIN` line
+//! is those bytes (to the end of a character they cut, and fewer at the stream's end): its
+//! candidate ends there, below the hold, and the shared regexes take the same span.
 //!
 //! # Connector `extra_patterns` (D39)
 //!
@@ -121,9 +121,15 @@ const MAX_TIME_MARKS: usize = 8;
 /// source, timestamps, link hashes, JSON framing and the trailing newline).
 const ENVELOPE_RESERVE_BYTES: usize = 4 * 1024;
 const SEGMENT_RECORD_BUDGET: usize = MAX_ENVELOPE_BYTES - ENVELOPE_RESERVE_BYTES;
-/// A quoted JSON key longer than this is not copied for the key check; it is assumed
-/// to be a secret key (holding more, never less).
-const JSON_KEY_PROBE_BYTES: usize = 256;
+/// The longest key the shared JSON literal can match, in units: up to 1,000 on each side of
+/// an eight-unit key word. A longer `[A-Za-z0-9_\-]` run after a quote is no key, so its
+/// candidate ends there instead of holding the run.
+const JSON_KEY_MAX_UNITS: u16 = 2008;
+/// The most backslashes the generic-secret literals take before a quote: JSON escaped up to
+/// three levels deep (`\"`, `\\\"`, seven before the quote).
+const MAX_QUOTE_ESCAPES: u8 = 7;
+/// The longest local part the shared `email` literal matches, in units (all ASCII).
+const EMAIL_LOCAL_MAX: u16 = 1024;
 
 /// Positions of the two `generic_secret_assignment` literals in the shared list, counting
 /// `masked_key` at index 2. A rule inserted before them shifts both, which `policy_ready`
@@ -422,7 +428,7 @@ static SHAPES: [Shape; 19] = [
     },
     Shape {
         kind: "private_key",
-        source: r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)",
+        source: r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
         form: Form::PrivateKey,
     },
     prefixed(
@@ -435,17 +441,17 @@ static SHAPES: [Shape; 19] = [
     ),
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)"(?:[A-Za-z0-9]+[_\-])*(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9]+)*"\s*:\s*"([^"\\]{16,})""#,
+        source: r#"(?i)\\{0,7}"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}""#,
         form: Form::JsonAssignment,
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?(?:[A-Za-z0-9_\-]{16,})"#,
+        source: r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
         form: Form::ShellAssignment,
     },
     Shape {
         kind: "email",
-        source: r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+        source: r"[A-Za-z0-9._%+\-]{1,1024}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
         form: Form::Email,
     },
     prefixed(
@@ -789,25 +795,45 @@ enum Pem {
     Begin(u8),
     Header(HeaderTail),
     Dashes(u8),
-    Body(EndLine),
+    Body {
+        /// Bytes after the BEGIN line, this unit's included.
+        n: u32,
+        end: EndLine,
+        /// Units of the END line in progress, from its first dash; zero when none is.
+        since: u32,
+    },
 }
+
+/// The most bytes the shared `private_key` literal takes after its BEGIN line: an END line
+/// must start within them, and without one the block is them. An RSA-8192 key is about
+/// 6.4 KiB, and a block this long fits the hold, so a lone BEGIN is decided below it.
+const PEM_BODY_MAX: u32 = 12288;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum JsonPhase {
     /// Before the key's opening quote.
     Open,
+    /// Backslashes (one to seven) before the key's opening quote.
+    OpenQuote(u8),
     Key,
+    /// Backslashes before the key's closing quote.
+    KeyQuote(u8),
     AfterKey,
     AfterColon,
+    /// Backslashes before the value's opening quote.
+    ValueQuote(u8),
     Value,
+    /// Backslashes after the value: only a quote completes the match.
+    ValueEnd(u8),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Json {
     phase: JsonPhase,
-    /// The key so far, while it is short enough to check; empty after the key.
+    /// The key so far; empty after the key.
     key: Vec<u8>,
-    long_key: bool,
+    /// Units of the key so far, at most [`JSON_KEY_MAX_UNITS`].
+    key_units: u16,
     value_start: u64,
     /// Value characters, capped at sixteen.
     n: u8,
@@ -826,6 +852,8 @@ enum Shell {
     ApiKey(u8),
     BeforeSep,
     AfterSep,
+    /// Backslashes (one to seven) before the optional quote.
+    Escape(u8),
     Quoted,
     /// Value characters, capped at sixteen.
     Value(u8),
@@ -833,7 +861,8 @@ enum Shell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Email {
-    Local,
+    /// Local-part units, at most [`EMAIL_LOCAL_MAX`]: past that the window slides.
+    Local(u16),
     Domain {
         /// At least one domain unit seen (capped).
         some: bool,
@@ -1144,10 +1173,12 @@ fn step_bearer(pos: &mut u8, spaced: &mut bool, count: &mut u8, u: Unit) -> bool
 }
 
 impl Pem {
-    /// `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)`.
-    /// The `\z` arm is not a unit this walk takes: a block still open at the end of the
-    /// stream is decided there, with every other held byte, by the shared regexes.
-    fn step(&mut self, u: Unit) -> Step {
+    /// `-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE
+    /// KEY-----|(?-u:[\x00-\xFF]){0,12288})`: to an END line that starts within
+    /// [`PEM_BODY_MAX`] bytes, else those bytes and the rest of a character they cut (fewer at
+    /// the end of the stream, which is decided there with every other held byte by the shared
+    /// regexes). `len` is this unit's length in bytes.
+    fn step(&mut self, u: Unit, len: usize) -> Step {
         let next = match self {
             Pem::Begin(p) => {
                 if !b"-----BEGIN ".get(*p as usize).is_some_and(|&b| is(u, b)) {
@@ -1172,20 +1203,37 @@ impl Pem {
                     return Step::Dead;
                 }
                 if *n + 1 == 5 {
-                    Pem::Body(EndLine::Scan(0))
+                    Pem::Body {
+                        n: 0,
+                        end: EndLine::Scan(0),
+                        since: 0,
+                    }
                 } else {
                     Pem::Dashes(*n + 1)
                 }
             }
-            // `[\s\S]` cannot match an invalid byte; a completed END line finishes the
-            // lazy match with this unit.
-            Pem::Body(end) => {
-                return if u == Unit::Invalid {
-                    Step::Dead
-                } else if end.step(u) {
+            // The body is any bytes; a completed END line finishes the lazy arm with this unit.
+            Pem::Body { n, end, since } => {
+                if end.step(u) {
+                    return Step::Last;
+                }
+                let before = *n;
+                *n += len as u32;
+                *since = match end {
+                    EndLine::Scan(d) => u32::from(*d),
+                    EndLine::Lit(p) => 5 + u32::from(*p),
+                    EndLine::Header(_) | EndLine::Tail(_) => *since + 1,
+                };
+                // Live while an END line may still start within the bound (the next unit starts
+                // at byte `n`; an END line is ASCII, so `since` is bytes too), or one that did is
+                // still open. A unit the bound cuts ends the block with it; otherwise the bounded
+                // arm ended before this unit.
+                return if *n <= PEM_BODY_MAX || (*since > 0 && *n - *since <= PEM_BODY_MAX) {
+                    Step::Live
+                } else if before < PEM_BODY_MAX {
                     Step::Last
                 } else {
-                    Step::Live
+                    Step::Dead
                 };
             }
         };
@@ -1195,33 +1243,51 @@ impl Pem {
 }
 
 impl Json {
-    /// `(?i)"KEY"\s*:\s*"([^"\\]{16,})"`; `after` is the offset after this unit.
+    /// `(?i)\\{0,7}"KEY\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}"`; `after` is the offset
+    /// after this unit.
     fn step(&mut self, u: Unit, after: u64) -> bool {
+        // One more backslash before a quote, while at most seven have been seen.
+        let more = |k: u8| (is(u, b'\\') && k < MAX_QUOTE_ESCAPES).then_some(k + 1);
         match self.phase {
-            JsonPhase::Open => {
+            JsonPhase::Open if is(u, b'\\') => {
+                self.phase = JsonPhase::OpenQuote(1);
+                true
+            }
+            JsonPhase::OpenQuote(k) if is(u, b'\\') => {
+                self.phase = JsonPhase::OpenQuote(k + 1);
+                more(k).is_some()
+            }
+            JsonPhase::Open | JsonPhase::OpenQuote(_) => {
                 self.phase = JsonPhase::Key;
                 is(u, b'"')
             }
             JsonPhase::Key if json_key(u) => {
+                if self.key_units == JSON_KEY_MAX_UNITS {
+                    return false;
+                }
                 if let Unit::Char(c) = u {
                     let mut buf = [0u8; 4];
-                    let bytes = c.encode_utf8(&mut buf).as_bytes();
-                    if self.key.len() + bytes.len() <= JSON_KEY_PROBE_BYTES {
-                        self.key.extend_from_slice(bytes);
-                    } else {
-                        self.long_key = true;
-                    }
+                    self.key
+                        .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
                 }
+                self.key_units += 1;
                 true
             }
-            JsonPhase::Key => {
+            JsonPhase::Key if is(u, b'\\') => {
+                self.phase = JsonPhase::KeyQuote(1);
+                !self.key.is_empty()
+            }
+            JsonPhase::KeyQuote(k) if is(u, b'\\') => {
+                self.phase = JsonPhase::KeyQuote(k + 1);
+                more(k).is_some()
+            }
+            JsonPhase::Key | JsonPhase::KeyQuote(_) => {
                 if !is(u, b'"') {
                     return false;
                 }
-                let secret =
-                    !self.key.is_empty() && (self.long_key || json_key_is_secret(&self.key));
+                let secret = !self.key.is_empty() && json_key_is_secret(&self.key);
                 self.key = Vec::new();
-                self.long_key = false;
+                self.key_units = 0;
                 self.phase = JsonPhase::AfterKey;
                 secret
             }
@@ -1229,25 +1295,48 @@ impl Json {
                 self.phase = JsonPhase::AfterColon;
                 true
             }
-            JsonPhase::AfterColon if is(u, b'"') => {
+            JsonPhase::AfterColon if is(u, b'\\') => {
+                self.phase = JsonPhase::ValueQuote(1);
+                true
+            }
+            JsonPhase::ValueQuote(k) if is(u, b'\\') => {
+                self.phase = JsonPhase::ValueQuote(k + 1);
+                more(k).is_some()
+            }
+            JsonPhase::AfterColon | JsonPhase::ValueQuote(_) if is(u, b'"') => {
                 self.phase = JsonPhase::Value;
                 self.value_start = after;
                 true
             }
             JsonPhase::AfterKey | JsonPhase::AfterColon => space(u),
+            JsonPhase::ValueQuote(_) => false,
             JsonPhase::Value => match u {
-                Unit::Char('"' | '\\') | Unit::Invalid => false,
+                // The closing quote may be escaped: hold the backslash until its quote.
+                Unit::Char('\\') => {
+                    self.phase = JsonPhase::ValueEnd(1);
+                    true
+                }
+                Unit::Char('"') | Unit::Invalid => false,
                 Unit::Char(_) => {
                     self.n = (self.n + 1).min(16);
                     true
                 }
+            },
+            // The quote completes the match, which the regex then sees; anything else but one
+            // more backslash ends it.
+            JsonPhase::ValueEnd(k) => match more(k) {
+                Some(k) => {
+                    self.phase = JsonPhase::ValueEnd(k);
+                    true
+                }
+                None => false,
             },
         }
     }
 }
 
 impl Shell {
-    /// `(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*['"]?[A-Za-z0-9_\-]{16,}`
+    /// `(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}`
     fn step(&mut self, u: Unit) -> bool {
         let next = match *self {
             Shell::Word { which, pos } => {
@@ -1295,7 +1384,9 @@ impl Shell {
             }
             Shell::BeforeSep if is(u, b'=') || is(u, b':') => Shell::AfterSep,
             Shell::BeforeSep | Shell::AfterSep if space(u) => return true,
-            Shell::AfterSep if is(u, b'\'') || is(u, b'"') => Shell::Quoted,
+            Shell::AfterSep if is(u, b'\\') => Shell::Escape(1),
+            Shell::Escape(k) if is(u, b'\\') && k < MAX_QUOTE_ESCAPES => Shell::Escape(k + 1),
+            Shell::AfterSep | Shell::Escape(_) if is(u, b'\'') || is(u, b'"') => Shell::Quoted,
             Shell::AfterSep | Shell::Quoted if token_folded(u) => Shell::Value(1),
             Shell::Value(n) if token_folded(u) => Shell::Value((n + 1).min(16)),
             _ => return false,
@@ -1306,11 +1397,11 @@ impl Shell {
 }
 
 impl Email {
-    /// `[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`. The domain stays live while
-    /// its run continues, since a later `.xx` can still extend the match.
+    /// `[A-Za-z0-9._%+\-]{1,1024}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`. The domain stays live
+    /// while its run continues, since a later `.xx` can still extend the match.
     fn step(&mut self, u: Unit) -> bool {
         match self {
-            Email::Local if is(u, b'@') => {
+            Email::Local(_) if is(u, b'@') => {
                 *self = Email::Domain {
                     some: false,
                     after_dot: None,
@@ -1318,7 +1409,10 @@ impl Email {
                 };
                 true
             }
-            Email::Local => local_part(u),
+            Email::Local(n) => {
+                *n = (*n + 1).min(EMAIL_LOCAL_MAX);
+                local_part(u)
+            }
             Email::Domain {
                 some,
                 after_dot,
@@ -1377,9 +1471,11 @@ impl Candidate {
             Form::Bearer => folded(u) == Some(b'b'),
             Form::Jwt => is(u, b'e'),
             Form::PrivateKey => is(u, b'-'),
-            Form::JsonAssignment => is(u, b'"'),
+            Form::JsonAssignment => is(u, b'"') || is(u, b'\\'),
             Form::ShellAssignment => matches!(folded(u), Some(b's' | b't' | b'p' | b'a')),
-            // The leftmost-first email match starts where its local-part run starts.
+            // The leftmost-first email match starts where its local-part run starts, or
+            // 1,024 units before its `@` in a longer run: one candidate per run, whose
+            // start slides with the run (see `Candidate::step`).
             Form::Email => local_part(u) && !prev_local,
             Form::Field { key, .. } => key.first().is_some_and(|&b| is(u, b)),
             Form::BillingHeader => is(u, BILLING_PREFIX[0]),
@@ -1404,12 +1500,12 @@ impl Candidate {
             Form::JsonAssignment => Walk::Json(Json {
                 phase: JsonPhase::Open,
                 key: Vec::new(),
-                long_key: false,
+                key_units: 0,
                 value_start: 0,
                 n: 0,
             }),
             Form::ShellAssignment => Walk::Shell(Shell::Word { which: 0, pos: 0 }),
-            Form::Email => Walk::Email(Email::Local),
+            Form::Email => Walk::Email(Email::Local(0)),
             Form::Field { .. } => Walk::Field(Field {
                 phase: FieldPhase::Key(0),
                 value_start: 0,
@@ -1444,10 +1540,17 @@ impl Candidate {
                 }
                 jwt_step(seg, count, u)
             }
-            (Walk::Pem(pem), _) => return pem.step(u),
+            (Walk::Pem(pem), _) => return pem.step(u, len),
             (Walk::Json(json), _) => json.step(u, off + len as u64),
             (Walk::Shell(shell), _) => shell.step(u),
-            (Walk::Email(email), _) => email.step(u),
+            (Walk::Email(email), _) => {
+                // A full window that takes one more local-part unit drops its first: the
+                // local part is ASCII, so the match can start no earlier than one byte on.
+                if *email == Email::Local(EMAIL_LOCAL_MAX) && local_part(u) {
+                    self.start += 1;
+                }
+                email.step(u)
+            }
             (Walk::Field(field), Form::Field { key, value }) => {
                 return field.step(key, *value, u, off, len);
             }
@@ -1468,8 +1571,11 @@ impl Candidate {
             (Walk::Masked(masked), _) => masked.past_separator().then_some(self.start),
             (Walk::Bearer { count, .. }, _) => (*count >= 1).then_some(self.start),
             (Walk::Jwt { pos, .. }, _) => (*pos == 3).then_some(self.start),
-            (Walk::Pem(Pem::Body(_)), _) => Some(self.start),
-            (Walk::Json(json), _) => (json.phase == JsonPhase::Value).then_some(json.value_start),
+            (Walk::Pem(Pem::Body { .. }), _) => Some(self.start),
+            (Walk::Json(json), _) => {
+                matches!(json.phase, JsonPhase::Value | JsonPhase::ValueEnd(_))
+                    .then_some(json.value_start)
+            }
             (Walk::Shell(Shell::Value(_)), _) => Some(self.start),
             // A connector field's value has begun: from there it is the rule's span.
             (Walk::Field(field), Form::Field { value, .. }) => match field.phase {
@@ -2613,6 +2719,11 @@ mod tests {
         b"%",
         b"+",
         b"\"api_key\":\"",
+        // Escaped inside a string (I-4).
+        b"\\\"api_key\\\": \\\"",
+        b"\\\"",
+        b"password: \\\"",
+        b"\\\\\\\"token\\\\\\\":\\\\\\\"",
         b"\"token\" : \"",
         "\"Secret\":\u{a0}\"".as_bytes(),
         b"token = '",
@@ -2756,14 +2867,14 @@ mod tests {
             .expect("private_key literal")
             .re
             .as_str();
-        // The END line, without the `|\z` arm: the end of the input is not a line this detector
-        // can complete, and the stream decides an open block at its end.
+        // The END line of the lazy arm, without the bounded arm: a block with no END line is
+        // the walk's unit count, not a line this detector completes.
+        let body = format!("(?-u:[\\x00-\\xFF]){{0,{PEM_BODY_MAX}}}");
         let end_half = shared
-            .split("[\\s\\S]*?")
+            .split(&format!("(?:{body}?"))
             .nth(1)
-            .and_then(|h| h.strip_prefix("(?:"))
-            .and_then(|h| h.strip_suffix("|\\z)"))
-            .expect("lazy body and an END-or-end-of-input arm in the literal");
+            .and_then(|h| h.strip_suffix(&format!("|{body})")))
+            .expect("a bounded lazy body to an END line, or the bounded body, in the literal");
         let end_re = regex::bytes::Regex::new(end_half).expect("END half compiles");
         let pieces: &[&[u8]] = &[
             b"-",
