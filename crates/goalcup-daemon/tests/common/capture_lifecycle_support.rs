@@ -420,8 +420,6 @@ pub async fn controlled_native_rig() -> (Rig, PathBuf, tempfile::TempDir) {
     let harness = std::fs::read_to_string(source)
         .unwrap()
         .replace("id = \"m2-controlled-workload\"", "id = \"capture-dev\"")
-        .replace("@PYTHON3_SHA256@", &"ab".repeat(32))
-        .replace("@PYTHON3_VERSION@", "3.12.0")
         .replace("@WORKLOAD@", "/synthetic/workload.py")
         .replace("@CONFIG@", "/synthetic/config.json");
     let connector = connectors.path().join("capture-dev");

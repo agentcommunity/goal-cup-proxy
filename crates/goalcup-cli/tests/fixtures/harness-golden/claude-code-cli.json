@@ -1,93 +1,4 @@
 {
-  "allowance_refusals": [
-    {
-      "args": "profile_args",
-      "refusal": null,
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the profile already has an --allowedTools of its own",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the profile's arguments do not end at `--`, so the allowance has no place to go",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "the rule is not one bounded `Bash(python3 <name>.py *)`",
-      "rule": ""
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)",
-      "variant": "family_changed"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)",
-      "variant": "id_changed"
-    }
-  ],
   "argv_deny": [
     {
       "arg": "--remote",
@@ -562,21 +473,12 @@
   "capture_profile": {
     "args": [
       "-p",
-      "--model",
-      "haiku",
-      "--effort",
-      "low",
       "--permission-mode",
-      "acceptEdits",
-      "--permission-prompts",
-      "none",
+      "bypassPermissions",
       "--session-id",
       "{session_id}",
       "--output-format",
       "json",
-      "--strict-mcp-config",
-      "--mcp-config",
-      "{{\"mcpServers\":{{}}}}",
       "--"
     ],
     "auth_hosts": [
@@ -587,17 +489,16 @@
       "NODE_EXTRA_CA_CERTS"
     ],
     "config_home": "shared",
-    "continuation": "none: claude -p one turn, acceptEdits, permission prompts denied, stdin /dev/null",
+    "continuation": "none: claude -p one turn, permissions bypassed, stdin /dev/null",
     "env": {
       "CLAUDE_CODE_RETRY_WATCHDOG": "1",
-      "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS": "1",
       "DISABLE_AUTOUPDATER": "1",
-      "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
       "SHELL": "/bin/zsh"
     },
     "executable": {
-      "sha256": "d8cb1e5c79684cc12a8bfc813e3a2073406921b6245744b3009be3ab5651d21e",
-      "version": "2.1.283"
+      "version_args": [
+        "--version"
+      ]
     },
     "home": "keychain_link",
     "hosts": [
@@ -614,16 +515,12 @@
       "linux-aarch64": {
         "env": {
           "SHELL": "/bin/bash"
-        },
-        "sha256": "346d294f0103d6fc0de11ac953579b5c62dfa90698a4cfc486b6f927c615e697",
-        "version": null
+        }
       },
       "linux-x86_64": {
         "env": {
           "SHELL": "/bin/bash"
-        },
-        "sha256": "1859583ce32920595c61ef868bee52e1b1594f7486db209935e01f1e5e804ae2",
-        "version": null
+        }
       }
     }
   },
@@ -714,11 +611,11 @@
       "name": "TERMINAL_HOME_MODE"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "CODEX_HOME"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "codex_home"
     },
     {
@@ -730,15 +627,15 @@
       "name": "claude_config_dir"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "HERMES_HOME"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "hermes_home"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "WORKLOAD_HOME"
     },
     {
@@ -970,7 +867,7 @@
       "name": "LD_LIBRARY_PATH"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": null,
       "name": "HERMES_X"
     },
     {
@@ -1023,8 +920,8 @@
     }
   ],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 18,
-    "goal_index": 17,
+    "argv_len": 9,
+    "goal_index": 8,
     "goal_prefix": 0,
     "tail": [
       "--",
@@ -1038,26 +935,17 @@
   "plan": {
     "argv": [
       "-p",
-      "--model",
-      "haiku",
-      "--effort",
-      "low",
       "--permission-mode",
-      "acceptEdits",
-      "--permission-prompts",
-      "none",
+      "bypassPermissions",
       "--session-id",
       "5f0c2a8e-8a0e-4c1f-9d6b-2b7d2b0e9a11",
       "--output-format",
       "json",
-      "--strict-mcp-config",
-      "--mcp-config",
-      "{\"mcpServers\":{}}",
       "--",
       "write result.txt"
     ],
     "capture": {
-      "goal_index": 17,
+      "goal_index": 8,
       "goal_prefix": 0
     },
     "cwd": "<TMP>/workspace",
@@ -1065,10 +953,8 @@
     "env_remove": [],
     "env_set": {
       "CLAUDE_CODE_RETRY_WATCHDOG": "1",
-      "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS": "1",
       "CLAUDE_CONFIG_DIR": "<TMP>/harness-home",
       "DISABLE_AUTOUPDATER": "1",
-      "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
       "HOME": "<TMP>/run-home",
       "HTTPS_PROXY": "<PROXY_URL>",
       "LOGNAME": "participant",
@@ -1088,14 +974,6 @@
     },
     "mode": "Server",
     "program": "<TMP>/bin/fake-harness"
-  },
-  "plan_with_claude_tool_allowance": {
-    "argv_tail": [
-      "--allowedTools",
-      "Bash(python3 demo.py *)",
-      "--",
-      "write result.txt"
-    ]
   },
   "redaction": {
     "extra_patterns": [
@@ -1121,30 +999,19 @@
     "registered_handle": {
       "argv": [
         "-p",
-        "--model",
-        "haiku",
-        "--effort",
-        "low",
         "--permission-mode",
-        "acceptEdits",
-        "--permission-prompts",
-        "none",
+        "bypassPermissions",
         "--session-id",
         "5f0c2a8e-8a0e-4c1f-9d6b-2b7d2b0e9a11",
         "--output-format",
         "json",
-        "--strict-mcp-config",
-        "--mcp-config",
-        "{\"mcpServers\":{}}",
         "--",
         "<goal>"
       ],
       "env_keys": [
         "CLAUDE_CODE_RETRY_WATCHDOG",
-        "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS",
         "CLAUDE_CONFIG_DIR",
         "DISABLE_AUTOUPDATER",
-        "ENABLE_CLAUDEAI_MCP_SERVERS",
         "HOME",
         "HTTPS_PROXY",
         "LOGNAME",

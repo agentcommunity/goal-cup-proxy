@@ -447,10 +447,6 @@ impl LossCauses {
         LossCause::from_reason(reason).is_some_and(|cause| self.causes.contains(&Some(cause)))
     }
 
-    pub(super) fn first(self) -> Option<&'static str> {
-        self.causes[0].map(LossCause::reason)
-    }
-
     pub(super) fn findings(self) -> [Option<&'static str>; 6] {
         self.causes.map(|cause| cause.map(LossCause::reason))
     }

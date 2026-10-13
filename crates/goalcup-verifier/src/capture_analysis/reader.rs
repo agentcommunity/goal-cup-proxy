@@ -1542,6 +1542,7 @@ impl CaptureState {
                 process_handoff_digest,
                 run_public_key,
                 connector_dir_sha256,
+                harness_build,
             } => {
                 check_time(observed)?;
                 if !is_capture_id(&goal_stream.producer) || goal_stream.stream == 0 {
@@ -1584,6 +1585,17 @@ impl CaptureState {
                     && Sha256Digest::try_from(digest.as_str()).is_err()
                 {
                     return Err("record_field_invalid");
+                }
+                // D53: the observed build is recorded, never judged here. Each present digest is
+                // canonical SHA-256 hex, and the platform is bounded text.
+                if let Some(build) = harness_build {
+                    let digests_ok = [&build.program_sha256, &build.image_sha256]
+                        .into_iter()
+                        .flatten()
+                        .all(|digest| Sha256Digest::try_from(digest.as_str()).is_ok());
+                    if !digests_ok || build.platform.is_empty() || !bounded_text(&build.platform) {
+                        return Err("record_field_invalid");
+                    }
                 }
                 remember(&mut self.launch_goals, goal_stream, "launch_limit_exceeded")?;
             }

@@ -1440,8 +1440,6 @@ fn schema_harness(id: &str) -> HarnessManifest {
     };
     let text = std::fs::read_to_string(path)
         .unwrap()
-        .replace("@PYTHON3_SHA256@", &"ab".repeat(32))
-        .replace("@PYTHON3_VERSION@", "3.12.0")
         .replace("@WORKLOAD@", "/synthetic/workload.py")
         .replace("@CONFIG@", "/synthetic/config.json");
     HarnessManifest::from_toml_str(&text).unwrap()
@@ -1510,16 +1508,27 @@ fn a_nonshipped_real_dir_is_part_of_the_config_home_refusal() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("participant-home");
     std::fs::create_dir(&home).unwrap();
+    // The real homes are data: each connector's `real_dirs`, never a list in this crate.
+    let shipped_real_dirs = [
+        "{user_home}/.codex".to_string(),
+        "{user_home}/.claude".to_string(),
+        "{user_home}/.hermes".to_string(),
+    ];
     for path in [
         home.join(".codex"),
         home.join(".claude"),
         home.join(".hermes"),
     ] {
         assert!(matches!(
-            isolated_config_home_for(&path, &[], &home),
+            isolated_config_home_for(&path, &shipped_real_dirs, &home),
             Err(DaemonError::Refused(_))
         ));
+        assert!(isolated_config_home_for(&path, &[], &home).is_ok());
     }
+    assert!(matches!(
+        isolated_config_home_for(&home, &[], &home),
+        Err(DaemonError::Refused(_))
+    ));
 
     let connectors = temp.path().join("connectors");
     std::fs::create_dir(&connectors).unwrap();

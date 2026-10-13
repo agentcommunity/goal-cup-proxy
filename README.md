@@ -31,10 +31,12 @@ export PATH="$PWD/target/release:$PATH"
 
 ## Quickstart
 
-**You need** a Mac with Apple silicon, or Linux (x86_64 or arm64) with the trace folder on ext4 or
-XFS ([Linux](#linux)); Goal Cup [installed](#install); and a Claude or ChatGPT subscription.
-Install the exact harness build Goal Cup is pinned to, Claude Code 2.1.283 or Codex CLI 0.153.0:
-`goalcup start` refuses any other build. Choose where the tracker keeps its state:
+**You need** a Mac (Apple silicon, or Intel: no Intel run is measured yet; on Apple
+silicon install the arm64 Goal Cup and harness, not an Intel build under Rosetta), or Linux
+(x86_64 or arm64) with the trace folder on ext4 or XFS ([Linux](#linux)); Goal Cup [installed](#install); and a Claude or ChatGPT subscription.
+Install Claude Code or Codex CLI (the recipes were measured at Claude Code 2.1.283 and Codex CLI
+0.153.0). Builds are recorded, not pinned: `goalcup start` runs the build it finds on `PATH` and
+the trace records its digests and the version it reports. Choose where the tracker keeps its state:
 
 ```sh
 export GOALCUP_CONFIG_DIR="$HOME/goalcup"
@@ -76,8 +78,8 @@ Status: v0.5.0 is published as source; binary releases come from
 ## Linux
 
 The [quickstart](#quickstart) works on Linux, apart from the three things below: how the harness
-is installed, the configuration directory and the Claude Code login. The shipped connectors pin
-the Linux x86_64 and arm64 harness builds as well as the macOS ones, as native binaries. Linux is
+is installed, the configuration directory and the Claude Code login. The harness build is
+recorded, not pinned, on Linux as on macOS. Linux is
 measured less than macOS, and no logged-in harness run has happened on Linux yet; the lists below
 say what was and was not measured.
 
@@ -96,10 +98,9 @@ other tools the tests need are in [the gate](#the-gate).
   `@openai/codex@0.153.0-linux-x64` or `-linux-arm64`, file
   `package/vendor/<x86_64|aarch64>-unknown-linux-musl/bin/codex`. Claude Code:
   `@anthropic-ai/claude-code-linux-x64@2.1.283` or `-linux-arm64`, file `package/claude`; these
-  are the glibc builds; the `-musl` (Alpine) builds are not pinned, so they are refused. Other
-  install routes are not measured: `npm i -g` puts the npm wrapper on `PATH`, which `goalcup
-  start` hashes in place of the binary and is likely to refuse, and Claude Code's native
-  installer on Linux was not tried.
+  are the glibc builds; the `-musl` (Alpine) builds were not measured. Other install routes are
+  not measured: `npm i -g` puts the npm wrapper on `PATH`, which `goalcup start` then runs and
+  records in place of the binary, and Claude Code's native installer on Linux was not tried.
 - **The configuration directory.** With `GOALCUP_CONFIG_DIR` unset it is `$XDG_CONFIG_HOME/goalcup`,
   else `~/.config/goalcup`; an empty `$XDG_CONFIG_HOME` counts as unset
   (`crates/goalcup-cli/src/config.rs`). The quickstart sets `GOALCUP_CONFIG_DIR` and skips this.
@@ -117,14 +118,18 @@ six synthetic contract-kit captures seal and verify. `sh scripts/linux-check.sh`
 from a Mac ([what it runs](#the-gate)). On x86_64, CI on ubuntu-24.04 runs the reservation tests on
 ext4 and they pass; the end-to-end suites were run only on arm64.
 
-The shipped Codex and Claude Code connectors pin the Linux x86_64 and arm64 builds
-(`[capture.platform.*]` in each `harness.toml`). With the arm64 builds and no login, measured in
-Docker: `goalcup doctor` passes the executable check; `goalcup start` launches the pinned binary;
+With the arm64 builds and no login, measured in Docker (when the connectors still pinned
+builds): `goalcup doctor` passes the executable check; `goalcup start` launches the binary;
 the harness fails on auth and gets no model reply (Codex receives 401 Unauthorized, Claude Code
 prints `Not logged in`, and both exit 1); the run seals; and
 `goalcup-verify --capture-integrity` exits 0. Neither binary left a child running after it
 exited on this path. The smoke needed network access: before it creates anything, `goalcup start`
 checks that the provider host answers, and with no network it refuses the run.
+
+The same no-login path was measured with the x86_64 builds on a GitHub-hosted ubuntu-24.04 runner
+(the `harness-smoke` job of the manual `linux-x86_64` workflow, `scripts/linux-harness-smoke.sh`,
+2026-10-13): both binaries run, stop at auth and exit 1, both runs seal, verify exits 0, and no
+harness process is left ([facts sheets](docs/harnesses/README.md)).
 
 **Not proven:**
 
@@ -136,10 +141,13 @@ checks that the provider host answers, and with no network it refuses the run.
   after the seal. It sweeps nothing if `goalcup start` itself dies, and a `goalcup seal` from
   another terminal can report `all_gone` while the sweep is still running
   ([TERMINATION.md](docs/TERMINATION.md#ruled-on-linux-confirmed-excludes-fork-and-leave-wrappers)).
-- A successful, logged-in harness run on Linux, and the Linux x86_64 harness builds, which are
-  pinned but were not run.
-- The end-to-end suites on x86_64, and any real Linux host or distribution kernel (only Docker
-  Desktop's was run).
+- A successful, logged-in harness run on Linux, on either architecture.
+- The end-to-end suites on x86_64. On the 4-vCPU runner `linux-check.sh` stops in its fast-gate
+  step before them: the daemon's `capture_redaction::seeded_long_inputs_*` tests hit the 180 s
+  timeout, and the CLI's `subreaper::linux::tests::the_bound_reports_what_keeps_arriving` stops
+  before its bound (workflow runs 38448817041 and 38450660369, 2026-10-13).
+- Any real Linux host or distribution kernel: only Docker Desktop's and the hosted runner's were
+  run.
 - Long runs, and termination against a real harness's process tree on Linux.
 
 ## Windows: use WSL2
@@ -198,8 +206,12 @@ or XFS (capture refuses overlayfs, tmpfs, btrfs and FUSE). `sh scripts/linux-che
 Linux part in Docker, after the `cargo fetch --locked` above: the registry check, `gate.sh fast`,
 the capture-reservation tests on ext4 and XFS, the CLI's `full` and `m2_cli_lifecycle` suites,
 the `#[ignore]`d `m2_synthetic_vertical` and `capture_failure_campaign` suites, and the daemon's
-`full` suite. It is not `gate.sh full`: the other crates' `full` binaries, the scripts' unit tests
-and the link check are not run there. It has been measured on Docker Desktop on an arm64 Mac only.
+`full` suite. With `LINUX_CHECK_HARNESSES=1` it then runs `scripts/linux-harness-smoke.sh`,
+which fetches the measured harness builds for the machine's architecture from npm and launches
+each with no login to the auth step (it needs network). It is not `gate.sh full`: the other
+crates' `full` binaries, the scripts' unit tests and the link check are not run there. It has
+been measured on Docker Desktop on an arm64 Mac only; on x86_64 it runs by hand in the
+`linux-x86_64` workflow ([OPERATING](docs/OPERATING.md)), whose `harness-smoke` job has passed.
 
 Each crate's integration tests are modules of two binaries: `tests/it/` (fast) and `tests/full/`
 (slow). The slow tier is every `full` binary plus the CLI's standalone `m2_cli_lifecycle`
@@ -270,6 +282,14 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   `daemon.toml` you wrote for an earlier build belongs at `$GOALCUP_CONFIG_DIR/daemon.toml`;
   otherwise the first `start` writes a default with other roots. The configuration's keys are in
   [OPERATING](docs/OPERATING.md#running-the-daemon).
+- <a id="login"></a>**Connecting to the Goal Cup server.** `goalcup login --server <URL>` asks
+  for the token the Goal Cup site gives you (paste it; it is not shown) and stores the address
+  and token in `$GOALCUP_CONFIG_DIR/server.json`, readable by your user alone. The token is
+  never printed, never put in the agent's environment or on its command line, and never written
+  into a trace; the agent runs as you, so it could still read the file, and you can revoke the
+  token on the site ([checklist](docs/CHEAT-CHECKLIST.md)). A `server.json` other users can
+  read is refused. Run it again to replace the token. Uploading runs to the server is being
+  built ([TODO](TODO.md), step 2): until it lands, the login is stored and runs stay local.
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
   `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. An installed one (Homebrew, or an unpacked
   release tarball) finds them at `<bin>/../share/goalcup/connectors`.

@@ -1,81 +1,4 @@
 {
-  "allowance_refusals": [
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_with_allowedtools",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 ../x.py *)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(python3 demo.py)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": "Bash(*)"
-    },
-    {
-      "args": "profile_args_without_separator",
-      "refusal": "only the pinned claude-code-cli profile may carry one",
-      "rule": ""
-    }
-  ],
   "argv_deny": [
     {
       "arg": "--remote",
@@ -564,8 +487,7 @@
     "continuation": "none: one fixed traffic plan, no input after the goal",
     "env": {},
     "executable": {
-      "sha256": "abababababababababababababababababababababababababababababababab",
-      "version": "3.12.0"
+      "version_args": []
     },
     "home": "empty",
     "hosts": [
@@ -669,27 +591,27 @@
       "name": "TERMINAL_HOME_MODE"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "CODEX_HOME"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "codex_home"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "CLAUDE_CONFIG_DIR"
     },
     {
-      "denied": null,
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "claude_config_dir"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "HERMES_HOME"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
       "name": "hermes_home"
     },
     {
@@ -925,7 +847,7 @@
       "name": "LD_LIBRARY_PATH"
     },
     {
-      "denied": "is reserved for the Hermes harness, which the capture launch configures itself",
+      "denied": null,
       "name": "HERMES_X"
     },
     {
@@ -1024,9 +946,6 @@
     },
     "mode": "Server",
     "program": "<TMP>/bin/fake-harness"
-  },
-  "plan_with_claude_tool_allowance": {
-    "refused": "exit1"
   },
   "redaction": {
     "extra_patterns": []

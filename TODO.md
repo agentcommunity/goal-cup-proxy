@@ -13,7 +13,8 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
    with `goalcup-verify --capture-integrity`.
 2. **Hourly upload to our storage.** R2 plus a tiny upload endpoint. A per-participant upload
    token. The tracker uploads every hour; once the upload is acknowledged it prunes local data
-   older than 2 hours; it retries until the connection returns.
+   older than 2 hours; it retries until the connection returns. Design:
+   [docs/SERVER-DESIGN.md](docs/SERVER-DESIGN.md). Done: `goalcup login` (section 13, item 1).
 3. **One admin page.** Entries, first prompt, last upload, outage flags. Researchers read R2
    directly.
 4. **Signed macOS binaries.** Sign and notarize the Homebrew release tarballs

@@ -114,7 +114,8 @@ pub(super) fn native_capture(
 }
 
 /// Resolve an isolated root before any artifact creation or source read. Missing trailing
-/// directories are allowed, but parent traversal and real harness homes are refused.
+/// directories are allowed, but parent traversal, the participant's `HOME` itself and every
+/// loaded connector's `real_dirs` (the harnesses' real homes, as data) are refused.
 pub(super) fn isolated_config_home(
     path: &Path,
     declared_real_dirs: &[String],
@@ -151,18 +152,14 @@ pub(super) fn isolated_config_home_for(
         Some(resolved)
     }
     let refused = || {
-        DaemonError::Refused("config_home must be an absolute isolated directory outside the participant's HOME/.codex, HOME/.claude and HOME/.hermes".into())
+        DaemonError::Refused("config_home must be an absolute isolated directory outside the participant's HOME and every loaded connector's real_dirs".into())
     };
     let root = resolve(path).ok_or_else(refused)?;
     let real_home = resolve(home).ok_or_else(refused)?;
     if root == real_home {
         return Err(refused());
     }
-    let mut forbidden = vec![
-        home.join(".codex"),
-        home.join(".claude"),
-        home.join(".hermes"),
-    ];
+    let mut forbidden = Vec::new();
     for declared in declared_real_dirs {
         let Some(rest) = declared.strip_prefix("{user_home}/") else {
             return Err(refused());

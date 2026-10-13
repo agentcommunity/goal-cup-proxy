@@ -67,8 +67,6 @@ pub struct StartOptions {
     pub goal_file: Option<PathBuf>,
     /// `--capture-reserve-bytes`: the chain bytes the daemon reserves before a v5 launch.
     pub capture_reserve_bytes: u64,
-    /// One explicitly supplied Claude M2 Bash rule; absent on ordinary runs.
-    pub capture_claude_allowed_tool: Option<String>,
 }
 
 /// What one `goalcup start` did.
@@ -136,12 +134,6 @@ fn started(
     //    nothing but set a flag; the four places that read it are the four moments this
     //    command can act on one.
     crate::arming::watch_for_interrupt();
-
-    if opts.capture_claude_allowed_tool.is_some() && opts.goal_file.is_none() {
-        return Err(CliError::Refused(
-            "a Claude capture tool allowance requires --goal-file".into(),
-        ));
-    }
 
     if let Some(goal_file) = &opts.goal_file {
         let roots = roots.unwrap_or_else(UpstreamRoots::webpki);
@@ -246,10 +238,6 @@ const CAPTURE_STARTUP: Duration = Duration::from_secs(5);
 /// bounds a different thing, even though both are five seconds.
 const GATE_READY_WITHIN: Duration = Duration::from_secs(5);
 
-/// How long Codex's launch waits for its scope identity (the `thread.started` event on stdout)
-/// before recording the launch without one.
-const CODEX_SCOPE_WAIT: Duration = Duration::from_secs(120);
-
 /// A named point in the capture launch where a test can hold this process (CONTRACTS.md, C6 local finish budget and capture spawn gate).
 ///
 /// Compiled only under `test-support`: a shipped build has the no-op below and nothing reads
@@ -308,7 +296,8 @@ struct CapturePrep {
     /// The scan of this run's artifacts for fragments of that key (D41), derived once, in
     /// memory, from the same bytes the child receives.
     matcher: Option<FragmentMatcher>,
-    executable: crate::launch::PinnedExecutable,
+    /// The harness file this run resolved and hashed; the release refuses it if it changed.
+    executable: crate::launch::ResolvedExecutable,
     /// The harness home every run of this connector shares (D39); `None` when each run makes its
     /// own inside its run directory.
     shared_home: Option<SharedCaptureHome>,
@@ -596,6 +585,8 @@ impl Forked<'_> {
 /// What the gate holds for the phases after the fork.
 struct Gate {
     plan: LaunchPlan,
+    /// What the harness reported for its `version_args`, or `unreported` (D53).
+    harness_version: String,
     goal_stream: goalcup_protocol::capture::StreamKey,
     gated: crate::launch::GatedSpawn,
     scope_deadline: std::time::Instant,
@@ -640,6 +631,7 @@ struct Released<'a> {
     tees: Tees,
     goal_stream: goalcup_protocol::capture::StreamKey,
     scope_deadline: std::time::Instant,
+    harness_version: String,
 }
 
 /// A harness that has exited.
@@ -718,18 +710,6 @@ fn prepare(
         profile,
         ..
     } = *cx;
-    if let Some(rule) = opts.capture_claude_allowed_tool.as_deref() {
-        let why = if opts.dev {
-            Some("a development run (--dev) cannot carry one")
-        } else {
-            crate::launch::allowance_refusal(c, &profile.args, rule)
-        };
-        if let Some(why) = why {
-            return Err(CliError::Refused(format!(
-                "the Claude capture tool allowance cannot be used: {why}. Nothing was created."
-            )));
-        }
-    }
     // The rulebook the proxy's host rules and the launch come from, through the one door.
     let pin = crate::preflight::harness_pin_gate(c, opts.dev);
     match pin.level {
@@ -852,6 +832,16 @@ fn create_and_gate<'a>(
         }
     };
 
+    // The harness's own account of its version, asked once with nothing but `PATH` and a
+    // throwaway `HOME` beside the run's own, removed afterwards: a probe may write state (Codex
+    // creates `~/.codex/tmp/arg0`), and the run's `HOME` stays as the profile made it. Reported,
+    // not proven, and `unreported` when it does not say (D53).
+    let harness_version = crate::harness_version::reported_version_in_scratch_home(
+        &prep.executable,
+        &profile.executable.version_args,
+        &run.dir.join("version-probe-home"),
+    );
+
     // The last alias/target identity check is directly before the create request. Preserve the
     // exact D39 leaf spelling in the request, local entry and child environment.
     if let Some(home) = prep.shared_home.as_ref() {
@@ -917,7 +907,6 @@ fn create_and_gate<'a>(
                 proxy_url: &proxied.proxy_url,
                 ca_certificate: proxied.proxy.ca_certificate(),
                 parent_env: env,
-                allowed_tool_rule: opts.capture_claude_allowed_tool.as_deref(),
             },
         )?;
         // Offered once. `busy` is the daemon's refusal before it reads a request and is
@@ -931,7 +920,9 @@ fn create_and_gate<'a>(
         if crate::arming::interrupted() {
             return Err(interrupted_refusal());
         }
-        let scope_deadline = std::time::Instant::now() + CODEX_SCOPE_WAIT;
+        // A `stdout_json` launch waits this long for its identity event (`thread.started` for
+        // Codex) before recording the launch without one; the connector may set it.
+        let scope_deadline = std::time::Instant::now() + profile.identity.stdout_wait();
         // The only way a capture child is spawned (D40): forked and parked before `exec`,
         // and released only once its registration is durable. Its pipes are the one
         // manifest-derived `StreamPlan` decision.
@@ -961,6 +952,7 @@ fn create_and_gate<'a>(
     };
     let gate = Gate {
         plan,
+        harness_version,
         goal_stream,
         gated,
         scope_deadline,
@@ -980,6 +972,7 @@ fn register_and_release<'a>(
     pause_at("capture-gate-forked");
     let Gate {
         plan,
+        harness_version,
         goal_stream,
         gated,
         scope_deadline,
@@ -1004,7 +997,7 @@ fn register_and_release<'a>(
         return Err(forked.unlaunched(CliError::Control(error), out));
     }
     pause_at("capture-gate-registered");
-    if let Err(e) = crate::launch::recheck_pinned_executable(&prep.executable) {
+    if let Err(e) = crate::launch::recheck_resolved_executable(&prep.executable) {
         gated.abort();
         return Err(forked.unlaunched(e, out));
     }
@@ -1090,6 +1083,7 @@ fn register_and_release<'a>(
         },
         goal_stream,
         scope_deadline,
+        harness_version,
     })
 }
 
@@ -1110,6 +1104,7 @@ fn run_harness<'a>(
         tees,
         goal_stream,
         scope_deadline,
+        harness_version,
     } = released;
     // Linux: what the harness leaves behind is this process's own child (a subreaper, `main.rs`),
     // and is swept between the root's exit and the seal. Armed first, while the root is certainly
@@ -1143,11 +1138,7 @@ fn run_harness<'a>(
     let launch = CaptureLaunchRequest {
         goal_stream,
         spawned_at,
-        harness_version: cx
-            .profile
-            .resolved_executable(goalcup_protocol::harness::PlatformKey::current())
-            .version
-            .to_string(),
+        harness_version,
         continuation: cx.profile.continuation.clone(),
         native_scope,
     };

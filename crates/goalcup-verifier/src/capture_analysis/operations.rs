@@ -57,6 +57,8 @@ pub struct Operations {
     references_omitted: u64,
     goals: BTreeMap<StreamKey, GoalExcerpt>,
     reference_bytes: usize,
+    /// Wire streams opened, of any wire source: what the proxy recorded at all.
+    wire_opens: u64,
 }
 
 impl Operations {
@@ -82,8 +84,18 @@ impl Operations {
         self.references_omitted
     }
 
+    /// Wire streams the chain opened, decoded or not.
+    pub(crate) fn wire_opens(&self) -> u64 {
+        self.wire_opens
+    }
+
     pub(super) fn record(&mut self, record: &CaptureRecord) {
         *self.counts.entry(count_key(record)).or_default() += 1;
+        if let CaptureRecord::Open { source, .. } = record
+            && super::session::is_wire(*source)
+        {
+            self.wire_opens += 1;
+        }
         match record {
             CaptureRecord::Open {
                 stream,

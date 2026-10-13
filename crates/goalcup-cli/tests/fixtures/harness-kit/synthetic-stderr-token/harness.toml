@@ -7,8 +7,6 @@ continuation = "one deferred stderr-bound echo and one append-only file"
 
 [capture.executable]
 program = "python3"
-version = "@PYTHON3_VERSION@"
-sha256 = "@PYTHON3_SHA256@"
 
 [capture.home]
 run_home = "empty"

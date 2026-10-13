@@ -10,8 +10,8 @@
 
 use goalcup_daemon::native_capture::{
     ClockReading, NativeAdmission, NativeCapture, NativeCaptureConfig, NativeCaptureError,
-    NativeCaptureLimits, NativeClock, NativeFinishBudget, NativeHint, NativeLabel,
-    NativeResumePoint, NativeSourceSpec, NativeStoreForm,
+    NativeCaptureLimits, NativeClock, NativeFinishBudget, NativeHint, NativeSourceSpec,
+    NativeStoreForm,
 };
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureSink, CaptureSource, EndReason, EpochAdmission, FrameEvent, GapReason,
@@ -757,32 +757,6 @@ fn native_label_never_contains_absolute_home() {
         assert!(!view.label.contains(&canonical));
         assert!(!view.label.contains(&tmp));
         assert_eq!(view.hint.as_deref(), Some("claude-code-jsonl"));
-    }
-    let parsed = NativeLabel::parse("main:projects/-ws-slug/sess-1.jsonl#g1").unwrap();
-    assert_eq!(
-        parsed,
-        NativeLabel {
-            source: "main".into(),
-            relative_path: "projects/-ws-slug/sess-1.jsonl".into(),
-            generation: 1,
-        }
-    );
-    assert_eq!(parsed.to_string(), "main:projects/-ws-slug/sess-1.jsonl#g1");
-    for bad in [
-        "",
-        "main",
-        "main:x",
-        "main:x#g",
-        "main:x#g0",
-        "main:x#g01",
-        ":x#g1",
-        "a b:x#g1",
-    ] {
-        assert_eq!(
-            NativeLabel::parse(bad),
-            None,
-            "{bad:?} is not a native label"
-        );
     }
     sink.assert_clean();
 }
@@ -1681,138 +1655,27 @@ fn disabled_sink_does_not_spin_or_advance_durable_claims() {
 }
 
 #[test]
-fn restart_state_never_claims_volatile_bytes_durable() {
+fn a_dropped_adapter_never_manufactures_a_close() {
     let root = root();
     let first = pattern_bytes(100 * 1024, 4);
-    let second = pattern_bytes(1000, 5);
-    let third = pattern_bytes(5000, 6);
     root.write("sessions/rollout-1.jsonl", &first);
-    root.write("sessions/rollout-2.jsonl", &second);
-    root.write("sessions/rollout-3.jsonl", &third);
-    let sources = || vec![rollout(&root, "sessions/rollout-*.jsonl")];
+    let sources = vec![rollout(&root, "sessions/rollout-*.jsonl")];
 
     let before = CollectSink::new();
-    let mut crashed = start(sources(), NativeCaptureLimits::default(), &before);
+    let mut crashed = start(sources, NativeCaptureLimits::default(), &before);
     crashed.poll();
-    let before_frames = before.frames();
-    let views = replay(&before_frames);
-    let (key, view) = by_label(&views, "rollout:sessions/rollout-1.jsonl#g1");
+    let views = replay(&before.frames());
+    let (_, view) = by_label(&views, "rollout:sessions/rollout-1.jsonl#g1");
     assert_eq!(
         view.data, first,
         "everything was queued: volatile, not durable"
     );
-    // The entry owner had appended only the first byte range of rollout-1 before the crash.
-    let durable_end = before_frames
-        .iter()
-        .find_map(|frame| match &frame.event {
-            FrameEvent::Bytes { offset, data } if frame.stream == *key => {
-                Some(offset + data.len() as u64)
-            }
-            _ => None,
-        })
-        .unwrap();
-    assert!(durable_end < first.len() as u64);
-    let label = NativeLabel::parse(&view.label).unwrap();
-    let old_producer = key.producer.clone();
     drop(crashed);
     assert_eq!(
         before.close_calls(),
         0,
         "a crash never manufactures a clean close"
     );
-
-    root.append("sessions/rollout-1.jsonl", b"after-restart\n");
-    fs::write(root.path("sessions/rollout-3.jsonl"), b"shrunk").unwrap();
-    let points = vec![
-        NativeResumePoint {
-            source: label.source.clone(),
-            relative_path: label.relative_path.clone(),
-            generation: label.generation,
-            durable_end: Some(durable_end),
-        },
-        NativeResumePoint {
-            source: "rollout".into(),
-            relative_path: "sessions/rollout-2.jsonl".into(),
-            generation: 1,
-            durable_end: None,
-        },
-        NativeResumePoint {
-            source: "rollout".into(),
-            relative_path: "sessions/rollout-3.jsonl".into(),
-            generation: 1,
-            durable_end: Some(third.len() as u64),
-        },
-    ];
-    let after = CollectSink::new();
-    let mut resumed = NativeCapture::resume(
-        config(sources(), NativeCaptureLimits::default()),
-        after.clone(),
-        clock(),
-        points,
-    )
-    .unwrap();
-    resumed.poll();
-    let frames = after.frames();
-    let views = replay(&frames);
-    assert!(
-        frames
-            .iter()
-            .all(|frame| frame.stream.producer != old_producer)
-    );
-    assert!(views.values().all(|view| view.label.ends_with("#g2")));
-
-    let (_, one) = by_label(&views, "rollout:sessions/rollout-1.jsonl#g2");
-    assert_eq!(one.gaps, [(GapReason::ProducerLost, None)]);
-    assert!(one.first_gap_seq.unwrap() < one.first_bytes_seq.unwrap());
-    assert_eq!(
-        one.first_offset,
-        Some(durable_end),
-        "resume starts at the durable end, not the volatile reader position"
-    );
-    let mut expected = first[durable_end as usize..].to_vec();
-    expected.extend_from_slice(b"after-restart\n");
-    assert_eq!(one.data, expected);
-
-    let (_, two) = by_label(&views, "rollout:sessions/rollout-2.jsonl#g2");
-    assert_eq!(two.gaps, [(GapReason::ProducerLost, None)]);
-    assert_eq!(
-        (two.first_offset, two.data.clone()),
-        (Some(0), second.clone())
-    );
-
-    let (_, three) = by_label(&views, "rollout:sessions/rollout-3.jsonl#g2");
-    assert_eq!(three.gaps, [(GapReason::SourceChanged, None)]);
-    assert_eq!(
-        (three.first_offset, three.data.clone()),
-        (Some(0), b"shrunk".to_vec())
-    );
-    after.assert_clean();
-
-    // Unknown sources and generation zero cannot be resumed.
-    for point in [
-        NativeResumePoint {
-            source: "nope".into(),
-            relative_path: "sessions/rollout-1.jsonl".into(),
-            generation: 1,
-            durable_end: None,
-        },
-        NativeResumePoint {
-            source: "rollout".into(),
-            relative_path: "sessions/rollout-1.jsonl".into(),
-            generation: 0,
-            durable_end: None,
-        },
-    ] {
-        assert!(matches!(
-            NativeCapture::resume(
-                config(sources(), NativeCaptureLimits::default()),
-                CollectSink::new(),
-                clock(),
-                vec![point],
-            ),
-            Err(NativeCaptureError::Config(_))
-        ));
-    }
 }
 
 #[test]

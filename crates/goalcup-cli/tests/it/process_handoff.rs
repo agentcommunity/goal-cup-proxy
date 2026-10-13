@@ -45,7 +45,7 @@ fn this_crate_never_terminates_anything() {
     // `support::walk` takes a path relative to the repository root, so the crate's own source
     // directory is spelled out.
     //
-    // The signal check carries four exemptions, and each is written down rather than
+    // The signal check carries five exemptions, and each is written down rather than
     // glossed.
     //
     // `preflight/probe.rs`: the version probe spawns the harness with `--version` in a group
@@ -82,6 +82,12 @@ fn this_crate_never_terminates_anything() {
     // daemon signals through pidfds, and the sweep signals only its own unreaped children, so
     // neither can reach a recycled pid and nothing is SIGKILLed before the daemon's own grace.
     //
+    // `harness_version.rs` (D53): the version probe, `<program> <version_args>`, runs once
+    // before the harness is spawned and is never a recorded run: it is not registered, carries
+    // no goal and no key, and leads a process group of its own. When it outlives its timeout
+    // the launcher SIGKILLs that group while its own unreaped leader still holds the group id,
+    // and reaps the leader, so it cannot reach a recycled pid or anything the daemon terminates.
+    //
     // The `start.rs` exemption stays ONE file: a second file that signals a launched harness
     // would have to be exempted here as well, by name.
     //
@@ -111,7 +117,7 @@ fn this_crate_never_terminates_anything() {
             !s.contains("fn terminate"),
             "{entry:?} defines a terminator"
         );
-        // The four files that signal, and the reason each one is allowed to. Only the probe half
+        // The five files that signal, and the reason each one is allowed to. Only the probe half
         // of `preflight/{mod,gates,probe}.rs` kills anything, so the exemption is matched on the
         // tail of the path, and `preflight/gates.rs` is NOT exempt — a `SIGKILL` appearing there
         // is the sweep doing its job.
@@ -120,6 +126,7 @@ fn this_crate_never_terminates_anything() {
             "commands/start.rs",
             "released_child.rs",
             "src/subreaper.rs",
+            "src/harness_version.rs",
         ]
         .iter()
         .any(|tail| entry.ends_with(tail));

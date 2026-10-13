@@ -19,6 +19,7 @@
 //! | `daemon.log` | a daemon the CLI started | its startup lines and any refusal |
 //! | `grant.json` | the V1 `goalcup auth` (removed by D48) | nothing: a leftover one is ignored |
 //! | `entries/` | the CLI | one record per entry `goalcup start` created |
+//! | `server.json` | `goalcup login` | the upload server and the participant's token, mode 0600 (`crate::server`) |
 
 use crate::CliError;
 use goalcup_platform::Platform;
@@ -264,10 +265,17 @@ pub fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
         }
     };
     let mut file = options.open(&temp).map_err(io(&temp))?;
-    file.write_all(bytes).map_err(io(&temp))?;
-    file.sync_all().map_err(io(&temp))?;
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(io(&temp));
     drop(file);
-    std::fs::rename(&temp, path).map_err(io(path))
+    // A failed write or rename leaves no copy of the secret behind in the temp file.
+    let renamed = written.and_then(|()| std::fs::rename(&temp, path).map_err(io(path)));
+    if renamed.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    renamed
 }
 
 /// `<dir>` at mode 0700, created if it is not there. An existing directory is left alone:

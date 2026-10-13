@@ -296,6 +296,12 @@ pub enum CaptureRecord {
         /// hex. Compared by a server against its allowlist; never interpreted by the reader.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         connector_dir_sha256: Option<String>,
+        /// Which harness build ran, observed by the daemon after `exec` (D53). Added to v5
+        /// after the `v0.5.0` tag: a v0.5.0 reader refuses a trace that carries it, which D53
+        /// accepts. Absent in older traces, and valid forever.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Boxed so the record enum stays small; the bytes are the same.
+        harness_build: Option<Box<HarnessBuildV1>>,
     },
     Assistance {
         observed: CaptureTime,
@@ -307,6 +313,27 @@ pub enum CaptureRecord {
         termination: crate::provenance::TerminationOutcomeV1,
         seal_manifest_sha256: String,
     },
+}
+
+/// The harness build a launch ran, as the daemon observed it (D53). Recorded, never judged by
+/// the reader: a server or judge compares the digests with a list of known builds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessBuildV1 {
+    /// SHA-256 of the program file the launcher resolved and registered, 64 lowercase hex. For
+    /// a script or a package-manager wrapper this is the only digest that names the harness.
+    /// Absent when the registered program was not an absolute path or could not be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_sha256: Option<String>,
+    /// SHA-256 of the running process's executable image, 64 lowercase hex: on Linux the file
+    /// `/proc/<pid>/exe` opens, on macOS the path `proc_pidpath` names. For an interpreted
+    /// harness this is the interpreter, and for a wrapper that `exec`s again it may be either
+    /// stage. Absent when the process had already gone, was not the registered instance, or its
+    /// image could not be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_sha256: Option<String>,
+    /// The daemon's platform, `<os>-<arch>` as Rust spells them (`macos-aarch64`).
+    pub platform: String,
 }
 
 /// The single bounded command-text allowance admitted for a Claude M2 launch.

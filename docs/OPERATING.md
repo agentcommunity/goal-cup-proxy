@@ -145,6 +145,14 @@ Every runner minute costs something on every pull request. Keep this file small:
 - Do not add branches, jobs, a build matrix, or the daemon and CLI suites. Those suites spawn
   process trees that hang or kill a 2-core Linux runner. CI runs the reservation tests on x86_64
   ext4; the daemon and CLI suites run on Linux in Docker via `scripts/linux-check.sh`, not in CI.
+- `.github/workflows/linux-x86_64.yml` is manual only (`workflow_dispatch`, never on a push or
+  pull request). It runs `scripts/linux-check.sh` on an x86_64 `ubuntu-24.04` runner with
+  `LINUX_CHECK_HARNESSES=1`, which ends with `scripts/linux-harness-smoke.sh`: the measured x86_64
+  Codex and Claude Code builds launched with no login to the auth step. The suites above run
+  there because a public repository's hosted runner has 4 vCPUs and they run in Docker with
+  `--init`; how long a run takes is not yet measured. A second job, `harness-smoke`, runs the
+  smoke alone on the runner after a release build, so a suite that fails on that host does not
+  hide the harness result. Start it by hand.
 - A green `ci` run proves nothing about the macOS target. `sh scripts/gate.sh fast` above (and `full` before a
   release), plus the ignored synthetic vertical suite, runs by hand before a merge.
 
@@ -272,9 +280,9 @@ goalcup-verify --capture-integrity <trace-dir>     # the line `start` printed
 Run the `verify:` line `start` printed, not one typed from memory. The integrity exit codes are
 in the [README](../README.md#run-a-capture).
 
-`goalcup doctor` checks, per connector, that the connector files are the pinned ones and that
-the harness executable on `PATH` is the exact build `goalcup start` would run (hashed, never
-started); a harness that is not installed, or is another build, fails it.
+`goalcup doctor` checks, per connector, that the connector files are the pinned ones and finds
+the harness executable on `PATH` that `goalcup start` would run (hashed, never started). Any build
+passes: builds are recorded, not pinned (D53). A harness that is not installed fails it.
 `goalcup doctor --harness <id>` scopes the report **and the exit code** to one connector.
 Without it, `doctor` reports every shipped connector and exits 1 if any of them failed —
 including one you have no intention of running, which is the honest answer to "is this
@@ -285,7 +293,6 @@ machine healthy" and the wrong one to "can I start this harness".
 | Flag | What it does |
 |---|---|
 | `goalcup start --capture-reserve-bytes <BYTES>` | The chain bytes the daemon reserves on disk before the launch. |
-| `goalcup start --capture-claude-allowed-tool <RULE>` | One bounded Claude Bash command rule for this launch only. |
 | `--json` on `status`, `entries` and `doctor` | The signed document itself, the summaries as one array, and the report as one document, instead of a page of text. |
 
 **Network outages.** Before anything is created, `goalcup start` makes one TCP connect to port
