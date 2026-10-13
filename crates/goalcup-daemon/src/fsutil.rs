@@ -30,9 +30,9 @@
 //! this module mints carries this process's pid, so a file sitting at that exact name is
 //! either this process's own leavings or a dead process's whose pid the operating system has
 //! since handed back to us — and a daemon killed between the create and the rename leaves
-//! exactly that. `status-line.txt` is the case that bites: it lives in the artifact root,
-//! which [`sweep_process_temp`] does not cover, so the next daemon to draw that pid would be
-//! refused on every status refresh, forever, by a file it could not name.
+//! exactly that. A startup sweep covers today's one target (`control.json`); the removal here
+//! keeps a target no sweep covers from being refused on every write, forever, by a file the
+//! next daemon to draw that pid could not name.
 //!
 //! So [`write_atomic`] removes a file at its own temp name before it creates one. It removes
 //! that one exact name and never a pattern; the removal does not follow a link, so a symlink
@@ -242,12 +242,10 @@ mod tests {
     /// next daemon to be handed that pid mints the same name — `process_temp` is the pid
     /// alone — and under
     /// `O_EXCL` on its own it would be refused by that file on every write it ever made.
-    /// `status-line.txt` sits in the artifact root, which no sweep covers, so "every write"
-    /// means every status refresh for the life of the run.
     #[test]
     fn a_stale_temp_of_our_own_name_does_not_refuse_the_write() -> std::io::Result<()> {
         let dir = tempfile::tempdir()?;
-        let target = dir.path().join("status-line.txt");
+        let target = dir.path().join("control.json");
         let temp = process_temp(&target);
         std::fs::write(&temp, b"half of what a killed write meant to say")?;
 
@@ -271,8 +269,8 @@ mod tests {
     #[test]
     fn a_temp_of_someone_else_s_name_is_left_alone() -> std::io::Result<()> {
         let dir = tempfile::tempdir()?;
-        let target = dir.path().join("status-line.txt");
-        let neighbour = dir.path().join("status-line.txt.999999.0.tmp");
+        let target = dir.path().join("control.json");
+        let neighbour = dir.path().join("control.json.999999.0.tmp");
         std::fs::write(&neighbour, b"not ours")?;
 
         let wrote = write_atomic(&target, &process_temp(&target), b"fresh\n", 0o644);
