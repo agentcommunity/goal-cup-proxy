@@ -72,7 +72,7 @@ step "cli end-to-end" 'cargo nextest run --offline -p goalcup-cli --test full --
 step "ignored end-to-end" 'cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
     -E "test(/^(m2_synthetic_vertical|capture_failure_campaign)::/)"'
 step "daemon full" 'cargo nextest run --offline -p goalcup-daemon --test full'
-# Optional, needs network: the pinned harness builds for this machine's architecture, fetched
+# Optional, needs network: the measured harness builds for this machine's architecture, fetched
 # from npm and launched with no login to the auth step (scripts/linux-harness-smoke.sh). The
 # rebuild puts the shipped binaries back in /target/debug after the test builds.
 if [ "${LINUX_CHECK_HARNESSES:-0}" = 1 ]; then

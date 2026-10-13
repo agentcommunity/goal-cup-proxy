@@ -199,11 +199,11 @@ Linux part in Docker, after the `cargo fetch --locked` above: the registry check
 the capture-reservation tests on ext4 and XFS, the CLI's `full` and `m2_cli_lifecycle` suites,
 the `#[ignore]`d `m2_synthetic_vertical` and `capture_failure_campaign` suites, and the daemon's
 `full` suite. With `LINUX_CHECK_HARNESSES=1` it then runs `scripts/linux-harness-smoke.sh`,
-which fetches the pinned harness builds for the machine's architecture from npm and launches
+which fetches the measured harness builds for the machine's architecture from npm and launches
 each with no login to the auth step (it needs network). It is not `gate.sh full`: the other
 crates' `full` binaries, the scripts' unit tests and the link check are not run there. It has
 been measured on Docker Desktop on an arm64 Mac only; on x86_64 it runs by hand in the
-`linux-x86_64` workflow ([OPERATING](docs/OPERATING.md)).
+`linux-x86_64` workflow ([OPERATING](docs/OPERATING.md)), whose `harness-smoke` job has passed.
 
 Each crate's integration tests are modules of two binaries: `tests/it/` (fast) and `tests/full/`
 (slow). The slow tier is every `full` binary plus the CLI's standalone `m2_cli_lifecycle`

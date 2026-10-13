@@ -1,5 +1,6 @@
 #!/bin/sh
-# No-login smoke of the pinned Linux harness builds (x86_64 or arm64, from `uname -m`).
+# No-login smoke of the measured Linux harness builds (x86_64 or arm64, from `uname -m`): Codex
+# 0.153.0 and Claude Code 2.1.283, the builds docs/harnesses/ describes.
 # For each harness: download its npm platform package, check the package's and the binary's
 # SHA-256, put the binary first on PATH, then `goalcup doctor` must pass and one `goalcup start`
 # with a never-logged-in home must launch it, stop at auth, seal and verify (exit 0), and leave
@@ -9,6 +10,8 @@
 # when the binaries are not beside a connectors/ directory, TMPDIR on ext4 or XFS, curl,
 # sha256sum, pgrep, and network (the npm registry, and `goalcup start` checks the provider host
 # answers). `sh scripts/linux-check.sh` runs it in Docker when LINUX_CHECK_HARNESSES=1.
+# Meant for CI or a container: `timeout` puts goalcup in a background process group, which a
+# terminal would stop on a read, and the leftover-process check sees any process of that name.
 # Usage: sh scripts/linux-harness-smoke.sh [codex-cli] [claude-code-cli]   (default: both)
 # Last line: `harness smoke: PASS` or `harness smoke: FAIL <harness> <step>`.
 set -u
@@ -23,8 +26,9 @@ work=$(mktemp -d) || fail "mktemp"
 trap 'rm -rf "$work"' EXIT
 trap 'exit 130' INT HUP TERM
 
-# The npm tarball and the binary inside it, with both SHA-256s. The binary hashes are the
-# connectors' [capture.platform.linux-*] pins; `goalcup doctor` checks those again.
+# The npm tarball and the binary inside it, with both SHA-256s, as measured in docs/harnesses/.
+# The connectors record the build that runs rather than pin one (D53), so these checks are what
+# makes this smoke run exactly that build.
 package() {
     case $1-$arch in
     codex-cli-x64)
@@ -57,7 +61,7 @@ smoke() {
     d=$work/$h
     mkdir -p "$d/pkg" "$d/bin" "$d/home" "$d/goal" || fail "$h mkdir"
     echo "harness smoke: $h ($arch) fetch"
-    curl -fsSL -o "$d/pkg.tgz" "$url" || fail "$h download"
+    curl -fsSL --retry 3 --max-time 600 -o "$d/pkg.tgz" "$url" || fail "$h download"
     echo "$tgz  $d/pkg.tgz" | sha256sum -c --quiet || fail "$h tarball sha256"
     tar xzf "$d/pkg.tgz" -C "$d/pkg" || fail "$h extract"
     echo "$bin  $d/pkg/$file" | sha256sum -c --quiet || fail "$h binary sha256"

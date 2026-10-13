@@ -6,7 +6,7 @@
 # - linux-check: `sh scripts/linux-check.sh` (README.md, "The gate") with LINUX_CHECK_HARNESSES=1,
 #   so after the suites it also runs the harness smoke inside its container.
 # - harness-smoke: the smoke alone, on the runner itself: a release build, then
-#   scripts/linux-harness-smoke.sh fetches the pinned x86_64 Codex and Claude Code builds from
+#   scripts/linux-harness-smoke.sh fetches the measured x86_64 Codex and Claude Code builds from
 #   npm and launches each with no login to the auth step. It does not wait on the suites, so a
 #   suite that fails on this host does not hide the harness result.
 
@@ -50,8 +50,10 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      # The checkout and /tmp are on the runner's ext4 root, which capture accepts.
-      - run: uname -m && stat -f -c %T "${RUNNER_TEMP}" && df -h /
+      # The run's TMPDIR, runner.temp, must be ext4 or XFS, which capture accepts.
+      - run: |
+          uname -m && df -h /
+          case $(stat -f -c %T "$RUNNER_TEMP") in ext2/ext3 | xfs) ;; *) exit 1 ;; esac
       - run: cargo build --locked --release -p goalcup-cli -p goalcup-daemon -p goalcup-verifier
       - env:
           TMPDIR: ${{ runner.temp }}
