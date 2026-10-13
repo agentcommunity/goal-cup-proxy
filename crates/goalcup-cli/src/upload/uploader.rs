@@ -30,6 +30,7 @@ use goalcup_protocol::export::{ACKS_FILE, BASELINE_FILE, CHAIN_FILE, SEAL_FILE};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// The most a chunk body may be, compressed: the server's cap.
@@ -718,6 +719,62 @@ fn heartbeat(
     ))
 }
 
+/// Sets its flag when dropped: the watcher thread's signal that the uploader has returned.
+struct SetOnDrop(std::sync::Arc<AtomicBool>);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// How long one ordinary heartbeat may take: well inside the 5-minute cadence, so a server that
+/// hangs cannot hold the local deadline check back for long.
+const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Send a heartbeat every `policy.heartbeat` and watch the run's own deadline, until the run
+/// must stop (said once on `stopping`, and `over` set) or the uploader is `done`.
+fn watch_deadline(
+    server: &ServerClient,
+    record: &UploadRecord,
+    policy: Policy,
+    local_deadline: Option<LocalDeadline>,
+    stopping: &std::sync::mpsc::Sender<String>,
+    over: &AtomicBool,
+    done: &AtomicBool,
+) {
+    let mut next_beat = Instant::now();
+    let tick = policy.poll.min(Duration::from_secs(1));
+    while !done.load(Ordering::SeqCst) {
+        let reason = if Instant::now() >= next_beat {
+            next_beat = Instant::now() + policy.heartbeat;
+            match heartbeat(server, record, false, HEARTBEAT_TIMEOUT) {
+                Some(Ok(answer)) if answer.stop => Some(format!(
+                    "the server says the run is over (its deadline was {})",
+                    answer.deadline_at
+                )),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let reason = reason.or_else(|| {
+            local_deadline.filter(LocalDeadline::passed).map(|_| {
+                format!(
+                    "the run's time is up by this machine's clock (its deadline was {})",
+                    record.deadline_at
+                )
+            })
+        });
+        if let Some(reason) = reason {
+            over.store(true, Ordering::SeqCst);
+            let _ = stopping.send(reason);
+            return;
+        }
+        std::thread::sleep(tick);
+    }
+}
+
 /// Append one acknowledgement as one line, in one write, and make it durable.
 fn append_ack(acks: &Path, ack: &AckCheckpoint) -> Result<(), CliError> {
     let mut line = serde_json::to_vec(ack)?;
@@ -967,31 +1024,30 @@ fn run(
     let mut failures = 0u32;
     let mut wait_until = Instant::now();
     let mut next_due = Instant::now();
-    let mut next_beat = Instant::now();
-    // Said once: the run must stop. Uploading waits for the finish after that.
-    let mut over = false;
+    // Heartbeats and the deadline run on a thread of their own, so a slow chunk upload never
+    // delays a stop. Once the run must stop, uploading waits for the finish.
+    let over = std::sync::Arc::new(AtomicBool::new(false));
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let _done_on_return = SetOnDrop(done.clone());
+    {
+        let (server, record, over, done) = (server.clone(), record.clone(), over.clone(), done);
+        let _ = std::thread::Builder::new()
+            .name("goalcup-heartbeat".into())
+            .spawn(move || {
+                watch_deadline(
+                    &server,
+                    &record,
+                    policy,
+                    local_deadline,
+                    &stopping,
+                    &over,
+                    &done,
+                )
+            });
+    }
     loop {
         let now = Instant::now();
-        if !over && now >= next_beat {
-            next_beat = now + policy.heartbeat;
-            if let Some(Ok(answer)) = heartbeat(&server, &record, false, super::http::CALL_TIMEOUT)
-                && answer.stop
-            {
-                over = true;
-                let _ = stopping.send(format!(
-                    "the server says the run is over (its deadline was {})",
-                    answer.deadline_at
-                ));
-            }
-        }
-        if !over && local_deadline.is_some_and(|d| d.passed()) {
-            over = true;
-            let _ = stopping.send(format!(
-                "the run's time is up by this machine's clock (its deadline was {})",
-                record.deadline_at
-            ));
-        }
-        if !over && stopped.is_none() && now >= wait_until {
+        if !over.load(Ordering::SeqCst) && stopped.is_none() && now >= wait_until {
             if uploader.is_none() {
                 match Uploader::resume(
                     server.clone(),
