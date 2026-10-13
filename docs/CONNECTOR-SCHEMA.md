@@ -28,14 +28,12 @@ All public schema structs and enums are non-exhaustive. A manifest cannot select
 
 - `Origin::Pinned` is an in-tree or pin-checked connector. It refuses an interpreter as the
   executable and refuses an absolute, home-relative, parent-relative or expanding path in an
-  argument. When this build pins its id, on top of every deny rule below, each `capture.env`
-  entry must be a reviewed row of `CAPTURE_ENV_ALLOWLIST` (name and exact value), and
-  `capture.args` with `goal_flag` must be exactly the connector's row of `CAPTURE_ARG_ALLOWLIST`
-  (in order, as written) in `capture_policy.rs`. A new connector, variable or argument, a model
-  name included, is a core PR. An unpinned id is refused at the pin gate and runs only under
-  `--dev`.
+  argument. There is no per-connector list in Rust (D51): `capture.args`, `goal_flag` and
+  `capture.env` are held to the generic rules below, and a new connector, variable or argument,
+  a model name included, is a data change reviewed in its PR. An unpinned id is refused at the
+  pin gate and runs only under `--dev`.
 - `Origin::Dev` is an unpinned directory under `GOALCUP_CONNECTORS_DIR` selected through
-  `--dev`. It relaxes those two refusals and the two allowlists. Environment values, seeds,
+  `--dev`. It relaxes those two refusals. Environment values, seeds,
   trust tables, all bounds and all cross-field rules remain strict.
 
 The CLI and daemon both use the same loader and each validates again at its own trust boundary.
@@ -111,8 +109,7 @@ its base values everywhere.
 
 Each entry is validated as the whole recipe it resolves to: the base table with that platform's
 digest, version and env applied. Every rule in this document applies to that recipe, including
-the env deny lists, value rules, bounds, cross-field rules and, for a pinned id,
-`CAPTURE_ENV_ALLOWLIST`. An override cannot set a variable, value or name that the base table
+the env deny lists, value rules, bounds and cross-field rules. An override cannot set a variable, value or name that the base table
 could not. A refusal names `capture.platform.<key>` (`.sha256`, `.version` or `.env`) and keeps
 the base rule's reason.
 
