@@ -282,6 +282,8 @@ const CAPTURE_HOMES_DIR: &str = "capture-homes";
 /// What every phase of one capture run is given and none changes.
 struct CaptureRun<'a> {
     client: &'a (dyn DaemonClient + Sync),
+    /// The connectors directory, for the seal a deadline asks for (`goalcup seal`'s path).
+    connectors: &'a Path,
     /// The upload server this run opens with, or `None` for a local-only run.
     upload: Option<&'a Uploading>,
     cfg: &'a Path,
@@ -554,6 +556,8 @@ struct UploadStart {
     /// The start receipt's key, which every acknowledgement must verify under.
     key: String,
     policy: crate::upload::uploader::Policy,
+    /// The run's deadline by this machine's own clock, for when the server cannot say it.
+    local_deadline: Option<crate::upload::uploader::LocalDeadline>,
 }
 
 impl Forked<'_> {
@@ -708,6 +712,7 @@ fn capture(
     let upload = uploading(cfg, opts, profile.credential.is_some(), out)?;
     let cx = CaptureRun {
         client,
+        connectors,
         upload: upload.as_ref(),
         cfg,
         env,
@@ -842,6 +847,7 @@ fn create_and_gate<'a>(
         goal_file,
         connector: c,
         profile,
+        ..
     } = *cx;
     // Catch a replacement since prepare before writing even the temporary run directory.
     let shared_home = prep
@@ -1013,6 +1019,9 @@ fn create_and_gate<'a>(
         template,
         upload: bound.map(|(record, key)| UploadStart {
             server: upload.map(|u| u.server.clone()),
+            local_deadline: opened
+                .as_ref()
+                .and_then(|o| crate::upload::uploader::LocalDeadline::of(&record, o.opened_at)),
             record,
             key,
             policy: opts.upload_policy,
@@ -1236,10 +1245,17 @@ fn run_harness<'a>(
         give_back.launched();
     }
     // The first chunk goes now, beside the run; nothing the uploader does waits the harness.
-    let uploading = forked.upload.take().and_then(|start| {
+    let mut uploading = forked.upload.take().and_then(|start| {
         let server = start.server?;
         let spool = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
-        match crate::upload::uploader::begin(server, start.record, start.key, start.policy, spool) {
+        match crate::upload::uploader::begin(
+            server,
+            start.record,
+            start.key,
+            start.policy,
+            spool,
+            start.local_deadline,
+        ) {
             Ok(running) => Some(running),
             Err(e) => {
                 let _ = say(out, &format!("  (the upload could not start: {e})"));
@@ -1247,10 +1263,37 @@ fn run_harness<'a>(
             }
         }
     });
-    let status = child.wait().map_err(|source| CliError::Io {
+    // At the run's deadline the uploader says stop: the run is sealed now, as `goalcup seal`
+    // would, and the daemon ends the harness. What that said is reported once the wait ends.
+    let stopped_at_deadline = std::sync::Mutex::new(None::<String>);
+    let stop = uploading.as_mut().and_then(|running| running.take_stop());
+    let status = crate::upload::wait_stopping(&mut child, stop, |reason| {
+        let mut ignored = Vec::new();
+        let sealed = crate::commands::seal::seal_with(
+            forked.client,
+            cx.connectors,
+            forked.cfg,
+            &entry_id,
+            &mut ignored,
+        );
+        let line = match sealed {
+            Ok(()) => format!("deadline: {reason}. The agent was stopped and the run sealed."),
+            Err(e) => format!("deadline: {reason}. The seal it asked for failed: {e}"),
+        };
+        *stopped_at_deadline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(line);
+    })
+    .map_err(|source| CliError::Io {
         path: handed.program.clone(),
         source,
     });
+    if let Some(line) = stopped_at_deadline
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+    {
+        let _ = say(out, &line);
+    }
     // What was swept is said on stdout; what may still be running goes to stderr now, and makes
     // the command exit 1 after the seal (`finish_and_scan`), so a script that reads only the exit
     // code still learns of it. The trace is unchanged either way.
@@ -2026,6 +2069,9 @@ struct Uploading {
 struct OpenedRun {
     run: crate::upload::api::OpenRun,
     request: crate::upload::api::OpenRunRequest,
+    /// When the server answered, on a clock that runs through sleep: the run's own count of
+    /// its length starts here.
+    opened_at: goalcup_protocol::clock::ContinuousOrigin,
     give_back: std::cell::RefCell<Option<crate::upload::GiveBack>>,
 }
 
@@ -2051,11 +2097,13 @@ impl Uploading {
         };
         crate::upload::give_back_pending(&self.server, cx.cfg);
         let run = crate::upload::open_run(&self.server, &request)?;
+        let opened_at = goalcup_protocol::clock::ContinuousOrigin::now();
         let give_back = crate::upload::GiveBack::opened(&self.server, cx.cfg, &run);
         match give_back {
             Ok(give_back) => Ok(OpenedRun {
                 run,
                 request,
+                opened_at,
                 give_back: std::cell::RefCell::new(Some(give_back)),
             }),
             Err(error) => {
@@ -2097,6 +2145,7 @@ impl Uploading {
             trace_dir: info.trace_dir.clone(),
             official_start: opened.run.official_start.clone(),
             deadline_at: opened.run.deadline_at.clone(),
+            workspace: opened.request.workspace.clone(),
         };
         crate::upload::keep_run(cfg, &record, &receipt)?;
         say(

@@ -20,7 +20,9 @@
 //!   where `goalcup-verify` reads it.
 
 use super::UploadRecord;
-use super::api::{ChunkAnswer, RunPosition, SealRequest, StatusAnswer};
+use super::api::{
+    ChunkAnswer, HeartbeatAnswer, HeartbeatRequest, RunPosition, SealRequest, StatusAnswer,
+};
 use super::http::{ServerClient, ServerError};
 use crate::CliError;
 use goalcup_protocol::ack::AckCheckpoint;
@@ -59,21 +61,24 @@ pub struct Policy {
     pub finish_budget: Duration,
     /// The longest one chunk upload may take.
     pub put_timeout: Duration,
+    /// How often a heartbeat goes while the run records.
+    pub heartbeat: Duration,
 }
 
 impl Policy {
     /// A test build's policy from `spec`: `interval,poll,backoff_min,backoff_max,finish`
-    /// milliseconds, `eager_bytes`, and optionally the chunk upload timeout in milliseconds,
-    /// comma separated. A shipped build has no such door.
+    /// milliseconds, `eager_bytes`, and optionally the chunk upload timeout and the heartbeat
+    /// interval in milliseconds, comma separated. A shipped build has no such door.
     #[cfg(feature = "test-support")]
     pub fn from_test_spec(spec: &str) -> Option<Policy> {
         let n: Vec<u64> = spec
             .split(',')
             .map(|v| v.trim().parse().ok())
             .collect::<Option<_>>()?;
-        let (interval, poll, backoff_min, backoff_max, finish, eager, put) = match n[..] {
-            [a, b, c, d, e, f] => (a, b, c, d, e, f, 600_000),
-            [a, b, c, d, e, f, g] => (a, b, c, d, e, f, g),
+        let (interval, poll, backoff_min, backoff_max, finish, eager, put, beat) = match n[..] {
+            [a, b, c, d, e, f] => (a, b, c, d, e, f, 600_000, 300_000),
+            [a, b, c, d, e, f, g] => (a, b, c, d, e, f, g, 300_000),
+            [a, b, c, d, e, f, g, h] => (a, b, c, d, e, f, g, h),
             _ => return None,
         };
         let ms = Duration::from_millis;
@@ -85,6 +90,7 @@ impl Policy {
             backoff_max: ms(backoff_max),
             finish_budget: ms(finish),
             put_timeout: ms(put),
+            heartbeat: ms(beat),
         })
     }
 }
@@ -99,6 +105,7 @@ impl Default for Policy {
             backoff_max: Duration::from_secs(15 * 60),
             finish_budget: Duration::from_secs(120),
             put_timeout: PUT_TIMEOUT,
+            heartbeat: Duration::from_secs(300),
         }
     }
 }
@@ -524,6 +531,42 @@ impl Uploader {
         Ok(())
     }
 
+    /// The final heartbeat: commit the sealed chain's last record as the run's end, asking
+    /// again after each retryable failure within `deadline`.
+    fn commit_end(
+        &mut self,
+        deadline: Option<Instant>,
+        say: &mut dyn FnMut(&str),
+    ) -> Result<(), String> {
+        let mut failures = 0;
+        loop {
+            let Some(timeout) = left(deadline, super::http::CALL_TIMEOUT) else {
+                return Err("the time left to finish ran out".to_string());
+            };
+            match heartbeat(&self.server, &self.record, true, timeout) {
+                None => return Err("the chain holds no whole record".to_string()),
+                Some(Ok(_)) => return Ok(()),
+                Some(Err(error)) if error.is_retryable() => {
+                    failures += 1;
+                    let wait = backoff(
+                        &self.policy,
+                        failures,
+                        error.retry_after().map(Duration::from_secs),
+                    );
+                    if deadline.is_some_and(|d| Instant::now() + wait > d) {
+                        return Err(error.to_string());
+                    }
+                    say(&format!(
+                        "upload: the final heartbeat was not stored ({error}); trying again in {}s",
+                        wait.as_secs().max(1)
+                    ));
+                    std::thread::sleep(wait);
+                }
+                Some(Err(error)) => return Err(error.to_string()),
+            }
+        }
+    }
+
     /// The trace's `seal.json` and `baseline.json`, once both exist.
     fn seal_documents(&self) -> Option<(String, String)> {
         let trace = Path::new(&self.record.trace_dir);
@@ -594,6 +637,87 @@ pub fn local_link_before(chain: &Path, offset: u64) -> Option<(u64, String)> {
     Some((link.seq, link.hash))
 }
 
+/// The last whole record of `chain`: the bytes up to the end of it, its `seq` and its `hash`.
+/// `None` for a chain with no whole record.
+pub fn local_end(chain: &Path) -> Option<(u64, u64, String)> {
+    let len = std::fs::metadata(chain).ok()?.len();
+    let start = len.saturating_sub(2 * (MAX_LINE_BYTES + 1));
+    let mut file = std::fs::File::open(chain).ok()?;
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = Vec::new();
+    file.take(len - start).read_to_end(&mut tail).ok()?;
+    // The end of the last whole line; a torn tail after it is not a record yet.
+    let end = start + tail.iter().rposition(|b| *b == b'\n')? as u64 + 1;
+    let (seq, hash) = local_link_before(chain, end)?;
+    Some((end, seq, hash))
+}
+
+/// The 40-hex commit `workspace`'s repository has checked out, read from its `.git` files (no
+/// `git` process): `HEAD` naming a commit, or a branch found under `refs/heads/` or in
+/// `packed-refs`. `None` when there is no repository or nothing is committed.
+pub fn repo_head(workspace: &Path) -> Option<String> {
+    let git = workspace.join(".git");
+    let read = |path: PathBuf| {
+        let mut text = String::new();
+        std::fs::File::open(path)
+            .ok()?
+            .take(64 * 1024)
+            .read_to_string(&mut text)
+            .ok()?;
+        Some(text)
+    };
+    let is_commit = |s: &str| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let head = read(git.join("HEAD"))?;
+    let head = head.trim();
+    if is_commit(head) {
+        return Some(head.to_ascii_lowercase());
+    }
+    let reference = head.strip_prefix("ref: ")?.trim();
+    // A reference names a path under `.git`; one that tries to leave it is not followed.
+    if !reference.starts_with("refs/") || reference.split('/').any(|part| part == "..") {
+        return None;
+    }
+    if let Some(commit) = read(git.join(reference)) {
+        let commit = commit.trim();
+        return is_commit(commit).then(|| commit.to_ascii_lowercase());
+    }
+    read(git.join("packed-refs"))?.lines().find_map(|line| {
+        let (commit, name) = line.split_once(' ')?;
+        (name.trim() == reference && is_commit(commit)).then(|| commit.to_ascii_lowercase())
+    })
+}
+
+/// `POST /v1/runs/{id}/heartbeat` with the local chain's last whole record: `final` once the
+/// run has ended, with the workspace repository's commit. `None` when the chain holds no
+/// whole record yet.
+fn heartbeat(
+    server: &ServerClient,
+    record: &UploadRecord,
+    is_final: bool,
+    timeout: Duration,
+) -> Option<Result<HeartbeatAnswer, ServerError>> {
+    let (offset_local, seq, head) = local_end(&Path::new(&record.trace_dir).join(CHAIN_FILE))?;
+    let repo_head = if is_final && !record.workspace.is_empty() {
+        repo_head(Path::new(&record.workspace))
+    } else {
+        None
+    };
+    let request = HeartbeatRequest {
+        entry_id: record.entry_id.clone(),
+        seq,
+        head,
+        offset_local,
+        is_final,
+        repo_head,
+    };
+    Some(server.json_timed(
+        "POST",
+        &format!("/v1/runs/{}/heartbeat", record.run_id),
+        Some(&request),
+        timeout,
+    ))
+}
+
 /// Append one acknowledgement as one line, in one write, and make it durable.
 fn append_ack(acks: &Path, ack: &AckCheckpoint) -> Result<(), CliError> {
     let mut line = serde_json::to_vec(ack)?;
@@ -653,6 +777,13 @@ impl Uploader {
     /// and the server is never sealed on a copy missing its tail.
     pub fn finish(&mut self, deadline: Option<Instant>, say: &mut dyn FnMut(&str)) -> Report {
         let documents = self.seal_documents();
+        // A sealed run commits its end first: after the deadline, the server accepts nothing
+        // past it, and nothing at all until it is committed.
+        if documents.is_some()
+            && let Err(why) = self.commit_end(deadline, say)
+        {
+            return Report::not(why, self.pos.offset);
+        }
         let mut failures = 0;
         loop {
             match self.attempt(deadline) {
@@ -715,6 +846,37 @@ pub struct Running {
     finish: std::sync::mpsc::Sender<Instant>,
     report: std::sync::mpsc::Receiver<Report>,
     budget: Duration,
+    /// Says, once, why the run must stop now: the server's deadline, or this machine's count of
+    /// the run's length when the server cannot be reached.
+    stop: Option<std::sync::mpsc::Receiver<String>>,
+}
+
+/// The run's own deadline, for when the server cannot say it: its length
+/// (`deadline_at − official_start`) counted from when it opened on a clock that keeps running
+/// while the machine sleeps.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalDeadline {
+    pub opened: goalcup_protocol::clock::ContinuousOrigin,
+    pub length: Duration,
+}
+
+impl LocalDeadline {
+    /// The run's length from the record's two server times, from `opened`.
+    pub fn of(
+        record: &UploadRecord,
+        opened: goalcup_protocol::clock::ContinuousOrigin,
+    ) -> Option<LocalDeadline> {
+        let start = goalcup_protocol::control::parse_z(&record.official_start)?;
+        let deadline = goalcup_protocol::control::parse_z(&record.deadline_at)?;
+        Some(LocalDeadline {
+            opened,
+            length: Duration::from_secs(deadline.checked_sub(start)?),
+        })
+    }
+
+    fn passed(&self) -> bool {
+        u128::from(self.opened.elapsed_ns()) >= self.length.as_nanos()
+    }
 }
 
 /// How long past its budget `goalcup start` waits for the uploader's own last word.
@@ -729,15 +891,22 @@ pub fn begin(
     receipt_key: String,
     policy: Policy,
     spool_dir: PathBuf,
+    local_deadline: Option<LocalDeadline>,
 ) -> Result<Running, CliError> {
     let lock = lock_entry(&spool_dir, &record.entry_id)?;
     let (finish, finishing) = std::sync::mpsc::channel::<Instant>();
     let (reported, report) = std::sync::mpsc::channel::<Report>();
+    let (stopping, stop) = std::sync::mpsc::channel::<String>();
     std::thread::Builder::new()
         .name("goalcup-upload".into())
         .spawn(move || {
             let _lock = lock;
-            let ended = run(server, record, receipt_key, policy, &spool_dir, finishing);
+            let beside = Beside {
+                finishing,
+                stopping,
+                local_deadline,
+            };
+            let ended = run(server, record, receipt_key, policy, &spool_dir, beside);
             let _ = reported.send(ended);
         })
         .map_err(|source| CliError::Io {
@@ -748,10 +917,25 @@ pub fn begin(
         finish,
         report,
         budget: policy.finish_budget,
+        stop: Some(stop),
     })
 }
 
+/// What the upload thread hears from, and says to, `goalcup start`.
+struct Beside {
+    /// The run is sealed: finish by this instant.
+    finishing: std::sync::mpsc::Receiver<Instant>,
+    /// The run must stop now, and why.
+    stopping: std::sync::mpsc::Sender<String>,
+    local_deadline: Option<LocalDeadline>,
+}
+
 impl Running {
+    /// The channel that says when the run must stop (taken once).
+    pub fn take_stop(&mut self) -> Option<std::sync::mpsc::Receiver<String>> {
+        self.stop.take()
+    }
+
     /// The run is sealed: send the rest and the seal within the policy's finish budget, and
     /// say how it went. Returns by the budget (and a short grace) whatever the server does:
     /// an upload still under way then is left to `goalcup upload`.
@@ -769,18 +953,45 @@ fn run(
     key: String,
     policy: Policy,
     spool_dir: &Path,
-    finishing: std::sync::mpsc::Receiver<Instant>,
+    beside: Beside,
 ) -> Report {
     use std::sync::mpsc::RecvTimeoutError;
+    let Beside {
+        finishing,
+        stopping,
+        local_deadline,
+    } = beside;
     let mut say = |line: &str| eprintln!("goalcup: {line}");
     let mut uploader: Option<Uploader> = None;
     let mut stopped: Option<String> = None;
     let mut failures = 0u32;
     let mut wait_until = Instant::now();
     let mut next_due = Instant::now();
+    let mut next_beat = Instant::now();
+    // Said once: the run must stop. Uploading waits for the finish after that.
+    let mut over = false;
     loop {
         let now = Instant::now();
-        if stopped.is_none() && now >= wait_until {
+        if !over && now >= next_beat {
+            next_beat = now + policy.heartbeat;
+            if let Some(Ok(answer)) = heartbeat(&server, &record, false, super::http::CALL_TIMEOUT)
+                && answer.stop
+            {
+                over = true;
+                let _ = stopping.send(format!(
+                    "the server says the run is over (its deadline was {})",
+                    answer.deadline_at
+                ));
+            }
+        }
+        if !over && local_deadline.is_some_and(|d| d.passed()) {
+            over = true;
+            let _ = stopping.send(format!(
+                "the run's time is up by this machine's clock (its deadline was {})",
+                record.deadline_at
+            ));
+        }
+        if !over && stopped.is_none() && now >= wait_until {
             if uploader.is_none() {
                 match Uploader::resume(
                     server.clone(),
