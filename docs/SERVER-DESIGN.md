@@ -101,8 +101,8 @@ through Supabase with row-level security.
    **Notifications:**
    - if the server hears nothing from an open run for 20 minutes, it emails the participant: "your
      run stopped; run `goalcup continue`". One email per silence, not repeated every 20 minutes, and none
-     once the run is sealed or past `deadline_at`. A run whose seal hasn't arrived 7 days after
-     `deadline_at` is marked abandoned *(my call)*;
+     once the run is sealed or past `deadline_at`. A run whose seal hasn't arrived 24 hours after
+     `deadline_at` is marked abandoned (owner), and no more uploads are accepted for it;
    - *(nice to have)* a small login item on the participant's machine notices an interrupted run after
      a reboot and shows a notification that leads to `goalcup continue`.
 6. **The deadline: the server says stop.** The run is over at `deadline_at`, in whatever state the
