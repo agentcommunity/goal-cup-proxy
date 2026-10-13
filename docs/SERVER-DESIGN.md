@@ -101,19 +101,28 @@ through Supabase with row-level security.
    **Notifications:**
    - if the server hears nothing from an open run for 20 minutes, it emails the participant: "your
      run stopped; run `goalcup continue`". One email per silence, not repeated every 20 minutes, and none
-     once the run is sealed or past `deadline_at`. A run with no seal by the end of the transfer window
-     (step 6) is marked abandoned;
+     once the run is sealed or past `deadline_at`. A run whose seal hasn't arrived 7 days after
+     `deadline_at` is marked abandoned *(my call)*;
    - *(nice to have)* a small login item on the participant's machine notices an interrupted run after
      a reboot and shows a notification that leads to `goalcup continue`.
-6. **The deadline.** At `deadline_at` the tracer stops the agent and seals, and the run is over.
+6. **The deadline: the server says stop.** The run is over at `deadline_at`, in whatever state the
+   agent is in (owner).
+   - **The server's clock decides.** Every heartbeat reply carries the server's verdict, and once server
+     time reaches `deadline_at` it answers `stop`. The tracer then stops the agent, stops recording at
+     once, and seals. The participant's own clock can't extend a run.
+   - **Offline fallback:** the tracer also stops by itself when its own monotonic clock, counted from the
+     `official_start` in the signed start receipt, reaches 168 hours. Whichever comes first wins.
+   - **The end is committed.** At stop the tracer sends a final heartbeat with its last `(seq, head)`
+     when it can reach the server.
    - **The submission is the participant's GitHub repo.** Its URL is given when the run opens, and at
      `deadline_at` the server records the latest commit on its default branch through the GitHub API.
      That commit is what judges review; later pushes don't count.
    - The tracer also notes the local repo's latest commit at the deadline, as a cross-check.
-   - **Hard stop, no late uploads** (owner). The run ends in whatever state the agent is in. The only
-     thing accepted after `deadline_at` is the final chunk and seal the tracer makes at the deadline,
-     delivered within a fixed 15-minute transfer window. Records stamped after `deadline_at` are refused.
-     Anything not uploaded by then (for example because the network was down) doesn't count.
+   - **Wrapping up can take time; recording can't.** After the stop, the upload of what's left may take
+     as long as it needs. The server accepts only chunks that complete the chain up to the committed
+     final head (or up to the seal, if the final heartbeat never arrived), never anything that extends
+     past it. The verify job flags any record stamped after `deadline_at`. No new run and no `continue`
+     is accepted after `deadline_at`.
 
 ## 4. The calls
 
@@ -133,8 +142,8 @@ checks that the run belongs to the token's member.
 **Acceptance of a chunk, step by step.**
 1. Reject early, before reading the body, if:
    - the token is wrong;
-   - the run isn't open, or is past `deadline_at` (only the final chunk and seal, within the 15-minute
-     transfer window, are accepted after it);
+   - the run isn't open, or is past `deadline_at` and the chunk would extend the chain past its
+     committed final head (section 3, step 6);
    - `Content-Length` is over 32 MB;
    - the run is over its storage quota;
    - the per-token rate limit trips;
@@ -299,7 +308,8 @@ $1 per TB per month), possibly kept for good.
 5a. `goalcup continue` (a new command): reattach to the same run, a new segment `entry_id` with its own
     fresh chain from genesis, and resume the harness's own session with "keep going" (a connector field
     for each harness's resume command).
-5b. The deadline stop: at `deadline_at`, stop the agent, note the local repo's latest commit, seal.
+5b. The deadline stop: on the server's `stop` (or the offline fallback), stop the agent and recording,
+    send the final heartbeat, note the local repo's latest commit, seal, then finish uploading.
 5c. *(Nice to have)* the login-item notification after a reboot.
 6. Pruning after verified acknowledgements, and the rolling reservation.
 7. Daemon config, receipt and acknowledgement verification: pin two keys. Verifier: report "pruned", report any record stamped after `deadline_at`. Export the `usage` and `tool_call` decoders.
@@ -335,8 +345,8 @@ $1 per TB per month), possibly kept for good.
 5. **Public per-run numbers:** yes, shown publicly (the site may choose to show daily updates). The
    infrastructure supports 5-minute updates. The terms say run statistics are public.
 6. **Deadline:** at 168 hours it's over. The submission is the repo's latest commit on its default branch,
-   recorded by the server at the deadline. No late uploads: only the final chunk and seal made at the
-   deadline, within a 15-minute transfer window (section 3, step 6).
+   recorded by the server at the deadline. The server tells the tracer to stop; recording stops at once,
+   and the remaining upload may finish afterwards (section 3, step 6).
 7. **Logistics:**
    - Cloudflare: the existing paid ($5) account. Domain: e.g. `ingest.agentcommunity.org`.
    - Supabase: the existing paid project (about 30,000 members).
