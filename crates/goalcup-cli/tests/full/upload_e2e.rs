@@ -276,9 +276,26 @@ fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
 // ------------------------------------------------------------------ the uploader
 
 /// A cadence a test can watch: an "hour" of 200 ms, polled every 25 ms, backoff from 100 ms to
-/// 400 ms, and up to 10 s to finish after the seal.
+/// 400 ms, up to 10 s to finish after the seal, and 3 s for one chunk.
 fn quick_policy() -> goalcup_cli::upload::uploader::Policy {
-    goalcup_cli::upload::uploader::Policy::from_test_spec("200,25,100,400,10000,268435456").unwrap()
+    goalcup_cli::upload::uploader::Policy::from_test_spec("200,25,100,400,10000,268435456,3000")
+        .unwrap()
+}
+
+/// End a fake harness that is already running: it reads `stop` once, so one that got there
+/// first is waiting on its one `sleep`, which is ended here.
+fn end_harness(rig: &Rig) {
+    rig.tell("stop", "");
+    wait_until("the harness to see stop or start its sleep", || {
+        rig.harness_file("done").is_some() || rig.harness_file("sleeper").is_some()
+    });
+    if let Some(pid) = rig
+        .harness_file("sleeper")
+        .and_then(|pid| pid.trim().parse::<i32>().ok())
+    {
+        // SAFETY: two integers; the pid is the fake harness's own `sleep`.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
 }
 
 fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
@@ -386,7 +403,7 @@ fn a_run_is_uploaded_as_it_records_and_sealed_at_the_end() {
                 .first()
                 .is_some_and(|run| !server.chunks(run).is_empty())
         });
-        rig.tell("stop", "");
+        end_harness(&rig);
         running.join().unwrap()
     });
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
@@ -428,7 +445,7 @@ fn a_server_that_goes_away_mid_run_gets_everything_once_it_is_back() {
                 ..ServerOptions::default()
             },
         );
-        rig.tell("stop", "");
+        end_harness(&rig);
         let (result, out) = running.join().unwrap();
         (result, out, back)
     });
@@ -462,7 +479,7 @@ fn an_upload_left_incomplete_is_finished_by_goalcup_upload() {
                 .is_some_and(|run| !first.chunks(run).is_empty())
         });
         first.stop();
-        rig.tell("stop", "");
+        end_harness(&rig);
         running.join().unwrap()
     });
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
@@ -557,7 +574,7 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
                 .is_some_and(|run| !first.chunks(run).is_empty())
         });
         first.stop();
-        rig.tell("stop", "");
+        end_harness(&rig);
         running.join().unwrap()
     });
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));

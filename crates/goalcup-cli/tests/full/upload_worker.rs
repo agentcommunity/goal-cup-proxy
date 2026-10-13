@@ -97,7 +97,8 @@ impl Wrangler {
             .set("Authorization", &format!("Bearer {token}"))
             .call()
             .unwrap()
-            .into_json()
+            .into_string()
+            .map(|text| serde_json::from_str(&text).unwrap())
             .unwrap()
     }
 }
@@ -144,7 +145,23 @@ fn log_in(rig: &Rig, url: &str, token: &str) {
 }
 
 fn quick_policy() -> goalcup_cli::upload::uploader::Policy {
-    goalcup_cli::upload::uploader::Policy::from_test_spec("200,25,100,400,20000,268435456").unwrap()
+    goalcup_cli::upload::uploader::Policy::from_test_spec("200,25,100,400,20000,268435456,5000")
+        .unwrap()
+}
+
+/// End a fake harness that is already running (see `upload_e2e::end_harness`).
+fn end_harness(rig: &Rig) {
+    rig.tell("stop", "");
+    wait_until("the harness to see stop or start its sleep", || {
+        rig.harness_file("done").is_some() || rig.harness_file("sleeper").is_some()
+    });
+    if let Some(pid) = rig
+        .harness_file("sleeper")
+        .and_then(|pid| pid.trim().parse::<i32>().ok())
+    {
+        // SAFETY: two integers; the pid is the fake harness's own `sleep`.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
 }
 
 fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
@@ -223,7 +240,7 @@ fn upload_worker_a_run_is_uploaded_and_sealed_and_survives_a_restart() {
         drop(first);
         std::thread::sleep(Duration::from_millis(600));
         let back = Wrangler::start(&state, port);
-        rig.tell("stop", "");
+        end_harness(&rig);
         let (result, out) = running.join().unwrap();
         (result, out, back)
     });
@@ -254,7 +271,7 @@ fn upload_worker_an_incomplete_upload_is_finished_by_goalcup_upload() {
         let running = rig.start(s, &client, opts, None);
         wait_until("a first acknowledgement", || acknowledged(&rig, &client));
         drop(first);
-        rig.tell("stop", "");
+        end_harness(&rig);
         running.join().unwrap()
     });
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));

@@ -302,11 +302,13 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   compressed). Each chunk is acknowledged with a signature, and the acknowledgement is added to
   the trace's `acks.jsonl`, which `goalcup-verify` checks. Recording never waits on the network:
   when the server cannot be reached the upload waits (a minute, doubling to fifteen) and tries
-  again, and the run goes on. After the seal, `start` sends the rest and the seal for up to two
+  again, and the run goes on. After the seal, `start` sends the rest and the seal for at most two
   minutes; if that is not enough it says so, and `goalcup upload <entry>` finishes the job
-  (after a crash too). It asks the server where it got to and is safe to run again. Uploading
-  stops, with the reason on stderr, if the server refuses the token or the local chain no
-  longer continues the server's copy; the run is still complete on this machine.
+  (after a crash too). It asks the server where it got to and is safe to run again, though not
+  while the run's own `start` is still uploading (it says so). Uploading stops, with the reason
+  on stderr, when the server refuses the request itself (a revoked token, a closed run, a TLS
+  certificate it cannot trust) or the local chain no longer continues the server's copy; the
+  run is still complete on this machine.
 - <a id="server"></a>**The server.** The upload Worker (Cloudflare Workers, R2, Supabase) is in
   [server/worker](server/worker/README.md), TypeScript, runnable on this machine with
   `wrangler dev` (`cd server/worker && npm install && npm test`); nothing is deployed. The

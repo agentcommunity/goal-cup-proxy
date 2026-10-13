@@ -1239,7 +1239,7 @@ fn run_harness<'a>(
     let uploading = forked.upload.take().and_then(|start| {
         let server = start.server?;
         let spool = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
-        match crate::upload::uploader::spawn(server, start.record, start.key, start.policy, spool) {
+        match crate::upload::uploader::begin(server, start.record, start.key, start.policy, spool) {
             Ok(running) => Some(running),
             Err(e) => {
                 let _ = say(out, &format!("  (the upload could not start: {e})"));
