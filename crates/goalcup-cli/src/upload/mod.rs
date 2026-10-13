@@ -112,7 +112,7 @@ fn with_retries<T>(mut call: impl FnMut() -> Result<T, ServerError>) -> Result<T
     }
 }
 
-fn refused(what: &str, client: &ServerClient, error: ServerError) -> CliError {
+fn refused(what: &str, server: &ServerClient, error: ServerError) -> CliError {
     let hint = match &error {
         ServerError::Status { status: 401, .. } => {
             " Your token was not accepted: run `goalcup login` again with a token from the site."
@@ -123,15 +123,15 @@ fn refused(what: &str, client: &ServerClient, error: ServerError) -> CliError {
     CliError::Refused(format!(
         "{what}: {} ({}).{hint} Nothing was started.",
         error,
-        client.base()
+        server.base()
     ))
 }
 
 /// `POST /v1/runs`. Repeats are safe: the server answers a repeat of the same `session_id`
 /// with the same run.
-pub fn open_run(client: &ServerClient, request: &OpenRunRequest) -> Result<OpenRun, CliError> {
-    let run: OpenRun = with_retries(|| client.json("POST", "/v1/runs", Some(request)))
-        .map_err(|e| refused("the Goal Cup server did not open the run", client, e))?;
+pub fn open_run(server: &ServerClient, request: &OpenRunRequest) -> Result<OpenRun, CliError> {
+    let run: OpenRun = with_retries(|| server.json("POST", "/v1/runs", Some(request)))
+        .map_err(|e| refused("the Goal Cup server did not open the run", server, e))?;
     let well_formed = goalcup_protocol::control::is_entry_id(&run.entry_id)
         && is_run_id(&run.run_id)
         && goalcup_protocol::control::parse_z(&run.official_start).is_some()
@@ -146,7 +146,7 @@ pub fn open_run(client: &ServerClient, request: &OpenRunRequest) -> Result<OpenR
         return Err(CliError::Refused(format!(
             "the Goal Cup server at {} answered a run this tracker cannot use: {run:?}. \
              Nothing was started.",
-            client.base()
+            server.base()
         )));
     }
     Ok(run)
@@ -166,7 +166,7 @@ pub fn is_run_id(id: &str) -> bool {
 /// names. Which keys to trust is the verifier's question, not this one's; this check only
 /// stops a receipt that could never bind this trace from being kept.
 pub fn fetch_receipt(
-    client: &ServerClient,
+    server: &ServerClient,
     run: &OpenRun,
     opened: &OpenRunRequest,
     chain_head: &str,
@@ -176,7 +176,7 @@ pub fn fetch_receipt(
         chain_head: chain_head.to_string(),
     };
     let answer: ReceiptAnswer = with_retries(|| {
-        client.json(
+        server.json(
             "POST",
             &format!("/v1/runs/{}/receipt", run.run_id),
             Some(&request),
@@ -185,7 +185,7 @@ pub fn fetch_receipt(
     .map_err(|e| {
         refused(
             "the Goal Cup server did not sign the start receipt",
-            client,
+            server,
             e,
         )
     })?;
@@ -205,13 +205,13 @@ pub fn fetch_receipt(
     if !matches {
         return Err(CliError::Refused(format!(
             "the start receipt from {} does not describe this run. Nothing was started.",
-            client.base()
+            server.base()
         )));
     }
     if receipt.verify_with(&receipt.public_key).is_err() {
         return Err(CliError::Refused(format!(
             "the start receipt from {} does not carry a valid signature. Nothing was started.",
-            client.base()
+            server.base()
         )));
     }
     Ok(receipt)
@@ -219,9 +219,9 @@ pub fn fetch_receipt(
 
 /// `POST /v1/runs/{run_id}/abandon`, once, for a start that failed before its launch. Best
 /// effort: the start is already failing, and its own refusal is what the participant reads.
-pub fn abandon_run(client: &ServerClient, run_id: &str, reason: &str) -> Result<(), ServerError> {
+pub fn abandon_run(server: &ServerClient, run_id: &str, reason: &str) -> Result<(), ServerError> {
     let reason: String = reason.chars().take(500).collect();
-    client
+    server
         .json::<StatusAnswer>(
             "POST",
             &format!("/v1/runs/{run_id}/abandon"),
