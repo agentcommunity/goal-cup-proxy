@@ -21,8 +21,7 @@ pub use crate::capture_status::{
     M2Status, RunState,
 };
 
-/// The protocol version whose envelopes may carry [`CaptureRecord`]s. The legacy default,
-/// [`crate::PROTOCOL_VERSION`], stays 4: v5 is selected explicitly, never by default.
+/// The protocol version of every envelope this crate writes or reads (D51).
 pub const M2_PROTOCOL_VERSION: u32 = 5;
 
 /// Bound on one source chunk and, separately, on one sanitized segment's bytes.

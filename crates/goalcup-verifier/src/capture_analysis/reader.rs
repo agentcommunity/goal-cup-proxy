@@ -373,7 +373,6 @@ fn export_code(error: &ExportError) -> Violation {
     match error {
         ExportError::UnsupportedProtocolVersion { .. } => "protocol_version_unsupported",
         ExportError::InvalidCaptureEnvelope { .. } => "capture_envelope_invalid",
-        ExportError::IncompatibleEnvelope { .. } => "envelope_incompatible",
         _ => "chain_phase_invalid",
     }
 }

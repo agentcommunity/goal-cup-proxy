@@ -1,8 +1,9 @@
 //! Wire and store types shared by the /goal Cup daemon and verifier.
 //!
 //! This crate carries no rule logic (DECISIONS D3). It defines the hash chain, the shipped
-//! envelope, the signed start receipt, the acknowledgement checkpoint, the run events, the seal
-//! manifest, the v5 capture records, and the connector contract:
+//! envelope, the signed start receipt, the acknowledgement checkpoint, the health states, the
+//! seal manifest, the v5 capture records, and the connector contract. It carries protocol v5
+//! only ([`capture::M2_PROTOCOL_VERSION`], D51):
 //!
 //! * [`harness`]: the harness manifest (`harness.toml`, schema 1) and its one loader;
 //! * [`capture_policy`]: the reviewed trust tables a harness manifest is checked against;
@@ -21,7 +22,6 @@ pub mod clock;
 pub mod connector_dir;
 pub mod constant_time;
 pub mod control;
-pub mod cursor;
 pub mod envelope;
 pub mod events;
 pub mod export;
@@ -36,39 +36,6 @@ pub mod redaction;
 pub mod seal;
 pub mod submission;
 pub mod template;
-
-/// Version every newly appended envelope uses.
-pub const PROTOCOL_VERSION: u32 = 4;
-
-/// First version whose envelope may carry inline redaction evidence.
-pub(crate) const INLINE_REDACTION_PROTOCOL_VERSION: u32 = 2;
-
-/// First version whose `HomeSeeded` body may carry handoff markers.
-pub(crate) const HOME_SEED_HANDOFF_PROTOCOL_VERSION: u32 = 3;
-
-/// First version whose finalization may bind a workspace submission manifest.
-pub(crate) const WORKSPACE_SUBMISSION_PROTOCOL_VERSION: u32 = 4;
-
-/// The V2 compatibility label retained by historical fixtures and consumers.
-///
-/// This is deliberately not used as a feature floor or as arithmetic "current minus one":
-/// V3 added HomeSeeded handoff markers and V4 added workspace submissions, while V2 remains
-/// a readable historical format.
-pub const PREVIOUS_PROTOCOL_VERSION: u32 = 2;
-
-/// The original envelope version, retained for trace and receipt compatibility.
-pub const LEGACY_PROTOCOL_VERSION: u32 = 1;
-
-/// The protocol versions this build can read. A trace outside it is refused by the
-/// verifier as `protocol_version_unsupported`, never silently parsed.
-///
-/// This is the LEGACY set, and it deliberately stops at 4. Protocol v5
-/// ([`capture::M2_PROTOCOL_VERSION`]) is admitted only by a writer and reader written for it;
-/// the legacy writer, the legacy export reader and the legacy semantic verifier refuse it.
-#[allow(clippy::manual_range_patterns)] // A closed wire-version set must stay explicit.
-pub fn is_supported_protocol_version(v: u32) -> bool {
-    matches!(v, 1 | 2 | 3 | 4)
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProtocolError {

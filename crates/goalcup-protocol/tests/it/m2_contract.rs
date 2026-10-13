@@ -6,8 +6,8 @@
 use goalcup_protocol::capture::*;
 use goalcup_protocol::chain::Link;
 use goalcup_protocol::control::StatusPayload;
-use goalcup_protocol::envelope::{Envelope, EnvelopeVersionCompatibilityError, EventBody};
-use goalcup_protocol::export::{ExportError, TraceExport};
+use goalcup_protocol::envelope::{Envelope, EventBody};
+use goalcup_protocol::export::{ChainPhaseReplay, ExportError, TraceExport};
 use goalcup_protocol::provenance::{Rfc3339Utc, TerminationMethodV1, TerminationOutcomeV1};
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
 use serde::Serialize;
@@ -137,46 +137,35 @@ fn layout<T: Serialize + DeserializeOwned + PartialEq + Debug>(value: &T, golden
 }
 
 #[test]
-fn capture_rejected_in_v4_and_roundtrips_in_v5() {
+fn capture_roundtrips_in_v5_and_every_other_version_is_refused() {
     assert_eq!(M2_PROTOCOL_VERSION, 5);
-    assert_eq!(
-        goalcup_protocol::PROTOCOL_VERSION,
-        4,
-        "the legacy default is unchanged"
-    );
-    assert!(
-        !goalcup_protocol::is_supported_protocol_version(5),
-        "v5 is not added to the legacy readable set"
-    );
+    let replay = ChainPhaseReplay::new();
+    for retired in 1..=4 {
+        assert!(
+            matches!(
+                replay.check_version(7, retired),
+                Err(ExportError::InvalidCaptureEnvelope { seq: 7, .. })
+            ),
+            "protocol v{retired} is a retired format, not a v5 record"
+        );
+    }
+    for unknown in [0, 6, u32::MAX] {
+        assert!(
+            matches!(
+                replay.check_version(7, unknown),
+                Err(ExportError::UnsupportedProtocolVersion { seq: 7, protocol_version })
+                    if protocol_version == unknown
+            ),
+            "protocol v{unknown} is an unknown version"
+        );
+    }
+    replay.check_version(7, M2_PROTOCOL_VERSION).unwrap();
 
     let body = EventBody::Capture {
         record: gap_record(),
     };
-    for legacy in 1..=4 {
-        let mut env = envelope(legacy, body.clone());
-        assert_eq!(
-            env.validate_version_body_compatibility(),
-            Err(EnvelopeVersionCompatibilityError::CaptureRequiresV5 {
-                protocol_version: legacy
-            }),
-            "protocol v{legacy} must refuse a capture record"
-        );
-        env.link.hash = env.expected_hash(&env.link.prev.clone()).unwrap();
-        assert!(env.validate_version_body_compatibility().is_err());
-    }
-
     let mut v5 = envelope(M2_PROTOCOL_VERSION, body);
     v5.link.hash = v5.expected_hash(&v5.link.prev.clone()).unwrap();
-    // The legacy check (the one every legacy writer and reader applies) keeps refusing v5 as
-    // a version, not as a body: v5 admission belongs to the v5 writer and reader.
-    assert_eq!(
-        v5.validate_version_body_compatibility(),
-        Err(
-            EnvelopeVersionCompatibilityError::UnsupportedProtocolVersion {
-                protocol_version: 5
-            }
-        )
-    );
     let bytes = serde_json::to_vec(&v5).unwrap();
     let back: Envelope = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(back, v5);
@@ -196,26 +185,10 @@ fn capture_rejected_in_v4_and_roundtrips_in_v5() {
             v5.link.hash
         )
     );
-
-    let v6 = envelope(
-        6,
-        EventBody::Capture {
-            record: gap_record(),
-        },
-    );
-    assert_eq!(
-        v6.validate_version_body_compatibility(),
-        Err(
-            EnvelopeVersionCompatibilityError::UnsupportedProtocolVersion {
-                protocol_version: 6
-            }
-        )
-    );
 }
 
 /// The v5 local-finish record is the export's reserved terminal record: an ordinary append
-/// refuses it before touching the chain. The legacy writer refuses the whole v5 version,
-/// and a writer that admits v5 appends must still refuse this body as reserved.
+/// refuses it as reserved before touching the chain.
 #[test]
 fn ordinary_append_refuses_local_finish() {
     let tmp = tempfile::tempdir().unwrap();
@@ -242,10 +215,7 @@ fn ordinary_append_refuses_local_finish() {
     assert!(
         matches!(
             refused,
-            Err(ExportError::UnsupportedProtocolVersion {
-                protocol_version: 5,
-                ..
-            }) | Err(ExportError::ReservedBody {
+            Err(ExportError::ReservedBody {
                 kind: "local_finish"
             })
         ),
