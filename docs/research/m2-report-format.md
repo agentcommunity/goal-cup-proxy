@@ -1,4 +1,4 @@
-# M2 research report format (research-report schema 1)
+# M2 research report format (research-report schema 2)
 
 `goalcup-verify --research-json TRACE --output REPORT.ndjson` writes a private, streaming report
 of one protocol-v5 capture trace. The library function
@@ -63,7 +63,7 @@ The research-report schema-1 kind vocabulary is closed at these ten values. Code
 
 | Field | Meaning |
 |---|---|
-| `type`, `schema_version` | `"summary"`, `1`. |
+| `type`, `schema_version` | `"summary"`, `2`. Schema 2 (2026-10-14) adds `analysis.models`, `analysis.models_omitted` and `analysis.cross_leg`; every schema-1 key keeps its meaning and observation lines are unchanged. |
 | `exit_code` | The verifier/report exit code (below), not the harness run's exit code. |
 | `verifier_version` | The verifier build that wrote the report. |
 | `options` | The effective options: `dev_mode`, `allow_descriptor_key`, `extra_server_keys`. |
@@ -77,6 +77,8 @@ The research-report schema-1 kind vocabulary is closed at these ten values. Code
 | `assistance` | `explicit_records` (the chain's `Assistance` records), `positive_native_markers` (the `human_message` observations written) and `evidence`: `observed` or `none_observed`. |
 | `analysis.state` | `available` (decoded observations written, no decoder degraded), `partial` (decoded observations written, some decoder degraded) or `unavailable` (no decoded observation written; source-referenced `unknown` observations may still be written). `KindTally` excludes `unknown` lines from decoded state. A capture-only stream can coexist with decoded streams; only the absence of a decoded fact makes analysis unavailable, while other decoded streams can make it available or partial. |
 | `analysis.decoders` | One entry per decoder, in the order they ran: `decoder`, its own `summary` (`decoder_id`, `decoder_version`, `observations`, `unknown_records`, `incomplete`; `null` if it failed), `written`, `over_budget`, `failure` (`{"phase","error"}` or `null`; `phase` is `create`, `accepts`, `push` or `finish`, `error` a short token such as an I/O error kind, or `panicked`), `measured` and `synthetic_only`. `unknown_records` counts both emitted source-referenced `unknown` observations and spanless findings counted only in the decoder summary, so it can exceed written `unknown` lines. |
+| `analysis.models` | What the run used, as its sources state it: one `{"decoder","model","count"}` per model identity a decoder's kept `model` observations name (`fields.model`), in decoder then name order. At most 16 names of at most 128 bytes per decoder; the rest are counted in `analysis.models_omitted`. A native decoder's names come from the harness's session file, a wire decoder's from the recorded requests and responses. |
+| `analysis.cross_leg` | `native_model_turns` (kept `model` observations of native streams), `wire_model_requests` (kept `model_request` observations of wire streams) and `state`: `consistent` (both non-zero), `native_turns_without_wire_calls` (the session file names model turns and the proxy recorded no model call: a harness that bypassed the proxy, or a fake), or `unchecked` (no native model turn to compare, or a wire stream no decoder read could hold the calls). Only zero against non-zero is judged, because a harness may write several native model entries per call. A note for judges: it never changes `exit_code`. Builds are recorded, not pinned (D53), so this is the check that catches a cheap wrapper. |
 | `references` | Operational facts that have no segment, in chain order: each `Gap`, `Recovery` and `Assistance` record, every `Launch` after the first, and one goal reference per goal stream. |
 | `references_omitted` | How many references did not fit the bound. They remain in the chain. |
 

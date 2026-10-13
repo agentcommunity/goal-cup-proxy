@@ -30,8 +30,9 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::Path;
 
-/// The research-report schema version governing every observation and summary line.
-const RESEARCH_SCHEMA_VERSION: u32 = 1;
+/// The research-report schema version governing every observation and summary line. Version 2
+/// adds `analysis.models` and `analysis.cross_leg` to the summary; observation lines are as in 1.
+const RESEARCH_SCHEMA_VERSION: u32 = 2;
 /// The longest observation line written, newline included.
 const MAX_OBSERVATION_LINE_BYTES: usize = 2 * 1024 * 1024;
 /// The longest summary line written, newline included.
@@ -270,12 +271,69 @@ pub fn research_summary(
         "analysis": {
             "state": analysis,
             "decoders": decoders.iter().map(entry).collect::<Vec<_>>(),
+            "models": models(decoders),
+            "models_omitted": decoders.iter().map(|d| d.observations.models_omitted).sum::<u64>(),
+            "cross_leg": cross_leg(outcome),
         },
         "references": operations.references(),
         "references_omitted": operations.references_omitted(),
     });
     summary.sort_all_objects();
     (exit_code, summary)
+}
+
+/// The model identities each decoder's kept `model` observations named, with counts, in
+/// decoder then name order. What the harness's session file and its traffic say the run used.
+fn models(decoders: &[DecoderOutcome]) -> Vec<Value> {
+    decoders
+        .iter()
+        .flat_map(|d| {
+            d.observations
+                .models
+                .iter()
+                .map(|(model, count)| json!({"decoder": d.id, "model": model, "count": count}))
+        })
+        .collect()
+}
+
+/// Whether the harness's own session file and the recorded traffic agree that model calls
+/// happened. Only zero against non-zero is judged: a harness may write several native model
+/// entries per call. `native_turns_without_wire_calls` is a note for judges (a session that
+/// names model turns while the proxy recorded no model call: a harness that bypassed the
+/// proxy, or a fake), never a change to the exit code. `unchecked` when there is no native
+/// model turn to compare, or a wire stream no decoder read could hold the calls.
+fn cross_leg(outcome: &DecodeOutcome) -> Value {
+    let native: u64 = outcome
+        .decoders
+        .iter()
+        .map(|d| d.observations.native_model_turns)
+        .sum();
+    let wire: u64 = outcome
+        .decoders
+        .iter()
+        .map(|d| d.observations.wire_model_requests)
+        .sum();
+    let unread_wire = outcome.undecoded_omitted > 0
+        || outcome
+            .undecoded
+            .iter()
+            .any(|u| super::session::is_wire(u.source));
+    json!({
+        "native_model_turns": native,
+        "wire_model_requests": wire,
+        "state": cross_leg_state(native, wire, unread_wire),
+    })
+}
+
+/// The one rule behind `analysis.cross_leg.state`.
+fn cross_leg_state(native: u64, wire: u64, unread_wire: bool) -> &'static str {
+    if native == 0 || unread_wire {
+        "unchecked"
+    } else if wire == 0 {
+        "native_turns_without_wire_calls"
+    } else {
+        "consistent"
+    }
 }
 
 /// User-visible connector provenance inferred from a validated Launch. A digest that is
@@ -319,6 +377,20 @@ fn entry(decoder: &DecoderOutcome) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cross_leg_note_judges_zero_against_non_zero_only() {
+        assert_eq!(cross_leg_state(3, 1, false), "consistent");
+        assert_eq!(cross_leg_state(1, 9, false), "consistent");
+        assert_eq!(
+            cross_leg_state(5, 0, false),
+            "native_turns_without_wire_calls"
+        );
+        assert_eq!(cross_leg_state(0, 4, false), "unchecked");
+        assert_eq!(cross_leg_state(0, 0, false), "unchecked");
+        // A wire stream no decoder read could hold the calls.
+        assert_eq!(cross_leg_state(5, 0, true), "unchecked");
+    }
     use crate::capture_analysis::api::{
         DecoderFailure, DecoderSummary, DecoderV1, ObservationTimeRange, SourceRef, StreamOpen,
     };

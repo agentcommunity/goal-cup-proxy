@@ -106,7 +106,10 @@ PR with a DECISIONS entry.
     `localhost`, `*.localhost`, single-label or numeric (row 0: a local model), or a redaction
     regex that is not one of the four core recognizers. How much the harness may do (model,
     sandbox, permissions) is never refused: that is the participant's, and a connector does not
-    limit it.
+    limit it. Also refused in `capture.env`: any `*_HOME`, `*_CONFIG_DIR` or `*_CONFIG_HOME`
+    name (your harness's own goes in `capture.home.env`), and any name under your connector's
+    `reserved_env_prefixes` (declare your harness's namespace there when it has switches that
+    would silently stop capture, as Hermes does with `HERMES_`).
 13. There is no list of reviewed arguments or variables. A refused value is refused with the
     rule's reason at step 9. What no rule can see (a dropped safety flag, a value that turns
     self-update back on) is the reviewer's job, so write in the facts sheet why each flag and

@@ -809,7 +809,7 @@ fn mixed_observations_end_in_one_bound_summary() {
     assert_eq!(&result.summary, summary);
     assert_eq!(result.exit_code, 0, "{summary:#}");
     assert_eq!(summary["exit_code"], 0);
-    assert_eq!(summary["schema_version"], 1);
+    assert_eq!(summary["schema_version"], 2);
     assert_eq!(
         summary["verifier_version"],
         goalcup_verifier::VERIFIER_VERSION
@@ -924,7 +924,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(&bytes)),
-        "285efe06e1a4760e26e19065fc74c746b09d89b47ba524817c8ff348b8bbcd69"
+        "791f8812bcee99eb897497cdc94142346e1f5c684def4725930e7ea27f170ad6"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];
@@ -1601,9 +1601,32 @@ fn native_and_wire_counts_remain_distinct() {
             .count();
         assert_eq!(decoder_entry(summary, decoder)["written"], written);
     }
+    // Schema 2 compares the legs (`analysis.cross_leg`) and lists the models each decoder saw
+    // (`analysis.models`); it still forms no total across decoders or legs.
+    const SCHEMA_2_MODEL_KEYS: &[&str] = &[
+        "models",
+        "models_omitted",
+        "model",
+        "native_model_turns",
+        "wire_model_requests",
+    ];
     for key in keys(summary) {
-        assert!(!key.contains("total") && !key.contains("model"), "{key}");
+        assert!(!key.contains("total"), "{key}");
+        assert!(
+            !key.contains("model") || SCHEMA_2_MODEL_KEYS.contains(&key.as_str()),
+            "{key}"
+        );
     }
+    // The native session names model turns and the proxy recorded model calls.
+    let cross_leg = &summary["analysis"]["cross_leg"];
+    assert_eq!(cross_leg["state"], "consistent", "{cross_leg:#}");
+    assert_eq!(cross_leg["wire_model_requests"], 2);
+    assert!(cross_leg["native_model_turns"].as_u64().unwrap() > 0);
+    let models = summary["analysis"]["models"].as_array().unwrap();
+    assert!(
+        models.iter().any(|m| m["decoder"] == "codex-native"),
+        "{models:#?}"
+    );
 }
 
 #[test]
