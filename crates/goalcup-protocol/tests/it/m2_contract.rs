@@ -34,6 +34,7 @@ fn optional_claude_launch_provenance_preserves_old_bytes_and_round_trips() {
         process_handoff_digest: None,
         run_public_key: None,
         connector_dir_sha256: None,
+        harness_build: None,
     };
     let old_json = serde_json::to_string(&old).unwrap();
     assert!(!old_json.contains("allowed_tool_rule"));
@@ -728,6 +729,7 @@ fn enum_and_record_serde_layouts_are_frozen() {
                 process_handoff_digest: None,
                 run_public_key: None,
                 connector_dir_sha256: None,
+                harness_build: None,
             },
             format!(
                 r#"{{"kind":"launch","observed":{d},"goal_stream":{k},"profile_id":"codex-cli","profile_digest":"{}","harness_version":"0.153.0","recorder_revision":"19a52ea","continuation":"none"}}"#,
@@ -751,13 +753,20 @@ fn enum_and_record_serde_layouts_are_frozen() {
                 process_handoff_digest: Some("d".repeat(64)),
                 run_public_key: Some("a".repeat(64)),
                 connector_dir_sha256: Some("b".repeat(64)),
+                harness_build: Some(Box::new(HarnessBuildV1 {
+                    program_sha256: Some("e".repeat(64)),
+                    image_sha256: Some("f".repeat(64)),
+                    platform: "macos-aarch64".to_string(),
+                })),
             },
             format!(
-                r#"{{"kind":"launch","observed":{d},"goal_stream":{k},"profile_id":"claude-code-cli","profile_digest":"{}","harness_version":"2.0","recorder_revision":"19a52ea","continuation":"none","allowed_tool_rule":"Bash(python3 demo.py *)","process_handoff_digest":"{}","run_public_key":"{}","connector_dir_sha256":"{}"}}"#,
+                r#"{{"kind":"launch","observed":{d},"goal_stream":{k},"profile_id":"claude-code-cli","profile_digest":"{}","harness_version":"2.0","recorder_revision":"19a52ea","continuation":"none","allowed_tool_rule":"Bash(python3 demo.py *)","process_handoff_digest":"{}","run_public_key":"{}","connector_dir_sha256":"{}","harness_build":{{"program_sha256":"{}","image_sha256":"{}","platform":"macos-aarch64"}}}}"#,
                 "c".repeat(64),
                 "d".repeat(64),
                 "a".repeat(64),
-                "b".repeat(64)
+                "b".repeat(64),
+                "e".repeat(64),
+                "f".repeat(64)
             ),
         ),
         (
@@ -821,6 +830,8 @@ fn enum_and_record_serde_layouts_are_frozen() {
                 "connector_dir_sha256",
                 "continuation",
                 "goal_stream",
+                // D53: the one field admitted after the v0.5.0 tag.
+                "harness_build",
                 "harness_version",
                 "kind",
                 "observed",
@@ -1470,6 +1481,7 @@ fn launch_run_key_and_connector_dir_digest_are_additive_and_skip_if_none() {
         process_handoff_digest: None,
         run_public_key: None,
         connector_dir_sha256: None,
+        harness_build: None,
     };
     let absent = serde_json::to_string(&launch).unwrap();
     assert!(!absent.contains("run_public_key") && !absent.contains("connector_dir_sha256"));
@@ -1549,7 +1561,9 @@ fn v5_field_and_variant_lists_are_pinned_from_serdes_own_errors() {
     );
     record(
         "launch",
-        "expected one of `observed`, `goal_stream`, `profile_id`, `profile_digest`, `harness_version`, `recorder_revision`, `continuation`, `allowed_tool_rule`, `process_handoff_digest`, `run_public_key`, `connector_dir_sha256`",
+        // `harness_build` joined after the v0.5.0 tag by D53, which accepts that a v0.5.0
+        // reader refuses a trace carrying it (CONTRACTS.md, "The v5 format freeze").
+        "expected one of `observed`, `goal_stream`, `profile_id`, `profile_digest`, `harness_version`, `recorder_revision`, `continuation`, `allowed_tool_rule`, `process_handoff_digest`, `run_public_key`, `connector_dir_sha256`, `harness_build`",
     );
     record("assistance", "expected `observed` or `action`");
     record(
@@ -1565,6 +1579,10 @@ fn v5_field_and_variant_lists_are_pinned_from_serdes_own_errors() {
     assert_eq!(
         error_of::<CaptureTime>(sub),
         unknown_field("expected one of `wall`, `mono_ns`, `clock_id`")
+    );
+    assert_eq!(
+        error_of::<HarnessBuildV1>(sub),
+        unknown_field("expected one of `program_sha256`, `image_sha256`, `platform`")
     );
     assert_eq!(
         error_of::<WireIdentity>(sub),
