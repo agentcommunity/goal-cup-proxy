@@ -3,7 +3,7 @@
   "launched_with_a_native_scope": {
     "gaps_after_launch": [],
     "launch_allowed_tool_rule": null,
-    "launch_connector_dir_sha256": "53312c9a4b8c619d697661cce28e312bd7231474709bb8e7baebd2bf60354e1d",
+    "launch_connector_dir_sha256": "4aa021401cb266ea8c8d334a9aee8b7a9c54bf70c275d57c9ba8dc8926700236",
     "launch_process_handoff_digest": null,
     "launch_profile_digest_is_sha256_of_harness_toml": true,
     "launch_profile_id": "claude-code-cli",
@@ -15,7 +15,7 @@
       "streamless:SourceChanged"
     ],
     "launch_allowed_tool_rule": null,
-    "launch_connector_dir_sha256": "53312c9a4b8c619d697661cce28e312bd7231474709bb8e7baebd2bf60354e1d",
+    "launch_connector_dir_sha256": "4aa021401cb266ea8c8d334a9aee8b7a9c54bf70c275d57c9ba8dc8926700236",
     "launch_process_handoff_digest": null,
     "launch_profile_digest_is_sha256_of_harness_toml": true,
     "launch_profile_id": "claude-code-cli",

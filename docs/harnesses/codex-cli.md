@@ -11,9 +11,9 @@ Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm
 The capture argv (code: [connectors/codex-cli/harness.toml](../../connectors/codex-cli/harness.toml)), with the goal appended as the single element after `--`:
 
 ```
-codex exec --json -m gpt-5.6-luna -c model_reasoning_effort="low" -c approval_policy="never" \
-  -c check_for_update_on_startup=false -c projects={ "<workspace>" = { trust_level = "trusted" } } \
-  -s workspace-write --skip-git-repo-check -C <workspace> -- "<goal>"
+codex exec --json -c approval_policy="never" -c check_for_update_on_startup=false \
+  -c projects={ "<workspace>" = { trust_level = "trusted" } } \
+  -s danger-full-access --skip-git-repo-check -C <workspace> -- "<goal>"
 ```
 
 - stdin is `/dev/null`; stdout is JSONL events (`thread.started`, `turn.started`, `item.*`, `turn.completed`), stderr is progress text (measured, launch recipes 2026-09-27).
@@ -21,7 +21,7 @@ codex exec --json -m gpt-5.6-luna -c model_reasoning_effort="low" -c approval_po
 - `-c projects=...` is a per-process override that stops Codex writing a `[projects."<ws>"] trust_level` entry into `$CODEX_HOME/config.toml` (measured: file hash unchanged). The workspace path must contain no `"` or `\`.
 - `--skip-git-repo-check` is required when the workspace is not a git repository (measured).
 - `exec` accepts an empty goal and runs a model session (measured); Goal Cup refuses empty goals before spawn.
-- Tool commands run in `workspace-write` with no network (`network_access: false`, measured). The sandbox profile grants read access to the whole filesystem (measured).
+- No model, reasoning effort or sandbox limit is set (owner direction, 2026-10-14): Codex uses its own default model, and tool commands run with full access and network (`-s danger-full-access`; `codex exec` alone is read-only). Earlier measured runs used `-m gpt-5.6-luna`, low effort and `workspace-write` without network; the full-access launch is not yet measured.
 - A 64 KiB goal as one argv element was safe on macOS with an allowlisted environment (measured, `ARG_MAX` 1048576). Other OS limits: unknown.
 
 ## 2. Install and pin a version
@@ -88,7 +88,7 @@ Compressed rollouts: vendor docs (research file, from Codex source) say a backgr
 
 - **Shared home.** All runs share one isolated `CODEX_HOME` (D39), so runs must be serialized and the directory holds older runs' sessions.
 - **Account state on OpenAI's side.** Plugins, apps, connectors and memory summary arrive from the account and appear in the developer message (measured); rate-limit and plan data ride on every turn.
-- **Read-everywhere sandbox.** The `workspace-write` profile still grants filesystem read access (measured); the per-run `HOME` stops automatic loading of `~/.agents/skills` and shell startup files, not deliberate reads.
+- **No sandbox.** Since D52 the launch uses `danger-full-access`: tool commands read and write anything the participant can, with network. The per-run `HOME` stops automatic loading of `~/.agents/skills` and shell startup files, not deliberate reads or writes. (The earlier `workspace-write` profile already granted filesystem read access, measured.)
 - **Machine-wide or managed settings.** `requirements.toml` inside `CODEX_HOME` was on the old V1 connector's allowlist (git history before `e4993a2`); the current connector does not seed it. A system-wide managed config location: unknown.
 - **A second Codex.** Another `CODEX_HOME`, an older global Homebrew copy, or the Codex desktop app can run beside the tracked one; the app shares `CODEX_HOME` (vendor docs via research file; Goal Cup measured an app thread in 2026-09).
 
