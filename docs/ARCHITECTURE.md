@@ -167,7 +167,7 @@ disk** ([redact/stream.rs][rs]; rules in [redact.rs](../crates/goalcup-daemon/sr
 |---|---|
 | Hard: shared set + pinned connector `extra_patterns` | First rule wins an overlap |
 | Soft: `masked_key` (D41) | Loses every overlap; can only add redaction |
-| Block: `private_key` (PEM) | Absorbs and merges with every overlapping claim; an unterminated `BEGIN` redacts to the end of the record |
+| Block: `private_key` (PEM) | Absorbs and merges with every overlapping claim; an `END` must start within 12,288 bytes of `BEGIN`, else the block is those bytes (the trade is in the checklist, H-20) |
 
 **Hold:** at most `MAX_HELD_BYTES` (16 KiB) undecided bytes per stream. Past it the stream
 **fails closed**: from the earliest undecided byte everything is replaced, up to the next safe

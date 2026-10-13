@@ -35,9 +35,23 @@ pub struct OutageWindow {
 
 /// The windows of one proxy run. Cheap and never blocking for long: one short lock per
 /// admission outcome.
-#[derive(Debug, Default)]
+///
+/// The tracker reads its clock *under* that lock. Admissions finish concurrently, so a time
+/// stamped before the lock could reach it after a later one: the window would then read
+/// `first_failure` after `last_failure`, or recover before its last failure. The wall clock
+/// itself can step back (NTP), so a reading earlier than the window's last failure is clamped
+/// to it: first ≤ last ≤ recovered always holds. The strings are fixed-width RFC 3339, so
+/// comparing them compares the times.
+#[derive(Debug)]
 pub(crate) struct OutageTracker {
     state: Mutex<State>,
+    clock: fn() -> String,
+}
+
+impl Default for OutageTracker {
+    fn default() -> Self {
+        Self::with_clock(|| super::metadata::capture_time().wall)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -48,19 +62,30 @@ struct State {
 }
 
 impl OutageTracker {
-    /// An admission's upstream connect failed at `at`.
-    pub(crate) fn failure(&self, at: &str) {
+    /// A tracker on `clock`, which is read under the tracker's lock.
+    pub(crate) fn with_clock(clock: fn() -> String) -> Self {
+        Self {
+            state: Mutex::new(State::default()),
+            clock,
+        }
+    }
+
+    /// An admission's upstream connect failed now.
+    pub(crate) fn failure(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let at = (self.clock)();
         match state.open.as_mut() {
             Some(open) => {
                 open.failures += 1;
-                open.last_failure = at.to_owned();
+                if at > open.last_failure {
+                    open.last_failure = at;
+                }
             }
             None => {
                 state.total += 1;
                 state.open = Some(OutageWindow {
-                    first_failure: at.to_owned(),
-                    last_failure: at.to_owned(),
+                    first_failure: at.clone(),
+                    last_failure: at,
                     failures: 1,
                     recovered: None,
                 });
@@ -68,11 +93,11 @@ impl OutageTracker {
         }
     }
 
-    /// An admission reached an upstream at `at`.
-    pub(crate) fn success(&self, at: &str) {
+    /// An admission reached an upstream now.
+    pub(crate) fn success(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(mut window) = state.open.take() {
-            window.recovered = Some(at.to_owned());
+            window.recovered = Some((self.clock)().max(window.last_failure.clone()));
             if state.closed.len() == MAX_KEPT_OUTAGE_WINDOWS {
                 state.closed.pop_front();
             }
@@ -119,6 +144,26 @@ pub(crate) fn finish_lines(total: u64, windows: &[OutageWindow]) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// The time the test clock reads next, set by `fail` and `reach`.
+        static NEXT: RefCell<String> = const { RefCell::new(String::new()) };
+    }
+
+    fn labelled() -> OutageTracker {
+        OutageTracker::with_clock(|| NEXT.with(|next| next.borrow().clone()))
+    }
+
+    fn fail(tracker: &OutageTracker, at: &str) {
+        NEXT.with(|next| *next.borrow_mut() = at.to_owned());
+        tracker.failure();
+    }
+
+    fn reach(tracker: &OutageTracker, at: &str) {
+        NEXT.with(|next| *next.borrow_mut() = at.to_owned());
+        tracker.success();
+    }
 
     fn window(first: &str, last: &str, failures: u64, recovered: Option<&str>) -> OutageWindow {
         OutageWindow {
@@ -131,20 +176,20 @@ mod tests {
 
     #[test]
     fn consecutive_failures_coalesce_and_the_first_success_closes_the_window() {
-        let tracker = OutageTracker::default();
-        tracker.success("t0");
+        let tracker = labelled();
+        reach(&tracker, "t0");
         assert_eq!(tracker.snapshot(), (0, vec![]));
-        tracker.failure("t1");
-        tracker.failure("t2");
-        tracker.failure("t3");
+        fail(&tracker, "t1");
+        fail(&tracker, "t2");
+        fail(&tracker, "t3");
         assert_eq!(tracker.snapshot(), (1, vec![window("t1", "t3", 3, None)]));
-        tracker.success("t4");
-        tracker.success("t5");
+        reach(&tracker, "t4");
+        reach(&tracker, "t5");
         assert_eq!(
             tracker.snapshot(),
             (1, vec![window("t1", "t3", 3, Some("t4"))])
         );
-        tracker.failure("t6");
+        fail(&tracker, "t6");
         assert_eq!(
             tracker.snapshot(),
             (
@@ -159,11 +204,11 @@ mod tests {
 
     #[test]
     fn only_the_most_recent_windows_are_kept_but_all_are_counted() {
-        let tracker = OutageTracker::default();
+        let tracker = labelled();
         let n = MAX_KEPT_OUTAGE_WINDOWS + 5;
         for i in 0..n {
-            tracker.failure(&format!("f{i}"));
-            tracker.success(&format!("s{i}"));
+            fail(&tracker, &format!("f{i}"));
+            reach(&tracker, &format!("s{i}"));
         }
         let (total, windows) = tracker.snapshot();
         assert_eq!(total, n as u64);
@@ -200,5 +245,61 @@ mod tests {
                     .to_string(),
             ]
         );
+    }
+
+    /// Admissions finish concurrently. The clock is read under the tracker's lock, so the times
+    /// a window records follow the order its updates were applied in: first ≤ last ≤ recovered,
+    /// however the threads interleave. The slow clock widens the window between reading the
+    /// time and taking the lock that a clock read outside the lock would leave open.
+    #[test]
+    fn a_wall_clock_stepped_back_never_puts_a_window_out_of_order() {
+        let tracker = labelled();
+        fail(&tracker, "t5");
+        fail(&tracker, "t3");
+        reach(&tracker, "t1");
+        assert_eq!(
+            tracker.snapshot(),
+            (1, vec![window("t5", "t5", 2, Some("t5"))])
+        );
+    }
+
+    #[test]
+    fn concurrent_outcomes_never_record_times_out_of_order() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static TICK: AtomicU64 = AtomicU64::new(0);
+        let tracker = OutageTracker::with_clock(|| {
+            let n = TICK.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_micros(200));
+            format!("{n:012}")
+        });
+        std::thread::scope(|scope| {
+            for worker in 0..8 {
+                let tracker = &tracker;
+                scope.spawn(move || {
+                    for round in 0..20 {
+                        if (worker + round) % 5 == 0 {
+                            tracker.success();
+                        } else {
+                            tracker.failure();
+                        }
+                    }
+                });
+            }
+        });
+        let (total, windows) = tracker.snapshot();
+        assert!(!windows.is_empty());
+        // Nothing lost: every failure is in exactly one window (all are kept at this size).
+        let failed = (0..8u64)
+            .flat_map(|w| (0..20u64).map(move |r| (w + r) % 5 != 0))
+            .filter(|f| *f)
+            .count() as u64;
+        assert!(total as usize <= MAX_KEPT_OUTAGE_WINDOWS);
+        assert_eq!(windows.iter().map(|w| w.failures).sum::<u64>(), failed);
+        for w in &windows {
+            assert!(w.first_failure <= w.last_failure, "{w:?}");
+            if let Some(recovered) = &w.recovered {
+                assert!(&w.last_failure <= recovered, "{w:?}");
+            }
+        }
     }
 }
