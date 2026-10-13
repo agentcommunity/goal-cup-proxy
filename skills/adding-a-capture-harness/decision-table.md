@@ -1,12 +1,16 @@
 # Do I need a core PR?
 
 Can this harness be a data-only connector, or does it need a reviewed core change first? For a
-contributor or agent at step 3 of [SKILL.md](SKILL.md). Updated: 2026-10-12.
+contributor or agent at step 3 of [SKILL.md](SKILL.md). Updated: 2026-10-14.
 
 Each row is a closed rule in
 [`capture_policy.rs`](../../crates/goalcup-protocol/src/capture_policy.rs) or
 [`harness.rs`](../../crates/goalcup-protocol/src/harness.rs) (`check_cross_field`). Field limits
 are in [CONNECTOR-SCHEMA](../../docs/CONNECTOR-SCHEMA.md).
+
+**Row 0 comes first**: the [check-first list](../../docs/HARNESS-ONBOARDING.md#row-0) names the
+harnesses no row below can fit (no local session file, a database store, HTTP/2-only or gRPC
+traffic, a local model, a desktop app). Stop there before this table.
 
 **Core PR** means: STOP. Open an issue that names the row and links your facts sheet
 (`docs/harnesses/<id>.md`, step 2). Write no connector until a maintainer lands the change (with
@@ -21,15 +25,21 @@ facts sheet, with `Status: facts only`, is still a complete PR.
 | 2 | Credential with identity | per-run home; `stderr_line`, or `stdout_json` (D50) | core PR |
 | 3 | Credential in the kit | none, or the case names it in `credential_env` | core PR |
 | 4 | Identity carrier | `none`, `preassigned`, `stdout_json` or `stderr_line` (plain-text stdout is not one) | core PR |
-| 5 | Home variable | `home.env` is `<WORD>_HOME` or `<WORD>_CONFIG_DIR` | core PR |
+| 5 | Home variable | `home.env` is `<WORD>_HOME` or `<WORD>_CONFIG_DIR`, or is left out | core PR |
 | 6 | XDG | the harness falls back to `$HOME` and needs no XDG seed | core PR |
 | 7 | CA variable | the harness honours `CODEX_CA_CERTIFICATE`, `NODE_EXTRA_CA_CERTS` or `HERMES_CA_BUNDLE` | core PR |
 | 8 | Native form | the own-session file is appended JSONL or rewritten whole | core decision |
 | 9 | One native row | exactly one local own-session store | core decision |
 | 10 | Executable pin | one entry-point file (a binary, or a script with a shebang), not an interpreter | record per-arch |
-| 11 | Endpoint names | you set no endpoint variable at all | issue, not blocking |
+| 11 | Endpoint names and hosts | you set no endpoint variable at all; every host is a public DNS name | issue, not blocking |
 | 12 | Other refusals | no refused env name, argv path or custom regex is needed | core PR |
-| 13 | Reviewed argv and env | never: every pinned connector's exact `capture.args` + `goal_flag`, and each `capture.env` entry, is a row of `CAPTURE_ARG_ALLOWLIST` / `CAPTURE_ENV_ALLOWLIST` | core PR (one small row PR, before step 6) |
+| 13 | Argv and env | always, when no generic rule refuses them (D51): no Rust row, a model change included | the reviewer reads every value |
+
+Rows 1, 7 and 12 (the regex part) are closed on purpose; they are security boundaries, not
+missing features. A credential name decides which secret the tracer copies from the
+participant's shell into your process. A CA variable is a trust statement about the
+participant's machine. A redaction regex runs inside the signed daemon. Each new one is a core
+PR with a DECISIONS entry.
 
 ## How to tell, row by row
 
@@ -61,7 +71,11 @@ facts sheet, with `Status: facts only`, is still a complete PR.
    session files land under the per-run home anyway, no id at all (`none`). If none fits, it
    is a core PR, which adds a new carrier to the loader and a kit case for it.
 5. The regex is `^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$`, and other tools' variables (`CARGO_HOME`,
-   `NPM_*` and so on) are refused.
+   `NPM_*` and so on) are refused. A harness with no such variable, or one with another shape,
+   leaves `home.env` out: it then keeps its state under the private run `HOME`, its native
+   `root` is `{run_home}/...`, `config_home` is `per_run`, and it takes no seeds or `dirs`
+   (nothing would read them). A login then lasts one run, so such a harness signs in with a
+   credential (row 1) or once per run.
 6. Every `XDG_*` name is refused in `capture.env` and as `home.env`. The launch env starts
    empty, so XDG is unset and the harness uses `$HOME`, the private run home. Seeds land only in
    the config home that `home.env` names.
@@ -78,12 +92,20 @@ facts sheet, with `Status: facts only`, is still a complete PR.
     script with a shebang is fine: you hash the script, and its interpreter is not pinned. Per-arch
     binaries hash differently: pin the platform you measured and list the others in the facts
     sheet.
-11. Names ending `_URL` (including `_BASE_URL` and `_API_URL`) or containing `ENDPOINT` are
-    refused, and so is any value with `://`. A harness endpoint variable with another name (no
-    `_URL` suffix) is not refused by name: never set it, record it in the facts sheet and open an
-    issue to refuse it.
-12. For example `NO_PAGER` (the `PAGER` suffix rule), an absolute path in `args`, or a
-    redaction regex that is not one of the four core recognizers.
+11. Names ending `_URL` (including `_BASE_URL` and `_API_URL`), `_BASE`, `_HOST`, `_ADDR`,
+    `_SERVER`, `_ORIGIN` or `_REGISTRY`, or containing `ENDPOINT`, are refused, and so is any
+    value with `://`. A harness endpoint variable with another name is not refused by name:
+    never set it, record it in the facts sheet and open an issue to refuse it. A pinned
+    connector's `hosts` and `auth_hosts` may not be `localhost`, `*.localhost` or a single-label
+    name (row 0: a local model).
+12. For example `NO_PAGER` (the `PAGER` suffix rule), a language runtime's variable (`NODE_*`,
+    `PYTHON*`), an absolute path in `args`, an argument that turns verification, the sandbox or
+    permission checks off, a `goal_flag` such as `--exec` or `--file`, or a redaction regex
+    that is not one of the four core recognizers.
+13. There is no list of reviewed arguments or variables. A refused value is refused with the
+    rule's reason at step 9. What no rule can see (a dropped safety flag, a value that turns
+    self-update back on) is the reviewer's job, so write in the facts sheet why each flag and
+    variable is there.
 
 ## Worked example: Amp
 
@@ -103,7 +125,8 @@ in October 2026, not from the Amp team; anything here that Amp's facts sheet
   `*_URL` rule. Fits.
 - **6, XDG**: settings follow `XDG_CONFIG_HOME`, which is refused. With XDG unset all state
   lands in the run home, so it fits unless a settings seed is required.
-- **5, home variable**: `AMP_HOME` passes the shape but does not move settings. Maintainer call.
+- **5, home variable**: `AMP_HOME` passes the shape but does not move settings, so leave
+  `home.env` out; settings then land in the private run home. Fits.
 - **7, CA variable**: `NODE_EXTRA_CA_CERTS` is a registry row. Fits on paper; live UNKNOWN.
 - **10, executable pin**: npm symlinks lead to one native binary, so `program = "amp"` pins the
   regular file. Darwin hashes differ per architecture and need a Mac.

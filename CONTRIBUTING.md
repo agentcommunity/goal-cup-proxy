@@ -109,9 +109,11 @@ new connector fixture is an additional case, not a replacement. All use stand-in
 proxy and private homes; they do not prove provider access, package publication, a release, or
 a qualified live harness. A passing kit is "synthetic tested"; a qualified claim needs a
 maintainer's live row and its own record.
-A new connector must use an admitted schema-1 policy row and identity pair. A new policy row
-(CA, credential, identity, native-store form or interpreter) is a separately reviewed core PR
-with a `docs/DECISIONS.md` row. A semantic decoder is a separately reviewed verifier PR. Do not
+A new connector must use an admitted schema-1 policy row and identity pair. Its arguments,
+model name and environment variables are data, held to generic rules (D51): no Rust row. A new
+policy row (CA, credential, identity, native-store form or interpreter) is a separately reviewed
+core PR with a `docs/DECISIONS.md` row. First check the harness can be captured at all
+([HARNESS-ONBOARDING, check first](docs/HARNESS-ONBOARDING.md#row-0)). A semantic decoder is a separately reviewed verifier PR. Do not
 add `.rs` files to an ordinary data-only connector PR.
 
 Record exact executable version and SHA-256 only when the source or an official artifact proves
