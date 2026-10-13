@@ -21,8 +21,12 @@
 --   * Times are timestamptz in the database; the Worker passes and receives RFC 3339 UTC
 --     strings to the second, and the functions format them with to_char below.
 --   * Every function is SECURITY DEFINER with a fixed search_path and is executable only by the
---     role `goalcup_worker`. That role has NO table privileges, so a leaked Worker key can call
---     these functions and nothing else.
+--     role `goalcup_worker`. PostgreSQL grants EXECUTE on a new function to PUBLIC by default, so
+--     the `revoke ... on all functions` below runs AFTER the last `create function` (a revoke that
+--     runs before the functions exist revokes nothing); it is what keeps `anon` and `authenticated`
+--     out. `alter default privileges` near the top covers functions added later by this role.
+--     `goalcup_worker` has NO table privileges, so a leaked Worker key can call these functions
+--     and nothing else.
 --   * Row-level security is enabled on every table in this same file; no policies are created
 --     here, so no role other than the table owner (which the definer functions run as) can read
 --     or write. Members read their own runs through a separate read-only function the website
@@ -32,6 +36,12 @@
 -- =====================================================================================
 
 create schema if not exists goalcup;
+
+-- Belt and braces for functions added to this schema later. The load-bearing step is the
+-- explicit revoke after the last `create function` below: a revoke on "all functions" only
+-- touches functions that already exist.
+alter default privileges in schema goalcup revoke execute on functions from public;
+revoke usage on schema goalcup from anon, authenticated;
 
 -- ---- tables ---------------------------------------------------------------------------
 
@@ -132,8 +142,7 @@ alter table goalcup.runs     enable row level security;
 alter table goalcup.entries  enable row level security;
 alter table goalcup.chunks   enable row level security;
 
-revoke all on all tables    in schema goalcup from public, anon, authenticated;
-revoke all on all functions in schema goalcup from public, anon, authenticated;
+revoke all on all tables in schema goalcup from public, anon, authenticated;
 
 -- ---- the Worker's role ------------------------------------------------------------------
 -- The Worker's SUPABASE_KEY is a JWT whose `role` claim is goalcup_worker, signed with the
@@ -183,7 +192,6 @@ as $$
   join goalcup.entries e on e.run_id = r.id and e.segment = 0
   where r.id = p_run_id
 $$;
-revoke all on function goalcup.run_json(text) from public, anon, authenticated;
 
 -- ---- the six calls (+ token lookup) ------------------------------------------------------
 
@@ -214,6 +222,13 @@ begin
     return jsonb_build_object('result', 'forbidden', 'message', 'This event is not open for runs.');
   end if;
 
+  -- A run that was never sealed 24 hours after its deadline is abandoned, which frees the
+  -- member's one open slot (the unique index is on open runs only).
+  update goalcup.runs
+     set status = 'abandoned', abandon_reason = 'expired: not sealed 24 hours after the deadline', sealed_at = v_start
+   where member_id = v_member and status = 'open' and seal_sha256 is null
+     and v_start > deadline_at + interval '24 hours';
+
   -- Same member, same session, still open, no receipt yet: the first answer was lost in transit.
   select * into v_open from goalcup.runs where member_id = v_member and status = 'open';
   if found then
@@ -240,7 +255,13 @@ begin
             p_harness_version, p_tracer_version);
     insert into goalcup.entries (id, run_id, segment) values (p_entry_id, p_run_id, 0);
   exception when unique_violation then
-    -- Two starts raced; the unique index let one through. This is the other one.
+    -- Two starts raced; the unique index let one through. That one has committed by now, so look
+    -- at it again: if it is this same session (a lost-reply retry racing the original) the answer
+    -- is the same run; otherwise this account has another open run.
+    select * into v_open from goalcup.runs where member_id = v_member and status = 'open';
+    if found and v_open.session_id = p_session_id and v_open.receipt is null then
+      return jsonb_build_object('result', 'existing', 'run', goalcup.run_json(v_open.id));
+    end if;
     return jsonb_build_object('result', 'conflict');
   end;
   return jsonb_build_object('result', 'created', 'run', goalcup.run_json(p_run_id));
@@ -317,17 +338,16 @@ declare
   v_off   bigint := (p_chunk ->> 'offset')::bigint;
   v_len   bigint := (p_chunk ->> 'length')::bigint;
 begin
-  select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid;
+  -- Lock order everywhere (commit, abandon, seal): the run first, then its entry. So a commit
+  -- racing an abandon or a seal queues behind it and then sees the new status.
+  select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
   if not found then return 'not_found'; end if;
+  if v_run.status <> 'open' then return 'closed'; end if;
 
-  -- Lock the entry row: concurrent commits for the same entry queue here, and the loser re-checks below.
+  -- Concurrent commits for the same run queue on the run lock above; the loser re-checks below.
   select * into v_entry from goalcup.entries
     where id = p_chunk ->> 'entry_id' and run_id = p_run_id for update;
   if not found then return 'not_found'; end if;
-
-  -- Re-read the status under the lock.
-  select * into v_run from goalcup.runs where id = p_run_id;
-  if v_run.status <> 'open' then return 'closed'; end if;
 
   if v_entry.upload_offset <> v_off
      or v_entry.head <> p_chunk ->> 'prev'
@@ -377,6 +397,13 @@ begin
   update goalcup.entries set sealed_at = p_sealed_at::timestamptz where id = p_entry_id and run_id = p_run_id;
   return 'sealed';
 end $$;
+
+-- ---- privileges: now that every function exists -----------------------------------------------
+-- PUBLIC has EXECUTE on each function just created (fmt_time, run_json and the upload_* ones).
+-- Take it away from everybody, then give the Worker's role exactly the upload_* functions.
+-- (run_json and fmt_time stay unexecutable by it: the definer functions call them as the owner.)
+revoke all on all functions in schema goalcup from public, anon, authenticated;
+revoke all on all tables    in schema goalcup from public, anon, authenticated;
 
 -- ---- grants: the Worker may execute exactly these, nothing else -----------------------------
 
