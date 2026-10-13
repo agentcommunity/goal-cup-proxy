@@ -107,6 +107,11 @@ x509-parser.workspace = true
 # daemon in code and that this line stays under `[dev-dependencies]`. There is no cycle:
 # `goalcup-daemon` depends on neither this crate nor anything that does.
 goalcup-daemon = { path = "../goalcup-daemon", features = ["test-hooks"] }
+# Tests only: the local stand-in for the upload server (`tests/common/upload_server/`) is an axum
+# app on loopback, the same crate and features the daemon's control endpoint already links.
+axum.workspace = true
+# Tests only: the stand-in hex-encodes its public key and signatures.
+hex.workspace = true
 
 [[bin]]
 name = "goalcup"

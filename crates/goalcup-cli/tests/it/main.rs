@@ -37,3 +37,4 @@ mod process_handoff;
 mod seal_scan;
 mod start_launch;
 mod status_views;
+mod upload_server;
