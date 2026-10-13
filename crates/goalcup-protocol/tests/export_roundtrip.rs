@@ -411,25 +411,6 @@ fn receipt() -> StartReceipt {
     }
 }
 
-#[cfg(unix)]
-fn descriptor(entry_id: &str) -> TraceDescriptorDoc {
-    TraceDescriptorDoc {
-        connector: "claude-code-cli".to_string(),
-        entry_id: entry_id.to_string(),
-        workspace: "/ws".to_string(),
-        tracked_sessions: vec!["s1".to_string()],
-        harness_version: "2.1.259".to_string(),
-        connector_manifest: MANIFEST_FILE.to_string(),
-        chain: Some(CHAIN_FILE.to_string()),
-        receipt: Some(RECEIPT_FILE.to_string()),
-        baseline: Some(BASELINE_FILE.to_string()),
-        acks: Some(ACKS_FILE.to_string()),
-        seal: Some(SEAL_FILE.to_string()),
-        server_public_key: Some("ab".repeat(32)),
-        expected_reread: false,
-    }
-}
-
 fn provenance_digest(byte: &str) -> Sha256Digest {
     Sha256Digest::try_from(byte.repeat(64)).unwrap()
 }
@@ -956,22 +937,6 @@ fn finalized_fixed_document_read_stays_bound_to_the_acquired_root_after_path_exc
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn descriptor_write_stays_bound_to_the_acquired_root_after_path_exchange() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("trace");
-    let detached = tmp.path().join("detached");
-    let x = TraceExport::create(&root).unwrap();
-
-    std::fs::rename(&root, &detached).unwrap();
-    std::fs::create_dir(&root).unwrap();
-    x.write_descriptor(&descriptor("e1")).unwrap();
-
-    assert!(detached.join(DESCRIPTOR_FILE).is_file());
-    assert!(!root.join(DESCRIPTOR_FILE).exists());
-}
-
 #[test]
 fn receipt_writer_refuses_an_existing_hard_link_without_changing_its_alias() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1072,13 +1037,6 @@ fn fixed_documents_are_absent_only_and_collisions_preserve_the_first_bytes() {
         std::fs::read(tmp.path().join(RECEIPT_FILE)).unwrap(),
         receipt_bytes
     );
-
-    x.write_manifest(b"first manifest").unwrap();
-    assert!(x.write_manifest(b"replacement manifest").is_err());
-    assert_eq!(
-        std::fs::read(tmp.path().join(MANIFEST_FILE)).unwrap(),
-        b"first manifest"
-    );
 }
 
 #[test]
@@ -1086,7 +1044,6 @@ fn preparing_and_dropping_a_valid_trace_changes_no_entry_or_bytes() {
     let tmp = tempfile::tempdir().unwrap();
     let mut export = TraceExport::create(tmp.path()).unwrap();
     export.write_receipt(&receipt()).unwrap();
-    export.write_manifest(b"pinned manifest").unwrap();
     let (_, baseline) = export.write_baseline(&manifest()).unwrap();
     drop(export);
     std::fs::remove_file(tmp.path().join(ACKS_FILE)).unwrap();
@@ -1384,187 +1341,6 @@ fn mismatched_chain_reader_poison_survives_name_restoration() {
     assert!(std::fs::read(&named).unwrap().is_empty());
 }
 
-#[test]
-fn the_descriptor_round_trips_and_names_the_six_files_the_writer_owns() {
-    let tmp = tempfile::tempdir().unwrap();
-    let x = TraceExport::create(tmp.path()).unwrap();
-    let doc = TraceDescriptorDoc {
-        connector: "claude-code-cli".to_string(),
-        entry_id: "e1".to_string(),
-        workspace: "/ws".to_string(),
-        tracked_sessions: vec!["s1".to_string()],
-        harness_version: "2.1.259".to_string(),
-        connector_manifest: MANIFEST_FILE.to_string(),
-        chain: Some(CHAIN_FILE.to_string()),
-        receipt: Some(RECEIPT_FILE.to_string()),
-        baseline: Some(BASELINE_FILE.to_string()),
-        acks: Some(ACKS_FILE.to_string()),
-        seal: Some(SEAL_FILE.to_string()),
-        server_public_key: Some("ab".repeat(32)),
-        expected_reread: false,
-    };
-    let path = x.write_descriptor(&doc).unwrap();
-    assert_eq!(path, tmp.path().join(DESCRIPTOR_FILE));
-    let back: TraceDescriptorDoc =
-        toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(back, doc);
-    // Relative, always: the directory must survive being copied elsewhere. Checked on
-    // the fields parsed back out of the file, not by grepping the text — every value
-    // that names a file *inside* the trace has to be a relative path a reader can join
-    // onto the root. `workspace` is not one of them: it records where the run happened,
-    // which is an absolute path by nature.
-    let named: Vec<(&str, &String)> =
-        std::iter::once(("connector_manifest", &back.connector_manifest))
-            .chain(
-                [
-                    ("chain", &back.chain),
-                    ("receipt", &back.receipt),
-                    ("baseline", &back.baseline),
-                    ("acks", &back.acks),
-                    ("seal", &back.seal),
-                ]
-                .into_iter()
-                .filter_map(|(name, v)| v.as_ref().map(|v| (name, v))),
-            )
-            .collect();
-    assert_eq!(named.len(), 6, "this document names all six files");
-    for (name, value) in named {
-        assert!(!value.is_empty(), "{name} names nothing");
-        assert!(!value.starts_with('/'), "{name} is absolute: {value}");
-        assert!(
-            !std::path::Path::new(value)
-                .components()
-                .any(|c| c == std::path::Component::ParentDir),
-            "{name} climbs out of the trace root: {value}"
-        );
-    }
-    let raw = std::fs::read_to_string(&path).unwrap();
-    // The document always states which reading it asked for.
-    assert!(raw.contains("expected_reread = false"));
-    // An absent file is an absent key, not an empty string the reader would join onto
-    // the root and then fail to open.
-    let bare = TraceDescriptorDoc {
-        chain: None,
-        receipt: None,
-        baseline: None,
-        acks: None,
-        seal: None,
-        server_public_key: None,
-        ..doc.clone()
-    };
-    let raw = toml::to_string(&bare).unwrap();
-    assert!(!raw.contains("seal"), "{raw}");
-    assert_eq!(toml::from_str::<TraceDescriptorDoc>(&raw).unwrap(), bare);
-}
-
-/// `write_descriptor` must write tmp-then-rename, the same way the daemon's
-/// `fsutil::write_atomic` does for `control.json`, so a reader
-/// that opens `trace.toml` mid-write sees the previous document whole rather than half of
-/// the next one.
-///
-/// A racing reader is not something a fast unit test can force deterministically, so this
-/// pins the *mechanism* instead of the race: a rename replaces a target by directory-entry
-/// swap and never checks the target file's own mode bits, while an in-place write opens
-/// the existing path and needs write permission ON THAT FILE. Chmod the first write's
-/// `trace.toml` read-only, then write a second, different document — a tmp+rename writer
-/// succeeds (and the file now holds the second document); a writer that truncates the
-/// existing path in place is refused by the filesystem before a single byte changes.
-#[cfg(unix)]
-#[test]
-fn write_descriptor_replaces_by_rename_not_by_truncating_the_existing_file() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let tmp = tempfile::tempdir().unwrap();
-    let x = TraceExport::create(tmp.path()).unwrap();
-    let first = TraceDescriptorDoc {
-        connector: "claude-code-cli".to_string(),
-        entry_id: "e1".to_string(),
-        workspace: "/ws".to_string(),
-        tracked_sessions: vec!["s1".to_string()],
-        harness_version: "2.1.259".to_string(),
-        connector_manifest: MANIFEST_FILE.to_string(),
-        chain: Some(CHAIN_FILE.to_string()),
-        receipt: None,
-        baseline: None,
-        acks: None,
-        seal: None,
-        server_public_key: None,
-        expected_reread: false,
-    };
-    let path = x.write_descriptor(&first).unwrap();
-
-    // Read-only: on a non-root test runner this refuses an open-for-write on the SAME
-    // path, but not a rename onto it (rename is a directory-entry operation and checks
-    // the directory's permissions, not the target file's mode).
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
-
-    let second = TraceDescriptorDoc {
-        entry_id: "e2".to_string(),
-        expected_reread: true,
-        ..first.clone()
-    };
-    x.write_descriptor(&second).unwrap_or_else(|e| {
-        panic!("a tmp+rename writer is not blocked by the target's own read-only mode: {e}")
-    });
-
-    // Restore write permission so the tempdir's own Drop cleanup can remove the file.
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let back: TraceDescriptorDoc =
-        toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(
-        back, second,
-        "the rename must have landed the second document"
-    );
-}
-
-/// `write_file_atomic` carries the target's existing mode onto its
-/// replacement. Otherwise the temp file gets whatever mode `File::create` gives
-/// (subject to the process umask) and the rename puts THAT mode on the final path, so an
-/// operator who had chmod'd `trace.toml` to 0600 would find it back at the default mode
-/// the next time this writer rewrote it.
-#[cfg(unix)]
-#[test]
-fn write_descriptor_carries_the_target_file_s_existing_mode_across_a_rewrite() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let tmp = tempfile::tempdir().unwrap();
-    let x = TraceExport::create(tmp.path()).unwrap();
-    let first = TraceDescriptorDoc {
-        connector: "claude-code-cli".to_string(),
-        entry_id: "e1".to_string(),
-        workspace: "/ws".to_string(),
-        tracked_sessions: vec!["s1".to_string()],
-        harness_version: "2.1.259".to_string(),
-        connector_manifest: MANIFEST_FILE.to_string(),
-        chain: Some(CHAIN_FILE.to_string()),
-        receipt: None,
-        baseline: None,
-        acks: None,
-        seal: None,
-        server_public_key: None,
-        expected_reread: false,
-    };
-    let path = x.write_descriptor(&first).unwrap();
-
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-
-    let second = TraceDescriptorDoc {
-        entry_id: "e2".to_string(),
-        expected_reread: true,
-        ..first.clone()
-    };
-    x.write_descriptor(&second).unwrap();
-
-    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
-    assert_eq!(
-        mode, 0o600,
-        "the rewrite must not have widened the mode an operator had tightened"
-    );
-    let back: TraceDescriptorDoc =
-        toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(back, second, "the rewrite must still have landed");
-}
-
 /// `TraceExport::create` and `TraceExport::resume` sweep any `*.tmp` file
 /// left in the trace directory — the residue of a `write_file_atomic` a crash caught
 /// between its `File::create` and the rename that would have cleared it. Planting one by
@@ -1602,7 +1378,7 @@ fn resume_sweeps_a_stale_tmp_file_and_touches_nothing_else() {
 }
 
 #[test]
-fn the_writer_owns_every_path_the_descriptor_names() {
+fn the_writer_owns_every_path_of_the_trace() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("entries").join("e1");
     let mut x = TraceExport::create(&root).unwrap();
@@ -1632,7 +1408,7 @@ fn the_writer_owns_every_path_the_descriptor_names() {
     assert_eq!(
         x.write_receipt(&receipt).unwrap(),
         root.join(RECEIPT_FILE),
-        "the receipt lands where the descriptor says"
+        "the receipt lands at its fixed name"
     );
     let back: StartReceipt =
         serde_json::from_slice(&std::fs::read(root.join(RECEIPT_FILE)).unwrap()).unwrap();
@@ -2257,60 +2033,6 @@ fn a_resumed_export_remembers_the_baseline_it_found() {
     let first: Envelope = serde_json::from_str(text.lines().next().unwrap()).unwrap();
     assert!(matches!(first.body, EventBody::Baseline { .. }));
     assert_eq!(first.link.hash, baseline.hash);
-}
-
-/// The connector's manifest is the one file a verifier reads whose bytes this crate does
-/// not author, and the verifier compares them byte for byte against the digest a receipt claims.
-/// It goes into the trace directory through the export like every other file there, so
-/// `write_file` stays this crate's single answer to "how does a file get into a trace"
-/// and the daemon keeps no second copy of the name.
-#[test]
-fn the_connector_manifest_goes_into_the_trace_through_the_export() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("entries").join("e1");
-    let x = TraceExport::create(&root).unwrap();
-
-    // Bytes, not text, and not re-serialised TOML: what the digest pin covers is the shipped file,
-    // whatever is in it.
-    let bytes: &[u8] = b"id = \"claude-code-cli\"\n# \xf0\x9f\x94\x92 trailing junk\n\n";
-    let path = x.write_manifest(bytes).unwrap();
-    assert_eq!(path, root.join(MANIFEST_FILE));
-    assert!(
-        path.starts_with(&root),
-        "the manifest lands under the trace root: {}",
-        path.display()
-    );
-    assert_eq!(
-        std::fs::read(&path).unwrap(),
-        bytes,
-        "byte for byte: the digest pin compares these bytes (R-D)"
-    );
-
-    // And the descriptor's manifest field names THIS file. One constant on both sides,
-    // so a trace the export wrote never points at a name the export does not use.
-    let doc = TraceDescriptorDoc {
-        connector: "claude-code-cli".to_string(),
-        entry_id: "e1".to_string(),
-        workspace: "/ws".to_string(),
-        tracked_sessions: vec!["s1".to_string()],
-        harness_version: "2.1.259".to_string(),
-        connector_manifest: MANIFEST_FILE.to_string(),
-        chain: Some(CHAIN_FILE.to_string()),
-        receipt: None,
-        baseline: None,
-        acks: Some(ACKS_FILE.to_string()),
-        seal: None,
-        server_public_key: None,
-        expected_reread: false,
-    };
-    let descriptor = x.write_descriptor(&doc).unwrap();
-    let back: TraceDescriptorDoc =
-        toml::from_str(&std::fs::read_to_string(&descriptor).unwrap()).unwrap();
-    assert_eq!(
-        std::fs::read(root.join(&back.connector_manifest)).unwrap(),
-        bytes,
-        "the descriptor names the manifest the export wrote"
-    );
 }
 
 /// `EventBody::Seal` and `EventBody::Baseline` are `write_seal`'s and `write_baseline`'s

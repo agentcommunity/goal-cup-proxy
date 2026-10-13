@@ -1,9 +1,9 @@
 //! The one writer of a trace directory.
 //!
-//! Seven files make up an entry's evidence — `trace.toml`, `chain.jsonl`, `acks.jsonl`,
-//! `receipt.json`, `baseline.json`, `seal.json`, and the copied `manifest.toml` — and this
-//! module owns their bytes. They are written here, in the crate that defines what is in
-//! them, so the daemon and verifier cannot disagree about a format neither of them owns.
+//! Five files make up an entry's evidence — `chain.jsonl`, `acks.jsonl`, `receipt.json`,
+//! `baseline.json` and `seal.json` — and this module owns their bytes. They are written here,
+//! in the crate that defines what is in them, so the daemon and verifier cannot disagree
+//! about a format neither of them owns.
 //!
 //! **The daemon never computes a hash.** `append_chain` takes the envelope's content and
 //! fills `seq`, `prev` and `hash` itself from its own state: a caller that hands over a
@@ -20,11 +20,9 @@
 //!
 //! **Some writers here have no production caller, on purpose.** The capture runtime writes
 //! a trace with `write_baseline_for_protocol`, `append_chain` and `write_local_finish`.
-//! The V1 writers — `write_cutoff`, `write_finalization`, `write_descriptor`,
-//! `write_receipt`, `write_manifest`, `write_seal` and their `_for_protocol` forms — lost
-//! their daemon caller in D48. The receipt, seal, cutoff and finalization writers stay because
-//! the verifier's v5 tests build signed and sealed fixture traces with them; `write_descriptor`
-//! and `write_manifest` are read by nothing since the pre-v5 verifier was removed (`TODO.md`).
+//! The V1 writers — `write_cutoff`, `write_finalization`, `write_receipt`, `write_seal` and
+//! their `_for_protocol` forms — lost their daemon caller in D48. They stay because the
+//! verifier's v5 tests build signed and sealed fixture traces with them.
 
 use crate::ProtocolError;
 use crate::ack::AckCheckpoint;
@@ -58,12 +56,9 @@ pub const ACKS_FILE: &str = "acks.jsonl";
 pub const RECEIPT_FILE: &str = "receipt.json";
 pub const BASELINE_FILE: &str = "baseline.json";
 pub const SEAL_FILE: &str = "seal.json";
+/// The pre-v5 trace descriptor's name. No writer produces it; a resume still sweeps its
+/// leftover temporaries, and a CLI test fixture names it.
 pub const DESCRIPTOR_FILE: &str = "trace.toml";
-/// The connector manifest, under the name it carries in the connector directory. The one
-/// file a verifier reads whose bytes this crate does not author — it is copied in by
-/// [`TraceExport::write_manifest`], and `TraceDescriptorDoc::connector_manifest` names it,
-/// so the digest pin is the digest of a file the trace directory carries with it.
-pub const MANIFEST_FILE: &str = "manifest.toml";
 /// The fixed daemon-owned root for a captured V4 workspace submission.
 pub const SUBMISSION_DIR: &str = "submission";
 /// The canonical submission manifest, present only for a captured V4 workspace submission.
@@ -93,11 +88,6 @@ pub enum ExportError {
         what: &'static str,
         #[source]
         source: serde_json::Error,
-    },
-    #[error("serialising trace.toml: {source}")]
-    Toml {
-        #[source]
-        source: toml::ser::Error,
     },
     #[error("protocol: {0}")]
     Protocol(#[from] ProtocolError),
@@ -682,48 +672,12 @@ fn validate_phase_inputs(entry_id: &str, recorded_at: &str) -> Result<(), Proven
     Rfc3339Utc::try_from(recorded_at).map(|_| ())
 }
 
-/// The `trace.toml` document, serialisable. The verifier's `TraceDescriptor`
-/// deserialises this exact shape; `crates/goalcup-verifier/tests/it/trace_export_roundtrip.rs` binds
-/// the two together.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TraceDescriptorDoc {
-    pub connector: String,
-    pub entry_id: String,
-    pub workspace: String,
-    pub tracked_sessions: Vec<String>,
-    pub harness_version: String,
-    /// The connector manifest, **relative to the trace root** — [`MANIFEST_FILE`] for a
-    /// trace this writer produced, because [`TraceExport::write_manifest`] is what put
-    /// the file there. A descriptor naming a path outside the directory is a trace that
-    /// stops verifying the moment it is copied.
-    pub connector_manifest: String,
-    /// Always `Some("chain.jsonl")` for a trace this writer produced.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub chain: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub receipt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub baseline: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub acks: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub seal: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub server_public_key: Option<String>,
-    /// A re-read from offset 0 is expected on this trace. Written unconditionally (no
-    /// `skip_serializing_if`), so the document always says which reading it asked for; the
-    /// verifier honours it only with a lower-seq witness.
-    #[serde(default)]
-    pub expected_reread: bool,
-}
-
 /// A fixed document that a restart/rebuild consumer may inspect through a held root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FixedTraceDocument {
     Receipt,
     Baseline,
     Seal,
-    Manifest,
 }
 
 impl FixedTraceDocument {
@@ -732,7 +686,14 @@ impl FixedTraceDocument {
             Self::Receipt => FixedDocument::Receipt,
             Self::Baseline => FixedDocument::Baseline,
             Self::Seal => FixedDocument::Seal,
-            Self::Manifest => FixedDocument::Manifest,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Receipt => RECEIPT_FILE,
+            Self::Baseline => BASELINE_FILE,
+            Self::Seal => SEAL_FILE,
         }
     }
 }
@@ -921,14 +882,13 @@ impl TraceExport {
             return Err(ExportError::AcksExist);
         }
         for document in [
-            FixedDocument::Receipt,
-            FixedDocument::Baseline,
-            FixedDocument::Seal,
-            FixedDocument::Manifest,
+            FixedTraceDocument::Receipt,
+            FixedTraceDocument::Baseline,
+            FixedTraceDocument::Seal,
         ] {
-            if root.dir.fixed_exists(document)? {
+            if root.dir.fixed_exists(document.platform())? {
                 return Err(ExportError::FixedDocumentExists {
-                    name: fixed_name(document),
+                    name: document.name(),
                 });
             }
         }
@@ -1751,24 +1711,13 @@ impl TraceExport {
             kind: TerminalKind::LocalFinish,
         };
         self.sync_capture()?;
-        let path = self.write_fixed(FixedDocument::Seal, &bytes)?;
+        let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
         self.sync_capture()?;
         Ok((path, link))
     }
 
-    /// Written tmp-then-rename: `trace.toml` is re-written every time the
-    /// descriptor changes — a rehydrated entry, a new tracked session — while a verifier
-    /// may open it at any moment, and a reader that opened it mid-write must see the
-    /// previous document whole rather than half of the next one. A rename replaces the
-    /// directory entry in one step; an in-place truncate-and-write does not.
-    pub fn write_descriptor(&self, doc: &TraceDescriptorDoc) -> Result<PathBuf, ExportError> {
-        let text = toml::to_string(doc).map_err(|source| ExportError::Toml { source })?;
-        self.root.dir.replace_descriptor(text.as_bytes())?;
-        Ok(self.root.display.join(DESCRIPTOR_FILE))
-    }
-
     pub fn write_receipt(&self, r: &StartReceipt) -> Result<PathBuf, ExportError> {
-        self.write_fixed(FixedDocument::Receipt, &to_json("receipt", r)?)
+        self.write_fixed(FixedTraceDocument::Receipt, &to_json("receipt", r)?)
     }
 
     /// Open one fixed document through this export's retained trace-root capability.
@@ -1777,23 +1726,6 @@ impl TraceExport {
         document: FixedTraceDocument,
     ) -> Result<Option<TraceReadFile>, ExportError> {
         self.root.read_fixed(document)
-    }
-
-    /// Put the connector's shipped `manifest.toml` in the trace directory, byte for byte,
-    /// under [`MANIFEST_FILE`].
-    ///
-    /// The bytes are the caller's — this is the one file in a trace this crate does not
-    /// author — but the *placing* is the export's, like every other file a verifier
-    /// reads: `TraceDescriptorDoc::connector_manifest` names a relative file, so the
-    /// directory stays copyable, and the digest pin compares the bytes that judged the
-    /// run rather than whatever sits in the participant's connector directory now.
-    ///
-    /// Bytes and not a source path: `fs::copy` would carry the source file's mode, and a
-    /// caller that has already read the manifest (to hash it, or to parse the heartbeat
-    /// interval out of it) must write the bytes it hashed rather than re-reading a file
-    /// that may have moved between the two.
-    pub fn write_manifest(&self, bytes: &[u8]) -> Result<PathBuf, ExportError> {
-        self.write_fixed(FixedDocument::Manifest, bytes)
     }
 
     /// Chain the baseline as the chain's FIRST link, then write it. Appends one
@@ -1859,7 +1791,7 @@ impl TraceExport {
         };
         let link = self.append_link_unchecked(&mut env)?;
         self.baseline_seq = Some(link.seq);
-        let path = self.write_fixed(FixedDocument::Baseline, &bytes)?;
+        let path = self.write_fixed(FixedTraceDocument::Baseline, &bytes)?;
         Ok((path, link))
     }
 
@@ -1928,7 +1860,7 @@ impl TraceExport {
             link: link.clone(),
             kind: TerminalKind::LegacySeal,
         };
-        let path = self.write_fixed(FixedDocument::Seal, &bytes)?;
+        let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
         Ok((path, link))
     }
 
@@ -1959,12 +1891,16 @@ impl TraceExport {
         Ok(self.root.dir.open_matching_reader(&mut self.chain)?)
     }
 
-    fn write_fixed(&self, document: FixedDocument, bytes: &[u8]) -> Result<PathBuf, ExportError> {
+    fn write_fixed(
+        &self,
+        document: FixedTraceDocument,
+        bytes: &[u8],
+    ) -> Result<PathBuf, ExportError> {
         self.root
             .dir
-            .create_fixed(document)?
+            .create_fixed(document.platform())?
             .write_all_sync_checked(bytes)?;
-        Ok(self.root.display.join(fixed_name(document)))
+        Ok(self.root.display.join(document.name()))
     }
 }
 
@@ -1992,15 +1928,6 @@ fn io(path: &Path, source: std::io::Error) -> ExportError {
     ExportError::Io {
         path: path.display().to_string(),
         source,
-    }
-}
-
-fn fixed_name(document: FixedDocument) -> &'static str {
-    match document {
-        FixedDocument::Receipt => RECEIPT_FILE,
-        FixedDocument::Baseline => BASELINE_FILE,
-        FixedDocument::Seal => SEAL_FILE,
-        FixedDocument::Manifest => MANIFEST_FILE,
     }
 }
 
