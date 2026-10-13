@@ -3,8 +3,8 @@
 //! account and no network.
 //!
 //! `#[ignore]`d: they need Node and `npm install` in `server/worker`. Run them with
-//! `GOALCUP_TEST_WORKER=1 cargo nextest run --offline -p goalcup-cli --test full --run-ignored
-//! ignored-only -E 'test(/upload_worker/)'`.
+//! `cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only
+//! -E 'test(/upload_worker/)'`.
 
 use crate::common::m2_cli_support::{Hooked, Rig};
 use goalcup_cli::server::{ServerConfig, write_server_config};
@@ -129,10 +129,6 @@ fn free_port() -> u16 {
         .port()
 }
 
-fn enabled() -> bool {
-    std::env::var_os("GOALCUP_TEST_WORKER").is_some()
-}
-
 fn log_in(rig: &Rig, url: &str, token: &str) {
     write_server_config(
         &rig.cfg,
@@ -217,11 +213,8 @@ fn assert_fully_uploaded(rig: &Rig, worker: &Wrangler, entry_id: &str) {
 }
 
 #[test]
-#[ignore = "needs Node and `npm install` in server/worker; set GOALCUP_TEST_WORKER=1"]
+#[ignore = "needs Node and `npm install` in server/worker"]
 fn upload_worker_a_run_is_uploaded_and_sealed_and_survives_a_restart() {
-    if !enabled() {
-        return;
-    }
     let rig = Rig::new();
     let state = rig.root.join("worker");
     let port = free_port();
@@ -250,11 +243,8 @@ fn upload_worker_a_run_is_uploaded_and_sealed_and_survives_a_restart() {
 }
 
 #[test]
-#[ignore = "needs Node and `npm install` in server/worker; set GOALCUP_TEST_WORKER=1"]
+#[ignore = "needs Node and `npm install` in server/worker"]
 fn upload_worker_an_incomplete_upload_is_finished_by_goalcup_upload() {
-    if !enabled() {
-        return;
-    }
     let rig = Rig::new();
     let state = rig.root.join("worker");
     let port = free_port();
@@ -290,11 +280,8 @@ fn upload_worker_an_incomplete_upload_is_finished_by_goalcup_upload() {
 }
 
 #[test]
-#[ignore = "needs Node and `npm install` in server/worker; set GOALCUP_TEST_WORKER=1"]
+#[ignore = "needs Node and `npm install` in server/worker"]
 fn upload_worker_a_wrong_token_starts_nothing() {
-    if !enabled() {
-        return;
-    }
     let rig = Rig::new();
     let worker = Wrangler::start(&rig.root.join("worker"), free_port());
     log_in(&rig, &worker.url, "gct_not_a_token_the_worker_knows");

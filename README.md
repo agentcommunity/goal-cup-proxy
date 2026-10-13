@@ -313,8 +313,8 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   [server/worker](server/worker/README.md), TypeScript, runnable on this machine with
   `wrangler dev` (`cd server/worker && npm install && npm test`); nothing is deployed. The
   tracer's end-to-end upload tests run against it too:
-  `GOALCUP_TEST_WORKER=1 cargo nextest run --offline -p goalcup-cli --test full --run-ignored
-  ignored-only -E 'test(/upload_worker/)'` (needs Node 22.18+ and the `npm install`).
+  `cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only
+  -E 'test(/upload_worker/)'` (needs Node 22.18+ and the `npm install`).
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
   `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. An installed one (Homebrew, or an unpacked
   release tarball) finds them at `<bin>/../share/goalcup/connectors`.
