@@ -72,6 +72,8 @@ pub struct StartOptions {
     /// `--repo`: the public GitHub repository the agent pushes to. Required when the tracker
     /// uploads to a server (`goalcup login`), which records its final commit at the deadline.
     pub repo: Option<String>,
+    /// When the run's chunks go and how failures wait ([`crate::upload::uploader::Policy`]).
+    pub upload_policy: crate::upload::uploader::Policy,
 }
 
 /// What one `goalcup start` did.
@@ -550,6 +552,17 @@ struct Forked<'a> {
     scanning: bool,
     /// This machine's record of the entry, with no pid yet.
     template: EntryRecord,
+    /// What the uploader needs, for a run opened on a server.
+    upload: Option<UploadStart>,
+}
+
+/// What the uploader of a run opened on a server starts from.
+struct UploadStart {
+    server: Option<crate::upload::http::ServerClient>,
+    record: crate::upload::UploadRecord,
+    /// The start receipt's key, which every acknowledgement must verify under.
+    key: String,
+    policy: crate::upload::uploader::Policy,
 }
 
 impl Forked<'_> {
@@ -652,6 +665,8 @@ struct Exited<'a> {
     forked: Forked<'a>,
     tees: Tees,
     status: Result<ExitStatus, CliError>,
+    /// The uploader, for a run opened on a server.
+    uploading: Option<crate::upload::uploader::Running>,
 }
 
 /// A v5 local capture run.
@@ -922,9 +937,10 @@ fn create_and_gate<'a>(
 
     // Up to the spawn, a failure unmakes everything above.
     let launched = write_entry(cfg, &template).and_then(|()| {
-        if let (Some(upload), Some(opened)) = (upload, opened.as_ref()) {
-            upload.bind(cfg, opened, &info, out)?;
-        }
+        let bound = match (upload, opened.as_ref()) {
+            (Some(upload), Some(opened)) => Some(upload.bind(cfg, opened, &info, out)?),
+            _ => None,
+        };
         say(out, &format!("entry {}", info.entry_id))?;
         say(out, &format!("run directory: {}", run.dir.display()))?;
         raise_open_file_limit(out)?;
@@ -969,9 +985,9 @@ fn create_and_gate<'a>(
             GATE_READY_WITHIN,
             prep.secret.as_ref(),
         )?;
-        Ok((proxied, plan, goal_stream, gated, scope_deadline))
+        Ok((proxied, plan, goal_stream, gated, scope_deadline, bound))
     });
-    let (proxied, plan, goal_stream, gated, scope_deadline) = match launched {
+    let (proxied, plan, goal_stream, gated, scope_deadline, bound) = match launched {
         Ok(launched) => launched,
         Err(error) => {
             unmake(client, cfg, &info.entry_id, &run, &error, out);
@@ -987,6 +1003,12 @@ fn create_and_gate<'a>(
         proxied,
         scanning: prep.matcher.is_some(),
         template,
+        upload: bound.map(|(record, key)| UploadStart {
+            server: upload.map(|u| u.server.clone()),
+            record,
+            key,
+            policy: opts.upload_policy,
+        }),
     };
     let gate = Gate {
         plan,
@@ -1132,7 +1154,7 @@ fn run_harness<'a>(
     out: &mut dyn std::io::Write,
 ) -> Result<Exited<'a>, CliError> {
     let Released {
-        forked,
+        mut forked,
         handed,
         mut child,
         spawned_at,
@@ -1194,6 +1216,18 @@ fn run_harness<'a>(
         out,
         "Recording. The harness runs headless; this command ends with it.",
     );
+    // The first chunk goes now, beside the run; nothing the uploader does waits the harness.
+    let uploading = forked.upload.take().and_then(|start| {
+        let server = start.server?;
+        let spool = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
+        match crate::upload::uploader::spawn(server, start.record, start.key, start.policy, spool) {
+            Ok(running) => Some(running),
+            Err(e) => {
+                let _ = say(out, &format!("  (the upload could not start: {e})"));
+                None
+            }
+        }
+    });
     let status = child.wait().map_err(|source| CliError::Io {
         path: handed.program.clone(),
         source,
@@ -1202,6 +1236,7 @@ fn run_harness<'a>(
         forked,
         tees,
         status,
+        uploading,
     })
 }
 
@@ -1218,6 +1253,7 @@ fn finish_and_scan(
         forked,
         tees,
         status,
+        uploading,
     } = exited;
     let Forked {
         client,
@@ -1246,6 +1282,27 @@ fn finish_and_scan(
     // is not this command's own (`main.rs`), so it is said here.
     if let Ok(status) = &status {
         let _ = say(out, &format!("harness exited: {}.", describe_exit(status)));
+    }
+    // After the seal: the rest of the chain and the seal itself, within the finish budget.
+    if let Some(running) = uploading {
+        let report = running.finish();
+        let line = match &report {
+            crate::upload::uploader::Report {
+                caught_up: true,
+                sealed: true,
+                ..
+            } => format!(
+                "uploaded: {} bytes, acknowledged, and the seal.",
+                report.offset
+            ),
+            _ => format!(
+                "upload incomplete ({}): the run is complete on this machine. Run `goalcup \
+                 upload {}` to finish sending it.",
+                report.why.as_deref().unwrap_or("the seal was not sent"),
+                info.entry_id
+            ),
+        };
+        let _ = say(out, &line);
     }
     // After the finish report, before this run's artifacts are called anything: the key scan.
     let trace_scanned = finished
@@ -1968,7 +2025,7 @@ impl Uploading {
         opened: &OpenedRun,
         info: &goalcup_protocol::control::CaptureWorkspaceInfo,
         out: &mut dyn std::io::Write,
-    ) -> Result<(), CliError> {
+    ) -> Result<(crate::upload::UploadRecord, String), CliError> {
         if info.entry_id != opened.run.entry_id {
             return Err(CliError::Internal(format!(
                 "the daemon created entry {} for the server's entry {}",
@@ -1996,7 +2053,8 @@ impl Uploading {
                 "run {} opened on {}: official start {}, deadline {}",
                 record.run_id, record.server_url, record.official_start, record.deadline_at
             ),
-        )
+        )?;
+        Ok((record, receipt.public_key))
     }
 
     /// Give the run back to the server: this start failed before its launch.

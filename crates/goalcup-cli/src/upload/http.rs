@@ -84,6 +84,7 @@ impl std::fmt::Display for ServerError {
 }
 
 /// A client for one server, holding the token. `Debug` prints the URL only.
+#[derive(Clone)]
 pub struct ServerClient {
     base: String,
     token: String,
