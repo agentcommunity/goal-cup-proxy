@@ -596,7 +596,9 @@ fn goalcup_lists_the_seven_commands_and_nothing_else() {
             .collect();
         assert_eq!(
             listed,
-            ["start", "status", "entries", "seal", "doctor", "login", "upload"],
+            [
+                "start", "status", "entries", "seal", "doctor", "login", "upload"
+            ],
             "`goalcup {flag}` lists the capture commands and nothing else"
         );
         assert!(

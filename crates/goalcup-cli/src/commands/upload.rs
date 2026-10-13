@@ -9,7 +9,6 @@
 use crate::CliError;
 use crate::upload::http::ServerClient;
 use crate::upload::uploader::{Policy, Uploader};
-use std::io::Write as _;
 use std::path::Path;
 
 /// The testable half: `entry_id` uploaded to the server `goalcup login` stored.

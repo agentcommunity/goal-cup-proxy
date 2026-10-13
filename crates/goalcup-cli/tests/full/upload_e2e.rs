@@ -201,14 +201,16 @@ fn the_client_speaks_tls_and_refuses_an_untrusted_certificate() {
 /// A cadence a test can watch: an "hour" of 200 ms, polled every 25 ms, backoff from 100 ms to
 /// 400 ms, and up to 10 s to finish after the seal.
 fn quick_policy() -> goalcup_cli::upload::uploader::Policy {
-    goalcup_cli::upload::uploader::Policy::from_test_spec("200,25,100,400,10000,268435456")
-        .unwrap()
+    goalcup_cli::upload::uploader::Policy::from_test_spec("200,25,100,400,10000,268435456").unwrap()
 }
 
 fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !done() {
-        assert!(std::time::Instant::now() < deadline, "{what} never happened");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} never happened"
+        );
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }
@@ -233,7 +235,11 @@ fn server_copy(server: &UploadServer, run_id: &str) -> Vec<u8> {
 fn assert_fully_uploaded(rig: &Rig, server: &UploadServer, run_id: &str, entry_id: &str) {
     let trace = rig.trace(entry_id);
     let chain = std::fs::read(trace.join("chain.jsonl")).unwrap();
-    assert_eq!(server_copy(server, run_id), chain, "the server's copy is the chain");
+    assert_eq!(
+        server_copy(server, run_id),
+        chain,
+        "the server's copy is the chain"
+    );
     let (seal_json, baseline_json) = server.seal(run_id).expect("the seal was sent");
     assert_eq!(
         seal_json.as_bytes(),
@@ -250,19 +256,33 @@ fn assert_fully_uploaded(rig: &Rig, server: &UploadServer, run_id: &str, entry_i
     let report = scan_capture_trace(&trace, &options, &mut |_| Ok(())).unwrap();
     assert_eq!(report.integrity, CaptureIntegrity::Valid, "{report:?}");
     assert_eq!(report.anchor, AnchorState::Signed, "{report:?}");
-    let last_seq = chain.split(|b| *b == b'\n').filter(|l| !l.is_empty()).count() as u64 - 1;
-    let acked = report.verified_ack.as_ref().expect("a verified acknowledgement");
+    let last_seq = chain
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+        .count() as u64
+        - 1;
+    let acked = report
+        .verified_ack
+        .as_ref()
+        .expect("a verified acknowledgement");
     assert_eq!(acked.seq, last_seq, "the last record is acknowledged");
     // Each acknowledgement is kept once.
     let acks = std::fs::read_to_string(trace.join("acks.jsonl")).unwrap();
     let seqs: Vec<u64> = acks
         .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["seq"].as_u64().unwrap())
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["seq"]
+                .as_u64()
+                .unwrap()
+        })
         .collect();
     assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
 }
 
-fn logged_in_options(rig: &Rig, goal: &std::path::Path) -> goalcup_cli::commands::start::StartOptions {
+fn logged_in_options(
+    rig: &Rig,
+    goal: &std::path::Path,
+) -> goalcup_cli::commands::start::StartOptions {
     let mut opts = rig.options(goal, RESERVE);
     opts.repo = Some(REPO.to_string());
     opts.upload_policy = quick_policy();
@@ -386,19 +406,32 @@ fn an_upload_left_incomplete_is_finished_by_goalcup_upload() {
     let run_id = server.run_ids()[0].clone();
     assert_ne!(server.status(&run_id).as_deref(), Some("sealed"));
     let mut said = Vec::new();
-    goalcup_cli::commands::upload::upload_with(&rig.cfg, &outcome.entry_id, quick_policy(), &mut said)
-        .unwrap();
+    goalcup_cli::commands::upload::upload_with(
+        &rig.cfg,
+        &outcome.entry_id,
+        quick_policy(),
+        &mut said,
+    )
+    .unwrap();
     let said = String::from_utf8(said).unwrap();
     assert!(said.contains("and its seal"), "{said}");
     assert!(
-        server.calls().iter().any(|c| c.starts_with("GET /v1/runs/")),
+        server
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("GET /v1/runs/")),
         "the upload began by asking the server where it is"
     );
     assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
     // And again: nothing is sent twice.
     let chunks = server.chunks(&run_id).len();
-    goalcup_cli::commands::upload::upload_with(&rig.cfg, &outcome.entry_id, quick_policy(), &mut Vec::new())
-        .unwrap();
+    goalcup_cli::commands::upload::upload_with(
+        &rig.cfg,
+        &outcome.entry_id,
+        quick_policy(),
+        &mut Vec::new(),
+    )
+    .unwrap();
     assert_eq!(server.chunks(&run_id).len(), chunks);
 }
 
@@ -416,8 +449,7 @@ fn a_lost_reply_is_retried_without_a_second_copy() {
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let opts = logged_in_options(&rig, &goal);
-    let (result, out) =
-        std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+    let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     assert!(out.contains("uploaded: "), "{out}");
     let run_id = server.run_ids()[0].clone();
@@ -457,7 +489,10 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
     let server = UploadServer::start(
         &store,
         ServerOptions {
-            tokens: vec![("gct_some_other_token_000000".to_string(), "member-1".to_string())],
+            tokens: vec![(
+                "gct_some_other_token_000000".to_string(),
+                "member-1".to_string(),
+            )],
             port: Some(port),
             ..ServerOptions::default()
         },
@@ -491,7 +526,11 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
     let rest = String::from_utf8(rest.to_vec()).unwrap();
     let next: serde_json::Value = serde_json::from_str(rest.lines().next().unwrap()).unwrap();
     let prev = next["prev"].as_str().unwrap();
-    let edited = rest.replacen(&format!("\"prev\":\"{prev}\""), &format!("\"prev\":\"{}\"", "1".repeat(64)), 1);
+    let edited = rest.replacen(
+        &format!("\"prev\":\"{prev}\""),
+        &format!("\"prev\":\"{}\"", "1".repeat(64)),
+        1,
+    );
     assert_ne!(edited, rest, "the next record's link was found");
     std::fs::write(&chain_path, [kept, edited.as_bytes()].concat()).unwrap();
     let refused = goalcup_cli::commands::upload::upload_with(
@@ -501,6 +540,13 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(refused.to_string().contains("does not continue"), "{refused}");
-    assert_eq!(server_copy(&server, &run_id).len(), held, "nothing more was stored");
+    assert!(
+        refused.to_string().contains("does not continue"),
+        "{refused}"
+    );
+    assert_eq!(
+        server_copy(&server, &run_id).len(),
+        held,
+        "nothing more was stored"
+    );
 }

@@ -19,9 +19,9 @@
 //!   a signature under the start receipt's key) and appended to the trace's `acks.jsonl`,
 //!   where `goalcup-verify` reads it.
 
+use super::UploadRecord;
 use super::api::{ChunkAnswer, RunPosition, SealRequest, StatusAnswer};
 use super::http::{ServerClient, ServerError};
-use super::UploadRecord;
 use crate::CliError;
 use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::export::{ACKS_FILE, BASELINE_FILE, CHAIN_FILE, SEAL_FILE};
@@ -363,7 +363,10 @@ impl Uploader {
 
     fn failed(&self, error: ServerError) -> Attempt {
         if error.is_retryable() {
-            Attempt::Retry(error.retry_after().map(Duration::from_secs), error.to_string())
+            Attempt::Retry(
+                error.retry_after().map(Duration::from_secs),
+                error.to_string(),
+            )
         } else {
             Attempt::Stop(error.to_string())
         }
@@ -418,7 +421,12 @@ impl Uploader {
 
     /// Check `ack` against the chunk it answers (`seq`, `head`) and keep it in the trace's
     /// `acks.jsonl` unless an acknowledgement at or past its `seq` is already there.
-    fn keep_ack(&mut self, ack: &AckCheckpoint, seq: Option<u64>, head: &str) -> Result<(), String> {
+    fn keep_ack(
+        &mut self,
+        ack: &AckCheckpoint,
+        seq: Option<u64>,
+        head: &str,
+    ) -> Result<(), String> {
         let fits = ack.entry_id == self.record.entry_id
             && Some(ack.seq) == seq
             && ack.hash == head
@@ -527,7 +535,7 @@ impl Uploader {
     /// `deadline` (or for as long as it takes, with `None`). `say` hears each wait.
     pub fn finish(&mut self, deadline: Option<Instant>, say: &mut dyn FnMut(&str)) -> Report {
         let mut failures = 0;
-        let mut report = |caught_up, sealed, why: Option<String>, offset| Report {
+        let report = |caught_up, sealed, why: Option<String>, offset| Report {
             caught_up,
             sealed,
             why,
@@ -644,16 +652,31 @@ fn run(
         let now = Instant::now();
         if stopped.is_none() && now >= wait_until {
             if uploader.is_none() {
-                match Uploader::resume(server.clone(), record.clone(), key.clone(), policy, spool_dir) {
+                match Uploader::resume(
+                    server.clone(),
+                    record.clone(),
+                    key.clone(),
+                    policy,
+                    spool_dir,
+                ) {
                     Ok(resumed) => uploader = Some(resumed),
                     Err(error) if error.is_retryable() => {
                         failures += 1;
-                        let wait = backoff(&policy, failures, error.retry_after().map(Duration::from_secs));
-                        say(&format!("upload: {error}; trying again in {}s", wait.as_secs().max(1)));
+                        let wait = backoff(
+                            &policy,
+                            failures,
+                            error.retry_after().map(Duration::from_secs),
+                        );
+                        say(&format!(
+                            "upload: {error}; trying again in {}s",
+                            wait.as_secs().max(1)
+                        ));
                         wait_until = now + wait;
                     }
                     Err(error) => {
-                        say(&format!("upload stopped: {error}. The run goes on recording on this machine."));
+                        say(&format!(
+                            "upload stopped: {error}. The run goes on recording on this machine."
+                        ));
                         stopped = Some(error.to_string());
                     }
                 }
@@ -669,7 +692,10 @@ fn run(
                     Attempt::Retry(after, why) => {
                         failures += 1;
                         let wait = backoff(&policy, failures, after);
-                        say(&format!("upload: {why}; trying again in {}s", wait.as_secs().max(1)));
+                        say(&format!(
+                            "upload: {why}; trying again in {}s",
+                            wait.as_secs().max(1)
+                        ));
                         wait_until = now + wait;
                     }
                     Attempt::Stop(why) => {
