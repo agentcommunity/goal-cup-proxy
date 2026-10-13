@@ -282,8 +282,6 @@ const CAPTURE_HOMES_DIR: &str = "capture-homes";
 /// What every phase of one capture run is given and none changes.
 struct CaptureRun<'a> {
     client: &'a (dyn DaemonClient + Sync),
-    /// The connectors directory, for the seal a deadline asks for (`goalcup seal`'s path).
-    connectors: &'a Path,
     /// The upload server this run opens with, or `None` for a local-only run.
     upload: Option<&'a Uploading>,
     cfg: &'a Path,
@@ -538,7 +536,8 @@ struct Forked<'a> {
     cfg: &'a Path,
     info: CaptureWorkspaceInfo,
     run: RunDir,
-    proxied: Proxied,
+    /// The recording proxy; `None` once a deadline finish has stopped it.
+    proxied: Option<Proxied>,
     /// The run was given a provider key, so its directory is scanned and judged.
     scanning: bool,
     /// This machine's record of the entry, with no pid yet.
@@ -574,7 +573,9 @@ impl Forked<'_> {
     fn unlaunched(self, error: CliError, out: &mut dyn std::io::Write) -> CliError {
         // Whatever ended the launch, including a Ctrl-C, the seal below runs its full retries.
         crate::arming::close_window();
-        finish_unlaunched(self.client, &self.info.entry_id, self.proxied, out);
+        if let Some(proxied) = self.proxied {
+            finish_unlaunched(self.client, &self.info.entry_id, proxied, out);
+        }
         note_unscanned(self.scanning, &self.run.dir, out);
         if let Some(give_back) = self.give_back {
             give_back.give();
@@ -606,7 +607,18 @@ impl Forked<'_> {
         let end = crate::launch::end_released_child(child, handed);
         let _ = say(out, &end.announcement(&info.entry_id));
         let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
-        let _ = finish(client, &info.entry_id, proxied, deadline, None, None, out);
+        if let Some(proxied) = proxied {
+            let _ = finish(
+                client,
+                &info.entry_id,
+                proxied,
+                deadline,
+                termination_bound(0),
+                None,
+                None,
+                out,
+            );
+        }
         tees.finish(deadline, out);
         // Worded from what was observed, never more: a native child that could not be checked is
         // not "nothing is running".
@@ -671,6 +683,8 @@ struct Exited<'a> {
     forked: Forked<'a>,
     tees: Tees,
     status: Result<ExitStatus, CliError>,
+    /// The finish a deadline made while the harness was still running, if one did.
+    finished_early: Option<Result<CaptureFinishReport, CliError>>,
     /// The uploader, for a run opened on a server.
     uploading: Option<crate::upload::uploader::Running>,
     /// Linux: the refusal the command ends with, after the seal, when the sweep left a process
@@ -712,7 +726,6 @@ fn capture(
     let upload = uploading(cfg, opts, profile.credential.is_some(), out)?;
     let cx = CaptureRun {
         client,
-        connectors,
         upload: upload.as_ref(),
         cfg,
         env,
@@ -1014,7 +1027,7 @@ fn create_and_gate<'a>(
         cfg,
         info,
         run,
-        proxied,
+        proxied: Some(proxied),
         scanning: prep.matcher.is_some(),
         template,
         upload: bound.map(|(record, key)| UploadStart {
@@ -1263,37 +1276,49 @@ fn run_harness<'a>(
             }
         }
     });
-    // At the run's deadline the uploader says stop: the run is sealed now, as `goalcup seal`
-    // would, and the daemon ends the harness. What that said is reported once the wait ends.
-    let stopped_at_deadline = std::sync::Mutex::new(None::<String>);
+    // At the run's deadline the uploader says stop: this command finishes the run there and
+    // then, as it would once the harness exits (the proxy stopped, then the seal), except that
+    // the daemon's seal ends the harness, given its grace. That ends the wait below. What the
+    // finish said is printed once the wait is over.
+    type Early = (Result<CaptureFinishReport, CliError>, Vec<u8>);
+    let early = std::sync::Mutex::new(None::<Early>);
+    let proxy_slot = std::sync::Mutex::new(forked.proxied.take());
     let stop = uploading.as_mut().and_then(|running| running.take_stop());
+    let (client, cfg) = (forked.client, forked.cfg);
+    let grace = handed.grace_seconds;
     let status = crate::upload::wait_stopping(&mut child, stop, |reason| {
-        let mut ignored = Vec::new();
-        let sealed = crate::commands::seal::seal_with(
-            forked.client,
-            cx.connectors,
-            forked.cfg,
-            &entry_id,
-            &mut ignored,
-        );
-        let line = match sealed {
-            Ok(()) => format!("deadline: {reason}. The agent was stopped and the run sealed."),
-            Err(e) => format!("deadline: {reason}. The seal it asked for failed: {e}"),
+        let Some(proxied) = proxy_slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            return;
         };
-        *stopped_at_deadline
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(line);
+        let mut said =
+            format!("deadline: {reason}. The agent is stopped and the run sealed now.\n")
+                .into_bytes();
+        let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+        let finished = finish(
+            client,
+            &entry_id,
+            proxied,
+            deadline,
+            termination_bound(grace),
+            None,
+            Some(cfg),
+            &mut said,
+        );
+        *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));
     })
     .map_err(|source| CliError::Io {
         path: handed.program.clone(),
         source,
     });
-    if let Some(line) = stopped_at_deadline
-        .into_inner()
-        .unwrap_or_else(|e| e.into_inner())
-    {
-        let _ = say(out, &line);
-    }
+    forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    let finished_early =
+        early
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|(finished, said)| {
+                let _ = out.write_all(&said);
+                finished
+            });
     // What was swept is said on stdout; what may still be running goes to stderr now, and makes
     // the command exit 1 after the seal (`finish_and_scan`), so a script that reads only the exit
     // code still learns of it. The trace is unchanged either way.
@@ -1310,6 +1335,7 @@ fn run_harness<'a>(
         forked,
         tees,
         status,
+        finished_early,
         uploading,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
     })
@@ -1328,6 +1354,7 @@ fn finish_and_scan(
         forked,
         tees,
         status,
+        finished_early,
         uploading,
         left_running,
     } = exited;
@@ -1340,19 +1367,26 @@ fn finish_and_scan(
         ..
     } = forked;
     let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
-    let finished = finish(
-        client,
-        &info.entry_id,
-        proxied,
-        deadline,
-        if tees.late_scope {
-            tees.marked.as_ref()
-        } else {
-            None
-        },
-        Some(cfg),
-        out,
-    );
+    let finished = match (finished_early, proxied) {
+        (Some(finished), _) => finished,
+        (None, Some(proxied)) => finish(
+            client,
+            &info.entry_id,
+            proxied,
+            deadline,
+            termination_bound(0),
+            if tees.late_scope {
+                tees.marked.as_ref()
+            } else {
+                None
+            },
+            Some(cfg),
+            out,
+        ),
+        (None, None) => Err(CliError::Internal(
+            "the run's proxy was stopped and nothing finished the run".to_string(),
+        )),
+    };
     tees.finish(deadline, out);
     // How the harness ended is the participant's to see: the exit code of a run that was recorded
     // is not this command's own (`main.rs`), so it is said here.
@@ -1529,7 +1563,16 @@ fn finish_unlaunched(
     out: &mut dyn std::io::Write,
 ) {
     let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
-    let _ = finish(client, entry_id, proxied, deadline, None, None, out);
+    let _ = finish(
+        client,
+        entry_id,
+        proxied,
+        deadline,
+        termination_bound(0),
+        None,
+        None,
+        out,
+    );
 }
 
 /// Whether the entry's own signed status shows it sealed. The read waits for the entry's run
@@ -1951,11 +1994,13 @@ fn proxy_admission_line(
 /// before the seal is sent, by [`crate::capture_tee::marker_wait_end`]'s deadline, which leaves
 /// the daemon's native read its share of the drain. The identity, if exactly one distinct one was
 /// printed, rides on the seal request; any other answer sends none.
+#[allow(clippy::too_many_arguments)]
 fn finish(
     client: &(dyn DaemonClient + Sync),
     entry_id: &str,
     proxied: Proxied,
     deadline: std::time::Instant,
+    termination: Duration,
     marked: Option<&CaptureStderr>,
     reconnect: Option<&Path>,
     out: &mut dyn std::io::Write,
@@ -1990,15 +2035,16 @@ fn finish(
             ScopeMarker::Absent | ScopeMarker::Conflicting => None,
         }
     });
-    // The launcher's own root is reaped, so the daemon's termination answers `AlreadyStopped`
-    // after one `ps`: the allowance is the bound for a root with no grace to give.
+    // After the harness exited, the launcher's own root is reaped and the daemon's termination
+    // answers `AlreadyStopped` after one `ps`: `termination_bound(0)`. At a deadline the harness
+    // is still running, and the bound gives it its grace.
     let sealed = crate::commands::seal::seal_locally(
         client,
         entry_id,
         Some(counters),
         native_scope,
         deadline,
-        termination_bound(0),
+        termination,
         reconnect,
     );
     // A committed seal stays committed: the report is this command's own output, and its
