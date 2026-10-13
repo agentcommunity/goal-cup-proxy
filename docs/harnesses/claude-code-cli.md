@@ -1,10 +1,10 @@
 # Claude Code CLI harness facts
 
-Connector id: `claude-code-cli` · Facts for version: `2.1.283` · Written by: Goal Cup team · Last checked: 2026-10-12
-Public disclosure: yes. Everything here comes from the public connector, the public decision log and Goal Cup's own measurements on macOS; no account data, tokens or personal paths are included.
+Connector id: `claude-code-cli` · Facts for version: `2.1.283` · Written by: Goal Cup team · Last checked: 2026-10-13
+Public disclosure: yes. Everything here comes from the public connector, the public decision log and Goal Cup's own measurements on macOS and, for Linux arm64 with no login, in Docker; no account data, tokens or personal paths are included.
 Status: shipped connector
 
-Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64; Claude Code 2.1.283 unless another version is named); "vendor docs" means a quote that Goal Cup's research file took from Anthropic's Claude Code documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux and Windows were not measured for this harness, so most cells in those columns say "unknown".
+Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64; Claude Code 2.1.283 unless another version is named); "vendor docs" means a quote that Goal Cup's research file took from Anthropic's Claude Code documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux was measured only on arm64 under Docker Desktop (Debian 13 container, Linux 7.0.12, 2026-10-13, Claude Code 2.1.283, no login, so no model call); the Linux x86_64 binary was hashed but never run, and a logged-in Linux run was not measured. Windows was not measured. Cells for what is still unmeasured say "unknown" or "not measured".
 
 ## 1. Run one prompt, headless
 
@@ -31,7 +31,9 @@ claude -p --model haiku --effort low --permission-mode acceptEdits --permission-
 - Install an exact version: unknown (not recorded by Goal Cup).
 - Stop self-update: `DISABLE_AUTOUPDATER=1` (code: connector env).
 - Version lock: while a run is going Claude creates and removes `~/.local/state/claude/locks/2.1.283.lock`; `XDG_STATE_HOME` redirects it (measured).
-- Linux and Windows install locations: unknown. A pinned SHA-256 matches one platform and one architecture only (design note in goal-cup-tracer history, `docs/research/platform-portability.md`, seam 7).
+- Linux packages (measured: tarballs fetched with `npm pack` and hashed, 2026-10-13): `@anthropic-ai/claude-code-linux-x64@2.1.283` and `@anthropic-ai/claude-code-linux-arm64@2.1.283`, each holding the native executable at `package/claude`. The packages without a `-musl` suffix are the ones pinned (assumed glibc builds; linkage not checked). The `-musl` packages are not pinned, so the pin check should refuse them (code; not run). Goal Cup pins the SHA-256 of that file per architecture (code: `[capture.platform.linux-x86_64]` and `[capture.platform.linux-aarch64]` in the connector): x86_64 `1859583c...804ae2`, arm64 `346d294f...15e697`. The arm64 hash was re-measured on a Mac with `shasum -a 256` and in the container with `sha256sum`; the x86_64 binary was only hashed, never run. `claude --version` on Linux prints `2.1.283 (Claude Code)` and exits 0 (measured, Docker `rust:1.99` image on arm64, `--network none`, empty temporary `HOME` and `CLAUDE_CONFIG_DIR`, 2026-10-13). Linux install locations of the native installer: unknown (not tried).
+- Linux, no login (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login): `goalcup doctor` passes the executable check on the pinned arm64 binary, reached through a symlink on `PATH` (the pin is checked on the file behind the link). Claude returns `{"is_error":true,"result":"Not logged in · Please run /login","terminal_reason":"api_error"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in about 49 ms, and exits 1; the proxy saw one intercepted connection, closed `interrupted`, with no wire stream. The run seals (`AlreadyStopped`) and `goalcup-verify --capture-integrity` exits 0.
+- Windows install locations: unknown. A pinned SHA-256 matches one platform and one architecture only (design note in goal-cup-tracer history, `docs/research/platform-portability.md`, seam 7).
 
 ## 3. Where it keeps things, per OS
 
@@ -58,7 +60,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 
 - **Subscription login (used by Goal Cup).** claude.ai OAuth. `claude auth status` reported `loggedIn true`, `authMethod claude.ai`, subscription `max` (measured).
 - **API key paths.** `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`. Goal Cup never passes them (code). Amp removes these from Claude's environment in its Claude Code mode (Amp docs, via Goal Cup's Amp record).
-- **Where credentials are stored.** macOS: the login Keychain, shared across config directories (code comment; consistent with a measurement: `loggedIn` was false with an empty `HOME` and true again once `HOME` held only a `Library/Keychains` link to the real keychain directory). Account metadata (`oauthAccount`, `userID`) sits in `.claude.json` (code: connector seeds these keys). Linux: unknown; Goal Cup's design note believes a credentials file under the config dir, not measured. Windows: unknown.
+- **Where credentials are stored.** macOS: the login Keychain, shared across config directories (code comment; consistent with a measurement: `loggedIn` was false with an empty `HOME` and true again once `HOME` held only a `Library/Keychains` link to the real keychain directory). Account metadata (`oauthAccount`, `userID`) sits in `.claude.json` (code: connector seeds these keys). Linux: unknown (measured on arm64 with no login: the no-login error names no path, and the run `HOME`'s dangling `Library/Keychains` symlink, from the connector's `keychain_link` home, drew no complaint); Goal Cup's design note believes a credentials file under the config dir, not measured. Windows: unknown.
 - **Auth needs `USER`.** `loggedIn` was false when `USER` was absent from the environment; setting only `LOGNAME` did not help (measured).
 - **Files derived from the key.** None known.
 
@@ -78,7 +80,8 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - **Tree.** One native executable. The Bash tool starts `zsh -c -l <script>`; MCP servers are children; subagents run in-process and write sidechain transcript files (measured).
 - **Kill.** Goal Cup signals the process group, 10 s grace, then SIGKILL (code: `strategy = process_group`). SIGTERM-specific behaviour of Claude: unknown.
 - **Hard kill.** `kill -9` leaves no session-end record; request body files written through the OTel raw-body switch were complete JSON up to the kill (measured, 2.1.259).
-- **Exit codes.** 0 after a finished turn, 1 for a missing goal (measured). Others: unknown.
+- **Exit codes.** 0 after a finished turn, 1 for a missing goal (measured). 1 on Linux arm64 with no login (measured). Others: unknown.
+- **Orphans.** On Linux there was no fork-and-leave on the no-login path: Claude's three short-lived children exited before it did, nothing stayed in its process group afterwards, and nothing but the tracker's daemon was reparented to init (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login, 0.1 s sampling; a child that lived and died between samples would not show, so this holds at that sampling interval). A logged-in Linux run, which runs tools, is not measured.
 
 ## 8. Things Goal Cup cannot isolate
 
@@ -95,5 +98,5 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - `USER` must be in the environment or login reports false (measured).
 - The MCP cache path is `$HOME/Library/Caches/claude-cli-nodejs`; `XDG_CACHE_HOME` is not consulted (read from the bundle, not separately measured).
 - Whether another install's updater could prune 2.1.283 while an unlocked run uses it: not measured.
-- Open: every "unknown" above for Linux and Windows; the Linux credential store; the managed-settings paths; the update and connector hosts; how to install an exact version.
-- Compiled from records dated 2026-09-03 to 2026-10-07 and the public connector; none of the runs were repeated for this sheet.
+- Open: every "unknown" still above for Linux and Windows (a logged-in run, the config-dir default, the x86_64 binary's behaviour); the Linux credential store; the managed-settings paths; the update and connector hosts; how to install an exact version.
+- Compiled from records dated 2026-09-03 to 2026-10-07 and the public connector; none of the runs were repeated for this sheet. The Linux facts come from the 2026-10-13 arm64 Docker run (PR #55).
