@@ -391,7 +391,7 @@ impl TraceDirHandle {
         self.replace_named(temporary, target_name, bytes)
     }
 
-    pub(super) fn remove_regular(&self, name: &str) -> Result<(), TraceCapError> {
+    fn remove_regular(&self, name: &str) -> Result<(), TraceCapError> {
         let operation = "remove contained regular file";
         let name = c_name(name);
         let raw = unsafe {
