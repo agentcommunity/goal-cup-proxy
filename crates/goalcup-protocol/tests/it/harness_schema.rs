@@ -202,7 +202,7 @@ fn the_controlled_workload_is_admitted_under_dev_and_refused_under_pinned() {
 #[test]
 fn the_parsed_fixtures_carry_the_values_the_design_gives() {
     let h = HarnessManifest::from_toml_str(&fixture_text("hermes-cli")).unwrap();
-    assert_eq!(h.capture.home.env, "HERMES_HOME");
+    assert_eq!(h.capture.home.env.as_deref(), Some("HERMES_HOME"));
     assert_eq!(h.capture.home.seed.len(), 3);
     assert_eq!(h.capture.native[0].pattern, "session_{id}.json");
     assert_eq!(
@@ -2725,4 +2725,112 @@ fn an_override_version_obeys_the_version_grammar() {
             .version,
         "0.153.1"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// A harness with no home variable, and loopback hosts
+// ---------------------------------------------------------------------------------------
+
+/// `codex` without `home.env`: a per-run config home nothing points at, and a native root under
+/// the private run `HOME`, where such a harness keeps its sessions.
+fn without_home_env() -> Table {
+    let mut t = codex();
+    let home = tbl(&mut t, &["capture", "home"]);
+    home.remove("env");
+    home.insert("config_home".into(), Value::String("per_run".into()));
+    let native = t["capture"]["native"].as_array().unwrap().clone();
+    let mut native0 = native[0].as_table().unwrap().clone();
+    native0.insert(
+        "root".into(),
+        Value::String("{run_home}/.example/sessions".into()),
+    );
+    tbl(&mut t, &["capture"]).insert("native".into(), Value::Array(vec![Value::Table(native0)]));
+    t
+}
+
+#[test]
+fn home_env_is_optional_and_then_the_harness_lives_in_the_run_home() {
+    let t = without_home_env();
+    admitted(&t, PINNED);
+    let m = parsed(&t);
+    assert_eq!(m.capture.home.env, None);
+
+    // Anything that only a home variable would make the harness read is refused, not admitted to
+    // record nothing.
+    let mut shared = without_home_env();
+    set(&mut shared, &["capture", "home"], "config_home", "shared");
+    refused(
+        &shared,
+        PINNED,
+        &["capture.home.config_home", "requires `capture.home.env`"],
+    );
+
+    let mut root = without_home_env();
+    let mut native = root["capture"]["native"].as_array().unwrap()[0]
+        .as_table()
+        .unwrap()
+        .clone();
+    native.insert(
+        "root".into(),
+        Value::String("{config_home}/sessions".into()),
+    );
+    tbl(&mut root, &["capture"]).insert("native".into(), Value::Array(vec![Value::Table(native)]));
+    refused(&root, PINNED, &["capture.native.root", "{run_home}/..."]);
+
+    for (field, value) in [
+        ("per_run_dir", Value::String("example".into())),
+        ("dirs", strings(&["sessions"])),
+        (
+            "seed",
+            Value::Array(vec![Value::Table(
+                toml::from_str::<Table>("file = \"config.toml\"").unwrap(),
+            )]),
+        ),
+    ] {
+        let mut t = without_home_env();
+        set(&mut t, &["capture", "home"], field, value);
+        refused(
+            &t,
+            PINNED,
+            &[
+                &format!("capture.home.{field}"),
+                "requires `capture.home.env`",
+            ],
+        );
+    }
+}
+
+/// A capture launch sets `NO_PROXY=127.0.0.1,localhost`, so a loopback model host would validate
+/// and record nothing. Pinned connectors are refused one; the kit's `*.localhost` stand-ins load
+/// as `Dev`.
+#[test]
+fn a_pinned_connector_names_no_loopback_or_single_label_host() {
+    for host in [
+        "localhost",
+        "api.localhost",
+        "localhost.localdomain",
+        "ollama",
+        "127.1",
+        "0x7f.1",
+        "127.0.0.01",
+    ] {
+        let mut t = codex();
+        let mut hosts = t["capture"]["hosts"].as_array().unwrap().clone();
+        hosts[0]
+            .as_table_mut()
+            .unwrap()
+            .insert("host".into(), Value::String(host.into()));
+        tbl(&mut t, &["capture"]).insert("hosts".into(), Value::Array(hosts.clone()));
+        refused(&t, PINNED, &["capture.hosts", host]);
+        if host.ends_with("localhost") {
+            admitted(&t, DEV);
+        }
+
+        let mut t = codex();
+        set(&mut t, &["capture"], "auth_hosts", strings(&[host]));
+        refused(&t, PINNED, &["capture.auth_hosts", host]);
+        if host.ends_with("localhost") {
+            admitted(&t, DEV);
+        }
+    }
 }

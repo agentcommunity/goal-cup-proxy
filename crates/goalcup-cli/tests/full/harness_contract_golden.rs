@@ -735,8 +735,8 @@ fn allowance_json(c: &HarnessConnector) -> Value {
     json!(rows)
 }
 
-fn legacy_env_refusal(key: &str, home_env: &str) -> Option<&'static str> {
-    if key.eq_ignore_ascii_case(home_env) {
+fn legacy_env_refusal(key: &str, home_env: Option<&str>) -> Option<&'static str> {
+    if home_env.is_some_and(|h| key.eq_ignore_ascii_case(h)) {
         return Some("is pinned by the capture launch itself");
     }
     match env_key_denied(key, EnvContext::CaptureEnv) {
@@ -874,7 +874,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         }
     };
 
-    let home_env = dp.home.env.as_str();
+    let home_env = dp.home.env.as_deref();
     let argv_deny: Vec<Value> = ARGV_PROBES
         .iter()
         .map(|arg| {
@@ -1710,6 +1710,11 @@ fn connectors_plus_one() -> tempfile::TempDir {
         ),
         ("@PYTHON3_VERSION@", "1.0.0".to_string()),
         ("@PYTHON3_SHA256@", "cd".repeat(32)),
+        // A pinned connector names no loopback host; the kit's stand-in host is Dev-only.
+        (
+            "host = \"api.e00.localhost\"",
+            "host = \"api.synthetic-extra.example\"".to_string(),
+        ),
     ] {
         assert!(text.contains(from), "{from} is not in the kit fixture");
         text = text.replace(from, &to);

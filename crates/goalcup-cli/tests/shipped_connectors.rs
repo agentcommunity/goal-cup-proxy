@@ -44,7 +44,7 @@ fn claude_capture_recipe_is_the_pinned_headless_launch() {
         !c.env.keys().any(|k| k.ends_with("_BASE_URL")),
         "D1: the tracker never sets a model base URL"
     );
-    assert_eq!(c.home.env, "CLAUDE_CONFIG_DIR");
+    assert_eq!(c.home.env.as_deref(), Some("CLAUDE_CONFIG_DIR"));
     let t = m.termination();
     assert_eq!(
         (t.strategy(), t.grace_seconds()),
@@ -67,7 +67,7 @@ fn the_codex_capture_recipe_kills_the_native_binary_not_the_wrapper() {
         !c.env.keys().any(|k| k.ends_with("_BASE_URL")),
         "D1: the tracker never sets a model base URL"
     );
-    assert_eq!(c.home.env, "CODEX_HOME");
+    assert_eq!(c.home.env.as_deref(), Some("CODEX_HOME"));
     let t = m.termination();
     assert_eq!(t.strategy(), Strategy::NativePid);
     assert_eq!(
