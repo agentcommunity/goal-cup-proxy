@@ -1,7 +1,7 @@
-//! The two small persisted records of the V1 workspace-submission capture that the registry row and
-//! the daemon configuration carry. They are plain data, kept so a registry written by a v0.5.0
-//! V1 build still opens and the daemon configuration still parses; the writer that filled them
-//! was removed with the V1 path (D48).
+//! The resource limits of the V1 workspace-submission capture that the daemon configuration's
+//! `receipt_binding` and a registry row's stored policy carry. Plain data, kept so a registry
+//! written by a v0.5.0 V1 build still opens and the daemon configuration still parses; the
+//! writer that filled them was removed with the V1 path (D48).
 
 use serde::{Deserialize, Serialize};
 
@@ -40,13 +40,4 @@ impl CaptureResourceLimitsV1 {
             && self.manifest_bytes > 0
             && self.manifest_bytes <= MAX_CAPTURE_MANIFEST_BYTES
     }
-}
-
-/// Once-only source-root binding written before cutoff. The journal contains no reopenable
-/// source pathname: a lost source handle is recovery-ambiguous, never an invitation to trust
-/// a matching dev/inode at a later pathname.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SourceRootJournalV1 {
-    pub identity: String,
 }
