@@ -109,3 +109,23 @@ fn a_failure_waits_longer_each_time_up_to_the_cap_and_never_less_than_asked() {
         Duration::from_secs(3600)
     );
 }
+
+/// A server's acknowledgement is kept only when the local record ending at the server's
+/// offset is the one it names: this is how that record is found.
+#[test]
+fn the_record_ending_at_an_offset_is_found_and_nothing_else() {
+    use goalcup_cli::upload::uploader::local_link_before;
+    let tmp = tempfile::tempdir().unwrap();
+    let (bytes, hashes) = chain(3);
+    let path = tmp.path().join("chain.jsonl");
+    std::fs::write(&path, &bytes).unwrap();
+    let line = (bytes.len() / 3) as u64;
+    assert_eq!(local_link_before(&path, line), Some((0, hashes[0].clone())));
+    assert_eq!(
+        local_link_before(&path, 3 * line),
+        Some((2, hashes[2].clone()))
+    );
+    for nowhere in [0, line - 1, line + 5, 4 * line] {
+        assert_eq!(local_link_before(&path, nowhere), None, "{nowhere}");
+    }
+}

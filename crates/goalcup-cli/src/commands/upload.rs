@@ -3,8 +3,8 @@
 //!
 //! It asks the server where it is (`GET /v1/runs/{id}`), sends every complete line of the
 //! local chain from there, and the seal once the run is sealed, waiting out a server that is
-//! away with the same backoff the run uses. Safe to run again at any time: the server takes
-//! nothing twice.
+//! away with the same backoff the run uses. Safe to run again: the server takes nothing twice.
+//! It is refused while another process (the run's own `goalcup start`) uploads the entry.
 
 use crate::CliError;
 use crate::upload::http::ServerClient;
@@ -47,6 +47,8 @@ pub fn upload_with(
     )?;
     let server = ServerClient::new(&config);
     let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
+    // One uploader per entry: refused while the run's own `goalcup start` still uploads it.
+    let _lock = crate::upload::uploader::lock_entry(&spool, entry_id)?;
     let mut say = |line: &str| {
         let _ = writeln!(out, "{line}");
     };

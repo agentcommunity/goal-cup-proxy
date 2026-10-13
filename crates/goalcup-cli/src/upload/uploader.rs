@@ -57,19 +57,24 @@ pub struct Policy {
     /// How long `goalcup start` keeps sending after the seal before it leaves the rest to
     /// `goalcup upload`.
     pub finish_budget: Duration,
+    /// The longest one chunk upload may take.
+    pub put_timeout: Duration,
 }
 
 impl Policy {
     /// A test build's policy from `spec`: `interval,poll,backoff_min,backoff_max,finish`
-    /// milliseconds and `eager_bytes`, comma separated. A shipped build has no such door.
+    /// milliseconds, `eager_bytes`, and optionally the chunk upload timeout in milliseconds,
+    /// comma separated. A shipped build has no such door.
     #[cfg(feature = "test-support")]
     pub fn from_test_spec(spec: &str) -> Option<Policy> {
         let n: Vec<u64> = spec
             .split(',')
             .map(|v| v.trim().parse().ok())
             .collect::<Option<_>>()?;
-        let [interval, poll, backoff_min, backoff_max, finish, eager] = n[..] else {
-            return None;
+        let (interval, poll, backoff_min, backoff_max, finish, eager, put) = match n[..] {
+            [a, b, c, d, e, f] => (a, b, c, d, e, f, 600_000),
+            [a, b, c, d, e, f, g] => (a, b, c, d, e, f, g),
+            _ => return None,
         };
         let ms = Duration::from_millis;
         Some(Policy {
@@ -79,6 +84,7 @@ impl Policy {
             backoff_min: ms(backoff_min),
             backoff_max: ms(backoff_max),
             finish_budget: ms(finish),
+            put_timeout: ms(put),
         })
     }
 }
@@ -92,6 +98,7 @@ impl Default for Policy {
             backoff_min: Duration::from_secs(60),
             backoff_max: Duration::from_secs(15 * 60),
             finish_budget: Duration::from_secs(120),
+            put_timeout: PUT_TIMEOUT,
         }
     }
 }
@@ -278,7 +285,49 @@ enum Attempt {
     Stop(String),
 }
 
-/// The uploader of one entry.
+/// What is left of `deadline`, or `cap` with none; `None` once it has passed.
+fn left(deadline: Option<Instant>, cap: Duration) -> Option<Duration> {
+    match deadline {
+        None => Some(cap),
+        Some(deadline) => {
+            let left = deadline.saturating_duration_since(Instant::now());
+            (left >= Duration::from_secs(1)).then(|| left.min(cap))
+        }
+    }
+}
+
+/// `<cfg>/uploads/<entry>.lock`: held by whichever process uploads the entry.
+pub fn lock_path(spool_dir: &Path, entry_id: &str) -> PathBuf {
+    spool_dir.join(format!("{entry_id}.lock"))
+}
+
+/// Take the entry's upload lock, held until the returned file is dropped. Only one process
+/// uploads an entry at a time: two would truncate each other's spool and race on
+/// `acks.jsonl`.
+pub fn lock_entry(spool_dir: &Path, entry_id: &str) -> Result<std::fs::File, CliError> {
+    crate::config::create_private_dir(spool_dir)?;
+    let path = lock_path(spool_dir, entry_id);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(io_error(&path))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: `flock` on a descriptor this function owns; it reads and writes no memory.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(CliError::Refused(format!(
+                "entry {entry_id} is being uploaded by another goalcup: its `goalcup start` is \
+                 still running, or another `goalcup upload` is. Run this again once it ends."
+            )));
+        }
+    }
+    Ok(file)
+}
+
+/// The uploader of one entry. Its caller holds the entry's lock ([`lock_entry`]).
 pub struct Uploader {
     server: ServerClient,
     record: UploadRecord,
@@ -286,14 +335,15 @@ pub struct Uploader {
     key: String,
     policy: Policy,
     pos: Position,
-    /// The highest `seq` already in the trace's `acks.jsonl`.
-    acked: Option<u64>,
+    /// The last acknowledgement in the trace's `acks.jsonl`: its `seq` and `acked_at`.
+    acked: Option<(u64, u64)>,
     spool: PathBuf,
 }
 
 impl Uploader {
     /// An uploader for `record`, at the position the server reports. A newer acknowledgement
-    /// the server holds than the trace has (a reply lost in transit) is checked and kept.
+    /// the server holds than the trace has (a reply lost in transit) is kept, once it is shown
+    /// to name a record of the local chain.
     pub fn resume(
         server: ServerClient,
         record: UploadRecord,
@@ -304,19 +354,18 @@ impl Uploader {
         let position: RunPosition =
             server.json("GET", &format!("/v1/runs/{}", record.run_id), None::<&()>)?;
         let spool = spool_dir.join(format!("{}.chunk.zst", record.entry_id));
+        // A spool a killed upload left behind is never sent: chunks are rebuilt from the chain.
+        let _ = std::fs::remove_file(&spool);
         let mut uploader = Uploader {
             server,
-            acked: last_acked_seq(&Path::new(&record.trace_dir).join(ACKS_FILE)),
+            acked: last_ack(&Path::new(&record.trace_dir).join(ACKS_FILE)),
             record,
             key: receipt_key,
             policy,
             pos: Position::from(&position),
             spool,
         };
-        if let Some(ack) = position.last_ack {
-            // A lost reply's acknowledgement: the chunk it names is the server's last.
-            let _ = uploader.keep_ack(&ack, position.next_seq.checked_sub(1), &position.head);
-        }
+        uploader.adopt_server_ack(&position);
         Ok(uploader)
     }
 
@@ -329,15 +378,38 @@ impl Uploader {
         waiting_bytes(&self.chain(), self.pos.offset)
     }
 
-    /// Send every complete line, chunk by chunk, once.
-    fn attempt(&mut self) -> Attempt {
+    /// Keep the server's last acknowledgement if the local chain's record ending at the
+    /// server's offset is the one it names. An acknowledgement of anything else would make
+    /// the trace fail verification, and dropping one is always safe.
+    fn adopt_server_ack(&mut self, position: &RunPosition) {
+        let Some(ack) = &position.last_ack else {
+            return;
+        };
+        let local = local_link_before(&self.chain(), position.offset);
+        if local
+            .as_ref()
+            .map(|(seq, hash)| (Some(*seq), hash.as_str()))
+            == Some((position.next_seq.checked_sub(1), position.head.as_str()))
+        {
+            let _ = self.keep_ack(ack, position.next_seq.checked_sub(1), &position.head);
+        }
+    }
+
+    /// Send every complete line, chunk by chunk, once, within `deadline` if one is given.
+    fn attempt(&mut self, deadline: Option<Instant>) -> Attempt {
         loop {
+            let Some(timeout) = left(deadline, self.policy.put_timeout) else {
+                return Attempt::Retry(None, "the time left to finish ran out".to_string());
+            };
             let chunk = match build_chunk(&self.chain(), &self.pos, &self.spool) {
                 Ok(Some(chunk)) => chunk,
                 Ok(None) => return Attempt::CaughtUp,
-                Err(error) => return Attempt::Stop(error.to_string()),
+                Err(error) => {
+                    let _ = std::fs::remove_file(&self.spool);
+                    return Attempt::Stop(error.to_string());
+                }
             };
-            let sent = self.put(&chunk);
+            let sent = self.put(&chunk, timeout);
             let _ = std::fs::remove_file(&chunk.spool);
             match sent {
                 Ok(answer) => {
@@ -380,9 +452,7 @@ impl Uploader {
             &format!("/v1/runs/{}", self.record.run_id),
             None::<&()>,
         )?;
-        if let Some(ack) = &position.last_ack {
-            let _ = self.keep_ack(ack, position.next_seq.checked_sub(1), &position.head);
-        }
+        self.adopt_server_ack(&position);
         let moved = Position::from(&position);
         if moved == self.pos {
             // A conflict that is not about where the server is cannot be cured by asking.
@@ -397,7 +467,7 @@ impl Uploader {
         Ok(())
     }
 
-    fn put(&self, chunk: &Chunk) -> Result<ChunkAnswer, ServerError> {
+    fn put(&self, chunk: &Chunk, timeout: Duration) -> Result<ChunkAnswer, ServerError> {
         let body = std::fs::File::open(&chunk.spool)
             .map_err(|e| ServerError::Transport(format!("reading the chunk spool: {e}")))?;
         let headers = [
@@ -415,57 +485,68 @@ impl Uploader {
             &headers,
             chunk.compressed,
             body,
-            PUT_TIMEOUT,
+            timeout,
         )
     }
 
-    /// Check `ack` against the chunk it answers (`seq`, `head`) and keep it in the trace's
-    /// `acks.jsonl` unless an acknowledgement at or past its `seq` is already there.
+    /// Check `ack` against the chunk it answers (`seq`, `head`) and append it to the trace's
+    /// `acks.jsonl`, where the verifier requires every acknowledgement to name a record of the
+    /// chain, verify, carry a valid time, and come after the one before it in both `seq` and
+    /// time. One that would break the order is not kept: dropping an acknowledgement only
+    /// weakens what the trace can show, and keeping it would make the trace invalid.
     fn keep_ack(
         &mut self,
         ack: &AckCheckpoint,
         seq: Option<u64>,
         head: &str,
     ) -> Result<(), String> {
-        let fits = ack.entry_id == self.record.entry_id
-            && Some(ack.seq) == seq
-            && ack.hash == head
-            && ack.acked_at_secs().is_some();
-        if !fits || ack.verify(&self.key).is_err() {
+        let at = goalcup_protocol::provenance::Rfc3339Utc::try_from(ack.acked_at.as_str())
+            .ok()
+            .and(ack.acked_at_secs());
+        let fits = ack.entry_id == self.record.entry_id && Some(ack.seq) == seq && ack.hash == head;
+        let (Some(at), true, Ok(())) = (at, fits, ack.verify(&self.key)) else {
             return Err(format!(
-                "the server's acknowledgement of seq {} does not match the chunk it answers, or \
-                 is not signed by the key of this run's start receipt",
+                "the server's acknowledgement of seq {} does not match the chunk it answers, is \
+                 not signed by the key of this run's start receipt, or has no valid time",
                 ack.seq
             ));
-        }
-        if self.acked.is_some_and(|acked| acked >= ack.seq) {
+        };
+        if self
+            .acked
+            .is_some_and(|(last_seq, last_at)| ack.seq <= last_seq || at < last_at)
+        {
             return Ok(());
         }
         append_ack(&Path::new(&self.record.trace_dir).join(ACKS_FILE), ack)
             .map_err(|e| e.to_string())?;
-        self.acked = Some(ack.seq);
+        self.acked = Some((ack.seq, at));
         Ok(())
     }
 
-    /// `POST /v1/runs/{id}/seal` with the trace's `seal.json` and `baseline.json`, once both
-    /// exist: the run is over.
-    fn seal(&self) -> Result<bool, ServerError> {
+    /// The trace's `seal.json` and `baseline.json`, once both exist.
+    fn seal_documents(&self) -> Option<(String, String)> {
         let trace = Path::new(&self.record.trace_dir);
-        let read = |name: &str| read_document(&trace.join(name));
-        let (Some(seal_json), Some(baseline_json)) = (read(SEAL_FILE), read(BASELINE_FILE)) else {
-            return Ok(false);
-        };
+        Some((
+            read_document(&trace.join(SEAL_FILE))?,
+            read_document(&trace.join(BASELINE_FILE))?,
+        ))
+    }
+
+    /// `POST /v1/runs/{id}/seal` with the two documents: the run is over.
+    fn seal(&self, documents: &(String, String), timeout: Duration) -> Result<(), ServerError> {
         let request = SealRequest {
             entry_id: self.record.entry_id.clone(),
-            seal_json,
-            baseline_json,
+            seal_json: documents.0.clone(),
+            baseline_json: documents.1.clone(),
         };
-        self.server.json::<StatusAnswer>(
-            "POST",
-            &format!("/v1/runs/{}/seal", self.record.run_id),
-            Some(&request),
-        )?;
-        Ok(true)
+        self.server
+            .json_timed::<StatusAnswer>(
+                "POST",
+                &format!("/v1/runs/{}/seal", self.record.run_id),
+                Some(&request),
+                timeout,
+            )
+            .map(|_| ())
     }
 }
 
@@ -482,13 +563,34 @@ fn read_document(path: &Path) -> Option<String> {
     (!text.is_empty() && text.len() as u64 <= MAX_DOCUMENT_BYTES).then_some(text)
 }
 
-/// The `seq` of the last acknowledgement in `acks`, or `None` for none (or none readable).
-fn last_acked_seq(acks: &Path) -> Option<u64> {
+/// The `seq` and `acked_at` of the last acknowledgement in `acks`, or `None` for none.
+fn last_ack(acks: &Path) -> Option<(u64, u64)> {
     let text = std::fs::read_to_string(acks).ok()?;
     text.lines()
         .rev()
         .find_map(|line| serde_json::from_str::<AckCheckpoint>(line).ok())
-        .map(|ack| ack.seq)
+        .and_then(|ack| Some((ack.seq, ack.acked_at_secs()?)))
+}
+
+/// The `seq` and `hash` of the chain record whose line ends exactly at byte `offset`, or
+/// `None` when no whole record ends there.
+pub fn local_link_before(chain: &Path, offset: u64) -> Option<(u64, String)> {
+    if offset == 0 {
+        return None;
+    }
+    let start = offset.saturating_sub(MAX_LINE_BYTES + 1);
+    let mut file = std::fs::File::open(chain).ok()?;
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = vec![0; (offset - start) as usize];
+    file.read_exact(&mut bytes).ok()?;
+    let body = bytes.strip_suffix(b"\n")?;
+    let line = match body.iter().rposition(|b| *b == b'\n') {
+        Some(at) => &body[at + 1..],
+        None if start == 0 => body,
+        None => return None,
+    };
+    let link = serde_json::from_slice::<LinkOnly>(line).ok()?.link;
+    Some((link.seq, link.hash))
 }
 
 /// Append one acknowledgement as one line, in one write, and make it durable.
@@ -530,26 +632,36 @@ pub struct Report {
     pub offset: u64,
 }
 
-impl Uploader {
-    /// Send everything and then the seal, asking again after each retryable failure until
-    /// `deadline` (or for as long as it takes, with `None`). `say` hears each wait.
-    pub fn finish(&mut self, deadline: Option<Instant>, say: &mut dyn FnMut(&str)) -> Report {
-        let mut failures = 0;
-        let report = |caught_up, sealed, why: Option<String>, offset| Report {
-            caught_up,
-            sealed,
-            why,
+impl Report {
+    fn not(why: impl Into<String>, offset: u64) -> Report {
+        Report {
+            caught_up: false,
+            sealed: false,
+            why: Some(why.into()),
             offset,
-        };
+        }
+    }
+}
+
+impl Uploader {
+    /// Send everything and then the seal, asking again after each retryable failure, all
+    /// within `deadline` (or for as long as it takes, with `None`). `say` hears each wait.
+    ///
+    /// The seal's documents are read before the chain is drained: the daemon writes them
+    /// after the chain's last record, so the drain that follows sends every record they seal,
+    /// and the server is never sealed on a copy missing its tail.
+    pub fn finish(&mut self, deadline: Option<Instant>, say: &mut dyn FnMut(&str)) -> Report {
+        let documents = self.seal_documents();
+        let mut failures = 0;
         loop {
-            match self.attempt() {
+            match self.attempt(deadline) {
                 Attempt::CaughtUp => break,
-                Attempt::Stop(why) => return report(false, false, Some(why), self.pos.offset),
+                Attempt::Stop(why) => return Report::not(why, self.pos.offset),
                 Attempt::Retry(after, why) => {
                     failures += 1;
                     let wait = backoff(&self.policy, failures, after);
                     if deadline.is_some_and(|d| Instant::now() + wait > d) {
-                        return report(false, false, Some(why), self.pos.offset);
+                        return Report::not(why, self.pos.offset);
                     }
                     say(&format!(
                         "upload: {why}; trying again in {}s",
@@ -559,10 +671,22 @@ impl Uploader {
                 }
             }
         }
+        let caught_up = |sealed, why| Report {
+            caught_up: true,
+            sealed,
+            why,
+            offset: self.pos.offset,
+        };
+        let Some(documents) = documents else {
+            return caught_up(false, None);
+        };
         let mut failures = 0;
         loop {
-            match self.seal() {
-                Ok(sealed) => return report(true, sealed, None, self.pos.offset),
+            let Some(timeout) = left(deadline, super::http::CALL_TIMEOUT) else {
+                return caught_up(false, Some("the time left to finish ran out".into()));
+            };
+            match self.seal(&documents, timeout) {
+                Ok(()) => return caught_up(true, None),
                 Err(error) if error.is_retryable() => {
                     failures += 1;
                     let wait = backoff(
@@ -571,7 +695,7 @@ impl Uploader {
                         error.retry_after().map(Duration::from_secs),
                     );
                     if deadline.is_some_and(|d| Instant::now() + wait > d) {
-                        return report(true, false, Some(error.to_string()), self.pos.offset);
+                        return caught_up(false, Some(error.to_string()));
                     }
                     say(&format!(
                         "upload: the seal was not stored ({error}); trying again in {}s",
@@ -579,9 +703,7 @@ impl Uploader {
                     ));
                     std::thread::sleep(wait);
                 }
-                Err(error) => {
-                    return report(true, false, Some(error.to_string()), self.pos.offset);
-                }
+                Err(error) => return caught_up(false, Some(error.to_string())),
             }
         }
     }
@@ -590,46 +712,53 @@ impl Uploader {
 /// The uploader running beside `goalcup start`, on a thread of its own.
 pub struct Running {
     finish: std::sync::mpsc::Sender<Instant>,
-    thread: std::thread::JoinHandle<Report>,
+    report: std::sync::mpsc::Receiver<Report>,
     budget: Duration,
 }
+
+/// How long past its budget `goalcup start` waits for the uploader's own last word.
+const FINISH_GRACE: Duration = Duration::from_secs(10);
 
 /// Start uploading `record` beside the run: the first chunk at once, then on [`Policy`]'s
 /// cadence. Its waits and failures are said on stderr, prefixed `goalcup: upload:`; nothing it
 /// does can stop or slow the recording.
-pub fn spawn(
+pub fn begin(
     server: ServerClient,
     record: UploadRecord,
     receipt_key: String,
     policy: Policy,
     spool_dir: PathBuf,
 ) -> Result<Running, CliError> {
+    let lock = lock_entry(&spool_dir, &record.entry_id)?;
     let (finish, finishing) = std::sync::mpsc::channel::<Instant>();
-    let thread = std::thread::Builder::new()
+    let (reported, report) = std::sync::mpsc::channel::<Report>();
+    std::thread::Builder::new()
         .name("goalcup-upload".into())
-        .spawn(move || run(server, record, receipt_key, policy, &spool_dir, finishing))
+        .spawn(move || {
+            let _lock = lock;
+            let ended = run(server, record, receipt_key, policy, &spool_dir, finishing);
+            let _ = reported.send(ended);
+        })
         .map_err(|source| CliError::Io {
             path: "the upload thread".to_string(),
             source,
         })?;
     Ok(Running {
         finish,
-        thread,
+        report,
         budget: policy.finish_budget,
     })
 }
 
 impl Running {
     /// The run is sealed: send the rest and the seal within the policy's finish budget, and
-    /// say how it went.
+    /// say how it went. Returns by the budget (and a short grace) whatever the server does:
+    /// an upload still under way then is left to `goalcup upload`.
     pub fn finish(self) -> Report {
         let _ = self.finish.send(Instant::now() + self.budget);
-        self.thread.join().unwrap_or_else(|_| Report {
-            caught_up: false,
-            sealed: false,
-            why: Some("the upload thread failed".to_string()),
-            offset: 0,
-        })
+        self.report
+            .recv_timeout(self.budget + FINISH_GRACE)
+            .unwrap_or_else(|_| Report::not("the upload did not finish in time", 0))
     }
 }
 
@@ -684,7 +813,7 @@ fn run(
             if let Some(up) = uploader.as_mut()
                 && (now >= next_due || up.waiting() >= policy.eager_bytes)
             {
-                match up.attempt() {
+                match up.attempt(None) {
                     Attempt::CaughtUp => {
                         failures = 0;
                         next_due = now + policy.interval;
@@ -707,38 +836,22 @@ fn run(
                 }
             }
         }
+        let offset = || uploader.as_ref().map(|u| u.pos.offset).unwrap_or(0);
         match finishing.recv_timeout(policy.poll) {
             Err(RecvTimeoutError::Timeout) => continue,
             // `goalcup start` ended without a finish (a refusal after the launch): stop here.
             Err(RecvTimeoutError::Disconnected) => {
-                return Report {
-                    caught_up: false,
-                    sealed: false,
-                    why: Some("the run ended before its upload finished".to_string()),
-                    offset: uploader.as_ref().map(|u| u.pos.offset).unwrap_or(0),
-                };
+                return Report::not("the run ended before its upload finished", offset());
             }
             Ok(deadline) => {
                 if let Some(why) = stopped {
-                    return Report {
-                        caught_up: false,
-                        sealed: false,
-                        why: Some(why),
-                        offset: uploader.as_ref().map(|u| u.pos.offset).unwrap_or(0),
-                    };
+                    return Report::not(why, offset());
                 }
                 let mut up = match uploader {
                     Some(up) => up,
                     None => match Uploader::resume(server, record, key, policy, spool_dir) {
                         Ok(up) => up,
-                        Err(error) => {
-                            return Report {
-                                caught_up: false,
-                                sealed: false,
-                                why: Some(error.to_string()),
-                                offset: 0,
-                            };
-                        }
+                        Err(error) => return Report::not(error.to_string(), 0),
                     },
                 };
                 return up.finish(Some(deadline), &mut say);
