@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::body::{Body, Bytes, HttpBody};
@@ -30,7 +29,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::KillListener;
-use super::state::{RunRecord, RunStatus, Shared, StoredChunk};
+use super::state::{
+    FinalCommit, RunRecord, RunStatus, Shared, StoredChunk, StoredHeartbeat, now_secs,
+};
 
 /// The cap on a chunk's compressed body (`Content-Length`).
 const MAX_CHUNK_BYTES: u64 = 32 * 1024 * 1024;
@@ -58,6 +59,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/runs/{run_id}/abandon", post(abandon))
         .route("/v1/runs/{run_id}/chunks/{offset}", put(put_chunk))
         .route("/v1/runs/{run_id}/seal", post(seal))
+        .route("/v1/runs/{run_id}/heartbeat", post(heartbeat))
         // A seal carries two documents of up to 16 MiB each inside one JSON body.
         .layer(DefaultBodyLimit::max(2 * MAX_SEAL_DOC_BYTES + 1024 * 1024))
         .layer(middleware::from_fn_with_state(shared.clone(), gate))
@@ -124,17 +126,13 @@ fn json_response(status: u16, value: Value) -> Response {
 
 // ---- shared helpers ----------------------------------------------------------------------
 
+/// The runs, with every run whose abandon time has come already abandoned.
 fn lock_runs(s: &Shared) -> std::sync::MutexGuard<'_, BTreeMap<String, RunRecord>> {
-    s.runs.lock().unwrap_or_else(|e| e.into_inner())
+    s.lock_runs()
 }
 
 fn now_z() -> String {
-    format_z(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("the clock is after 1970")
-            .as_secs(),
-    )
+    format_z(now_secs())
 }
 
 /// Request log plus the maintenance switch. Maintenance comes before authentication: the contract
@@ -284,10 +282,7 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
 
     let run_id = random_id('r', |id| runs.contains_key(id));
     let entry_id = random_id('e', |id| runs.values().any(|r| r.entry_id == id));
-    let start_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("the clock is after 1970")
-        .as_secs();
+    let start_secs = now_secs();
     let run = RunRecord {
         run_id: run_id.clone(),
         entry_id,
@@ -301,12 +296,15 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
         tracer_version: req.tracer_version,
         repo_url: req.repo_url,
         official_start: format_z(start_secs),
-        deadline_at: format_z(start_secs + s.run_hours * 3600),
+        deadline_at: format_z(start_secs + s.run_secs),
         status: RunStatus::Open,
         abandon_reason: None,
         receipt: None,
         chunks: Vec::new(),
         seal: None,
+        heartbeats: Vec::new(),
+        final_commit: None,
+        auto_abandoned: false,
     };
     s.persist(&run);
     let view = run_view(&run);
@@ -336,6 +334,8 @@ async fn get_run(
             "next_seq": run.next_seq(),
             "head": run.head(),
             "last_ack": run.chunks.last().map(|c| &c.ack),
+            "stop": run.stopped(),
+            "final": run.final_commit.as_ref().map(|f| json!({"seq": f.seq, "head": f.head})),
         }),
     ))
 }
@@ -420,7 +420,10 @@ async fn abandon(
     let run = runs.get_mut(&run_id).expect("just found");
     match run.status {
         // A repeat whose reply was lost is not an error.
-        RunStatus::Abandoned => return Ok(json_response(200, json!({"status": "abandoned"}))),
+        RunStatus::Abandoned if !run.auto_abandoned => {
+            return Ok(json_response(200, json!({"status": "abandoned"})));
+        }
+        RunStatus::Abandoned => return Err(ApiError::closed("The run was abandoned.")),
         RunStatus::Sealed => return Err(ApiError::closed("The run is sealed.")),
         RunStatus::Open => {}
     }
@@ -492,6 +495,30 @@ fn chunk_headers(h: &HeaderMap) -> Result<ChunkHeaders, ApiError> {
     Ok(parsed)
 }
 
+/// The deadline rules for a chunk: after `deadline_at` nothing is taken until a final heartbeat
+/// has committed the end, and once an end is committed nothing past it is taken, before or
+/// after `deadline_at`.
+fn chunk_deadline_gate(run: &RunRecord, hdr: &ChunkHeaders) -> Result<(), ApiError> {
+    let Some(end) = &run.final_commit else {
+        if run.stopped() {
+            let mut e = ApiError::new(
+                503,
+                "awaiting_final",
+                "The run is past its deadline and no final heartbeat has arrived yet.",
+            );
+            e.retry_after = Some(1);
+            return Err(e);
+        }
+        return Ok(());
+    };
+    if hdr.last_seq > end.seq || (hdr.last_seq == end.seq && hdr.head != end.head) {
+        return Err(ApiError::closed(
+            "The chunk goes past the end the final heartbeat committed.",
+        ));
+    }
+    Ok(())
+}
+
 /// A temp name that deletes itself on drop, so every early return leaves nothing behind. On the
 /// success path the bytes were hard-linked to their final name first, so removing it is cleanup.
 struct TempBody {
@@ -548,6 +575,7 @@ async fn put_chunk(
         if hdr.content_length > MAX_CHUNK_BYTES {
             return Err(ApiError::too_large("The chunk is over 32 MiB."));
         }
+        chunk_deadline_gate(run, &hdr)?;
         // A retry is answered from the stored acknowledgement, body unread.
         if let Some(held) = run.chunks.iter().find(|c| c.offset == offset) {
             if held.length == hdr.length && held.head == hdr.head {
@@ -623,6 +651,7 @@ async fn put_chunk(
     if run.status != RunStatus::Open {
         return Err(ApiError::closed("The run is not open."));
     }
+    chunk_deadline_gate(run, &hdr)?;
     if offset != run.offset() || hdr.prev != run.head() || hdr.first_seq != run.next_seq() {
         return Err(ApiError::conflict(
             "The server moved while the body was being read.",
@@ -709,8 +738,102 @@ async fn seal(
             "The run is sealed with other documents.",
         ));
     }
+    // After the deadline the seal is taken only when the server holds the chain up to the end
+    // the final heartbeat committed.
+    if run.stopped() {
+        let complete = run
+            .final_commit
+            .as_ref()
+            .is_some_and(|end| run.next_seq() == end.seq + 1 && run.head() == end.head);
+        if !complete {
+            return Err(ApiError::conflict(
+                "The run is past its deadline and the server does not hold the chain up to the committed end.",
+            ));
+        }
+    }
     run.seal = Some((req.seal_json, req.baseline_json));
     run.status = RunStatus::Sealed;
     s.persist(run);
     Ok(json_response(200, json!({"status": "sealed"})))
+}
+
+// ---- POST /v1/runs/{run_id}/heartbeat ----------------------------------------------------
+
+#[derive(Deserialize)]
+struct HeartbeatRequest {
+    entry_id: String,
+    seq: u64,
+    head: String,
+    offset_local: u64,
+    #[serde(rename = "final")]
+    final_: bool,
+    repo_head: Option<String>,
+}
+
+async fn heartbeat(
+    State(s): St,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let member = auth(&s, &headers)?;
+    let req: HeartbeatRequest = parse_json(&body)?;
+    if !is_hex64(&req.head) {
+        return Err(ApiError::malformed("head is not 64 lowercase hex digits."));
+    }
+    if let Some(repo_head) = &req.repo_head
+        && !(repo_head.len() == 40
+            && repo_head
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+    {
+        return Err(ApiError::malformed(
+            "repo_head is not 40 lowercase hex digits.",
+        ));
+    }
+    let mut runs = lock_runs(&s);
+    find_run(&runs, &member, &run_id)?;
+    let run = runs.get_mut(&run_id).expect("just found");
+    if req.entry_id != run.entry_id {
+        return Err(ApiError::not_found());
+    }
+    match run.status {
+        RunStatus::Abandoned => return Err(ApiError::closed("The run was abandoned.")),
+        // The final heartbeat follows the seal in the tracer's wrap-up, so a sealed run still
+        // takes it; a plain heartbeat has nothing left to say.
+        RunStatus::Sealed if !req.final_ => return Err(ApiError::closed("The run is sealed.")),
+        RunStatus::Sealed | RunStatus::Open => {}
+    }
+    if req.final_ {
+        match &run.final_commit {
+            // A repeat of the committed end, whose reply may have been lost.
+            Some(end) if end.seq == req.seq && end.head == req.head => {}
+            Some(_) => {
+                return Err(ApiError::conflict(
+                    "A final heartbeat already committed a different end of the run.",
+                ));
+            }
+            None => {
+                run.final_commit = Some(FinalCommit {
+                    seq: req.seq,
+                    head: req.head.clone(),
+                    repo_head: req.repo_head.clone(),
+                });
+            }
+        }
+    }
+    run.heartbeats.push(StoredHeartbeat {
+        entry_id: req.entry_id,
+        seq: req.seq,
+        head: req.head,
+        offset_local: req.offset_local,
+        final_: req.final_,
+        repo_head: req.repo_head,
+        received_at: now_z(),
+    });
+    s.persist(run);
+    Ok(json_response(
+        200,
+        json!({"stop": run.stopped(), "deadline_at": run.deadline_at}),
+    ))
 }

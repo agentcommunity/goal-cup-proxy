@@ -161,6 +161,35 @@ impl Rig {
         )
     }
 
+    fn heartbeat(
+        &self,
+        run: &str,
+        entry: &str,
+        seq: u64,
+        head: &str,
+        final_: bool,
+        repo_head: Option<&str>,
+    ) -> Reply {
+        self.json(
+            "POST",
+            &format!("/v1/runs/{run}/heartbeat"),
+            TOKEN,
+            &json!({"entry_id": entry, "seq": seq, "head": head, "offset_local": 150,
+                    "final": final_, "repo_head": repo_head}),
+        )
+    }
+
+    /// Block until the run's `stop` is true (polling `GET`), at most 10 s.
+    fn wait_for_stop(&self, run: &str) {
+        for _ in 0..100 {
+            if self.get(run, TOKEN).body["stop"] == true {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("the run never reached its deadline");
+    }
+
     fn put(&self, run: &str, entry: &str, c: &Chunk) -> Result<Reply, Box<ureq::Error>> {
         let extra = [
             ("Content-Type", "application/zstd".to_string()),
@@ -784,4 +813,415 @@ fn the_call_log_lists_method_and_path() {
         rig.server.calls(),
         vec!["POST /v1/runs".to_string(), format!("GET /v1/runs/{run}")]
     );
+}
+
+// ---- the deadline ------------------------------------------------------------------------
+
+/// A run that ends two seconds after it opens.
+fn short_run() -> Rig {
+    Rig::with(ServerOptions {
+        run_seconds: Some(2),
+        ..two_tokens()
+    })
+}
+
+fn seal_body(entry: &str) -> Value {
+    json!({"entry_id": entry, "seal_json": "{\"a\":1}", "baseline_json": "{\"b\":2}"})
+}
+
+#[test]
+fn stop_is_false_before_the_deadline_and_true_after() {
+    let rig = short_run();
+    let (run, entry) = rig.open_ok();
+    let opened = rig.get(&run, TOKEN);
+    assert_eq!(opened.body["stop"], false, "{}", opened.body);
+    assert_eq!(opened.body["final"], Value::Null);
+    let (s, d) = (
+        parse_z(opened.body["official_start"].as_str().unwrap()).unwrap(),
+        parse_z(opened.body["deadline_at"].as_str().unwrap()).unwrap(),
+    );
+    assert_eq!(d - s, 2, "run_seconds overrides run_hours");
+
+    let hb = rig.heartbeat(&run, &entry, 3, &head(3), false, None);
+    assert_eq!(hb.status, 200, "{}", hb.body);
+    assert_eq!(hb.body["stop"], false);
+    assert_eq!(hb.body["deadline_at"], opened.body["deadline_at"]);
+
+    rig.wait_for_stop(&run);
+    let hb = rig.heartbeat(&run, &entry, 3, &head(3), false, None);
+    assert_eq!((hb.status, &hb.body["stop"]), (200, &json!(true)));
+    assert_eq!(hb.body["deadline_at"], opened.body["deadline_at"]);
+    // The run is still open: past the deadline is not abandoned.
+    assert_eq!(rig.get(&run, TOKEN).body["status"], "open");
+}
+
+#[test]
+fn a_chunk_after_the_deadline_without_a_final_is_503_with_retry_after() {
+    let rig = short_run();
+    let (run, entry) = rig.open_ok();
+    rig.wait_for_stop(&run);
+    let r = rig.put(&run, &entry, &Chunk::first()).unwrap();
+    assert_err(&r, 503, "awaiting_final");
+    assert_eq!(r.retry_after.as_deref(), Some("1"));
+    assert_eq!(rig.server.chunks(&run).len(), 0);
+
+    // The final heartbeat is what lets the upload through.
+    let hb = rig.heartbeat(&run, &entry, 3, &head(3), true, None);
+    assert_eq!(hb.status, 200, "{}", hb.body);
+    rig.put_ok(&run, &entry, &Chunk::first());
+}
+
+#[test]
+fn a_final_commits_the_end_and_chunks_past_it_are_closed() {
+    let rig = short_run();
+    let (run, entry) = rig.open_ok();
+    let hb = rig.heartbeat(&run, &entry, 5, &head(5), true, None);
+    assert_eq!(hb.status, 200, "{}", hb.body);
+    assert_eq!(hb.body["stop"], false, "early final: the deadline is ahead");
+    let g = rig.get(&run, TOKEN).body;
+    assert_eq!(g["final"], json!({"seq": 5, "head": head(5)}));
+
+    // Before the deadline, up to the committed end is taken ...
+    rig.put_ok(&run, &entry, &Chunk::first());
+    // ... and so is a chunk ending exactly at it with the committed head, after the deadline too.
+    rig.wait_for_stop(&run);
+    rig.put_ok(&run, &entry, &Chunk::second());
+    // Past it: 410, and nothing is stored.
+    let past = Chunk::new(150, 50, 6, 7, &head(5));
+    assert_err(&rig.put(&run, &entry, &past).unwrap(), 410, "closed");
+    assert_eq!(rig.server.chunks(&run).len(), 2);
+}
+
+#[test]
+fn a_chunk_past_the_committed_end_is_closed_before_the_deadline_too() {
+    let rig = Rig::new(); // 168 h: the deadline is far away
+    let (run, entry) = rig.open_ok();
+    rig.heartbeat(&run, &entry, 3, &head(3), true, None);
+    rig.put_ok(&run, &entry, &Chunk::first());
+    assert_err(
+        &rig.put(&run, &entry, &Chunk::second()).unwrap(),
+        410,
+        "closed",
+    );
+    assert_eq!(rig.get(&run, TOKEN).body["stop"], false);
+}
+
+#[test]
+fn a_chunk_ending_at_the_committed_seq_with_another_head_is_closed() {
+    let rig = Rig::new();
+    let (run, entry) = rig.open_ok();
+    rig.heartbeat(&run, &entry, 3, &head(3), true, None);
+    let mut wrong = Chunk::first();
+    wrong.head = sha_hex(b"not the committed head");
+    assert_err(&rig.put(&run, &entry, &wrong).unwrap(), 410, "closed");
+    assert_eq!(rig.server.chunks(&run).len(), 0);
+    rig.put_ok(&run, &entry, &Chunk::first());
+}
+
+#[test]
+fn a_seal_after_the_deadline_needs_the_chain_up_to_the_committed_end() {
+    let rig = short_run();
+    let (run, entry) = rig.open_ok();
+    rig.heartbeat(&run, &entry, 5, &head(5), true, None);
+    rig.put_ok(&run, &entry, &Chunk::first());
+    rig.wait_for_stop(&run);
+    let path = format!("/v1/runs/{run}/seal");
+    // Held up to seq 3 only: short of the committed 5.
+    assert_err(
+        &rig.json("POST", &path, TOKEN, &seal_body(&entry)),
+        409,
+        "conflict",
+    );
+    assert_eq!(rig.get(&run, TOKEN).body["status"], "open");
+    rig.put_ok(&run, &entry, &Chunk::second());
+    let r = rig.json("POST", &path, TOKEN, &seal_body(&entry));
+    assert_eq!((r.status, &r.body), (200, &json!({"status": "sealed"})));
+    // A repeat is still 200.
+    assert_eq!(
+        rig.json("POST", &path, TOKEN, &seal_body(&entry)).status,
+        200
+    );
+}
+
+#[test]
+fn a_seal_after_the_deadline_with_no_final_is_409() {
+    let rig = short_run();
+    let (run, entry) = rig.open_ok();
+    rig.wait_for_stop(&run);
+    let r = rig.json(
+        "POST",
+        &format!("/v1/runs/{run}/seal"),
+        TOKEN,
+        &seal_body(&entry),
+    );
+    assert_err(&r, 409, "conflict");
+}
+
+#[test]
+fn a_final_heartbeat_is_idempotent_and_never_changes() {
+    let rig = Rig::new();
+    let (run, entry) = rig.open_ok();
+    let repo = "0123456789abcdef0123456789abcdef01234567";
+    let first = rig.heartbeat(&run, &entry, 5, &head(5), true, Some(repo));
+    assert_eq!(first.status, 200, "{}", first.body);
+    // The same (seq, head) again: 200.
+    assert_eq!(
+        rig.heartbeat(&run, &entry, 5, &head(5), true, Some(repo))
+            .status,
+        200
+    );
+    // A different seq, or a different head at the same seq: 409, nothing changes.
+    assert_err(
+        &rig.heartbeat(&run, &entry, 6, &head(6), true, None),
+        409,
+        "conflict",
+    );
+    assert_err(
+        &rig.heartbeat(&run, &entry, 5, &head(99), true, None),
+        409,
+        "conflict",
+    );
+    assert_eq!(
+        rig.server
+            .final_commit(&run)
+            .map(|f| (f.seq, f.head, f.repo_head)),
+        Some((5, head(5), Some(repo.to_string())))
+    );
+    // A plain heartbeat after the final is not a second commit.
+    assert_eq!(
+        rig.heartbeat(&run, &entry, 7, &head(7), false, None).status,
+        200
+    );
+    assert_eq!(rig.get(&run, TOKEN).body["final"]["seq"], 5);
+}
+
+#[test]
+fn a_final_heartbeat_after_the_seal_is_taken() {
+    let rig = Rig::new();
+    let (run, entry) = rig.open_ok();
+    rig.put_ok(&run, &entry, &Chunk::first());
+    let sealed = rig.json(
+        "POST",
+        &format!("/v1/runs/{run}/seal"),
+        TOKEN,
+        &seal_body(&entry),
+    );
+    assert_eq!(sealed.status, 200);
+    // The tracer seals, then sends its final heartbeat; a plain one has nothing left to say.
+    assert_eq!(
+        rig.heartbeat(&run, &entry, 3, &head(3), true, None).status,
+        200
+    );
+    assert_err(
+        &rig.heartbeat(&run, &entry, 3, &head(3), false, None),
+        410,
+        "closed",
+    );
+}
+
+#[test]
+fn heartbeats_are_validated() {
+    let rig = Rig::new();
+    let (run, entry) = rig.open_ok();
+    assert_err(
+        &rig.heartbeat(&run, &entry, 1, "abc", false, None),
+        400,
+        "malformed",
+    );
+    assert_err(
+        &rig.heartbeat(&run, &entry, 1, &head(1), true, Some("not-a-commit")),
+        400,
+        "malformed",
+    );
+    assert_err(
+        &rig.heartbeat(&run, "e0000000000000000", 1, &head(1), false, None),
+        404,
+        "not_found",
+    );
+    let path = format!("/v1/runs/{run}/heartbeat");
+    assert_err(
+        &rig.json("POST", &path, TOKEN, &json!({"entry_id": entry})),
+        400,
+        "malformed",
+    );
+    assert_err(
+        &rig.json(
+            "POST",
+            &path,
+            TOKEN_2,
+            &json!({"entry_id": entry, "seq": 1, "head": head(1), "offset_local": 1,
+                    "final": false, "repo_head": null}),
+        ),
+        404,
+        "not_found",
+    );
+    assert!(rig.server.heartbeats(&run).is_empty());
+}
+
+#[test]
+fn the_heartbeat_helper_sees_the_heartbeats() {
+    let rig = Rig::new();
+    let (run, entry) = rig.open_ok();
+    assert!(rig.server.heartbeats(&run).is_empty());
+    rig.heartbeat(&run, &entry, 3, &head(3), false, None);
+    rig.heartbeat(&run, &entry, 5, &head(5), false, None);
+    let repo = "fedcba9876543210fedcba9876543210fedcba98";
+    rig.heartbeat(&run, &entry, 5, &head(5), true, Some(repo));
+    let seen: Vec<_> = rig
+        .server
+        .heartbeats(&run)
+        .into_iter()
+        .map(|h| (h.seq, h.head, h.offset_local, h.final_, h.repo_head))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (3, head(3), 150, false, None),
+            (5, head(5), 150, false, None),
+            (5, head(5), 150, true, Some(repo.to_string())),
+        ]
+    );
+    assert!(parse_z(&rig.server.heartbeats(&run)[0].received_at).is_some());
+    assert!(rig.server.heartbeats("r0000000000000000").is_empty());
+    assert!(
+        rig.server
+            .calls()
+            .iter()
+            .any(|c| c == &format!("POST /v1/runs/{run}/heartbeat"))
+    );
+}
+
+#[test]
+fn an_unsealed_run_is_abandoned_after_the_deadline_and_frees_the_account() {
+    let rig = Rig::with(ServerOptions {
+        run_seconds: Some(1),
+        abandon_after_seconds: 1,
+        ..two_tokens()
+    });
+    let (run, entry) = rig.open_ok();
+    rig.put_ok(&run, &entry, &Chunk::first());
+    // The account's run is open and blocks a second one until the abandon time passes.
+    let mut status = String::new();
+    for _ in 0..100 {
+        status = rig.get(&run, TOKEN).body["status"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        if status == "abandoned" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(status, "abandoned");
+    assert_eq!(rig.server.status(&run).as_deref(), Some("abandoned"));
+
+    // Every write is 410; the read still answers.
+    assert_err(
+        &rig.put(&run, &entry, &Chunk::second()).unwrap(),
+        410,
+        "closed",
+    );
+    assert_err(
+        &rig.heartbeat(&run, &entry, 3, &head(3), true, None),
+        410,
+        "closed",
+    );
+    assert_err(
+        &rig.json(
+            "POST",
+            &format!("/v1/runs/{run}/seal"),
+            TOKEN,
+            &seal_body(&entry),
+        ),
+        410,
+        "closed",
+    );
+    assert_err(
+        &rig.json(
+            "POST",
+            &format!("/v1/runs/{run}/receipt"),
+            TOKEN,
+            &json!({"entry_id": entry, "chain_head": head(0)}),
+        ),
+        410,
+        "closed",
+    );
+    assert_err(
+        &rig.json(
+            "POST",
+            &format!("/v1/runs/{run}/abandon"),
+            TOKEN,
+            &json!({"reason": "x"}),
+        ),
+        410,
+        "closed",
+    );
+    assert_eq!(rig.get(&run, TOKEN).status, 200);
+
+    // It no longer counts as the open run.
+    let again = rig.open(TOKEN, "session-b");
+    assert_eq!(again.status, 201, "{}", again.body);
+    assert_ne!(again.body["run_id"], run.as_str());
+}
+
+#[test]
+fn a_sealed_run_is_not_abandoned() {
+    let rig = Rig::with(ServerOptions {
+        run_seconds: Some(1),
+        abandon_after_seconds: 1,
+        ..two_tokens()
+    });
+    let (run, entry) = rig.open_ok();
+    rig.put_ok(&run, &entry, &Chunk::first());
+    let sealed = rig.json(
+        "POST",
+        &format!("/v1/runs/{run}/seal"),
+        TOKEN,
+        &seal_body(&entry),
+    );
+    assert_eq!(sealed.status, 200);
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(rig.get(&run, TOKEN).body["status"], "sealed");
+}
+
+#[test]
+fn the_deadline_state_survives_a_restart() {
+    let dir = TempDir::new().unwrap();
+    let options = || ServerOptions {
+        run_seconds: Some(3600),
+        ..ServerOptions::default()
+    };
+    let server = UploadServer::start(dir.path(), options());
+    let r = call(
+        "POST",
+        &format!("{}/v1/runs", server.url()),
+        Some(TOKEN),
+        &[],
+        Rig::open_body("session-a").to_string().as_bytes(),
+    )
+    .unwrap();
+    let run = r.body["run_id"].as_str().unwrap().to_string();
+    let entry = r.body["entry_id"].as_str().unwrap().to_string();
+    let hb = |server: &UploadServer, seq: u64, head: &str, fin: bool| {
+        call(
+            "POST",
+            &format!("{}/v1/runs/{run}/heartbeat", server.url()),
+            Some(TOKEN),
+            &[],
+            json!({"entry_id": entry, "seq": seq, "head": head, "offset_local": 9,
+                   "final": fin, "repo_head": null})
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap()
+    };
+    assert_eq!(hb(&server, 2, &head(2), false).status, 200);
+    assert_eq!(hb(&server, 5, &head(5), true).status, 200);
+    server.stop();
+
+    let server = UploadServer::start(dir.path(), options());
+    assert_eq!(server.heartbeats(&run).len(), 2);
+    assert_eq!(server.final_commit(&run).map(|f| f.seq), Some(5));
+    assert_eq!(hb(&server, 5, &head(5), true).status, 200);
+    assert_eq!(hb(&server, 6, &head(6), true).status, 409);
 }
