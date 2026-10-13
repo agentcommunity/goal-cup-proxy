@@ -996,10 +996,10 @@ fn a_retried_launch_appends_one_launch_record() {
     // The row update after the first append fails, so the row does not say `Started`:
     // the retry marks the row again and appends nothing.
     capture
-        .record_launch(&mut capture.lock(), &request)
+        .record_launch(&mut capture.lock(), &request, None)
         .unwrap();
     capture
-        .record_launch(&mut capture.lock(), &request)
+        .record_launch(&mut capture.lock(), &request, None)
         .unwrap();
     let launches = records(dir.path())
         .iter()

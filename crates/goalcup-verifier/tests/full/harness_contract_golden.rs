@@ -157,6 +157,7 @@ fn launch(profile_id: &str, rule: Option<&str>, handoff_digest: Option<&str>) ->
         process_handoff_digest: handoff_digest.map(str::to_string),
         run_public_key: None,
         connector_dir_sha256: None,
+        harness_build: None,
     }
 }
 

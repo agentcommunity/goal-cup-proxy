@@ -146,6 +146,7 @@ use std::time::{Duration, Instant};
 
 mod finish;
 mod harness;
+mod harness_build;
 mod native_scope;
 mod owner;
 mod sink;
@@ -670,8 +671,15 @@ impl Daemon {
     ) -> Result<(), DaemonError> {
         let capture = self.capture_entry(entry_id)?;
         capture.require_live_capture_authority()?;
+        // D53: which build ran, read before the run lock is taken, because it reads whole
+        // binaries. The launch post follows the release, so the registered process has `exec`ed.
+        let harness_build = self
+            .registry()
+            .get(entry_id)?
+            .and_then(|row| row.last_process)
+            .map(|handle| Box::new(harness_build::observe(&handle)));
         let mut run = capture.lock();
-        capture.record_launch(&mut run, request)?;
+        capture.record_launch(&mut run, request, harness_build)?;
         run.entry = self.registry().update(entry_id, |entry| {
             entry.state = EntryState::Started;
             entry.harness_version = request.harness_version.clone();
@@ -1142,6 +1150,7 @@ impl CaptureEntry {
         &self,
         run: &mut CaptureRun,
         request: &CaptureLaunchRequest,
+        harness_build: Option<Box<goalcup_protocol::capture::HarnessBuildV1>>,
     ) -> Result<(), DaemonError> {
         run.refuse_if_finished()?;
         match &run.goal {
@@ -1179,6 +1188,7 @@ impl CaptureEntry {
                 .connector_dir_sha256
                 .as_ref()
                 .map(|digest| digest.to_ascii_lowercase()),
+            harness_build,
         };
         let mut writer = lock(&self.writer);
         let now = (self.clock)();

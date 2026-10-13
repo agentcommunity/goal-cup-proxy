@@ -1282,6 +1282,11 @@ Decided by D43 ruling 7; the design is `.superpowers/sdd/2026-10-02-oss/harness-
   holds a field it does not know. That turns a valid trace invalid, which the reader rule below
   forbids. Wanting additive v5 fields after the tag needs its own DECISIONS row that accepts
   older verifiers failing newer traces.
+- **The one exception so far (D53, 2026-10-14).** `Launch.harness_build` (`program_sha256`,
+  `image_sha256`, `platform`; optional, skip-if-none) joined v5 after the tag, so the tracer can
+  record the build that ran instead of pinning one. The cost is stated, not hidden: the released
+  v0.5.0 verifier refuses (`record_malformed`) any trace that carries it, and verifiers from this
+  change on read both. A second such field opens v6 instead.
 - **What is frozen.** `M2_PROTOCOL_VERSION = 5` (`capture.rs`) is the only switch. Frozen are the
   `Envelope`, the bodies a v5 chain carries, the ten `CaptureRecord` kinds and their sub-types,
   the trace layout files `chain.jsonl`, `baseline.json` and `seal.json`, and `Launch` as S1 left

@@ -302,6 +302,7 @@ fn launch_naming(goal_stream: StreamKey) -> CaptureRecord {
         process_handoff_digest: None,
         run_public_key: None,
         connector_dir_sha256: None,
+        harness_build: None,
     }
 }
 
@@ -2942,4 +2943,35 @@ fn cli_capture_integrity_mode() {
         .unwrap();
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stdout.is_empty());
+}
+
+/// D53: a recorded harness build is read for its shape only. Canonical digests and a bounded
+/// platform pass; a malformed digest is a malformed record, never a verdict on the build.
+#[test]
+fn verifier_reads_a_recorded_harness_build_for_its_shape_only() {
+    let with = |build: goalcup_protocol::capture::HarnessBuildV1| {
+        let mut records = launched(complete_wire(None));
+        if let Some(CaptureRecord::Launch { harness_build, .. }) = records
+            .iter_mut()
+            .find(|record| matches!(record, CaptureRecord::Launch { .. }))
+        {
+            *harness_build = Some(Box::new(build));
+        }
+        scan(make_trace(&records, true).path()).0
+    };
+    let good = with(goalcup_protocol::capture::HarnessBuildV1 {
+        program_sha256: Some("e".repeat(64)),
+        image_sha256: None,
+        platform: "linux-x86_64".into(),
+    });
+    assert_eq!(good.exit_code(), 0, "{good:#?}");
+    for (program, platform) in [(Some("E".repeat(64)), "macos-aarch64"), (None, "")] {
+        let bad = with(goalcup_protocol::capture::HarnessBuildV1 {
+            program_sha256: program,
+            image_sha256: None,
+            platform: platform.into(),
+        });
+        assert_eq!(bad.exit_code(), 2, "{bad:#?}");
+        assert!(has(&bad, "record_field_invalid"), "{bad:#?}");
+    }
 }

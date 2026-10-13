@@ -260,6 +260,40 @@ async fn accepted_goal_cannot_be_replaced() {
     );
 }
 
+/// D53: the daemon records the build of the registered process that ran. The test child is
+/// `/bin/sleep`, registered as the relative program `sleep`, so only its image is hashed.
+#[tokio::test]
+async fn the_launch_records_the_running_harness_build() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let harness = Child::sleeping();
+    let registration = harness.registration(info.process_generation);
+    assert_eq!(
+        rig.register(&info.entry_id, &registration).await.status(),
+        204
+    );
+    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    let records = rig.records(&info.entry_id);
+    let Some(CaptureRecord::Launch { harness_build, .. }) = records
+        .iter()
+        .find(|record| matches!(record, CaptureRecord::Launch { .. }))
+    else {
+        panic!("the launch is chained");
+    };
+    let build = harness_build.as_ref().expect("the build is recorded");
+    assert_eq!(build.program_sha256, None);
+    assert_eq!(
+        build.image_sha256.as_deref(),
+        Some(hex::encode(Sha256::digest(std::fs::read("/bin/sleep").unwrap())).as_str())
+    );
+    assert_eq!(
+        build.platform,
+        format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+    );
+}
+
 #[tokio::test]
 async fn the_launch_record_names_the_goal_and_the_harness_profile() {
     let rig = Rig::start().await;
@@ -285,6 +319,7 @@ async fn the_launch_record_names_the_goal_and_the_harness_profile() {
         process_handoff_digest,
         run_public_key,
         connector_dir_sha256,
+        harness_build,
         ..
     }) = records
         .iter()
@@ -292,6 +327,8 @@ async fn the_launch_record_names_the_goal_and_the_harness_profile() {
     else {
         panic!("the launch is chained");
     };
+    // D53: no process was registered here, so no build was observed, and none is guessed.
+    assert_eq!(harness_build, &None);
     assert_eq!(goal_stream, &goal);
     assert_eq!(profile_id, "codex-cli");
     let harness =

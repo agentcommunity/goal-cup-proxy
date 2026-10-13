@@ -55,7 +55,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2) | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
 | D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2); model and thinking clause superseded by D52 | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
 | D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47; V1-path clause replaced by D48 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
-| D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2); ruling 3 amended by D49 and D50; ruling 5 by D51 | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
+| D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2); ruling 3 amended by D49 and D50; ruling 5 by D51; ruling 7 by D53 | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
 | D44 | OpenCode native = read-only own-session SQLite snapshot; public repo goal-cup-tracer | in force (m2); DCO clause amended by D47 | [entry](#d44-m2-opencodes-native-leg-is-a-read-only-snapshot-of-its-own-sessions-rows-the-public-repo-is-goal-cup-tracer) |
 | D45 | Integrity exit judges the record, not the run: interrupted, undecoded and unconfirmed-stop runs stay exit 0 | in force (m2) | [entry](#d45-m2-the-integrity-exit-judges-the-record-not-the-run) |
 | D46 | Capture creation binds the CLI and daemon to identical connector bytes | in force (m2) | [entry](#d46-m2-capture-creation-binds-both-local-halves-to-identical-connector-bytes) |
@@ -65,6 +65,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D50 | D43 ruling 3: credential + `stdout_json` via one stdout reader | in force (m2) | [entry](#d50-m2-amend-d43-ruling-3-for-stdout_json-identity) |
 | D51 | A connector's argv and env are data; review is the control; credential, CA and redaction lists stay closed | in force (m2) once merged | [entry](#d51-m2-a-connectors-argv-and-env-are-data-review-is-the-control) |
 | D52 | Shipped connectors set no model, effort, sandbox, permission or MCP limit | in force (m2) once merged | [entry](#d52-m2-the-shipped-connectors-set-no-model-effort-sandbox-permission-or-mcp-limit) |
+| D53 | Record the harness build in v5 (`Launch.harness_build`); v0.5.0 readers refuse such traces | in force (m2) once merged | [entry](#d53-m2-record-the-harness-build-in-v5-accepting-that-v050-readers-refuse-it) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1355,6 +1356,33 @@ Hermes drops `--model` and `agent.reasoning_effort`, and keeps `--provider deeps
 
 **Reconsider when** a measured run shows a default that breaks capture (a session file not
 written, a second session id).
+
+---
+
+## D53. **(M2)** Record the harness build in v5, accepting that v0.5.0 readers refuse it.
+
+**Decision (owner direction relayed by the coordinator, 2026-10-14).** The tracer records which
+harness build ran instead of refusing builds it has not pinned. `Launch` gains one optional,
+skip-if-none field, `harness_build`: `program_sha256` (the program file the launcher resolved and
+registered; for a script or wrapper the only digest that names the harness), `image_sha256` (the
+running process's executable image, read by the daemon at the launch post, which follows `exec`:
+`/proc/<pid>/exe` on Linux, the path `proc_pidpath` names on macOS) and `platform`
+(`<os>-<arch>`). The daemon takes both digests itself, outside the run lock, only while the pid is
+the registered instance; a digest it cannot take is absent, never guessed.
+
+**The trade, plainly.** `v0.5.0` is tagged and froze the v5 records (D43 ruling 7). Every record
+refuses unknown fields, so the released v0.5.0 verifier, and any server reader built from it,
+reports `record_malformed` on a trace that carries `harness_build`. This row accepts that instead
+of opening protocol v6: nobody depends on a v0.5.0 verifier before the event, and the tracer and
+the server ship their own. Traces without the field stay valid for every reader, old and new.
+
+**What it is not.** The reader checks only the field's shape (canonical hex, bounded platform);
+it never compares a digest with a list. Matching against known builds, and the "unlisted" note
+for judges, belong to the server. Removing the pin refusal is the next PR; the recording lands
+first so the tree never has neither.
+
+**Reconsider when** the server's build list exists, or a second post-tag field is wanted (then
+open v6 rather than another exception).
 
 ---
 
