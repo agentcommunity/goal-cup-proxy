@@ -8,12 +8,14 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::{Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::SigningKey;
 use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::chain::GENESIS;
+use goalcup_protocol::control::parse_z;
 use goalcup_protocol::receipt::StartReceipt;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +34,27 @@ pub struct StoredChunk {
     pub body_path: PathBuf,
     /// The acknowledgement answered for this chunk, kept so a retry gets the same bytes back.
     pub ack: AckCheckpoint,
+}
+
+/// One heartbeat the server accepted, with the server's own receive time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredHeartbeat {
+    pub entry_id: String,
+    pub seq: u64,
+    pub head: String,
+    pub offset_local: u64,
+    pub final_: bool,
+    pub repo_head: Option<String>,
+    /// The server's clock when it received the heartbeat (RFC 3339, to the second).
+    pub received_at: String,
+}
+
+/// The end of the run a final heartbeat committed: the last record the server will accept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinalCommit {
+    pub seq: u64,
+    pub head: String,
+    pub repo_head: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,9 +96,29 @@ pub struct RunRecord {
     pub chunks: Vec<StoredChunk>,
     /// `(seal_json, baseline_json)`, verbatim.
     pub seal: Option<(String, String)>,
+    /// Every heartbeat accepted, in order.
+    #[serde(default)]
+    pub heartbeats: Vec<StoredHeartbeat>,
+    /// Set by the first final heartbeat; never changes after.
+    #[serde(default)]
+    pub final_commit: Option<FinalCommit>,
+    /// True when the server abandoned the run itself, `abandon_after_seconds` after the deadline
+    /// with no seal, as opposed to the member giving it back through `/abandon`.
+    #[serde(default)]
+    pub auto_abandoned: bool,
 }
 
 impl RunRecord {
+    /// The deadline in epoch seconds.
+    pub fn deadline_secs(&self) -> u64 {
+        parse_z(&self.deadline_at).expect("deadline_at is a stored RFC 3339 time")
+    }
+
+    /// True once the server's clock is at or past `deadline_at`.
+    pub fn stopped(&self) -> bool {
+        now_secs() >= self.deadline_secs()
+    }
+
     /// Bytes of `chain.jsonl` held: the end of the last chunk.
     pub fn offset(&self) -> u64 {
         self.chunks.last().map_or(0, |c| c.offset + c.length)
@@ -106,7 +149,10 @@ pub struct Position {
 pub struct Shared {
     pub store_dir: PathBuf,
     pub tokens: HashMap<String, String>,
-    pub run_hours: u64,
+    /// Run length in seconds: `deadline_at` is `official_start` plus this.
+    pub run_secs: u64,
+    /// How long after `deadline_at` an unsealed run is abandoned.
+    pub abandon_after_secs: u64,
     pub key: SigningKey,
     /// Ordered, so `run_ids()` is stable.
     pub runs: Mutex<BTreeMap<String, RunRecord>>,
@@ -117,7 +163,32 @@ pub struct Shared {
     pub drop_replies: AtomicU64,
 }
 
+/// The server's clock, in whole seconds since the epoch.
+pub fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock is after 1970")
+        .as_secs()
+}
+
 impl Shared {
+    /// Lock the runs after abandoning every open run whose time has come, so no caller sees a
+    /// stale `open`. The abandonment is persisted like any other change.
+    pub fn lock_runs(&self) -> MutexGuard<'_, BTreeMap<String, RunRecord>> {
+        let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now_secs();
+        for run in runs.values_mut() {
+            if run.status == RunStatus::Open
+                && now >= run.deadline_secs().saturating_add(self.abandon_after_secs)
+            {
+                run.status = RunStatus::Abandoned;
+                run.auto_abandoned = true;
+                self.persist(run);
+            }
+        }
+        runs
+    }
+
     /// Load every run file already in `store_dir`.
     pub fn load_runs(store_dir: &Path) -> BTreeMap<String, RunRecord> {
         fs::create_dir_all(store_dir).expect("create the upload store directory");

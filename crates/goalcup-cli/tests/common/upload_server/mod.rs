@@ -12,6 +12,10 @@
 //! * It checks exactly what the contract says the server checks, and nothing more. It does not
 //!   decompress a chunk and does not look inside the chain.
 //!
+//! The deadline rules (heartbeats, the committed end, the 410/503 answers after `deadline_at`,
+//! abandonment) are in `handlers.rs`; `ServerOptions::run_seconds` and `abandon_after_seconds`
+//! shorten them for tests.
+//!
 //! Test hooks (not part of the contract): `set_maintenance`, `set_maintenance_retry_after`,
 //! `fail_next_chunks` and `drop_next_chunk_reply`.
 
@@ -34,7 +38,7 @@ use goalcup_protocol::receipt::StartReceipt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 
-pub use state::{Position, StoredChunk};
+pub use state::{FinalCommit, Position, StoredChunk, StoredHeartbeat};
 use state::{RunStatus, Shared};
 
 /// What the stand-in is configured with.
@@ -44,6 +48,10 @@ pub struct ServerOptions {
     pub tokens: Vec<(String, String)>,
     /// The event's run length; `deadline_at` is `official_start` plus this.
     pub run_hours: u64,
+    /// Overrides `run_hours` when set, so a test can have a run end after a second or two.
+    pub run_seconds: Option<u64>,
+    /// How long after `deadline_at` a run with no seal is abandoned (default 24 hours).
+    pub abandon_after_seconds: u64,
     /// Seed of the Ed25519 key that signs receipts and acknowledgements.
     pub signing_seed: [u8; 32],
     /// A fixed port, so a test can restart on the same one. `None` picks a free port.
@@ -55,6 +63,8 @@ impl Default for ServerOptions {
         ServerOptions {
             tokens: vec![("test-token".to_string(), "member-1".to_string())],
             run_hours: 168,
+            run_seconds: None,
+            abandon_after_seconds: 24 * 3600,
             signing_seed: [7u8; 32],
             port: None,
         }
@@ -77,7 +87,8 @@ impl UploadServer {
         let shared = Arc::new(Shared {
             store_dir: store_dir.to_path_buf(),
             tokens: config.tokens.into_iter().collect::<HashMap<_, _>>(),
-            run_hours: config.run_hours,
+            run_secs: config.run_seconds.unwrap_or(config.run_hours * 3600),
+            abandon_after_secs: config.abandon_after_seconds,
             key,
             runs: Mutex::new(Shared::load_runs(store_dir)),
             calls: Mutex::new(Vec::new()),
@@ -189,13 +200,13 @@ impl UploadServer {
     }
 
     fn with_run<T>(&self, run_id: &str, f: impl FnOnce(&state::RunRecord) -> T) -> Option<T> {
-        let runs = self.shared.runs.lock().unwrap_or_else(|e| e.into_inner());
+        let runs = self.shared.lock_runs();
         runs.get(run_id).map(f)
     }
 
     /// Every run the server holds, ordered by id.
     pub fn run_ids(&self) -> Vec<String> {
-        let runs = self.shared.runs.lock().unwrap_or_else(|e| e.into_inner());
+        let runs = self.shared.lock_runs();
         runs.keys().cloned().collect()
     }
 
@@ -224,6 +235,17 @@ impl UploadServer {
     pub fn last_ack(&self, run_id: &str) -> Option<AckCheckpoint> {
         self.with_run(run_id, |r| r.chunks.last().map(|c| c.ack.clone()))
             .flatten()
+    }
+
+    /// Every heartbeat the server accepted for the run, in order.
+    pub fn heartbeats(&self, run_id: &str) -> Vec<StoredHeartbeat> {
+        self.with_run(run_id, |r| r.heartbeats.clone())
+            .unwrap_or_default()
+    }
+
+    /// The end a final heartbeat committed, if one has.
+    pub fn final_commit(&self, run_id: &str) -> Option<FinalCommit> {
+        self.with_run(run_id, |r| r.final_commit.clone()).flatten()
     }
 
     /// `open`, `sealed` or `abandoned`.
