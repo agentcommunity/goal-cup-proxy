@@ -158,11 +158,13 @@ fn a_start_that_fails_before_the_launch_gives_the_run_back() {
         "{out}"
     );
     assert!(!rig.harness_started());
+    assert_nothing_kept(&rig);
 }
 
 /// The client speaks TLS with this crate's own rustls: a server whose certificate chains to a
 /// trusted root answers, and the same server is refused by a client trusting only the public
-/// roots, before any request (and so before the token) is sent.
+/// roots, before any request (and so before the token) is sent, as a failure that asking again
+/// does not cure.
 #[test]
 fn the_client_speaks_tls_and_refuses_an_untrusted_certificate() {
     use goalcup_cli::upload::http::ServerClient;
@@ -189,11 +191,86 @@ fn the_client_speaks_tls_and_refuses_an_untrusted_certificate() {
     let refused = public
         .json::<serde_json::Value>("GET", "/v1/runs/r0000000000000000", None::<&()>)
         .unwrap_err();
-    assert!(refused.is_retryable(), "{refused}");
-    assert!(
-        refused.to_string().contains("could not be reached"),
-        "{refused}"
+    assert!(!refused.is_retryable(), "{refused}");
+    assert!(refused.to_string().contains("TLS"), "{refused}");
+}
+
+/// Nothing of a given-back run stays on this machine: no upload record, no receipt copy, no
+/// note of a pending open.
+fn assert_nothing_kept(rig: &Rig) {
+    let uploads = rig.cfg.join("uploads");
+    let left: Vec<_> = std::fs::read_dir(&uploads)
+        .map(|entries| entries.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?} left in {}", uploads.display());
+}
+
+/// A failure after the fork and before the harness runs (here the daemon refuses the
+/// registration) gives the run back too.
+#[test]
+fn a_launch_refused_after_the_fork_gives_the_run_back() {
+    let rig = Rig::new();
+    let server = server(&rig.root.join("server"));
+    log_in(&rig, &server.url(), TOKEN);
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    client.book().registration = Some(crate::common::m2_cli_support::RegistrationFault::Refused);
+    let mut opts = rig.options(&goal, RESERVE);
+    opts.repo = Some(REPO.to_string());
+    let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+    result.expect_err("the start did not fail");
+    let runs = server.run_ids();
+    assert_eq!(runs.len(), 1, "{out}");
+    assert_eq!(
+        server.status(&runs[0]).as_deref(),
+        Some("abandoned"),
+        "{out}"
     );
+    assert!(!rig.harness_started());
+    assert_nothing_kept(&rig);
+}
+
+/// A start killed between the open and the launch cannot give its run back; it leaves a note,
+/// and the next start gives that run back first instead of meeting "one open run" refused.
+#[test]
+fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
+    let rig = Rig::new();
+    let server = server(&rig.root.join("server"));
+    log_in(&rig, &server.url(), TOKEN);
+    let config = goalcup_cli::server::read_server_config(&rig.cfg)
+        .unwrap()
+        .unwrap();
+    let client = goalcup_cli::upload::http::ServerClient::new(&config);
+    let request = goalcup_cli::upload::api::OpenRunRequest {
+        connector_id: "m2-fake".into(),
+        manifest_sha256: "a".repeat(64),
+        connector_dir_sha256: "b".repeat(64),
+        workspace: "/nowhere/workspace".into(),
+        session_id: "00000000-0000-4000-8000-000000000001".into(),
+        harness_version: "1".into(),
+        tracer_version: "0.1.0".into(),
+        repo_url: REPO.into(),
+    };
+    let killed = goalcup_cli::upload::open_run(&client, &request).unwrap();
+    // What the killed start left: the note, and nothing that gives the run back.
+    std::mem::forget(goalcup_cli::upload::GiveBack::opened(&client, &rig.cfg, &killed).unwrap());
+
+    rig.tell("stop", "");
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let hooked = Hooked::new(&http, &rig);
+    let mut opts = rig.options(&goal, RESERVE);
+    opts.repo = Some(REPO.to_string());
+    let (result, out) = std::thread::scope(|s| rig.start(s, &hooked, opts, None).join().unwrap());
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert_eq!(
+        server.status(&killed.run_id).as_deref(),
+        Some("abandoned"),
+        "{out}"
+    );
+    assert_eq!(server.run_ids().len(), 2, "{out}");
+    assert!(!goalcup_cli::upload::pending_path(&rig.cfg).exists());
 }
 
 // ------------------------------------------------------------------ the uploader

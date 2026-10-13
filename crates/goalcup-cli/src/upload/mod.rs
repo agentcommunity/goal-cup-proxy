@@ -1,7 +1,7 @@
 //! The upload server's side of a run (docs/SERVER-DESIGN.md, docs/UPLOAD-API.md).
 //!
 //! Off unless `goalcup login` stored a server ([`crate::server`]): with no `server.json`, and
-//! for a `--dev` run, nothing here is called and the run is local only.
+//! for a harness given a provider key, nothing here is called and the run is local only.
 //!
 //! What a run with a server does, in `goalcup start`'s order:
 //!
@@ -12,8 +12,9 @@
 //!    the run's fields and that head. It is checked against what was sent before it is kept
 //!    ([`keep_run`]): in `<cfg>/uploads/` and as the trace's `receipt.json`.
 //!
-//! A failure between 1 and the launch gives the run back ([`abandon_run`]), so the account
-//! is not left holding an open run with nothing in it.
+//! A failure between 1 and the launch gives the run back ([`GiveBack`]), so the account is not
+//! left holding an open run with nothing in it. A start killed in that window cannot, so it
+//! leaves `<cfg>/uploads/pending-open.json`, and the next start gives that run back first.
 
 pub mod api;
 pub mod http;
@@ -85,7 +86,7 @@ pub fn checked_repo_url(url: &str) -> Result<String, CliError> {
                     && s.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || extra.contains(&b))
             };
-            name(owner, b"") && name(repo, b"._") && !repo.contains('/')
+            name(owner, b"") && name(repo, b"._") && repo != "." && repo != ".."
         });
     if !ok {
         return Err(CliError::Refused(format!(
@@ -116,6 +117,10 @@ fn refused(what: &str, server: &ServerClient, error: ServerError) -> CliError {
     let hint = match &error {
         ServerError::Status { status: 401, .. } => {
             " Your token was not accepted: run `goalcup login` again with a token from the site."
+        }
+        ServerError::Status { status: 409, .. } => {
+            " The server says this account already has an open run: a run that is still going \
+             cannot be started twice."
         }
         ServerError::Transport(_) => " Check your network, or try again in a few minutes.",
         _ => "",
@@ -217,8 +222,8 @@ pub fn fetch_receipt(
     Ok(receipt)
 }
 
-/// `POST /v1/runs/{run_id}/abandon`, once, for a start that failed before its launch. Best
-/// effort: the start is already failing, and its own refusal is what the participant reads.
+/// `POST /v1/runs/{run_id}/abandon`, once. `reason` is a fixed sentence: nothing local (a
+/// path, a user name) is sent with it.
 pub fn abandon_run(server: &ServerClient, run_id: &str, reason: &str) -> Result<(), ServerError> {
     let reason: String = reason.chars().take(500).collect();
     server
@@ -257,4 +262,101 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
         .map_err(io)?;
     file.write_all(bytes).map_err(io)?;
     file.sync_all().map_err(io)
+}
+
+/// `<cfg>/uploads/pending-open.json`: a run opened on the server whose start has not launched.
+pub fn pending_path(cfg: &Path) -> PathBuf {
+    cfg.join(UPLOADS_DIR_NAME).join("pending-open.json")
+}
+
+/// What [`pending_path`] holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingOpen {
+    pub run_id: String,
+    pub server_url: String,
+}
+
+/// A run opened on the server and not launched yet: given back if the start fails before the
+/// launch, kept once the harness runs.
+#[derive(Debug)]
+pub struct GiveBack {
+    pub server: ServerClient,
+    pub cfg: PathBuf,
+    pub run_id: String,
+    pub entry_id: String,
+}
+
+impl GiveBack {
+    /// Note the opened run on disk, so a start killed before its launch is given back by the
+    /// next one.
+    pub fn opened(server: &ServerClient, cfg: &Path, run: &OpenRun) -> Result<GiveBack, CliError> {
+        let pending = PendingOpen {
+            run_id: run.run_id.clone(),
+            server_url: server.base().to_string(),
+        };
+        write_secret_file(&pending_path(cfg), &serde_json::to_vec_pretty(&pending)?)?;
+        Ok(GiveBack {
+            server: server.clone(),
+            cfg: cfg.to_path_buf(),
+            run_id: run.run_id.clone(),
+            entry_id: run.entry_id.clone(),
+        })
+    }
+
+    /// The start failed before its launch: give the run back, and remove what this machine
+    /// kept of it. Best effort: the start's own refusal is what the participant reads; a run
+    /// the server did not hear about is given back by the next start.
+    pub fn give(self) {
+        let given = abandon_run(
+            &self.server,
+            &self.run_id,
+            "goalcup start failed before the launch",
+        );
+        let _ = std::fs::remove_file(record_path(&self.cfg, &self.entry_id));
+        let _ = std::fs::remove_file(receipt_path(&self.cfg, &self.entry_id));
+        if settled(&given) {
+            let _ = std::fs::remove_file(pending_path(&self.cfg));
+        }
+    }
+
+    /// The harness was launched: the run is the participant's now.
+    pub fn launched(self) {
+        let _ = std::fs::remove_file(pending_path(&self.cfg));
+    }
+}
+
+/// Whether an abandon's answer settles the run: given back, or past giving back (gone,
+/// holding chunks, or closed).
+fn settled(answer: &Result<(), ServerError>) -> bool {
+    match answer {
+        Ok(()) => true,
+        Err(ServerError::Status { status, .. }) => matches!(status, 404 | 409 | 410),
+        Err(_) => false,
+    }
+}
+
+/// Give back a run an earlier start opened on `server` and never launched, if this machine
+/// noted one. Best effort, and silent: if the server cannot be asked now, the note stays for
+/// the next start.
+pub fn give_back_pending(server: &ServerClient, cfg: &Path) {
+    let path = pending_path(cfg);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let Ok(pending) = serde_json::from_slice::<PendingOpen>(&bytes) else {
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    if pending.server_url != server.base() || !is_run_id(&pending.run_id) {
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    let given = abandon_run(
+        server,
+        &pending.run_id,
+        "an earlier goalcup start ended before the launch",
+    );
+    if settled(&given) {
+        let _ = std::fs::remove_file(&path);
+    }
 }

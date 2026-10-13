@@ -1,5 +1,5 @@
 //! The one HTTP client for the upload server: one request, sent once, its answer read with a
-//! bound. Retrying is the caller's ([`super::backoff`]).
+//! bound. Retrying is the caller's.
 //!
 //! TLS is this crate's own rustls with the `ring` provider and the `webpki-roots` anchors, the
 //! stack the recording proxy already links, plugged into `ureq` through its connector hook.
@@ -33,6 +33,9 @@ pub enum ServerError {
     },
     /// A success whose body this client could not read.
     Malformed(String),
+    /// The TLS handshake failed: the certificate is not trusted, not for this host, or the
+    /// server speaks no TLS this client accepts. Asking again does not change a certificate.
+    Tls(String),
 }
 
 impl ServerError {
@@ -44,7 +47,7 @@ impl ServerError {
             ServerError::Status { status, .. } => {
                 *status >= 500 || *status == 429 || *status == 422
             }
-            ServerError::Malformed(_) => false,
+            ServerError::Malformed(_) | ServerError::Tls(_) => false,
         }
     }
 
@@ -79,6 +82,11 @@ impl std::fmt::Display for ServerError {
                 }
             }
             ServerError::Malformed(why) => write!(f, "the server's answer is unreadable ({why})"),
+            ServerError::Tls(why) => write!(
+                f,
+                "the server's TLS connection was refused ({why}); check the address `goalcup \
+                 login` stored"
+            ),
         }
     }
 }
@@ -215,14 +223,46 @@ fn answer(sent: Result<ureq::Response, ureq::Error>) -> Result<ureq::Response, S
             let error: ErrorBody = serde_json::from_slice(&body).unwrap_or_default();
             Err(ServerError::Status {
                 status,
-                code: error.error,
-                message: error.message,
+                code: printable(&error.error, 40),
+                message: printable(&error.message, 300),
                 retry_after,
             })
         }
         // The transport error's text names the host and the cause, never a header.
-        Err(ureq::Error::Transport(t)) => Err(ServerError::Transport(t.to_string())),
+        Err(ureq::Error::Transport(t)) => Err(match tls_failure(&t) {
+            Some(why) => ServerError::Tls(why),
+            None => ServerError::Transport(t.to_string()),
+        }),
     }
+}
+
+/// The server's own words, safe for a terminal: control characters (an escape sequence among
+/// them) dropped, and at most `max` characters.
+fn printable(text: &str, max: usize) -> String {
+    let mut kept: String = text.chars().filter(|c| !c.is_control()).take(max).collect();
+    if text.chars().filter(|c| !c.is_control()).count() > max {
+        kept.push('…');
+    }
+    kept
+}
+
+/// The rustls error under a transport failure, if the failure was the TLS handshake.
+fn tls_failure(t: &ureq::Transport) -> Option<String> {
+    let mut source = std::error::Error::source(t);
+    while let Some(error) = source {
+        if let Some(tls) = error.downcast_ref::<rustls::Error>() {
+            return Some(tls.to_string());
+        }
+        if let Some(tls) = error
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref())
+            .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        {
+            return Some(tls.to_string());
+        }
+        source = error.source();
+    }
+    None
 }
 
 fn parse<T: serde::de::DeserializeOwned>(response: ureq::Response) -> Result<T, ServerError> {

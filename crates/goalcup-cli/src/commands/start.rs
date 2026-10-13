@@ -552,6 +552,8 @@ struct Forked<'a> {
     scanning: bool,
     /// This machine's record of the entry, with no pid yet.
     template: EntryRecord,
+    /// For a run opened on a server: given back if the harness is never launched.
+    give_back: Option<crate::upload::GiveBack>,
     /// What the uploader needs, for a run opened on a server.
     upload: Option<UploadStart>,
 }
@@ -581,6 +583,9 @@ impl Forked<'_> {
         crate::arming::close_window();
         finish_unlaunched(self.client, &self.info.entry_id, self.proxied, out);
         note_unscanned(self.scanning, &self.run.dir, out);
+        if let Some(give_back) = self.give_back {
+            give_back.give();
+        }
         error
     }
 
@@ -598,8 +603,13 @@ impl Forked<'_> {
             client,
             info,
             proxied,
+            give_back,
             ..
         } = self;
+        // The harness is ended at once and nothing was uploaded: the run goes back.
+        if let Some(give_back) = give_back {
+            give_back.give();
+        }
         let end = crate::launch::end_released_child(child, handed);
         let _ = say(out, &end.announcement(&info.entry_id));
         let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
@@ -895,9 +905,13 @@ fn create_and_gate<'a>(
         },
         None => None,
     };
-    let give_back = |cause: &CliError| {
-        if let (Some(upload), Some(opened)) = (upload, opened.as_ref()) {
-            upload.give_back(opened, cause);
+    // Give the run back to the server: this start failed before its launch.
+    let give_back = |_cause: &CliError| {
+        if let Some(give_back) = opened
+            .as_ref()
+            .and_then(|o| o.give_back.borrow_mut().take())
+        {
+            give_back.give();
         }
     };
     let request = CaptureWorkspaceRequest {
@@ -1009,6 +1023,9 @@ fn create_and_gate<'a>(
             key,
             policy: opts.upload_policy,
         }),
+        give_back: opened
+            .as_ref()
+            .and_then(|o| o.give_back.borrow_mut().take()),
     };
     let gate = Gate {
         plan,
@@ -1216,6 +1233,10 @@ fn run_harness<'a>(
         out,
         "Recording. The harness runs headless; this command ends with it.",
     );
+    // Launched: the run on the server is this participant's now, and is not given back.
+    if let Some(give_back) = forked.give_back.take() {
+        give_back.launched();
+    }
     // The first chunk goes now, beside the run; nothing the uploader does waits the harness.
     let uploading = forked.upload.take().and_then(|start| {
         let server = start.server?;
@@ -1968,7 +1989,9 @@ fn uploading(
     }
     let Some(repo) = opts.repo.as_deref() else {
         return Err(CliError::Refused(format!(
-            "this tracker uploads to {} (`goalcup login`), so `goalcup start` needs --repo              https://github.com/<owner>/<repo>: the public repository your agent pushes to.              Nothing was created.",
+            "this tracker uploads to {} (`goalcup login`), so `goalcup start` needs --repo \
+             https://github.com/<owner>/<repo>: the public repository your agent pushes to. \
+             Nothing was created.",
             server.url
         )));
     };
@@ -1984,10 +2007,11 @@ struct Uploading {
     repo_url: String,
 }
 
-/// The run as the server opened it, and what it was asked.
+/// The run as the server opened it, what it was asked, and the give-back until the launch.
 struct OpenedRun {
     run: crate::upload::api::OpenRun,
     request: crate::upload::api::OpenRunRequest,
+    give_back: std::cell::RefCell<Option<crate::upload::GiveBack>>,
 }
 
 impl Uploading {
@@ -2013,8 +2037,24 @@ impl Uploading {
             tracer_version: crate::CLI_VERSION.to_string(),
             repo_url: self.repo_url.clone(),
         };
+        crate::upload::give_back_pending(&self.server, cx.cfg);
         let run = crate::upload::open_run(&self.server, &request)?;
-        Ok(OpenedRun { run, request })
+        let give_back = crate::upload::GiveBack::opened(&self.server, cx.cfg, &run);
+        match give_back {
+            Ok(give_back) => Ok(OpenedRun {
+                run,
+                request,
+                give_back: std::cell::RefCell::new(Some(give_back)),
+            }),
+            Err(error) => {
+                let _ = crate::upload::abandon_run(
+                    &self.server,
+                    &run.run_id,
+                    "goalcup start failed before the launch",
+                );
+                Err(error)
+            }
+        }
     }
 
     /// The daemon made the entry under the server's id: fetch the start receipt over its
@@ -2055,15 +2095,6 @@ impl Uploading {
             ),
         )?;
         Ok((record, receipt.public_key))
-    }
-
-    /// Give the run back to the server: this start failed before its launch.
-    fn give_back(&self, opened: &OpenedRun, cause: &CliError) {
-        let _ = crate::upload::abandon_run(
-            &self.server,
-            &opened.run.run_id,
-            &format!("goalcup start failed before the launch: {cause}"),
-        );
     }
 }
 

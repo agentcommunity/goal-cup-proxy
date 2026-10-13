@@ -51,6 +51,10 @@ Called by `goalcup start` after its local checks and before anything is created 
 stamps `official_start` from its own clock, and sets `deadline_at` = `official_start` + the
 event's run hours.
 
+`repo_url` is `https://github.com/<owner>/<repo>` exactly: the owner is ASCII letters, digits and
+`-`; the repository is ASCII letters, digits, `-`, `_` and `.`, and is never `.` or `..`. Anything
+else is `400`.
+
 A repeat of the same `session_id` by the same member while that run is open and has no receipt
 returns the same answer with `200`, so a reply lost in transit is not a second run. Another open
 run on the account is `409`.
@@ -78,7 +82,8 @@ a different `chain_head` once a receipt exists is `409`.
 ## `POST /v1/runs/{run_id}/abandon` — give back a run that never started
 
 `{"reason": "<text, at most 500 characters>"}`. Accepted only while no chunk has been stored:
-`200 {"status": "abandoned"}`. A run with stored chunks is `409`. Used when `goalcup start` fails
+`200 {"status": "abandoned"}`, and `200` again for a repeat. A run with stored chunks is `409`; a
+sealed run is `410`. The tracer sends a fixed sentence, never a local path. Used when `goalcup start` fails
 after the run opened and before the harness launched, so the account is not left with an open run
 that holds nothing.
 

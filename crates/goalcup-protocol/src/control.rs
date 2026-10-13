@@ -47,6 +47,8 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// `arming_recipe`, `posts_dropped`, `posts_dropped_after_seal` and `pins_dropped`, the
 /// `arming_timeout` and `unsupported_connector` error codes, and `ProcessHandle.home_seed`.
 /// An unknown connector is now refused `preflight_failed`.
+/// V7 lets a capture create carry an upload server's `entry_id`, and adds `chain_head` and
+/// `trace_dir` to its answer (docs/UPLOAD-API.md).
 pub const CONTROL_API_VERSION: u32 = 7;
 
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
