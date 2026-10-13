@@ -7,8 +7,6 @@ continuation = "one preassigned offline echo and one identity-scoped append-only
 
 [capture.executable]
 program = "python3"
-version = "@PYTHON3_VERSION@"
-sha256 = "@PYTHON3_SHA256@"
 
 [capture.home]
 run_home = "empty"

@@ -121,8 +121,8 @@ fn a_missing_or_unusable_key_is_refused_without_being_echoed() {
 fn hostile_goals_stay_one_goal_flag_element_and_the_key_is_in_no_plan_surface() {
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
-    let c = s::repinned("hermes-cli", &exe);
-    let pinned = s::pinned(&c, &exe);
+    let c = s::shipped("hermes-cli");
+    let resolved = s::resolved(&exe);
     let proxy = s::proxy_url();
     // The key is in the tracker's own environment, as the loader leaves it. The capture plan
     // reads only the identity names from there.
@@ -144,7 +144,7 @@ fn hostile_goals_stay_one_goal_flag_element_and_the_key_is_in_no_plan_surface() 
             &c,
             &s::vars(&l),
             &l.workspace,
-            &s::launch(&l, goal.as_bytes(), &pinned, &proxy, &parent),
+            &s::launch(&l, goal.as_bytes(), &resolved, &proxy, &parent),
         )
         .unwrap_or_else(|e| panic!("{goal:?}: {e}"));
         assert_eq!(plan.argv.len(), profile.args.len() + 1, "{goal:?}");
@@ -202,15 +202,15 @@ fn the_other_shipped_profiles_still_place_the_goal_after_a_separator() {
     for id in ["codex-cli", "claude-code-cli"] {
         let l = s::Layout::new();
         let exe = s::fake_harness(&l.bin);
-        let c = s::repinned(id, &exe);
-        let pinned = s::pinned(&c, &exe);
+        let c = s::shipped(id);
+        let resolved = s::resolved(&exe);
         let proxy = s::proxy_url();
         let parent = s::parent_env();
         let plan = build_capture_launch(
             &c,
             &s::vars(&l),
             &l.workspace,
-            &s::launch(&l, b"hello", &pinned, &proxy, &parent),
+            &s::launch(&l, b"hello", &resolved, &proxy, &parent),
         )
         .unwrap();
         assert_eq!(plan.argv[plan.argv.len() - 2], "--", "{id}");

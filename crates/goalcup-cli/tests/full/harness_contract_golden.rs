@@ -14,7 +14,7 @@
 //!   fields), the `CaptureStreams` decision and its pipes, the per-run home tree where there is
 //!   one (every path, type, mode and file SHA-256), the CA variables and their mode, the
 //!   credential variable and the verdicts on its value, the argv and environment deny
-//!   decisions over fixed probe lists, the tool-allowance refusals, the registered
+//!   decisions over fixed probe lists, the registered
 //!   `ProcessHandle` fields that come from the manifest, the termination settings and the
 //!   redaction patterns the profile carries;
 //! * across families (`cross-family.json`): the CA, credential and argv-guard decisions over
@@ -41,12 +41,11 @@
 
 use crate::common::m2_profile_support;
 
-use goalcup_cli::CliError;
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::key_scan::FragmentMatcher;
 use goalcup_cli::launch::{
-    LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, allowance_refusal,
-    build_capture_launch, child_secret_for_harness, handle, spawn, stdout_tee, tee_marked,
+    LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, build_capture_launch,
+    child_secret_for_harness, handle, spawn, stdout_tee, tee_marked,
 };
 use goalcup_cli::per_run_home::create_per_run_home;
 use goalcup_protocol::ProtocolError;
@@ -168,7 +167,7 @@ struct Subject {
     _dir: Option<tempfile::TempDir>,
 }
 
-/// The controlled workload's manifest, with synthetic values for its four placeholders.
+/// The controlled workload's manifest, with synthetic values for its two placeholders.
 fn controlled_connector() -> (HarnessConnector, tempfile::TempDir) {
     let template = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -176,8 +175,6 @@ fn controlled_connector() -> (HarnessConnector, tempfile::TempDir) {
     )
     .unwrap();
     let rendered = template
-        .replace("@PYTHON3_SHA256@", &"ab".repeat(32))
-        .replace("@PYTHON3_VERSION@", "3.12.0")
         .replace("@WORKLOAD@", "/synthetic/workload.py")
         .replace("@CONFIG@", "/synthetic/config.json");
     let dir = tempfile::tempdir().unwrap();
@@ -217,19 +214,18 @@ fn declared(id: &str) -> Subject {
     }
 }
 
-/// The connector with its executable pin naming `exe`, as the launch tests use it.
-fn repinned(id: &str, exe: &Path) -> Subject {
+/// The connector as the launch tests use it: its base recipe ([`base_recipe`]).
+fn base_subject(id: &str) -> Subject {
     let mut subject = declared(id);
-    subject.connector = repin(&subject.connector, exe);
+    subject.connector = base_recipe(&subject.connector);
     subject
 }
 
-/// A copy of `c` whose executable pin names `exe`, without its `capture.platform` table: the
-/// plan is the base recipe on every platform, so the golden bytes are the same wherever it
-/// runs. The declared overrides are in `capture_profile`.
-fn repin(c: &HarnessConnector, exe: &Path) -> HarnessConnector {
+/// A copy of `c` without its `capture.platform` table: the plan is the base recipe on every
+/// platform, so the golden bytes are the same wherever it runs. The declared overrides are in
+/// `capture_profile`.
+fn base_recipe(c: &HarnessConnector) -> HarnessConnector {
     let mut c = c.clone();
-    c.loaded.manifest.capture.executable.sha256 = s::sha256_of(exe);
     c.loaded.manifest.capture.platform.clear();
     c.loaded
         .manifest
@@ -597,7 +593,7 @@ fn profile_json(p: &CaptureSpec) -> Value {
     out.insert("env".into(), json!(p.env));
     out.insert(
         "executable".into(),
-        json!({"version": p.executable.version, "sha256": p.executable.sha256}),
+        json!({"version_args": p.executable.version_args}),
     );
     if let Some(goal_flag) = &p.goal_flag {
         out.insert("goal_flag".into(), json!(goal_flag));
@@ -608,10 +604,7 @@ fn profile_json(p: &CaptureSpec) -> Value {
             json!(
                 p.platform
                     .iter()
-                    .map(|(key, over)| (
-                        key.as_str(),
-                        json!({"sha256": over.sha256, "version": over.version, "env": over.env}),
-                    ))
+                    .map(|(key, over)| (key.as_str(), json!({"env": over.env}),))
                     .collect::<BTreeMap<_, _>>()
             ),
         );
@@ -689,54 +682,8 @@ fn ca_json(l: &s::Layout, p: &CaptureSpec, plan: &LaunchPlan) -> Value {
     })
 }
 
-/// The allowance refusals of this connector over fixed rules and argument shapes.
-fn allowance_json(c: &HarnessConnector) -> Value {
-    let p = profile(c);
-    let mut with_flag = p.args.clone();
-    with_flag.insert(0, "--allowedTools".to_string());
-    let mut no_separator = p.args.clone();
-    if no_separator.last().map(String::as_str) == Some("--") {
-        no_separator.pop();
-    }
-    let shapes: [(&str, Vec<String>); 3] = [
-        ("profile_args", p.args.clone()),
-        ("profile_args_with_allowedtools", with_flag),
-        ("profile_args_without_separator", no_separator),
-    ];
-    let rules = [
-        "Bash(python3 demo.py *)",
-        "Bash(python3 ../x.py *)",
-        "Bash(python3 demo.py)",
-        "Bash(*)",
-        "",
-    ];
-    let mut rows = Vec::new();
-    for (label, args) in &shapes {
-        for rule in rules {
-            rows.push(json!({
-                "args": label, "rule": rule,
-                "refusal": allowance_refusal(c, args, rule),
-            }));
-        }
-    }
-    // The two halves of the id-and-family predicate, separately.
-    if c.loaded.manifest.id == "claude-code-cli" {
-        let mut other_id = c.clone();
-        other_id.loaded.manifest.id = "claude-code-clone".to_string();
-        rows.push(json!({
-            "args": "profile_args", "rule": rules[0], "variant": "family_changed",
-            "refusal": "only the pinned claude-code-cli profile may carry one",
-        }));
-        rows.push(json!({
-            "args": "profile_args", "rule": rules[0], "variant": "id_changed",
-            "refusal": allowance_refusal(&other_id, &p.args, rules[0]),
-        }));
-    }
-    json!(rows)
-}
-
-fn legacy_env_refusal(key: &str, home_env: &str) -> Option<&'static str> {
-    if key.eq_ignore_ascii_case(home_env) {
+fn legacy_env_refusal(key: &str, home_env: Option<&str>) -> Option<&'static str> {
+    if home_env.is_some_and(|h| key.eq_ignore_ascii_case(h)) {
         return Some("is pinned by the capture launch itself");
     }
     match env_key_denied(key, EnvContext::CaptureEnv) {
@@ -773,12 +720,12 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
     let id = dc.loaded.manifest.id.as_str();
     let dp = profile(dc);
 
-    // The plan, built against a fake executable pinned in place of the measured one.
+    // The plan, built against a fake executable in place of the harness.
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
-    let repinned = repin(dc, &exe);
-    let c = &repinned;
-    let pinned = s::pinned(c, &exe);
+    let base = base_recipe(dc);
+    let c = &base;
+    let resolved = s::resolved(&exe);
     let proxy = s::proxy_url();
     let parent = s::parent_env();
     let goal = b"write result.txt";
@@ -786,7 +733,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         c,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, goal, &pinned, &proxy, &parent),
+        &s::launch(&l, goal, &resolved, &proxy, &parent),
     )
     .unwrap_or_else(|e| panic!("{id}: {e}"));
 
@@ -796,7 +743,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         c,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, hostile, &pinned, &proxy, &parent),
+        &s::launch(&l, hostile, &resolved, &proxy, &parent),
     )
     .unwrap();
     let placement = json!({
@@ -805,15 +752,6 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         "goal_prefix": hostile_plan.capture.map(|h| h.goal_prefix),
         "argv_len": hostile_plan.argv.len(),
     });
-
-    // The tool allowance in the plan: spliced before the goal, or refused.
-    let mut with_rule = s::launch(&l, goal, &pinned, &proxy, &parent);
-    with_rule.allowed_tool_rule = Some("Bash(python3 demo.py *)");
-    let allowance_plan = match build_capture_launch(c, &s::vars(&l), &l.workspace, &with_rule) {
-        Ok(p) => json!({"argv_tail": p.argv[p.argv.len().saturating_sub(4)..].to_vec()}),
-        Err(CliError::Refused(_)) => json!({"refused": "exit1"}),
-        Err(e) => json!({"error": format!("exit{}", e.exit_code())}),
-    };
 
     // The handle the manifest's kill fields end up in, from a live fake child.
     let mut live = plan.clone();
@@ -874,7 +812,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         }
     };
 
-    let home_env = dp.home.env.as_str();
+    let home_env = dp.home.env.as_deref();
     let argv_deny: Vec<Value> = ARGV_PROBES
         .iter()
         .map(|arg| {
@@ -907,7 +845,6 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         "capture_profile": profile_json(dp),
         "plan": plan_json(&l, &plan),
         "goal_placement_for_an_option_shaped_goal": placement,
-        "plan_with_claude_tool_allowance": allowance_plan,
         "streams": connector_streams_json(dp),
         "home": home,
         "ca": ca_json(&l, dp, &plan),
@@ -918,7 +855,6 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         },
         "argv_deny": argv_deny,
         "env_deny": env_deny,
-        "allowance_refusals": allowance_json(dc),
         "redaction": {
             "extra_patterns": dc.loaded.manifest.redaction.as_ref()
                 .map(|r| r.extra_patterns.iter().map(|p| json!({"kind": p.kind, "regex": p.regex})).collect::<Vec<_>>())
@@ -1396,15 +1332,15 @@ fn the_identity_grammars_are_pinned() {
     // Claude Code is told its identity rather than reading it: the plan carries the id.
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
-    let claude = repinned("claude-code-cli", &exe);
-    let pinned = s::pinned(&claude.connector, &exe);
+    let claude = base_subject("claude-code-cli");
+    let resolved = s::resolved(&exe);
     let proxy = s::proxy_url();
     let parent = s::parent_env();
     let plan = build_capture_launch(
         &claude.connector,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, b"g", &pinned, &proxy, &parent),
+        &s::launch(&l, b"g", &resolved, &proxy, &parent),
     )
     .unwrap();
     let at = plan.argv.iter().position(|a| a == "--session-id").unwrap();
@@ -1708,8 +1644,11 @@ fn connectors_plus_one() -> tempfile::TempDir {
             "program = \"python3\"",
             "program = \"synthtool\"".to_string(),
         ),
-        ("@PYTHON3_VERSION@", "1.0.0".to_string()),
-        ("@PYTHON3_SHA256@", "cd".repeat(32)),
+        // A pinned connector names no loopback host; the kit's stand-in host is Dev-only.
+        (
+            "host = \"api.e00.localhost\"",
+            "host = \"api.synthetic-extra.example\"".to_string(),
+        ),
     ] {
         assert!(text.contains(from), "{from} is not in the kit fixture");
         text = text.replace(from, &to);

@@ -8,15 +8,19 @@ description: Use when adding or supporting a CLI coding-agent harness in Goal Cu
 What do I do, in order, to add a harness to the Goal Cup tracer? The checklist for a harness
 team's coding agent. Every step has a command, its expected output, and a STOP rule. Read the
 linked files when a step points to them; do not guess past a STOP. The human summary is
-[HARNESS-ONBOARDING](../../docs/HARNESS-ONBOARDING.md). Updated: 2026-10-12.
+[HARNESS-ONBOARDING](../../docs/HARNESS-ONBOARDING.md). Updated: 2026-10-14.
 
 A contribution is data only: a facts sheet `docs/harnesses/<id>.md`, a connector
 `connectors/<id>/` (`harness.toml` plus reviewed seed files), one pin line, regenerated goldens
-and one kit case. No `.rs` file. Policy rows and decoders are separate core PRs. A harness that
-does not fit yet contributes the facts sheet alone.
+and one kit case. No `.rs` file: args, `goal_flag`, the model name and `capture.env` are data,
+held to generic rules every connector shares (D51). The closed lists that stay in core are
+security boundaries: a credential variable name, a CA variable, a redaction regex, plus new
+identity carriers and native forms. Each is a separate core PR the decision table names. A
+harness that does not fit yet contributes the facts sheet alone.
 
 ## STOP rules
 
+- **Cannot be captured** (step 0): stop, and contribute the facts sheet alone.
 - **Needs a core PR** (step 3): stop, open an issue naming the decision-table row and linking
   the facts sheet. Write no connector. The facts sheet, with `Status: facts only`, is the PR.
 - **Unknown fact** in transport, session storage, isolation or auth, or session identity: write
@@ -30,6 +34,11 @@ does not fit yet contributes the facts sheet alone.
 Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-]{1,47}$`),
 `<program>` is the harness executable. Run from the repo root.
 
+0. **Can it be captured at all?** Read row 0, the
+   [check-first list](../../docs/HARNESS-ONBOARDING.md#row-0): no local session file, a database
+   store, HTTP/2-only or gRPC traffic, a local model, a desktop app. STOP on any match, before
+   building anything. Its known gaps (subagent files, self-update, many hosts) do not stop you;
+   record them in the facts sheet.
 1. **Set up.** Fork and branch as in
    [CONTRIBUTING](../../CONTRIBUTING.md#from-fork-to-pull-request) and read the rules in
    [AGENTS.md](../../AGENTS.md) once. Check `which cargo` is `~/.cargo/bin/cargo` (rustup), not
@@ -60,7 +69,7 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    | Facts sheet section | Lands in `harness.toml` |
    |---|---|
    | 1. Run one prompt, headless | `[capture].args`, `goal_flag` or a trailing `--`, `continuation` |
-   | 2. Install and pin a version | `[capture.executable]` (step 4) |
+   | 2. Install and record a version | `[capture.executable]` (step 4) |
    | 3. Where it keeps things (macOS column) | `[capture.home]`, `[[capture.native]].root` |
    | 4. Session format and identity | `[[capture.native]]` `pattern`/`form`, `[capture.identity]` |
    | 5. Auth | `[capture.credential]`, `auth_hosts`, `[capture.home]` `run_home` |
@@ -72,22 +81,18 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    it. STOP on an unknown in sections 4, 5 or 6, or in the macOS column of section 3.
 3. **Decide: do I need a core PR?** Walk every row of [decision-table.md](decision-table.md).
    STOP on any "core PR" or "core decision" row.
-4. **Pin the executable.** Hash the regular file the CLI will run, not a symlink:
+4. **Record how to get the version.** Builds are recorded, not pinned (D53): the tracer hashes
+   whatever `program` resolves to and records it. Find the file the CLI will run, and the
+   command that prints the version:
    ```
    python3 -c 'import os,shutil,sys; print(os.path.realpath(shutil.which(sys.argv[1])))' <program>
-   shasum -a 256 <that path>
    <program> --version
    ```
-   Expect: one absolute path; one line `<64 hex>  <path>`; the version. These go into
-   `[capture.executable]` and section 2 of the facts sheet; `version` is the number only
-   (`1.2.3`, not `toy 1.2.3`). A harness that is a script with a shebang passes the pin: the
-   hash is of the script file, and the interpreter it runs under is not pinned.
-   No check verifies this hash against your binary: `check-connector.sh` and the kit never run
-   the real harness (the kit runs `/usr/bin/python3`), and the binary need not be on `PATH`
-   for them. A wrong hash shows up only as a changed `"sha256"` in your `<id>.json` golden
-   (step 7), and as a refusal when `goalcup start` launches the real binary. A maintainer
-   re-derives the hash from an official artifact before merging, so record where yours came
-   from in section 2.
+   Expect: one absolute path; the version on the first line of stdout. Put the arguments in
+   `[capture.executable] version_args` (`["--version"]`), and the path and version in section 2
+   of the facts sheet. If the harness has no version command, or it needs a network or a login,
+   leave `version_args` out: the trace then says `unreported`. Never write `version` or
+   `sha256`: both are refused.
 5. **Write the connector.**
    ```
    mkdir -p connectors/<id>
@@ -98,9 +103,10 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    and must be named in `seed`; any other file in the folder is refused. Field rules:
    [CONNECTOR-SCHEMA](../../docs/CONNECTOR-SCHEMA.md). Check that no placeholder is left
    outside comments: `grep -nE '^[^#]*<[^>]+>' connectors/<id>/harness.toml`. Expect: no output.
-   Your exact `capture.args` + `goal_flag` and every `capture.env` entry must also be rows of
-   `CAPTURE_ARG_ALLOWLIST` / `CAPTURE_ENV_ALLOWLIST` in `capture_policy.rs` (decision table row
-   13): a core PR that lands first, or the pinned connector is refused at load.
+   `capture.args`, `goal_flag` and `capture.env` need no row anywhere in Rust; the schema step
+   (step 9) refuses what a generic rule forbids, and the refusal names the rule.
+   `capture.home.env` is optional: leave it out when the harness has no variable that moves its
+   config, and it keeps its state under the private run `HOME` (decision table row 5).
 6. **Regenerate the pins.** `sh scripts/pin-manifests.sh`. Expect: no output, exit 0. Then
    `git diff --stat -- crates/*/pins`. Expect: `crates/goalcup-protocol/pins/connector-dirs.txt`
    with one line added for `<id>`, and nothing else. Re-run after every edit under
@@ -156,7 +162,13 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
     It runs build, format, lint and the fast tests; the goldens and kit are covered by step 9.
 11. **Review your own diff** against the
     [reviewer checklist](../../docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr): every
-    field and seed justified, no base URL or endpoint variable, no secrets, one pin line.
+    field and seed justified, no base URL or endpoint variable, no secrets, one directory pin
+    line.
+    Optional, on your own account (a trial, not a judged entry): `cargo build` (the pins from
+    step 6 are compiled in), then run one short goal with
+    `target/debug/goalcup start --harness <id>` as in the README quickstart, and check it with
+    `target/debug/goalcup-verify --capture-integrity <trace>`. No `--dev` is needed for a
+    pinned id.
 12. **Open the PR** holding exactly: `connectors/<id>/`, the one new line in
     `connector-dirs.txt`, the golden JSON from step 7, the kit case from step 8, and
     `docs/harnesses/<id>.md`. Check with `git status --short`. In the body, paste the last line

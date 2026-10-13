@@ -5,7 +5,7 @@
 #
 # Unpacks it, checks that all three binaries print <version>, and checks through
 # `goalcup doctor --json` what the Homebrew formula's test checks: the unpacked goalcup finds
-# the connectors it ships, and every one's pin passes. doctor exits 1 when no pinned harness is
+# the connectors it ships, and every one's pin passes. doctor exits 1 when no harness is
 # installed, so only its report is judged. It runs with an environment built from nothing, so
 # neither $GOALCUP_CONNECTORS_DIR nor a real config directory can stand in for the tarball's.
 set -eu

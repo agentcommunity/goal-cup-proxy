@@ -137,8 +137,8 @@ fn a_capture_launch_takes_nothing_hostile_from_the_real_environment() {
     use m2_profile_support as s;
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
-    let c = s::repinned("codex-cli", &exe);
-    let pinned = s::pinned(&c, &exe);
+    let c = s::shipped("codex-cli");
+    let resolved = s::resolved(&exe);
     let hostile = [
         ("HTTPS_PROXY", "http://evil.example:3128"),
         ("NO_PROXY", "*"),
@@ -157,7 +157,7 @@ fn a_capture_launch_takes_nothing_hostile_from_the_real_environment() {
         &c,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, b"goal", &pinned, &proxy, &parent),
+        &s::launch(&l, b"goal", &resolved, &proxy, &parent),
     );
     let still: Vec<Option<String>> = hostile.iter().map(|(k, _)| std::env::var(k).ok()).collect();
     for restore in restores.into_iter().rev() {

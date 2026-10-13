@@ -262,10 +262,11 @@ fn an_unpinned_rulebook_is_a_doctor_failure_whose_fix_names_the_one_door() {
     }
 }
 
-/// `goalcup doctor` fails when the harness `goalcup start` would run is not there, or is not
-/// the pinned build: the same lookup and hash `start` makes, without starting anything.
+/// `goalcup doctor` fails when the harness `goalcup start` would run is not there, and passes
+/// any build that is (D53: recorded, not pinned): the same lookup and hash `start` makes,
+/// without starting anything.
 #[test]
-fn doctor_fails_naming_the_harness_when_its_pinned_executable_is_missing_or_another_build() {
+fn doctor_fails_naming_a_missing_harness_and_passes_any_build_it_finds() {
     let cfg = cfg_with_a_daemon();
     let mut scoped = opts();
     scoped.harness = Some("codex-cli".to_string());
@@ -298,7 +299,7 @@ fn doctor_fails_naming_the_harness_when_its_pinned_executable_is_missing_or_anot
         "naming the program and the harness: {line}"
     );
 
-    // Something called `codex` that is not the measured build: its bytes decide.
+    // Something called `codex` that is not any measured build: it passes, named by its digest.
     let impostor = bin.join("codex");
     let marker = bin.join("ran");
     std::fs::write(
@@ -320,11 +321,16 @@ fn doctor_fails_naming_the_harness_when_its_pinned_executable_is_missing_or_anot
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert_eq!(code, 1, "another build fails the report: {text}");
+    assert_eq!(code, 0, "any build passes the report: {text}");
     let line = check(&text);
+    let canonical = std::fs::canonicalize(&impostor).unwrap();
+    let digest = goalcup_daemon::workspace::sha256_hex(&std::fs::read(&impostor).unwrap());
     assert!(
-        line.contains("FAIL") && line.contains("the profile pins"),
-        "naming both digests: {line}"
+        line.contains("PASS")
+            && line.contains(&canonical.display().to_string())
+            && line.contains(&digest)
+            && line.contains("recorded, not pinned"),
+        "naming the path and its digest: {line}"
     );
     assert!(!marker.exists(), "and it was hashed, never run");
 }

@@ -843,26 +843,3 @@ async fn standalone_seal_ends_sigterm_ignoring_harness_with_full_grace() {
     );
     assert!(!alive(pid), "the harness is gone");
 }
-
-#[test]
-fn capture_finish_never_raises_busy() {
-    // `NotAdmitted` is exactly `busy`, `unauthorized` and a refused connection: that is only
-    // true while no capture finish stage can answer `busy`. The runtime's `Busy` is the legacy
-    // pump hold, and this file must never name it.
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/runtime/capture");
-    let mut production = String::new();
-    for file in std::fs::read_dir(&dir).unwrap() {
-        let path = file.unwrap().path();
-        if path.file_name().is_some_and(|name| name != "tests.rs") {
-            production.push_str(&std::fs::read_to_string(&path).unwrap());
-        }
-    }
-    assert!(
-        production.contains("fn finish_capture"),
-        "the module's sources were read"
-    );
-    assert!(
-        !production.contains("DaemonError::Busy") && !production.contains("held_elsewhere"),
-        "a capture finish stage raises the legacy pump-hold `busy`"
-    );
-}

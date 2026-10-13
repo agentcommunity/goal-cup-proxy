@@ -283,14 +283,11 @@ macro_rules! daemon_error_table {
     ($( $pattern:pat => ($mapped:expr, $sample:expr) ),+ $(,)?) => {
         /// A [`DaemonError`] as the contract's error.
         ///
-        /// The interesting pair is `Refused` → `Conflict` and `Busy` → `Busy`, both of
-        /// which reach the wire as `409` through [`http_status_for`] and mean opposite
-        /// things. `DaemonError::Refused` is the entry's own state saying no — already
-        /// sealed, a lock still on disk — and a client that retries it spins forever.
-        /// `DaemonError::Busy` is the entry held for the length of one pump, which the
-        /// same call a moment later will not meet. A `500` for either would tell the CLI
-        /// the daemon had broken; one `409` for both would tell it nothing it could act on,
-        /// which is what this row exists to prevent.
+        /// `DaemonError::Refused` → `Conflict` is the entry's own state saying no —
+        /// already sealed, a lock still on disk — and a client that retries it spins
+        /// forever. `ControlError::Busy` shares its `409` through [`http_status_for`] but is
+        /// no longer produced from a `DaemonError`: the daemon has no runtime hold left to
+        /// raise it from (D48).
         ///
         /// Everything a participant cannot act on is `Internal`. That includes `Io`, whose
         /// message carries an absolute path by construction — acceptable here because this
@@ -324,10 +321,6 @@ daemon_error_table! {
     DaemonError::Guard(m) => (
         ControlError::Conflict(m),
         DaemonError::Guard(SAMPLE_MESSAGE.to_string())
-    ),
-    DaemonError::Busy(m) => (
-        ControlError::Busy(m),
-        DaemonError::Busy(SAMPLE_MESSAGE.to_string())
     ),
     DaemonError::FinishDeadline { stage } => (
         ControlError::FinishDeadline(stage.to_string()),
@@ -370,26 +363,9 @@ daemon_error_table! {
         ControlError::Internal(e.to_string()),
         DaemonError::Db(SAMPLE_MESSAGE.to_string())
     ),
-    e @ DaemonError::Sqlite(_) => (
-        ControlError::Internal(e.to_string()),
-        DaemonError::Sqlite(SAMPLE_MESSAGE.to_string())
-    ),
-    e @ DaemonError::Http(_) => (
-        ControlError::Internal(e.to_string()),
-        DaemonError::Http(SAMPLE_MESSAGE.to_string())
-    ),
     e @ DaemonError::Crypto(_) => (
         ControlError::Internal(e.to_string()),
         DaemonError::Crypto(SAMPLE_MESSAGE.to_string())
-    ),
-    // Finalization normally records this typed outcome as a successful terminal report. If it
-    // reaches the generic control mapper instead, it is an internal integration failure, not
-    // a participant-retryable capture request; retain the original typed reason in diagnostics.
-    e @ DaemonError::SubmissionCapture { .. } => (
-        ControlError::Internal(e.to_string()),
-        DaemonError::SubmissionCapture {
-            reason: goalcup_protocol::submission::SubmissionFailureV1::StorageFailed,
-        }
     ),
 }
 

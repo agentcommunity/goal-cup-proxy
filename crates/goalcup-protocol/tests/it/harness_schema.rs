@@ -15,10 +15,10 @@
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
-    CA_REGISTRY, CREDENTIAL_ENV, EXTRA_PATTERN_SOURCES, EnvContext, HARNESS_RESERVED_PREFIXES,
-    INJECTION_ENV, INJECTION_PREFIXES, INTERPRETER_PROGRAMS, PROVIDER_PREFIXES, SHELL_VALUES,
-    STARTUP_BASENAMES, STARTUP_COMPONENTS, arg_path_denied, env_key_denied, env_value_denied,
-    is_interpreter_program, startup_file_problem,
+    CA_REGISTRY, CREDENTIAL_ENV, EXTRA_PATTERN_SOURCES, EnvContext, INJECTION_ENV,
+    INJECTION_PREFIXES, INTERPRETER_PROGRAMS, PROVIDER_PREFIXES, SHELL_VALUES, STARTUP_BASENAMES,
+    STARTUP_COMPONENTS, arg_path_denied, env_key_denied, env_value_denied, is_interpreter_program,
+    startup_file_problem,
 };
 use goalcup_protocol::harness::{HarnessManifest, NEWER_SENTENCE, Origin, PlatformKey};
 use std::path::{Path, PathBuf};
@@ -125,8 +125,6 @@ args = ["/work/tests/fixtures/m2-controlled-workload.py", "/work/config.json", "
 
 [capture.executable]
 program = "python3"
-version = "3.9.6"
-sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
 
 [capture.home]
 run_home = "empty"
@@ -202,7 +200,7 @@ fn the_controlled_workload_is_admitted_under_dev_and_refused_under_pinned() {
 #[test]
 fn the_parsed_fixtures_carry_the_values_the_design_gives() {
     let h = HarnessManifest::from_toml_str(&fixture_text("hermes-cli")).unwrap();
-    assert_eq!(h.capture.home.env, "HERMES_HOME");
+    assert_eq!(h.capture.home.env.as_deref(), Some("HERMES_HOME"));
     assert_eq!(h.capture.home.seed.len(), 3);
     assert_eq!(h.capture.native[0].pattern, "session_{id}.json");
     assert_eq!(
@@ -1148,15 +1146,24 @@ fn hermes_home_passes_as_home_env_and_fails_as_a_capture_env_key() {
     ] {
         assert_eq!(env_key_denied(home, EnvContext::HomeEnv), None, "{home}");
     }
-    assert!(
-        env_key_denied("HERMES_HOME", EnvContext::CaptureEnv)
-            .is_some_and(|why| why.contains("reserved")),
-    );
-    assert_eq!(HARNESS_RESERVED_PREFIXES.len(), 1);
+    // In `capture.env` every home or config-dir name is refused, by shape, not by harness name.
+    for name in ["HERMES_HOME", "GH_CONFIG_DIR", "EXAMPLE_CONFIG_HOME"] {
+        assert!(
+            env_key_denied(name, EnvContext::CaptureEnv)
+                .is_some_and(|why| why.contains("capture.home.env")),
+            "{name}"
+        );
+    }
+    // A name in another harness's namespace is not refused for that reason alone.
+    assert_eq!(env_key_denied("HERMES_QUIET", EnvContext::CaptureEnv), None);
     // Through the manifest: Codex with HERMES_HOME in `env`.
     let mut t = codex();
     set(&mut t, &["capture", "env"], "HERMES_HOME", "x");
-    refused(&t, PINNED, &["capture.env", "HERMES_HOME", "reserved"]);
+    refused(
+        &t,
+        PINNED,
+        &["capture.env", "HERMES_HOME", "capture.home.env"],
+    );
     // And Hermes itself, whose home.env is HERMES_HOME, validates (the fixture test above).
     admitted(&hermes(), PINNED);
 }
@@ -1486,30 +1493,83 @@ fn the_executable_fields_follow_their_grammars() {
         set(&mut t, &["capture", "executable"], "program", bad);
         refused(&t, PINNED, &["capture.executable.program"]);
     }
-    for bad in ["", "v1", "1 2", &format!("1{}", "0".repeat(32))] {
+}
+
+/// `version_args`: empty, or exactly one of `--version`, `-v`, `-V`, `version`. The probe runs
+/// before the capture with no proxy and no record, so nothing else (`update`, `login`) may run.
+#[test]
+fn version_args_follow_their_grammar() {
+    let mut t = hermes();
+    tbl(&mut t, &["capture", "executable"]).remove("version_args");
+    assert!(parsed(&t).capture.executable.version_args.is_empty());
+    for ok in [
+        vec![],
+        vec!["--version"],
+        vec!["-v"],
+        vec!["-V"],
+        vec!["version"],
+    ] {
         let mut t = codex();
         set(
             &mut t,
             &["capture", "executable"],
-            "version",
-            bad.to_string(),
+            "version_args",
+            strings(&ok),
         );
-        refused(&t, PINNED, &["capture.executable.version"]);
-    }
-    for ok in ["0.153.0", "1", "2.1.283", "1.2.3-rc.1+b5"] {
-        let mut t = codex();
-        set(&mut t, &["capture", "executable"], "version", ok);
         admitted(&t, PINNED);
+        admitted(&t, DEV);
     }
-    for bad in ["", "ABC", &"a".repeat(63), &"A".repeat(64), &"g".repeat(64)] {
+    for bad in [
+        vec![""],
+        vec!["update"],
+        vec!["login"],
+        vec!["mcp"],
+        vec!["version", "--json"],
+        vec!["--version=1"],
+        vec!["/usr/bin/codex"],
+        vec!["{workspace}"],
+        vec!["--version", "--version"],
+    ] {
         let mut t = codex();
         set(
             &mut t,
             &["capture", "executable"],
-            "sha256",
-            bad.to_string(),
+            "version_args",
+            strings(&bad),
         );
-        refused(&t, PINNED, &["capture.executable.sha256"]);
+        refused(&t, PINNED, &["capture.executable.version_args", "no proxy"]);
+        refused(&t, DEV, &["capture.executable.version_args"]);
+    }
+}
+
+/// D53: a manifest that still pins a build is refused with one sentence naming the retired
+/// key, not with the newer-schema sentence an unknown key gets.
+#[test]
+fn a_retired_pin_key_is_refused_with_its_own_sentence() {
+    for key in ["sha256", "version"] {
+        let mut base = codex();
+        set(&mut base, &["capture", "executable"], key, "0.153.0");
+        let mut over = with_platform(codex(), "linux-x86_64", &[("SHELL", "/bin/bash")]);
+        set(
+            &mut over,
+            &["capture", "platform", "linux-x86_64"],
+            key,
+            "0.153.0",
+        );
+        for (t, field) in [
+            (base, format!("capture.executable.{key}")),
+            (over, format!("capture.platform.linux-x86_64.{key}")),
+        ] {
+            let sentence = format!(
+                "`{key}` is no longer a connector field (D53): the tracer records the build \
+                 that runs instead of pinning one; delete the line."
+            );
+            for origin in [PINNED, DEV] {
+                refused(&t, origin, &[&field, &sentence]);
+                let msg = outcome(&t, origin).unwrap();
+                assert!(!msg.contains(NEWER_SENTENCE), "{msg}");
+            }
+        }
     }
 }
 
@@ -2391,15 +2451,13 @@ fn the_closed_sets_are_non_exhaustive_so_a_downstream_match_must_end_in_a_wildca
 }
 
 // ---------------------------------------------------------------------------------------
-// `[capture.platform.<os>-<arch>]`: the per-platform executable pin and env
+// `[capture.platform.<os>-<arch>]`: the per-platform env
 // ---------------------------------------------------------------------------------------
 
-const LINUX_SHA: &str = "fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be";
-
-/// `t` with `[capture.platform.<key>]` holding `sha256` and `[capture.platform.<key>.env]`.
-fn with_platform(mut t: Table, key: &str, sha256: &str, env: &[(&str, &str)]) -> Table {
+/// `t` with `[capture.platform.<key>]`, holding `[capture.platform.<key>.env]` when `env` has
+/// entries.
+fn with_platform(mut t: Table, key: &str, env: &[(&str, &str)]) -> Table {
     let mut over = Table::new();
-    over.insert("sha256".into(), sha256.into());
     if !env.is_empty() {
         let env: Table = env
             .iter()
@@ -2424,42 +2482,25 @@ fn parsed(t: &Table) -> HarnessManifest {
 }
 
 #[test]
-fn a_platform_override_replaces_only_the_pin_and_env() {
-    let t = with_platform(
-        codex(),
-        "linux-x86_64",
-        LINUX_SHA,
-        &[("SHELL", "/bin/bash")],
-    );
+fn a_platform_override_replaces_only_env() {
+    let t = with_platform(codex(), "linux-x86_64", &[("SHELL", "/bin/bash")]);
     let m = parsed(&t);
-    m.check_allowlists()
-        .expect("SHELL=/bin/bash is a reviewed row");
-    let base = &m.capture.executable;
 
-    let linux = m.capture.resolved_executable(PlatformKey::LinuxX86_64);
-    assert_eq!(linux.program, base.program);
-    assert_eq!(linux.version, base.version);
-    assert_eq!(linux.sha256, LINUX_SHA);
     let env = m.capture.resolved_env(PlatformKey::LinuxX86_64);
     assert_eq!(env.get("SHELL").map(String::as_str), Some("/bin/bash"));
     assert_eq!(env.len(), m.capture.env.len());
 
     for other in [PlatformKey::MacosAarch64, PlatformKey::LinuxAarch64] {
-        let exe = m.capture.resolved_executable(other);
-        assert_eq!(
-            (exe.program, exe.version, exe.sha256),
-            (
-                base.program.as_str(),
-                base.version.as_str(),
-                base.sha256.as_str()
-            )
-        );
         assert_eq!(m.capture.resolved_env(other), m.capture.env);
     }
     // No platform, as on any target the closed set does not name: the base values.
-    let none = m.capture.resolved_executable(None);
-    assert_eq!(none.sha256, base.sha256);
     assert_eq!(m.capture.resolved_env(None), m.capture.env);
+    // An empty override changes nothing.
+    let m = parsed(&with_platform(codex(), "linux-aarch64", &[]));
+    assert_eq!(
+        m.capture.resolved_env(PlatformKey::LinuxAarch64),
+        m.capture.env
+    );
 }
 
 #[test]
@@ -2483,18 +2524,18 @@ fn an_unknown_platform_key_is_refused() {
         "Linux-x86_64",
         "",
     ] {
-        let t = with_platform(codex(), key, LINUX_SHA, &[]);
+        let t = with_platform(codex(), key, &[]);
         refused(&t, PINNED, &["capture.platform", NEWER_SENTENCE]);
         refused(&t, DEV, &["capture.platform"]);
     }
     // A key named twice, as two headers or as a header and an inline table, is refused at load.
-    let entry = format!("sha256 = \"{LINUX_SHA}\"\n");
+    let entry = "env = { SHELL = \"/bin/bash\" }\n";
     for twice in [
         format!(
             "[capture.platform.linux-x86_64]\n{entry}\n[capture.platform.linux-x86_64]\n{entry}"
         ),
         format!(
-            "[capture.platform]\nlinux-x86_64 = {{ sha256 = \"{LINUX_SHA}\" }}\n\n\
+            "[capture.platform]\nlinux-x86_64 = {{ env = {{}} }}\n\n\
              [capture.platform.linux-x86_64]\n{entry}"
         ),
     ] {
@@ -2519,9 +2560,10 @@ fn an_override_with_any_other_field_is_refused() {
         ("ca", Value::Table(Table::new())),
         ("credential", Value::Table(Table::new())),
         ("executable", Value::Table(Table::new())),
+        ("version_args", strings(&["--version"])),
     ];
     for (key, value) in cases {
-        let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
+        let mut t = with_platform(codex(), "linux-x86_64", &[]);
         set(&mut t, &["capture", "platform", "linux-x86_64"], key, value);
         refused(
             &t,
@@ -2533,10 +2575,6 @@ fn an_override_with_any_other_field_is_refused() {
             ],
         );
     }
-    // `sha256` is required: an override is a pin.
-    let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
-    tbl(&mut t, &["capture", "platform", "linux-x86_64"]).remove("sha256");
-    refused(&t, PINNED, &["sha256"]);
 }
 
 #[test]
@@ -2564,39 +2602,114 @@ fn an_override_env_obeys_the_base_env_policy() {
         let reason = base_msg
             .split_once(": ")
             .map_or(base_msg.as_str(), |(_, r)| r);
-        let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
+        let t = with_platform(codex(), "linux-x86_64", &[(key, value)]);
         refused(&t, PINNED, &["capture.platform.linux-x86_64", reason]);
         refused(&t, DEV, &["capture.platform.linux-x86_64", reason]);
     }
 }
 
+/// D51: an override's env is held to the same generic rules as the base table (there is no
+/// per-connector list of reviewed rows any more), and a plain new variable is data.
 #[test]
-fn an_override_env_key_outside_the_allowlist_is_refused() {
-    // Passes every deny list, as the base table's `RUN_TAG` does, and is on no reviewed row.
+fn an_override_env_is_held_to_the_generic_rules() {
+    for (key, value) in [
+        ("SHELL", "/bin/csh"),
+        ("OPENSSL_CONF", "x"),
+        ("SSLKEYLOGFILE", "x"),
+        ("DEEPSEEK_API_BASE", "api.example.org"),
+        ("MODEL_HOST", "api.example.org"),
+    ] {
+        let t = with_platform(codex(), "linux-x86_64", &[(key, value)]);
+        refused(&t, PINNED, &["capture.platform.linux-x86_64", key]);
+    }
     for (key, value) in [
         ("RUN_TAG", "x"),
-        ("SHELL", "/bin/csh"),
         ("DISABLE_AUTOUPDATER", "0"),
+        ("PYTHONUNBUFFERED", "1"),
+        ("NODE_ENV", "production"),
     ] {
-        let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
-        let text = toml::to_string(&t).unwrap();
-        let m = HarnessManifest::from_toml_str(&text).unwrap();
-        let err = match m.validate(PINNED) {
-            Err(e) => e.to_string(),
-            Ok(()) => m
-                .check_allowlists()
-                .expect_err("not a reviewed row")
-                .to_string(),
-        };
-        assert!(err.contains("capture.platform.linux-x86_64"), "{err}");
-        assert!(err.contains(key), "{err}");
+        let t = with_platform(codex(), "linux-x86_64", &[(key, value)]);
+        let m = parsed(&t);
+        let env = m.capture.resolved_env(PlatformKey::LinuxX86_64);
+        assert_eq!(env.get(key).map(String::as_str), Some(value));
     }
-    let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[("RUN_TAG", "x")]);
-    let m = parsed(&t);
-    let err = m
-        .check_allowlists()
-        .expect_err("RUN_TAG is not a reviewed row");
-    assert!(err.to_string().contains("CAPTURE_ENV_ALLOWLIST"), "{err}");
+}
+
+/// D51: the rules that replaced the per-connector argv rows. Each word is refused anywhere in
+/// an argument, for every origin.
+#[test]
+fn argv_that_loosens_the_run_is_refused_by_rule() {
+    for (arg, needle) in [
+        ("--insecure", "verification off"),
+        ("--tls-no-verify", "verification off"),
+        ("--ssl-verify=false", "verification off"),
+        ("--keylog-file=x", "TLS secrets"),
+        (r#"notify=["x"]"#, "runs a program"),
+        (r#"mcp_servers.x.command="sh""#, "names a command"),
+        (
+            r#"{"mcpServers":{"x":{"command":"sh"}}}"#,
+            "names a command",
+        ),
+        ("--hooks=x", "names a command"),
+        ("--no-ssl-verification", "verification off"),
+        ("--no-check-certificate", "verification off"),
+        ("--openai-api-base=evil.example.org", "endpoint"),
+        ("--host", "names a server"),
+    ] {
+        let mut t = codex();
+        set(&mut t, &["capture"], "args", strings(&["exec", arg, "--"]));
+        refused(&t, PINNED, &["capture.args", needle]);
+        refused(&t, DEV, &["capture.args", needle]);
+    }
+}
+
+/// D51: the goal flag rule reads whole words, so Amp's `--execute` is a goal flag and `--exec`
+/// is not.
+#[test]
+fn goal_flag_words_are_whole_words() {
+    for (flag, ok) in [
+        ("--execute", true),
+        ("--query", true),
+        ("--prompt", true),
+        ("--payload", true),
+        ("--exec", false),
+        ("--prompt-file", false),
+        ("--run", false),
+        ("--load-config", false),
+    ] {
+        let mut t = hermes();
+        set(&mut t, &["capture"], "goal_flag", flag);
+        if ok {
+            admitted(&t, PINNED);
+        } else {
+            refused(&t, PINNED, &["capture.goal_flag", "the goal is a prompt"]);
+        }
+    }
+}
+
+/// D51: a new connector is data. An id, a model, flags and variables that no Rust file names
+/// pass validation as `Pinned`; nothing in `capture_policy.rs` lists connectors.
+#[test]
+fn a_new_connector_needs_no_rust() {
+    let mut t = codex();
+    t.insert("id".into(), Value::String("example-cli".into()));
+    set(
+        &mut t,
+        &["capture"],
+        "args",
+        strings(&[
+            "run",
+            "--model",
+            "example-model-1",
+            "--non-interactive",
+            "--cwd",
+            "{workspace}",
+            "--",
+        ]),
+    );
+    set(&mut t, &["capture", "env"], "EXAMPLE_NO_UPDATE", "1");
+    set(&mut t, &["capture", "env"], "EXAMPLE_TELEMETRY", "off");
+    admitted(&t, PINNED);
 }
 
 #[test]
@@ -2606,50 +2719,182 @@ fn an_override_env_may_not_set_a_variable_the_manifest_pins() {
         .as_str()
         .unwrap()
         .to_string();
-    let t = with_platform(t, "linux-aarch64", LINUX_SHA, &[(&home, "x")]);
+    let t = with_platform(t, "linux-aarch64", &[(&home, "x")]);
     refused(&t, PINNED, &["capture.platform.linux-aarch64", &home]);
 }
 
+// ---------------------------------------------------------------------------------------
+// A harness with no home variable, and loopback hosts
+// ---------------------------------------------------------------------------------------
+
+/// `codex` without `home.env`: a per-run config home nothing points at, and a native root under
+/// the private run `HOME`, where such a harness keeps its sessions.
+fn without_home_env() -> Table {
+    let mut t = codex();
+    let home = tbl(&mut t, &["capture", "home"]);
+    home.remove("env");
+    home.insert("config_home".into(), Value::String("per_run".into()));
+    let native = t["capture"]["native"].as_array().unwrap().clone();
+    let mut native0 = native[0].as_table().unwrap().clone();
+    native0.insert(
+        "root".into(),
+        Value::String("{run_home}/.example/sessions".into()),
+    );
+    tbl(&mut t, &["capture"]).insert("native".into(), Value::Array(vec![Value::Table(native0)]));
+    t
+}
+
 #[test]
-fn an_override_sha256_must_be_64_lowercase_hex() {
-    for bad in ["", "ABC", &"a".repeat(63), &"A".repeat(64), &"g".repeat(64)] {
-        let t = with_platform(codex(), "linux-x86_64", bad, &[]);
+fn home_env_is_optional_and_then_the_harness_lives_in_the_run_home() {
+    let t = without_home_env();
+    admitted(&t, PINNED);
+    let m = parsed(&t);
+    assert_eq!(m.capture.home.env, None);
+
+    // Anything that only a home variable would make the harness read is refused, not admitted to
+    // record nothing.
+    let mut shared = without_home_env();
+    set(&mut shared, &["capture", "home"], "config_home", "shared");
+    refused(
+        &shared,
+        PINNED,
+        &["capture.home.config_home", "requires `capture.home.env`"],
+    );
+
+    let mut root = without_home_env();
+    let mut native = root["capture"]["native"].as_array().unwrap()[0]
+        .as_table()
+        .unwrap()
+        .clone();
+    native.insert(
+        "root".into(),
+        Value::String("{config_home}/sessions".into()),
+    );
+    tbl(&mut root, &["capture"]).insert("native".into(), Value::Array(vec![Value::Table(native)]));
+    refused(&root, PINNED, &["capture.native.root", "{run_home}/..."]);
+
+    for (field, value) in [
+        ("per_run_dir", Value::String("example".into())),
+        ("dirs", strings(&["sessions"])),
+        (
+            "seed",
+            Value::Array(vec![Value::Table(
+                toml::from_str::<Table>("file = \"config.toml\"").unwrap(),
+            )]),
+        ),
+    ] {
+        let mut t = without_home_env();
+        set(&mut t, &["capture", "home"], field, value);
         refused(
             &t,
             PINNED,
-            &["capture.platform.linux-x86_64.sha256", "64 lowercase hex"],
+            &[
+                &format!("capture.home.{field}"),
+                "requires `capture.home.env`",
+            ],
         );
     }
 }
 
+/// A capture launch sets `NO_PROXY=127.0.0.1,localhost`, so a loopback model host would validate
+/// and record nothing. Pinned connectors are refused one; the kit's `*.localhost` stand-ins load
+/// as `Dev`.
 #[test]
-fn an_override_version_obeys_the_version_grammar() {
-    for bad in ["", "v1", "1 2", &format!("1{}", "0".repeat(32))] {
-        let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
-        set(
-            &mut t,
-            &["capture", "platform", "linux-x86_64"],
-            "version",
-            bad.to_string(),
-        );
+fn a_pinned_connector_names_no_loopback_or_single_label_host() {
+    for host in [
+        "localhost",
+        "api.localhost",
+        "localhost.localdomain",
+        "ollama",
+        "127.1",
+        "0x7f.1",
+        "127.0.0.01",
+    ] {
+        let mut t = codex();
+        let mut hosts = t["capture"]["hosts"].as_array().unwrap().clone();
+        hosts[0]
+            .as_table_mut()
+            .unwrap()
+            .insert("host".into(), Value::String(host.into()));
+        tbl(&mut t, &["capture"]).insert("hosts".into(), Value::Array(hosts.clone()));
+        refused(&t, PINNED, &["capture.hosts", host]);
+        if host.ends_with("localhost") {
+            admitted(&t, DEV);
+        }
+
+        let mut t = codex();
+        set(&mut t, &["capture"], "auth_hosts", strings(&[host]));
+        refused(&t, PINNED, &["capture.auth_hosts", host]);
+        if host.ends_with("localhost") {
+            admitted(&t, DEV);
+        }
+    }
+}
+
+/// The stdout identity wait is connector data, not a constant named after one harness.
+#[test]
+fn the_stdout_identity_wait_is_a_bounded_connector_field() {
+    let m = parsed(&codex());
+    assert_eq!(
+        m.capture.identity.stdout_wait(),
+        std::time::Duration::from_secs(120)
+    );
+    let mut t = codex();
+    set(&mut t, &["capture", "identity"], "wait_seconds", 300);
+    let m = parsed(&t);
+    assert_eq!(
+        m.capture.identity.stdout_wait(),
+        std::time::Duration::from_secs(300)
+    );
+    for bad in [0, 601] {
+        let mut t = codex();
+        set(&mut t, &["capture", "identity"], "wait_seconds", bad);
+        refused(&t, PINNED, &["capture.identity.wait_seconds", "1 to 600"]);
+    }
+    let mut t = hermes();
+    set(&mut t, &["capture", "identity"], "wait_seconds", 60);
+    refused(
+        &t,
+        PINNED,
+        &["capture.identity", "wait_seconds", "stdout_json"],
+    );
+}
+
+/// A connector reserves its harness's own namespace as data (`reserved_env_prefixes`), so a
+/// switch that would silently stop capture is refused without a harness name in the policy.
+#[test]
+fn a_connector_reserves_its_own_env_namespace_as_data() {
+    for name in [
+        "HERMES_SAFE_MODE",
+        "HERMES_IGNORE_USER_CONFIG",
+        "hermes_yolo_mode",
+    ] {
+        let mut t = hermes();
+        set(&mut t, &["capture", "env"], name, "1");
         refused(
             &t,
             PINNED,
-            &["capture.platform.linux-x86_64.version", "must match"],
+            &["capture.env", "HERMES_", "reserved_env_prefixes"],
         );
     }
-    let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
-    set(
-        &mut t,
-        &["capture", "platform", "linux-x86_64"],
-        "version",
-        "0.153.1",
-    );
-    let m = parsed(&t);
-    assert_eq!(
-        m.capture
-            .resolved_executable(PlatformKey::LinuxX86_64)
-            .version,
-        "0.153.1"
-    );
+    // Another connector is not bound by Hermes's reservation.
+    let mut t = codex();
+    set(&mut t, &["capture", "env"], "HERMES_SAFE_MODE", "1");
+    admitted(&t, PINNED);
+    // The prefix grammar.
+    for bad in [
+        "hermes_",
+        "HERMES",
+        "_X_",
+        "A_B_C_D_E_F_G_H_I_J_K_L_M_N_O_P_Q_",
+    ] {
+        let mut t = hermes();
+        set(
+            &mut t,
+            &["capture"],
+            "reserved_env_prefixes",
+            strings(&[bad]),
+        );
+        refused(&t, PINNED, &["capture.reserved_env_prefixes"]);
+    }
 }

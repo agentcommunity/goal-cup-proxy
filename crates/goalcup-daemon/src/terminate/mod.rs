@@ -269,7 +269,8 @@ pub fn terminate_with(
     };
 
     // **An absent pid leads nothing.** `guard_registered` answers `Absent`
-    // for a pid that is not in the process table at all, which is the ordinary seal — the
+    // for a pid that is not in the process table at all (or that a second `liveness` read
+    // found gone after it was caught exiting), which is the ordinary seal — the
     // participant quit hours ago — and which it cannot ask either of its questions about:
     // there is no age to compare and no argv to match. The group id on the handle is then a
     // number and nothing else, and a `killpg` on it days later reaches whatever process has

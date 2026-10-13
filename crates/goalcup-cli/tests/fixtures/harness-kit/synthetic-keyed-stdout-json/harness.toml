@@ -7,8 +7,6 @@ continuation = "one keyed child, one stdout-bound offline echo and one snapshot"
 
 [capture.executable]
 program = "python3"
-version = "@PYTHON3_VERSION@"
-sha256 = "@PYTHON3_SHA256@"
 
 [capture.home]
 run_home = "empty"
