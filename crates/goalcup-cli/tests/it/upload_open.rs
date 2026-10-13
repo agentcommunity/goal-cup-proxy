@@ -26,6 +26,8 @@ fn a_repo_is_a_github_owner_and_name_and_nothing_else() {
         "https://github.com/a b/c",
         "https://github.com//b",
         "git@github.com:a/b.git",
+        "https://github.com/a/..",
+        "https://github.com/a_b/c",
     ] {
         let refusal = checked_repo_url(bad).unwrap_err();
         assert_eq!(refusal.exit_code(), 1, "{bad}");

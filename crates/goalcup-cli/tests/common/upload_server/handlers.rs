@@ -202,14 +202,19 @@ fn valid_repo_url(url: &str) -> bool {
     let (Some(owner), Some(repo), None) = (parts.next(), parts.next(), parts.next()) else {
         return false;
     };
-    let ok = |p: &str| {
-        !p.is_empty()
-            && p != "."
-            && p != ".."
-            && p.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-    };
-    ok(owner) && ok(repo)
+    // docs/UPLOAD-API.md: the owner is letters, digits and `-`; the repository also `.` and
+    // `_`, and is never `.` or `..`.
+    let owner_ok = !owner.is_empty()
+        && owner
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    let repo_ok = !repo.is_empty()
+        && repo != "."
+        && repo != ".."
+        && repo
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    owner_ok && repo_ok
 }
 
 fn run_view(run: &RunRecord) -> Value {
