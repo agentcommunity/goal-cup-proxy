@@ -1065,7 +1065,11 @@ impl HarnessManifest {
                     "an argument is longer than the bound or contains a control character",
                 ));
             }
-            if let Some(why) = capture_arg_denied(a) {
+            // A `Dev` argument that is an absolute path is one the kit or the controlled
+            // workload substituted (`@STAND_IN@`); its directory names (a checkout under
+            // `.../hook-fix/`) are not flags, so the word rules do not read them.
+            let substituted_path = origin == Origin::Dev && a.starts_with('/');
+            if !substituted_path && let Some(why) = capture_arg_denied(a) {
                 return Err(refuse("capture.args", format!("`{a}` {why}")));
             }
             // N1: the one observable predicate. A pinned connector never needs an absolute

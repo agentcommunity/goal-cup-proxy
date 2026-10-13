@@ -101,10 +101,11 @@ refuses many invalid values, but validation is not a substitute for review.
    path. If argv is pre-scanned, `argv_guard` covers every acted option and abbreviation.
 3. Check `capture.env`: justify every value; `SHELL` is only `/bin/zsh`, `/bin/bash` or `/bin/sh`.
    No Rust list names a connector's argv or env any more (D51): this step is the control for
-   what the generic rules cannot see. Check that no safety flag the harness needs was dropped
-   (Claude Code's `--strict-mcp-config`, Codex's `-s workspace-write`), that no value re-enables
-   self-update (`DISABLE_AUTOUPDATER = "0"`), and that no argument or variable names a command,
-   a hook, an MCP server, a host or a file outside the run.
+   what the generic rules cannot see. Check that no flag capture needs was dropped (one headless
+   turn, the session file kept, self-update off: `DISABLE_AUTOUPDATER = "0"` turns it back on),
+   and that no argument or variable names a command, a hook, an MCP server, a host or a file
+   outside the run. How much the harness may do (model, sandbox, permissions) is the
+   participant's, not the connector's: a connector does not limit it.
    Look for telemetry exporters and code loaders. Do not request a `NO_PAGER` exception: the
    `PAGER` suffix rule refuses it.
 4. Re-derive `capture.executable.sha256` from an official artifact of exactly the declared version.

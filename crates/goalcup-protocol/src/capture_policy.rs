@@ -186,6 +186,16 @@ pub const INJECTION_ENV: &[&str] = &[
     "BASHOPTS",
     "PS1",
     "PS2",
+    // D51: runtime variables that name code to load or run (a whole `PYTHON*` or `NODE_*`
+    // prefix would also refuse `PYTHONUNBUFFERED` and `NODE_ENV`).
+    "PYTHONBREAKPOINT",
+    "PYTHONINSPECT",
+    "PYTHONEXECUTABLE",
+    "NODE_REPL_EXTERNAL_MODULE",
+    "BUN_CONFIG_PRELOAD",
+    "PERL5DB",
+    "PERLDB_OPTS",
+    "RUBYGEMS_GEMDEPS",
 ];
 
 /// Name SUFFIXES that make a tool run a command: `GIT_PROXY_COMMAND`, `GIT_EDITOR`,
@@ -243,32 +253,6 @@ pub const INJECTION_PREFIXES: &[(&str, &str)] = &[
     (
         "OPENSSL_",
         "configures OpenSSL, which can load a configuration file, an engine or a module",
-    ),
-    // D51: a language runtime's own namespace (`PYTHONBREAKPOINT`, `NODE_REPL_EXTERNAL_MODULE`,
-    // `PERL5DB`) can name code it loads or runs.
-    (
-        "PYTHON",
-        "configures the Python runtime, which can load and run code",
-    ),
-    (
-        "NODE_",
-        "configures the Node.js runtime, which can load and run code",
-    ),
-    (
-        "BUN_",
-        "configures the Bun runtime, which can load and run code",
-    ),
-    (
-        "DENO_",
-        "configures the Deno runtime, which can load and run code",
-    ),
-    (
-        "PERL",
-        "configures the Perl runtime, which can load and run code",
-    ),
-    (
-        "RUBY",
-        "configures the Ruby runtime, which can load and run code",
     ),
 ];
 
@@ -898,6 +882,9 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
             "loads a configuration profile from outside the capture profile",
         ),
         ("--plugin-dir", "loads plugin code into the harness"),
+        ("--host", "names a server (D1)"),
+        ("--server", "names a server (D1)"),
+        ("--url", "names a server (D1)"),
     ];
     const SUBSTRING: &[(&str, &str)] = &[
         ("baseurl", "redirects the model endpoint (D1)"),
@@ -931,32 +918,26 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
         ("nodeoptions", "injects code into the harness"),
         ("bunoptions", "injects code into the harness"),
         // D51: what the per-connector argv rows used to stop (Codex `-c notify=[...]`, an MCP
-        // server's `command`, `--insecure`, a sandbox or permission switch), as rules.
+        // server's `command`, `--insecure`), as rules. How much the harness may do (its
+        // sandbox, permissions, directories, model) is the participant's, not a capture rule.
         ("insecure", "turns certificate verification off"),
         ("noverify", "turns certificate verification off"),
         ("skipverify", "turns certificate verification off"),
-        ("sslverify", "turns certificate verification off"),
-        ("tlsverify", "turns certificate verification off"),
+        ("sslverif", "turns certificate verification off"),
+        ("tlsverif", "turns certificate verification off"),
+        ("verifyssl", "turns certificate verification off"),
+        ("verifytls", "turns certificate verification off"),
+        ("strictssl", "turns certificate verification off"),
+        ("checkcertificate", "turns certificate verification off"),
+        ("ignorecertificate", "turns certificate verification off"),
+        // A server named without a scheme (`--api-base evil.example`), as in env.
+        ("apibase", "redirects the model endpoint (D1)"),
+        ("apihost", "redirects the model endpoint (D1)"),
+        ("apiserver", "redirects the model endpoint (D1)"),
         ("keylog", "writes TLS secrets to a file"),
         ("notify", "runs a program on an event"),
         ("command", "names a command the harness runs"),
         ("hook", "names a command the harness runs"),
-        (
-            "danger",
-            "turns the harness's sandbox or permission checks off",
-        ),
-        (
-            "bypass",
-            "turns the harness's sandbox or permission checks off",
-        ),
-        (
-            "yolo",
-            "turns the harness's sandbox or permission checks off",
-        ),
-        (
-            "adddir",
-            "widens the directories the harness may read or write",
-        ),
     ];
     let lower = arg.to_ascii_lowercase();
     for (flag, why) in WHOLE {
@@ -974,20 +955,17 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
 /// Why a `goal_flag` is refused beyond [`capture_arg_denied`], or `None` (D51). The goal is a
 /// prompt the harness reads: an option whose name says it runs, evaluates or loads its value
 /// (`--exec`, `--command`, `--script`, `--file`, `--config`) would hand the goal text to
-/// something other than the model. Compared after lower-casing and dropping `-` and `_`.
+/// something other than the model. Compared lower-cased, word by word (`-` and `_` split).
 pub fn goal_flag_denied(flag: &str) -> Option<&'static str> {
     const WORDS: &[&str] = &[
         "exec", "eval", "shell", "cmd", "command", "script", "run", "file", "path", "load",
         "config", "import", "plugin", "hook",
     ];
-    let normal: String = flag
-        .to_ascii_lowercase()
-        .chars()
-        .filter(|c| *c != '-' && *c != '_')
-        .collect();
-    WORDS
-        .iter()
-        .any(|w| normal.contains(w))
+    // Whole words only: `--exec` and `--prompt-file` are refused, `--execute` (Amp's goal
+    // flag) and `--payload` are not.
+    flag.to_ascii_lowercase()
+        .split(['-', '_'])
+        .any(|part| WORDS.contains(&part))
         .then_some("names an option that runs, evaluates or loads its value; the goal is a prompt")
 }
 

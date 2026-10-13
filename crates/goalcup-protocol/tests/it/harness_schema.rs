@@ -2582,7 +2582,12 @@ fn an_override_env_is_held_to_the_generic_rules() {
         let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
         refused(&t, PINNED, &["capture.platform.linux-x86_64", key]);
     }
-    for (key, value) in [("RUN_TAG", "x"), ("DISABLE_AUTOUPDATER", "0")] {
+    for (key, value) in [
+        ("RUN_TAG", "x"),
+        ("DISABLE_AUTOUPDATER", "0"),
+        ("PYTHONUNBUFFERED", "1"),
+        ("NODE_ENV", "production"),
+    ] {
         let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
         let m = parsed(&t);
         let env = m.capture.resolved_env(PlatformKey::LinuxX86_64);
@@ -2606,15 +2611,39 @@ fn argv_that_loosens_the_run_is_refused_by_rule() {
             "names a command",
         ),
         ("--hooks=x", "names a command"),
-        ("--dangerously-skip-permissions", "sandbox or permission"),
-        ("danger-full-access", "sandbox or permission"),
-        ("bypassPermissions", "sandbox or permission"),
-        ("--yolo", "sandbox or permission"),
+        ("--no-ssl-verification", "verification off"),
+        ("--no-check-certificate", "verification off"),
+        ("--openai-api-base=evil.example.org", "endpoint"),
+        ("--host", "names a server"),
     ] {
         let mut t = codex();
         set(&mut t, &["capture"], "args", strings(&["exec", arg, "--"]));
         refused(&t, PINNED, &["capture.args", needle]);
         refused(&t, DEV, &["capture.args", needle]);
+    }
+}
+
+/// D51: the goal flag rule reads whole words, so Amp's `--execute` is a goal flag and `--exec`
+/// is not.
+#[test]
+fn goal_flag_words_are_whole_words() {
+    for (flag, ok) in [
+        ("--execute", true),
+        ("--query", true),
+        ("--prompt", true),
+        ("--payload", true),
+        ("--exec", false),
+        ("--prompt-file", false),
+        ("--run", false),
+        ("--load_config", false),
+    ] {
+        let mut t = hermes();
+        set(&mut t, &["capture"], "goal_flag", flag);
+        if ok {
+            admitted(&t, PINNED);
+        } else {
+            refused(&t, PINNED, &["capture.goal_flag", "the goal is a prompt"]);
+        }
     }
 }
 

@@ -511,17 +511,11 @@ fn a_pinned_connector_sets_no_env_the_rules_refuse() {
 }
 
 /// Review R7 I-2: arguments the deny lists missed, refused by rule since D51. A dropped
-/// argument (Claude Code without `--strict-mcp-config`) is a harness-specific fact no rule can
-/// see: it is on the reviewer checklist, and the reviewed diff is the control.
+/// argument is a harness-specific fact no rule can see: it is on the reviewer checklist, and
+/// the reviewed diff is the control.
 #[test]
 fn a_pinned_connector_passes_no_args_the_rules_refuse() {
-    for extra in [
-        "--insecure",
-        "--cafile",
-        r#"notify=[\"sh\",\"-c\",\"id\"]"#,
-        "--add-dir",
-        "danger-full-access",
-    ] {
+    for extra in ["--insecure", "--cafile", r#"notify=[\"sh\",\"-c\",\"id\"]"#] {
         let tmp = shipped_dir("codex-cli", |toml| {
             toml.replace(
                 "  \"--skip-git-repo-check\",\n",
@@ -597,7 +591,7 @@ fn a_dev_seed_carrying_an_endpoint_is_refused() {
     assert!(msg.contains("capture.home.seed"), "{msg}");
 }
 
-/// D51: a connector's argv and env are data. A pinned connector whose model changes and which
+/// D51: a connector's argv and env are data. A pinned connector that adds a model flag and
 /// sets a variable no Rust file names loads as `Pinned`: the only gates are the generic rules
 /// in `capture_policy.rs`, the directory pin and review. (Until D51 this was refused unless
 /// `capture_policy.rs` carried a matching per-connector row.)
@@ -606,9 +600,12 @@ fn a_pinned_connector_needs_no_rust_row_for_its_argv_or_env() {
     let (_keep, dir) = shipped_copy("codex-cli");
     let path = dir.join("harness.toml");
     let text = std::fs::read_to_string(&path).unwrap();
-    assert!(text.contains("\"gpt-5.6-luna\""), "the fixture moved");
+    assert!(text.contains("\"exec\", \"--json\","), "the fixture moved");
     let text = text
-        .replace("\"gpt-5.6-luna\"", "\"gpt-example-model\"")
+        .replace(
+            "\"exec\", \"--json\",",
+            "\"exec\", \"--json\", \"--model\", \"gpt-example-model\",",
+        )
         .replace(
             "[capture.env]\n",
             "[capture.env]\nEXAMPLE_NO_RUST_ROW = \"1\"\n",
@@ -630,13 +627,14 @@ fn a_pinned_connector_needs_no_rust_row_for_its_argv_or_env() {
     );
 
     // The generic rules still bind a pinned connector.
-    let text = std::fs::read_to_string(&path)
-        .unwrap()
-        .replace("\"workspace-write\"", "\"danger-full-access\"");
+    let text = std::fs::read_to_string(&path).unwrap().replace(
+        "\"--skip-git-repo-check\",",
+        "\"--skip-git-repo-check\", \"--insecure\",",
+    );
     std::fs::write(&path, text).unwrap();
     let msg = refusal(&dir, Origin::Pinned);
     assert!(
-        msg.contains("danger-full-access") && msg.contains("sandbox"),
+        msg.contains("--insecure") && msg.contains("verification off"),
         "{msg}"
     );
 }

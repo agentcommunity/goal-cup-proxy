@@ -1285,16 +1285,24 @@ to generic rules that bind every connector, and a new connector, a model bump or
 is a data-only PR. This amends D43 ruling 5's "a harness PR has no `.rs` file", which the
 allowlists had made false.
 - **Why it is safe.** At run time only pinned bytes load, and the pins are compiled in, so a
-  changed argv or env already needs a merged PR. `connectors/` and `pins/` are code-owned, so that
-  PR is a reviewed diff. The allowlists repeated the same review in a Rust file.
-- **What became a rule.** The R7 cases each have a rule: `OPENSSL_*`, `*KEYLOG*`, the language
-  runtimes' namespaces (`PYTHON*`, `NODE_*`, `BUN_*`, `DENO_*`, `PERL*`, `RUBY*`) and server
-  names (`*_BASE`, `*_HOST`, `*_ADDR`, `*_SERVER`, `*_ORIGIN`, `*_REGISTRY`, beside `*_URL`) in
-  env; certificate-verification switches, `keylog`, `notify`, `command`, `hook`, sandbox and
-  permission bypasses (`danger`, `bypass`, `yolo`) and `--add-dir` in argv; and a `goal_flag`
-  whose name says it runs, evaluates or loads its value (`--exec`, `--script`, `--file`).
-- **What only review sees.** A dropped safety flag (Claude Code's `--strict-mcp-config`) and a
-  value that re-enables self-update (`DISABLE_AUTOUPDATER = "0"`) are harness-specific facts.
+  changed argv or env already needs a merged PR. `connectors/` and `pins/` are code-owned and the
+  `main` ruleset requires a code owner's approval, so an outside PR is a reviewed diff. The
+  maintainer's own PRs may use the temporary single-maintainer bypass
+  (`docs/REPOSITORY-GOVERNANCE.md`) and then have no second reviewer; the allowlists did not
+  change that, since the maintainer wrote their rows too.
+- **What became a rule.** The R7 cases each have a rule: in env, `OPENSSL_*`, `*KEYLOG*`, the
+  runtime variables that name code to load (`PYTHONBREAKPOINT`, `NODE_REPL_EXTERNAL_MODULE`,
+  `PERL5DB` and their siblings, by name, so `PYTHONUNBUFFERED` and `NODE_ENV` stay data) and
+  server names (`*_BASE`, `*_HOST`, `*_HOSTNAME`, `*_ADDR`, `*_ADDRESS`, `*_SERVER`,
+  `*_ORIGIN`, `*_REGISTRY`, beside `*_URL`); in argv, certificate-verification switches
+  (including `cafile`, `capath`), `keylog`, `notify`, `command`, `hook`, an API base or host
+  without a scheme, and the whole flags `--host`, `--server`, `--url`; and a `goal_flag` with a
+  word that says it runs, evaluates or loads its value (`--exec`, `--script`, `--prompt-file`;
+  `--execute` is a word of its own and passes). How much the harness may do (model, sandbox,
+  permissions, directories) is not a capture rule and has none (owner direction, 2026-10-14).
+- **What only review sees.** A dropped flag that capture needs (one headless turn, the session
+  file kept) and a value that re-enables self-update (`DISABLE_AUTOUPDATER = "0"`) are
+  harness-specific facts.
   They are on the reviewer checklist (`docs/CONNECTOR-CONTRIBUTING.md`, step 3), and the
   loader tests that asserted them under the allowlist were narrowed to the rule cases.
 - **What stays closed, as security boundaries.** `CREDENTIAL_ENV` names the variables the
