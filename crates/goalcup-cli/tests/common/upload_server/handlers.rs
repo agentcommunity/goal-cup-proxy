@@ -740,22 +740,23 @@ async fn seal(
     }
     // After the deadline the seal is taken only when the server holds the chain up to the end
     // the final heartbeat committed.
-    if run.stopped() {
-        let Some(end) = run.final_commit.as_ref() else {
-            let mut e = ApiError::new(
-                503,
-                "awaiting_final",
-                "The run is past its deadline and no final heartbeat has arrived yet.",
-            );
-            e.retry_after = Some(1);
-            return Err(e);
-        };
-        let complete = run.next_seq() == end.seq + 1 && run.head() == end.head;
-        if !complete {
-            return Err(ApiError::conflict(
-                "The run is past its deadline and the server does not hold the chain up to the committed end.",
-            ));
-        }
+    // After the deadline the seal waits for the final heartbeat, and a committed end (before
+    // or after the deadline) binds it: the server must hold the chain up to that end.
+    if run.stopped() && run.final_commit.is_none() {
+        let mut e = ApiError::new(
+            503,
+            "awaiting_final",
+            "The run is past its deadline and no final heartbeat has arrived yet.",
+        );
+        e.retry_after = Some(1);
+        return Err(e);
+    }
+    if let Some(end) = run.final_commit.as_ref()
+        && !(run.next_seq() == end.seq + 1 && run.head() == end.head)
+    {
+        return Err(ApiError::conflict(
+            "The server does not hold the chain up to the committed end.",
+        ));
     }
     run.seal = Some((req.seal_json, req.baseline_json));
     run.status = RunStatus::Sealed;

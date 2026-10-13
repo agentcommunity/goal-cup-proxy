@@ -297,13 +297,12 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   // After the deadline the seal is accepted only for the end the final heartbeat committed, and
   // only once the server holds the chain all the way to it. (The chain cannot grow past the
   // committed end, so a check against this snapshot cannot be overtaken.)
-  if (isStopped(ctx, run)) {
-    if (run.final === null) {
-      throw new ApiError(503, "awaiting_final", "Send the final heartbeat before sealing a run past its deadline.", { "retry-after": String(FINAL_RETRY_AFTER) });
-    }
-    if (run.next_seq - 1 !== run.final.seq || run.head !== run.final.head) {
-      throw conflict("The server does not hold the chain up to the end the final heartbeat committed yet; read the position and upload the rest.");
-    }
+  // A committed end binds the seal before the deadline too.
+  if (isStopped(ctx, run) && run.final === null) {
+    throw new ApiError(503, "awaiting_final", "Send the final heartbeat before sealing a run past its deadline.", { "retry-after": String(FINAL_RETRY_AFTER) });
+  }
+  if (run.final !== null && (run.next_seq - 1 !== run.final.seq || run.head !== run.final.head)) {
+    throw conflict("The server does not hold the chain up to the end the final heartbeat committed yet; read the position and upload the rest.");
   }
 
   // Store the documents first, under names that contain their hash (so they can never be

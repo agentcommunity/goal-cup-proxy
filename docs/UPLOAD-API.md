@@ -193,7 +193,8 @@ no late window.
   uploading asks again after it has sent its final heartbeat. The seal after `deadline_at` is
   likewise `503 awaiting_final` before the final heartbeat, and `409` until the server holds the
   chain up to the committed end.
-- **Before `deadline_at`** a run that has a committed end accepts nothing past it either.
+- **Before `deadline_at`** a run that has a committed end accepts nothing past it either, and its
+  seal only once the server holds the chain up to it.
 - **Abandoned.** A run with no seal 24 hours after `deadline_at` is abandoned: it accepts
   nothing more (`410`), and it no longer counts as the account's open run.
 - Which records count is the verify job's: a record stamped after `deadline_at` does not, however

@@ -1258,6 +1258,15 @@ fn run_harness<'a>(
         give_back.launched();
     }
     // The first chunk goes now, beside the run; nothing the uploader does waits the harness.
+    // The run's upload record, kept here so the workspace's commit can be noted the moment the
+    // run stops.
+    let noted = forked.upload.as_ref().map(|start| start.record.clone());
+    let uploads_dir = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
+    let note_repo_head = || {
+        if let Some(record) = &noted {
+            crate::upload::uploader::note_repo_head(&uploads_dir, record);
+        }
+    };
     let mut uploading = forked.upload.take().and_then(|start| {
         let server = start.server?;
         let spool = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
@@ -1290,11 +1299,13 @@ fn run_harness<'a>(
         let Some(proxied) = proxy_slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
             return;
         };
+        // The commit the workspace has now, before the harness's grace lets it change.
+        note_repo_head();
         let mut said =
             format!("deadline: {reason}. The agent is stopped and the run sealed now.\n")
                 .into_bytes();
         let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
-        let finished = finish(
+        let mut finished = finish(
             client,
             &entry_id,
             proxied,
@@ -1304,6 +1315,23 @@ fn run_harness<'a>(
             Some(cfg),
             &mut said,
         );
+        // A seal that did not take (the daemon busy or restarting) is asked again: the harness
+        // must not run on past its deadline, and only the daemon's seal ends it.
+        for _ in 0..DEADLINE_SEAL_RETRIES {
+            if finished.is_ok() {
+                break;
+            }
+            std::thread::sleep(DEADLINE_SEAL_RETRY_WAIT);
+            finished = crate::commands::seal::seal_locally(
+                client,
+                &entry_id,
+                None,
+                None,
+                std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET,
+                termination_bound(grace),
+                Some(cfg),
+            );
+        }
         *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));
     })
     .map_err(|source| CliError::Io {
@@ -1311,6 +1339,10 @@ fn run_harness<'a>(
         source,
     });
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    // A run that ended on its own: its commit as it ended.
+    if forked.proxied.is_some() {
+        note_repo_head();
+    }
     let finished_early =
         early
             .into_inner()
@@ -2070,6 +2102,10 @@ fn finish(
     sealed
 }
 
+/// How often, and how far apart, a deadline seal that did not take is asked again.
+const DEADLINE_SEAL_RETRIES: u32 = 12;
+const DEADLINE_SEAL_RETRY_WAIT: Duration = Duration::from_secs(5);
+
 /// The upload server this run opens with: `None` with no `goalcup login`, and for a harness
 /// handed a provider key (`keyed`), whose run must pass the key scan at its end before
 /// anything leaves the machine. With a server, `--repo` is required, checked here before
@@ -2142,8 +2178,10 @@ impl Uploading {
             repo_url: self.repo_url.clone(),
         };
         crate::upload::give_back_pending(&self.server, cx.cfg);
-        let run = crate::upload::open_run(&self.server, &request)?;
+        // Taken before the first ask: a repeat after a lost reply answers the first
+        // `official_start`, and the run's own clock must never start later than the server's.
         let opened_at = goalcup_protocol::clock::ContinuousOrigin::now();
+        let run = crate::upload::open_run(&self.server, &request)?;
         let give_back = crate::upload::GiveBack::opened(&self.server, cx.cfg, &run);
         match give_back {
             Ok(give_back) => Ok(OpenedRun {

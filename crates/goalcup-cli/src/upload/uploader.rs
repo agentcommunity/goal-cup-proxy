@@ -346,6 +346,9 @@ pub struct Uploader {
     /// The last acknowledgement in the trace's `acks.jsonl`: its `seq` and `acked_at`.
     acked: Option<(u64, u64)>,
     spool: PathBuf,
+    /// Beside a recording run only: set once the run must stop, after which this background
+    /// upload sends nothing more (the finish takes over).
+    halt: Option<std::sync::Arc<AtomicBool>>,
 }
 
 impl Uploader {
@@ -372,6 +375,7 @@ impl Uploader {
             policy,
             pos: Position::from(&position),
             spool,
+            halt: None,
         };
         uploader.adopt_server_ack(&position);
         Ok(uploader)
@@ -406,6 +410,10 @@ impl Uploader {
     /// Send every complete line, chunk by chunk, once, within `deadline` if one is given.
     fn attempt(&mut self, deadline: Option<Instant>) -> Attempt {
         loop {
+            // A background upload stops between chunks once the run must stop.
+            if deadline.is_none() && self.halt.as_ref().is_some_and(|h| h.load(Ordering::SeqCst)) {
+                return Attempt::Retry(None, "the run is stopping".to_string());
+            }
             // Only a finish has a deadline; once it has passed, the rest is `goalcup upload`'s.
             let Some(timeout) = left(deadline, self.policy.put_timeout) else {
                 return Attempt::Stop("the time left to finish ran out".to_string());
@@ -443,6 +451,18 @@ impl Uploader {
     }
 
     fn failed(&self, error: ServerError) -> Attempt {
+        // Past the deadline the server takes nothing before the final heartbeat, which only a
+        // sealed run sends. Beside a recording run the stop is on its way, so this waits; for
+        // `goalcup upload` of a run that was never sealed it is the end of the road.
+        if self.halt.is_none()
+            && matches!(&error, ServerError::Status { code, .. } if code == "awaiting_final")
+        {
+            return Attempt::Stop(format!(
+                "the run is past its deadline and is not sealed on this machine, so its end cannot \
+                 be committed: run `goalcup seal {}` first, then upload again",
+                self.record.entry_id
+            ));
+        }
         if error.is_retryable() {
             Attempt::Retry(
                 error.retry_after().map(Duration::from_secs),
@@ -544,7 +564,8 @@ impl Uploader {
             let Some(timeout) = left(deadline, super::http::CALL_TIMEOUT) else {
                 return Err("the time left to finish ran out".to_string());
             };
-            match heartbeat(&self.server, &self.record, true, timeout) {
+            let repo_head = noted_repo_head(&self.spool, &self.record.entry_id);
+            match heartbeat(&self.server, &self.record, true, repo_head, timeout) {
                 None => return Err("the chain holds no whole record".to_string()),
                 Some(Ok(_)) => return Ok(()),
                 Some(Err(error)) if error.is_retryable() => {
@@ -658,15 +679,9 @@ pub fn local_end(chain: &Path) -> Option<(u64, u64, String)> {
 /// `packed-refs`. `None` when there is no repository or nothing is committed.
 pub fn repo_head(workspace: &Path) -> Option<String> {
     let git = workspace.join(".git");
-    let read = |path: PathBuf| {
-        let mut text = String::new();
-        std::fs::File::open(path)
-            .ok()?
-            .take(64 * 1024)
-            .read_to_string(&mut text)
-            .ok()?;
-        Some(text)
-    };
+    // The agent controls this directory: only regular files are read (a FIFO would block), and
+    // never more than a bound.
+    let read = |path: PathBuf| regular_file_text(&path, 64 * 1024);
     let is_commit = |s: &str| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit());
     let head = read(git.join("HEAD"))?;
     let head = head.trim();
@@ -682,10 +697,58 @@ pub fn repo_head(workspace: &Path) -> Option<String> {
         let commit = commit.trim();
         return is_commit(commit).then(|| commit.to_ascii_lowercase());
     }
-    read(git.join("packed-refs"))?.lines().find_map(|line| {
-        let (commit, name) = line.split_once(' ')?;
-        (name.trim() == reference && is_commit(commit)).then(|| commit.to_ascii_lowercase())
-    })
+    regular_file_text(&git.join("packed-refs"), 64 * 1024 * 1024)?
+        .lines()
+        .find_map(|line| {
+            let (commit, name) = line.split_once(' ')?;
+            (name.trim() == reference && is_commit(commit)).then(|| commit.to_ascii_lowercase())
+        })
+}
+
+/// The text of `path` if it is a regular file (never a FIFO, device or directory, and opened
+/// without blocking), at most `max` bytes, or `None`.
+fn regular_file_text(path: &Path, max: u64) -> Option<String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut text = String::new();
+    file.take(max + 1).read_to_string(&mut text).ok()?;
+    (text.len() as u64 <= max).then_some(text)
+}
+
+/// `<cfg>/uploads/<entry>.repo-head`: the commit noted when the run stopped.
+fn repo_head_path(spool_dir: &Path, entry_id: &str) -> PathBuf {
+    spool_dir.join(format!("{entry_id}.repo-head"))
+}
+
+/// Note the workspace repository's checked-out commit now, the moment the run stops, for the
+/// final heartbeat to send whenever it goes (a later `goalcup upload` included). Nothing is
+/// noted when there is no repository.
+pub fn note_repo_head(spool_dir: &Path, record: &UploadRecord) {
+    if record.workspace.is_empty() {
+        return;
+    }
+    if let Some(commit) = repo_head(Path::new(&record.workspace)) {
+        let _ = crate::config::write_secret_file(
+            &repo_head_path(spool_dir, &record.entry_id),
+            commit.as_bytes(),
+        );
+    }
+}
+
+/// The commit [`note_repo_head`] noted for the entry whose spool is `spool`, if any.
+fn noted_repo_head(spool: &Path, entry_id: &str) -> Option<String> {
+    let text = std::fs::read_to_string(repo_head_path(spool.parent()?, entry_id)).ok()?;
+    let text = text.trim();
+    (text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit())).then(|| text.to_string())
 }
 
 /// `POST /v1/runs/{id}/heartbeat` with the local chain's last whole record: `final` once the
@@ -695,14 +758,10 @@ fn heartbeat(
     server: &ServerClient,
     record: &UploadRecord,
     is_final: bool,
+    repo_head: Option<String>,
     timeout: Duration,
 ) -> Option<Result<HeartbeatAnswer, ServerError>> {
     let (offset_local, seq, head) = local_end(&Path::new(&record.trace_dir).join(CHAIN_FILE))?;
-    let repo_head = if is_final && !record.workspace.is_empty() {
-        repo_head(Path::new(&record.workspace))
-    } else {
-        None
-    };
     let request = HeartbeatRequest {
         entry_id: record.entry_id.clone(),
         seq,
@@ -746,9 +805,18 @@ fn watch_deadline(
     let mut next_beat = Instant::now();
     let tick = policy.poll.min(Duration::from_secs(1));
     while !done.load(Ordering::SeqCst) {
-        let reason = if Instant::now() >= next_beat {
+        // This machine's clock first: it needs no network, so a hanging server cannot hold it.
+        let local = local_deadline.filter(LocalDeadline::passed).map(|_| {
+            format!(
+                "the run's time is up by this machine's clock (its deadline was {})",
+                record.deadline_at
+            )
+        });
+        let reason = if local.is_some() {
+            local
+        } else if Instant::now() >= next_beat {
             next_beat = Instant::now() + policy.heartbeat;
-            match heartbeat(server, record, false, HEARTBEAT_TIMEOUT) {
+            match heartbeat(server, record, false, None, HEARTBEAT_TIMEOUT) {
                 Some(Ok(answer)) if answer.stop => Some(format!(
                     "the server says the run is over (its deadline was {})",
                     answer.deadline_at
@@ -758,14 +826,6 @@ fn watch_deadline(
         } else {
             None
         };
-        let reason = reason.or_else(|| {
-            local_deadline.filter(LocalDeadline::passed).map(|_| {
-                format!(
-                    "the run's time is up by this machine's clock (its deadline was {})",
-                    record.deadline_at
-                )
-            })
-        });
         if let Some(reason) = reason {
             over.store(true, Ordering::SeqCst);
             let _ = stopping.send(reason);
@@ -1056,7 +1116,10 @@ fn run(
                     policy,
                     spool_dir,
                 ) {
-                    Ok(resumed) => uploader = Some(resumed),
+                    Ok(mut resumed) => {
+                        resumed.halt = Some(over.clone());
+                        uploader = Some(resumed);
+                    }
                     Err(error) if error.is_retryable() => {
                         failures += 1;
                         let wait = backoff(

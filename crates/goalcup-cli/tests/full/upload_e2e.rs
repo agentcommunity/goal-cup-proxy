@@ -672,7 +672,9 @@ fn beating_policy() -> goalcup_cli::upload::uploader::Policy {
 #[test]
 fn the_server_stops_the_run_at_its_deadline() {
     let rig = Rig::new();
-    let server = short_server(&rig.root.join("server"), 3, None);
+    // Long enough for the fake harness to start and the agent to commit under a loaded test
+    // machine; short enough for a test.
+    let server = short_server(&rig.root.join("server"), 8, None);
     log_in(&rig, &server.url(), TOKEN);
     let goal = rig.goal(GOAL);
     let http = rig.client();
@@ -680,7 +682,24 @@ fn the_server_stops_the_run_at_its_deadline() {
     let mut opts = logged_in_options(&rig, &goal);
     opts.upload_policy = beating_policy();
     let started = std::time::Instant::now();
-    let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let (result, out) = std::thread::scope(|s| {
+        let running = rig.start(s, &client, opts, None);
+        // The agent commits in its workspace while the run records.
+        wait_until("the harness to start", || {
+            rig.harness_pid().is_some() || running.is_finished()
+        });
+        if running.is_finished() {
+            let (result, out) = running.join().unwrap();
+            panic!("start ended before the harness ran: {result:?}\n{out}");
+        }
+        let workspace = std::path::PathBuf::from(&client.book().creates[0].workspace);
+        let git = workspace.join(".git");
+        std::fs::create_dir_all(git.join("refs/heads")).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(git.join("refs/heads/main"), format!("{commit}\n")).unwrap();
+        running.join().unwrap()
+    });
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     assert!(
         started.elapsed() < std::time::Duration::from_secs(30),
@@ -697,6 +716,11 @@ fn the_server_stops_the_run_at_its_deadline() {
     let run_id = server.run_ids()[0].clone();
     assert!(!server.heartbeats(&run_id).is_empty());
     let committed = server.final_commit(&run_id).expect("a final heartbeat");
+    assert_eq!(
+        committed.repo_head.as_deref(),
+        Some(commit),
+        "the final heartbeat names the workspace's commit as the run stopped"
+    );
     let chain = std::fs::read(rig.trace(&outcome.entry_id).join("chain.jsonl")).unwrap();
     let last = chain
         .split(|b| *b == b'\n')
