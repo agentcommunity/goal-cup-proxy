@@ -14,6 +14,8 @@ import type {
   CommitChunkArgs,
   CommitChunkResult,
   Db,
+  HeartbeatArgs,
+  HeartbeatResult,
   OpenRunArgs,
   OpenRunResult,
   RunRow,
@@ -21,9 +23,9 @@ import type {
   SealResult,
   StoreReceiptResult,
 } from "./db.ts";
-import { FIRST_SEQ, GENESIS } from "./db.ts";
+import { ABANDON_AFTER_SECONDS, FIRST_SEQ, GENESIS, isAbandonable } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
-import { sha256Hex } from "./util.ts";
+import { parseTime, sha256Hex } from "./util.ts";
 
 interface StoredRun extends RunRow {
   harness_version: string;
@@ -31,6 +33,9 @@ interface StoredRun extends RunRow {
   abandon_reason: string | null;
   sealed_at: string | null;
   chunks: ChunkRecord[];
+  final_repo_head: string | null;
+  last_heartbeat: { at: string; seq: number; head: string; offset_local: number } | null;
+  heartbeat_count: number;
 }
 
 const MAX_CAS_TRIES = 10;
@@ -38,26 +43,34 @@ const MAX_CAS_TRIES = 10;
 export class LocalDb implements Db {
   readonly #bucket: R2Bucket;
   readonly #tokens: Map<string, string>; // sha256(token) -> member
+  readonly #abandonAfterSeconds: number;
 
-  private constructor(bucket: R2Bucket, tokens: Map<string, string>) {
+  private constructor(bucket: R2Bucket, tokens: Map<string, string>, abandonAfterSeconds: number) {
     this.#bucket = bucket;
     this.#tokens = tokens;
+    this.#abandonAfterSeconds = abandonAfterSeconds;
   }
 
   /** Parses DEV_TOKENS ("token1:member1,token2:member2"). Refuses to exist without it. */
-  static async create(bucket: R2Bucket, devTokens: string | undefined): Promise<LocalDb> {
+  static async create(
+    bucket: R2Bucket,
+    devTokens: string | undefined,
+    // Tests only (ABANDON_AFTER_SECONDS, honoured only by this local backend): production is 24 hours.
+    abandonAfterSeconds: number = ABANDON_AFTER_SECONDS,
+  ): Promise<LocalDb> {
     if (!devTokens || devTokens.trim() === "") {
       throw new Error("DB_BACKEND=local needs DEV_TOKENS (\"token1:member1,token2:member2\"); refusing to start without it");
     }
     const tokens = new Map<string, string>();
-    for (const pair of devTokens.split(",")) {
+    for (const [i, pair] of devTokens.split(",").entries()) {
       const at = pair.indexOf(":");
       const token = pair.slice(0, at).trim();
       const member = pair.slice(at + 1).trim();
-      if (at < 1 || token === "" || member === "") throw new Error(`DEV_TOKENS entry "${pair}" is not token:member`);
+      // Name the entry by position, never by content: it holds a token.
+      if (at < 1 || token === "" || member === "") throw new Error(`DEV_TOKENS entry number ${i + 1} is not token:member`);
       tokens.set(await sha256Hex(token), member);
     }
-    return new LocalDb(bucket, tokens);
+    return new LocalDb(bucket, tokens, abandonAfterSeconds);
   }
 
   async memberForToken(tokenSha256: string): Promise<string | null> {
@@ -106,7 +119,13 @@ export class LocalDb implements Db {
       const marker = await this.#bucket.get(openKey);
       if (marker !== null) {
         const heldId = ((await marker.json()) as { run_id: string }).run_id;
-        const held = await this.#readRun(heldId);
+        let held = await this.#readRun(heldId);
+        // An unsealed run 24 hours past its deadline is abandoned first, which frees the slot.
+        // (`official_start` is the caller's "now": the Worker's clock.)
+        if (held !== null && held.run.status === "open" && isAbandonable(held.run.deadline_at, parseTime(a.official_start), this.#abandonAfterSeconds)) {
+          await this.expireRun(held.run.member_id, held.run.run_id, a.official_start);
+          held = await this.#readRun(heldId);
+        }
         if (held !== null && held.run.status === "open") {
           if (held.run.session_id === a.session_id && held.run.receipt === null) {
             return { kind: "existing", run: toRow(held.run) };
@@ -142,6 +161,10 @@ export class LocalDb implements Db {
         abandon_reason: null,
         sealed_at: null,
         chunks: [],
+        final: null,
+        final_repo_head: null,
+        last_heartbeat: null,
+        heartbeat_count: 0,
       };
       // Write the run first, then take the slot; if the slot is lost, remove the run again.
       await this.#bucket.put(this.#runKey(a.run_id), JSON.stringify(run), { onlyIf: { etagDoesNotMatch: "*" } });
@@ -155,6 +178,47 @@ export class LocalDb implements Db {
       await this.#bucket.delete(this.#runKey(a.run_id));
     }
     throw new Error("local state is too contended; try again");
+  }
+
+  /** Mark an open, unsealed run abandoned because its time ran out. */
+  expireRun(memberId: string, runId: string, at: string): Promise<boolean> {
+    return this.#updateRun<boolean>(runId, memberId, false, (run) => {
+      if (run.status !== "open" || run.seal_sha256 !== null) return { answer: false };
+      if (!isAbandonable(run.deadline_at, parseTime(at), this.#abandonAfterSeconds)) return { answer: false };
+      return {
+        next: { ...run, status: "abandoned", abandon_reason: "expired: not sealed 24 hours after the deadline", sealed_at: at },
+        answer: true,
+      };
+    });
+  }
+
+  recordHeartbeat(a: HeartbeatArgs): Promise<HeartbeatResult> {
+    return this.#updateRun<HeartbeatResult>(a.run_id, a.member_id, "not_found", (run) => {
+      if (run.status === "abandoned") return { answer: "closed" };
+      const note = { at: a.at, seq: a.seq, head: a.head, offset_local: a.offset_local };
+      if (!a.final) {
+        // A sealed run has nothing left to record.
+        if (run.status !== "open") return { answer: "recorded" };
+        return { next: { ...run, last_heartbeat: note, heartbeat_count: run.heartbeat_count + 1 }, answer: "recorded" };
+      }
+      // The final heartbeat commits the end of the run, once.
+      if (run.final !== null) {
+        return { answer: run.final.seq === a.seq && run.final.head === a.head ? "final_existing" : "final_conflict" };
+      }
+      // It cannot contradict what the server already holds.
+      const stored = run.next_seq - 1; // -1 before any record
+      if (stored > a.seq || (stored === a.seq && run.head !== a.head)) return { answer: "final_conflict" };
+      return {
+        next: {
+          ...run,
+          final: { seq: a.seq, head: a.head },
+          final_repo_head: a.repo_head,
+          last_heartbeat: note,
+          heartbeat_count: run.heartbeat_count + 1,
+        },
+        answer: "final_committed",
+      };
+    });
   }
 
   async getRun(memberId: string, runId: string): Promise<RunRow | null> {
@@ -192,6 +256,10 @@ export class LocalDb implements Db {
     const c = a.chunk;
     return this.#updateRun<CommitChunkResult>(a.run_id, a.member_id, "not_found", (run) => {
       if (run.status !== "open") return { answer: "closed" };
+      // Nothing past the committed end, whatever the Worker saw a moment ago.
+      if (run.final !== null && (c.last_seq > run.final.seq || (c.last_seq === run.final.seq && c.head !== run.final.head))) {
+        return { answer: "beyond_final" };
+      }
       // The point of the whole function: advance only if the run still stands where the caller saw it.
       if (run.offset !== c.offset || run.head !== c.prev || run.next_seq !== c.first_seq) return { answer: "conflict" };
       return {
@@ -225,6 +293,9 @@ export class LocalDb implements Db {
 
 /** The public shape of a run: drop the bookkeeping that only the local store keeps. */
 function toRow(r: StoredRun): RunRow {
-  const { harness_version: _h, tracer_version: _t, abandon_reason: _a, sealed_at: _s, chunks: _c, ...row } = r;
+  const {
+    harness_version: _h, tracer_version: _t, abandon_reason: _a, sealed_at: _s, chunks: _c,
+    final_repo_head: _f, last_heartbeat: _l, heartbeat_count: _n, ...row
+  } = r;
   return row;
 }

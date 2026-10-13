@@ -2,17 +2,16 @@
 // The chunk upload is in chunks.ts. Contract: docs/UPLOAD-API.md.
 
 import type { Ctx } from "./context.ts";
-import type { RunRow } from "./db.ts";
+import { type RunRow, isAbandonable, isPastDeadline } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
 import {
   REPO_URL,
-  addHours,
+  addSeconds,
   asObject,
   formatTime,
   hexField,
   isEntryId,
   newId,
-  parseTime,
   readBodyCapped,
   sha256Hex,
   strField,
@@ -22,7 +21,14 @@ const JSON_BODY_MAX = 64 * 1024;
 const SEAL_DOC_MAX = 16 * 1024 * 1024; // each document, bytes
 const SEAL_BODY_MAX = 2 * SEAL_DOC_MAX + JSON_BODY_MAX; // two documents plus the JSON around them
 
+/**
+ * Read a JSON object body of at most `max` bytes. The raw bytes and the decoded text live only
+ * inside this function, so the caller holds just the parsed object.
+ */
 async function readJson(request: Request, max: number): Promise<Record<string, unknown>> {
+  // A declared length over the cap is refused before a single byte is read.
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > max) throw tooLarge("The request body is too large.");
   const bytes = await readBodyCapped(request, max);
   if (bytes === null) throw tooLarge("The request body is too large.");
   let parsed: unknown;
@@ -34,23 +40,42 @@ async function readJson(request: Request, max: number): Promise<Record<string, u
   return asObject(parsed, "The body");
 }
 
-/** The caller's own run, or 404. A run that belongs to someone else is indistinguishable from none. */
+/**
+ * Take one document string out of the parsed body as UTF-8 bytes, and remove the string from the
+ * body so it can be freed: a seal carries two documents of up to 16 MiB, and the Worker has 128 MB.
+ */
+function takeDocument(body: Record<string, unknown>, name: string): Uint8Array {
+  const text = body[name];
+  if (typeof text !== "string" || text === "") throw malformed(`${name} must be a non-empty string.`);
+  if (!text.isWellFormed()) throw malformed(`${name} is not well-formed Unicode.`);
+  delete body[name];
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length > SEAL_DOC_MAX) throw tooLarge(`${name} is over 16 MiB.`);
+  return bytes;
+}
+
+/**
+ * The caller's own run, or 404. A run that belongs to someone else is indistinguishable from none.
+ * A run that was never sealed 24 hours after its deadline is abandoned here, the first time anyone
+ * looks at it, so every call sees it as abandoned (410) and its account's open slot is free.
+ */
 export async function requireRun(ctx: Ctx, member: string, runId: string): Promise<RunRow> {
   const run = await ctx.db.getRun(member, runId);
   if (run === null) throw notFound("No such run for this token.");
+  if (run.status === "open" && isAbandonable(run.deadline_at, ctx.now(), ctx.cfg.abandonAfterSeconds)) {
+    if (await ctx.db.expireRun(member, runId, formatTime(ctx.now()))) return { ...run, status: "abandoned" };
+    return (await ctx.db.getRun(member, runId)) ?? run;
+  }
   return run;
 }
 
-/** 410 unless the run is open and not past `deadline_at` + the grace period. */
-export function requireOpen(ctx: Ctx, run: RunRow): void {
+/** 410 unless the run is open (not sealed, not abandoned). */
+export function requireOpen(run: RunRow): void {
   if (run.status !== "open") throw closed(`This run is ${run.status}.`);
-  if (isPastGrace(ctx, run)) throw closed("This run is past its grace period.");
 }
 
-export function isPastGrace(ctx: Ctx, run: RunRow): boolean {
-  const graceEnds = addHours(parseTime(run.deadline_at), ctx.cfg.graceHours);
-  return ctx.now().getTime() > graceEnds.getTime();
-}
+/** `stop`: the server's clock is at or past `deadline_at`; the run is over. */
+export const isStopped = (ctx: Ctx, run: RunRow): boolean => isPastDeadline(run.deadline_at, ctx.now());
 
 // ---- POST /v1/runs ------------------------------------------------------------------------
 
@@ -76,7 +101,7 @@ export async function openRun(ctx: Ctx, member: string, request: Request): Promi
     run_id: newId("r"),
     entry_id: newId("e"),
     official_start: formatTime(now), // the server's clock, not the participant's
-    deadline_at: formatTime(addHours(now, ctx.cfg.runHours)),
+    deadline_at: formatTime(addSeconds(now, ctx.cfg.runSeconds)),
     connector_id,
     manifest_sha256,
     connector_dir_sha256,
@@ -123,7 +148,7 @@ export async function issueReceipt(ctx: Ctx, member: string, runId: string, requ
   if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
   const chain_head = hexField(b, "chain_head");
   if (entry_id !== run.entry_id) throw notFound("That entry does not belong to this run.");
-  requireOpen(ctx, run);
+  requireOpen(run);
 
   if (run.receipt !== null) {
     if (run.receipt.claims.chain_head !== chain_head) throw conflict("This run already has a receipt for a different chain_head.");
@@ -192,7 +217,60 @@ export async function getPosition(ctx: Ctx, member: string, runId: string): Prom
     next_seq: r.next_seq,
     head: r.head,
     last_ack: r.last_ack,
+    stop: isStopped(ctx, r),
+    final: r.final,
   });
+}
+
+/** Seconds a tracer is told to wait when it must send its final heartbeat first. */
+export const FINAL_RETRY_AFTER = 60;
+
+// ---- POST /v1/runs/{id}/heartbeat ---------------------------------------------------------
+
+export async function heartbeat(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
+  const run = await requireRun(ctx, member, runId);
+  const b = await readJson(request, JSON_BODY_MAX);
+  const entry_id = b.entry_id;
+  if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
+  const seq = uintField(b, "seq");
+  const head = hexField(b, "head");
+  const offset_local = uintField(b, "offset_local");
+  if (typeof b.final !== "boolean") throw malformed("final must be true or false.");
+  const repo = b.repo_head ?? null;
+  if (repo !== null && (typeof repo !== "string" || !/^[0-9a-f]{40}$/.test(repo))) throw malformed("repo_head must be null or 40 lowercase hex digits.");
+  if (entry_id !== run.entry_id) throw notFound("That entry does not belong to this run.");
+  // An abandoned run accepts nothing more, a final heartbeat included. A sealed one still takes the final.
+  if (run.status === "abandoned") throw closed("This run is abandoned.");
+
+  const result = await ctx.db.recordHeartbeat({
+    member_id: member,
+    run_id: runId,
+    entry_id: run.entry_id,
+    seq,
+    head,
+    offset_local,
+    final: b.final,
+    repo_head: b.final ? repo : null, // only the final heartbeat's repo head means anything
+    at: formatTime(ctx.now()),
+  });
+  switch (result) {
+    case "recorded":
+    case "final_committed":
+    case "final_existing":
+      return json(200, { stop: isStopped(ctx, run), deadline_at: run.deadline_at });
+    case "final_conflict":
+      throw conflict("A different end of the run is already committed, or the server already holds a different chain than this final heartbeat names.");
+    case "closed":
+      throw closed("This run is abandoned.");
+    case "not_found":
+      throw notFound("No such run for this token.");
+  }
+}
+
+function uintField(o: Record<string, unknown>, name: string): number {
+  const v = o[name];
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw malformed(`${name} must be a non-negative whole number.`);
+  return v;
 }
 
 // ---- POST /v1/runs/{id}/seal --------------------------------------------------------------
@@ -202,14 +280,8 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   const b = await readJson(request, SEAL_BODY_MAX);
   const entry_id = b.entry_id;
   if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
-  const sealJson = b.seal_json;
-  const baselineJson = b.baseline_json;
-  if (typeof sealJson !== "string" || sealJson === "") throw malformed("seal_json must be a non-empty string.");
-  if (typeof baselineJson !== "string" || baselineJson === "") throw malformed("baseline_json must be a non-empty string.");
-  if (!sealJson.isWellFormed() || !baselineJson.isWellFormed()) throw malformed("The documents are not well-formed Unicode.");
-  const sealBytes = new TextEncoder().encode(sealJson);
-  const baselineBytes = new TextEncoder().encode(baselineJson);
-  if (sealBytes.length > SEAL_DOC_MAX || baselineBytes.length > SEAL_DOC_MAX) throw tooLarge("A document is over 16 MiB.");
+  const sealBytes = takeDocument(b, "seal_json");
+  const baselineBytes = takeDocument(b, "baseline_json");
   if (entry_id !== run.entry_id) throw notFound("That entry does not belong to this run.");
 
   const sealSha = await sha256Hex(sealBytes);
@@ -221,7 +293,18 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
     throw conflict("This run is sealed with different documents.");
   }
   if (run.status !== "open") throw closed(`This run is ${run.status}.`);
-  if (isPastGrace(ctx, run)) throw closed("This run is past its grace period.");
+
+  // After the deadline the seal is accepted only for the end the final heartbeat committed, and
+  // only once the server holds the chain all the way to it. (The chain cannot grow past the
+  // committed end, so a check against this snapshot cannot be overtaken.)
+  if (isStopped(ctx, run)) {
+    if (run.final === null) {
+      throw new ApiError(503, "maintenance", "Send the final heartbeat before sealing a run past its deadline.", { "retry-after": String(FINAL_RETRY_AFTER) });
+    }
+    if (run.next_seq - 1 !== run.final.seq || run.head !== run.final.head) {
+      throw conflict("The server does not hold the chain up to the end the final heartbeat committed yet; read the position and upload the rest.");
+    }
+  }
 
   // Store the documents first, under names that contain their hash (so they can never be
   // overwritten with different content), then record the seal.

@@ -10,32 +10,83 @@ import { REPO_URL, parseSafeUint } from "../src/util.ts";
 
 const baseEnv = { EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
 
+/** Run `fn` with console.error captured; returns what was logged. */
+async function captureErrors(fn: () => Promise<unknown>): Promise<string> {
+  const lines: string[] = [];
+  const real = console.error;
+  console.error = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  try {
+    await fn();
+  } catch {
+    // the caller asserts on the rejection separately
+  } finally {
+    console.error = real;
+  }
+  return lines.join("\n");
+}
+
 test("the default database backend is supabase, and it refuses to start without its secrets", async () => {
-  await assert.rejects(getDb({ ...baseEnv }), (e) => e instanceof ApiError && e.code === "misconfigured" && /SUPABASE_URL/.test(e.message));
+  const logged = await captureErrors(() => getDb({ ...baseEnv }));
+  assert.match(logged, /SUPABASE_URL/); // the detail is in the log...
+  await assert.rejects(getDb({ ...baseEnv }), (e) => e instanceof ApiError && e.code === "misconfigured" && !/SUPABASE/.test(e.message)); // ...not in the answer
 });
 
 test("the local backend refuses to start without DEV_TOKENS", async () => {
-  await assert.rejects(
-    getDb({ ...baseEnv, DB_BACKEND: "local" }),
-    (e) => e instanceof ApiError && e.code === "misconfigured" && /DEV_TOKENS/.test(e.message),
-  );
-  await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "  " }), ApiError);
-  await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "no-colon" }), ApiError);
+  const logged = await captureErrors(() => getDb({ ...baseEnv, DB_BACKEND: "local" }));
+  assert.match(logged, /DEV_TOKENS/);
+  await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local" }), (e) => e instanceof ApiError && e.status === 500 && e.code === "misconfigured");
+  await captureErrors(async () => {
+    await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "  " }), ApiError);
+    await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "no-colon" }), ApiError);
+  });
   await getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "t1:m1,t2:m2" }); // fine
 });
 
+test("a bad DEV_TOKENS entry is never echoed to the caller or the log", async () => {
+  const secret = "super-secret-token-text";
+  let answer = "";
+  const logged = await captureErrors(async () => {
+    try {
+      await getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: `t1:m1,${secret}` });
+    } catch (e) {
+      answer = (e as ApiError).message;
+      throw e;
+    }
+  });
+  assert.ok(answer.length > 0);
+  assert.ok(!answer.includes(secret), "the answer echoes the token");
+  assert.ok(!logged.includes(secret), "the log echoes the token");
+  assert.match(logged, /entry number 2/);
+});
+
 test("an unknown backend is refused", async () => {
-  await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "sqlite" }), ApiError);
+  await captureErrors(async () => {
+    await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "sqlite" }), ApiError);
+  });
 });
 
 test("config defaults and validation", () => {
-  assert.deepEqual(readConfig(baseEnv), { eventId: "practice", runHours: 168, graceHours: 48, githubCheck: false });
+  assert.deepEqual(readConfig(baseEnv), { eventId: "practice", runSeconds: 168 * 3600, abandonAfterSeconds: 86400, githubCheck: false });
+  assert.equal(readConfig({ ...baseEnv, RUN_HOURS: "2" }).runSeconds, 7200);
   assert.equal(readConfig({ ...baseEnv, GITHUB_CHECK: "on" }).githubCheck, true);
   assert.equal(readConfig({ ...baseEnv, GITHUB_CHECK: "yes" }).githubCheck, false);
   assert.throws(() => readConfig({ ...baseEnv, EVENT_ID: "../x" }), ApiError);
   assert.throws(() => readConfig({ ...baseEnv, RUN_HOURS: "0" }), ApiError);
   assert.throws(() => readConfig({ ...baseEnv, RUN_HOURS: "abc" }), ApiError);
-  assert.equal(readConfig({ ...baseEnv, GRACE_HOURS: "0" }).graceHours, 0);
+});
+
+test("RUN_SECONDS and ABANDON_AFTER_SECONDS are honoured only with the local backend", () => {
+  const local = { ...baseEnv, DB_BACKEND: "local" };
+  assert.equal(readConfig({ ...local, RUN_SECONDS: "3" }).runSeconds, 3);
+  assert.equal(readConfig({ ...local, RUN_SECONDS: "3", RUN_HOURS: "1" }).runSeconds, 3);
+  assert.equal(readConfig({ ...local, ABANDON_AFTER_SECONDS: "5" }).abandonAfterSeconds, 5);
+  // On any other backend their presence is a mistake, so the Worker refuses rather than ignoring them.
+  for (const name of ["RUN_SECONDS", "ABANDON_AFTER_SECONDS"] as const) {
+    assert.throws(() => readConfig({ ...baseEnv, [name]: "3" }), (e) => e instanceof ApiError && e.code === "misconfigured");
+    assert.throws(() => readConfig({ ...baseEnv, DB_BACKEND: "supabase", [name]: "3" }), ApiError);
+  }
+  assert.throws(() => readConfig({ ...local, RUN_SECONDS: "0" }), ApiError);
+  assert.throws(() => readConfig({ ...local, RUN_SECONDS: "x" }), ApiError);
 });
 
 test("repo_url shape", () => {

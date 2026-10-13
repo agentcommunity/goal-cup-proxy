@@ -21,8 +21,12 @@
 --   * Times are timestamptz in the database; the Worker passes and receives RFC 3339 UTC
 --     strings to the second, and the functions format them with to_char below.
 --   * Every function is SECURITY DEFINER with a fixed search_path and is executable only by the
---     role `goalcup_worker`. That role has NO table privileges, so a leaked Worker key can call
---     these functions and nothing else.
+--     role `goalcup_worker`. PostgreSQL grants EXECUTE on a new function to PUBLIC by default, so
+--     the `revoke ... on all functions` below runs AFTER the last `create function` (a revoke that
+--     runs before the functions exist revokes nothing); it is what keeps `anon` and `authenticated`
+--     out. `alter default privileges` near the top covers functions added later by this role.
+--     `goalcup_worker` has NO table privileges, so a leaked Worker key can call these functions
+--     and nothing else.
 --   * Row-level security is enabled on every table in this same file; no policies are created
 --     here, so no role other than the table owner (which the definer functions run as) can read
 --     or write. Members read their own runs through a separate read-only function the website
@@ -33,6 +37,12 @@
 
 create schema if not exists goalcup;
 
+-- Belt and braces for functions added to this schema later. The load-bearing step is the
+-- explicit revoke after the last `create function` below: a revoke on "all functions" only
+-- touches functions that already exist.
+alter default privileges in schema goalcup revoke execute on functions from public;
+revoke usage on schema goalcup from anon, authenticated;
+
 -- ---- tables ---------------------------------------------------------------------------
 
 create table goalcup.events (
@@ -40,8 +50,7 @@ create table goalcup.events (
   mode                 text not null check (mode in ('competition', 'dry_run', 'practice')),
   start_window_opens   timestamptz not null,
   start_window_closes  timestamptz not null,
-  run_hours            integer not null default 168,
-  grace_hours          integer not null default 48
+  run_hours            integer not null default 168   -- no grace period: at deadline_at the run is over
 );
 
 -- Which version of the terms a member accepted. The website's consent flow writes this;
@@ -104,8 +113,27 @@ create table goalcup.entries (
   last_ack      jsonb,
   last_chunk_at timestamptz,
   sealed_at     timestamptz,
+  -- The end of the run, committed once by the final heartbeat: the last record the server will accept.
+  final_seq       bigint,
+  final_head      text,
+  final_repo_head text,                                                -- 40 hex, or null
+  final_at        timestamptz,
+  check ((final_seq is null) = (final_head is null)),
   unique (run_id, segment)
 );
+
+-- One row per heartbeat (every 5 minutes per run: a few million rows over an event).
+create table goalcup.heartbeats (
+  run_id       text not null references goalcup.runs (id),
+  entry_id     text not null references goalcup.entries (id),
+  received_at  timestamptz not null,
+  seq          bigint not null,
+  head         text not null,
+  offset_local bigint not null,
+  final        boolean not null,
+  repo_head    text
+);
+create index heartbeats_run_received on goalcup.heartbeats (run_id, received_at);
 
 create table goalcup.chunks (
   entry_id     text not null references goalcup.entries (id),
@@ -122,8 +150,7 @@ create table goalcup.chunks (
   primary key (entry_id, "offset")
 );
 
--- Other tables from SERVER-DESIGN section 7 (heartbeats, outages, verify_results) belong to
--- later slices and are not needed by these six calls.
+-- Other tables from SERVER-DESIGN section 7 (outages, verify_results) belong to later slices.
 
 alter table goalcup.events   enable row level security;
 alter table goalcup.consents enable row level security;
@@ -131,9 +158,9 @@ alter table goalcup.tokens   enable row level security;
 alter table goalcup.runs     enable row level security;
 alter table goalcup.entries  enable row level security;
 alter table goalcup.chunks   enable row level security;
+alter table goalcup.heartbeats enable row level security;
 
-revoke all on all tables    in schema goalcup from public, anon, authenticated;
-revoke all on all functions in schema goalcup from public, anon, authenticated;
+revoke all on all tables in schema goalcup from public, anon, authenticated;
 
 -- ---- the Worker's role ------------------------------------------------------------------
 -- The Worker's SUPABASE_KEY is a JWT whose `role` claim is goalcup_worker, signed with the
@@ -175,6 +202,8 @@ as $$
     'next_seq',             e.next_seq,
     'head',                 e.head,
     'last_ack',             e.last_ack,
+    'final',                case when e.final_seq is null then null
+                                 else jsonb_build_object('seq', e.final_seq, 'head', e.final_head) end,
     'receipt',              r.receipt,
     'seal_sha256',          r.seal_sha256,
     'baseline_sha256',      r.baseline_sha256
@@ -183,7 +212,6 @@ as $$
   join goalcup.entries e on e.run_id = r.id and e.segment = 0
   where r.id = p_run_id
 $$;
-revoke all on function goalcup.run_json(text) from public, anon, authenticated;
 
 -- ---- the six calls (+ token lookup) ------------------------------------------------------
 
@@ -214,6 +242,13 @@ begin
     return jsonb_build_object('result', 'forbidden', 'message', 'This event is not open for runs.');
   end if;
 
+  -- A run that was never sealed 24 hours after its deadline is abandoned, which frees the
+  -- member's one open slot (the unique index is on open runs only).
+  update goalcup.runs
+     set status = 'abandoned', abandon_reason = 'expired: not sealed 24 hours after the deadline', sealed_at = v_start
+   where member_id = v_member and status = 'open' and seal_sha256 is null
+     and v_start > deadline_at + interval '24 hours';
+
   -- Same member, same session, still open, no receipt yet: the first answer was lost in transit.
   select * into v_open from goalcup.runs where member_id = v_member and status = 'open';
   if found then
@@ -240,7 +275,13 @@ begin
             p_harness_version, p_tracer_version);
     insert into goalcup.entries (id, run_id, segment) values (p_entry_id, p_run_id, 0);
   exception when unique_violation then
-    -- Two starts raced; the unique index let one through. This is the other one.
+    -- Two starts raced; the unique index let one through. That one has committed by now, so look
+    -- at it again: if it is this same session (a lost-reply retry racing the original) the answer
+    -- is the same run; otherwise this account has another open run.
+    select * into v_open from goalcup.runs where member_id = v_member and status = 'open';
+    if found and v_open.session_id = p_session_id and v_open.receipt is null then
+      return jsonb_build_object('result', 'existing', 'run', goalcup.run_json(v_open.id));
+    end if;
     return jsonb_build_object('result', 'conflict');
   end;
   return jsonb_build_object('result', 'created', 'run', goalcup.run_json(p_run_id));
@@ -307,7 +348,7 @@ end $$;
 
 -- PUT /v1/runs/{id}/chunks/{offset}, after the bytes are in R2. THE atomic step: advances the
 -- entry only if offset, head (prev) and next_seq (first_seq) still are what the Worker checked.
--- p_chunk is the Worker's ChunkRecord. Returns 'committed' | 'conflict' | 'closed' | 'not_found'.
+-- p_chunk is the Worker's ChunkRecord. Returns 'committed' | 'conflict' | 'beyond_final' | 'closed' | 'not_found'.
 create function goalcup.upload_commit_chunk(p_member_id text, p_run_id text, p_chunk jsonb) returns text
 language plpgsql security definer set search_path = goalcup, pg_temp
 as $$
@@ -317,17 +358,23 @@ declare
   v_off   bigint := (p_chunk ->> 'offset')::bigint;
   v_len   bigint := (p_chunk ->> 'length')::bigint;
 begin
-  select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid;
+  -- Lock order everywhere (commit, abandon, seal): the run first, then its entry. So a commit
+  -- racing an abandon or a seal queues behind it and then sees the new status.
+  select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
   if not found then return 'not_found'; end if;
+  if v_run.status <> 'open' then return 'closed'; end if;
 
-  -- Lock the entry row: concurrent commits for the same entry queue here, and the loser re-checks below.
+  -- Concurrent commits for the same run queue on the run lock above; the loser re-checks below.
   select * into v_entry from goalcup.entries
     where id = p_chunk ->> 'entry_id' and run_id = p_run_id for update;
   if not found then return 'not_found'; end if;
 
-  -- Re-read the status under the lock.
-  select * into v_run from goalcup.runs where id = p_run_id;
-  if v_run.status <> 'open' then return 'closed'; end if;
+  -- Nothing past the end the final heartbeat committed, whatever the Worker saw a moment ago.
+  if v_entry.final_seq is not null
+     and ((p_chunk ->> 'last_seq')::bigint > v_entry.final_seq
+          or ((p_chunk ->> 'last_seq')::bigint = v_entry.final_seq and p_chunk ->> 'head' <> v_entry.final_head)) then
+    return 'beyond_final';
+  end if;
 
   if v_entry.upload_offset <> v_off
      or v_entry.head <> p_chunk ->> 'prev'
@@ -378,6 +425,84 @@ begin
   return 'sealed';
 end $$;
 
+-- POST /v1/runs/{id}/heartbeat. Records the heartbeat; a final one commits the end of the run (once).
+-- Returns 'recorded' | 'final_committed' | 'final_existing' | 'final_conflict' | 'closed' | 'not_found'.
+-- Lock order as everywhere: the run, then its entry.
+create function goalcup.upload_heartbeat(
+  p_member_id text, p_run_id text, p_entry_id text,
+  p_seq bigint, p_head text, p_offset_local bigint, p_final boolean, p_repo_head text, p_at text
+) returns text
+language plpgsql security definer set search_path = goalcup, pg_temp
+as $$
+declare
+  v_run    goalcup.runs;
+  v_entry  goalcup.entries;
+  v_at     timestamptz := p_at::timestamptz;
+  v_stored bigint;
+begin
+  select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
+  if not found then return 'not_found'; end if;
+  if v_run.status = 'abandoned' then return 'closed'; end if;
+
+  select * into v_entry from goalcup.entries where id = p_entry_id and run_id = p_run_id for update;
+  if not found then return 'not_found'; end if;
+
+  if not p_final then
+    if v_run.status = 'open' then   -- a sealed run has nothing left to record
+      insert into goalcup.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final)
+      values (p_run_id, p_entry_id, v_at, p_seq, p_head, p_offset_local, false);
+      update goalcup.runs set last_heartbeat_at = v_at where id = p_run_id;
+    end if;
+    return 'recorded';
+  end if;
+
+  if v_entry.final_seq is not null then
+    if v_entry.final_seq = p_seq and v_entry.final_head = p_head then return 'final_existing'; end if;
+    return 'final_conflict';
+  end if;
+
+  -- The end cannot contradict the chain the server already holds (next_seq - 1 is -1 before any record).
+  v_stored := v_entry.next_seq - 1;
+  if v_stored > p_seq or (v_stored = p_seq and v_entry.head <> p_head) then
+    return 'final_conflict';
+  end if;
+
+  update goalcup.entries
+     set final_seq = p_seq, final_head = p_head, final_repo_head = p_repo_head, final_at = v_at
+   where id = p_entry_id;
+  insert into goalcup.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final, repo_head)
+  values (p_run_id, p_entry_id, v_at, p_seq, p_head, p_offset_local, true, p_repo_head);
+  update goalcup.runs set last_heartbeat_at = v_at where id = p_run_id;
+  return 'final_committed';
+end $$;
+
+-- Abandon an open, unsealed run that is more than 24 hours past its deadline (the Worker calls this
+-- whenever it sees one). Returns 'expired' | 'not_expired'.
+create function goalcup.upload_expire_run(p_member_id text, p_run_id text, p_at text) returns text
+language plpgsql security definer set search_path = goalcup, pg_temp
+as $$
+declare
+  v_run goalcup.runs;
+  v_at  timestamptz := p_at::timestamptz;
+begin
+  select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
+  if not found or v_run.status <> 'open' or v_run.seal_sha256 is not null
+     or v_at <= v_run.deadline_at + interval '24 hours' then
+    return 'not_expired';
+  end if;
+  update goalcup.runs
+     set status = 'abandoned', abandon_reason = 'expired: not sealed 24 hours after the deadline', sealed_at = v_at
+   where id = p_run_id;
+  return 'expired';
+end $$;
+
+-- ---- privileges: now that every function exists -----------------------------------------------
+-- PUBLIC has EXECUTE on each function just created (fmt_time, run_json and the upload_* ones).
+-- Take it away from everybody, then give the Worker's role exactly the upload_* functions.
+-- (run_json and fmt_time stay unexecutable by it: the definer functions call them as the owner.)
+revoke all on all functions in schema goalcup from public, anon, authenticated;
+revoke all on all tables    in schema goalcup from public, anon, authenticated;
+
 -- ---- grants: the Worker may execute exactly these, nothing else -----------------------------
 
 grant execute on function
@@ -388,13 +513,15 @@ grant execute on function
   goalcup.upload_issue_receipt(text, text, text, jsonb),
   goalcup.upload_abandon_run(text, text, text, text),
   goalcup.upload_commit_chunk(text, text, jsonb),
-  goalcup.upload_seal_run(text, text, text, text, text, text, text, text)
+  goalcup.upload_seal_run(text, text, text, text, text, text, text, text),
+  goalcup.upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text),
+  goalcup.upload_expire_run(text, text, text)
 to goalcup_worker;
 
 -- ---- what the website's owner still has to decide --------------------------------------------
 --  * Where "accepted the current terms" really lives (this file assumes goalcup.consents).
 --  * Seeding goalcup.events: one row per event (practice, dry_run, competition) with its window,
---    run_hours and grace_hours. The Worker currently takes EVENT_ID / RUN_HOURS / GRACE_HOURS from
+--    run_hours. The Worker currently takes EVENT_ID / RUN_HOURS from
 --    its own variables and only checks in upload_open_run that the event exists and is open for starts.
 --  * Minting tokens (insert sha256(token) into goalcup.tokens from a server-side function).
 --  * Whether PostgREST should expose schema goalcup at all (required for RPC), or whether thin

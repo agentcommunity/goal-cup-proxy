@@ -1,12 +1,12 @@
 // Goal Cup upload Worker: routing, maintenance switch, authentication, error mapping.
-// Contract: docs/UPLOAD-API.md. No framework; six routes.
+// Contract: docs/UPLOAD-API.md. No framework; seven routes.
 
 import { authenticate } from "./auth.ts";
 import { putChunk } from "./chunks.ts";
 import { type Ctx, makeCtx } from "./context.ts";
 import type { Env } from "./env.ts";
 import { ApiError, errorResponse, json } from "./errors.ts";
-import { abandonRun, getPosition, issueReceipt, openRun, sealRun } from "./runs.ts";
+import { abandonRun, getPosition, heartbeat, issueReceipt, openRun, sealRun } from "./runs.ts";
 import { RUN_ID } from "./util.ts";
 
 type Handler = (ctx: Ctx, member: string, request: Request) => Promise<Response>;
@@ -32,6 +32,8 @@ function route(path: string): Route[] | null {
         return [{ method: "POST", handler: (c, m, r) => abandonRun(c, m, runId, r) }];
       case "seal":
         return [{ method: "POST", handler: (c, m, r) => sealRun(c, m, runId, r) }];
+      case "heartbeat":
+        return [{ method: "POST", handler: (c, m, r) => heartbeat(c, m, runId, r) }];
     }
   }
   if (parts.length === 6 && parts[4] === "chunks") {
