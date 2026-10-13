@@ -150,7 +150,9 @@ Every runner minute costs something on every pull request. Keep this file small:
   `LINUX_CHECK_HARNESSES=1`, which ends with `scripts/linux-harness-smoke.sh`: the pinned x86_64
   Codex and Claude Code builds launched with no login to the auth step. The suites above run
   there because a public repository's hosted runner has 4 vCPUs and they run in Docker with
-  `--init`; how long a run takes is not yet measured. Start it by hand.
+  `--init`; how long a run takes is not yet measured. A second job, `harness-smoke`, runs the
+  smoke alone on the runner after a release build, so a suite that fails on that host does not
+  hide the harness result. Start it by hand.
 - A green `ci` run proves nothing about the macOS target. `sh scripts/gate.sh fast` above (and `full` before a
   release), plus the ignored synthetic vertical suite, runs by hand before a merge.
 
