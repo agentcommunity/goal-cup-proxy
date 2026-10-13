@@ -23,7 +23,7 @@ hermes chat -Q --provider deepseek --query=<goal>
 
 ## 2. Install and pin a version
 
-- Distribution: the Python package `hermes-agent`, installed with `uv tool install hermes-agent` (code: `harnesses/install.sh`, which installs unpinned). Pinned form `hermes-agent==0.19.0` is the measured identity; the `==` spelling is standard uv/pip syntax, not run for this sheet.
+- Distribution: the Python package `hermes-agent`, installed with `uv tool install hermes-agent` (code: `harnesses/install.sh`, which installs unpinned). `hermes-agent==0.19.0` is the measured version (no build is pinned since D53, and the connector has no `version_args`: the version command is not known); the `==` spelling is standard uv/pip syntax, not run for this sheet.
 - Requires Python `>=3.11,<3.14`; measured with CPython 3.13.13 (source; metadata).
 - Binary: `$UV_TOOL_BIN_DIR/hermes` is a 372-byte console script whose entry point is `hermes_cli.main:main`; Goal Cup pins its SHA-256 (code). Whether those bytes are the same on every install, OS and interpreter path: unknown.
 - Print the version: unknown (the connector does not use a version command; the installed distribution name and version are read from the package metadata).

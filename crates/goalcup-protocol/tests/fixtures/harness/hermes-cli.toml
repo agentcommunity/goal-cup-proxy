@@ -13,8 +13,6 @@ continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /
 
 [capture.executable]
 program = "hermes"
-version = "0.19.0"
-sha256 = "0444572f0bce8a805473fbcaa431beed399818528758b454fbf24825a51be325"
 
 [capture.env]
 TERMINAL_HOME_MODE = "profile"

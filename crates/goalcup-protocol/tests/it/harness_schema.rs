@@ -125,8 +125,6 @@ args = ["/work/tests/fixtures/m2-controlled-workload.py", "/work/config.json", "
 
 [capture.executable]
 program = "python3"
-version = "3.9.6"
-sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
 
 [capture.home]
 run_home = "empty"
@@ -1495,30 +1493,100 @@ fn the_executable_fields_follow_their_grammars() {
         set(&mut t, &["capture", "executable"], "program", bad);
         refused(&t, PINNED, &["capture.executable.program"]);
     }
-    for bad in ["", "v1", "1 2", &format!("1{}", "0".repeat(32))] {
+}
+
+/// `version_args`: up to four flags or words, each 1 to 32 bytes of `-{1,2}[a-z][a-z0-9-]*` or
+/// `[a-z][a-z0-9-]*`, and none the capture deny list refuses. Absent is empty.
+#[test]
+fn version_args_follow_their_grammar() {
+    let mut t = hermes();
+    tbl(&mut t, &["capture", "executable"]).remove("version_args");
+    assert!(parsed(&t).capture.executable.version_args.is_empty());
+    for ok in [
+        vec![],
+        vec!["--version"],
+        vec!["-v"],
+        vec!["version"],
+        vec!["version", "--json"],
+        vec!["--a", "-b", "c", "d-2"],
+        vec![&*format!("--{}", "a".repeat(30))],
+    ] {
         let mut t = codex();
         set(
             &mut t,
             &["capture", "executable"],
-            "version",
-            bad.to_string(),
+            "version_args",
+            strings(&ok),
         );
-        refused(&t, PINNED, &["capture.executable.version"]);
-    }
-    for ok in ["0.153.0", "1", "2.1.283", "1.2.3-rc.1+b5"] {
-        let mut t = codex();
-        set(&mut t, &["capture", "executable"], "version", ok);
         admitted(&t, PINNED);
+        admitted(&t, DEV);
     }
-    for bad in ["", "ABC", &"a".repeat(63), &"A".repeat(64), &"g".repeat(64)] {
+    for bad in [
+        vec![""],
+        vec!["-"],
+        vec!["--"],
+        vec!["---version"],
+        vec!["--Version"],
+        vec!["-V"],
+        vec!["1version"],
+        vec!["--version=1"],
+        vec!["--ver sion"],
+        vec!["/usr/bin/codex"],
+        vec!["{workspace}"],
+        vec![&*format!("--{}", "a".repeat(31))],
+        vec!["a", "b", "c", "d", "e"],
+    ] {
         let mut t = codex();
         set(
             &mut t,
             &["capture", "executable"],
-            "sha256",
-            bad.to_string(),
+            "version_args",
+            strings(&bad),
         );
-        refused(&t, PINNED, &["capture.executable.sha256"]);
+        refused(&t, PINNED, &["capture.executable.version_args"]);
+        refused(&t, DEV, &["capture.executable.version_args"]);
+    }
+    // The deny list holds here too: a version probe may not name a server.
+    for (denied, needle) in [("--remote", "somewhere else"), ("--host", "names a server")] {
+        let mut t = codex();
+        set(
+            &mut t,
+            &["capture", "executable"],
+            "version_args",
+            strings(&[denied]),
+        );
+        refused(&t, PINNED, &["capture.executable.version_args", needle]);
+    }
+}
+
+/// D53: a manifest that still pins a build is refused with one sentence naming the retired
+/// key, not with the newer-schema sentence an unknown key gets.
+#[test]
+fn a_retired_pin_key_is_refused_with_its_own_sentence() {
+    for key in ["sha256", "version"] {
+        let mut base = codex();
+        set(&mut base, &["capture", "executable"], key, "0.153.0");
+        let mut over = with_platform(codex(), "linux-x86_64", &[("SHELL", "/bin/bash")]);
+        set(
+            &mut over,
+            &["capture", "platform", "linux-x86_64"],
+            key,
+            "0.153.0",
+        );
+        for (t, field) in [
+            (base, format!("capture.executable.{key}")),
+            (over, format!("capture.platform.linux-x86_64.{key}")),
+        ] {
+            let sentence = format!(
+                "`{key}` is no longer a connector field (D53): the tracer records the build \
+                 that runs instead of pinning one; delete the line."
+            );
+            for origin in [PINNED, DEV] {
+                refused(&t, origin, &[&field, &sentence]);
+                let msg = outcome(&t, origin).unwrap();
+                assert!(!msg.contains(NEWER_SENTENCE), "{msg}");
+            }
+        }
     }
 }
 
@@ -2400,15 +2468,13 @@ fn the_closed_sets_are_non_exhaustive_so_a_downstream_match_must_end_in_a_wildca
 }
 
 // ---------------------------------------------------------------------------------------
-// `[capture.platform.<os>-<arch>]`: the per-platform executable pin and env
+// `[capture.platform.<os>-<arch>]`: the per-platform env
 // ---------------------------------------------------------------------------------------
 
-const LINUX_SHA: &str = "fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be";
-
-/// `t` with `[capture.platform.<key>]` holding `sha256` and `[capture.platform.<key>.env]`.
-fn with_platform(mut t: Table, key: &str, sha256: &str, env: &[(&str, &str)]) -> Table {
+/// `t` with `[capture.platform.<key>]`, holding `[capture.platform.<key>.env]` when `env` has
+/// entries.
+fn with_platform(mut t: Table, key: &str, env: &[(&str, &str)]) -> Table {
     let mut over = Table::new();
-    over.insert("sha256".into(), sha256.into());
     if !env.is_empty() {
         let env: Table = env
             .iter()
@@ -2433,40 +2499,25 @@ fn parsed(t: &Table) -> HarnessManifest {
 }
 
 #[test]
-fn a_platform_override_replaces_only_the_pin_and_env() {
-    let t = with_platform(
-        codex(),
-        "linux-x86_64",
-        LINUX_SHA,
-        &[("SHELL", "/bin/bash")],
-    );
+fn a_platform_override_replaces_only_env() {
+    let t = with_platform(codex(), "linux-x86_64", &[("SHELL", "/bin/bash")]);
     let m = parsed(&t);
-    let base = &m.capture.executable;
 
-    let linux = m.capture.resolved_executable(PlatformKey::LinuxX86_64);
-    assert_eq!(linux.program, base.program);
-    assert_eq!(linux.version, base.version);
-    assert_eq!(linux.sha256, LINUX_SHA);
     let env = m.capture.resolved_env(PlatformKey::LinuxX86_64);
     assert_eq!(env.get("SHELL").map(String::as_str), Some("/bin/bash"));
     assert_eq!(env.len(), m.capture.env.len());
 
     for other in [PlatformKey::MacosAarch64, PlatformKey::LinuxAarch64] {
-        let exe = m.capture.resolved_executable(other);
-        assert_eq!(
-            (exe.program, exe.version, exe.sha256),
-            (
-                base.program.as_str(),
-                base.version.as_str(),
-                base.sha256.as_str()
-            )
-        );
         assert_eq!(m.capture.resolved_env(other), m.capture.env);
     }
     // No platform, as on any target the closed set does not name: the base values.
-    let none = m.capture.resolved_executable(None);
-    assert_eq!(none.sha256, base.sha256);
     assert_eq!(m.capture.resolved_env(None), m.capture.env);
+    // An empty override changes nothing.
+    let m = parsed(&with_platform(codex(), "linux-aarch64", &[]));
+    assert_eq!(
+        m.capture.resolved_env(PlatformKey::LinuxAarch64),
+        m.capture.env
+    );
 }
 
 #[test]
@@ -2490,18 +2541,18 @@ fn an_unknown_platform_key_is_refused() {
         "Linux-x86_64",
         "",
     ] {
-        let t = with_platform(codex(), key, LINUX_SHA, &[]);
+        let t = with_platform(codex(), key, &[]);
         refused(&t, PINNED, &["capture.platform", NEWER_SENTENCE]);
         refused(&t, DEV, &["capture.platform"]);
     }
     // A key named twice, as two headers or as a header and an inline table, is refused at load.
-    let entry = format!("sha256 = \"{LINUX_SHA}\"\n");
+    let entry = "env = { SHELL = \"/bin/bash\" }\n";
     for twice in [
         format!(
             "[capture.platform.linux-x86_64]\n{entry}\n[capture.platform.linux-x86_64]\n{entry}"
         ),
         format!(
-            "[capture.platform]\nlinux-x86_64 = {{ sha256 = \"{LINUX_SHA}\" }}\n\n\
+            "[capture.platform]\nlinux-x86_64 = {{ env = {{}} }}\n\n\
              [capture.platform.linux-x86_64]\n{entry}"
         ),
     ] {
@@ -2526,9 +2577,10 @@ fn an_override_with_any_other_field_is_refused() {
         ("ca", Value::Table(Table::new())),
         ("credential", Value::Table(Table::new())),
         ("executable", Value::Table(Table::new())),
+        ("version_args", strings(&["--version"])),
     ];
     for (key, value) in cases {
-        let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
+        let mut t = with_platform(codex(), "linux-x86_64", &[]);
         set(&mut t, &["capture", "platform", "linux-x86_64"], key, value);
         refused(
             &t,
@@ -2540,10 +2592,6 @@ fn an_override_with_any_other_field_is_refused() {
             ],
         );
     }
-    // `sha256` is required: an override is a pin.
-    let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
-    tbl(&mut t, &["capture", "platform", "linux-x86_64"]).remove("sha256");
-    refused(&t, PINNED, &["sha256"]);
 }
 
 #[test]
@@ -2571,7 +2619,7 @@ fn an_override_env_obeys_the_base_env_policy() {
         let reason = base_msg
             .split_once(": ")
             .map_or(base_msg.as_str(), |(_, r)| r);
-        let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
+        let t = with_platform(codex(), "linux-x86_64", &[(key, value)]);
         refused(&t, PINNED, &["capture.platform.linux-x86_64", reason]);
         refused(&t, DEV, &["capture.platform.linux-x86_64", reason]);
     }
@@ -2588,7 +2636,7 @@ fn an_override_env_is_held_to_the_generic_rules() {
         ("DEEPSEEK_API_BASE", "api.example.org"),
         ("MODEL_HOST", "api.example.org"),
     ] {
-        let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
+        let t = with_platform(codex(), "linux-x86_64", &[(key, value)]);
         refused(&t, PINNED, &["capture.platform.linux-x86_64", key]);
     }
     for (key, value) in [
@@ -2597,7 +2645,7 @@ fn an_override_env_is_held_to_the_generic_rules() {
         ("PYTHONUNBUFFERED", "1"),
         ("NODE_ENV", "production"),
     ] {
-        let t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[(key, value)]);
+        let t = with_platform(codex(), "linux-x86_64", &[(key, value)]);
         let m = parsed(&t);
         let env = m.capture.resolved_env(PlatformKey::LinuxX86_64);
         assert_eq!(env.get(key).map(String::as_str), Some(value));
@@ -2688,52 +2736,8 @@ fn an_override_env_may_not_set_a_variable_the_manifest_pins() {
         .as_str()
         .unwrap()
         .to_string();
-    let t = with_platform(t, "linux-aarch64", LINUX_SHA, &[(&home, "x")]);
+    let t = with_platform(t, "linux-aarch64", &[(&home, "x")]);
     refused(&t, PINNED, &["capture.platform.linux-aarch64", &home]);
-}
-
-#[test]
-fn an_override_sha256_must_be_64_lowercase_hex() {
-    for bad in ["", "ABC", &"a".repeat(63), &"A".repeat(64), &"g".repeat(64)] {
-        let t = with_platform(codex(), "linux-x86_64", bad, &[]);
-        refused(
-            &t,
-            PINNED,
-            &["capture.platform.linux-x86_64.sha256", "64 lowercase hex"],
-        );
-    }
-}
-
-#[test]
-fn an_override_version_obeys_the_version_grammar() {
-    for bad in ["", "v1", "1 2", &format!("1{}", "0".repeat(32))] {
-        let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
-        set(
-            &mut t,
-            &["capture", "platform", "linux-x86_64"],
-            "version",
-            bad.to_string(),
-        );
-        refused(
-            &t,
-            PINNED,
-            &["capture.platform.linux-x86_64.version", "must match"],
-        );
-    }
-    let mut t = with_platform(codex(), "linux-x86_64", LINUX_SHA, &[]);
-    set(
-        &mut t,
-        &["capture", "platform", "linux-x86_64"],
-        "version",
-        "0.153.1",
-    );
-    let m = parsed(&t);
-    assert_eq!(
-        m.capture
-            .resolved_executable(PlatformKey::LinuxX86_64)
-            .version,
-        "0.153.1"
-    );
 }
 
 // ---------------------------------------------------------------------------------------

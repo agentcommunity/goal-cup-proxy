@@ -16,6 +16,8 @@ mod daemon_client;
 mod dependency_bans;
 mod harness_kit_credential;
 mod harness_launch_plan;
+#[cfg(unix)]
+mod harness_version_probe;
 mod hermes_child_secret;
 #[cfg(unix)]
 mod hermes_offline_key;

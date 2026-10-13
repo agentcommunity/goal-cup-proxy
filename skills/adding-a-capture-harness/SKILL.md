@@ -69,7 +69,7 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    | Facts sheet section | Lands in `harness.toml` |
    |---|---|
    | 1. Run one prompt, headless | `[capture].args`, `goal_flag` or a trailing `--`, `continuation` |
-   | 2. Install and pin a version | `[capture.executable]` (step 4) |
+   | 2. Install and record a version | `[capture.executable]` (step 4) |
    | 3. Where it keeps things (macOS column) | `[capture.home]`, `[[capture.native]].root` |
    | 4. Session format and identity | `[[capture.native]]` `pattern`/`form`, `[capture.identity]` |
    | 5. Auth | `[capture.credential]`, `auth_hosts`, `[capture.home]` `run_home` |
@@ -81,22 +81,18 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
    it. STOP on an unknown in sections 4, 5 or 6, or in the macOS column of section 3.
 3. **Decide: do I need a core PR?** Walk every row of [decision-table.md](decision-table.md).
    STOP on any "core PR" or "core decision" row.
-4. **Pin the executable.** Hash the regular file the CLI will run, not a symlink:
+4. **Record how to get the version.** Builds are recorded, not pinned (D53): the tracer hashes
+   whatever `program` resolves to and records it. Find the file the CLI will run, and the
+   command that prints the version:
    ```
    python3 -c 'import os,shutil,sys; print(os.path.realpath(shutil.which(sys.argv[1])))' <program>
-   shasum -a 256 <that path>
    <program> --version
    ```
-   Expect: one absolute path; one line `<64 hex>  <path>`; the version. These go into
-   `[capture.executable]` and section 2 of the facts sheet; `version` is the number only
-   (`1.2.3`, not `toy 1.2.3`). A harness that is a script with a shebang passes the pin: the
-   hash is of the script file, and the interpreter it runs under is not pinned.
-   No check verifies this hash against your binary: `check-connector.sh` and the kit never run
-   the real harness (the kit runs `/usr/bin/python3`), and the binary need not be on `PATH`
-   for them. A wrong hash shows up only as a changed `"sha256"` in your `<id>.json` golden
-   (step 7), and as a refusal when `goalcup start` launches the real binary. A maintainer
-   re-derives the hash from an official artifact before merging, so record where yours came
-   from in section 2.
+   Expect: one absolute path; the version on the first line of stdout. Put the arguments in
+   `[capture.executable] version_args` (`["--version"]`), and the path and version in section 2
+   of the facts sheet. If the harness has no version command, or it needs a network or a login,
+   leave `version_args` out: the trace then says `unreported`. Never write `version` or
+   `sha256`: both are refused.
 5. **Write the connector.**
    ```
    mkdir -p connectors/<id>
@@ -166,7 +162,8 @@ Placeholders: `<id>` is the connector id (`<name>-cli`, matching `^[a-z][a-z0-9-
     It runs build, format, lint and the fast tests; the goldens and kit are covered by step 9.
 11. **Review your own diff** against the
     [reviewer checklist](../../docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr): every
-    field and seed justified, no base URL or endpoint variable, no secrets, one pin line.
+    field and seed justified, no base URL or endpoint variable, no secrets, one directory pin
+    line.
     Optional, on your own account (a trial, not a judged entry): `cargo build` (the pins from
     step 6 are compiled in), then run one short goal with
     `target/debug/goalcup start --harness <id>` as in the README quickstart, and check it with

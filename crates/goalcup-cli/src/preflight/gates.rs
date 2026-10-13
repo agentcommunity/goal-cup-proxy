@@ -86,7 +86,8 @@ pub(crate) struct PreflightReport {
 
 impl PreflightReport {
     /// Whether anything here refuses the run. `Warn` does not; `Fail` does, and a harness
-    /// that is not installed, or is not the pinned build, is a `Fail` (`harness_executable`).
+    /// that is not installed is a `Fail` (`harness_executable`). Any installed build passes:
+    /// it is recorded, not pinned (D53).
     pub(crate) fn failed(&self) -> bool {
         self.checks.iter().any(|c| c.level == Level::Fail)
     }

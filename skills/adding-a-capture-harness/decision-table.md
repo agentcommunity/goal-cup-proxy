@@ -31,7 +31,7 @@ facts sheet, with `Status: facts only`, is still a complete PR.
 | 7 | CA variable | the harness honours `CODEX_CA_CERTIFICATE`, `NODE_EXTRA_CA_CERTS` or `HERMES_CA_BUNDLE` | core PR |
 | 8 | Native form | the own-session file is appended JSONL or rewritten whole | core decision |
 | 9 | One native row | exactly one local own-session store | core decision |
-| 10 | Executable pin | one entry-point file (a binary, or a script with a shebang), not an interpreter | record per-arch |
+| 10 | Executable | one entry-point file (a binary, or a script with a shebang), not an interpreter | fits (recorded, not pinned) |
 | 11 | Endpoint names | you set no endpoint variable at all | issue, not blocking |
 | 12 | Other refusals | no refused env name, argv path or custom regex is needed | core PR |
 | 13 | Argv and env | always, when no generic rule refuses them (D51): no Rust row, a model change included; the reviewer reads every value | refused: row 12 |
@@ -89,11 +89,11 @@ PR with a DECISIONS entry.
 8. `append_only` or `snapshot` only. SQLite, LevelDB or any database store is refused.
 9. Schema 1 refuses zero native rows (no wire-only connector) and more than one. Sessions kept
    only on a vendor server have no schema-1 fit.
-10. One `sha256`. The CLI resolves `program` on `PATH`, follows symlinks, and hashes the regular
-    file. A pinned `program` cannot be an interpreter (`python3`, `node`, `sh`, `env`). A
-    script with a shebang is fine: you hash the script, and its interpreter is not pinned. Per-arch
-    binaries hash differently: pin the platform you measured and list the others in the facts
-    sheet.
+10. No `sha256` (D53). The CLI resolves `program` on `PATH`, follows symlinks, and hashes the
+    regular file only to record it and to refuse a swap mid-launch; any build runs. A pinned
+    `program` cannot be an interpreter (`python3`, `node`, `sh`, `env`). A script with a shebang
+    is fine: the script is what is recorded. Per-arch builds need nothing per platform; name the
+    version command in `version_args` if there is one.
 11. Names ending `_URL` (including `_BASE_URL` and `_API_URL`), `_BASE`, `_HOST`,
     `_HOSTNAME`, `_ADDR`, `_ADDRESS`, `_SERVER`, `_ORIGIN` or `_REGISTRY`, or containing
     `ENDPOINT`, are refused, and so is any value with `://`. A harness endpoint variable with
@@ -133,8 +133,8 @@ in October 2026, not from the Amp team; anything here that Amp's facts sheet
 - **5, home variable**: `AMP_HOME` passes the shape but does not move settings, so leave
   `home.env` out; settings then land in the private run home. Fits.
 - **7, CA variable**: `NODE_EXTRA_CA_CERTS` is a registry row. Fits on paper; live UNKNOWN.
-- **10, executable pin**: npm symlinks lead to one native binary, so `program = "amp"` pins the
-  regular file. Darwin hashes differ per architecture and need a Mac.
+- **10, executable**: npm symlinks lead to one native binary, so `program = "amp"` resolves to
+  the regular file, which is recorded. Fits.
 
 Amp most likely stops at row 0, before this table: no local own-session file was found, and
 row 9 is the same fact seen from the schema. The rows above assume a facts sheet that finds one.

@@ -28,7 +28,11 @@ fn claude_capture_recipe_is_the_pinned_headless_launch() {
     let m = load_harness("claude-code-cli").loaded.manifest;
     let c = &m.capture;
     assert_eq!(c.executable.program, "claude");
-    assert_eq!(c.executable.version, "2.1.283", "launch-recipes §2");
+    assert_eq!(
+        c.executable.version_args,
+        ["--version"],
+        "docs/harnesses/claude-code-cli.md"
+    );
     let session = c
         .args
         .iter()
@@ -57,7 +61,11 @@ fn the_codex_capture_recipe_kills_the_native_binary_not_the_wrapper() {
     let m = load_harness("codex-cli").loaded.manifest;
     let c = &m.capture;
     assert_eq!(c.executable.program, "codex");
-    assert_eq!(c.executable.version, "0.153.0", "launch-recipes §2");
+    assert_eq!(
+        c.executable.version_args,
+        ["--version"],
+        "docs/harnesses/codex-cli.md"
+    );
     assert!(
         !c.args.iter().any(|a| a == "--ephemeral"),
         "the rollout is what the capture reads: {:?}",

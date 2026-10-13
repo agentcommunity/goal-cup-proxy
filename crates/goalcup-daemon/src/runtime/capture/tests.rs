@@ -1440,8 +1440,6 @@ fn schema_harness(id: &str) -> HarnessManifest {
     };
     let text = std::fs::read_to_string(path)
         .unwrap()
-        .replace("@PYTHON3_SHA256@", &"ab".repeat(32))
-        .replace("@PYTHON3_VERSION@", "3.12.0")
         .replace("@WORKLOAD@", "/synthetic/workload.py")
         .replace("@CONFIG@", "/synthetic/config.json");
     HarnessManifest::from_toml_str(&text).unwrap()

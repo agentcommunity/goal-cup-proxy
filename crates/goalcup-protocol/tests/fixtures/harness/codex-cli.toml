@@ -20,8 +20,7 @@ args = [
 
 [capture.executable]
 program = "codex"
-version = "0.153.0"
-sha256 = "a29d9e86eef88cbbd69f97ce8c590b1d0a287c8f77424f5eef226b883d7eaa22"
+version_args = ["--version"]
 
 [capture.env]
 SHELL = "/bin/zsh"

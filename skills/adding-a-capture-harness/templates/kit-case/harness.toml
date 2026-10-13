@@ -1,8 +1,8 @@
 # Template for crates/goalcup-cli/tests/fixtures/harness-kit/<HARNESS_ID>/harness.toml.
 # A kit case mirrors the connector's home, identity and native shape, but runs a Python
 # stand-in against the kit's own offline upstream. Keep every @NAME@ token exactly: the kit
-# runner replaces them before loading (python3 hash and version, stand-in path, marker path,
-# upstream port and test id). Replace every <PLACEHOLDER>.
+# runner replaces them before loading (stand-in path, marker path, upstream port and test
+# id). Replace every <PLACEHOLDER>.
 
 schema_version = 1
 # The case runs as an unpinned dev connector, which refuses a pinned id: never use the
@@ -16,9 +16,7 @@ args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "--"]
 continuation = "one offline echo and one native file for <HARNESS_ID>"
 
 [capture.executable]
-program = "python3"                     # the kit hashes /usr/bin/python3; keep these three
-version = "@PYTHON3_VERSION@"
-sha256 = "@PYTHON3_SHA256@"
+program = "python3"                     # the kit runs /usr/bin/python3; keep this line
 
 # Copy from the connector: run_home, config_home, per_run_dir, dirs, seed, real_dirs.
 # home.env may be the connector's own variable; the stand-in reads it to find the config home.

@@ -13,8 +13,8 @@
 //!   connector passes (its argv, its `capture.env`) is held to the generic rules below, and the
 //!   rest of the control is review. A connector's bytes are pinned by directory digest
 //!   (`pins/connector-dirs.txt`), `connectors/` and `pins/` are code-owned, so every argv or env
-//!   change is a reviewed diff; the reviewer re-derives the executable's `sha256` and works the
-//!   reviewer checklist (`docs/DECISIONS.md` D43, ruling 6; D51).
+//!   change is a reviewed diff; the reviewer works the reviewer checklist (`docs/DECISIONS.md`
+//!   D43, ruling 6; D51). The harness build itself is recorded, not pinned (D53).
 //!
 //! The harness manifest's loader and validator (schema 1) are in `harness.rs`.
 

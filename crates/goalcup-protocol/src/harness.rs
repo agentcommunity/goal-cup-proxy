@@ -15,7 +15,9 @@
 //! # Parsing
 //!
 //! 1. The text is parsed as a generic TOML table and `schema_version` is read first
-//!    (`SUPPORTED_SCHEMA_VERSIONS`).
+//!    (`SUPPORTED_SCHEMA_VERSIONS`). The executable pin's retired keys (`sha256`, `version`) are
+//!    refused here with their own sentence (D53), before the strict deserialization would call
+//!    them a newer schema's.
 //! 2. It is then deserialized with `deny_unknown_fields` everywhere. An unknown key, and an
 //!    unknown value of a closed-set field, are refused with one sentence ([`NEWER_SENTENCE`]):
 //!    serde's own "unknown variant" text never reaches the user.
@@ -23,7 +25,7 @@
 //!    is deterministic: executable, args and goal, env, home, credential, CA, identity,
 //!    native, argv guard, termination, hosts, redaction, the delivery-agnostic rule (F7), the
 //!    cross-field rules, and then every rule again on the recipe each `[capture.platform.<key>]`
-//!    resolves to (an override may replace only the executable pin and env entries).
+//!    resolves to (an override may replace only env entries).
 //!
 //! [`Origin`] is the one observable predicate that relaxes anything: `Dev` (an unpinned
 //! directory under `GOALCUP_CONNECTORS_DIR` loaded with `--dev`, for kit cases and the
@@ -308,8 +310,8 @@ pub struct CaptureSpec {
     /// The hosts the proxy terminates TLS for.
     #[serde(default)]
     pub hosts: Vec<HostSpec>,
-    /// Per-platform replacements for the executable pin and env entries. Everything else is
-    /// the same recipe on every platform.
+    /// Per-platform replacements for env entries. Everything else is the same recipe on every
+    /// platform.
     #[serde(default)]
     pub platform: BTreeMap<PlatformKey, PlatformOverride>,
 }
@@ -319,57 +321,30 @@ pub struct CaptureSpec {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ExecutableSpec {
-    /// A bare name resolved on `PATH`.
+    /// A bare name resolved on `PATH`. Whatever build it names runs: the tracer records that
+    /// build's digests (`Launch.harness_build`, D53) and pins none.
     pub program: String,
-    /// The version the recipe was measured at; recorded as `Launch.harness_version`.
-    pub version: String,
-    /// SHA-256 of the measured executable's bytes, lowercase hex.
-    pub sha256: String,
+    /// The arguments that make the program print its version on the first line of stdout
+    /// (`["--version"]`); empty when the harness has no such command. The launcher runs them
+    /// once before the harness and records the line as `Launch.harness_version`, reported by
+    /// the harness rather than proven; without them it records `unreported`.
+    #[serde(default)]
+    pub version_args: Vec<String>,
 }
 
-/// `[capture.platform.<key>]`: what a platform may change. Only the executable's pin (and its
-/// version, should a platform's build carry another) and env entries; every other field, the
-/// program included, is the base table's. The resolved recipe is validated
-/// as a whole.
+/// `[capture.platform.<key>]`: what a platform may change. Only env entries; every other
+/// field, the executable included, is the base table's. The resolved recipe is validated as a
+/// whole.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct PlatformOverride {
-    /// SHA-256 of this platform's executable bytes, lowercase hex.
-    pub sha256: String,
-    #[serde(default)]
-    pub version: Option<String>,
     /// Entries added to `capture.env`, replacing a same-named one.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
 }
 
-/// The executable a platform runs: the base `program`, with the platform's pin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ResolvedExecutable<'a> {
-    pub program: &'a str,
-    pub version: &'a str,
-    pub sha256: &'a str,
-}
-
 impl CaptureSpec {
-    /// The executable for `key`: the override's pin and version where it has them, the base
-    /// values otherwise. `None` (an unnamed platform) is the base.
-    pub fn resolved_executable(
-        &self,
-        key: impl Into<Option<PlatformKey>>,
-    ) -> ResolvedExecutable<'_> {
-        let over = key.into().and_then(|k| self.platform.get(&k));
-        ResolvedExecutable {
-            program: &self.executable.program,
-            version: over
-                .and_then(|o| o.version.as_deref())
-                .unwrap_or(&self.executable.version),
-            sha256: over.map_or(&self.executable.sha256, |o| &o.sha256),
-        }
-    }
-
     /// `capture.env` for `key`: the base entries, then the override's, which replace a
     /// same-named one.
     pub fn resolved_env(&self, key: impl Into<Option<PlatformKey>>) -> BTreeMap<String, String> {
@@ -383,15 +358,8 @@ impl CaptureSpec {
     /// The base recipe with `key`'s override applied and no `platform` table: what the
     /// validator sees for that platform.
     fn resolved_for(&self, key: PlatformKey) -> CaptureSpec {
-        let exe = self.resolved_executable(key);
-        let executable = ExecutableSpec {
-            program: exe.program.to_string(),
-            version: exe.version.to_string(),
-            sha256: exe.sha256.to_string(),
-        };
         CaptureSpec {
             env: self.resolved_env(key),
-            executable,
             platform: BTreeMap::new(),
             ..self.clone()
         }
@@ -742,8 +710,47 @@ impl HarnessManifest {
                 ));
             }
         }
+        refuse_retired_pin_keys(&table)?;
         toml::from_str::<HarnessManifest>(text).map_err(|e| map_toml_error(text, &e))
     }
+}
+
+/// The keys the executable pin used to need, refused by name (D53): the tracer records the
+/// build that runs, so a manifest that still pins one is told to drop the line, not that it is
+/// from a newer schema.
+const RETIRED_PIN_KEYS: &[&str] = &["sha256", "version"];
+
+/// Refuse `capture.executable.{sha256,version}` and `capture.platform.<key>.{sha256,version}`
+/// with one sentence each, read from the generic table before the strict deserialization.
+fn refuse_retired_pin_keys(table: &toml::Table) -> Result<(), ProtocolError> {
+    let Some(capture) = table.get("capture").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    let mut places: Vec<(String, &toml::Table)> = Vec::new();
+    if let Some(executable) = capture.get("executable").and_then(toml::Value::as_table) {
+        places.push(("capture.executable".to_string(), executable));
+    }
+    if let Some(platforms) = capture.get("platform").and_then(toml::Value::as_table) {
+        for (key, value) in platforms {
+            if let Some(over) = value.as_table() {
+                places.push((format!("capture.platform.{key}"), over));
+            }
+        }
+    }
+    for (at, keys) in places {
+        for retired in RETIRED_PIN_KEYS {
+            if keys.contains_key(*retired) {
+                return Err(refuse(
+                    format!("{at}.{retired}"),
+                    format!(
+                        "`{retired}` is no longer a connector field (D53): the tracer records the \
+                         build that runs instead of pinning one; delete the line."
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------
@@ -858,10 +865,25 @@ fn glob_matches(name: &str, pattern: &str) -> bool {
     j == pattern.len()
 }
 
-fn is_hex64(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+/// At most this many `capture.executable.version_args`.
+const MAX_VERSION_ARGS: usize = 4;
+
+/// At most this many bytes in one `capture.executable.version_args` element.
+const MAX_VERSION_ARG_BYTES: usize = 32;
+
+/// A flag or a word: `^-{1,2}[a-z][a-z0-9-]*$` or `^[a-z][a-z0-9-]*$`, 1 to
+/// [`MAX_VERSION_ARG_BYTES`] bytes. No value, path or template can be one.
+fn is_version_arg(a: &str) -> bool {
+    if a.is_empty() || a.len() > MAX_VERSION_ARG_BYTES {
+        return false;
+    }
+    let word = a
+        .strip_prefix("--")
+        .or_else(|| a.strip_prefix('-'))
+        .unwrap_or(a);
+    let mut bytes = word.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// How a native `root` splits: which home it names and the relative path under it.
@@ -947,17 +969,17 @@ fn native_pattern_components(pattern: &str, source_has_id: bool) -> Result<Vec<S
 }
 
 /// A refusal of the recipe `key` resolves to, renamed to the override that caused it: the
-/// override changes only the executable pin and env, so the base table already passed every
-/// other rule, and the base rule's reason is kept.
+/// override changes only env, so the base table already passed every other rule, and the base
+/// rule's reason is kept.
 fn platform_refusal(key: PlatformKey, e: ProtocolError) -> ProtocolError {
     let ProtocolError::Field { field, reason } = e else {
         return e;
     };
     let at = format!("capture.platform.{}", key.as_str());
-    match field.strip_prefix("capture.executable.") {
-        Some(rest) => refuse(format!("{at}.{rest}"), reason),
-        None if field == "capture.env" => refuse(format!("{at}.env"), reason),
-        None => refuse(at, format!("{field}: {reason}")),
+    if field == "capture.env" {
+        refuse(format!("{at}.env"), reason)
+    } else {
+        refuse(at, format!("{field}: {reason}"))
     }
 }
 
@@ -1056,24 +1078,28 @@ impl HarnessManifest {
                 ),
             ));
         }
-        let mut v = exe.version.bytes();
-        let version_ok = exe.version.len() <= 32
-            && v.next().is_some_and(|b| b.is_ascii_digit())
-            && v.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-'));
-        if !version_ok {
+        if exe.version_args.len() > MAX_VERSION_ARGS {
             return Err(refuse(
-                "capture.executable.version",
-                format!(
-                    "`{}` must match `^[0-9][0-9A-Za-z.+-]{{0,31}}$`",
-                    exe.version
-                ),
+                "capture.executable.version_args",
+                format!("must hold at most {MAX_VERSION_ARGS} arguments"),
             ));
         }
-        if !is_hex64(&exe.sha256) {
-            return Err(refuse(
-                "capture.executable.sha256",
-                "must be 64 lowercase hex characters",
-            ));
+        for a in &exe.version_args {
+            if !is_version_arg(a) {
+                return Err(refuse(
+                    "capture.executable.version_args",
+                    format!(
+                        "`{a}` must be 1 to {MAX_VERSION_ARG_BYTES} bytes matching \
+                         `^-{{1,2}}[a-z][a-z0-9-]*$` or `^[a-z][a-z0-9-]*$`"
+                    ),
+                ));
+            }
+            if let Some(why) = capture_arg_denied(a) {
+                return Err(refuse(
+                    "capture.executable.version_args",
+                    format!("`{a}` {why}"),
+                ));
+            }
         }
         Ok(())
     }

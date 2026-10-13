@@ -108,8 +108,9 @@ refuses many invalid values, but validation is not a substitute for review.
    participant's, not the connector's: a connector does not limit it.
    Look for telemetry exporters and code loaders. Do not request a `NO_PAGER` exception: the
    `PAGER` suffix rule refuses it.
-4. Re-derive `capture.executable.sha256` from an official artifact of exactly the declared version.
-   `program` is the harness entry point, not an interpreter or moving updater wrapper.
+4. Check `capture.executable`: `program` is the harness entry point, not an interpreter or moving
+   updater wrapper, and `version_args` (if any) only asks for the version. There is no build
+   digest to re-derive: builds are recorded, not pinned (D53).
 5. Check hosts: only the provider, narrowest evidence paths and a real hint; no registry or
    unrelated host. Auth hosts are sign-in/refresh tunnels and cannot supply model evidence.
 6. Check native capture: root is inside the run/config home, `{id}` scopes a shared store, and

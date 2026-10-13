@@ -272,9 +272,9 @@ goalcup-verify --capture-integrity <trace-dir>     # the line `start` printed
 Run the `verify:` line `start` printed, not one typed from memory. The integrity exit codes are
 in the [README](../README.md#run-a-capture).
 
-`goalcup doctor` checks, per connector, that the connector files are the pinned ones and that
-the harness executable on `PATH` is the exact build `goalcup start` would run (hashed, never
-started); a harness that is not installed, or is another build, fails it.
+`goalcup doctor` checks, per connector, that the connector files are the pinned ones and finds
+the harness executable on `PATH` that `goalcup start` would run (hashed, never started). Any build
+passes: builds are recorded, not pinned (D53). A harness that is not installed fails it.
 `goalcup doctor --harness <id>` scopes the report **and the exit code** to one connector.
 Without it, `doctor` reports every shipped connector and exits 1 if any of them failed —
 including one you have no intention of running, which is the honest answer to "is this
