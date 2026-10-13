@@ -79,14 +79,15 @@ refused. `{session_id}` has the identity rules described below.
 | Field | Required/default | Contract |
 |---|---|---|
 | `capture.executable.program` | required | Bare `PATH` name, 1–64 bytes of `[A-Za-z0-9._-]`; no path. |
-| `capture.executable.version_args` | optional, default `[]` | 0–4 arguments, each 1–32 bytes matching `^-{1,2}[a-z][a-z0-9-]*$` or `^[a-z][a-z0-9-]*$`, and none refused by the capture argument deny list. |
+| `capture.executable.version_args` | optional, default `[]` | Empty, or exactly one of `--version`, `-v`, `-V`, `version`: the probe runs before the capture, with no proxy and no record. |
 
 No build is pinned (D53). `goalcup start` resolves `program` on `PATH`, follows the symlinks above
 the file, refuses a symlink or anything but a regular file at the end, hashes that file, and runs
 it; before releasing the parked child it hashes the same path again and refuses a file swapped in
 between. The daemon records the build that ran in `Launch.harness_build`. With `version_args`,
 the launcher runs `<program> <version_args>` once before the harness, with an empty environment
-except `PATH` and the run's private `HOME`, stdin `/dev/null` and a ten-second timeout, and records
+except `PATH` and a throwaway `HOME` beside the run's own (made for the probe and removed after
+it, so whatever the probe writes never reaches the run's `HOME`), stdin `/dev/null` and a ten-second timeout, and records
 the first line of its stdout (trimmed, printable ASCII, at most 128 bytes) as
 `Launch.harness_version`; without them, or when that fails, it records `unreported`. The version
 is reported by the harness, not proven.

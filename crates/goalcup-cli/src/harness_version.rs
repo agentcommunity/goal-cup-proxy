@@ -51,6 +51,31 @@ pub fn reported_version(
 
 /// [`reported_version`] for any program path, with the timeout as a parameter (tests use a short
 /// one).
+/// [`reported_version`] with `home` created fresh (mode 0700) for the probe and removed after
+/// it, whatever the probe left there. `unreported` when the directory cannot be made.
+pub fn reported_version_in_scratch_home(
+    executable: &ResolvedExecutable,
+    version_args: &[String],
+    home: &Path,
+) -> String {
+    if version_args.is_empty() {
+        return UNREPORTED.to_string();
+    }
+    #[cfg(unix)]
+    let made = {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(home)
+    };
+    #[cfg(not(unix))]
+    let made = std::fs::create_dir(home);
+    if made.is_err() {
+        return UNREPORTED.to_string();
+    }
+    let version = reported_version(executable, version_args, home);
+    let _ = std::fs::remove_dir_all(home);
+    version
+}
+
 pub fn reported_version_within(
     program: &Path,
     version_args: &[String],
@@ -111,7 +136,10 @@ pub fn reported_version_within(
     if !status.success() {
         return UNREPORTED.to_string();
     }
-    let remaining = deadline.saturating_duration_since(Instant::now());
+    // Output already buffered is still read when the exit came right at the deadline.
+    let remaining = deadline
+        .saturating_duration_since(Instant::now())
+        .max(Duration::from_millis(50));
     match receiver.recv_timeout(remaining) {
         Ok(bytes) => reported_line(&bytes),
         Err(_) => UNREPORTED.to_string(),

@@ -4,7 +4,7 @@
 
 use goalcup_cli::harness_version::{
     MAX_REPORTED_VERSION_BYTES, UNREPORTED, reported_line, reported_version,
-    reported_version_within,
+    reported_version_in_scratch_home, reported_version_within,
 };
 use goalcup_cli::launch::{recheck_resolved_executable, resolve_harness_executable};
 use std::path::{Path, PathBuf};
@@ -62,6 +62,26 @@ printf '  toy 1.2.3  \nsecond line\n'
         env.contains(&format!("PATH={}\n", goalcup_cli::launch::CAPTURE_PATH)),
         "{env}"
     );
+}
+
+/// The launch probes in a throwaway home beside the run's: whatever the probe writes there (Codex
+/// creates `~/.codex/tmp/arg0`) is removed with it, and the run's own `HOME` never sees it.
+#[test]
+fn the_launch_probe_writes_only_into_a_throwaway_home() {
+    let (_tmp, root, run_home) = scratch();
+    let exe = stub(
+        &root,
+        "toy",
+        r#"mkdir -p "$HOME/.toy/tmp" && echo state > "$HOME/.toy/tmp/lock"; echo "toy 1.2.3""#,
+    );
+    let resolved = resolve_harness_executable(&exe).unwrap();
+    let probe_home = root.join("version-probe-home");
+    assert_eq!(
+        reported_version_in_scratch_home(&resolved, &args(&["--version"]), &probe_home),
+        "toy 1.2.3"
+    );
+    assert!(!probe_home.exists(), "the throwaway home is removed");
+    assert_eq!(std::fs::read_dir(&run_home).unwrap().count(), 0);
 }
 
 #[test]

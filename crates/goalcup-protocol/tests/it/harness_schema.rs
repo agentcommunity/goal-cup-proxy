@@ -1495,8 +1495,8 @@ fn the_executable_fields_follow_their_grammars() {
     }
 }
 
-/// `version_args`: up to four flags or words, each 1 to 32 bytes of `-{1,2}[a-z][a-z0-9-]*` or
-/// `[a-z][a-z0-9-]*`, and none the capture deny list refuses. Absent is empty.
+/// `version_args`: empty, or exactly one of `--version`, `-v`, `-V`, `version`. The probe runs
+/// before the capture with no proxy and no record, so nothing else (`update`, `login`) may run.
 #[test]
 fn version_args_follow_their_grammar() {
     let mut t = hermes();
@@ -1506,10 +1506,8 @@ fn version_args_follow_their_grammar() {
         vec![],
         vec!["--version"],
         vec!["-v"],
+        vec!["-V"],
         vec!["version"],
-        vec!["version", "--json"],
-        vec!["--a", "-b", "c", "d-2"],
-        vec![&*format!("--{}", "a".repeat(30))],
     ] {
         let mut t = codex();
         set(
@@ -1523,18 +1521,14 @@ fn version_args_follow_their_grammar() {
     }
     for bad in [
         vec![""],
-        vec!["-"],
-        vec!["--"],
-        vec!["---version"],
-        vec!["--Version"],
-        vec!["-V"],
-        vec!["1version"],
+        vec!["update"],
+        vec!["login"],
+        vec!["mcp"],
+        vec!["version", "--json"],
         vec!["--version=1"],
-        vec!["--ver sion"],
         vec!["/usr/bin/codex"],
         vec!["{workspace}"],
-        vec![&*format!("--{}", "a".repeat(31))],
-        vec!["a", "b", "c", "d", "e"],
+        vec!["--version", "--version"],
     ] {
         let mut t = codex();
         set(
@@ -1543,19 +1537,8 @@ fn version_args_follow_their_grammar() {
             "version_args",
             strings(&bad),
         );
-        refused(&t, PINNED, &["capture.executable.version_args"]);
+        refused(&t, PINNED, &["capture.executable.version_args", "no proxy"]);
         refused(&t, DEV, &["capture.executable.version_args"]);
-    }
-    // The deny list holds here too: a version probe may not name a server.
-    for (denied, needle) in [("--remote", "somewhere else"), ("--host", "names a server")] {
-        let mut t = codex();
-        set(
-            &mut t,
-            &["capture", "executable"],
-            "version_args",
-            strings(&[denied]),
-        );
-        refused(&t, PINNED, &["capture.executable.version_args", needle]);
     }
 }
 

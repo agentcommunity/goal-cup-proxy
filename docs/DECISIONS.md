@@ -1397,7 +1397,7 @@ sentence telling the author to delete the line. `goalcup start` runs whatever bu
 resolves to on `PATH`, keeping only a consistency check that the file did not change between
 resolution and release. `Launch.harness_version` now carries the harness's own `version_args`
 output (first line of stdout, printable ASCII, at most 128 bytes, from a probe with an empty
-environment but `PATH` and the run's private `HOME`, ten-second timeout) or `unreported`, where it
+environment but `PATH` and a throwaway `HOME` removed afterwards, ten-second timeout) or `unreported`, where it
 used to carry the connector's pinned version: a change of meaning this row accepts, since the
 field was always display text and the digests are the record. The connector-directory pin
 (`pins/connector-dirs.txt`) stays: it is what stops a connector smuggling a base URL.

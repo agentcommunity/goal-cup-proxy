@@ -832,12 +832,14 @@ fn create_and_gate<'a>(
         }
     };
 
-    // The harness's own account of its version, asked once with nothing but `PATH` and this run's
-    // private `HOME`: reported, not proven, and `unreported` when it does not say (D53).
-    let harness_version = crate::harness_version::reported_version(
+    // The harness's own account of its version, asked once with nothing but `PATH` and a
+    // throwaway `HOME` beside the run's own, removed afterwards: a probe may write state (Codex
+    // creates `~/.codex/tmp/arg0`), and the run's `HOME` stays as the profile made it. Reported,
+    // not proven, and `unreported` when it does not say (D53).
+    let harness_version = crate::harness_version::reported_version_in_scratch_home(
         &prep.executable,
         &profile.executable.version_args,
-        &run.home,
+        &run.dir.join("version-probe-home"),
     );
 
     // The last alias/target identity check is directly before the create request. Preserve the

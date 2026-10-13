@@ -865,26 +865,10 @@ fn glob_matches(name: &str, pattern: &str) -> bool {
     j == pattern.len()
 }
 
-/// At most this many `capture.executable.version_args`.
-const MAX_VERSION_ARGS: usize = 4;
-
-/// At most this many bytes in one `capture.executable.version_args` element.
-const MAX_VERSION_ARG_BYTES: usize = 32;
-
-/// A flag or a word: `^-{1,2}[a-z][a-z0-9-]*$` or `^[a-z][a-z0-9-]*$`, 1 to
-/// [`MAX_VERSION_ARG_BYTES`] bytes. No value, path or template can be one.
-fn is_version_arg(a: &str) -> bool {
-    if a.is_empty() || a.len() > MAX_VERSION_ARG_BYTES {
-        return false;
-    }
-    let word = a
-        .strip_prefix("--")
-        .or_else(|| a.strip_prefix('-'))
-        .unwrap_or(a);
-    let mut bytes = word.bytes();
-    bytes.next().is_some_and(|b| b.is_ascii_lowercase())
-        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-}
+/// The only `capture.executable.version_args` a connector may name: one of these, alone. A
+/// wider grammar would let a reviewed connector run `update`, `login` or `mcp` through the
+/// probe, which runs before the capture with no proxy and no record.
+const VERSION_ARGS: &[&str] = &["--version", "-v", "-V", "version"];
 
 /// How a native `root` splits: which home it names and the relative path under it.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1078,26 +1062,21 @@ impl HarnessManifest {
                 ),
             ));
         }
-        if exe.version_args.len() > MAX_VERSION_ARGS {
-            return Err(refuse(
-                "capture.executable.version_args",
-                format!("must hold at most {MAX_VERSION_ARGS} arguments"),
-            ));
-        }
-        for a in &exe.version_args {
-            if !is_version_arg(a) {
+        match exe.version_args.as_slice() {
+            [] => {}
+            [one] if VERSION_ARGS.contains(&one.as_str()) => {}
+            _ => {
                 return Err(refuse(
                     "capture.executable.version_args",
                     format!(
-                        "`{a}` must be 1 to {MAX_VERSION_ARG_BYTES} bytes matching \
-                         `^-{{1,2}}[a-z][a-z0-9-]*$` or `^[a-z][a-z0-9-]*$`"
+                        "must be empty or exactly one of {}: the probe runs before the capture, \
+                         with no proxy and no record",
+                        VERSION_ARGS
+                            .iter()
+                            .map(|a| format!("`{a}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
-                ));
-            }
-            if let Some(why) = capture_arg_denied(a) {
-                return Err(refuse(
-                    "capture.executable.version_args",
-                    format!("`{a}` {why}"),
                 ));
             }
         }

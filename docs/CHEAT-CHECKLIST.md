@@ -76,7 +76,9 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the
   judges comparing the native session's model turns with the wire leg's model calls; the verifier
   does not yet flag native turns with no wire model call. `Launch.harness_version` is what the
-  harness printed for its own `version_args` (or `unreported`): reported, not proven.
+  harness printed for its own `version_args` (or `unreported`): reported, not proven. That probe
+  runs the unpinned binary once before the daemon registers anything, with no proxy, no record and
+  a throwaway `HOME`; `version_args` is limited to `--version`, `-v`, `-V` or `version`.
 - **One run per shared home, by a lock with two gaps.** `goalcup start` holds an exclusive flock
   on `capture-homes/<id>.lock` until its finish returns, and refuses a second start of the same
   harness (D39). The lock dies with the launcher: if `goalcup start` is SIGKILLed while a
