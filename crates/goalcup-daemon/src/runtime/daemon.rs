@@ -1,9 +1,9 @@
 use super::CycleCounters;
 use super::capture::{CaptureEntry, fresh_capture_id};
+use crate::DaemonError;
 use crate::config::DaemonConfig;
 use crate::ingest::{IngestClock, IngestConfig, IngestListener};
 use crate::registry::Registry;
-use crate::{DaemonError, now_unix};
 use goalcup_platform::tracecap::ArtifactRoot;
 use goalcup_protocol::control::{CycleErrors, EntrySummary, SignedStatus};
 use goalcup_protocol::process::ProcessRegistration;
@@ -47,14 +47,13 @@ pub(super) struct DaemonInner {
     pub(super) ingest_addr: SocketAddr,
     /// The daemon's one observation clock for capture records and ingest outcomes.
     pub(super) capture_clock: IngestClock,
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) finalization_clock: Mutex<Option<f64>>,
-    #[cfg(any(test, feature = "test-hooks"))]
-    pub(super) finalization_clock_steps: Mutex<std::collections::VecDeque<f64>>,
-    /// Process-local monotone wall-time authority for deadline/finalization decisions.
-    /// `deadline_observed` carries the threshold latch across restarts; this high-water
-    /// prevents a wall-clock rollback within one process from moving any phase backwards.
-    pub(super) finalization_epoch_unix: f64,
+    /// Seconds a test has pretended the machine slept: what a real sleep adds to the wall
+    /// clock and to nothing an `Instant` reads.
+    #[cfg(test)]
+    pub(super) simulated_sleep_seconds: Mutex<f64>,
+    /// The latest finalization time this process has handed out. The finalization clock is
+    /// the wall clock, which keeps counting while the Mac sleeps; this high-water keeps a
+    /// wall-clock rollback within one process from moving any phase backwards.
     pub(super) finalization_high_water: Mutex<f64>,
     /// What the daemon's loop lost, so the signed status can carry it.
     pub(super) cycles: Arc<CycleCounters>,
@@ -93,6 +92,10 @@ pub(super) struct DaemonInner {
 pub struct Daemon {
     pub(super) inner: Arc<DaemonInner>,
 }
+
+/// How long an entry may sit created and never launched before the idle loop abandons it.
+/// `goalcup start` goes from create to launch in seconds.
+pub const UNLAUNCHED_LIMIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 impl Daemon {
     /// Test-only: replace this exact configured root with a symlink immediately after its
@@ -167,11 +170,8 @@ impl Daemon {
             ingest: Mutex::new(Some(ingest)),
             ingest_addr,
             capture_clock,
-            #[cfg(any(test, feature = "test-hooks"))]
-            finalization_clock: Mutex::new(None),
-            #[cfg(any(test, feature = "test-hooks"))]
-            finalization_clock_steps: Mutex::new(std::collections::VecDeque::new()),
-            finalization_epoch_unix: now_unix(),
+            #[cfg(test)]
+            simulated_sleep_seconds: Mutex::new(0.0),
             finalization_high_water: Mutex::new(0.0),
             cycles: Arc::new(CycleCounters::default()),
             control_addr: OnceLock::new(),
@@ -244,8 +244,11 @@ impl Daemon {
     /// that is merely dropped does not release them: the control router holds an `Arc` of
     /// this one, and dropping a `JoinHandle` detaches its task rather than ending it. So
     /// the listener is aborted and awaited — awaited, because `abort` only marks a task
-    /// and the socket is closed when the task is dropped — and only then is `self` gone,
-    /// which is the last `Arc` and so the moment the locks are released.
+    /// and the socket is closed when the task is dropped — and only then is `self` gone.
+    /// That drops this handle's `Arc`, and the locks go with the last one. It is not always
+    /// the last: `axum::serve` spawns each accepted connection as its own task, which the
+    /// abort does not reach, so a keep-alive connection still open holds the router's
+    /// `Arc<Daemon>`, and the locks, until the client closes it.
     ///
     /// By value, because a stopped daemon has nothing left to answer with: the port is
     /// closed and the registry handle is released, and a caller holding one afterwards
@@ -347,7 +350,9 @@ impl Daemon {
     /// work, and no authenticated control request. What `goalcup-daemon --exit-when-idle`
     /// waits on, so the daemon the CLI starts for a run ends once every run is sealed.
     ///
-    /// **An unfinished capture keeps it up however long it takes**, including one reopened
+    /// **An unfinished capture keeps it up however long it takes**, except one that never
+    /// launched and is older than [`UNLAUNCHED_LIMIT`]: its CLI died, and it is abandoned. That
+    /// includes one reopened
     /// after a crash that nobody has sealed yet: a daemon that idled out over it would be
     /// started again by the next `goalcup seal`, and every reopen of a launched entry chains
     /// another `IngestLost` gap. The grace is measured from the last moment there was work,
@@ -357,6 +362,7 @@ impl Daemon {
         const POLL: std::time::Duration = std::time::Duration::from_millis(500);
         loop {
             tokio::time::sleep(POLL).await;
+            self.abandon_stale_unlaunched(UNLAUNCHED_LIMIT);
             if self.has_work() {
                 self.note_activity();
                 continue;

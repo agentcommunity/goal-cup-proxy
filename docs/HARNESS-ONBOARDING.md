@@ -43,7 +43,8 @@ contribution on its own.
 
 ## What you need
 
-- A Mac with Apple silicon. The test kit runs on macOS only.
+- A Mac with Apple silicon. The test kit's synthetic captures also run on Linux, in Docker, but a
+  real harness capture is measured on macOS only ([README, Linux](../README.md#linux)).
 - Rust through [rustup](https://rustup.rs) (1.99 or later), the Xcode command line tools, and
   `python3` (the one macOS ships is fine). If Homebrew also installed Rust, make sure
   `which cargo` shows `~/.cargo/bin/cargo`.
@@ -130,8 +131,8 @@ maintainer replies within 7 days and runs the checks again on a Mac.
 - **No installer.** The tracer is source only; participants build it with cargo.
 - **No server.** Traces stay on the participant's machine; upload to the organizers is
   planned, not built.
-- **macOS only.** Linux and Windows are not measured. The test kit does not run there, which is
-  why the facts sheet asks for their paths now.
+- **macOS only for a real capture.** Linux is measured in Docker with synthetic captures only,
+  and Windows is not measured, which is why the facts sheet asks for their paths now.
 - **One local session store.** A harness that keeps its sessions only on a server, or in a
   database file, needs a tracer change first (decision table, rows 8 and 9).
 

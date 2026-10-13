@@ -38,20 +38,20 @@
 //! **This transport sends one request and reports what came back**, `busy` included.
 //!
 //! Retry policy lives one layer up, in [`crate::retry`]. Most commands use
-//! [`crate::retry::retry_busy`]; the `/process` handoff and terminal `/seal` select their
-//! route-specific policies there. It is above the transport because a retry buried in the
+//! [`crate::retry::retry_busy`]; the `/abandon` and `/process` routes and the capture seal
+//! select their route-specific policies there. It is above the transport because a retry buried in the
 //! HTTP client is a retry that only that client has: a command driven by the in-process
 //! `MockDaemonClient` would meet the mock's one `busy` and stop, the fake would be modelling
-//! the daemon faithfully, and the rule the command is supposed to honour — a resume retries
-//! a busy once — would be untestable everywhere the commands are actually tested. One
+//! the daemon faithfully, and the rule the command is supposed to honour — an abandon
+//! retries a busy — would be untestable everywhere the commands are actually tested. One
 //! policy seam, and both clients behave the same on the far side of it.
 //!
 //! # The token
 //!
 //! It is the one secret this struct holds. It is never interpolated into an error, never
 //! printed, and [`HttpDaemonClient`]'s `Debug` redacts it — the same treatment
-//! `config::ControlFile` and `control::WorkspaceOpts` give the
-//! credentials they carry. `tests/it/daemon_client.rs` greps every refusal this client raises
+//! `config::ControlFile` gives the
+//! credential it carries. `tests/it/daemon_client.rs` greps every refusal this client raises
 //! for it.
 
 #[cfg(feature = "test-support")]
@@ -69,9 +69,9 @@ use goalcup_protocol::control::{
     CONTROL_API_VERSION, CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest,
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
     ControlError, DaemonClient, DaemonHealth, EntrySummary, ErrorBody, FINISH_COMMIT_RESERVE,
-    ProcessRegistrationError, ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT,
-    ROUTE_HEALTH, SUFFIX_ABANDON, SUFFIX_CAPTURE_GOAL, SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS,
-    SUFFIX_SEAL, SUFFIX_STATUS, SealResponse, SignedStatus, entry_route, is_public_route,
+    ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, SUFFIX_ABANDON,
+    SUFFIX_CAPTURE_GOAL, SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS,
+    SealResponse, SignedStatus, entry_route, is_public_route,
 };
 use goalcup_protocol::process::ProcessRegistration;
 use std::path::Path;
@@ -127,11 +127,9 @@ pub(crate) const PROCESS_HANDOFF_CALL_TIMEOUT: Duration = Duration::from_secs(2)
 ///
 /// It is five minutes, and an admitted call that may take five minutes must never be replayed
 /// after an ambiguous timeout, unreachable transport, or malformed response: the daemon may
-/// have completed that seal. A confirmed pre-operation `busy` refusal is different:
-/// [`crate::retry::retry_busy_seal`] retries only those short refusals within its 301-second
-/// reservation, always leaving room for one full admitted seal. No other call carries this
-/// timeout: giving an ordinary call the seal's deadline would give the retry helper a budget
-/// it could blow through.
+/// have completed that seal. The bare seal route reads only the entry's registry row and never
+/// answers `busy`. No other call carries this timeout: giving an ordinary call the seal's
+/// deadline would give the retry helper a budget it could blow through.
 ///
 /// So this constant appears at exactly one call site. No test pins that count any more.
 pub const SLOW_CALL_TIMEOUT: Duration = Duration::from_secs(300);
@@ -154,8 +152,8 @@ struct CallResponse {
 /// A control call that did not produce its ordinary successful response.
 ///
 /// A framed daemon refusal is distinct from a reply this client could not verify or parse.
-/// The ordinary control trait exposes both as [`ControlError`], but `/process` must retain
-/// the distinction until it decides whether a launched child is safe to stop.
+/// The ordinary control trait exposes both as [`ControlError`]; only the capture seal reads
+/// the difference, to tell a refusal made before the finish began from an ambiguous one.
 enum CallError {
     Uncertain(ControlError),
     /// The connection was never accepted, so nothing was written (`ureq`'s `ConnectionFailed`,
@@ -163,7 +161,6 @@ enum CallError {
     /// not ask; only the capture seal reads the difference.
     NotConnected(ControlError),
     Refusal {
-        status: u16,
         error: ControlError,
     },
 }
@@ -369,7 +366,6 @@ impl HttpDaemonClient {
         // unrecognised code becomes `Internal` inside `from_code`, never a silent success.
         match serde_json::from_str::<ErrorBody>(&text) {
             Ok(body) => Err(CallError::Refusal {
-                status,
                 error: ControlError::from_code(&body.error.code, &body.error.message),
             }),
             Err(e) => Err(CallError::Uncertain(ControlError::Malformed(format!(
@@ -406,61 +402,6 @@ impl HttpDaemonClient {
         body: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, ControlError> {
         self.post(&entry_route(entry_id, SUFFIX_SEAL), body, SLOW_CALL_TIMEOUT)
-    }
-
-    /// `POST`, retaining the response status for a route whose acknowledgement has a
-    /// narrower contract than an ordinary JSON control response.
-    fn post_with_status(
-        &self,
-        path: &str,
-        body: Option<&serde_json::Value>,
-        read_timeout: Duration,
-    ) -> Result<CallResponse, CallError> {
-        self.call("POST", path, body, read_timeout)
-    }
-
-    fn register_process_with_admission(
-        &self,
-        entry_id: &str,
-        request: &ProcessRegistration,
-    ) -> Result<(), ProcessRegistrationError> {
-        let body = document(request).map_err(ProcessRegistrationError::DefinitelyRefused)?;
-        let path = entry_route(entry_id, SUFFIX_PROCESS);
-        match self.post_with_status(&path, Some(&body), PROCESS_HANDOFF_CALL_TIMEOUT) {
-            Ok(response) if response.status == 204 && response.body_is_empty => Ok(()),
-            // A success response that misses the narrow acknowledgement contract may have
-            // followed durable admission, just as a reply that could not be read could.
-            Ok(_) => Err(ProcessRegistrationError::PossiblyAdmitted(
-                ControlError::Malformed(format!(
-                    "{path}: expected HTTP 204 No Content for a process registration acknowledgement"
-                )),
-            )),
-            Err(CallError::Refusal {
-                error: error @ ControlError::ProcessAdmissionUncertain(_),
-                ..
-            }) => Err(ProcessRegistrationError::PossiblyAdmitted(error)),
-            // Busy is retryable, but an exact Prepared replay intentionally preserves the
-            // same 409/code. Its wire shape therefore cannot prove pre-mutation refusal.
-            Err(CallError::Refusal {
-                error: error @ ControlError::ProcessAdmissionBusy(_),
-                ..
-            }) => Err(ProcessRegistrationError::PossiblyAdmitted(error)),
-            // The handler validates this before it calls the authority-mutating runtime
-            // method, so a framed daemon 400 malformed refusal is definitely pre-admission.
-            Err(CallError::Refusal {
-                status: 400,
-                error: error @ ControlError::Malformed(_),
-            }) => Err(ProcessRegistrationError::DefinitelyRefused(error)),
-            // Only a structured 4xx refusal is a settled rejection. Redirects and 5xx
-            // responses can cross an intermediary or follow durable `Prepared` work, so
-            // neither proves the daemon did not admit this exact process.
-            Err(CallError::Refusal { status, error }) if (400..500).contains(&status) => {
-                Err(ProcessRegistrationError::DefinitelyRefused(error))
-            }
-            Err(error) => Err(ProcessRegistrationError::PossiblyAdmitted(
-                error.into_error(),
-            )),
-        }
     }
 }
 
@@ -648,36 +589,32 @@ impl DaemonClient for HttpDaemonClient {
         parsed(ROUTE_ENTRIES, answer)
     }
 
-    /// The one slow call: it finishes the entry and terminates a process tree, so it
-    /// carries [`SLOW_CALL_TIMEOUT`] and no other route does.
+    /// The bare seal, which carries [`SLOW_CALL_TIMEOUT`] and no other route does.
     ///
-    /// **The terminal seal command applies [`crate::retry::retry_busy_seal`]**, not the
-    /// generic policy. Its reservation keeps one full [`SLOW_CALL_TIMEOUT`] available for an
-    /// admitted manifest operation while its four dephased Busy attempts ride out a short
-    /// pump hold. A retry left off here would be a `busy` — the transient the daemon raises
-    /// on every mutating route while an entry is mid-pump — reported to a participant
-    /// finishing early as a seal that failed. The `conflict` that shares its `409` is still
-    /// never retried, here or anywhere.
+    /// `goalcup seal` sends it only when the entry has no capture status: the daemon answers
+    /// it `malformed` for a capture row it could not reopen (a torn entry) and `missing` for an
+    /// id it does not hold. The `conflict` that shares `busy`'s `409` is never retried.
     fn seal(&self, entry_id: &str) -> Result<SealResponse, ControlError> {
         let answer = self.post_seal(entry_id, None)?;
         parsed(&entry_route(entry_id, SUFFIX_SEAL), answer)
     }
 
+    /// The handoff's acknowledgement has a narrower contract than an ordinary JSON control
+    /// response: only a bare `204` (no length- or transfer-delimited body) acknowledges.
     fn register_process(
         &self,
         entry_id: &str,
         request: &ProcessRegistration,
     ) -> Result<(), ControlError> {
-        HttpDaemonClient::register_process_with_admission(self, entry_id, request)
-            .map_err(ProcessRegistrationError::into_error)
-    }
-
-    fn register_process_with_admission(
-        &self,
-        entry_id: &str,
-        request: &ProcessRegistration,
-    ) -> Result<(), ProcessRegistrationError> {
-        HttpDaemonClient::register_process_with_admission(self, entry_id, request)
+        let body = document(request)?;
+        let path = entry_route(entry_id, SUFFIX_PROCESS);
+        match self.call("POST", &path, Some(&body), PROCESS_HANDOFF_CALL_TIMEOUT) {
+            Ok(response) if response.status == 204 && response.body_is_empty => Ok(()),
+            Ok(_) => Err(ControlError::Malformed(format!(
+                "{path}: expected HTTP 204 No Content for a process registration acknowledgement"
+            ))),
+            Err(error) => Err(error.into_error()),
+        }
     }
 
     fn health(&self) -> Result<DaemonHealth, ControlError> {

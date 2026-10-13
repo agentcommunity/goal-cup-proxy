@@ -534,7 +534,10 @@ async fn auth_and_non_capture_hosts_are_opaque_tunnels() {
     payload.extend((0..=255u8).collect::<Vec<_>>());
     let reply = b"UPSTREAM-OPAQUE-\x00\xff-REPLY".to_vec();
 
-    // An authentication host, even with a ClientHello naming an approved host.
+    // An authentication host, even with a ClientHello naming an approved host, is still an
+    // unchanged tunnel whose content is never read. It is reported as `SniMismatch`, a
+    // fail-open tunnel the proxy chains as a loss: an approved host's traffic must not leave
+    // uncaptured through an authentication host.
     let recorder = Recorder::start(reply.clone()).await;
     let proxy = serve_one(config.clone()).await;
     let target = format!("localhost:{}", recorder.addr.port());
@@ -553,7 +556,7 @@ async fn auth_and_non_capture_hosts_are_opaque_tunnels() {
         tunneled(outcome),
         Tunneled {
             host: "localhost".into(),
-            reason: TunnelReason::AuthHost,
+            reason: TunnelReason::SniMismatch,
             end: TunnelEnd::Closed {
                 client_to_upstream: payload.len() as u64,
                 upstream_to_client: reply.len() as u64
@@ -561,7 +564,11 @@ async fn auth_and_non_capture_hosts_are_opaque_tunnels() {
         }
     );
 
-    // A host that is neither approved nor an authentication host.
+    // A host that is neither approved nor an authentication host, whose ClientHello names a
+    // host that is not approved either.
+    let mut payload = client_hello(client_config(&[], &[H11], true), "other.test");
+    payload.extend_from_slice(b"Authorization: Bearer AUTH-SENTINEL-9d1e\r\n");
+    payload.extend((0..=255u8).collect::<Vec<_>>());
     let recorder = Recorder::start(reply.clone()).await;
     let proxy = serve_one(config).await;
     let target = format!("127.0.0.1:{}", recorder.addr.port());

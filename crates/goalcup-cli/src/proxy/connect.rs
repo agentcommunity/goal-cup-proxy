@@ -10,7 +10,12 @@
 //! - [`Admission::Tunneled`]: an authentication host, a host that is not approved, or an
 //!   approved host whose ClientHello is absent, unparsable or names another server. The
 //!   tunnel ran to completion inside `admit`, relaying every byte unchanged — including the
-//!   bytes read while inspecting the ClientHello. Nothing about its content is returned.
+//!   bytes read while inspecting the ClientHello. Nothing about its content is returned. Every
+//!   tunnel waits for the client's first bytes, so a tunnel to another authority (an IP
+//!   literal, a sibling name, an authentication host) whose ClientHello names an approved host
+//!   is reported as [`TunnelReason::SniMismatch`], a fail-open tunnel and so a loss, never as an
+//!   opaque by-design one. A protocol whose server speaks first cannot pass this proxy: the
+//!   wait for the client's bytes runs out at the admission deadline.
 //! - [`Admission::Failed`]: a fixed [`FailureClass`] and, once the CONNECT target parsed and
 //!   the caller authenticated, the target host.
 //!
@@ -504,6 +509,18 @@ async fn negotiate<S: AsyncIo + 'static>(
         if write_established(&mut inbound).await.is_err() {
             return Decision::Failed(FailureClass::ClientIo);
         }
+        // Approved-host traffic must not leave uncaptured through another authority. Only the
+        // server name is read, so an authentication host's content is still never inspected.
+        let (prefix, hello) = match peek_client_hello(&mut inbound, prefix).await {
+            Ok(peeked) => peeked,
+            Err(_) => return Decision::Failed(FailureClass::ClientIo),
+        };
+        let reason = match hello {
+            HelloParse::Sni(Some(name)) if config.approved.contains_key(&normalize_sni(&name)) => {
+                TunnelReason::SniMismatch
+            }
+            _ => reason,
+        };
         return Decision::Tunnel {
             inbound,
             upstream,

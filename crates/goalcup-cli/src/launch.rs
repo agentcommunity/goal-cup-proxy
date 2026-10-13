@@ -48,10 +48,6 @@
 //! is the strictly better thing to hand a terminator. No shipped connector uses this mode;
 //! the variant stays in the schema for a harness that is genuinely headless.
 //!
-//! The port refusal is not this mode's. Any recipe naming `{server_port}` is refused on an
-//! empty one, whatever the launch mode: `--port ""` is a harness started on nothing, and the
-//! daemon reserving no port is a bug worth naming.
-//!
 //! [`LaunchMode::AttachOnly`] builds no plan at all. In V1, attach mode armed the folder and
 //! the participant opened a session in it; there was no argv, so the V1 `plan` refused it
 //! rather than inventing one. A capture plan is always [`LaunchMode::Server`].
@@ -341,42 +337,6 @@ pub fn launched_at_now() -> String {
             .map(|d| d.as_secs())
             .unwrap_or(0),
     )
-}
-
-/// A recipe that names `{server_port}` may not be launched on an empty one.
-///
-/// The check is on the templates rather than on the rendered strings, because an empty
-/// render leaves nothing to look for: `--port "" --hostname 127.0.0.1` and a recipe that
-/// never wanted a port are the same argv once the substitution has happened. So the
-/// question asked is the honest one — does this recipe need the variable, and did the
-/// daemon supply it.
-///
-/// Not restricted to [`LaunchMode::Server`]: a `Tui` recipe carrying `--port`/`--hostname`
-/// flags is as much a harness started on nothing when the value is empty. The thing refused
-/// is a recipe launched on an empty value it asked for, whatever owns the terminal. The
-/// daemon reserves on the same question, over the same templates.
-fn needs_a_port_it_has(
-    args: &[String],
-    env: &BTreeMap<String, String>,
-    v: &TemplateVars,
-    id: &str,
-) -> Result<(), CliError> {
-    const PORT: &str = "{server_port}";
-    let named = args.iter().any(|t| t.contains(PORT)) || env.values().any(|t| t.contains(PORT));
-    if !named {
-        return Ok(());
-    }
-    // The V1 `vars::build` (removed by D48) rendered an unreserved port as the empty string
-    // deliberately, so that this refusal could exist rather than a number being invented
-    // there. A map with no `server_port` at all reads the same.
-    if v.get("server_port").unwrap_or("").is_empty() {
-        return Err(CliError::Refused(format!(
-            "`{id}`'s launch recipe renders `{PORT}`, and no port was reserved for this \
-             entry: the port is empty, so the harness would be started on nothing. Nothing \
-             is launched."
-        )));
-    }
-    Ok(())
 }
 
 // ------------------------------------------------------------------ M2 capture launch
@@ -831,7 +791,6 @@ pub fn build_capture_launch(
     let config_home = absolute_utf8("harness home", launch.config_home)?;
     let ca_certificate = absolute_utf8("proxy CA certificate", launch.ca_certificate)?;
     loopback_proxy_url(launch.proxy_url)?;
-    needs_a_port_it_has(&profile.args, &profile.env, v, id)?;
 
     let mut argv = Vec::with_capacity(profile.args.len() + 1);
     for template in &profile.args {
@@ -1714,7 +1673,7 @@ pub fn handle(p: &LaunchPlan, s: &Spawned, now: &str) -> Result<ProcessHandle, C
 /// the fork-time creation identity, which `exec` does not change.
 pub fn gated_handle(p: &LaunchPlan, g: &GatedSpawn, now: &str) -> Result<ProcessHandle, CliError> {
     // The only way this fails is that the parked child has no readable creation identity, which
-    // on macOS is a child that already died (a zombie has none): it never ran.
+    // is a child that already died (a zombie has none, on macOS and Linux alike): it never ran.
     build_handle(p, g.pid, &g.program, || (None, None), now).map_err(|_| {
         CliError::Internal(format!(
             "the parked child of {} ended before it could be registered, so it never ran",
@@ -1760,11 +1719,6 @@ fn build_handle(
         // process's environment is not portably readable after the fact anyway — what the
         // daemon can check is that a pinned key is still there.
         env_keys: p.env_set.keys().cloned().collect(),
-        // Never filled in here: this function is handed a child and a launch plan rather
-        // than a connector's `[home_seed]`. A capture launch seeds nothing and the daemon
-        // refuses a capture registration that carries a seed record, so this stays `None`.
-        // The V1 seeding that set it was removed by D48.
-        home_seed: None,
     })
 }
 

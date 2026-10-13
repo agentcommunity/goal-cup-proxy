@@ -1135,8 +1135,9 @@ its own).
   relaunches the harness and records a re-telling, not the harness's own store). Residual to state
   in CHEAT-CHECKLIST: rows edited or deleted in place during the run are not witnessed.
 - **Public repository.** The open-source copy goes to `agentcommunity/goal-cup-tracer` (created
-  private and empty on 2026-10-05), filled from `scripts/oss-cut.py` with no history; the existing
-  private `agentcommunity/goal-cup` keeps the full history. Outside PRs require DCO sign-off,
+  private and empty on 2026-10-05), filled from `scripts/oss-cut.py` (deleted 2026-10-13 once
+  its job was done) with no history; the existing private `agentcommunity/goal-cup` keeps the
+  full history. Outside PRs require DCO sign-off,
   enforced by the GitHub DCO app (amended by [D47](#d47-m2-no-dco-sign-off): neither applies).
 
 ---

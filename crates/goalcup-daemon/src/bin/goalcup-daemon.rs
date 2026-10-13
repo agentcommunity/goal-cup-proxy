@@ -20,9 +20,8 @@
 //!   document (`StatusPayload::cycles`), which is a participant-readable surface rather
 //!   than a file nobody rotates. So `stdout` here carries the two startup facts and
 //!   nothing else, and
-//!   `stderr` carries a refusal the process is about to exit on — and, when the configured
-//!   server key is the published placeholder, the one line that says so — plus one warning
-//!   for each existing configured root whose group or other permission bits are set.
+//!   `stderr` carries a refusal the process is about to exit on, plus one warning for each
+//!   existing configured root whose group or other permission bits are set.
 //! * **A signal seals nothing, and it does not merely drop either.** SIGTERM and SIGINT
 //!   end the process through [`Daemon::stop`] (the listener down, every in-flight seal
 //!   awaited, every redb file lock released), but they do not end the entry. A capture entry
@@ -32,8 +31,9 @@
 //!
 //! **There is no poll to finish.** [`Daemon::run_forever`] drives nothing: a capture entry's
 //! work is done by its ingest and control calls, and D48 removed the V1 tick with its
-//! receipt requests and uploads. The chain is durable per envelope, so nothing in flight is
-//! evidence that was lost.
+//! receipt requests and uploads. Each capture's owner thread syncs the chain every 800 ms
+//! (`SYNC_EVERY`), so a process that dies loses at most the envelopes appended since its
+//! last sync.
 
 use clap::Parser;
 use goalcup_daemon::config::DaemonConfig;
@@ -106,8 +106,8 @@ struct Args {
 
 fn main() -> ExitCode {
     let args = Args::parse();
-    // `enable_all` because the loop wants both the timer and the IO drivers: four
-    // `tokio::time::interval`s and the loopback control listener.
+    // `enable_all` because the daemon wants both the timer and the IO drivers: the idle
+    // poll's and the ingest's sleeps and timeouts, and the loopback listeners.
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -141,12 +141,6 @@ async fn run(args: Args) -> ExitCode {
     // never become one: see the field's own documentation.
     if args.print_addresses {
         return print_addresses(&config.config_dir, &control_file);
-    }
-
-    // One line, after the validation and the `--print-addresses` early return: a doctor asking
-    // where a running daemon is must not be told off about a key it did not start with.
-    if let Some(notice) = config.placeholder_key_notice() {
-        eprintln!("goalcup-daemon: {notice}");
     }
 
     let daemon = match Daemon::start(config).await {

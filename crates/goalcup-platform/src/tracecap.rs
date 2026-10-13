@@ -129,8 +129,8 @@ pub struct AppendAllocation {
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReservationFault {
-    /// The filesystem gate observes the measured unqualified name `hfs` instead of the
-    /// volume's own.
+    /// The filesystem gate observes an unqualified filesystem instead of the volume's own: the
+    /// measured name `hfs` on macOS, tmpfs's `f_type` magic on Linux.
     UnqualifiedFileSystem,
     /// The allocator call is skipped as though it had reported success without granting a
     /// block, so the real remeasurement finds the allocation short.
@@ -152,12 +152,12 @@ pub fn inject_reservation_fault(fault: ReservationFault) {
     RESERVATION_FAULT.with(|slot| slot.set(Some(fault)));
 }
 
-#[cfg(all(target_os = "macos", debug_assertions))]
+#[cfg(all(any(target_os = "macos", target_os = "linux"), debug_assertions))]
 fn take_reservation_fault() -> Option<ReservationFault> {
     RESERVATION_FAULT.with(std::cell::Cell::take)
 }
 
-#[cfg(all(target_os = "macos", not(debug_assertions)))]
+#[cfg(all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)))]
 fn take_reservation_fault() -> Option<ReservationFault> {
     None
 }
@@ -505,16 +505,20 @@ impl TraceDir {
     /// length included, are blocks the filesystem has already granted, without moving its
     /// logical end of file; return the allocation remeasured after the call.
     ///
-    /// Only macOS APFS is qualified (`docs/qualification/m2/reservation.md`): the file is
-    /// topped up by the missing difference with `F_PREALLOCATE`
-    /// (`F_ALLOCATEALL | F_ALLOCATEPERSIST`, `F_PEOFPOSMODE`), never truncated or extended, and
-    /// `st_blocks × 512`, not the requested or reported length, is the evidence. A satisfied
-    /// target adds nothing, so repeating the call after a reopen remeasures rather than
-    /// allocating twice.
+    /// macOS APFS is qualified: the file is topped up by the missing difference with
+    /// `F_PREALLOCATE` (`F_ALLOCATEALL | F_ALLOCATEPERSIST`, `F_PEOFPOSMODE`). Linux ext4 and
+    /// XFS, by `statfs(2)` `f_type`, use `fallocate(FALLOC_FL_KEEP_SIZE)` over
+    /// `[0, total_bytes)`; that is measured in Docker on Linux 7.0.12 (aarch64) loop-mounted
+    /// ext4 and XFS images, and refused on overlayfs, tmpfs and FUSE. Either way the file is
+    /// never truncated or extended, and `st_blocks × 512`, not the requested or reported
+    /// length, is the evidence. A satisfied target adds nothing, so repeating the call after a
+    /// reopen remeasures rather than allocating twice.
     ///
-    /// Any other filesystem or platform is refused as `UnsupportedFileSystem`; missing bytes
-    /// above the volume's reported free space are `InsufficientSpace` before any allocation is
-    /// attempted (free space is necessary, never sufficient); a kernel refusal is `Io`; and a
+    /// Any other filesystem or platform is refused as `UnsupportedFileSystem` (on Linux also an
+    /// ext4-magic volume whose `fallocate` reports `EOPNOTSUPP`); missing bytes above the
+    /// volume's reported free space are `InsufficientSpace` before any allocation is attempted
+    /// (free space is necessary, never sufficient); a kernel refusal is `Io` (on Linux it may
+    /// leave part of the request allocated behind the logical end, never as content); and a
     /// remeasurement short of the target or with a moved logical end is
     /// `AllocationNotRetained`. None of these write a byte of the stream or poison it.
     ///

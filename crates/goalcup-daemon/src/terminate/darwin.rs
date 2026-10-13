@@ -1,6 +1,8 @@
 use super::authority::{Presence, degraded_guard, guard_registered};
 use super::os::{ForkWitness, InstanceAuthority, ProcessOs, SignalOutcome, waited_ms};
-use super::{KILL_SWEEP_TIMEOUT_MS, LIVENESS_POLL_MS, MIN_SIGNALLABLE_PID, TerminationReport};
+use super::{
+    KILL_SWEEP_TIMEOUT_MS, LIVENESS_POLL_MS, MIN_SIGNALLABLE_PID, TerminationReport, grace,
+};
 use goalcup_protocol::process::{ProcInfo, ProcessHandle, descendants};
 use std::time::{Duration, Instant};
 use std::{
@@ -89,7 +91,7 @@ fn terminate_darwin_singleton_with_authority(
         None => return attempt.finish(),
     }
 
-    let grace_ends = os.now() + Duration::from_secs(handle.grace_seconds);
+    let grace_ends = os.now() + grace(handle.grace_seconds);
     let gone_after_term = match wait_until_exit(os, attempt.target.as_mut(), grace_ends) {
         Some(gone) => gone,
         None => return attempt.finish(),
@@ -436,7 +438,6 @@ mod tests {
             program: "codex".to_string(),
             argv: argv.iter().map(|a| a.to_string()).collect(),
             env_keys: Vec::new(),
-            home_seed: None,
         }
     }
 

@@ -19,24 +19,25 @@ install, one capture run) is in [../README.md](../README.md).
 ## Current M2 operating boundary
 
 v0.5.0 is published as source only
-(cleanup record). No downloadable binary,
-installer, staged bundle, registry publication, signature, notarization or qualification exists.
-Built binaries print `0.1.0`: the package version is independent of source release tags. The source
+(cleanup record). Binary releases are built by `.github/workflows/release.yml` from a `v*` tag
+that equals the workspace version, and installed with Homebrew
+([packaging/README.md](../packaging/README.md)); they are unsigned and unnotarized, and no
+qualification exists. Until a version is tagged, built binaries print `0.1.0`. The source
 contains exactly three pinned schema-1 connector directories: `codex-cli`, `claude-code-cli` and
-`hermes-cli`. The separate private macOS packaging allowlist (`m2-pilot` in
-[packaging/README.md](../packaging/README.md)) stages only Codex and Claude, copying each selected
-directory whole, including any seeds. A source pin is not
-evidence of package inclusion. macOS is the only measured platform. Linux builds, but a
-`goalcup start` capture is refused there: the chain's disk reservation is implemented only for
-macOS APFS.
+`hermes-cli`. A release tarball carries `codex-cli` and `claude-code-cli`, as committed, under
+`share/goalcup/connectors`; `hermes-cli` stays maintainer-only (H-21). macOS is the only platform
+measured with a real harness. On Linux the workspace builds, the chain's disk reservation works on
+ext4 and XFS and refuses other filesystems, and the synthetic contract-kit captures seal and
+verify in Docker; no real harness has been captured there ([README, Linux](../README.md#linux)).
 
 Connector discovery checks `$GOALCUP_CONNECTORS_DIR`, `<exe>/../share/goalcup/connectors`, then
-`<exe>/../../connectors`. It considers immediate child directories with a regular `harness.toml`,
+`<exe>/../../connectors`, beside the path `goalcup` was started by and then beside its resolved
+path, skipping a candidate that holds a link. It considers immediate child directories with a regular `harness.toml`,
 validates every discovered schema-1 profile, then selects by declared id. Every run gets a fresh
 `HOME`: Codex and Claude use shared isolated config homes (Claude links the checked Keychains
 directory); Hermes gets a seeded per-run `HERMES_HOME`.
 
-Control API v5 requires the version on mutating requests and binds creation to the daemon's loaded
+Control API v6 requires the version on mutating requests and binds creation to the daemon's loaded
 connector-directory digest. Pre-allocation refusals happen before daemon entry/artifact/workspace
 writes, but CLI run/home/CA/seed preparation may already exist and is cleaned. After restart an
 unfinished v5 capture has status/seal-only authority; other authenticated mutators refuse before
@@ -59,10 +60,12 @@ Prerequisites:
 - **Rust 1.99 or later.** `Cargo.toml` sets `rust-version = "1.99"`, the latest stable release
   when v0.5.1 was cut. The code itself needs less: edition 2024 needs 1.85, it uses `let` chains,
   and the locked dependencies declare at most 1.88. Development and CI use 1.99.0.
-  `rust-toolchain.toml` asks for `stable`.
+  `rust-toolchain.toml` pins `1.99.0`, which rustup installs on first use; the release workflow
+  builds with the same pin.
 - **macOS or Linux.** `goalcup-platform` refuses to compile on anything else
-  (`crates/goalcup-platform/src/lib.rs`). The V1 claim is one macOS target; Linux is a
-  smoke check (see CI below).
+  (`crates/goalcup-platform/src/lib.rs`). The V1 claim is one macOS target; Linux is
+  measured in Docker, not claimed ([README, Linux](../README.md#linux)), and CI runs a smoke
+  check (see below).
 - **A C compiler.** `ring` compiles C and assembly.
 - **`shasum` or `sha256sum`**, because the test suite runs `scripts/pin-manifests.sh --print`
   (`crates/goalcup-protocol/tests/it/connector_pins.rs`), and **`python3`** if you change
@@ -140,7 +143,8 @@ runs the `test_ci_scope.py` and `test_check_links.py` suites and `scripts/check-
 
 Every runner minute costs something on every pull request. Keep this file small:
 - Do not add branches, jobs, a build matrix, or the daemon and CLI suites. Those suites spawn
-  process trees that hang or kill a 2-core Linux runner, and Linux is best-effort, not a claim.
+  process trees that hang or kill a 2-core Linux runner. CI runs the reservation tests on x86_64
+  ext4; the daemon and CLI suites run on Linux in Docker via `scripts/linux-check.sh`, not in CI.
 - A green `ci` run proves nothing about the macOS target. `sh scripts/gate.sh fast` above (and `full` before a
   release), plus the ignored synthetic vertical suite, runs by hand before a merge.
 
@@ -160,7 +164,7 @@ Then either put that directory in front of `PATH` for the session:
 export PATH="$PWD/target/release:$PATH"
 ```
 
-— or copy the four binaries somewhere already on it, and **set `$GOALCUP_CONNECTORS_DIR` to
+— or copy the three binaries somewhere already on it, and **set `$GOALCUP_CONNECTORS_DIR` to
 this checkout's `connectors/`**:
 
 ```
@@ -168,14 +172,16 @@ export GOALCUP_CONNECTORS_DIR="$PWD/connectors"
 ```
 
 That second variable is not optional for a copied binary, and it is the one thing about
-installing this tree that surprises people. The connector manifests are the **rulebook** —
-the human rule, the exclusion catalogue, the tool classes, with their digests pinned in the
-verifier — so they live beside the binary and never under a directory the participant
-writes. `goalcup` looks for them at `$GOALCUP_CONNECTORS_DIR`, then at
+installing this tree that surprises people. The connector directories (`harness.toml` and
+seeds) are the **rulebook** — how a harness is launched and captured, with their digests pinned
+in `goalcup-protocol` — so they live beside the binary and never under a directory the
+participant writes. `goalcup` looks for them at `$GOALCUP_CONNECTORS_DIR`, then at
 `<exe dir>/../share/goalcup/connectors` for an installed layout, then at
 `<exe dir>/../../connectors`, which is what makes `target/release/goalcup` find this
-repository's `connectors/` with nothing exported at all. A binary copied to `~/bin` matches
-none of the three and refuses, naming the variable. `cargo install` lands in the same place
+repository's `connectors/` with nothing exported at all. Both are tried beside the path
+`goalcup` was started by, then beside its resolved path, so a link in `~/bin` to
+`target/release/goalcup` finds them too. A binary copied to `~/bin` matches none of them and
+refuses, naming the variable. `cargo install` lands in the same place
 for the same reason.
 
 `$GOALCUP_CONFIG_DIR` is the third, and it must agree with the daemon (next section).
@@ -221,10 +227,8 @@ control_addr = "127.0.0.1:7787"
 ```
 
 `upload_url` and `server_public_key` are still parsed, both or neither, so a V1 configuration
-keeps loading. Nothing in this tree uploads or checks a receipt (D48), so the pair changes only
-one thing: when `server_public_key` is the published placeholder (the verifying key of the
-published seed `[5u8; 32]`), the daemon prints one stderr line saying its seed is
-public. Omit both.
+keeps loading. Nothing in this tree uploads or checks a receipt (D48), so the pair changes
+nothing. Omit both.
 
 `$GOALCUP_CONFIG_DIR` overrides **both sides at once**: exported, the CLI
 reads that directory instead of the platform default, and a daemon started with the same value
@@ -315,22 +319,22 @@ usage error (exit 1).
 | 3 | The CLI could not do its job: a file it could not read, an answer it could not parse. |
 | 4 | Not left by a capture run: it belonged to the removed V1 gates (D48). |
 
-**What `--dev` means, on each of the two binaries that carry it.** Both say the same thing:
-this is a development run, and its result is not a judged entry's.
+**What `--dev` and `--dev-key` mean.** Both say the same thing: this is a development run,
+and its result is not a judged entry's.
 
 | Flag | What it admits |
 |---|---|
 | `goalcup start --dev` | A connector directory this build does not pin: an edited manifest, a hand-written one, a connector under development. Without the flag that is a pre-allocation refusal before daemon entry/artifact/workspace creation; CLI preparation may already exist and is cleaned. The run says so on stdout and the entry record records it. |
-| `goalcup-verify --dev` | See **Running the verifier** below: the placeholder-server-key finding is suppressed. |
+| `goalcup-verify --dev-key <hex>` | See **Running the verifier** below: a server key this build does not pin, for one run. |
 
-None of them is a way to make a failing entry pass. `--dev` never suppresses a `chain_broken`,
-and a verdict that used it says so in its own document.
+Neither is a way to make a failing entry pass. Neither suppresses a `chain_broken`, and a
+verdict that used one says so in its own document.
 
 ### Running the verifier
 
 ```
-goalcup-verify --capture-integrity <trace> [--dev] [--dev-key <hex>]
-goalcup-verify --research-json <trace> --output <report.ndjson> [--dev] [--dev-key <hex>]
+goalcup-verify --capture-integrity <trace> [--dev-key <hex>]
+goalcup-verify --research-json <trace> --output <report.ndjson> [--dev-key <hex>]
 ```
 
 `<trace>` is a protocol-v5 capture trace directory (`chain.jsonl` and the files beside it).
@@ -347,7 +351,9 @@ exits 3.
 | 2 | Invalid evidence, a torn tail included |
 | 3 | No usable report: the trace could not be read, its chain is not v5, or the invocation was refused |
 
-`--dev` suppresses the `placeholder_server_key` finding. `--dev-key <hex>` (repeatable, 64 hex
+This build pins no server key, so a receipt or acknowledgement never verifies on its own: an
+untrusted signature is `receipt_key_not_accepted` or `ack_signature_unverified`, and the anchor
+stays `local_only`. `--dev-key <hex>` (repeatable, 64 hex
 characters) accepts acknowledgement and receipt signatures under that Ed25519 public key for
 one run; the report records `key_source: "supplied"` so a development run can never be mistaken
 for a production one.

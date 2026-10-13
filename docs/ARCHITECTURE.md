@@ -9,9 +9,9 @@ How do the M2 recorder's parts fit, and where is each guarantee tested? For cont
   traffic (wire leg) and its own session file (native leg) go into one protocol-v5 chain, sealed
   locally. Scope: [D37](DECISIONS.md#d37-m2-autonomous-runs-research-evidence-and-open-contributions);
   constraints D36–D41 are in [DECISIONS](DECISIONS.md).
-- **Status:** v0.5.0 is published as source only; a private unsigned staged three-binary pilot
-  candidate exists. No downloadable binary, installer, staged bundle, registry publication,
-  signing, notarization or qualification claim is made. The qualification records are in git
+- **Status:** v0.5.0 is published as source only. Later `v*` tags attach unsigned binary
+  tarballs, installed with Homebrew ([packaging/README.md](../packaging/README.md)). No signing,
+  notarization or qualification claim is made. The qualification records are in git
   history at `6494030`.
 - **V1** lives on `v1/trunk`. Its hook leg is not in this tree
   ([D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree)), and neither are the verifier's
@@ -53,7 +53,7 @@ The daemon opens a registry written by either line and refuses only V1 rows that
 
 `goalcup` has five commands (`start --goal-file`, `status`, `entries`, `seal`, `doctor`); a v5
 entry cannot resume ([C5 amendments][cont]).
-Control API v5 requires the version on mutating requests; create binds the directory digest.
+Control API v6 requires the version on mutating requests; create binds the directory digest.
 
 The open protocol-hint grammar validates metadata only. `DecoderRegistry::builtin()` and each
 decoder's `accepts` decide which retained formats are decoded. The wire decoders share framing,
@@ -69,7 +69,7 @@ On M2 the legs are **native + wire**; the V1 hook leg is deleted (D2 note in
 | Source | Model traffic to the connector's declared hosts | The harness's own session file |
 | How | Process-scoped `HTTPS_PROXY` + per-launch CA in the profile's `ca_env`; no base URL is ever set ([D1](DECISIONS.md) note) | Bytes read under an isolated root through no-follow capabilities |
 | Producer | Proxy epochs over loopback IPC ([sender](../crates/goalcup-cli/src/proxy/ingest.rs) → [receiver](../crates/goalcup-daemon/src/ingest.rs)) | [native_capture.rs](../crates/goalcup-daemon/src/native_capture.rs), submitting to the owner directly |
-| Scope | `[[capture.hosts]]` hosts and `evidence_paths` | One source per family ([native_scope.rs](../crates/goalcup-daemon/src/runtime/capture/native_scope.rs) `shipped_source`): Codex `sessions/*/*/*/rollout-*-{id}.jsonl`, Claude `projects/*/{id}.jsonl`, Hermes `sessions/session_{id}.json` (snapshot) |
+| Scope | `[[capture.hosts]]` hosts and `evidence_paths` | One source per connector, from its `harness.toml` `[[capture.native]]` row ([native_scope.rs](../crates/goalcup-daemon/src/runtime/capture/native_scope.rs) `native_plan`): Codex `sessions/*/*/*/rollout-*-{id}.jsonl`, Claude `projects/*/{id}.jsonl`, Hermes `sessions/session_{id}.json` (snapshot) |
 | Identity | Physical connection id + exchange, WS `message_index` ([C1]) | Codex: first `thread.started` on stdout; Claude: preassigned session id; Hermes: stderr `session_id:` line, bound at finish |
 | On loss | `Loss` frames and gaps (§6); the relay never stops | One stream-less `SourceChanged` gap; the harness never stops ([C5 T24N amendment][cont]) |
 
@@ -91,8 +91,10 @@ CLI phases are in [commands/start.rs]; daemon finish stages are in
 
 [CONTRACTS C6][cont] pins spawn/finish; [TERMINATION](TERMINATION.md) pins process ownership. A restart
 reopens an unfinished v5 entry under `RecoveredStatusSealOnly`: status and seal remain authoritative,
-every other authenticated mutator refuses before side effects, and a launched entry gets one
-`IngestLost` gap. The launcher reconnects finish once.
+abandon still works for an entry that never launched and handed nothing off, every other
+authenticated mutator refuses before side effects, and a launched entry gets one `IngestLost` gap.
+An entry that never launched and handed nothing off is abandoned by the idle loop after
+`UNLAUNCHED_LIMIT` (15 minutes). The launcher reconnects finish once.
 
 ## 6. Chain, records and verdicts
 
@@ -165,7 +167,7 @@ disk** ([redact/stream.rs][rs]; rules in [redact.rs](../crates/goalcup-daemon/sr
 |---|---|
 | Hard: shared set + pinned connector `extra_patterns` | First rule wins an overlap |
 | Soft: `masked_key` (D41) | Loses every overlap; can only add redaction |
-| Block: `private_key` (PEM) | Absorbs and merges with every overlapping claim; an unterminated `BEGIN` redacts to the end of the record |
+| Block: `private_key` (PEM) | Absorbs and merges with every overlapping claim; an `END` must start within 12,288 bytes of `BEGIN`, else the block is those bytes (the trade is in the checklist, H-20) |
 
 **Hold:** at most `MAX_HELD_BYTES` (16 KiB) undecided bytes per stream. Past it the stream
 **fails closed**: from the earliest undecided byte everything is replaced, up to the next safe
@@ -178,9 +180,8 @@ residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`): [checklist](C
 - Discovery checks `$GOALCUP_CONNECTORS_DIR`, installed `share/goalcup/connectors`, then the source
   tree. It validates every immediate child with a regular `harness.toml` before selecting by id.
 - The source tree and OSS cut contain exactly three pinned directories: `codex-cli`,
-  `claude-code-cli`, `hermes-cli`. The private `m2-pilot` package allowlist contains only the first
-  two and stages each selected directory whole, including seeds and its retained V1 manifest. A
-  source pin is integrity metadata, not evidence that the connector is packaged.
+  `claude-code-cli`, `hermes-cli`. A release tarball carries `codex-cli` and `claude-code-cli` as
+  committed, under `share/goalcup/connectors` ([packaging/README.md](../packaging/README.md)).
 - Every run gets a fresh `HOME`. Codex and Claude use shared isolated config homes (Claude adds the
   checked Keychains link); Hermes uses a seeded per-run `HERMES_HOME`, child-only
   `DEEPSEEK_API_KEY`, replace-mode `HERMES_CA_BUNDLE`, deferred identity and a fail-closed key scan.
@@ -188,7 +189,7 @@ residuals (F-07, invalid UTF-8 inside a key body, a lone `BEGIN`): [checklist](C
   `synthetic-preassigned` (launch identity), `synthetic-stderr-token` (deferred identity) and
   `synthetic-stdout-json` (two snapshots), the last two each with a keyed `synthetic-keyed-*`
   twin. Each requires `--dev`; wrong-id decoys appear in all but `controlled-workload`.
-- Directory pins and the two transitional V1-manifest pins come from `pin-manifests.sh`; executables
+- Directory pins come from `pin-manifests.sh` (`connector-dirs.txt`; no V1 manifest exists); executables
   carry version/SHA-256 pins. Same-UID executable and non-atomic connector-namespace races remain
   accepted residuals; see [SECURITY](../SECURITY.md).
 

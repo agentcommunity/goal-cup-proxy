@@ -9,11 +9,14 @@
 //! * **tightening a row that a shipped connector uses migrates that connector in the same
 //!   PR**, and `tests/it/harness_conformance.rs` fails until it does;
 //! * the lists that name *spellings* (interpreters, startup files, env names) slow an
-//!   attacker down; they do not stop one. The control is the reviewer's re-derivation of the
-//!   executable's `sha256` and the reviewer checklist (`docs/DECISIONS.md` D43, ruling 6).
+//!   attacker down; they do not stop one. The env and argument allowlists
+//!   ([`CAPTURE_ENV_ALLOWLIST`], [`CAPTURE_ARG_ALLOWLIST`]) make any change to a pinned
+//!   connector's environment or argv a core change: a CI tripwire for a PR that re-pins an
+//!   edited connector, since at run time only pinned bytes load. The rest of the control is the
+//!   reviewer's re-derivation of the executable's `sha256` and the reviewer checklist
+//!   (`docs/DECISIONS.md` D43, ruling 6).
 //!
-//! Recorded V1 manifests retain parser-only compatibility in `manifest.rs`; they do not own
-//! capture policy. The harness manifest's loader and validator (schema 1) are in `harness.rs`.
+//! The harness manifest's loader and validator (schema 1) are in `harness.rs`.
 
 use std::collections::BTreeSet;
 
@@ -737,6 +740,182 @@ pub fn startup_file_problem(path: &str) -> Option<&'static str> {
 pub(crate) fn has_duplicate<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
     let mut seen = BTreeSet::new();
     names.into_iter().find(|n| !seen.insert(*n))
+}
+
+// ---------------------------------------------------------------------------------------
+// Allowlists: what a pinned connector may pass (review R7 I-1, I-2)
+// ---------------------------------------------------------------------------------------
+
+/// Every `capture.env` entry a pinned connector may set: the name and its exact values.
+///
+/// The deny lists above refuse first and say why; this list is what decides, because a deny
+/// list of spellings always has holes (`OPENSSL_CONF`, `SSLKEYLOGFILE`, `DEEPSEEK_API_BASE`).
+/// A new row is a core PR and a DECISIONS entry, like a [`CA_REGISTRY`] row. A `--dev`
+/// connector (`Origin::Dev`) is not held to it.
+pub const CAPTURE_ENV_ALLOWLIST: &[(&str, &[&str])] = &[
+    ("SHELL", SHELL_VALUES),
+    ("DISABLE_AUTOUPDATER", &["1"]),
+    ("ENABLE_CLAUDEAI_MCP_SERVERS", &["false"]),
+    ("CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS", &["1"]),
+    ("CLAUDE_CODE_RETRY_WATCHDOG", &["1"]),
+    ("TERMINAL_HOME_MODE", &["profile"]),
+];
+
+/// Whether `key = value` is a row of [`CAPTURE_ENV_ALLOWLIST`].
+pub fn capture_env_allowed(key: &str, value: &str) -> bool {
+    CAPTURE_ENV_ALLOWLIST
+        .iter()
+        .any(|(name, values)| *name == key && values.contains(&value))
+}
+
+/// The exact launch every pinned connector makes, per connector id: its whole `capture.args`,
+/// in order and exactly as `harness.toml` spells it (templates unrendered), and its `goal_flag`.
+/// A new connector, or any change to one's arguments (a model name included), is a row here,
+/// reviewed like a [`CA_REGISTRY`] row: an argument such as Codex's `-c notify=[...]` runs a
+/// program, `--insecure` turns verification off, and dropping `--strict-mcp-config` or
+/// `-s workspace-write` loosens the run.
+pub const CAPTURE_ARG_ALLOWLIST: &[(&str, &[&str], Option<&str>)] = &[
+    (
+        "codex-cli",
+        &[
+            "exec",
+            "--json",
+            "-m",
+            "gpt-5.6-luna",
+            "-c",
+            r#"model_reasoning_effort="low""#,
+            "-c",
+            r#"approval_policy="never""#,
+            "-c",
+            "check_for_update_on_startup=false",
+            "-c",
+            r#"projects={{ "{workspace}" = {{ trust_level = "trusted" }} }}"#,
+            "-s",
+            "workspace-write",
+            "--skip-git-repo-check",
+            "-C",
+            "{workspace}",
+            "--",
+        ],
+        None,
+    ),
+    (
+        "claude-code-cli",
+        &[
+            "-p",
+            "--model",
+            "haiku",
+            "--effort",
+            "low",
+            "--permission-mode",
+            "acceptEdits",
+            "--permission-prompts",
+            "none",
+            "--session-id",
+            "{session_id}",
+            "--output-format",
+            "json",
+            "--strict-mcp-config",
+            "--mcp-config",
+            r#"{{"mcpServers":{{}}}}"#,
+            "--",
+        ],
+        None,
+    ),
+    (
+        "hermes-cli",
+        &[
+            "chat",
+            "-Q",
+            "--provider",
+            "deepseek",
+            "--model",
+            "deepseek-v4-flash",
+        ],
+        Some("--query"),
+    ),
+];
+
+/// Whether `args` and `goal_flag` are exactly [`CAPTURE_ARG_ALLOWLIST`]'s row for connector `id`.
+pub fn capture_argv_allowed(id: &str, args: &[String], goal_flag: Option<&str>) -> bool {
+    CAPTURE_ARG_ALLOWLIST.iter().any(|(name, row, flag)| {
+        *name == id
+            && *flag == goal_flag
+            && row.len() == args.len()
+            && row.iter().zip(args).all(|(r, a)| *r == a.as_str())
+    })
+}
+
+/// Why a seed file's bytes are refused, or `None`. Every origin, `--dev` included.
+///
+/// A seed is copied into the harness's home before it starts, so for Hermes `config.yaml` is
+/// the whole provider configuration: a seed can carry exactly what D1 forbids in `args`. Its
+/// bytes must be UTF-8 text; full-line comments (`#`, `//`) are skipped; what is left may hold
+/// no URL, no backslash (so no escape or line continuation), none of the endpoint, host,
+/// provider, proxy, trust and telemetry spellings, and no run of 32 or more key characters
+/// (`[A-Za-z0-9_-]`), which is the shape of a key or token (a UUID or a git revision too).
+/// It is a spelling check under every origin; a pinned seed is also pinned bytes, read by the
+/// reviewer.
+pub fn seed_content_problem(bytes: &[u8]) -> Option<&'static str> {
+    const SUBSTRING: &[(&str, &str)] = &[
+        ("baseurl", "redirects the model endpoint (D1)"),
+        ("apiurl", "redirects the model endpoint (D1)"),
+        ("apibase", "redirects the model endpoint (D1)"),
+        ("endpoint", "redirects an endpoint (D1)"),
+        ("modelprovider", "switches to another model provider"),
+        ("fallbackprovider", "switches to another model provider"),
+        ("bedrock", "switches to another model provider"),
+        ("vertex", "switches to another model provider"),
+        ("foundry", "switches to another model provider"),
+        ("credential", "carries a provider credential"),
+        ("bearer", "carries a provider credential"),
+        ("proxy", "sets a proxy the capture launch does not own"),
+        ("cacert", "changes which certificates the harness trusts"),
+        ("cabundle", "changes which certificates the harness trusts"),
+        ("certfile", "changes which certificates the harness trusts"),
+        ("insecure", "turns certificate verification off"),
+        ("rejectunauthorized", "turns certificate verification off"),
+        ("sslverify", "turns certificate verification off"),
+        ("keylog", "writes TLS secrets to a file"),
+        (
+            "otel",
+            "exports telemetry somewhere the capture does not see",
+        ),
+        ("notify", "runs a program on an event"),
+        ("url", "names an endpoint (D1)"),
+        ("host", "names a host (D1)"),
+    ];
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Some("is not UTF-8 text; a seed is reviewed text");
+    };
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            continue;
+        }
+        if line.contains("://") {
+            return Some("names a URL; a seed names no host (D1)");
+        }
+        // An escape (`\u0062ase_url`, `https:\/\/`) or a line continuation would spell any of
+        // the words below past this check, and a seed needs none.
+        if line.contains('\\') {
+            return Some("holds a backslash; a seed is plain text with no escapes");
+        }
+        let lower = line.to_ascii_lowercase();
+        let normal: String = lower.chars().filter(|c| *c != '-' && *c != '_').collect();
+        if let Some((_, why)) = SUBSTRING.iter().find(|(needle, _)| normal.contains(needle)) {
+            return Some(why);
+        }
+        let longest = line
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .map(str::len)
+            .max()
+            .unwrap_or(0);
+        if longest >= 32 {
+            return Some("holds a run of 32 or more key characters, the shape of a key or token");
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------------------

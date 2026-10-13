@@ -6,8 +6,9 @@
 //! The daemon a row observes is found by its command line (`--config <cfg>/daemon.toml`), which
 //! is unique to the row's temporary directory. Each row ends every daemon it started.
 //!
-//! macOS only: the daemon reserves a capture chain on APFS alone. Slow (a row waits out the
-//! daemon's 30-second idle grace), so it is in the `full` tier.
+//! Runs on macOS (APFS) and on Linux (ext4 or XFS); the daemon refuses to reserve a capture
+//! chain anywhere else. Slow (a row waits out the daemon's 30-second idle grace), so it is in
+//! the `full` tier.
 
 use crate::common::m2_cli_support;
 use crate::common::support;
@@ -392,9 +393,10 @@ fn files_under(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
     out
 }
 
-/// Two `goalcup start` at the same moment, with no daemon: both runs are recorded and sealed,
-/// and exactly one daemon holds them. The loser of a start race refuses at the registry lock
-/// and its command uses the winner.
+/// Two `goalcup start` at the same moment, with no daemon: exactly one daemon holds whatever
+/// they record. The loser of a start race refuses at the registry lock and its command uses the
+/// winner. The fake connector shares one harness home, so the two runs go one at a time (D39):
+/// a start that meets the other still recording is refused plainly and leaves no entry.
 #[test]
 fn two_concurrent_starts_end_with_exactly_one_daemon() {
     let rig = Rig::run_scoped();
@@ -402,10 +404,20 @@ fn two_concurrent_starts_end_with_exactly_one_daemon() {
     rig.tell("stop", "");
     let first = start_in_background(&rig, &goal_in(&rig, "runs-a"));
     let second = start_in_background(&rig, &goal_in(&rig, "runs-b"));
+    let mut recorded = 0;
     for child in [first, second] {
         let output = child.wait_with_output().unwrap();
-        assert!(output.status.success(), "{}", said(&output));
+        if output.status.success() {
+            recorded += 1;
+        } else {
+            assert!(
+                said(&output).contains("already recording"),
+                "the only refusal is the shared home's: {}",
+                said(&output)
+            );
+        }
     }
+    assert!(recorded >= 1, "at least one run is recorded");
     assert_eq!(daemons(&rig).len(), 1, "one daemon: {:?}", daemons(&rig));
     let output = goalcup(&rig, &cli())
         .args(["entries", "--json"])
@@ -416,12 +428,12 @@ fn two_concurrent_starts_end_with_exactly_one_daemon() {
     let entries = entries.as_array().unwrap();
     assert_eq!(
         entries.len(),
-        2,
-        "both runs are in the one daemon: {entries:?}"
+        recorded,
+        "every recorded run is in the one daemon: {entries:?}"
     );
     assert!(
         entries.iter().all(|e| !e["sealed_at"].is_null()),
-        "and both are sealed: {entries:?}"
+        "and every one is sealed: {entries:?}"
     );
 }
 

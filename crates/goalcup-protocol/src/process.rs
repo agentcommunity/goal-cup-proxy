@@ -94,22 +94,6 @@ pub struct ProcessHandle {
     /// The environment keys the CLI pinned, names only, never values (the receiver token
     /// is one of the values). A pinned key missing from the live process is a deviation.
     pub env_keys: Vec<String>,
-    /// What this launch's `[home_seed]` carried into the per-run harness home, for the daemon
-    /// to chain as `EventBody::HomeSeeded`.
-    ///
-    /// **It rides here rather than on a route of its own** because a launch calls
-    /// `register_process` exactly once — the start does, and each resume does once the daemon
-    /// has cleared the standing handle — which is exactly the cadence the record needs. A
-    /// second route would be a second surface for a fact that already has a call.
-    ///
-    /// `None` on a connector that declares no `[home_seed]`, on a seeding that failed, and on
-    /// every handle written before this field existed: additive, `serde(default)`, skipped
-    /// when absent, so a registry row from an older build reads back exactly as it did.
-    ///
-    /// Nothing terminates on it. `terminate` reads the pid, the group, the program and the
-    /// argv; this field is inert to all four.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub home_seed: Option<crate::events::HomeSeedRecord>,
 }
 
 /// The one authority-bearing request the CLI may post after it launches a harness.
@@ -160,46 +144,6 @@ impl<'de> Deserialize<'de> for ProcessRegistration {
             program: String,
             argv: Vec<String>,
             env_keys: Vec<String>,
-            #[serde(default)]
-            home_seed: Option<WireHomeSeedRecord>,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct WireSeededKey {
-            name: String,
-            #[serde(default)]
-            value: Option<serde_json::Value>,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct WireSeededFile {
-            name: String,
-            bytes: u64,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct WireHomeSeedRecord {
-            #[serde(default)]
-            handoff_generation: Option<u64>,
-            #[serde(default)]
-            handoff_request_digest: Option<String>,
-            connector: String,
-            from: String,
-            #[serde(default)]
-            keys: Vec<WireSeededKey>,
-            #[serde(default)]
-            keys_unchanged: Vec<String>,
-            #[serde(default)]
-            written: Vec<WireSeededKey>,
-            #[serde(default)]
-            files: Vec<WireSeededFile>,
-            #[serde(default)]
-            files_kept: Vec<String>,
-            #[serde(default)]
-            files_missing: Vec<String>,
         }
 
         let wire = WireRegistration::deserialize(deserializer)?;
@@ -218,43 +162,6 @@ impl<'de> Deserialize<'de> for ProcessRegistration {
                 program: wire.handle.program,
                 argv: wire.handle.argv,
                 env_keys: wire.handle.env_keys,
-                home_seed: wire
-                    .handle
-                    .home_seed
-                    .map(|seed| crate::events::HomeSeedRecord {
-                        handoff_generation: seed.handoff_generation,
-                        handoff_request_digest: seed.handoff_request_digest,
-                        connector: seed.connector,
-                        from: seed.from,
-                        keys: seed
-                            .keys
-                            .into_iter()
-                            .map(|key| crate::events::SeededKey {
-                                name: key.name,
-                                value: key.value,
-                            })
-                            .collect(),
-                        keys_unchanged: seed.keys_unchanged,
-                        written: seed
-                            .written
-                            .into_iter()
-                            .map(|key| crate::events::SeededKey {
-                                name: key.name,
-                                value: key.value,
-                            })
-                            .collect(),
-                        files: seed
-                            .files
-                            .into_iter()
-                            .map(|file| crate::events::SeededFile {
-                                name: file.name,
-                                bytes: file.bytes,
-                            })
-                            .collect(),
-                        files_kept: seed.files_kept,
-                        files_missing: seed.files_missing,
-                        wire_layout: Default::default(),
-                    }),
             },
         })
     }
@@ -262,10 +169,7 @@ impl<'de> Deserialize<'de> for ProcessRegistration {
 
 impl ProcessRegistration {
     /// A domain-separated canonical identity for the termination authority in this
-    /// registration.  It deliberately excludes `home_seed`: configuration evidence is not
-    /// a process identity, and hashing it would turn private settings into a stable
-    /// correlator.  The daemon may persist this digest and put it in a trace marker without
-    /// deriving evidence from the seed contents.
+    /// registration.  The daemon may persist this digest and put it in a trace marker.
     pub fn canonical_handle_digest(&self, entry_id: &str) -> String {
         #[derive(Serialize)]
         struct Claims<'a> {
@@ -310,15 +214,6 @@ impl ProcessRegistration {
         hasher.update(serde_json::to_vec(&claims).expect("canonical process claims serialize"));
         hex::encode(hasher.finalize())
     }
-
-    /// The durable process identity has no place for seed evidence.  Keeping the one
-    /// operation here makes it difficult for a registry path to accidentally retain
-    /// the seed alongside its recovery marker.
-    pub fn stripped_handle(&self) -> ProcessHandle {
-        let mut handle = self.handle.clone();
-        handle.home_seed = None;
-        handle
-    }
 }
 
 /// A process-instance identity usable as a root-reuse guard.
@@ -326,7 +221,8 @@ impl ProcessRegistration {
 /// Linux's boot ID plus `/proc/<pid>/stat` start tick identifies one kernel process
 /// instance. macOS's `proc_pidinfo(PROC_PIDTBSDINFO)` supplies its creation timestamp down
 /// to microseconds. Neither value is itself a retained signal handle: callers must compare
-/// it while acquiring fresh authority. Numeric PID/group fallbacks still report the
+/// it while acquiring fresh authority. A zombie (a child that has exited but is not yet
+/// reaped) has no identity on either platform. Numeric PID/group fallbacks still report the
 /// check-to-signal race as unverified rather than claiming atomic containment.
 pub fn process_start_identity(pid: u32) -> Option<String> {
     #[cfg(target_os = "linux")]
@@ -335,12 +231,13 @@ pub fn process_start_identity(pid: u32) -> Option<String> {
         // Field 2 is parenthesized and may itself contain spaces or `)`, so split only
         // after its final delimiter. Field 22 (`starttime`) is index 19 after `state`.
         let close = stat.rfind(')')?;
-        let start = stat
-            .get(close + 2..)?
-            .split_whitespace()
-            .nth(19)?
-            .parse::<u64>()
-            .ok()?;
+        let mut fields = stat.get(close + 2..)?.split_whitespace();
+        // A zombie (`Z`) or dead (`X`) process keeps its `/proc` entry and start tick until
+        // reaped, but it is no running instance: like macOS's `proc_pidinfo`, report none.
+        if matches!(fields.next()?, "Z" | "X") {
+            return None;
+        }
+        let start = fields.nth(18)?.parse::<u64>().ok()?;
         let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
             .ok()?
             .trim()
@@ -403,9 +300,11 @@ pub fn process_instance_status(pid: u32, expected: Option<&str>) -> ProcessInsta
     let presence = if observed.is_some() {
         Some(true)
     } else {
-        snapshot()
-            .ok()
-            .map(|table| table.iter().any(|row| row.pid == pid))
+        // No identity, so ask the table: a row that is absent or a zombie (it has exited and
+        // only awaits its parent's reap, as on a Linux host whose reaper is slow) is gone. With
+        // no identity, a `ps` that runs and prints nothing therefore reads as gone; only a `ps`
+        // that cannot be run at all is unknown.
+        liveness(pid).ok()
     };
     classify_process_instance(expected, observed.as_deref(), presence)
 }
@@ -599,7 +498,6 @@ pub fn is_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{HomeSeedRecord, SeededFile, SeededKey};
 
     fn registration() -> ProcessRegistration {
         ProcessRegistration {
@@ -620,61 +518,62 @@ mod tests {
                 program: "/bin/sh".to_string(),
                 argv: vec!["sh".to_string(), "./wrapper.sh".to_string()],
                 env_keys: vec!["HOME".to_string()],
-                home_seed: None,
             },
         }
     }
 
+    /// A child that has exited but not been reaped is a zombie: its pid still answers
+    /// `kill(pid, 0)`, but it is no running process instance and has no creation identity
+    /// to compare. macOS's `proc_pidinfo` already says so; Linux must not read the dead
+    /// child's `/proc/<pid>/stat` start tick as though it were alive.
+    #[cfg(unix)]
     #[test]
-    fn canonical_registration_digest_binds_every_termination_identity_field_but_never_seed_evidence()
-     {
-        let bare = registration();
-        let mut seeded = bare.clone();
-        seeded.handle.home_seed = Some(HomeSeedRecord {
-            handoff_generation: None,
-            handoff_request_digest: None,
-            connector: "fixture".to_string(),
-            from: "{home}/private-settings.json".to_string(),
-            keys: vec![SeededKey::new(
-                "sensitive-setting",
-                &serde_json::json!("seed-content-must-not-define-process-identity"),
-            )],
-            keys_unchanged: Vec::new(),
-            written: vec![SeededKey::new("written-setting", &serde_json::json!(false))],
-            files: vec![SeededFile {
-                name: "settings.json".to_string(),
-                bytes: 42,
-            }],
-            files_kept: Vec::new(),
-            files_missing: Vec::new(),
-            wire_layout: Default::default(),
-        });
-        let digest = bare.canonical_handle_digest("entry-a");
-        assert_eq!(digest, seeded.canonical_handle_digest("entry-a"));
-        let mut different_seed = seeded;
-        let seed = different_seed
-            .handle
-            .home_seed
-            .as_mut()
-            .expect("the alternate seed exists");
-        seed.handoff_generation = Some(99);
-        seed.handoff_request_digest = Some("cd".repeat(32));
-        seed.connector = "other-fixture".to_string();
-        seed.from = "{home}/other-private-settings.json".to_string();
-        seed.keys[0] = SeededKey::new("other-setting", &serde_json::json!(false));
-        seed.keys_unchanged.push("unchanged-setting".to_string());
-        seed.written[0] = SeededKey::new("other-written-setting", &serde_json::json!(true));
-        seed.files[0] = SeededFile {
-            name: "other-settings.json".to_string(),
-            bytes: 99,
+    fn process_start_identity_is_none_for_an_unreaped_dead_child() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("spawn a child that exits at once");
+        let pid = child.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let zombie = || {
+            #[cfg(target_os = "linux")]
+            {
+                std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .and_then(|stat| {
+                        let close = stat.rfind(')')?;
+                        stat.get(close + 2..)?.chars().next()
+                    })
+                    == Some('Z')
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                matches!(liveness(pid), Ok(false))
+            }
         };
-        seed.files_kept.push("copied.json".to_string());
-        seed.files_missing.push("missing.json".to_string());
+        while !zombie() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child never became a zombie"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let identity = process_start_identity(pid);
+        let status = process_instance_status(pid, Some("cached"));
+        child.wait().expect("reap the child");
+        assert_eq!(identity, None, "a zombie has no process-start identity");
         assert_eq!(
-            digest,
-            different_seed.canonical_handle_digest("entry-a"),
-            "missing, present, and different home-seed evidence all leave process identity alone"
+            status,
+            ProcessInstanceStatus::GoneOrReused,
+            "a zombie is a gone instance, not an unknown one"
         );
+    }
+
+    #[test]
+    fn canonical_registration_digest_binds_every_termination_identity_field() {
+        let bare = registration();
+        let digest = bare.canonical_handle_digest("entry-a");
         let mut cases: Vec<(&str, ProcessRegistration)> = Vec::new();
         let mut changed = bare.clone();
         changed.generation += 1;
@@ -732,23 +631,7 @@ mod tests {
 
     #[test]
     fn process_registration_rejects_unknown_fields_at_every_authority_bearing_nesting_level() {
-        let mut registered = registration();
-        registered.handle.home_seed = Some(HomeSeedRecord {
-            handoff_generation: Some(7),
-            handoff_request_digest: Some("ab".repeat(32)),
-            connector: "fixture".to_string(),
-            from: "{home}/private-settings.json".to_string(),
-            keys: vec![SeededKey::new("setting", &serde_json::json!(true))],
-            keys_unchanged: Vec::new(),
-            written: vec![SeededKey::new("written", &serde_json::json!(false))],
-            files: vec![SeededFile {
-                name: "settings.json".to_string(),
-                bytes: 42,
-            }],
-            files_kept: Vec::new(),
-            files_missing: Vec::new(),
-            wire_layout: Default::default(),
-        });
+        let registered = registration();
         let original = serde_json::to_value(registered).expect("the fixture serialises");
         let mut variants = Vec::new();
 
@@ -764,34 +647,6 @@ mod tests {
             .unwrap()
             .insert("unexpected".to_string(), serde_json::json!(true));
         variants.push(("handle", handle));
-
-        let mut seed = original.clone();
-        seed["handle"]["home_seed"]
-            .as_object_mut()
-            .unwrap()
-            .insert("unexpected".to_string(), serde_json::json!(true));
-        variants.push(("home_seed", seed));
-
-        let mut key = original.clone();
-        key["handle"]["home_seed"]["keys"][0]
-            .as_object_mut()
-            .unwrap()
-            .insert("unexpected".to_string(), serde_json::json!(true));
-        variants.push(("keys item", key));
-
-        let mut written = original.clone();
-        written["handle"]["home_seed"]["written"][0]
-            .as_object_mut()
-            .unwrap()
-            .insert("unexpected".to_string(), serde_json::json!(true));
-        variants.push(("written item", written));
-
-        let mut file = original;
-        file["handle"]["home_seed"]["files"][0]
-            .as_object_mut()
-            .unwrap()
-            .insert("unexpected".to_string(), serde_json::json!(true));
-        variants.push(("files item", file));
 
         for (level, value) in variants {
             assert!(

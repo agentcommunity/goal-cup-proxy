@@ -20,8 +20,8 @@
 //! status, the CLI's outcome and the verifier's literal exit code. Literal `ENOSPC` on a mounted
 //! volume, power loss, other filesystems and RSS are not measured here.
 //!
-//! macOS only (the chain is reserved on APFS alone), ignored by default because each row runs
-//! real processes for seconds. Build the binaries first, then run by name and serially:
+//! macOS and Linux (the trace folder must be on APFS, ext4 or XFS), ignored by default because
+//! each row runs real processes for seconds. Build the binaries first, then run by name and serially:
 //!
 //! ```text
 //! cargo build --offline

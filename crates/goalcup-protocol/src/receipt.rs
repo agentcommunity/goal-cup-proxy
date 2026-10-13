@@ -16,20 +16,6 @@ pub const RECEIPT_DOMAIN: &[u8] = b"goalcup-receipt-v1\0";
 /// Domain for the digest that binds the complete signed receipt, independent of file formatting.
 pub const START_RECEIPT_DIGEST_DOMAIN: &[u8] = b"goalcup:start-receipt-digest:v1\0";
 
-/// The published placeholder server key, hex: the Ed25519 verifying key of the seed
-/// `[5u8; 32]`, which is written in this repository (the verifier's fixtures).
-///
-/// **Anybody can sign a receipt or an acknowledgement under it**, so a run anchored to it is
-/// anchored to nothing until the project server's real key replaces it (V1.1). It lives in the
-/// protocol crate, which every side already links, so the daemon can say so at startup.
-/// `crates/goalcup-protocol/tests/it/placeholder_seed.rs` derives it from the seed, so the
-/// constant cannot drift from what signs under it.
-///
-/// `goalcup_verifier::PLACEHOLDER_SERVER_PUBLIC_KEY` aliases this constant; the one spelling
-/// cannot drift from the seed the development fixtures use.
-pub const PLACEHOLDER_SERVER_PUBLIC_KEY_HEX: &str =
-    "6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1";
-
 /// Why a receipt was refused. A distinct type rather than `ProtocolError`, because V13
 /// renders each of these as a different sentence and "signature: invalid" is not a
 /// finding a reviewer can act on.

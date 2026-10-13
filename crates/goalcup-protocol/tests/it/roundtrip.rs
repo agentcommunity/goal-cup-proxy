@@ -434,7 +434,7 @@ fn a_receipt_verifies_only_against_the_key_the_caller_pins() {
     use ed25519_dalek::SigningKey;
     use goalcup_protocol::receipt::{ReceiptError, StartReceipt, StartReceiptClaims};
 
-    let server = SigningKey::from_bytes(&[5u8; 32]);
+    let server = SigningKey::from_bytes(&[0x42; 32]);
     let impostor = SigningKey::from_bytes(&[6u8; 32]);
     let claims = StartReceiptClaims {
         entry_id: "e1".to_string(),
@@ -488,7 +488,7 @@ fn acked_at_is_inside_the_ack_signature() {
     use ed25519_dalek::SigningKey;
     use goalcup_protocol::ack::{ACK_DOMAIN, AckCheckpoint};
 
-    let server = SigningKey::from_bytes(&[5u8; 32]);
+    let server = SigningKey::from_bytes(&[0x42; 32]);
     let pinned = hex::encode(server.verifying_key().to_bytes());
     let mut ack = AckCheckpoint {
         entry_id: "e1".to_string(),

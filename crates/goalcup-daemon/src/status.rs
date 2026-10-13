@@ -149,9 +149,6 @@ pub fn build_payload(inputs: &StatusInputs) -> StatusPayload {
         } else {
             inputs.events_pending
         },
-        // The signed field stays; no connector has a human arming step (the first transcript
-        // record arms every entry), so it is always `None`.
-        arming_recipe: None,
         detail: if terminal_drain_needs_review {
             "Capture is closed: terminal upload validation failed. This entry requires elevated \
              review and must not be treated as fully acknowledged."
@@ -166,12 +163,6 @@ pub fn build_payload(inputs: &StatusInputs) -> StatusPayload {
         event_status_source: source_of(inputs.entry, &inputs.event),
         event: inputs.event.clone(),
         cycles: inputs.cycles.clone(),
-        // Hook-post counters. The payload fields are signed wire and stay; with no hook
-        // receiver in the daemon nothing is ever dropped, so both are zero.
-        posts_dropped: 0,
-        posts_dropped_after_seal: 0,
-        // D24's reported-pin counter: signed wire that stays, with no hook leg to feed it.
-        pins_dropped: 0,
         polls_capped: inputs.polls_capped,
         cursor_restore_failures: inputs.cursor_restore_failures,
         skipped_replayed: inputs.skipped_replayed,

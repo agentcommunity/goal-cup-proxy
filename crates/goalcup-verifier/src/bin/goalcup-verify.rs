@@ -47,14 +47,6 @@ struct Args {
     /// trace. An existing file is refused.
     #[arg(long, value_name = "OUTPUT", requires = "research_json")]
     output: Option<PathBuf>,
-    /// Development only: suppress `placeholder_server_key`, the finding a trace raises when
-    /// the M1 placeholder anchor (whose seed is published in this repository) is what
-    /// verified its receipt or its acknowledgements. That is the expected thing while
-    /// developing and never acceptable when judging an entry.
-    ///
-    /// It does not suppress `server_key_unpinned`.
-    #[arg(long = "dev")]
-    dev: bool,
     /// Development only, repeatable: accept signatures under this Ed25519 public key
     /// (64 hex characters) for this run alone.
     ///
@@ -88,16 +80,9 @@ fn server_public_key(value: &str) -> Result<String, String> {
 
 /// The options of either mode (`--capture-integrity` or `--research-json`).
 ///
-/// Each development option says so on stderr. A supplied key is accepted for this run and
-/// reported as `key_source: "supplied"`. `--dev` suppresses the placeholder-key disclosure.
+/// A supplied key says so on stderr, is accepted for this run and is reported as
+/// `key_source: "supplied"`.
 fn capture_options(args: Args) -> VerifyOptions {
-    if args.dev {
-        eprintln!(
-            "goalcup-verify: --dev is set, so the placeholder-server-key finding is \
-             suppressed; this run proves nothing about who signed the receipt or \
-             acknowledgements it checks"
-        );
-    }
     if !args.dev_key.is_empty() {
         eprintln!(
             "goalcup-verify: --dev-key supplied {} key(s) this build does not pin; a receipt \
@@ -109,7 +94,6 @@ fn capture_options(args: Args) -> VerifyOptions {
     VerifyOptions {
         allow_descriptor_key: false,
         extra_server_keys: args.dev_key,
-        dev_mode: args.dev,
     }
 }
 

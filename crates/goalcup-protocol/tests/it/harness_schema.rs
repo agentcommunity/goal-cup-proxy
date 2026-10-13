@@ -1660,7 +1660,10 @@ fn args_and_continuation_have_bounds() {
 
 #[test]
 fn template_tokens_are_closed_and_braces_are_literal_only_doubled() {
+    // Review R7 I-3: nothing supplies `{port}`, so a recipe naming it would validate and then
+    // fail at launch, after the proxy is up.
     for bad in [
+        "{port}",
         "{home}",
         "{config_home}",
         "{user_home}",
@@ -1677,13 +1680,7 @@ fn template_tokens_are_closed_and_braces_are_literal_only_doubled() {
         set(&mut t, &["capture", "env"], "RUN_TAG", bad);
         refused(&t, PINNED, &["capture.env"]);
     }
-    for ok in [
-        "{workspace}",
-        "{port}",
-        "{{literal}}",
-        "{{ {workspace} }}",
-        "x{{y",
-    ] {
+    for ok in ["{workspace}", "{{literal}}", "{{ {workspace} }}", "x{{y"] {
         let mut t = codex();
         set(&mut t, &["capture"], "args", strings(&["exec", ok, "--"]));
         admitted(&t, PINNED);

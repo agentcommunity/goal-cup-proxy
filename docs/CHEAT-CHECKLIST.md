@@ -4,7 +4,7 @@ For anyone about to trust a Pass or claim a new check closes something. It lists
 this build accepts, each with what bounds it and the ticket that tracks it. Anything that behaves
 worse than stated here is a bug. Add a row whenever a review accepts a gap instead of fixing it.
 
-Updated: 2026-10-12. A verifier exit 0 alone is not a capture claim: a claim needs native and wire
+Updated: 2026-10-13. A verifier exit 0 alone is not a capture claim: a claim needs native and wire
 records per real harness ([ARCHITECTURE](ARCHITECTURE.md)).
 
 ## On m2/wire (current)
@@ -14,16 +14,49 @@ apply. A v5 capture trace is judged by the integrity reader (exit 0 complete and
 or unsealed, 2 invalid, 3 no usable report); the V1 checks are not in this tree. LocalOnly (no server,
 receipt or ACK) is a valid local outcome. Nothing on m2 is qualified for long runs ([TODO](../TODO.md)).
 
+- **A local-only record can be rewritten and re-sealed.** The chain is plain SHA-256 with no
+  secret key: anyone who controls the machine can edit a record, recompute the hashes after it
+  and update `seal.json`, or truncate at a clean point (no producer left open) and finish again
+  with the public code, and the verifier still exits 0 with anchor LocalOnly. What the chain
+  catches is an edit that leaves the later hashes alone, a reorder, a splice, a truncation left
+  unsealed and accidental corruption. Every trace this build ships is local only. Bounded by:
+  nothing yet. The fix is a server-signed acknowledgement of the chain head, which needs the
+  hourly upload (TODO step 2) and a production server key; until then even a signed receipt can
+  be forged ([SECURITY](../SECURITY.md)).
+
 Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it in git history at `6494030`. Open issues that still matter are in [TODO](../TODO.md#known-issues).
 
 ### Wire leg, finish and storage
 
 - **Proxy loss is chained, but not counted per loss.** The proxy chains each loss when it begins
   (fail-open tunnel, table full, opaque fallback, unsettled cut) as a stream-zero `Loss` frame
-  written as a stream-less gap, so a lossy run reads incomplete (closed `76e88bad`). Residuals: an
+  written as a stream-less gap, so a lossy run reads incomplete (closed `76e88bad`). A
+  well-formed request that meets the upstream's clean close of an idle keep-alive is not a
+  fallback: it is not forwarded, the connection closes `Interrupted`, and the client retries on a
+  new connection. Residuals: an
   old CLI on a new daemon keeps the old behaviour (counters only on the seal request); gap counts
   count records, not individual losses; a handled finish shows doubled daemon-clocked gaps.
   Ticket: H-16.
+- **A tunnel whose ClientHello names an approved host is a loss; one that names none is not.**
+  A tunnel to any authority (an IP literal, a sibling name, an authentication host) whose
+  ClientHello names an approved host is chained as a fail-open loss, and so is a request inside
+  an intercepted connection whose Host names another host (the connection goes opaque, so a
+  later legitimate request on it is not captured either). A tunnel to a host that is not
+  approved stays opaque by design, and is not a loss, when its ClientHello names a host that is
+  not approved (domain fronting on a provider's edge, an ECH outer name), names none, or is not
+  TLS: an edge that answered the API that way would let it through uncaptured. Every tunnel now
+  waits for the client's first bytes, inside the 30-second admission deadline, so a protocol
+  whose server speaks first, or a CONNECT held idle past the deadline, fails admission. A decided
+  tunnel still open at stop (a dev server or MCP server that outlived the harness) is cut without
+  a loss: a fail-open one was already chained at its decision. Only a connection cut before its
+  decision is chained as an unsettled cut.
+- **The seal walk lists what it cannot read, and has no time bound.** A symlink, FIFO, socket or
+  device in the workspace is listed with the absent digest and never followed or read, so the
+  agent cannot wedge the seal with one. A directory the agent makes unreadable (`chmod 000`) is
+  listed the same way and its contents are not: an absent digest on a directory means "contents
+  unseen", a way to hide files from the seal manifest that stays visible as the marker. A
+  regular file is hashed whole with no size cap or deadline inside the walk, so a huge file or
+  one on a stalled network mount still holds the run lock while it is read.
 - **Two faults can leave a harness running on a sealed entry.** The spawn gate (4b) closes the
   spawn-to-registration window and the finish budget (4a) keeps the SIGTERM, grace, SIGKILL bound.
   A CLI crash after the gate released the child, combined with a raced manual `goalcup seal`, can
@@ -35,6 +68,12 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   starts at the first read: a same-UID writer can mutate the open file in place so the read sequence
   hashes to the pin while the file's final bytes differ. After the read, `exec` resolves the path,
   so a same-UID pathname replacement can change what runs. This does not bind exact bytes or inode.
+- **One run per shared home, by a lock with two gaps.** `goalcup start` holds an exclusive flock
+  on `capture-homes/<id>.lock` until its finish returns, and refuses a second start of the same
+  harness (D39). The lock dies with the launcher: if `goalcup start` is SIGKILLed while a
+  registered harness keeps running, a new start can share the home with it. A by-hand
+  `codex login` into that home takes no lock. A Ctrl-C that lands during the release itself
+  (milliseconds) still reaches only the parked child, and the harness runs.
 - **Shared-home validation has same-UID and ACL residuals.** The CLI preserves D39's exact leaf
   alias after checking and rechecking leaf/target identities, ownership and exact target mode
   `0700`; the daemon separately refuses every loaded connector's `real_dirs`. The CLI does not
@@ -44,13 +83,26 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   one stall can lose up to about 2.1 MiB; `seal.json` sits outside the reservation, so a failed seal
   write reads `incomplete` with no further policy; the network-filter rule is bound to the E01
   binary hash. Ticket: H-04.
-- **A base64url run of 16 KiB or more redacts the rest of a one-line JSON body** (the redactor holds
-  16 KiB and fails closed). Measured unreachable on the pilot path (0 `encrypted_content` in 14 real
-  Codex client messages); reachable on a stateless HTTP fallback. Parked; re-measure on every long
-  chain. Ticket: F-07.
-- **Redaction residuals.** An invalid UTF-8 byte inside a key body leaves the whole key raw (fix
-  before any raw-byte capture surface). A lone `BEGIN` mention redacts to the end of that record and
-  breaks that record's JSON. Ticket: H-20.
+- **A base64url run of 16 KiB or more can still redact the rest of its JSON line** (the redactor
+  holds 16 KiB and fails closed), but only when a rule prefix inside it (`sk-`, `eyJ`, `AIza`,
+  `glpat-`) lies more than 16 KiB before the run's end. A bare run holds nothing: the JSON key and
+  the email local part are bounded (2,008 and 1,024 units). The run is common: the native Codex rollout
+  persists `encrypted_content` on every reasoning item (9 in
+  `spikes/codex-cli/fixtures/rollout-main-01a06614.jsonl`, largest 2,020 B; 8 in
+  `spikes/codex-app/fixtures/rollout-main-01a06657.jsonl`, largest 2,276 B). The earlier
+  "unreachable" counted wire client messages. Ticket: F-07.
+- **Redaction residuals.** A PEM block is at most 12,288 bytes after its `BEGIN` line: an `END`
+  line must start within them, and without one the block is those bytes. An RSA-8192 key fits:
+  one measured PKCS#8 file is 6,388 bytes, and 7,325 as Claude Code's Read tool prints it,
+  JSON-escaped. The trade, against the unbounded rule before it:
+  - a lone `BEGIN` mention redacts the next 12,288 bytes, across record boundaries, and breaks the
+    JSON of every record it reaches, where before it redacted the rest of the stream, a whole
+    session;
+  - a key body longer than the bound leaks its tail, where before the stream failed closed over
+    it. Larger keys and several keys between one `BEGIN` and one `END` do not fit;
+  - an `END` more than 12,288 bytes after its `BEGIN` is not this block's: the text between them
+    past the bound stays raw.
+  Ticket: H-20.
 
 ### Hermes reference row (D41): what the key scan cannot see
 
@@ -116,8 +168,9 @@ wording is in git (`git show f8621f99:docs/CHEAT-CHECKLIST.md`).
   `crates/goalcup-daemon/src/tailer/sqlite.rs` at `v0.5.0`). OpenCode has no connector on m2.
 - **App-wide config changed while no daemon runs is not reported.** The baseline is re-hashed at
   daemon start; the chain shows a `DaemonRestart` marking the window.
-- **The pinned server key is the published placeholder** until V1.1; `goalcup-verify` reports
-  `placeholder_server_key` without `--dev`. V1 qualification used the development signer.
+- **No server key is pinned** until V1.1, so no trace is `anchor: signed` on its own; a key
+  supplied with `--dev-key` is reported as `supplied` with `server_key_unpinned`. V1
+  qualification used the development signer.
 - **More than 20,000 transcript files** hit the directory tailer's seen-set cap (`MAX_SEEN_FILES`);
   further files are reported as `StoreUnavailable`, never tailed.
 - **The connector-directory digest walks by name, then opens by handle**, so a symlink swap between

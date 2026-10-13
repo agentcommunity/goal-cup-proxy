@@ -17,8 +17,9 @@ thiserror.workspace = true
 goalcup-platform = { path = "../goalcup-platform" }
 
 # `proc_pidinfo(PROC_PIDTBSDINFO)` supplies the microsecond process-creation
-# timestamp used to reject PID reuse on the supported macOS target.
-[target.'cfg(target_os = "macos")'.dependencies]
+# timestamp used to reject PID reuse on the supported macOS target; `clock_gettime` reads
+# the sleep-counting clock in `clock.rs`.
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 libc.workspace = true
 
 # Tests only.
@@ -27,3 +28,8 @@ libc.workspace = true
 #     returned value.
 [dev-dependencies]
 tempfile.workspace = true
+
+#   libc (Linux) — `tests/capture_reserved_storage.rs` classifies its temporary directory with
+#     `statfs(2)` itself, so the expected reservation outcome never comes from the code under test.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc.workspace = true

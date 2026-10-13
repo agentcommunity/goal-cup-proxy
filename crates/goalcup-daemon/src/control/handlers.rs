@@ -231,7 +231,7 @@ pub(super) async fn create_capture_workspace(
         match capture_profile(&state, &request.profile_id) {
             Ok(profile) => profile,
             Err(DaemonError::Missing(_)) => {
-                return ControlErrorResponse::new(ControlError::UnsupportedConnector(format!(
+                return ControlErrorResponse::new(ControlError::PreflightFailed(format!(
                     "this daemon ships no connector {:?}",
                     request.profile_id
                 )))
@@ -355,9 +355,10 @@ fn is_capture_row(state: &ControlState, id: &str) -> Result<bool, DaemonError> {
 /// manifest-pinned native identity.  An unrelated same-name binary is never a valid handoff:
 /// accepting it would turn a stale PID into a later seal target.
 ///
-/// An empty `argv` is not refused. `terminate`'s guard has two halves — the pid's age and
-/// the program `ps` names among its arguments — and a handle with no argv leaves only the
-/// first; the tree already carries that case as `TerminationReport::guard_degraded`, which reports
+/// An empty `argv` is not refused. `terminate`'s guard has two halves — the process-start
+/// identity (`process_start`, required below) and the program `ps` names among its
+/// arguments — and a handle with no argv leaves only the first; the tree already carries
+/// that case as `TerminationReport::guard_degraded`, which reports
 /// the weaker guard rather than pretending the launch never happened.
 ///
 /// **A second registration is a `409` while a handle stands**, raised inside

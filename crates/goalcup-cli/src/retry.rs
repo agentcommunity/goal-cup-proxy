@@ -5,12 +5,10 @@
 //! `busy` is the daemon holding an entry for the length of one asynchronous call. It is
 //! raised on every mutating route while an entry is mid-pump, it is transient by
 //! construction, and the same request a moment later is expected to succeed. Most mutable
-//! calls use the bounded generic retry below. Selected entry-runtime calls (`/abandon`), the
-//! `/process` handoff, and terminal `/seal`
-//! have deliberately dephased policies with separately stated end-to-end limits: entry calls
-//! must span an upload hold, `/process` is made while a freshly launched child is waiting for
-//! daemon ownership, and `/seal` has to preserve room for one slow, admitted manifest
-//! operation.
+//! calls use the bounded generic retry below. The entry-runtime `/abandon` and the `/process`
+//! handoff share one dephased schedule with separately stated end-to-end limits: the abandon
+//! must span an upload hold, and `/process` is made while a freshly launched child is waiting
+//! for daemon ownership. The capture seal has its own retry against the local-finish budget.
 //! `conflict` shares the `409` and means the opposite: already sealed, already started, a
 //! lock still on disk. It is never retried, here or anywhere.
 //!
@@ -43,13 +41,11 @@
 //! give. Attempts times a read deadline is the real worst case, and with the seal's
 //! five-minute deadline that arithmetic comes to a quarter of an hour of held terminal. The
 //! budget is written in ordinary calls — twice [`crate::daemon::CALL_TIMEOUT`], never the
-//! slow one — and the terminal `/seal` route is kept out of this *generic* helper entirely.
-//! [`retry_busy_seal`] gives it a distinct reservation. When the budget is spent the `busy`
-//! surfaces: the last one the daemon actually said, with its own words in it.
+//! slow one — and the capture seal is kept out of this *generic* helper entirely:
+//! [`retry_capture_seal`] works against the finish budget instead. When the budget is spent
+//! the `busy` surfaces: the last one the daemon actually said, with its own words in it.
 
-use goalcup_protocol::control::{
-    CaptureSealError, ControlError, FINISH_COMMIT_RESERVE, ProcessRegistrationError,
-};
+use goalcup_protocol::control::{CaptureSealError, ControlError, FINISH_COMMIT_RESERVE};
 use std::time::{Duration, Instant};
 
 /// How many times one call is made before a `busy` daemon is reported as busy.
@@ -136,35 +132,12 @@ fn backoff() -> bool {
     true
 }
 
-/// How many times a selected entry-runtime call is asked before its final `busy` is reported.
-///
-/// These calls all reject `busy` before performing their operation. Nine bounded asks span
-/// one ordinary daemon upload hold without widening retry semantics for unrelated routes.
-pub(crate) const ENTRY_BUSY_ATTEMPTS: usize = 9;
-
-/// The maximum nominal sleep after the first selected entry-runtime `busy`: 12,050 ms.
-pub const ENTRY_BUSY_MAX_SLEEP: Duration = Duration::from_millis(12_050);
-
-/// Explicit scheduler allowance around the interruptible entry-runtime waits.
-pub const ENTRY_BUSY_SCHEDULER_HEADROOM: Duration = Duration::from_millis(950);
-
-/// Planned entry-runtime sleeps plus bounded scheduler headroom.
-pub(crate) const ENTRY_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(13);
-
-/// The wall-clock reservation for a selected entry-runtime call.
-///
-/// One current ordinary call, one next ordinary call, and the 13-second retry envelope make
-/// a strict 73-second ceiling. A `busy` is expected to answer immediately; reserving two full
-/// transport windows keeps a late current response from starting another request that cannot
-/// finish inside the stated bound.
-pub(crate) const ENTRY_BUSY_BUDGET: Duration = Duration::new(
-    crate::daemon::CALL_TIMEOUT.as_secs() * 2 + ENTRY_BUSY_RETRY_ENVELOPE.as_secs(),
-    ENTRY_BUSY_RETRY_ENVELOPE.subsec_nanos(),
-);
-
-/// Fixed entry-runtime waits, producing offsets 0, 100, 275, 550, 1,050, 2,050, 4,050,
-/// 8,050, and 12,050 ms.
-const ENTRY_BUSY_BACKOFFS: [Duration; ENTRY_BUSY_ATTEMPTS - 1] = [
+/// The fixed, deliberately non-periodic waits of the scheduled policies: offsets 0, 100, 275,
+/// 550, 1,050, 2,050, 4,050, 8,050 and 12,050 ms, nine asks in all. They span one daemon
+/// upload hold of its ordinary ten-second network timeout and escape every phase of the
+/// accelerated 200 ms capture cadence's 120 ms hold, without randomness in a participant's
+/// reproduction of a refusal.
+const DEPHASED_BACKOFFS: [Duration; 8] = [
     Duration::from_millis(100),
     Duration::from_millis(175),
     Duration::from_millis(275),
@@ -175,298 +148,162 @@ const ENTRY_BUSY_BACKOFFS: [Duration; ENTRY_BUSY_ATTEMPTS - 1] = [
     Duration::from_millis(4_000),
 ];
 
-/// Retries only a definite [`ControlError::Busy`] from selected entry-runtime routes.
+/// The retry envelope of a scheduled policy: the 12,050 ms of planned sleep in
+/// [`DEPHASED_BACKOFFS`] plus 950 ms of explicit scheduler headroom (never another delay).
+const DEPHASED_RETRY_ENVELOPE: Duration = Duration::from_secs(13);
+
+/// The wall-clock reservation for an entry-runtime call (`/abandon`), start to final refusal.
 ///
-/// The daemon emits `busy` only before borrowing the entry runtime, so arm, abandon, resume
-/// preview/CAS, and process-handoff cancellation can repeat that definite pre-operation
-/// refusal. `Unreachable`, timeout, malformed, conflict, and internal responses are returned
-/// once. Each wait uses the shared 20 ms interruption slices, and a retry is made only where
-/// its wait and one full ordinary transport window fit [`ENTRY_BUSY_BUDGET`].
+/// One current ordinary call, one next ordinary call, and the 13-second retry envelope make
+/// a strict 73-second ceiling. A `busy` is expected to answer immediately; reserving two full
+/// transport windows keeps a late current response from starting another request that cannot
+/// finish inside the stated bound.
+pub(crate) const ENTRY_BUSY_BUDGET: Duration = Duration::new(
+    crate::daemon::CALL_TIMEOUT.as_secs() * 2 + DEPHASED_RETRY_ENVELOPE.as_secs(),
+    DEPHASED_RETRY_ENVELOPE.subsec_nanos(),
+);
+
+/// The wall-clock ceiling for a real `/process` handoff, start to final refusal.
+///
+/// Nine [`crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT`] windows plus the 13-second retry
+/// envelope is 31 seconds. These equalities are pinned in deterministic tests below so a
+/// route deadline or schedule change also makes the participant-visible bound an intentional
+/// choice.
+pub(crate) const PROCESS_BUSY_BUDGET: Duration = Duration::new(
+    crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT.as_secs() * (DEPHASED_BACKOFFS.len() as u64 + 1)
+        + DEPHASED_RETRY_ENVELOPE.as_secs(),
+    DEPHASED_RETRY_ENVELOPE.subsec_nanos(),
+);
+
+/// One scheduled policy: its waits, its wall-clock budget, and the transport window every
+/// further request must still fit inside that budget.
+struct Schedule {
+    backoffs: &'static [Duration],
+    budget: Duration,
+    call_window: Duration,
+}
+
+/// `/abandon`: nine asks over [`ENTRY_BUSY_BUDGET`], each with an ordinary call's window.
+const ENTRY_SCHEDULE: Schedule = Schedule {
+    backoffs: &DEPHASED_BACKOFFS,
+    budget: ENTRY_BUSY_BUDGET,
+    call_window: crate::daemon::CALL_TIMEOUT,
+};
+
+/// `/process`: nine asks over [`PROCESS_BUSY_BUDGET`], each with the handoff's short window.
+const PROCESS_SCHEDULE: Schedule = Schedule {
+    backoffs: &DEPHASED_BACKOFFS,
+    budget: PROCESS_BUSY_BUDGET,
+    call_window: crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT,
+};
+
+/// Retries only a definite [`ControlError::Busy`] from an entry-runtime route (`/abandon`).
+///
+/// The daemon emits `busy` only before borrowing the entry runtime, so the call can repeat
+/// that definite pre-operation refusal. `Unreachable`, timeout, malformed, conflict, and
+/// internal responses are returned once. Each wait uses the shared 20 ms interruption slices,
+/// and a retry is made only where its wait and one full ordinary transport window fit
+/// [`ENTRY_BUSY_BUDGET`].
 pub(crate) fn retry_busy_entry<T>(
     call: impl FnMut() -> Result<T, ControlError>,
 ) -> Result<T, ControlError> {
     let started = Instant::now();
-    retry_busy_entry_with(|| started.elapsed(), dephased_backoff, call)
+    retry_scheduled(
+        &ENTRY_SCHEDULE,
+        |error| matches!(error, ControlError::Busy(_)),
+        || started.elapsed(),
+        dephased_backoff,
+        call,
+    )
 }
 
-/// Testable clock and wait seam for [`retry_busy_entry`].
-fn retry_busy_entry_with<T>(
+/// Retries a pre-admission [`ControlError::Busy`], a post-Prepare
+/// [`ControlError::ProcessAdmissionBusy`], or an ambiguous [`ControlError::Unreachable`] from
+/// the `/process` handoff.
+///
+/// `Unreachable` is the narrow exception because durable `Prepared`/`Registered` makes this
+/// exact route request idempotent: it can mean the daemon accepted the body and the `204` was
+/// lost. Every other result is returned immediately, including a `conflict` that shares HTTP
+/// 409 with `busy`, and a malformed or internal response. The closure owns no request
+/// construction: callers capture one immutable
+/// [`ProcessRegistration`](goalcup_protocol::process::ProcessRegistration) and submit that
+/// same document on each attempt, within [`PROCESS_BUSY_BUDGET`].
+pub(crate) fn retry_busy_process<T>(
+    call: impl FnMut() -> Result<T, ControlError>,
+) -> Result<T, ControlError> {
+    let started = Instant::now();
+    retry_scheduled(
+        &PROCESS_SCHEDULE,
+        |error| {
+            matches!(
+                error,
+                ControlError::Busy(_)
+                    | ControlError::ProcessAdmissionBusy(_)
+                    | ControlError::Unreachable(_)
+            )
+        },
+        || started.elapsed(),
+        dephased_backoff,
+        call,
+    )
+}
+
+/// The testable core of the scheduled policies. `elapsed` is the call's wall clock; `wait`
+/// returns false only when the local process has been interrupted, which surfaces the last
+/// retryable refusal rather than making another request.
+///
+/// It makes at most one call more than there are waits. Before it takes a wait, it reserves
+/// both that wait and the next request's transport window inside the budget; after the wait it
+/// checks again, because `thread::sleep` can wake late. A spent budget surfaces the last
+/// retryable refusal without making a further request.
+fn retry_scheduled<T>(
+    schedule: &Schedule,
+    retryable: impl Fn(&ControlError) -> bool,
     mut elapsed: impl FnMut() -> Duration,
     mut wait: impl FnMut(Duration) -> bool,
     mut call: impl FnMut() -> Result<T, ControlError>,
 ) -> Result<T, ControlError> {
-    let mut said = String::new();
-    for attempt in 0..ENTRY_BUSY_ATTEMPTS {
-        match call() {
-            Err(ControlError::Busy(message)) => {
-                said = message;
-                let Some(delay) = ENTRY_BUSY_BACKOFFS.get(attempt) else {
-                    break;
-                };
-                if elapsed()
-                    .saturating_add(*delay)
-                    .saturating_add(crate::daemon::CALL_TIMEOUT)
-                    > ENTRY_BUSY_BUDGET
-                {
-                    break;
-                }
-                if !wait(*delay) {
-                    break;
-                }
-                if elapsed().saturating_add(crate::daemon::CALL_TIMEOUT) > ENTRY_BUSY_BUDGET {
-                    break;
-                }
-            }
+    let mut attempt = 0;
+    loop {
+        let error = match call() {
+            Err(error) if retryable(&error) => error,
             answered => return answered,
+        };
+        let Some(&delay) = schedule.backoffs.get(attempt) else {
+            return Err(error);
+        };
+        if elapsed()
+            .saturating_add(delay)
+            .saturating_add(schedule.call_window)
+            > schedule.budget
+        {
+            return Err(error);
         }
-    }
-    Err(ControlError::Busy(said))
-}
-
-/// How many times `/process` is asked before its final `busy` is reported.
-///
-/// This is intentionally independent from [`BUSY_ATTEMPTS`]. The handoff is a fixed,
-/// immutable request made immediately after a child was launched, so it gets nine bounded
-/// tries spanning one ordinary upload hold rather than changing every other control route.
-pub(crate) const PROCESS_BUSY_ATTEMPTS: usize = 9;
-
-/// The maximum nominal sleep after the first `/process` `busy`.
-///
-/// The fixed waits total 12,050 ms. This is the planned sleep, not the whole retry envelope:
-/// real scheduling around the interruptible slices has a separate bounded allowance below.
-pub const PROCESS_BUSY_MAX_SLEEP: Duration = Duration::from_millis(12_050);
-
-/// Explicit allowance for ordinary scheduler delay around the `/process` waits.
-///
-/// The schedule remains fixed and deterministic. This 950 ms is reservation headroom, never
-/// another retry delay.
-pub const PROCESS_BUSY_SCHEDULER_HEADROOM: Duration = Duration::from_millis(950);
-
-/// The `/process` retry envelope: planned sleeps plus bounded scheduler headroom.
-pub(crate) const PROCESS_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(13);
-
-/// The wall-clock ceiling for a real `/process` handoff, start to final refusal.
-///
-/// Nine [`crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT`] windows plus the 13-second
-/// [`PROCESS_BUSY_RETRY_ENVELOPE`] is 31 seconds. The envelope includes the fixed
-/// [`PROCESS_BUSY_MAX_SLEEP`] and [`PROCESS_BUSY_SCHEDULER_HEADROOM`]. These equalities are
-/// pinned in deterministic tests below so a route deadline or schedule change also makes the
-/// participant-visible bound an intentional choice.
-pub(crate) const PROCESS_BUSY_BUDGET: Duration = Duration::new(
-    crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT.as_secs() * PROCESS_BUSY_ATTEMPTS as u64
-        + PROCESS_BUSY_RETRY_ENVELOPE.as_secs(),
-    PROCESS_BUSY_RETRY_ENVELOPE.subsec_nanos(),
-);
-
-/// The waits for the `/process` handoff route are the entry-runtime waits: offsets 0, 100,
-/// 275, 550, 1,050, 2,050, 4,050, 8,050, and 12,050 ms, so one daemon upload may occupy the
-/// entry for its ordinary ten-second network timeout and the immutable handoff still gets an
-/// idle-window attempt without randomized behavior.
-const PROCESS_BUSY_BACKOFFS: [Duration; PROCESS_BUSY_ATTEMPTS - 1] = ENTRY_BUSY_BACKOFFS;
-
-/// The terminal outcome of a process retry.  The distinction is security relevant: once
-/// any attempt was transport/post-Prepare ambiguous, a later definite refusal cannot prove
-/// the daemon did not accept the original immutable body.
-#[derive(Debug)]
-pub struct ProcessRetryFailure {
-    pub error: ControlError,
-    pub may_have_been_admitted: bool,
-    /// The local interrupt flag ended a backoff before another request was made. This is
-    /// distinct from spending the nine-attempt/budget envelope even though both preserve
-    /// the last wire error and its admission classification.
-    pub interrupted: bool,
-}
-
-/// Retries a pre-admission [`ControlError::Busy`], a post-Prepare
-/// [`ControlError::ProcessAdmissionBusy`], or an ambiguous [`ControlError::Unreachable`]
-/// from the `/process` handoff, and keeps the ambiguity history for the CLI lifecycle: a
-/// caller must not kill or cancel a child that an earlier unreachable request may already
-/// have handed to the daemon.
-///
-/// It makes at most [`PROCESS_BUSY_ATTEMPTS`] calls using the fixed waits in
-/// [`PROCESS_BUSY_BACKOFFS`], whose total is [`PROCESS_BUSY_MAX_SLEEP`]. Every other result
-/// is returned immediately, including a `conflict` that shares HTTP 409 with `busy`, and a
-/// malformed or internal response.  `Unreachable` is the narrow exception because durable
-/// `Prepared`/`Registered` makes this exact route request idempotent: it can mean the daemon
-/// accepted the body and the `204` was lost. The closure owns no request construction:
-/// callers capture one immutable
-/// [`ProcessRegistration`](goalcup_protocol::process::ProcessRegistration) and submit that
-/// same document on each attempt. Before it takes a wait for another attempt, the helper
-/// reserves both that wait and the next route's named transport window inside
-/// [`PROCESS_BUSY_BUDGET`]; a spent budget surfaces the last retryable refusal without making
-/// a further request.
-pub fn retry_busy_process_classified<T>(
-    call: impl FnMut() -> Result<T, ProcessRegistrationError>,
-) -> Result<T, ProcessRetryFailure> {
-    let started = Instant::now();
-    retry_busy_process_classified_with(|| started.elapsed(), dephased_backoff, call)
-}
-
-fn retry_busy_process_classified_with<T>(
-    mut elapsed: impl FnMut() -> Duration,
-    mut wait: impl FnMut(Duration) -> bool,
-    mut call: impl FnMut() -> Result<T, ProcessRegistrationError>,
-) -> Result<T, ProcessRetryFailure> {
-    let mut may_have_been_admitted = false;
-    let mut last = None;
-    let mut interrupted = false;
-    for attempt in 0..PROCESS_BUSY_ATTEMPTS {
-        match call() {
-            Err(response) => {
-                let response_may_have_been_admitted = response.may_have_been_admitted();
-                let error = response.into_error();
-                match error {
-                    error @ (ControlError::Busy(_)
-                    | ControlError::ProcessAdmissionBusy(_)
-                    | ControlError::Unreachable(_)) => {
-                        may_have_been_admitted |= response_may_have_been_admitted;
-                        last = Some(error);
-                        let Some(delay) = PROCESS_BUSY_BACKOFFS.get(attempt) else {
-                            break;
-                        };
-                        if elapsed()
-                            .saturating_add(*delay)
-                            .saturating_add(crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT)
-                            > PROCESS_BUSY_BUDGET
-                        {
-                            break;
-                        }
-                        if !wait(*delay) {
-                            interrupted = true;
-                            break;
-                        }
-                        if elapsed().saturating_add(crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT)
-                            > PROCESS_BUSY_BUDGET
-                        {
-                            break;
-                        }
-                    }
-                    error => {
-                        return Err(ProcessRetryFailure {
-                            may_have_been_admitted: may_have_been_admitted
-                                || response_may_have_been_admitted,
-                            error,
-                            interrupted: false,
-                        });
-                    }
-                }
-            }
-            Ok(value) => return Ok(value),
+        if !wait(delay) {
+            return Err(error);
         }
+        if elapsed().saturating_add(schedule.call_window) > schedule.budget {
+            return Err(error);
+        }
+        attempt += 1;
     }
-    Err(ProcessRetryFailure {
-        error: last.expect("a bounded process retry always remembers its last refusal"),
-        may_have_been_admitted,
-        interrupted,
-    })
 }
 
-/// How many times the slow `/seal` call is asked before its final `busy` is reported.
-///
-/// This is intentionally independent from both [`BUSY_ATTEMPTS`] and
-/// [`PROCESS_BUSY_ATTEMPTS`]. A seal is a terminal, admitted slow call; its retry policy only
-/// rides out the short `busy` windows before that call starts, and never asks again after an
-/// uncertain transport or a permanent refusal.
-pub const SEAL_BUSY_ATTEMPTS: usize = 4;
+/// How many times the capture seal is asked before its final `busy` is reported: one more
+/// than [`SEAL_BUSY_BACKOFFS`].
+const SEAL_BUSY_ATTEMPTS: usize = 4;
 
-/// The maximum nominal sleep after the first `/seal` `busy`: 100 + 175 + 275 ms.
-pub const SEAL_BUSY_MAX_SLEEP: Duration = Duration::from_millis(550);
-
-/// Explicit allowance for ordinary scheduler delay around the dephased `/seal` waits.
-///
-/// The 550 ms schedule is still fixed — it is what escapes every capture-cadence phase.
-/// Real wall clocks also include scheduling between timer slices, response handling, and the
-/// checks in this helper. This 450 ms is reservation headroom, never another retry delay.
-pub const SEAL_BUSY_SCHEDULER_HEADROOM: Duration = Duration::from_millis(450);
-
-/// The `/seal` retry envelope: its planned sleeps plus bounded scheduler headroom.
-///
-/// This is deliberately one second, not a claim that the policy sleeps for one second. The
-/// schedule remains [`SEAL_BUSY_MAX_SLEEP`]; the remaining 450 ms makes the fourth ordinary
-/// command-path attempt reachable while still refusing an extraordinary late wake.
-pub(crate) const SEAL_BUSY_RETRY_ENVELOPE: Duration = Duration::from_secs(1);
-
-/// The wall-clock reservation for a real `/seal` retry, start to final refusal.
-///
-/// A seal that the daemon admits can legitimately use its entire
-/// [`crate::daemon::SLOW_CALL_TIMEOUT`], so one full slow transport window and the
-/// one-second [`SEAL_BUSY_RETRY_ENVELOPE`] are reserved together. The planned dephased sleeps
-/// still total only [`SEAL_BUSY_MAX_SLEEP`]; `busy` itself is immediate, and a later `busy`
-/// only earns an attempt if a full slow seal can still begin inside this 301-second envelope.
-pub(crate) const SEAL_BUSY_BUDGET: Duration = Duration::new(
-    crate::daemon::SLOW_CALL_TIMEOUT.as_secs() + SEAL_BUSY_RETRY_ENVELOPE.as_secs(),
-    SEAL_BUSY_RETRY_ENVELOPE.subsec_nanos(),
-);
-
-/// Deliberately non-periodic waits for the one `/seal` route.
-///
-/// These are the same fixed offsets as `/process`: 0, 100, 275, and 550 ms escape every
-/// phase of the accelerated 200 ms capture cadence's 120 ms hold, without introducing
-/// randomness into a participant's reproduction of a refusal.
+/// Deliberately non-periodic waits for the capture seal: the first three of
+/// [`DEPHASED_BACKOFFS`]. Offsets 0, 100, 275, and 550 ms escape every phase of the
+/// accelerated 200 ms capture cadence's 120 ms hold.
 const SEAL_BUSY_BACKOFFS: [Duration; SEAL_BUSY_ATTEMPTS - 1] = [
     Duration::from_millis(100),
     Duration::from_millis(175),
     Duration::from_millis(275),
 ];
 
-/// Retries only a transient [`ControlError::Busy`] from the terminal `/seal` call.
-///
-/// It makes at most [`SEAL_BUSY_ATTEMPTS`] calls on the fixed schedule in
-/// [`SEAL_BUSY_BACKOFFS`]. Every non-`Busy` answer returns immediately. Before and after each
-/// interruptible wait, the policy reserves a full [`crate::daemon::SLOW_CALL_TIMEOUT`] inside
-/// [`SEAL_BUSY_BUDGET`]. The 550 ms planned schedule has 450 ms explicit scheduler headroom;
-/// a wake beyond that envelope surfaces the daemon's last refusal instead of beginning another
-/// five-minute route outside its stated reservation.
-pub(crate) fn retry_busy_seal<T>(
-    call: impl FnMut() -> Result<T, ControlError>,
-) -> Result<T, ControlError> {
-    let started = Instant::now();
-    retry_busy_seal_with(|| started.elapsed(), dephased_backoff, call)
-}
-
-/// The testable core of [`retry_busy_seal`]. `elapsed` is the seal's wall clock; `wait`
-/// returns false only when the local process has been interrupted, which surfaces the last
-/// daemon `busy` rather than making another terminal request.
-fn retry_busy_seal_with<T>(
-    mut elapsed: impl FnMut() -> Duration,
-    mut wait: impl FnMut(Duration) -> bool,
-    mut call: impl FnMut() -> Result<T, ControlError>,
-) -> Result<T, ControlError> {
-    let mut said = String::new();
-    for attempt in 0..SEAL_BUSY_ATTEMPTS {
-        match call() {
-            Err(ControlError::Busy(message)) => {
-                said = message;
-                let Some(delay) = SEAL_BUSY_BACKOFFS.get(attempt) else {
-                    break;
-                };
-                // The next terminal request must have room for both its wait and the full
-                // admitted seal window. Equality permits the fourth offset at the exact
-                // boundary; a greater sum would cross the stated reservation.
-                if elapsed()
-                    .saturating_add(*delay)
-                    .saturating_add(crate::daemon::SLOW_CALL_TIMEOUT)
-                    > SEAL_BUSY_BUDGET
-                {
-                    break;
-                }
-                if !wait(*delay) {
-                    break;
-                }
-                // `thread::sleep` can wake late. Recheck after it so a scheduler delay
-                // cannot turn an equality admission into a slow route outside the budget.
-                if elapsed().saturating_add(crate::daemon::SLOW_CALL_TIMEOUT) > SEAL_BUSY_BUDGET {
-                    break;
-                }
-            }
-            answered => return answered,
-        }
-    }
-    Err(ControlError::Busy(said))
-}
-
-/// The capture seal's retry (CONTRACTS.md, H-10 4a ¶7): [`retry_busy_seal`]'s dephased schedule,
-/// but against the one local-finish budget instead of the legacy 301-second reservation.
+/// The capture seal's retry (CONTRACTS.md, H-10 4a ¶7): a dephased schedule against the one
+/// local-finish budget.
 ///
 /// Retries only [`CaptureSealError::NotAdmitted`] carrying `busy`, on [`SEAL_BUSY_BACKOFFS`],
 /// and only while the wait still leaves [`FINISH_COMMIT_RESERVE`] of `deadline`. Every other
@@ -535,37 +372,49 @@ fn dephased_backoff(delay: Duration) -> bool {
 }
 
 #[cfg(test)]
-mod entry_retry_tests {
+mod schedule_tests {
     use super::*;
     use std::cell::Cell;
 
+    fn entry<T>(
+        elapsed: impl FnMut() -> Duration,
+        wait: impl FnMut(Duration) -> bool,
+        call: impl FnMut() -> Result<T, ControlError>,
+    ) -> Result<T, ControlError> {
+        retry_scheduled(
+            &ENTRY_SCHEDULE,
+            |error| matches!(error, ControlError::Busy(_)),
+            elapsed,
+            wait,
+            call,
+        )
+    }
+
+    fn process<T>(
+        elapsed: impl FnMut() -> Duration,
+        wait: impl FnMut(Duration) -> bool,
+        call: impl FnMut() -> Result<T, ControlError>,
+    ) -> Result<T, ControlError> {
+        retry_scheduled(
+            &PROCESS_SCHEDULE,
+            |error| {
+                matches!(
+                    error,
+                    ControlError::Busy(_)
+                        | ControlError::ProcessAdmissionBusy(_)
+                        | ControlError::Unreachable(_)
+                )
+            },
+            elapsed,
+            wait,
+            call,
+        )
+    }
+
     #[test]
-    fn an_entry_call_retries_busy_on_the_exact_non_periodic_schedule() {
-        let elapsed = Cell::new(Duration::ZERO);
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result = retry_busy_entry_with(
-            || elapsed.get(),
-            |delay| {
-                waits.push(delay);
-                elapsed.set(elapsed.get() + delay);
-                true
-            },
-            || {
-                attempts += 1;
-                if attempts < 9 {
-                    Err(ControlError::Busy(format!("pump {attempts}")))
-                } else {
-                    Ok("armed")
-                }
-            },
-        );
-
-        assert!(matches!(result, Ok("armed")));
-        assert_eq!(attempts, 9);
+    fn the_schedule_is_exact_and_its_budgets_are_pinned() {
         assert_eq!(
-            waits,
+            DEPHASED_BACKOFFS.to_vec(),
             vec![
                 Duration::from_millis(100),
                 Duration::from_millis(175),
@@ -577,55 +426,112 @@ mod entry_retry_tests {
                 Duration::from_millis(4_000),
             ]
         );
-        let planned_wait = waits.into_iter().sum::<Duration>();
+        let planned_wait = DEPHASED_BACKOFFS.iter().copied().sum::<Duration>();
         assert_eq!(planned_wait, Duration::from_millis(12_050));
-        assert_eq!(ENTRY_BUSY_MAX_SLEEP, planned_wait);
-        assert_eq!(ENTRY_BUSY_SCHEDULER_HEADROOM, Duration::from_millis(950));
         assert_eq!(
-            ENTRY_BUSY_RETRY_ENVELOPE,
-            planned_wait + ENTRY_BUSY_SCHEDULER_HEADROOM
+            DEPHASED_RETRY_ENVELOPE,
+            planned_wait + Duration::from_millis(950),
+            "the retry envelope is planned sleep plus 950 ms of scheduler headroom"
         );
         assert_eq!(
             ENTRY_BUSY_BUDGET,
-            crate::daemon::CALL_TIMEOUT * 2 + ENTRY_BUSY_RETRY_ENVELOPE
+            crate::daemon::CALL_TIMEOUT * 2 + DEPHASED_RETRY_ENVELOPE
         );
         assert_eq!(ENTRY_BUSY_BUDGET, Duration::from_secs(73));
+        assert_eq!(
+            crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT,
+            Duration::from_secs(2),
+            "the handoff leaves the daemon time for durable registry and trace writes"
+        );
+        assert_eq!(
+            PROCESS_BUSY_BUDGET,
+            crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT * 9 + DEPHASED_RETRY_ENVELOPE,
+            "nine 2 s route windows and the 13 s retry envelope are the strict ceiling"
+        );
+        assert_eq!(PROCESS_BUSY_BUDGET, Duration::from_secs(31));
+        assert_eq!(SEAL_BUSY_BACKOFFS, DEPHASED_BACKOFFS[..3]);
     }
 
     #[test]
-    fn an_entry_call_outlasts_one_ten_second_upload_hold() {
+    fn an_entry_call_retries_busy_on_the_exact_non_periodic_schedule() {
         let elapsed = Cell::new(Duration::ZERO);
-        let mut attempts = Vec::new();
+        let mut waits = Vec::new();
+        let mut attempts = 0;
 
-        let result = retry_busy_entry_with(
+        let result = entry(
             || elapsed.get(),
             |delay| {
+                waits.push(delay);
                 elapsed.set(elapsed.get() + delay);
                 true
             },
             || {
-                attempts.push(elapsed.get());
+                attempts += 1;
+                if attempts < 9 {
+                    Err(ControlError::Busy(format!("pump {attempts}")))
+                } else {
+                    Ok("abandoned")
+                }
+            },
+        );
+
+        assert!(matches!(result, Ok("abandoned")));
+        assert_eq!(attempts, 9);
+        assert_eq!(waits, DEPHASED_BACKOFFS.to_vec());
+    }
+
+    #[test]
+    fn both_schedules_outlast_one_ten_second_upload_hold() {
+        for (name, retried) in [("entry", false), ("process", true)] {
+            let elapsed = Cell::new(Duration::ZERO);
+            let mut attempts = Vec::new();
+            let held = || {
                 if elapsed.get() < Duration::from_secs(10) {
                     Err(ControlError::Busy(
                         "the upload still holds the entry".into(),
                     ))
                 } else {
-                    Ok("armed")
+                    Ok("answered")
                 }
-            },
-        );
+            };
+            let wait = |delay| {
+                elapsed.set(elapsed.get() + delay);
+                true
+            };
+            let mut call = || {
+                attempts.push(elapsed.get());
+                held()
+            };
+            let result = if retried {
+                process(|| elapsed.get(), wait, &mut call)
+            } else {
+                entry(|| elapsed.get(), wait, &mut call)
+            };
 
-        assert!(matches!(result, Ok("armed")));
-        assert_eq!(attempts.len(), 9);
-        assert_eq!(attempts.last(), Some(&Duration::from_millis(12_050)));
+            assert!(matches!(result, Ok("answered")), "{name}");
+            assert_eq!(
+                attempts,
+                vec![
+                    Duration::ZERO,
+                    Duration::from_millis(100),
+                    Duration::from_millis(275),
+                    Duration::from_millis(550),
+                    Duration::from_millis(1_050),
+                    Duration::from_millis(2_050),
+                    Duration::from_millis(4_050),
+                    Duration::from_millis(8_050),
+                    Duration::from_millis(12_050),
+                ],
+                "{name}: the ninth ask is the first one after a 10 s upload hold"
+            );
+        }
     }
 
     #[test]
-    fn an_entry_call_surfaces_the_ninth_busy_without_a_tenth_attempt() {
+    fn the_ninth_retryable_refusal_surfaces_without_a_tenth_attempt() {
         let mut waits = Vec::new();
         let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_entry_with(
+        let result: Result<(), ControlError> = entry(
             || Duration::ZERO,
             |delay| {
                 waits.push(delay);
@@ -636,19 +542,38 @@ mod entry_retry_tests {
                 Err(ControlError::Busy(format!("pump {attempts}")))
             },
         );
-
         assert!(matches!(result, Err(ControlError::Busy(message)) if message == "pump 9"));
+        assert_eq!((attempts, waits.len()), (9, 8));
+
+        let mut waits = Vec::new();
+        let mut attempts = 0;
+        let result: Result<(), ControlError> = process(
+            || Duration::ZERO,
+            |delay| {
+                waits.push(delay);
+                true
+            },
+            || {
+                attempts += 1;
+                Err(ControlError::Unreachable(format!(
+                    "daemon absent {attempts}"
+                )))
+            },
+        );
+        assert!(
+            matches!(result, Err(ControlError::Unreachable(message)) if message == "daemon absent 9")
+        );
         assert_eq!(attempts, 9);
-        assert_eq!(waits.len(), 8);
+        assert_eq!(waits, DEPHASED_BACKOFFS.to_vec());
     }
 
     #[test]
-    fn entry_attempts_escape_every_phase_of_a_200ms_120ms_hold() {
+    fn attempts_escape_every_phase_of_a_200ms_120ms_hold() {
         for start_ms in 0..120_u64 {
             let elapsed_ms = Cell::new(0_u64);
             let attempts = Cell::new(0_usize);
 
-            let result: Result<(), ControlError> = retry_busy_entry_with(
+            let result: Result<(), ControlError> = entry(
                 || Duration::from_millis(elapsed_ms.get()),
                 |delay| {
                     elapsed_ms.set(elapsed_ms.get() + delay.as_millis() as u64);
@@ -673,972 +598,148 @@ mod entry_retry_tests {
     }
 
     #[test]
-    fn an_entry_call_does_not_wait_without_room_for_the_next_transport_window() {
-        let elapsed = Cell::new(
-            Duration::from_secs(73) - Duration::from_millis(100) - crate::daemon::CALL_TIMEOUT
-                + Duration::from_millis(1),
-        );
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_entry_with(
-            || elapsed.get(),
-            |delay| {
+    fn no_wait_is_taken_without_room_for_the_next_transport_window() {
+        for (name, budget, window) in [
+            ("entry", ENTRY_BUSY_BUDGET, crate::daemon::CALL_TIMEOUT),
+            (
+                "process",
+                PROCESS_BUSY_BUDGET,
+                crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT,
+            ),
+        ] {
+            let elapsed = budget - Duration::from_millis(100) - window + Duration::from_millis(1);
+            let mut waits = Vec::new();
+            let mut attempts = 0;
+            let wait = |delay| {
                 waits.push(delay);
                 true
-            },
-            || {
+            };
+            let call = || {
                 attempts += 1;
-                Err(ControlError::Busy(
-                    "the upload still holds the entry".into(),
-                ))
-            },
-        );
+                Err::<(), _>(ControlError::Busy("held".into()))
+            };
+            let result = if name == "entry" {
+                entry(|| elapsed, wait, call)
+            } else {
+                process(|| elapsed, wait, call)
+            };
 
-        assert!(matches!(result, Err(ControlError::Busy(_))));
-        assert_eq!(attempts, 1);
-        assert!(waits.is_empty());
+            assert!(matches!(result, Err(ControlError::Busy(_))), "{name}");
+            assert_eq!(attempts, 1, "{name}");
+            assert!(
+                waits.is_empty(),
+                "{name}: no retry begins without its window"
+            );
+        }
     }
 
     #[test]
-    fn an_entry_call_rechecks_its_budget_after_an_overslept_wait() {
-        let elapsed = Cell::new(
-            Duration::from_secs(73) - Duration::from_millis(100) - crate::daemon::CALL_TIMEOUT,
-        );
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_entry_with(
-            || elapsed.get(),
-            |delay| {
+    fn the_budget_is_rechecked_after_an_overslept_wait() {
+        for (name, budget, window) in [
+            ("entry", ENTRY_BUSY_BUDGET, crate::daemon::CALL_TIMEOUT),
+            (
+                "process",
+                PROCESS_BUSY_BUDGET,
+                crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT,
+            ),
+        ] {
+            let elapsed = Cell::new(budget - Duration::from_millis(100) - window);
+            let mut waits = Vec::new();
+            let mut attempts = 0;
+            let wait = |delay| {
                 waits.push(delay);
                 elapsed.set(elapsed.get() + delay + Duration::from_millis(1));
                 true
-            },
-            || {
+            };
+            let call = || {
                 attempts += 1;
-                Err(ControlError::Busy(
-                    "the upload still holds the entry".into(),
-                ))
-            },
-        );
+                Err::<(), _>(ControlError::Busy("held".into()))
+            };
+            let result = if name == "entry" {
+                entry(|| elapsed.get(), wait, call)
+            } else {
+                process(|| elapsed.get(), wait, call)
+            };
 
-        assert!(matches!(result, Err(ControlError::Busy(_))));
-        assert_eq!(attempts, 1);
-        assert_eq!(waits, vec![Duration::from_millis(100)]);
+            assert!(matches!(result, Err(ControlError::Busy(_))), "{name}");
+            assert_eq!(attempts, 1, "{name}");
+            assert_eq!(waits, vec![Duration::from_millis(100)], "{name}");
+        }
     }
 
     #[test]
-    fn an_interrupted_entry_wait_surfaces_busy_without_another_attempt() {
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_entry_with(
-            || Duration::ZERO,
-            |delay| {
-                waits.push(delay);
-                false
-            },
-            || {
-                attempts += 1;
-                Err(ControlError::Busy(
-                    "the upload still holds the entry".into(),
-                ))
-            },
-        );
-
-        assert!(matches!(result, Err(ControlError::Busy(_))));
-        assert_eq!(attempts, 1);
-        assert_eq!(waits, vec![Duration::from_millis(100)]);
-    }
-
-    #[test]
-    fn every_non_busy_entry_result_is_one_shot() {
-        for error in [
-            ControlError::Unreachable("daemon absent".into()),
-            ControlError::NotFound("entry absent".into()),
-            ControlError::Conflict("entry changed".into()),
-            ControlError::Unauthorized("wrong bearer".into()),
-            ControlError::ArmingTimeout {
-                detail: "the server refused the gate".into(),
-            },
-            ControlError::PreflightFailed("server gate failed".into()),
-            ControlError::UnsupportedConnector("unknown harness".into()),
-            ControlError::Malformed("bad reply".into()),
-            ControlError::Internal("daemon failed".into()),
-            ControlError::Unsupported("wrong platform".into()),
-            ControlError::ProcessAdmissionUncertain("not an arm result".into()),
+    fn an_interrupted_wait_surfaces_the_refusal_without_another_attempt() {
+        for retried in [
+            ControlError::Busy("held".into()),
+            ControlError::ProcessAdmissionBusy("Prepared is waiting".into()),
         ] {
+            let expected = retried.code();
+            let mut retried = Some(retried);
+            let mut waits = Vec::new();
+            let mut attempts = 0;
+            let result: Result<(), ControlError> = process(
+                || Duration::ZERO,
+                |delay| {
+                    waits.push(delay);
+                    false
+                },
+                || {
+                    attempts += 1;
+                    Err(retried
+                        .take()
+                        .expect("the interrupt prevents a second attempt"))
+                },
+            );
+            assert_eq!(result.expect_err("surfaced").code(), expected);
+            assert_eq!(attempts, 1);
+            assert_eq!(waits, vec![Duration::from_millis(100)]);
+        }
+    }
+
+    #[test]
+    fn every_other_result_is_one_shot() {
+        let both_one_shot = || {
+            vec![
+                ControlError::NotFound("entry absent".into()),
+                ControlError::Conflict("entry changed".into()),
+                ControlError::Unauthorized("wrong bearer".into()),
+                ControlError::PreflightFailed("server gate failed".into()),
+                ControlError::Malformed("bad reply".into()),
+                ControlError::Internal("daemon failed".into()),
+                ControlError::Unsupported("wrong platform".into()),
+                ControlError::ProcessAdmissionUncertain("Prepared was durable".into()),
+            ]
+        };
+        let cases = [
+            ControlError::Unreachable("daemon absent".into()),
+            ControlError::ProcessAdmissionBusy("not an entry-runtime refusal".into()),
+        ]
+        .into_iter()
+        .chain(both_one_shot())
+        .map(|error| (false, error))
+        .chain(both_one_shot().into_iter().map(|error| (true, error)));
+        for (is_process, error) in cases {
             let expected = error.code();
             let mut error = Some(error);
             let mut attempts = 0;
             let mut waits = Vec::new();
-            let result: Result<(), ControlError> = retry_busy_entry_with(
-                || Duration::ZERO,
-                |delay| {
-                    waits.push(delay);
-                    true
-                },
-                || {
-                    attempts += 1;
-                    Err(error.take().expect("the arm result is one-shot"))
-                },
-            );
+            let wait = |delay| {
+                waits.push(delay);
+                true
+            };
+            let call = || {
+                attempts += 1;
+                Err::<(), _>(error.take().expect("the result is one-shot"))
+            };
+            let result = if is_process {
+                process(|| Duration::ZERO, wait, call)
+            } else {
+                entry(|| Duration::ZERO, wait, call)
+            };
 
             assert_eq!(result.expect_err("the refusal surfaces").code(), expected);
             assert_eq!(attempts, 1, "{expected} was retried");
             assert!(waits.is_empty(), "{expected} scheduled a wait");
-        }
-    }
-}
-
-#[cfg(test)]
-mod process_handoff_tests {
-    use super::*;
-    use std::cell::Cell;
-
-    /// A refusal as a client that could not classify it reports it.
-    fn refused(error: ControlError) -> ProcessRegistrationError {
-        ProcessRegistrationError::from_unclassified(error)
-    }
-
-    #[test]
-    fn a_process_handoff_retries_busy_on_the_dephased_schedule() {
-        let elapsed = Cell::new(Duration::ZERO);
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result = retry_busy_process_classified_with(
-            || elapsed.get(),
-            |delay| {
-                waits.push(delay);
-                elapsed.set(elapsed.get() + delay);
-                true
-            },
-            || {
-                attempts += 1;
-                if attempts < 9 {
-                    Err(refused(ControlError::Busy(format!("pump {attempts}"))))
-                } else {
-                    Ok("registered")
-                }
-            },
-        );
-
-        assert!(matches!(result, Ok("registered")));
-        assert_eq!(attempts, 9);
-        assert_eq!(
-            waits,
-            vec![
-                Duration::from_millis(100),
-                Duration::from_millis(175),
-                Duration::from_millis(275),
-                Duration::from_millis(500),
-                Duration::from_millis(1_000),
-                Duration::from_millis(2_000),
-                Duration::from_millis(4_000),
-                Duration::from_millis(4_000),
-            ]
-        );
-        let planned_wait = waits.iter().copied().sum::<Duration>();
-        assert_eq!(
-            planned_wait,
-            Duration::from_millis(12_050),
-            "the exact non-periodic schedule spans one ordinary 10 s upload hold"
-        );
-        assert_eq!(
-            PROCESS_BUSY_MAX_SLEEP, planned_wait,
-            "the nominal wait cap is the sum of the eight fixed waits"
-        );
-        assert_eq!(
-            crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT,
-            Duration::from_secs(2),
-            "the handoff leaves the daemon time for durable registry and trace writes"
-        );
-        assert_eq!(
-            PROCESS_BUSY_SCHEDULER_HEADROOM,
-            Duration::from_millis(950),
-            "the retry envelope reserves 950 ms of scheduler headroom"
-        );
-        assert_eq!(
-            PROCESS_BUSY_RETRY_ENVELOPE,
-            planned_wait + PROCESS_BUSY_SCHEDULER_HEADROOM,
-            "the retry envelope is exactly planned sleep plus scheduler headroom"
-        );
-        assert_eq!(
-            PROCESS_BUSY_BUDGET,
-            crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT * 9 + PROCESS_BUSY_RETRY_ENVELOPE,
-            "nine 2 s route windows and the 13 s retry envelope are the strict ceiling"
-        );
-        assert_eq!(
-            PROCESS_BUSY_BUDGET,
-            Duration::from_secs(31),
-            "the participant-visible process handoff ceiling is 31 seconds"
-        );
-    }
-
-    #[test]
-    fn a_process_handoff_outlasts_one_ten_second_upload_hold() {
-        let elapsed = Cell::new(Duration::ZERO);
-        let mut attempts = Vec::new();
-
-        let result = retry_busy_process_classified_with(
-            || elapsed.get(),
-            |delay| {
-                elapsed.set(elapsed.get() + delay);
-                true
-            },
-            || {
-                attempts.push(elapsed.get());
-                if elapsed.get() < Duration::from_secs(10) {
-                    Err(refused(ControlError::Busy(
-                        "the upload still holds the entry".into(),
-                    )))
-                } else {
-                    Ok("registered")
-                }
-            },
-        );
-
-        assert!(matches!(result, Ok("registered")));
-        assert_eq!(
-            attempts,
-            vec![
-                Duration::ZERO,
-                Duration::from_millis(100),
-                Duration::from_millis(275),
-                Duration::from_millis(550),
-                Duration::from_millis(1_050),
-                Duration::from_millis(2_050),
-                Duration::from_millis(4_050),
-                Duration::from_millis(8_050),
-                Duration::from_millis(12_050),
-            ],
-            "the ninth ask is the first one after a 10 s upload hold"
-        );
-    }
-
-    #[test]
-    fn a_process_handoff_budget_exhausted_before_a_retry_surfaces_busy_without_waiting() {
-        let elapsed = Cell::new(PROCESS_BUSY_BUDGET - Duration::from_millis(99));
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-            || elapsed.get(),
-            |delay| {
-                waits.push(delay);
-                true
-            },
-            || {
-                attempts += 1;
-                Err(refused(ControlError::Busy(
-                    "the handoff is still held".into(),
-                )))
-            },
-        );
-
-        assert!(
-            matches!(result, Err(ProcessRetryFailure { error: ControlError::Busy(message), .. }) if message == "the handoff is still held")
-        );
-        assert_eq!(attempts, 1, "a wait past the handoff budget makes no retry");
-        assert!(
-            waits.is_empty(),
-            "the budget is checked before the first wait"
-        );
-    }
-
-    #[test]
-    fn a_process_handoff_does_not_start_a_route_that_cannot_fit_its_budget() {
-        let elapsed = Cell::new(
-            PROCESS_BUSY_BUDGET
-                - Duration::from_millis(100)
-                - crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT
-                + Duration::from_millis(1),
-        );
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-            || elapsed.get(),
-            |delay| {
-                waits.push(delay);
-                true
-            },
-            || {
-                attempts += 1;
-                Err(refused(ControlError::Busy(
-                    "the handoff is still held".into(),
-                )))
-            },
-        );
-
-        assert!(
-            matches!(result, Err(ProcessRetryFailure { error: ControlError::Busy(message), .. }) if message == "the handoff is still held")
-        );
-        assert_eq!(
-            attempts, 1,
-            "a remaining sleep is insufficient when the next route cannot also fit"
-        );
-        assert!(
-            waits.is_empty(),
-            "no retry begins without its transport window"
-        );
-    }
-
-    #[test]
-    fn a_process_handoff_rechecks_the_budget_after_an_overslept_wait() {
-        let elapsed = Cell::new(
-            PROCESS_BUSY_BUDGET
-                - Duration::from_millis(100)
-                - crate::daemon::PROCESS_HANDOFF_CALL_TIMEOUT,
-        );
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-            || elapsed.get(),
-            |delay| {
-                waits.push(delay);
-                elapsed.set(elapsed.get() + delay + Duration::from_millis(1));
-                true
-            },
-            || {
-                attempts += 1;
-                Err(refused(ControlError::Busy(
-                    "the handoff is still held".into(),
-                )))
-            },
-        );
-
-        assert!(
-            matches!(result, Err(ProcessRetryFailure { error: ControlError::Busy(message), .. }) if message == "the handoff is still held")
-        );
-        assert_eq!(attempts, 1, "an overslept wait leaves no transport budget");
-        assert_eq!(waits, vec![Duration::from_millis(100)]);
-    }
-
-    #[test]
-    fn a_process_handoff_surfaces_the_ninth_busy_without_a_tenth_attempt() {
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-            || Duration::ZERO,
-            |delay| {
-                waits.push(delay);
-                true
-            },
-            || {
-                attempts += 1;
-                Err(refused(ControlError::Busy(format!("pump {attempts}"))))
-            },
-        );
-
-        assert!(
-            matches!(result, Err(ProcessRetryFailure { error: ControlError::Busy(message), .. }) if message == "pump 9")
-        );
-        assert_eq!(attempts, 9);
-        assert_eq!(waits.len(), 8);
-    }
-
-    #[test]
-    fn a_process_handoff_retries_an_ambiguous_transport_result_on_the_same_schedule() {
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result = retry_busy_process_classified_with(
-            || Duration::ZERO,
-            |delay| {
-                waits.push(delay);
-                true
-            },
-            || {
-                attempts += 1;
-                match attempts {
-                    1 => Err(refused(ControlError::Unreachable(
-                        "the accepted response was lost".to_string(),
-                    ))),
-                    2 => Ok("registered"),
-                    _ => unreachable!("the exact retry succeeded before a third call"),
-                }
-            },
-        );
-
-        assert!(matches!(result, Ok("registered")));
-        assert_eq!(attempts, 2, "one ambiguous reply earns one exact replay");
-        assert_eq!(waits, vec![Duration::from_millis(100)]);
-    }
-
-    #[test]
-    fn a_later_conflict_cannot_disprove_an_earlier_ambiguous_process_response() {
-        let mut attempts = 0;
-        let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified(|| {
-            attempts += 1;
-            match attempts {
-                1 => Err(ProcessRegistrationError::from_unclassified(
-                    ControlError::Unreachable("accepted response lost".into()),
-                )),
-                2 => Err(ProcessRegistrationError::from_unclassified(
-                    ControlError::Conflict("a handle now stands".into()),
-                )),
-                _ => unreachable!("conflict is not retried"),
-            }
-        });
-        let failure = result.expect_err("the later refusal is surfaced with its admission history");
-
-        assert!(
-            failure.may_have_been_admitted,
-            "the first ambiguous response means the immutable body may already be durable"
-        );
-        assert!(matches!(failure.error, ControlError::Conflict(_)));
-    }
-
-    #[test]
-    fn malformed_and_internal_process_replies_are_possibly_admitted_without_a_retry() {
-        for code in ["malformed", "internal"] {
-            let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified(|| {
-                Err(ProcessRegistrationError::from_unclassified(match code {
-                    "malformed" => {
-                        ControlError::Malformed("duplicate control version header".into())
-                    }
-                    "internal" => ControlError::Internal("ambiguous daemon response".into()),
-                    _ => unreachable!("the table names every process-response ambiguity"),
-                }))
-            });
-            let failure = result.expect_err("the non-retryable response is surfaced");
-            assert!(failure.may_have_been_admitted, "{}", failure.error.code());
-        }
-    }
-
-    #[test]
-    fn process_busy_classification_preserves_the_prepare_boundary() {
-        let definite: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-            || Duration::ZERO,
-            |_| true,
-            || {
-                Err(ProcessRegistrationError::from_unclassified(
-                    ControlError::Busy("the entry is held before admission".into()),
-                ))
-            },
-        );
-        assert!(
-            !definite.expect_err("busy exhausts").may_have_been_admitted,
-            "ordinary busy proves every attempt was pre-mutation"
-        );
-
-        let prepared: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-            || Duration::ZERO,
-            |_| true,
-            || {
-                Err(ProcessRegistrationError::from_unclassified(
-                    ControlError::ProcessAdmissionBusy("Prepared is waiting".into()),
-                ))
-            },
-        );
-        assert!(
-            prepared
-                .expect_err("prepared busy exhausts")
-                .may_have_been_admitted,
-            "post-Prepare busy retains the immutable body and child"
-        );
-    }
-
-    #[test]
-    fn interrupted_process_busy_wait_keeps_the_same_admission_classification() {
-        for (error, expected_ambiguous) in [
-            (ControlError::Busy("held before admission".into()), false),
-            (
-                ControlError::ProcessAdmissionBusy("Prepared is waiting".into()),
-                true,
-            ),
-        ] {
-            let mut error = Some(error);
-            let mut attempts = 0;
-            let failure: ProcessRetryFailure = retry_busy_process_classified_with(
-                || Duration::ZERO,
-                |_| false,
-                || {
-                    attempts += 1;
-                    Err::<(), _>(ProcessRegistrationError::from_unclassified(
-                        error
-                            .take()
-                            .expect("the interrupt prevents a second attempt"),
-                    ))
-                },
-            )
-            .expect_err("the interrupted wait surfaces the last retryable result");
-            assert_eq!(attempts, 1);
-            assert_eq!(failure.may_have_been_admitted, expected_ambiguous);
-            assert!(
-                failure.interrupted,
-                "the caller can distinguish Ctrl-C from exhaustion"
-            );
-        }
-    }
-
-    #[test]
-    fn a_process_handoff_exhausts_ambiguous_transport_within_its_same_bound() {
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-            || Duration::ZERO,
-            |delay| {
-                waits.push(delay);
-                true
-            },
-            || {
-                attempts += 1;
-                Err(refused(ControlError::Unreachable(format!(
-                    "daemon absent {attempts}"
-                ))))
-            },
-        );
-
-        assert!(
-            matches!(result, Err(ProcessRetryFailure { error: ControlError::Unreachable(message), .. }) if message == "daemon absent 9")
-        );
-        assert_eq!(attempts, 9);
-        assert_eq!(waits.len(), 8);
-        assert_eq!(waits.into_iter().sum::<Duration>(), PROCESS_BUSY_MAX_SLEEP);
-    }
-
-    #[test]
-    fn an_interrupted_process_handoff_wait_surfaces_busy_without_another_attempt() {
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-            || Duration::ZERO,
-            |delay| {
-                waits.push(delay);
-                false
-            },
-            || {
-                attempts += 1;
-                Err(refused(ControlError::Busy(
-                    "the upload still holds the entry".into(),
-                )))
-            },
-        );
-
-        assert!(
-            matches!(result, Err(ProcessRetryFailure { error: ControlError::Busy(message), .. }) if message == "the upload still holds the entry")
-        );
-        assert_eq!(attempts, 1, "an interrupted wait makes no second request");
-        assert_eq!(waits, vec![Duration::from_millis(100)]);
-    }
-
-    #[test]
-    fn a_process_handoff_reports_permanent_refusals_once() {
-        for error in [
-            ControlError::Conflict("the handoff slot is occupied".into()),
-            ControlError::ArmingTimeout {
-                detail: "not a process handoff retry".into(),
-            },
-            ControlError::Malformed("an uncertain response".into()),
-            ControlError::Internal("the daemon rejected the request".into()),
-        ] {
-            let expected_code = error.code();
-            let mut error = Some(error);
-            let mut waits = Vec::new();
-            let mut attempts = 0;
-
-            let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-                || Duration::ZERO,
-                |delay| {
-                    waits.push(delay);
-                    true
-                },
-                || {
-                    attempts += 1;
-                    Err(refused(
-                        error.take().expect("a non-Busy refusal is called once"),
-                    ))
-                },
-            );
-
-            assert_eq!(
-                result
-                    .expect_err("the non-Busy result surfaces")
-                    .error
-                    .code(),
-                expected_code
-            );
-            assert_eq!(attempts, 1, "{expected_code} is not a transient Busy");
-            assert!(waits.is_empty(), "{expected_code} schedules no retry");
-        }
-    }
-
-    #[test]
-    fn dephased_process_handoff_attempts_escape_every_phase_of_a_200ms_120ms_hold() {
-        for start_ms in 0..120_u64 {
-            let clock_ms = Cell::new(start_ms);
-            let attempts = Cell::new(0_usize);
-
-            let result: Result<(), ProcessRetryFailure> = retry_busy_process_classified_with(
-                || Duration::from_millis(clock_ms.get()),
-                |delay| {
-                    clock_ms.set(clock_ms.get() + delay.as_millis() as u64);
-                    true
-                },
-                || {
-                    attempts.set(attempts.get() + 1);
-                    if clock_ms.get() % 200 < 120 {
-                        Err(refused(ControlError::Busy(
-                            "the upload still holds the entry".into(),
-                        )))
-                    } else {
-                        Ok(())
-                    }
-                },
-            );
-
-            assert!(
-                result.is_ok(),
-                "start offset {start_ms} ms stayed inside every simulated upload hold"
-            );
-            assert!(
-                attempts.get() <= PROCESS_BUSY_ATTEMPTS,
-                "start offset {start_ms} ms exceeded the bounded retry cap"
-            );
-            assert!(
-                clock_ms.get() - start_ms <= PROCESS_BUSY_MAX_SLEEP.as_millis() as u64,
-                "start offset {start_ms} ms exceeded the post-Busy sleep cap"
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-mod seal_retry_tests {
-    use super::*;
-    use std::cell::Cell;
-
-    #[test]
-    fn a_seal_retries_busy_on_the_dephased_schedule() {
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result = retry_busy_seal_with(
-            || Duration::ZERO,
-            |delay| {
-                waits.push(delay);
-                true
-            },
-            || {
-                attempts += 1;
-                if attempts < SEAL_BUSY_ATTEMPTS {
-                    Err(ControlError::Busy(format!("pump {attempts}")))
-                } else {
-                    Ok("sealed")
-                }
-            },
-        );
-
-        assert!(matches!(result, Ok("sealed")));
-        assert_eq!(attempts, SEAL_BUSY_ATTEMPTS);
-        assert_eq!(
-            waits,
-            vec![
-                Duration::from_millis(100),
-                Duration::from_millis(175),
-                Duration::from_millis(275),
-            ]
-        );
-        assert_eq!(
-            waits.into_iter().sum::<Duration>(),
-            SEAL_BUSY_MAX_SLEEP,
-            "the complete seal retry window is bounded at 550 ms"
-        );
-        assert_eq!(
-            SEAL_BUSY_BUDGET,
-            crate::daemon::SLOW_CALL_TIMEOUT + SEAL_BUSY_RETRY_ENVELOPE,
-            "the whole reservation is one admitted slow seal and its one-second retry envelope"
-        );
-        assert_eq!(
-            SEAL_BUSY_RETRY_ENVELOPE,
-            SEAL_BUSY_MAX_SLEEP + SEAL_BUSY_SCHEDULER_HEADROOM,
-            "the one-second reservation leaves 450 ms beyond the 550 ms planned waits"
-        );
-    }
-
-    #[test]
-    fn a_seal_succeeds_after_one_busy() {
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result = retry_busy_seal_with(
-            || Duration::ZERO,
-            |delay| {
-                waits.push(delay);
-                true
-            },
-            || {
-                attempts += 1;
-                if attempts == 1 {
-                    Err(ControlError::Busy("the pump is mid-cycle".into()))
-                } else {
-                    Ok(())
-                }
-            },
-        );
-
-        assert!(result.is_ok());
-        assert_eq!(attempts, 2);
-        assert_eq!(waits, vec![Duration::from_millis(100)]);
-    }
-
-    #[test]
-    fn a_seal_allows_the_fourth_attempt_on_its_reservation_boundary() {
-        let elapsed = Cell::new(Duration::ZERO);
-        let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_seal_with(
-            || elapsed.get(),
-            |delay| {
-                elapsed.set(elapsed.get() + delay);
-                true
-            },
-            || {
-                attempts += 1;
-                match attempts {
-                    1 | 2 => Err(ControlError::Busy("the seal is still held".into())),
-                    3 => {
-                        // The third Busy will wait 275 ms. With 725 ms already elapsed,
-                        // that wait and a whole slow call land exactly at the 301 s
-                        // reservation boundary, so the fourth call is still admitted.
-                        elapsed.set(
-                            SEAL_BUSY_BUDGET
-                                - Duration::from_millis(275)
-                                - crate::daemon::SLOW_CALL_TIMEOUT,
-                        );
-                        Err(ControlError::Busy("the seal is still held".into()))
-                    }
-                    4 => Ok(()),
-                    _ => unreachable!("the bounded helper never asks a fifth time"),
-                }
-            },
-        );
-
-        assert!(result.is_ok());
-        assert_eq!(attempts, SEAL_BUSY_ATTEMPTS);
-    }
-
-    #[test]
-    fn a_seal_surfaces_the_fourth_busy_without_a_fifth_attempt() {
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_seal_with(
-            || Duration::ZERO,
-            |delay| {
-                waits.push(delay);
-                true
-            },
-            || {
-                attempts += 1;
-                Err(ControlError::Busy(format!("pump {attempts}")))
-            },
-        );
-
-        assert!(matches!(result, Err(ControlError::Busy(message)) if message == "pump 4"));
-        assert_eq!(attempts, SEAL_BUSY_ATTEMPTS);
-        assert_eq!(waits.len(), SEAL_BUSY_ATTEMPTS - 1);
-    }
-
-    #[test]
-    fn a_seal_reports_every_non_busy_refusal_once() {
-        for error in [
-            ControlError::Conflict("already sealed".into()),
-            ControlError::Unreachable("the daemon went away".into()),
-            ControlError::ArmingTimeout {
-                detail: "a timeout is not a Busy".into(),
-            },
-            ControlError::Malformed("an uncertain response".into()),
-            ControlError::Internal("the daemon failed".into()),
-        ] {
-            let expected_code = error.code();
-            let mut error = Some(error);
-            let mut waits = Vec::new();
-            let mut attempts = 0;
-
-            let result: Result<(), ControlError> = retry_busy_seal_with(
-                || Duration::ZERO,
-                |delay| {
-                    waits.push(delay);
-                    true
-                },
-                || {
-                    attempts += 1;
-                    Err(error.take().expect("a non-Busy refusal is called once"))
-                },
-            );
-
-            assert_eq!(
-                result.expect_err("the non-Busy result surfaces").code(),
-                expected_code
-            );
-            assert_eq!(attempts, 1, "{expected_code} is not a transient Busy");
-            assert!(waits.is_empty(), "{expected_code} schedules no retry");
-        }
-    }
-
-    #[test]
-    fn a_seal_does_not_start_a_route_that_cannot_fit_its_budget() {
-        let elapsed = Cell::new(
-            SEAL_BUSY_BUDGET - Duration::from_millis(100) - crate::daemon::SLOW_CALL_TIMEOUT
-                + Duration::from_millis(1),
-        );
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_seal_with(
-            || elapsed.get(),
-            |delay| {
-                waits.push(delay);
-                true
-            },
-            || {
-                attempts += 1;
-                Err(ControlError::Busy("the seal is still held".into()))
-            },
-        );
-
-        assert!(
-            matches!(result, Err(ControlError::Busy(message)) if message == "the seal is still held")
-        );
-        assert_eq!(
-            attempts, 1,
-            "the next slow call cannot cross the reservation"
-        );
-        assert!(
-            waits.is_empty(),
-            "no wait is taken without room for the next slow call"
-        );
-    }
-
-    #[test]
-    fn a_seal_reservation_absorbs_a_bounded_late_wake() {
-        let elapsed = Cell::new(Duration::ZERO);
-        let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_seal_with(
-            || elapsed.get(),
-            |delay| {
-                elapsed.set(elapsed.get() + delay + Duration::from_millis(500));
-                true
-            },
-            || {
-                attempts += 1;
-                if attempts == 1 {
-                    Err(ControlError::Busy("the seal is still held".into()))
-                } else {
-                    Ok(())
-                }
-            },
-        );
-
-        assert!(
-            result.is_ok(),
-            "the one-second envelope admits this late wake"
-        );
-        assert_eq!(attempts, 2, "the next slow call still fits the reservation");
-    }
-
-    #[test]
-    fn a_seal_rechecks_the_budget_after_an_overslept_wait() {
-        let elapsed = Cell::new(Duration::ZERO);
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_seal_with(
-            || elapsed.get(),
-            |delay| {
-                waits.push(delay);
-                elapsed.set(SEAL_BUSY_RETRY_ENVELOPE + Duration::from_millis(1));
-                true
-            },
-            || {
-                attempts += 1;
-                Err(ControlError::Busy("the seal is still held".into()))
-            },
-        );
-
-        assert!(
-            matches!(result, Err(ControlError::Busy(message)) if message == "the seal is still held")
-        );
-        assert_eq!(
-            attempts, 1,
-            "an overslept wait leaves no slow-call reservation"
-        );
-        assert_eq!(waits, vec![Duration::from_millis(100)]);
-    }
-
-    #[test]
-    fn an_interrupted_seal_wait_surfaces_busy_without_another_attempt() {
-        let mut waits = Vec::new();
-        let mut attempts = 0;
-
-        let result: Result<(), ControlError> = retry_busy_seal_with(
-            || Duration::ZERO,
-            |delay| {
-                waits.push(delay);
-                false
-            },
-            || {
-                attempts += 1;
-                Err(ControlError::Busy("the seal is still held".into()))
-            },
-        );
-
-        assert!(
-            matches!(result, Err(ControlError::Busy(message)) if message == "the seal is still held")
-        );
-        assert_eq!(
-            attempts, 1,
-            "an interrupted wait does not make another seal request"
-        );
-        assert_eq!(waits, vec![Duration::from_millis(100)]);
-    }
-
-    #[test]
-    fn dephased_seal_attempts_escape_every_phase_of_a_200ms_120ms_hold() {
-        for start_ms in 0..120_u64 {
-            let elapsed_ms = Cell::new(0_u64);
-            let attempts = Cell::new(0_usize);
-
-            let result: Result<(), ControlError> = retry_busy_seal_with(
-                || Duration::from_millis(elapsed_ms.get()),
-                |delay| {
-                    elapsed_ms.set(elapsed_ms.get() + delay.as_millis() as u64);
-                    true
-                },
-                || {
-                    attempts.set(attempts.get() + 1);
-                    if (start_ms + elapsed_ms.get()) % 200 < 120 {
-                        Err(ControlError::Busy(
-                            "the upload still holds the entry".into(),
-                        ))
-                    } else {
-                        Ok(())
-                    }
-                },
-            );
-
-            assert!(
-                result.is_ok(),
-                "start offset {start_ms} ms stayed inside every simulated upload hold"
-            );
-            assert!(
-                attempts.get() <= SEAL_BUSY_ATTEMPTS,
-                "start offset {start_ms} ms exceeded the bounded retry cap"
-            );
-            assert!(
-                elapsed_ms.get() <= SEAL_BUSY_MAX_SLEEP.as_millis() as u64,
-                "start offset {start_ms} ms exceeded the post-Busy sleep cap"
-            );
         }
     }
 }

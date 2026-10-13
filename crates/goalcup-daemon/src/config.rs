@@ -1,8 +1,9 @@
 //! The daemon's per-machine configuration file.
 //!
 //! This is the only thing the daemon invents that is not already in `goalcup-protocol`.
-//! Everything below is either a path root the daemon resolves templates against, a cadence,
-//! or a threshold; nothing here is a rule, and nothing here is read by the verifier.
+//! Everything below is a path root, the control address, the round's dates, or a V1 field
+//! accepted only so an old `daemon.toml` still loads; nothing here is a rule, and nothing
+//! here is read by the verifier.
 
 use crate::DaemonError;
 use crate::submission_types::CaptureResourceLimitsV1;
@@ -33,76 +34,59 @@ pub struct DaemonConfig {
     pub workspace_parent: PathBuf,
     /// The control API's listen address. `validate()` refuses anything but loopback.
     pub control_addr: SocketAddr,
-    /// Where signed chunks go. **Loopback cleartext, or refused**: nothing in this build
-    /// terminates TLS, so `validate()` refuses `https` by name and refuses `http` to any host
-    /// but 127.0.0.0/8, `localhost` or `[::1]`.
-    /// The rule itself lived on the V1 `receipt::split_url`, which connected; D48 removed it,
-    /// so nothing in this tree connects to this URL now.
-    /// Omit this and `server_public_key` together for a service-free v5 installation.
+    /// Accepted for old configs; nothing reads it, and nothing connects to it (D48 removed
+    /// the uploader). `validate()` still refuses one set without `server_public_key`, and
+    /// one that is not an `http` or `https` URL.
     #[serde(default)]
     pub upload_url: String,
-    /// The Ed25519 key this daemon verifies every `StartReceipt` and `AckCheckpoint`
-    /// against, hex. Written into `trace.toml` as `server_public_key`. In development it
-    /// is `goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX`; in a signed release it is the
-    /// event backend's. `validate()` refuses anything that is not 64 hex characters,
-    /// because an unparseable key would make every acknowledgement silently unverifiable.
-    ///
-    /// **The development key is a published placeholder; the daemon says so and does not
-    /// refuse it.** Its seed is a constant in this repository, so anybody can sign a receipt
-    /// and an acknowledgement under it and a run anchored to it is anchored to nothing. The
-    /// verifier reports that as V13's `placeholder_server_key`; the daemon prints one line on
-    /// stderr at startup ([`DaemonConfig::placeholder_key_notice`]). It does not refuse, because refusing would
-    /// break every development run in this tree. Read as: a `server_public_key` equal to
-    /// `goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX` (the key of the
-    /// published seed `[5u8; 32]`) names a trace that a verifier will
-    /// flag, and only `--dev` suppresses the flag.
-    /// Omitted together with `upload_url`, this is empty and only local v5 entries are admitted.
+    /// Accepted for old configs; nothing reads it (the daemon verifies no receipt or
+    /// acknowledgement). `validate()` still refuses one set without `upload_url`, and one
+    /// that is not 64 hex characters.
     #[serde(default)]
     pub server_public_key: String,
 
-    /// The receipt contract copied onto each newly-created registry row.
-    /// Existing rows retain their stored policy across restart and configuration changes.
+    /// Accepted for old configs, and still validated; nothing reads it: every new entry is
+    /// created `ReceiptBindingPolicy::Legacy` (`runtime::capture`).
     #[serde(default)]
     pub receipt_binding: ReceiptBindingPolicy,
 
-    /// Tailing cadence. 250 ms is the measured one: spike 5 kept up with 2,371 records.
+    // Every field from here to `event` is accepted for old configs; nothing reads it.
+    // `deny_unknown_fields` is why they stay: removing one would make a `daemon.toml` that
+    // still sets it a load error. `validate()` checks none of them.
+    /// Accepted for old configs; nothing reads it.
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
+    /// Accepted for old configs; nothing reads it.
     #[serde(default = "default_upload_interval_ms")]
     pub upload_interval_ms: u64,
-    /// The most envelopes one signed chunk carries.
+    /// Accepted for old configs; nothing reads it.
     #[serde(default = "default_upload_chunk_max")]
     pub upload_chunk_max: usize,
+    /// Accepted for old configs; nothing reads it.
     #[serde(default = "default_status_interval_ms")]
     pub status_interval_ms: u64,
-    /// Silence from every store for this long is `HealthState::CaptureStalled`.
+    /// Accepted for old configs; nothing reads it.
     #[serde(default = "default_stall_after_seconds")]
     pub stall_after_seconds: f64,
-    /// Not read: kept so an existing config that sets it still loads under
-    /// `deny_unknown_fields`.
+    /// Accepted for old configs; nothing reads it.
     #[serde(default = "default_silence_window_seconds")]
     pub silence_window_seconds: f64,
-    /// An unacknowledged head this old is `HealthState::UploadLagging`.
+    /// Accepted for old configs; nothing reads it.
     #[serde(default = "default_ack_lag_seconds")]
     pub ack_lag_seconds: f64,
-    /// The **second** step of the arming-timeout precedence chain documented once on
-    /// `manifest::Arming`: connector default, then this per-machine override, then
-    /// `WorkspaceOpts.arming_timeout_seconds` from the CLI. `None` means "leave the
-    /// connector's number alone", which is the normal case — so it is the default, and a
-    /// machine that sets it is deliberately overriding every connector at once.
+    /// Not read: the V1 arming gate it overrode is gone. Kept so an existing config that
+    /// sets it still loads under `deny_unknown_fields`.
     #[serde(default)]
     pub arming_timeout_seconds: Option<u64>,
-    /// How often an `EventBody::Heartbeat` is chained. Absence of heartbeats over a window is what makes
-    /// downtime a positive statement in the verdict rather than an absence.
+    /// Accepted for old configs; nothing reads it. No heartbeat is chained.
     #[serde(default = "default_heartbeat_seconds")]
     pub heartbeat_seconds: u64,
-    /// How far the server's `acked_at` may diverge from local time before a `clock_skew`
-    /// health detail is chained.
+    /// Accepted for old configs; nothing reads it.
     #[serde(default = "default_clock_skew_seconds")]
     pub clock_skew_seconds: f64,
-    /// The free-space floor on the artifact-root volume below which the daemon degrades
-    /// to `HealthState::DiskPressure` — *before* `append` starts failing, because a
-    /// buffer that runs out of disk mid-run tells the participant nothing.
+    /// Accepted for old configs; nothing reads it. Nothing watches free space on the
+    /// artifact-root volume: a full disk shows up as a failing `append`, not as an earlier
+    /// health state.
     #[serde(default = "default_disk_reserve_bytes")]
     pub disk_reserve_bytes: u64,
 
@@ -322,27 +306,9 @@ fn default_disk_reserve_bytes() -> u64 {
 }
 
 impl DaemonConfig {
-    /// The legacy service is configured only by supplying both existing fields.
-    /// `validate` separately refuses partial pairs and validates their URL and key.
+    /// Whether both V1 service fields are set. Only `validate` asks.
     pub(crate) fn has_service(&self) -> bool {
         !self.upload_url.is_empty() && !self.server_public_key.is_empty()
-    }
-
-    /// The one stderr line the daemon prints at startup when `server_public_key` is the
-    /// published placeholder, or `None` for any other key (and for none at all).
-    ///
-    /// Compared without regard to hex case. The text names what the placeholder costs: the
-    /// seed is public, so every receipt and acknowledgement under it can be forged, until the
-    /// project server's real key is configured (V1.1). A line, not a refusal: see the field.
-    pub fn placeholder_key_notice(&self) -> Option<String> {
-        self.server_public_key
-            .eq_ignore_ascii_case(goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX)
-            .then(|| {
-                "server_public_key is the published placeholder key: its seed is public, so \
-                 every receipt and acknowledgement under it can be forged until the project \
-                 server's key replaces it (V1.1)"
-                    .to_string()
-            })
     }
 
     /// Parse without touching the filesystem. `validate()` is a separate call, so a
@@ -368,16 +334,9 @@ impl DaemonConfig {
     ///   (`is_public_route`), and what makes that safe is that the socket is not
     ///   reachable off the machine. Stated here as a refusal so it is an enforced
     ///   property rather than a hope.
-    /// - **A complete service pair, or neither field for local v5 capture.** Partial
-    ///   configuration cannot activate legacy creation or recovery.
-    /// - **A parsable supplied server key.** An unparseable one would make every `StartReceipt`
-    ///   and `AckCheckpoint` silently unverifiable — the daemon would accept whatever
-    ///   arrived and record it as acknowledged.
-    /// - **An upload url this build can honestly reach**. Cleartext
-    ///   `http` only to a loopback host, and `https` refused by name rather than silently
-    ///   downgraded by the client that has to speak to it. Checked here, at load, because
-    ///   a machine configured to ship a run's evidence over a network in the clear should
-    ///   learn that before the run and not after it.
+    /// - **The two V1 service fields together or not at all**, the key as 64 hex characters
+    ///   and the URL as `http` or `https`. Nothing reads either field; these refusals are
+    ///   kept so a config that loaded before still loads, and one refused before still is.
     /// - **A workspace parent that is not entangled with the artifact root**. Agents
     ///   enumerate the workspace's parent directory on their first tool call, so
     ///   a `workspace_parent` that contains — or sits inside — the artifact root puts the
@@ -404,8 +363,7 @@ impl DaemonConfig {
             if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return Err(DaemonError::Config(format!(
                     "server_public_key must be 64 hex characters (an Ed25519 public key), and this \
-                     one is {} character(s): an unparseable key would make every acknowledgement \
-                     silently unverifiable",
+                     one is {} character(s)",
                     key.len()
                 )));
             }
@@ -437,18 +395,6 @@ impl DaemonConfig {
             )));
         }
 
-        if self.poll_interval_ms == 0 {
-            return Err(DaemonError::Config(
-                "poll_interval_ms must be greater than zero".to_string(),
-            ));
-        }
-        if self.upload_chunk_max == 0 {
-            return Err(DaemonError::Config(
-                "upload_chunk_max must be greater than zero: a chunk carrying no envelopes \
-                 never drains the buffer"
-                    .to_string(),
-            ));
-        }
         if self.has_service()
             && !self.upload_url.starts_with("http://")
             && !self.upload_url.starts_with("https://")

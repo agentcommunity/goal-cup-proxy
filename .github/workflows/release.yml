@@ -1,0 +1,107 @@
+# Release: build the three binaries for four targets, package each as a tarball, smoke-test each
+# tarball on its own architecture, and attach the tarballs, SHA256SUMS and the rendered Homebrew
+# formula to a GitHub release.
+#
+# - A `v*` tag push builds and publishes the release for that tag. The tag must equal the
+#   workspace version in Cargo.toml (`v0.5.0` for `version = "0.5.0"`), because the formula's
+#   test checks `goalcup --version` against it.
+# - A manual start builds and packages only: the tarballs are the run's artifacts, and nothing
+#   is published. Use it to try a release before tagging.
+#
+# It runs on tags and by hand only, never on pull requests; everyday CI is ci.yml. Layout and
+# publishing steps: packaging/README.md.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    # Every target builds on a runner of its own architecture, so its tarball is smoke-tested
+    # where it was built. macos-15-intel is GitHub's last Intel image.
+    strategy:
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-14 }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          # Ubuntu 22.04 for glibc 2.35, so the binaries also run on Debian 12 and older WSL2
+          # images; a 24.04 build would need glibc 2.39.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: version
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      # The compiler the gate uses: rust-toolchain.toml's pinned channel.
+      - run: >-
+          rustup toolchain install --profile minimal --target "$TARGET"
+          "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+      - run: >-
+          cargo build --release --locked --target "$TARGET"
+          -p goalcup-cli -p goalcup-daemon -p goalcup-verifier
+      - run: sh scripts/package-release.sh "$TARGET" "$VERSION" dist
+      # Unpacks the tarball and runs both binaries and `goalcup doctor` from it; a failure here
+      # fails the build, and with it the release.
+      - run: sh scripts/smoke-release.sh "dist/goalcup-$VERSION-$TARGET.tar.gz" "$VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goalcup-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    # A tag push only: a manual start from a tag also has ref_type tag, and it must not publish.
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums and formula
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          python3 scripts/render-formula.py --version "$version" --sums dist/SHA256SUMS \
+            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME" \
+            > dist/goalcup.rb
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag
+          --title "$GITHUB_REF_NAME" --generate-notes
+          dist/*.tar.gz dist/SHA256SUMS dist/goalcup.rb

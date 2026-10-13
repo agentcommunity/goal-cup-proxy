@@ -1,2 +1,6 @@
 [toolchain]
-channel = "stable"
+# The one compiler: the gate and the release workflow both build with it (Cargo.toml
+# `rust-version`, .github/workflows/release.yml).
+channel = "1.99.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

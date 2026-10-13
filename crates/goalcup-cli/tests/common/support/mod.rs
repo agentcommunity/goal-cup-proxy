@@ -35,6 +35,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// A test-only server public key: the Ed25519 verifying key of the test seed `[0x42; 32]`.
+/// The verifier trusts no key, this one included; it only has to be a well-formed key.
+pub const TEST_SERVER_PUBLIC_KEY_HEX: &str =
+    "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12";
+
 /// One clock for every render. A test that formatted `now` would pass on the day it was
 /// written and be a different test tomorrow.
 pub const NOW: &str = "2026-09-05T00:00:00Z";
@@ -272,12 +277,6 @@ pub fn cfg_with_entry(tmp: &Path, info: &control::WorkspaceInfo) -> PathBuf {
     let record = goalcup_cli::entries::EntryRecord {
         entry_id: info.entry_id.clone(),
         process_generation: info.process_generation,
-        pending_process_registration: None,
-        pending_process_registration_origin: None,
-        pending_process_cleanup: None,
-        pending_process_cleanup_origin: None,
-        pending_unresolved_native_cleanup: None,
-        resume_recovery: None,
         connector_id: "claude-code-cli".to_string(),
         run_public_key: info.run_public_key.clone(),
         workspace: info.workspace.clone(),
@@ -285,7 +284,6 @@ pub fn cfg_with_entry(tmp: &Path, info: &control::WorkspaceInfo) -> PathBuf {
         harness_home: info.harness_home.clone(),
         session_id: info.session_id.clone(),
         last_pid: None,
-        workspace_relative: info.workspace_relative.clone(),
         status_url: info.status_url.clone(),
         created_at: info.created_at.clone(),
         dev: false,
@@ -503,8 +501,7 @@ impl RecordingDaemon {
         }
     }
 
-    /// The body of the last request, so a test can assert that `POST /v0/workspaces`
-    /// carries a bare `WorkspaceOpts`.
+    /// The body of the last request, so a test can assert what went out.
     pub fn last_body(&self) -> Option<String> {
         match self.log.lock() {
             Ok(log) => log.last_body.clone(),

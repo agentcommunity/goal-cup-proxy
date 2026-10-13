@@ -21,7 +21,7 @@ use goalcup_daemon::terminate::{
     terminate_with,
 };
 use goalcup_protocol::manifest::KillStrategy;
-use goalcup_protocol::process::{ProcInfo, ProcessError, ProcessHandle};
+use goalcup_protocol::process::{KILL_SWEEP_TIMEOUT_MS, ProcInfo, ProcessError, ProcessHandle};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -671,7 +671,6 @@ impl Sim {
             program: format!("/usr/bin/{}", root.comm),
             argv: vec![format!("/usr/bin/{}", root.comm)],
             env_keys: Vec::new(),
-            home_seed: None,
         }
     }
 
@@ -986,6 +985,35 @@ fn sanity_tree_dies_under_live_root() {
         assert_eq!(sorted(&report.targeted), sorted(&w.born), "{platform:?}");
         assert!(w.alive_born().is_empty(), "{platform:?}:\n{}", w.describe());
         assert!(!report.harness_unverified, "{platform:?}: {report:?}");
+    }
+}
+
+/// `grace_seconds` comes from the control client unbounded. `u64::MAX` must not overflow the
+/// grace deadline (`Instant + Duration` panics, which poisons every later seal of the
+/// entry): the grace is clamped to the manifest's ceiling of 60 seconds, then the SIGTERM
+/// ignorer is SIGKILLed as usual.
+#[test]
+fn an_unbounded_grace_is_clamped_rather_than_overflowing() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(
+            platform,
+            leaf(ROOT, "sleep", false, OnTerm::Ignores),
+            vec![],
+        );
+        let mut handle = sim.handle(None, None);
+        handle.grace_seconds = u64::MAX;
+        let report = run(&sim, &handle).expect("a live root terminates");
+        let w = sim.world();
+        assert!(
+            report.observed_gone && report.still_alive.is_empty(),
+            "{platform:?}: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(
+            (60_000..=2 * (60_000 + KILL_SWEEP_TIMEOUT_MS) + 1_000).contains(&report.waited_ms),
+            "{platform:?}: the grace ran for the 60 s ceiling, not forever: {report:?}"
+        );
+        assert!(w.alive_born().is_empty(), "{platform:?}:\n{}", w.describe());
     }
 }
 
@@ -2121,7 +2149,7 @@ fn env_u64(name: &str, default: u64) -> u64 {
 /// set (B minus what had left the root's ppid walk before the call, D30), A the pids alive
 /// at return, K the kills sent, R the report.
 /// I1  R.observed_gone ⟹ A ∩ O ⊆ W, where W is the platform's stated residual window
-///     (Linux: same-poll orphans; macOS: ∅).
+///     (Linux: any orphan the ppid walk cannot see, see "RULED" below; macOS: ∅).
 /// I2  R.observed_gone ⟹ A ∩ R.targeted = ∅.
 /// I3  every k ∈ K names a pid ≥ 2 that was ours when sent, with SIGTERM or SIGKILL only;
 ///     every killpg names a group of ours under a live leader.

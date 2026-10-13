@@ -174,28 +174,12 @@ fn termination_summary(report: &crate::terminate::TerminationReport) -> String {
 }
 
 impl Daemon {
+    /// Now on the finalization clock: the wall clock, which keeps counting while the Mac
+    /// sleeps, never earlier than a time this process already handed out. Never an `Instant`:
+    /// that stops during sleep, so a run sealed after a lid-closed night would record its
+    /// harness ending hours before it did.
     pub(super) fn finalization_now_unix(&self) -> f64 {
-        #[cfg(any(test, feature = "test-hooks"))]
-        let candidate = self
-            .inner
-            .finalization_clock_steps
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .pop_front()
-            .or_else(|| {
-                *self
-                    .inner
-                    .finalization_clock
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-            })
-            .unwrap_or_else(|| {
-                self.inner.finalization_epoch_unix + self.inner.started.elapsed().as_secs_f64()
-            });
-        #[cfg(not(any(test, feature = "test-hooks")))]
-        let candidate =
-            self.inner.finalization_epoch_unix + self.inner.started.elapsed().as_secs_f64();
-
+        let candidate = self.wall_now_unix();
         let mut high_water = self
             .inner
             .finalization_high_water
@@ -203,6 +187,20 @@ impl Daemon {
             .unwrap_or_else(|error| error.into_inner());
         *high_water = high_water.max(candidate);
         *high_water
+    }
+
+    /// The wall clock. A test may add a pretend sleep to it: what a real sleep adds to the
+    /// wall clock and to nothing an `Instant` reads.
+    fn wall_now_unix(&self) -> f64 {
+        let now = crate::now_unix();
+        #[cfg(test)]
+        let now = now
+            + *self
+                .inner
+                .simulated_sleep_seconds
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+        now
     }
 
     pub(super) fn finalization_timestamp_at_or_after(
@@ -226,5 +224,65 @@ impl Daemon {
             self.finalization_now_unix().max(0.0) as u64,
         ))
         .map_err(|error| DaemonError::Refused(format!("cannot timestamp {fact}: {error}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::DaemonConfig;
+
+    const NIGHT: f64 = 8.0 * 3600.0;
+
+    async fn daemon(temp: &tempfile::TempDir) -> Daemon {
+        let config = DaemonConfig::from_toml_str(&format!(
+            "artifact_root = {artifacts:?}\n\
+             connectors_dir = {connectors:?}\n\
+             config_dir = {config:?}\n\
+             workspace_parent = {workspaces:?}\n\
+             control_addr = \"127.0.0.1:0\"\n",
+            artifacts = temp.path().join("artifacts"),
+            connectors = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors"),
+            config = temp.path().join("config"),
+            workspaces = temp.path().join("workspaces"),
+        ))
+        .unwrap();
+        Daemon::start(config).await.unwrap()
+    }
+
+    /// C1: a lid-closed night between start and seal. The wall clock moves eight hours, an
+    /// `Instant` does not; the termination time the chain records must move with the wall.
+    #[tokio::test]
+    async fn a_seal_after_a_night_asleep_records_the_real_time() {
+        let temp = tempfile::tempdir().unwrap();
+        let daemon = daemon(&temp).await;
+        let evening = daemon.finalization_now_unix();
+
+        *daemon.inner.simulated_sleep_seconds.lock().unwrap() = NIGHT;
+        let morning = daemon.finalization_now_unix();
+
+        assert!(
+            morning - evening >= NIGHT,
+            "eight hours asleep moved the finalization clock {:.0} s",
+            morning - evening
+        );
+        let stamped = daemon.finalization_timestamp("the morning seal").unwrap();
+        let stamped = goalcup_protocol::control::parse_z(stamped.as_str()).unwrap() as f64;
+        assert!(
+            (stamped - morning).abs() < 2.0,
+            "{stamped} against {morning}"
+        );
+        daemon.stop().await;
+    }
+
+    /// The rollback guard still holds: a wall clock stepped back never moves a phase back.
+    #[tokio::test]
+    async fn a_wall_clock_stepped_back_never_moves_finalization_back() {
+        let temp = tempfile::tempdir().unwrap();
+        let daemon = daemon(&temp).await;
+        let before = daemon.finalization_now_unix();
+        *daemon.inner.simulated_sleep_seconds.lock().unwrap() = -NIGHT;
+        assert!(daemon.finalization_now_unix() >= before);
+        daemon.stop().await;
     }
 }

@@ -7,8 +7,9 @@ the tracker or reviews a change to it. Updated: 2026-10-11.
 
 v0.5.0 is published as source only
 ([release](https://github.com/agentcommunity/goal-cup-tracer/releases/tag/v0.5.0), no attached
-files). There is no stable release, downloadable binary or installer, staged bundle, registry
-publication, signature, notarization or qualification.
+files). Later `v*` tags attach unsigned, unnotarized binary tarballs installed with Homebrew
+([packaging/README.md](packaging/README.md)). There is no stable release, signature, notarization
+or qualification.
 
 ## Reporting a vulnerability
 
@@ -47,7 +48,8 @@ report of one of those is known, not new, unless it shows the stated bound does 
 ## Assets and trust boundaries
 
 Assets: harness subscription credentials; prompts, responses and tool output in traces; the
-control bearer; the ingest and proxy secrets; trace integrity (the chain and its seal).
+control bearer; the ingest and proxy secrets; trace integrity (the chain and its seal;
+a local-only chain can be rewritten and re-sealed, see [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md)).
 
 | Adversary | Position |
 |---|---|
@@ -56,7 +58,7 @@ control bearer; the ingest and proxy secrets; trace integrity (the chain and its
 | Same-user processes, including the agent under test | **Inside the boundary.** They can read `control.json` (mode 0600, same uid), the harness environment and run directories, and call authenticated mutators while a capture has live authority. After restart, recovered v5 captures accept status and seal only. Detection is after the fact, from captured native and wire records. A keychain-held or per-run token, or a sandbox denying config access, is future work. |
 | Network | The proxy validates upstream TLS. Only declared provider hosts and paths are decrypted and retained; authentication hosts always tunnel unmodified. |
 | Connector authors | **Trusted code.** See below. |
-| The project server | Not used by the M2 capture path (LocalOnly). Until a production server exists the server key is a published placeholder, so **every receipt and acknowledgement can be forged until V1.1**: its seed is in this repository, anybody can sign under it, and a run anchored to it is anchored to nothing. The daemon does not refuse that key (development runs use it) but prints one line on stderr at startup when it is configured, and the verifier flags `placeholder_server_key` on every trace unless `--dev` is given. |
+| The project server | Not used by the M2 capture path (LocalOnly). Until a production server exists, `goalcup-verify` trusts **no** server key: a receipt or acknowledgement verifies only under a key supplied to that one run (`--dev-key`), and the report then records `key_source: "supplied"` and `server_key_unpinned`. No key whose seed is in this repository is trusted, so no trace reads as `anchor: signed` on its own. |
 
 ## Connectors are trusted code
 
@@ -69,9 +71,8 @@ malicious merge, because a connector PR regenerates them. Every connector change
 reviewed by a code owner against the checklist in
 [docs/CONNECTOR-CONTRIBUTING.md](docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr), and
 an unreviewed build must not be run. The source tree contains exactly three pinned
-schema-1 directories (`codex-cli`, `claude-code-cli`, `hermes-cli`). The private `m2-pilot` macOS
-package allowlist selects only Codex and Claude and copies each selected directory whole, including
-any seeds; a source pin does not prove package inclusion. The build has no V1 execution path
+schema-1 directories (`codex-cli`, `claude-code-cli`, `hermes-cli`). A release tarball
+carries `codex-cli` and `claude-code-cli` as committed ([packaging/README.md](packaging/README.md)). The build has no V1 execution path
 (D48) and no V1 `manifest.toml` (OS-29): a connector is its `harness.toml` and seeds.
 
 ## Guarantees the code aims to keep
@@ -81,7 +82,7 @@ any seeds; a source pin does not prove package inclusion. The build has no V1 ex
 - The capture executable is SHA-256 pinned and re-opened with `O_NOFOLLOW|O_NONBLOCK`; after durable
   process registration the CLI requires a regular file and streams what it reads into SHA-256
   immediately before gate release. The harness environment is built from nothing.
-- Control API v5 requires its version on mutating requests. Capture creation refuses before daemon
+- Control API v6 requires its version on mutating requests. Capture creation refuses before daemon
   entry, artifact and workspace allocation when CLI and daemon loaded different connector bytes
   (D46); earlier CLI run/home/CA/seed preparation can exist and is cleaned on refusal.
 - A restarted unfinished v5 capture has status/seal-only authority; other authenticated mutators
@@ -94,7 +95,7 @@ any seeds; a source pin does not prove package inclusion. The build has no V1 ex
 
 Listed in [docs/CHEAT-CHECKLIST.md](docs/CHEAT-CHECKLIST.md): redaction (F-07, H-20), key-scan
 blind spots (H-18), and the termination windows in [docs/TERMINATION.md](docs/TERMINATION.md).
-Also stated here: same-user control of the daemon (above), the placeholder server key (above),
+Also stated here: same-user control of the daemon (above), the absent server key (above),
 the macOS executable recheck is neither a coherent snapshot nor inode-bound execution (a same-UID
 writer can mutate the open file from the first read, then replace its pathname before `exec`),
 shared-home checks do not inspect ACLs and cannot exclude a same-UID replacement after the final

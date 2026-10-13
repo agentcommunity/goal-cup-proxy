@@ -5,8 +5,8 @@
 //! writes the case id into the chain, and the run stages the case's manifest and the shipped
 //! connectors, so a key-scan form of the credential in any of them would fail the keyed case
 //! for a reason that has nothing to do with the credential leaking. The kit cases themselves
-//! run on macOS only; this check runs everywhere, so a colliding credential or case name is
-//! caught on Linux too.
+//! run on macOS and Linux; this check runs everywhere, so a colliding credential or case name is
+//! caught on other platforms too.
 
 use crate::common::support;
 

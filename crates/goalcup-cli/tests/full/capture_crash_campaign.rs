@@ -23,8 +23,8 @@
 //! exit code. Power loss, a crashed relay, peer-initiated disconnect with a live receiver and
 //! arbitrary v5 readmission are not measured here.
 //!
-//! macOS only (the chain is reserved on APFS alone). Each row runs real processes for tens of
-//! seconds, so the campaign is in the `full` tier, one row at a time (the `serial` test group in
+//! macOS and Linux (the trace folder must be on APFS, ext4 or XFS). Each row runs real processes
+//! for tens of seconds, so the campaign is in the `full` tier, one row at a time (the `serial` test group in
 //! `.config/nextest.toml`); `sh scripts/gate.sh full` builds the binaries first and runs it. No
 //! row needs a real harness or the network.
 
@@ -1209,6 +1209,47 @@ fn capture_daemon_killed_after_registered_harness_is_owned_across_restart() {
     row.note("verifier", integrity.clone());
     assert_eq!(code, 1, "{integrity}");
     assert_eq!(integrity["sealed"], true);
+}
+
+/// #7: a Ctrl-C that reaches the launcher after the registration and before the release. It
+/// is no longer swallowed: the parked child is ended without running, and the entry is sealed
+/// with no Launch.
+#[test]
+fn capture_ctrl_c_after_registration_never_releases_the_harness() {
+    let _lock = TableLock::acquire();
+    let v = Vertical::new("plain", json!({"hold": true}));
+    let mut row = Row::new(
+        "capture_ctrl_c_after_registration_never_releases_the_harness",
+        &v,
+        EVIDENCE,
+    );
+    let pause = gate_pause(&v, "capture-gate-registered");
+    let mut start = v.start_paused(RESERVE, &pause);
+    let entry = v.entry_id();
+    gate_reached(&pause, "capture-gate-registered");
+
+    // SAFETY: `kill` reads two integers; the pid is the launcher this test spawned.
+    assert_eq!(unsafe { libc::kill(start.pid(), libc::SIGINT) }, 0);
+    gate_go(&pause, "capture-gate-registered");
+    let exit = start.wait(RUN);
+    row.note("start_exit", exit.code());
+    row.note("start_output", start.output());
+    assert!(!exit.success(), "{}", start.output());
+    assert!(
+        start
+            .output()
+            .contains("interrupted before the harness started"),
+        "{}",
+        start.output()
+    );
+    assert_harness_never_ran(&v, &mut row);
+    let chain = v.chain(&entry);
+    assert_eq!(
+        launches(&chain),
+        0,
+        "no Launch for a harness that never ran"
+    );
+    assert_eq!(local_finishes(&chain), 1, "the launcher sealed the entry");
 }
 
 #[test]

@@ -13,10 +13,7 @@ use crate::common::support;
 
 use goalcup_cli::CliError;
 use goalcup_cli::daemon::{CALL_TIMEOUT, HttpDaemonClient, MockDaemonClient, SLOW_CALL_TIMEOUT};
-use goalcup_cli::retry::{
-    BUSY_ATTEMPTS, BUSY_BACKOFF, BUSY_BUDGET, retry_busy, retry_busy_process_classified,
-    retry_busy_within,
-};
+use goalcup_cli::retry::{BUSY_ATTEMPTS, BUSY_BACKOFF, BUSY_BUDGET, retry_busy, retry_busy_within};
 use goalcup_protocol::control::{
     self, ControlError, DaemonClient, SUFFIX_SEAL, SUFFIX_STATUS, entry_route, is_public_route,
 };
@@ -40,9 +37,15 @@ fn process_registration() -> ProcessRegistration {
             program: "/usr/bin/true".to_string(),
             argv: vec!["true".to_string()],
             env_keys: Vec::new(),
-            home_seed: None,
         },
     }
+}
+
+fn version_header() -> Vec<(String, String)> {
+    vec![(
+        "x-goalcup-control-version".to_string(),
+        goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
+    )]
 }
 
 #[test]
@@ -68,48 +71,34 @@ fn process_registration_accepts_only_a_bare_204_with_one_matching_version_header
         (
             "204 JSON null body",
             204,
-            vec![("x-goalcup-control-version".to_string(), version.clone())],
+            version_header(),
             b"null".to_vec(),
         ),
         (
             "204 whitespace body",
             204,
-            vec![("x-goalcup-control-version".to_string(), version.clone())],
+            version_header(),
             b" \t\r\n".to_vec(),
         ),
-        (
-            "200 json body",
-            200,
-            vec![("x-goalcup-control-version".to_string(), version.clone())],
-            b"{}".to_vec(),
-        ),
-        (
-            "another 2xx",
-            201,
-            vec![("x-goalcup-control-version".to_string(), version.clone())],
-            Vec::new(),
-        ),
+        ("200 json body", 200, version_header(), b"{}".to_vec()),
+        ("another 2xx", 201, version_header(), Vec::new()),
     ];
 
     for (name, status, headers, body) in cases {
         let srv = support::raw_response_daemon(status, headers, body);
         let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
         let failure = client
-            .register_process_with_admission("e1", &process_registration())
+            .register_process("e1", &process_registration())
             .expect_err("{name} is not a process acknowledgement");
         assert!(
-            failure.may_have_been_admitted(),
-            "{name} cannot prove the daemon did not admit the process"
+            matches!(failure, ControlError::Malformed(_)),
+            "{name}: {failure:?}"
         );
     }
 
-    let srv = support::raw_response_daemon(
-        204,
-        vec![("x-goalcup-control-version".to_string(), version)],
-        Vec::new(),
-    );
+    let srv = support::raw_response_daemon(204, version_header(), Vec::new());
     let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
-    let result = client.register_process_with_admission("e1", &process_registration());
+    let result = client.register_process("e1", &process_registration());
     assert!(
         result.is_ok(),
         "a contract 204 must acknowledge: {result:?}"
@@ -118,23 +107,13 @@ fn process_registration_accepts_only_a_bare_204_with_one_matching_version_header
 
 #[test]
 fn a_chunked_204_process_reply_is_not_a_bare_acknowledgement() {
-    let srv = support::raw_chunked_response_daemon(
-        204,
-        vec![(
-            "x-goalcup-control-version".to_string(),
-            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
-        )],
-        b"null".to_vec(),
-    );
+    let srv = support::raw_chunked_response_daemon(204, version_header(), b"null".to_vec());
     let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
 
     let failure = client
-        .register_process_with_admission("e1", &process_registration())
+        .register_process("e1", &process_registration())
         .expect_err("a Transfer-Encoding response is not a bare 204 acknowledgement");
-    assert!(
-        failure.may_have_been_admitted(),
-        "ureq hides 204 chunk bytes, so their presence cannot prove no admission"
-    );
+    assert!(matches!(failure, ControlError::Malformed(_)), "{failure:?}");
     assert_eq!(
         srv.last().1.as_deref(),
         Some("Bearer control-token"),
@@ -143,156 +122,45 @@ fn a_chunked_204_process_reply_is_not_a_bare_acknowledgement() {
 }
 
 #[test]
-fn process_registration_treats_truncated_and_non_json_replies_as_ambiguous() {
+fn process_registration_reports_truncated_and_non_json_replies_as_malformed() {
     let registration = process_registration();
     let client = HttpDaemonClient::new(support::truncated_daemon().base(), "t".into()).unwrap();
     let failure = client
-        .register_process_with_admission("e1", &registration)
-        .expect_err("a truncated acknowledgement is not proof of rejection");
-    assert!(failure.may_have_been_admitted());
-    assert!(matches!(failure.into_error(), ControlError::Malformed(_)));
+        .register_process("e1", &registration)
+        .expect_err("a truncated acknowledgement is not an acknowledgement");
+    assert!(matches!(failure, ControlError::Malformed(_)), "{failure:?}");
 
-    let srv = support::raw_response_daemon(
-        200,
-        vec![(
-            "x-goalcup-control-version".to_string(),
-            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
-        )],
-        b"not json".to_vec(),
-    );
+    let srv = support::raw_response_daemon(200, version_header(), b"not json".to_vec());
     let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
     let failure = client
-        .register_process_with_admission("e1", &registration)
-        .expect_err("a malformed acknowledgement is not proof of rejection");
-    assert!(failure.may_have_been_admitted());
-    assert!(matches!(failure.into_error(), ControlError::Malformed(_)));
+        .register_process("e1", &registration)
+        .expect_err("a malformed acknowledgement is not an acknowledgement");
+    assert!(matches!(failure, ControlError::Malformed(_)), "{failure:?}");
 }
 
 #[test]
-fn a_framed_400_malformed_process_refusal_is_not_admission_ambiguous() {
+fn a_framed_process_refusal_keeps_its_wire_code() {
     for (status, code) in [
         (400, "malformed"),
         (401, "unauthorized"),
         (404, "not_found"),
+        (409, "busy"),
+        (409, "process_admission_busy"),
+        (409, "process_admission_uncertain"),
         (422, "preflight_failed"),
     ] {
         let srv = support::raw_response_daemon(
             status,
-            vec![(
-                "x-goalcup-control-version".to_string(),
-                goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
-            )],
+            version_header(),
             format!(r#"{{"error":{{"code":"{code}","message":"route refusal"}}}}"#).into_bytes(),
         );
         let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
 
-        let failure = retry_busy_process_classified(|| {
-            client.register_process_with_admission("e1", &process_registration())
-        })
-        .expect_err("a daemon-side validation refusal is surfaced");
+        let failure = client
+            .register_process("e1", &process_registration())
+            .expect_err("a daemon refusal is surfaced");
 
-        assert_eq!(
-            failure.error.code(),
-            code,
-            "the framed {status} body survives"
-        );
-        assert!(
-            !failure.may_have_been_admitted,
-            "a framed authenticated {status} means the daemon rejected the registration before admission"
-        );
-        assert_eq!(
-            srv.last().1.as_deref(),
-            Some("Bearer control-token"),
-            "the protected {status} route received the control bearer"
-        );
-    }
-}
-
-#[test]
-fn an_explicit_post_prepare_error_is_ambiguous_even_if_its_status_regresses_to_4xx() {
-    let srv = support::raw_response_daemon(
-        409,
-        vec![(
-            "x-goalcup-control-version".to_string(),
-            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
-        )],
-        br#"{"error":{"code":"process_admission_uncertain","message":"Prepared was durable before reconciliation failed"}}"#.to_vec(),
-    );
-    let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
-
-    let failure = client
-        .register_process_with_admission("e1", &process_registration())
-        .expect_err("post-Prepare failure never proves refusal");
-    assert!(
-        failure.may_have_been_admitted(),
-        "the explicit admission boundary outranks a generic structured 4xx"
-    );
-}
-
-#[test]
-fn a_framed_pre_admission_busy_process_refusal_is_definite() {
-    let srv = support::raw_response_daemon(
-        409,
-        vec![(
-            "x-goalcup-control-version".to_string(),
-            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
-        )],
-        br#"{"error":{"code":"busy","message":"the entry was held before process admission"}}"#
-            .to_vec(),
-    );
-    let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
-
-    let failure = client
-        .register_process_with_admission("e1", &process_registration())
-        .expect_err("pre-admission busy is retryable and proves this attempt made no mutation");
-    assert!(!failure.may_have_been_admitted());
-    assert!(matches!(failure.into_error(), ControlError::Busy(_)));
-}
-
-#[test]
-fn a_framed_post_prepare_busy_process_response_remains_possibly_admitted() {
-    let srv = support::raw_response_daemon(
-        409,
-        vec![(
-            "x-goalcup-control-version".to_string(),
-            goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
-        )],
-        br#"{"error":{"code":"process_admission_busy","message":"the exact Prepared request is waiting for its runtime"}}"#.to_vec(),
-    );
-    let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
-
-    let failure = client
-        .register_process_with_admission("e1", &process_registration())
-        .expect_err("Prepared busy is retryable but cannot prove the body absent");
-    assert!(failure.may_have_been_admitted());
-    assert!(matches!(
-        failure.into_error(),
-        ControlError::ProcessAdmissionBusy(_)
-    ));
-}
-
-#[test]
-fn a_framed_3xx_process_reply_is_not_a_definite_refusal() {
-    for status in [302, 307] {
-        let srv = support::raw_response_daemon(
-            status,
-            vec![(
-                "x-goalcup-control-version".to_string(),
-                goalcup_protocol::control::CONTROL_API_VERSION.to_string(),
-            )],
-            br#"{"error":{"code":"malformed","message":"redirected process route"}}"#.to_vec(),
-        );
-        let client = HttpDaemonClient::new(srv.base(), "control-token".into()).unwrap();
-
-        let failure = retry_busy_process_classified(|| {
-            client.register_process_with_admission("e1", &process_registration())
-        })
-        .expect_err("a non-4xx response cannot prove the process was refused");
-
-        assert!(
-            failure.may_have_been_admitted,
-            "a framed {status} is not an authenticated daemon refusal"
-        );
+        assert_eq!(failure.code(), code, "the framed {status} body survives");
         assert_eq!(
             srv.last().1.as_deref(),
             Some("Bearer control-token"),
@@ -666,14 +534,12 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
     // shows only in JSON are readable here.
     assert!(!m.status_detail().is_empty());
     m.set_cycle_error("upload", "the upload is behind");
-    m.set_posts_dropped(3);
     let signed = m.status(&info.entry_id).unwrap();
     assert_eq!(signed.payload.cycles.upload, 1);
     assert_eq!(
         signed.payload.cycles.last.as_deref(),
         Some("the upload is behind")
     );
-    assert_eq!(signed.payload.posts_dropped, 3);
     assert!(
         signed.verify_with(&info.run_public_key).is_ok(),
         "a hook that edits the payload re-signs it"
@@ -707,7 +573,6 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
         program: "/usr/bin/true".to_string(),
         argv: vec!["true".to_string()],
         env_keys: vec!["GOALCUP_RECEIVER_TOKEN".to_string()],
-        home_seed: None,
     };
     assert_eq!(m.last_registered_pid(), None);
     m.register_process(
@@ -1189,8 +1054,8 @@ fn capture_children_spawn_only_through_the_gate() {
     // The order is the gate's: forked and parked, handle, durable registration, an exact-path
     // executable recheck, only then release.
     assert!(at("spawn_gated(") < at("gated_handle("));
-    assert!(at("gated_handle(") < at("register_process_with_admission("));
-    assert!(at("register_process_with_admission(") < at("recheck_pinned_executable("));
+    assert!(at("gated_handle(") < at("register_process("));
+    assert!(at("register_process(") < at("recheck_pinned_executable("));
     assert!(at("recheck_pinned_executable(") < at("gated.release()"));
     // A failed registration aborts the gate; it never reaches the release.
     let (failed, _) = body

@@ -28,6 +28,11 @@ pub use status::*;
 
 use goalcup_daemon::registry::{Entry, ExpectedProcessHandoff, Registry, RunKeys};
 
+/// A test-only server public key: the Ed25519 verifying key of the test seed `[0x42; 32]`.
+/// The verifier trusts no key, this one included; it only has to be a well-formed key.
+pub const TEST_SERVER_PUBLIC_KEY_HEX: &str =
+    "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12";
+
 /// One entry, put into `registry` and returned as it was stored.
 pub fn entry_in(
     registry: &Registry,
@@ -100,7 +105,7 @@ pub fn write_config_with(
         connectors = connectors,
         config = root.join("config"),
         workspaces = root.join("workspaces"),
-        key = goalcup_protocol::receipt::PLACEHOLDER_SERVER_PUBLIC_KEY_HEX,
+        key = TEST_SERVER_PUBLIC_KEY_HEX,
     );
     let path = root.join("goalcup.toml");
     write(&path, edit(text).as_bytes());

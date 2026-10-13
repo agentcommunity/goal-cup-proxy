@@ -34,9 +34,10 @@ use crate::capture_policy::{
     CREDENTIAL_ENV, CaMode, EXTRA_PATTERN_SOURCES, EnvContext, MAX_CAPTURE_ARG_BYTES,
     MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV, MAX_CAPTURE_ENV_KEY_BYTES, MAX_CAPTURE_ENV_VALUE_BYTES,
     MAX_CAPTURE_HOSTS, MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, MAX_GOAL_FLAG_BYTES,
-    arg_path_denied, ca_registry_mode, capture_arg_denied, capture_path_problem, env_key_denied,
-    env_value_denied, has_duplicate, is_capture_host, is_interpreter_program, is_tracker_host,
-    mentions_goalcup, startup_file_problem,
+    arg_path_denied, ca_registry_mode, capture_arg_denied, capture_argv_allowed,
+    capture_env_allowed, capture_path_problem, env_key_denied, env_value_denied, has_duplicate,
+    is_capture_host, is_interpreter_program, is_tracker_host, mentions_goalcup,
+    seed_content_problem, startup_file_problem,
 };
 use crate::connector_dir::hash_connector_dir_listing;
 use crate::hints::valid_hint;
@@ -623,7 +624,7 @@ impl HarnessManifest {
 
 /// Template variables an `args` element or an env value may use. `{session_id}` additionally
 /// needs `identity.source = "preassigned"` (a cross-field rule).
-const TEMPLATE_TOKENS: &[&str] = &["workspace", "port", "session_id"];
+const TEMPLATE_TOKENS: &[&str] = &["workspace", "session_id"];
 
 /// A template that may name only [`TEMPLATE_TOKENS`].
 fn check_template(field: &str, what: &str, value: &str) -> Result<(), ProtocolError> {
@@ -856,6 +857,40 @@ impl HarnessManifest {
         self.check_redaction()?;
         self.check_delivery_agnostic()?;
         self.check_cross_field()?;
+        Ok(())
+    }
+
+    /// The reviewed allowlists a pinned connector is held to on top of [`Self::validate`]:
+    /// every `capture.env` entry must be a row of [`crate::capture_policy::CAPTURE_ENV_ALLOWLIST`],
+    /// and `capture.args` with `goal_flag` must be exactly the connector's row of
+    /// [`crate::capture_policy::CAPTURE_ARG_ALLOWLIST`]. The loader calls it for
+    /// `Origin::Pinned` after `validate`, so a deny-list refusal keeps its own reason, when this
+    /// build pins the connector's id. An unpinned id is refused later by the pin gate and runs
+    /// only under `--dev`.
+    pub fn check_allowlists(&self) -> Result<(), ProtocolError> {
+        let c = &self.capture;
+        if !capture_argv_allowed(&self.id, &c.args, c.goal_flag.as_deref()) {
+            return Err(refuse(
+                "capture.args",
+                format!(
+                    "`capture.args` and `goal_flag` of `{}` are not exactly its reviewed row \
+                     (capture_policy::CAPTURE_ARG_ALLOWLIST); a new or changed argument is a \
+                     core PR",
+                    self.id
+                ),
+            ));
+        }
+        for (k, v) in &c.env {
+            if !capture_env_allowed(k, v) {
+                return Err(refuse(
+                    "capture.env",
+                    format!(
+                        "`{k} = {v:?}` is not on the reviewed list \
+                         (capture_policy::CAPTURE_ENV_ALLOWLIST); a new variable is a core PR"
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -1979,6 +2014,12 @@ fn load_dir_resolving_origin_fallible(
         refuse_dev_for_a_pinned_directory(&manifest.id, &listing.sha256)?;
     }
     manifest.validate(origin)?;
+    // Only a connector this build pins: an unpinned one is refused at the pin gate with its own
+    // reason, and runs only under `--dev`.
+    if origin == Origin::Pinned && crate::pins::pinned_connector_dir_sha256(&manifest.id).is_some()
+    {
+        manifest.check_allowlists()?;
+    }
 
     let seeds: Vec<String> = manifest
         .capture
@@ -2026,13 +2067,16 @@ fn load_dir_resolving_origin_fallible(
                 .captured
                 .remove(&format!("files/{}", s.file))
                 .expect("every seed was listed, so the walk captured it");
-            LoadedSeed {
+            if let Some(why) = seed_content_problem(&bytes) {
+                return Err(refuse("capture.home.seed", format!("`{}` {why}", s.file)));
+            }
+            Ok(LoadedSeed {
                 file: s.file.clone(),
                 mode: s.mode(),
                 bytes,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     Ok(LoadedConnector {
         manifest,
         harness_toml,

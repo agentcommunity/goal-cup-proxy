@@ -26,10 +26,15 @@ All public schema structs and enums are non-exhaustive. A manifest cannot select
 
 - `Origin::Pinned` is an in-tree or pin-checked connector. It refuses an interpreter as the
   executable and refuses an absolute, home-relative, parent-relative or expanding path in an
-  argument.
+  argument. When this build pins its id, on top of every deny rule below, each `capture.env`
+  entry must be a reviewed row of `CAPTURE_ENV_ALLOWLIST` (name and exact value), and
+  `capture.args` with `goal_flag` must be exactly the connector's row of `CAPTURE_ARG_ALLOWLIST`
+  (in order, as written) in `capture_policy.rs`. A new connector, variable or argument, a model
+  name included, is a core PR. An unpinned id is refused at the pin gate and runs only under
+  `--dev`.
 - `Origin::Dev` is an unpinned directory under `GOALCUP_CONNECTORS_DIR` selected through
-  `--dev`. It relaxes only those two refusals. Environment values, seeds, trust tables, all
-  bounds and all cross-field rules remain strict.
+  `--dev`. It relaxes those two refusals and the two allowlists. Environment values, seeds,
+  trust tables, all bounds and all cross-field rules remain strict.
 
 The CLI and daemon both use the same loader and each validates again at its own trust boundary.
 
@@ -64,8 +69,7 @@ next single argument, or `capture.goal_flag` is present and carries the goal as
 `--flag=<goal>`, never both. Every argument and `goal_flag` passes the core deny policy and the
 optional argument guard.
 
-Argument and `capture.env` value templates admit only `{workspace}`, `{port}` and
-`{session_id}`. `{{` and `}}` render literal braces. Any other token or unmatched brace is
+Argument and `capture.env` value templates admit only `{workspace}` and `{session_id}`. `{{` and `}}` render literal braces. Any other token or unmatched brace is
 refused. `{session_id}` has the identity rules described below.
 
 ### Executable
@@ -141,7 +145,12 @@ Seed and directory paths are refused case-insensitively if they name startup fil
 file, credential or tool-loaded directories, or `.config/git`. Seed destinations are unique.
 Each seed file must exist, be regular and be at most 65,536 bytes. The directory walk reads and
 hashes its bytes once; the per-run-home writer uses those captured bytes rather than reopening the
-connector.
+connector. Under every origin a seed's bytes must be UTF-8 text and, outside full-line `#` or `//`
+comments, hold no URL (`://`), no backslash, none of the endpoint, `url`, `host`, provider,
+proxy, trust, keylog, telemetry and `notify` spellings (compared lowercase with `-` and `_`
+dropped), and no run of 32 or more `[A-Za-z0-9_-]` characters, the shape of a key or token, a
+UUID or a git revision (`capture_policy::seed_content_problem`). It is a spelling check; the
+reviewer still reads every seed.
 
 `capture.home.env` must have the shape of one harness's own home variable: one uppercase word
 followed by `_HOME` or `_CONFIG_DIR`, such as `CODEX_HOME`, `HERMES_HOME` or

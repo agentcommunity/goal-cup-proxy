@@ -88,7 +88,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
@@ -389,9 +389,9 @@ impl ProxyHandle {
     /// 2. Let every connection end on its own until the cut, `deadline - min(deadline / 4,
     ///    SHUTDOWN_CANCEL_RESERVE)`.
     /// 3. At the cut, cancel whatever is left: intercepted connections end their open streams
-    ///    `Interrupted` and record `Close { Interrupted }`; connections still in admission or
-    ///    in an opaque tunnel are counted (`cut_unsettled`), since no capture record exists
-    ///    for them.
+    ///    `Interrupted` and record `Close { Interrupted }`; connections still in admission are
+    ///    counted (`cut_unsettled`), since no capture record exists for them. An open tunnel
+    ///    is cut without one: it was decided, and a fail-open one was chained then.
     /// 4. Only when every task has ended by the deadline, ask the emitter to close the
     ///    producer ([`CaptureEmitter::try_close`]: the sink's `try_close_epoch` with the exact
     ///    last admitted sequence). `Queued` is volatile acceptance, never a claim that the
@@ -517,8 +517,7 @@ impl ProxyStopReport {
     /// approved host relayed as an opaque tunnel (fail-open, not captured), an intercepted
     /// connection relayed uncaptured because the capture table was full, or an HTTP relay
     /// that fell back to opaque bytes. Possible: connections cut at shutdown while still in
-    /// admission or in an opaque tunnel (`cut_unsettled`: a tunnel is counted as fail-open only
-    /// when it ends, so a fail-open tunnel may be among them), tasks that outlived the deadline
+    /// admission (`cut_unsettled`: one may have become a fail-open tunnel), tasks that outlived the deadline
     /// (`unterminated`), and a lost accept loop. Since H-16 every loss but the last two is also
     /// a `Loss` frame in the producer's stream (see the module documentation); the last two leave
     /// the producer unclosed. The launcher's seal request still carries these counters as a
@@ -601,8 +600,7 @@ pub struct ProxyHealth {
     pub accept_errors: u64,
     /// Connection tasks alive now.
     pub active: u64,
-    /// Of `active`: connections in admission or in an opaque tunnel. `connect` reports a tunnel
-    /// only when it closes, so the two cannot be told apart while it is open.
+    /// Of `active`: connections in admission or in an opaque tunnel.
     pub unsettled: u64,
     /// Of `active`: intercepted connections holding a place in the capture table (at most
     /// `MAX_OPEN_CONNECTIONS`).
@@ -613,8 +611,9 @@ pub struct ProxyHealth {
     pub tunneled_auth_host: u64,
     /// Completed tunnels to hosts that are not approved.
     pub tunneled_not_approved: u64,
-    /// Completed tunnels to an **approved** host whose ClientHello did not name it (absent
-    /// or different SNI, not TLS, unparsable): relayed unchanged and not captured.
+    /// Tunnels to an **approved** host whose ClientHello did not name it (absent or different
+    /// SNI, not TLS, unparsable): relayed unchanged and not captured. Counted when decided, so a
+    /// tunnel still open at stop is counted too.
     pub tunneled_fail_open: u64,
     /// Intercepted connections relayed as bytes, uncaptured, because the capture table was
     /// full.
@@ -640,7 +639,9 @@ pub struct ProxyHealth {
     pub closed_transport_error: u64,
     /// Intercepted connections cancelled by shutdown or by dropping the handle.
     pub cut_intercepted: u64,
-    /// Connections cancelled while still in admission or in an opaque tunnel.
+    /// Connections cancelled while still in admission, before a tunnel or interception was
+    /// decided. A tunnel cut while open is not counted: a fail-open one was chained as a loss
+    /// when it was decided, and any other is opaque by design.
     pub cut_unsettled: u64,
     /// Connection controls (`Open`, `UpgradedWebSocket`, `Close`) the emitter refused.
     pub control_refusals: u64,
@@ -904,14 +905,18 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
     let unsettled = Unsettled::enter(shared);
     // A fail-open tunnel is chained as a loss when it is decided, before its first byte is
     // relayed: the tunnel runs inside `admit`, so a task that is cut or panics mid-relay
-    // never reaches the counters below.
+    // never reaches the counters below. Every decided tunnel settles there too: a cut one is
+    // then either that loss, already chained, or opaque by design, which is no loss.
     let admission = connect::admit_observed(tcp, &shared.admission, |reason| {
+        unsettled.settle();
         // A tunnel is decided only once its upstream is connected; every reason but a host
-        // that is not approved is a provider host's.
+        // that is not approved is a provider host's, or (a `SniMismatch` to another authority)
+        // names one in its ClientHello.
         if reason != connect::TunnelReason::NotApproved {
-            shared.outages.success(&metadata::capture_time().wall);
+            shared.outages.success();
         }
         if is_fail_open(reason) {
+            bump(&counters.tunneled_fail_open);
             let _ = shared
                 .emitter
                 .proxy_loss(metadata::capture_time(), ProxyLoss::FailOpenTunnel);
@@ -919,6 +924,7 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
     })
     .await;
     unsettled.settle();
+    drop(unsettled);
     record_upstream_reach(shared, &admission);
     match admission {
         Admission::Failed(failure) => {
@@ -963,21 +969,22 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
                 bump(class);
             }
         }
-        Admission::Tunneled(tunnel) => bump(match tunnel.reason {
-            connect::TunnelReason::AuthHost => &counters.tunneled_auth_host,
-            connect::TunnelReason::NotApproved => &counters.tunneled_not_approved,
+        Admission::Tunneled(tunnel) => match tunnel.reason {
+            connect::TunnelReason::AuthHost => bump(&counters.tunneled_auth_host),
+            connect::TunnelReason::NotApproved => bump(&counters.tunneled_not_approved),
+            // Counted at the decision, with its loss.
             connect::TunnelReason::SniAbsent
             | connect::TunnelReason::SniMismatch
             | connect::TunnelReason::NotTls
-            | connect::TunnelReason::ClientHelloUnparsed => &counters.tunneled_fail_open,
-        }),
+            | connect::TunnelReason::ClientHelloUnparsed => {}
+        },
         Admission::Intercepted(intercepted) => relay_intercepted(intercepted, shared).await,
     }
 }
 
 /// What a settled admission says about reaching a provider host (approved or authentication),
-/// for the outage windows. A tunnel is recorded when it is decided (it settles only when it
-/// ends); an interception, and a TLS or ALPN failure that came after the TCP connect, reached the
+/// for the outage windows. A tunnel is recorded when it is decided (admission returns only when
+/// it ends); an interception, and a TLS or ALPN failure that came after the TCP connect, reached the
 /// upstream; a failed connect did not. A host that is not approved is the agent's own traffic and
 /// says nothing about the provider; nor does a refusal, a timeout or a client that went away.
 fn record_upstream_reach(shared: &Shared, admission: &Admission) {
@@ -1000,16 +1007,17 @@ fn record_upstream_reach(shared: &Shared, admission: &Admission) {
         },
         Admission::Tunneled(_) => return,
     };
-    let at = metadata::capture_time().wall;
     if reached {
-        shared.outages.success(&at);
+        shared.outages.success();
     } else {
-        shared.outages.failure(&at);
+        shared.outages.failure();
     }
 }
 
-/// An approved host's tunnel that was not intercepted, so was relayed uncaptured. An
-/// authentication host and a host that is not approved are opaque by design, not a loss.
+/// An approved host's traffic relayed uncaptured: a tunnel to an approved host that was not
+/// intercepted, or a tunnel to any other authority whose ClientHello names an approved host
+/// (`SniMismatch`). An authentication host and a host that is not approved are otherwise
+/// opaque by design, not a loss.
 fn is_fail_open(reason: connect::TunnelReason) -> bool {
     !matches!(
         reason,
@@ -1018,13 +1026,14 @@ fn is_fail_open(reason: connect::TunnelReason) -> bool {
 }
 
 /// Counts a connection as unsettled (in admission or an opaque tunnel) while it lives; one
-/// dropped without [`Unsettled::settle`] was cancelled there, which is a loss: it is counted
-/// (`cut_unsettled`) and chained as `Loss { ShutdownDeadline }`. That includes a connection cut
-/// before it relayed anything (still reading the CONNECT head): conservative, and the same
-/// `ShutdownDeadline` mapping the seal request's counter has always had.
+/// dropped without [`Unsettled::settle`] was cancelled before admission decided it, which is a
+/// loss: it is counted (`cut_unsettled`) and chained as `Loss { ShutdownDeadline }`. That
+/// includes a connection cut before it relayed anything (still reading the CONNECT head):
+/// conservative, and the same `ShutdownDeadline` mapping the seal request's counter has always
+/// had. A tunnel settles when it is decided, so one cut while open is not counted here.
 struct Unsettled<'a> {
     shared: &'a Shared,
-    settled: bool,
+    settled: AtomicBool,
 }
 
 impl<'a> Unsettled<'a> {
@@ -1032,19 +1041,19 @@ impl<'a> Unsettled<'a> {
         bump(&shared.counters.unsettled);
         Self {
             shared,
-            settled: false,
+            settled: AtomicBool::new(false),
         }
     }
 
-    fn settle(mut self) {
-        self.settled = true;
+    fn settle(&self) {
+        self.settled.store(true, Ordering::SeqCst);
     }
 }
 
 impl Drop for Unsettled<'_> {
     fn drop(&mut self) {
         unbump(&self.shared.counters.unsettled);
-        if !self.settled && !std::thread::panicking() {
+        if !*self.settled.get_mut() && !std::thread::panicking() {
             bump(&self.shared.counters.cut_unsettled);
             let _ = self
                 .shared
