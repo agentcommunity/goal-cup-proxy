@@ -9,6 +9,15 @@
 //     reports why not and changes nothing.
 
 import type { Ack, StartReceipt } from "./sign.ts";
+import { addHours, parseTime } from "./util.ts";
+
+/** A run that is still unsealed this many hours after its `deadline_at` is abandoned. */
+export const ABANDON_AFTER_HOURS = 24;
+
+/** True once `now` is more than ABANDON_AFTER_HOURS past `deadlineAt`. */
+export function isAbandonable(deadlineAt: string, now: Date): boolean {
+  return now.getTime() > addHours(parseTime(deadlineAt), ABANDON_AFTER_HOURS).getTime();
+}
 
 export type RunStatus = "open" | "sealed" | "abandoned";
 

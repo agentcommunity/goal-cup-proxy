@@ -21,9 +21,9 @@ import type {
   SealResult,
   StoreReceiptResult,
 } from "./db.ts";
-import { FIRST_SEQ, GENESIS } from "./db.ts";
+import { FIRST_SEQ, GENESIS, isAbandonable } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
-import { sha256Hex } from "./util.ts";
+import { parseTime, sha256Hex } from "./util.ts";
 
 interface StoredRun extends RunRow {
   harness_version: string;
@@ -50,11 +50,12 @@ export class LocalDb implements Db {
       throw new Error("DB_BACKEND=local needs DEV_TOKENS (\"token1:member1,token2:member2\"); refusing to start without it");
     }
     const tokens = new Map<string, string>();
-    for (const pair of devTokens.split(",")) {
+    for (const [i, pair] of devTokens.split(",").entries()) {
       const at = pair.indexOf(":");
       const token = pair.slice(0, at).trim();
       const member = pair.slice(at + 1).trim();
-      if (at < 1 || token === "" || member === "") throw new Error(`DEV_TOKENS entry "${pair}" is not token:member`);
+      // Name the entry by position, never by content: it holds a token.
+      if (at < 1 || token === "" || member === "") throw new Error(`DEV_TOKENS entry number ${i + 1} is not token:member`);
       tokens.set(await sha256Hex(token), member);
     }
     return new LocalDb(bucket, tokens);
@@ -106,7 +107,13 @@ export class LocalDb implements Db {
       const marker = await this.#bucket.get(openKey);
       if (marker !== null) {
         const heldId = ((await marker.json()) as { run_id: string }).run_id;
-        const held = await this.#readRun(heldId);
+        let held = await this.#readRun(heldId);
+        // An unsealed run 24 hours past its deadline is abandoned first, which frees the slot.
+        // (`official_start` is the caller's "now": the Worker's clock.)
+        if (held !== null && held.run.status === "open" && isAbandonable(held.run.deadline_at, parseTime(a.official_start))) {
+          await this.abandonExpired(held.run.member_id, held.run.run_id, a.official_start);
+          held = await this.#readRun(heldId);
+        }
         if (held !== null && held.run.status === "open") {
           if (held.run.session_id === a.session_id && held.run.receipt === null) {
             return { kind: "existing", run: toRow(held.run) };
@@ -155,6 +162,17 @@ export class LocalDb implements Db {
       await this.#bucket.delete(this.#runKey(a.run_id));
     }
     throw new Error("local state is too contended; try again");
+  }
+
+  /** Mark an open, unsealed run abandoned because its time ran out. */
+  private abandonExpired(memberId: string, runId: string, at: string): Promise<AbandonResult> {
+    return this.#updateRun<AbandonResult>(runId, memberId, "not_found", (run) => {
+      if (run.status !== "open") return { answer: "closed" };
+      return {
+        next: { ...run, status: "abandoned", abandon_reason: "expired: not sealed 24 hours after the deadline", sealed_at: at },
+        answer: "abandoned",
+      };
+    });
   }
 
   async getRun(memberId: string, runId: string): Promise<RunRow | null> {

@@ -10,22 +10,59 @@ import { REPO_URL, parseSafeUint } from "../src/util.ts";
 
 const baseEnv = { EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
 
+/** Run `fn` with console.error captured; returns what was logged. */
+async function captureErrors(fn: () => Promise<unknown>): Promise<string> {
+  const lines: string[] = [];
+  const real = console.error;
+  console.error = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  try {
+    await fn();
+  } catch {
+    // the caller asserts on the rejection separately
+  } finally {
+    console.error = real;
+  }
+  return lines.join("\n");
+}
+
 test("the default database backend is supabase, and it refuses to start without its secrets", async () => {
-  await assert.rejects(getDb({ ...baseEnv }), (e) => e instanceof ApiError && e.code === "misconfigured" && /SUPABASE_URL/.test(e.message));
+  const logged = await captureErrors(() => getDb({ ...baseEnv }));
+  assert.match(logged, /SUPABASE_URL/); // the detail is in the log...
+  await assert.rejects(getDb({ ...baseEnv }), (e) => e instanceof ApiError && e.code === "misconfigured" && !/SUPABASE/.test(e.message)); // ...not in the answer
 });
 
 test("the local backend refuses to start without DEV_TOKENS", async () => {
-  await assert.rejects(
-    getDb({ ...baseEnv, DB_BACKEND: "local" }),
-    (e) => e instanceof ApiError && e.code === "misconfigured" && /DEV_TOKENS/.test(e.message),
-  );
-  await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "  " }), ApiError);
-  await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "no-colon" }), ApiError);
+  const logged = await captureErrors(() => getDb({ ...baseEnv, DB_BACKEND: "local" }));
+  assert.match(logged, /DEV_TOKENS/);
+  await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local" }), (e) => e instanceof ApiError && e.status === 500 && e.code === "misconfigured");
+  await captureErrors(async () => {
+    await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "  " }), ApiError);
+    await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "no-colon" }), ApiError);
+  });
   await getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "t1:m1,t2:m2" }); // fine
 });
 
+test("a bad DEV_TOKENS entry is never echoed to the caller or the log", async () => {
+  const secret = "super-secret-token-text";
+  let answer = "";
+  const logged = await captureErrors(async () => {
+    try {
+      await getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: `t1:m1,${secret}` });
+    } catch (e) {
+      answer = (e as ApiError).message;
+      throw e;
+    }
+  });
+  assert.ok(answer.length > 0);
+  assert.ok(!answer.includes(secret), "the answer echoes the token");
+  assert.ok(!logged.includes(secret), "the log echoes the token");
+  assert.match(logged, /entry number 2/);
+});
+
 test("an unknown backend is refused", async () => {
-  await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "sqlite" }), ApiError);
+  await captureErrors(async () => {
+    await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "sqlite" }), ApiError);
+  });
 });
 
 test("config defaults and validation", () => {

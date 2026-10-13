@@ -48,7 +48,7 @@ curl -s -XPOST localhost:8787/v1/runs -H 'authorization: Bearer dev-token-1' \
 | `src/db-supabase.ts` | Production: one Postgres function per step, via PostgREST RPC |
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `sql/proposed-goalcup-functions.sql` | **Proposal** for the schema and functions SupabaseDb calls |
-| `test/` | `sign.test.ts` (Rust vectors), `config.test.ts`, `github.test.ts`, `integration.test.ts` (HTTP against `wrangler dev`) |
+| `test/` | `sign.test.ts` (Rust vectors), `config.test.ts`, `github.test.ts`, `supabase.test.ts` (RPC names and arguments, stubbed fetch), `local-db.test.ts`, `integration.test.ts` (HTTP against `wrangler dev`) |
 
 ## Configuration
 
@@ -92,6 +92,18 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
   from the stored chunk if it was a retry, otherwise `409`.
 - **Not checked here, by design:** whether the bytes really are a valid chain. The verify job
   does that over the reassembled copy.
+
+## Before launch: things only real services can prove
+
+- **R2 checksum failure.** The Worker maps a failed `sha256` put to `422 digest_mismatch` by
+  recognising the error text (`10037`, "checksum", "did not match"). That wording is proven only
+  in the local simulator. On a deployed preview, upload a chunk with a wrong `Goalcup-Sha256`
+  against real R2 and confirm `422` and nothing stored. If it comes back `502`, the Worker log has
+  a line starting `r2-put-unrecognised-error` with the real wording: add it to the pattern in
+  `src/chunks.ts`. (A recognised failure logs `r2-put-digest-mismatch`.)
+- **Create-only puts** (`onlyIf: { etagDoesNotMatch: "*" }`) must refuse to overwrite on real R2,
+  including under the 180-day bucket lock.
+- **The proposed SQL** has only been run on a local PostgreSQL, never on Supabase/PostgREST.
 
 ## What the owner must create before deploying
 
@@ -148,4 +160,7 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
   the chunks (create-only, named by hash), so a repeat is cheap and different documents can never
   overwrite them.
 - Database or storage failures are `502 upstream_error` and misconfiguration is
-  `500 misconfigured`; the tracer retries any 5xx.
+  `500 misconfigured` (the same generic sentence for every cause: the detail, which may hold
+  configuration, goes to the Worker's log only); the tracer retries any 5xx.
+- An unsealed run more than 24 hours past its `deadline_at` is abandoned when its member next opens
+  a run, which frees the member's one open slot.

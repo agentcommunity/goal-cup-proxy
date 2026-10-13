@@ -22,7 +22,14 @@ const JSON_BODY_MAX = 64 * 1024;
 const SEAL_DOC_MAX = 16 * 1024 * 1024; // each document, bytes
 const SEAL_BODY_MAX = 2 * SEAL_DOC_MAX + JSON_BODY_MAX; // two documents plus the JSON around them
 
+/**
+ * Read a JSON object body of at most `max` bytes. The raw bytes and the decoded text live only
+ * inside this function, so the caller holds just the parsed object.
+ */
 async function readJson(request: Request, max: number): Promise<Record<string, unknown>> {
+  // A declared length over the cap is refused before a single byte is read.
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > max) throw tooLarge("The request body is too large.");
   const bytes = await readBodyCapped(request, max);
   if (bytes === null) throw tooLarge("The request body is too large.");
   let parsed: unknown;
@@ -32,6 +39,20 @@ async function readJson(request: Request, max: number): Promise<Record<string, u
     throw malformed("The body is not valid JSON.");
   }
   return asObject(parsed, "The body");
+}
+
+/**
+ * Take one document string out of the parsed body as UTF-8 bytes, and remove the string from the
+ * body so it can be freed: a seal carries two documents of up to 16 MiB, and the Worker has 128 MB.
+ */
+function takeDocument(body: Record<string, unknown>, name: string): Uint8Array {
+  const text = body[name];
+  if (typeof text !== "string" || text === "") throw malformed(`${name} must be a non-empty string.`);
+  if (!text.isWellFormed()) throw malformed(`${name} is not well-formed Unicode.`);
+  delete body[name];
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length > SEAL_DOC_MAX) throw tooLarge(`${name} is over 16 MiB.`);
+  return bytes;
 }
 
 /** The caller's own run, or 404. A run that belongs to someone else is indistinguishable from none. */
@@ -202,14 +223,8 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   const b = await readJson(request, SEAL_BODY_MAX);
   const entry_id = b.entry_id;
   if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
-  const sealJson = b.seal_json;
-  const baselineJson = b.baseline_json;
-  if (typeof sealJson !== "string" || sealJson === "") throw malformed("seal_json must be a non-empty string.");
-  if (typeof baselineJson !== "string" || baselineJson === "") throw malformed("baseline_json must be a non-empty string.");
-  if (!sealJson.isWellFormed() || !baselineJson.isWellFormed()) throw malformed("The documents are not well-formed Unicode.");
-  const sealBytes = new TextEncoder().encode(sealJson);
-  const baselineBytes = new TextEncoder().encode(baselineJson);
-  if (sealBytes.length > SEAL_DOC_MAX || baselineBytes.length > SEAL_DOC_MAX) throw tooLarge("A document is over 16 MiB.");
+  const sealBytes = takeDocument(b, "seal_json");
+  const baselineBytes = takeDocument(b, "baseline_json");
   if (entry_id !== run.entry_id) throw notFound("That entry does not belong to this run.");
 
   const sealSha = await sha256Hex(sealBytes);

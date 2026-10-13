@@ -67,9 +67,13 @@ export async function getDb(env: Env): Promise<Db> {
     if (backend === "supabase") return new SupabaseDb(env.SUPABASE_URL, env.SUPABASE_KEY);
     if (backend === "local") return await LocalDb.create(env.TRACES, env.DEV_TOKENS);
   } catch (e) {
-    throw misconfigured(e instanceof Error ? e.message : "database configuration is invalid.");
+    // The detail goes to the Worker's log only: a caller without a token gets this answer too,
+    // and a configuration error must not echo configuration (DEV_TOKENS holds tokens).
+    console.error(`misconfigured: ${e instanceof Error ? e.message : String(e)}`);
+    throw misconfigured("The database is not configured correctly; the Worker's log says how.");
   }
-  throw misconfigured(`DB_BACKEND must be "supabase" or "local", not "${backend}".`);
+  console.error(`misconfigured: DB_BACKEND must be "supabase" or "local", not "${backend}"`);
+  throw misconfigured("The database is not configured correctly; the Worker's log says how.");
 }
 
 export async function makeCtx(env: Env): Promise<Ctx> {
