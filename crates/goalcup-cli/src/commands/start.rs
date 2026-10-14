@@ -46,8 +46,7 @@ use crate::upload::policy::{WrapUp, WrapUpSpec};
 use goalcup_protocol::capture::CaptureSink;
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest, CaptureWorkspaceInfo,
-    CaptureWorkspaceRequest, DaemonClient, FINISH_COMMIT_RESERVE, LOCAL_CAPTURE_FINISH_BUDGET,
-    ProxyCounters, SignedStatus,
+    CaptureWorkspaceRequest, DaemonClient, FINISH_COMMIT_RESERVE, ProxyCounters, SignedStatus,
 };
 use goalcup_protocol::harness::{CaptureSpec, ConfigHome, RunHome};
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration, termination_bound};
@@ -631,7 +630,7 @@ impl Forked<'_> {
         }
         let end = crate::launch::end_released_child(child, handed);
         let _ = say(out, &end.announcement(&info.entry_id));
-        let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+        let deadline = std::time::Instant::now() + crate::finish_budget();
         if let Some(proxied) = proxied {
             let _ = finish(
                 client,
@@ -1488,7 +1487,7 @@ fn run_harness<'a>(
         if let Some(announce) = &announce {
             announce.send(&mut said);
         }
-        let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+        let deadline = std::time::Instant::now() + crate::finish_budget();
         // A seal that did not take (the daemon busy or restarting) is asked again through the
         // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
         // seal ends it.
@@ -1589,7 +1588,7 @@ fn finish_and_scan(
         watching,
         ..
     } = forked;
-    let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+    let deadline = std::time::Instant::now() + crate::finish_budget();
     // The run was ended by a stop (its deadline, the server, or a full disk) and not by the
     // harness leaving on its own.
     let stopped = finished_early.is_some();
@@ -1827,7 +1826,7 @@ fn finish_unlaunched(
     proxied: Proxied,
     out: &mut dyn std::io::Write,
 ) {
-    let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+    let deadline = std::time::Instant::now() + crate::finish_budget();
     let _ = finish(
         client,
         entry_id,
@@ -1882,7 +1881,7 @@ fn report_tee_finish(result: Option<std::io::Result<bool>>, out: &mut dyn std::i
                 &format!(
                     "Final harness output did not finish within the {}-second finish budget; its \
                      tail may be missing.",
-                    LOCAL_CAPTURE_FINISH_BUDGET.as_secs()
+                    crate::finish_budget().as_secs()
                 ),
             );
         }
@@ -2100,7 +2099,7 @@ impl Proxied {
                 info.entry_id.clone(),
                 IngestSecret::new(info.ingest_secret.clone()),
                 info.producer_id.clone(),
-                LOCAL_CAPTURE_FINISH_BUDGET,
+                crate::finish_budget(),
             ))
             .map_err(|e| refused("sender", &e))?
         };
@@ -2117,7 +2116,7 @@ impl Proxied {
             // The stop is the finish's first step and is measured from its own call, which is
             // the finish deadline's start, so its bound is the drain share: it ends by
             // `drain_end`, leaving the commit reserve to the daemon's seal.
-            shutdown_deadline: LOCAL_CAPTURE_FINISH_BUDGET - FINISH_COMMIT_RESERVE,
+            shutdown_deadline: crate::finish_budget() - FINISH_COMMIT_RESERVE,
             admission_timeout: DEFAULT_ADMISSION_TIMEOUT,
             connect_attempt_timeout: DEFAULT_CONNECT_ATTEMPT_TIMEOUT,
             max_connections: MAX_CONNECTION_TASKS as usize,
@@ -2255,7 +2254,7 @@ fn proxy_admission_line(
 /// proxy is stopped once, and each later ask has a whole local-finish budget of its own. A
 /// `WrapUp::one_attempt()` asks once.
 ///
-/// The one deadline of a capture run's finish is `LOCAL_CAPTURE_FINISH_BUDGET`, taken when the
+/// The one deadline of a capture run's finish is `finish_budget()` (`LOCAL_CAPTURE_FINISH_BUDGET`), taken when the
 /// harness has exited and immediately before the proxy's stop: nothing runs between the two. The
 /// proxy's stop gets its drain share (the budget less `FINISH_COMMIT_RESERVE`), the daemon's seal
 /// its own request's remainder, and the sender's drain and the scoped stdout what is left of the

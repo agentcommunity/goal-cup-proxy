@@ -75,6 +75,9 @@ pub struct Vertical {
     _tmp: tempfile::TempDir,
 }
 
+/// The finish budget the vertical's `goalcup` processes work within, in milliseconds.
+pub const TEST_FINISH_BUDGET_MS: u64 = 10_000;
+
 impl Vertical {
     /// A daemon, an endpoint and a connector whose workload runs `mode`, with `extra` merged
     /// into its configuration.
@@ -191,6 +194,12 @@ impl Vertical {
             .env("HOME", self.root.join("home"))
             .env(goalcup_cli::config::CONFIG_DIR_ENV, &self.cfg)
             .env(goalcup_cli::config::CONNECTORS_DIR_ENV, &self.connectors)
+            // These tests cut a finish that cannot complete; the shipped budget is three
+            // minutes (D56), a test's is ten seconds.
+            .env(
+                "GOALCUP_TEST_FINISH_BUDGET_MS",
+                TEST_FINISH_BUDGET_MS.to_string(),
+            )
             .stdin(Stdio::null());
         for key in ["USER", "LOGNAME", "TMPDIR"] {
             if let Ok(value) = std::env::var(key) {
