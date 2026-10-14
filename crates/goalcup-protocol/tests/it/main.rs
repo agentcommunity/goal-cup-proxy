@@ -2,7 +2,6 @@
 //! `export_roundtrip` (process umask) and `capture_reserved_storage` (re-executes itself by
 //! test name) stay separate binaries.
 
-mod addenda;
 mod capture_storage;
 mod capture_terminals;
 mod chain_golden;
