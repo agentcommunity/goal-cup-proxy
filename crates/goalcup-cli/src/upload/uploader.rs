@@ -8,13 +8,21 @@
 //! - **What:** whole lines from where the server is (`offset`, `next_seq`, `head`), each
 //!   chunk one zstd frame of at most [`MAX_CHUNK_BYTES`] compressed, built in a spool file
 //!   beside the trace and streamed from it, so a chunk is never held in memory.
-//! - **When:** at once when the run launches, then once an hour, or sooner once
-//!   [`Policy::eager_bytes`] of chain is waiting, and everything at the end.
-//! - **Failures:** no answer, a server error, a rate limit or the maintenance switch is asked
-//!   again after a backoff that starts at a minute and doubles to fifteen, with jitter, never
-//!   sooner than the server's `Retry-After`. A `409` means the server is somewhere else: its
-//!   position is read again and the upload continues from there. Any other refusal stops the
-//!   uploader and says why; the run goes on recording.
+//! - **When:** at once when the run launches, then every [`Policy::interval`] (thirty
+//!   minutes; the first interval after the opening chunk is a random share of it, so that
+//!   runs started together do not send together), or sooner once [`Policy::eager_bytes`] of
+//!   chain is waiting, and everything at the end.
+//! - **Failures:** one failed attempt never ends an upload. No answer, a server error, a rate
+//!   limit, the maintenance switch, a rejected chunk (`400`, `413`, `422`) or any other answer
+//!   is asked again after a backoff that starts at a minute and doubles to fifteen, with
+//!   jitter, never sooner than the server's `Retry-After`. A `409` means the server is
+//!   somewhere else: its position is read again and the upload continues from there. Only
+//!   `401`, `404` and `410` ([`ServerError::ends_upload`]: the token, the run, or the run's
+//!   being closed) stop the uploader and say why, and so do a local chain that does not
+//!   continue the server's copy and an acknowledgement that does not verify; the run goes on
+//!   recording. After the stop the same asking goes on for the wrap-up ([`Policy::wrap_up`],
+//!   an hour, counted through machine sleep): the final heartbeat, the rest of the chain and
+//!   the seal. What is still unsent then is `goalcup upload`'s.
 //! - **Acknowledgements:** each one is checked (this entry, the chunk's last `seq` and head,
 //!   a signature under the start receipt's key) and appended to the trace's `acks.jsonl`,
 //!   where `goalcup-verify` reads it.
@@ -24,6 +32,8 @@ use super::api::{
     ChunkAnswer, HeartbeatAnswer, HeartbeatRequest, RunPosition, SealRequest, StatusAnswer,
 };
 use super::http::{ServerClient, ServerError};
+use super::policy::Cadence;
+pub use super::policy::{Policy, WrapUp, backoff};
 use crate::CliError;
 use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::export::{ACKS_FILE, BASELINE_FILE, CHAIN_FILE, SEAL_FILE};
@@ -43,74 +53,6 @@ const CHUNK_SOFT_BYTES: u64 = MAX_CHUNK_BYTES - 2 * 1024 * 1024;
 const ZSTD_LEVEL: i32 = 3;
 /// The longest line read: one chain record is at most this (`MAX_ENVELOPE_BYTES`).
 const MAX_LINE_BYTES: u64 = goalcup_protocol::capture::MAX_ENVELOPE_BYTES as u64;
-/// How long one chunk upload may take.
-const PUT_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// When chunks go, and how failures wait.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Policy {
-    /// The regular cadence.
-    pub interval: Duration,
-    /// How often the chain is looked at.
-    pub poll: Duration,
-    /// A chunk goes before its hour once this much chain is waiting (about 25 MB compressed).
-    pub eager_bytes: u64,
-    pub backoff_min: Duration,
-    pub backoff_max: Duration,
-    /// How long `goalcup start` keeps sending after the seal before it leaves the rest to
-    /// `goalcup upload`.
-    pub finish_budget: Duration,
-    /// The longest one chunk upload may take.
-    pub put_timeout: Duration,
-    /// How often a heartbeat goes while the run records.
-    pub heartbeat: Duration,
-}
-
-impl Policy {
-    /// A test build's policy from `spec`: `interval,poll,backoff_min,backoff_max,finish`
-    /// milliseconds, `eager_bytes`, and optionally the chunk upload timeout and the heartbeat
-    /// interval in milliseconds, comma separated. A shipped build has no such door.
-    #[cfg(feature = "test-support")]
-    pub fn from_test_spec(spec: &str) -> Option<Policy> {
-        let n: Vec<u64> = spec
-            .split(',')
-            .map(|v| v.trim().parse().ok())
-            .collect::<Option<_>>()?;
-        let (interval, poll, backoff_min, backoff_max, finish, eager, put, beat) = match n[..] {
-            [a, b, c, d, e, f] => (a, b, c, d, e, f, 600_000, 300_000),
-            [a, b, c, d, e, f, g] => (a, b, c, d, e, f, g, 300_000),
-            [a, b, c, d, e, f, g, h] => (a, b, c, d, e, f, g, h),
-            _ => return None,
-        };
-        let ms = Duration::from_millis;
-        Some(Policy {
-            interval: ms(interval),
-            poll: ms(poll),
-            eager_bytes: eager,
-            backoff_min: ms(backoff_min),
-            backoff_max: ms(backoff_max),
-            finish_budget: ms(finish),
-            put_timeout: ms(put),
-            heartbeat: ms(beat),
-        })
-    }
-}
-
-impl Default for Policy {
-    fn default() -> Self {
-        Policy {
-            interval: Duration::from_secs(3600),
-            poll: Duration::from_secs(30),
-            eager_bytes: 256 * 1024 * 1024,
-            backoff_min: Duration::from_secs(60),
-            backoff_max: Duration::from_secs(15 * 60),
-            finish_budget: Duration::from_secs(120),
-            put_timeout: PUT_TIMEOUT,
-            heartbeat: Duration::from_secs(300),
-        }
-    }
-}
-
 /// Where the server is: the bytes it holds, the `seq` the next chunk starts at, and the hash
 /// the next chunk's first record must extend.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,15 +235,35 @@ enum Attempt {
     Stop(String),
 }
 
-/// What is left of `deadline`, or `cap` with none; `None` once it has passed.
-fn left(deadline: Option<Instant>, cap: Duration) -> Option<Duration> {
-    match deadline {
+/// The least of the wrap-up that is worth a request.
+const LEAST_CALL: Duration = Duration::from_millis(100);
+
+/// What is left of the wrap-up `until`, or `cap` with none; `None` once it has run out.
+fn left(until: Option<WrapUp>, cap: Duration) -> Option<Duration> {
+    match until {
         None => Some(cap),
-        Some(deadline) => {
-            let left = deadline.saturating_duration_since(Instant::now());
-            (left >= Duration::from_secs(1)).then(|| left.min(cap))
+        Some(until) => {
+            let left = until.remaining();
+            (left >= LEAST_CALL).then(|| left.min(cap))
         }
     }
+}
+
+/// The sentence for a wrap-up that ran out, with the last answer that was not an end of the
+/// upload when there was one: what the participant needs to know is why it never got through.
+fn ran_out(last: Option<&str>) -> String {
+    match last {
+        Some(last) => format!("{RAN_OUT}; the last answer was: {last}"),
+        None => RAN_OUT.to_string(),
+    }
+}
+
+/// What a finish says when the wrap-up ran out before an attempt could begin.
+const RAN_OUT: &str = "the time left to finish ran out";
+
+/// Whether waiting `wait` would run past the wrap-up `until` (never, with none).
+fn past(until: Option<WrapUp>, wait: Duration) -> bool {
+    until.is_some_and(|until| wait > until.remaining())
 }
 
 /// `<cfg>/uploads/<entry>.lock`: held by whichever process uploads the entry.
@@ -407,16 +369,17 @@ impl Uploader {
         }
     }
 
-    /// Send every complete line, chunk by chunk, once, within `deadline` if one is given.
-    fn attempt(&mut self, deadline: Option<Instant>) -> Attempt {
+    /// Send every complete line, chunk by chunk, once, within the wrap-up `until` if one is
+    /// given.
+    fn attempt(&mut self, until: Option<WrapUp>) -> Attempt {
         loop {
             // A background upload stops between chunks once the run must stop.
-            if deadline.is_none() && self.halt.as_ref().is_some_and(|h| h.load(Ordering::SeqCst)) {
+            if until.is_none() && self.halt.as_ref().is_some_and(|h| h.load(Ordering::SeqCst)) {
                 return Attempt::Retry(None, "the run is stopping".to_string());
             }
-            // Only a finish has a deadline; once it has passed, the rest is `goalcup upload`'s.
-            let Some(timeout) = left(deadline, self.policy.put_timeout) else {
-                return Attempt::Stop("the time left to finish ran out".to_string());
+            // Only a finish has a wrap-up; once it has run out, the rest is `goalcup upload`'s.
+            let Some(timeout) = left(until, self.policy.put_timeout) else {
+                return Attempt::Stop(RAN_OUT.to_string());
             };
             let chunk = match build_chunk(&self.chain(), &self.pos, &self.spool) {
                 Ok(Some(chunk)) => chunk,
@@ -463,13 +426,13 @@ impl Uploader {
                 self.record.entry_id
             ));
         }
-        if error.is_retryable() {
+        if error.ends_upload() {
+            Attempt::Stop(error.to_string())
+        } else {
             Attempt::Retry(
                 error.retry_after().map(Duration::from_secs),
                 error.to_string(),
             )
-        } else {
-            Attempt::Stop(error.to_string())
         }
     }
 
@@ -553,35 +516,37 @@ impl Uploader {
     }
 
     /// The final heartbeat: commit the sealed chain's last record as the run's end, asking
-    /// again after each retryable failure within `deadline`.
+    /// again after each failure that does not end the upload, within the wrap-up `until`.
     fn commit_end(
         &mut self,
-        deadline: Option<Instant>,
+        until: Option<WrapUp>,
         say: &mut dyn FnMut(&str),
     ) -> Result<(), String> {
         let mut failures = 0;
+        let mut last = None::<String>;
         loop {
-            let Some(timeout) = left(deadline, super::http::CALL_TIMEOUT) else {
-                return Err("the time left to finish ran out".to_string());
+            let Some(timeout) = left(until, super::http::CALL_TIMEOUT) else {
+                return Err(ran_out(last.as_deref()));
             };
             let repo_head = noted_repo_head(&self.spool, &self.record.entry_id);
             match heartbeat(&self.server, &self.record, true, repo_head, timeout) {
                 None => return Err("the chain holds no whole record".to_string()),
                 Some(Ok(_)) => return Ok(()),
-                Some(Err(error)) if error.is_retryable() => {
+                Some(Err(error)) if !error.ends_upload() => {
                     failures += 1;
                     let wait = backoff(
                         &self.policy,
                         failures,
                         error.retry_after().map(Duration::from_secs),
                     );
-                    if deadline.is_some_and(|d| Instant::now() + wait > d) {
+                    if past(until, wait) {
                         return Err(error.to_string());
                     }
                     say(&format!(
                         "upload: the final heartbeat was not stored ({error}); trying again in {}s",
                         wait.as_secs().max(1)
                     ));
+                    last = Some(error.to_string());
                     std::thread::sleep(wait);
                 }
                 Some(Err(error)) => return Err(error.to_string()),
@@ -848,19 +813,6 @@ fn append_ack(acks: &Path, ack: &AckCheckpoint) -> Result<(), CliError> {
     file.sync_data().map_err(io_error(acks))
 }
 
-/// The wait before asking again: from `min`, doubling per consecutive failure to `max`, plus
-/// up to a quarter more at random so a fleet of tracers does not ask in step, and never
-/// less than what the server asked for.
-pub fn backoff(policy: &Policy, failures: u32, retry_after: Option<Duration>) -> Duration {
-    use rand::Rng;
-    let doubled = policy
-        .backoff_min
-        .saturating_mul(1u32 << failures.saturating_sub(1).min(16))
-        .min(policy.backoff_max);
-    let jitter = doubled.mul_f64(rand::thread_rng().gen_range(0.0..0.25));
-    (doubled + jitter).max(retry_after.unwrap_or_default())
-}
-
 /// How an upload ended, for the participant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
@@ -886,36 +838,42 @@ impl Report {
 }
 
 impl Uploader {
-    /// Send everything and then the seal, asking again after each retryable failure, all
-    /// within `deadline` (or for as long as it takes, with `None`). `say` hears each wait.
+    /// Send everything and then the seal, asking again after each failure that does not end
+    /// the upload, all within the wrap-up `until` (or for as long as it takes, with `None`).
+    /// `say` hears each wait.
     ///
     /// The seal's documents are read before the chain is drained: the daemon writes them
     /// after the chain's last record, so the drain that follows sends every record they seal,
     /// and the server is never sealed on a copy missing its tail.
-    pub fn finish(&mut self, deadline: Option<Instant>, say: &mut dyn FnMut(&str)) -> Report {
+    pub fn finish(&mut self, until: Option<WrapUp>, say: &mut dyn FnMut(&str)) -> Report {
         let documents = self.seal_documents();
         // A sealed run commits its end first: after the deadline, the server accepts nothing
         // past it, and nothing at all until it is committed.
         if documents.is_some()
-            && let Err(why) = self.commit_end(deadline, say)
+            && let Err(why) = self.commit_end(until, say)
         {
             return Report::not(why, self.pos.offset);
         }
         let mut failures = 0;
+        let mut last = None::<String>;
         loop {
-            match self.attempt(deadline) {
+            match self.attempt(until) {
                 Attempt::CaughtUp => break,
+                Attempt::Stop(why) if why == RAN_OUT => {
+                    return Report::not(ran_out(last.as_deref()), self.pos.offset);
+                }
                 Attempt::Stop(why) => return Report::not(why, self.pos.offset),
                 Attempt::Retry(after, why) => {
                     failures += 1;
                     let wait = backoff(&self.policy, failures, after);
-                    if deadline.is_some_and(|d| Instant::now() + wait > d) {
+                    if past(until, wait) {
                         return Report::not(why, self.pos.offset);
                     }
                     say(&format!(
                         "upload: {why}; trying again in {}s",
                         wait.as_secs().max(1)
                     ));
+                    last = Some(why);
                     std::thread::sleep(wait);
                 }
             }
@@ -930,26 +888,28 @@ impl Uploader {
             return caught_up(false, None);
         };
         let mut failures = 0;
+        let mut last = None::<String>;
         loop {
-            let Some(timeout) = left(deadline, super::http::CALL_TIMEOUT) else {
-                return caught_up(false, Some("the time left to finish ran out".into()));
+            let Some(timeout) = left(until, super::http::CALL_TIMEOUT) else {
+                return caught_up(false, Some(ran_out(last.as_deref())));
             };
             match self.seal(&documents, timeout) {
                 Ok(()) => return caught_up(true, None),
-                Err(error) if error.is_retryable() => {
+                Err(error) if !error.ends_upload() => {
                     failures += 1;
                     let wait = backoff(
                         &self.policy,
                         failures,
                         error.retry_after().map(Duration::from_secs),
                     );
-                    if deadline.is_some_and(|d| Instant::now() + wait > d) {
+                    if past(until, wait) {
                         return caught_up(false, Some(error.to_string()));
                     }
                     say(&format!(
                         "upload: the seal was not stored ({error}); trying again in {}s",
                         wait.as_secs().max(1)
                     ));
+                    last = Some(error.to_string());
                     std::thread::sleep(wait);
                 }
                 Err(error) => return caught_up(false, Some(error.to_string())),
@@ -960,9 +920,8 @@ impl Uploader {
 
 /// The uploader running beside `goalcup start`, on a thread of its own.
 pub struct Running {
-    finish: std::sync::mpsc::Sender<Instant>,
+    finish: std::sync::mpsc::Sender<WrapUp>,
     report: std::sync::mpsc::Receiver<Report>,
-    budget: Duration,
     /// Says, once, why the run must stop now: the server's deadline, or this machine's count of
     /// the run's length when the server cannot be reached.
     stop: Option<std::sync::mpsc::Receiver<String>>,
@@ -996,8 +955,11 @@ impl LocalDeadline {
     }
 }
 
-/// How long past its budget `goalcup start` waits for the uploader's own last word.
+/// How long past the wrap-up `goalcup start` waits for the uploader's own last word.
 const FINISH_GRACE: Duration = Duration::from_secs(10);
+
+/// How often the wait for the uploader's last word looks at the continuous clock again.
+const FINISH_SLICE: Duration = Duration::from_secs(5);
 
 /// Start uploading `record` beside the run: the first chunk at once, then on [`Policy`]'s
 /// cadence. Its waits and failures are said on stderr, prefixed `goalcup: upload:`; nothing it
@@ -1011,7 +973,7 @@ pub fn begin(
     local_deadline: Option<LocalDeadline>,
 ) -> Result<Running, CliError> {
     let lock = lock_entry(&spool_dir, &record.entry_id)?;
-    let (finish, finishing) = std::sync::mpsc::channel::<Instant>();
+    let (finish, finishing) = std::sync::mpsc::channel::<WrapUp>();
     let (reported, report) = std::sync::mpsc::channel::<Report>();
     let (stopping, stop) = std::sync::mpsc::channel::<String>();
     std::thread::Builder::new()
@@ -1033,15 +995,14 @@ pub fn begin(
     Ok(Running {
         finish,
         report,
-        budget: policy.finish_budget,
         stop: Some(stop),
     })
 }
 
 /// What the upload thread hears from, and says to, `goalcup start`.
 struct Beside {
-    /// The run is sealed: finish by this instant.
-    finishing: std::sync::mpsc::Receiver<Instant>,
+    /// The run is sealed: finish within this wrap-up.
+    finishing: std::sync::mpsc::Receiver<WrapUp>,
     /// The run must stop now, and why.
     stopping: std::sync::mpsc::Sender<String>,
     local_deadline: Option<LocalDeadline>,
@@ -1053,14 +1014,29 @@ impl Running {
         self.stop.take()
     }
 
-    /// The run is sealed: send the rest and the seal within the policy's finish budget, and
-    /// say how it went. Returns by the budget (and a short grace) whatever the server does:
-    /// an upload still under way then is left to `goalcup upload`.
-    pub fn finish(self) -> Report {
-        let _ = self.finish.send(Instant::now() + self.budget);
-        self.report
-            .recv_timeout(self.budget + FINISH_GRACE)
-            .unwrap_or_else(|_| Report::not("the upload did not finish in time", 0))
+    /// The run is sealed: send the rest and the seal, asking again after every failure that
+    /// does not end the upload, until `wrap_up` has run out, and say how it went. Returns by
+    /// then (and a short grace) whatever the server does: an upload still under way is left
+    /// to `goalcup upload`.
+    ///
+    /// The wait is counted on the continuous clock, in slices: a machine that sleeps through
+    /// the wrap-up does not owe it again on waking.
+    pub fn finish(self, wrap_up: WrapUp) -> Report {
+        let _ = self.finish.send(wrap_up);
+        let last_word = WrapUp::after(wrap_up.remaining() + FINISH_GRACE);
+        loop {
+            let left = last_word.remaining();
+            if left.is_zero() {
+                return Report::not("the upload did not finish in time", 0);
+            }
+            match self.report.recv_timeout(left.min(FINISH_SLICE)) {
+                Ok(report) => return report,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Report::not("the upload did not finish in time", 0);
+                }
+            }
+        }
     }
 }
 
@@ -1084,6 +1060,7 @@ fn run(
     let mut failures = 0u32;
     let mut wait_until = Instant::now();
     let mut next_due = Instant::now();
+    let mut cadence = Cadence::new(&policy);
     // Heartbeats and the deadline run on a thread of their own, so a slow chunk upload never
     // delays a stop. Once the run must stop, uploading waits for the finish.
     let over = std::sync::Arc::new(AtomicBool::new(false));
@@ -1120,7 +1097,7 @@ fn run(
                         resumed.halt = Some(over.clone());
                         uploader = Some(resumed);
                     }
-                    Err(error) if error.is_retryable() => {
+                    Err(error) if !error.ends_upload() => {
                         failures += 1;
                         let wait = backoff(
                             &policy,
@@ -1147,7 +1124,7 @@ fn run(
                 match up.attempt(None) {
                     Attempt::CaughtUp => {
                         failures = 0;
-                        next_due = now + policy.interval;
+                        next_due = cadence.next_due(now);
                     }
                     Attempt::Retry(after, why) => {
                         failures += 1;
@@ -1174,7 +1151,7 @@ fn run(
             Err(RecvTimeoutError::Disconnected) => {
                 return Report::not("the run ended before its upload finished", offset());
             }
-            Ok(deadline) => {
+            Ok(wrap_up) => {
                 if let Some(why) = stopped {
                     return Report::not(why, offset());
                 }
@@ -1185,7 +1162,7 @@ fn run(
                         Err(error) => return Report::not(error.to_string(), 0),
                     },
                 };
-                return up.finish(Some(deadline), &mut say);
+                return up.finish(Some(wrap_up), &mut say);
             }
         }
     }

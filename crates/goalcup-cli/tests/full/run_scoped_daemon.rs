@@ -776,3 +776,122 @@ fn a_moved_connectors_directory_rewrites_the_default_config_and_refuses_an_edite
     );
     assert_eq!(daemons(&rig), vec![second]);
 }
+
+// ------------------------------------------------------------------ slow is not dead
+
+/// A `goalcup-daemon` that runs `script` first, in a directory of its own, then (if the script
+/// reaches it) the real one: a daemon that is slow to answer, or that dies.
+fn daemon_shim(rig: &Rig, script: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = rig.root.join("daemon-shim");
+    std::fs::create_dir_all(&bin).unwrap();
+    let shim = bin.join("goalcup-daemon");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\n{script}\nexec '{}' \"$@\"\n",
+            support::daemon_binary().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    shim
+}
+
+/// The waits of a command, scaled down: a dead daemon for 300 ms, a live one for 30 s, said
+/// every 400 ms.
+const QUICK_WAIT: goalcup_cli::daemon::spawn::Wait = goalcup_cli::daemon::spawn::Wait {
+    dead: Duration::from_millis(300),
+    reopening: Duration::from_secs(30),
+    report_every: Duration::from_millis(400),
+};
+
+fn ensure_with(
+    rig: &Rig,
+    shim: &Path,
+    wait: goalcup_cli::daemon::spawn::Wait,
+    said: &mut Vec<String>,
+) -> Result<goalcup_cli::daemon::HttpDaemonClient, goalcup_cli::CliError> {
+    goalcup_cli::daemon::spawn::ensure_daemon_waiting(
+        &rig.cfg,
+        goalcup_cli::daemon::MissingConfig::WriteDefault {
+            connectors: &rig.capture_connectors,
+        },
+        Some(shim),
+        wait,
+        &mut |line| said.push(line.to_string()),
+    )
+}
+
+/// A daemon that is alive but has not yet written `control.json` (it is reopening a long run)
+/// is waited for well past the wait a dead one gets, and the wait says so.
+#[test]
+fn a_daemon_still_reopening_is_waited_for() {
+    let rig = Rig::run_scoped();
+    let _reaper = reaper(&rig);
+    let shim = daemon_shim(&rig, "sleep 2");
+    let mut said = Vec::new();
+    let began = Instant::now();
+    let client = ensure_with(&rig, &shim, QUICK_WAIT, &mut said);
+    let took = began.elapsed();
+    assert!(client.is_ok(), "{:?}", client.err());
+    assert!(
+        took >= Duration::from_millis(1_500),
+        "the 300 ms a dead daemon gets was not all it got: {took:?}"
+    );
+    assert!(
+        said.len() >= 2
+            && said
+                .iter()
+                .all(|line| line.starts_with("the daemon is reopening the run (")),
+        "{said:?}"
+    );
+}
+
+/// A daemon that is gone is not waited for: one that dies at once fails the command at once,
+/// and one that dies while being waited for ends the wait there, not at the long budget.
+#[test]
+fn a_dead_daemon_is_not_waited_for() {
+    let rig = Rig::run_scoped();
+    let _reaper = reaper(&rig);
+
+    let dead = daemon_shim(&rig, "exit 3");
+    let mut said = Vec::new();
+    let began = Instant::now();
+    // Starting a process takes longer on a busy machine than a short report interval, so this
+    // one is said no more than every five seconds: a report here would be a daemon waited for.
+    let patient = goalcup_cli::daemon::spawn::Wait {
+        report_every: Duration::from_secs(5),
+        ..QUICK_WAIT
+    };
+    let error =
+        ensure_with(&rig, &dead, patient, &mut said).expect_err("a dead daemon is an error");
+    assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        began.elapsed()
+    );
+    assert!(error.to_string().contains("exited"), "{error}");
+    assert!(
+        said.is_empty(),
+        "nothing to wait for, nothing said: {said:?}"
+    );
+
+    // Alive for a while, then gone.
+    let dies = daemon_shim(&rig, "sleep 1; exit 3");
+    let mut said = Vec::new();
+    let began = Instant::now();
+    let error = ensure_with(&rig, &dies, QUICK_WAIT, &mut said)
+        .expect_err("a daemon that dies is an error");
+    let took = began.elapsed();
+    assert!(
+        took >= Duration::from_millis(900),
+        "it was waited for while alive: {took:?}"
+    );
+    assert!(
+        took < Duration::from_secs(10),
+        "and not once it was gone: {took:?}"
+    );
+    assert!(error.to_string().contains("exited"), "{error}");
+    assert!(!said.is_empty(), "the wait said it was waiting: {said:?}");
+}

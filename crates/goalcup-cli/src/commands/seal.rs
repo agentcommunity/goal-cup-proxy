@@ -24,7 +24,8 @@
 
 use crate::CliError;
 use crate::entries::read_entry;
-use crate::retry::{BUSY_ATTEMPTS, retry_busy, retry_capture_seal};
+use crate::retry::{BUSY_ATTEMPTS, retry_busy, retry_capture_seal, retry_capture_seal_until};
+use crate::upload::policy::WrapUp;
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureSealError, CaptureSealRequest, ControlError, DaemonClient,
     LOCAL_CAPTURE_FINISH_BUDGET, LocalSealOutcome, ProxyCounters,
@@ -151,7 +152,7 @@ pub(crate) fn finish_locally(
 
 /// The seal request of [`finish_locally`] without its report: what a caller needs when the seal
 /// has to count as committed whether or not this command's own output can still be written.
-/// Nothing is printed here.
+/// Nothing is printed here. One attempt, within `deadline`.
 pub(crate) fn seal_locally(
     client: &dyn DaemonClient,
     entry_id: &str,
@@ -161,24 +162,64 @@ pub(crate) fn seal_locally(
     termination_allowance: std::time::Duration,
     reconnect: Option<&Path>,
 ) -> Result<CaptureFinishReport, CliError> {
+    seal_locally_until(
+        client,
+        entry_id,
+        proxy,
+        native_scope,
+        deadline,
+        WrapUp::one_attempt(),
+        termination_allowance,
+        reconnect,
+    )
+}
+
+/// [`seal_locally`] asked again, with growing waits, until the wrap-up `until` has run out: the
+/// stop of a run must end in a seal, and one attempt's ten seconds are not the whole of what a
+/// busy or restarting daemon gets (`retry_capture_seal_until` says which failures are asked
+/// again).
+///
+/// The first attempt is within `first_deadline`, the one local-finish budget its caller took
+/// (and shared with the proxy's stop and the tees); each later attempt has a whole budget of its
+/// own, and follows a daemon restarted since the one before.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn seal_locally_until(
+    client: &dyn DaemonClient,
+    entry_id: &str,
+    proxy: Option<ProxyCounters>,
+    native_scope: Option<String>,
+    first_deadline: std::time::Instant,
+    until: WrapUp,
+    termination_allowance: std::time::Duration,
+    reconnect: Option<&Path>,
+) -> Result<CaptureFinishReport, CliError> {
     let mut waited = std::time::Duration::ZERO;
-    let mut fresh = None;
-    let finish: CaptureFinishReport = retry_capture_seal(deadline, |remaining| {
-        // Whole milliseconds, rounded down: the request and the timeout state the same number.
-        let remaining = std::time::Duration::from_millis(
-            u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX),
-        );
-        let request = CaptureSealRequest {
-            proxy,
-            remaining_finish_ms: Some(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)),
-            native_scope: native_scope.clone(),
+    let mut asked = 0u32;
+    let finish: CaptureFinishReport = retry_capture_seal_until(until, || {
+        asked += 1;
+        let deadline = if asked == 1 {
+            first_deadline
+        } else {
+            std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET
         };
-        waited = crate::daemon::capture_seal_read_timeout(remaining, termination_allowance);
-        // A daemon restarted since the caller's client was built is at another port or token:
-        // `reconnect` is the configuration directory to read that from (H-14).
-        crate::daemon::seal_capture_following_restart(
-            client, &mut fresh, reconnect, entry_id, &request, waited,
-        )
+        let mut fresh = None;
+        retry_capture_seal(deadline, |remaining| {
+            // Whole milliseconds, rounded down: the request and the timeout state the same number.
+            let remaining = std::time::Duration::from_millis(
+                u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX),
+            );
+            let request = CaptureSealRequest {
+                proxy,
+                remaining_finish_ms: Some(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)),
+                native_scope: native_scope.clone(),
+            };
+            waited = crate::daemon::capture_seal_read_timeout(remaining, termination_allowance);
+            // A daemon restarted since the caller's client was built is at another port or
+            // token: `reconnect` is the configuration directory to read that from (H-14).
+            crate::daemon::seal_capture_following_restart(
+                client, &mut fresh, reconnect, entry_id, &request, waited,
+            )
+        })
     })
     .map_err(|failure| capture_finish_refusal(entry_id, failure, waited))?;
     if finish.entry_id != entry_id {

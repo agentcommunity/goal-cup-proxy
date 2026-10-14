@@ -40,6 +40,7 @@ use crate::proxy::ingest::{IngestSecret, IngestSink, SinkConfig, connect_sink};
 use crate::proxy::tls::UpstreamRoots;
 use crate::proxy::{MAX_CONNECTION_TASKS, ProxyConfig, ProxyHandle};
 use crate::retry::{retry_busy, retry_busy_entry, retry_busy_process};
+use crate::upload::policy::{WrapUp, wrap_up_length};
 use goalcup_protocol::capture::CaptureSink;
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest, CaptureWorkspaceInfo,
@@ -613,6 +614,7 @@ impl Forked<'_> {
                 &info.entry_id,
                 proxied,
                 deadline,
+                WrapUp::one_attempt(),
                 termination_bound(0),
                 None,
                 None,
@@ -687,6 +689,8 @@ struct Exited<'a> {
     finished_early: Option<Result<CaptureFinishReport, CliError>>,
     /// The uploader, for a run opened on a server.
     uploading: Option<crate::upload::uploader::Running>,
+    /// The wrap-up after the stop, which the seal and the upload's finish share.
+    wrap_up: WrapUp,
     /// Linux: the refusal the command ends with, after the seal, when the sweep left a process
     /// running or could not read `/proc` after it had signalled one.
     left_running: Option<CliError>,
@@ -1261,6 +1265,9 @@ fn run_harness<'a>(
     // The run's upload record, kept here so the workspace's commit can be noted the moment the
     // run stops.
     let noted = forked.upload.as_ref().map(|start| start.record.clone());
+    // How long the wrap-up after the stop lasts: the upload policy's for a run on a server, and
+    // the local default for one without.
+    let wrap_length = wrap_up_length(forked.upload.as_ref().map(|start| &start.policy));
     let uploads_dir = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
     let note_repo_head = || {
         if let Some(record) = &noted {
@@ -1291,6 +1298,8 @@ fn run_harness<'a>(
     // finish said is printed once the wait is over.
     type Early = (Result<CaptureFinishReport, CliError>, Vec<u8>);
     let early = std::sync::Mutex::new(None::<Early>);
+    // The wrap-up of a run stopped at its deadline starts there, not when the harness is gone.
+    let stopped_wrap = std::sync::Mutex::new(None::<WrapUp>);
     let proxy_slot = std::sync::Mutex::new(forked.proxied.take());
     let stop = uploading.as_mut().and_then(|running| running.take_stop());
     let (client, cfg) = (forked.client, forked.cfg);
@@ -1301,37 +1310,27 @@ fn run_harness<'a>(
         };
         // The commit the workspace has now, before the harness's grace lets it change.
         note_repo_head();
+        // The one bound of the wrap-up, for the seal below and the upload's finish later.
+        let wrap_up = WrapUp::after(wrap_length);
+        *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
         let mut said =
             format!("deadline: {reason}. The agent is stopped and the run sealed now.\n")
                 .into_bytes();
         let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
-        let mut finished = finish(
+        // A seal that did not take (the daemon busy or restarting) is asked again through the
+        // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
+        // seal ends it.
+        let finished = finish(
             client,
             &entry_id,
             proxied,
             deadline,
+            wrap_up,
             termination_bound(grace),
             None,
             Some(cfg),
             &mut said,
         );
-        // A seal that did not take (the daemon busy or restarting) is asked again: the harness
-        // must not run on past its deadline, and only the daemon's seal ends it.
-        for _ in 0..DEADLINE_SEAL_RETRIES {
-            if finished.is_ok() {
-                break;
-            }
-            std::thread::sleep(DEADLINE_SEAL_RETRY_WAIT);
-            finished = crate::commands::seal::seal_locally(
-                client,
-                &entry_id,
-                None,
-                None,
-                std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET,
-                termination_bound(grace),
-                Some(cfg),
-            );
-        }
         *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));
     })
     .map_err(|source| CliError::Io {
@@ -1339,6 +1338,11 @@ fn run_harness<'a>(
         source,
     });
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    // A run that ended on its own stopped just now.
+    let wrap_up = stopped_wrap
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(|| WrapUp::after(wrap_length));
     // A run that ended on its own: its commit as it ended.
     if forked.proxied.is_some() {
         note_repo_head();
@@ -1369,6 +1373,7 @@ fn run_harness<'a>(
         status,
         finished_early,
         uploading,
+        wrap_up,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
     })
 }
@@ -1388,6 +1393,7 @@ fn finish_and_scan(
         status,
         finished_early,
         uploading,
+        wrap_up,
         left_running,
     } = exited;
     let Forked {
@@ -1406,6 +1412,7 @@ fn finish_and_scan(
             &info.entry_id,
             proxied,
             deadline,
+            wrap_up,
             termination_bound(0),
             if tees.late_scope {
                 tees.marked.as_ref()
@@ -1427,7 +1434,7 @@ fn finish_and_scan(
     }
     // After the seal: the rest of the chain and the seal itself, within the finish budget.
     if let Some(running) = uploading {
-        let report = running.finish();
+        let report = running.finish(wrap_up);
         let line = match &report {
             crate::upload::uploader::Report {
                 caught_up: true,
@@ -1600,6 +1607,7 @@ fn finish_unlaunched(
         entry_id,
         proxied,
         deadline,
+        WrapUp::one_attempt(),
         termination_bound(0),
         None,
         None,
@@ -2016,6 +2024,11 @@ fn proxy_admission_line(
 /// ended, all within `deadline` (the one local-finish budget, taken by the caller immediately
 /// before this call); nothing here waits on the harness.
 ///
+/// A seal that did not take (the daemon busy, restarting, or past its budget) is asked again with
+/// growing waits until `wrap_up` has run out ([`crate::retry::retry_capture_seal_until`]): the
+/// proxy is stopped once, and each later ask has a whole local-finish budget of its own. A
+/// `WrapUp::one_attempt()` asks once.
+///
 /// The one deadline of a capture run's finish is `LOCAL_CAPTURE_FINISH_BUDGET`, taken when the
 /// harness has exited and immediately before the proxy's stop: nothing runs between the two. The
 /// proxy's stop gets its drain share (the budget less `FINISH_COMMIT_RESERVE`), the daemon's seal
@@ -2032,6 +2045,7 @@ fn finish(
     entry_id: &str,
     proxied: Proxied,
     deadline: std::time::Instant,
+    wrap_up: WrapUp,
     termination: Duration,
     marked: Option<&CaptureStderr>,
     reconnect: Option<&Path>,
@@ -2070,12 +2084,13 @@ fn finish(
     // After the harness exited, the launcher's own root is reaped and the daemon's termination
     // answers `AlreadyStopped` after one `ps`: `termination_bound(0)`. At a deadline the harness
     // is still running, and the bound gives it its grace.
-    let sealed = crate::commands::seal::seal_locally(
+    let sealed = crate::commands::seal::seal_locally_until(
         client,
         entry_id,
         Some(counters),
         native_scope,
         deadline,
+        wrap_up,
         termination,
         reconnect,
     );
@@ -2101,10 +2116,6 @@ fn finish(
     });
     sealed
 }
-
-/// How often, and how far apart, a deadline seal that did not take is asked again.
-const DEADLINE_SEAL_RETRIES: u32 = 12;
-const DEADLINE_SEAL_RETRY_WAIT: Duration = Duration::from_secs(5);
 
 /// The upload server this run opens with: `None` with no `goalcup login`, and for a harness
 /// handed a provider key (`keyed`), whose run must pass the key scan at its end before

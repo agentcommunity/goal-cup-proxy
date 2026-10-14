@@ -264,7 +264,7 @@ fn upload_worker_an_incomplete_upload_is_finished_by_goalcup_upload() {
     let mut opts = rig.options(&goal, RESERVE);
     opts.repo = Some(REPO.to_string());
     opts.upload_policy = quick_policy();
-    opts.upload_policy.finish_budget = Duration::from_millis(300);
+    opts.upload_policy.wrap_up = Duration::from_millis(300);
     let (result, out) = std::thread::scope(|s| {
         let running = rig.start(s, &client, opts, None);
         wait_until("a first acknowledgement", || acknowledged(&rig, &client));
