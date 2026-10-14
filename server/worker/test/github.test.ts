@@ -2,20 +2,28 @@
 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import type { Auth } from "../src/auth.ts";
 import type { Ctx } from "../src/context.ts";
 import type { Db, OpenRunArgs } from "../src/db.ts";
 import { ApiError } from "../src/errors.ts";
 import { openRun } from "../src/runs.ts";
 import { openBody } from "./helpers/client.ts";
 
+const AUTH: Auth = { member: "m", credential: "c".repeat(64), run_id: null, mode: "practice" };
+
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-function ctxWith(githubCheck: boolean, token?: string) {
+function ctxWith(githubCheck: boolean, token?: string, bind: "bound" | "conflict" = "bound") {
   const opened: OpenRunArgs[] = [];
+  const bound: { credential: string; run_id: string; expires_at: string }[] = [];
   const db = {
+    async bindCredential(credential: string, run_id: string, expires_at: string) {
+      bound.push({ credential, run_id, expires_at });
+      return bind;
+    },
     async openRun(a: OpenRunArgs) {
       opened.push(a);
       return { kind: "created" as const, run: { run_id: a.run_id, entry_id: a.entry_id, official_start: a.official_start, deadline_at: a.deadline_at } };
@@ -27,7 +35,7 @@ function ctxWith(githubCheck: boolean, token?: string) {
     cfg: { eventId: "practice", runSeconds: 168 * 3600, abandonAfterSeconds: 86400, githubCheck },
     now: () => new Date("2026-11-06T09:00:00Z"),
   } as unknown as Ctx;
-  return { ctx, opened };
+  return { ctx, opened, bound };
 }
 
 const req = () => new Request("https://x.example/v1/runs", { method: "POST", body: JSON.stringify(openBody()) });
@@ -43,9 +51,11 @@ function stubGithub(reply: () => Response) {
 
 test("off: GitHub is never asked", async () => {
   const calls = stubGithub(() => new Response("{}", { status: 500 }));
-  const { ctx, opened } = ctxWith(false);
-  const res = await openRun(ctx, "m", req());
+  const { ctx, opened, bound } = ctxWith(false);
+  const res = await openRun(ctx, AUTH, req());
   assert.equal(res.status, 201);
+  // The credential is bound to the new run until 24 hours after its deadline.
+  assert.deepEqual(bound, [{ credential: AUTH.credential, run_id: opened[0]!.run_id, expires_at: "2026-11-14T09:00:00Z" }]);
   assert.equal(calls.length, 0);
   assert.equal(opened[0]!.official_start, "2026-11-06T09:00:00Z");
   assert.equal(opened[0]!.deadline_at, "2026-11-13T09:00:00Z");
@@ -54,7 +64,7 @@ test("off: GitHub is never asked", async () => {
 test("on: a public repository passes, and the token is sent when configured", async () => {
   const calls = stubGithub(() => new Response(JSON.stringify({ private: false }), { status: 200 }));
   const { ctx } = ctxWith(true, "ghp_example");
-  assert.equal((await openRun(ctx, "m", req())).status, 201);
+  assert.equal((await openRun(ctx, AUTH, req())).status, 201);
   assert.equal(calls[0]!.url, "https://api.github.com/repos/someone/goal-cup-entry");
   assert.equal(calls[0]!.headers.authorization, "Bearer ghp_example");
 });
@@ -62,14 +72,20 @@ test("on: a public repository passes, and the token is sent when configured", as
 test("on: private, missing, and unreachable repositories are refused", async () => {
   const { ctx, opened } = ctxWith(true);
   stubGithub(() => new Response(JSON.stringify({ private: true }), { status: 200 }));
-  await assert.rejects(openRun(ctx, "m", req()), (e) => e instanceof ApiError && e.status === 400 && e.code === "malformed");
+  await assert.rejects(openRun(ctx, AUTH, req()), (e) => e instanceof ApiError && e.status === 400 && e.code === "malformed");
   stubGithub(() => new Response("{}", { status: 404 }));
-  await assert.rejects(openRun(ctx, "m", req()), (e) => e instanceof ApiError && e.status === 400);
+  await assert.rejects(openRun(ctx, AUTH, req()), (e) => e instanceof ApiError && e.status === 400);
   stubGithub(() => new Response("{}", { status: 403 })); // e.g. API rate limit: our problem, so retryable
-  await assert.rejects(openRun(ctx, "m", req()), (e) => e instanceof ApiError && e.status === 502);
+  await assert.rejects(openRun(ctx, AUTH, req()), (e) => e instanceof ApiError && e.status === 502);
   globalThis.fetch = (async () => {
     throw new TypeError("offline");
   }) as typeof fetch;
-  await assert.rejects(openRun(ctx, "m", req()), (e) => e instanceof ApiError && e.status === 502);
+  await assert.rejects(openRun(ctx, AUTH, req()), (e) => e instanceof ApiError && e.status === 502);
   assert.equal(opened.length, 0, "no run is created when the check fails");
+});
+
+test("a credential that cannot bind to the new run is 409, not a second run for it", async () => {
+  stubGithub(() => new Response("{}", { status: 500 }));
+  const { ctx } = ctxWith(false, undefined, "conflict");
+  await assert.rejects(openRun(ctx, AUTH, req()), (e) => e instanceof ApiError && e.status === 409 && /goalcup continue/.test(e.message));
 });

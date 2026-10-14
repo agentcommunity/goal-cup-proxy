@@ -5,15 +5,21 @@
 //
 // The functions are proposed in sql/proposed-goalcup-functions.sql (the website repo owns the
 // schema). The Worker's key belongs to a dedicated role that may execute only those functions.
-// Tokens: Supabase stores only the sha256 of a token, so the Worker hashes the bearer token
-// and sends the hash.
+// Credentials and device codes: Supabase stores only their sha256, so the Worker hashes the
+// bearer credential (or the device code) and sends the hash. The one plain value that comes
+// back is a freshly minted credential, once, from upload_poll_device.
 
 import type {
   AbandonResult,
+  ApproveDeviceResult,
+  BindCredentialResult,
   ChunkRecord,
   CommitChunkArgs,
   CommitChunkResult,
+  CreateDeviceArgs,
+  Credential,
   Db,
+  DevicePoll,
   HeartbeatArgs,
   HeartbeatResult,
   OpenRunArgs,
@@ -75,9 +81,50 @@ export class SupabaseDb implements Db {
     throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
   }
 
-  async memberForToken(tokenSha256: string): Promise<string | null> {
-    const v = await this.#rpc("upload_lookup_token", { p_token_hash: tokenSha256 });
-    return typeof v === "string" && v !== "" ? v : null;
+  async credential(credentialSha256: string, now: string): Promise<Credential | null> {
+    const v = await this.#rpc("upload_credential", { p_credential_hash: credentialSha256, p_now: now });
+    return (v as Credential | null) ?? null;
+  }
+
+  async bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<BindCredentialResult> {
+    const v = await this.#rpc("upload_bind_credential", { p_credential_hash: credentialSha256, p_run_id: runId, p_expires_at: expiresAt });
+    return this.#word("upload_bind_credential", v, ["bound", "conflict"] as const);
+  }
+
+  async createDevice(a: CreateDeviceArgs): Promise<void> {
+    const v = await this.#rpc("upload_create_device", {
+      p_device_hash: a.device_sha256,
+      p_user_hash: a.user_sha256,
+      p_purpose: a.purpose,
+      p_mode: a.mode,
+      p_connector_id: a.connector_id,
+      p_tracer_version: a.tracer_version,
+      p_created_at: a.created_at,
+      p_expires_at: a.expires_at,
+    });
+    this.#word("upload_create_device", v, ["created"] as const);
+  }
+
+  async pollDevice(deviceSha256: string, now: string): Promise<DevicePoll> {
+    const v = (await this.#rpc("upload_poll_device", { p_device_hash: deviceSha256, p_now: now })) as {
+      result?: unknown;
+      purpose?: "login" | "run";
+      credential?: string;
+      expires_at?: string;
+      handle?: string;
+    } | null;
+    const result = this.#word("upload_poll_device", v?.result, ["pending", "approved", "denied", "expired"] as const);
+    if (result !== "approved") return { kind: result };
+    if (v?.purpose === "login" && typeof v.handle === "string") return { kind: "approved", purpose: "login", handle: v.handle };
+    if (v?.purpose === "run" && typeof v.credential === "string" && typeof v.expires_at === "string") {
+      return { kind: "approved", purpose: "run", credential_plain: v.credential, expires_at: v.expires_at };
+    }
+    throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+  }
+
+  async approveDevice(userCode: string, memberId: string, approve: boolean, now: string): Promise<ApproveDeviceResult> {
+    const v = await this.#rpc("upload_approve_device", { p_user_code: userCode, p_member_id: memberId, p_approve: approve, p_now: now });
+    return this.#word("upload_approve_device", v, ["ok", "not_found", "expired", "already_decided"] as const);
   }
 
   async openRun(a: OpenRunArgs): Promise<OpenRunResult> {
