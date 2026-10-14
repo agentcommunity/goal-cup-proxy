@@ -616,9 +616,8 @@ pub fn arg_path_denied(arg: &str) -> Option<&'static str> {
 /// Programs that interpret their arguments as code, a script or a command: refused as
 /// `executable.program` for `Origin::Pinned` (I5d). The check is on the spelling
 /// ([`is_interpreter_program`]); the harness's own entry point, even a launcher script found
-/// on `PATH`, is not pinned by hash: the launch records the build that runs (D53). `codex`, `claude` and `hermes` are
-/// not on the list. Kit cases and the controlled workload load as `Origin::Dev` and run
-/// `python3`.
+/// on `PATH`, is not pinned by hash: the launch records the build that runs (D53). Kit cases
+/// and the controlled workload load as `Origin::Dev` and run `python3`.
 pub const INTERPRETER_PROGRAMS: &[&str] = &[
     "sh",
     "bash",

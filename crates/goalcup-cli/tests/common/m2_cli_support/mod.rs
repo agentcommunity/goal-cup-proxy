@@ -162,18 +162,6 @@ impl Rig {
             upload_url: format!("http://{}", upload_trap.local_addr().unwrap()),
             server_public_key: super::support::TEST_SERVER_PUBLIC_KEY_HEX.to_string(),
             receipt_binding: goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
-            poll_interval_ms: 250,
-            // Short, so a run of a second meets several upload ticks that must not dial.
-            upload_interval_ms: 100,
-            upload_chunk_max: 256,
-            status_interval_ms: 1_000,
-            stall_after_seconds: 900.0,
-            silence_window_seconds: 60.0,
-            ack_lag_seconds: 300.0,
-            arming_timeout_seconds: None,
-            heartbeat_seconds: 60,
-            clock_skew_seconds: 120.0,
-            disk_reserve_bytes: 0,
             event: None,
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()

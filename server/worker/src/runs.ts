@@ -3,7 +3,8 @@
 
 import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
-import { type EntryRow, type MachineFacts, type RunRow, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, statusAt } from "./db.ts";
+import type { Env } from "./env.ts";
+import { type EntryRow, type MachineFacts, type RecordingState, type RunRow, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
 import {
   REPO_URL,
@@ -92,7 +93,7 @@ export function requireOpen(ctx: Ctx, run: RunRow, entry: EntryRow): void {
 /** A heartbeat's answer: is the run over now, and if so why (a later start replaced it, or its deadline came)? */
 function answerStop(ctx: Ctx, run: RunRow) {
   const stop = isPastEnd(run, ctx.now());
-  const reason = !stop ? null : run.replaced_at !== null && run.replaced_at < run.deadline_at ? "replaced" : "deadline";
+  const reason = !stop ? null : isReplaced(run) ? "replaced" : "deadline";
   return { stop, deadline_at: run.deadline_at, reason };
 }
 
@@ -213,15 +214,21 @@ export async function continueRun(ctx: Ctx, auth: Auth, runId: string, request: 
   }
 }
 
-/** GitHub says the repository exists and is public. Failures to ask are 502, so the tracer retries. */
-async function requirePublicGithubRepo(ctx: Ctx, repoUrl: string): Promise<void> {
-  const path = repoUrl.slice("https://github.com/".length); // owner/repo, shape already checked
+/** The headers every call to the GitHub API carries (the token, if there is one, only raises the rate limit). */
+export function githubHeaders(env: Env): Record<string, string> {
   const headers: Record<string, string> = {
     accept: "application/vnd.github+json",
     "user-agent": "goalcup-upload-worker",
     "x-github-api-version": "2022-11-28",
   };
-  if (ctx.env.GITHUB_TOKEN) headers.authorization = `Bearer ${ctx.env.GITHUB_TOKEN}`;
+  if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
+  return headers;
+}
+
+/** GitHub says the repository exists and is public. Failures to ask are 502, so the tracer retries. */
+async function requirePublicGithubRepo(ctx: Ctx, repoUrl: string): Promise<void> {
+  const path = repoUrl.slice("https://github.com/".length); // owner/repo, shape already checked
+  const headers = githubHeaders(ctx.env);
   let res: Response;
   try {
     res = await fetch(`https://api.github.com/repos/${path}`, { headers, signal: AbortSignal.timeout(8000) });
@@ -338,12 +345,11 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
   if (typeof b.final !== "boolean") throw malformed("final must be true or false.");
   const repo = b.repo_head ?? null;
   if (repo !== null && (typeof repo !== "string" || !/^[0-9a-f]{40}$/.test(repo))) throw malformed("repo_head must be null or 40 lowercase hex digits.");
-  // Optional facts about the recording; null is absent, as for repo_head. Only their shape is
-  // checked for now.
+  // Optional facts; null is absent, as for repo_head.
   if (b.recording != null && !["ok", "gaps", "failed", "unknown"].includes(b.recording as string)) {
     throw malformed('recording must be "ok", "gaps", "failed" or "unknown".');
   }
-  if (b.model_requests != null) uintField(b, "model_requests");
+  const model_requests = b.model_requests == null ? null : uintField(b, "model_requests");
   const { run, entry } = await requireRun(ctx, member, runId, entry_id);
   // An abandoned or closed run accepts nothing more, a final heartbeat included.
   requireAccepting(ctx, run);
@@ -357,6 +363,9 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
     offset_local,
     final: b.final,
     repo_head: b.final ? repo : null, // only the final heartbeat's repo head means anything
+    recording: (b.recording ?? null) as RecordingState | null,
+    model_requests,
+    ...clientFacts(request),
     at: formatTime(ctx.now()),
   });
   switch (result) {

@@ -51,13 +51,14 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/device.ts` | The device flow: start, poll, and the test-only approval |
 | `src/auth.ts` | Bearer run credential -> member, and the one run it may touch |
 | `src/runs.ts` | Open, continue, receipt, abandon, position, heartbeat, seal |
+| `src/notices.ts` | The 5-minute cron: close runs, record the GitHub commit at the deadline, queue the run emails |
 | `src/chunks.ts` | The chunk upload (early refusals, retry rule, streaming to R2, atomic commit) |
 | `src/sign.ts` | Ed25519 receipts and acks (byte-exact with the Rust formats) |
 | `src/db.ts` | The `Db` interface: one method per step |
 | `src/db-supabase.ts` | Production: one Postgres function per step, via PostgREST RPC |
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `sql/proposed-goalcup-functions.sql` | **Proposal** for the schema and functions SupabaseDb calls |
-| `test/` | `sign.test.ts` (Rust vectors), `config.test.ts`, `github.test.ts`, `supabase.test.ts` (RPC names and arguments, stubbed fetch), `local-db.test.ts`, `integration.test.ts`, `device.test.ts` and `segments.test.ts` (HTTP against `wrangler dev`), `lifecycle.test.ts` (the Worker in this process on a clock the test moves: replace, window, continue, close), `device-unit.test.ts` |
+| `test/` | `sign.test.ts` (Rust vectors), `config.test.ts`, `github.test.ts`, `supabase.test.ts` (RPC names and arguments, stubbed fetch), `local-db.test.ts`, `integration.test.ts`, `device.test.ts` and `segments.test.ts` (HTTP against `wrangler dev`), `lifecycle.test.ts` (the Worker in this process on a clock the test moves: replace, window, continue, close), `notices.test.ts` (the same rig, running the cron), `device-unit.test.ts` |
 
 ## Configuration
 
@@ -71,7 +72,7 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's `deadline_at` = `official_start` + this many minutes. |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local`. `local` is for `wrangler dev` and tests. Never set it in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | placeholder in `wrangler.toml` | The website's page where a member approves a device request, without a query string. The Worker answers `verification_uri` with it and `verification_uri_complete` with `?code=<user code>` added. |
-| `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. |
+| `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. Set only in `[env.staging.vars]` of `wrangler.toml`. |
 | `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask the GitHub API that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off so they need no network). A missing or private repository is `400`; GitHub being unreachable or rate-limiting is `502`, which the tracer retries. |
 | `MAINTENANCE` | off | `on` makes every call answer `503 maintenance` with `Retry-After`, before authentication and before any body is read. |
 | `MAINTENANCE_RETRY_AFTER` | `300` | Seconds for that header. |
@@ -86,7 +87,7 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 | `RECEIPT_SIGNING_KEY` | The Ed25519 seed, 32 bytes as 64 hex characters, generated offline. Its public key is what the tracer pins. |
 | `SUPABASE_URL` | `https://<project>.supabase.co` (supabase backend). |
 | `SUPABASE_KEY` | Key of a dedicated role limited to schema `goalcup` (see the SQL header). Not the community-wide service key. |
-| `GITHUB_TOKEN` | Optional. Read-only; only raises the GitHub API rate limit. |
+| `GITHUB_TOKEN` | Read-only token for public repositories. **Required in production and staging:** the cron asks GitHub for each run's commit at its deadline, and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses, so without a token those calls fail. Optional locally. |
 | `TEST_APPROVAL_KEY` | **Tests and staging only.** Switches on `POST /v1/device/approve`, which approves a device request as any member (`Authorization: Bearer <key>`). Honoured only with `DB_BACKEND=local` or `STAGING=on`; set anywhere else, every call answers `500 misconfigured`. Unset, the route does not exist (`404`). Never set it in production. |
 
 ## What is checked where
@@ -139,15 +140,17 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
      pinned in the tracer and verifier.
    - `SUPABASE_URL` and `SUPABASE_KEY`: the key of a dedicated Postgres role (`goalcup_worker` in
      the proposed SQL) that can execute the `goalcup.upload_*` functions and nothing else.
-   - Optionally `GITHUB_TOKEN` (read access to public repositories).
+   - `GITHUB_TOKEN` (read access to public repositories), for the production Worker and for staging.
 4. **Supabase, in the website repo** (the website repo owns the schema): migrations for schema
-   `goalcup` with row-level security, and the fourteen `upload_*` functions. `sql/proposed-goalcup-functions.sql`
+   `goalcup` with row-level security, and the seventeen `upload_*` functions. `sql/proposed-goalcup-functions.sql`
    is a proposal to start from. It was run only against a throwaway local PostgreSQL, never against Supabase.
    The owner also has to decide or provide:
    - the `events` rows (start window, `run_hours`) and the `EVENT_ID` the Worker
      is deployed with; the proposal checks that the event exists and that now is inside its start
      window, while `RUN_HOURS` comes from the Worker's variables;
    - where "accepted the current terms" lives (the proposal assumes `goalcup.consents`);
+   - the mailer: it reads the unsent rows of `goalcup.notices` (the Worker's cron queues them: `started`,
+     `silence`, `idle_3h`, `idle_6h`, `recording`, `ended`), writes each email, sends it and sets `sent_at`;
    - the approval page for device requests (it calls `goalcup.goalcup_approve_device`; only the
      `sha256` of codes and credentials is stored), and the member's handle for `member_handle`;
    - exposing schema `goalcup` to PostgREST (RPC needs it) while revoking everything from `anon`
@@ -189,8 +192,40 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
   configuration, goes to the Worker's log only); the tracer retries any 5xx.
 - A run that is over is closed the first time anyone looks at it (any call naming the run) once it
   is: `sealed` if its current entry is sealed, `incomplete` more than 24 hours after its end
-  without that; it then answers `410`. There is no scheduled job yet. (`abandoned` is only the
-  participant's own `abandon`.)
+  without that; it then answers `410`. The cron (below) does the same for runs nobody looks at.
+  (`abandoned` is only the participant's own `abandon`.)
+
+## The cron, as implemented
+
+`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes (`[triggers]` in
+`wrangler.toml`). It builds the same context a request does and runs three steps, each with its own
+try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`. All take the time as a parameter. They
+read `Db.runsForTick(now)` (open runs, and runs that ended in the last 48 hours; never abandoned
+ones) and write with `Db.closeRun`, `Db.recordFinalCommit` and `Db.queueNotices` (one call for the whole batch). The constants
+(20 minutes of silence, idle at 3 and 6 hours, an hour to wait for the commit, 50 GitHub calls per
+tick) are in `notices.ts` and have no variable. The rules are in `docs/UPLOAD-API.md`, "What the
+server does on its own". Locally, `wrangler dev --test-scheduled` and `curl
+localhost:8787/__scheduled` run one tick; the outbox rows are the objects under `state/notices/`.
+Cost: each step reads the run list with one call (three in all), `queueNotices` makes one call for
+the whole batch of notices however many runs there are (every open run owes `started` each tick; the
+database skips what is there already), `closeRuns` makes one call per run that is due to close, and
+`recordFinalCommits` makes at most 50 GitHub fetches and 50 writes. That is about a hundred
+subrequests in a busy tick, not one per open run. It still assumes the paid Workers plan (the free
+plan allows 50 subrequests per invocation). A run that fails in `closeRuns` or `recordFinalCommits`
+is logged (`tick <step> <run_id>: <message>`) and the rest go on; a failed notice batch is logged
+once (`tick queueNotices: <message>`) and the next tick sends the same batch again, which is safe
+because a notice is stored once per run, kind and key.
+The Worker's tests call `worker.scheduled` on a moved clock (`test/helpers/inproc.ts`, `tick`).
+
+## Staging
+
+`wrangler deploy --env staging` makes a second Worker, `goalcup-upload-staging`, with its own
+bucket and its own event ids, `STAGING = "on"` and the same cron. It is the one place besides local
+tests where `TEST_APPROVAL_KEY` may exist, as a secret (`wrangler secret put TEST_APPROVAL_KEY --env
+staging`), and it must point at a Supabase project (or role) of its own. `wrangler.toml` repeats
+every `[vars]` entry for staging, because wrangler does not copy them into an environment.
+`test/config.test.ts` reads the file and fails if the top level names `TEST_APPROVAL_KEY` or sets
+`STAGING = "on"`.
 
 ## The end of a run, as implemented
 

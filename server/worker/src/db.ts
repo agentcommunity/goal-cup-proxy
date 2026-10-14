@@ -24,6 +24,11 @@ export function endsAt(run: { deadline_at: string; replaced_at: string | null })
   return run.replaced_at !== null && run.replaced_at < run.deadline_at ? run.replaced_at : run.deadline_at;
 }
 
+/** A later start replaced the run before its deadline. */
+export function isReplaced(run: { deadline_at: string; replaced_at: string | null }): boolean {
+  return run.replaced_at !== null && run.replaced_at < run.deadline_at;
+}
+
 /** True once the server's clock is at or past the end of the run: the run is over. */
 export function isPastEnd(run: { deadline_at: string; replaced_at: string | null }, now: Date): boolean {
   return now.getTime() >= new Date(endsAt(run)).getTime();
@@ -215,6 +220,9 @@ export interface CommitChunkArgs {
  */
 export type CommitChunkResult = "committed" | "conflict" | "beyond_final" | "closed" | "not_found";
 
+/** How the tracer says its own recording is going. */
+export type RecordingState = "ok" | "gaps" | "failed" | "unknown";
+
 export interface HeartbeatArgs {
   member_id: string;
   run_id: string;
@@ -224,13 +232,23 @@ export interface HeartbeatArgs {
   offset_local: number;
   final: boolean;
   repo_head: string | null; // 40 hex, final only
+  /** Optional facts the heartbeat carries; null when it did not send them. */
+  recording: RecordingState | null;
+  model_requests: number | null;
+  /** Server-side facts about the connection (never shown to anyone). */
+  client_ip: string | null;
+  client_country: string | null;
   at: string;
 }
 /**
- * `recorded`: an ordinary heartbeat was noted. `final_committed` / `final_existing`: the final
- * heartbeat's (seq, head) is now / already was the committed end. `final_conflict`: a different
- * end is committed, or the chain the server holds already contradicts this one. `closed`: the run
- * is abandoned or incomplete.
+ * `recorded`: an ordinary heartbeat was noted. Either kind sets the run's last heartbeat and its
+ * latest IP and country (a missing one keeps the last). A `recording` of `gaps` or `failed` flags
+ * the run (once, the first wins). `model_requests` is kept per entry (a continued process counts
+ * from zero): the first one an entry reports, and any above that entry's stored value, stores it
+ * and moves the run's last model request to `at`; a lower or equal one changes nothing. Anything
+ * else changes nothing. `final_committed` / `final_existing`: the final heartbeat's (seq, head)
+ * is now / already was the committed end. `final_conflict`: a different end is committed, or the
+ * chain the server holds already contradicts this one. `closed`: the run is abandoned or incomplete.
  */
 export type HeartbeatResult = "recorded" | "final_committed" | "final_existing" | "final_conflict" | "closed" | "not_found";
 
@@ -290,6 +308,35 @@ export interface Credential {
   expires_at: string;
 }
 
+/** A run as the cron reads it: the run, and what the heartbeats and the deadline added to it. */
+export interface TickRun extends RunRow {
+  /** The latest heartbeat of any of its entries. */
+  last_heartbeat_at: string | null;
+  /** When an entry's `model_requests` was first reported or last grew; null until a heartbeat reports it. */
+  last_model_request_at: string | null;
+  /** When a heartbeat first said the recording had `gaps` or `failed`, and which of the two. */
+  flagged_at: string | null;
+  flag_reason: "gaps" | "failed" | null;
+  /** The GitHub commit at the deadline: 40 hex, `none` for a repository GitHub does not have, null until asked. */
+  final_commit: string | null;
+}
+
+/** A run that is over this long, and no longer open, is not looked at by the cron any more. */
+export const TICK_LOOKBACK_SECONDS = 48 * 3600;
+
+export type NoticeKind = "started" | "silence" | "idle_3h" | "idle_6h" | "recording" | "ended";
+
+/** One row for the outbox: the website's mailer turns it into an email. */
+export interface NoticeArgs {
+  run_id: string;
+  member_id: string;
+  kind: NoticeKind;
+  /** What makes this the same notice again: a notice is queued once per (run, kind, dedupe_key). */
+  dedupe_key: string;
+  payload: Record<string, unknown>;
+  at: string;
+}
+
 export interface Db {
   /** Start a device request. The two hashes must be new. */
   createDevice(args: CreateDeviceArgs): Promise<void>;
@@ -317,6 +364,15 @@ export interface Db {
    * now (null if the run is not this member's).
    */
   closeRun(memberId: string, runId: string, at: string): Promise<RunStatus | null>;
+  /** Every run that is open, and every run that ended within `TICK_LOOKBACK_SECONDS` before `now`, except abandoned ones. Oldest first. */
+  runsForTick(now: string): Promise<TickRun[]>;
+  /**
+   * Queue notices, each unless one with the same run, kind and key exists, in one call. Returns how
+   * many this call queued. A batch that fails is retried whole: the key makes that safe.
+   */
+  queueNotices(notices: NoticeArgs[]): Promise<number>;
+  /** Store the commit found at the deadline (a 40-hex sha, or `none`). The first one stored stays. */
+  recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void>;
   /** A stored chunk of the entry that starts at `offset`, or null. */
   getChunk(memberId: string, runId: string, entryId: string, offset: number): Promise<ChunkRecord | null>;
   storeReceipt(memberId: string, runId: string, entryId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult>;

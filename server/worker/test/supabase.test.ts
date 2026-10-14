@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import type { ChunkRecord, EntryRow, OpenRunArgs, RunRow } from "../src/db.ts";
+import type { ChunkRecord, EntryRow, NoticeArgs, OpenRunArgs, RunRow, TickRun } from "../src/db.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
 import { ApiError } from "../src/errors.ts";
 import type { StartReceipt } from "../src/sign.ts";
@@ -252,7 +252,10 @@ test("sealRun -> upload_seal_run, with the run's status after it", async () => {
 
 test("recordHeartbeat -> upload_heartbeat", async () => {
   const calls = stub("recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found");
-  const a = { member_id: "m", run_id: "r1", entry_id: "e1", seq: 9, head: H("9"), offset_local: 1234, final: true, repo_head: "f".repeat(40), at: "t" };
+  const a = {
+    member_id: "m", run_id: "r1", entry_id: "e1", seq: 9, head: H("9"), offset_local: 1234, final: true, repo_head: "f".repeat(40),
+    recording: "gaps" as const, model_requests: 77, client_ip: "203.0.113.9", client_country: "DE", at: "t",
+  };
   for (const want of ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"]) {
     assert.equal(await db().recordHeartbeat(a), want);
   }
@@ -260,9 +263,65 @@ test("recordHeartbeat -> upload_heartbeat", async () => {
     fn: "upload_heartbeat",
     args: {
       p_member_id: "m", p_run_id: "r1", p_entry_id: "e1", p_seq: 9, p_head: H("9"), p_offset_local: 1234,
-      p_final: true, p_repo_head: "f".repeat(40), p_at: "t",
+      p_final: true, p_repo_head: "f".repeat(40), p_recording: "gaps", p_model_requests: 77,
+      p_client_ip: "203.0.113.9", p_client_country: "DE", p_at: "t",
     },
   });
+  // Fields that were not sent go as null.
+  const calls2 = stub("recorded");
+  await db().recordHeartbeat({ ...a, recording: null, model_requests: null, client_ip: null, client_country: null });
+  assert.deepEqual([calls2[0]!.args.p_recording, calls2[0]!.args.p_model_requests, calls2[0]!.args.p_client_ip, calls2[0]!.args.p_client_country], [null, null, null, null]);
+});
+
+const tickRun: TickRun = {
+  ...run, last_heartbeat_at: "2026-11-06T09:05:00Z", last_model_request_at: T, flagged_at: null, flag_reason: null, final_commit: null,
+};
+
+test("runsForTick -> upload_runs_for_tick(p_at), each row checked", async () => {
+  const flagged = { ...tickRun, run_id: "r0000000000000002", flagged_at: T, flag_reason: "gaps", final_commit: "none", last_heartbeat_at: null, last_model_request_at: null };
+  const calls = stub([tickRun, flagged], [], null);
+  assert.deepEqual(await db().runsForTick(T), [tickRun, flagged]);
+  assert.deepEqual(await db().runsForTick(T), []);
+  assert.deepEqual(calls[0], { fn: "upload_runs_for_tick", args: { p_at: T } });
+  const quiet = console.error;
+  const lines: string[] = [];
+  console.error = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  try {
+    await assert.rejects(db().runsForTick(T), (e) => e instanceof ApiError && e.status === 502); // not a list
+    for (const bad of [{ last_model_request_at: "yesterday" }, { flag_reason: "dunno" }, { final_commit: "abc" }, { last_heartbeat_at: 5 }, { status: "finished" }]) {
+      stub([{ ...tickRun, ...bad }]);
+      await assert.rejects(db().runsForTick(T), (e) => e instanceof ApiError && e.status === 502, JSON.stringify(bad));
+    }
+  } finally {
+    console.error = quiet;
+  }
+  assert.ok(lines.some((l) => l.includes("last_model_request_at") && !l.includes("yesterday")), lines.join("\n"));
+});
+
+test("queueNotices -> one upload_queue_notices call with the whole batch, the count back", async () => {
+  const n: NoticeArgs = { run_id: "r1", member_id: "m", kind: "silence", dedupe_key: T, payload: { last_heartbeat_at: T }, at: "t" };
+  const batch = [n, { ...n, run_id: "r2", kind: "started" as const, dedupe_key: "" }];
+  const calls = stub(2, 0, "two", -1, 1.5);
+  assert.equal(await db().queueNotices(batch), 2);
+  assert.equal(await db().queueNotices(batch), 0);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], { fn: "upload_queue_notices", args: { p_notices: batch } });
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    for (let i = 0; i < 3; i++) await assert.rejects(db().queueNotices(batch), (e) => e instanceof ApiError && e.status === 502);
+  } finally {
+    console.error = quiet;
+  }
+  assert.equal(await db().queueNotices([]), 0);
+  assert.equal(calls.length, 5, "an empty batch is not sent");
+});
+
+test("recordFinalCommit -> upload_record_final_commit", async () => {
+  const calls = stub(true, false);
+  await db().recordFinalCommit("m", "r1", "a".repeat(40), "t");
+  await db().recordFinalCommit("m", "r1", "none", "t");
+  assert.deepEqual(calls[0], { fn: "upload_record_final_commit", args: { p_member_id: "m", p_run_id: "r1", p_commit: "a".repeat(40), p_at: "t" } });
 });
 
 test("closeRun -> upload_close_run", async () => {

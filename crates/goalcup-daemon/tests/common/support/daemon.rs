@@ -21,17 +21,6 @@ pub fn config_at(root: &Path, upload_url: &str) -> DaemonConfig {
         upload_url: upload_url.to_string(),
         server_public_key: super::TEST_SERVER_PUBLIC_KEY_HEX.to_string(),
         receipt_binding: goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
-        poll_interval_ms: 250,
-        upload_interval_ms: 2_000,
-        upload_chunk_max: 256,
-        status_interval_ms: 1_000,
-        stall_after_seconds: 900.0,
-        silence_window_seconds: 60.0,
-        ack_lag_seconds: 300.0,
-        arming_timeout_seconds: None,
-        heartbeat_seconds: 60,
-        clock_skew_seconds: 120.0,
-        disk_reserve_bytes: 0,
         // No round configured: the signed status carries the entry's own timeline and
         // says so, through `event_status_source: "fallback"`.
         event: None,

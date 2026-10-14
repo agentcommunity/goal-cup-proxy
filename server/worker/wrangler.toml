@@ -47,6 +47,41 @@ MAINTENANCE_RETRY_AFTER = "300"
 #   RECEIPT_SIGNING_KEY  Ed25519 seed, 64 hex characters, generated offline
 #   SUPABASE_URL         https://<project>.supabase.co
 #   SUPABASE_KEY         key of the dedicated role limited to schema goalcup
-#   GITHUB_TOKEN         optional, read-only, raises the GitHub API rate limit
+#   GITHUB_TOKEN         read-only; required in production and staging (the cron's commit fetch fails without it)
 #   TEST_APPROVAL_KEY    never in production. Staging only (with STAGING = "on"): switches on
 #                        POST /v1/device/approve, which approves a device request as any member.
+
+# The 5-minute cron (src/notices.ts): closes runs that are over, records the GitHub commit at each
+# deadline, queues the run emails into the outbox. Staging repeats it below.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Staging: `wrangler deploy --env staging` makes a second Worker, goalcup-upload-staging, on its own
+# bucket and its own events. It is the only deployment that may hold TEST_APPROVAL_KEY (a secret,
+# set with `wrangler secret put TEST_APPROVAL_KEY --env staging`, never in this file). wrangler
+# copies neither `vars` nor `r2_buckets` into an environment, so staging repeats every one.
+[env.staging]
+name = "goalcup-upload-staging"
+# routes = [{ pattern = "ingest-staging.example.org", custom_domain = true }]
+
+[env.staging.triggers]
+crons = ["*/5 * * * *"]
+
+[[env.staging.r2_buckets]]
+binding = "TRACES"
+# PLACEHOLDER: a private bucket of its own, never the production one.
+bucket_name = "replace-me-goalcup-traces-staging"
+preview_bucket_name = "replace-me-goalcup-traces-staging-preview"
+
+[env.staging.vars]
+STAGING = "on"
+EVENT_ID = "competition-staging"
+PRACTICE_EVENT_ID = "practice-staging"
+RUN_HOURS = "168"
+PRACTICE_RUN_MINUTES = "10"
+DB_BACKEND = "supabase"
+GITHUB_CHECK = "on"
+# PLACEHOLDER: the staging website's approval page.
+APPROVAL_URL = "https://staging.example.org/goalcup/approve"
+MAINTENANCE = "off"
+MAINTENANCE_RETRY_AFTER = "300"

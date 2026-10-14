@@ -129,8 +129,10 @@ credential opens a practice run, in the practice event.
 
 `machine` is optional: facts about the machine, a flat JSON object whose values are strings,
 numbers, booleans or `null`, at most 4 KiB serialized (else `400`; `null` means absent). The server
-keeps it on the run and never shows it. It also keeps the connection's IP address and country on the
-run (from Cloudflare), and again on each `continue`; they are never in an answer, a key or a log.
+keeps it on the run and never shows it. It also keeps the connection's IP address and country (from
+Cloudflare) on the run: the open call's pair, which stays, and the latest pair, which each `continue`
+and each heartbeat moves (a call without one keeps the last). They are never in an answer, a key or
+a log.
 
 `repo_url` is `https://github.com/<owner>/<repo>` exactly: the owner is ASCII letters, digits and
 `-`; the repository is ASCII letters, digits, `-`, `_` and `.`, and is never `.` or `..`. Anything
@@ -276,7 +278,13 @@ repository had checked out when the run ended (final heartbeat only; `null` when
 Two optional fields may be added: `"recording": "ok" | "gaps" | "failed" | "unknown"` (how the
 tracer sees its own recording) and `"model_requests": <u64>` (model calls seen so far, cumulative,
 at most 2^53 - 1). A heartbeat without them is as before, and `null` means absent, as for
-`repo_head`. The server checks their shape and records nothing else about them yet.
+`repo_head`. The first `gaps` or `failed` flags the run, once. `model_requests` is counted per
+entry, because a continued process counts from zero: the first value an entry reports, and any
+value above the highest that entry has reported, moves the run's last model request to this
+heartbeat; a lower or equal one changes nothing. Every heartbeat also sets the run's latest
+heartbeat time (whichever entry sent it), and the server keeps the connection's IP address and
+country on the heartbeat and as the run's latest pair, as for the open call. The notices that follow
+from these are under "What the server does on its own".
 
 `200`: `{"stop": <bool>, "deadline_at": "…", "reason": "deadline" | "replaced" | null}`. `stop` is
 `true` once the server's clock is at or past `ends_at`: **the run is over**. The tracer then stops
@@ -307,12 +315,13 @@ in. There is no grace period and no late window.
   (see the seal call). Every entry of the run, not only the current one, is accepted, so an older
   segment finishes its wrap-up.
 - **Before `ends_at`** an entry that has a committed end accepts nothing past it either.
-- **Closed.** 24 hours after `ends_at` the server closes the run: `sealed` if its current entry is
-  sealed, else `incomplete` (the last piece is missing; the run is judged on what arrived). It
-  accepts nothing more (`410`), including a repeat of the final heartbeat; only a chunk it already
-  stored and a seal it already answered are answered again (`200`). A run that ended at its
-  deadline closes when its credential expires, so for it the participant meets `401`, not `410`.
-  `abandoned` is only the participant's own `abandon` call before any chunk.
+- **Closed.** 24 hours after `ends_at` the server closes the run (the cron, or the first call that
+  names it): `sealed` if its current entry is sealed, else `incomplete` (the last piece is missing;
+  the run is judged on what arrived). It accepts nothing more (`410`), including a repeat of the
+  final heartbeat; only a chunk it already stored and a seal it already answered are answered again
+  (`200`). A run that ended at its deadline closes when its credential expires, so for it the
+  participant meets `401`, not `410`. `abandoned` is only the participant's own `abandon` call
+  before any chunk.
 - Which records count is the verify job's: a record stamped after `deadline_at` does not, however
   it arrived.
 
@@ -337,6 +346,48 @@ The previous entry is not sealed or closed by this; it may still upload its wrap
 - At or after the run's end (`ends_at`) the answer is `410`, as it is for an abandoned or closed run.
 - The same call again (the latest entry was made by a `continue` with this `session_id` after this
   `previous_entry_id`) is `200` with the same answer, so a lost reply is not a second segment.
+
+## What the server does on its own
+
+A cron runs every 5 minutes. It does three things, in this order, and a step that fails is logged
+and does not stop the next: it closes runs that are over (so a run's status is final without any
+call naming it), it records the GitHub commit at each deadline, and it queues the run emails. A
+tracer sees none of this. The Worker never sends mail: it writes rows to an outbox, and the
+website's mailer sends the emails and marks the rows sent. (While the maintenance switch is on the
+cron does nothing, since no tracer can send a heartbeat.)
+
+**The commit at the deadline.** For a competition run that reached its deadline (not a replaced run,
+not practice), the server asks GitHub for the head commit of `repo_url`
+(`GET /repos/{owner}/{repo}/commits/HEAD`, 8 seconds, at most 50 runs per tick, oldest first) and
+keeps the sha, with the time it was asked (`final_commit_at`). It is asked on the first tick at or
+after `ends_at`, not at that instant, so it may include pushes made in the minutes after the
+deadline; the final heartbeat's `repo_head` is the tracer's own account. GitHub saying the
+repository does not exist or is empty (`404`, `409`) is kept as "no commit". Any other answer, or
+none, keeps nothing and the next tick asks again. Runs that ended more than 48 hours ago and are
+closed are not asked.
+
+**The six emails.** Each is queued at most once per run, kind and key. None is queued for a practice
+run, and none after the run's end except `ended`.
+
+| Kind | Queued when | Once per |
+|---|---|---|
+| `started` | a competition run is open (before its end) | run |
+| `silence` | the run's last heartbeat (or its start, if none yet) is more than 20 minutes old | last heartbeat time |
+| `idle_3h` | the run is beating (last heartbeat within 20 minutes), has reported `model_requests` at least once, and its last model request is more than 3 hours old | last model request |
+| `idle_6h` | the same, 6 hours | last model request |
+| `recording` | a heartbeat has flagged the run (`gaps` or `failed`) | run |
+| `ended` | the run reached its deadline (a replaced run is not the main run and has none) and the commit was recorded, or an hour has passed without it | run |
+
+The last model request is unset until a heartbeat first reports `model_requests`, so a tracer that
+never reports gets no idle email; once set, it moves whenever any entry's count first appears or
+grows (a continue's new process reporting 2 after the old one reached 50 counts). A run that comes back
+and goes quiet again gets a new `silence`; a new model request starts a new idle period. The
+`ended` payload holds the end time, the commit (or none) and the repository.
+
+**What is stored, and only on the server.** The outbox row holds the run, the member, the kind, the
+key and a small payload (times, hours, the commit, the repository). The run holds the machine facts
+from the open call, the IP address and country of the open call, and the latest pair (moved by each
+`continue` and heartbeat). None of it is in any answer, key or log, and none of it is public.
 
 ## Not built yet
 

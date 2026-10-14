@@ -368,7 +368,10 @@ fn upload_worker_a_wrong_token_starts_nothing() {
 }
 
 /// The Worker ends a run at its deadline: its heartbeat answer says stop, the tracer stops the
-/// agent at once and seals, commits the end in a final heartbeat, and uploads up to it.
+/// agent at once and seals, commits the end in a final heartbeat, and uploads up to it. The
+/// tracer's own clock and the Worker's answer reach the deadline in the same second, so either
+/// may be the one that stops the run; what the test holds is on the Worker's side: the end it
+/// committed is the last record, and the entry is sealed.
 #[test]
 #[ignore = "needs Node and `npm install` in server/worker"]
 fn upload_worker_the_worker_stops_the_run_at_its_deadline() {
@@ -394,7 +397,8 @@ fn upload_worker_the_worker_stops_the_run_at_its_deadline() {
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     assert!(started.elapsed() < Duration::from_secs(30), "{out}");
     assert!(
-        out.contains("deadline: the server says the run is over"),
+        out.contains("deadline: the server says the run is over")
+            || out.contains("deadline: the run's time is up by this machine's clock"),
         "{out}"
     );
     let position = worker.get(
@@ -402,6 +406,11 @@ fn upload_worker_the_worker_stops_the_run_at_its_deadline() {
         &credential,
     );
     assert_eq!(position["stop"], true, "{position}");
-    assert!(position["final"].is_object(), "{position}");
+    let chain = std::fs::read(rig.trace(&outcome.entry_id).join("chain.jsonl")).unwrap();
+    let records = chain
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+        .count() as u64;
+    assert_eq!(position["final"]["seq"], records - 1, "{position}");
     assert_fully_uploaded(&rig, &worker, &credential, &outcome.entry_id);
 }
