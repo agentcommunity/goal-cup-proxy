@@ -240,6 +240,17 @@ pub fn build_chunk(
     tally.inner.sync_all().map_err(io_error(spool))?;
     if lines == 0 {
         let _ = std::fs::remove_file(spool);
+        // A closed part ends at a whole record (it is closed at a durable frontier), so bytes
+        // before its end that hold no whole line mean the part is damaged: waiting would
+        // stall the upload for good, silently.
+        if parts.last().is_some_and(|last| last.start != part.start) {
+            return Err(CliError::Internal(format!(
+                "{} is closed but holds no whole record at byte {}, so the upload cannot go on \
+                 past it",
+                chain.display(),
+                pos.offset
+            )));
+        }
         return Ok(None);
     }
     if tally.bytes > MAX_CHUNK_BYTES {
@@ -387,9 +398,7 @@ impl Uploader {
             acked_offset: std::sync::Arc::new(AtomicU64::new(0)),
         };
         uploader.adopt_server_ack(&position);
-        uploader
-            .acked_offset
-            .store(uploader.pos.offset, Ordering::SeqCst);
+        uploader.adopt_verified_offset(&position);
         Ok(uploader)
     }
 
@@ -406,9 +415,36 @@ impl Uploader {
 
     /// Hand the run's two shared counters to this uploader, replacing its own.
     fn share(&mut self, last_ok: &std::sync::Arc<AtomicU64>, acked: &std::sync::Arc<AtomicU64>) {
+        let verified = self.acknowledged();
         self.last_ok = last_ok.clone();
         self.acked_offset = acked.clone();
-        self.acked_offset.store(self.pos.offset, Ordering::SeqCst);
+        self.acked_offset.store(verified, Ordering::SeqCst);
+    }
+
+    /// Bytes of the chain this uploader has verified the server holds: what the disk watch may
+    /// delete behind. It is raised only to an offset a signed chunk acknowledgement proved, or
+    /// to a server position the local chain confirms ([`Self::adopt_verified_offset`]); never
+    /// to a number the server merely reports.
+    pub fn acknowledged(&self) -> u64 {
+        self.acked_offset.load(Ordering::SeqCst)
+    }
+
+    /// Take the server's reported position as the acknowledged offset only if it is shown
+    /// true: offset 0, or the local record ending exactly at `offset` has the `seq` and hash
+    /// the server names. Anything else leaves the offset as it was (lowering is always safe;
+    /// raising to an unverified value would let the watch delete bytes the server never held).
+    fn adopt_verified_offset(&self, position: &RunPosition) {
+        let verified = position.offset == 0
+            || self
+                .parts()
+                .ok()
+                .and_then(|parts| local_link_before(&parts, position.offset))
+                .is_some_and(|(seq, hash)| {
+                    position.next_seq.checked_sub(1) == Some(seq) && hash == position.head
+                });
+        if verified {
+            self.acked_offset.store(position.offset, Ordering::SeqCst);
+        }
     }
 
     /// Bytes of chain waiting to be sent (an upper bound).
@@ -529,8 +565,7 @@ impl Uploader {
             });
         }
         self.pos = moved;
-        // What the server holds is what this machine may delete behind.
-        self.acked_offset.store(self.pos.offset, Ordering::SeqCst);
+        self.adopt_verified_offset(&position);
         Ok(())
     }
 

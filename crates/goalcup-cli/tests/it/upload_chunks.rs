@@ -298,6 +298,40 @@ fn upload_continues_from_the_server_offset_after_parts_were_deleted() {
 }
 
 #[test]
+fn a_closed_part_without_a_whole_record_is_an_error_not_a_stall() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (bytes, hashes) = chain(3);
+    let line = bytes.len() / 3;
+    // Part 0 ends in a torn line (it cannot be, for a part the daemon closed); a later part
+    // exists.
+    std::fs::write(tmp.path().join(part_file_name(0)), &bytes[..line + 10]).unwrap();
+    std::fs::write(
+        tmp.path().join(part_file_name(line as u64 + 10)),
+        &bytes[line + 10..],
+    )
+    .unwrap();
+    let at = Position {
+        offset: line as u64,
+        next_seq: 1,
+        head: hashes[0].clone(),
+    };
+    let error = build_chunk(&parts_in(tmp.path()), &at, &tmp.path().join("s.zst"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("closed but holds no whole record"),
+        "{error}"
+    );
+    // The same torn tail in the last (live) part just waits.
+    std::fs::remove_file(tmp.path().join(part_file_name(line as u64 + 10))).unwrap();
+    assert!(
+        build_chunk(&parts_in(tmp.path()), &at, &tmp.path().join("s.zst"))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn local_end_reads_the_last_part() {
     use goalcup_cli::upload::uploader::local_end;
     let tmp = tempfile::tempdir().unwrap();
@@ -399,6 +433,9 @@ mod retries {
         url: String,
         seen: Arc<Mutex<Vec<String>>>,
         stop: Arc<AtomicBool>,
+        /// When set, the position the server reports (`GET /v1/runs/{id}`) is rewritten to this
+        /// `(offset, next_seq, head)`: a server that is wrong, or lying.
+        lie: Arc<Mutex<Option<(u64, u64, String)>>>,
     }
 
     impl Front {
@@ -409,20 +446,32 @@ mod retries {
             let seen = Arc::new(Mutex::new(Vec::new()));
             let stop = Arc::new(AtomicBool::new(false));
             let fault = Arc::new(Mutex::new(fault));
-            let (seen_in, stop_in) = (seen.clone(), stop.clone());
+            let lie = Arc::new(Mutex::new(None));
+            let (seen_in, stop_in, lie_in) = (seen.clone(), stop.clone(), lie.clone());
             std::thread::spawn(move || {
                 while !stop_in.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let (target, fault, seen) =
-                                (target.clone(), fault.clone(), seen_in.clone());
-                            std::thread::spawn(move || answer(stream, &target, &fault, &seen));
+                            let (target, fault, seen, lie) = (
+                                target.clone(),
+                                fault.clone(),
+                                seen_in.clone(),
+                                lie_in.clone(),
+                            );
+                            std::thread::spawn(move || {
+                                answer(stream, &target, &fault, &seen, &lie)
+                            });
                         }
                         Err(_) => std::thread::sleep(Duration::from_millis(5)),
                     }
                 }
             });
-            Front { url, seen, stop }
+            Front {
+                url,
+                seen,
+                stop,
+                lie,
+            }
         }
 
         fn count(&self, prefix: &str) -> usize {
@@ -446,6 +495,7 @@ mod retries {
         target: &str,
         fault: &Mutex<Fault>,
         seen: &Mutex<Vec<String>>,
+        lie: &Mutex<Option<(u64, u64, String)>>,
     ) {
         stream.set_nonblocking(false).unwrap();
         stream
@@ -504,11 +554,19 @@ mod retries {
                     .header("Content-Type")
                     .unwrap_or("application/json")
                     .to_string();
-                (
-                    response.status(),
-                    content_type,
-                    response.into_string().unwrap().into_bytes(),
-                )
+                let status = response.status();
+                let mut reply = response.into_string().unwrap().into_bytes();
+                if method == "GET"
+                    && path.matches('/').count() == 3
+                    && let Some((offset, next_seq, head)) = lie.lock().unwrap().clone()
+                {
+                    let mut json: serde_json::Value = serde_json::from_slice(&reply).unwrap();
+                    json["offset"] = offset.into();
+                    json["next_seq"] = next_seq.into();
+                    json["head"] = head.into();
+                    reply = serde_json::to_vec(&json).unwrap();
+                }
+                (status, content_type, reply)
             }
         };
         let head = format!(
@@ -717,6 +775,95 @@ mod retries {
         assert_eq!(chunks.len(), 2, "one chunk for each part");
         assert_eq!(chunks[1].offset, 2 * line as u64);
         assert_eq!(chunks[1].head, hashes[2]);
+    }
+
+    /// A run whose chain is two records in `chain.jsonl` and one in a later part, unsealed.
+    fn run_in_two_parts(fault: Fault) -> (Run, usize) {
+        let run = Run::new(fault);
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        let (bytes, _) = chain(3);
+        let line = bytes.len() / 3;
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        std::fs::write(trace.join("chain.jsonl"), &bytes[..2 * line]).unwrap();
+        std::fs::write(
+            trace.join(goalcup_protocol::export::part_file_name(2 * line as u64)),
+            &bytes[2 * line..],
+        )
+        .unwrap();
+        (run, line)
+    }
+
+    fn sweep_far_ahead(run: &Run, acknowledged: u64) -> usize {
+        use goalcup_cli::run::{EntryRef, watch::Pruner};
+        let entry = EntryRef {
+            entry_id: run.record.entry_id.clone(),
+            trace_dir: std::path::PathBuf::from(&run.record.trace_dir),
+        };
+        let mut pruner = Pruner::default();
+        let t0 = Instant::now();
+        pruner.sweep(
+            std::slice::from_ref(&entry),
+            &|_| acknowledged,
+            t0,
+            &mut |_| {},
+        );
+        pruner.sweep(
+            std::slice::from_ref(&entry),
+            &|_| acknowledged,
+            t0 + Duration::from_secs(3 * 3600),
+            &mut |_| {},
+        );
+        goalcup_protocol::export::chain_parts(&entry.trace_dir)
+            .unwrap()
+            .len()
+    }
+
+    #[test]
+    fn a_server_position_the_local_chain_does_not_confirm_is_not_an_acknowledgement() {
+        // Resume against a server that says it holds far more than exists, with a foreign head.
+        let (run, _) = run_in_two_parts(Box::new(|_| None));
+        *run.front.lie.lock().unwrap() = Some((10_000_000, 99_999, "f".repeat(64)));
+        let uploader = run.uploader();
+        assert_eq!(uploader.acknowledged(), 0);
+        assert_eq!(
+            sweep_far_ahead(&run, uploader.acknowledged()),
+            2,
+            "nothing is deleted behind a number the server only claimed"
+        );
+        drop(uploader);
+
+        // An honest server: a signed acknowledgement raises the offset, and only that.
+        *run.front.lie.lock().unwrap() = None;
+        let mut uploader = run.uploader();
+        let first = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |_| {});
+        assert!(first.caught_up, "{first:?}");
+        assert_eq!(uploader.acknowledged(), first.offset);
+        assert!(first.offset > 0);
+    }
+
+    #[test]
+    fn a_409_reread_moves_the_acknowledged_offset_only_to_a_confirmed_position() {
+        // The first chunk is stored but its reply is lost: the retry gets a 409, and the
+        // re-read reports a position the local chain confirms, which is then the offset.
+        let (run, line) = run_in_two_parts(Box::new(|_| None));
+        run.server.drop_next_chunk_reply();
+        let mut uploader = run.uploader();
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |_| {});
+        assert!(report.caught_up, "{report:?}");
+        assert_eq!(uploader.acknowledged(), 3 * line as u64);
+
+        // Now the same 409 path, but the re-read reports a far offset and a foreign head: the
+        // uploader stops, and the offset it has verified does not move.
+        let (run, line) = run_in_two_parts(Box::new(|label| {
+            // Every chunk is answered 409 by the front itself.
+            label.starts_with("PUT /v1/runs/").then_some(409)
+        }));
+        let mut uploader = run.uploader();
+        *run.front.lie.lock().unwrap() = Some((line as u64, 1, "f".repeat(64)));
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |_| {});
+        assert!(!report.caught_up, "{report:?}");
+        assert_eq!(uploader.acknowledged(), 0);
+        assert_eq!(sweep_far_ahead(&run, uploader.acknowledged()), 2);
     }
 
     #[test]

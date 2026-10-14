@@ -47,6 +47,10 @@ pub fn deletable(
     now: Instant,
     pressure: bool,
 ) -> Vec<PathBuf> {
+    // An entry with no parts listed says nothing about its parts' ages.
+    if parts.is_empty() {
+        return Vec::new();
+    }
     // The acknowledged parts: a prefix, and never the last part.
     let acknowledged: Vec<&ChainPart> = parts
         .split_last()

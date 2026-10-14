@@ -178,17 +178,20 @@ impl Pruner {
     ) -> u64 {
         let listed: Vec<_> = entries
             .iter()
-            .map(|entry| (entry, parts_now(&entry.trace_dir).unwrap_or_default()))
+            .map(|entry| (entry, parts_now(&entry.trace_dir).ok()))
             .collect();
         let total: u64 = listed
             .iter()
-            .flat_map(|(_, parts)| parts)
+            .flat_map(|(_, parts)| parts.iter().flatten())
             .map(|part| part.len)
             .sum();
         let under_pressure = pressure(total);
         let mut left = total;
         let mut freed = 0u64;
         for (entry, parts) in &listed {
+            // Parts that could not be listed this tick are left alone: they are looked at again
+            // at the next one, and their ages are kept.
+            let Some(parts) = parts else { continue };
             let due = deletable(
                 &entry.entry_id,
                 parts,
@@ -221,10 +224,19 @@ impl Pruner {
             }
         }
         if freed > 0 {
-            say(&format!(
-                "disk: {} of the recording, uploaded two hours ago, was deleted from this machine",
-                human(freed)
-            ));
+            say(&if under_pressure {
+                format!(
+                    "disk: {} of the recording, already uploaded, was deleted from this machine \
+                     to make room",
+                    human(freed)
+                )
+            } else {
+                format!(
+                    "disk: {} of the recording, uploaded over two hours ago, was deleted from \
+                     this machine",
+                    human(freed)
+                )
+            });
         }
         left
     }
@@ -602,8 +614,8 @@ mod tests {
         assert_eq!(part_starts(dir.path()), [10, 20, 30, 40]);
         assert_eq!(sweep(&mut pruner, due + Duration::from_secs(30)), 30);
         assert_eq!(part_starts(dir.path()), [20, 30, 40]);
-        // The part holding the acknowledged offset (30..40 ends at 40 < 45; 40..50 is live) goes
-        // on until only the live part is left, and then nothing more.
+        // The record ending at 45 is in the live part (40..50), which is never deleted: the
+        // deletions go on until only it is left, and then nothing more.
         sweep(&mut pruner, due + Duration::from_secs(60));
         sweep(&mut pruner, due + Duration::from_secs(90));
         sweep(&mut pruner, due + Duration::from_secs(120));
@@ -612,6 +624,42 @@ mod tests {
             said.iter().all(|l| l.contains("deleted from this machine")),
             "{said:?}"
         );
+    }
+
+    #[test]
+    fn an_entry_whose_parts_cannot_be_listed_keeps_its_clocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 3, 10);
+        let gone = EntryRef {
+            entry_id: "e1".to_string(),
+            trace_dir: dir.path().join("moved"),
+        };
+        let (mut pruner, t0) = (Pruner::default(), Instant::now());
+        let sweep = |pruner: &mut Pruner, entry: &EntryRef, at: Instant| {
+            pruner.sweep(std::slice::from_ref(entry), &|_| 25, at, &mut |_| {})
+        };
+        sweep(&mut pruner, &entry, t0);
+        // One tick where the directory cannot be listed must not restart the two hours.
+        assert_eq!(sweep(&mut pruner, &gone, t0 + Duration::from_secs(3600)), 0);
+        sweep(&mut pruner, &entry, t0 + crate::upload::prune::PRUNE_AFTER);
+        assert_eq!(part_starts(dir.path()), [10, 20]);
+    }
+
+    #[test]
+    fn the_deletion_line_says_why_the_parts_went() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 3, 10);
+        let (mut pruner, t0) = (Pruner::default(), Instant::now());
+        let mut said = Vec::new();
+        let due = t0 + crate::upload::prune::PRUNE_AFTER;
+        pruner.sweep(std::slice::from_ref(&entry), &|_| 25, t0, &mut |l| {
+            said.push(l.to_string())
+        });
+        pruner.sweep(std::slice::from_ref(&entry), &|_| 25, due, &mut |l| {
+            said.push(l.to_string())
+        });
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("uploaded over two hours ago"), "{said:?}");
     }
 
     #[test]
@@ -646,11 +694,12 @@ mod tests {
             trace_dir: dir.path().to_path_buf(),
         };
         let mut pruner = Pruner::default();
+        let mut said = Vec::new();
         let left = pruner.sweep(
             std::slice::from_ref(&entry),
             &|_| 3 * big,
             Instant::now(),
-            &mut |_| {},
+            &mut |l| said.push(l.to_string()),
         );
         assert_eq!(
             left,
@@ -658,6 +707,7 @@ mod tests {
             "young, yet deleted: the parts are past the reservation"
         );
         assert_eq!(part_starts(dir.path()), [big, 2 * big]);
+        assert!(said.iter().any(|l| l.contains("to make room")), "{said:?}");
     }
 
     #[cfg(unix)]
