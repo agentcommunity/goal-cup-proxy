@@ -10,17 +10,18 @@ use crate::submission_types::CaptureResourceLimitsV1;
 use goalcup_protocol::submission::{
     EffectiveSubmissionLimitsV1, LimitProfileV1, SubmissionProfileV1,
 };
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-/// `#[serde(deny_unknown_fields)]`, and that attribute is the whole mechanism behind the
-/// two "cut fields are load errors" assertions in `tests/it/config_load.rs`: without it, a
+/// Read through [`DaemonConfigFile`], whose `deny_unknown_fields` is the whole mechanism behind
+/// the two "cut fields are load errors" assertions in `tests/it/config_load.rs`: without it, a
 /// config still setting `unix_socket` or `foreign_scan_interval_ms` would load and be
 /// silently ignored — the participant would believe a transport was configured and a
 /// scan scheduled, and neither would exist.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "DaemonConfigFile")]
 pub struct DaemonConfig {
     /// Where the daemon writes. **The only tree it writes to outside a tracker-created
     /// workspace**: never `$HOME`, never a harness config directory, never `spikes/`.
@@ -50,46 +51,6 @@ pub struct DaemonConfig {
     #[serde(default)]
     pub receipt_binding: ReceiptBindingPolicy,
 
-    // Every field from here to `event` is accepted for old configs; nothing reads it.
-    // `deny_unknown_fields` is why they stay: removing one would make a `daemon.toml` that
-    // still sets it a load error. `validate()` checks none of them.
-    /// Accepted for old configs; nothing reads it.
-    #[serde(default = "default_poll_interval_ms")]
-    pub poll_interval_ms: u64,
-    /// Accepted for old configs; nothing reads it.
-    #[serde(default = "default_upload_interval_ms")]
-    pub upload_interval_ms: u64,
-    /// Accepted for old configs; nothing reads it.
-    #[serde(default = "default_upload_chunk_max")]
-    pub upload_chunk_max: usize,
-    /// Accepted for old configs; nothing reads it.
-    #[serde(default = "default_status_interval_ms")]
-    pub status_interval_ms: u64,
-    /// Accepted for old configs; nothing reads it.
-    #[serde(default = "default_stall_after_seconds")]
-    pub stall_after_seconds: f64,
-    /// Accepted for old configs; nothing reads it.
-    #[serde(default = "default_silence_window_seconds")]
-    pub silence_window_seconds: f64,
-    /// Accepted for old configs; nothing reads it.
-    #[serde(default = "default_ack_lag_seconds")]
-    pub ack_lag_seconds: f64,
-    /// Not read: the V1 arming gate it overrode is gone. Kept so an existing config that
-    /// sets it still loads under `deny_unknown_fields`.
-    #[serde(default)]
-    pub arming_timeout_seconds: Option<u64>,
-    /// Accepted for old configs; nothing reads it. No heartbeat is chained.
-    #[serde(default = "default_heartbeat_seconds")]
-    pub heartbeat_seconds: u64,
-    /// Accepted for old configs; nothing reads it.
-    #[serde(default = "default_clock_skew_seconds")]
-    pub clock_skew_seconds: f64,
-    /// Accepted for old configs; nothing reads it. Nothing watches free space on the
-    /// artifact-root volume: a full disk shows up as a failing `append`, not as an earlier
-    /// health state.
-    #[serde(default = "default_disk_reserve_bytes")]
-    pub disk_reserve_bytes: u64,
-
     /// The round's own dates, when this machine has been told them.
     ///
     /// Absent is the normal case and the default. What it costs is on [`EventConfig`]: with
@@ -98,6 +59,66 @@ pub struct DaemonConfig {
     /// a reader can tell the two apart.
     #[serde(default)]
     pub event: Option<EventConfig>,
+}
+
+/// The file's own keys, each one named so that no other key loads.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)] // the retired keys are named to be accepted, never read
+struct DaemonConfigFile {
+    artifact_root: PathBuf,
+    connectors_dir: PathBuf,
+    config_dir: PathBuf,
+    workspace_parent: PathBuf,
+    control_addr: SocketAddr,
+    #[serde(default)]
+    upload_url: String,
+    #[serde(default)]
+    server_public_key: String,
+    #[serde(default)]
+    receipt_binding: ReceiptBindingPolicy,
+    // The V1 cadences and thresholds: accepted with any value and dropped. Removing one would
+    // make a `daemon.toml` that still sets it a load error.
+    #[serde(default)]
+    poll_interval_ms: IgnoredAny,
+    #[serde(default)]
+    upload_interval_ms: IgnoredAny,
+    #[serde(default)]
+    upload_chunk_max: IgnoredAny,
+    #[serde(default)]
+    status_interval_ms: IgnoredAny,
+    #[serde(default)]
+    stall_after_seconds: IgnoredAny,
+    #[serde(default)]
+    silence_window_seconds: IgnoredAny,
+    #[serde(default)]
+    ack_lag_seconds: IgnoredAny,
+    #[serde(default)]
+    arming_timeout_seconds: IgnoredAny,
+    #[serde(default)]
+    heartbeat_seconds: IgnoredAny,
+    #[serde(default)]
+    clock_skew_seconds: IgnoredAny,
+    #[serde(default)]
+    disk_reserve_bytes: IgnoredAny,
+    #[serde(default)]
+    event: Option<EventConfig>,
+}
+
+impl From<DaemonConfigFile> for DaemonConfig {
+    fn from(f: DaemonConfigFile) -> Self {
+        DaemonConfig {
+            artifact_root: f.artifact_root,
+            connectors_dir: f.connectors_dir,
+            config_dir: f.config_dir,
+            workspace_parent: f.workspace_parent,
+            control_addr: f.control_addr,
+            upload_url: f.upload_url,
+            server_public_key: f.server_public_key,
+            receipt_binding: f.receipt_binding,
+            event: f.event,
+        }
+    }
 }
 
 /// `[event]` — the competition-wide dates the signed status document carries.
@@ -272,37 +293,6 @@ impl EventConfig {
             read("start_window_closes_at", &self.start_window_closes_at)?,
         ))
     }
-}
-
-fn default_poll_interval_ms() -> u64 {
-    250
-}
-fn default_upload_interval_ms() -> u64 {
-    2_000
-}
-fn default_upload_chunk_max() -> usize {
-    256
-}
-fn default_status_interval_ms() -> u64 {
-    1_000
-}
-fn default_stall_after_seconds() -> f64 {
-    900.0
-}
-fn default_silence_window_seconds() -> f64 {
-    60.0
-}
-fn default_ack_lag_seconds() -> f64 {
-    300.0
-}
-fn default_heartbeat_seconds() -> u64 {
-    60
-}
-fn default_clock_skew_seconds() -> f64 {
-    120.0
-}
-fn default_disk_reserve_bytes() -> u64 {
-    256 << 20
 }
 
 impl DaemonConfig {

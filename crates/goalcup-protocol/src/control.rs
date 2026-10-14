@@ -605,7 +605,6 @@ pub struct DaemonHealth {
     pub daemon_version: String,
     pub uptime_seconds: u64,
     pub entries_open: u32,
-    pub upload_ok: bool,
 }
 
 /// The durable answer to a V4 workspace finalization request.

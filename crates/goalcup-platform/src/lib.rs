@@ -22,6 +22,8 @@ pub mod filecap;
 pub mod handle_budget;
 /// Facts about the machine and small host helpers, with no identity in them.
 pub mod machine;
+/// The executable file a running process was started from.
+pub mod process_image;
 pub mod readcap;
 pub mod sourcecap;
 pub mod tracecap;
