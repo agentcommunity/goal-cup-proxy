@@ -227,40 +227,50 @@ fn local_finish_without_service_is_complete() {
 
 #[test]
 #[ignore = "real processes and sockets; run by name with --ignored"]
-fn reserved_chain_precedes_production_launch() {
+fn the_run_reserve_precedes_production_launch_and_the_chain_reserves_nothing() {
     use std::os::unix::fs::MetadataExt;
     let _lock = TableLock::acquire();
     let v = Vertical::new("plain", json!({"hold": true}));
     let mut start = v.start(RESERVE);
-    // The workload's first act: the chain's physical allocation, as it stands then.
+    // The workload's first act: the run's one reserve file is there, physically allocated, and
+    // the chain holds only what was written to it.
     v.harness_pid();
     let entry = v.entry_id();
+    // Beside the traces: where the daemon the CLI started would keep them. This rig starts its
+    // own daemon elsewhere, so the CLI's own default root is where the reserve is.
+    let reserve_dir = goalcup_cli::run::reserve::artifact_root(&v.cfg).join("reserve");
+    let held: Vec<_> = std::fs::read_dir(&reserve_dir).unwrap().flatten().collect();
+    assert_eq!(held.len(), 1, "one reserve file for the run");
+    assert_eq!(held[0].file_name().to_string_lossy(), entry);
+    assert!(
+        held[0].metadata().unwrap().blocks() * 512 > 0,
+        "the reserve holds blocks"
+    );
     let meta = std::fs::metadata(v.trace(&entry).join("chain.jsonl")).unwrap();
     assert!(
-        meta.blocks() * 512 >= RESERVE,
-        "{} of {RESERVE} bytes allocated when the workload began",
-        meta.blocks() * 512
-    );
-    assert!(
-        meta.len() < RESERVE / 64,
-        "the reservation is not logical growth"
+        meta.blocks() * 512 < RESERVE / 4 && meta.len() < RESERVE / 64,
+        "the chain is not preallocated: {} bytes allocated for {} written",
+        meta.blocks() * 512,
+        meta.len()
     );
     let storage = v.status(&entry).payload.capture.unwrap().storage;
     assert_eq!(storage.quota_bytes, RESERVE);
-    assert_eq!(
-        storage.reserved_bytes, RESERVE,
-        "reported only once measured"
-    );
+    assert_eq!(storage.reserved_bytes, 0, "a chain is quota-only");
     v.release();
     assert!(start.wait(RUN).success(), "{}", start.output());
+    assert_eq!(
+        std::fs::read_dir(&reserve_dir).unwrap().count(),
+        0,
+        "a local run gives its reserve back"
+    );
 
-    // A reservation this volume cannot hold: refused before anything runs.
+    // A volume that cannot hold the run's reservation: refused before anything is created.
     let refused = Vertical::new("plain", json!({}));
-    let mut start = refused.start(1 << 60);
+    let mut start = refused.start_unreservable();
     let exit = start.wait(RUN);
     assert_eq!(exit.code(), Some(1), "{}", start.output());
     assert!(
-        start.output().contains("cannot reserve"),
+        start.output().contains("this run needs"),
         "{}",
         start.output()
     );

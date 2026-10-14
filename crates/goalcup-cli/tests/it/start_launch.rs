@@ -73,3 +73,35 @@ fn the_entry_cache_says_so_when_there_is_none() {
         "naming an entry this machine never started is a refusal, not the CLI failing"
     );
 }
+
+/// The run's disk is one reservation held by the run, not a number the participant passes: the
+/// flag that used to size each chain's preallocation is gone, and `--help` does not offer it.
+#[test]
+fn capture_reserve_bytes_is_no_longer_a_flag() {
+    let goalcup = env!("CARGO_BIN_EXE_goalcup");
+    let out = std::process::Command::new(goalcup)
+        .args([
+            "start",
+            "--harness",
+            "codex-cli",
+            "--goal-file",
+            "/nonexistent/goal.txt",
+            "--capture-reserve-bytes",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "a usage error");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("--capture-reserve-bytes"), "{said}");
+    assert!(said.contains("unexpected argument"), "{said}");
+    let help = std::process::Command::new(goalcup)
+        .args(["start", "--help"])
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&help.stdout).contains("capture-reserve"),
+        "{}",
+        String::from_utf8_lossy(&help.stdout)
+    );
+}

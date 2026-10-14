@@ -40,7 +40,7 @@ use goalcup_protocol::export::{ACKS_FILE, BASELINE_FILE, CHAIN_FILE, SEAL_FILE};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// The most a chunk body may be, compressed: the server's cap.
@@ -313,6 +313,11 @@ pub struct Uploader {
     /// Beside a recording run only: set once the run must stop, after which this background
     /// upload sends nothing more (the finish takes over).
     halt: Option<std::sync::Arc<AtomicBool>>,
+    /// The unix second of the last time this upload worked: a chunk or the seal acknowledged,
+    /// or nothing left to send. The run's disk watch reads it.
+    last_ok: std::sync::Arc<AtomicU64>,
+    /// Bytes of the chain the server holds, as of the last acknowledgement.
+    acked_offset: std::sync::Arc<AtomicU64>,
 }
 
 impl Uploader {
@@ -340,13 +345,30 @@ impl Uploader {
             pos: Position::from(&position),
             spool,
             halt: None,
+            last_ok: std::sync::Arc::new(AtomicU64::new(crate::run::now_unix())),
+            acked_offset: std::sync::Arc::new(AtomicU64::new(0)),
         };
         uploader.adopt_server_ack(&position);
+        uploader
+            .acked_offset
+            .store(uploader.pos.offset, Ordering::SeqCst);
         Ok(uploader)
     }
 
     fn chain(&self) -> PathBuf {
         Path::new(&self.record.trace_dir).join(CHAIN_FILE)
+    }
+
+    /// This upload worked just now.
+    fn mark_ok(&self) {
+        self.last_ok.store(crate::run::now_unix(), Ordering::SeqCst);
+    }
+
+    /// Hand the run's two shared counters to this uploader, replacing its own.
+    fn share(&mut self, last_ok: &std::sync::Arc<AtomicU64>, acked: &std::sync::Arc<AtomicU64>) {
+        self.last_ok = last_ok.clone();
+        self.acked_offset = acked.clone();
+        self.acked_offset.store(self.pos.offset, Ordering::SeqCst);
     }
 
     /// Bytes of chain waiting to be sent (an upper bound).
@@ -404,6 +426,8 @@ impl Uploader {
                         next_seq: chunk.last_seq + 1,
                         head: chunk.head.clone(),
                     };
+                    self.acked_offset.store(self.pos.offset, Ordering::SeqCst);
+                    self.mark_ok();
                 }
                 // The server is somewhere else: read where, and go on from there.
                 Err(error) if error.is_conflict() => match self.reread() {
@@ -896,7 +920,10 @@ impl Uploader {
                 return caught_up(false, Some(ran_out(last.as_deref())));
             };
             match self.seal(&documents, timeout) {
-                Ok(()) => return caught_up(true, None),
+                Ok(()) => {
+                    self.mark_ok();
+                    return caught_up(true, None);
+                }
                 Err(error) if !error.ends_upload() => {
                     failures += 1;
                     let wait = backoff(
@@ -924,9 +951,8 @@ impl Uploader {
 pub struct Running {
     finish: std::sync::mpsc::Sender<WrapUp>,
     report: std::sync::mpsc::Receiver<Report>,
-    /// Says, once, why the run must stop now: the server's deadline, or this machine's count of
-    /// the run's length when the server cannot be reached.
-    stop: Option<std::sync::mpsc::Receiver<String>>,
+    last_ok: std::sync::Arc<AtomicU64>,
+    acked_offset: std::sync::Arc<AtomicU64>,
 }
 
 /// The run's own deadline, for when the server cannot say it: its length
@@ -966,6 +992,9 @@ const FINISH_SLICE: Duration = Duration::from_secs(5);
 /// Start uploading `record` beside the run: the first chunk at once, then on [`Policy`]'s
 /// cadence. Its waits and failures are said on stderr, prefixed `goalcup: upload:`; nothing it
 /// does can stop or slow the recording.
+///
+/// `stop` is the run's one stop channel: when the server says the run is over, or this
+/// machine's count of the run's length runs out, the reason is sent on it once.
 pub fn begin(
     server: ServerClient,
     record: UploadRecord,
@@ -973,19 +1002,23 @@ pub fn begin(
     policy: Policy,
     spool_dir: PathBuf,
     local_deadline: Option<LocalDeadline>,
+    stop: std::sync::mpsc::Sender<String>,
 ) -> Result<Running, CliError> {
     let lock = lock_entry(&spool_dir, &record.entry_id)?;
     let (finish, finishing) = std::sync::mpsc::channel::<WrapUp>();
     let (reported, report) = std::sync::mpsc::channel::<Report>();
-    let (stopping, stop) = std::sync::mpsc::channel::<String>();
+    let last_ok = std::sync::Arc::new(AtomicU64::new(crate::run::now_unix()));
+    let acked_offset = std::sync::Arc::new(AtomicU64::new(0));
+    let shared = (last_ok.clone(), acked_offset.clone());
     std::thread::Builder::new()
         .name("goalcup-upload".into())
         .spawn(move || {
             let _lock = lock;
             let beside = Beside {
                 finishing,
-                stopping,
+                stopping: stop,
                 local_deadline,
+                shared,
             };
             let ended = run(server, record, receipt_key, policy, &spool_dir, beside);
             let _ = reported.send(ended);
@@ -997,7 +1030,8 @@ pub fn begin(
     Ok(Running {
         finish,
         report,
-        stop: Some(stop),
+        last_ok,
+        acked_offset,
     })
 }
 
@@ -1008,12 +1042,21 @@ struct Beside {
     /// The run must stop now, and why.
     stopping: std::sync::mpsc::Sender<String>,
     local_deadline: Option<LocalDeadline>,
+    /// The counters [`Running::last_ok`] and [`Running::acked_offset`] read.
+    shared: (std::sync::Arc<AtomicU64>, std::sync::Arc<AtomicU64>),
 }
 
 impl Running {
-    /// The channel that says when the run must stop (taken once).
-    pub fn take_stop(&mut self) -> Option<std::sync::mpsc::Receiver<String>> {
-        self.stop.take()
+    /// The unix second of the last time this upload worked: it starts at the run's launch, and
+    /// is set again by each acknowledged chunk, by the seal, and whenever there is nothing
+    /// left to send. The run's disk watch calls uploads failing when it is half an hour old.
+    pub fn last_ok(&self) -> std::sync::Arc<AtomicU64> {
+        self.last_ok.clone()
+    }
+
+    /// Bytes of the chain the server has acknowledged.
+    pub fn acked_offset(&self) -> std::sync::Arc<AtomicU64> {
+        self.acked_offset.clone()
     }
 
     /// The run is sealed: send the rest and the seal, asking again after every failure that
@@ -1055,6 +1098,7 @@ fn run(
         finishing,
         stopping,
         local_deadline,
+        shared,
     } = beside;
     let mut say = |line: &str| eprintln!("goalcup: {line}");
     let mut uploader: Option<Uploader> = None;
@@ -1097,6 +1141,7 @@ fn run(
                 ) {
                     Ok(mut resumed) => {
                         resumed.halt = Some(over.clone());
+                        resumed.share(&shared.0, &shared.1);
                         uploader = Some(resumed);
                     }
                     Err(error) if !error.ends_upload() => {
@@ -1119,6 +1164,13 @@ fn run(
                         stopped = Some(error.to_string());
                     }
                 }
+            }
+            // Nothing waiting is an upload with nothing to complain of.
+            if let Some(up) = uploader.as_ref()
+                && stopped.is_none()
+                && up.waiting() == 0
+            {
+                up.mark_ok();
             }
             if let Some(up) = uploader.as_mut()
                 && (now >= next_due || up.waiting() >= policy.eager_bytes)
@@ -1162,7 +1214,10 @@ fn run(
                 let mut up = match uploader {
                     Some(up) => up,
                     None => match Uploader::resume(server, record, key, policy, spool_dir) {
-                        Ok(up) => up,
+                        Ok(mut up) => {
+                            up.share(&shared.0, &shared.1);
+                            up
+                        }
                         Err(error) => return Report::not(error.to_string(), 0),
                     },
                 };

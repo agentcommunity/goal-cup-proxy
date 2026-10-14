@@ -281,6 +281,157 @@ fn local_pilot_never_requests_receipt() {
     );
 }
 
+/// The reserve files in the artifact root `goalcup start` used for this rig.
+fn reserve_files(rig: &Rig) -> Vec<std::fs::DirEntry> {
+    let dir = goalcup_cli::run::reserve::artifact_root(&rig.cfg).join("reserve");
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
+    use std::os::unix::fs::MetadataExt;
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::new();
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let (started, held, record) = std::thread::scope(|s| {
+        let start = rig.start(s, &client, rig.options(&goal, RESERVE), None);
+        rig.wait_for("sleeper");
+        let entry_id = client.created().entry_id;
+        let held: Vec<(String, u64)> = reserve_files(&rig)
+            .iter()
+            .map(|f| {
+                (
+                    f.file_name().to_string_lossy().into_owned(),
+                    f.metadata().unwrap().blocks() * 512,
+                )
+            })
+            .collect();
+        let record = goalcup_cli::run::read(&rig.cfg, &entry_id);
+        // Ending the run through the daemon ends the harness.
+        let mut sealed = Vec::new();
+        goalcup_cli::commands::seal::seal_with(
+            &http,
+            &rig.connectors,
+            &rig.cfg,
+            &entry_id,
+            &mut sealed,
+        )
+        .unwrap();
+        (joined(start), held, record)
+    });
+    let (result, out) = started;
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    let entry_id = client.created().entry_id;
+    // One file, named for the run (a local run's id is its entry's), holding its blocks.
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].0, entry_id);
+    assert!(held[0].1 >= RESERVE, "{held:?}");
+    // The record the run left: no server, no deadline, the entry and its trace folder.
+    let record = record.expect("a run record while the run records");
+    assert_eq!(record.run_id, entry_id);
+    assert_eq!((record.server_url, record.deadline_at), (None, None));
+    assert_eq!(record.connector_id, FAKE_ID);
+    assert_eq!(record.entries.len(), 1);
+    assert_eq!(record.entries[0].entry_id, entry_id);
+    assert_eq!(
+        goalcup_cli::run::of_entry(&rig.cfg, &entry_id)
+            .unwrap()
+            .map(|r| r.run_id),
+        Some(entry_id.clone())
+    );
+    assert_eq!(
+        goalcup_cli::run::newest(&rig.cfg)
+            .unwrap()
+            .map(|r| r.run_id),
+        Some(entry_id)
+    );
+    // And at the run's end the reservation is gone.
+    assert!(reserve_files(&rig).is_empty(), "{:?}", reserve_files(&rig));
+}
+
+#[test]
+fn a_full_disk_with_no_upload_ends_the_run_through_the_one_stop_channel() {
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::new();
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let mut opts = rig.options(&goal, RESERVE);
+    // The disk always reads as full: a floor above any free space. A local run uploads nothing,
+    // so its uploads count as failing, and the watch stops the run as the deadline would.
+    opts.disk.free_floor = u64::MAX / 2;
+    let (result, out) = std::thread::scope(|s| joined(rig.start(s, &client, opts, None)));
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(
+        out.contains("stopped: the disk is nearly full and uploads are failing"),
+        "{out}"
+    );
+    assert!(out.contains("finished locally"), "{out}");
+    let entry_id = client.created().entry_id;
+    let (report, _) = rig.read_trace(&entry_id);
+    assert!(report.sealed, "{:?}", report.findings);
+    assert!(reserve_files(&rig).is_empty());
+}
+
+#[test]
+fn a_stale_reserve_is_released_by_the_next_start() {
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::new();
+    let root = goalcup_cli::run::reserve::artifact_root(&rig.cfg);
+    // An earlier server run, past its deadline by more than a day, still holding its reserve;
+    // and one whose deadline has not come.
+    let long_gone = goalcup_protocol::control::format_z(1_000);
+    let ahead = goalcup_protocol::control::format_z(goalcup_cli::run::now_unix() + 3_600);
+    for (id, deadline) in [
+        ("r0000000000000001", long_gone),
+        ("r0000000000000002", ahead),
+    ] {
+        goalcup_cli::run::write(
+            &rig.cfg,
+            &goalcup_cli::run::RunRecord {
+                run_id: id.to_string(),
+                server_url: Some("https://server.example".to_string()),
+                practice: false,
+                connector_id: FAKE_ID.to_string(),
+                workspace: rig.root.join("old"),
+                started_at_unix: 1,
+                deadline_at: Some(deadline),
+                entries: Vec::new(),
+            },
+        )
+        .unwrap();
+        goalcup_cli::run::reserve::RunReserve::take(
+            &goalcup_cli::run::reserve::reserve_path(&root, id),
+            &support::disk_of(RESERVE),
+        )
+        .unwrap();
+    }
+    assert_eq!(reserve_files(&rig).len(), 2);
+
+    let goal = rig.goal(GOAL);
+    rig.tell("stop", "");
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let (result, out) =
+        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    let left: Vec<String> = reserve_files(&rig)
+        .iter()
+        .map(|f| f.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        left,
+        vec!["r0000000000000002".to_string()],
+        "only the live run's"
+    );
+}
+
 #[test]
 fn local_owned_stop_and_seal_need_no_anchor() {
     let _lock = table_lock::TableLock::acquire();
@@ -501,25 +652,27 @@ fn an_altered_pinned_id_under_an_alias_is_exit_one_before_any_start_write() {
 }
 
 #[test]
-fn an_unreservable_chain_refuses_before_the_proxy_and_leaves_nothing() {
+fn a_run_that_cannot_get_its_disk_refuses_before_the_proxy_and_leaves_nothing() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
-    let (result, out) =
-        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, 1 << 60), None)));
+    let mut opts = rig.options(&goal, RESERVE);
+    // The run's one reservation, bigger than any volume.
+    opts.disk.reserve_bytes = 1 << 60;
+    let (result, out) = std::thread::scope(|s| joined(rig.start(s, &client, opts, None)));
     let error = result.expect_err("a reservation this volume cannot hold");
+    assert_eq!(error.exit_code(), 1, "{error}\n{out}");
+    assert!(error.to_string().contains("this run needs"), "{error}");
     assert!(
-        matches!(
-            error,
-            goalcup_cli::CliError::Control(ControlError::PreflightFailed(_))
-        ),
-        "{error}\n{out}"
+        client.names().is_empty(),
+        "refused before the daemon was asked for anything: {:?}",
+        client.names()
     );
-    assert_eq!(client.names(), vec!["create_capture_workspace"]);
     assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
     assert!(records(&rig).is_empty());
+    assert!(!rig.cfg.join("runs").exists(), "no run record");
     assert!(!rig.harness_started());
 }
 
@@ -609,7 +762,7 @@ fn refused_producer_never_spawns_the_harness() {
             anchor: goalcup_protocol::capture::AnchorState::LocalOnly,
             storage: goalcup_protocol::capture::CaptureStorage {
                 quota_bytes: RESERVE,
-                reserved_bytes: RESERVE,
+                reserved_bytes: 0,
                 used_bytes: 0,
                 durable: None,
                 accounting_available: true,
@@ -1348,8 +1501,8 @@ fn a_test_build_trusts_the_upstream_roots_its_environment_names() {
         std::process::Command::new(env!("CARGO_BIN_EXE_goalcup"))
             .args(["start", "--harness", FAKE_ID, "--dev", "--goal-file"])
             .arg(&goal)
-            .args(["--capture-reserve-bytes", &RESERVE.to_string()])
             .env_clear()
+            .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"))
             .env("PATH", rig.path())
             .env("GOALCUP_CONFIG_DIR", &rig.cfg)
             .env("GOALCUP_CONNECTORS_DIR", &rig.capture_connectors)

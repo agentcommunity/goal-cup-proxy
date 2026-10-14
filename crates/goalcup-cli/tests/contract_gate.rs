@@ -617,12 +617,7 @@ fn goalcup_start_requires_a_goal_file_and_offers_no_v1_flags() {
     let out = goalcup().args(["start", "--help"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).unwrap();
-    for flag in [
-        "--harness",
-        "--dev",
-        "--goal-file",
-        "--capture-reserve-bytes",
-    ] {
+    for flag in ["--harness", "--dev", "--goal-file"] {
         assert!(
             text.contains(flag),
             "`goalcup start --help` must list {flag}"
@@ -634,6 +629,7 @@ fn goalcup_start_requires_a_goal_file_and_offers_no_v1_flags() {
         "--no-open",
         "--arming-timeout",
         "--hours",
+        "--capture-reserve-bytes",
     ] {
         assert!(
             !text.contains(flag),

@@ -47,7 +47,7 @@ docker run -d --name "$name" --label "$label" --privileged --init --cpus="$cpus"
     -v "$registry":/usr/local/cargo/registry -v goalcup-linux-check-target:/target \
     -w /src "$img" sleep infinity >/dev/null || { echo "linux-check: FAIL container"; exit 1; }
 docker exec "$name" sh -c 'set -e; chown dev /target; mkdir -p /mnt/ext4 /mnt/xfs
-    truncate -s 4G /ext4.img; mkfs.ext4 -q -F /ext4.img; mount -o loop /ext4.img /mnt/ext4
+    truncate -s 8G /ext4.img; mkfs.ext4 -q -F /ext4.img; mount -o loop /ext4.img /mnt/ext4
     truncate -s 2G /xfs.img; mkfs.xfs -q -f /xfs.img; mount -o loop /xfs.img /mnt/xfs
     mkdir -p /mnt/ext4/tmp /mnt/xfs/tmp; chmod 1777 /mnt/ext4/tmp /mnt/xfs/tmp' ||
     { echo "linux-check: FAIL volumes"; exit 1; }

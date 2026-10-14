@@ -381,7 +381,7 @@ impl Staged {
         command
             .arg("--goal-file")
             .arg(&self.world.goal)
-            .args(["--capture-reserve-bytes", &RESERVE.to_string()])
+            .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"))
             .process_group(0)
             .output()
             .unwrap()
