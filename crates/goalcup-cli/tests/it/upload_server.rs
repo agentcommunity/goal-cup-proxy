@@ -297,16 +297,27 @@ fn open_run_rules() {
     assert_eq!(again.body, first.body);
     assert_eq!(rig.server.run_ids().len(), 1);
 
-    // A different session while one is open.
-    assert_err(&rig.open(TOKEN, "session-b"), 409, "conflict");
-    // Another member is not blocked by it.
-    assert_eq!(rig.open(TOKEN_2, "session-c").status, 201);
-
-    // Once a receipt exists, even the same session is a conflict.
+    // A different session is a new run: it replaces the first, which ends then.
     let run = first.body["run_id"].as_str().unwrap();
     let entry = first.body["entry_id"].as_str().unwrap();
+    let second = rig.open(TOKEN, "session-b");
+    assert_eq!(second.status, 201, "{}", second.body);
+    assert_ne!(second.body["run_id"], first.body["run_id"]);
+    assert!(rig.server.replaced_at(run).is_some());
+    assert_eq!(
+        rig.heartbeat(run, entry, 0, &head(0), false, None).body["reason"],
+        "replaced"
+    );
+    // Another member is not touched by it.
+    assert_eq!(rig.open(TOKEN_2, "session-c").status, 201);
+
+    // Once a receipt exists, the same session is no lost reply: it is a start again.
+    let run = second.body["run_id"].as_str().unwrap();
+    let entry = second.body["entry_id"].as_str().unwrap();
     assert_eq!(rig.receipt(run, entry, &head(0)).status, 200);
-    assert_err(&rig.open(TOKEN, "session-a"), 409, "conflict");
+    let third = rig.open(TOKEN, "session-b");
+    assert_eq!(third.status, 201, "{}", third.body);
+    assert_ne!(third.body["run_id"], second.body["run_id"]);
 }
 
 #[test]
@@ -617,26 +628,43 @@ fn abandon_only_before_any_chunk() {
 }
 
 #[test]
-fn seal_stores_both_documents_and_closes_the_run() {
+fn seal_stores_both_documents_and_seals_the_entry() {
     let rig = Rig::new();
     let (run, entry) = rig.open_ok();
     rig.put_ok(&run, &entry, &Chunk::first());
     let path = format!("/v1/runs/{run}/seal");
     let docs = json!({"entry_id": entry, "seal_json": "{\"a\":1}\n", "baseline_json": "{\"b\":2}"});
+    // A seal needs the entry's committed end first.
+    let early = rig.json("POST", &path, TOKEN, &docs);
+    assert_err(&early, 409, "conflict");
+    assert!(
+        early.body["message"]
+            .as_str()
+            .unwrap()
+            .contains("final heartbeat")
+    );
+    assert_eq!(
+        rig.heartbeat(&run, &entry, 3, &head(3), true, None).status,
+        200
+    );
     let r = rig.json("POST", &path, TOKEN, &docs);
-    assert_eq!((r.status, &r.body), (200, &json!({"status": "sealed"})));
+    // Sealed before the run's end: the run stays open, so it can be continued.
+    assert_eq!(
+        (r.status, &r.body),
+        (200, &json!({"status": "sealed", "run_status": "open"}))
+    );
     assert_eq!(
         rig.server.seal(&run),
         Some(("{\"a\":1}\n".to_string(), "{\"b\":2}".to_string()))
     );
-    assert_eq!(rig.get(&run, TOKEN).body["status"], "sealed");
+    assert_eq!(rig.get(&run, TOKEN).body["status"], "open");
 
     // Same documents again: 200. Different documents: 409.
     assert_eq!(rig.json("POST", &path, TOKEN, &docs).status, 200);
     let other = json!({"entry_id": entry, "seal_json": "{}", "baseline_json": "{\"b\":2}"});
     assert_err(&rig.json("POST", &path, TOKEN, &other), 409, "conflict");
 
-    // After the seal the run takes no more chunks and cannot be abandoned.
+    // After the seal the entry takes no more chunks, and the run (it holds chunks) cannot be abandoned.
     assert_err(
         &rig.put(&run, &entry, &Chunk::second()).unwrap(),
         410,
@@ -648,9 +676,7 @@ fn seal_stores_both_documents_and_closes_the_run() {
         TOKEN,
         &json!({"reason": "x"}),
     );
-    assert_err(&gone, 410, "closed");
-    // And it frees the account for a new run.
-    assert_eq!(rig.open(TOKEN, "session-b").status, 201);
+    assert_err(&gone, 409, "conflict");
 }
 
 #[test]
@@ -934,8 +960,13 @@ fn a_seal_after_the_deadline_needs_the_chain_up_to_the_committed_end() {
     );
     assert_eq!(rig.get(&run, TOKEN).body["status"], "open");
     rig.put_ok(&run, &entry, &Chunk::second());
+    // The run is over and this is its current entry: the run is sealed with it.
     let r = rig.json("POST", &path, TOKEN, &seal_body(&entry));
-    assert_eq!((r.status, &r.body), (200, &json!({"status": "sealed"})));
+    assert_eq!(
+        (r.status, &r.body),
+        (200, &json!({"status": "sealed", "run_status": "sealed"}))
+    );
+    assert_eq!(rig.get(&run, TOKEN).body["status"], "sealed");
     // A repeat is still 200.
     assert_eq!(
         rig.json("POST", &path, TOKEN, &seal_body(&entry)).status,
@@ -997,10 +1028,14 @@ fn a_final_heartbeat_is_idempotent_and_never_changes() {
 }
 
 #[test]
-fn a_final_heartbeat_after_the_seal_is_taken() {
+fn a_sealed_entry_takes_the_same_final_again_and_no_plain_heartbeat() {
     let rig = Rig::new();
     let (run, entry) = rig.open_ok();
     rig.put_ok(&run, &entry, &Chunk::first());
+    assert_eq!(
+        rig.heartbeat(&run, &entry, 3, &head(3), true, None).status,
+        200
+    );
     let sealed = rig.json(
         "POST",
         &format!("/v1/runs/{run}/seal"),
@@ -1008,15 +1043,21 @@ fn a_final_heartbeat_after_the_seal_is_taken() {
         &seal_body(&entry),
     );
     assert_eq!(sealed.status, 200);
-    // The tracer seals, then sends its final heartbeat; a plain one has nothing left to say.
+    // A repeat of the final is the same answer; a plain one has nothing left to say (and is not kept).
     assert_eq!(
         rig.heartbeat(&run, &entry, 3, &head(3), true, None).status,
         200
     );
+    let before = rig.server.heartbeats(&run).len();
+    assert_eq!(
+        rig.heartbeat(&run, &entry, 3, &head(3), false, None).status,
+        200
+    );
+    assert_eq!(rig.server.heartbeats(&run).len(), before);
     assert_err(
-        &rig.heartbeat(&run, &entry, 3, &head(3), false, None),
-        410,
-        "closed",
+        &rig.heartbeat(&run, &entry, 4, &head(4), true, None),
+        409,
+        "conflict",
     );
 }
 
@@ -1093,28 +1134,28 @@ fn the_heartbeat_helper_sees_the_heartbeats() {
 }
 
 #[test]
-fn an_unsealed_run_is_abandoned_after_the_deadline_and_frees_the_account() {
+fn an_unsealed_run_is_incomplete_after_the_close_time_and_takes_nothing() {
     let rig = Rig::with(ServerOptions {
         run_seconds: Some(1),
-        abandon_after_seconds: 1,
+        close_after_seconds: 1,
         ..two_tokens()
     });
     let (run, entry) = rig.open_ok();
     rig.put_ok(&run, &entry, &Chunk::first());
-    // The account's run is open and blocks a second one until the abandon time passes.
+    // Over at 1 s, closed after 1 s more.
     let mut status = String::new();
     for _ in 0..100 {
         status = rig.get(&run, TOKEN).body["status"]
             .as_str()
             .unwrap()
             .to_string();
-        if status == "abandoned" {
+        if status == "incomplete" {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert_eq!(status, "abandoned");
-    assert_eq!(rig.server.status(&run).as_deref(), Some("abandoned"));
+    assert_eq!(status, "incomplete");
+    assert_eq!(rig.server.status(&run).as_deref(), Some("incomplete"));
 
     // Every write is 410; the read still answers.
     assert_err(
@@ -1158,22 +1199,23 @@ fn an_unsealed_run_is_abandoned_after_the_deadline_and_frees_the_account() {
         "closed",
     );
     assert_eq!(rig.get(&run, TOKEN).status, 200);
-
-    // It no longer counts as the open run.
-    let again = rig.open(TOKEN, "session-b");
-    assert_eq!(again.status, 201, "{}", again.body);
-    assert_ne!(again.body["run_id"], run.as_str());
+    // A chunk the server already held is still answered with its stored acknowledgement.
+    assert_eq!(rig.put(&run, &entry, &Chunk::first()).unwrap().status, 200);
 }
 
 #[test]
-fn a_sealed_run_is_not_abandoned() {
+fn a_sealed_run_stays_sealed_when_it_closes() {
     let rig = Rig::with(ServerOptions {
         run_seconds: Some(1),
-        abandon_after_seconds: 1,
+        close_after_seconds: 1,
         ..two_tokens()
     });
     let (run, entry) = rig.open_ok();
     rig.put_ok(&run, &entry, &Chunk::first());
+    assert_eq!(
+        rig.heartbeat(&run, &entry, 3, &head(3), true, None).status,
+        200
+    );
     let sealed = rig.json(
         "POST",
         &format!("/v1/runs/{run}/seal"),

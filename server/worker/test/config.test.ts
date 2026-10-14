@@ -8,7 +8,7 @@ import type { Env } from "../src/env.ts";
 import { ApiError } from "../src/errors.ts";
 import { REPO_URL, parseSafeUint } from "../src/util.ts";
 
-const baseEnv = { EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
+const baseEnv = { EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
 
 /** Run `fn` with console.error captured; returns what was logged. */
 async function captureErrors(fn: () => Promise<unknown>): Promise<string> {
@@ -42,8 +42,20 @@ test("an unknown backend is refused", async () => {
 });
 
 test("config defaults and validation", () => {
-  assert.deepEqual(readConfig(baseEnv), { eventId: "practice", runSeconds: 168 * 3600, abandonAfterSeconds: 86400, githubCheck: false });
+  assert.deepEqual(readConfig(baseEnv), {
+    eventId: "cup",
+    practiceEventId: "practice",
+    runSeconds: 168 * 3600,
+    practiceRunSeconds: 600,
+    closeAfterSeconds: 86400,
+    startWindow: undefined,
+    githubCheck: false,
+  });
   assert.equal(readConfig({ ...baseEnv, RUN_HOURS: "2" }).runSeconds, 7200);
+  assert.equal(readConfig({ ...baseEnv, PRACTICE_RUN_MINUTES: "30" }).practiceRunSeconds, 1800);
+  assert.throws(() => readConfig({ ...baseEnv, PRACTICE_RUN_MINUTES: "0" }), ApiError);
+  assert.throws(() => readConfig({ ...baseEnv, PRACTICE_EVENT_ID: undefined as unknown as string }), (e) => e instanceof ApiError && e.code === "misconfigured");
+  assert.throws(() => readConfig({ ...baseEnv, PRACTICE_EVENT_ID: "../x" }), ApiError);
   assert.equal(readConfig({ ...baseEnv, GITHUB_CHECK: "on" }).githubCheck, true);
   assert.equal(readConfig({ ...baseEnv, GITHUB_CHECK: "yes" }).githubCheck, false);
   assert.throws(() => readConfig({ ...baseEnv, EVENT_ID: "../x" }), ApiError);
@@ -51,15 +63,24 @@ test("config defaults and validation", () => {
   assert.throws(() => readConfig({ ...baseEnv, RUN_HOURS: "abc" }), ApiError);
 });
 
-test("RUN_SECONDS and ABANDON_AFTER_SECONDS are honoured only with the local backend", () => {
+test("RUN_SECONDS, CLOSE_AFTER_SECONDS and the start window are honoured only with the local backend", () => {
   const local = { ...baseEnv, DB_BACKEND: "local" };
   assert.equal(readConfig({ ...local, RUN_SECONDS: "3" }).runSeconds, 3);
   assert.equal(readConfig({ ...local, RUN_SECONDS: "3", RUN_HOURS: "1" }).runSeconds, 3);
-  assert.equal(readConfig({ ...local, ABANDON_AFTER_SECONDS: "5" }).abandonAfterSeconds, 5);
+  assert.equal(readConfig({ ...local, CLOSE_AFTER_SECONDS: "5" }).closeAfterSeconds, 5);
+  assert.deepEqual(readConfig({ ...local, START_WINDOW_CLOSES: "2026-11-06T10:00:00Z" }).startWindow, { opens: null, closes: "2026-11-06T10:00:00Z" });
+  assert.deepEqual(readConfig({ ...local, START_WINDOW_OPENS: "2026-11-06T08:00:00Z", START_WINDOW_CLOSES: "2026-11-06T10:00:00Z" }).startWindow, {
+    opens: "2026-11-06T08:00:00Z",
+    closes: "2026-11-06T10:00:00Z",
+  });
+  assert.throws(() => readConfig({ ...local, START_WINDOW_OPENS: "tomorrow" }), (e) => e instanceof ApiError && e.code === "misconfigured");
   // On any other backend their presence is a mistake, so the Worker refuses rather than ignoring them.
-  for (const name of ["RUN_SECONDS", "ABANDON_AFTER_SECONDS"] as const) {
+  for (const name of ["RUN_SECONDS", "CLOSE_AFTER_SECONDS"] as const) {
     assert.throws(() => readConfig({ ...baseEnv, [name]: "3" }), (e) => e instanceof ApiError && e.code === "misconfigured");
     assert.throws(() => readConfig({ ...baseEnv, DB_BACKEND: "supabase", [name]: "3" }), ApiError);
+  }
+  for (const name of ["START_WINDOW_OPENS", "START_WINDOW_CLOSES"] as const) {
+    assert.throws(() => readConfig({ ...baseEnv, [name]: "2026-11-06T10:00:00Z" }), (e) => e instanceof ApiError && e.code === "misconfigured");
   }
   assert.throws(() => readConfig({ ...local, RUN_SECONDS: "0" }), ApiError);
   assert.throws(() => readConfig({ ...local, RUN_SECONDS: "x" }), ApiError);
@@ -148,21 +169,4 @@ test("SupabaseDb: unknown credential is null; errors become 502; odd answers bec
     throw new TypeError("network down");
   });
   await assert.rejects(db.credential("x", "t"), (e) => e instanceof ApiError && e.status === 502);
-});
-
-test("SupabaseDb maps the open_run answers", async () => {
-  const run = { run_id: "r0123456789abcdef", entry_id: "e0123456789abcdef" };
-  const db = new SupabaseDb("https://p.example", "k");
-  const args = {
-    member_id: "m", event_id: "practice", run_id: "r1", entry_id: "e1", official_start: "s", deadline_at: "d", connector_id: "c",
-    manifest_sha256: "a", connector_dir_sha256: "b", workspace: "w", session_id: "s", harness_version: "h", tracer_version: "t", repo_url: "u",
-  };
-  stubFetch(() => new Response(JSON.stringify({ result: "created", run }), { status: 200 }));
-  assert.deepEqual(await db.openRun(args), { kind: "created", run });
-  stubFetch(() => new Response(JSON.stringify({ result: "existing", run }), { status: 200 }));
-  assert.equal((await db.openRun(args)).kind, "existing");
-  stubFetch(() => new Response(JSON.stringify({ result: "conflict" }), { status: 200 }));
-  assert.deepEqual(await db.openRun(args), { kind: "conflict" });
-  stubFetch(() => new Response(JSON.stringify({ result: "forbidden", message: "Accept the terms first." }), { status: 200 }));
-  assert.deepEqual(await db.openRun(args), { kind: "forbidden", message: "Accept the terms first." });
 });

@@ -89,6 +89,68 @@ impl Default for Policy {
     }
 }
 
+/// The environment variable through which a test build shortens the wrap-up of a run without an
+/// upload server: `<wrap_up_ms>[,<first_seal_retry_ms>]`. A shipped build neither has nor reads
+/// it.
+#[cfg(feature = "test-support")]
+pub const TEST_LOCAL_WRAP_UP: &str = "GOALCUP_TEST_LOCAL_WRAP_UP";
+
+/// How a run's wrap-up is shaped: its length, and (in a test build only) the first wait of the
+/// seal's retries. [`WrapUpSpec::begin`] starts the clock at the moment the run stops.
+#[derive(Debug, Clone, Copy)]
+pub struct WrapUpSpec {
+    length: Duration,
+    #[cfg(feature = "test-support")]
+    first_retry: Option<Duration>,
+}
+
+impl WrapUpSpec {
+    /// The shape for a run: the policy's for a run on a server, [`LOCAL_WRAP_UP`] for one
+    /// without. A test build reads [`TEST_LOCAL_WRAP_UP`] from `env` and applies it to a run
+    /// without a server only; a malformed value is ignored.
+    pub fn for_run(
+        policy: Option<&Policy>,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        #[cfg(not(feature = "test-support"))]
+        let _ = env;
+        #[allow(unused_mut)]
+        let mut spec = WrapUpSpec {
+            length: wrap_up_length(policy),
+            #[cfg(feature = "test-support")]
+            first_retry: None,
+        };
+        #[cfg(feature = "test-support")]
+        if policy.is_none()
+            && let Some(value) = env.get(TEST_LOCAL_WRAP_UP)
+        {
+            let parsed: Option<Vec<u64>> =
+                value.split(',').map(|v| v.trim().parse().ok()).collect();
+            let ms = Duration::from_millis;
+            match parsed.as_deref() {
+                Some(&[wrap]) => spec.length = ms(wrap),
+                Some(&[wrap, first]) => {
+                    spec.length = ms(wrap);
+                    spec.first_retry = Some(ms(first));
+                }
+                _ => {}
+            }
+        }
+        spec
+    }
+
+    /// The wrap-up, beginning now.
+    pub fn begin(self) -> WrapUp {
+        let wrap = WrapUp::after(self.length);
+        #[cfg(feature = "test-support")]
+        let wrap = WrapUp {
+            first_retry: self.first_retry,
+            ..wrap
+        };
+        wrap
+    }
+}
+
 /// How long the wrap-up of a run lasts: the policy's for a run opened on a server, and
 /// [`LOCAL_WRAP_UP`] for a run with none.
 pub fn wrap_up_length(policy: Option<&Policy>) -> Duration {
@@ -144,6 +206,9 @@ impl Cadence {
 pub struct WrapUp {
     began: ContinuousOrigin,
     length: Duration,
+    /// A test build's first seal-retry wait, in place of [`crate::retry::SEAL_RETRY_FIRST`].
+    #[cfg(feature = "test-support")]
+    first_retry: Option<Duration>,
 }
 
 impl WrapUp {
@@ -152,7 +217,19 @@ impl WrapUp {
         WrapUp {
             began: ContinuousOrigin::now(),
             length,
+            #[cfg(feature = "test-support")]
+            first_retry: None,
         }
+    }
+
+    /// The first wait before the seal is asked again: [`crate::retry::SEAL_RETRY_FIRST`],
+    /// except in a test build told otherwise ([`TEST_LOCAL_WRAP_UP`]).
+    pub fn first_seal_retry(&self) -> Duration {
+        #[cfg(feature = "test-support")]
+        if let Some(first) = self.first_retry {
+            return first;
+        }
+        crate::retry::SEAL_RETRY_FIRST
     }
 
     /// A bound that is already spent: one attempt is made and none is repeated.

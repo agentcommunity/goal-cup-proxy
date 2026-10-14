@@ -16,10 +16,15 @@ export interface Reply {
   body: any;
 }
 
+/** How a request reaches the Worker: `fetch` over HTTP, or the Worker's own `fetch` in this process. */
+export type Fetcher = (input: string, init: RequestInit) => Promise<Response>;
+
 export class Client {
   readonly base: string;
-  constructor(base: string) {
+  readonly #fetch: Fetcher;
+  constructor(base: string, fetcher: Fetcher = fetch) {
     this.base = base;
+    this.#fetch = fetcher;
   }
 
   async call(method: string, path: string, opts: { token?: string | null; json?: unknown; body?: Uint8Array; headers?: Record<string, string> } = {}): Promise<Reply> {
@@ -32,7 +37,7 @@ export class Client {
     } else if (opts.body !== undefined) {
       body = opts.body as BodyInit;
     }
-    const res = await fetch(this.base + path, { method, headers, body });
+    const res = await this.#fetch(this.base + path, { method, headers, body });
     const text = await res.text();
     let parsed: unknown = text;
     try {
@@ -75,7 +80,7 @@ export const APPROVAL_KEY = "test-approval-key";
 /** `POST /v1/device`, the way the tracer sends it. */
 export const deviceBody = (overrides: Record<string, unknown> = {}) => ({
   purpose: "run",
-  mode: "practice",
+  mode: "competition",
   connector_id: "codex-cli",
   tracer_version: "0.1.0",
   ...overrides,
@@ -86,8 +91,8 @@ export const approve = (api: Client, user_code: string, member_id: string, appro
   api.call("POST", "/v1/device/approve", { token: key, json: { user_code, member_id, approve } });
 
 /** The whole device flow in one go: a run credential (`gcr_` + 64 hex) for `member`, still unbound. */
-export async function credentialFor(api: Client, member: string): Promise<string> {
-  const d = await api.call("POST", "/v1/device", { json: deviceBody() });
+export async function credentialFor(api: Client, member: string, mode: "competition" | "practice" = "competition"): Promise<string> {
+  const d = await api.call("POST", "/v1/device", { json: deviceBody({ mode }) });
   if (d.status !== 200) throw new Error(`device: ${d.status} ${JSON.stringify(d.body)}`);
   const a = await approve(api, d.body.user_code, member);
   if (a.status !== 200) throw new Error(`approve: ${a.status} ${JSON.stringify(a.body)}`);
