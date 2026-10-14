@@ -1,9 +1,9 @@
 //! The one writer of a trace directory.
 //!
-//! Seven files make up an entry's evidence — `trace.toml`, `chain.jsonl`, `acks.jsonl`,
-//! `receipt.json`, `baseline.json`, `seal.json`, and the copied `manifest.toml` — and this
-//! module owns their bytes. They are written here, in the crate that defines what is in
-//! them, so the daemon and verifier cannot disagree about a format neither of them owns.
+//! Five files make up an entry's evidence — `chain.jsonl`, `acks.jsonl`, `receipt.json`,
+//! `baseline.json` and `seal.json` — and this module owns their bytes. They are written here,
+//! in the crate that defines what is in them, so the daemon and verifier cannot disagree
+//! about a format neither of them owns.
 //!
 //! **The daemon never computes a hash.** `append_chain` takes the envelope's content and
 //! fills `seq`, `prev` and `hash` itself from its own state: a caller that hands over a
@@ -11,20 +11,15 @@
 //! one), so "the chain is contiguous from 0" is a property of this writer rather than a
 //! rule every call site has to remember.
 //!
-//! **`chain::Chain` is the M0 formula and is deliberately not used here; envelopes hash
-//! through `envelope.rs`.** `Chain::try_append` pre-increments, so its first link is `seq`
-//! 1, which `tests/it/chain_golden.rs` pins. The entry chain starts at 0, and `seq` is inside
-//! `Envelope::chain_bytes`, so the base is part of what is hashed and the two sequences
-//! must not share an implementation. This module calls `link_hash` directly with its own
-//! 0-based counter.
+//! **Envelopes hash through `envelope.rs`.** This module calls `chain::link_hash` over
+//! `Envelope::chain_bytes` with its own 0-based counter; `seq` is inside the chain bytes, so
+//! the base is part of what is hashed.
 //!
 //! **Some writers here have no production caller, on purpose.** The capture runtime writes
 //! a trace with `write_baseline_for_protocol`, `append_chain` and `write_local_finish`.
-//! The V1 writers — `write_cutoff`, `write_finalization`, `write_descriptor`,
-//! `write_receipt`, `write_manifest`, `write_seal` and their `_for_protocol` forms — lost
-//! their daemon caller in D48. The receipt, seal, cutoff and finalization writers stay because
-//! the verifier's v5 tests build signed and sealed fixture traces with them; `write_descriptor`
-//! and `write_manifest` are read by nothing since the pre-v5 verifier was removed (`TODO.md`).
+//! The V1 writers — `write_cutoff_for_protocol`, `write_finalization_for_protocol`,
+//! `write_receipt` and `write_seal_for_protocol` — lost their daemon caller in D48. They stay because the
+//! verifier's v5 tests build signed and sealed fixture traces with them.
 
 use crate::ProtocolError;
 use crate::ack::AckCheckpoint;
@@ -34,14 +29,13 @@ use crate::capture::{
     TERMINAL_RESERVE_BYTES,
 };
 use crate::chain::{GENESIS, Link, link_hash};
-use crate::envelope::{Envelope, EnvelopeVersionCompatibilityError, EventBody};
+use crate::envelope::{Envelope, EventBody};
 use crate::provenance::{
     CutoffReachedV1, FinalizationV1, ProvenanceError, Rfc3339Utc, Sha256Digest,
     TerminationOutcomeV1,
 };
 use crate::receipt::StartReceipt;
 use crate::seal::SealManifest;
-use crate::submission::{SubmissionManifestV1, SubmissionOutcomeV1};
 use goalcup_platform::tracecap::{
     FixedDocument, TraceAppendFile, TraceCapError, TraceDir, TraceReadFile,
 };
@@ -58,20 +52,9 @@ pub const ACKS_FILE: &str = "acks.jsonl";
 pub const RECEIPT_FILE: &str = "receipt.json";
 pub const BASELINE_FILE: &str = "baseline.json";
 pub const SEAL_FILE: &str = "seal.json";
+/// The pre-v5 trace descriptor's name. No writer produces it; a resume still sweeps its
+/// leftover temporaries, and a CLI test fixture names it.
 pub const DESCRIPTOR_FILE: &str = "trace.toml";
-/// The connector manifest, under the name it carries in the connector directory. The one
-/// file a verifier reads whose bytes this crate does not author — it is copied in by
-/// [`TraceExport::write_manifest`], and `TraceDescriptorDoc::connector_manifest` names it,
-/// so the digest pin is the digest of a file the trace directory carries with it.
-pub const MANIFEST_FILE: &str = "manifest.toml";
-/// The fixed daemon-owned root for a captured V4 workspace submission.
-pub const SUBMISSION_DIR: &str = "submission";
-/// The canonical submission manifest, present only for a captured V4 workspace submission.
-pub const SUBMISSION_MANIFEST_FILE: &str = "submission/manifest.json";
-const SUBMISSION_MANIFEST_NAME: &str = "manifest.json";
-/// Content-addressed immutable object storage beneath [`SUBMISSION_DIR`].
-pub const SUBMISSION_SHA256_OBJECTS_DIR: &str = "submission/objects/sha256";
-
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
     #[error("chain sequence space is exhausted")]
@@ -87,17 +70,6 @@ pub enum ExportError {
         what: &'static str,
         #[source]
         source: serde_json::Error,
-    },
-    #[error("deserialising {what}: {source}")]
-    Deserialise {
-        what: &'static str,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("serialising trace.toml: {source}")]
-    Toml {
-        #[source]
-        source: toml::ser::Error,
     },
     #[error("protocol: {0}")]
     Protocol(#[from] ProtocolError),
@@ -131,12 +103,6 @@ pub enum ExportError {
     ChainCorrupt { seq: u64, reason: String },
     #[error("chain.jsonl seq {seq} declares unsupported protocol version {protocol_version}")]
     UnsupportedProtocolVersion { seq: u64, protocol_version: u32 },
-    #[error("the envelope version and body are incompatible: {reason}")]
-    IncompatibleEnvelope {
-        reason: EnvelopeVersionCompatibilityError,
-    },
-    #[error("a parsed legacy HomeSeeded layout is historical evidence and cannot be appended")]
-    LegacyHomeSeededAppend,
     #[error("chain.jsonl already exists and is not empty: resume it rather than creating over it")]
     ChainExists,
     #[error(
@@ -159,7 +125,7 @@ pub enum ExportError {
     FinalizationBeforeCutoff,
     #[error("this export already chained a finalization at seq {seq}")]
     FinalizationAlreadyChained { seq: u64 },
-    #[error("the finalization or captured submission manifest does not match the cutoff")]
+    #[error("the finalization does not match the cutoff")]
     FinalizationBindingMismatch,
     #[error("the chain is terminal at seq {terminal_seq}: no chain record may follow")]
     Terminal { terminal_seq: u64 },
@@ -209,18 +175,6 @@ struct EnvelopeVersionSeq {
     seq: u64,
 }
 
-fn version_body_export_error(seq: u64, error: EnvelopeVersionCompatibilityError) -> ExportError {
-    match error {
-        EnvelopeVersionCompatibilityError::UnsupportedProtocolVersion { protocol_version } => {
-            ExportError::UnsupportedProtocolVersion {
-                seq,
-                protocol_version,
-            }
-        }
-        reason => ExportError::IncompatibleEnvelope { reason },
-    }
-}
-
 /// The parenthetical in an `OutOfOrder` message: names the last link written, or says
 /// there is not one, rather than printing a `None` at a reader.
 fn last_link(expected_after: &Option<u64>) -> String {
@@ -250,9 +204,6 @@ fn resumed_phase_after(phase: &ExportPhase, env: &Envelope) -> Result<ExportPhas
                 },
         } => {
             validate_new_phase_envelope(env)?;
-            if env.protocol_version != M2_PROTOCOL_VERSION {
-                return Err("a local finish is protocol v5 evidence only".to_string());
-            }
             if env.recorded_at != observed.wall {
                 return Err(
                     "a local finish envelope time differs from its own observation".to_string(),
@@ -349,12 +300,11 @@ fn resumed_phase_after(phase: &ExportPhase, env: &Envelope) -> Result<ExportPhas
     }
 }
 
+/// A cutoff, finalization or local finish is a daemon envelope with a valid time and a bounded
+/// entry. Its version (v5) and the absence of envelope redaction are already admitted by
+/// [`admit`] before this runs.
 fn validate_new_phase_envelope(env: &Envelope) -> Result<(), String> {
-    let known = crate::is_supported_protocol_version(env.protocol_version)
-        || env.protocol_version == M2_PROTOCOL_VERSION;
-    if !known
-        || env.protocol_version < crate::INLINE_REDACTION_PROTOCOL_VERSION
-        || env.source != "daemon"
+    if env.source != "daemon"
         || env.redaction.is_some()
         || Rfc3339Utc::try_from(env.recorded_at.as_str()).is_err()
         || env.entry_id.is_empty()
@@ -370,77 +320,47 @@ fn validate_new_phase_envelope(env: &Envelope) -> Result<(), String> {
     }
 }
 
-/// Which wire contract a chain's records follow. The first record decides, and a chain never
-/// changes format: a capture chain carries protocol v5 only, a legacy chain versions 1–4 only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChainFormat {
-    /// Protocol versions 1–4, admitted by the legacy version/body check.
-    Legacy,
-    /// Protocol v5 (M2 capture): every record, baseline and terminal included, is v5.
-    Capture,
-}
-
-const LEGACY_IN_CAPTURE_CHAIN: &str = "a capture chain carries only protocol v5 envelopes";
 /// Every v5 entry has a v5 baseline, and a baseline is only ever the genesis.
 const CAPTURE_GENESIS_NOT_BASELINE: &str = "a capture chain begins with its v5 baseline";
 
-/// The v5 body matrix. A capture chain holds its baseline, capture records and exactly the
-/// terminal kinds this writer can close it with; legacy leg/health bodies are not v5 evidence.
-/// Redaction evidence lives inside a capture `Segment`, never on the envelope.
-fn validate_capture_envelope(env: &Envelope) -> Result<(), ExportError> {
+/// Protocol versions 1–4, which the pre-v5 writer produced (D54). A line declaring one is a
+/// known, retired format rather than an unknown future one, and is refused as an envelope that
+/// does not belong in a v5 chain.
+fn is_retired_protocol_version(protocol_version: u32) -> bool {
+    matches!(protocol_version, 1..=4)
+}
+
+/// The version every chain line must declare: v5. A retired version 1–4 is
+/// `InvalidCaptureEnvelope`; any other is `UnsupportedProtocolVersion`, so a future version's
+/// unknown body is reported as a version, never as a parse failure.
+fn check_version(seq: u64, protocol_version: u32) -> Result<(), ExportError> {
+    if protocol_version == M2_PROTOCOL_VERSION {
+        Ok(())
+    } else if is_retired_protocol_version(protocol_version) {
+        Err(ExportError::InvalidCaptureEnvelope {
+            seq,
+            reason: "a capture chain carries only protocol v5 envelopes",
+        })
+    } else {
+        Err(ExportError::UnsupportedProtocolVersion {
+            seq,
+            protocol_version,
+        })
+    }
+}
+
+/// Version admission of `env`, then the envelope rule the closed v5 body set leaves: redaction
+/// evidence lives inside a capture `Segment`, never on the envelope.
+fn admit(env: &Envelope) -> Result<(), ExportError> {
     let seq = env.link.seq;
+    check_version(seq, env.protocol_version)?;
     if env.redaction.is_some() {
         return Err(ExportError::InvalidCaptureEnvelope {
             seq,
             reason: "a v5 envelope carries redaction evidence only inside its capture record",
         });
     }
-    match env.body {
-        EventBody::Capture { .. }
-        | EventBody::Baseline { .. }
-        | EventBody::Seal { .. }
-        | EventBody::CutoffReachedV1(_)
-        | EventBody::FinalizationV1(_) => Ok(()),
-        _ => Err(ExportError::InvalidCaptureEnvelope {
-            seq,
-            reason: "this body is not part of protocol v5",
-        }),
-    }
-}
-
-/// Version/body admission of `env` into a chain of `format` (`None`: the chain is empty and
-/// its first record decides). v5 is admitted only into a capture chain; the legacy check,
-/// which refuses v5 as an unsupported version, still judges every legacy record.
-fn admit_for_format(format: Option<ChainFormat>, env: &Envelope) -> Result<(), ExportError> {
-    let seq = env.link.seq;
-    check_version_for_format(format, seq, env.protocol_version)?;
-    if env.protocol_version == M2_PROTOCOL_VERSION {
-        validate_capture_envelope(env)
-    } else {
-        env.validate_version_body_compatibility()
-            .map_err(|error| version_body_export_error(seq, error))
-    }
-}
-
-fn check_version_for_format(
-    format: Option<ChainFormat>,
-    seq: u64,
-    protocol_version: u32,
-) -> Result<(), ExportError> {
-    let v5 = protocol_version == M2_PROTOCOL_VERSION;
-    let legacy = crate::is_supported_protocol_version(protocol_version);
-    match format {
-        Some(ChainFormat::Capture) | None if v5 => Ok(()),
-        Some(ChainFormat::Capture) if legacy => Err(ExportError::InvalidCaptureEnvelope {
-            seq,
-            reason: LEGACY_IN_CAPTURE_CHAIN,
-        }),
-        Some(ChainFormat::Legacy) | None if legacy => Ok(()),
-        _ => Err(ExportError::UnsupportedProtocolVersion {
-            seq,
-            protocol_version,
-        }),
-    }
+    Ok(())
 }
 
 /// The local terminal's own fields: a valid observation, a bounded non-control reason and a
@@ -499,7 +419,7 @@ fn spends_terminal_allowance(body: &EventBody) -> bool {
                     ..
                 }
         ),
-        _ => false,
+        EventBody::Baseline { .. } => false,
     }
 }
 
@@ -516,20 +436,18 @@ pub struct ChainTerminal {
 ///
 /// It is the one implementation of the terminal rules: [`TraceExport`]'s resume runs every
 /// line through it, and an independent reader (the M2 integrity reader) applies the same
-/// rules read-only instead of re-deriving them. It checks, in order: version admission for
-/// the chain's format (decided by the first record; see [`ChainFormat`]), the version/body
-/// matrix, baseline-first and once-only (a capture chain's genesis must be its v5
+/// rules read-only instead of re-deriving them. It checks, in order: version admission (v5
+/// only) and no envelope redaction, baseline-first and once-only (the genesis must be the
 /// baseline), and the phase machine — a capture record never
 /// follows a cutoff or a terminal; a cutoff is followed only by its bound finalization;
 /// exactly one terminal (legacy seal, finalization or v5 local finish) closes the chain.
-/// A local finish must be v5, carry its own observation as the envelope time, valid fields,
+/// A local finish must carry its own observation as the envelope time, valid fields,
 /// a typed termination with ordered times and a lowercase SHA-256 manifest digest.
 ///
 /// It is pure: fixed files are not read here. Use [`check_terminal_manifest`] to bind the
 /// terminal to its `seal.json`. It holds constant state, never the records it has seen.
 #[derive(Debug, Clone, Default)]
 pub struct ChainPhaseReplay {
-    format: Option<ChainFormat>,
     phase: ExportPhase,
     baseline_seq: Option<u64>,
 }
@@ -542,18 +460,13 @@ impl ChainPhaseReplay {
     /// Admit a line's declared version *before* its body is decoded, so a future version's
     /// unknown body is reported as an unsupported version rather than a parse failure.
     pub fn check_version(&self, seq: u64, protocol_version: u32) -> Result<(), ExportError> {
-        check_version_for_format(self.format, seq, protocol_version)
-    }
-
-    /// The version/body admission alone, without advancing the replay.
-    pub(crate) fn check_envelope(&self, env: &Envelope) -> Result<(), ExportError> {
-        admit_for_format(self.format, env)
+        check_version(seq, protocol_version)
     }
 
     /// Admit the next already link-verified envelope. A refusal names the envelope's `seq`;
     /// phase and baseline violations are [`ExportError::ChainCorrupt`].
     pub fn push(&mut self, env: &Envelope) -> Result<(), ExportError> {
-        self.check_envelope(env)?;
+        admit(env)?;
         let seq = env.link.seq;
         let corrupt = |reason: String| ExportError::ChainCorrupt { seq, reason };
         // The baseline is recovered exactly as the seal is, and for the same reason: the
@@ -561,7 +474,8 @@ impl ChainPhaseReplay {
         // second baseline line is a chain this writer will not extend — two answers to
         // "what did the workspace hold at t0" is one a reviewer would have to choose between.
         let baseline = matches!(env.body, EventBody::Baseline { .. });
-        if self.format.is_none() && env.protocol_version == M2_PROTOCOL_VERSION && !baseline {
+        // The first admitted record is the baseline, so until one is admitted nothing else is.
+        if self.baseline_seq.is_none() && !baseline {
             return Err(ExportError::InvalidCaptureEnvelope {
                 seq,
                 reason: CAPTURE_GENESIS_NOT_BASELINE,
@@ -583,20 +497,8 @@ impl ChainPhaseReplay {
         if baseline {
             self.baseline_seq = Some(seq);
         }
-        if self.format.is_none() {
-            self.format = Some(if env.protocol_version == M2_PROTOCOL_VERSION {
-                ChainFormat::Capture
-            } else {
-                ChainFormat::Legacy
-            });
-        }
         self.phase = phase;
         Ok(())
-    }
-
-    /// The chain's format, once its first record has been admitted.
-    pub fn format(&self) -> Option<ChainFormat> {
-        self.format
     }
 
     pub fn baseline_seq(&self) -> Option<u64> {
@@ -682,48 +584,12 @@ fn validate_phase_inputs(entry_id: &str, recorded_at: &str) -> Result<(), Proven
     Rfc3339Utc::try_from(recorded_at).map(|_| ())
 }
 
-/// The `trace.toml` document, serialisable. The verifier's `TraceDescriptor`
-/// deserialises this exact shape; `crates/goalcup-verifier/tests/it/trace_export_roundtrip.rs` binds
-/// the two together.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TraceDescriptorDoc {
-    pub connector: String,
-    pub entry_id: String,
-    pub workspace: String,
-    pub tracked_sessions: Vec<String>,
-    pub harness_version: String,
-    /// The connector manifest, **relative to the trace root** — [`MANIFEST_FILE`] for a
-    /// trace this writer produced, because [`TraceExport::write_manifest`] is what put
-    /// the file there. A descriptor naming a path outside the directory is a trace that
-    /// stops verifying the moment it is copied.
-    pub connector_manifest: String,
-    /// Always `Some("chain.jsonl")` for a trace this writer produced.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub chain: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub receipt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub baseline: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub acks: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub seal: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub server_public_key: Option<String>,
-    /// A re-read from offset 0 is expected on this trace. Written unconditionally (no
-    /// `skip_serializing_if`), so the document always says which reading it asked for; the
-    /// verifier honours it only with a lower-seq witness.
-    #[serde(default)]
-    pub expected_reread: bool,
-}
-
 /// A fixed document that a restart/rebuild consumer may inspect through a held root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FixedTraceDocument {
     Receipt,
     Baseline,
     Seal,
-    Manifest,
 }
 
 impl FixedTraceDocument {
@@ -732,7 +598,14 @@ impl FixedTraceDocument {
             Self::Receipt => FixedDocument::Receipt,
             Self::Baseline => FixedDocument::Baseline,
             Self::Seal => FixedDocument::Seal,
-            Self::Manifest => FixedDocument::Manifest,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Receipt => RECEIPT_FILE,
+            Self::Baseline => BASELINE_FILE,
+            Self::Seal => SEAL_FILE,
         }
     }
 }
@@ -795,10 +668,6 @@ pub struct TraceExport {
     /// Logical `chain.jsonl` bytes this writer validated or appended: the used-bytes figure
     /// quota admission is measured against.
     chain_bytes: u64,
-    /// This is a protocol-v5 capture chain: selected by [`Self::configure_capture_quota`] or
-    /// [`Self::reserve_capture`] on an empty chain, or recovered from a v5 first record. It
-    /// admits v5 records only.
-    capture_chain: bool,
     /// The serialized chain-byte quota, [`TERMINAL_RESERVE_BYTES`] included. Admission
     /// accounting only: by itself it allocates nothing and is never reported as reserved.
     capture_quota: Option<u64>,
@@ -819,7 +688,7 @@ pub struct TraceExport {
     head: String,
     /// The execution phase reconstructed from the chain itself.
     phase: ExportPhase,
-    /// The seq of the baseline link, once one exists — always 0, because `write_baseline`
+    /// The seq of the baseline link, once one exists — always 0, because `write_baseline_for_protocol`
     /// refuses to chain one anywhere else. Set when this instance chains it and when
     /// `resume` finds it in the file, for the same reason `seal_seq` is: the once-only
     /// rule cannot live in one process's memory, or a daemon killed after taking the
@@ -921,14 +790,13 @@ impl TraceExport {
             return Err(ExportError::AcksExist);
         }
         for document in [
-            FixedDocument::Receipt,
-            FixedDocument::Baseline,
-            FixedDocument::Seal,
-            FixedDocument::Manifest,
+            FixedTraceDocument::Receipt,
+            FixedTraceDocument::Baseline,
+            FixedTraceDocument::Seal,
         ] {
-            if root.dir.fixed_exists(document)? {
+            if root.dir.fixed_exists(document.platform())? {
                 return Err(ExportError::FixedDocumentExists {
-                    name: fixed_name(document),
+                    name: document.name(),
                 });
             }
         }
@@ -937,7 +805,6 @@ impl TraceExport {
             chain,
             acks,
             chain_bytes: 0,
-            capture_chain: false,
             capture_quota: None,
             capture_reserved: 0,
             durable: None,
@@ -954,9 +821,9 @@ impl TraceExport {
     /// The position is **read off `chain.jsonl`**, not supplied: a restarting daemon
     /// that told the writer where it had got to would be keeping chain state of its own,
     /// which is the drift this writer exists to make impossible. It shallow-decodes each
-    /// line's version and sequence first; an unsupported version is refused before typed
+    /// line's version and sequence first; any version but v5 is refused before typed
     /// body decoding, link checks, acknowledgement creation, temp cleanup, or mutation.
-    /// Supported records then have their version/body compatibility and link checked;
+    /// Each line must then be its canonical serialization and have its link checked;
     /// anything else is `ChainCorrupt`, because a chain the writer cannot read from the
     /// start is not one it can honestly append to.
     ///
@@ -972,8 +839,8 @@ impl TraceExport {
     /// nothing to resume. `acks.jsonl` is created if absent: a run may legitimately have
     /// been acknowledged not once.
     ///
-    /// The scan **streams**. `chain.jsonl` is the whole run — every leg-1 record, every
-    /// leg-2 post and every raw body — and a 168-hour entry runs to tens of
+    /// The scan **streams**. `chain.jsonl` is the whole run — every captured segment of
+    /// both legs — and a 168-hour entry runs to tens of
     /// gigabytes, so reading it into one `String` would make the recovery path (D9:
     /// reconnect, catch up, say "back online") the one place the daemon needs the run in
     /// memory. One line is held at a time; the `Envelope` is dropped once its `seq` and
@@ -1017,14 +884,9 @@ impl TraceExport {
         let mut replay = ChainPhaseReplay::new();
         let mut validated_bytes = 0u64;
         let mut i = 0u64;
-        let capture_line_limit = MAX_ENVELOPE_BYTES as u64;
+        // Every line is bounded before it is buffered.
+        let limit = MAX_ENVELOPE_BYTES as u64;
         loop {
-            // A capture chain's lines are bounded before they are buffered. The first line
-            // decides the format; a legacy chain keeps its historical unbounded lines.
-            let limit = match replay.format() {
-                Some(ChainFormat::Capture) => capture_line_limit,
-                _ => u64::MAX,
-            };
             let mut line = Vec::new();
             let read = (&mut reader)
                 .take(limit)
@@ -1050,36 +912,25 @@ impl TraceExport {
                 ));
             }
             line.pop();
-            // JSON allows a trailing carriage return, so the header parses either way.
+            // JSON allows a trailing carriage return, so the header parses either way; the
+            // canonical check below refuses it.
             let header: EnvelopeVersionSeq = serde_json::from_slice(&line)
                 .map_err(|source| corrupt(format!("not an envelope header: {source}")))?;
-            // A legacy record keeps its historical tolerance of a carriage return; a v5 record
-            // must be exactly its canonical serialization (checked below).
-            if header.protocol_version != M2_PROTOCOL_VERSION && line.last() == Some(&b'\r') {
-                line.pop();
-            }
             replay.check_version(header.seq, header.protocol_version)?;
-            if header.protocol_version == M2_PROTOCOL_VERSION && read > capture_line_limit {
-                return Err(corrupt(
-                    "record exceeds the protocol v5 envelope bound".to_string(),
-                ));
-            }
             let env: Envelope = serde_json::from_slice(&line)
                 .map_err(|source| corrupt(format!("not an envelope: {source}")))?;
-            // The link hash covers the decoded content only, so another spelling of a v5 line
+            // The link hash covers the decoded content only, so another spelling of a line
             // (an unknown key, whitespace, a carriage return) is bytes nothing covers, and the
             // verifier refuses it (`record_not_canonical`). A chain it can never verify is not
             // one to append to.
-            if header.protocol_version == M2_PROTOCOL_VERSION
-                && !serde_json::to_vec(&env).is_ok_and(|canonical| canonical == line)
-            {
+            if !serde_json::to_vec(&env).is_ok_and(|canonical| canonical == line) {
                 return Err(corrupt(
                     "record is not its canonical serialization (a carriage return, extra \
                      whitespace or an unknown key was added to the line)"
                         .to_string(),
                 ));
             }
-            replay.check_envelope(&env)?;
+            admit(&env)?;
             if env.link.seq != next_seq {
                 return Err(corrupt(format!(
                     "names seq {}, but the chain is at {next_seq}",
@@ -1149,7 +1000,6 @@ impl TraceExport {
             chain: prepared.chain,
             acks,
             chain_bytes: prepared.validated_bytes,
-            capture_chain: prepared.replay.format() == Some(ChainFormat::Capture),
             // A reopened writer has flushed nothing and holds no quota or measured reservation:
             // the owner configures (or re-reserves) its quota again, and the first sync
             // establishes a durable frontier.
@@ -1182,24 +1032,21 @@ impl TraceExport {
     /// that acknowledgement covering a chain that kept growing.
     ///
     /// **`EventBody::Seal` and `EventBody::Baseline` are not appends.** Either body here
-    /// is `ReservedBody`: they are [`TraceExport::write_seal`]'s and
-    /// [`TraceExport::write_baseline`]'s to build, and everything that makes them mean
+    /// is `ReservedBody`: they are [`TraceExport::write_seal_for_protocol`]'s and
+    /// [`TraceExport::write_baseline_for_protocol`]'s to build, and everything that makes them mean
     /// anything — seal-last, baseline-first, one of each, the file written beside the
     /// link — lives in those two methods. The check is here rather than in a caller so
     /// that it travels with the export to every holder of one: a chain with two seals
     /// gives an acknowledgement two heads to anchor, and a baseline chained
     /// at an arbitrary seq is a claim about a workspace the agent has been writing to.
     ///
-    /// **Protocol v5 is admitted only into a capture chain** (see
-    /// [`Self::configure_capture_quota`]); there every record is v5 and is budgeted against
-    /// the quota before it is written, and `CaptureRecord::LocalFinish` is reserved to
-    /// [`Self::write_local_finish`] exactly as the seal is to `write_seal`.
+    /// **Every record is protocol v5** and is budgeted against the quota (see
+    /// [`Self::configure_capture_quota`]) before it is written; nothing is appended until a
+    /// quota is configured. `CaptureRecord::LocalFinish` is reserved to
+    /// [`Self::write_local_finish`] exactly as the seal is to `write_seal_for_protocol`.
     pub fn append_chain(&mut self, env: &mut Envelope) -> Result<Link, ExportError> {
-        self.admit_envelope(env)?;
+        admit(env)?;
         match &env.body {
-            EventBody::HomeSeeded(seed) if seed.has_legacy_wire_layout() => {
-                return Err(ExportError::LegacyHomeSeededAppend);
-            }
             EventBody::Seal { .. } => return Err(ExportError::ReservedBody { kind: "seal" }),
             EventBody::Baseline { .. } => {
                 return Err(ExportError::ReservedBody { kind: "baseline" });
@@ -1225,26 +1072,11 @@ impl TraceExport {
         self.append_link_unchecked(env)
     }
 
-    /// Version/body admission for this writer's chain. An export that has not selected
-    /// capture refuses v5 as the unsupported version it always was; a capture chain refuses
-    /// every legacy version.
-    fn admit_envelope(&self, env: &Envelope) -> Result<(), ExportError> {
-        let format = if self.capture_chain {
-            ChainFormat::Capture
-        } else {
-            ChainFormat::Legacy
-        };
-        admit_for_format(Some(format), env)
-    }
-
     /// Capture-chain admission of one complete serialized line (newline included), before
     /// any byte is written: the v5 envelope bound, then the quota. Payload stops in front of
     /// the terminal allowance; a bounded closure may spend it, and a refused closure means
     /// loss can no longer be accounted.
     fn admit_capture_line(&mut self, body: &EventBody, len: usize) -> Result<(), ExportError> {
-        if !self.capture_chain {
-            return Ok(());
-        }
         let quota = self
             .capture_quota
             .ok_or(ExportError::CaptureQuotaNotConfigured)?;
@@ -1276,16 +1108,13 @@ impl TraceExport {
         Ok(())
     }
 
-    /// The stamping itself, with no body-kind check: `write_seal` and `write_baseline`
+    /// The stamping itself, with no body-kind check: `write_seal_for_protocol` and `write_baseline_for_protocol`
     /// chain the two bodies `append_chain` reserves, and they reach the chain through
     /// here. Every other rule — seal-closes-the-chain, contiguity, the caller's link
     /// being the writer's to fill — applies to them exactly as it does to a record.
     fn append_link_unchecked(&mut self, env: &mut Envelope) -> Result<Link, ExportError> {
-        self.admit_envelope(env)?;
-        if self.capture_chain
-            && self.next_seq == 0
-            && !matches!(env.body, EventBody::Baseline { .. })
-        {
+        admit(env)?;
+        if self.next_seq == 0 && !matches!(env.body, EventBody::Baseline { .. }) {
             return Err(ExportError::InvalidCaptureEnvelope {
                 seq: env.link.seq,
                 reason: CAPTURE_GENESIS_NOT_BASELINE,
@@ -1350,21 +1179,8 @@ impl TraceExport {
         }
     }
 
-    /// Append the once-only local cutoff boundary at the legacy default protocol version.
-    pub fn write_cutoff(
-        &mut self,
-        entry_id: &str,
-        recorded_at: &str,
-        cutoff: CutoffReachedV1,
-    ) -> Result<Link, ExportError> {
-        self.write_cutoff_for_protocol(crate::PROTOCOL_VERSION, entry_id, recorded_at, cutoff)
-    }
-
-    /// Append the once-only cutoff boundary under an explicit envelope protocol version.
-    ///
-    /// The version is admitted for this chain before anything is hashed or written: v5 only
-    /// into a capture chain, a legacy version only into a legacy chain. The cutoff validation
-    /// and once-only phase rules are those of [`Self::write_cutoff`], which delegates here.
+    /// Append the once-only cutoff boundary. The version is admitted before anything is
+    /// hashed or written: only v5 is.
     pub fn write_cutoff_for_protocol(
         &mut self,
         protocol_version: u32,
@@ -1407,26 +1223,9 @@ impl TraceExport {
         Ok(link)
     }
 
-    /// Append the single terminal result bound to the preceding cutoff, at the legacy default
-    /// protocol version.
-    pub fn write_finalization(
-        &mut self,
-        entry_id: &str,
-        recorded_at: &str,
-        finalization: FinalizationV1,
-    ) -> Result<Link, ExportError> {
-        self.write_finalization_for_protocol(
-            crate::PROTOCOL_VERSION,
-            entry_id,
-            recorded_at,
-            finalization,
-        )
-    }
-
-    /// Append the single terminal result bound to the preceding cutoff under an explicit
-    /// envelope protocol version, admitted before hashing or writing exactly as for
-    /// [`Self::write_cutoff_for_protocol`]. Binding, captured-submission and once-only rules
-    /// are those of [`Self::write_finalization`], which delegates here.
+    /// Append the single terminal result bound to the preceding cutoff, its version admitted
+    /// before hashing or writing exactly as for [`Self::write_cutoff_for_protocol`]. It must
+    /// name the cutoff's entry and receipt, and only one is ever chained.
     pub fn write_finalization_for_protocol(
         &mut self,
         protocol_version: u32,
@@ -1436,16 +1235,13 @@ impl TraceExport {
     ) -> Result<Link, ExportError> {
         finalization.validate()?;
         validate_phase_inputs(entry_id, recorded_at)?;
-        let (cutoff_entry, cutoff_receipt, cutoff_link) = match &self.phase {
+        match &self.phase {
             ExportPhase::Open => return Err(ExportError::FinalizationBeforeCutoff),
             ExportPhase::Cutoff {
                 entry_id: cutoff_entry,
                 receipt_sha256,
-                link,
                 ..
-            } if cutoff_entry == entry_id && receipt_sha256 == finalization.receipt_sha256() => {
-                (cutoff_entry.clone(), receipt_sha256.clone(), link.clone())
-            }
+            } if cutoff_entry == entry_id && receipt_sha256 == finalization.receipt_sha256() => {}
             ExportPhase::Cutoff { .. } => {
                 return Err(ExportError::FinalizationBindingMismatch);
             }
@@ -1457,13 +1253,7 @@ impl TraceExport {
             ExportPhase::Terminal { seq, .. } => {
                 return Err(ExportError::Terminal { terminal_seq: *seq });
             }
-        };
-        self.validate_captured_workspace_submission(
-            &finalization,
-            &cutoff_entry,
-            &cutoff_receipt,
-            &cutoff_link,
-        )?;
+        }
         let mut env = Envelope {
             protocol_version,
             entry_id: entry_id.to_string(),
@@ -1484,51 +1274,6 @@ impl TraceExport {
             kind: TerminalKind::FinalizationV1,
         };
         Ok(link)
-    }
-
-    fn validate_captured_workspace_submission(
-        &self,
-        finalization: &FinalizationV1,
-        cutoff_entry: &str,
-        cutoff_receipt: &Sha256Digest,
-        cutoff_link: &Link,
-    ) -> Result<(), ExportError> {
-        let FinalizationV1::WorkspaceSubmission {
-            submission: SubmissionOutcomeV1::Captured(captured),
-            ..
-        } = finalization
-        else {
-            return Ok(());
-        };
-
-        let submission_dir = match self.root.dir.open_child_dir(SUBMISSION_DIR) {
-            Ok(dir) => dir,
-            Err(TraceCapError::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                return Err(ExportError::FinalizationBindingMismatch);
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let Some(file) = submission_dir.read_regular(SUBMISSION_MANIFEST_NAME)? else {
-            return Err(ExportError::FinalizationBindingMismatch);
-        };
-        let manifest: SubmissionManifestV1 =
-            serde_json::from_reader(file).map_err(|source| ExportError::Deserialise {
-                what: "submission manifest",
-                source,
-            })?;
-        let manifest_sha256 = manifest.digest()?;
-
-        if manifest_sha256 != captured.manifest_sha256
-            || manifest.entry_id != cutoff_entry
-            || &manifest.receipt_sha256 != cutoff_receipt
-            || manifest.cutoff_seq != cutoff_link.seq
-            || manifest.cutoff_chain_hash.as_str() != cutoff_link.hash
-        {
-            return Err(ExportError::FinalizationBindingMismatch);
-        }
-        Ok(())
     }
 
     pub fn append_ack(&mut self, ack: &AckCheckpoint) -> Result<(), ExportError> {
@@ -1561,7 +1306,7 @@ impl TraceExport {
         Ok(self.root.dir.open_matching_reader(&mut self.acks)?)
     }
 
-    /// Select protocol-v5 capture for this chain and set its serialized chain-byte quota.
+    /// Set this chain's serialized chain-byte quota.
     ///
     /// **This is admission accounting, not a reservation.** Nothing is allocated, the chain's
     /// logical length is untouched, and [`Self::capture_storage`] reports `reserved_bytes: 0`
@@ -1569,19 +1314,17 @@ impl TraceExport {
     /// an explicitly unreserved experiment and never qualifies a pilot launch.
     ///
     /// `bytes` includes [`TERMINAL_RESERVE_BYTES`], which payload never spends, so it must
-    /// exceed that allowance. It cannot be below the bytes already written. A legacy chain
-    /// that already holds a record cannot become a capture chain; on an empty chain this
-    /// selects v5 before the baseline, and a reopened capture chain configures its quota
-    /// again here before appending.
+    /// exceed that allowance. It cannot be below the bytes already written. Nothing is appended
+    /// until a quota is set: a new chain sets it before its baseline, and a reopened chain sets
+    /// it again here before appending.
     pub fn configure_capture_quota(&mut self, bytes: u64) -> Result<(), ExportError> {
         self.check_capture_quota(bytes)?;
-        self.capture_chain = true;
         self.capture_quota = Some(bytes);
         self.capture_reserved = 0;
         Ok(())
     }
 
-    /// Select protocol-v5 capture, set the serialized chain-byte quota, and physically reserve
+    /// Set the serialized chain-byte quota and physically reserve
     /// that quota in `chain.jsonl` itself: the pilot's storage preflight, which subsumes
     /// [`Self::configure_capture_quota`] for a shipped run.
     ///
@@ -1615,7 +1358,6 @@ impl TraceExport {
                 found_bytes: measured.logical_bytes,
             });
         }
-        self.capture_chain = true;
         self.capture_quota = Some(bytes);
         // Measured, and never reported beyond the quota it backs.
         self.capture_reserved = measured.allocated_bytes.min(bytes);
@@ -1629,12 +1371,6 @@ impl TraceExport {
             return Err(ExportError::InvalidCaptureQuota {
                 bytes,
                 reason: "a capture quota must exceed the terminal allowance it includes",
-            });
-        }
-        if !self.capture_chain && self.head().is_some() {
-            return Err(ExportError::InvalidCaptureQuota {
-                bytes,
-                reason: "an existing legacy chain cannot become a protocol v5 capture chain",
             });
         }
         if bytes < self.chain_bytes {
@@ -1751,24 +1487,13 @@ impl TraceExport {
             kind: TerminalKind::LocalFinish,
         };
         self.sync_capture()?;
-        let path = self.write_fixed(FixedDocument::Seal, &bytes)?;
+        let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
         self.sync_capture()?;
         Ok((path, link))
     }
 
-    /// Written tmp-then-rename: `trace.toml` is re-written every time the
-    /// descriptor changes — a rehydrated entry, a new tracked session — while a verifier
-    /// may open it at any moment, and a reader that opened it mid-write must see the
-    /// previous document whole rather than half of the next one. A rename replaces the
-    /// directory entry in one step; an in-place truncate-and-write does not.
-    pub fn write_descriptor(&self, doc: &TraceDescriptorDoc) -> Result<PathBuf, ExportError> {
-        let text = toml::to_string(doc).map_err(|source| ExportError::Toml { source })?;
-        self.root.dir.replace_descriptor(text.as_bytes())?;
-        Ok(self.root.display.join(DESCRIPTOR_FILE))
-    }
-
     pub fn write_receipt(&self, r: &StartReceipt) -> Result<PathBuf, ExportError> {
-        self.write_fixed(FixedDocument::Receipt, &to_json("receipt", r)?)
+        self.write_fixed(FixedTraceDocument::Receipt, &to_json("receipt", r)?)
     }
 
     /// Open one fixed document through this export's retained trace-root capability.
@@ -1777,23 +1502,6 @@ impl TraceExport {
         document: FixedTraceDocument,
     ) -> Result<Option<TraceReadFile>, ExportError> {
         self.root.read_fixed(document)
-    }
-
-    /// Put the connector's shipped `manifest.toml` in the trace directory, byte for byte,
-    /// under [`MANIFEST_FILE`].
-    ///
-    /// The bytes are the caller's — this is the one file in a trace this crate does not
-    /// author — but the *placing* is the export's, like every other file a verifier
-    /// reads: `TraceDescriptorDoc::connector_manifest` names a relative file, so the
-    /// directory stays copyable, and the digest pin compares the bytes that judged the
-    /// run rather than whatever sits in the participant's connector directory now.
-    ///
-    /// Bytes and not a source path: `fs::copy` would carry the source file's mode, and a
-    /// caller that has already read the manifest (to hash it, or to parse the heartbeat
-    /// interval out of it) must write the bytes it hashed rather than re-reading a file
-    /// that may have moved between the two.
-    pub fn write_manifest(&self, bytes: &[u8]) -> Result<PathBuf, ExportError> {
-        self.write_fixed(FixedDocument::Manifest, bytes)
     }
 
     /// Chain the baseline as the chain's FIRST link, then write it. Appends one
@@ -1817,16 +1525,8 @@ impl TraceExport {
     /// The seq is recorded before `baseline.json` is written, so a failure to write the
     /// file does not license a second link over the same baseline; what is on disk then
     /// is a chained claim with no manifest beside it, which V13 reports.
-    pub fn write_baseline(&mut self, m: &SealManifest) -> Result<(PathBuf, Link), ExportError> {
-        self.write_baseline_for_protocol(crate::PROTOCOL_VERSION, m)
-    }
-
-    /// Write a baseline using an explicit envelope protocol version.
     ///
-    /// Historical fixture generators use this to reproduce their original signed bytes.
-    /// Ordinary callers use [`Self::write_baseline`], which always selects the current
-    /// protocol. Protocol choice changes only this envelope; all position and phase rules
-    /// remain owned by this shared implementation.
+    /// The version is admitted before anything is written: only v5 is.
     pub fn write_baseline_for_protocol(
         &mut self,
         protocol_version: u32,
@@ -1859,7 +1559,7 @@ impl TraceExport {
         };
         let link = self.append_link_unchecked(&mut env)?;
         self.baseline_seq = Some(link.seq);
-        let path = self.write_fixed(FixedDocument::Baseline, &bytes)?;
+        let path = self.write_fixed(FixedTraceDocument::Baseline, &bytes)?;
         Ok((path, link))
     }
 
@@ -1875,15 +1575,8 @@ impl TraceExport {
     /// does not license a second link over the same seal. What is on disk then is a
     /// chained claim with no manifest beside it, which V13 reports; what a retry would
     /// leave is two claims a reviewer has to choose between.
-    pub fn write_seal(&mut self, m: &SealManifest) -> Result<(PathBuf, Link), ExportError> {
-        self.write_seal_for_protocol(crate::PROTOCOL_VERSION, m)
-    }
-
-    /// Write a seal using an explicit envelope protocol version.
     ///
-    /// This is the reserved-envelope counterpart to callers supplying a version on an
-    /// ordinary [`Envelope`]. It exists for byte-stable historical fixtures; the phase and
-    /// once-only rules are identical to [`Self::write_seal`].
+    /// The version is admitted before anything is written: only v5 is.
     pub fn write_seal_for_protocol(
         &mut self,
         protocol_version: u32,
@@ -1928,7 +1621,7 @@ impl TraceExport {
             link: link.clone(),
             kind: TerminalKind::LegacySeal,
         };
-        let path = self.write_fixed(FixedDocument::Seal, &bytes)?;
+        let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
         Ok((path, link))
     }
 
@@ -1959,17 +1652,21 @@ impl TraceExport {
         Ok(self.root.dir.open_matching_reader(&mut self.chain)?)
     }
 
-    fn write_fixed(&self, document: FixedDocument, bytes: &[u8]) -> Result<PathBuf, ExportError> {
+    fn write_fixed(
+        &self,
+        document: FixedTraceDocument,
+        bytes: &[u8],
+    ) -> Result<PathBuf, ExportError> {
         self.root
             .dir
-            .create_fixed(document)?
+            .create_fixed(document.platform())?
             .write_all_sync_checked(bytes)?;
-        Ok(self.root.display.join(fixed_name(document)))
+        Ok(self.root.display.join(document.name()))
     }
 }
 
-/// The sha256, hex, of the exact bytes `write_seal` puts in `seal.json` — and of the
-/// bytes `write_baseline` puts in `baseline.json`, which go through the same writer. One
+/// The sha256, hex, of the exact bytes `write_seal_for_protocol` puts in `seal.json` — and of
+/// the bytes `write_baseline_for_protocol` puts in `baseline.json`, which go through the same writer. One
 /// definition, so a chained claim and V13's recomputation cannot differ; V13 calls this
 /// function rather than hashing either file its own way.
 ///
@@ -1992,15 +1689,6 @@ fn io(path: &Path, source: std::io::Error) -> ExportError {
     ExportError::Io {
         path: path.display().to_string(),
         source,
-    }
-}
-
-fn fixed_name(document: FixedDocument) -> &'static str {
-    match document {
-        FixedDocument::Receipt => RECEIPT_FILE,
-        FixedDocument::Baseline => BASELINE_FILE,
-        FixedDocument::Seal => SEAL_FILE,
-        FixedDocument::Manifest => MANIFEST_FILE,
     }
 }
 

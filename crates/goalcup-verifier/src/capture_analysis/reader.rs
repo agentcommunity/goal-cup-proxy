@@ -34,7 +34,7 @@
 use super::lineage::Lineage;
 use crate::VerifyOptions;
 use crate::trace_fs::{TracePath, TraceRoot};
-use crate::{KeySource as VerdictKeySource, SERVER_PUBLIC_KEYS, VerifierError};
+use crate::{SERVER_PUBLIC_KEYS, VerifierError};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use goalcup_protocol::ack::AckCheckpoint;
@@ -52,12 +52,9 @@ use goalcup_protocol::export::{
     ACKS_FILE, BASELINE_FILE, CHAIN_FILE, ChainPhaseReplay, ExportError, RECEIPT_FILE, SEAL_FILE,
     TerminalKind, check_terminal_manifest, manifest_sha256,
 };
-use goalcup_protocol::provenance::{
-    FinalizationV1, Rfc3339Utc, Sha256Digest, TerminationOutcomeV1,
-};
+use goalcup_protocol::provenance::{Rfc3339Utc, Sha256Digest, TerminationOutcomeV1};
 use goalcup_protocol::receipt::StartReceipt;
 use goalcup_protocol::seal::SealManifest;
-use goalcup_protocol::submission::SubmissionOutcomeV1;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, BufReader, Read};
@@ -80,7 +77,9 @@ pub enum CaptureIntegrity {
     Invalid,
 }
 
-/// Provenance of the key that verified this v5 trace's receipt and acknowledgements.
+/// Provenance of the key that verified this v5 trace's receipt and acknowledgements:
+/// `pinned` is this build's allowlist (`SERVER_PUBLIC_KEYS`), `supplied` a key the caller
+/// passed for this run (`goalcup-verify --dev-key`), `none` no key at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -298,34 +297,34 @@ fn read_fixed(root: &TraceRoot, name: &str, limit: u64) -> io::Result<Fixed> {
 /// the caller supplied (`--dev-key`), pinned first so a pinned key is never reported as
 /// borrowed. A v5 capture trace has no descriptor, so there is no descriptor key to admit.
 struct AcceptedKeys<'a> {
-    keys: Vec<(&'a str, VerdictKeySource)>,
+    keys: Vec<(&'a str, KeySource)>,
 }
 
 impl<'a> AcceptedKeys<'a> {
     fn new(options: &'a VerifyOptions) -> Self {
-        let mut keys: Vec<(&'a str, VerdictKeySource)> = SERVER_PUBLIC_KEYS
+        let mut keys: Vec<(&'a str, KeySource)> = SERVER_PUBLIC_KEYS
             .iter()
-            .map(|key| (*key, VerdictKeySource::Pinned))
+            .map(|key| (*key, KeySource::Pinned))
             .collect();
         for key in &options.extra_server_keys {
             if !keys
                 .iter()
                 .any(|(known, _)| known.eq_ignore_ascii_case(key))
             {
-                keys.push((key.as_str(), VerdictKeySource::Supplied));
+                keys.push((key.as_str(), KeySource::Supplied));
             }
         }
         Self { keys }
     }
 
-    fn named(&self, public_key: &str) -> Option<(&'a str, VerdictKeySource)> {
+    fn named(&self, public_key: &str) -> Option<(&'a str, KeySource)> {
         self.keys
             .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(public_key))
             .copied()
     }
 
-    fn verifying(&self, ack: &AckCheckpoint) -> Option<(&'a str, VerdictKeySource)> {
+    fn verifying(&self, ack: &AckCheckpoint) -> Option<(&'a str, KeySource)> {
         self.keys
             .iter()
             .find(|(key, _)| ack.verify(key).is_ok())
@@ -373,7 +372,6 @@ fn export_code(error: &ExportError) -> Violation {
     match error {
         ExportError::UnsupportedProtocolVersion { .. } => "protocol_version_unsupported",
         ExportError::InvalidCaptureEnvelope { .. } => "capture_envelope_invalid",
-        ExportError::IncompatibleEnvelope { .. } => "envelope_incompatible",
         _ => "chain_phase_invalid",
     }
 }
@@ -390,8 +388,6 @@ struct VerifiedReceipt {
 
 /// The cutoff a signed finalization closes, kept from the one pass.
 struct CutoffFacts {
-    seq: u64,
-    hash: String,
     receipt_sha256: Sha256Digest,
     deadline_at: String,
 }
@@ -418,7 +414,7 @@ struct Scan<'k> {
     receipt_present: bool,
     receipt: Option<VerifiedReceipt>,
     /// The key that verified the receipt or, without one, the first ACK.
-    anchor: Option<(&'k str, VerdictKeySource)>,
+    anchor: Option<(&'k str, KeySource)>,
     acks_failed: bool,
     verified_ack: Option<VerifiedAckPosition>,
     sealed: bool,
@@ -662,8 +658,6 @@ impl<'k> Scan<'k> {
             }
             if let EventBody::CutoffReachedV1(cutoff) = &env.body {
                 self.cutoff = Some(CutoffFacts {
-                    seq,
-                    hash: env.link.hash.clone(),
                     receipt_sha256: cutoff.receipt_sha256.clone(),
                     deadline_at: cutoff.deadline_at.as_str().to_string(),
                 });
@@ -787,7 +781,7 @@ impl<'k> Scan<'k> {
 
     /// Bind the validated terminal to what it claims. A local finish or legacy seal binds
     /// its fixed `seal.json`, with no receipt prerequisite. A signed finalization binds its
-    /// verified receipt, its cutoff and any preserved submission. The two terminal modes
+    /// verified receipt and its cutoff. The two terminal modes
     /// are never interchangeable.
     fn bind_terminal(&mut self, root: &TraceRoot) -> io::Result<()> {
         if let Some(receipt) = &self.receipt
@@ -807,7 +801,7 @@ impl<'k> Scan<'k> {
             TerminalKind::LocalFinish | TerminalKind::LegacySeal => {
                 self.bind_fixed_manifest(root, &env)?
             }
-            TerminalKind::FinalizationV1 => self.bind_signed_finalization(root, &env),
+            TerminalKind::FinalizationV1 => self.bind_signed_finalization(&env),
         };
         if bound {
             self.terminal_facts = terminal_facts(&env);
@@ -846,11 +840,11 @@ impl<'k> Scan<'k> {
         Ok(true)
     }
 
-    fn bind_signed_finalization(&mut self, root: &TraceRoot, env: &Envelope) -> bool {
-        let EventBody::FinalizationV1(finalization) = &env.body else {
+    fn bind_signed_finalization(&mut self, env: &Envelope) -> bool {
+        if !matches!(env.body, EventBody::FinalizationV1(_)) {
             self.fail("chain_phase_invalid");
             return false;
-        };
+        }
         let Some(receipt) = &self.receipt else {
             if !self.receipt_present {
                 // A signed-mode terminal whose receipt is not retained cannot be proven.
@@ -868,24 +862,6 @@ impl<'k> Scan<'k> {
         }
         if cutoff.deadline_at != receipt.receipt.claims.deadline_at {
             faults.push("cutoff_deadline_mismatch");
-        }
-        if let FinalizationV1::WorkspaceSubmission {
-            submission: SubmissionOutcomeV1::Captured(captured),
-            ..
-        } = finalization
-        {
-            match crate::submission::verify_submission(root, captured) {
-                Err(_) => faults.push("submission_invalid"),
-                Ok(manifest) => {
-                    if Some(manifest.entry_id.as_str()) != self.entry_id.as_deref()
-                        || manifest.receipt_sha256 != receipt.digest
-                        || manifest.cutoff_seq != cutoff.seq
-                        || manifest.cutoff_chain_hash.as_str() != cutoff.hash
-                    {
-                        faults.push("submission_binding_mismatch");
-                    }
-                }
-            }
         }
         let proven = receipt.bound && receipt.head_bound;
         for fault in &faults {
@@ -930,7 +906,7 @@ impl<'k> Scan<'k> {
                 started_at: r.receipt.claims.started_at.clone(),
                 deadline_at: r.receipt.claims.deadline_at.clone(),
             });
-        if let Some((_, VerdictKeySource::Supplied)) = self.anchor {
+        if let Some((_, KeySource::Supplied)) = self.anchor {
             self.findings.add("server_key_unpinned");
         }
         let integrity = if self.invalid {
@@ -955,20 +931,12 @@ impl<'k> Scan<'k> {
             gap_count: self.capture.gaps,
             coverage_incomplete,
             torn_tail: self.torn_tail,
-            key_source: report_key_source(self.anchor.map(|(_, source)| source)),
+            key_source: self.anchor.map_or(KeySource::None, |(_, source)| source),
             findings: self.findings.finish(),
             verified_ack: self.verified_ack,
             receipt_clock,
             terminal: self.terminal_facts,
         }
-    }
-}
-
-fn report_key_source(source: Option<VerdictKeySource>) -> KeySource {
-    match source {
-        Some(VerdictKeySource::Pinned) => KeySource::Pinned,
-        Some(VerdictKeySource::Supplied) => KeySource::Supplied,
-        Some(VerdictKeySource::Descriptor | VerdictKeySource::None) | None => KeySource::None,
     }
 }
 
@@ -992,11 +960,7 @@ fn terminal_facts(env: &Envelope) -> Option<CaptureTerminalFacts> {
             Some(seal_manifest_sha256.clone()),
         ),
         EventBody::FinalizationV1(finalization) => {
-            let termination = match finalization {
-                FinalizationV1::Captured { termination, .. }
-                | FinalizationV1::CaptureUnavailable { termination, .. }
-                | FinalizationV1::WorkspaceSubmission { termination, .. } => termination.clone(),
-            };
+            let termination = finalization.termination().clone();
             (
                 None,
                 env.recorded_at.clone(),
