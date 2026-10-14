@@ -27,20 +27,7 @@ pub(super) fn native_plan(
         .native
         .first()
         .ok_or_else(|| DaemonError::Config("a schema-1 capture has no native source".into()))?;
-    let root = if native.root == "{config_home}" {
-        config_home.to_path_buf()
-    } else if let Some(rest) = native.root.strip_prefix("{config_home}/") {
-        config_home.join(rest)
-    } else if native.root == "{run_home}" {
-        run_home.to_path_buf()
-    } else if let Some(rest) = native.root.strip_prefix("{run_home}/") {
-        run_home.join(rest)
-    } else {
-        return Err(DaemonError::Config(format!(
-            "native root {:?} is not rooted in config_home or run_home",
-            native.root
-        )));
-    };
+    let root = native_root(&native.root, run_home, config_home)?;
     let form = match native.form {
         goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
         goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
@@ -93,6 +80,44 @@ pub(super) fn native_plan(
             unread_stores: 0,
         })
     }
+}
+
+/// A native source's `root` template, resolved.
+fn native_root(root: &str, run_home: &Path, config_home: &Path) -> Result<PathBuf, DaemonError> {
+    if root == "{config_home}" {
+        Ok(config_home.to_path_buf())
+    } else if let Some(rest) = root.strip_prefix("{config_home}/") {
+        Ok(config_home.join(rest))
+    } else if root == "{run_home}" {
+        Ok(run_home.to_path_buf())
+    } else if let Some(rest) = root.strip_prefix("{run_home}/") {
+        Ok(run_home.join(rest))
+    } else {
+        Err(DaemonError::Config(format!(
+            "native root {root:?} is not rooted in config_home or run_home"
+        )))
+    }
+}
+
+/// The baseline's listing of the config home (D56): every file but the native roots inside it.
+/// Empty when a native root is the home itself; `None` when the home cannot be read.
+pub(super) fn listed_home(
+    capture: &CaptureSpec,
+    run_home: &Path,
+    config_home: &Path,
+) -> Option<Vec<goalcup_protocol::seal::SealedFile>> {
+    let mut excluded = Vec::new();
+    for native in &capture.native {
+        let Ok(root) = native_root(&native.root, run_home, config_home) else {
+            continue;
+        };
+        match root.strip_prefix(config_home) {
+            Ok(rel) if rel.as_os_str().is_empty() => return Some(Vec::new()),
+            Ok(rel) => excluded.push(rel.to_string_lossy().replace('\\', "/")),
+            Err(_) => {}
+        }
+    }
+    workspace::list_home(config_home, &excluded)
 }
 
 /// A native capture over `sources`, queueing into `sink`.

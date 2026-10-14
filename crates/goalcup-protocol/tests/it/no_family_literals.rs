@@ -30,6 +30,7 @@ fn capture_paths_contain_no_compiled_family_routing_literals() {
         root.join("crates/goalcup-cli/src/run/watch.rs"),
         root.join("crates/goalcup-cli/src/upload/policy.rs"),
         root.join("crates/goalcup-daemon/src/native_capture.rs"),
+        root.join("crates/goalcup-daemon/src/workspace_git.rs"),
         root.join("crates/goalcup-protocol/src/harness.rs"),
         root.join("crates/goalcup-protocol/src/capture_policy.rs"),
     ];

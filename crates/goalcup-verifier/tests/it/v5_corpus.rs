@@ -230,6 +230,82 @@ fn the_corpus_directory_and_the_table_agree() {
 }
 
 // ---------------------------------------------------------------------------------------
+// The seal of a clone (D56).
+// ---------------------------------------------------------------------------------------
+
+/// A seal that records the Git state instead of the files, beside a baseline that lists the
+/// harness home: the reader binds both through the manifest digest and the trace is valid. A
+/// `seal.json` whose uncommitted digest was edited afterwards no longer is.
+#[test]
+fn a_seal_with_git_verifies() {
+    use goalcup_protocol::seal::{SealedFile, WorkspaceGit};
+    let mut baseline = manifest();
+    baseline.git = Some(WorkspaceGit {
+        commit: Some("ab".repeat(20)),
+        dirty_sha256: "cd".repeat(32),
+    });
+    baseline.home = Some(vec![SealedFile {
+        path: "config.toml".to_string(),
+        bytes: 3,
+        sha256: "ef".repeat(32),
+    }]);
+    let mut seal = manifest();
+    seal.git = Some(WorkspaceGit {
+        commit: None,
+        dirty_sha256: "12".repeat(32),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let mut records = goal();
+    records.push(launch("codex-cli", None, None));
+    build_trace(dir.path(), &baseline, &records, |export| {
+        local_finish(export, &seal, confirmed());
+    });
+    let case = |root: &Path| {
+        let output = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
+            .arg("--capture-integrity")
+            .arg(root)
+            .output()
+            .unwrap();
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+        (output.status.code(), report)
+    };
+    let (exit, report) = case(dir.path());
+    assert_eq!(exit, Some(0), "{report}");
+    assert_eq!(report["integrity"].as_str(), Some("valid"), "{report}");
+    assert_eq!(report["sealed"].as_bool(), Some(true), "{report}");
+
+    let path = dir.path().join("seal.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace(&"12".repeat(32), &"34".repeat(32))).unwrap();
+    let (exit, report) = case(dir.path());
+    assert_ne!(
+        exit,
+        Some(0),
+        "an edited Git digest must not verify: {report}"
+    );
+}
+
+/// The two fields are skipped when absent, so a manifest written before them serializes to
+/// the same bytes and keeps the digest its terminal binds.
+#[test]
+fn a_manifest_without_the_new_fields_keeps_its_digest() {
+    for name in ["sealed-with-files", "sealed-old-launch"] {
+        for file in ["baseline.json", "seal.json"] {
+            let bytes = std::fs::read(corpus_dir().join(name).join(file)).unwrap();
+            let manifest: goalcup_protocol::seal::SealManifest =
+                serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(manifest.git, None);
+            assert_eq!(manifest.home, None);
+            assert_eq!(
+                goalcup_protocol::export::manifest_sha256(&manifest).unwrap(),
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes)),
+                "{name}/{file}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 // The writer of the corpus (runs only when asked to).
 // ---------------------------------------------------------------------------------------
 
