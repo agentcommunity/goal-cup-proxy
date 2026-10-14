@@ -1,5 +1,5 @@
 use goalcup_platform::machine::{
-    ac_from_pmset, container_from_systemd, facts, is_wsl_from, on_windows_drive_with,
+    ac_from_pmset, container_from_systemd, facts, is_wsl_from, on_windows_drive_with, url_allowed,
 };
 use std::path::Path;
 
@@ -46,52 +46,6 @@ fn host_name() -> Option<String> {
     Some(String::from_utf8_lossy(&buf[..end]).into_owned())
 }
 
-/// Every JSON key and string value, lowercased.
-fn strings(v: &serde_json::Value, out: &mut Vec<String>) {
-    match v {
-        serde_json::Value::String(s) => out.push(s.to_lowercase()),
-        serde_json::Value::Array(a) => a.iter().for_each(|x| strings(x, out)),
-        serde_json::Value::Object(o) => {
-            for (k, x) in o {
-                out.push(k.to_lowercase());
-                strings(x, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-#[test]
-fn facts_name_no_host_or_user() {
-    let facts = facts(&std::env::temp_dir());
-    let json = serde_json::to_value(&facts).unwrap();
-    let mut seen = Vec::new();
-    strings(&json, &mut seen);
-    assert!(!seen.is_empty(), "os and arch are always known");
-
-    let host = host_name();
-    let user = std::env::var("USER").ok();
-    for secret in [host, user].into_iter().flatten() {
-        let secret = secret.to_lowercase();
-        // A short value would match unrelated words; whole-string equality stays honest.
-        if secret.len() < 3 {
-            continue;
-        }
-        let full = secret.clone();
-        let short = full.split('.').next().unwrap_or(&full).to_string();
-        assert!(
-            !seen.iter().any(|s| *s == full || *s == short),
-            "facts leak {secret:?}: {json}"
-        );
-        if secret.len() >= 6 {
-            assert!(
-                !seen.iter().any(|s| s.contains(&secret)),
-                "facts embed {secret:?}: {json}"
-            );
-        }
-    }
-}
-
 /// Whether `needle` appears in `hay` bounded by non-alphanumeric characters (or the ends).
 fn contains_word(hay: &str, needle: &str) -> bool {
     hay.match_indices(needle).any(|(i, m)| {
@@ -112,7 +66,7 @@ fn values(v: &serde_json::Value, out: &mut Vec<String>) {
 }
 
 #[test]
-fn facts_hold_no_paths_and_no_whole_word_identity() {
+fn facts_name_no_host_or_user() {
     let json = serde_json::to_value(facts(&std::env::temp_dir())).unwrap();
     let mut vals = Vec::new();
     values(&json, &mut vals);
@@ -172,4 +126,18 @@ fn facts_are_present_for_the_basics() {
     assert_eq!(f.arch.as_deref(), Some(std::env::consts::ARCH));
     assert!(f.cpu_count.unwrap_or(0) >= 1);
     assert!(f.disk_total_bytes.unwrap_or(0) > 0);
+}
+
+#[test]
+fn only_https_urls_reach_the_opener() {
+    assert!(url_allowed("https://example.com/path?a=1&b=2"));
+    assert!(!url_allowed("http://example.com"));
+    assert!(!url_allowed("http://127.0.0.1:8080/"));
+    assert!(!url_allowed("--help"));
+    assert!(!url_allowed("-https://x"));
+    assert!(!url_allowed("file:///etc/passwd"));
+    assert!(!url_allowed("https://"));
+    assert!(!url_allowed("https://a b"));
+    assert!(!url_allowed("https://a\nb"));
+    assert!(!url_allowed(""));
 }

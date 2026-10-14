@@ -121,3 +121,17 @@ fn reopening_at_another_size_ends_at_that_size_without_doubling() {
     assert_eq!(std::fs::metadata(&path).unwrap().len(), 16 * MIB);
     smaller.release().unwrap();
 }
+
+#[test]
+fn growing_past_the_free_space_is_storage_full_and_keeps_the_size() {
+    let tmp = Fixture::new();
+    let path = tmp.path().join("reserve");
+    let mut reserve = ReserveFile::hold(&path, 4 * MIB).unwrap();
+    let allocated = reserve.allocated();
+    let ask = free_bytes(tmp.path()).unwrap() + (1 << 40);
+    let error = reserve.resize(ask).expect_err("must refuse");
+    assert_eq!(error.kind(), ErrorKind::StorageFull);
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 4 * MIB);
+    assert_eq!(reserve.allocated(), allocated);
+    reserve.release().unwrap();
+}

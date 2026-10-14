@@ -8,13 +8,13 @@
 //! Linux: the parent-death signal fires when the *spawning thread* exits, not the process, so a
 //! short-lived caller thread must not be the one that spawns the inhibitor.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::machine::is_wsl;
+use crate::machine::{find_on_path, is_executable, is_wsl};
 
 const WSL_REFUSAL: &str =
     "the Windows host decides when this machine sleeps; set its power settings";
@@ -185,17 +185,4 @@ fn find_tool(name: &str) -> Option<PathBuf> {
         return is_executable(&fixed).then_some(fixed);
     }
     find_on_path(name)
-}
-
-/// The first executable called `name` on `PATH`.
-pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| is_executable(candidate))
-}
-
-fn is_executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }

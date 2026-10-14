@@ -13,7 +13,6 @@ compile_error!(
 /// A held sleep inhibitor that lives and dies with its value.
 pub mod awake;
 /// Free space on a volume and the run reserve file that holds blocks against a full disk.
-#[cfg(unix)]
 pub mod disk;
 /// The calling thread's `errno`, for the `readdir` end-of-directory idiom.
 #[cfg(unix)]

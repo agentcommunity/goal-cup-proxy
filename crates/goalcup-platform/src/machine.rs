@@ -5,12 +5,10 @@
 
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt as _;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
-
-use crate::awake::find_on_path;
 
 /// What a run can say about the machine it ran on. Every field is optional: a fact that could
 /// not be read is left out rather than guessed.
@@ -72,7 +70,7 @@ pub fn is_wsl_from(osrelease: &str) -> bool {
 /// no battery, or no readable source).
 pub fn on_ac_power() -> Option<bool> {
     if cfg!(target_os = "macos") {
-        let out = Command::new("pmset")
+        let out = Command::new("/usr/bin/pmset")
             .args(["-g", "batt"])
             .stdin(Stdio::null())
             .stderr(Stdio::null())
@@ -119,6 +117,9 @@ fn ac_from_sysfs(dir: &Path) -> Option<bool> {
 }
 
 /// Whether `p` lives on a Windows drive mounted into WSL (`/mnt/<letter>/...`).
+///
+/// Only the path as given is inspected; callers must canonicalize it first so a symlink or `..`
+/// cannot hide a drive.
 pub fn on_windows_drive(p: &Path) -> bool {
     on_windows_drive_with(p, is_wsl())
 }
@@ -145,10 +146,25 @@ pub fn on_windows_drive_with(p: &Path, wsl: bool) -> bool {
     }
 }
 
-/// Open `url` in the user's browser. Returns whether the opener started; it is never waited on.
+/// Whether `url` may be handed to an opener: it must start with `https://`, and hold no
+/// whitespace or control characters. That also keeps an argument beginning with `-` away from
+/// the opener.
+#[doc(hidden)]
+pub fn url_allowed(url: &str) -> bool {
+    url.strip_prefix("https://")
+        .is_some_and(|rest| !rest.is_empty())
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+/// Open `url` in the user's browser. Only `https://` URLs are accepted (see [`url_allowed`]);
+/// anything else returns false without starting a process. Otherwise returns whether the opener
+/// started; it is never waited on.
 pub fn open_url(url: &str) -> bool {
+    if !url_allowed(url) {
+        return false;
+    }
     let mut command = if cfg!(target_os = "macos") {
-        let mut c = Command::new("open");
+        let mut c = Command::new("/usr/bin/open");
         c.arg(url);
         c
     } else if let Some(wslview) = find_on_path("wslview") {
@@ -316,4 +332,17 @@ fn disk_space(path: &Path) -> Option<(u64, u64)> {
     let total = (st.f_blocks as u64).checked_mul(unit)?;
     let free = (st.f_bavail as u64).checked_mul(unit)?;
     Some((total, free))
+}
+
+/// The first executable called `name` on `PATH`.
+pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| is_executable(candidate))
+}
+
+pub(crate) fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
