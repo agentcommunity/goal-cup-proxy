@@ -149,6 +149,9 @@ const SHARED: &[(&str, &str)] = &[
         r"(?i)sk-[A-Za-z0-9-]{1,8}(?:\.{3}|…|\\u2026|\*{3,64})[A-Za-z0-9]{3,4}",
     ),
     ("github_token", r"gh[pousr]_[A-Za-z0-9]{20,}"),
+    // The fine-grained form: `github_pat_`, then 22 characters, `_`, 59 more. Same kind, so
+    // nothing downstream sees a new label.
+    ("github_token", r"github_pat_[A-Za-z0-9_]{22,}"),
     ("aws_access_key", r"AKIA[0-9A-Z]{16}"),
     ("bearer", r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}"),
     (
@@ -209,7 +212,7 @@ const SHARED: &[(&str, &str)] = &[
 
 static COMPILED: OnceLock<Vec<Pattern>> = OnceLock::new();
 
-/// The nineteen shared literals — eighteen kinds, `generic_secret_assignment` twice —
+/// The twenty shared literals — eighteen kinds, `generic_secret_assignment` and `github_token` twice —
 /// compiled once for the process.
 ///
 /// A literal in [`SHARED`] that will not compile is skipped rather than unwrapped: this
