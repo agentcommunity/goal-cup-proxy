@@ -25,7 +25,7 @@ use goalcup_protocol::process::ProcessRegistration;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-/// A small physical reservation: 4 MiB, the 1 MiB terminal allowance included.
+/// A small chain quota: 4 MiB, the 1 MiB terminal allowance included.
 pub const RESERVE: u64 = 4 * 1024 * 1024;
 
 /// An empty daemon whose upload URL is the trap.

@@ -18,8 +18,8 @@ pub struct DurableFrontier {
     pub chain_bytes: u64,
 }
 
-/// Storage accounting. `quota_bytes` is the admission ceiling; `reserved_bytes` is measured
-/// physical allocation, zero for an explicitly unreserved (quota-only) experiment.
+/// Storage accounting. `quota_bytes` is the admission ceiling; `reserved_bytes` is zero: a
+/// chain is quota-only, and the run host holds the run's one disk reservation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaptureStorage {
     pub quota_bytes: u64,

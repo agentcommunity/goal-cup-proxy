@@ -28,8 +28,3 @@ libc.workspace = true
 #     returned value.
 [dev-dependencies]
 tempfile.workspace = true
-
-#   libc (Linux) — `tests/capture_reserved_storage.rs` classifies its temporary directory with
-#     `statfs(2)` itself, so the expected reservation outcome never comes from the code under test.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-libc.workspace = true

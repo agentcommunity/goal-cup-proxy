@@ -9,9 +9,6 @@
 //! `hold_capture_owner_drain`, `delay_capture_finish_stage`), the precedent being the registry's.
 //! They exist in no shipped build. A real binary is not made to hold a permit or an owner; the
 //! campaign rows (`capture_failure_campaign.rs`) substitute a whole-daemon SIGSTOP and say so.
-//!
-//! Runs on macOS (APFS) and on Linux (ext4 or XFS): every entry is reserved on the temporary
-//! directory's volume, which must be one of them.
 
 use crate::common::capture_lifecycle_support;
 use crate::common::support;
