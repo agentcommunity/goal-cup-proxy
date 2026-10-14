@@ -24,7 +24,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 // ---------------------------------------------------------------------------------------
 // Local bounded sink
@@ -328,6 +328,7 @@ fn source(
         form,
         hint,
         scope_id: None,
+        modified_since: None,
     }
 }
 
@@ -343,6 +344,7 @@ fn codex_thread(root: &Path, thread: &str) -> NativeSourceSpec {
         form: NativeStoreForm::AppendOnly,
         hint: Some(NativeHint::new("codex-jsonl").unwrap()),
         scope_id: Some(thread.into()),
+        modified_since: None,
     }
 }
 
@@ -1932,6 +1934,7 @@ fn hermes_session(sessions: &Path, id: &str) -> NativeSourceSpec {
         form: NativeStoreForm::Snapshot,
         hint: None,
         scope_id: Some(id.into()),
+        modified_since: None,
     }
 }
 
@@ -2154,4 +2157,165 @@ fn hermes_poisoned_scope_ids_are_refused() {
             "scope id {id:?} must be refused"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Since the run started (D57)
+// ---------------------------------------------------------------------------------------
+
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn set_mtime(path: &Path, when: SystemTime) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+}
+
+/// A shared, unscoped session store read from `started`: every file is a candidate.
+fn since(root: &Root, started: SystemTime) -> NativeSourceSpec {
+    NativeSourceSpec {
+        modified_since: Some(started),
+        ..rollout(root, "sessions/rollout-*.jsonl")
+    }
+}
+
+/// A minute ago: every file the test writes now is newer, every file dated a day back older.
+fn run_start() -> SystemTime {
+    SystemTime::now() - Duration::from_secs(60)
+}
+
+#[test]
+fn old_files_are_skipped_and_the_new_one_found_among_5000() {
+    let root = root();
+    let started = run_start();
+    for n in 0..5000 {
+        let old = root.write(
+            &format!("sessions/rollout-yesterday-{n:04}.jsonl"),
+            b"old\n",
+        );
+        set_mtime(&old, started - DAY);
+    }
+    root.write("sessions/rollout-today.jsonl", b"new\n");
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![since(&root, started)],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    let report = capture.poll();
+    assert!(
+        !report.discovery_capped,
+        "one directory of 5 000 sessions is enumerated within the walker's bound"
+    );
+    assert_eq!(
+        report.untracked_files, 0,
+        "an old file never counts against max_files"
+    );
+    assert_eq!(
+        labels(&replay(&sink.frames())),
+        ["rollout:sessions/rollout-today.jsonl#g1"]
+    );
+    assert_eq!(capture.loss_report().tracked_files, 1);
+    let finished = capture.finish(generous());
+    assert!(finished.closed && !finished.discovery_capped);
+    assert_eq!(finished.completed_streams, 1);
+    assert_eq!(finished.untracked_files, 0);
+    let views = replay(&sink.frames());
+    assert_eq!(views.len(), 1);
+    assert_eq!(
+        by_label(&views, "rollout:sessions/rollout-today.jsonl#g1")
+            .1
+            .data,
+        b"new\n"
+    );
+    sink.assert_clean();
+}
+
+#[test]
+fn two_new_session_files_are_both_recorded() {
+    let root = root();
+    let started = run_start();
+    let old = root.write("sessions/rollout-old.jsonl", b"old\n");
+    set_mtime(&old, started - DAY);
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![since(&root, started)],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    root.write("sessions/rollout-first.jsonl", b"first\n");
+    capture.poll();
+    root.write("sessions/rollout-second.jsonl", b"second\n");
+    root.append("sessions/rollout-first.jsonl", b"more\n");
+    capture.poll();
+    let finished = capture.finish(generous());
+    assert!(finished.closed);
+    assert_eq!(finished.completed_streams, 2, "neither file is preferred");
+    let views = replay(&sink.frames());
+    let mut seen = labels(&views);
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            "rollout:sessions/rollout-first.jsonl#g1",
+            "rollout:sessions/rollout-second.jsonl#g1",
+        ]
+    );
+    assert_eq!(
+        by_label(&views, "rollout:sessions/rollout-first.jsonl#g1")
+            .1
+            .data,
+        b"first\nmore\n"
+    );
+    assert_eq!(
+        by_label(&views, "rollout:sessions/rollout-second.jsonl#g1")
+            .1
+            .data,
+        b"second\n"
+    );
+    sink.assert_clean();
+}
+
+#[test]
+fn an_old_file_written_during_the_run_is_recorded() {
+    let root = root();
+    let started = run_start();
+    let resumed = root.write("sessions/rollout-resumed.jsonl", b"yesterday\n");
+    set_mtime(&resumed, started - DAY);
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![since(&root, started)],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    let report = capture.poll();
+    assert_eq!(report.frames, 0, "an old file left alone is not read");
+    assert_eq!(capture.loss_report().tracked_files, 0);
+    // The harness resumes the old session: appending makes it this run's.
+    root.append("sessions/rollout-resumed.jsonl", b"today\n");
+    capture.poll();
+    assert_eq!(capture.loss_report().tracked_files, 1);
+    // Once admitted it stays, whatever its time says later.
+    set_mtime(&resumed, started - DAY);
+    capture.poll();
+    assert_eq!(capture.loss_report().tracked_files, 1);
+    assert_eq!(capture.loss_report().source_changes, 0);
+    let finished = capture.finish(generous());
+    assert_eq!(finished.completed_streams, 1);
+    let views = replay(&sink.frames());
+    assert_eq!(
+        labels(&views),
+        ["rollout:sessions/rollout-resumed.jsonl#g1"]
+    );
+    assert_eq!(
+        by_label(&views, "rollout:sessions/rollout-resumed.jsonl#g1")
+            .1
+            .data,
+        b"yesterday\ntoday\n",
+        "the whole file is recorded, its lines from before the run included"
+    );
+    sink.assert_clean();
 }

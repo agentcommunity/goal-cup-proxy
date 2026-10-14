@@ -308,8 +308,10 @@ impl Daemon {
         digests: &ProfileDigests,
         every_loaded_real_dir: &[String],
         reserve_bytes: u64,
+        native_since: Option<u64>,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let config_home = isolated_config_home(config_home, every_loaded_real_dir)?;
+        let plan = native_plan(&manifest.capture, run_home, &config_home, native_since)?;
         let extra_patterns = crate::redact::extra_patterns_of(manifest);
         StreamRedactor::with_extra_patterns(&extra_patterns)?;
         let artifact_dir = self
@@ -348,6 +350,7 @@ impl Daemon {
             extra_patterns,
             &artifact,
             &artifact_dir,
+            plan,
         );
         if let Err(error) = &opened {
             let created = (!workspace_existed).then_some(workspace);
@@ -373,6 +376,7 @@ impl Daemon {
         extra_patterns: Vec<RedactionPattern>,
         artifact: &EntryArtifactRoot,
         artifact_dir: &Path,
+        plan: NativePlan,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let trace = artifact.create_trace().map_err(|error| {
             DaemonError::Refused(format!(
@@ -449,7 +453,6 @@ impl Daemon {
             clock.clone(),
             CaptureAuthority::Live,
         );
-        let plan = native_plan(&manifest.capture, run_home, config_home)?;
         // Prepare the fixed isolated source root before spawn: the leaf opens it once.
         if let Some(source) = &plan.scoped {
             // An unavailable native root must not stop the harness. The Launch constructor

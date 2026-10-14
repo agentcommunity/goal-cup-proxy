@@ -2,7 +2,7 @@
 
 What may `connectors/<id>/harness.toml` contain? This is the public field and validation
 reference for harness authors and reviewers.
-Updated: 2026-10-13.
+Updated: 2026-10-15.
 
 The executable authority is
 [`harness.rs`](../crates/goalcup-protocol/src/harness.rs). Its
@@ -51,7 +51,9 @@ optional field or table is absent.
 | `capture` | required table | The complete launch-and-capture profile below. |
 | `redaction` | optional, default absent | Connector-selected rows from the core redaction mirror. |
 | `capture.args` | required | 1–64 strings; each at most 4096 bytes and without control characters. |
-| `capture.goal_flag` | optional, default absent | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. |
+| `capture.goal_flag` | optional, default absent | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. Refused with `interactive`. |
+| `capture.interactive` | optional, default `false` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57); see below. |
+| `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued; each held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
 | `capture.continuation` | required | Non-blank, one line, 1–512 bytes; declarative provenance for unattended continuation. |
 | `capture.auth_hosts` | optional, default `[]` | At most 16 unique lowercase DNS hosts; always opaque tunnels. |
 | `capture.env` | optional, default `{}` | At most 32 string-to-string entries; the child-only process environment additions. |
@@ -68,10 +70,16 @@ optional field or table is absent.
 
 The goal has exactly one slot: either `capture.args` ends in the literal `--` and the goal is the
 next single argument, or `capture.goal_flag` is present and carries the goal as
-`--flag=<goal>`, never both. Every argument and `goal_flag` passes the core deny policy and the
-optional argument guard.
+`--flag=<goal>`, never both. Every argument, every `resume_args` entry and `goal_flag` passes the
+core deny policy and the optional argument guard.
 
-Argument and `capture.env` value templates admit only `{workspace}` and `{session_id}`. `{{` and `}}` render literal braces. Any other token or unmatched brace is
+With `interactive = true` (D57) there is no goal slot: the participant types the prompt in the
+harness. The profile then takes no `goal_flag`, its `args` need not end in `--`, it takes no
+`[capture.credential]` and its `identity.source` must be `none`. With `false`, the default, every
+rule above holds unchanged. `resume_args` may be set either way; `goalcup continue` appends it
+after `args`.
+
+Argument (`args` and `resume_args`) and `capture.env` value templates admit only `{workspace}` and `{session_id}`. `{{` and `}}` render literal braces. Any other token or unmatched brace is
 refused. `{session_id}` has the identity rules described below.
 
 ### Executable
@@ -189,11 +197,12 @@ path component. `Origin::Dev` does not relax environment values.
 | `capture.home.dirs` | optional, default `[]` | `per_run` only; at most 8 relative paths, created mode `0700`. |
 | `capture.home.seed` | optional, default `[]` | `per_run` only; at most 16 seed rows. |
 | `capture.home.real_dirs` | required | 1–4 paths of the form `{user_home}/<relative>`; the daemon refuses a config home at or below them. |
+| `capture.home.skills_dir` | optional, default absent | The directory under the config home where the harness reads its skills; a relative path of at most four components. Declarative: the daemon does not use it. |
 | `capture.home.seed[].file` | required | Source below connector `files/` and the same destination below the config home. |
 | `capture.home.seed[].mode` | optional, default `0600` | Closed values: `0600`, `0400`. |
 
-Each `dirs`, seed `file` and `real_dirs` relative suffix has at most four, four and eight path
-components respectively. A component is 1–64 bytes of `[A-Za-z0-9._-]` and is not `.` or `..`.
+Each `dirs`, seed `file`, `skills_dir` and `real_dirs` relative suffix has at most four, four,
+four and eight path components respectively. A component is 1–64 bytes of `[A-Za-z0-9._-]` and is not `.` or `..`.
 Seed and directory paths are refused case-insensitively if they name startup files, a `*.pth`
 file, credential or tool-loaded directories, or `.config/git`. Seed destinations are unique.
 Each seed file must exist, be regular and be at most 65,536 bytes. The directory walk reads and
@@ -219,7 +228,7 @@ harness never reads, admitted to record nothing.
 
 | Field | Required/default | Contract |
 |---|---|---|
-| `capture.credential.env` | required when the optional table exists | Closed registry: `DEEPSEEK_API_KEY`, `AMP_API_KEY`. The value: 20 to 256 bytes of `[A-Za-z0-9_-]`. |
+| `capture.credential.env` | required when the optional table exists; refused with `interactive` | Closed registry: `DEEPSEEK_API_KEY`, `AMP_API_KEY`. The value: 20 to 256 bytes of `[A-Za-z0-9_-]`. |
 | `capture.ca.env` | required | 1–2 unique names from the CA registry. |
 | `capture.ca.mode` | required | Closed values: `extend`, `replace`; every name must have this mode in the registry. |
 
@@ -239,7 +248,7 @@ DECISIONS change, not a connector field value.
 
 | Field | Required/default | Contract |
 |---|---|---|
-| `capture.identity.source` | required | Closed values: `preassigned`, `stdout_json`, `stderr_line`, `none`. |
+| `capture.identity.source` | required | Closed values: `preassigned`, `stdout_json`, `stderr_line`, `none`. An `interactive` profile takes `none` only. |
 | `capture.identity.binding` | required except for `none` | Closed values: `at_launch`, `deferred`. |
 | `capture.identity.match_field` | `stdout_json` only; required there | Dot path of 1–4 nonempty `[A-Za-z0-9_]+` segments. |
 | `capture.identity.match_value` | `stdout_json` only; required there | 1–64 bytes, no control character. |
@@ -273,11 +282,20 @@ Exactly one native row is required.
 | `capture.native[].pattern` | required | 1–1024 bytes, relative, at most eight `/`-separated components. |
 | `capture.native[].form` | required | Closed values: `append_only`, `snapshot`. `sqlite` is explicitly a core capability, not schema 1. |
 | `capture.native[].protocol_hint` | optional, default absent | `append_only` only; 1–64 bytes matching `^[a-z][a-z0-9.-]{0,63}$`. |
+| `capture.native[].since_run_start` | optional, default `false` | Boolean. `true` reads only the files new or written since the run started (D57). |
 
 Pattern components admit `[A-Za-z0-9._-]`, `*`, `?` and the special `{id}` token. Empty, `.` or
 `..` components, recursive `**`, other braces and absolute paths are refused. `{id}` appears
 exactly once when the identity source names a session, and not at all when the source is `none`.
 Globs do not cross `/`.
+
+With `since_run_start = true`, the launcher sends the run's start time (`native_since`, Unix
+seconds) when it creates the capture, and the daemon refuses the creation without it. A file the
+pattern matches is admitted once its modification time, in whole seconds, is at or after that
+start; an older file is not tracked and does not count against the file bound until it is
+written. Once admitted a file stays, and it is recorded whole from offset 0. Every admitted file is
+recorded: none is refused and none is preferred. This is safe on a shared config home because runs
+against it are serialized.
 
 An unknown but syntactically valid `protocol_hint` is admitted and means capture-only unless a
 registered decoder accepts the complete `StreamOpen`. A snapshot cannot carry a hint. The same
@@ -296,7 +314,7 @@ All fields default when the optional table is present.
 
 A guarded `--name` or `--name=value` is refused. A single-dash cluster is scanned left to right;
 a guarded short option is refused, while a `short_with_value` option consumes the rest of the
-token and ends scanning. The guard is applied to every `args` item and to `goal_flag`. It can only
+token and ends scanning. The guard is applied to every `args` and `resume_args` item and to `goal_flag`. It can only
 make the core argument policy stricter.
 
 ## `[capture.termination]`
@@ -355,14 +373,15 @@ daemon's streaming redactor and `EXTRA_PATTERN_SOURCES`.
 
 In addition to the local rules above, all of these apply:
 
-1. `preassigned` requires `{session_id}` in `capture.args`. `{session_id}` anywhere in `args` or
-   an environment value requires `preassigned`.
+1. `preassigned` requires `{session_id}` in `capture.args`. `{session_id}` anywhere in `args`,
+   `resume_args` or an environment value requires `preassigned`.
 2. A credential requires `stderr_line` plus `deferred`, or `stdout_json` plus `at_launch`,
    identity and a `per_run` config home. One stdout reader feeds the key-fragment scan and the
    `stdout_json` identity matcher.
 3. `capture.home.seed`, `dirs` and an explicit `per_run_dir` require `config_home = "per_run"`.
 4. With `identity.source = "none"`, the native root must be `{run_home}/...`, or
-   `{config_home}/...` with a per-run config home. A shared unscoped source could read another
+   `{config_home}/...` with a per-run config home, or the native source must declare
+   `since_run_start = true`. A shared unscoped source read from before the run could read another
    run's session and is refused.
 5. The native root plus pattern, compared case-insensitively with `{id}` treated as `*`, cannot
    match a seed destination. A `{run_home}` root is checked both with the config home coincident
@@ -373,7 +392,7 @@ In addition to the local rules above, all of these apply:
 8. Authentication and intercepted host sets are disjoint; every intercepted host has at least one
    scoped path.
 9. A native hint is allowed only on `append_only`; a prefix path cannot be `/`.
-10. A manifest is delivery-agnostic: no argument, goal flag, environment key/value, host or auth
+10. A manifest is delivery-agnostic: no argument, resume argument, goal flag, environment key/value, host or auth
     host may name Goal Cup, its reserved environment namespace or a tracker host. There is no
     schema field for a server, upload or delivery credential.
 

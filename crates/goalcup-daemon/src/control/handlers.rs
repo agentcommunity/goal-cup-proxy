@@ -265,6 +265,7 @@ pub(super) async fn create_capture_workspace(
         &digests,
         &every_loaded_real_dir,
         request.reserve_bytes,
+        request.native_since,
     ) {
         Ok(info) => axum::Json(info).into_response(),
         Err(e) => ControlErrorResponse::from(e).into_response(),

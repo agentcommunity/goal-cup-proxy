@@ -86,6 +86,7 @@ fn capture_request(
         run_home: h.root.join("run-home").display().to_string(),
         config_home: h.root.join("config-home").display().to_string(),
         entry_id: None,
+        native_since: None,
     }
 }
 
@@ -1004,6 +1005,7 @@ fn capture_create_request(
             .display()
             .to_string(),
         entry_id: None,
+        native_since: None,
     }
 }
 

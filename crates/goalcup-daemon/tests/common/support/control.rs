@@ -359,6 +359,7 @@ pub async fn capture_control_harness() -> CaptureControlHarness {
         run_home: inner.root.join("run-home").display().to_string(),
         config_home: inner.root.join("config-home").display().to_string(),
         entry_id: None,
+        native_since: None,
     };
     let response = inner
         .client

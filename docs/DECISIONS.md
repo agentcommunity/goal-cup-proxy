@@ -64,11 +64,12 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D49 | Admit `AMP_API_KEY` as a child credential | in force (m2) | [entry](#d49-m2-admit-amp_api_key-as-a-child-credential) |
 | D50 | D43 ruling 3: credential + `stdout_json` via one stdout reader | in force (m2) | [entry](#d50-m2-amend-d43-ruling-3-for-stdout_json-identity) |
 | D51 | A connector's argv and env are data; review is the control; credential, CA and redaction lists stay closed | in force (m2) once merged | [entry](#d51-m2-a-connectors-argv-and-env-are-data-review-is-the-control) |
-| D52 | Shipped connectors set no model, effort, sandbox, permission or MCP limit | in force (m2) once merged | [entry](#d52-m2-the-shipped-connectors-set-no-model-effort-sandbox-permission-or-mcp-limit) |
+| D52 | Shipped connectors set no model, effort, sandbox, permission or MCP limit | in force (m2) once merged; amended by D57 | [entry](#d52-m2-the-shipped-connectors-set-no-model-effort-sandbox-permission-or-mcp-limit) |
 | D53 | Record the harness build in v5 (`Launch.harness_build`); v0.5.0 readers refuse such traces | in force (m2) once merged | [entry](#d53-m2-record-the-harness-build-in-v5-accepting-that-v050-readers-refuse-it) |
 | D54 | The protocol carries v5 only: pre-v5 versions, bodies and writers and the Git provenance types leave | in force (m2) once merged | [entry](#d54-m2-the-protocol-carries-v5-only) |
 | D55 | A capture chain may be split into part files named by their logical start offset; records and hashes are unchanged | in force (m2) once merged | [entry](#d55-m2-the-capture-chain-rotates-into-part-files) |
 | D56 | The seal of a clone records its commit and an uncommitted digest; the finish gets three minutes | in force (m2) once merged | [entry](#d56-m2-the-seal-of-a-clone-records-its-commit-and-an-uncommitted-digest-the-finish-gets-minutes) |
+| D57 | Shipped connectors run the harness in chat mode; the participant types the prompt; the session files are every one new or written since the run started | in force (m2) once merged; amends D52 | [entry](#d57-m2-connectors-run-the-harness-in-chat-mode-and-record-every-session-file-since-the-start) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1368,6 +1369,9 @@ Hermes drops `--model` and `agent.reasoning_effort`, and keeps `--provider deeps
 **Reconsider when** a measured run shows a default that breaks capture (a session file not
 written, a second session id).
 
+**Amended by D57:** the shipped connectors run the harness in chat mode, so they set no approval
+or permission option either.
+
 ---
 
 ## D53. **(M2)** Record the harness build in v5, accepting that v0.5.0 readers refuse it.
@@ -1539,6 +1543,46 @@ before the last start, so the walk it falls back to has the other half. The base
 
 **Reconsider when** the server re-derives the uncommitted state from a pushed branch, or a
 harness needs its config home listed beyond 10 000 files.
+
+---
+
+## D57. **(M2)** Connectors run the harness in chat mode and record every session file since the start.
+
+**Decision (2026-10-15, owner's 168-hour run plan; amends D52).** Shipped connectors run the
+harness in its normal chat mode in the participant's terminal; the participant types the prompt;
+connectors set no model, approval, sandbox or permission option (amends D52); identity is every
+session file new or written since the run started, which is safe because runs on a shared home are
+serialized.
+
+**The schema (connector schema 1, additive: every field defaults to today's behaviour).**
+- `[capture] interactive = true` (default `false`). The profile takes no `goal_flag`, its `args`
+  need not end in `--`, it takes no `[capture.credential]`, and its identity is `none`. With
+  `false` every headless rule is unchanged.
+- `[capture] resume_args = [...]` (default `[]`): appended after `args` when a run is continued.
+  Each argument passes the same D51 checks as `args` (one function serves both), and the two lists
+  together hold at most 64 arguments. It may be set with or without `interactive`.
+- `[[capture.native]] since_run_start = true` (default `false`): the store is read from the run's
+  start. It is what admits `identity.source = "none"` on a shared config home, the cross-field
+  rule that otherwise refuses an unscoped source there.
+- `[capture.home] skills_dir = "<relative>"` (optional): where under the config home the harness
+  reads its skills. Declarative; the daemon does not use it.
+
+**The run's start.** `CaptureWorkspaceRequest` gains `native_since`, Unix seconds (UTC) of the
+run's start, optional and not written when absent. A `since_run_start` source admits a matched
+file into its tracked set once the file's modification time, truncated to whole seconds, is at or
+after it, checked before the file counts against `max_files`; once admitted it stays, and is read
+whole from offset 0, its lines from before the run included. Every admitted file is recorded; none
+is refused and none is preferred. A `since_run_start` source with no `native_since` in the request
+is refused at creation, before anything is allocated, rather than reading every old file.
+`native_since` is ignored for a source that does not declare `since_run_start`.
+
+**The walker's bound.** `NativeCaptureLimits::max_dir_entries` defaults to 8192 (it was 4096), so
+one directory of 5 000 old sessions is enumerated whole on every poll and the new one is found.
+Past the bound, discovery is capped and reported as a loss, as before. An old file costs one
+`fstatat` per poll and nothing else.
+
+**Reconsider when** two runs share a config home at the same time, or a harness writes a session
+file without changing its modification time.
 
 ---
 
