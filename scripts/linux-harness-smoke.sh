@@ -78,17 +78,21 @@ smoke() {
     echo "Print the word hello." >"$d/goal/goal.txt"
     run goalcup doctor --harness "$h" || fail "$h doctor"
     echo "harness smoke: $h start"
-    # 256 MiB of chain reserved, not the 10 GiB default: linux-check's ext4 volume is 4 GiB.
-    # `timeout` bounds a harness that keeps retrying. `goalcup start` exits 0 once the run
-    # seals, whatever the harness's own exit code.
+    # The run holds its 3 GiB reservation and wants 1 GiB more free (linux-check gives the ext4
+    # volume 8 GiB for this). `timeout` bounds a harness that keeps retrying. `goalcup start`
+    # exits 0 once the run seals, whatever the harness's own exit code.
     run timeout 600 goalcup start --harness "$h" --goal-file "$d/goal/goal.txt" \
-        --capture-reserve-bytes 268435456 >"$d/start.out" 2>&1
+        >"$d/start.out" 2>&1
     rc=$?
     cat "$d/start.out"
     echo "harness smoke: $h start exit $rc"
     [ "$rc" -eq 0 ] || { cat "$d/cfg/daemon.log" 2>/dev/null; fail "$h start exit $rc"; }
-    trace=$(sed -n 's/^trace:  *//p' "$d/start.out" | tail -n 1)
-    [ -n "$trace" ] && [ -d "$trace" ] || fail "$h no trace folder (the run did not seal)"
+    # The run's own record names the trace folder: <cfg>/runs/<run_id>/run.json.
+    rec=$(ls "$d"/cfg/runs/*/run.json 2>/dev/null | tail -n 1)
+    [ -n "$rec" ] || fail "$h no run record (run.json) under $d/cfg/runs"
+    trace=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$rec") ||
+        fail "$h the run record $rec could not be read"
+    [ -n "$trace" ] && [ -d "$trace" ] || fail "$h the trace folder named in $rec was not found"
     goalcup-verify --capture-integrity "$trace" || fail "$h verify"
     # Only the harness's own name; run this where no other $prog runs (the Docker container).
     if pgrep -x "$prog" >/dev/null; then

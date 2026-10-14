@@ -44,6 +44,7 @@ pub mod preflight;
 pub mod proxy;
 mod released_child;
 pub mod retry;
+pub mod run;
 pub mod server;
 pub mod subreaper;
 pub mod upload;

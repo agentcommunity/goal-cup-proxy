@@ -264,15 +264,7 @@ fn only_the_fixed_hermes_start_is_ever_executed() {
     // The permitted options.
     let out = w.run(
         &[],
-        &[
-            f,
-            "start",
-            "--harness",
-            "hermes-cli",
-            "--goal-file=/tmp/g",
-            "--capture-reserve-bytes",
-            "4194304",
-        ],
+        &[f, "start", "--harness", "hermes-cli", "--goal-file=/tmp/g"],
         &[],
     );
     assert!(out.status.success(), "{}", printed(&out));

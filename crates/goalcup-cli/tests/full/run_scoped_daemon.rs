@@ -118,7 +118,7 @@ fn start_command(rig: &Rig, binary: &Path, goal: &Path) -> Command {
     command
         .args(["start", "--harness", FAKE_ID, "--dev", "--goal-file"])
         .arg(goal)
-        .args(["--capture-reserve-bytes", &RESERVE.to_string()]);
+        .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"));
     command
 }
 
