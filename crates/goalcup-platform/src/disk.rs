@@ -20,12 +20,28 @@ pub fn free_bytes(dir: &Path) -> io::Result<u64> {
         // SAFETY: `path` is NUL-terminated and `stat` is a writable statvfs for the call.
         libc::statvfs(path.as_ptr(), stat.as_mut_ptr())
     };
+    available(result, stat)
+}
+
+/// The same measurement on an open descriptor, so it names the volume the file lives on.
+fn free_bytes_of(file: &File) -> io::Result<u64> {
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let result = unsafe {
+        // SAFETY: the descriptor is live and `stat` is a writable statvfs for the call.
+        libc::fstatvfs(file.as_raw_fd(), stat.as_mut_ptr())
+    };
+    available(result, stat)
+}
+
+fn available(result: libc::c_int, stat: std::mem::MaybeUninit<libc::statvfs>) -> io::Result<u64> {
     if result == -1 {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: statvfs returned 0, so it filled the struct.
     let stat = unsafe { stat.assume_init() };
-    // The field widths differ by target (u32 and u64 on macOS, u64 on 64-bit Linux).
+    // The field widths differ by target (u32 and u64 on macOS, u64 on 64-bit Linux); the u32
+    // block count on macOS caps a volume at 16 TiB of free space at 4 KiB blocks, which is
+    // far above any reserve.
     #[allow(clippy::useless_conversion)]
     let free = u64::from(stat.f_bavail).saturating_mul(u64::from(stat.f_frsize));
     Ok(free)
@@ -49,6 +65,7 @@ impl ReserveFile {
             .read(true)
             .write(true)
             .mode(0o600)
+            // O_NONBLOCK so a FIFO at the path cannot block the open; it is refused below.
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         let (file, created) = match options.clone().create_new(true).open(path) {
             Ok(file) => (file, true),
@@ -82,24 +99,42 @@ impl ReserveFile {
         Ok(reserve)
     }
 
-    /// Bytes physically allocated to the file (`st_blocks * 512`).
+    /// Bytes physically allocated to the file (`st_blocks * 512`); 0 if it cannot be measured.
     pub fn allocated(&self) -> u64 {
-        self.file
-            .metadata()
-            .map_or(0, |meta| meta.blocks().saturating_mul(512))
+        self.measure().unwrap_or(0)
+    }
+
+    fn measure(&self) -> io::Result<u64> {
+        Ok(self.file.metadata()?.blocks().saturating_mul(512))
     }
 
     /// Allocate or give back blocks so the file holds `bytes`. Growing checks the volume
-    /// first and is `StorageFull` when short; shrinking returns the blocks to the volume.
+    /// first and is `StorageFull` when short, and verifies the result by measurement, writing
+    /// zeros if the allocator did not deliver; shrinking returns the blocks to the volume.
     pub fn resize(&mut self, bytes: u64) -> io::Result<()> {
-        let missing = bytes.saturating_sub(self.allocated());
-        if missing > 0 {
-            let dir = self.path.parent().filter(|dir| !dir.as_os_str().is_empty());
-            if free_bytes(dir.unwrap_or(Path::new(".")))? < missing {
-                return Err(io::Error::from(ErrorKind::StorageFull));
-            }
-            allocate(&self.file, bytes, missing)?;
+        let missing = bytes.saturating_sub(self.measure()?);
+        if missing == 0 {
+            return self.set_length(bytes);
         }
+        if free_bytes_of(&self.file)? < missing {
+            return Err(io::Error::from(ErrorKind::StorageFull));
+        }
+        let granted = match allocate(&self.file, bytes, missing) {
+            Ok(()) => true,
+            Err(error) if is_unsupported(&error) => false,
+            Err(error) => return Err(error),
+        };
+        self.set_length(bytes)?;
+        if !granted || self.measure()? < bytes {
+            write_zeros(&self.file, bytes)?;
+            if self.measure()? < bytes {
+                return Err(io::Error::other("the volume did not allocate the reserve"));
+            }
+        }
+        Ok(())
+    }
+
+    fn set_length(&self, bytes: u64) -> io::Result<()> {
         if self.file.metadata()?.len() != bytes {
             self.file.set_len(bytes)?;
         }
@@ -138,7 +173,6 @@ fn allocate(file: &File, _bytes: u64, missing: u64) -> io::Result<()> {
 }
 
 /// Linux: `fallocate(0)` over `[0, bytes)`, which also makes the logical length `bytes`.
-/// Filesystems without it (`EOPNOTSUPP`) get real zeros instead.
 #[cfg(target_os = "linux")]
 fn allocate(file: &File, bytes: u64, _missing: u64) -> io::Result<()> {
     let length =
@@ -154,19 +188,25 @@ fn allocate(file: &File, bytes: u64, _missing: u64) -> io::Result<()> {
         let error = io::Error::last_os_error();
         match error.raw_os_error() {
             Some(libc::EINTR) => {}
-            Some(libc::EOPNOTSUPP) => return write_zeros(file, bytes),
             _ => return Err(error),
         }
     }
 }
 
+/// No native allocator is known here: the caller falls back to writing zeros.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn allocate(file: &File, bytes: u64, _missing: u64) -> io::Result<()> {
-    write_zeros(file, bytes)
+fn allocate(_file: &File, _bytes: u64, _missing: u64) -> io::Result<()> {
+    Err(io::Error::from_raw_os_error(libc::ENOTSUP))
+}
+
+/// The errors a filesystem gives when it has no preallocation, as opposed to a real failure.
+fn is_unsupported(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL
+    })
 }
 
 /// Allocate by writing: zeros in 1 MiB chunks over `[0, bytes)`.
-#[cfg(not(target_os = "macos"))]
 fn write_zeros(file: &File, bytes: u64) -> io::Result<()> {
     use std::os::unix::fs::FileExt;
 
