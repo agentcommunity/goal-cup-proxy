@@ -1,5 +1,5 @@
-// Goal Cup upload Worker: routing, maintenance switch, authentication, error mapping.
-// Contract: docs/UPLOAD-API.md. No framework; eleven routes.
+// Goal Cup upload Worker: routing, maintenance switch, authentication, error mapping, and the
+// 5-minute cron (notices.ts). Contract: docs/UPLOAD-API.md. No framework; eleven routes.
 
 import { type Auth, authenticate } from "./auth.ts";
 import { putChunk } from "./chunks.ts";
@@ -7,6 +7,7 @@ import { type Ctx, makeCtx } from "./context.ts";
 import { approveDevice, createDevice, pollDevice } from "./device.ts";
 import type { Env } from "./env.ts";
 import { ApiError, errorResponse, json, notFound } from "./errors.ts";
+import { runTick } from "./notices.ts";
 import { abandonRun, continueRun, getPosition, heartbeat, issueReceipt, openRun, sealRun } from "./runs.ts";
 import { RUN_ID } from "./util.ts";
 
@@ -92,5 +93,10 @@ export default {
       console.error(`unhandled: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
       return json(500, { error: "internal", message: "Something went wrong on the server; try again." });
     }
+  },
+
+  /** The cron (wrangler.toml `[triggers]`): close runs, record the deadline commit, queue the run emails. */
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runTick(env));
   },
 } satisfies ExportedHandler<Env>;

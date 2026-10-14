@@ -6,6 +6,7 @@
 import { mock } from "node:test";
 import type { Env } from "../../src/env.ts";
 import worker from "../../src/index.ts";
+import { type Ctx, makeCtx } from "../../src/context.ts";
 import { LocalDb } from "../../src/db-local.ts";
 import { APPROVAL_KEY, Client } from "./client.ts";
 import { FakeBucket, asR2 } from "./fake-r2.ts";
@@ -13,9 +14,15 @@ import { TEST_SEED } from "./worker.ts";
 
 export interface InProcess {
   api: Client;
+  /** The Worker's bindings and variables. */
+  env: Env;
   bucket: FakeBucket;
   /** A LocalDb over the same bucket, to put state in or read it back. */
   db: () => LocalDb;
+  /** The Worker's context (database, configuration, clock), for calling its internals directly. */
+  ctx: () => Promise<Ctx>;
+  /** Run the Worker's cron once, now, and wait for it. */
+  tick: () => Promise<void>;
   /** Move the Worker's clock to this instant (RFC 3339). */
   at: (iso: string) => void;
   /** Move the Worker's clock on by this many seconds. */
@@ -51,7 +58,16 @@ export function inProcess(start: string, vars: Record<string, string> = {}, cf: 
   });
   return {
     api,
+    env,
     bucket,
+    ctx: () => makeCtx(env),
+    tick: async () => {
+      const pending: Promise<unknown>[] = [];
+      const controller = { cron: "*/5 * * * *", scheduledTime: now, noRetry() {} } as ScheduledController;
+      const exec = { waitUntil: (p: Promise<unknown>) => void pending.push(p), passThroughOnException() {} } as ExecutionContext;
+      await worker.scheduled(controller, env, exec);
+      await Promise.all(pending);
+    },
     db: () => LocalDb.create(asR2(bucket)),
     at: (iso) => {
       now = Date.parse(iso);

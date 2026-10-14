@@ -26,6 +26,13 @@
 //! practice credential opens a practice run (never replacing, no window), and
 //! `ServerOptions::start_window_opens` / `start_window_closes` bound competition starts.
 //!
+//! What the Worker does on its own (the 5-minute cron: closing runs, the commit at the deadline
+//! and the run emails, see "What the server does on its own" in `UPLOAD-API.md`) is not built here;
+//! nothing in the tracer reads it. The heartbeat's `recording` and `model_requests` are kept on
+//! the heartbeat record (`heartbeats_of`); they flag nothing and queue nothing. A run's status
+//! follows the same close rule as the Worker's, but is worked out when it is asked for, not
+//! written by a cron.
+//!
 //! Test hooks (not part of the contract): `set_maintenance`, `set_maintenance_retry_after`,
 //! `fail_next_chunks`, `drop_next_chunk_reply`, `set_approval`, `mint_credential`,
 //! `expire_credential`, `bind_credential`, `credential_expires_at` and `device_requests`.
