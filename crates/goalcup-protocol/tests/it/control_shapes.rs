@@ -501,7 +501,6 @@ fn the_remaining_types_round_trip() {
         daemon_version: "0.1.0".into(),
         uptime_seconds: 90,
         entries_open: 1,
-        upload_ok: true,
     };
     assert_eq!(
         h,

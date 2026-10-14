@@ -24,6 +24,7 @@ import type {
   EntryRow,
   HeartbeatArgs,
   HeartbeatResult,
+  NoticeArgs,
   OpenRunArgs,
   OpenRunResult,
   RunRow,
@@ -31,6 +32,7 @@ import type {
   SealArgs,
   SealResult,
   StoreReceiptResult,
+  TickRun,
 } from "./db.ts";
 import { ApiError } from "./errors.ts";
 import type { StartReceipt } from "./sign.ts";
@@ -68,6 +70,14 @@ const RUN_SHAPE: Record<string, Check> = {
   first_entry_id: isEntryId,
   current_entry_id: isEntryId,
   current_sealed_at: nullable(isTime),
+};
+const TICK_SHAPE: Record<string, Check> = {
+  ...RUN_SHAPE,
+  last_heartbeat_at: nullable(isTime),
+  last_model_request_at: nullable(isTime),
+  flagged_at: nullable(isTime),
+  flag_reason: nullable(oneOf("gaps", "failed")),
+  final_commit: nullable((v) => typeof v === "string" && /^([0-9a-f]{40}|none)$/.test(v)),
 };
 const ENTRY_SHAPE: Record<string, Check> = {
   entry_id: isEntryId,
@@ -159,6 +169,13 @@ export class SupabaseDb implements Db {
   /** The functions return a fixed set of words; anything else means the SQL and this file disagree. */
   #word<T extends string>(fn: string, v: unknown, allowed: readonly T[]): T {
     if (typeof v === "string" && (allowed as readonly string[]).includes(v)) return v as T;
+    console.error(`supabase ${fn}: unexpected result ${JSON.stringify(v)?.slice(0, 200)}`);
+    throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+  }
+
+  /** A function that answers true or false. */
+  #flag(fn: string, v: unknown): boolean {
+    if (typeof v === "boolean") return v;
     console.error(`supabase ${fn}: unexpected result ${JSON.stringify(v)?.slice(0, 200)}`);
     throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
   }
@@ -314,6 +331,10 @@ export class SupabaseDb implements Db {
       p_offset_local: a.offset_local,
       p_final: a.final,
       p_repo_head: a.repo_head,
+      p_recording: a.recording,
+      p_model_requests: a.model_requests,
+      p_client_ip: a.client_ip,
+      p_client_country: a.client_country,
       p_at: a.at,
     });
     return this.#word("upload_heartbeat", v, ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"] as const);
@@ -322,6 +343,28 @@ export class SupabaseDb implements Db {
   async closeRun(memberId: string, runId: string, at: string): Promise<RunStatus | null> {
     const v = await this.#rpc("upload_close_run", { p_member_id: memberId, p_run_id: runId, p_at: at });
     return v === null ? null : this.#word("upload_close_run", v, STATUS_WORDS);
+  }
+
+  async runsForTick(now: string): Promise<TickRun[]> {
+    const v = await this.#rpc("upload_runs_for_tick", { p_at: now });
+    if (!Array.isArray(v)) {
+      console.error(`supabase upload_runs_for_tick: expected a list of runs`);
+      throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+    }
+    return v.map((row) => this.#row<TickRun>("upload_runs_for_tick", row, "run", TICK_SHAPE));
+  }
+
+  async queueNotices(notices: NoticeArgs[]): Promise<number> {
+    if (notices.length === 0) return 0;
+    const v = await this.#rpc("upload_queue_notices", { p_notices: notices });
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= notices.length) return v;
+    console.error(`supabase upload_queue_notices: unexpected result ${JSON.stringify(v)?.slice(0, 200)}`);
+    throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+  }
+
+  async recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {
+    const v = await this.#rpc("upload_record_final_commit", { p_member_id: memberId, p_run_id: runId, p_commit: commit, p_at: at });
+    this.#flag("upload_record_final_commit", v);
   }
 
   async sealRun(a: SealArgs): Promise<SealResult> {

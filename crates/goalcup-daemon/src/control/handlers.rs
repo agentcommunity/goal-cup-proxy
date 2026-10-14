@@ -67,8 +67,6 @@ pub(super) async fn health(State(state): State<ControlState>) -> Response {
         daemon_version: DAEMON_VERSION.to_string(),
         uptime_seconds: state.started_at.elapsed().as_secs(),
         entries_open: u32::try_from(open).unwrap_or(u32::MAX),
-        // Wire field only: this tree has no uploader (D48), so none is failing.
-        upload_ok: true,
     })
     .into_response()
 }
