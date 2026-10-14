@@ -34,6 +34,14 @@ export async function sha256Hex(data: string | Uint8Array): Promise<string> {
   return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource)));
 }
 
+/** Equal strings, without the time depending on where they first differ (both sides are hashed first). */
+export async function constantTimeEqual(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([sha256Hex(a), sha256Hex(b)]);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return diff === 0;
+}
+
 /** "YYYY-MM-DDTHH:MM:SSZ": RFC 3339 UTC to the second, the only time shape on the wire. */
 export function formatTime(d: Date): string {
   return d.toISOString().slice(0, 19) + "Z";
