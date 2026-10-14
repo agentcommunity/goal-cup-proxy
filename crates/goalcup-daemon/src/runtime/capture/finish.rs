@@ -413,11 +413,13 @@ impl Daemon {
             return Err(capture.expire(FinishStage::WorkspaceWalk, None, Some(termination)));
         }
         let sealed_at = now_rfc3339();
-        // A clone's Git state may take what is left; the drain share left it at least
-        // `GIT_READ_FLOOR` (D56).
-        let git_budget = budget
-            .last_start(excluded)
-            .saturating_duration_since(tokio::time::Instant::now());
+        // A clone's Git state may take what is left but the commit reserve; the drain share left
+        // it at least `GIT_READ_FLOOR` (D56).
+        let git_budget = (budget.deadline + excluded)
+            .checked_sub(FINISH_COMMIT_RESERVE)
+            .map_or(Duration::ZERO, |end| {
+                end.saturating_duration_since(tokio::time::Instant::now())
+            });
         let manifest =
             match workspace::seal_workspace(&row.workspace, &entry_id, &sealed_at, git_budget) {
                 Ok(Ok(manifest)) => manifest,

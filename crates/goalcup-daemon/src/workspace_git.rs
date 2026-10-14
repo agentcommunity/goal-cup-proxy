@@ -56,7 +56,7 @@ fn resolve_git(workspace: &Path) -> Option<PathBuf> {
 
 /// `git` in `workspace` with the seal's sanitized environment: the [`resolve_git`] executable,
 /// nothing inherited but `PATH`, `home` as `HOME`, no system or global configuration, no
-/// fsmonitor, no hooks, no external diff, no transport and no lazy fetch, and the repository
+/// fsmonitor, no hooks, no transport and no lazy fetch, and the repository
 /// pinned to `<workspace>/.git` so a missing or broken one is never looked for above the
 /// workspace. Stdin is null. `None` when no `git` is found.
 pub fn command(workspace: &Path, home: &Path) -> Option<Command> {
@@ -80,7 +80,7 @@ pub fn command(workspace: &Path, home: &Path) -> Option<Command> {
             "-c",
             "core.hooksPath=/dev/null",
         ])
-        .args(["-c", "diff.external=", "-c", "core.untrackedCache=false"])
+        .args(["-c", "core.untrackedCache=false"])
         .current_dir(workspace)
         .stdin(Stdio::null());
     Some(git)
@@ -95,8 +95,9 @@ pub fn command(workspace: &Path, home: &Path) -> Option<Command> {
 /// ‖ for each untracked path no `.gitignore` excludes, sorted bytewise:
 /// `path ‖ 0x00 ‖ value ‖ b"\n"`,
 ///
-/// where `value` is the hex SHA-256 of the content, `deleted`, `size:<n>` above 64 MiB, or for
-/// an index gitlink that is not the commit's, `gitlink:<id>`. A directory `ls-files` collapses
+/// where `value` is the hex SHA-256 of the content, `deleted`, `size:<n>` above 64 MiB, for
+/// anything but a readable regular file (a link, a directory, a FIFO) the walk's absent digest
+/// (64 zeros), or for an index gitlink that is not the commit's, `gitlink:<id>`. A directory `ls-files` collapses
 /// (a nested repository) is listed file by file. A clean clone digests to
 /// `sha256(b"diff\0untracked\0")`.
 pub fn state(workspace: &Path, budget: Duration) -> Result<WorkspaceGit, String> {
@@ -277,23 +278,10 @@ pub fn state(workspace: &Path, budget: Duration) -> Result<WorkspaceGit, String>
         git.in_time()?;
         let full = workspace.join(OsStr::from_bytes(path));
         if path.ends_with(b"/") {
-            // A directory `ls-files` does not enter (a nested repository): every file below it.
-            let left = COLLAPSED_FILE_LIMIT - collapsed;
-            let files = walk(&full, &[], left + 1, HASH_LIMIT).map_err(|e| e.to_string())?;
+            let files =
+                collapsed_files(&full, path, COLLAPSED_FILE_LIMIT - collapsed, git.deadline)?;
             collapsed += files.len();
-            if collapsed > COLLAPSED_FILE_LIMIT {
-                return Err(format!(
-                    "more than {COLLAPSED_FILE_LIMIT} files below untracked directories"
-                ));
-            }
-            for file in files {
-                let value = if file.bytes > HASH_LIMIT {
-                    format!("size:{}", file.bytes)
-                } else {
-                    file.sha256
-                };
-                untracked.insert([path, file.path.as_bytes()].concat(), value.into_bytes());
-            }
+            untracked.extend(files);
             continue;
         }
         let value = match full.symlink_metadata() {
@@ -322,6 +310,36 @@ pub fn state(workspace: &Path, budget: Duration) -> Result<WorkspaceGit, String>
         commit,
         dirty_sha256: hex::encode(digest.finalize()),
     })
+}
+
+/// One digest line: a path and its value.
+type Line = (Vec<u8>, Vec<u8>);
+
+/// A directory `ls-files` does not enter (a nested repository): every file below `full`, as
+/// `path ‖ rel` and its value, at most `left` of them, read before `deadline`.
+fn collapsed_files(
+    full: &Path,
+    path: &[u8],
+    left: usize,
+    deadline: Instant,
+) -> Result<Vec<Line>, String> {
+    let files = walk(full, &[], left + 1, HASH_LIMIT, Some(deadline)).map_err(|e| e.to_string())?;
+    if files.len() > left {
+        return Err(format!(
+            "more than {COLLAPSED_FILE_LIMIT} files below untracked directories"
+        ));
+    }
+    Ok(files
+        .into_iter()
+        .map(|file| {
+            let value = if file.bytes > HASH_LIMIT {
+                format!("size:{}", file.bytes)
+            } else {
+                file.sha256
+            };
+            ([path, file.path.as_bytes()].concat(), value.into_bytes())
+        })
+        .collect())
 }
 
 /// `meta TAB path` of one `ls-tree` or `ls-files --stage` entry.
@@ -455,5 +473,25 @@ impl FreshHome {
 impl Drop for FreshHome {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review fix 2: the walk below a nested repository keeps the state's deadline. Past it, the
+    /// state is not read, as for any other timeout.
+    #[test]
+    fn a_nested_walk_past_its_deadline_is_not_read() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("work.rs"), b"one").unwrap();
+        let soon = Instant::now() + Duration::from_secs(60);
+        let read = collapsed_files(t.path(), b"nested/", 10, soon).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].0, b"nested/work.rs");
+        let past = Instant::now();
+        std::thread::sleep(Duration::from_millis(2));
+        assert!(collapsed_files(t.path(), b"nested/", 10, past).is_err());
     }
 }

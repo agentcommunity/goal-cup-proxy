@@ -152,7 +152,7 @@ pub fn list_workspace(
         entry_id: entry_id.to_string(),
         sealed_at: at.to_string(),
         workspace: workspace.to_string_lossy().to_string(),
-        files: walk(workspace, excluded, usize::MAX, u64::MAX)?,
+        files: walk(workspace, excluded, usize::MAX, u64::MAX, None)?,
         excluded: excluded.to_vec(),
         git: None,
         home: None,
@@ -198,18 +198,20 @@ pub(crate) const HASH_LIMIT: u64 = 64 * 1024 * 1024;
 /// `excluded` (its native roots), symlinks unfollowed, stopping at [`HOME_FILE_LIMIT`] files,
 /// sorted. A file over [`HASH_LIMIT`] is not read. `None` when the home cannot be read.
 pub fn list_home(home: &Path, excluded: &[String]) -> Option<Vec<SealedFile>> {
-    let mut files = walk(home, excluded, HOME_FILE_LIMIT, HASH_LIMIT).ok()?;
+    let mut files = walk(home, excluded, HOME_FILE_LIMIT, HASH_LIMIT, None).ok()?;
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Some(files)
 }
 
 /// Every file below `workspace` the exclusions leave, at most `limit` of them, in walk order. A
 /// regular file over `hash_limit` bytes is listed with its size and the absent digest, unread.
+/// Past `deadline`, checked before each file, the walk is refused.
 pub(crate) fn walk(
     workspace: &Path,
     excluded: &[String],
     limit: usize,
     hash_limit: u64,
+    deadline: Option<std::time::Instant>,
 ) -> Result<Vec<SealedFile>, DaemonError> {
     let mut files = Vec::new();
     let mut stack = vec![workspace.to_path_buf()];
@@ -268,6 +270,9 @@ pub(crate) fn walk(
             if kind.is_dir() {
                 stack.push(path);
                 continue;
+            }
+            if deadline.is_some_and(|end| std::time::Instant::now() >= end) {
+                return Err(DaemonError::Refused("the walk ran out of time".into()));
             }
             let (bytes, sha256) = measure(&path, hash_limit);
             files.push(SealedFile {

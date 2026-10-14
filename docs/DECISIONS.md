@@ -1529,8 +1529,11 @@ tree or in the index and whose work-tree content differs from `HEAD` (compared b
 An index gitlink that is not the commit's is `path ‖ 0x00 ‖ "gitlink:" ‖ <id> ‖ b"\n"` in the
 first part (a submodule's content belongs to another repository). An untracked directory
 `ls-files` collapses (a nested repository, `dir/`) is listed file by file below it, by the same
-bounded no-follow walk, at most 100 000 such files, or the state is not read. A clean clone
-digests to `sha256(b"diff\0untracked\0")`.
+bounded no-follow walk, at most 100 000 such files and within the same deadline, or the state is
+not read. A clean clone digests to `sha256(b"diff\0untracked\0")`. Because the comparison is
+`--no-filters`, a clone whose checkout converts files (LFS, eol or a smudge filter) does not get
+that empty digest even when nothing changed; its digest is still deterministic for the same work
+tree.
 
 **Only `.gitignore` hides a file.** The plan said `--exclude-standard`; this reads `.gitignore`
 files only (controller ruling). `.git/info/exclude` and `core.excludesFile` are outside the
@@ -1544,8 +1547,7 @@ filter or transport. `git` is the first one on `PATH` under an absolute entry ou
 workspace. It runs with the environment cleared but `PATH`, a fresh empty `HOME`, no system or
 global configuration, the repository pinned to `<workspace>/.git`, `GIT_ALLOW_PROTOCOL` empty (no
 transport, so an agent-written promisor remote is never fetched from, on any Git version) and
-`GIT_NO_LAZY_FETCH=1`, `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c diff.external=`,
-and only `rev-parse`, `ls-tree`, `ls-files`, `hash-object --no-filters` and `cat-file --batch`.
+`GIT_NO_LAZY_FETCH=1`, `-c core.fsmonitor=false -c core.hooksPath=/dev/null`, and only `rev-parse`, `ls-tree`, `ls-files`, `hash-object --no-filters` and `cat-file --batch`.
 The plan's `git diff` was dropped: comparing the work tree runs the repository's clean and process
 filters (`an_agent_written_clean_filter_is_never_run` failed on it). Every call shares one
 deadline, prints at most 64 MiB, and is killed and reaped past the deadline.
@@ -1553,7 +1555,7 @@ deadline, prints at most 64 MiB, and is killed and reaped past the deadline.
 **Time.** `LOCAL_CAPTURE_FINISH_BUDGET` is 180 s (it was 10 s; amends D40 and the C6 budget in
 CONTRACTS.md); `FINISH_COMMIT_RESERVE` stays 2 s. The daemon's drain share now ends the reserve
 plus 30 s before the deadline, so a producer that never settles cannot starve the Git read: it
-gets at least 30 s, or all of a smaller budget. The baseline gives Git 20 s, inside the CLI's 30 s
+gets at least 30 s, or all of a smaller budget, and it ends at the commit reserve. The baseline gives Git 20 s, inside the CLI's 30 s
 create call.
 
 **Reconsider when** the server re-derives the uncommitted state from a pushed branch, or a
