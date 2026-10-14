@@ -35,6 +35,11 @@ struct Wrangler {
 
 impl Wrangler {
     fn start(state: &Path, port: u16) -> Wrangler {
+        Wrangler::start_with(state, port, &[])
+    }
+
+    /// [`Wrangler::start`] with more `--var`s (a test-only short run, say).
+    fn start_with(state: &Path, port: u16, more: &[(&str, &str)]) -> Wrangler {
         let dir = worker_dir();
         let wrangler = dir.join("node_modules/wrangler/bin/wrangler.js");
         assert!(
@@ -59,6 +64,9 @@ impl Wrangler {
             .arg(state.join("r2"))
             .arg("--show-interactive-dev-session=false");
         for (name, value) in vars {
+            command.args(["--var", &format!("{name}:{value}")]);
+        }
+        for (name, value) in more {
             command.args(["--var", &format!("{name}:{value}")]);
         }
         use std::os::unix::process::CommandExt;
@@ -297,4 +305,42 @@ fn upload_worker_a_wrong_token_starts_nothing() {
         "{error}\n{out}"
     );
     assert!(client.book().creates.is_empty(), "{out}");
+}
+
+/// The Worker ends a run at its deadline: its heartbeat answer says stop, the tracer stops the
+/// agent at once and seals, commits the end in a final heartbeat, and uploads up to it.
+#[test]
+#[ignore = "needs Node and `npm install` in server/worker"]
+fn upload_worker_the_worker_stops_the_run_at_its_deadline() {
+    let rig = Rig::new();
+    let worker = Wrangler::start_with(
+        &rig.root.join("worker"),
+        free_port(),
+        &[("RUN_SECONDS", "3")],
+    );
+    log_in(&rig, &worker.url, TOKEN);
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let mut opts = rig.options(&goal, RESERVE);
+    opts.repo = Some(REPO.to_string());
+    opts.upload_policy = goalcup_cli::upload::uploader::Policy::from_test_spec(
+        "200,25,100,400,20000,268435456,5000,100",
+    )
+    .unwrap();
+    let started = Instant::now();
+    let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(started.elapsed() < Duration::from_secs(30), "{out}");
+    assert!(
+        out.contains("deadline: the server says the run is over"),
+        "{out}"
+    );
+    let position = worker.get(
+        &format!("/v1/runs/{}", run_id(&rig, &outcome.entry_id)),
+        TOKEN,
+    );
+    assert_eq!(position["stop"], true, "{position}");
+    assert!(position["final"].is_object(), "{position}");
+    assert_fully_uploaded(&rig, &worker, &outcome.entry_id);
 }

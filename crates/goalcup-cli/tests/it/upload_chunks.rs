@@ -129,3 +129,34 @@ fn the_record_ending_at_an_offset_is_found_and_nothing_else() {
         assert_eq!(local_link_before(&path, nowhere), None, "{nowhere}");
     }
 }
+
+/// The workspace repository's checked-out commit, from `.git` files alone.
+#[test]
+fn the_repo_head_is_read_from_the_git_files() {
+    use goalcup_cli::upload::uploader::repo_head;
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    assert_eq!(repo_head(ws), None, "no repository");
+    let git = ws.join(".git");
+    std::fs::create_dir_all(git.join("refs/heads")).unwrap();
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    assert_eq!(repo_head(ws), None, "nothing committed yet");
+    std::fs::write(git.join("refs/heads/main"), format!("{commit}\n")).unwrap();
+    assert_eq!(repo_head(ws).as_deref(), Some(commit));
+    std::fs::remove_file(git.join("refs/heads/main")).unwrap();
+    std::fs::write(
+        git.join("packed-refs"),
+        format!("# pack-refs with: peeled\n{commit} refs/heads/main\n"),
+    )
+    .unwrap();
+    assert_eq!(repo_head(ws).as_deref(), Some(commit), "a packed branch");
+    std::fs::write(git.join("HEAD"), format!("{}\n", commit.to_uppercase())).unwrap();
+    assert_eq!(repo_head(ws).as_deref(), Some(commit), "a detached HEAD");
+    std::fs::write(git.join("HEAD"), "ref: refs/../../etc/passwd\n").unwrap();
+    assert_eq!(
+        repo_head(ws),
+        None,
+        "a reference leaving .git is not followed"
+    );
+}

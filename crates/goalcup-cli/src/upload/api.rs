@@ -69,6 +69,43 @@ pub struct RunPosition {
     /// The chain hash of the last stored record; the genesis hash before any.
     pub head: String,
     pub last_ack: Option<AckCheckpoint>,
+    /// The server's clock is at or past `deadline_at`: the run is over.
+    #[serde(default)]
+    pub stop: bool,
+    /// The end a final heartbeat committed, if one has.
+    #[serde(default, rename = "final")]
+    pub committed: Option<ChainEnd>,
+}
+
+/// A chain position: the `seq` and `hash` of one record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainEnd {
+    pub seq: u64,
+    pub head: String,
+}
+
+/// `POST /v1/runs/{run_id}/heartbeat`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeartbeatRequest {
+    pub entry_id: String,
+    /// The last whole record of the local chain.
+    pub seq: u64,
+    pub head: String,
+    /// The bytes of the local chain up to the end of that record.
+    pub offset_local: u64,
+    /// The run has ended: this commits `(seq, head)` as the last record the server accepts.
+    #[serde(rename = "final")]
+    pub is_final: bool,
+    /// The commit the workspace repository had checked out when the run ended.
+    pub repo_head: Option<String>,
+}
+
+/// The answer to a heartbeat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeartbeatAnswer {
+    /// The server's clock is at or past `deadline_at`: stop now.
+    pub stop: bool,
+    pub deadline_at: String,
 }
 
 /// The answer to a stored chunk.

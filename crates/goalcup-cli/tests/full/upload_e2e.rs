@@ -644,3 +644,136 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
         "nothing more was stored"
     );
 }
+
+// ------------------------------------------------------------------ the deadline
+
+/// A server whose runs last `seconds`.
+fn short_server(store: &std::path::Path, seconds: u64, port: Option<u16>) -> UploadServer {
+    UploadServer::start(
+        store,
+        ServerOptions {
+            tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
+            run_seconds: Some(seconds),
+            port,
+            ..ServerOptions::default()
+        },
+    )
+}
+
+/// [`quick_policy`] with a heartbeat every 100 ms.
+fn beating_policy() -> goalcup_cli::upload::uploader::Policy {
+    goalcup_cli::upload::uploader::Policy::from_test_spec("200,25,100,400,10000,268435456,3000,100")
+        .unwrap()
+}
+
+/// At the deadline the server says stop: the tracer stops the agent there and then (the fake
+/// harness would otherwise sleep a minute), seals, commits the chain's end in a final
+/// heartbeat, and uploads up to it.
+#[test]
+fn the_server_stops_the_run_at_its_deadline() {
+    let rig = Rig::new();
+    // Long enough for the fake harness to start and the agent to commit under a loaded test
+    // machine; short enough for a test.
+    let server = short_server(&rig.root.join("server"), 8, None);
+    log_in(&rig, &server.url(), TOKEN);
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let mut opts = logged_in_options(&rig, &goal);
+    opts.upload_policy = beating_policy();
+    let started = std::time::Instant::now();
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let (result, out) = std::thread::scope(|s| {
+        let running = rig.start(s, &client, opts, None);
+        // The agent commits in its workspace while the run records.
+        wait_until("the harness to start", || {
+            rig.harness_pid().is_some() || running.is_finished()
+        });
+        if running.is_finished() {
+            let (result, out) = running.join().unwrap();
+            panic!("start ended before the harness ran: {result:?}\n{out}");
+        }
+        let workspace = std::path::PathBuf::from(&client.book().creates[0].workspace);
+        let git = workspace.join(".git");
+        std::fs::create_dir_all(git.join("refs/heads")).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(git.join("refs/heads/main"), format!("{commit}\n")).unwrap();
+        running.join().unwrap()
+    });
+    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "the run was not stopped at its deadline:\n{out}"
+    );
+    assert!(
+        out.contains("deadline: the server says the run is over"),
+        "{out}"
+    );
+    assert!(
+        rig.harness_file("done").is_none(),
+        "the harness ended on its own"
+    );
+    let run_id = server.run_ids()[0].clone();
+    assert!(!server.heartbeats(&run_id).is_empty());
+    let committed = server.final_commit(&run_id).expect("a final heartbeat");
+    assert_eq!(
+        committed.repo_head.as_deref(),
+        Some(commit),
+        "the final heartbeat names the workspace's commit as the run stopped"
+    );
+    let chain = std::fs::read(rig.trace(&outcome.entry_id).join("chain.jsonl")).unwrap();
+    let last = chain
+        .split(|b| *b == b'\n')
+        .rfind(|l| !l.is_empty())
+        .unwrap();
+    let last: serde_json::Value = serde_json::from_slice(last).unwrap();
+    assert_eq!(committed.seq, last["seq"].as_u64().unwrap());
+    assert_eq!(committed.head, last["hash"].as_str().unwrap());
+    assert!(out.contains("uploaded: "), "{out}");
+    assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
+}
+
+/// With the server out of reach, the tracer stops on its own count of the run's length; the
+/// final heartbeat and the rest go later with `goalcup upload`, and the server takes them up to
+/// the committed end although its deadline has passed.
+#[test]
+fn without_a_server_the_run_stops_on_its_own_clock_and_is_finished_later() {
+    let rig = Rig::new();
+    let store = rig.root.join("server");
+    let first = short_server(&store, 3, None);
+    let port = first.port();
+    log_in(&rig, &first.url(), TOKEN);
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let mut opts = logged_in_options(&rig, &goal);
+    opts.upload_policy = beating_policy();
+    opts.upload_policy.finish_budget = std::time::Duration::from_millis(300);
+    let (result, out) = std::thread::scope(|s| {
+        let running = rig.start(s, &client, opts, None);
+        wait_until("a first chunk", || {
+            first
+                .run_ids()
+                .first()
+                .is_some_and(|run| !first.chunks(run).is_empty())
+        });
+        first.stop();
+        running.join().unwrap()
+    });
+    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(out.contains("by this machine's clock"), "{out}");
+    assert!(out.contains("upload incomplete"), "{out}");
+
+    let server = short_server(&store, 3, Some(port));
+    let run_id = server.run_ids()[0].clone();
+    assert!(server.final_commit(&run_id).is_none());
+    goalcup_cli::commands::upload::upload_with(
+        &rig.cfg,
+        &outcome.entry_id,
+        quick_policy(),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(server.final_commit(&run_id).is_some());
+    assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
+}

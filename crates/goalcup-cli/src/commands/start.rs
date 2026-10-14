@@ -536,7 +536,8 @@ struct Forked<'a> {
     cfg: &'a Path,
     info: CaptureWorkspaceInfo,
     run: RunDir,
-    proxied: Proxied,
+    /// The recording proxy; `None` once a deadline finish has stopped it.
+    proxied: Option<Proxied>,
     /// The run was given a provider key, so its directory is scanned and judged.
     scanning: bool,
     /// This machine's record of the entry, with no pid yet.
@@ -554,6 +555,8 @@ struct UploadStart {
     /// The start receipt's key, which every acknowledgement must verify under.
     key: String,
     policy: crate::upload::uploader::Policy,
+    /// The run's deadline by this machine's own clock, for when the server cannot say it.
+    local_deadline: Option<crate::upload::uploader::LocalDeadline>,
 }
 
 impl Forked<'_> {
@@ -570,7 +573,9 @@ impl Forked<'_> {
     fn unlaunched(self, error: CliError, out: &mut dyn std::io::Write) -> CliError {
         // Whatever ended the launch, including a Ctrl-C, the seal below runs its full retries.
         crate::arming::close_window();
-        finish_unlaunched(self.client, &self.info.entry_id, self.proxied, out);
+        if let Some(proxied) = self.proxied {
+            finish_unlaunched(self.client, &self.info.entry_id, proxied, out);
+        }
         note_unscanned(self.scanning, &self.run.dir, out);
         if let Some(give_back) = self.give_back {
             give_back.give();
@@ -602,7 +607,18 @@ impl Forked<'_> {
         let end = crate::launch::end_released_child(child, handed);
         let _ = say(out, &end.announcement(&info.entry_id));
         let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
-        let _ = finish(client, &info.entry_id, proxied, deadline, None, None, out);
+        if let Some(proxied) = proxied {
+            let _ = finish(
+                client,
+                &info.entry_id,
+                proxied,
+                deadline,
+                termination_bound(0),
+                None,
+                None,
+                out,
+            );
+        }
         tees.finish(deadline, out);
         // Worded from what was observed, never more: a native child that could not be checked is
         // not "nothing is running".
@@ -667,6 +683,8 @@ struct Exited<'a> {
     forked: Forked<'a>,
     tees: Tees,
     status: Result<ExitStatus, CliError>,
+    /// The finish a deadline made while the harness was still running, if one did.
+    finished_early: Option<Result<CaptureFinishReport, CliError>>,
     /// The uploader, for a run opened on a server.
     uploading: Option<crate::upload::uploader::Running>,
     /// Linux: the refusal the command ends with, after the seal, when the sweep left a process
@@ -842,6 +860,7 @@ fn create_and_gate<'a>(
         goal_file,
         connector: c,
         profile,
+        ..
     } = *cx;
     // Catch a replacement since prepare before writing even the temporary run directory.
     let shared_home = prep
@@ -1008,11 +1027,14 @@ fn create_and_gate<'a>(
         cfg,
         info,
         run,
-        proxied,
+        proxied: Some(proxied),
         scanning: prep.matcher.is_some(),
         template,
         upload: bound.map(|(record, key)| UploadStart {
             server: upload.map(|u| u.server.clone()),
+            local_deadline: opened
+                .as_ref()
+                .and_then(|o| crate::upload::uploader::LocalDeadline::of(&record, o.opened_at)),
             record,
             key,
             policy: opts.upload_policy,
@@ -1236,10 +1258,26 @@ fn run_harness<'a>(
         give_back.launched();
     }
     // The first chunk goes now, beside the run; nothing the uploader does waits the harness.
-    let uploading = forked.upload.take().and_then(|start| {
+    // The run's upload record, kept here so the workspace's commit can be noted the moment the
+    // run stops.
+    let noted = forked.upload.as_ref().map(|start| start.record.clone());
+    let uploads_dir = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
+    let note_repo_head = || {
+        if let Some(record) = &noted {
+            crate::upload::uploader::note_repo_head(&uploads_dir, record);
+        }
+    };
+    let mut uploading = forked.upload.take().and_then(|start| {
         let server = start.server?;
         let spool = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
-        match crate::upload::uploader::begin(server, start.record, start.key, start.policy, spool) {
+        match crate::upload::uploader::begin(
+            server,
+            start.record,
+            start.key,
+            start.policy,
+            spool,
+            start.local_deadline,
+        ) {
             Ok(running) => Some(running),
             Err(e) => {
                 let _ = say(out, &format!("  (the upload could not start: {e})"));
@@ -1247,10 +1285,72 @@ fn run_harness<'a>(
             }
         }
     });
-    let status = child.wait().map_err(|source| CliError::Io {
+    // At the run's deadline the uploader says stop: this command finishes the run there and
+    // then, as it would once the harness exits (the proxy stopped, then the seal), except that
+    // the daemon's seal ends the harness, given its grace. That ends the wait below. What the
+    // finish said is printed once the wait is over.
+    type Early = (Result<CaptureFinishReport, CliError>, Vec<u8>);
+    let early = std::sync::Mutex::new(None::<Early>);
+    let proxy_slot = std::sync::Mutex::new(forked.proxied.take());
+    let stop = uploading.as_mut().and_then(|running| running.take_stop());
+    let (client, cfg) = (forked.client, forked.cfg);
+    let grace = handed.grace_seconds;
+    let status = crate::upload::wait_stopping(&mut child, stop, |reason| {
+        let Some(proxied) = proxy_slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            return;
+        };
+        // The commit the workspace has now, before the harness's grace lets it change.
+        note_repo_head();
+        let mut said =
+            format!("deadline: {reason}. The agent is stopped and the run sealed now.\n")
+                .into_bytes();
+        let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+        let mut finished = finish(
+            client,
+            &entry_id,
+            proxied,
+            deadline,
+            termination_bound(grace),
+            None,
+            Some(cfg),
+            &mut said,
+        );
+        // A seal that did not take (the daemon busy or restarting) is asked again: the harness
+        // must not run on past its deadline, and only the daemon's seal ends it.
+        for _ in 0..DEADLINE_SEAL_RETRIES {
+            if finished.is_ok() {
+                break;
+            }
+            std::thread::sleep(DEADLINE_SEAL_RETRY_WAIT);
+            finished = crate::commands::seal::seal_locally(
+                client,
+                &entry_id,
+                None,
+                None,
+                std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET,
+                termination_bound(grace),
+                Some(cfg),
+            );
+        }
+        *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));
+    })
+    .map_err(|source| CliError::Io {
         path: handed.program.clone(),
         source,
     });
+    forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    // A run that ended on its own: its commit as it ended.
+    if forked.proxied.is_some() {
+        note_repo_head();
+    }
+    let finished_early =
+        early
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|(finished, said)| {
+                let _ = out.write_all(&said);
+                finished
+            });
     // What was swept is said on stdout; what may still be running goes to stderr now, and makes
     // the command exit 1 after the seal (`finish_and_scan`), so a script that reads only the exit
     // code still learns of it. The trace is unchanged either way.
@@ -1267,6 +1367,7 @@ fn run_harness<'a>(
         forked,
         tees,
         status,
+        finished_early,
         uploading,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
     })
@@ -1285,6 +1386,7 @@ fn finish_and_scan(
         forked,
         tees,
         status,
+        finished_early,
         uploading,
         left_running,
     } = exited;
@@ -1297,19 +1399,26 @@ fn finish_and_scan(
         ..
     } = forked;
     let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
-    let finished = finish(
-        client,
-        &info.entry_id,
-        proxied,
-        deadline,
-        if tees.late_scope {
-            tees.marked.as_ref()
-        } else {
-            None
-        },
-        Some(cfg),
-        out,
-    );
+    let finished = match (finished_early, proxied) {
+        (Some(finished), _) => finished,
+        (None, Some(proxied)) => finish(
+            client,
+            &info.entry_id,
+            proxied,
+            deadline,
+            termination_bound(0),
+            if tees.late_scope {
+                tees.marked.as_ref()
+            } else {
+                None
+            },
+            Some(cfg),
+            out,
+        ),
+        (None, None) => Err(CliError::Internal(
+            "the run's proxy was stopped and nothing finished the run".to_string(),
+        )),
+    };
     tees.finish(deadline, out);
     // How the harness ended is the participant's to see: the exit code of a run that was recorded
     // is not this command's own (`main.rs`), so it is said here.
@@ -1486,7 +1595,16 @@ fn finish_unlaunched(
     out: &mut dyn std::io::Write,
 ) {
     let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
-    let _ = finish(client, entry_id, proxied, deadline, None, None, out);
+    let _ = finish(
+        client,
+        entry_id,
+        proxied,
+        deadline,
+        termination_bound(0),
+        None,
+        None,
+        out,
+    );
 }
 
 /// Whether the entry's own signed status shows it sealed. The read waits for the entry's run
@@ -1908,11 +2026,13 @@ fn proxy_admission_line(
 /// before the seal is sent, by [`crate::capture_tee::marker_wait_end`]'s deadline, which leaves
 /// the daemon's native read its share of the drain. The identity, if exactly one distinct one was
 /// printed, rides on the seal request; any other answer sends none.
+#[allow(clippy::too_many_arguments)]
 fn finish(
     client: &(dyn DaemonClient + Sync),
     entry_id: &str,
     proxied: Proxied,
     deadline: std::time::Instant,
+    termination: Duration,
     marked: Option<&CaptureStderr>,
     reconnect: Option<&Path>,
     out: &mut dyn std::io::Write,
@@ -1947,15 +2067,16 @@ fn finish(
             ScopeMarker::Absent | ScopeMarker::Conflicting => None,
         }
     });
-    // The launcher's own root is reaped, so the daemon's termination answers `AlreadyStopped`
-    // after one `ps`: the allowance is the bound for a root with no grace to give.
+    // After the harness exited, the launcher's own root is reaped and the daemon's termination
+    // answers `AlreadyStopped` after one `ps`: `termination_bound(0)`. At a deadline the harness
+    // is still running, and the bound gives it its grace.
     let sealed = crate::commands::seal::seal_locally(
         client,
         entry_id,
         Some(counters),
         native_scope,
         deadline,
-        termination_bound(0),
+        termination,
         reconnect,
     );
     // A committed seal stays committed: the report is this command's own output, and its
@@ -1980,6 +2101,10 @@ fn finish(
     });
     sealed
 }
+
+/// How often, and how far apart, a deadline seal that did not take is asked again.
+const DEADLINE_SEAL_RETRIES: u32 = 12;
+const DEADLINE_SEAL_RETRY_WAIT: Duration = Duration::from_secs(5);
 
 /// The upload server this run opens with: `None` with no `goalcup login`, and for a harness
 /// handed a provider key (`keyed`), whose run must pass the key scan at its end before
@@ -2026,6 +2151,9 @@ struct Uploading {
 struct OpenedRun {
     run: crate::upload::api::OpenRun,
     request: crate::upload::api::OpenRunRequest,
+    /// When the server answered, on a clock that runs through sleep: the run's own count of
+    /// its length starts here.
+    opened_at: goalcup_protocol::clock::ContinuousOrigin,
     give_back: std::cell::RefCell<Option<crate::upload::GiveBack>>,
 }
 
@@ -2050,12 +2178,16 @@ impl Uploading {
             repo_url: self.repo_url.clone(),
         };
         crate::upload::give_back_pending(&self.server, cx.cfg);
+        // Taken before the first ask: a repeat after a lost reply answers the first
+        // `official_start`, and the run's own clock must never start later than the server's.
+        let opened_at = goalcup_protocol::clock::ContinuousOrigin::now();
         let run = crate::upload::open_run(&self.server, &request)?;
         let give_back = crate::upload::GiveBack::opened(&self.server, cx.cfg, &run);
         match give_back {
             Ok(give_back) => Ok(OpenedRun {
                 run,
                 request,
+                opened_at,
                 give_back: std::cell::RefCell::new(Some(give_back)),
             }),
             Err(error) => {
@@ -2097,6 +2229,7 @@ impl Uploading {
             trace_dir: info.trace_dir.clone(),
             official_start: opened.run.official_start.clone(),
             deadline_at: opened.run.deadline_at.clone(),
+            workspace: opened.request.workspace.clone(),
         };
         crate::upload::keep_run(cfg, &record, &receipt)?;
         say(

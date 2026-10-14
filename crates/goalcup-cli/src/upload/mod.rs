@@ -46,6 +46,9 @@ pub struct UploadRecord {
     pub trace_dir: String,
     pub official_start: String,
     pub deadline_at: String,
+    /// The run's workspace, whose repository's checked-out commit the final heartbeat names.
+    #[serde(default)]
+    pub workspace: String,
 }
 
 /// `<cfg>/uploads/<entry_id>.json`.
@@ -359,4 +362,36 @@ pub fn give_back_pending(server: &ServerClient, cfg: &Path) {
     if settled(&given) {
         let _ = std::fs::remove_file(&path);
     }
+}
+
+/// Wait for the harness to exit, and when `stop` says the run must stop first (its deadline),
+/// call `on_stop` with the reason while the wait goes on. `on_stop` asks the daemon to seal,
+/// which ends the harness (the daemon is the only terminator, D22), and so ends this wait.
+/// With no `stop`, this is `child.wait()`.
+pub fn wait_stopping<F: FnOnce(&str) + Send>(
+    child: &mut std::process::Child,
+    stop: Option<std::sync::mpsc::Receiver<String>>,
+    on_stop: F,
+) -> std::io::Result<std::process::ExitStatus> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::RecvTimeoutError;
+    let Some(stop) = stop else {
+        return child.wait();
+    };
+    let exited = AtomicBool::new(false);
+    let exited = &exited;
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            while !exited.load(Ordering::SeqCst) {
+                match stop.recv_timeout(Duration::from_millis(200)) {
+                    Ok(reason) => return on_stop(&reason),
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+            }
+        });
+        let status = child.wait();
+        exited.store(true, Ordering::SeqCst);
+        status
+    })
 }

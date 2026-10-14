@@ -213,9 +213,17 @@ pub(crate) fn report_local_finish(
             ),
         )?,
     }
+    // A run opened on an upload server carries its signed start receipt in the trace.
+    let receipt =
+        std::path::Path::new(&finish.trace_dir).join(goalcup_protocol::export::RECEIPT_FILE);
     say(
         out,
-        "anchor: local only. No receipt, acknowledgement or upload exists for this run.",
+        if receipt.is_file() {
+            "anchor: the upload server's signed start receipt; its acknowledgements are added to \
+             acks.jsonl as the trace uploads."
+        } else {
+            "anchor: local only. No receipt, acknowledgement or upload exists for this run."
+        },
     )?;
     say(
         out,

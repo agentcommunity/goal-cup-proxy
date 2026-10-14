@@ -11,7 +11,7 @@
 import type { Ctx } from "./context.ts";
 import type { ChunkRecord, RunRow } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
-import { requireOpen, requireRun } from "./runs.ts";
+import { FINAL_RETRY_AFTER, isStopped, requireOpen, requireRun } from "./runs.ts";
 import { formatTime, isEntryId, isHex64, parseSafeUint } from "./util.ts";
 
 export const MAX_CHUNK_BYTES = 33_554_432; // 32 MiB, compressed
@@ -33,10 +33,22 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   const contentLength = checkContentLength(request);
   const h = parseHeaders(request);
 
-  // 1. ...and the run: it must be this member's, open, and within its grace period.
+  // 1. ...and the run: it must be this member's and open (not sealed, not abandoned).
   const run = await requireRun(ctx, member, runId);
-  requireOpen(ctx, run);
+  requireOpen(run);
   if (h.entryId !== run.entry_id) throw notFound("That entry does not belong to this run.");
+
+  // 1. ...and the deadline. Past `deadline_at` a chunk is accepted only once the final heartbeat
+  //    has committed where the chain ends (until then: wait, 503). Once an end is committed, whether
+  //    or not the deadline has passed, nothing may go beyond it (410).
+  if (run.final === null && isStopped(ctx, run)) {
+    throw new ApiError(503, "awaiting_final", "The run is past its deadline: send the final heartbeat, then upload the rest.", {
+      "retry-after": String(FINAL_RETRY_AFTER),
+    });
+  }
+  if (run.final !== null && goesBeyond(h, run.final)) {
+    throw closed("This chunk goes past the end of the run that the final heartbeat committed.");
+  }
 
   // 2. A chunk the server already holds, sent again (a reply was lost): same offset, same length,
   //    same head -> the stored ack, without touching the body.
@@ -82,11 +94,18 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
       if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored);
       throw conflict("The run moved while this chunk was being stored; read the position again.");
     }
+    case "beyond_final":
+      throw closed("This chunk goes past the end of the run that the final heartbeat committed.");
     case "closed":
       throw closed("This run is no longer open.");
     case "not_found":
       throw notFound("No such run for this token.");
   }
+}
+
+/** Past the committed end: it ends after the final seq, or ends at it with another head. */
+function goesBeyond(h: ChunkHeaders, final: { seq: number; head: string }): boolean {
+  return h.lastSeq > final.seq || (h.lastSeq === final.seq && h.head !== final.head);
 }
 
 function storedAnswer(c: ChunkRecord): Response {

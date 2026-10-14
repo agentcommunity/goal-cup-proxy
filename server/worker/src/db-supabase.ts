@@ -14,6 +14,8 @@ import type {
   CommitChunkArgs,
   CommitChunkResult,
   Db,
+  HeartbeatArgs,
+  HeartbeatResult,
   OpenRunArgs,
   OpenRunResult,
   RunRow,
@@ -132,7 +134,27 @@ export class SupabaseDb implements Db {
 
   async commitChunk(a: CommitChunkArgs): Promise<CommitChunkResult> {
     const v = await this.#rpc("upload_commit_chunk", { p_member_id: a.member_id, p_run_id: a.run_id, p_chunk: a.chunk });
-    return this.#word("upload_commit_chunk", v, ["committed", "conflict", "closed", "not_found"] as const);
+    return this.#word("upload_commit_chunk", v, ["committed", "conflict", "beyond_final", "closed", "not_found"] as const);
+  }
+
+  async recordHeartbeat(a: HeartbeatArgs): Promise<HeartbeatResult> {
+    const v = await this.#rpc("upload_heartbeat", {
+      p_member_id: a.member_id,
+      p_run_id: a.run_id,
+      p_entry_id: a.entry_id,
+      p_seq: a.seq,
+      p_head: a.head,
+      p_offset_local: a.offset_local,
+      p_final: a.final,
+      p_repo_head: a.repo_head,
+      p_at: a.at,
+    });
+    return this.#word("upload_heartbeat", v, ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"] as const);
+  }
+
+  async expireRun(memberId: string, runId: string, at: string): Promise<boolean> {
+    const v = await this.#rpc("upload_expire_run", { p_member_id: memberId, p_run_id: runId, p_at: at });
+    return this.#word("upload_expire_run", v, ["expired", "not_expired"] as const) === "expired";
   }
 
   async sealRun(a: SealArgs): Promise<SealResult> {
