@@ -7,6 +7,13 @@ tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests r
 (`crates/goalcup-cli/tests/common/upload_server/`), and the Worker
 (`server/worker/`).
 
+A rule change touches all of them: the Worker (`server/worker/src/`), its local database
+(`db-local.ts`), the SQL proposal (`server/worker/sql/proposed-goalcup-functions.sql`) and the Rust
+stand-in. Then run the suite that holds the Worker to the real contract:
+`cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only -E 'test(/upload_worker/)'`
+(it needs `npm ci` in `server/worker`; `sh scripts/gate.sh full` runs it too, and says so if that is
+missing). It is not in CI.
+
 ## Common rules
 
 - Base URL: what `goalcup login --server` stored. Every path below is under it.
@@ -27,13 +34,13 @@ tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests r
   | 401 | `unauthorized` | No credential, or not one the server knows, or it has expired. | stops: `goalcup login` again |
   | 403 | `forbidden` | The member may not start a run now (terms not accepted, outside the start window), or a device request was denied. | stops, reports |
   | 404 | `not_found` | No such run for this credential, or not this run's entry. | stops, reports |
-  | 409 | `conflict` | The request does not continue where the server is (offset, `prev`, seq), the account already has an open run, or the credential already opened a run. | chunk: re-reads the position (`GET`), then continues |
-  | 410 | `closed` | The run is sealed or abandoned, or (after `deadline_at`) the request goes past what the final heartbeat committed. A device request has expired or was already picked up. | stops, reports |
+  | 409 | `conflict` | The request does not continue where the server is (offset, `prev`, seq), the credential already opened a run, `previous_entry_id` is not the run's latest entry, or a seal comes before the final heartbeat. | chunk: re-reads the position (`GET`), then continues |
+  | 410 | `closed` | The run is abandoned, or closed 24 hours after it ended; the entry is sealed; the request goes past what the final heartbeat committed; or the run is over and cannot be continued. A device request has expired or was already picked up. | stops, reports |
   | 413 | `too_large` | A body over its cap. | stops, reports (a tracer bug) |
   | 422 | `digest_mismatch` | The body's SHA-256 is not `Goalcup-Sha256`. Nothing was stored. | retries with backoff |
   | 429 | `rate_limited` | Too many calls. `Retry-After` says when. | retries with backoff |
   | 503 | `maintenance` | The server asks every tracer to wait. `Retry-After` says when. | retries with backoff |
-  | 503 | `awaiting_final` | Past `deadline_at`, and the final heartbeat has not arrived. | sends it, then retries |
+  | 503 | `awaiting_final` | The run is over (`ends_at`), and the entry's final heartbeat has not arrived. | sends it, then retries |
 
   Any other 5xx, and any network failure, is retried with backoff. Backoff starts at 60 s,
   doubles to at most 15 min, with up to 25 % random jitter, and never waits less than a
@@ -109,23 +116,42 @@ Called by `goalcup start` after its local checks and before anything is created 
 {"connector_id": "codex-cli", "manifest_sha256": "<hex>", "connector_dir_sha256": "<hex>",
  "workspace": "/abs/path/run-.../workspace", "session_id": "<uuid>",
  "harness_version": "0.153.0", "tracer_version": "0.1.0",
- "repo_url": "https://github.com/<owner>/<repo>"}
+ "repo_url": "https://github.com/<owner>/<repo>",
+ "machine": {"os": "macOS", "cpus": 8, "ac_power": true}}
 ```
 
-`201`: `{"run_id", "entry_id", "official_start", "deadline_at"}`. The server mints both ids,
-stamps `official_start` from its own clock, and sets `deadline_at` = `official_start` + the
-event's run hours.
+`201`: `{"run_id", "entry_id", "official_start", "deadline_at"}`. The server mints both ids and
+stamps `official_start` from its own clock. `entry_id` is the run's first entry, segment 0.
+
+`deadline_at` = `official_start` + the run length: the event's run hours for a competition run,
+`PRACTICE_RUN_MINUTES` (10) for a practice run. The credential's `mode` decides which: a `practice`
+credential opens a practice run, in the practice event.
+
+`machine` is optional: facts about the machine, a flat JSON object whose values are strings,
+numbers, booleans or `null`, at most 4 KiB serialized (else `400`; `null` means absent). The server
+keeps it on the run and never shows it. It also keeps the connection's IP address and country on the
+run (from Cloudflare), and again on each `continue`; they are never in an answer, a key or a log.
 
 `repo_url` is `https://github.com/<owner>/<repo>` exactly: the owner is ASCII letters, digits and
 `-`; the repository is ASCII letters, digits, `-`, `_` and `.`, and is never `.` or `..`. Anything
 else is `400`.
 
+**One main run per account.** A competition start by the account replaces its other open competition
+run: that run gets `replaced_at` = this run's `official_start`, in the same step, and ends then
+(`ends_at`, below). A replaced run keeps its credential and goes on taking its wrap-up (below). A
+practice run replaces nothing and is never replaced; an account may have any number of practice runs.
+
+**The start window.** A competition run can be started only inside the event's start window (its
+edges are inside). Before it opens the answer is `403` ("The start window has not opened yet.");
+after it closes, `403` with the message "after the start window you can only `goalcup continue` your
+run". Practice has no window.
+
 A credential opens one run. A repeat of the same `session_id` on a credential that already opened a
 run returns that run's answer with `200`, whatever the run's state, so a reply lost in transit is
 not a second run. Another `session_id` on it is `409`: this credential already opened a run, and
-the participant runs `goalcup continue`. Binding the credential to the new run is conditional on
-it being unbound; if it was bound to another run in the meantime, that too is this `409`. A credential that has not opened a run yet is still held
-to the account's one open run: another open run on the account is `409`.
+the participant runs `goalcup continue`. The credential is bound to the new run in the same atomic
+step that creates the run, so a credential that cannot bind (it is unknown, or was bound to another
+run in the meantime) is the same `409` and creates nothing.
 
 **Differs from section 4:** `chain_head_at_create` is not sent here. The chain's first link hashes
 the `entry_id`, and the server issues the `entry_id` in this answer, so the head cannot exist yet.
@@ -141,40 +167,44 @@ baseline.
 ```
 
 `200`: `{"start_receipt": <StartReceipt>}`, in the verifier's existing format
-(`crates/goalcup-protocol/src/receipt.rs`), signed with the server's Ed25519 key. Its claims are
-the run's own fields: `entry_id`, `connector_id`, `workspace`, `session_id`,
-`started_at` = `official_start`, `deadline_at`, `manifest_sha256`, `chain_head` (from this
-request), `connector_dir_sha256`. A repeat with the same `chain_head` returns the stored receipt;
-a different `chain_head` once a receipt exists is `409`.
+(`crates/goalcup-protocol/src/receipt.rs`), signed with the server's Ed25519 key. Each entry has its
+own receipt. Its claims are that entry's own fields: `entry_id`, `connector_id`, `workspace`,
+`session_id`, `manifest_sha256`, `connector_dir_sha256` (what the open or continue call for that
+entry sent), `chain_head` (from this request), and the run's `started_at` = `official_start` and
+`deadline_at`. A repeat with the same `chain_head` returns the stored receipt; a different
+`chain_head` once the entry has a receipt is `409`.
 
 ## `POST /v1/runs/{run_id}/abandon` — give back a run that never started
 
 `{"reason": "<text, at most 500 characters>"}`. Accepted only while no chunk has been stored:
 `200 {"status": "abandoned"}`, and `200` again for a repeat. A run with stored chunks is `409`; a
 sealed run is `410`. The tracer sends a fixed sentence, never a local path. Used when `goalcup start` fails
-after the run opened and before the harness launched, so the account is not left with an open run
-that holds nothing.
+after the run opened and before the harness launched, so no run is left open holding nothing.
 
-**Not in section 4.** Without it a failed start (a daemon refusal, a full disk) would leave the
-one open run per account taken.
+**Not in section 4.** Without it a failed start (a daemon refusal, a full disk) would leave an open
+run that holds nothing.
 
 ## `GET /v1/runs/{run_id}` — where the server is
 
-`200`:
+`GET /v1/runs/{run_id}` answers the run's current entry (the highest segment);
+`GET /v1/runs/{run_id}?entry_id=e…` answers that entry (`404` if it is not this run's). `200`:
 
 ```json
-{"run_id": "r…", "entry_id": "e…", "status": "open", "official_start": "…", "deadline_at": "…",
+{"run_id": "r…", "entry_id": "e…", "segment": 0, "status": "open",
+ "official_start": "…", "deadline_at": "…", "ends_at": "…",
  "offset": 123456, "next_seq": 812, "head": "<hex>", "last_ack": <AckCheckpoint or null>,
  "stop": false, "final": {"seq": 812, "head": "<hex>"} or null}
 ```
 
-`stop` is `true` once the server's clock is at or past `deadline_at`; `final` is the committed end
-(below) or `null`.
+`ends_at` is when the run is over: `deadline_at`, or `replaced_at` if a later start replaced the run
+first. `stop` is `true` once the server's clock is at or past `ends_at`; `final` is the entry's
+committed end (below) or `null`.
 
 `offset` is how many bytes of the entry's `chain.jsonl` the server holds, `next_seq` the sequence
 the next chunk starts at (0 before the first chunk: a chain's first record, the baseline, has
-`seq` 0), `head` the chain hash of the last stored record (the 64-zero genesis before any), `last_ack` the acknowledgement of the last stored chunk. `status` is `open`,
-`sealed` or `abandoned`.
+`seq` 0), `head` the chain hash of the last stored record (the 64-zero genesis before any), `last_ack` the acknowledgement of the last stored chunk. `status` is the run's: `open`,
+`sealed` (the run is over and its current entry is sealed), `incomplete` (the run closed without it)
+or `abandoned`.
 
 ## `PUT /v1/runs/{run_id}/chunks/{offset}` — store bytes of the chain
 
@@ -184,7 +214,7 @@ The body is one zstd frame holding bytes `[offset, offset + length)` of the entr
 
 | Header | Value |
 |---|---|
-| `Goalcup-Entry-Id` | the entry the bytes belong to |
+| `Goalcup-Entry-Id` | the entry the bytes belong to (any entry of the run: an older segment keeps uploading its wrap-up) |
 | `Goalcup-Length` | the uncompressed length in bytes |
 | `Goalcup-Sha256` | SHA-256 of the request body (the compressed bytes) |
 | `Goalcup-First-Seq` | the `seq` of the first record |
@@ -192,8 +222,9 @@ The body is one zstd frame holding bytes `[offset, offset + length)` of the entr
 | `Goalcup-Prev` | the `link.prev` of the first record |
 | `Goalcup-Head` | the `link.hash` of the last record |
 
-Before the body is read the server refuses a bad token, a run that is not open, a
-`Content-Length` over the cap and a missing or malformed header. It then requires
+Before the body is read the server refuses a bad token, an entry that is not this run's (`404`), a
+run that is closed, an entry that is sealed, a `Content-Length` over the cap and a missing or
+malformed header. It then requires
 `offset` = its `offset`, `Goalcup-Prev` = its `head` and `Goalcup-First-Seq` = its `next_seq`
 (`409` otherwise), streams the body into storage while hashing it, and keeps it only if the hash
 is `Goalcup-Sha256` (`422` otherwise, nothing kept). Storage is create-only.
@@ -205,19 +236,27 @@ signed with the same key as the receipt.
 
 **A retry is safe.** A chunk at an `offset` the server already holds, with the same
 `Goalcup-Length` and `Goalcup-Head`, is answered `200` with the acknowledgement stored for it,
-without reading the body. The same `offset` with a different length or head is `409`.
+without reading the body, before anything about the run's state is looked at. The same `offset` with
+a different length or head is `409`.
 
 The server checks only these headers. Whether the bytes really are the chain they claim to be is
 checked later by the verify job, which runs `goalcup-verify` over the reassembled copy.
 
-## `POST /v1/runs/{run_id}/seal` — the run is over
+## `POST /v1/runs/{run_id}/seal` — an entry is over
 
 ```json
 {"entry_id": "e…", "seal_json": "<seal.json, verbatim>", "baseline_json": "<baseline.json, verbatim>"}
 ```
 
-Each document at most 16 MiB. Sent after the last chunk. `200 {"status": "sealed"}`; a repeat with
-the same documents is `200` again. Different documents once sealed are `409`.
+Each document at most 16 MiB. Sent after the entry's final heartbeat and its last chunk: a seal
+needs the entry's committed end, and the server holding the chain up to it, checked in the step that
+seals. Without a final heartbeat the answer is `409` ("send the final heartbeat first"), or `503
+awaiting_final` once the run is over; a chain the server does not yet hold up to the end is `409`.
+
+`200 {"status": "sealed", "run_status": "open" | "sealed"}`. The entry is sealed. The run is `sealed`
+only when this is its current entry and the run is over (`ends_at` has passed); a segment sealed
+before the end leaves the run `open`, so it can be continued. A repeat with the same documents is
+`200` again, with the run's status then. Different documents once sealed are `409`.
 
 ## `POST /v1/runs/{run_id}/heartbeat` — still running, and where the chain is
 
@@ -238,44 +277,48 @@ tracer sees its own recording) and `"model_requests": <u64>` (model calls seen s
 at most 2^53 - 1). A heartbeat without them is as before, and `null` means absent, as for
 `repo_head`. The server checks their shape and records nothing else about them yet.
 
-`200`: `{"stop": <bool>, "deadline_at": "…", "reason": null}`. `stop` is `true` once the server's
-clock is at or past `deadline_at`: **the run is over**. The tracer then stops the agent at once,
-seals, and sends the final heartbeat. `reason` says why `stop` is true when the deadline is not
-the only reason (`"deadline"` or `"replaced"`; a later change fills it, today it is `null`).
+`200`: `{"stop": <bool>, "deadline_at": "…", "reason": "deadline" | "replaced" | null}`. `stop` is
+`true` once the server's clock is at or past `ends_at`: **the run is over**. The tracer then stops
+the agent at once, seals, and sends the final heartbeat. `reason` says why: `"replaced"` when a
+later start replaced the run, `"deadline"` when `deadline_at` came, `null` while `stop` is `false`.
 
-**The final heartbeat commits the end of the run.** Its `(seq, head)` is the last record the
-server will ever accept for the entry. A repeat with the same `(seq, head)` is `200`; a different
-one is `409`. A final heartbeat is accepted before `deadline_at` (the agent ended early) or after
-it, until the run is abandoned.
+**The final heartbeat commits the end of the entry.** Its `(seq, head)` is the last record the
+server will ever accept for that entry. A repeat with the same `(seq, head)` is `200`; a different
+one is `409`. Any entry may send its own final heartbeat at any time: before `ends_at` (the agent
+ended early) or after it, until the run is abandoned or closed.
 
-## The deadline
+## When a run ends
 
-At `deadline_at` the run is over, in whatever state the agent is in. There is no grace period and
-no late window.
+A run ends at `ends_at` = `min(deadline_at, replaced_at)`: at its deadline, or when the account's
+later competition start replaced it. At `ends_at` the run is over, in whatever state the agent is
+in. There is no grace period and no late window.
 
-- **The server says stop.** Every heartbeat answered at or after `deadline_at` carries
-  `stop: true`. The tracer stops recording at once. Without a network it stops on its own clock:
-  `deadline_at − official_start` after the run opened, counted on a clock that keeps running
-  while the machine sleeps.
-- **The wrap-up upload has no time limit, but it can only complete the chain up to the committed
-  end.** After `deadline_at`, a chunk is accepted only once a final heartbeat has committed
-  `(seq, head)`, and only if its `Goalcup-Last-Seq` is at most that `seq` (and the chunk ending at
-  that `seq` has that `head`); anything else is `410 closed`. Before the final heartbeat arrives,
-  a chunk after `deadline_at` is `503 awaiting_final` with `Retry-After`, so a tracer still
-  uploading asks again after it has sent its final heartbeat. The seal after `deadline_at` is
-  likewise `503 awaiting_final` before the final heartbeat, and `409` until the server holds the
-  chain up to the committed end.
-- **Before `deadline_at`** a run that has a committed end accepts nothing past it either, and its
-  seal only once the server holds the chain up to it.
-- **Abandoned.** A run with no seal 24 hours after `deadline_at` is abandoned: it accepts
-  nothing more (`410`), and it no longer counts as the account's open run.
+- **The server says stop.** Every heartbeat answered at or after `ends_at` carries `stop: true` and
+  the `reason`. The tracer stops recording at once. Without a network it stops on its own clock:
+  `deadline_at − official_start` after the run opened, counted on a clock that keeps running while
+  the machine sleeps. (A replaced run learns of it from its next heartbeat.)
+- **The wrap-up upload has no time limit, but it can only complete each entry's chain up to its
+  committed end.** After `ends_at`, a chunk is accepted only once the entry's final heartbeat has
+  committed `(seq, head)`, and only if its `Goalcup-Last-Seq` is at most that `seq` (and the chunk
+  ending at that `seq` has that `head`); anything else is `410 closed`. Before the final heartbeat
+  arrives, a chunk after `ends_at` is `503 awaiting_final` with `Retry-After`, so a tracer still
+  uploading asks again after it has sent its final heartbeat. The seal needs the committed end too
+  (see the seal call). Every entry of the run, not only the current one, is accepted, so an older
+  segment finishes its wrap-up.
+- **Before `ends_at`** an entry that has a committed end accepts nothing past it either.
+- **Closed.** 24 hours after `ends_at` the server closes the run: `sealed` if its current entry is
+  sealed, else `incomplete` (the last piece is missing; the run is judged on what arrived). It
+  accepts nothing more (`410`) except the repeat of a call it already answered. `abandoned` is only
+  the participant's own `abandon` call before any chunk.
 - Which records count is the verify job's: a record stamped after `deadline_at` does not, however
   it arrived.
 
 ## `POST /v1/runs/{run_id}/continue` — one more segment of the same run
 
-**Not built yet: the Worker's next task implements it.** The contract is fixed here so the tracer
-can code against it.
+Called by `goalcup continue` on the machine that started the run, with that run's credential. A run
+is one or more entries (segments): segment 0 is made by `POST /v1/runs`, each `continue` adds the
+next. Every entry has its own chain, receipt and seal, and the receipt, chunk, heartbeat and seal
+calls address the entry they name.
 
 ```json
 {"previous_entry_id": "e…", "connector_id": "…", "manifest_sha256": "<hex>",
@@ -283,13 +326,15 @@ can code against it.
  "harness_version": "…", "tracer_version": "…"}
 ```
 
-`201 {"entry_id", "segment", "official_start", "deadline_at"}`. The same `session_id` again is `200`
-with the same answer. A `previous_entry_id` that is not the run's latest entry is `409`. At or after
-the run's end (`ends_at = min(deadline_at, replaced_at)`) it is `410`. The receipt, chunks,
-heartbeat and seal calls then address the named `entry_id`, and `GET /v1/runs/{run_id}?entry_id=`
-gives that entry's position.
+`201 {"entry_id", "segment", "official_start", "deadline_at"}`: the new entry, and the run's own
+`official_start` and `deadline_at` (a segment is not a new run, and the deadline does not move).
+The previous entry is not sealed or closed by this; it may still upload its wrap-up.
+
+- `previous_entry_id` must be the run's latest entry, else `409`.
+- At or after the run's end (`ends_at`) the answer is `410`, as it is for an abandoned or closed run.
+- The same call again (the latest entry was made by a `continue` with this `session_id` after this
+  `previous_entry_id`) is `200` with the same answer, so a lost reply is not a second segment.
 
 ## Not built yet
 
-Outage windows, live totals in the heartbeat, and the rest of `continue` (section 4) come in later
-slices.
+Outage windows and live totals in the heartbeat come in later slices.

@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import type { ChunkRecord, RunRow } from "../src/db.ts";
+import type { ChunkRecord, EntryRow, OpenRunArgs, RunRow } from "../src/db.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
 import { ApiError } from "../src/errors.ts";
 import type { StartReceipt } from "../src/sign.ts";
@@ -36,7 +36,16 @@ function stub(...replies: unknown[]): Call[] {
 const db = () => new SupabaseDb("https://p.example", "key");
 const H = (c: string) => c.repeat(64);
 
-const run = { run_id: "r0000000000000001", entry_id: "e0000000000000001", status: "open" } as unknown as RunRow;
+const T = "2026-11-06T09:00:00Z";
+const run: RunRow = {
+  run_id: "r0000000000000001", event_id: "cup", member_id: "m", mode: "competition", status: "open", official_start: T,
+  deadline_at: "2026-11-13T09:00:00Z", replaced_at: null, repo_url: "https://github.com/a/b", current_entry_id: "e0000000000000001", current_sealed_at: null,
+};
+const entry: EntryRow = {
+  entry_id: "e0000000000000001", run_id: "r0000000000000001", segment: 0, connector_id: "c", manifest_sha256: H("a"), connector_dir_sha256: H("c"),
+  workspace: "/w", session_id: "s", offset: 0, next_seq: 0, head: H("0"), last_ack: null, final: null, receipt: null, seal_sha256: null,
+  baseline_sha256: null, sealed_at: null,
+};
 const receipt = { claims: { chain_head: H("b") }, public_key: "p", signature: "s" } as unknown as StartReceipt;
 const chunk = {
   entry_id: "e0000000000000001", offset: 0, length: 10, sha256: H("1"), first_seq: 0, last_seq: 2, prev: H("0"), head: H("2"),
@@ -50,16 +59,6 @@ test("credential -> upload_credential(p_credential_hash, p_now)", async () => {
   assert.deepEqual(await db().credential(H("a"), "2026-11-06T09:06:00Z"), cred);
   assert.equal(await db().credential(H("b"), "2026-11-06T09:06:00Z"), null);
   assert.deepEqual(calls[0], { fn: "upload_credential", args: { p_credential_hash: H("a"), p_now: "2026-11-06T09:06:00Z" } });
-});
-
-test("bindCredential -> upload_bind_credential", async () => {
-  const calls = stub("bound", "conflict");
-  assert.equal(await db().bindCredential(H("a"), "r0000000000000001", "2026-11-14T09:00:00Z"), "bound");
-  assert.equal(await db().bindCredential(H("a"), "r0000000000000002", "2026-11-14T09:00:00Z"), "conflict");
-  assert.deepEqual(calls[0], {
-    fn: "upload_bind_credential",
-    args: { p_credential_hash: H("a"), p_run_id: "r0000000000000001", p_expires_at: "2026-11-14T09:00:00Z" },
-  });
 });
 
 test("createDevice -> upload_create_device", async () => {
@@ -101,41 +100,108 @@ test("approveDevice -> upload_approve_device(p_user_code, ...)", async () => {
   assert.deepEqual(calls[0], { fn: "upload_approve_device", args: { p_user_code: "BCDFGHJK", p_member_id: "m", p_approve: true, p_now: "t" } });
 });
 
-test("openRun -> upload_open_run with every p_ argument", async () => {
-  const calls = stub({ result: "created", run }, { result: "existing", run }, { result: "conflict" }, { result: "forbidden", message: "no" });
-  const args = {
-    member_id: "m", event_id: "practice", run_id: "r1", entry_id: "e1", official_start: "s", deadline_at: "d", connector_id: "c",
-    manifest_sha256: "ms", connector_dir_sha256: "cd", workspace: "w", session_id: "sid", harness_version: "h", tracer_version: "t", repo_url: "u",
-  };
-  assert.deepEqual(await db().openRun(args), { kind: "created", run });
-  assert.deepEqual(await db().openRun(args), { kind: "existing", run });
-  assert.deepEqual(await db().openRun(args), { kind: "conflict" });
-  assert.deepEqual(await db().openRun(args), { kind: "forbidden", message: "no" });
+const openArgs: OpenRunArgs = {
+  member_id: "m", event_id: "cup", mode: "competition", run_id: "r1", entry_id: "e1", official_start: "s", deadline_at: "d", connector_id: "c",
+  manifest_sha256: "ms", connector_dir_sha256: "cd", workspace: "w", session_id: "sid", harness_version: "h", tracer_version: "t", repo_url: "u",
+  machine: { os: "linux", cpus: 4 }, client_ip: "203.0.113.9", client_country: "DE", credential: H("c"), credential_expires_at: "x",
+};
+
+test("openRun -> upload_open_run with every p_ argument, binding the credential in the same call", async () => {
+  const calls = stub({ result: "created", run, entry }, { result: "conflict" }, { result: "forbidden", message: "no" });
+  assert.deepEqual(await db().openRun(openArgs), { kind: "created", run, entry });
+  assert.deepEqual(await db().openRun(openArgs), { kind: "conflict" });
+  assert.deepEqual(await db().openRun(openArgs), { kind: "forbidden", message: "no" });
   assert.equal(calls[0]!.fn, "upload_open_run");
   assert.deepEqual(calls[0]!.args, {
-    p_member_id: "m", p_event_id: "practice", p_run_id: "r1", p_entry_id: "e1", p_official_start: "s", p_deadline_at: "d",
+    p_member_id: "m", p_event_id: "cup", p_mode: "competition", p_run_id: "r1", p_entry_id: "e1", p_official_start: "s", p_deadline_at: "d",
     p_connector_id: "c", p_manifest_sha256: "ms", p_connector_dir_sha256: "cd", p_workspace: "w", p_session_id: "sid",
-    p_harness_version: "h", p_tracer_version: "t", p_repo_url: "u",
+    p_harness_version: "h", p_tracer_version: "t", p_repo_url: "u", p_machine: { os: "linux", cpus: 4 },
+    p_client_ip: "203.0.113.9", p_client_country: "DE", p_credential_hash: H("c"), p_credential_expires_at: "x",
   });
 });
 
-test("getRun -> upload_run_position; getChunk -> upload_get_chunk", async () => {
-  const calls = stub(run, null, chunk, null);
-  assert.deepEqual(await db().getRun("m", "r1"), run);
-  assert.equal(await db().getRun("m", "r2"), null);
-  assert.deepEqual(await db().getChunk("m", "r1", 0), chunk);
-  assert.equal(await db().getChunk("m", "r1", 99), null);
-  assert.deepEqual(calls[0], { fn: "upload_run_position", args: { p_member_id: "m", p_run_id: "r1" } });
-  assert.deepEqual(calls[2], { fn: "upload_get_chunk", args: { p_member_id: "m", p_run_id: "r1", p_offset: 0 } });
+test("continueRun -> upload_continue_run", async () => {
+  const second = { ...entry, entry_id: "e0000000000000002", segment: 1 };
+  const calls = stub(
+    { result: "created", run, entry: second }, { result: "existing", run, entry: second },
+    { result: "conflict" }, { result: "closed" }, { result: "not_found" },
+  );
+  const args = {
+    member_id: "m", run_id: "r1", previous_entry_id: "e1", entry_id: "e2", connector_id: "c", manifest_sha256: "ms", connector_dir_sha256: "cd",
+    workspace: "w", session_id: "sid", harness_version: "h", tracer_version: "t", client_ip: null, client_country: null, at: "t",
+  };
+  assert.deepEqual(await db().continueRun(args), { kind: "created", run, entry: second });
+  assert.deepEqual(await db().continueRun(args), { kind: "existing", run, entry: second });
+  for (const kind of ["conflict", "closed", "not_found"]) assert.deepEqual(await db().continueRun(args), { kind });
+  assert.deepEqual(calls[0], {
+    fn: "upload_continue_run",
+    args: {
+      p_member_id: "m", p_run_id: "r1", p_previous_entry_id: "e1", p_entry_id: "e2", p_connector_id: "c", p_manifest_sha256: "ms",
+      p_connector_dir_sha256: "cd", p_workspace: "w", p_session_id: "sid", p_harness_version: "h", p_tracer_version: "t",
+      p_client_ip: null, p_client_country: null, p_at: "t",
+    },
+  });
+});
+
+test("getRun -> upload_run_position (the entry named, or null for the current one); getChunk -> upload_get_chunk", async () => {
+  const calls = stub({ run, entry }, { run, entry: null }, null, chunk, null);
+  assert.deepEqual(await db().getRun("m", "r1", null), { run, entry });
+  assert.deepEqual(await db().getRun("m", "r1", "e9"), { run, entry: null });
+  assert.equal(await db().getRun("m", "r2", null), null);
+  assert.deepEqual(await db().getChunk("m", "r1", "e1", 0), chunk);
+  assert.equal(await db().getChunk("m", "r1", "e1", 99), null);
+  assert.deepEqual(calls[0], { fn: "upload_run_position", args: { p_member_id: "m", p_run_id: "r1", p_entry_id: null } });
+  assert.deepEqual(calls[1]!.args, { p_member_id: "m", p_run_id: "r1", p_entry_id: "e9" });
+  assert.deepEqual(calls[3], { fn: "upload_get_chunk", args: { p_member_id: "m", p_run_id: "r1", p_entry_id: "e1", p_offset: 0 } });
+});
+
+test("a row that does not look like one is a 502 that names the fields, not the values", async () => {
+  const lines: string[] = [];
+  const quiet = console.error;
+  console.error = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  try {
+    const bad502 = (e: unknown) => e instanceof ApiError && e.status === 502 && e.code === "upstream_error";
+    const secret = "do-not-log-this-workspace";
+    for (const [reply, run_, entry_] of [
+      [{ run: { ...run, status: "flagged" }, entry }, "run", "status"], // a word the Worker does not know
+      [{ run: { ...run, replaced_at: "yesterday" }, entry }, "run", "replaced_at"],
+      [{ run, entry: { ...entry, offset: 1.5 } }, "entry", "offset"], // not a whole number
+      [{ run, entry: { ...entry, next_seq: 2 ** 53 } }, "entry", "next_seq"], // not a safe integer
+      [{ run, entry: { ...entry, head: "ABC", workspace: secret } }, "entry", "head"],
+      [{ run, entry: { ...entry, final: { seq: 1 } } }, "entry", "final"],
+      [{ run, entry: { ...entry, sealed_at: 5 } }, "entry", "sealed_at"],
+      [{ run: { ...run, current_entry_id: "nope" }, entry }, "run", "current_entry_id"],
+    ] as const) {
+      stub(reply);
+      await assert.rejects(db().getRun("m", "r1", null), bad502);
+      assert.match(lines.at(-1) ?? "", new RegExp(`the ${run_} has fields.*${entry_}`));
+      assert.ok(!lines.at(-1)!.includes(secret), "a value reached the log");
+    }
+    stub({ result: "created", run, entry: { ...entry, segment: -1 } });
+    await assert.rejects(db().openRun(openArgs), bad502);
+    stub({ result: "existing", run: { ...run, mode: "dry_run" }, entry });
+    await assert.rejects(db().continueRun({ member_id: "m", run_id: "r1", previous_entry_id: "e1", entry_id: "e2", connector_id: "c", manifest_sha256: "m", connector_dir_sha256: "d", workspace: "w", session_id: "s", harness_version: "h", tracer_version: "t", client_ip: null, client_country: null, at: "t" }), bad502);
+    stub({ ...chunk, length: "ten" });
+    await assert.rejects(db().getChunk("m", "r1", "e1", 0), bad502);
+    stub({ ...chunk, head: "short" });
+    await assert.rejects(db().getChunk("m", "r1", "e1", 0), bad502);
+    stub(["not", "an", "object"]);
+    await assert.rejects(db().getRun("m", "r1", null), bad502);
+    stub("incomplete-ish");
+    await assert.rejects(db().closeRun("m", "r1", "t"), bad502);
+  } finally {
+    console.error = quiet;
+  }
 });
 
 test("storeReceipt -> upload_issue_receipt", async () => {
-  const calls = stub({ result: "stored", receipt }, { result: "existing", receipt }, { result: "conflict" }, { result: "closed" });
-  assert.deepEqual(await db().storeReceipt("m", "r1", H("b"), receipt), { kind: "stored", receipt });
-  assert.deepEqual(await db().storeReceipt("m", "r1", H("b"), receipt), { kind: "existing", receipt });
-  assert.deepEqual(await db().storeReceipt("m", "r1", H("d"), receipt), { kind: "conflict" });
-  assert.deepEqual(await db().storeReceipt("m", "r1", H("b"), receipt), { kind: "closed" });
-  assert.deepEqual(calls[0], { fn: "upload_issue_receipt", args: { p_member_id: "m", p_run_id: "r1", p_chain_head: H("b"), p_receipt: receipt } });
+  const calls = stub({ result: "stored", receipt }, { result: "existing", receipt }, { result: "conflict" }, { result: "closed" }, { result: "not_found" });
+  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("b"), receipt), { kind: "stored", receipt });
+  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("b"), receipt), { kind: "existing", receipt });
+  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("d"), receipt), { kind: "conflict" });
+  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("b"), receipt), { kind: "closed" });
+  assert.deepEqual(await db().storeReceipt("m", "r1", "e1", H("b"), receipt), { kind: "not_found" });
+  assert.deepEqual(calls[0], { fn: "upload_issue_receipt", args: { p_member_id: "m", p_run_id: "r1", p_entry_id: "e1", p_chain_head: H("b"), p_receipt: receipt } });
 });
 
 test("abandonRun -> upload_abandon_run", async () => {
@@ -155,12 +221,25 @@ test("commitChunk -> upload_commit_chunk(p_chunk)", async () => {
   assert.deepEqual(calls[0], { fn: "upload_commit_chunk", args: { p_member_id: "m", p_run_id: "r1", p_chunk: chunk } });
 });
 
-test("sealRun -> upload_seal_run", async () => {
-  const calls = stub("sealed", "already_sealed", "conflict", "closed", "not_found");
+test("sealRun -> upload_seal_run, with the run's status after it", async () => {
+  const calls = stub(
+    { result: "sealed", run_status: "sealed" }, { result: "already_sealed", run_status: "open" },
+    { result: "conflict" }, { result: "no_final" }, { result: "chain_behind" }, { result: "closed" }, { result: "not_found" },
+    { result: "sealed", run_status: "finished" },
+  );
   const a = {
     member_id: "m", run_id: "r1", entry_id: "e1", seal_sha256: "s", baseline_sha256: "b", seal_key: "sk", baseline_key: "bk", sealed_at: "t",
   };
-  for (const want of ["sealed", "already_sealed", "conflict", "closed", "not_found"]) assert.equal(await db().sealRun(a), want);
+  assert.deepEqual(await db().sealRun(a), { kind: "sealed", run_status: "sealed" });
+  assert.deepEqual(await db().sealRun(a), { kind: "already_sealed", run_status: "open" });
+  for (const kind of ["conflict", "no_final", "chain_behind", "closed", "not_found"]) assert.deepEqual(await db().sealRun(a), { kind });
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    await assert.rejects(db().sealRun(a), (e) => e instanceof ApiError && e.status === 502); // a status word the Worker does not know
+  } finally {
+    console.error = quiet;
+  }
   assert.deepEqual(calls[0], {
     fn: "upload_seal_run",
     args: {
@@ -185,11 +264,13 @@ test("recordHeartbeat -> upload_heartbeat", async () => {
   });
 });
 
-test("expireRun -> upload_expire_run", async () => {
-  const calls = stub("expired", "not_expired");
-  assert.equal(await db().expireRun("m", "r1", "t"), true);
-  assert.equal(await db().expireRun("m", "r1", "t"), false);
-  assert.deepEqual(calls[0], { fn: "upload_expire_run", args: { p_member_id: "m", p_run_id: "r1", p_at: "t" } });
+test("closeRun -> upload_close_run", async () => {
+  const calls = stub("open", "sealed", "incomplete", null);
+  assert.equal(await db().closeRun("m", "r1", "t"), "open");
+  assert.equal(await db().closeRun("m", "r1", "t"), "sealed");
+  assert.equal(await db().closeRun("m", "r1", "t"), "incomplete");
+  assert.equal(await db().closeRun("m", "r2", "t"), null);
+  assert.deepEqual(calls[0], { fn: "upload_close_run", args: { p_member_id: "m", p_run_id: "r1", p_at: "t" } });
 });
 
 test("an answer outside the agreed words is a 502, not a guess", async () => {
@@ -202,10 +283,7 @@ test("an answer outside the agreed words is a 502, not a guess", async () => {
       (e) => e instanceof ApiError && e.status === 502,
     );
     stub({ result: "created" }); // created, but no run in the answer
-    await assert.rejects(
-      db().openRun({ member_id: "m", event_id: "e", run_id: "r", entry_id: "e", official_start: "s", deadline_at: "d", connector_id: "c", manifest_sha256: "m", connector_dir_sha256: "c", workspace: "w", session_id: "s", harness_version: "h", tracer_version: "t", repo_url: "u" }),
-      (e) => e instanceof ApiError && e.status === 502,
-    );
+    await assert.rejects(db().openRun(openArgs), (e) => e instanceof ApiError && e.status === 502);
   } finally {
     console.error = quiet;
   }

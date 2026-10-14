@@ -1,0 +1,520 @@
+// The run lifecycle (docs/UPLOAD-API.md): one main run that a later start replaces, practice runs,
+// the start window, `continue` and its segments, and the close 24 hours after a run ends. All of
+// it depends on time, so the Worker runs inside this process on a clock the test moves
+// (test/helpers/inproc.ts). The same rules over real HTTP and real chunk bodies are in
+// segments.test.ts.
+
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
+import { Signer } from "../src/sign.ts";
+import type { StartReceipt } from "../src/sign.ts";
+import { Client, GENESIS, credentialFor, openBody, sha256, verifyReceipt } from "./helpers/client.ts";
+import { type InProcess, inProcess } from "./helpers/inproc.ts";
+import { TEST_SEED } from "./helpers/worker.ts";
+
+const publicKey = (await Signer.fromSeedHex(TEST_SEED)).publicKeyHex;
+
+const T0 = "2026-11-06T09:00:00Z";
+/** A start window from 08:00 to 10:00 on the day of T0. */
+const WINDOW = { START_WINDOW_OPENS: "2026-11-06T08:00:00Z", START_WINDOW_CLOSES: "2026-11-06T10:00:00Z" };
+
+function assertError(r: { status: number; body: { error?: string; message?: string } }, status: number, code: string) {
+  assert.equal(r.status, status, JSON.stringify(r.body));
+  assert.equal(r.body.error, code);
+  assert.equal(typeof r.body.message, "string");
+  assert.deepEqual(Object.keys(r.body).sort(), ["error", "message"]);
+}
+
+interface Opened {
+  run_id: string;
+  entry_id: string;
+  official_start: string;
+  deadline_at: string;
+}
+
+/** The Worker, a clock, and the calls a test makes again and again. */
+function rig(vars: Record<string, string> = WINDOW, start = T0, cf?: Record<string, unknown>) {
+  const p: InProcess = inProcess(start, vars, cf);
+  const api: Client = p.api;
+  const cred = (member: string, mode: "competition" | "practice" = "competition") => credentialFor(api, member, mode);
+  const open = (token: string, session: string, extra: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
+    api.call("POST", "/v1/runs", { token, json: openBody({ session_id: session, ...extra }), headers });
+  const start_ = async (token: string, session: string): Promise<Opened> => {
+    const r = await open(token, session);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    return r.body as Opened;
+  };
+  const beat = (token: string, run: string, entry: string, over: Record<string, unknown> = {}) =>
+    api.call("POST", `/v1/runs/${run}/heartbeat`, {
+      token,
+      json: { entry_id: entry, seq: 0, head: GENESIS, offset_local: 0, final: false, repo_head: null, ...over },
+    });
+  const get = (token: string, run: string, entry?: string) => api.call("GET", `/v1/runs/${run}${entry === undefined ? "" : `?entry_id=${entry}`}`, { token });
+  const seal = (token: string, run: string, entry: string) =>
+    api.call("POST", `/v1/runs/${run}/seal`, { token, json: { entry_id: entry, seal_json: '{"s":1}', baseline_json: '{"b":1}' } });
+  const cont = (token: string, run: string, previous: string, session: string, extra: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
+    api.call("POST", `/v1/runs/${run}/continue`, {
+      token,
+      headers,
+      json: {
+        previous_entry_id: previous,
+        connector_id: "other-cli",
+        manifest_sha256: "1".repeat(64),
+        connector_dir_sha256: "2".repeat(64),
+        workspace: "/w/two",
+        session_id: session,
+        harness_version: "9",
+        tracer_version: "0.2.0",
+        ...extra,
+      },
+    });
+  /** The server holds records 0..4 of this entry (put in through the database, as a chunk upload would). */
+  const hold = async (member: string, run: string, entry: string): Promise<string> => {
+    const head = sha256(`${entry}:4`);
+    const chunk = {
+      entry_id: entry, offset: 0, length: 10, sha256: "1".repeat(64), first_seq: 0, last_seq: 4, prev: GENESIS, head, r2_key: "k",
+      received_at: T0, ack: { entry_id: entry, seq: 4, hash: head, acked_at: T0, server_signature: "s" },
+    };
+    assert.equal(await p.db().commitChunk({ member_id: member, run_id: run, chunk }), "committed");
+    return head;
+  };
+  /** Commit the end of an entry that `hold` filled. */
+  const finish = async (token: string, run: string, entry: string, head: string) => {
+    const f = await beat(token, run, entry, { seq: 4, head, final: true });
+    assert.equal(f.status, 200, JSON.stringify(f.body));
+  };
+  const storedRun = (run: string) => JSON.parse(p.bucket.map.get(`state/runs/${run}.json`)!.text) as Record<string, unknown>;
+  return { ...p, cred, open, start: start_, beat, get, seal, cont, hold, finish, storedRun };
+}
+type Rig = ReturnType<typeof rig>;
+
+function lifecycle(name: string, fn: (r: Rig) => Promise<void>, vars?: Record<string, string>, start?: string) {
+  test(name, async () => {
+    const r = rig(vars, start);
+    try {
+      await fn(r);
+    } finally {
+      r.stop();
+    }
+  });
+}
+
+describe("one main run per account", () => {
+  lifecycle("a second start in the window replaces the first, whose heartbeat says stop/replaced", async (r) => {
+    const [c1, c2, c3] = [await r.cred("alice"), await r.cred("alice"), await r.cred("alice")];
+    const bob = await r.cred("bob");
+    const bobRun = await r.start(bob, "bob-1");
+    const a = await r.start(c1, "s1");
+    r.after(60);
+    const b = await r.start(c2, "s2"); // was 409 "already has an open run"
+    assert.notEqual(b.run_id, a.run_id);
+
+    // The first run is told to stop, and why; its deadline is unchanged.
+    const hb = await r.beat(c1, a.run_id, a.entry_id);
+    assert.equal(hb.status, 200, JSON.stringify(hb.body));
+    assert.deepEqual(hb.body, { stop: true, deadline_at: a.deadline_at, reason: "replaced" });
+    const pos = await r.get(c1, a.run_id);
+    assert.equal(pos.body.stop, true);
+    assert.equal(pos.body.status, "open");
+    assert.equal(pos.body.ends_at, "2026-11-06T09:01:00Z");
+    assert.equal(pos.body.deadline_at, a.deadline_at);
+
+    // The second runs on; another account's run is not touched; the replaced run keeps its credential.
+    assert.deepEqual((await r.beat(c2, b.run_id, b.entry_id)).body, { stop: false, deadline_at: b.deadline_at, reason: null });
+    assert.deepEqual((await r.beat(bob, bobRun.run_id, bobRun.entry_id)).body, { stop: false, deadline_at: bobRun.deadline_at, reason: null });
+    assert.equal((await r.get(c2, b.run_id)).body.ends_at, b.deadline_at);
+
+    // A lost reply is still the same run, not a third start.
+    const again = await r.open(c2, "s2");
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    assert.deepEqual(again.body, b);
+    assert.equal((await r.beat(c2, b.run_id, b.entry_id)).body.stop, false);
+
+    // A third start replaces the second; the first keeps the instant it was replaced.
+    r.after(60);
+    const c = await r.start(c3, "s3");
+    assert.equal((await r.get(c1, a.run_id)).body.ends_at, "2026-11-06T09:01:00Z");
+    assert.deepEqual((await r.beat(c2, b.run_id, b.entry_id)).body, { stop: true, deadline_at: b.deadline_at, reason: "replaced" });
+    assert.equal((await r.beat(c3, c.run_id, c.entry_id)).body.stop, false);
+  });
+
+  lifecycle("a replaced run takes its final heartbeat and seal for 24 hours, and nothing after", async (r) => {
+    const [c1, c2] = [await r.cred("alice"), await r.cred("alice")];
+    const a = await r.start(c1, "s1");
+    const head = await r.hold("alice", a.run_id, a.entry_id);
+    r.after(60);
+    await r.start(c2, "s2");
+
+    // Replaced, so over: the seal waits for the committed end.
+    const early = await r.seal(c1, a.run_id, a.entry_id);
+    assertError(early, 503, "awaiting_final");
+    assert.equal(early.headers.get("retry-after"), "60");
+    await r.finish(c1, a.run_id, a.entry_id, head);
+    const sealed = await r.seal(c1, a.run_id, a.entry_id);
+    assert.equal(sealed.status, 200, JSON.stringify(sealed.body));
+    assert.deepEqual(sealed.body, { status: "sealed", run_status: "sealed" });
+    assert.equal((await r.get(c1, a.run_id)).body.status, "sealed");
+
+    // 24 hours after it was replaced it takes nothing.
+    r.after(24 * 3600 + 1);
+    assertError(await r.beat(c1, a.run_id, a.entry_id), 410, "closed");
+    assert.equal((await r.get(c1, a.run_id)).body.status, "sealed");
+  });
+});
+
+describe("the start window and practice runs", () => {
+  lifecycle("after the window a start is 403 and continue works", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    r.at("2026-11-06T10:00:01Z");
+    const bob = await r.cred("bob");
+    const late = await r.open(bob, "bob-1");
+    assertError(late, 403, "forbidden");
+    assert.equal(late.body.message, "after the start window you can only `goalcup continue` your run");
+    const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
+    assert.equal(c.status, 201, JSON.stringify(c.body));
+    assert.equal(c.body.segment, 1);
+    // The window is the edges in: the last second is inside.
+    r.at("2026-11-06T10:00:00Z");
+    assert.equal((await r.open(await r.cred("carol"), "carol-1")).status, 201);
+  });
+
+  lifecycle("before the window opens a start is 403, and a start with no window configured is always open", async (r) => {
+    const dave = await r.cred("dave");
+    assertError(await r.open(dave, "d1"), 403, "forbidden");
+    r.at("2026-11-06T08:00:00Z");
+    assert.equal((await r.open(dave, "d1")).status, 201);
+  }, WINDOW, "2026-11-06T07:59:59Z");
+
+  lifecycle("no window configured means always open", async (r) => {
+    assert.equal((await r.open(await r.cred("erin"), "e1")).status, 201);
+    r.at("2031-01-01T00:00:00Z");
+    assert.equal((await r.open(await r.cred("frank"), "f1")).status, 201);
+  }, {});
+
+  lifecycle("practice never replaces and ends after PRACTICE_RUN_MINUTES", async (r) => {
+    const [comp, p1c, p2c] = [await r.cred("dave"), await r.cred("dave", "practice"), await r.cred("dave", "practice")];
+    const c = await r.start(comp, "comp");
+    const p1 = await r.start(p1c, "pr1");
+    assert.equal(Date.parse(p1.deadline_at) - Date.parse(p1.official_start), 10 * 60 * 1000);
+    r.after(60);
+    const p2 = await r.start(p2c, "pr2"); // a second practice run does not stop the first
+    for (const [token, run] of [[comp, c], [p1c, p1], [p2c, p2]] as const) {
+      assert.equal((await r.beat(token, run.run_id, run.entry_id)).body.stop, false);
+    }
+
+    // The first practice run ends at 09:10, the second at 09:11; the competition run goes on.
+    r.at("2026-11-06T09:10:00Z");
+    assert.deepEqual((await r.beat(p1c, p1.run_id, p1.entry_id)).body, { stop: true, deadline_at: p1.deadline_at, reason: "deadline" });
+    assert.equal((await r.beat(p2c, p2.run_id, p2.entry_id)).body.stop, false);
+    assert.equal((await r.beat(comp, c.run_id, c.entry_id)).body.stop, false);
+
+    // A competition start replaces the competition run only, and practice is outside the window.
+    const next = await r.start(await r.cred("dave"), "comp2");
+    assert.equal((await r.beat(comp, c.run_id, c.entry_id)).body.reason, "replaced");
+    assert.equal((await r.beat(p2c, p2.run_id, p2.entry_id)).body.stop, false);
+    r.at("2026-11-06T12:00:00Z");
+    assert.equal((await r.open(await r.cred("dave", "practice"), "pr3")).status, 201);
+    assert.equal((await r.get(await r.cred("dave"), next.run_id)).status, 404); // a new credential sees no run before it opens one
+
+    // Practice runs are stored under the practice event, competition runs under the event.
+    for (const [member, token, run] of [["dave", p1c, p1], ["dave", comp, c]] as const) {
+      const head = await r.hold(member, run.run_id, run.entry_id);
+      await r.finish(token, run.run_id, run.entry_id, head);
+      assert.equal((await r.seal(token, run.run_id, run.entry_id)).status, 200);
+    }
+    const keys = [...r.bucket.map.keys()].filter((k) => k.startsWith("traces/"));
+    assert.ok(keys.some((k) => k.startsWith(`traces/practice/${p1.run_id}/${p1.entry_id}/seal-`)), keys.join("\n"));
+    assert.ok(keys.some((k) => k.startsWith(`traces/cup/${c.run_id}/${c.entry_id}/seal-`)), keys.join("\n"));
+  });
+
+  lifecycle("PRACTICE_RUN_MINUTES sets the practice length", async (r) => {
+    const p = await r.start(await r.cred("gina", "practice"), "g1");
+    assert.equal(Date.parse(p.deadline_at) - Date.parse(p.official_start), 90 * 1000);
+  }, { PRACTICE_RUN_MINUTES: "1.5" });
+});
+
+describe("continue and segments", () => {
+  lifecycle("continue mints segment 1 with its own entry and receipt", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    const first = await r.api.call("POST", `/v1/runs/${a.run_id}/receipt`, { token: alice, json: { entry_id: a.entry_id, chain_head: "b".repeat(64) } });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    r.after(300);
+
+    const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
+    assert.equal(c.status, 201, JSON.stringify(c.body));
+    assert.deepEqual(Object.keys(c.body), ["entry_id", "segment", "official_start", "deadline_at"]);
+    assert.match(c.body.entry_id, /^e[0-9a-f]{16}$/);
+    assert.notEqual(c.body.entry_id, a.entry_id);
+    assert.equal(c.body.segment, 1);
+    assert.equal(c.body.official_start, a.official_start); // the run's clock, not a new one
+    assert.equal(c.body.deadline_at, a.deadline_at);
+
+    // Its receipt claims this entry's own connector facts and session, the run's start and deadline.
+    const r1 = await r.api.call("POST", `/v1/runs/${a.run_id}/receipt`, { token: alice, json: { entry_id: c.body.entry_id, chain_head: "d".repeat(64) } });
+    assert.equal(r1.status, 200, JSON.stringify(r1.body));
+    const receipt: StartReceipt = r1.body.start_receipt;
+    assert.deepEqual(receipt.claims, {
+      entry_id: c.body.entry_id, connector_id: "other-cli", workspace: "/w/two", session_id: "s-two",
+      started_at: a.official_start, deadline_at: a.deadline_at, manifest_sha256: "1".repeat(64),
+      chain_head: "d".repeat(64), connector_dir_sha256: "2".repeat(64),
+    });
+    assert.equal(await verifyReceipt(receipt, publicKey), true);
+    // Segment 0 keeps its own.
+    const again = await r.api.call("POST", `/v1/runs/${a.run_id}/receipt`, { token: alice, json: { entry_id: a.entry_id, chain_head: "b".repeat(64) } });
+    assert.deepEqual(again.body.start_receipt, first.body.start_receipt);
+    assert.equal(again.body.start_receipt.claims.workspace, openBody().workspace);
+
+    // The position answers the current entry, or the one asked for.
+    const now = await r.get(alice, a.run_id);
+    assert.equal(now.body.entry_id, c.body.entry_id);
+    assert.equal(now.body.segment, 1);
+    assert.equal(now.body.offset, 0);
+    const old = await r.get(alice, a.run_id, a.entry_id);
+    assert.equal(old.body.entry_id, a.entry_id);
+    assert.equal(old.body.segment, 0);
+    assert.deepEqual(Object.keys(old.body).sort(), [
+      "deadline_at", "ends_at", "entry_id", "final", "head", "last_ack", "next_seq", "official_start", "offset", "run_id", "segment", "status", "stop",
+    ]);
+    assertError(await r.get(alice, a.run_id, "e" + "7".repeat(16)), 404, "not_found");
+    assertError(await r.get(alice, a.run_id, "nope"), 400, "malformed");
+
+    // A repeat of the same continue is the same answer, not a third segment.
+    const repeat = await r.cont(alice, a.run_id, a.entry_id, "s-two");
+    assert.equal(repeat.status, 200, JSON.stringify(repeat.body));
+    assert.deepEqual(repeat.body, c.body);
+    assert.equal((await r.get(alice, a.run_id)).body.segment, 1);
+  });
+
+  lifecycle("stale previous_entry_id is 409", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    const c1 = await r.cont(alice, a.run_id, a.entry_id, "s-two");
+    assert.equal(c1.status, 201);
+    // The latest entry is c1's; the first one is no longer a place to continue from.
+    assertError(await r.cont(alice, a.run_id, a.entry_id, "s-three"), 409, "conflict");
+    assertError(await r.cont(alice, a.run_id, "e" + "5".repeat(16), "s-three"), 409, "conflict");
+    assertError(await r.cont(alice, a.run_id, "not-an-entry", "s-three"), 400, "malformed");
+    assertError(await r.cont(alice, a.run_id, c1.body.entry_id, ""), 400, "malformed");
+    assert.equal((await r.get(alice, a.run_id)).body.segment, 1);
+    const c2 = await r.cont(alice, a.run_id, c1.body.entry_id, "s-three");
+    assert.equal(c2.status, 201, JSON.stringify(c2.body));
+    assert.equal(c2.body.segment, 2);
+    // Another credential, another run, a foreign run id: not found.
+    assertError(await r.cont(await r.cred("bob"), a.run_id, c2.body.entry_id, "s-four"), 404, "not_found");
+    assertError(await r.api.call("GET", `/v1/runs/${a.run_id}/continue`, { token: alice }), 405, "method_not_allowed");
+  });
+
+  lifecycle("continue after ends_at is 410", async (r) => {
+    const [c1, c2] = [await r.cred("alice"), await r.cred("alice")];
+    const a = await r.start(c1, "s1");
+    r.after(60);
+    await r.start(c2, "s2"); // replaced: its end is now
+    assertError(await r.cont(c1, a.run_id, a.entry_id, "s-two"), 410, "closed");
+
+    const [d, e] = [await r.cred("dave"), await r.cred("erin")];
+    const run = await r.start(d, "d1");
+    r.at(run.deadline_at);
+    assertError(await r.cont(d, run.run_id, run.entry_id, "s-two"), 410, "closed");
+    // One second before the deadline it still worked (a run of 168 hours has this second).
+    r.at("2026-11-06T09:00:00Z");
+    const fresh = await r.start(e, "e1");
+    r.at(new Date(Date.parse(fresh.deadline_at) - 1000).toISOString());
+    assert.equal((await r.cont(e, fresh.run_id, fresh.entry_id, "s-two")).status, 201);
+  });
+
+  lifecycle("chunks and seal address an older segment by entry_id", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    const h0 = await r.hold("alice", a.run_id, a.entry_id);
+    const c = (await r.cont(alice, a.run_id, a.entry_id, "s-two")).body;
+    const h1 = await r.hold("alice", a.run_id, c.entry_id);
+
+    // Each entry commits its own end, whenever it likes, and the position of each is its own.
+    await r.finish(alice, a.run_id, a.entry_id, h0);
+    assert.deepEqual((await r.get(alice, a.run_id, a.entry_id)).body.final, { seq: 4, head: h0 });
+    assert.equal((await r.get(alice, a.run_id)).body.final, null);
+    assert.equal((await r.get(alice, a.run_id)).body.head, h1);
+
+    const old = await r.seal(alice, a.run_id, a.entry_id);
+    assert.equal(old.status, 200, JSON.stringify(old.body));
+    assert.deepEqual(old.body, { status: "sealed", run_status: "open" });
+    // The current one has no end yet, and a foreign entry is nobody's.
+    const noEnd = await r.seal(alice, a.run_id, c.entry_id);
+    assertError(noEnd, 409, "conflict");
+    assert.match(noEnd.body.message, /final heartbeat/);
+    assertError(await r.seal(alice, a.run_id, "e" + "6".repeat(16)), 404, "not_found");
+    assertError(await r.beat(alice, a.run_id, "e" + "6".repeat(16)), 404, "not_found");
+    // A repeat of the older seal is the same answer.
+    assert.deepEqual((await r.seal(alice, a.run_id, a.entry_id)).body, { status: "sealed", run_status: "open" });
+  });
+
+  lifecycle("a segment seal before the end leaves the run open", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    const h0 = await r.hold("alice", a.run_id, a.entry_id);
+    await r.finish(alice, a.run_id, a.entry_id, h0);
+    const sealed = await r.seal(alice, a.run_id, a.entry_id);
+    assert.deepEqual(sealed.body, { status: "sealed", run_status: "open" });
+    assert.equal((await r.get(alice, a.run_id)).body.status, "open");
+    assert.equal((await r.get(alice, a.run_id)).body.stop, false);
+
+    // So the run can go on: another segment, with a heartbeat that says go on.
+    const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
+    assert.equal(c.status, 201, JSON.stringify(c.body));
+    assert.equal((await r.beat(alice, a.run_id, c.body.entry_id)).body.stop, false);
+    assert.equal((await r.get(alice, a.run_id)).body.status, "open");
+
+    // The entry that was sealed takes no more chain; the run is not its alone.
+    const dead = await r.api.call("POST", `/v1/runs/${a.run_id}/receipt`, { token: alice, json: { entry_id: a.entry_id, chain_head: "b".repeat(64) } });
+    assertError(dead, 410, "closed");
+  });
+
+  lifecycle("a run whose current entry is sealed reads as sealed once the run is over", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    const head = await r.hold("alice", a.run_id, a.entry_id);
+    await r.finish(alice, a.run_id, a.entry_id, head);
+    assert.deepEqual((await r.seal(alice, a.run_id, a.entry_id)).body, { status: "sealed", run_status: "open" });
+    r.at(a.deadline_at);
+    assert.equal((await r.get(alice, a.run_id)).body.status, "sealed");
+    assertError(await r.cont(alice, a.run_id, a.entry_id, "s-two"), 410, "closed");
+  });
+});
+
+describe("the close 24 hours after a run ends", () => {
+  lifecycle("at +24 h a run whose current entry is sealed is sealed, else incomplete", async (r) => {
+    const [alice, bob] = [await r.cred("alice"), await r.cred("bob")];
+    const x = await r.start(alice, "x1");
+    const y = await r.start(bob, "y1");
+    const hx = await r.hold("alice", x.run_id, x.entry_id);
+    const hy = await r.hold("bob", y.run_id, y.entry_id);
+    await r.finish(alice, x.run_id, x.entry_id, hx);
+    assert.deepEqual((await r.seal(alice, x.run_id, x.entry_id)).body, { status: "sealed", run_status: "open" });
+
+    // Both accounts start again at 09:10, which ends these two runs then.
+    r.at("2026-11-06T09:10:00Z");
+    await r.start(await r.cred("alice"), "x2");
+    await r.start(await r.cred("bob"), "y2");
+    // The sealed one reads as sealed at once; the other waits for its wrap-up.
+    assert.equal((await r.get(alice, x.run_id)).body.status, "sealed");
+    assert.equal((await r.get(bob, y.run_id)).body.status, "open");
+    assertError(await r.seal(bob, y.run_id, y.entry_id), 503, "awaiting_final");
+    await r.finish(bob, y.run_id, y.entry_id, hy);
+
+    // Exactly 24 hours later is still inside; one second more is not.
+    r.at("2026-11-07T09:10:00Z");
+    assert.equal((await r.get(bob, y.run_id)).body.status, "open");
+    assert.equal((await r.beat(bob, y.run_id, y.entry_id)).status, 200);
+    r.after(1);
+    assert.equal((await r.get(bob, y.run_id)).body.status, "incomplete");
+    assert.equal((await r.get(alice, x.run_id)).body.status, "sealed");
+    assert.equal(r.storedRun(y.run_id).status, "incomplete"); // written, not only computed
+    assert.equal(r.storedRun(x.run_id).status, "sealed");
+
+    // Nothing is accepted after that; a repeat of a seal that was stored is still answered.
+    assertError(await r.beat(bob, y.run_id, y.entry_id), 410, "closed");
+    assertError(await r.seal(bob, y.run_id, y.entry_id), 410, "closed");
+    assertError(await r.beat(alice, x.run_id, x.entry_id), 410, "closed");
+    assertError(await r.cont(bob, y.run_id, y.entry_id, "s-two"), 410, "closed");
+    assert.deepEqual((await r.seal(alice, x.run_id, x.entry_id)).body, { status: "sealed", run_status: "sealed" });
+  });
+
+  lifecycle("an older segment can still finish until the run closes", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    const h0 = await r.hold("alice", a.run_id, a.entry_id);
+    const c = (await r.cont(alice, a.run_id, a.entry_id, "s-two")).body;
+    const h1 = await r.hold("alice", a.run_id, c.entry_id);
+    await r.finish(alice, a.run_id, c.entry_id, h1);
+    r.at(a.deadline_at);
+    assert.deepEqual((await r.seal(alice, a.run_id, c.entry_id)).body, { status: "sealed", run_status: "sealed" });
+
+    // The run reads sealed, but segment 0 has not sent its end yet: it may, for 24 hours.
+    r.after(3600);
+    await r.finish(alice, a.run_id, a.entry_id, h0);
+    assert.deepEqual((await r.seal(alice, a.run_id, a.entry_id)).body, { status: "sealed", run_status: "sealed" });
+    assert.equal((await r.get(alice, a.run_id)).body.status, "sealed");
+  });
+});
+
+describe("what a seal needs", () => {
+  lifecycle("a seal without a final heartbeat is 409 before the end and 503 after it; a chain behind the end is 409", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    const noFinal = await r.seal(alice, a.run_id, a.entry_id);
+    assertError(noFinal, 409, "conflict");
+    assert.match(noFinal.body.message, /final heartbeat/);
+
+    // An end the server does not hold the chain up to yet.
+    const f = await r.beat(alice, a.run_id, a.entry_id, { seq: 9, head: "9".repeat(64), final: true });
+    assert.equal(f.status, 200, JSON.stringify(f.body));
+    assertError(await r.seal(alice, a.run_id, a.entry_id), 409, "conflict");
+    r.at(a.deadline_at);
+    assertError(await r.seal(alice, a.run_id, a.entry_id), 409, "conflict"); // past the end too: an end is committed, the chain is behind it
+  }, {});
+});
+
+describe("facts about the machine and the connection", () => {
+  const machine = { os: "macOS", os_version: "26.0", cpus: 8, memory_gb: 32.5, ac_power: true, wsl2: false, sandbox: null };
+
+  test("machine, client IP and country are stored on the run, overwritten on continue, and never echoed", async () => {
+    const r = rig({}, T0, { country: "DE" });
+    try {
+      const alice = await r.cred("alice");
+      const opened = await r.open(alice, "s1", { machine }, { "cf-connecting-ip": "203.0.113.9" });
+      assert.equal(opened.status, 201, JSON.stringify(opened.body));
+      const run = opened.body as Opened;
+      assert.deepEqual(r.storedRun(run.run_id).machine, machine);
+      assert.equal(r.storedRun(run.run_id).client_ip, "203.0.113.9");
+      assert.equal(r.storedRun(run.run_id).client_country, "DE");
+
+      const c = await r.cont(alice, run.run_id, run.entry_id, "s-two", {}, { "cf-connecting-ip": "198.51.100.7" });
+      assert.equal(c.status, 201, JSON.stringify(c.body));
+      assert.equal(r.storedRun(run.run_id).client_ip, "198.51.100.7");
+      assert.deepEqual(r.storedRun(run.run_id).machine, machine); // the open call's facts stay
+
+      // Not in any answer.
+      const answers = [
+        opened.body,
+        c.body,
+        (await r.get(alice, run.run_id)).body,
+        (await r.beat(alice, run.run_id, c.body.entry_id)).body,
+        (await r.open(alice, "s1")).body,
+      ];
+      for (const text of answers.map((a) => JSON.stringify(a))) {
+        assert.ok(!/203\.0\.113\.9|198\.51\.100\.7|"DE"|macOS|machine|client_/.test(text), text);
+      }
+    } finally {
+      r.stop();
+    }
+  });
+
+  test("a run opened with no machine, no IP and no country stores nulls", async () => {
+    const r = rig({}, T0);
+    try {
+      const run = await r.start(await r.cred("alice"), "s1");
+      assert.equal(r.storedRun(run.run_id).machine, null);
+      assert.equal(r.storedRun(run.run_id).client_ip, null);
+      assert.equal(r.storedRun(run.run_id).client_country, null);
+      assert.equal((await r.open(await r.cred("bob"), "b1", { machine: null })).status, 201); // null is absent
+    } finally {
+      r.stop();
+    }
+  });
+
+  test("machine must be a flat object of at most 4 KiB", async () => {
+    const r = rig({}, T0);
+    try {
+      const exactly = (n: number) => ({ k: "x".repeat(n - '{"k":""}'.length) });
+      assert.equal(JSON.stringify(exactly(4096)).length, 4096);
+      assert.equal((await r.open(await r.cred("alice"), "s1", { machine: exactly(4096) })).status, 201);
+      for (const bad of [exactly(4097), { nested: { a: 1 } }, { list: [1] }, [1, 2], "linux", 5, true]) {
+        assertError(await r.open(await r.cred("bob"), "b1", { machine: bad }), 400, "malformed");
+      }
+    } finally {
+      r.stop();
+    }
+  });
+});

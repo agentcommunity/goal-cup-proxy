@@ -1,10 +1,12 @@
 -- =====================================================================================
 -- PROPOSAL ONLY. NEVER RUN AGAINST SUPABASE.
 --
--- It was loaded once into a throwaway local PostgreSQL 17 (with stub roles anon, authenticated,
--- authenticator) and its functions were exercised by hand: open / repeat / conflict, receipt,
--- commit (stale offset refused), abandon, seal, the device flow (create, poll, approve, deny, expire,
--- pickup once, credential minted, bound, expired) and the role's lack of table privileges. That
+-- It was loaded into a throwaway local PostgreSQL 17 (with stub roles anon, authenticated,
+-- authenticator) and its functions were exercised by hand: open, replace, the start window,
+-- practice, the credential binding in the same step, continue and its repeat, receipt, commit
+-- (stale offset refused), abandon, seal (needs the end and the chain), the close, the device flow
+-- (create, poll, approve, deny, expire, pickup once, credential minted, expired) and the role's
+-- lack of table privileges. That
 -- proves the SQL parses and behaves as the Worker expects. It does NOT prove anything about
 -- Supabase itself: PostgREST exposure of the schema, the JWT role, RLS defaults.
 --
@@ -51,7 +53,7 @@ create table goalcup.events (
   mode                 text not null check (mode in ('competition', 'dry_run', 'practice')),
   start_window_opens   timestamptz not null,
   start_window_closes  timestamptz not null,
-  run_hours            integer not null default 168   -- no grace period: at deadline_at the run is over
+  run_hours            integer not null default 168   -- not used yet (the Worker has RUN_HOURS); no grace period: at the end the run is over
 );
 
 -- Which version of the terms a member accepted. The website's consent flow writes this;
@@ -80,36 +82,34 @@ create table goalcup.device_requests (
   picked_up_at   timestamptz                                                 -- set by the one pickup
 );
 
+-- A run: what an account started. Its chain, receipt and seal live on its entries (segments).
 create table goalcup.runs (
   id                   text primary key check (id ~ '^r[0-9a-f]{16}$'),
   event_id             text not null references goalcup.events (id),
   member_id            uuid not null,
+  mode                 text not null check (mode in ('competition', 'practice')),   -- from the credential
   official_start       timestamptz not null,
   deadline_at          timestamptz not null,
-  status               text not null default 'open' check (status in ('open', 'sealed', 'abandoned', 'flagged')),
+  -- Set when the account's later competition start replaced this run: the run ends then, if that
+  -- is before deadline_at (ends_at = least(deadline_at, replaced_at)).
+  replaced_at          timestamptz,
+  -- 'sealed' once over with its current entry sealed; 'incomplete' 24 hours after it ended with that entry
+  -- unsealed (the last piece is missing); 'abandoned' only by the participant's own call, before any chunk.
+  status               text not null default 'open' check (status in ('open', 'sealed', 'incomplete', 'abandoned')),
   repo_url             text not null,
-  session_id           text not null,
-  connector_id         text not null,
-  manifest_sha256      text not null,
-  connector_dir_sha256 text not null,
-  workspace            text not null,
-  harness_version      text not null,
-  tracer_version       text not null,
-  receipt              jsonb,                 -- the signed StartReceipt, once issued
+  machine              jsonb,                 -- non-identifying facts the tracer sent (OS, CPUs, memory...); never public
+  client_ip            text,                  -- from the request, kept on the server only
+  client_country       text,
   abandon_reason       text,
-  seal_sha256          text,
-  baseline_sha256      text,
-  seal_key             text,                  -- R2 keys of the stored seal.json / baseline.json
-  baseline_key         text,
   sealed_at            timestamptz,
-  final_commit         text,
-  final_commit_at      timestamptz,
   last_heartbeat_at    timestamptz,
   created_at           timestamptz not null default now()
 );
 
--- One open run per member, enforced by the database, so two simultaneous starts cannot both win.
-create unique index runs_one_open_per_member on goalcup.runs (member_id) where status = 'open';
+-- One main competition run per member, enforced by the database, so two simultaneous starts cannot
+-- both win: a later start sets replaced_at on the earlier one in the same step that inserts.
+create unique index runs_one_main_per_member on goalcup.runs (member_id)
+  where status = 'open' and mode = 'competition' and replaced_at is null;
 
 -- A run credential replaces the pasted member token. Minted at pickup (upload_poll_device), only its
 -- sha256 is stored. It stands for one member; until it opens a run it is unbound and lasts one hour
@@ -123,22 +123,36 @@ create table goalcup.run_credentials (
   created_at      timestamptz not null default now()
 );
 
+-- One segment of a run. Segment 0 is made by POST /v1/runs, the next ones by POST .../continue.
 create table goalcup.entries (
   id            text primary key check (id ~ '^e[0-9a-f]{16}$'),   -- the entry_id
   run_id        text not null references goalcup.runs (id),
   segment       integer not null default 0,
   opened_at     timestamptz not null default now(),
+  -- What the open (or continue) call sent; the receipt signs these.
+  connector_id         text not null,
+  manifest_sha256      text not null,
+  connector_dir_sha256 text not null,
+  workspace            text not null,
+  session_id           text not null,
+  harness_version      text not null,
+  tracer_version       text not null,
+  receipt       jsonb,                                              -- the signed StartReceipt, once issued
   upload_offset bigint not null default 0,
   next_seq      bigint not null default 0,                          -- the first record (the baseline) has seq 0
   head          text not null default repeat('0', 64),              -- genesis before any record
   last_ack      jsonb,
   last_chunk_at timestamptz,
-  sealed_at     timestamptz,
-  -- The end of the run, committed once by the final heartbeat: the last record the server will accept.
+  -- The end of the entry, committed once by the final heartbeat: the last record the server will accept.
   final_seq       bigint,
   final_head      text,
   final_repo_head text,                                                -- 40 hex, or null
   final_at        timestamptz,
+  seal_sha256     text,
+  baseline_sha256 text,
+  seal_key        text,                                                -- R2 keys of the stored seal.json / baseline.json
+  baseline_key    text,
+  sealed_at       timestamptz,
   check ((final_seq is null) = (final_head is null)),
   unique (run_id, segment)
 );
@@ -202,36 +216,66 @@ create function goalcup.fmt_time(t timestamptz) returns text
 language sql immutable
 as $$ select to_char(t at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') $$;
 
--- The run as the Worker's RunRow (src/db.ts). Joins the run with its (first) entry.
-create function goalcup.run_json(p_run_id text) returns jsonb
+-- The run and one of its entries as the Worker's {run: RunRow, entry: EntryRow} (src/db.ts): the entry
+-- named by p_entry_id (null if it is not this run's), or the current one (the highest segment) if none.
+create function goalcup.run_json(p_run_id text, p_entry_id text default null) returns jsonb
 language sql stable security definer set search_path = goalcup, pg_temp
 as $$
   select jsonb_build_object(
-    'run_id',               r.id,
-    'entry_id',             e.id,
-    'event_id',             r.event_id,
-    'member_id',            r.member_id::text,
-    'status',               r.status,
-    'official_start',       goalcup.fmt_time(r.official_start),
-    'deadline_at',          goalcup.fmt_time(r.deadline_at),
-    'connector_id',         r.connector_id,
-    'manifest_sha256',      r.manifest_sha256,
-    'connector_dir_sha256', r.connector_dir_sha256,
-    'workspace',            r.workspace,
-    'session_id',           r.session_id,
-    'repo_url',             r.repo_url,
-    'offset',               e.upload_offset,
-    'next_seq',             e.next_seq,
-    'head',                 e.head,
-    'last_ack',             e.last_ack,
-    'final',                case when e.final_seq is null then null
-                                 else jsonb_build_object('seq', e.final_seq, 'head', e.final_head) end,
-    'receipt',              r.receipt,
-    'seal_sha256',          r.seal_sha256,
-    'baseline_sha256',      r.baseline_sha256
+    'run', jsonb_build_object(
+      'run_id',            r.id,
+      'event_id',          r.event_id,
+      'member_id',         r.member_id::text,
+      'mode',              r.mode,
+      'status',            r.status,
+      'official_start',    goalcup.fmt_time(r.official_start),
+      'deadline_at',       goalcup.fmt_time(r.deadline_at),
+      'replaced_at',       goalcup.fmt_time(r.replaced_at),
+      'repo_url',          r.repo_url,
+      'current_entry_id',  cur.id,
+      'current_sealed_at', goalcup.fmt_time(cur.sealed_at)),
+    'entry', (
+      select jsonb_build_object(
+        'entry_id',             e.id,
+        'run_id',               e.run_id,
+        'segment',              e.segment,
+        'connector_id',         e.connector_id,
+        'manifest_sha256',      e.manifest_sha256,
+        'connector_dir_sha256', e.connector_dir_sha256,
+        'workspace',            e.workspace,
+        'session_id',           e.session_id,
+        'offset',               e.upload_offset,
+        'next_seq',             e.next_seq,
+        'head',                 e.head,
+        'last_ack',             e.last_ack,
+        'final',                case when e.final_seq is null then null
+                                     else jsonb_build_object('seq', e.final_seq, 'head', e.final_head) end,
+        'receipt',              e.receipt,
+        'seal_sha256',          e.seal_sha256,
+        'baseline_sha256',      e.baseline_sha256,
+        'sealed_at',            goalcup.fmt_time(e.sealed_at))
+      from goalcup.entries e
+      where e.run_id = r.id and e.id = coalesce(p_entry_id, cur.id))
   )
   from goalcup.runs r
-  join goalcup.entries e on e.run_id = r.id and e.segment = 0
+  cross join lateral (select e.id, e.sealed_at from goalcup.entries e where e.run_id = r.id order by e.segment desc limit 1) cur
+  where r.id = p_run_id
+$$;
+
+-- What the run's status is at p_at: 'sealed' once it is over with its current entry sealed, 'incomplete'
+-- once it has been over for 24 hours with that entry unsealed. A status already written (abandoned,
+-- sealed, incomplete) stays. The same rule as statusAt in src/db.ts.
+create function goalcup.run_status_at(p_run_id text, p_at timestamptz) returns text
+language sql stable security definer set search_path = goalcup, pg_temp
+as $$
+  select case
+    when r.status <> 'open' or p_at < least(r.deadline_at, coalesce(r.replaced_at, r.deadline_at)) then r.status
+    when cur.sealed_at is not null then 'sealed'
+    when p_at > least(r.deadline_at, coalesce(r.replaced_at, r.deadline_at)) + interval '24 hours' then 'incomplete'
+    else 'open'
+  end
+  from goalcup.runs r
+  cross join lateral (select e.sealed_at from goalcup.entries e where e.run_id = r.id order by e.segment desc limit 1) cur
   where r.id = p_run_id
 $$;
 
@@ -247,21 +291,6 @@ as $$
     from goalcup.run_credentials c
    where c.credential_hash = p_credential_hash and p_now::timestamptz < c.expires_at
 $$;
-
--- The credential opened this run: from now on it sees only this run, until p_expires_at. Only an
--- unbound credential (or one already bound to this run) binds; "conflict" otherwise, or if unknown.
-create function goalcup.upload_bind_credential(p_credential_hash text, p_run_id text, p_expires_at text) returns text
-language plpgsql security definer set search_path = goalcup, pg_temp
-as $$
-declare
-  v_rows integer;
-begin
-  update goalcup.run_credentials
-     set run_id = p_run_id, expires_at = p_expires_at::timestamptz
-   where credential_hash = p_credential_hash and (run_id is null or run_id = p_run_id);
-  get diagnostics v_rows = row_count;
-  return case when v_rows = 1 then 'bound' else 'conflict' end;
-end $$;
 
 -- POST /v1/device. A repeated hash is a unique violation (the Worker answers 502 and the tracer retries).
 create function goalcup.upload_create_device(
@@ -348,82 +377,134 @@ as $$
   select goalcup.upload_approve_device(p_user_code, p_member_id::text, p_approve, goalcup.fmt_time(now()))
 $$;
 
--- ---- the six calls ------------------------------------------------------------------------
+-- ---- the run calls -------------------------------------------------------------------------
 
--- POST /v1/runs. Returns {"result": "created"|"existing"|"conflict"|"forbidden", "run": {...}, "message": "..."}.
+-- POST /v1/runs. Returns {"result": "created"|"conflict"|"forbidden", "run": {...}, "entry": {...}, "message": "..."}.
+-- One transaction: a competition start replaces the member's other open competition run, the new run and its
+-- segment 0 are inserted, and the credential is bound to the run. A credential that is unknown or already
+-- bound is "conflict" and nothing is written.
 create function goalcup.upload_open_run(
-  p_member_id text, p_event_id text, p_run_id text, p_entry_id text,
+  p_member_id text, p_event_id text, p_mode text, p_run_id text, p_entry_id text,
   p_official_start text, p_deadline_at text,
   p_connector_id text, p_manifest_sha256 text, p_connector_dir_sha256 text,
-  p_workspace text, p_session_id text, p_harness_version text, p_tracer_version text, p_repo_url text
+  p_workspace text, p_session_id text, p_harness_version text, p_tracer_version text, p_repo_url text,
+  p_machine jsonb, p_client_ip text, p_client_country text,
+  p_credential_hash text, p_credential_expires_at text
 ) returns jsonb
 language plpgsql security definer set search_path = goalcup, pg_temp
 as $$
 declare
   v_member uuid := p_member_id::uuid;
   v_event  goalcup.events;
-  v_open   goalcup.runs;
   v_start  timestamptz := p_official_start::timestamptz;
+  v_bound  text;
+  v_try    integer;
 begin
   select * into v_event from goalcup.events where id = p_event_id;
   if not found then
     return jsonb_build_object('result', 'forbidden', 'message', 'This event is not open for runs.');
   end if;
 
-  -- A run that was never sealed 24 hours after its deadline is abandoned, which frees the
-  -- member's one open slot (the unique index is on open runs only).
-  update goalcup.runs
-     set status = 'abandoned', abandon_reason = 'expired: not sealed 24 hours after the deadline', sealed_at = v_start
-   where member_id = v_member and status = 'open' and seal_sha256 is null
-     and v_start > deadline_at + interval '24 hours';
-
-  -- Same member, same session, still open, no receipt yet: the first answer was lost in transit.
-  select * into v_open from goalcup.runs where member_id = v_member and status = 'open';
-  if found then
-    if v_open.session_id = p_session_id and v_open.receipt is null then
-      return jsonb_build_object('result', 'existing', 'run', goalcup.run_json(v_open.id));
-    end if;
-    return jsonb_build_object('result', 'conflict');
-  end if;
-
-  -- Eligibility (checked after the idempotent repeat so a lost reply never turns into a refusal).
+  -- Eligibility. (A lost reply never reaches here: the Worker answers a repeat from the bound credential.)
   if not exists (select 1 from goalcup.consents where member_id = v_member) then
     return jsonb_build_object('result', 'forbidden', 'message', 'Accept the Goal Cup terms on the website first.');
   end if;
-  if v_start < v_event.start_window_opens or v_start > v_event.start_window_closes then
-    return jsonb_build_object('result', 'forbidden', 'message', 'Runs cannot be started outside the start window.');
+  -- Practice has no start window.
+  if p_mode = 'competition' then
+    if v_start < v_event.start_window_opens then
+      return jsonb_build_object('result', 'forbidden', 'message', 'The start window has not opened yet.');
+    end if;
+    if v_start > v_event.start_window_closes then
+      return jsonb_build_object('result', 'forbidden',
+                                'message', 'after the start window you can only `goalcup continue` your run');
+    end if;
   end if;
 
-  begin
-    insert into goalcup.runs (id, event_id, member_id, official_start, deadline_at, repo_url, session_id,
-                              connector_id, manifest_sha256, connector_dir_sha256, workspace,
-                              harness_version, tracer_version)
-    values (p_run_id, p_event_id, v_member, v_start, p_deadline_at::timestamptz, p_repo_url, p_session_id,
-            p_connector_id, p_manifest_sha256, p_connector_dir_sha256, p_workspace,
-            p_harness_version, p_tracer_version);
-    insert into goalcup.entries (id, run_id, segment) values (p_entry_id, p_run_id, 0);
-  exception when unique_violation then
-    -- Two starts raced; the unique index let one through. That one has committed by now, so look
-    -- at it again: if it is this same session (a lost-reply retry racing the original) the answer
-    -- is the same run; otherwise this account has another open run.
-    select * into v_open from goalcup.runs where member_id = v_member and status = 'open';
-    if found and v_open.session_id = p_session_id and v_open.receipt is null then
-      return jsonb_build_object('result', 'existing', 'run', goalcup.run_json(v_open.id));
-    end if;
+  -- The credential binds in this same transaction: take its row, and refuse one that is unknown or bound.
+  select run_id into v_bound from goalcup.run_credentials where credential_hash = p_credential_hash for update;
+  if not found or v_bound is not null then
     return jsonb_build_object('result', 'conflict');
-  end;
-  return jsonb_build_object('result', 'created', 'run', goalcup.run_json(p_run_id));
+  end if;
+
+  -- A later competition start replaces the member's other open competition run (it ends now). Two starts
+  -- racing: the unique index lets one insert through; the other goes round once more and replaces it.
+  for v_try in 1..2 loop
+    if p_mode = 'competition' then
+      update goalcup.runs set replaced_at = v_start
+       where member_id = v_member and mode = 'competition' and status = 'open' and replaced_at is null;
+    end if;
+    begin
+      insert into goalcup.runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url,
+                                machine, client_ip, client_country)
+      values (p_run_id, p_event_id, v_member, p_mode, v_start, p_deadline_at::timestamptz, p_repo_url,
+              p_machine, p_client_ip, p_client_country);
+      exit;
+    exception when unique_violation then
+      if v_try = 2 then raise; end if;
+    end;
+  end loop;
+
+  insert into goalcup.entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256,
+                               workspace, session_id, harness_version, tracer_version)
+  values (p_entry_id, p_run_id, 0, p_connector_id, p_manifest_sha256, p_connector_dir_sha256,
+          p_workspace, p_session_id, p_harness_version, p_tracer_version);
+  update goalcup.run_credentials
+     set run_id = p_run_id, expires_at = p_credential_expires_at::timestamptz
+   where credential_hash = p_credential_hash;
+  return jsonb_build_object('result', 'created') || goalcup.run_json(p_run_id);
 end $$;
 
--- GET /v1/runs/{id} (and the lookup every other call starts with). Null if not this member's.
-create function goalcup.upload_run_position(p_member_id text, p_run_id text) returns jsonb
+-- POST /v1/runs/{id}/continue. Returns {"result": "created"|"existing"|"conflict"|"closed"|"not_found",
+-- "run": {...}, "entry": {...}} (the new, or the existing, current entry). "existing" is the same call again
+-- (the current entry came from this session, after p_previous_entry_id); "conflict" is a previous entry that
+-- is not the latest; "closed" is a run that is over (at or after ends_at), abandoned or closed.
+create function goalcup.upload_continue_run(
+  p_member_id text, p_run_id text, p_previous_entry_id text, p_entry_id text,
+  p_connector_id text, p_manifest_sha256 text, p_connector_dir_sha256 text, p_workspace text,
+  p_session_id text, p_harness_version text, p_tracer_version text,
+  p_client_ip text, p_client_country text, p_at text
+) returns jsonb
+language plpgsql security definer set search_path = goalcup, pg_temp
+as $$
+declare
+  v_run goalcup.runs;
+  v_cur goalcup.entries;
+  v_at  timestamptz := p_at::timestamptz;
+begin
+  select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
+  if not found then return jsonb_build_object('result', 'not_found'); end if;
+  select * into v_cur from goalcup.entries where run_id = p_run_id order by segment desc limit 1;
+
+  if v_cur.segment > 0 and v_cur.session_id = p_session_id
+     and exists (select 1 from goalcup.entries
+                  where run_id = p_run_id and segment = v_cur.segment - 1 and id = p_previous_entry_id) then
+    return jsonb_build_object('result', 'existing') || goalcup.run_json(p_run_id);
+  end if;
+  if v_run.status <> 'open' or v_at >= least(v_run.deadline_at, coalesce(v_run.replaced_at, v_run.deadline_at)) then
+    return jsonb_build_object('result', 'closed');
+  end if;
+  if v_cur.id <> p_previous_entry_id then
+    return jsonb_build_object('result', 'conflict');
+  end if;
+
+  insert into goalcup.entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256,
+                               workspace, session_id, harness_version, tracer_version)
+  values (p_entry_id, p_run_id, v_cur.segment + 1, p_connector_id, p_manifest_sha256, p_connector_dir_sha256,
+          p_workspace, p_session_id, p_harness_version, p_tracer_version);
+  update goalcup.runs set client_ip = p_client_ip, client_country = p_client_country where id = p_run_id;
+  return jsonb_build_object('result', 'created') || goalcup.run_json(p_run_id);
+end $$;
+
+-- GET /v1/runs/{id} (and the lookup every other call starts with): {"run": {...}, "entry": {...}|null}, the
+-- entry named, or the current one when p_entry_id is null. Null if the run is not this member's.
+create function goalcup.upload_run_position(p_member_id text, p_run_id text, p_entry_id text default null) returns jsonb
 language sql stable security definer set search_path = goalcup, pg_temp
 as $$
-  select goalcup.run_json(r.id) from goalcup.runs r where r.id = p_run_id and r.member_id = p_member_id::uuid
+  select goalcup.run_json(r.id, p_entry_id) from goalcup.runs r where r.id = p_run_id and r.member_id = p_member_id::uuid
 $$;
 
--- The stored chunk that starts at p_offset, in the Worker's ChunkRecord shape, or null.
-create function goalcup.upload_get_chunk(p_member_id text, p_run_id text, p_offset bigint) returns jsonb
+-- The stored chunk of the entry that starts at p_offset, in the Worker's ChunkRecord shape, or null.
+create function goalcup.upload_get_chunk(p_member_id text, p_run_id text, p_entry_id text, p_offset bigint) returns jsonb
 language sql stable security definer set search_path = goalcup, pg_temp
 as $$
   select jsonb_build_object(
@@ -433,27 +514,32 @@ as $$
   from goalcup.chunks c
   join goalcup.entries e on e.id = c.entry_id
   join goalcup.runs r on r.id = e.run_id
-  where r.id = p_run_id and r.member_id = p_member_id::uuid and c."offset" = p_offset
+  where r.id = p_run_id and r.member_id = p_member_id::uuid and c.entry_id = p_entry_id and c."offset" = p_offset
 $$;
 
--- POST /v1/runs/{id}/receipt. The Worker signs; this stores. {"result": "stored"|"existing"|"conflict"|"closed", "receipt": {...}}
-create function goalcup.upload_issue_receipt(p_member_id text, p_run_id text, p_chain_head text, p_receipt jsonb) returns jsonb
+-- POST /v1/runs/{id}/receipt. The Worker signs; this stores, on the named entry.
+-- {"result": "stored"|"existing"|"conflict"|"closed"|"not_found", "receipt": {...}}
+create function goalcup.upload_issue_receipt(p_member_id text, p_run_id text, p_entry_id text, p_chain_head text, p_receipt jsonb) returns jsonb
 language plpgsql security definer set search_path = goalcup, pg_temp
 as $$
 declare
-  v_run goalcup.runs;
+  v_run   goalcup.runs;
+  v_entry goalcup.entries;
 begin
   select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
-  if not found or v_run.status <> 'open' then
+  if not found then return jsonb_build_object('result', 'not_found'); end if;
+  select * into v_entry from goalcup.entries where id = p_entry_id and run_id = p_run_id for update;
+  if not found then return jsonb_build_object('result', 'not_found'); end if;
+  if v_run.status in ('abandoned', 'incomplete') or v_entry.sealed_at is not null then
     return jsonb_build_object('result', 'closed');
   end if;
-  if v_run.receipt is not null then
-    if v_run.receipt -> 'claims' ->> 'chain_head' = p_chain_head then
-      return jsonb_build_object('result', 'existing', 'receipt', v_run.receipt);
+  if v_entry.receipt is not null then
+    if v_entry.receipt -> 'claims' ->> 'chain_head' = p_chain_head then
+      return jsonb_build_object('result', 'existing', 'receipt', v_entry.receipt);
     end if;
     return jsonb_build_object('result', 'conflict');
   end if;
-  update goalcup.runs set receipt = p_receipt where id = p_run_id;
+  update goalcup.entries set receipt = p_receipt where id = p_entry_id;
   return jsonb_build_object('result', 'stored', 'receipt', p_receipt);
 end $$;
 
@@ -486,16 +572,17 @@ declare
   v_off   bigint := (p_chunk ->> 'offset')::bigint;
   v_len   bigint := (p_chunk ->> 'length')::bigint;
 begin
-  -- Lock order everywhere (commit, abandon, seal): the run first, then its entry. So a commit
+  -- Lock order everywhere (commit, abandon, seal, close): the run first, then its entry. So a commit
   -- racing an abandon or a seal queues behind it and then sees the new status.
   select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
   if not found then return 'not_found'; end if;
-  if v_run.status <> 'open' then return 'closed'; end if;
 
   -- Concurrent commits for the same run queue on the run lock above; the loser re-checks below.
   select * into v_entry from goalcup.entries
     where id = p_chunk ->> 'entry_id' and run_id = p_run_id for update;
   if not found then return 'not_found'; end if;
+  -- A run that is 'sealed' still takes the wrap-up of an older segment; the Worker enforces the 24 hours.
+  if v_run.status in ('abandoned', 'incomplete') or v_entry.sealed_at is not null then return 'closed'; end if;
 
   -- Nothing past the end the final heartbeat committed, whatever the Worker saw a moment ago.
   if v_entry.final_seq is not null
@@ -526,34 +613,53 @@ begin
 end $$;
 
 -- POST /v1/runs/{id}/seal, after seal.json / baseline.json are in R2 under p_seal_key / p_baseline_key.
--- Returns 'sealed' | 'already_sealed' (same hashes) | 'conflict' (other hashes) | 'closed' | 'not_found'.
+-- Seals the named entry. {"result": "sealed"|"already_sealed" (same hashes)|"conflict" (other hashes)|
+-- "no_final" (the entry has no committed end)|"chain_behind" (the server does not hold the chain up to it)|
+-- "closed"|"not_found", "run_status": ...}. The two checks run here, under the entry lock, so a chunk or a
+-- final heartbeat cannot slip between the Worker's look and the seal. p_sealed_at is the Worker's "now": the
+-- run becomes 'sealed' in this step when this is its current entry and the run is over.
 create function goalcup.upload_seal_run(
   p_member_id text, p_run_id text, p_entry_id text,
   p_seal_sha256 text, p_baseline_sha256 text, p_seal_key text, p_baseline_key text, p_sealed_at text
-) returns text
+) returns jsonb
 language plpgsql security definer set search_path = goalcup, pg_temp
 as $$
 declare
-  v_run goalcup.runs;
+  v_run    goalcup.runs;
+  v_entry  goalcup.entries;
+  v_at     timestamptz := p_sealed_at::timestamptz;
+  v_status text;
 begin
   select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
-  if not found then return 'not_found'; end if;
-  if v_run.status = 'sealed' then
-    if v_run.seal_sha256 = p_seal_sha256 and v_run.baseline_sha256 = p_baseline_sha256 then
-      return 'already_sealed';
+  if not found then return jsonb_build_object('result', 'not_found'); end if;
+  select * into v_entry from goalcup.entries where id = p_entry_id and run_id = p_run_id for update;
+  if not found then return jsonb_build_object('result', 'not_found'); end if;
+
+  if v_entry.sealed_at is not null then
+    if v_entry.seal_sha256 = p_seal_sha256 and v_entry.baseline_sha256 = p_baseline_sha256 then
+      return jsonb_build_object('result', 'already_sealed', 'run_status', goalcup.run_status_at(p_run_id, v_at));
     end if;
-    return 'conflict';
+    return jsonb_build_object('result', 'conflict');
   end if;
-  if v_run.status <> 'open' then return 'closed'; end if;
-  update goalcup.runs
-     set status = 'sealed', seal_sha256 = p_seal_sha256, baseline_sha256 = p_baseline_sha256,
-         seal_key = p_seal_key, baseline_key = p_baseline_key, sealed_at = p_sealed_at::timestamptz
-   where id = p_run_id;
-  update goalcup.entries set sealed_at = p_sealed_at::timestamptz where id = p_entry_id and run_id = p_run_id;
-  return 'sealed';
+  if v_run.status in ('abandoned', 'incomplete') then return jsonb_build_object('result', 'closed'); end if;
+  if v_entry.final_seq is null then return jsonb_build_object('result', 'no_final'); end if;
+  if v_entry.next_seq - 1 <> v_entry.final_seq or v_entry.head <> v_entry.final_head then
+    return jsonb_build_object('result', 'chain_behind');
+  end if;
+
+  update goalcup.entries
+     set seal_sha256 = p_seal_sha256, baseline_sha256 = p_baseline_sha256,
+         seal_key = p_seal_key, baseline_key = p_baseline_key, sealed_at = v_at
+   where id = p_entry_id;
+  v_status := goalcup.run_status_at(p_run_id, v_at);
+  if v_status <> v_run.status then
+    update goalcup.runs set status = v_status, sealed_at = case when v_status = 'sealed' then v_at else sealed_at end
+     where id = p_run_id;
+  end if;
+  return jsonb_build_object('result', 'sealed', 'run_status', v_status);
 end $$;
 
--- POST /v1/runs/{id}/heartbeat. Records the heartbeat; a final one commits the end of the run (once).
+-- POST /v1/runs/{id}/heartbeat. Records the heartbeat; a final one commits the end of the entry (once).
 -- Returns 'recorded' | 'final_committed' | 'final_existing' | 'final_conflict' | 'closed' | 'not_found'.
 -- Lock order as everywhere: the run, then its entry.
 create function goalcup.upload_heartbeat(
@@ -570,13 +676,13 @@ declare
 begin
   select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
   if not found then return 'not_found'; end if;
-  if v_run.status = 'abandoned' then return 'closed'; end if;
+  if v_run.status in ('abandoned', 'incomplete') then return 'closed'; end if;
 
   select * into v_entry from goalcup.entries where id = p_entry_id and run_id = p_run_id for update;
   if not found then return 'not_found'; end if;
 
   if not p_final then
-    if v_run.status = 'open' then   -- a sealed run has nothing left to record
+    if v_entry.sealed_at is null then   -- a sealed entry has nothing left to record
       insert into goalcup.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final)
       values (p_run_id, p_entry_id, v_at, p_seq, p_head, p_offset_local, false);
       update goalcup.runs set last_heartbeat_at = v_at where id = p_run_id;
@@ -604,30 +710,35 @@ begin
   return 'final_committed';
 end $$;
 
--- Abandon an open, unsealed run that is more than 24 hours past its deadline (the Worker calls this
--- whenever it sees one). Returns 'expired' | 'not_expired'.
-create function goalcup.upload_expire_run(p_member_id text, p_run_id text, p_at text) returns text
+-- The close of a run that is over (the Worker calls this the first time it sees one, and a cron will):
+-- 'sealed' if its current entry is sealed, 'incomplete' if it has been over for 24 hours without that.
+-- Returns the status now ('open' when nothing changed), or null if the run is not this member's.
+create function goalcup.upload_close_run(p_member_id text, p_run_id text, p_at text) returns text
 language plpgsql security definer set search_path = goalcup, pg_temp
 as $$
 declare
-  v_run goalcup.runs;
-  v_at  timestamptz := p_at::timestamptz;
+  v_run    goalcup.runs;
+  v_at     timestamptz := p_at::timestamptz;
+  v_status text;
 begin
   select * into v_run from goalcup.runs where id = p_run_id and member_id = p_member_id::uuid for update;
-  if not found or v_run.status <> 'open' or v_run.seal_sha256 is not null
-     or v_at <= v_run.deadline_at + interval '24 hours' then
-    return 'not_expired';
+  if not found then return null; end if;
+  v_status := goalcup.run_status_at(p_run_id, v_at);
+  if v_status <> v_run.status then
+    update goalcup.runs
+       set status = v_status,
+           sealed_at = case when v_status = 'sealed'
+                            then (select e.sealed_at from goalcup.entries e where e.run_id = p_run_id order by e.segment desc limit 1)
+                            else sealed_at end
+     where id = p_run_id;
   end if;
-  update goalcup.runs
-     set status = 'abandoned', abandon_reason = 'expired: not sealed 24 hours after the deadline', sealed_at = v_at
-   where id = p_run_id;
-  return 'expired';
+  return v_status;
 end $$;
 
 -- ---- privileges: now that every function exists -----------------------------------------------
--- PUBLIC has EXECUTE on each function just created (fmt_time, run_json and the upload_* ones).
+-- PUBLIC has EXECUTE on each function just created (fmt_time, run_json, run_status_at and the upload_* ones).
 -- Take it away from everybody, then give the Worker's role exactly the upload_* functions.
--- (run_json and fmt_time stay unexecutable by it: the definer functions call them as the owner.)
+-- (the helpers stay unexecutable by it: the definer functions call them as the owner.)
 revoke all on all functions in schema goalcup from public, anon, authenticated;
 revoke all on all tables    in schema goalcup from public, anon, authenticated;
 
@@ -635,27 +746,29 @@ revoke all on all tables    in schema goalcup from public, anon, authenticated;
 
 grant execute on function
   goalcup.upload_credential(text, text),
-  goalcup.upload_bind_credential(text, text, text),
   goalcup.upload_create_device(text, text, text, text, text, text, text, text),
   goalcup.upload_poll_device(text, text),
   goalcup.upload_approve_device(text, text, boolean, text),  -- STAGING ONLY: approves a request as any member.
                                                               -- Owner decision: grant it only to a staging Worker role.
-  goalcup.upload_open_run(text, text, text, text, text, text, text, text, text, text, text, text, text, text),
-  goalcup.upload_run_position(text, text),
-  goalcup.upload_get_chunk(text, text, bigint),
-  goalcup.upload_issue_receipt(text, text, text, jsonb),
+  goalcup.upload_open_run(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text,
+                          jsonb, text, text, text, text),
+  goalcup.upload_continue_run(text, text, text, text, text, text, text, text, text, text, text, text, text, text),
+  goalcup.upload_run_position(text, text, text),
+  goalcup.upload_get_chunk(text, text, text, bigint),
+  goalcup.upload_issue_receipt(text, text, text, text, jsonb),
   goalcup.upload_abandon_run(text, text, text, text),
   goalcup.upload_commit_chunk(text, text, jsonb),
   goalcup.upload_seal_run(text, text, text, text, text, text, text, text),
   goalcup.upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text),
-  goalcup.upload_expire_run(text, text, text)
+  goalcup.upload_close_run(text, text, text)
 to goalcup_worker;
 
 -- ---- what the website's owner still has to decide --------------------------------------------
 --  * Where "accepted the current terms" really lives (this file assumes goalcup.consents).
---  * Seeding goalcup.events: one row per event (practice, dry_run, competition) with its window,
---    run_hours. The Worker currently takes EVENT_ID / RUN_HOURS from
---    its own variables and only checks in upload_open_run that the event exists and is open for starts.
+--  * Seeding goalcup.events: one row for the competition (its start window decides when a competition run
+--    may be started) and one for practice (the window columns are ignored for it). The Worker takes
+--    EVENT_ID, PRACTICE_EVENT_ID, RUN_HOURS and PRACTICE_RUN_MINUTES from its own variables; upload_open_run
+--    only checks that the event exists and, for a competition run, the window.
 --  * The approval page: it calls goalcup.goalcup_approve_device(user_code, member_id, approve) for the
 --    signed-in member, and replaces goalcup.member_handle with the real handle column.
 --  * Whether PostgREST should expose schema goalcup at all (required for RPC), or whether thin
