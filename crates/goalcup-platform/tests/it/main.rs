@@ -4,6 +4,10 @@
 #[cfg(unix)]
 mod artifact_root_unix;
 #[cfg(unix)]
+mod awake;
+#[cfg(unix)]
+mod machine;
+#[cfg(unix)]
 mod readcap_unix;
 #[cfg(unix)]
 mod unix_snapshot_primitives;
