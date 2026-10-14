@@ -428,7 +428,7 @@ mod linux {
             assert!(field("swept") >= 1, "nothing was swept: {line}");
             assert_eq!(field("unlisted"), 0, "{line}");
             assert_eq!(
-                field("spawner_alive"),
+                field("elder_alive"),
                 1,
                 "a child older than the root was signalled: {line}"
             );
@@ -469,12 +469,14 @@ mod linux {
 
         /// The sweep's host, run only by [`the_bound_reports_what_keeps_arriving`]. A plain
         /// `sleep` is started before the root, so the start filter must keep the sweep off it:
-        /// any signal ends it. After the root, the host starts a chain of [`LINKS`] processes,
+        /// any signal ends it. After the root, the host starts a chain of [`LINKS`] + 1 processes,
         /// each the parent of the next, that ignore SIGTERM, and waits until the last is up.
         /// The sweep reaches only the chain's head, its one child. SIGKILL ends the head, and the
         /// kernel hands the head's child to this process before the head turns zombie, so every
         /// pass finds the next link: the sweep can never find this process childless, and must
         /// stop at its bound and name what it last saw.
+        /// The chain has a process group of its own, so a runner that kills the test's group does
+        /// not reach it: a host killed from outside leaves its links to end with their `sleep 60`.
         /// The chain replaced a loop that handed over four orphans every few milliseconds. On a
         /// loaded 4-vCPU x86_64 runner that loop fell behind the 20 ms poll, the sweep found the
         /// host childless and ended early (2 runs in 4); a chain does not depend on any timing.
@@ -506,6 +508,8 @@ mod linux {
             // exec, and the links all share the head's process group.
             let ready = std::env::temp_dir()
                 .join(format!("goalcup-subreaper-chain-{}", std::process::id()));
+            // A file left by an earlier host with this pid would start the sweep before the trap.
+            let _ = std::fs::remove_file(&ready);
             let chain = Chain(
                 std::process::Command::new("/bin/sh")
                     .args(["-c", "trap '' TERM; exec sh -c \"$LINK\" link \"$LINKS\""])
@@ -532,19 +536,19 @@ mod linux {
             let began = Instant::now();
             let swept = sweep(root_start, HOST_GRACE);
             let took = began.elapsed();
-            let spawner_alive = elder.0.try_wait().unwrap().is_none();
+            let elder_alive = elder.0.try_wait().unwrap().is_none();
             drop(elder);
             drop(chain);
             // Everything this process still holds, the chain's last links included.
             let cleanup = sweep(0, Duration::ZERO);
             println!(
-                "{RESULT} took_ms={} swept={} left={} unlisted={} spawner_alive={} cleanup_left={} \
+                "{RESULT} took_ms={} swept={} left={} unlisted={} elder_alive={} cleanup_left={} \
                  exit={}",
                 took.as_millis(),
                 swept.swept,
                 swept.left.len(),
                 u8::from(swept.unlisted),
-                u8::from(spawner_alive),
+                u8::from(elder_alive),
                 cleanup.left.len(),
                 swept.refusal("e").map_or(0, |e| e.exit_code()),
             );
