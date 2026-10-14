@@ -34,9 +34,9 @@
 //! commit reserve ([`FINISH_COMMIT_RESERVE`]). It closes admission, lets live wire producers
 //! drain until the end of the drain share, stops the owner (native finish, remaining producers
 //! cut as losses, flush, sync), chains the proxy's counters as gaps, ends the registered process
-//! tree and records its actual outcome (termination time is outside the budget), walks the
-//! workspace into the seal manifest, and calls `write_local_finish` once. The drain share
-//! expiring is the existing cut-with-a-gap, never a refusal. A stage that waits on a permit, the
+//! tree and records its actual outcome (termination time is outside the budget), seals the
+//! workspace (a clone's Git state, else the walk; D56), and calls `write_local_finish` once. The
+//! drain share expiring is the existing cut-with-a-gap, never a refusal. A stage that waits on a permit, the
 //! entry's lock or the owner, or that is about to begin with less than [`FINISH_RESPONSE_MARGIN`]
 //! left, is refused with [`DaemonError::FinishDeadline`]: no terminal is written, the entry stays
 //! open, and a sticky [`ExpiredFinish`] makes the next finish record a `ShutdownDeadline` gap. A
@@ -161,6 +161,10 @@ use self::writer::*;
 
 /// The longest the owner waits for a queue item before checking its timers.
 const IDLE_WAIT: Duration = Duration::from_millis(25);
+
+/// What reading a clone's Git state may take at the baseline (D56): inside the CLI's 30 s
+/// create call. A clone not read in it is refused, never walked.
+const BASELINE_GIT_BUDGET: Duration = Duration::from_secs(20);
 
 /// One v5 capture entry of this daemon.
 pub(crate) struct CaptureEntry {
@@ -304,8 +308,10 @@ impl Daemon {
         digests: &ProfileDigests,
         every_loaded_real_dir: &[String],
         reserve_bytes: u64,
+        native_since: Option<u64>,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let config_home = isolated_config_home(config_home, every_loaded_real_dir)?;
+        let plan = native_plan(&manifest.capture, run_home, &config_home, native_since)?;
         let extra_patterns = crate::redact::extra_patterns_of(manifest);
         StreamRedactor::with_extra_patterns(&extra_patterns)?;
         let artifact_dir = self
@@ -344,6 +350,7 @@ impl Daemon {
             extra_patterns,
             &artifact,
             &artifact_dir,
+            plan,
         );
         if let Err(error) = &opened {
             let created = (!workspace_existed).then_some(workspace);
@@ -369,6 +376,7 @@ impl Daemon {
         extra_patterns: Vec<RedactionPattern>,
         artifact: &EntryArtifactRoot,
         artifact_dir: &Path,
+        plan: NativePlan,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let trace = artifact.create_trace().map_err(|error| {
             DaemonError::Refused(format!(
@@ -396,7 +404,12 @@ impl Daemon {
             path: workspace.display().to_string(),
             source,
         })?;
-        let baseline = workspace::list_workspace(&workspace, entry_id, &now_rfc3339(), &[])?;
+        let mut baseline =
+            workspace::seal_workspace(&workspace, entry_id, &now_rfc3339(), BASELINE_GIT_BUDGET)?
+                .map_err(|why| {
+                DaemonError::Refused(format!("the Git work folder could not be read: {why}"))
+            })?;
+        baseline.home = listed_home(&manifest.capture, run_home, config_home);
         export.write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)?;
         export.sync_capture()?;
         let reserved_bytes = export.capture_storage().reserved_bytes;
@@ -443,7 +456,6 @@ impl Daemon {
             clock.clone(),
             CaptureAuthority::Live,
         );
-        let plan = native_plan(&manifest.capture, run_home, config_home)?;
         // Prepare the fixed isolated source root before spawn: the leaf opens it once.
         if let Some(source) = &plan.scoped {
             // An unavailable native root must not stop the harness. The Launch constructor

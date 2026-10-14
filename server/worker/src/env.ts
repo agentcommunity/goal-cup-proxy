@@ -4,13 +4,23 @@ export interface Env {
   /** R2 bucket: raw chunks under traces/…; (local backend only) state under state/…. */
   TRACES: R2Bucket;
 
-  /** Event that new runs belong to, e.g. "practice". */
+  /** Event that new competition runs belong to, e.g. "cup". */
   EVENT_ID: string;
+  /** Event that practice runs belong to, e.g. "practice". */
+  PRACTICE_EVENT_ID: string;
   /** Run length in hours (default 168). */
   RUN_HOURS?: string;
-  /** Tests only, DB_BACKEND=local only: run length in seconds, and seconds after the deadline until an unsealed run is abandoned (default 24 h). */
+  /** Practice run length in minutes (default 10). */
+  PRACTICE_RUN_MINUTES?: string;
+  /**
+   * Tests only, DB_BACKEND=local only: run length in seconds; seconds after a run ends until it is
+   * closed (default 24 h); and the competition start window (RFC 3339, `2026-11-06T09:00:00Z`;
+   * an unset edge is open). In production the window is the event's row in the database.
+   */
   RUN_SECONDS?: string;
-  ABANDON_AFTER_SECONDS?: string;
+  CLOSE_AFTER_SECONDS?: string;
+  START_WINDOW_OPENS?: string;
+  START_WINDOW_CLOSES?: string;
 
   /** "supabase" (default) or "local" (wrangler dev and tests only). */
   DB_BACKEND?: string;

@@ -213,7 +213,27 @@ impl Vertical {
         self.start_with(disk_spec(reserve), Some(pause_dir))
     }
 
+    /// [`Vertical::start_paused`] with a test build's wrap-up for a run without a server
+    /// shortened to `wrap_up_ms` (`GOALCUP_TEST_LOCAL_WRAP_UP`).
+    pub fn start_paused_short_wrap_up(
+        &self,
+        reserve: u64,
+        pause_dir: &Path,
+        wrap_up_ms: u64,
+    ) -> Launcher {
+        self.start_launcher(disk_spec(reserve), Some(pause_dir), Some(wrap_up_ms))
+    }
+
     fn start_with(&self, disk: String, pause_dir: Option<&Path>) -> Launcher {
+        self.start_launcher(disk, pause_dir, None)
+    }
+
+    fn start_launcher(
+        &self,
+        disk: String,
+        pause_dir: Option<&Path>,
+        wrap_up_ms: Option<u64>,
+    ) -> Launcher {
         use std::os::unix::process::CommandExt;
         let mut command = self.goalcup();
         command
@@ -223,6 +243,9 @@ impl Vertical {
             .env("GOALCUP_TEST_UPSTREAM_ROOTS", &self.upstream_pem);
         if let Some(dir) = pause_dir {
             command.env("GOALCUP_TEST_PAUSE_DIR", dir);
+        }
+        if let Some(ms) = wrap_up_ms {
+            command.env("GOALCUP_TEST_LOCAL_WRAP_UP", ms.to_string());
         }
         let child = command
             .stdout(log(&self.logs, "start.out"))

@@ -20,6 +20,8 @@ fn chain(dir: &Path, quota: u64) -> ChainWriter {
         workspace: "/w".to_string(),
         files: Vec::new(),
         excluded: Vec::new(),
+        git: None,
+        home: None,
     };
     export
         .write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)
@@ -1314,11 +1316,15 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
         })
     ));
 
-    // The full budget: an 8 s drain share, a 2 s commit reserve, 1 s of it the margin.
+    // The full budget (D56): a 148 s drain share, 30 s left for a clone's Git read, a 2 s
+    // commit reserve, 1 s of it the margin.
     let full = FinishBudget::from_request(&request(None)).unwrap();
-    assert_eq!(full.deadline - full.drain_end, FINISH_COMMIT_RESERVE);
+    assert_eq!(
+        full.deadline - full.drain_end,
+        FINISH_COMMIT_RESERVE + GIT_READ_FLOOR
+    );
     let native = full.native_budget();
-    assert!(native <= Duration::from_secs(8) && native > Duration::from_millis(7_500));
+    assert!(native <= Duration::from_secs(148) && native > Duration::from_millis(147_500));
     assert!(full.admits(Duration::ZERO));
     assert_eq!(
         full.last_start(Duration::ZERO) + FINISH_RESPONSE_MARGIN,
@@ -1340,7 +1346,10 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
 
     // Larger than the budget is clamped to it.
     let large = FinishBudget::from_request(&request(Some(u64::MAX))).unwrap();
-    assert!(large.deadline - tokio::time::Instant::now() <= Duration::from_secs(10));
+    assert!(
+        large.deadline - tokio::time::Instant::now()
+            <= goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET
+    );
 }
 
 #[test]
@@ -1472,17 +1481,82 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
     ];
     for (id, binding, name, form, hint) in cases {
         let manifest = schema_harness(id);
-        let plan = native_plan(&manifest.capture, Path::new("/run"), Path::new("/config")).unwrap();
+        let plan = native_plan(
+            &manifest.capture,
+            Path::new("/run"),
+            Path::new("/config"),
+            None,
+        )
+        .unwrap();
         let source = plan.scoped.expect("the shipped source is scoped");
         assert_eq!(plan.initial_binding, binding, "{id}");
         assert_eq!((source.name.as_str(), source.form), (name, form), "{id}");
         assert_eq!(source.hint.as_ref().map(NativeHint::as_str), hint, "{id}");
     }
     let workload = schema_harness("m2-controlled-workload");
-    let plan = native_plan(&workload.capture, Path::new("/run"), Path::new("/config")).unwrap();
+    let plan = native_plan(
+        &workload.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        None,
+    )
+    .unwrap();
     assert_eq!(plan.initial_binding, NativeBinding::NotRequired);
     assert!(plan.scoped.is_none());
     assert_eq!(plan.controlled[0].root, Path::new("/run"));
+}
+
+#[test]
+fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors/codex-cli/harness.toml"),
+    )
+    .unwrap()
+    .replace(
+        "form = \"append_only\"",
+        "form = \"append_only\"\nsince_run_start = true",
+    );
+    let manifest = HarnessManifest::from_toml_str(&text).unwrap();
+    let error = native_plan(
+        &manifest.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        None,
+    )
+    .err()
+    .expect("no run start, no plan");
+    assert!(error.to_string().contains("native_since"), "{error}");
+    // A start no clock can hold is refused, not a panic.
+    let error = native_plan(
+        &manifest.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        Some(u64::MAX),
+    )
+    .err()
+    .expect("an unrepresentable start, no plan");
+    assert!(error.to_string().contains("native_since"), "{error}");
+    let plan = native_plan(
+        &manifest.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        Some(1_760_000_000),
+    )
+    .unwrap();
+    assert_eq!(
+        plan.scoped.unwrap().modified_since,
+        Some(std::time::UNIX_EPOCH + Duration::from_secs(1_760_000_000))
+    );
+    // A source that does not declare it ignores the start time.
+    let shipped = schema_harness("codex-cli");
+    let plan = native_plan(
+        &shipped.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        Some(1_760_000_000),
+    )
+    .unwrap();
+    assert_eq!(plan.scoped.unwrap().modified_since, None);
 }
 
 #[test]
@@ -1496,7 +1570,13 @@ fn unknown_valid_native_hint_is_copied_byte_for_byte() {
         "protocol_hint = \"future-hint-v7\"",
     );
     let manifest = HarnessManifest::from_toml_str(&text).unwrap();
-    let plan = native_plan(&manifest.capture, Path::new("/run"), Path::new("/config")).unwrap();
+    let plan = native_plan(
+        &manifest.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        None,
+    )
+    .unwrap();
     assert_eq!(
         plan.scoped.unwrap().hint.unwrap().as_str(),
         "future-hint-v7"

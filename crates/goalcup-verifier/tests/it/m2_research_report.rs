@@ -562,6 +562,8 @@ fn manifest() -> SealManifest {
             sha256: "ab".repeat(32),
         }],
         excluded: vec!["target".to_string()],
+        git: None,
+        home: None,
     }
 }
 

@@ -619,6 +619,7 @@ mod retries {
             );
             let config = |url: String| ServerConfig {
                 url,
+                account: None,
                 token: TOKEN.to_string(),
             };
             // The run is opened straight on the stand-in; only the uploader goes through the front.
@@ -667,6 +668,7 @@ mod retries {
         fn uploader(&self) -> Uploader {
             let client = ServerClient::new(&ServerConfig {
                 url: self.front.url.clone(),
+                account: None,
                 token: TOKEN.to_string(),
             });
             Uploader::resume(

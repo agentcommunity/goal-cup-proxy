@@ -664,6 +664,11 @@ pub struct CaptureWorkspaceRequest {
     /// which every record then carries. Absent for a local-only run: the daemon mints one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry_id: Option<String>,
+    /// The run's start, Unix seconds (UTC): a native source that declares `since_run_start`
+    /// reads only the files modified or changed at or after it (D57). Required by such a source,
+    /// ignored by any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_since: Option<u64>,
 }
 
 fn lowercase_sha256<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -798,8 +803,9 @@ pub struct ProxyCounters {
 /// replaces the CLI's `CAPTURE_FINISH` and the daemon's `CAPTURE_DRAIN`. Termination time is
 /// outside it: SIGTERM, the connector's grace, SIGKILL, the kill sweep and the reconfirm keep
 /// TERMINATION.md's bound and are never cut (D40; CONTRACTS.md, "Amendment 2026-10-02 (C6
-/// local finish budget, H-10 4a)").
-pub const LOCAL_CAPTURE_FINISH_BUDGET: Duration = Duration::from_secs(10);
+/// local finish budget, H-10 4a)"). Three minutes since D56, so a slow disk or a large clone
+/// still seals; it was 10 s.
+pub const LOCAL_CAPTURE_FINISH_BUDGET: Duration = Duration::from_secs(180);
 
 /// The commit share of [`LOCAL_CAPTURE_FINISH_BUDGET`]. The drain stages (proxy stop, ingest
 /// drain, native finish) end this long before the deadline, so a producer that never settles

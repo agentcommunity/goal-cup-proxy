@@ -43,6 +43,7 @@ pub use submission_types::CaptureResourceLimitsV1;
 #[cfg(unix)]
 pub mod terminate;
 pub mod workspace;
+pub mod workspace_git;
 
 /// This build's version, as the daemon reports it: health, `control.json` and status documents.
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");

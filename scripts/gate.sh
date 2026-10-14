@@ -6,8 +6,10 @@
 #         binaries.
 #   full  fast's checks, every test including `full`, the CLI's `#[ignore]`d end-to-end tests
 #         (the `m2_synthetic_vertical` and `capture_failure_campaign` modules of its `full`
-#         binary, about 4.5 minutes), the scripts' unit tests and the link check. The other
-#         ignored tests need a real Hermes or a disk image and are run by hand.
+#         binary, about 4.5 minutes), the upload Worker's `upload_worker` tests (they run the
+#         real Worker under `wrangler dev` and need `npm ci` in server/worker), the scripts' unit
+#         tests and the link check. The other ignored tests need a real Hermes or a disk image
+#         and are run by hand.
 #
 # Tests run under cargo-nextest (one process per test, in parallel). Without it the gate falls
 # back to `cargo test`, which runs every tier.
@@ -35,6 +37,12 @@ step() {
     "$@" || fail
 }
 
+# The Worker's tests need its node_modules; say so at once rather than after the long steps.
+if [ "$tier" = full ] && [ ! -d server/worker/node_modules ]; then
+    echo "run npm ci in server/worker"
+    fail
+fi
+
 # The CLI tests spawn the sibling target/debug/goalcup-daemon, so the whole workspace is built
 # before any test runs. A stale daemon binary would otherwise be tested.
 step cargo build --offline --workspace
@@ -61,6 +69,10 @@ if cargo nextest --version >/dev/null 2>&1; then
         # release check runs them by name. The other ignored tests are not selected.
         step cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
             -E 'test(/^(m2_synthetic_vertical|capture_failure_campaign)::/)'
+        # The real upload Worker against the tracer (a rule change there touches the Worker, its
+        # local database, the SQL proposal and the Rust stand-in: docs/UPLOAD-API.md).
+        step cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
+            -E 'test(/upload_worker/)'
     fi
     # nextest does not run doctests; the compile_fail one in goalcup-protocol guards a promise.
     step cargo test --offline --workspace --doc
@@ -70,6 +82,7 @@ else
     if [ "$tier" = full ]; then
         step cargo test --offline -p goalcup-cli --test full -- --ignored \
             m2_synthetic_vertical:: capture_failure_campaign::
+        step cargo test --offline -p goalcup-cli --test full -- --ignored upload_worker
     fi
 fi
 

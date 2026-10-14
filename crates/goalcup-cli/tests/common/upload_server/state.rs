@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ed25519_dalek::SigningKey;
 use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::chain::GENESIS;
-use goalcup_protocol::control::parse_z;
+use goalcup_protocol::control::{format_z, parse_z};
 use goalcup_protocol::receipt::StartReceipt;
 use serde::{Deserialize, Serialize};
 
@@ -108,6 +108,7 @@ pub struct Credential {
 pub enum RunStatus {
     Open,
     Sealed,
+    Incomplete,
     Abandoned,
 }
 
@@ -116,16 +117,44 @@ impl RunStatus {
         match self {
             RunStatus::Open => "open",
             RunStatus::Sealed => "sealed",
+            RunStatus::Incomplete => "incomplete",
             RunStatus::Abandoned => "abandoned",
         }
     }
 }
 
+/// A run: what an account started. Its chain, receipt and seal live on its entries (segments).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: String,
-    pub entry_id: String,
     pub member: String,
+    /// `competition` or `practice`, from the credential.
+    pub mode: String,
+    pub repo_url: String,
+    pub official_start: String,
+    pub deadline_at: String,
+    /// Set when a later competition start by the member replaced this run: it ends then.
+    #[serde(default)]
+    pub replaced_at: Option<String>,
+    pub status: RunStatus,
+    pub abandon_reason: Option<String>,
+    /// The open call's `machine` facts, kept and never shown.
+    #[serde(default)]
+    pub machine: Option<serde_json::Value>,
+    /// What the connection said about itself (`CF-Connecting-IP`, `CF-IPCountry`): kept, never shown.
+    #[serde(default)]
+    pub client_ip: Option<String>,
+    #[serde(default)]
+    pub client_country: Option<String>,
+    /// Segment 0 first; the last is the current entry.
+    pub entries: Vec<EntryRecord>,
+}
+
+/// One segment of a run: its own chain, receipt and seal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntryRecord {
+    pub entry_id: String,
+    pub segment: u64,
     pub session_id: String,
     pub connector_id: String,
     pub manifest_sha256: String,
@@ -133,11 +162,6 @@ pub struct RunRecord {
     pub workspace: String,
     pub harness_version: String,
     pub tracer_version: String,
-    pub repo_url: String,
-    pub official_start: String,
-    pub deadline_at: String,
-    pub status: RunStatus,
-    pub abandon_reason: Option<String>,
     pub receipt: Option<StartReceipt>,
     pub chunks: Vec<StoredChunk>,
     /// `(seal_json, baseline_json)`, verbatim.
@@ -148,23 +172,9 @@ pub struct RunRecord {
     /// Set by the first final heartbeat; never changes after.
     #[serde(default)]
     pub final_commit: Option<FinalCommit>,
-    /// True when the server abandoned the run itself, `abandon_after_seconds` after the deadline
-    /// with no seal, as opposed to the member giving it back through `/abandon`.
-    #[serde(default)]
-    pub auto_abandoned: bool,
 }
 
-impl RunRecord {
-    /// The deadline in epoch seconds.
-    pub fn deadline_secs(&self) -> u64 {
-        parse_z(&self.deadline_at).expect("deadline_at is a stored RFC 3339 time")
-    }
-
-    /// True once the server's clock is at or past `deadline_at`.
-    pub fn stopped(&self) -> bool {
-        now_secs() >= self.deadline_secs()
-    }
-
+impl EntryRecord {
     /// Bytes of `chain.jsonl` held: the end of the last chunk.
     pub fn offset(&self) -> u64 {
         self.chunks.last().map_or(0, |c| c.offset + c.length)
@@ -180,6 +190,65 @@ impl RunRecord {
         self.chunks
             .last()
             .map_or_else(|| GENESIS.to_string(), |c| c.head.clone())
+    }
+}
+
+impl RunRecord {
+    /// The deadline in epoch seconds.
+    pub fn deadline_secs(&self) -> u64 {
+        parse_z(&self.deadline_at).expect("deadline_at is a stored RFC 3339 time")
+    }
+
+    /// When the run is over, in epoch seconds: the deadline, or when a later start replaced it.
+    pub fn ends_secs(&self) -> u64 {
+        let deadline = self.deadline_secs();
+        match self.replaced_at.as_deref().and_then(parse_z) {
+            Some(replaced) => deadline.min(replaced),
+            None => deadline,
+        }
+    }
+
+    /// `ends_at` as the contract writes it.
+    pub fn ends_at(&self) -> String {
+        format_z(self.ends_secs())
+    }
+
+    /// True once the server's clock is at or past the end of the run.
+    pub fn stopped(&self) -> bool {
+        now_secs() >= self.ends_secs()
+    }
+
+    /// The entry of the highest segment.
+    pub fn current(&self) -> &EntryRecord {
+        self.entries.last().expect("a run has an entry")
+    }
+
+    pub fn entry(&self, entry_id: &str) -> Option<&EntryRecord> {
+        self.entries.iter().find(|e| e.entry_id == entry_id)
+    }
+
+    pub fn entry_mut(&mut self, entry_id: &str) -> Option<&mut EntryRecord> {
+        self.entries.iter_mut().find(|e| e.entry_id == entry_id)
+    }
+
+    /// True once the run has been over for more than `close_after` seconds: it takes nothing more.
+    pub fn past_close(&self, close_after: u64) -> bool {
+        now_secs() > self.ends_secs().saturating_add(close_after)
+    }
+
+    /// What the status is now: `sealed` once the run is over and its current entry is sealed,
+    /// `incomplete` once it has been over for `close_after` seconds without that.
+    pub fn status_now(&self, close_after: u64) -> RunStatus {
+        if self.status != RunStatus::Open || !self.stopped() {
+            return self.status;
+        }
+        if self.current().seal.is_some() {
+            RunStatus::Sealed
+        } else if self.past_close(close_after) {
+            RunStatus::Incomplete
+        } else {
+            RunStatus::Open
+        }
     }
 }
 
@@ -206,8 +275,13 @@ pub struct Shared {
     pub credentials: Mutex<HashMap<String, Credential>>,
     /// Run length in seconds: `deadline_at` is `official_start` plus this.
     pub run_secs: u64,
-    /// How long after `deadline_at` an unsealed run is abandoned.
-    pub abandon_after_secs: u64,
+    /// The same for a practice run.
+    pub practice_secs: u64,
+    /// How long after a run ends it is closed (`sealed`, or `incomplete`).
+    pub close_after_secs: u64,
+    /// The competition start window, in epoch seconds; an unset edge is open.
+    pub window_opens: Option<u64>,
+    pub window_closes: Option<u64>,
     pub key: SigningKey,
     /// Ordered, so `run_ids()` is stable.
     pub runs: Mutex<BTreeMap<String, RunRecord>>,
@@ -227,17 +301,15 @@ pub fn now_secs() -> u64 {
 }
 
 impl Shared {
-    /// Lock the runs after abandoning every open run whose time has come, so no caller sees a
-    /// stale `open`. The abandonment is persisted like any other change.
+    /// Lock the runs after closing every run whose time has come (`sealed` if its current entry
+    /// is sealed, `incomplete` after the close time without that), so no caller sees a stale
+    /// `open`. The close is persisted like any other change.
     pub fn lock_runs(&self) -> MutexGuard<'_, BTreeMap<String, RunRecord>> {
         let mut runs = self.runs.lock().unwrap_or_else(|e| e.into_inner());
-        let now = now_secs();
         for run in runs.values_mut() {
-            if run.status == RunStatus::Open
-                && now >= run.deadline_secs().saturating_add(self.abandon_after_secs)
-            {
-                run.status = RunStatus::Abandoned;
-                run.auto_abandoned = true;
+            let status = run.status_now(self.close_after_secs);
+            if status != run.status {
+                run.status = status;
                 self.persist(run);
             }
         }

@@ -125,6 +125,16 @@ pub fn git_worktree_of(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// `workspace` holds a `.git` directory, not a file or a link, and no ancestor is a work tree:
+/// the root of its own clone (D56).
+pub fn is_clone_root(workspace: &Path) -> bool {
+    workspace
+        .join(".git")
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.is_dir())
+        && workspace.parent().and_then(git_worktree_of).is_none()
+}
+
 /// Walk `workspace`, applying [`is_excluded`] with `excluded`, and return a sorted
 /// manifest. One walker for the baseline and for the seal, so the zero-entry proof and the
 /// seal can never disagree about what was left out.
@@ -138,9 +148,77 @@ pub fn list_workspace(
     at: &str,
     excluded: &[String],
 ) -> Result<SealManifest, DaemonError> {
+    Ok(SealManifest {
+        entry_id: entry_id.to_string(),
+        sealed_at: at.to_string(),
+        workspace: workspace.to_string_lossy().to_string(),
+        files: walk(workspace, excluded, usize::MAX, u64::MAX, None)?,
+        excluded: excluded.to_vec(),
+        git: None,
+        home: None,
+    }
+    .sorted())
+}
+
+/// The workspace's seal (D56). The root of its own clone ([`is_clone_root`]) is never walked:
+/// its Git state, read within `budget`, or `Ok(Err(why))` when it could not be read, which the
+/// caller refuses rather than walk. Any other workspace is walked, as before.
+pub fn seal_workspace(
+    workspace: &Path,
+    entry_id: &str,
+    at: &str,
+    budget: std::time::Duration,
+) -> Result<Result<SealManifest, String>, DaemonError> {
+    if !is_clone_root(workspace) {
+        return list_workspace(workspace, entry_id, at, &[]).map(Ok);
+    }
+    let git = match crate::workspace_git::state(workspace, budget) {
+        Ok(git) => git,
+        Err(why) => return Ok(Err(why)),
+    };
+    Ok(Ok(SealManifest {
+        entry_id: entry_id.to_string(),
+        sealed_at: at.to_string(),
+        workspace: workspace.to_string_lossy().to_string(),
+        files: Vec::new(),
+        excluded: Vec::new(),
+        git: Some(git),
+        home: None,
+    }))
+}
+
+/// The most files the baseline lists of the harness home (D56).
+pub const HOME_FILE_LIMIT: usize = 10_000;
+
+/// A file larger than this is described by its size alone: in the Git digest, and in the
+/// baseline's harness-home listing, where it carries the absent digest beside its size (D56).
+pub(crate) const HASH_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// The connector's config home for the baseline (D56): every file the walk meets, without
+/// `excluded` (its native roots), symlinks unfollowed, stopping at [`HOME_FILE_LIMIT`] files,
+/// sorted. A file over [`HASH_LIMIT`] is not read. `None` when the home cannot be read.
+pub fn list_home(home: &Path, excluded: &[String]) -> Option<Vec<SealedFile>> {
+    let mut files = walk(home, excluded, HOME_FILE_LIMIT, HASH_LIMIT, None).ok()?;
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Some(files)
+}
+
+/// Every file below `workspace` the exclusions leave, at most `limit` of them, in walk order. A
+/// regular file over `hash_limit` bytes is listed with its size and the absent digest, unread.
+/// Past `deadline`, checked before each file, the walk is refused.
+pub(crate) fn walk(
+    workspace: &Path,
+    excluded: &[String],
+    limit: usize,
+    hash_limit: u64,
+    deadline: Option<std::time::Instant>,
+) -> Result<Vec<SealedFile>, DaemonError> {
     let mut files = Vec::new();
     let mut stack = vec![workspace.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if files.len() >= limit {
+            break;
+        }
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             // The workspace itself must be readable: without it there is nothing to seal.
@@ -193,22 +271,21 @@ pub fn list_workspace(
                 stack.push(path);
                 continue;
             }
-            let (bytes, sha256) = measure(&path);
+            if deadline.is_some_and(|end| std::time::Instant::now() >= end) {
+                return Err(DaemonError::Refused("the walk ran out of time".into()));
+            }
+            let (bytes, sha256) = measure(&path, hash_limit);
             files.push(SealedFile {
                 path: rel,
                 bytes,
                 sha256,
             });
+            if files.len() >= limit {
+                break;
+            }
         }
     }
-    Ok(SealManifest {
-        entry_id: entry_id.to_string(),
-        sealed_at: at.to_string(),
-        workspace: workspace.to_string_lossy().to_string(),
-        files,
-        excluded: excluded.to_vec(),
-    }
-    .sorted())
+    Ok(files)
 }
 
 /// A workspace-relative path with forward slashes.
@@ -225,7 +302,9 @@ fn relative_to(workspace: &Path, path: &Path) -> String {
 /// blocking, never read, so an agent's `mkfifo` cannot wedge the seal), a socket, a device, a
 /// file whose permissions changed under the walk — is still listed, with the absent digest:
 /// dropping it would make the seal quieter than the workspace it describes.
-fn measure(path: &Path) -> (u64, String) {
+///
+/// A regular file over `hash_limit` bytes is not read: its size, with the absent digest.
+pub(crate) fn measure(path: &Path, hash_limit: u64) -> (u64, String) {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
     let Ok(mut file) = std::fs::OpenOptions::new()
@@ -235,8 +314,14 @@ fn measure(path: &Path) -> (u64, String) {
     else {
         return (0, ABSENT.to_string());
     };
-    if !file.metadata().is_ok_and(|m| m.file_type().is_file()) {
+    let Ok(meta) = file.metadata() else {
         return (0, ABSENT.to_string());
+    };
+    if !meta.file_type().is_file() {
+        return (0, ABSENT.to_string());
+    }
+    if meta.len() > hash_limit {
+        return (meta.len(), ABSENT.to_string());
     }
     let mut hasher = Sha256::new();
     let mut total = 0u64;
@@ -263,9 +348,13 @@ fn measure(path: &Path) -> (u64, String) {
 /// It creates no directory, not even the workspace: the capture runtime asks "would this be
 /// refused?" before it creates the entry's artifact directory.
 ///
-/// A workspace that does not exist yet has zero entries; that is the normal case.
+/// A workspace that does not exist yet has zero entries; that is the normal case. The root of
+/// its own clone (a `.git` directory, no work tree above it) is admitted with its files (D56).
 pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
     check_artifact_placement(&roots.artifact_root, &roots.workspace)?;
+    if is_clone_root(&roots.workspace) {
+        return Ok(());
+    }
     if let Some(repo) = git_worktree_of(&roots.workspace) {
         return Err(DaemonError::Guard(format!(
             "workspace {} is inside the Git worktree {} (R3: a new directory outside any \

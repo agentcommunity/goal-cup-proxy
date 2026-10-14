@@ -18,29 +18,38 @@ pub(super) struct NativePlan {
     pub(super) unread_stores: usize,
 }
 
+/// `native_since` is the run's start in Unix seconds, which a `since_run_start` source needs
+/// (D57) and any other ignores.
 pub(super) fn native_plan(
     capture: &CaptureSpec,
     run_home: &Path,
     config_home: &Path,
+    native_since: Option<u64>,
 ) -> Result<NativePlan, DaemonError> {
     let native = capture
         .native
         .first()
         .ok_or_else(|| DaemonError::Config("a schema-1 capture has no native source".into()))?;
-    let root = if native.root == "{config_home}" {
-        config_home.to_path_buf()
-    } else if let Some(rest) = native.root.strip_prefix("{config_home}/") {
-        config_home.join(rest)
-    } else if native.root == "{run_home}" {
-        run_home.to_path_buf()
-    } else if let Some(rest) = native.root.strip_prefix("{run_home}/") {
-        run_home.join(rest)
-    } else {
-        return Err(DaemonError::Config(format!(
-            "native root {:?} is not rooted in config_home or run_home",
-            native.root
-        )));
+    let modified_since = match (native.since_run_start, native_since) {
+        (false, _) => None,
+        (true, Some(secs)) => Some(
+            std::time::UNIX_EPOCH
+                .checked_add(Duration::from_secs(secs))
+                .ok_or_else(|| {
+                    DaemonError::Config(format!(
+                        "`native_since` {secs} is not a time this machine can represent"
+                    ))
+                })?,
+        ),
+        (true, None) => {
+            return Err(DaemonError::Config(
+                "the profile reads the session files written since the run started, and the \
+                 request names no `native_since`: the launcher must send the run's start time"
+                    .into(),
+            ));
+        }
     };
+    let root = native_root(&native.root, run_home, config_home)?;
     let form = match native.form {
         goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
         goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
@@ -63,6 +72,7 @@ pub(super) fn native_plan(
         form,
         hint,
         scope_id: None,
+        modified_since,
     };
     if native.pattern.contains("{id}") {
         let initial_binding = match capture.identity.binding {
@@ -93,6 +103,44 @@ pub(super) fn native_plan(
             unread_stores: 0,
         })
     }
+}
+
+/// A native source's `root` template, resolved.
+fn native_root(root: &str, run_home: &Path, config_home: &Path) -> Result<PathBuf, DaemonError> {
+    if root == "{config_home}" {
+        Ok(config_home.to_path_buf())
+    } else if let Some(rest) = root.strip_prefix("{config_home}/") {
+        Ok(config_home.join(rest))
+    } else if root == "{run_home}" {
+        Ok(run_home.to_path_buf())
+    } else if let Some(rest) = root.strip_prefix("{run_home}/") {
+        Ok(run_home.join(rest))
+    } else {
+        Err(DaemonError::Config(format!(
+            "native root {root:?} is not rooted in config_home or run_home"
+        )))
+    }
+}
+
+/// The baseline's listing of the config home (D56): every file but the native roots inside it.
+/// Empty when a native root is the home itself; `None` when the home cannot be read.
+pub(super) fn listed_home(
+    capture: &CaptureSpec,
+    run_home: &Path,
+    config_home: &Path,
+) -> Option<Vec<goalcup_protocol::seal::SealedFile>> {
+    let mut excluded = Vec::new();
+    for native in &capture.native {
+        let Ok(root) = native_root(&native.root, run_home, config_home) else {
+            continue;
+        };
+        match root.strip_prefix(config_home) {
+            Ok(rel) if rel.as_os_str().is_empty() => return Some(Vec::new()),
+            Ok(rel) => excluded.push(rel.to_string_lossy().replace('\\', "/")),
+            Err(_) => {}
+        }
+    }
+    workspace::list_home(config_home, &excluded)
 }
 
 /// A native capture over `sources`, queueing into `sink`.

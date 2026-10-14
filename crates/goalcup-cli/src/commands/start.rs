@@ -42,7 +42,7 @@ use crate::proxy::{MAX_CONNECTION_TASKS, ProxyConfig, ProxyHandle};
 use crate::retry::{retry_busy, retry_busy_entry, retry_busy_process};
 use crate::run::reserve::{DiskPolicy, RunReserve, artifact_root, release_stale, reserve_path};
 use crate::run::{EntryRef, RunRecord};
-use crate::upload::policy::{WrapUp, wrap_up_length};
+use crate::upload::policy::{WrapUp, WrapUpSpec};
 use goalcup_protocol::capture::CaptureSink;
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest, CaptureWorkspaceInfo,
@@ -1019,6 +1019,7 @@ fn create_and_gate<'a>(
         run_home: run.home.display().to_string(),
         config_home: config_home.display().to_string(),
         entry_id: opened.as_ref().map(|o| o.run.entry_id.clone()),
+        native_since: None,
     };
     let info = match retry_busy(|| client.create_capture_workspace(&request)) {
         Ok(info) => info,
@@ -1378,7 +1379,7 @@ fn run_harness<'a>(
     let noted = forked.upload.as_ref().map(|start| start.record.clone());
     // How long the wrap-up after the stop lasts: the upload policy's for a run on a server, and
     // the local default for one without.
-    let wrap_length = wrap_up_length(forked.upload.as_ref().map(|start| &start.policy));
+    let wrap_spec = WrapUpSpec::for_run(forked.upload.as_ref().map(|start| &start.policy), cx.env);
     let uploads_dir = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
     let note_repo_head = || {
         if let Some(record) = &noted {
@@ -1468,7 +1469,7 @@ fn run_harness<'a>(
         // The commit the workspace has now, before the harness's grace lets it change.
         note_repo_head();
         // The one bound of the wrap-up, for the seal below and the upload's finish later.
-        let wrap_up = WrapUp::after(wrap_length);
+        let wrap_up = wrap_spec.begin();
         *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
         keeper.update(|state| state.stopped = Some(reason.to_string()));
         let label = if reason == crate::run::watch::DISK_STOP_REASON
@@ -1521,7 +1522,7 @@ fn run_harness<'a>(
     let wrap_up = stopped_wrap
         .into_inner()
         .unwrap_or_else(|e| e.into_inner())
-        .unwrap_or_else(|| WrapUp::after(wrap_length));
+        .unwrap_or_else(|| wrap_spec.begin());
     // A run that ended on its own: its commit as it ended.
     if forked.proxied.is_some() {
         note_repo_head();

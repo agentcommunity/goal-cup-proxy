@@ -27,6 +27,7 @@ fn log_in(rig: &Rig, url: &str, token: &str) {
         &rig.cfg,
         &ServerConfig {
             url: url.to_string(),
+            account: None,
             token: token.to_string(),
         },
     )
@@ -177,6 +178,7 @@ fn the_client_speaks_tls_and_refuses_an_untrusted_certificate() {
     let upstream = crate::common::m2_cli_support::Upstream::start(&runtime);
     let config = ServerConfig {
         url: format!("https://localhost:{}", upstream.port),
+        account: None,
         token: TOKEN.to_string(),
     };
     let root =
