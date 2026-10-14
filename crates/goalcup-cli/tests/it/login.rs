@@ -153,6 +153,7 @@ fn a_server_file_others_can_read_is_refused() {
     let tmp = tempfile::tempdir().unwrap();
     let config = ServerConfig {
         url: "https://ingest.example.org".into(),
+        account: None,
         token: TOKEN.into(),
     };
     let path = write_server_config(tmp.path(), &config).unwrap();

@@ -6,6 +6,7 @@
 //! The workspace builds `ureq` without its TLS feature, so this adds no crate.
 
 use super::api::ErrorBody;
+use crate::account::credential::RunCredential;
 use crate::server::ServerConfig;
 use std::io::Read;
 use std::sync::Arc;
@@ -91,7 +92,7 @@ impl std::fmt::Display for ServerError {
     }
 }
 
-/// A client for one server, holding the token. `Debug` prints the URL only.
+/// A client for one server, holding a bearer token or none. `Debug` prints the URL only.
 #[derive(Clone)]
 pub struct ServerClient {
     base: String,
@@ -112,6 +113,17 @@ impl ServerClient {
     /// A client for `config`, trusting the public web roots.
     pub fn new(config: &ServerConfig) -> ServerClient {
         ServerClient::bearer(&config.url, &config.token)
+    }
+
+    /// A client for `url` that sends no `Authorization` header at all: the device flow's two
+    /// calls are made before there is a credential.
+    pub fn anonymous(url: &str) -> ServerClient {
+        ServerClient::bearer(url, "")
+    }
+
+    /// A client for `url` that authenticates as the run `c` was approved for.
+    pub fn with_credential(url: &str, c: &RunCredential) -> ServerClient {
+        ServerClient::bearer(url, c.secret())
     }
 
     /// A client for any `base` URL and bearer `token`, trusting the public web roots. The
@@ -227,10 +239,14 @@ impl ServerClient {
         parse(answer(request.send(body))?)
     }
 
+    /// The request, with an `Authorization` header only when this client holds a token.
     fn request(&self, method: &str, path: &str) -> ureq::Request {
-        self.agent
-            .request(method, &format!("{}{path}", self.base))
-            .set("Authorization", &format!("Bearer {}", self.token))
+        let request = self.agent.request(method, &format!("{}{path}", self.base));
+        if self.token.is_empty() {
+            request
+        } else {
+            request.set("Authorization", &format!("Bearer {}", self.token))
+        }
     }
 }
 
