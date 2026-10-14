@@ -228,33 +228,12 @@ fn invalid_quota_refused_before_append() {
         );
     }
     assert_eq!(export.capture_storage().quota_bytes, 0);
-    // Nothing was selected, so a v5 record is still an unsupported version for this export.
+    // No quota was set, so nothing may be appended, the baseline included.
     assert!(matches!(
         export.write_baseline_for_protocol(M2_PROTOCOL_VERSION, &manifest()),
-        Err(ExportError::UnsupportedProtocolVersion {
-            protocol_version: 5,
-            ..
-        })
+        Err(ExportError::CaptureQuotaNotConfigured)
     ));
     assert!(chain(tmp.path()).is_empty(), "no byte reached the chain");
-
-    // A legacy chain that already holds a record cannot be relabelled as a capture chain.
-    let legacy = tempfile::tempdir().unwrap();
-    let mut export = TraceExport::create(legacy.path()).unwrap();
-    export.write_baseline(&manifest()).unwrap();
-    let before = snapshot(legacy.path());
-    assert!(matches!(
-        export.configure_capture_quota(SMALL_QUOTA),
-        Err(ExportError::InvalidCaptureQuota { .. })
-    ));
-    assert!(matches!(
-        export.append_chain(&mut v5(gap(1))),
-        Err(ExportError::UnsupportedProtocolVersion {
-            protocol_version: 5,
-            ..
-        })
-    ));
-    assert_eq!(snapshot(legacy.path()), before);
 }
 
 #[test]
@@ -678,33 +657,21 @@ fn malformed_terminated_capture_records_fail_resume() {
 }
 
 #[test]
-fn capture_chains_admit_only_protocol_five_capture_bodies() {
+fn capture_chains_admit_only_protocol_five_envelopes() {
     let tmp = tempfile::tempdir().unwrap();
     let mut export = capture_export(tmp.path(), LARGE_QUOTA);
     let before = chain(tmp.path());
 
-    let mut legacy = v5(gap(70));
-    legacy.protocol_version = goalcup_protocol::PROTOCOL_VERSION;
-    legacy.body = EventBody::Leg1Record {
-        store: "main".to_string(),
-        payload: serde_json::json!({"legacy": true}),
-    };
+    for retired in 1..=4 {
+        let mut legacy = v5(gap(70));
+        legacy.protocol_version = retired;
+        assert!(matches!(
+            export.append_chain(&mut legacy),
+            Err(ExportError::InvalidCaptureEnvelope { .. })
+        ));
+    }
     assert!(matches!(
-        export.append_chain(&mut legacy),
-        Err(ExportError::InvalidCaptureEnvelope { .. })
-    ));
-    assert!(matches!(
-        export.write_seal(&manifest()),
-        Err(ExportError::InvalidCaptureEnvelope { .. })
-    ));
-
-    let mut leg_body_v5 = v5(gap(71));
-    leg_body_v5.body = EventBody::Leg1Record {
-        store: "main".to_string(),
-        payload: serde_json::json!({"legacy": true}),
-    };
-    assert!(matches!(
-        export.append_chain(&mut leg_body_v5),
+        export.write_seal_for_protocol(4, &manifest()),
         Err(ExportError::InvalidCaptureEnvelope { .. })
     ));
 
@@ -726,15 +693,11 @@ fn capture_chains_admit_only_protocol_five_capture_bodies() {
     ));
     assert_eq!(chain(tmp.path()), before, "no refusal reached the chain");
 
-    // A hand-linked legacy record inside a capture chain does not resume either.
+    // A hand-linked retired-version record inside a capture chain does not resume either.
     let head = export.head().unwrap();
     drop(export);
     let mut legacy = v5(gap(74));
-    legacy.protocol_version = goalcup_protocol::PROTOCOL_VERSION;
-    legacy.body = EventBody::Leg1Record {
-        store: "main".to_string(),
-        payload: serde_json::json!({"legacy": true}),
-    };
+    legacy.protocol_version = 4;
     append_raw(tmp.path(), &linked_line(&head, legacy));
     assert!(matches!(
         TraceExport::resume(tmp.path()),
