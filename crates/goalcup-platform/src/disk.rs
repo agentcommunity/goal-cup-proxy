@@ -48,6 +48,12 @@ fn available(result: libc::c_int, stat: std::mem::MaybeUninit<libc::statvfs>) ->
 }
 
 /// A file whose logical length equals the bytes it holds, with every block allocated.
+///
+/// `ErrorKind::StorageFull` means the volume has too little free space. `ErrorKind::Unsupported`
+/// means this volume cannot hold a physically allocated reserve at all (for instance a
+/// compressing filesystem that stores zeros as holes): the caller should run without a reserve.
+/// Growing can block on I/O, because a volume with no native allocator is filled by writing
+/// zeros.
 #[derive(Debug)]
 pub struct ReserveFile {
     file: File,
@@ -57,8 +63,9 @@ pub struct ReserveFile {
 impl ReserveFile {
     /// Create `path` (mode 0600, never through a symlink) or reopen an existing regular file,
     /// and allocate it up to `bytes`. An existing file keeps the blocks it already has. When
-    /// the volume cannot supply the missing bytes this is `ErrorKind::StorageFull` and a file
-    /// this call created is removed.
+    /// the volume cannot supply the missing bytes this is `ErrorKind::StorageFull`, and when it
+    /// cannot allocate at all it is `ErrorKind::Unsupported`; in both cases, and for any other
+    /// error, a file this call created is removed.
     pub fn hold(path: &Path, bytes: u64) -> io::Result<ReserveFile> {
         let mut options = OpenOptions::new();
         options
@@ -110,9 +117,13 @@ impl ReserveFile {
 
     /// Allocate or give back blocks so the file holds `bytes`. Growing checks the volume
     /// first and is `StorageFull` when short, and verifies the result by measurement, writing
-    /// zeros if the allocator did not deliver; shrinking returns the blocks to the volume.
+    /// zeros over the new range if the allocator did not deliver, and is `Unsupported` if the
+    /// blocks are still not there; shrinking returns the blocks to the volume. A failed grow
+    /// leaves the previous length. This can block on I/O while it writes zeros.
     pub fn resize(&mut self, bytes: u64) -> io::Result<()> {
-        let missing = bytes.saturating_sub(self.measure()?);
+        let old_len = self.file.metadata()?.len();
+        let old_allocated = self.measure()?;
+        let missing = bytes.saturating_sub(old_allocated);
         if missing == 0 {
             return self.set_length(bytes);
         }
@@ -126,9 +137,15 @@ impl ReserveFile {
         };
         self.set_length(bytes)?;
         if !granted || self.measure()? < bytes {
-            write_zeros(&self.file, bytes)?;
+            // Blocks below the old length are already allocated when the file was fully held;
+            // a sparse reopened file is rewritten from the start instead.
+            let from = if old_allocated >= old_len { old_len } else { 0 };
+            write_zeros(&self.file, from, bytes)?;
             if self.measure()? < bytes {
-                return Err(io::Error::other("the volume did not allocate the reserve"));
+                return Err(io::Error::new(
+                    ErrorKind::Unsupported,
+                    "this volume cannot hold a reserve",
+                ));
             }
         }
         Ok(())
@@ -206,12 +223,12 @@ fn is_unsupported(error: &io::Error) -> bool {
     })
 }
 
-/// Allocate by writing: zeros in 1 MiB chunks over `[0, bytes)`.
-fn write_zeros(file: &File, bytes: u64) -> io::Result<()> {
+/// Allocate by writing: zeros in 1 MiB chunks over `[from, bytes)`.
+fn write_zeros(file: &File, from: u64, bytes: u64) -> io::Result<()> {
     use std::os::unix::fs::FileExt;
 
     let chunk = vec![0u8; 1 << 20];
-    let mut offset = 0u64;
+    let mut offset = from;
     while offset < bytes {
         let take =
             usize::try_from(bytes - offset).map_or(chunk.len(), |left| left.min(chunk.len()));
