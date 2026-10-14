@@ -69,16 +69,12 @@ Ticket IDs below (H-xx, F-xx) name tickets of the retired `LEDGER.md`; read it i
   A CLI crash after the gate released the child, combined with a raced manual `goalcup seal`, can
   still leave a harness running. Needs both faults. Ticket: H-10; record
   m2-h10-finish-and-spawn-gate.
-- **The release-time swap check is neither a coherent snapshot nor inode-bound execution on
-  macOS.** No build is pinned (D53): the CLI resolves `program` on `PATH`, hashes the regular file
-  once, and after durable registration re-opens the exact canonical path with
-  `O_NOFOLLOW|O_NONBLOCK`, requires a regular file and streams it into SHA-256 again, refusing a
-  file swapped mid-launch. The residual window starts at the first read: a same-UID writer can
-  mutate the open file in place so the second read hashes to the first while the file's final
-  bytes differ. After the read, `exec` resolves the path, so a same-UID pathname replacement can
-  change what runs. The daemon's `Launch.harness_build` digests (the registered program and, on
-  Linux, the running image) are the record of what ran; on macOS the image digest reads a path,
-  so the same replacement is a residual there too.
+- **The launch is not inode-bound execution.** No build is pinned (D53): the CLI resolves
+  `program` on `PATH`, refuses a symlink or anything but a regular file, and reads none of its
+  bytes. `exec` resolves the path, so a same-UID pathname replacement or an updater rewriting the
+  file can change what runs; that is simply a different build. The daemon's `Launch.harness_build`
+  digests (the registered program and, on Linux, the running image) are the record of what ran; on
+  macOS the image digest reads a path, so the same replacement is a residual there too.
 - **An unpinned build may be anything on PATH** (a wrapper that unsets `HTTPS_PROXY`, a fake that
   writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the
   judges comparing the native session's model turns with the wire leg's model calls. The research
