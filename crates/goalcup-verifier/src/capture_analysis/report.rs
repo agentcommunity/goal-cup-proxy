@@ -238,7 +238,8 @@ pub fn research_summary(
         "options": {
             // Schema 1 keeps this key; there is no development mode to record any more.
             "dev_mode": false,
-            "allow_descriptor_key": options.allow_descriptor_key,
+            // Schema 1 keeps this key too: a v5 trace names no descriptor key to allow.
+            "allow_descriptor_key": false,
             "extra_server_keys": options.extra_server_keys,
         },
         "key_source": integrity.key_source,

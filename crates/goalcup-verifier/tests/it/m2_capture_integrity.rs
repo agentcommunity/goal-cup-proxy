@@ -503,7 +503,6 @@ fn server_key() -> SigningKey {
 fn supplied(key: &SigningKey) -> VerifyOptions {
     VerifyOptions {
         extra_server_keys: vec![hex::encode(key.verifying_key().to_bytes())],
-        ..VerifyOptions::default()
     }
 }
 
