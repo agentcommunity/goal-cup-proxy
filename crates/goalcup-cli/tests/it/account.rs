@@ -127,6 +127,10 @@ fn private_non_empty_or_read_only_repos_are_refused_with_distinct_sentences() {
         (200, r#"{"private":false,"size":0}"#),
         (404, r#"{"message":"Not Found"}"#),
         (401, r#"{"message":"Bad credentials"}"#),
+        (
+            301,
+            r#"{"message":"Moved Permanently","url":"https://api.github.com/repositories/1"}"#,
+        ),
     ];
     let mut sentences = Vec::new();
     for (status, body) in cases {
@@ -140,7 +144,7 @@ fn private_non_empty_or_read_only_repos_are_refused_with_distinct_sentences() {
             Some(format!("Bearer {}", token()).as_str())
         );
     }
-    // Private, non-empty, read-only, not found, refused token: five different sentences, and
+    // Private, non-empty, read-only, not found, refused token, moved: six different sentences, and
     // a missing `permissions` object reads as read-only.
     assert!(sentences[0].contains("private"), "{}", sentences[0]);
     assert!(sentences[1].contains("not empty"), "{}", sentences[1]);
@@ -387,12 +391,13 @@ fn all_files(dir: &Path, found: &mut Vec<PathBuf>) {
 fn the_clone_has_a_helper_and_no_token_in_its_config() {
     let rig = rig();
     let dest = rig.root.join("work");
-    let cfg = rig.root.join("it's cfg");
+    let cfg = rig.root.join("it's my cfg");
     // A goalcup that answers the way the real helper does, to see git ask it.
     let exe = rig.root.join("goalcup");
     std::fs::write(
         &exe,
-        "#!/bin/sh\ncat >/dev/null\necho username=x-access-token\necho password=ours\n",
+        "#!/bin/sh\ncat >/dev/null\necho username=x-access-token\n\
+         echo \"password=ours:$GOALCUP_CONFIG_DIR\"\n",
     )
     .unwrap();
     make_executable(&exe);
@@ -415,7 +420,7 @@ fn the_clone_has_a_helper_and_no_token_in_its_config() {
         ],
     );
     let ours = format!(
-        "!GOALCUP_CONFIG_DIR='{}/it'\\''s cfg' '{}' git-credential",
+        "!GOALCUP_CONFIG_DIR='{}/it'\\''s my cfg' '{}' git-credential",
         rig.root.display(),
         exe.display()
     );
@@ -468,7 +473,11 @@ fn the_clone_has_a_helper_and_no_token_in_its_config() {
     let out = asked.wait_with_output().unwrap();
     let said = String::from_utf8(out.stdout.clone()).unwrap();
     assert!(out.status.success(), "{out:?}");
-    assert!(said.contains("password=ours"), "{said}");
+    // The configuration directory, with a space and a quote in its name, arrives intact.
+    assert!(
+        said.contains(&format!("password=ours:{}\n", cfg.display())),
+        "{said}"
+    );
     assert!(!said.contains("leaked"), "{said}");
 
     // A relative goalcup is refused: the agent's git runs the helper from anywhere.
@@ -484,6 +493,19 @@ fn the_clone_has_a_helper_and_no_token_in_its_config() {
     assert!(
         matches!(relative, Err(CliError::Refused(_))),
         "{relative:?}"
+    );
+    assert!(!other.exists());
+    let relative_cfg = clone_from(
+        &rig.git,
+        &rig.source,
+        &setup(),
+        &other,
+        &exe,
+        Path::new("cfg"),
+    );
+    assert!(
+        matches!(relative_cfg, Err(CliError::Refused(_))),
+        "{relative_cfg:?}"
     );
     assert!(!other.exists());
 }
@@ -574,6 +596,12 @@ fn the_setup_is_stored_for_the_owner_alone_and_checked_on_the_way_in_and_out() {
             Err(CliError::Refused(why)) => assert!(!why.contains(bad) || bad.is_empty(), "{why}"),
             other => panic!("token {bad:?} was accepted: {other:?}"),
         }
+    }
+
+    // A token pasted at the address prompt is not echoed back.
+    match GithubSetup::new(&token(), &token()) {
+        Err(CliError::Refused(why)) => assert!(!why.contains(&token()), "{why}"),
+        other => panic!("{other:?}"),
     }
 
     // The token is read as one bounded line.

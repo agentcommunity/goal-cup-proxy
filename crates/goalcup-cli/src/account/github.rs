@@ -191,9 +191,11 @@ pub fn github_path(cfg: &Path) -> PathBuf {
 /// `https://github.com/<owner>/<repo>`, with an optional `.git` and an optional trailing `/`.
 /// The owner is 1 to 39 of `[A-Za-z0-9-]`; the repository is 1 to 100 of `[A-Za-z0-9._-]`,
 /// is not `.` or `..`, and does not itself end in `.git`. A refusal names the expected form
-/// and never repeats a URL that carries user info (a password).
+/// and repeats the input only when it starts with `https://` and carries no user info.
 fn parse_repo_url(url: &str) -> Result<(&str, &str), CliError> {
-    let shown = if url.contains('@') {
+    // Echoed only when it looks like an address: a token pasted at the wrong prompt, or a
+    // URL with user info, is not repeated.
+    let shown = if url.contains('@') || !url.trim().starts_with("https://") {
         "given".to_string()
     } else {
         format!("{:?}", url.chars().take(100).collect::<String>())
@@ -291,6 +293,13 @@ pub fn check(api_base: &str, s: &GithubSetup) -> Result<(), CliError> {
                      to read and write, then run `goalcup prep` again."
                 ))
             }
+            ServerError::Status {
+                status: 301 | 302 | 307 | 308,
+                ..
+            } => CliError::Refused(format!(
+                "GitHub says {owner}/{repo} has moved or been renamed. Open the repository on \
+                 GitHub, copy its current address, then run `goalcup prep` again with it."
+            )),
             ServerError::Status { status: 404, .. } => CliError::Refused(format!(
                 "the repository {owner}/{repo} was not found, or the token cannot see it. \
                  Check the address, and that the token was created for this repository, then \
@@ -460,6 +469,13 @@ fn run_git<'a>(
     let output = command
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
+        // A caller's repository or configuration must not redirect `-C <dest> config --local`
+        // into another repository, or add settings of its own to the clone.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

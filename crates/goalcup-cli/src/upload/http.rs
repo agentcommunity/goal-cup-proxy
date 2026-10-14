@@ -120,7 +120,7 @@ impl ServerClient {
     pub(crate) fn bearer(base: &str, token: &str) -> ServerClient {
         let mut store = rustls::RootCertStore::empty();
         store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        ServerClient::with_store(base.trim_end_matches('/'), token, store)
+        ServerClient::with_store(base, token, store)
     }
 
     /// A client trusting exactly `roots`, for a test server with a certificate of its own. A
@@ -159,7 +159,8 @@ impl ServerClient {
             agent = agent.tls_connector(Arc::new(RustlsConnector(tls)));
         }
         ServerClient {
-            base: base.to_string(),
+            // Without a trailing slash, so `base` + `/path` is one slash whichever door built it.
+            base: base.trim_end_matches('/').to_string(),
             token: token.to_string(),
             agent: agent.build(),
         }
