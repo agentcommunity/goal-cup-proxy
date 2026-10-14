@@ -320,6 +320,9 @@ struct CaptureRun<'a> {
     goal_file: &'a Path,
     connector: &'a HarnessConnector,
     profile: &'a CaptureSpec,
+    /// Set when an abandon was refused, so some of what the start made is still there: the
+    /// cleanup sentence ([`CLEANED_UP`]) is not true then, and is not said.
+    uncleaned: &'a std::cell::Cell<bool>,
 }
 
 /// Everything a capture run decides, and every refusal it makes, before anything is created.
@@ -794,6 +797,7 @@ fn capture(
         profile.credential.is_some(),
         out,
     )?;
+    let uncleaned = std::cell::Cell::new(false);
     let cx = CaptureRun {
         client,
         upload: None,
@@ -803,6 +807,7 @@ fn capture(
         goal_file,
         connector: &c,
         profile,
+        uncleaned: &uncleaned,
     };
     let mut prep = prepare(&cx, goal, out)?;
     // Every refusal that needs no approval has been made: now the participant approves this
@@ -818,9 +823,21 @@ fn capture(
         upload: upload.as_ref(),
         ..cx
     };
-    // The shared harness home is claimed only now: it creates a folder and holds a lock.
-    claim_shared_home(&cx, &mut prep)?;
-    let (forked, gate) = create_and_gate(&cx, roots, &prep, out)?;
+    // The shared harness home is claimed only now: it creates a folder and holds a lock. Every
+    // failure from here to the fork (the home, the run directory and the clone, the open on the
+    // server, the entry, the launch) is one phase, and ends with one sentence about what was
+    // removed.
+    let started =
+        claim_shared_home(&cx, &mut prep).and_then(|()| create_and_gate(&cx, roots, &prep, out));
+    let (forked, gate) = match started {
+        Ok(started) => started,
+        Err(error) => {
+            if upload.is_some() && !uncleaned.get() {
+                let _ = say(out, CLEANED_UP);
+            }
+            return Err(error);
+        }
+    };
     // Right before the launch the machine is told to stay awake, and it stays so to the end of
     // the wrap-up. A lock that cannot be taken is no reason to refuse or stop a run: it is
     // kept as the reason in the run's state, and `goalcup status` says it.
@@ -988,7 +1005,6 @@ fn create_and_gate<'a>(
         && let Err(error) = upload.clone_workspace(&run.workspace)
     {
         let _ = run.remove();
-        let _ = say(out, CLEANED_UP);
         return Err(error);
     }
     let config_home = match shared_home {
@@ -1169,6 +1185,9 @@ fn create_and_gate<'a>(
                 let _ = held.release();
             }
             let unmade = unmake(client, cfg, &info.entry_id, &run, &error, out);
+            if !unmade {
+                cx.uncleaned.set(true);
+            }
             // The run is given back first, and its credential outlives the give-back while the
             // server may still hold the run open: the next start's `give_back_pending` asks with it.
             give_back(&error);
@@ -2419,7 +2438,11 @@ fn uploading(
     };
     if keyed {
         if practice {
-            return Err(needs_server());
+            return Err(CliError::Refused(
+                "`--practice` cannot be used with this harness: a harness handed a provider key \
+                 is never uploaded, so it cannot make a practice run. Nothing was created."
+                    .to_string(),
+            ));
         }
         say(
             out,
@@ -2456,8 +2479,9 @@ fn uploading(
     }))
 }
 
-/// What a start that fails after the approval says once it has removed what it made: the run
-/// directory beside the goal file, the clone, and the run's credential directory. It does not
+/// What a start that fails after the approval says once it has removed what it made (said once,
+/// by `capture`, for every failure of that phase): the run directory beside the goal file, the
+/// clone, and the run's credential directory. It does not
 /// remove the work folder itself (the participant's folder, left in place once created) or the
 /// shared harness-home folder of a connector under `<cfg>/capture-homes/` (one per connector,
 /// persistent, and reused by every run of it).

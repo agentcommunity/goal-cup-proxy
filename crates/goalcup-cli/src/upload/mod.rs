@@ -335,7 +335,8 @@ fn forget_credential(cfg: &Path, run_id: &str) {
 /// noted one. The credential that start saved in the run's directory is what asks. Best effort,
 /// and silent: if the server cannot be asked now, the note stays for the next start; a note
 /// with no credential beside it cannot be acted on and is dropped (the server ends such a run
-/// at its deadline, or when the account starts another).
+/// at its deadline, or when the account starts another). A note for another server, or whose
+/// credential has ended, is dropped with its credential.
 pub fn give_back_pending(server_url: &str, cfg: &Path) {
     let path = pending_path(cfg);
     let Ok(bytes) = std::fs::read(&path) else {
@@ -345,8 +346,15 @@ pub fn give_back_pending(server_url: &str, cfg: &Path) {
         let _ = std::fs::remove_file(&path);
         return;
     };
-    if pending.server_url != server_url.trim_end_matches('/') || !is_run_id(&pending.run_id) {
+    if !is_run_id(&pending.run_id) {
         let _ = std::fs::remove_file(&path);
+        return;
+    }
+    if pending.server_url != server_url.trim_end_matches('/') {
+        // Another server: this one cannot give that run back, and the credential kept for it
+        // is of no use to anyone.
+        let _ = std::fs::remove_file(&path);
+        forget_credential(cfg, &pending.run_id);
         return;
     }
     let dir = crate::run::run_dir(cfg, &pending.run_id);
@@ -354,6 +362,15 @@ pub fn give_back_pending(server_url: &str, cfg: &Path) {
         let _ = std::fs::remove_file(&path);
         return;
     };
+    // The server refuses a credential after its end; asking again every start would never
+    // succeed, so the note and the credential go.
+    if goalcup_protocol::control::parse_z(&credential.expires_at)
+        .is_some_and(|ends| ends <= crate::run::now_unix())
+    {
+        let _ = std::fs::remove_file(&path);
+        forget_credential(cfg, &pending.run_id);
+        return;
+    }
     let server = ServerClient::with_credential(server_url, &credential);
     let given = abandon_run(
         &server,

@@ -663,6 +663,98 @@ mod server_runs {
         );
     }
 
+    /// A failure after the approval that is not the clone (here the server refusing the open,
+    /// its start window being shut) ends with the same sentence about what was removed.
+    #[test]
+    fn a_refused_open_ends_with_the_cleanup_sentence() {
+        let rig = Rig::new();
+        let server = UploadServer::start(
+            &rig.root.join("server"),
+            ServerOptions {
+                start_window_closes: Some(1),
+                ..ServerOptions::default()
+            },
+        );
+        rig.prepare_for(&server.url());
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let opts = rig.options(&goal, RESERVE);
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("the open was not refused");
+        assert_eq!(refused.exit_code(), 1, "{refused}");
+        assert!(refused.to_string().contains("403"), "{refused}");
+        assert!(
+            out.contains("Nothing was started, and what this start made was removed."),
+            "{out}"
+        );
+        assert!(client.book().creates.is_empty());
+        assert!(rig.run_dirs().is_empty());
+        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
+        assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists());
+    }
+
+    /// A harness handed a provider key never uploads, so `--practice` with it is refused with a
+    /// sentence of its own, before anything is created.
+    #[test]
+    fn practice_with_a_keyed_harness_is_refused_in_its_own_words() {
+        let rig = Rig::hermes();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.hermes_options(&goal, RESERVE);
+        opts.practice = true;
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("refused").to_string();
+        assert!(refused.contains("provider key"), "{refused}");
+        assert!(!refused.contains("goalcup login"), "{refused}");
+        assert!(server.device_requests().is_empty(), "{out}");
+        assert!(client.book().creates.is_empty());
+        assert!(rig.run_dirs().is_empty());
+    }
+
+    /// A kept note that this start cannot act on is dropped with its credential: it names another
+    /// server, or the credential has ended (the server would refuse it for ever).
+    #[test]
+    fn a_note_for_another_server_or_an_ended_credential_is_dropped_with_its_credential() {
+        for (note_server, expires_at) in [
+            ("http://127.0.0.1:1", "2099-01-01T00:00:00Z"),
+            ("http://127.0.0.1:2", "2020-01-01T00:00:00Z"),
+        ] {
+            let cfg = tempfile::tempdir().unwrap();
+            let run_id = "r0123456789abcdef";
+            let credential = goalcup_cli::account::credential::RunCredential::new(
+                format!("gcr_{}", "ab".repeat(32)),
+                expires_at.to_string(),
+            )
+            .unwrap();
+            let dir = goalcup_cli::run::run_dir(cfg.path(), run_id);
+            goalcup_cli::account::credential::store(&dir, &credential).unwrap();
+            goalcup_cli::config::write_secret_file(
+                &goalcup_cli::upload::pending_path(cfg.path()),
+                format!(r#"{{"run_id":"{run_id}","server_url":"{note_server}"}}"#).as_bytes(),
+            )
+            .unwrap();
+            // The current server is `note_server` itself for the ended credential, and a
+            // different one for the first case; neither is ever asked.
+            let current = if note_server.ends_with(":2") {
+                note_server
+            } else {
+                "http://127.0.0.1:3"
+            };
+            goalcup_cli::upload::give_back_pending(current, cfg.path());
+            assert!(
+                !goalcup_cli::upload::pending_path(cfg.path()).exists(),
+                "{note_server}: the note stays"
+            );
+            assert!(!dir.exists(), "{note_server}: the credential stays");
+        }
+    }
+
     // -------------------------------------------------------------- the approval, abandoned
 
     /// A server that hands out a device code and never approves it: what the participant's
