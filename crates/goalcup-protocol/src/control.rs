@@ -652,8 +652,8 @@ pub struct CaptureWorkspaceRequest {
     /// compares it with its own authoritative load before it allocates an entry or writes a byte.
     #[serde(deserialize_with = "lowercase_sha256")]
     pub connector_dir_sha256: String,
-    /// Serialized chain bytes reserved before the entry is ready, the terminal allowance
-    /// included ([`crate::capture::DEFAULT_CAPTURE_RESERVE_BYTES`] unless measured otherwise).
+    /// The chain's logical byte quota, the terminal allowance included: admission accounting
+    /// only, nothing is allocated ([`crate::capture::CHAIN_QUOTA_BYTES`] by default).
     pub reserve_bytes: u64,
     /// The absolute per-run `HOME` the launcher creates and gives the harness; the daemon
     /// reads `{home}/` stores only for controlled-workload families.
@@ -693,7 +693,7 @@ pub struct CaptureWorkspaceInfo {
     /// The generation `register_process` names for the harness this entry launches. It is
     /// accepted once, before `record_capture_launch`.
     pub process_generation: u64,
-    /// The chain bytes measured as physically allocated: the requested amount.
+    /// The chain bytes physically reserved: always zero, since a chain is quota-only.
     pub reserved_bytes: u64,
     /// The daemon's loopback ingest endpoint.
     pub ingest_addr: std::net::SocketAddr,

@@ -669,12 +669,8 @@ pub struct TraceExport {
     /// quota admission is measured against.
     chain_bytes: u64,
     /// The serialized chain-byte quota, [`TERMINAL_RESERVE_BYTES`] included. Admission
-    /// accounting only: by itself it allocates nothing and is never reported as reserved.
+    /// accounting only: it allocates nothing and is never reported as reserved.
     capture_quota: Option<u64>,
-    /// The part of `capture_quota` this writer measured as physically allocated in the chain
-    /// file ([`Self::reserve_capture`]). Zero for a quota-only chain and after every reopen,
-    /// until the retained allocation is remeasured.
-    capture_reserved: u64,
     /// The last frontier a successful flush made durable. Never the appended head.
     durable: Option<DurableFrontier>,
     /// False once a byte count may be wrong (a failed append) or a closure could not be
@@ -806,7 +802,6 @@ impl TraceExport {
             acks,
             chain_bytes: 0,
             capture_quota: None,
-            capture_reserved: 0,
             durable: None,
             accounting_available: true,
             next_seq: 0,
@@ -1004,7 +999,6 @@ impl TraceExport {
             // the owner configures (or re-reserves) its quota again, and the first sync
             // establishes a durable frontier.
             capture_quota: None,
-            capture_reserved: 0,
             durable: None,
             accounting_available: true,
             next_seq: prepared.next_seq,
@@ -1309,9 +1303,8 @@ impl TraceExport {
     /// Set this chain's serialized chain-byte quota.
     ///
     /// **This is admission accounting, not a reservation.** Nothing is allocated, the chain's
-    /// logical length is untouched, and [`Self::capture_storage`] reports `reserved_bytes: 0`
-    /// — even over blocks an earlier [`Self::reserve_capture`] allocated; a quota-only chain is
-    /// an explicitly unreserved experiment and never qualifies a pilot launch.
+    /// logical length is untouched, and [`Self::capture_storage`] reports `reserved_bytes: 0`.
+    /// The run's disk is reserved once, by the run host; a chain only counts against its quota.
     ///
     /// `bytes` includes [`TERMINAL_RESERVE_BYTES`], which payload never spends, so it must
     /// exceed that allowance. It cannot be below the bytes already written. Nothing is appended
@@ -1320,52 +1313,10 @@ impl TraceExport {
     pub fn configure_capture_quota(&mut self, bytes: u64) -> Result<(), ExportError> {
         self.check_capture_quota(bytes)?;
         self.capture_quota = Some(bytes);
-        self.capture_reserved = 0;
         Ok(())
     }
 
-    /// Set the serialized chain-byte quota and physically reserve
-    /// that quota in `chain.jsonl` itself: the pilot's storage preflight, which subsumes
-    /// [`Self::configure_capture_quota`] for a shipped run.
-    ///
-    /// `bytes` has exactly the quota's meaning and refusals — the whole serialized chain
-    /// allowance, [`TERMINAL_RESERVE_BYTES`] included, never added. The chain file is then
-    /// topped up, through the retained chain capability, until at least `bytes` of it are
-    /// physically allocated, without moving its logical end ([`TraceDir::reserve_append`]:
-    /// macOS APFS with the measured `F_ALLOCATEALL | F_ALLOCATEPERSIST` recipe, or Linux ext4
-    /// and XFS with `fallocate(FALLOC_FL_KEEP_SIZE)`, measured in Docker on loop-mounted images;
-    /// either is measured from the file's block count). Only after that remeasurement does
-    /// [`Self::capture_storage`] report the quota as `reserved_bytes`.
-    ///
-    /// Any refusal — unsupported filesystem or platform, insufficient space, a kernel error, a
-    /// short remeasurement, or a chain length that is not this writer's — leaves the quota and
-    /// the reported reservation exactly as they were and writes no chain byte; it must refuse
-    /// pilot launch, and the budget is never silently reduced. A reopened writer reports
-    /// nothing reserved until this is called again, which remeasures the retained allocation
-    /// and adds only what is missing (nothing, for an unchanged quota), so a restart never
-    /// allocates twice.
-    ///
-    /// The allocation is this chain's protected floor, not admission: payload still stops in
-    /// front of the terminal allowance and every record at the quota. Registry,
-    /// acknowledgement, fixed-document and harness writes need free-space headroom of their
-    /// own; a failed one stays a visible error.
-    pub fn reserve_capture(&mut self, bytes: u64) -> Result<(), ExportError> {
-        self.check_capture_quota(bytes)?;
-        let measured = self.root.dir.reserve_append(&mut self.chain, bytes)?;
-        if measured.logical_bytes != self.chain_bytes {
-            return Err(ExportError::ChainLengthChanged {
-                validated_bytes: self.chain_bytes,
-                found_bytes: measured.logical_bytes,
-            });
-        }
-        self.capture_quota = Some(bytes);
-        // Measured, and never reported beyond the quota it backs.
-        self.capture_reserved = measured.allocated_bytes.min(bytes);
-        Ok(())
-    }
-
-    /// The quota refusals shared by [`Self::configure_capture_quota`] and
-    /// [`Self::reserve_capture`], checked before either changes anything.
+    /// The quota refusals, checked before [`Self::configure_capture_quota`] changes anything.
     fn check_capture_quota(&self, bytes: u64) -> Result<(), ExportError> {
         if bytes <= TERMINAL_RESERVE_BYTES {
             return Err(ExportError::InvalidCaptureQuota {
@@ -1403,13 +1354,12 @@ impl TraceExport {
     }
 
     /// The chain's storage accounting. `quota_bytes` is the configured serialized-byte
-    /// allowance (zero when none is configured); `reserved_bytes` is the part of it this writer
-    /// measured as physically allocated by [`Self::reserve_capture`] — zero for a quota-only
-    /// chain and after a reopen until remeasured. A quota is never reported as reservation.
+    /// allowance (zero when none is configured); `reserved_bytes` is always zero, because a
+    /// chain is quota-only and a quota is never reported as reservation.
     pub fn capture_storage(&self) -> CaptureStorage {
         CaptureStorage {
             quota_bytes: self.capture_quota.unwrap_or(0),
-            reserved_bytes: self.capture_reserved,
+            reserved_bytes: 0,
             used_bytes: self.chain_bytes,
             durable: self.durable.clone(),
             accounting_available: self.accounting_available,

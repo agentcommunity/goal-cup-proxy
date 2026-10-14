@@ -61,12 +61,6 @@ step() {
 }
 step "registry" 'cargo metadata --offline --locked --format-version 1 >/dev/null'
 step "fast gate" 'sh scripts/gate.sh fast'
-step "reservation" '
-    GOALCUP_TRACECAP_TEST_ROOTS=/mnt/ext4/tmp:/mnt/xfs/tmp GOALCUP_TRACECAP_REQUIRE_QUALIFIED=1 \
-        cargo test --offline -p goalcup-platform --lib linux_reservation &&
-    for t in /tmp /mnt/ext4/tmp /mnt/xfs/tmp; do
-        TMPDIR=$t cargo test --offline -p goalcup-protocol --test capture_reserved_storage || exit 1
-    done'
 step "cli end-to-end" 'cargo nextest run --offline -p goalcup-cli --test full --test m2_cli_lifecycle'
 # The `#[ignore]`d end-to-end suites, selected as `gate.sh full` selects them.
 step "ignored end-to-end" 'cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
