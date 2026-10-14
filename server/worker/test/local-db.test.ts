@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { boundCredentialExpiry, endsAt, isPastClose, isPastEnd, statusAt } from "../src/db.ts";
-import type { ContinueRunArgs, OpenRunArgs, RunMode } from "../src/db.ts";
+import type { ContinueRunArgs, HeartbeatArgs, OpenRunArgs, RunMode } from "../src/db.ts";
 import { LocalDb } from "../src/db-local.ts";
 import { sha256Hex } from "../src/util.ts";
 import { FakeBucket, asR2 } from "./helpers/fake-r2.ts";
@@ -214,6 +214,7 @@ const mk = async () => {
 };
 const hb = (seq: number, head: string, final: boolean, entry = E1) => ({
   member_id: "m1", run_id: R1, entry_id: entry, seq, head, offset_local: 10, final, repo_head: null, at: DEADLINE,
+  recording: null, model_requests: null, client_ip: null, client_country: null,
 });
 const chunk = (first: number, last: number, prev: string, head: string, offset: number, entry = E1) => ({
   member_id: "m1",
@@ -463,4 +464,79 @@ test("a login approval hands back the handle once and mints no credential", asyn
   await db.approveDevice(CODE, "m1", true, "2026-11-06T09:05:00Z");
   assert.deepEqual(await db.pollDevice(dev.device_sha256, "2026-11-06T09:06:00Z"), { kind: "approved", purpose: "login", handle: "m1" });
   assert.deepEqual(await db.pollDevice(dev.device_sha256, "2026-11-06T09:06:01Z"), { kind: "expired" });
+});
+
+// ---- what the cron reads and writes ----------------------------------------------------------
+
+const beat = (at: string, over: Partial<HeartbeatArgs> = {}, entry = E1): HeartbeatArgs => ({ ...hb(0, G, false, entry), at, ...over });
+
+test("last_heartbeat_at belongs to the run: a heartbeat of any entry sets it", async () => {
+  const db = await mk();
+  const two = await db.continueRun(contArgs(id("e", 2), E1, "s2", "2026-11-06T10:00:00Z"));
+  assert.equal(two.kind, "created");
+  const tick = async () => (await db.runsForTick("2026-11-06T12:00:00Z"))[0]!;
+  assert.equal((await tick()).last_heartbeat_at, null);
+  await db.recordHeartbeat(beat("2026-11-06T10:05:00Z", {}, id("e", 2)));
+  assert.equal((await tick()).last_heartbeat_at, "2026-11-06T10:05:00Z");
+  await db.recordHeartbeat(beat("2026-11-06T10:10:00Z", {}, E1)); // the older entry still beats
+  assert.equal((await tick()).last_heartbeat_at, "2026-11-06T10:10:00Z");
+  // A heartbeat that was refused (a different end already committed) is not one.
+  assert.equal(await db.recordHeartbeat(beat("2026-11-06T10:20:00Z", { seq: 3, head: "3".repeat(64), final: true })), "final_committed");
+  assert.equal(await db.recordHeartbeat(beat("2026-11-06T11:00:00Z", { seq: 4, head: "4".repeat(64), final: true })), "final_conflict");
+  assert.equal((await tick()).last_heartbeat_at, "2026-11-06T10:20:00Z");
+});
+
+test("heartbeat signals: the first gaps or failed flags the run, model_requests only moves up", async () => {
+  const db = await mk();
+  const tick = async () => (await db.runsForTick("2026-11-06T12:00:00Z"))[0]!;
+  const first = await tick();
+  assert.deepEqual([first.flagged_at, first.flag_reason, first.last_model_request_at], [null, null, START]);
+  await db.recordHeartbeat(beat("2026-11-06T09:10:00Z", { recording: "ok", model_requests: 0 }));
+  await db.recordHeartbeat(beat("2026-11-06T09:20:00Z", { recording: "failed", model_requests: 4 }));
+  await db.recordHeartbeat(beat("2026-11-06T09:30:00Z", { recording: "gaps", model_requests: 4 }));
+  await db.recordHeartbeat(beat("2026-11-06T09:40:00Z", { model_requests: 3 }));
+  const run = await tick();
+  assert.deepEqual([run.flagged_at, run.flag_reason, run.last_model_request_at], ["2026-11-06T09:20:00Z", "failed", "2026-11-06T09:20:00Z"]);
+});
+
+test("runsForTick: open runs and recently ended ones, with the run's own facts; not abandoned or long closed", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()));
+  const [c1, c2, c3] = [await credential(db, "m1"), await credential(db, "m2"), await credential(db, "m3", "practice")];
+  await db.openRun(openArgs(1, "s1", START, DEADLINE, c1));
+  await db.openRun(openArgs(2, "s2", START, "2026-11-06T10:00:00Z", c2, { member_id: "m2" }));
+  await db.openRun(openArgs(3, "s3", START, "2026-11-06T09:10:00Z", c3, { member_id: "m3", mode: "practice" }));
+  const ids = async (at: string) => (await db.runsForTick(at)).map((r) => r.run_id);
+  assert.deepEqual(await ids(START), [id("r", 1), id("r", 2), id("r", 3)]);
+  const mine = (await db.runsForTick(START))[0]!;
+  assert.deepEqual([mine.mode, mine.member_id, mine.repo_url, mine.final_commit], ["competition", "m1", "https://github.com/a/b", null]);
+  // Closed and ended more than two days ago: left alone. An open one is always in.
+  assert.equal(await db.closeRun("m3", id("r", 3), "2026-11-07T10:00:00Z"), "incomplete");
+  assert.deepEqual(await ids("2026-11-08T09:10:00Z"), [id("r", 1), id("r", 2), id("r", 3)]); // 48 h after the practice run ended
+  assert.deepEqual(await ids("2026-11-08T09:10:01Z"), [id("r", 1), id("r", 2)]);
+  assert.deepEqual(await db.abandonRun("m1", id("r", 1), "gone", START), "abandoned");
+  assert.deepEqual(await ids(START), [id("r", 2), id("r", 3)]);
+});
+
+test("queueNotice writes a notice once per run, kind and key", async () => {
+  const bucket = new FakeBucket();
+  const db = LocalDb.create(asR2(bucket));
+  const n = { run_id: R1, member_id: "m1", kind: "silence" as const, dedupe_key: START, payload: { last_heartbeat_at: START }, at: "2026-11-06T09:21:00Z" };
+  assert.equal(await db.queueNotice(n), true);
+  assert.equal(await db.queueNotice({ ...n, payload: { other: true } }), false); // the first stays
+  assert.equal(await db.queueNotice({ ...n, dedupe_key: "2026-11-06T09:30:00Z" }), true);
+  assert.equal(await db.queueNotice({ ...n, kind: "started", dedupe_key: "" }), true);
+  assert.equal(await db.queueNotice({ ...n, run_id: id("r", 2), dedupe_key: "" , kind: "started" }), true);
+  const stored = [...bucket.map.entries()].filter(([k]) => k.startsWith("state/notices/")).map(([, v]) => JSON.parse(v.text));
+  assert.equal(stored.length, 4);
+  assert.deepEqual(stored.find((x) => x.kind === "silence" && x.dedupe_key === START), {
+    run_id: R1, member_id: "m1", kind: "silence", dedupe_key: START, payload: { last_heartbeat_at: START }, created_at: "2026-11-06T09:21:00Z", sent_at: null,
+  });
+});
+
+test("recordFinalCommit keeps the first commit it was given", async () => {
+  const db = await mk();
+  await db.recordFinalCommit("m1", R1, "a".repeat(40), DEADLINE);
+  await db.recordFinalCommit("m1", R1, "b".repeat(40), DEADLINE);
+  await db.recordFinalCommit("m2", R1, "c".repeat(40), DEADLINE); // not this member's
+  assert.equal((await db.runsForTick(DEADLINE))[0]!.final_commit, "a".repeat(40));
 });

@@ -5,7 +5,8 @@
 -- authenticator) and its functions were exercised by hand: open, replace, the start window,
 -- practice, the credential binding in the same step, continue and its repeat, receipt, commit
 -- (stale offset refused), abandon, seal (needs the end and the chain), the close, the device flow
--- (create, poll, approve, deny, expire, pickup once, credential minted, expired) and the role's
+-- (create, poll, approve, deny, expire, pickup once, credential minted, expired), the heartbeat signals, the cron's
+-- reads and the notice outbox, and the role's
 -- lack of table privileges. That
 -- proves the SQL parses and behaves as the Worker expects. It does NOT prove anything about
 -- Supabase itself: PostgREST exposure of the schema, the JWT role, RLS defaults.
@@ -102,7 +103,15 @@ create table goalcup.runs (
   client_country       text,
   abandon_reason       text,
   sealed_at            timestamptz,
-  last_heartbeat_at    timestamptz,
+  last_heartbeat_at    timestamptz,           -- the latest heartbeat of any of its entries
+  -- Facts from the heartbeats (docs/UPLOAD-API.md, "What the server does on its own").
+  model_requests       bigint not null default 0,   -- the highest cumulative count a heartbeat has sent
+  last_model_request_at timestamptz not null,       -- when model_requests last grew; official_start until it does
+  flagged_at           timestamptz,           -- the first heartbeat that said the recording had gaps or failed
+  flag_reason          text check (flag_reason in ('gaps', 'failed')),
+  -- The commit GitHub had at the deadline: 40 hex, or 'none' when GitHub has no such repository. Null until asked.
+  final_commit         text check (final_commit ~ '^([0-9a-f]{40}|none)$'),
+  final_commit_at      timestamptz,
   created_at           timestamptz not null default now()
 );
 
@@ -166,9 +175,29 @@ create table goalcup.heartbeats (
   head         text not null,
   offset_local bigint not null,
   final        boolean not null,
-  repo_head    text
+  repo_head    text,
+  recording    text check (recording in ('ok', 'gaps', 'failed', 'unknown')),   -- as the tracer saw it; null if not sent
+  client_ip      text,                   -- from the request, kept on the server only
+  client_country text
 );
 create index heartbeats_run_received on goalcup.heartbeats (run_id, received_at);
+
+-- The outbox of run emails. The Worker's cron queues a row; the website's mailer sends the email and
+-- sets sent_at. The Worker never sends mail and never reads this table back. A notice is queued once
+-- per (run, kind, dedupe_key): the key is what makes it the same notice again (the time of the last
+-- heartbeat for 'silence', the time of the last model request for 'idle_*', empty for the others).
+create table goalcup.notices (
+  id          bigint generated always as identity primary key,
+  run_id      text not null references goalcup.runs (id),
+  member_id   uuid not null,
+  kind        text not null check (kind in ('started', 'silence', 'idle_3h', 'idle_6h', 'recording', 'ended')),
+  dedupe_key  text not null,
+  payload     jsonb not null default '{}',   -- what the email needs: times, hours, the commit, the repo
+  created_at  timestamptz not null,
+  sent_at     timestamptz,
+  unique (run_id, kind, dedupe_key)
+);
+create index notices_unsent on goalcup.notices (created_at) where sent_at is null;
 
 create table goalcup.chunks (
   entry_id     text not null references goalcup.entries (id),
@@ -195,6 +224,7 @@ alter table goalcup.runs     enable row level security;
 alter table goalcup.entries  enable row level security;
 alter table goalcup.chunks   enable row level security;
 alter table goalcup.heartbeats enable row level security;
+alter table goalcup.notices  enable row level security;
 
 revoke all on all tables in schema goalcup from public, anon, authenticated;
 
@@ -279,6 +309,24 @@ as $$
   from goalcup.runs r
   cross join lateral (select e.sealed_at from goalcup.entries e where e.run_id = r.id order by e.segment desc limit 1) cur
   where r.id = p_run_id
+$$;
+
+-- What a recorded heartbeat adds to its run (the same rules as withSignals in src/db-local.ts): the time,
+-- the connection, the first flag, and growth in model requests. Null arguments change nothing.
+create function goalcup.note_heartbeat(
+  p_run_id text, p_at timestamptz, p_recording text, p_model_requests bigint, p_client_ip text, p_client_country text
+) returns void
+language sql security definer set search_path = goalcup, pg_temp
+as $$
+  update goalcup.runs set
+    last_heartbeat_at     = p_at,
+    client_ip             = p_client_ip,
+    client_country        = p_client_country,
+    flagged_at            = case when flagged_at is null and p_recording in ('gaps', 'failed') then p_at else flagged_at end,
+    flag_reason           = case when flagged_at is null and p_recording in ('gaps', 'failed') then p_recording else flag_reason end,
+    last_model_request_at = case when p_model_requests > model_requests then p_at else last_model_request_at end,
+    model_requests        = greatest(model_requests, p_model_requests)
+  where id = p_run_id
 $$;
 
 -- ---- the device flow and the run credential ----------------------------------------------
@@ -447,9 +495,9 @@ begin
     end if;
     begin
       insert into goalcup.runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url,
-                                machine, client_ip, client_country)
+                                machine, client_ip, client_country, last_model_request_at)
       values (p_run_id, p_event_id, v_member, p_mode, v_start, p_deadline_at::timestamptz, p_repo_url,
-              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country);   -- a JSON null is no facts
+              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country, v_start);   -- a JSON null is no facts
       exit;
     exception when unique_violation then
       if v_try = 2 then raise; end if;
@@ -671,12 +719,14 @@ begin
   return jsonb_build_object('result', 'sealed', 'run_status', v_status);
 end $$;
 
--- POST /v1/runs/{id}/heartbeat. Records the heartbeat; a final one commits the end of the entry (once).
+-- POST /v1/runs/{id}/heartbeat. Records the heartbeat (and its signals, see note_heartbeat); a final one
+-- commits the end of the entry (once).
 -- Returns 'recorded' | 'final_committed' | 'final_existing' | 'final_conflict' | 'closed' | 'not_found'.
 -- Lock order as everywhere: the run, then its entry.
 create function goalcup.upload_heartbeat(
   p_member_id text, p_run_id text, p_entry_id text,
-  p_seq bigint, p_head text, p_offset_local bigint, p_final boolean, p_repo_head text, p_at text
+  p_seq bigint, p_head text, p_offset_local bigint, p_final boolean, p_repo_head text,
+  p_recording text, p_model_requests bigint, p_client_ip text, p_client_country text, p_at text
 ) returns text
 language plpgsql security definer set search_path = goalcup, pg_temp
 as $$
@@ -695,9 +745,10 @@ begin
 
   if not p_final then
     if v_entry.sealed_at is null then   -- a sealed entry has nothing left to record
-      insert into goalcup.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final)
-      values (p_run_id, p_entry_id, v_at, p_seq, p_head, p_offset_local, false);
-      update goalcup.runs set last_heartbeat_at = v_at where id = p_run_id;
+      insert into goalcup.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final,
+                                      recording, client_ip, client_country)
+      values (p_run_id, p_entry_id, v_at, p_seq, p_head, p_offset_local, false, p_recording, p_client_ip, p_client_country);
+      perform goalcup.note_heartbeat(p_run_id, v_at, p_recording, p_model_requests, p_client_ip, p_client_country);
     end if;
     return 'recorded';
   end if;
@@ -716,13 +767,14 @@ begin
   update goalcup.entries
      set final_seq = p_seq, final_head = p_head, final_repo_head = p_repo_head, final_at = v_at
    where id = p_entry_id;
-  insert into goalcup.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final, repo_head)
-  values (p_run_id, p_entry_id, v_at, p_seq, p_head, p_offset_local, true, p_repo_head);
-  update goalcup.runs set last_heartbeat_at = v_at where id = p_run_id;
+  insert into goalcup.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final, repo_head,
+                                  recording, client_ip, client_country)
+  values (p_run_id, p_entry_id, v_at, p_seq, p_head, p_offset_local, true, p_repo_head, p_recording, p_client_ip, p_client_country);
+  perform goalcup.note_heartbeat(p_run_id, v_at, p_recording, p_model_requests, p_client_ip, p_client_country);
   return 'final_committed';
 end $$;
 
--- The close of a run that is over (the Worker calls this the first time it sees one, and a cron will):
+-- The close of a run that is over (the Worker calls this the first time it sees one, and its cron does):
 -- 'sealed' if its current entry is sealed, 'incomplete' if it has been over for 24 hours without that.
 -- Returns the status now ('open' when nothing changed), or null if the run is not this member's.
 create function goalcup.upload_close_run(p_member_id text, p_run_id text, p_at text) returns text
@@ -745,6 +797,61 @@ begin
      where id = p_run_id;
   end if;
   return v_status;
+end $$;
+
+-- ---- the cron (src/notices.ts) --------------------------------------------------------------
+
+-- The runs the cron looks at: every open run, and every run that ended within 48 hours before p_at (the same
+-- as TICK_LOOKBACK_SECONDS in src/db.ts), except abandoned ones; oldest first. Each is the run as run_json
+-- gives it, plus what the heartbeats and the deadline added (the TickRun of src/db.ts).
+create function goalcup.upload_runs_for_tick(p_at text) returns jsonb
+language sql stable security definer set search_path = goalcup, pg_temp
+as $$
+  select coalesce(jsonb_agg(
+           (goalcup.run_json(r.id) -> 'run') || jsonb_build_object(
+             'last_heartbeat_at',     goalcup.fmt_time(r.last_heartbeat_at),
+             'last_model_request_at', goalcup.fmt_time(r.last_model_request_at),
+             'flagged_at',            goalcup.fmt_time(r.flagged_at),
+             'flag_reason',           r.flag_reason,
+             'final_commit',          r.final_commit)
+           order by r.official_start, r.id), '[]'::jsonb)
+    from goalcup.runs r
+   where r.status <> 'abandoned'
+     and (r.status = 'open'
+          or least(r.deadline_at, coalesce(r.replaced_at, r.deadline_at)) >= p_at::timestamptz - interval '48 hours')
+$$;
+
+-- Queue a notice in the outbox. True when this call queued it, false when one with the same run, kind and
+-- dedupe key was there already (or the run is not this member's).
+create function goalcup.upload_queue_notice(
+  p_run_id text, p_member_id text, p_kind text, p_dedupe_key text, p_payload jsonb, p_at text
+) returns boolean
+language plpgsql security definer set search_path = goalcup, pg_temp
+as $$
+declare
+  v_rows integer;
+begin
+  insert into goalcup.notices (run_id, member_id, kind, dedupe_key, payload, created_at)
+  select r.id, r.member_id, p_kind, p_dedupe_key, coalesce(p_payload, '{}'::jsonb), p_at::timestamptz
+    from goalcup.runs r
+   where r.id = p_run_id and r.member_id = p_member_id::uuid
+  on conflict (run_id, kind, dedupe_key) do nothing;
+  get diagnostics v_rows = row_count;
+  return v_rows = 1;
+end $$;
+
+-- Keep the commit GitHub had at the deadline ('none' when it has no such repository). The first one stays.
+-- True when this call stored it.
+create function goalcup.upload_record_final_commit(p_member_id text, p_run_id text, p_commit text, p_at text) returns boolean
+language plpgsql security definer set search_path = goalcup, pg_temp
+as $$
+declare
+  v_rows integer;
+begin
+  update goalcup.runs set final_commit = p_commit, final_commit_at = p_at::timestamptz
+   where id = p_run_id and member_id = p_member_id::uuid and final_commit is null;
+  get diagnostics v_rows = row_count;
+  return v_rows = 1;
 end $$;
 
 -- ---- privileges: now that every function exists -----------------------------------------------
@@ -771,8 +878,11 @@ grant execute on function
   goalcup.upload_abandon_run(text, text, text, text),
   goalcup.upload_commit_chunk(text, text, jsonb),
   goalcup.upload_seal_run(text, text, text, text, text, text, text, text),
-  goalcup.upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text),
-  goalcup.upload_close_run(text, text, text)
+  goalcup.upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text, bigint, text, text, text),
+  goalcup.upload_close_run(text, text, text),
+  goalcup.upload_runs_for_tick(text),
+  goalcup.upload_queue_notice(text, text, text, text, jsonb, text),
+  goalcup.upload_record_final_commit(text, text, text, text)
 to goalcup_worker;
 
 -- ---- what the website's owner still has to decide --------------------------------------------
@@ -781,6 +891,9 @@ to goalcup_worker;
 --    may be started) and one for practice (the window columns are ignored for it). The Worker takes
 --    EVENT_ID, PRACTICE_EVENT_ID, RUN_HOURS and PRACTICE_RUN_MINUTES from its own variables; upload_open_run
 --    only checks that the event exists and, for a competition run, the window.
+--  * The mailer: it reads goalcup.notices where sent_at is null, writes the email for each kind (started, silence,
+--    idle_3h, idle_6h, recording, ended; the payload has what it needs), sends it and sets sent_at. Nothing here
+--    sends mail, and goalcup_worker can write the outbox only through upload_queue_notice.
 --  * The approval page: it calls goalcup.goalcup_approve_device(user_code, member_id, approve) for the
 --    signed-in member, and replaces goalcup.member_handle with the real handle column.
 --  * Whether PostgREST should expose schema goalcup at all (required for RPC), or whether thin

@@ -1,6 +1,8 @@
 // Configuration guards and the SupabaseDb request shape (against a stubbed fetch: no Supabase here).
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { getDb, readConfig } from "../src/context.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
@@ -169,4 +171,50 @@ test("SupabaseDb: unknown credential is null; errors become 502; odd answers bec
     throw new TypeError("network down");
   });
   await assert.rejects(db.credential("x", "t"), (e) => e instanceof ApiError && e.status === 502);
+});
+
+// ---- wrangler.toml ---------------------------------------------------------------------------
+
+/** The tables of wrangler.toml with their `key = value` lines as written (strings unquoted). Enough for this file; not TOML. */
+const WRANGLER = readFileSync(join(import.meta.dirname, "../wrangler.toml"), "utf8");
+
+function wranglerTables(): Record<string, Record<string, string>> {
+  const tables: Record<string, Record<string, string>> = { "": {} };
+  let current = "";
+  for (const raw of WRANGLER.split("\n")) {
+    const line = raw.trim();
+    const table = /^\[\[?([A-Za-z0-9_.-]+)\]\]?$/.exec(line);
+    if (table !== null) {
+      current = table[1]!;
+      tables[current] ??= {};
+      continue;
+    }
+    const pair = /^([A-Za-z_]+)\s*=\s*(.*)$/.exec(line);
+    if (pair !== null) tables[current]![pair[1]!] = pair[2]!.replace(/^"(.*)"$/, "$1");
+  }
+  return tables;
+}
+
+test("TEST_APPROVAL_KEY is absent from the production block; only staging says STAGING = on", () => {
+  const tables = wranglerTables();
+  for (const [name, keys] of Object.entries(tables)) {
+    assert.ok(!("TEST_APPROVAL_KEY" in keys), `TEST_APPROVAL_KEY is a secret, not a setting of [${name}]`);
+  }
+  assert.ok(!/^[^#\n]*TEST_APPROVAL_KEY\s*=/m.test(WRANGLER));
+  assert.notEqual(tables.vars!.STAGING, "on");
+  assert.equal(tables["env.staging.vars"]!.STAGING, "on");
+  assert.equal(tables.vars!.DB_BACKEND, "supabase"); // production never runs the local database
+});
+
+test("the 5-minute cron runs in production and in staging; staging is a Worker of its own", () => {
+  const tables = wranglerTables();
+  assert.equal(tables.triggers!.crons, '["*/5 * * * *"]');
+  assert.equal(tables["env.staging.triggers"]!.crons, '["*/5 * * * *"]');
+  assert.equal(tables[""]!.name, "goalcup-upload");
+  assert.equal(tables["env.staging"]!.name, "goalcup-upload-staging");
+  // wrangler does not inherit vars into an environment: staging repeats every one, and has its own events and bucket.
+  for (const name of Object.keys(tables.vars!)) assert.ok(name in tables["env.staging.vars"]!, `staging needs ${name}`);
+  assert.notEqual(tables["env.staging.vars"]!.EVENT_ID, tables.vars!.EVENT_ID);
+  assert.notEqual(tables["env.staging.vars"]!.PRACTICE_EVENT_ID, tables.vars!.PRACTICE_EVENT_ID);
+  assert.notEqual(tables["env.staging.r2_buckets"]!.bucket_name, tables.r2_buckets!.bucket_name);
 });

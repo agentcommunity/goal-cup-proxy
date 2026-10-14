@@ -8,6 +8,7 @@
 //   state/devices/{sha256}.json  a device request, by the hash of its device code
 //   state/usercodes/{sha256}.json  {"device_sha256": …}: the request a user code belongs to
 //   state/credentials/{sha256}.json  a run credential, by its own hash
+//   state/notices/{run_id}.{kind}.{key}.json  a queued notice (the outbox); `key` is the dedupe key, URL-encoded, "-" when empty
 //
 // Not built for load: a run's whole state is one object. Fine for a developer and for tests.
 
@@ -27,6 +28,7 @@ import type {
   HeartbeatArgs,
   HeartbeatResult,
   MachineFacts,
+  NoticeArgs,
   OpenRunArgs,
   OpenRunResult,
   RunRow,
@@ -34,8 +36,9 @@ import type {
   SealArgs,
   SealResult,
   StoreReceiptResult,
+  TickRun,
 } from "./db.ts";
-import { CLOSE_AFTER_SECONDS, FIRST_SEQ, GENESIS, UNBOUND_CREDENTIAL_SECONDS, isPastEnd, statusAt } from "./db.ts";
+import { CLOSE_AFTER_SECONDS, FIRST_SEQ, GENESIS, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
 import { addSeconds, formatTime, sha256Hex, toHex } from "./util.ts";
 
@@ -44,7 +47,15 @@ interface StoredEntry extends EntryRow {
   tracer_version: string;
   chunks: ChunkRecord[];
   final_repo_head: string | null;
-  last_heartbeat: { at: string; seq: number; head: string; offset_local: number } | null;
+  last_heartbeat: {
+    at: string;
+    seq: number;
+    head: string;
+    offset_local: number;
+    recording: string | null;
+    client_ip: string | null;
+    client_country: string | null;
+  } | null;
   heartbeat_count: number;
 }
 
@@ -55,6 +66,14 @@ interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" |
   client_country: string | null;
   abandon_reason: string | null;
   sealed_at: string | null;
+  // What the heartbeats and the deadline add, for the cron. (A state file from before has none of these.)
+  last_heartbeat_at?: string | null;
+  model_requests?: number;
+  last_model_request_at?: string;
+  flagged_at?: string | null;
+  flag_reason?: "gaps" | "failed" | null;
+  final_commit?: string | null;
+  final_commit_at?: string | null;
   entries: StoredEntry[];
 }
 
@@ -243,6 +262,13 @@ export class LocalDb implements Db {
       client_country: a.client_country,
       abandon_reason: null,
       sealed_at: null,
+      last_heartbeat_at: null,
+      model_requests: 0,
+      last_model_request_at: a.official_start,
+      flagged_at: null,
+      flag_reason: null,
+      final_commit: null,
+      final_commit_at: null,
       entries: [newEntry(a.entry_id, a.run_id, 0, a)],
     };
     await this.#keep(run);
@@ -311,11 +337,12 @@ export class LocalDb implements Db {
       if (run.status === "abandoned" || run.status === "incomplete") return { answer: "closed" };
       const entry = entryOf(run, a.entry_id);
       if (entry === undefined) return { answer: "not_found" };
-      const note = { at: a.at, seq: a.seq, head: a.head, offset_local: a.offset_local };
+      const note = { at: a.at, seq: a.seq, head: a.head, offset_local: a.offset_local, recording: a.recording, client_ip: a.client_ip, client_country: a.client_country };
       if (!a.final) {
         // A sealed entry has nothing left to record.
         if (entry.sealed_at !== null) return { answer: "recorded" };
-        return { next: withEntry(run, { ...entry, last_heartbeat: note, heartbeat_count: entry.heartbeat_count + 1 }), answer: "recorded" };
+        const next = { ...entry, last_heartbeat: note, heartbeat_count: entry.heartbeat_count + 1 };
+        return { next: withSignals(withEntry(run, next), a), answer: "recorded" };
       }
       // The final heartbeat commits the end of the entry, once.
       if (entry.final !== null) {
@@ -325,8 +352,36 @@ export class LocalDb implements Db {
       const stored = entry.next_seq - 1; // -1 before any record
       if (stored > a.seq || (stored === a.seq && entry.head !== a.head)) return { answer: "final_conflict" };
       const next = { ...entry, final: { seq: a.seq, head: a.head }, final_repo_head: a.repo_head, last_heartbeat: note, heartbeat_count: entry.heartbeat_count + 1 };
-      return { next: withEntry(run, next), answer: "final_committed" };
+      return { next: withSignals(withEntry(run, next), a), answer: "final_committed" };
     });
+  }
+
+  async runsForTick(now: string): Promise<TickRun[]> {
+    const cutoff = formatTime(addSeconds(new Date(now), -TICK_LOOKBACK_SECONDS));
+    const runs: StoredRun[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.#bucket.list({ prefix: "state/runs/", cursor });
+      for (const { key } of page.objects) {
+        const run = (await (await this.#bucket.get(key))?.json()) as StoredRun | undefined;
+        if (run === undefined || run.status === "abandoned") continue;
+        if (run.status === "open" || endsAt(run) >= cutoff) runs.push(run);
+      }
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor !== undefined);
+    return runs.sort((x, y) => (x.official_start + x.run_id).localeCompare(y.official_start + y.run_id)).map(toTick);
+  }
+
+  async queueNotice(n: NoticeArgs): Promise<boolean> {
+    const key = `state/notices/${n.run_id}.${n.kind}.${encodeURIComponent(n.dedupe_key) || "-"}.json`;
+    const row = { run_id: n.run_id, member_id: n.member_id, kind: n.kind, dedupe_key: n.dedupe_key, payload: n.payload, created_at: n.at, sent_at: null };
+    return (await this.#bucket.put(key, JSON.stringify(row), { onlyIf: { etagDoesNotMatch: "*" } })) !== null;
+  }
+
+  recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {
+    return this.#updateRun<void>(runId, memberId, undefined, (run) =>
+      run.final_commit != null ? { answer: undefined } : { next: { ...run, final_commit: commit, final_commit_at: at }, answer: undefined },
+    );
   }
 
   async getRun(memberId: string, runId: string, entryId: string | null): Promise<{ run: RunRow; entry: EntryRow | null } | null> {
@@ -402,6 +457,20 @@ export class LocalDb implements Db {
   }
 }
 
+/** The run-level facts a recorded heartbeat adds: its time, the connection, the first flag, and growth in model requests. */
+function withSignals(run: StoredRun, a: HeartbeatArgs): StoredRun {
+  const flag = a.recording === "gaps" || a.recording === "failed" ? a.recording : null;
+  const grew = a.model_requests !== null && a.model_requests > (run.model_requests ?? 0);
+  return {
+    ...run,
+    last_heartbeat_at: a.at,
+    client_ip: a.client_ip,
+    client_country: a.client_country,
+    ...(flag !== null && run.flagged_at == null ? { flagged_at: a.at, flag_reason: flag } : {}),
+    ...(grew ? { model_requests: a.model_requests ?? 0, last_model_request_at: a.at } : {}),
+  };
+}
+
 const newEntry = (
   entry_id: string,
   run_id: string,
@@ -435,9 +504,25 @@ const newEntry = (
 
 /** The public shape of a run: what it says about itself, and its current entry. */
 function toRun(r: StoredRun): RunRow {
-  const { machine: _m, client_ip: _i, client_country: _c, abandon_reason: _a, sealed_at: _s, entries: _e, ...row } = r;
+  const {
+    machine: _m, client_ip: _i, client_country: _c, abandon_reason: _a, sealed_at: _s, entries: _e,
+    last_heartbeat_at: _h, model_requests: _r, last_model_request_at: _l, flagged_at: _f, flag_reason: _g, final_commit: _k, final_commit_at: _t,
+    ...row
+  } = r;
   const cur = currentOf(r);
   return { ...row, first_entry_id: r.entries[0]!.entry_id, current_entry_id: cur.entry_id, current_sealed_at: cur.sealed_at };
+}
+
+/** A run as the cron reads it. */
+function toTick(r: StoredRun): TickRun {
+  return {
+    ...toRun(r),
+    last_heartbeat_at: r.last_heartbeat_at ?? null,
+    last_model_request_at: r.last_model_request_at ?? r.official_start,
+    flagged_at: r.flagged_at ?? null,
+    flag_reason: r.flag_reason ?? null,
+    final_commit: r.final_commit ?? null,
+  };
 }
 
 /** The public shape of an entry: drop the bookkeeping that only the local store keeps. */
