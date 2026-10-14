@@ -46,6 +46,8 @@ interface StoredEntry extends EntryRow {
   harness_version: string;
   tracer_version: string;
   chunks: ChunkRecord[];
+  /** The highest `model_requests` a heartbeat of this entry has sent; null until one does. */
+  model_requests?: number | null;
   final_repo_head: string | null;
   last_heartbeat: {
     at: string;
@@ -64,12 +66,14 @@ interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" |
   machine: MachineFacts | null;
   client_ip: string | null;
   client_country: string | null;
+  /** The latest pair, from a heartbeat or a continue; `client_*` stay the open call's. */
+  last_client_ip?: string | null;
+  last_client_country?: string | null;
   abandon_reason: string | null;
   sealed_at: string | null;
   // What the heartbeats and the deadline add, for the cron. (A state file from before has none of these.)
   last_heartbeat_at?: string | null;
-  model_requests?: number;
-  last_model_request_at?: string;
+  last_model_request_at?: string | null;
   flagged_at?: string | null;
   flag_reason?: "gaps" | "failed" | null;
   final_commit?: string | null;
@@ -262,9 +266,10 @@ export class LocalDb implements Db {
       client_country: a.client_country,
       abandon_reason: null,
       sealed_at: null,
+      last_client_ip: null,
+      last_client_country: null,
       last_heartbeat_at: null,
-      model_requests: 0,
-      last_model_request_at: a.official_start,
+      last_model_request_at: null,
       flagged_at: null,
       flag_reason: null,
       final_commit: null,
@@ -319,7 +324,12 @@ export class LocalDb implements Db {
       if (run.status !== "open" || isPastEnd(run, new Date(a.at))) return { answer: { kind: "closed" } };
       if (cur.entry_id !== a.previous_entry_id) return { answer: { kind: "conflict" } };
       const entry = newEntry(a.entry_id, run.run_id, cur.segment + 1, a);
-      const next = { ...run, client_ip: a.client_ip, client_country: a.client_country, entries: [...run.entries, entry] };
+      const next = {
+        ...run,
+        last_client_ip: a.client_ip ?? run.last_client_ip ?? null,
+        last_client_country: a.client_country ?? run.last_client_country ?? null,
+        entries: [...run.entries, entry],
+      };
       return { next, answer: { kind: "created", run: toRun(next), entry: toEntry(entry) } };
     });
   }
@@ -342,7 +352,7 @@ export class LocalDb implements Db {
         // A sealed entry has nothing left to record.
         if (entry.sealed_at !== null) return { answer: "recorded" };
         const next = { ...entry, last_heartbeat: note, heartbeat_count: entry.heartbeat_count + 1 };
-        return { next: withSignals(withEntry(run, next), a), answer: "recorded" };
+        return { next: withSignals(run, next, a), answer: "recorded" };
       }
       // The final heartbeat commits the end of the entry, once.
       if (entry.final !== null) {
@@ -352,7 +362,7 @@ export class LocalDb implements Db {
       const stored = entry.next_seq - 1; // -1 before any record
       if (stored > a.seq || (stored === a.seq && entry.head !== a.head)) return { answer: "final_conflict" };
       const next = { ...entry, final: { seq: a.seq, head: a.head }, final_repo_head: a.repo_head, last_heartbeat: note, heartbeat_count: entry.heartbeat_count + 1 };
-      return { next: withSignals(withEntry(run, next), a), answer: "final_committed" };
+      return { next: withSignals(run, next, a), answer: "final_committed" };
     });
   }
 
@@ -457,17 +467,21 @@ export class LocalDb implements Db {
   }
 }
 
-/** The run-level facts a recorded heartbeat adds: its time, the connection, the first flag, and growth in model requests. */
-function withSignals(run: StoredRun, a: HeartbeatArgs): StoredRun {
+/**
+ * `entry` with the heartbeat noted, in `run`, and the run-level facts it adds: its time, the latest
+ * connection (a missing one keeps the last), the first flag, and an entry's first or higher
+ * `model_requests` (each entry counts from zero).
+ */
+function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): StoredRun {
   const flag = a.recording === "gaps" || a.recording === "failed" ? a.recording : null;
-  const grew = a.model_requests !== null && a.model_requests > (run.model_requests ?? 0);
+  const grew = a.model_requests !== null && (entry.model_requests == null || a.model_requests > entry.model_requests);
   return {
-    ...run,
+    ...withEntry(run, grew ? { ...entry, model_requests: a.model_requests } : entry),
     last_heartbeat_at: a.at,
-    client_ip: a.client_ip,
-    client_country: a.client_country,
+    last_client_ip: a.client_ip ?? run.last_client_ip ?? null,
+    last_client_country: a.client_country ?? run.last_client_country ?? null,
     ...(flag !== null && run.flagged_at == null ? { flagged_at: a.at, flag_reason: flag } : {}),
-    ...(grew ? { model_requests: a.model_requests ?? 0, last_model_request_at: a.at } : {}),
+    ...(grew ? { last_model_request_at: a.at } : {}),
   };
 }
 
@@ -500,13 +514,15 @@ const newEntry = (
   final_repo_head: null,
   last_heartbeat: null,
   heartbeat_count: 0,
+  model_requests: null,
 });
 
 /** The public shape of a run: what it says about itself, and its current entry. */
 function toRun(r: StoredRun): RunRow {
   const {
     machine: _m, client_ip: _i, client_country: _c, abandon_reason: _a, sealed_at: _s, entries: _e,
-    last_heartbeat_at: _h, model_requests: _r, last_model_request_at: _l, flagged_at: _f, flag_reason: _g, final_commit: _k, final_commit_at: _t,
+    last_client_ip: _p, last_client_country: _q,
+    last_heartbeat_at: _h, last_model_request_at: _l, flagged_at: _f, flag_reason: _g, final_commit: _k, final_commit_at: _t,
     ...row
   } = r;
   const cur = currentOf(r);
@@ -518,7 +534,7 @@ function toTick(r: StoredRun): TickRun {
   return {
     ...toRun(r),
     last_heartbeat_at: r.last_heartbeat_at ?? null,
-    last_model_request_at: r.last_model_request_at ?? r.official_start,
+    last_model_request_at: r.last_model_request_at ?? null,
     flagged_at: r.flagged_at ?? null,
     flag_reason: r.flag_reason ?? null,
     final_commit: r.final_commit ?? null,
@@ -527,6 +543,6 @@ function toTick(r: StoredRun): TickRun {
 
 /** The public shape of an entry: drop the bookkeeping that only the local store keeps. */
 function toEntry(e: StoredEntry): EntryRow {
-  const { harness_version: _h, tracer_version: _t, chunks: _c, final_repo_head: _f, last_heartbeat: _l, heartbeat_count: _n, ...row } = e;
+  const { harness_version: _h, tracer_version: _t, chunks: _c, final_repo_head: _f, last_heartbeat: _l, heartbeat_count: _n, model_requests: _m, ...row } = e;
   return row;
 }

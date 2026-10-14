@@ -190,37 +190,131 @@ lifecycle("a heartbeat without the new fields is still 200 and changes nothing a
   assert.deepEqual(plain.body, { stop: false, deadline_at: run.deadline_at, reason: null });
   const nulls = await r.beat(token, run.run_id, run.entry_id, { recording: null, model_requests: null });
   assert.equal(nulls.status, 200, JSON.stringify(nulls.body));
-  const s = r.storedRun(run.run_id);
-  assert.deepEqual([s.flagged_at, s.model_requests, s.last_model_request_at, s.last_heartbeat_at], [null, 0, T0, t(MIN)]);
+  const s = r.storedRun(run.run_id) as { entries: { model_requests: number | null }[] } & ReturnType<typeof r.storedRun>;
+  assert.deepEqual([s.flagged_at, s.entries[0]!.model_requests, s.last_model_request_at, s.last_heartbeat_at], [null, null, null, t(MIN)]);
 });
 
-lifecycle("model_requests above the stored value moves the last model request; equal or lower does not", async (r) => {
+lifecycle("model_requests above the entry's stored value moves the last model request; equal or lower does not", async (r) => {
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
-  const seen = async (after: number, model_requests: number) => {
+  const seen = async (after: number, model_requests: number, entry = run.entry_id) => {
     r.at(t(after));
-    await r.beat(token, run.run_id, run.entry_id, { model_requests });
-    const s = r.storedRun(run.run_id);
-    return [s.model_requests, s.last_model_request_at];
+    await r.beat(token, run.run_id, entry, { model_requests });
+    const s = r.storedRun(run.run_id) as { last_model_request_at: string; entries: { model_requests: number | null }[] };
+    return [s.entries.map((e) => e.model_requests), s.last_model_request_at];
   };
-  assert.deepEqual(await seen(60, 5), [5, t(60)]);
-  assert.deepEqual(await seen(120, 5), [5, t(60)]);
-  assert.deepEqual(await seen(180, 2), [5, t(60)]); // a counter that restarted lower
-  assert.deepEqual(await seen(240, 6), [6, t(240)]);
-  assert.deepEqual(await seen(300, 0), [6, t(240)]);
+  assert.deepEqual(await seen(60, 5), [[5], t(60)]);
+  assert.deepEqual(await seen(120, 5), [[5], t(60)]);
+  assert.deepEqual(await seen(180, 2), [[5], t(60)]); // lower, on the same entry
+  assert.deepEqual(await seen(240, 6), [[6], t(240)]);
+  assert.deepEqual(await seen(300, 0), [[6], t(240)]);
 });
 
-lifecycle("each heartbeat keeps the connection's IP and country on the server, and answers neither", async (r) => {
+lifecycle("a continue counts from zero: its first report and its growth move the last model request", async (r) => {
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
+  r.at(t(60));
+  await r.beat(token, run.run_id, run.entry_id, { model_requests: 50 });
+  r.at(t(2 * HOURS));
+  const next = (await r.cont(token, run.run_id, run.entry_id, "s-two")).body.entry_id as string;
+  const state = () => {
+    const s = r.storedRun(run.run_id) as { last_model_request_at: string; entries: { model_requests: number | null }[] };
+    return [s.entries.map((e) => e.model_requests), s.last_model_request_at];
+  };
+  assert.deepEqual(state(), [[50, null], t(60)]); // nothing reported by the new process yet
+  await r.beat(token, run.run_id, next, { model_requests: 2 }); // lower than the run's old maximum
+  assert.deepEqual(state(), [[50, 2], t(2 * HOURS)]);
+  r.at(t(2 * HOURS + 10 * MIN));
+  await r.beat(token, run.run_id, next, { model_requests: 3 });
+  assert.deepEqual(state(), [[50, 3], t(2 * HOURS + 10 * MIN)]);
+  r.at(t(2 * HOURS + 20 * MIN));
+  await r.beat(token, run.run_id, run.entry_id, { model_requests: 50 }); // the old entry, no growth
+  assert.deepEqual(state(), [[50, 3], t(2 * HOURS + 10 * MIN)]);
+  r.at(t(2 * HOURS + 30 * MIN));
+  await r.beat(token, run.run_id, run.entry_id, { model_requests: 51 }); // the old entry grows on its own count
+  assert.deepEqual(state(), [[51, 3], t(2 * HOURS + 30 * MIN)]);
+});
+
+lifecycle("a run that never reported model_requests gets no idle notice", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  for (const hours of [3, 7]) {
+    r.at(t(hours * HOURS + MIN));
+    await r.beat(token, run.run_id, run.entry_id, { recording: "ok" });
+    await r.tick();
+  }
+  assert.deepEqual(kinds(r), ["started"]);
+  // Its first report starts the clock; three quiet hours after it are idle.
+  r.at(t(8 * HOURS));
+  await r.beat(token, run.run_id, run.entry_id, { model_requests: 0 });
+  r.at(t(11 * HOURS + MIN));
+  await r.beat(token, run.run_id, run.entry_id, { model_requests: 0 });
+  await r.tick();
+  assert.deepEqual(only(r, "idle_3h").map((n) => n.dedupe_key), [t(8 * HOURS)]);
+});
+
+lifecycle("the open keeps its IP and country; heartbeats and a continue keep the latest, and a missing header keeps the last", async (r) => {
+  const token = await r.cred("alice");
+  const opened = await r.open(token, "s1", {}, { "cf-connecting-ip": "203.0.113.9" });
+  const run = opened.body as { run_id: string; entry_id: string };
+  type Stored = { client_ip: string; client_country: string; last_client_ip: string; last_client_country: string; entries: { last_heartbeat: Record<string, unknown> }[] };
+  const stored = () => r.storedRun(run.run_id) as unknown as Stored;
+  assert.deepEqual([stored().client_ip, stored().client_country], ["203.0.113.9", "DE"]);
+
   const beat = await r.beat(token, run.run_id, run.entry_id, {}, { "cf-connecting-ip": "203.0.113.50" });
   assert.deepEqual(Object.keys(beat.body).sort(), ["deadline_at", "reason", "stop"]);
-  const s = r.storedRun(run.run_id) as { client_ip: string; client_country: string; entries: { last_heartbeat: Record<string, unknown> }[] };
-  assert.deepEqual([s.client_ip, s.client_country], ["203.0.113.50", "DE"]);
-  assert.deepEqual([s.entries[0]!.last_heartbeat.client_ip, s.entries[0]!.last_heartbeat.client_country], ["203.0.113.50", "DE"]);
-  assert.ok(!JSON.stringify(beat.body).includes("203.0.113.50"));
-  assert.ok(![...r.bucket.map.keys()].some((k) => k.includes("203.0.113.50")), "an address in a storage key");
+  assert.deepEqual([stored().client_ip, stored().last_client_ip, stored().last_client_country], ["203.0.113.9", "203.0.113.50", "DE"]);
+  const hb = stored().entries[0]!.last_heartbeat;
+  assert.deepEqual([hb.client_ip, hb.client_country], ["203.0.113.50", "DE"]);
+
+  // A heartbeat without the header says so on its own record, and leaves the run's latest pair.
+  await r.beat(token, run.run_id, run.entry_id);
+  assert.equal(stored().entries[0]!.last_heartbeat.client_ip, null);
+  assert.deepEqual([stored().last_client_ip, stored().client_ip], ["203.0.113.50", "203.0.113.9"]);
+
+  // A continue writes the latest pair too; the open's stays.
+  const c = await r.cont(token, run.run_id, run.entry_id, "s-two", {}, { "cf-connecting-ip": "198.51.100.7" });
+  assert.equal(c.status, 201, JSON.stringify(c.body));
+  assert.deepEqual([stored().client_ip, stored().last_client_ip], ["203.0.113.9", "198.51.100.7"]);
+
+  assert.ok(![...r.bucket.map.keys()].some((k) => k.includes("203.0.113")), "an address in a storage key");
 }, undefined, undefined, { country: "DE" });
+
+lifecycle("one run that fails does not stop the others in a step", async (r) => {
+  stubGithub(() => head(SHA));
+  const [a, b] = [await r.cred("alice"), await r.cred("bob")];
+  const first = await r.start(a, "s1");
+  const second = await r.start(b, "s2");
+  const queue = LocalDb.prototype.queueNotice;
+  const broken = mock.method(LocalDb.prototype, "queueNotice", function (this: LocalDb, n: Parameters<typeof queue>[0]) {
+    if (n.run_id === first.run_id) throw new Error("boom");
+    return queue.call(this, n);
+  });
+  const logged: string[] = [];
+  const log = mock.method(console, "error", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+  try {
+    await r.tick();
+    assert.deepEqual(kinds(r, second.run_id), ["started"]);
+    assert.deepEqual(kinds(r, first.run_id), []);
+    // The same for the commit step: one run's failing write leaves the other's recorded.
+    broken.mock.restore();
+    const record = LocalDb.prototype.recordFinalCommit;
+    const bad = mock.method(LocalDb.prototype, "recordFinalCommit", function (this: LocalDb, member: string, run: string, ...rest: [string, string]) {
+      if (run === first.run_id) throw new Error("boom");
+      return record.call(this, member, run, ...rest);
+    });
+    r.at(first.deadline_at);
+    await r.tick();
+    bad.mock.restore();
+    assert.equal(r.storedRun(second.run_id).final_commit, SHA);
+    assert.equal(r.storedRun(first.run_id).final_commit ?? null, null);
+  } finally {
+    broken.mock.restore();
+    log.mock.restore();
+  }
+  assert.ok(logged.some((l) => l.includes("queueNotices") && l.includes(first.run_id) && l.includes("boom")), logged.join("\n"));
+  assert.ok(logged.some((l) => l.includes("recordFinalCommits") && l.includes(first.run_id)), logged.join("\n"));
+});
 
 lifecycle("the end queues one ended notice with the commit", async (r) => {
   const calls = stubGithub(() => head(SHA));

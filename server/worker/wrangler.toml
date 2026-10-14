@@ -47,7 +47,7 @@ MAINTENANCE_RETRY_AFTER = "300"
 #   RECEIPT_SIGNING_KEY  Ed25519 seed, 64 hex characters, generated offline
 #   SUPABASE_URL         https://<project>.supabase.co
 #   SUPABASE_KEY         key of the dedicated role limited to schema goalcup
-#   GITHUB_TOKEN         optional, read-only, raises the GitHub API rate limit
+#   GITHUB_TOKEN         read-only; required in production and staging (the cron's commit fetch fails without it)
 #   TEST_APPROVAL_KEY    never in production. Staging only (with STAGING = "on"): switches on
 #                        POST /v1/device/approve, which approves a device request as any member.
 

@@ -24,15 +24,26 @@ export const COMMITS_PER_TICK = 50;
 
 const earlier = (now: Date, seconds: number) => formatTime(addSeconds(now, -seconds));
 
+/** Do `work` for each run; one that throws is logged (its id, the message) and the rest still get their turn. Returns the sum. */
+async function eachRun(step: string, runs: TickRun[], work: (run: TickRun) => Promise<number>): Promise<number> {
+  let total = 0;
+  for (const run of runs) {
+    try {
+      total += await work(run);
+    } catch (e) {
+      console.error(`tick ${step} ${run.run_id}: ${message(e)}`);
+    }
+  }
+  return total;
+}
+
 /** Write the close of every run that is over: `sealed`, or `incomplete` once the close time has passed. Returns how many. */
 export async function closeRuns(ctx: Ctx, now: Date): Promise<number> {
-  let closed = 0;
-  for (const run of await ctx.db.runsForTick(formatTime(now))) {
-    if (statusAt(run, now, ctx.cfg.closeAfterSeconds) === run.status) continue;
+  return eachRun("closeRuns", await ctx.db.runsForTick(formatTime(now)), async (run) => {
+    if (statusAt(run, now, ctx.cfg.closeAfterSeconds) === run.status) return 0;
     await ctx.db.closeRun(run.member_id, run.run_id, formatTime(now));
-    closed++;
-  }
-  return closed;
+    return 1;
+  });
 }
 
 /**
@@ -58,19 +69,21 @@ async function headCommit(ctx: Ctx, repoUrl: string): Promise<string | null> {
   }
 }
 
-/** For runs that ended at their deadline: ask GitHub for the head commit and keep it. Returns how many were recorded. */
+/**
+ * For runs that ended at their deadline: ask GitHub for the head commit and keep it. It is asked on
+ * the first tick at or after `ends_at`, so it may include pushes made after the deadline.
+ * Returns how many were recorded.
+ */
 export async function recordFinalCommits(ctx: Ctx, now: Date): Promise<number> {
   const due = (await ctx.db.runsForTick(formatTime(now))).filter(
     (r) => r.mode === "competition" && !isReplaced(r) && r.final_commit === null && endsAt(r) <= formatTime(now),
   );
-  let recorded = 0;
-  for (const run of due.slice(0, COMMITS_PER_TICK)) {
+  return eachRun("recordFinalCommits", due.slice(0, COMMITS_PER_TICK), async (run) => {
     const commit = await headCommit(ctx, run.repo_url);
-    if (commit === null) continue;
+    if (commit === null) return 0;
     await ctx.db.recordFinalCommit(run.member_id, run.run_id, commit, formatTime(now));
-    recorded++;
-  }
-  return recorded;
+    return 1;
+  });
 }
 
 /** The notices a competition run is owed at `now`: kind, dedupe key, payload. */
@@ -91,8 +104,9 @@ function owed(run: TickRun, now: Date): { kind: NoticeKind; key: string; payload
   const heard = run.last_heartbeat_at ?? run.official_start;
   if (heard < earlier(now, SILENCE_AFTER)) {
     notices.push({ kind: "silence", key: heard, payload: { last_heartbeat_at: run.last_heartbeat_at } });
-  } else if (run.last_heartbeat_at !== null) {
-    // The run is beating, so its agent is what is quiet.
+  } else if (run.last_heartbeat_at !== null && run.last_model_request_at !== null) {
+    // The run is beating, so its agent is what is quiet. (A run that has never reported
+    // model_requests is not judged: the tracer may not send them.)
     for (const hours of IDLE_HOURS) {
       if (run.last_model_request_at < earlier(now, hours * 3600)) {
         notices.push({ kind: hours === 3 ? "idle_3h" : "idle_6h", key: run.last_model_request_at, payload: { hours, since: run.last_model_request_at } });
@@ -104,9 +118,9 @@ function owed(run: TickRun, now: Date): { kind: NoticeKind; key: string; payload
 
 /** Queue the notices that are due. Returns how many were queued by this call (not already there). */
 export async function queueNotices(ctx: Ctx, now: Date): Promise<number> {
-  let queued = 0;
-  for (const run of await ctx.db.runsForTick(formatTime(now))) {
-    if (run.mode !== "competition") continue;
+  const runs = (await ctx.db.runsForTick(formatTime(now))).filter((r) => r.mode === "competition");
+  return eachRun("queueNotices", runs, async (run) => {
+    let queued = 0;
     for (const n of owed(run, now)) {
       const added = await ctx.db.queueNotice({
         run_id: run.run_id,
@@ -118,8 +132,8 @@ export async function queueNotices(ctx: Ctx, now: Date): Promise<number> {
       });
       if (added) queued++;
     }
-  }
-  return queued;
+    return queued;
+  });
 }
 
 /** One cron tick. Each step is on its own: one that fails is logged and the others still run. */

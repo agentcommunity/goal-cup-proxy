@@ -278,7 +278,7 @@ const tickRun: TickRun = {
 };
 
 test("runsForTick -> upload_runs_for_tick(p_at), each row checked", async () => {
-  const flagged = { ...tickRun, run_id: "r0000000000000002", flagged_at: T, flag_reason: "gaps", final_commit: "none", last_heartbeat_at: null };
+  const flagged = { ...tickRun, run_id: "r0000000000000002", flagged_at: T, flag_reason: "gaps", final_commit: "none", last_heartbeat_at: null, last_model_request_at: null };
   const calls = stub([tickRun, flagged], [], null);
   assert.deepEqual(await db().runsForTick(T), [tickRun, flagged]);
   assert.deepEqual(await db().runsForTick(T), []);

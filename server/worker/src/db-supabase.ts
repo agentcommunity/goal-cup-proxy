@@ -74,7 +74,7 @@ const RUN_SHAPE: Record<string, Check> = {
 const TICK_SHAPE: Record<string, Check> = {
   ...RUN_SHAPE,
   last_heartbeat_at: nullable(isTime),
-  last_model_request_at: isTime,
+  last_model_request_at: nullable(isTime),
   flagged_at: nullable(isTime),
   flag_reason: nullable(oneOf("gaps", "failed")),
   final_commit: nullable((v) => typeof v === "string" && /^([0-9a-f]{40}|none)$/.test(v)),

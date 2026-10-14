@@ -241,13 +241,14 @@ export interface HeartbeatArgs {
   at: string;
 }
 /**
- * `recorded`: an ordinary heartbeat was noted. Either kind sets the run's last heartbeat and
- * its latest IP and country. A `recording` of `gaps` or `failed` flags the run (once, the first
- * wins); a `model_requests` above the run's stored value stores it and moves the run's last model
- * request to `at`; anything else changes nothing. `final_committed` / `final_existing`: the final
- * heartbeat's (seq, head) is now / already was the committed end. `final_conflict`: a different
- * end is committed, or the chain the server holds already contradicts this one. `closed`: the run
- * is abandoned or incomplete.
+ * `recorded`: an ordinary heartbeat was noted. Either kind sets the run's last heartbeat and its
+ * latest IP and country (a missing one keeps the last). A `recording` of `gaps` or `failed` flags
+ * the run (once, the first wins). `model_requests` is kept per entry (a continued process counts
+ * from zero): the first one an entry reports, and any above that entry's stored value, stores it
+ * and moves the run's last model request to `at`; a lower or equal one changes nothing. Anything
+ * else changes nothing. `final_committed` / `final_existing`: the final heartbeat's (seq, head)
+ * is now / already was the committed end. `final_conflict`: a different end is committed, or the
+ * chain the server holds already contradicts this one. `closed`: the run is abandoned or incomplete.
  */
 export type HeartbeatResult = "recorded" | "final_committed" | "final_existing" | "final_conflict" | "closed" | "not_found";
 
@@ -311,8 +312,8 @@ export interface Credential {
 export interface TickRun extends RunRow {
   /** The latest heartbeat of any of its entries. */
   last_heartbeat_at: string | null;
-  /** When `model_requests` last grew; the run's `official_start` until it does. */
-  last_model_request_at: string;
+  /** When an entry's `model_requests` was first reported or last grew; null until a heartbeat reports it. */
+  last_model_request_at: string | null;
   /** When a heartbeat first said the recording had `gaps` or `failed`, and which of the two. */
   flagged_at: string | null;
   flag_reason: "gaps" | "failed" | null;

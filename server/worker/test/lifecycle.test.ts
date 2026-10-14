@@ -392,7 +392,7 @@ describe("what a seal needs", () => {
 describe("facts about the machine and the connection", () => {
   const machine = { os: "macOS", os_version: "26.0", cpus: 8, memory_gb: 32.5, ac_power: true, wsl2: false, sandbox: null };
 
-  test("machine, client IP and country are stored on the run, overwritten on continue, and never echoed", async () => {
+  test("machine, client IP and country are stored on the run, the latest pair moves on continue, and never echoed", async () => {
     const r = rig({}, T0, { country: "DE" });
     try {
       const alice = await r.cred("alice");
@@ -405,7 +405,8 @@ describe("facts about the machine and the connection", () => {
 
       const c = await r.cont(alice, run.run_id, run.entry_id, "s-two", {}, { "cf-connecting-ip": "198.51.100.7" });
       assert.equal(c.status, 201, JSON.stringify(c.body));
-      assert.equal(r.storedRun(run.run_id).client_ip, "198.51.100.7");
+      assert.equal(r.storedRun(run.run_id).last_client_ip, "198.51.100.7");
+      assert.equal(r.storedRun(run.run_id).client_ip, "203.0.113.9"); // the open call's pair stays
       assert.deepEqual(r.storedRun(run.run_id).machine, machine); // the open call's facts stay
 
       // Not in any answer.
@@ -444,6 +445,7 @@ describe("facts about the machine and the connection", () => {
       assert.equal(r.storedRun(run.run_id).machine, null);
       assert.equal(r.storedRun(run.run_id).client_ip, null);
       assert.equal(r.storedRun(run.run_id).client_country, null);
+      assert.equal(r.storedRun(run.run_id).last_client_ip ?? null, null);
       assert.equal((await r.open(await r.cred("bob"), "b1", { machine: null })).status, 201); // null is absent
     } finally {
       r.stop();

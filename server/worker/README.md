@@ -87,7 +87,7 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 | `RECEIPT_SIGNING_KEY` | The Ed25519 seed, 32 bytes as 64 hex characters, generated offline. Its public key is what the tracer pins. |
 | `SUPABASE_URL` | `https://<project>.supabase.co` (supabase backend). |
 | `SUPABASE_KEY` | Key of a dedicated role limited to schema `goalcup` (see the SQL header). Not the community-wide service key. |
-| `GITHUB_TOKEN` | Optional. Read-only; only raises the GitHub API rate limit. |
+| `GITHUB_TOKEN` | Read-only token for public repositories. **Required in production and staging:** the cron asks GitHub for each run's commit at its deadline, and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses, so without a token those calls fail. Optional locally. |
 | `TEST_APPROVAL_KEY` | **Tests and staging only.** Switches on `POST /v1/device/approve`, which approves a device request as any member (`Authorization: Bearer <key>`). Honoured only with `DB_BACKEND=local` or `STAGING=on`; set anywhere else, every call answers `500 misconfigured`. Unset, the route does not exist (`404`). Never set it in production. |
 
 ## What is checked where
@@ -140,7 +140,7 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
      pinned in the tracer and verifier.
    - `SUPABASE_URL` and `SUPABASE_KEY`: the key of a dedicated Postgres role (`goalcup_worker` in
      the proposed SQL) that can execute the `goalcup.upload_*` functions and nothing else.
-   - Optionally `GITHUB_TOKEN` (read access to public repositories).
+   - `GITHUB_TOKEN` (read access to public repositories), for the production Worker and for staging.
 4. **Supabase, in the website repo** (the website repo owns the schema): migrations for schema
    `goalcup` with row-level security, and the seventeen `upload_*` functions. `sql/proposed-goalcup-functions.sql`
    is a proposal to start from. It was run only against a throwaway local PostgreSQL, never against Supabase.
@@ -206,6 +206,12 @@ ones) and write with `Db.closeRun`, `Db.recordFinalCommit` and `Db.queueNotice`.
 tick) are in `notices.ts` and have no variable. The rules are in `docs/UPLOAD-API.md`, "What the
 server does on its own". Locally, `wrangler dev --test-scheduled` and `curl
 localhost:8787/__scheduled` run one tick; the outbox rows are the objects under `state/notices/`.
+Cost: a tick reads the run list with one call and then makes one `queueNotice` call per owed
+notice per open run (every open run owes `started` each tick, which the database answers "already
+there"), so with about 1,500 open runs it is a few thousand subrequests per tick, plus up to 50
+GitHub calls. That assumes the paid Workers plan (the free plan allows 50 subrequests per
+invocation). Each run is handled in its own try/catch: one that fails is logged
+(`tick <step> <run_id>: <message>`) and the rest go on.
 The Worker's tests call `worker.scheduled` on a moved clock (`test/helpers/inproc.ts`, `tick`).
 
 ## Staging

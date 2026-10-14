@@ -490,7 +490,7 @@ test("heartbeat signals: the first gaps or failed flags the run, model_requests 
   const db = await mk();
   const tick = async () => (await db.runsForTick("2026-11-06T12:00:00Z"))[0]!;
   const first = await tick();
-  assert.deepEqual([first.flagged_at, first.flag_reason, first.last_model_request_at], [null, null, START]);
+  assert.deepEqual([first.flagged_at, first.flag_reason, first.last_model_request_at], [null, null, null]); // nothing reported yet
   await db.recordHeartbeat(beat("2026-11-06T09:10:00Z", { recording: "ok", model_requests: 0 }));
   await db.recordHeartbeat(beat("2026-11-06T09:20:00Z", { recording: "failed", model_requests: 4 }));
   await db.recordHeartbeat(beat("2026-11-06T09:30:00Z", { recording: "gaps", model_requests: 4 }));

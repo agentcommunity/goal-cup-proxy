@@ -99,14 +99,15 @@ create table goalcup.runs (
   status               text not null default 'open' check (status in ('open', 'sealed', 'incomplete', 'abandoned')),
   repo_url             text not null,
   machine              jsonb,                 -- non-identifying facts the tracer sent (OS, CPUs, memory...); never public
-  client_ip            text,                  -- from the request, kept on the server only
+  client_ip            text,                  -- from the open call's request, kept on the server only
   client_country       text,
+  last_client_ip       text,                  -- the latest pair, from a heartbeat or a continue (a missing one keeps the last)
+  last_client_country  text,
   abandon_reason       text,
   sealed_at            timestamptz,
   last_heartbeat_at    timestamptz,           -- the latest heartbeat of any of its entries
   -- Facts from the heartbeats (docs/UPLOAD-API.md, "What the server does on its own").
-  model_requests       bigint not null default 0,   -- the highest cumulative count a heartbeat has sent
-  last_model_request_at timestamptz not null,       -- when model_requests last grew; official_start until it does
+  last_model_request_at timestamptz,          -- when an entry's model_requests was first reported or last grew; null until a heartbeat reports it
   flagged_at           timestamptz,           -- the first heartbeat that said the recording had gaps or failed
   flag_reason          text check (flag_reason in ('gaps', 'failed')),
   -- The commit GitHub had at the deadline: 40 hex, or 'none' when GitHub has no such repository. Null until asked.
@@ -152,6 +153,7 @@ create table goalcup.entries (
   head          text not null default repeat('0', 64),              -- genesis before any record
   last_ack      jsonb,
   last_chunk_at timestamptz,
+  model_requests bigint,                                              -- the highest count this entry's heartbeats sent (each process counts from 0); null until one does
   -- The end of the entry, committed once by the final heartbeat: the last record the server will accept.
   final_seq       bigint,
   final_head      text,
@@ -311,23 +313,32 @@ as $$
   where r.id = p_run_id
 $$;
 
--- What a recorded heartbeat adds to its run (the same rules as withSignals in src/db-local.ts): the time,
--- the connection, the first flag, and growth in model requests. Null arguments change nothing.
+-- What a recorded heartbeat adds to its run (the same rules as withSignals in src/db-local.ts): the time, the
+-- latest connection (a missing one keeps the last), the first flag, and an entry's first or higher
+-- model_requests (each entry counts from zero, so a continued process is not held to the old maximum), which
+-- moves the run's last model request.
 create function goalcup.note_heartbeat(
-  p_run_id text, p_at timestamptz, p_recording text, p_model_requests bigint, p_client_ip text, p_client_country text
+  p_run_id text, p_entry_id text, p_at timestamptz, p_recording text, p_model_requests bigint, p_client_ip text, p_client_country text
 ) returns void
-language sql security definer set search_path = goalcup, pg_temp
+language plpgsql security definer set search_path = goalcup, pg_temp
 as $$
+declare
+  v_grew boolean := false;
+begin
+  if p_model_requests is not null then
+    update goalcup.entries set model_requests = p_model_requests
+     where id = p_entry_id and (model_requests is null or p_model_requests > model_requests);
+    v_grew := found;
+  end if;
   update goalcup.runs set
     last_heartbeat_at     = p_at,
-    client_ip             = p_client_ip,
-    client_country        = p_client_country,
+    last_client_ip        = coalesce(p_client_ip, last_client_ip),
+    last_client_country   = coalesce(p_client_country, last_client_country),
     flagged_at            = case when flagged_at is null and p_recording in ('gaps', 'failed') then p_at else flagged_at end,
     flag_reason           = case when flagged_at is null and p_recording in ('gaps', 'failed') then p_recording else flag_reason end,
-    last_model_request_at = case when p_model_requests > model_requests then p_at else last_model_request_at end,
-    model_requests        = greatest(model_requests, p_model_requests)
-  where id = p_run_id
-$$;
+    last_model_request_at = case when v_grew then p_at else last_model_request_at end
+  where id = p_run_id;
+end $$;
 
 -- ---- the device flow and the run credential ----------------------------------------------
 
@@ -495,9 +506,9 @@ begin
     end if;
     begin
       insert into goalcup.runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url,
-                                machine, client_ip, client_country, last_model_request_at)
+                                machine, client_ip, client_country)
       values (p_run_id, p_event_id, v_member, p_mode, v_start, p_deadline_at::timestamptz, p_repo_url,
-              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country, v_start);   -- a JSON null is no facts
+              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country);   -- a JSON null is no facts
       exit;
     exception when unique_violation then
       if v_try = 2 then raise; end if;
@@ -551,7 +562,8 @@ begin
                                workspace, session_id, harness_version, tracer_version)
   values (p_entry_id, p_run_id, v_cur.segment + 1, p_connector_id, p_manifest_sha256, p_connector_dir_sha256,
           p_workspace, p_session_id, p_harness_version, p_tracer_version);
-  update goalcup.runs set client_ip = p_client_ip, client_country = p_client_country where id = p_run_id;
+  update goalcup.runs set last_client_ip = coalesce(p_client_ip, last_client_ip),
+                          last_client_country = coalesce(p_client_country, last_client_country) where id = p_run_id;
   return jsonb_build_object('result', 'created') || goalcup.run_json(p_run_id);
 end $$;
 
@@ -748,7 +760,7 @@ begin
       insert into goalcup.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final,
                                       recording, client_ip, client_country)
       values (p_run_id, p_entry_id, v_at, p_seq, p_head, p_offset_local, false, p_recording, p_client_ip, p_client_country);
-      perform goalcup.note_heartbeat(p_run_id, v_at, p_recording, p_model_requests, p_client_ip, p_client_country);
+      perform goalcup.note_heartbeat(p_run_id, p_entry_id, v_at, p_recording, p_model_requests, p_client_ip, p_client_country);
     end if;
     return 'recorded';
   end if;
@@ -770,7 +782,7 @@ begin
   insert into goalcup.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final, repo_head,
                                   recording, client_ip, client_country)
   values (p_run_id, p_entry_id, v_at, p_seq, p_head, p_offset_local, true, p_repo_head, p_recording, p_client_ip, p_client_country);
-  perform goalcup.note_heartbeat(p_run_id, v_at, p_recording, p_model_requests, p_client_ip, p_client_country);
+  perform goalcup.note_heartbeat(p_run_id, p_entry_id, v_at, p_recording, p_model_requests, p_client_ip, p_client_country);
   return 'final_committed';
 end $$;
 
