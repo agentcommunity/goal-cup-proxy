@@ -52,7 +52,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D37 | Autonomous runs, research evidence, contributions | in force (m2) | [entry](#d37-m2-autonomous-runs-research-evidence-and-open-contributions) · capture-first |
 | D38 | Fresh per-run HOME for Claude Code | in force (m2); cheapest-model clause superseded by D52 | [entry](#d38-m2-fresh-per-run-home-for-claude-code-cheapest-models-for-live-tests) · qualification/m2/launch-recipes |
 | D39 | Headless launches, ported patterns, Codex home | in force (m2) | [entry](#d39-m2-headless-capture-launches-ported-extra-redaction-patterns-shared-isolated-codex-home) |
-| D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2) | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
+| D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2); amended 2026-10-14 | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
 | D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2); model and thinking clause superseded by D52 | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
 | D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47; V1-path clause replaced by D48 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
 | D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2); ruling 3 amended by D49 and D50; ruling 5 by D51; ruling 7 by D53 | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
@@ -983,12 +983,10 @@ Task 5/H-11 designs and the H-11 APFS probe).**
   very stable. A capture launch must not leave a live harness the tracker never durably recorded;
   the design revision chooses the mechanism (for example, the child waits before `exec` until its
   record is durable).
-- **Reservation release (H-11).** Deferred. On macOS 26.6.2 APFS only grow-then-shrink frees
-  `F_ALLOCATEPERSIST` blocks, and a crash between grow and shrink leaves the sealed chain followed
-  by a zero tail, which the reader rejects. Making valid evidence invalid is not acceptable, so
-  capture reservations stay small (as T24 already does) and are not released. A separate-reservation
-  design that can never touch the chain is to be designed before T27 or any repeated large-reserve
-  endurance run.
+- **Reservation release (H-11).** Closed by the amendment below. It was deferred: on macOS
+  26.6.2 APFS only grow-then-shrink frees `F_ALLOCATEPERSIST` blocks, and a crash between grow and
+  shrink leaves the sealed chain followed by a zero tail, which the reader rejects. Making valid
+  evidence invalid was not acceptable, so reservations stayed small and were never released.
 - **Hermes provider.** The Hermes reference row uses Hermes's `deepseek` provider with the
   owner's DeepSeek API key in `DEEPSEEK_API_KEY`, passed to the child only. No DeepSeek base-URL
   variable or config `base_url` is set. The `openai-codex` OAuth login in the isolated Hermes home
@@ -996,6 +994,16 @@ Task 5/H-11 designs and the H-11 APFS probe).**
 
 **Evidence.** `.superpowers/sdd/2026-10-01-m2-phase-1-local-reliability/`
 `task-4-design-review.md`, `task-5-design-review.md`, `task-5-probe.md`; LEDGER H-10, H-11.
+
+**Amendment (2026-10-14, run-lifecycle plan, task R1).** There is one disk reservation for each
+run, held by the run host (one 3 GB reserve file, reused all week and released after the last
+upload); there is none for each entry or segment. A chain is quota-only: the daemon calls
+`configure_capture_quota` and nothing else, preallocates nothing, and `CaptureStorage.reserved_bytes`
+reports 0. The quota is a logical admission ceiling (`CHAIN_QUOTA_BYTES`, 1 TiB), not disk. The
+chain file therefore never carries a persistent allocation behind its end, so the grow-then-shrink
+release and its zero-tail crash window cannot occur: H-11 is closed by removing the thing it
+released. The per-entry allocator seam (`reserve_capture`, `reserve_append`, `ReservationFault`)
+is deleted.
 
 ---
 

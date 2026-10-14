@@ -111,56 +111,6 @@ impl std::error::Error for TraceCapError {
     }
 }
 
-/// The physical allocation of one retained append stream, measured from the file itself.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AppendAllocation {
-    /// The logical length (`st_size`).
-    pub logical_bytes: u64,
-    /// The bytes the filesystem has actually allocated to the file (`st_blocks × 512`).
-    pub allocated_bytes: u64,
-}
-
-/// A refusal a debug-build test may force on this thread's next [`TraceDir::reserve_append`],
-/// so a dependent crate's default-gate tests can prove it refuses rather than falling back.
-///
-/// Fail-closed by construction: each fault can only make the reservation refuse — never
-/// succeed, allocate, or report more — and release builds cannot inject one at all.
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReservationFault {
-    /// The filesystem gate observes an unqualified filesystem instead of the volume's own: the
-    /// measured name `hfs` on macOS, tmpfs's `f_type` magic on Linux.
-    UnqualifiedFileSystem,
-    /// The allocator call is skipped as though it had reported success without granting a
-    /// block, so the real remeasurement finds the allocation short.
-    AllocatorGrantsNothing,
-}
-
-#[cfg(debug_assertions)]
-thread_local! {
-    static RESERVATION_FAULT: std::cell::Cell<Option<ReservationFault>> = const {
-        std::cell::Cell::new(None)
-    };
-}
-
-/// Force `fault` on this thread's next reservation (debug builds only; see
-/// [`ReservationFault`]). It is consumed by that reservation whatever its outcome.
-#[cfg(debug_assertions)]
-#[doc(hidden)]
-pub fn inject_reservation_fault(fault: ReservationFault) {
-    RESERVATION_FAULT.with(|slot| slot.set(Some(fault)));
-}
-
-#[cfg(all(any(target_os = "macos", target_os = "linux"), debug_assertions))]
-fn take_reservation_fault() -> Option<ReservationFault> {
-    RESERVATION_FAULT.with(std::cell::Cell::take)
-}
-
-#[cfg(all(any(target_os = "macos", target_os = "linux"), not(debug_assertions)))]
-fn take_reservation_fault() -> Option<ReservationFault> {
-    None
-}
-
 /// An owning capability to one trace directory.
 pub struct TraceDir {
     inner: imp::TraceDirHandle,
@@ -386,60 +336,6 @@ impl TraceDir {
                 .check_append_binding(writer.name, &writer.inner)?;
             self.inner.sync()
         })();
-        if result.is_err() {
-            writer.poisoned = true;
-        }
-        result
-    }
-
-    /// Physically allocate `writer`'s file so that at least `total_bytes` of it, its logical
-    /// length included, are blocks the filesystem has already granted, without moving its
-    /// logical end of file; return the allocation remeasured after the call.
-    ///
-    /// macOS APFS is qualified: the file is topped up by the missing difference with
-    /// `F_PREALLOCATE` (`F_ALLOCATEALL | F_ALLOCATEPERSIST`, `F_PEOFPOSMODE`). Linux ext4 and
-    /// XFS, by `statfs(2)` `f_type`, use `fallocate(FALLOC_FL_KEEP_SIZE)` over
-    /// `[0, total_bytes)`; that is measured in Docker on Linux 7.0.12 (aarch64) loop-mounted
-    /// ext4 and XFS images, and refused on overlayfs, tmpfs and FUSE. Either way the file is
-    /// never truncated or extended, and `st_blocks × 512`, not the requested or reported
-    /// length, is the evidence. A satisfied target adds nothing, so repeating the call after a
-    /// reopen remeasures rather than allocating twice.
-    ///
-    /// Any other filesystem or platform is refused as `UnsupportedFileSystem` (on Linux also an
-    /// ext4-magic volume whose `fallocate` reports `EOPNOTSUPP`); missing bytes above the
-    /// volume's reported free space are `InsufficientSpace` before any allocation is attempted
-    /// (free space is necessary, never sufficient); a kernel refusal is `Io` (on Linux it may
-    /// leave part of the request allocated behind the logical end, never as content); and a
-    /// remeasurement short of the target or with a moved logical end is
-    /// `AllocationNotRetained`. None of these write a byte of the stream or poison it.
-    ///
-    /// The allocation is a protected floor for this file, not a cap: the caller's own byte
-    /// accounting keeps appends within `total_bytes`. As for a flush, the fixed name must still
-    /// identify the writer's own file before and after the allocation; a replaced name
-    /// permanently poisons `writer`.
-    pub fn reserve_append(
-        &self,
-        writer: &mut TraceAppendFile,
-        total_bytes: u64,
-    ) -> Result<AppendAllocation, TraceCapError> {
-        if writer.poisoned {
-            return Err(TraceCapError::Poisoned {
-                stream: writer.stream,
-            });
-        }
-        self.check_append_bound(writer)?;
-        let allocation = writer.inner.reserve(total_bytes)?;
-        self.check_append_bound(writer)?;
-        Ok(allocation)
-    }
-
-    /// The retained writer is still its own regular file under its fixed name; any failure
-    /// permanently poisons it.
-    fn check_append_bound(&self, writer: &mut TraceAppendFile) -> Result<(), TraceCapError> {
-        let result = writer
-            .inner
-            .validate()
-            .and_then(|()| self.inner.check_append_binding(writer.name, &writer.inner));
         if result.is_err() {
             writer.poisoned = true;
         }
@@ -1054,40 +950,6 @@ mod tests {
         std::fs::remove_file(tmp.path().join("alias")).unwrap();
         assert!(matches!(
             root.sync_append(&mut chain),
-            Err(TraceCapError::Poisoned { .. })
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_reservation_refuses_and_poisons_a_stream_whose_name_was_replaced() {
-        use std::os::unix::fs::MetadataExt;
-        let tmp = Fixture::new();
-        let root = TraceDir::create(tmp.path()).unwrap();
-        let mut chain = root.open_chain_for_create().unwrap();
-        chain.append_checked(b"one\n").unwrap();
-        std::fs::rename(tmp.path().join("chain.jsonl"), tmp.path().join("moved")).unwrap();
-        std::fs::write(tmp.path().join("chain.jsonl"), b"").unwrap();
-
-        assert!(matches!(
-            root.reserve_append(&mut chain, 256 * 1024),
-            Err(TraceCapError::Refused {
-                reason: RefusalKind::IdentityChanged,
-                ..
-            })
-        ));
-        let impostor = std::fs::metadata(tmp.path().join("chain.jsonl")).unwrap();
-        assert_eq!(impostor.blocks(), 0, "the replacement was not allocated");
-        let retained = std::fs::metadata(tmp.path().join("moved")).unwrap();
-        assert!(
-            retained.blocks() * 512 < 256 * 1024,
-            "nor was the renamed stream"
-        );
-
-        std::fs::remove_file(tmp.path().join("chain.jsonl")).unwrap();
-        std::fs::rename(tmp.path().join("moved"), tmp.path().join("chain.jsonl")).unwrap();
-        assert!(matches!(
-            root.reserve_append(&mut chain, 256 * 1024),
             Err(TraceCapError::Poisoned { .. })
         ));
     }
