@@ -560,7 +560,10 @@ fn local_finish_under_backlog_has_one_deadline() {
     let v = Vertical::new("stream", json!({"descendant": true}));
     let mut row = Row::new("local_finish_under_backlog_has_one_deadline", &v, EVIDENCE);
     let pause = armed(&v, "capture-finish-started");
-    let mut start = v.start_paused(RESERVE, &pause);
+    // The wrap-up of a run without a server is one second in a test build: the first attempt
+    // spends the whole 10 s budget, so no later ask is made and the one deadline is what is
+    // measured. (At the shipped 30 minutes a frozen daemon is asked again, by design.)
+    let mut start = v.start_paused_short_wrap_up(RESERVE, &pause, 1_000);
     let entry = v.entry_id();
     v.wait_for("pid");
     v.wait_for_echoes(5);

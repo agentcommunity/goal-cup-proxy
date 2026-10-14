@@ -414,7 +414,7 @@ pub fn retry_capture_seal_until<T>(
     retry_capture_seal_until_with(
         || until.remaining(),
         std::thread::sleep,
-        (SEAL_RETRY_FIRST, SEAL_RETRY_MAX),
+        (until.first_seal_retry(), SEAL_RETRY_MAX),
         || rand::thread_rng().gen_range(-SEAL_RETRY_JITTER..SEAL_RETRY_JITTER),
         say,
         call,
