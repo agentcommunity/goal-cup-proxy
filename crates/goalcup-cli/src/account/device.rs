@@ -22,7 +22,7 @@
 
 use crate::CliError;
 use crate::account::credential::RunCredential;
-use crate::server::checked_account;
+use crate::server::{checked_account, checked_server_url};
 use crate::upload::http::{ServerClient, ServerError};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -150,6 +150,12 @@ pub fn approve(
             )),
         })?;
     check_created(&created)?;
+    // The code's life began when the server made it, not when the participant has read this.
+    let wait = created
+        .expires_in
+        .unwrap_or(MAX_WAIT_SECS)
+        .min(MAX_WAIT_SECS);
+    let deadline = Instant::now() + Duration::from_secs(wait);
 
     let say = |out: &mut dyn Write, line: String| {
         writeln!(out, "{line}").map_err(|source| CliError::Io {
@@ -178,11 +184,6 @@ pub fn approve(
             .unwrap_or(DEFAULT_INTERVAL_SECS)
             .clamp(MIN_INTERVAL_SECS, MAX_INTERVAL_SECS),
     );
-    let wait = created
-        .expires_in
-        .unwrap_or(MAX_WAIT_SECS)
-        .min(MAX_WAIT_SECS);
-    let deadline = Instant::now() + Duration::from_secs(wait);
     loop {
         let polled: Result<Polled, ServerError> = server.json(
             "POST",
@@ -269,11 +270,16 @@ fn check_created(created: &Created) -> Result<(), CliError> {
     {
         return Err(bad_answer("the device code"));
     }
-    let uri = created.verification_uri_complete.as_str();
-    let scheme_ok = uri.starts_with("https://")
-        || uri.starts_with("http://127.0.0.1")
-        || uri.starts_with("http://localhost");
-    if !scheme_ok || uri.chars().any(|c| c.is_control() || c.is_whitespace()) {
+    // The address is `<uri>?code=<user code>`: the part before the query must be a server
+    // address (https anywhere, http only to this machine, no user info), the query plain text.
+    let (base, query) = match created.verification_uri_complete.split_once('?') {
+        Some((base, query)) => (base, Some(query)),
+        None => (created.verification_uri_complete.as_str(), None),
+    };
+    let query_ok = query.is_none_or(|q| {
+        !q.contains(['#', '@']) && !q.chars().any(|c| c.is_control() || c.is_whitespace())
+    });
+    if !query_ok || checked_server_url(base).is_err() {
         return Err(bad_answer("the approval address"));
     }
     Ok(())
@@ -294,7 +300,9 @@ fn finish(answer: Polled, asked: Purpose) -> Result<Approved, CliError> {
             let credential = answer
                 .credential
                 .ok_or_else(|| bad_answer("no run credential"))?;
-            let expires_at = answer.expires_at.unwrap_or_default();
+            let expires_at = answer
+                .expires_at
+                .ok_or_else(|| bad_answer("no end time for the run credential"))?;
             let credential = RunCredential::new(credential, expires_at)
                 .map_err(|_| bad_answer("the run credential"))?;
             Ok(Approved::Run(credential))

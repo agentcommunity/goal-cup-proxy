@@ -156,11 +156,21 @@ pub fn checked_server_url(url: &str) -> Result<String, CliError> {
         .to_string())
 }
 
-/// `handle` checked: 1 to [`ACCOUNT_MAX_LEN`] characters, none of them a control character.
+/// `handle` checked: 1 to [`ACCOUNT_MAX_LEN`] characters, not only whitespace, none of them a
+/// control character or an invisible or direction-changing one.
 pub fn checked_account(handle: &str) -> Result<String, CliError> {
-    if handle.is_empty()
+    // Zero-width and direction-control characters print as nothing, or reorder what is around
+    // them: a handle holding one could read as another account's.
+    let invisible = |c: char| {
+        matches!(
+            c,
+            '\u{AD}' | '\u{61C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        )
+    };
+    if handle.trim().is_empty()
         || handle.chars().count() > ACCOUNT_MAX_LEN
-        || handle.chars().any(|c| c.is_control())
+        || handle.chars().any(|c| c.is_control() || invisible(c))
     {
         return Err(CliError::Refused(format!(
             "the account handle is not 1 to {ACCOUNT_MAX_LEN} printable characters. Run \

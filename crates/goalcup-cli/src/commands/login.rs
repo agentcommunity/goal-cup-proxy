@@ -37,9 +37,18 @@ pub fn run(
 ) -> Result<(), CliError> {
     let url = match &args.server {
         Some(url) => url.clone(),
-        None => match read_server_config(cfg)? {
-            Some(stored) => stored.url,
-            None => DEFAULT_SERVER_URL.to_string(),
+        // An unreadable `server.json` is not repaired by logging in the same way again: say
+        // which file, and how to start over with an address.
+        None => match read_server_config(cfg) {
+            Ok(Some(stored)) => stored.url,
+            Ok(None) => DEFAULT_SERVER_URL.to_string(),
+            Err(_) => {
+                return Err(CliError::Refused(format!(
+                    "{} cannot be used (it is unreadable, or other users can read it). Run \
+                     `goalcup login --server <URL>` to replace it, or delete it.",
+                    crate::server::server_path(cfg).display()
+                )));
+            }
         },
     };
     let url = checked_server_url(&url)?;

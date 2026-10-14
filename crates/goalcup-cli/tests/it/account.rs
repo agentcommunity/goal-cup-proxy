@@ -719,7 +719,7 @@ fn secret_of(c: &RunCredential) -> String {
     doc["credential"].as_str().unwrap().to_string()
 }
 
-fn no_browser(_: &str) -> bool {
+fn browser_opens(_: &str) -> bool {
     true
 }
 
@@ -734,7 +734,7 @@ fn login_stores_the_handle_and_no_secret() {
             server: Some(server.url()),
         },
         &cfg,
-        &no_browser,
+        &browser_opens,
         &mut out,
     )
     .unwrap();
@@ -829,14 +829,14 @@ fn an_expired_code_says_start_again_and_creates_nothing() {
             server: Some(server.url()),
         },
         &cfg,
-        &no_browser,
+        &browser_opens,
         &mut Vec::new(),
     )
     .unwrap_err();
     assert!(matches!(refusal, CliError::Refused(_)), "{refusal:?}");
     assert!(refusal.to_string().contains("start again"), "{refusal}");
     assert!(files_under(&cfg).is_empty());
-    assert!(!cfg.join("server.json").exists());
+    assert!(!cfg.exists(), "a failed login created the config directory");
 }
 
 #[test]
@@ -850,13 +850,14 @@ fn a_denied_approval_creates_nothing() {
             server: Some(server.url()),
         },
         &cfg,
-        &no_browser,
+        &browser_opens,
         &mut Vec::new(),
     )
     .unwrap_err();
     assert!(matches!(refusal, CliError::Refused(_)), "{refusal:?}");
     assert!(refusal.to_string().contains("denied"), "{refusal}");
     assert!(files_under(&cfg).is_empty());
+    assert!(!cfg.exists(), "a failed login created the config directory");
 }
 
 #[test]
@@ -871,7 +872,7 @@ fn an_unreachable_server_says_nothing_was_created() {
         &ServerClient::anonymous(&format!("http://127.0.0.1:{port}")),
         Purpose::Login,
         "none",
-        &no_browser,
+        &browser_opens,
         &mut Vec::new(),
     )
     .unwrap_err();
@@ -891,7 +892,7 @@ fn a_login_keeps_the_server_it_was_given_before() {
             server: Some(server.url()),
         },
         &cfg,
-        &no_browser,
+        &browser_opens,
         &mut Vec::new(),
     )
     .unwrap();
@@ -899,7 +900,7 @@ fn a_login_keeps_the_server_it_was_given_before() {
     login::run(
         &LoginArgs { server: None },
         &cfg,
-        &no_browser,
+        &browser_opens,
         &mut Vec::new(),
     )
     .unwrap();
@@ -917,7 +918,7 @@ fn a_run_approval_is_stored_and_loaded_back() {
         &anonymous,
         Purpose::Run { practice: true },
         "codex-cli",
-        &no_browser,
+        &browser_opens,
         &mut Vec::new(),
     )
     .unwrap() else {
@@ -1037,4 +1038,84 @@ fn the_server_file_keeps_an_account_and_no_token() {
     )
     .unwrap();
     assert!(read_server_config(tmp.path()).is_err());
+}
+
+#[test]
+fn an_approval_address_that_is_not_the_servers_is_refused_unopened() {
+    let device_code = "ab".repeat(32);
+    for uri in [
+        "http://localhost.attacker.example/device?code=BCDF-GHJK",
+        "http://127.0.0.1@evil.example/device?code=BCDF-GHJK",
+        "http://approve.example/device?code=BCDF-GHJK",
+        "ftp://approve.example/device?code=BCDF-GHJK",
+        "https://user:pw@approve.example/device?code=BCDF-GHJK",
+        "https://approve.example/device?code=BCDF-GHJK#frag",
+    ] {
+        let body = format!(
+            r#"{{"device_code":"{device_code}","user_code":"BCDF-GHJK",
+                "verification_uri_complete":"{uri}","interval":1,"expires_in":5}}"#
+        );
+        let fake = FakeGithub::start(200, &body);
+        let opened = RefCell::new(0);
+        let refusal = approve(
+            &ServerClient::anonymous(&fake.base),
+            Purpose::Login,
+            "none",
+            &|_: &str| {
+                *opened.borrow_mut() += 1;
+                true
+            },
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(refusal, CliError::Internal(_)),
+            "{uri}: {refusal:?}"
+        );
+        assert!(!refusal.to_string().contains(&device_code), "{refusal}");
+        assert_eq!(*opened.borrow(), 0, "{uri} was opened");
+    }
+}
+
+#[test]
+fn an_unusable_server_file_is_named_and_not_asked_for_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("cfg");
+    std::fs::create_dir_all(&cfg).unwrap();
+    std::fs::write(cfg.join("server.json"), "not json").unwrap();
+    let refusal = login::run(
+        &LoginArgs { server: None },
+        &cfg,
+        &browser_opens,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    let said = refusal.to_string();
+    assert!(matches!(refusal, CliError::Refused(_)), "{said}");
+    assert!(said.contains("server.json"), "{said}");
+    assert!(said.contains("goalcup login --server <URL>"), "{said}");
+    assert_eq!(
+        std::fs::read_to_string(cfg.join("server.json")).unwrap(),
+        "not json"
+    );
+}
+
+#[test]
+fn an_account_handle_that_is_blank_or_invisible_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    for handle in [
+        "   ",
+        "\t",
+        "ada\u{200b}",
+        "\u{202e}ada",
+        "a\u{2066}da",
+        "\u{feff}ada",
+    ] {
+        let doc = serde_json::json!({"url": "https://ingest.example.org", "account": handle});
+        std::fs::write(tmp.path().join("server.json"), doc.to_string()).unwrap();
+        assert!(
+            read_server_config(tmp.path()).is_err(),
+            "{handle:?} was accepted"
+        );
+    }
 }
