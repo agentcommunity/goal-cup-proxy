@@ -136,6 +136,10 @@ impl Wrangler {
 }
 
 /// The approval codes the tracer's opener was handed (the `code=` of the address it would open).
+///
+/// Process-wide: this file relies on nextest running each test in its own process. Under plain
+/// `cargo test`, which runs them as threads of one process, two tests would take each other's
+/// codes.
 static OPENED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// The opener a test start is given: it opens nothing and remembers the code for

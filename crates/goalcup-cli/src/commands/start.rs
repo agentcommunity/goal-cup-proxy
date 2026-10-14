@@ -786,7 +786,14 @@ fn capture(
     let profile = &c.loaded.manifest.capture;
     // With a server: the prep checks, before any other work and before the participant is asked
     // for anything.
-    let serving = uploading(cfg, env, opts, profile.credential.is_some(), out)?;
+    let serving = uploading(
+        cfg,
+        env,
+        goal_file,
+        opts.practice,
+        profile.credential.is_some(),
+        out,
+    )?;
     let cx = CaptureRun {
         client,
         upload: None,
@@ -981,12 +988,8 @@ fn create_and_gate<'a>(
         && let Err(error) = upload.clone_workspace(&run.workspace)
     {
         let _ = run.remove();
-        return Err(match error {
-            CliError::Refused(why) => CliError::Refused(format!(
-                "{why} Nothing was started, and what this start made was removed."
-            )),
-            other => other,
-        });
+        let _ = say(out, CLEANED_UP);
+        return Err(error);
     }
     let config_home = match shared_home {
         Some(home) => home,
@@ -1165,10 +1168,13 @@ fn create_and_gate<'a>(
             if let Some(held) = reserve.take() {
                 let _ = held.release();
             }
-            if unmake(client, cfg, &info.entry_id, &run, &error, out) {
-                crate::run::remove(cfg, &record.run_id);
-            }
+            let unmade = unmake(client, cfg, &info.entry_id, &run, &error, out);
+            // The run is given back first, and its credential outlives the give-back while the
+            // server may still hold the run open: the next start's `give_back_pending` asks with it.
             give_back(&error);
+            if unmade {
+                remove_run_keeping_pending_credential(cfg, &record.run_id);
+            }
             return Err(error);
         }
     };
@@ -1949,7 +1955,8 @@ fn beside_goal(goal_file: &Path) -> PathBuf {
 /// `home/` (the harness's `HOME`) and `ca/` (the proxy's CA certificate).
 ///
 /// A run on a server has its workspace elsewhere: a clone of the participant's repository in
-/// their work folder, `<work_root>/goalcup-<the same 16 hex digits as this directory's name>`.
+/// their work folder, `<work_root>/goalcup-<16 hex digits>`, **a random name of its own**, never
+/// this directory's (the goal file's folder may be the work folder, and the two must not meet).
 /// It is named before the server has issued the run id (the server and the daemon are told the
 /// path), so the id cannot be in it.
 struct RunDir {
@@ -1977,7 +1984,7 @@ impl RunDir {
         let dir = beside.join(&name);
         private_dir(&dir, false)?;
         let workspace = match work_root {
-            Some(root) => root.join(&name),
+            Some(root) => root.join(format!("goalcup-{:016x}", rand::random::<u64>())),
             None => dir.join("workspace"),
         };
         let run = RunDir {
@@ -2391,14 +2398,29 @@ fn finish(
 fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
-    opts: &StartOptions,
+    goal_file: &Path,
+    practice: bool,
     keyed: bool,
     out: &mut dyn std::io::Write,
 ) -> Result<Option<Serving>, CliError> {
+    // A practice run is a run on the server: without one there is nothing to practise on.
+    let needs_server = || {
+        CliError::Refused(
+            "`--practice` needs `goalcup login` and `goalcup prep` first. Nothing was created."
+                .to_string(),
+        )
+    };
     let Some(server) = crate::server::read_server_config(cfg)? else {
-        return Ok(None);
+        return if practice {
+            Err(needs_server())
+        } else {
+            Ok(None)
+        };
     };
     if keyed {
+        if practice {
+            return Err(needs_server());
+        }
         say(
             out,
             "A run of a harness given a provider key is not uploaded: it stays on this machine.",
@@ -2417,6 +2439,7 @@ fn uploading(
         return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
     }
     refuse_windows_drive(&work_root, goalcup_platform::machine::is_wsl())?;
+    refuse_goal_folder_inside_work_root(&work_root, goal_file)?;
     #[cfg(feature = "test-support")]
     let clone_source = env.get(TEST_CLONE_SOURCE).cloned();
     #[cfg(not(feature = "test-support"))]
@@ -2424,7 +2447,6 @@ fn uploading(
         let _ = env;
         None
     };
-    let _ = opts;
     Ok(Some(Serving {
         url: server.url,
         cfg: std::fs::canonicalize(cfg).unwrap_or_else(|_| cfg.to_path_buf()),
@@ -2433,6 +2455,13 @@ fn uploading(
         clone_source,
     }))
 }
+
+/// What a start that fails after the approval says once it has removed what it made: the run
+/// directory beside the goal file, the clone, and the run's credential directory. It does not
+/// remove the work folder itself (the participant's folder, left in place once created) or the
+/// shared harness-home folder of a connector under `<cfg>/capture-homes/` (one per connector,
+/// persistent, and reused by every run of it).
+const CLEANED_UP: &str = "Nothing was started, and what this start made was removed.";
 
 /// WSL2 only: a work folder on a Windows drive (`/mnt/c/...`) is refused, because a clone there is
 /// slow and cannot keep file modes. The path as it exists is looked at, so a link cannot hide the
@@ -2444,6 +2473,29 @@ fn refuse_windows_drive(work_root: &Path, wsl: bool) -> Result<(), CliError> {
             "the work folder {} is on a Windows drive, which WSL2 reads slowly and cannot keep \
              file modes on. Choose a folder in the Linux home (for example under ~/goalcup) and \
              run `goalcup prep` again. Nothing was created.",
+            work_root.display()
+        )));
+    }
+    Ok(())
+}
+
+/// The run directory is made beside the goal file and holds the harness's `HOME`; the clone is
+/// made in the work folder, under a name of its own. They cannot be the same folder, but a goal
+/// file in a folder *below* the work folder would put the run directory (and so the harness's
+/// home) inside some other clone, or inside an older run's folder. So: the goal file's folder
+/// may be the work folder itself, or anywhere outside it, and is refused anywhere inside it.
+fn refuse_goal_folder_inside_work_root(work_root: &Path, goal_file: &Path) -> Result<(), CliError> {
+    let beside = std::fs::canonicalize(beside_goal(goal_file));
+    let root = std::fs::canonicalize(work_root).unwrap_or_else(|_| work_root.to_path_buf());
+    if let Ok(beside) = beside
+        && beside != root
+        && beside.starts_with(&root)
+    {
+        return Err(CliError::Refused(format!(
+            "the goal file is in {}, which is inside the work folder {}. Put the goal file in \
+             the work folder itself or outside it, so a run's folder is never inside a clone. \
+             Nothing was created.",
+            beside.display(),
             work_root.display()
         )));
     }
@@ -2659,6 +2711,34 @@ impl Uploading {
             ),
         )?;
         Ok((record, receipt.public_key))
+    }
+}
+
+/// Remove this machine's directory for a run that never launched. When the note of the open
+/// still names the run (the server was away when it was given back), the credential stays: it is
+/// the only thing that can give that run back later.
+fn remove_run_keeping_pending_credential(cfg: &Path, run_id: &str) {
+    let pending = std::fs::read(crate::upload::pending_path(cfg))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<crate::upload::PendingOpen>(&bytes).ok())
+        .is_some_and(|note| note.run_id == run_id);
+    if !pending {
+        crate::run::remove(cfg, run_id);
+        return;
+    }
+    let dir = crate::run::run_dir(cfg, run_id);
+    let keep = crate::account::credential::CREDENTIAL_FILE_NAME;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if entry.file_name() != keep {
+                let path = entry.path();
+                let _ = if path.is_dir() {
+                    std::fs::remove_dir_all(path)
+                } else {
+                    std::fs::remove_file(path)
+                };
+            }
+        }
     }
 }
 

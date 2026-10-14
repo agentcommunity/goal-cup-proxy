@@ -291,7 +291,7 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   stored your empty public GitHub repository, your work folder and a token that can push to that
   repository, `goalcup start` asks you to approve **each run** in the browser (`--practice` for
   a practice run) before it creates anything: a Ctrl-C, a denial, an expired code or a server
-  that cannot be reached ends the start with one sentence and leaves nothing behind. Then it
+  that cannot be reached ends the start with one sentence and leaves no run, entry, clone or credential (the recording daemon may already be running). Then it
   clones your repository into `<work folder>/goalcup-<id>`, which is the agent's workspace, and
   opens the run on the server, with the machine's facts (system, architecture, CPUs, memory,
   disk, WSL2, container, AC power; no names or serial numbers): the server issues the entry id,

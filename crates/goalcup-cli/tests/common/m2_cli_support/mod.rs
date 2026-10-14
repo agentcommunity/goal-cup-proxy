@@ -648,6 +648,9 @@ pub struct Book {
     pub sealed_seen: Vec<bool>,
     /// Put a file where the proxy's CA certificate goes, before the proxy starts.
     pub occupy_ca_file: bool,
+    /// Run once, when the daemon is asked to create the entry (after the run opened on the
+    /// server and before anything can fail): a test's way to take the server away at that point.
+    pub on_create: Option<Box<dyn FnOnce() + Send>>,
     /// Called as each capture seal begins, before the daemon is asked: what a test wants to
     /// know "at the seal".
     pub on_seal: Option<Box<dyn Fn() + Send>>,
@@ -814,6 +817,10 @@ impl DaemonClient for Hooked<'_> {
     ) -> Result<CaptureWorkspaceInfo, ControlError> {
         self.note("create_capture_workspace");
         self.book().creates.push(request.clone());
+        let hook = self.book().on_create.take();
+        if let Some(hook) = hook {
+            hook();
+        }
         if self.book().occupy_ca_file {
             // The run directory's `ca/`: beside `home/` (the workspace of a run on a server is a clone
             // elsewhere).

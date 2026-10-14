@@ -81,11 +81,15 @@ mod server_runs {
 
     /// One whole run: the harness is told to stop before it starts, so the run ends at once.
     fn run_to_end(rig: &Rig, practice: bool) -> Ended {
-        rig.tell("stop", "");
         let goal = rig.goal(GOAL);
+        run_to_end_with(rig, practice, &goal)
+    }
+
+    fn run_to_end_with(rig: &Rig, practice: bool, goal: &Path) -> Ended {
+        rig.tell("stop", "");
         let http = rig.client();
         let client = Hooked::new(&http, rig);
-        let mut opts = rig.options(&goal, RESERVE);
+        let mut opts = rig.options(goal, RESERVE);
         opts.upload_policy = quick_policy();
         opts.practice = practice;
         let (result, out) =
@@ -433,7 +437,7 @@ mod server_runs {
     #[test]
     fn start_without_prep_refuses_before_creating_anything() {
         type Break = fn(&Rig);
-        let cases: [(&str, Break); 5] = [
+        let cases: [(&str, Break); 6] = [
             ("no prep.json", |rig| {
                 std::fs::remove_file(goalcup_cli::prep_file::prep_path(&rig.cfg)).unwrap();
             }),
@@ -454,6 +458,13 @@ mod server_runs {
                         r#"{{"harness":"x","work_root":"{}"}}"#,
                         rig.work_root().display()
                     ),
+                )
+                .unwrap();
+            }),
+            ("a relative work_root", |rig| {
+                std::fs::write(
+                    goalcup_cli::prep_file::prep_path(&rig.cfg),
+                    format!(r#"{{"harness":"x","repo_url":"{PREP_REPO}","work_root":"work"}}"#),
                 )
                 .unwrap();
             }),
@@ -512,13 +523,144 @@ mod server_runs {
         assert_eq!(refused.exit_code(), 1, "{refused}");
         let said = refused.to_string();
         assert!(said.contains("could not clone"), "{said}");
-        assert!(said.contains("removed"), "{said}");
+        assert!(out.contains("what this start made was removed"), "{out}");
         assert!(!said.contains(FAKE_GITHUB_TOKEN), "{said}");
         assert!(client.book().creates.is_empty(), "{out}");
         assert!(rig.run_dirs().is_empty());
         assert!(rig.clones().is_empty(), "{:?}", rig.clones());
         assert!(server.run_ids().is_empty(), "no run was opened");
         assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists());
+    }
+
+    /// The goal file may sit in the work folder itself (`~/goalcup/goal.txt` with the clones in
+    /// `~/goalcup`): the run directory and the clone get names of their own, and the harness's home
+    /// is in the run directory, not in the clone the agent works in.
+    #[test]
+    fn a_goal_file_in_the_work_folder_keeps_the_run_directory_out_of_the_clone() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let goal = rig.work_root().join("goal.txt");
+        std::fs::write(&goal, GOAL).unwrap();
+        let ended = run_to_end_with(&rig, false, &goal);
+        assert_eq!(server.run_ids().len(), 1, "{}", ended.out);
+        assert!(ended.workspace.join(".git").is_dir());
+        let env = rig.harness_file("env").unwrap();
+        let home = env
+            .lines()
+            .find_map(|l| l.strip_prefix("HOME="))
+            .expect("the harness has a HOME");
+        assert!(
+            !Path::new(home).starts_with(&ended.workspace),
+            "the harness home {home} is inside the clone {}",
+            ended.workspace.display()
+        );
+        // Two folders of their own beside the goal file: the run directory and the clone.
+        assert_eq!(rig.clones().len(), 3, "{:?}", rig.clones());
+        let run_dir = Path::new(home).parent().unwrap();
+        assert_ne!(run_dir, ended.workspace);
+        assert_eq!(run_dir.parent(), ended.workspace.parent());
+    }
+
+    /// A goal file in a folder below the work folder (inside a clone, say) is refused before the
+    /// participant is asked: its run directory would sit inside that clone.
+    #[test]
+    fn a_goal_file_below_the_work_folder_is_refused_before_the_approval() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let below = rig.work_root().join("goalcup-0123456789abcdef");
+        std::fs::create_dir_all(&below).unwrap();
+        let goal = below.join("goal.txt");
+        std::fs::write(&goal, GOAL).unwrap();
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let opts = rig.options(&goal, RESERVE);
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("refused");
+        assert_eq!(refused.exit_code(), 1, "{refused}");
+        assert!(
+            refused.to_string().contains("inside the work folder"),
+            "{refused}"
+        );
+        assert!(server.device_requests().is_empty(), "{out}");
+        assert!(client.book().creates.is_empty());
+        assert_eq!(rig.clones(), [below]);
+    }
+
+    /// `--practice` is a run on the server: without a login (no `server.json`) it is refused
+    /// before anything is created.
+    #[test]
+    fn practice_without_a_server_is_refused_before_anything_is_created() {
+        let rig = Rig::new();
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.options(&goal, RESERVE);
+        opts.practice = true;
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("refused");
+        assert_eq!(refused.exit_code(), 1, "{refused}");
+        assert!(
+            refused
+                .to_string()
+                .contains("`--practice` needs `goalcup login` and `goalcup prep` first"),
+            "{refused}"
+        );
+        assert!(client.book().creates.is_empty(), "{out}");
+        assert!(rig.run_dirs().is_empty());
+        assert!(!rig.harness_started());
+    }
+
+    /// A start that fails after the run opened, with the server away so the run cannot be given
+    /// back then, keeps that run's credential: the next start gives the run back with it.
+    #[test]
+    fn a_run_that_could_not_be_given_back_is_given_back_by_the_next_start() {
+        let rig = Rig::new();
+        let server = std::sync::Arc::new(server(&rig));
+        rig.prepare_for(&server.url());
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        {
+            let mut book = client.book();
+            // The proxy cannot write its CA file, and the server goes away as the daemon is asked.
+            book.occupy_ca_file = true;
+            let away = server.clone();
+            book.on_create = Some(Box::new(move || away.set_maintenance(true)));
+        }
+        let opts = rig.options(&goal, RESERVE);
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        result.expect_err("the start did not fail");
+        let runs = server.run_ids();
+        assert_eq!(runs.len(), 1, "{out}");
+        let first = runs[0].clone();
+        assert_eq!(server.status(&first).as_deref(), Some("open"), "{out}");
+        assert!(
+            goalcup_cli::upload::pending_path(&rig.cfg).exists(),
+            "the open is noted"
+        );
+        goalcup_cli::account::credential::load(&goalcup_cli::run::run_dir(&rig.cfg, &first))
+            .expect("the credential is kept while the run may still be open");
+
+        server.set_maintenance(false);
+        client.book().occupy_ca_file = false;
+        let ended = run_to_end(&rig, false);
+        assert_eq!(
+            server.status(&first).as_deref(),
+            Some("abandoned"),
+            "{}",
+            ended.out
+        );
+        assert_eq!(server.run_ids().len(), 2);
+        assert!(!goalcup_cli::upload::pending_path(&rig.cfg).exists());
+        assert!(
+            !goalcup_cli::run::run_dir(&rig.cfg, &first).exists(),
+            "and the given-back run's directory is gone"
+        );
     }
 
     // -------------------------------------------------------------- the approval, abandoned

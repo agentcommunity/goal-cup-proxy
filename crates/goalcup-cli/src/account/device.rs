@@ -20,7 +20,9 @@
 //! cannot be reached: each is a refusal that says nothing was created. Ctrl-C needs
 //! little: `goalcup login` takes the default SIGINT, which ends the process with nothing to clean
 //! up, and `goalcup start`, which catches Ctrl-C into a flag (`arming`), is answered by the poll
-//! loop looking at that flag.
+//! loop looking at that flag. The flag is seen between requests, not during one: a Ctrl-C that
+//! arrives while a request is in flight is acted on when it returns, which can take up to the
+//! call timeout (60 s) if the server has stopped answering.
 
 use crate::CliError;
 use crate::account::credential::RunCredential;
