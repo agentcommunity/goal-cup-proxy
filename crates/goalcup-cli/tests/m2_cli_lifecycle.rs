@@ -22,9 +22,7 @@ use goalcup_protocol::capture::{CaptureRecord, CaptureSource, RunState};
 use goalcup_protocol::capture_status::AnchorState;
 use goalcup_protocol::control::{ControlError, DaemonClient};
 use goalcup_protocol::provenance::TerminationOutcomeV1;
-use m2_cli_support::{
-    ExecutableFault, FAKE_ID, Hooked, LaunchFault, RegistrationFault, Rig, Upstream,
-};
+use m2_cli_support::{FAKE_ID, Hooked, LaunchFault, RegistrationFault, Rig, Upstream};
 use std::time::{Duration, Instant};
 
 const GOAL: &str = "write hello.txt, then stop";
@@ -590,6 +588,22 @@ fn an_unreachable_provider_host_refuses_the_start_before_anything_is_created() {
 fn an_unpinned_connector_without_dev_is_refused_before_anything_is_created() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
+    // Without `--dev` the directory is checked as a pinned one, and a pinned manifest may not
+    // name a loopback host: the fixture's `localhost` would be refused by that rule (exit 3)
+    // before the missing `--dev` is reached. A non-loopback test name leaves the pin refusal as
+    // the only one this test can see.
+    let manifest = rig.capture_connectors.join(FAKE_ID).join("harness.toml");
+    let source = std::fs::read_to_string(&manifest).unwrap();
+    assert!(source.contains("host = \"localhost\""));
+    std::fs::write(
+        &manifest,
+        source.replacen(
+            "host = \"localhost\"",
+            "host = \"unpinned-fixture.invalid\"",
+            1,
+        ),
+    )
+    .unwrap();
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -871,69 +885,6 @@ fn capture_registration_refused_never_execs() {
         );
         assert!(report.findings.contains(&"launch_missing".to_string()));
     }
-}
-
-fn executable_replacement_after_registration_never_releases_gate(
-    fault: ExecutableFault,
-) -> Duration {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::new();
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    client.book().executable_fault = Some(fault);
-    let (result, out) =
-        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
-    let error = result.expect_err("changed executable bytes must keep the child parked");
-    assert!(
-        format!("{error}").contains("was replaced after it was resolved"),
-        "{error}\n{out}"
-    );
-    let pid = client.book().registered[0];
-    support::wait_until_gone(pid);
-    assert!(!rig.harness_started(), "{error}\n{out}");
-    assert_eq!(
-        client.count("record_capture_launch"),
-        0,
-        "{:?}",
-        client.names()
-    );
-    assert_eq!(client.count("seal_capture"), 1, "{:?}", client.names());
-    let (report, records) = rig.read_trace(&client.created().entry_id);
-    assert!(report.sealed, "{:?}", report.findings);
-    assert_eq!(
-        count(&records, |record| matches!(
-            record,
-            CaptureRecord::Launch { .. }
-        )),
-        0
-    );
-    assert!(report.findings.contains(&"launch_missing".to_string()));
-    client
-        .book()
-        .executable_faulted_at
-        .expect("the executable was replaced")
-        .elapsed()
-}
-
-#[test]
-fn atomic_executable_replacement_after_registration_never_releases_gate() {
-    let _ = executable_replacement_after_registration_never_releases_gate(ExecutableFault::Atomic);
-}
-
-#[test]
-fn symlink_executable_replacement_after_registration_never_releases_gate() {
-    let _ = executable_replacement_after_registration_never_releases_gate(ExecutableFault::Symlink);
-}
-
-#[test]
-fn fifo_executable_replacement_after_registration_refuses_promptly() {
-    let elapsed =
-        executable_replacement_after_registration_never_releases_gate(ExecutableFault::Fifo);
-    assert!(
-        elapsed < Duration::from_secs(1),
-        "the no-follow recheck blocked opening a FIFO for {elapsed:?}"
-    );
 }
 
 /// The root ruling under D40: a seal that raced in between the registration and the release

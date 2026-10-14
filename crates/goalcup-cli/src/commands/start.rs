@@ -1144,13 +1144,9 @@ fn register_and_release<'a>(
         return Err(forked.unlaunched(CliError::Control(error), out));
     }
     pause_at("capture-gate-registered");
-    if let Err(e) = crate::launch::recheck_resolved_executable(&prep.executable) {
-        gated.abort();
-        return Err(forked.unlaunched(e, out));
-    }
-    // The last look at the flag. A Ctrl-C during the spawn, the registration or the re-hash
-    // above reached only this process and the parked child, which rides it out; released now,
-    // the harness would run the whole goal the participant asked to stop.
+    // The last look at the flag. A Ctrl-C during the spawn or the registration above reached
+    // only this process and the parked child, which rides it out; released now, the harness
+    // would run the whole goal the participant asked to stop.
     if crate::arming::interrupted() {
         gated.abort();
         return Err(forked.unlaunched(interrupted_before_launch(), out));
