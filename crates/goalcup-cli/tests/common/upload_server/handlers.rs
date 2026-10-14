@@ -30,7 +30,8 @@ use sha2::{Digest, Sha256};
 
 use super::KillListener;
 use super::state::{
-    FinalCommit, RunRecord, RunStatus, Shared, StoredChunk, StoredHeartbeat, now_secs,
+    Approval, Credential, Device, DeviceRequest, FinalCommit, RunRecord, RunStatus, Shared,
+    StoredChunk, StoredHeartbeat, now_secs,
 };
 
 /// The cap on a chunk's compressed body (`Content-Length`).
@@ -38,6 +39,16 @@ const MAX_CHUNK_BYTES: u64 = 32 * 1024 * 1024;
 /// The cap on each document a seal carries.
 const MAX_SEAL_DOC_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ABANDON_REASON_CHARS: usize = 500;
+/// A device request lives this long from its creation, whatever its state.
+const DEVICE_EXPIRES_IN: u64 = 900;
+const DEVICE_INTERVAL: u64 = 5;
+/// An unbound credential lasts this long from the approval.
+const UNBOUND_CREDENTIAL_SECS: u64 = 3600;
+/// A bound credential lasts until this long after its run's deadline.
+const BOUND_CREDENTIAL_EXTRA_SECS: u64 = 24 * 3600;
+const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ";
+/// Where a member would approve; `.invalid` never resolves, so no test can open a real page.
+const VERIFICATION_URI: &str = "https://approve.invalid/goalcup/device";
 
 /// Per-connection handle a handler uses to cut its own connection (see `KillListener`).
 #[derive(Clone, Debug)]
@@ -53,6 +64,8 @@ type St = State<Arc<Shared>>;
 
 pub fn router(shared: Arc<Shared>) -> Router {
     Router::new()
+        .route("/v1/device", post(create_device))
+        .route("/v1/device/token", post(poll_device))
         .route("/v1/runs", post(open_run))
         .route("/v1/runs/{run_id}", get(get_run))
         .route("/v1/runs/{run_id}/receipt", post(post_receipt))
@@ -88,7 +101,7 @@ impl ApiError {
         ApiError::new(400, "malformed", message)
     }
     fn not_found() -> ApiError {
-        ApiError::new(404, "not_found", "No such run for this token.")
+        ApiError::new(404, "not_found", "No such run for this credential.")
     }
     fn conflict(message: impl Into<String>) -> ApiError {
         ApiError::new(409, "conflict", message)
@@ -150,25 +163,67 @@ async fn gate(State(s): St, req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-/// The member a bearer token belongs to, or 401.
-fn auth(s: &Shared, headers: &HeaderMap) -> Result<String, ApiError> {
-    let unauthorized = || ApiError::new(401, "unauthorized", "Missing or unknown token.");
+/// Who a bearer is: a member, and for a run credential the one run it may see.
+struct Who {
+    member: String,
+    /// sha256 of the credential; `None` for a legacy member token.
+    credential: Option<String>,
+    /// The run the credential opened, if it has opened one.
+    run_id: Option<String>,
+}
+
+impl Who {
+    /// A legacy token sees all its member's runs; a credential only the run it opened.
+    fn sees(&self, run_id: &str) -> bool {
+        self.credential.is_none() || self.run_id.as_deref() == Some(run_id)
+    }
+}
+
+pub fn sha256_hex(text: &str) -> String {
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+/// The caller behind a bearer, or 401: a run credential that has not expired, or a legacy token.
+fn auth(s: &Shared, headers: &HeaderMap) -> Result<Who, ApiError> {
+    let unauthorized = || {
+        ApiError::new(
+            401,
+            "unauthorized",
+            "Missing, unknown or expired credential.",
+        )
+    };
     let value = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(unauthorized)?;
     let token = value.strip_prefix("Bearer ").ok_or_else(unauthorized)?;
-    s.tokens.get(token).cloned().ok_or_else(unauthorized)
+    if let Some(member) = s.tokens.get(token) {
+        return Ok(Who {
+            member: member.clone(),
+            credential: None,
+            run_id: None,
+        });
+    }
+    let hash = sha256_hex(token);
+    let credentials = s.credentials.lock().unwrap_or_else(|e| e.into_inner());
+    match credentials.get(&hash) {
+        Some(c) if now_secs() < c.expires_at => Ok(Who {
+            member: c.member.clone(),
+            credential: Some(hash),
+            run_id: c.run_id.clone(),
+        }),
+        _ => Err(unauthorized()),
+    }
 }
 
-/// A run of this member, or 404 (the same answer for "no such run" and "someone else's").
+/// A run of this caller, or 404 (the same answer for "no such run" and "someone else's").
 fn find_run<'a>(
     runs: &'a BTreeMap<String, RunRecord>,
-    member: &str,
+    who: &Who,
     run_id: &str,
 ) -> Result<&'a RunRecord, ApiError> {
     runs.get(run_id)
-        .filter(|r| r.member == member)
+        .filter(|r| r.member == who.member && who.sees(&r.run_id))
         .ok_or_else(ApiError::not_found)
 }
 
@@ -239,7 +294,7 @@ struct OpenRequest {
 }
 
 async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
-    let member = auth(&s, &headers)?;
+    let who = auth(&s, &headers)?;
     let req: OpenRequest = parse_json(&body)?;
     for (name, value) in [
         ("connector_id", &req.connector_id),
@@ -269,12 +324,23 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
     }
 
     let mut runs = lock_runs(&s);
+    // A credential opens one run. The same session again is a lost reply: that run.
+    if let Some(opened) = &who.run_id {
+        return match runs.get(opened) {
+            Some(run) if run.session_id == req.session_id => Ok(json_response(200, run_view(run))),
+            _ => Err(ApiError::conflict(
+                "This credential already opened a run; run `goalcup continue`.",
+            )),
+        };
+    }
+    let member = who.member.clone();
     if let Some(open) = runs
         .values()
         .find(|r| r.member == member && r.status == RunStatus::Open)
     {
         // A lost reply to the first call is not a second run.
         if open.session_id == req.session_id && open.receipt.is_none() {
+            bind_credential(&s, &who, open);
             return Ok(json_response(200, run_view(open)));
         }
         return Err(ApiError::conflict("The account already has an open run."));
@@ -307,9 +373,21 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
         auto_abandoned: false,
     };
     s.persist(&run);
+    bind_credential(&s, &who, &run);
     let view = run_view(&run);
     runs.insert(run_id, run);
     Ok(json_response(201, view))
+}
+
+/// The credential that opened `run` is bound to it, until 24 hours after its deadline.
+fn bind_credential(s: &Shared, who: &Who, run: &RunRecord) {
+    let Some(hash) = &who.credential else { return };
+    let mut credentials = s.credentials.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(c) = credentials.get_mut(hash) {
+        c.run_id = Some(run.run_id.clone());
+        c.expires_at = run.deadline_secs() + BOUND_CREDENTIAL_EXTRA_SECS;
+    }
+    s.persist_credentials(&credentials);
 }
 
 // ---- GET /v1/runs/{run_id} ---------------------------------------------------------------
@@ -319,9 +397,9 @@ async fn get_run(
     headers: HeaderMap,
     Path(run_id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let member = auth(&s, &headers)?;
+    let who = auth(&s, &headers)?;
     let runs = lock_runs(&s);
-    let run = find_run(&runs, &member, &run_id)?;
+    let run = find_run(&runs, &who, &run_id)?;
     Ok(json_response(
         200,
         json!({
@@ -354,10 +432,10 @@ async fn post_receipt(
     Path(run_id): Path<String>,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let member = auth(&s, &headers)?;
+    let who = auth(&s, &headers)?;
     let req: ReceiptRequest = parse_json(&body)?;
     let mut runs = lock_runs(&s);
-    find_run(&runs, &member, &run_id)?;
+    find_run(&runs, &who, &run_id)?;
     let run = runs.get_mut(&run_id).expect("just found");
     if run.status != RunStatus::Open {
         return Err(ApiError::closed("The run is not open."));
@@ -410,13 +488,13 @@ async fn abandon(
     Path(run_id): Path<String>,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let member = auth(&s, &headers)?;
+    let who = auth(&s, &headers)?;
     let req: AbandonRequest = parse_json(&body)?;
     if req.reason.chars().count() > MAX_ABANDON_REASON_CHARS {
         return Err(ApiError::malformed("reason is longer than 500 characters."));
     }
     let mut runs = lock_runs(&s);
-    find_run(&runs, &member, &run_id)?;
+    find_run(&runs, &who, &run_id)?;
     let run = runs.get_mut(&run_id).expect("just found");
     match run.status {
         // A repeat whose reply was lost is not an error.
@@ -550,7 +628,7 @@ async fn put_chunk(
     Path((run_id, offset)): Path<(String, String)>,
     body: Body,
 ) -> Result<Response, ApiError> {
-    let member = auth(&s, &headers)?;
+    let who = auth(&s, &headers)?;
     if s.fail_chunks
         .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
         .is_ok()
@@ -564,7 +642,7 @@ async fn put_chunk(
     // Everything the contract says is refused before the body is read.
     let (hdr, entry_id) = {
         let runs = lock_runs(&s);
-        let run = find_run(&runs, &member, &run_id)?;
+        let run = find_run(&runs, &who, &run_id)?;
         if run.status != RunStatus::Open {
             return Err(ApiError::closed("The run is not open."));
         }
@@ -716,10 +794,10 @@ async fn seal(
     Path(run_id): Path<String>,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let member = auth(&s, &headers)?;
+    let who = auth(&s, &headers)?;
     let req: SealRequest = parse_json(&body)?;
     let mut runs = lock_runs(&s);
-    find_run(&runs, &member, &run_id)?;
+    find_run(&runs, &who, &run_id)?;
     let run = runs.get_mut(&run_id).expect("just found");
     if run.status == RunStatus::Abandoned {
         return Err(ApiError::closed("The run was abandoned."));
@@ -775,6 +853,10 @@ struct HeartbeatRequest {
     #[serde(rename = "final")]
     final_: bool,
     repo_head: Option<String>,
+    #[serde(default)]
+    recording: Option<String>,
+    #[serde(default)]
+    model_requests: Option<u64>,
 }
 
 async fn heartbeat(
@@ -783,7 +865,7 @@ async fn heartbeat(
     Path(run_id): Path<String>,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let member = auth(&s, &headers)?;
+    let who = auth(&s, &headers)?;
     let req: HeartbeatRequest = parse_json(&body)?;
     if !is_hex64(&req.head) {
         return Err(ApiError::malformed("head is not 64 lowercase hex digits."));
@@ -798,8 +880,15 @@ async fn heartbeat(
             "repo_head is not 40 lowercase hex digits.",
         ));
     }
+    if let Some(recording) = &req.recording
+        && !["ok", "gaps", "failed", "unknown"].contains(&recording.as_str())
+    {
+        return Err(ApiError::malformed(
+            "recording is not ok, gaps, failed or unknown.",
+        ));
+    }
     let mut runs = lock_runs(&s);
-    find_run(&runs, &member, &run_id)?;
+    find_run(&runs, &who, &run_id)?;
     let run = runs.get_mut(&run_id).expect("just found");
     if req.entry_id != run.entry_id {
         return Err(ApiError::not_found());
@@ -836,11 +925,154 @@ async fn heartbeat(
         offset_local: req.offset_local,
         final_: req.final_,
         repo_head: req.repo_head,
+        recording: req.recording,
+        model_requests: req.model_requests,
         received_at: now_z(),
     });
     s.persist(run);
     Ok(json_response(
         200,
-        json!({"stop": run.stopped(), "deadline_at": run.deadline_at}),
+        json!({"stop": run.stopped(), "deadline_at": run.deadline_at, "reason": null}),
+    ))
+}
+
+// ---- POST /v1/device, POST /v1/device/token ----------------------------------------------
+
+/// A credential for `member`, stored by its hash and persisted; returns the plain text.
+pub fn mint_credential(s: &Shared, member: &str, mode: &str, approved_at: u64) -> String {
+    let plain = format!(
+        "gcr_{:016x}{:016x}{:016x}{:016x}",
+        rand::random::<u64>(),
+        rand::random::<u64>(),
+        rand::random::<u64>(),
+        rand::random::<u64>()
+    );
+    let mut credentials = s.credentials.lock().unwrap_or_else(|e| e.into_inner());
+    credentials.insert(
+        sha256_hex(&plain),
+        Credential {
+            member: member.to_string(),
+            mode: mode.to_string(),
+            run_id: None,
+            expires_at: approved_at + UNBOUND_CREDENTIAL_SECS,
+        },
+    );
+    s.persist_credentials(&credentials);
+    plain
+}
+
+#[derive(Deserialize)]
+struct DeviceBody {
+    purpose: String,
+    mode: String,
+    connector_id: String,
+    tracer_version: String,
+}
+
+async fn create_device(State(s): St, body: Bytes) -> Result<Response, ApiError> {
+    let req: DeviceBody = parse_json(&body)?;
+    if !["login", "run"].contains(&req.purpose.as_str()) {
+        return Err(ApiError::malformed("purpose is not login or run."));
+    }
+    if !["competition", "practice"].contains(&req.mode.as_str()) {
+        return Err(ApiError::malformed("mode is not competition or practice."));
+    }
+    if req.connector_id.is_empty() || req.tracer_version.is_empty() {
+        return Err(ApiError::malformed(
+            "connector_id or tracer_version is empty.",
+        ));
+    }
+    let device_code = format!(
+        "{:016x}{:016x}{:016x}{:016x}",
+        rand::random::<u64>(),
+        rand::random::<u64>(),
+        rand::random::<u64>(),
+        rand::random::<u64>()
+    );
+    let letters: String = (0..8)
+        .map(|_| {
+            USER_CODE_ALPHABET[rand::random::<u32>() as usize % USER_CODE_ALPHABET.len()] as char
+        })
+        .collect();
+    let user_code = format!("{}-{}", &letters[..4], &letters[4..]);
+    let request = DeviceRequest {
+        purpose: req.purpose,
+        mode: req.mode,
+        connector_id: req.connector_id,
+        tracer_version: req.tracer_version,
+    };
+    let approval = *s.approval.lock().unwrap_or_else(|e| e.into_inner());
+    s.device_log
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(request.clone());
+    s.devices.lock().unwrap_or_else(|e| e.into_inner()).insert(
+        sha256_hex(&device_code),
+        Device {
+            approval,
+            request,
+            created_at: now_secs(),
+            picked_up: false,
+        },
+    );
+    Ok(json_response(
+        200,
+        json!({
+            "device_code": device_code,
+            "user_code": user_code,
+            "verification_uri": VERIFICATION_URI,
+            "verification_uri_complete": format!("{VERIFICATION_URI}?code={user_code}"),
+            "interval": DEVICE_INTERVAL,
+            "expires_in": DEVICE_EXPIRES_IN,
+        }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct TokenBody {
+    device_code: String,
+}
+
+async fn poll_device(State(s): St, body: Bytes) -> Result<Response, ApiError> {
+    let req: TokenBody = parse_json(&body)?;
+    if !is_hex64(&req.device_code) {
+        return Err(ApiError::malformed(
+            "device_code is not 64 lowercase hex digits.",
+        ));
+    }
+    let gone = || ApiError::closed("This sign-in request has expired or was already picked up.");
+    let mut devices = s.devices.lock().unwrap_or_else(|e| e.into_inner());
+    let device = devices
+        .get_mut(&sha256_hex(&req.device_code))
+        .ok_or_else(gone)?;
+    let now = now_secs();
+    if now >= device.created_at + DEVICE_EXPIRES_IN || device.picked_up {
+        return Err(gone());
+    }
+    match device.approval {
+        Approval::Expire => return Err(gone()),
+        Approval::Deny => {
+            return Err(ApiError::new(403, "forbidden", "This sign-in was denied."));
+        }
+        Approval::Auto => {}
+    }
+    device.picked_up = true;
+    if device.request.purpose == "login" {
+        return Ok(json_response(
+            200,
+            json!({"status": "approved", "purpose": "login",
+                   "account": {"handle": s.device_member}}),
+        ));
+    }
+    let plain = mint_credential(
+        &s,
+        &s.device_member,
+        &device.request.mode,
+        device.created_at,
+    );
+    Ok(json_response(
+        200,
+        json!({"status": "approved", "purpose": "run", "credential": plain,
+               "expires_at": format_z(device.created_at + UNBOUND_CREDENTIAL_SECS)}),
     ))
 }

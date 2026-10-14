@@ -1,7 +1,7 @@
 # Goal Cup upload Worker
 
 The server end of `goalcup`'s trace upload: a Cloudflare Worker (TypeScript, no framework) that
-checks a participant's token, streams zstd chunks of `chain.jsonl` into R2, records progress in
+checks a participant's run credential, streams zstd chunks of `chain.jsonl` into R2, records progress in
 Supabase (Postgres), and returns Ed25519-signed receipts and acknowledgements in the formats the
 Rust verifier already checks.
 
@@ -29,11 +29,18 @@ npm test                           # type-check, then unit and end-to-end tests
 wrangler's own config directory pointed at a temporary folder), so it needs no setup and leaves
 nothing behind. It takes about 15 seconds.
 
-Try it by hand against `npm run dev` (tokens come from `.dev.vars`):
+Try it by hand against `npm run dev`. A credential comes from the device flow; the test approval
+route (`TEST_APPROVAL_KEY` in `.dev.vars`) stands in for the website's approval page:
 
 ```sh
-curl -s -XPOST localhost:8787/v1/runs -H 'authorization: Bearer dev-token-1' \
-  -H 'content-type: application/json' -d '{"connector_id":"codex-cli", ... }'
+curl -s -XPOST localhost:8787/v1/device -H 'content-type: application/json' \
+  -d '{"purpose":"run","mode":"practice","connector_id":"codex-cli","tracer_version":"0.1.0"}'
+# -> device_code, user_code. Approve the user code as a member, then pick up the credential:
+curl -s -XPOST localhost:8787/v1/device/approve -H 'authorization: Bearer dev-approval-key' \
+  -H 'content-type: application/json' -d '{"user_code":"<user_code>","member_id":"member1","approve":true}'
+curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json' \
+  -d '{"device_code":"<device_code>"}'
+# -> credential (gcr_…): send it as 'authorization: Bearer <credential>' to POST /v1/runs.
 ```
 
 ## Layout
@@ -41,6 +48,8 @@ curl -s -XPOST localhost:8787/v1/runs -H 'authorization: Bearer dev-token-1' \
 | Path | What |
 |---|---|
 | `src/index.ts` | Routing, maintenance switch, authentication, error mapping |
+| `src/device.ts` | The device flow: start, poll, and the test-only approval |
+| `src/auth.ts` | Bearer run credential -> member, and the one run it may touch |
 | `src/runs.ts` | Open, receipt, abandon, position, seal |
 | `src/chunks.ts` | The chunk upload (early refusals, retry rule, streaming to R2, atomic commit) |
 | `src/sign.ts` | Ed25519 receipts and acks (byte-exact with the Rust formats) |
@@ -48,7 +57,7 @@ curl -s -XPOST localhost:8787/v1/runs -H 'authorization: Bearer dev-token-1' \
 | `src/db-supabase.ts` | Production: one Postgres function per step, via PostgREST RPC |
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `sql/proposed-goalcup-functions.sql` | **Proposal** for the schema and functions SupabaseDb calls |
-| `test/` | `sign.test.ts` (Rust vectors), `config.test.ts`, `github.test.ts`, `supabase.test.ts` (RPC names and arguments, stubbed fetch), `local-db.test.ts`, `integration.test.ts` (HTTP against `wrangler dev`) |
+| `test/` | `sign.test.ts` (Rust vectors), `config.test.ts`, `github.test.ts`, `supabase.test.ts` (RPC names and arguments, stubbed fetch), `local-db.test.ts`, `integration.test.ts`, `device.test.ts` (HTTP against `wrangler dev`), `device-unit.test.ts` |
 
 ## Configuration
 
@@ -58,8 +67,9 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 |---|---|---|
 | `EVENT_ID` | none (required) | Event that new runs belong to, e.g. `practice`. Lowercase letters, digits, dashes; it becomes part of every R2 key. One deployment serves one event for now. |
 | `RUN_HOURS` | `168` | `deadline_at` = `official_start` + this many hours. |
-| `DB_BACKEND` | `supabase` | `supabase` (production) or `local`. `local` is for `wrangler dev` and tests; it refuses to work without `DEV_TOKENS`. Never set it in the deployed `wrangler.toml`. |
-| `DEV_TOKENS` | none | Local backend only: `token1:member1,token2:member2`. |
+| `DB_BACKEND` | `supabase` | `supabase` (production) or `local`. `local` is for `wrangler dev` and tests. Never set it in the deployed `wrangler.toml`. |
+| `APPROVAL_URL` | placeholder in `wrangler.toml` | The website's page where a member approves a device request, without a query string. The Worker answers `verification_uri` with it and `verification_uri_complete` with `?code=<user code>` added. |
+| `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. |
 | `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask the GitHub API that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off so they need no network). A missing or private repository is `400`; GitHub being unreachable or rate-limiting is `502`, which the tracer retries. |
 | `MAINTENANCE` | off | `on` makes every call answer `503 maintenance` with `Retry-After`, before authentication and before any body is read. |
 | `MAINTENANCE_RETRY_AFTER` | `300` | Seconds for that header. |
@@ -74,10 +84,11 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 | `SUPABASE_URL` | `https://<project>.supabase.co` (supabase backend). |
 | `SUPABASE_KEY` | Key of a dedicated role limited to schema `goalcup` (see the SQL header). Not the community-wide service key. |
 | `GITHUB_TOKEN` | Optional. Read-only; only raises the GitHub API rate limit. |
+| `TEST_APPROVAL_KEY` | **Tests and staging only.** Switches on `POST /v1/device/approve`, which approves a device request as any member (`Authorization: Bearer <key>`). Honoured only with `DB_BACKEND=local` or `STAGING=on`; set anywhere else, every call answers `500 misconfigured`. Unset, the route does not exist (`404`). Never set it in production. |
 
 ## What is checked where
 
-- **Before a chunk body is read:** token, run exists and is this member's, run is open, the deadline rules
+- **Before a chunk body is read:** credential, run exists and is the credential's own, run is open, the deadline rules
   below allow it (after `deadline_at`: `503` until the final heartbeat, then nothing past the committed
   end), `Content-Length` present and at most 33,554,432, `Content-Type` and all seven
   `Goalcup-*` headers well formed, entry id matches, maintenance switch.
@@ -127,17 +138,18 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
      the proposed SQL) that can execute the `goalcup.upload_*` functions and nothing else.
    - Optionally `GITHUB_TOKEN` (read access to public repositories).
 4. **Supabase, in the website repo** (the website repo owns the schema): migrations for schema
-   `goalcup` with row-level security, and the ten `upload_*` functions. `sql/proposed-goalcup-functions.sql`
+   `goalcup` with row-level security, and the fourteen `upload_*` functions. `sql/proposed-goalcup-functions.sql`
    is a proposal to start from. It was run only against a throwaway local PostgreSQL, never against Supabase.
    The owner also has to decide or provide:
    - the `events` rows (start window, `run_hours`) and the `EVENT_ID` the Worker
      is deployed with; the proposal checks that the event exists and that now is inside its start
      window, while `RUN_HOURS` comes from the Worker's variables;
    - where "accepted the current terms" lives (the proposal assumes `goalcup.consents`);
-   - token minting (only `sha256(token)` is stored);
+   - the approval page for device requests (it calls `goalcup.goalcup_approve_device`; only the
+     `sha256` of codes and credentials is stored), and the member's handle for `member_handle`;
    - exposing schema `goalcup` to PostgREST (RPC needs it) while revoking everything from `anon`
      and `authenticated`, as the proposal does.
-5. **Not built yet** (SERVER-DESIGN sections 4, 11): per-token rate limiting (`429`; do it with a
+5. **Not built yet** (SERVER-DESIGN sections 4, 11): per-credential rate limiting (`429`; do it with a
    Cloudflare rate-limiting rule on the route), the per-run storage quota, live totals in the
    heartbeat, outages, `continue`, the verify job, `live.json`, monitoring. The organizer pause on new starts is not a
    separate switch; `MAINTENANCE=on` stops everything.
@@ -146,8 +158,16 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
 
 - The first record's `seq` is **0** (the baseline link of a v5 chain; this follows the contract), so
   a fresh run reports `next_seq: 0` and `head` = 64 zeros.
-- `POST /v1/runs` repeated with the same `session_id` returns the existing run only while it has
-  no receipt; after the receipt it is `409` (the account has an open run), as the contract says.
+- A credential opens one run. `POST /v1/runs` repeated with the same `session_id` on a credential
+  that already opened a run returns that run (`200`), also after the receipt; another `session_id`
+  is `409`. A credential that has not opened a run yet still meets the member-level rule: another
+  open run on the account is `409` (a later task replaces that rule).
+- A credential sees only the run it opened: another run id, or any run id before it has opened
+  one, is `404`. Unknown or expired is `401`. It lasts an hour from the approval until it opens a
+  run, then until 24 hours after that run's `deadline_at`.
+- The device flow's errors reuse the table's codes: a denied request is `403 forbidden`; an
+  expired, unknown or already picked-up one is `410 closed`. A request lives 900 seconds from its
+  creation in every state, so an approval that is not picked up in time is lost too.
 - A repeated `abandon` of an already abandoned run is `200`. Abandoning a sealed run is `410`.
 - A retried chunk's `200` body repeats what the original answered: that chunk's ack, the offset
   just after it, `last_seq + 1`, and its head (not the run's current position).

@@ -2,9 +2,10 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isAbandonable } from "../src/db.ts";
+import { boundCredentialExpiry, isAbandonable } from "../src/db.ts";
 import type { OpenRunArgs } from "../src/db.ts";
 import { LocalDb } from "../src/db-local.ts";
+import { sha256Hex } from "../src/util.ts";
 import { FakeBucket, asR2 } from "./helpers/fake-r2.ts";
 
 const open = (id: number, session: string, startedAt: string, deadlineAt: string): OpenRunArgs => ({
@@ -32,7 +33,7 @@ test("isAbandonable: strictly more than 24 hours after the deadline", () => {
 });
 
 test("opening a run abandons the account's unsealed run that is 24 hours past its deadline", async () => {
-  const db = await LocalDb.create(asR2(new FakeBucket()), "t1:m1");
+  const db = LocalDb.create(asR2(new FakeBucket()));
   const first = await db.openRun(open(1, "s1", "2026-11-06T09:00:00Z", "2026-11-13T09:00:00Z"));
   assert.equal(first.kind, "created");
 
@@ -48,7 +49,7 @@ test("opening a run abandons the account's unsealed run that is 24 hours past it
 });
 
 const mk = async () => {
-  const db = await LocalDb.create(asR2(new FakeBucket()), "t1:m1");
+  const db = LocalDb.create(asR2(new FakeBucket()));
   await db.openRun(open(1, "s1", "2026-11-06T09:00:00Z", "2026-11-13T09:00:00Z"));
   return db;
 };
@@ -110,7 +111,7 @@ test("a final heartbeat is still taken on a sealed run, an ordinary one is a no-
 });
 
 test("a sealed run never blocks, and an old run of a different member is untouched", async () => {
-  const db = await LocalDb.create(asR2(new FakeBucket()), "t1:m1,t2:m2");
+  const db = LocalDb.create(asR2(new FakeBucket()));
   const a = await db.openRun(open(1, "s1", "2026-11-06T09:00:00Z", "2026-11-13T09:00:00Z"));
   assert.equal(a.kind, "created");
   const sealed = await db.sealRun({
@@ -120,4 +121,88 @@ test("a sealed run never blocks, and an old run of a different member is untouch
   assert.equal(sealed, "sealed");
   assert.equal((await db.openRun(open(2, "s2", "2026-11-13T10:00:00Z", "2026-11-20T10:00:00Z"))).kind, "created");
   assert.equal((await db.getRun("m1", "r0000000000000001"))?.status, "sealed");
+});
+
+// ---- the device flow and the run credential --------------------------------------------------
+
+const CODE = "BCDFGHJK";
+const newDevice = async (over: Record<string, unknown> = {}) => ({
+  device_sha256: await sha256Hex("device-1"),
+  user_sha256: await sha256Hex(CODE),
+  purpose: "run" as const,
+  mode: "practice" as const,
+  connector_id: "codex-cli",
+  tracer_version: "1",
+  created_at: "2026-11-06T09:00:00Z",
+  expires_at: "2026-11-06T09:15:00Z",
+  ...over,
+});
+
+test("a device request: pending, approved, picked up once, with the credential minted at pickup", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()));
+  const dev = await newDevice();
+  await db.createDevice(dev);
+  assert.deepEqual(await db.pollDevice(dev.device_sha256, "2026-11-06T09:01:00Z"), { kind: "pending" });
+  assert.equal(await db.approveDevice(CODE, "m1", true, "2026-11-06T09:05:00Z"), "ok");
+  assert.equal(await db.approveDevice(CODE, "m1", false, "2026-11-06T09:05:30Z"), "already_decided");
+
+  const got = await db.pollDevice(dev.device_sha256, "2026-11-06T09:06:00Z");
+  assert.equal(got.kind, "approved");
+  if (got.kind !== "approved") return;
+  assert.equal(got.purpose, "run");
+  assert.match(got.credential_plain ?? "", /^gcr_[0-9a-f]{64}$/);
+  assert.equal(got.expires_at, "2026-11-06T10:05:00Z"); // approved_at + 1 hour
+  assert.deepEqual(await db.pollDevice(dev.device_sha256, "2026-11-06T09:06:05Z"), { kind: "expired" }); // once
+  assert.deepEqual(await db.pollDevice(await sha256Hex("never-issued"), "2026-11-06T09:06:05Z"), { kind: "expired" });
+
+  // The credential is stored hashed and names the member and the mode, unbound.
+  const hash = await sha256Hex(got.credential_plain ?? "");
+  assert.deepEqual(await db.credential(hash, "2026-11-06T09:07:00Z"), {
+    member_id: "m1", run_id: null, mode: "practice", expires_at: "2026-11-06T10:05:00Z",
+  });
+});
+
+test("credential expiry: approved+1h unbound, deadline+24h bound", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()));
+  await db.createDevice(await newDevice());
+  await db.approveDevice(CODE, "m1", true, "2026-11-06T09:05:00Z");
+  const got = await db.pollDevice(await sha256Hex("device-1"), "2026-11-06T09:06:00Z");
+  const hash = await sha256Hex(got.kind === "approved" ? (got.credential_plain ?? "") : "");
+
+  assert.notEqual(await db.credential(hash, "2026-11-06T10:04:59Z"), null);
+  assert.equal(await db.credential(hash, "2026-11-06T10:05:00Z"), null); // unbound: over at approved + 1 h
+
+  const deadline = "2026-11-13T09:06:00Z";
+  assert.equal(boundCredentialExpiry(deadline), "2026-11-14T09:06:00Z");
+  await db.bindCredential(hash, "r0000000000000001", boundCredentialExpiry(deadline));
+  const bound = await db.credential(hash, "2026-11-14T09:05:59Z");
+  assert.deepEqual(bound, { member_id: "m1", run_id: "r0000000000000001", mode: "practice", expires_at: "2026-11-14T09:06:00Z" });
+  assert.equal(await db.credential(hash, "2026-11-14T09:06:00Z"), null); // bound: over at deadline + 24 h
+  assert.equal(await db.credential(await sha256Hex("gcr_unknown"), "2026-11-06T09:07:00Z"), null);
+});
+
+test("a request that is not decided in time is expired; a denial is 403 until then", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()));
+  const dev = await newDevice();
+  await db.createDevice(dev);
+  assert.deepEqual(await db.pollDevice(dev.device_sha256, "2026-11-06T09:14:59Z"), { kind: "pending" });
+  assert.deepEqual(await db.pollDevice(dev.device_sha256, "2026-11-06T09:15:00Z"), { kind: "expired" });
+  assert.equal(await db.approveDevice(CODE, "m1", true, "2026-11-06T09:15:00Z"), "expired");
+  assert.equal(await db.approveDevice("BBBBBBBB", "m1", true, "2026-11-06T09:01:00Z"), "not_found");
+
+  const other = await newDevice({ device_sha256: await sha256Hex("device-2"), user_sha256: await sha256Hex("CCCCCCCC") });
+  await db.createDevice(other);
+  assert.equal(await db.approveDevice("CCCCCCCC", "m1", false, "2026-11-06T09:02:00Z"), "ok");
+  assert.deepEqual(await db.pollDevice(other.device_sha256, "2026-11-06T09:03:00Z"), { kind: "denied" });
+  assert.deepEqual(await db.pollDevice(other.device_sha256, "2026-11-06T09:14:00Z"), { kind: "denied" });
+  assert.deepEqual(await db.pollDevice(other.device_sha256, "2026-11-06T09:15:00Z"), { kind: "expired" });
+});
+
+test("a login approval hands back the handle once and mints no credential", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()));
+  const dev = await newDevice({ purpose: "login" });
+  await db.createDevice(dev);
+  await db.approveDevice(CODE, "m1", true, "2026-11-06T09:05:00Z");
+  assert.deepEqual(await db.pollDevice(dev.device_sha256, "2026-11-06T09:06:00Z"), { kind: "approved", purpose: "login", handle: "m1" });
+  assert.deepEqual(await db.pollDevice(dev.device_sha256, "2026-11-06T09:06:01Z"), { kind: "expired" });
 });

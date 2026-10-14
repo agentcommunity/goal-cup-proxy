@@ -16,8 +16,13 @@
 //! abandonment) are in `handlers.rs`; `ServerOptions::run_seconds` and `abandon_after_seconds`
 //! shorten them for tests.
 //!
+//! The device flow and the run credential (`handlers.rs`): `set_approval` says what happens to the
+//! next device request, `mint_credential` makes a credential without HTTP, `expire_credential`
+//! ends one. A bearer that is not a credential is looked up among `ServerOptions::tokens`.
+//!
 //! Test hooks (not part of the contract): `set_maintenance`, `set_maintenance_retry_after`,
-//! `fail_next_chunks` and `drop_next_chunk_reply`.
+//! `fail_next_chunks`, `drop_next_chunk_reply`, `set_approval`, `mint_credential`,
+//! `expire_credential` and `device_requests`.
 
 mod handlers;
 mod state;
@@ -38,14 +43,17 @@ use goalcup_protocol::receipt::StartReceipt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 
-pub use state::{FinalCommit, Position, StoredChunk, StoredHeartbeat};
+pub use state::{Approval, DeviceRequest, FinalCommit, Position, StoredChunk, StoredHeartbeat};
 use state::{RunStatus, Shared};
 
 /// What the stand-in is configured with.
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
-    /// `(token, member)` pairs: the bearer tokens the server knows and whose they are.
+    /// `(token, member)` pairs: pasted member tokens the server still accepts, member-scoped,
+    /// for the tracer's old login. Legacy: removed with the pasted token (T5).
     pub tokens: Vec<(String, String)>,
+    /// The member the stand-in approves device requests as; a login request's handle.
+    pub device_member: String,
     /// The event's run length; `deadline_at` is `official_start` plus this.
     pub run_hours: u64,
     /// Overrides `run_hours` when set, so a test can have a run end after a second or two.
@@ -62,6 +70,7 @@ impl Default for ServerOptions {
     fn default() -> Self {
         ServerOptions {
             tokens: vec![("test-token".to_string(), "member-1".to_string())],
+            device_member: "member-1".to_string(),
             run_hours: 168,
             run_seconds: None,
             abandon_after_seconds: 24 * 3600,
@@ -87,6 +96,11 @@ impl UploadServer {
         let shared = Arc::new(Shared {
             store_dir: store_dir.to_path_buf(),
             tokens: config.tokens.into_iter().collect::<HashMap<_, _>>(),
+            device_member: config.device_member,
+            approval: Mutex::new(Approval::Auto),
+            devices: Mutex::new(HashMap::new()),
+            device_log: Mutex::new(Vec::new()),
+            credentials: Mutex::new(Shared::load_credentials(store_dir)),
             run_secs: config.run_seconds.unwrap_or(config.run_hours * 3600),
             abandon_after_secs: config.abandon_after_seconds,
             key,
@@ -197,6 +211,43 @@ impl UploadServer {
     /// answered from the stored acknowledgement.
     pub fn drop_next_chunk_reply(&self) {
         self.shared.drop_replies.store(1, Ordering::SeqCst);
+    }
+
+    /// What happens to each device request from now on (default `Auto`).
+    pub fn set_approval(&self, approval: Approval) {
+        *self
+            .shared
+            .approval
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = approval;
+    }
+
+    /// A fresh unbound credential for `member`, made without a device request. It lasts an hour,
+    /// like an approved one.
+    pub fn mint_credential(&self, member: &str) -> String {
+        handlers::mint_credential(&self.shared, member, "practice", state::now_secs())
+    }
+
+    /// End a credential now: its next use is `401`.
+    pub fn expire_credential(&self, credential: &str) {
+        let mut credentials = self
+            .shared
+            .credentials
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = credentials.get_mut(&handlers::sha256_hex(credential)) {
+            c.expires_at = 0;
+        }
+        self.shared.persist_credentials(&credentials);
+    }
+
+    /// Every device request the server was asked for, in order.
+    pub fn device_requests(&self) -> Vec<DeviceRequest> {
+        self.shared
+            .device_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn with_run<T>(&self, run_id: &str, f: impl FnOnce(&state::RunRecord) -> T) -> Option<T> {

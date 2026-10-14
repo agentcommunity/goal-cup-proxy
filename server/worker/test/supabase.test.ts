@@ -44,11 +44,60 @@ const chunk = {
   ack: { entry_id: "e0000000000000001", seq: 2, hash: H("2"), acked_at: "2026-11-06T09:00:00Z", server_signature: "sig" },
 } as ChunkRecord;
 
-test("memberForToken -> upload_lookup_token(p_token_hash)", async () => {
-  const calls = stub("member-1", null);
-  assert.equal(await db().memberForToken(H("a")), "member-1");
-  assert.equal(await db().memberForToken(H("b")), null);
-  assert.deepEqual(calls[0], { fn: "upload_lookup_token", args: { p_token_hash: H("a") } });
+test("credential -> upload_credential(p_credential_hash, p_now)", async () => {
+  const cred = { member_id: "member-1", run_id: null, mode: "practice", expires_at: "2026-11-06T10:05:00Z" };
+  const calls = stub(cred, null);
+  assert.deepEqual(await db().credential(H("a"), "2026-11-06T09:06:00Z"), cred);
+  assert.equal(await db().credential(H("b"), "2026-11-06T09:06:00Z"), null);
+  assert.deepEqual(calls[0], { fn: "upload_credential", args: { p_credential_hash: H("a"), p_now: "2026-11-06T09:06:00Z" } });
+});
+
+test("bindCredential -> upload_bind_credential", async () => {
+  const calls = stub("bound");
+  await db().bindCredential(H("a"), "r0000000000000001", "2026-11-14T09:00:00Z");
+  assert.deepEqual(calls[0], {
+    fn: "upload_bind_credential",
+    args: { p_credential_hash: H("a"), p_run_id: "r0000000000000001", p_expires_at: "2026-11-14T09:00:00Z" },
+  });
+});
+
+test("createDevice -> upload_create_device", async () => {
+  const calls = stub("created");
+  await db().createDevice({
+    device_sha256: H("d"), user_sha256: H("u"), purpose: "run", mode: "competition", connector_id: "c", tracer_version: "t",
+    created_at: "2026-11-06T09:00:00Z", expires_at: "2026-11-06T09:15:00Z",
+  });
+  assert.deepEqual(calls[0], {
+    fn: "upload_create_device",
+    args: {
+      p_device_hash: H("d"), p_user_hash: H("u"), p_purpose: "run", p_mode: "competition", p_connector_id: "c", p_tracer_version: "t",
+      p_created_at: "2026-11-06T09:00:00Z", p_expires_at: "2026-11-06T09:15:00Z",
+    },
+  });
+});
+
+test("pollDevice -> upload_poll_device; the credential comes back once", async () => {
+  const calls = stub(
+    { result: "pending" },
+    { result: "approved", purpose: "run", credential: "gcr_" + H("1"), expires_at: "2026-11-06T10:05:00Z" },
+    { result: "approved", purpose: "login", handle: "alice" },
+    { result: "denied" },
+    { result: "expired" },
+  );
+  assert.deepEqual(await db().pollDevice(H("d"), "t"), { kind: "pending" });
+  assert.deepEqual(await db().pollDevice(H("d"), "t"), { kind: "approved", purpose: "run", credential_plain: "gcr_" + H("1"), expires_at: "2026-11-06T10:05:00Z" });
+  assert.deepEqual(await db().pollDevice(H("d"), "t"), { kind: "approved", purpose: "login", handle: "alice" });
+  assert.deepEqual(await db().pollDevice(H("d"), "t"), { kind: "denied" });
+  assert.deepEqual(await db().pollDevice(H("d"), "t"), { kind: "expired" });
+  assert.deepEqual(calls[0], { fn: "upload_poll_device", args: { p_device_hash: H("d"), p_now: "t" } });
+});
+
+test("approveDevice -> upload_approve_device(p_user_code, ...)", async () => {
+  const calls = stub("ok", "not_found", "expired", "already_decided");
+  for (const want of ["ok", "not_found", "expired", "already_decided"]) {
+    assert.equal(await db().approveDevice("BCDFGHJK", "m", true, "t"), want);
+  }
+  assert.deepEqual(calls[0], { fn: "upload_approve_device", args: { p_user_code: "BCDFGHJK", p_member_id: "m", p_approve: true, p_now: "t" } });
 });
 
 test("openRun -> upload_open_run with every p_ argument", async () => {

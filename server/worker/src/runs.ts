@@ -1,8 +1,9 @@
 // Handlers for the run-level calls: open, receipt, abandon, position, seal.
 // The chunk upload is in chunks.ts. Contract: docs/UPLOAD-API.md.
 
+import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
-import { type RunRow, isAbandonable, isPastDeadline } from "./db.ts";
+import { type RunRow, boundCredentialExpiry, isAbandonable, isPastDeadline } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
 import {
   REPO_URL,
@@ -25,7 +26,7 @@ const SEAL_BODY_MAX = 2 * SEAL_DOC_MAX + JSON_BODY_MAX; // two documents plus th
  * Read a JSON object body of at most `max` bytes. The raw bytes and the decoded text live only
  * inside this function, so the caller holds just the parsed object.
  */
-async function readJson(request: Request, max: number): Promise<Record<string, unknown>> {
+export async function readJson(request: Request, max: number): Promise<Record<string, unknown>> {
   // A declared length over the cap is refused before a single byte is read.
   const declared = request.headers.get("content-length");
   if (declared !== null && Number(declared) > max) throw tooLarge("The request body is too large.");
@@ -61,7 +62,7 @@ function takeDocument(body: Record<string, unknown>, name: string): Uint8Array {
  */
 export async function requireRun(ctx: Ctx, member: string, runId: string): Promise<RunRow> {
   const run = await ctx.db.getRun(member, runId);
-  if (run === null) throw notFound("No such run for this token.");
+  if (run === null) throw notFound("No such run for this credential.");
   if (run.status === "open" && isAbandonable(run.deadline_at, ctx.now(), ctx.cfg.abandonAfterSeconds)) {
     if (await ctx.db.expireRun(member, runId, formatTime(ctx.now()))) return { ...run, status: "abandoned" };
     return (await ctx.db.getRun(member, runId)) ?? run;
@@ -79,7 +80,7 @@ export const isStopped = (ctx: Ctx, run: RunRow): boolean => isPastDeadline(run.
 
 // ---- POST /v1/runs ------------------------------------------------------------------------
 
-export async function openRun(ctx: Ctx, member: string, request: Request): Promise<Response> {
+export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<Response> {
   const b = await readJson(request, JSON_BODY_MAX);
   const connector_id = strField(b, "connector_id", 128);
   const manifest_sha256 = hexField(b, "manifest_sha256");
@@ -92,11 +93,18 @@ export async function openRun(ctx: Ctx, member: string, request: Request): Promi
   const repo_url = strField(b, "repo_url", 200);
   if (!REPO_URL.test(repo_url)) throw malformed("repo_url must look like https://github.com/<owner>/<repo>.");
 
+  // A credential opens one run. Asking again with the same session_id is a lost reply: the same run.
+  if (auth.run_id !== null) {
+    const opened = await ctx.db.getRun(auth.member, auth.run_id);
+    if (opened !== null && opened.session_id === session_id) return json(200, runView(opened));
+    throw conflict("This credential already opened a run; run `goalcup continue`.");
+  }
+
   if (ctx.cfg.githubCheck) await requirePublicGithubRepo(ctx, repo_url);
 
   const now = ctx.now();
   const result = await ctx.db.openRun({
-    member_id: member,
+    member_id: auth.member,
     event_id: ctx.cfg.eventId,
     run_id: newId("r"),
     entry_id: newId("e"),
@@ -114,9 +122,11 @@ export async function openRun(ctx: Ctx, member: string, request: Request): Promi
   if (result.kind === "conflict") throw conflict("This account already has an open run.");
   if (result.kind === "forbidden") throw new ApiError(403, "forbidden", result.message);
 
-  const { run_id, entry_id, official_start, deadline_at } = result.run;
-  return json(result.kind === "created" ? 201 : 200, { run_id, entry_id, official_start, deadline_at });
+  await ctx.db.bindCredential(auth.credential, result.run.run_id, boundCredentialExpiry(result.run.deadline_at));
+  return json(result.kind === "created" ? 201 : 200, runView(result.run));
 }
+
+const runView = ({ run_id, entry_id, official_start, deadline_at }: RunRow) => ({ run_id, entry_id, official_start, deadline_at });
 
 /** GitHub says the repository exists and is public. Failures to ask are 502, so the tracer retries. */
 async function requirePublicGithubRepo(ctx: Ctx, repoUrl: string): Promise<void> {
@@ -199,7 +209,7 @@ export async function abandonRun(ctx: Ctx, member: string, runId: string, reques
     case "closed":
       throw closed("This run is no longer open.");
     case "not_found":
-      throw notFound("No such run for this token.");
+      throw notFound("No such run for this credential.");
   }
 }
 
@@ -238,6 +248,11 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
   if (typeof b.final !== "boolean") throw malformed("final must be true or false.");
   const repo = b.repo_head ?? null;
   if (repo !== null && (typeof repo !== "string" || !/^[0-9a-f]{40}$/.test(repo))) throw malformed("repo_head must be null or 40 lowercase hex digits.");
+  // Optional facts about the recording. W2 stores them; for now only their shape is checked.
+  if (b.recording !== undefined && !["ok", "gaps", "failed", "unknown"].includes(b.recording as string)) {
+    throw malformed('recording must be "ok", "gaps", "failed" or "unknown".');
+  }
+  if (b.model_requests !== undefined) uintField(b, "model_requests");
   if (entry_id !== run.entry_id) throw notFound("That entry does not belong to this run.");
   // An abandoned run accepts nothing more, a final heartbeat included. A sealed one still takes the final.
   if (run.status === "abandoned") throw closed("This run is abandoned.");
@@ -257,13 +272,13 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
     case "recorded":
     case "final_committed":
     case "final_existing":
-      return json(200, { stop: isStopped(ctx, run), deadline_at: run.deadline_at });
+      return json(200, { stop: isStopped(ctx, run), deadline_at: run.deadline_at, reason: null });
     case "final_conflict":
       throw conflict("A different end of the run is already committed, or the server already holds a different chain than this final heartbeat names.");
     case "closed":
       throw closed("This run is abandoned.");
     case "not_found":
-      throw notFound("No such run for this token.");
+      throw notFound("No such run for this credential.");
   }
 }
 
@@ -332,7 +347,7 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
     case "closed":
       throw closed("This run is no longer open.");
     case "not_found":
-      throw notFound("No such run for this token.");
+      throw notFound("No such run for this credential.");
   }
 }
 

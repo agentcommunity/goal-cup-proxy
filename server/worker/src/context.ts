@@ -45,7 +45,20 @@ function testOnlySeconds(env: Env, name: "RUN_SECONDS" | "ABANDON_AFTER_SECONDS"
   return positiveNumber(name, raw, 0, "seconds", 365 * 24 * 3600);
 }
 
+/**
+ * TEST_APPROVAL_KEY switches on a route that approves a device request as any member, so it is
+ * honoured only where that is meant: DB_BACKEND=local (tests, `wrangler dev`) or STAGING=on.
+ * Anywhere else its presence is a mistake worth stopping every call for.
+ */
+function checkTestApprovalKey(env: Env): void {
+  if (env.TEST_APPROVAL_KEY === undefined || env.TEST_APPROVAL_KEY === "") return;
+  if (env.DB_BACKEND !== "local" && env.STAGING !== "on") {
+    throw misconfigured("TEST_APPROVAL_KEY is for DB_BACKEND=local (tests) or STAGING=on only.");
+  }
+}
+
 export function readConfig(env: Env): Config {
+  checkTestApprovalKey(env);
   // The event id becomes part of every R2 key, so it is restricted to a safe alphabet.
   if (typeof env.EVENT_ID !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(env.EVENT_ID)) {
     throw misconfigured("EVENT_ID must be lowercase letters, digits and dashes.");
@@ -77,10 +90,10 @@ export async function getDb(env: Env): Promise<Db> {
   const backend = env.DB_BACKEND ?? "supabase";
   try {
     if (backend === "supabase") return new SupabaseDb(env.SUPABASE_URL, env.SUPABASE_KEY);
-    if (backend === "local") return await LocalDb.create(env.TRACES, env.DEV_TOKENS, readConfig(env).abandonAfterSeconds);
+    if (backend === "local") return LocalDb.create(env.TRACES, readConfig(env).abandonAfterSeconds);
   } catch (e) {
-    // The detail goes to the Worker's log only: a caller without a token gets this answer too,
-    // and a configuration error must not echo configuration (DEV_TOKENS holds tokens).
+    // The detail goes to the Worker's log only: a caller without a credential gets this answer too,
+    // and a configuration error must not echo configuration.
     console.error(`misconfigured: ${e instanceof Error ? e.message : String(e)}`);
     throw misconfigured("The database is not configured correctly; the Worker's log says how.");
   }
