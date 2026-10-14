@@ -32,8 +32,8 @@ import hashlib, json, re, sys
 PATTERNS = [
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
     ("openai_key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9_\-]{20,}")),
-    ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
     ("github_token", re.compile(r"github_pat_[A-Za-z0-9_]{22,}")),
+    ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("bearer", re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),

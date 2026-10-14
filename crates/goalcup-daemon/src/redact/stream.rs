@@ -406,20 +406,20 @@ static SHAPES: [Shape; 20] = [
     },
     prefixed(
         "github_token",
-        r"gh[pousr]_[A-Za-z0-9]{20,}",
-        &[b"g", b"h", b"pousr", b"_"],
-        word,
-        20,
-        None,
-    ),
-    prefixed(
-        "github_token",
         r"github_pat_[A-Za-z0-9_]{22,}",
         &[
             b"g", b"i", b"t", b"h", b"u", b"b", b"_", b"p", b"a", b"t", b"_",
         ],
         word_underscore,
         22,
+        None,
+    ),
+    prefixed(
+        "github_token",
+        r"gh[pousr]_[A-Za-z0-9]{20,}",
+        &[b"g", b"h", b"pousr", b"_"],
+        word,
+        20,
         None,
     ),
     prefixed(

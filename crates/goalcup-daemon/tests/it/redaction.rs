@@ -127,7 +127,8 @@ fn the_shared_set_kinds_are_in_the_documented_order() {
             // A masked provider key (`sk-ab***wxyz`).
             "masked_key",
             "github_token",
-            // The fine-grained form, beside the classic one.
+            // The fine-grained form, ahead of the classic one: it wins an overlap with a `ghp_`
+            // inside its own body.
             "github_token",
             "aws_access_key",
             "bearer",
@@ -2345,6 +2346,51 @@ fn a_fine_grained_github_token_is_redacted_in_stream_and_whole() {
                 kept, "export GH=<redacted:github_token>; done",
                 "{chunks:?}/{flush_every}: the stream equals the whole-record result"
             );
+        }
+    }
+}
+
+/// The first segment of a fine-grained token may end in `ghp`, `gho`, `ghu`, `ghs` or `ghr`,
+/// and then `ghp_` and the body after it is also a classic token. The fine-grained rule claims
+/// first, so the whole token goes and neither `github_pat_` nor the start of the body stays
+/// raw. The token is synthetic.
+#[test]
+fn a_fine_grained_token_containing_a_classic_prefix_is_redacted_whole() {
+    for k in ["p", "o", "u", "s", "r"] {
+        let token = format!(
+            "github_pat_{}gh{k}_{}",
+            "B2".repeat(9) + "x",
+            "C3d".repeat(20)
+        );
+        assert_eq!(token.len(), 11 + 22 + 1 + 60);
+        let text = format!("remote https://x:{token}@host done");
+        let expect = "remote https://x:<redacted:github_token>@host done";
+
+        let whole = Redactor::new().apply(text.as_bytes());
+        assert_eq!(String::from_utf8(whole.bytes).unwrap(), expect, "gh{k}");
+        assert_eq!(
+            whole.spans.len(),
+            1,
+            "gh{k}: one span, not a classic one inside"
+        );
+
+        for chunks in [&[1usize][..], &[7], &[13], &[30, 2], &[1000]] {
+            for flush_every in [0, 1] {
+                let records =
+                    stream_through(StreamRedactor::new(), text.as_bytes(), chunks, flush_every);
+                let mut kept = Vec::new();
+                for r in &records {
+                    if let CaptureRecord::Segment { data_b64, .. } = r {
+                        use base64::{Engine, engine::general_purpose::STANDARD};
+                        kept.extend(STANDARD.decode(data_b64).unwrap());
+                    }
+                }
+                assert_eq!(
+                    String::from_utf8(kept).unwrap(),
+                    expect,
+                    "gh{k} {chunks:?}/{flush_every}"
+                );
+            }
         }
     }
 }

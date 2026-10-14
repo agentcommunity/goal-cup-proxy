@@ -148,10 +148,12 @@ const SHARED: &[(&str, &str)] = &[
         "masked_key",
         r"(?i)sk-[A-Za-z0-9-]{1,8}(?:\.{3}|…|\\u2026|\*{3,64})[A-Za-z0-9]{3,4}",
     ),
-    ("github_token", r"gh[pousr]_[A-Za-z0-9]{20,}"),
     // The fine-grained form: `github_pat_`, then 22 characters, `_`, 59 more. Same kind, so
-    // nothing downstream sees a new label.
+    // nothing downstream sees a new label. It goes first: a body can hold `ghp_` (or `gho_`...)
+    // inside it, and the first rule to claim wins the overlap, so the classic rule listed
+    // first would take that inner part and leave `github_pat_` and the start of the body raw.
     ("github_token", r"github_pat_[A-Za-z0-9_]{22,}"),
+    ("github_token", r"gh[pousr]_[A-Za-z0-9]{20,}"),
     ("aws_access_key", r"AKIA[0-9A-Z]{16}"),
     ("bearer", r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}"),
     (
