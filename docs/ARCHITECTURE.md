@@ -120,7 +120,7 @@ writer refuses any later record of a superseded producer and a second Recovery o
 [runtime/capture/mod.rs][rc]; contract in [cont], H-16 ¶4.
 
 The reader and `DecodeSession` share the bounded Recovery-lineage calculation: capped seen-producer
-bookkeeping and supersession selection, including repeated Recovery and the 127/128 producer edges.
+bookkeeping and supersession selection, including repeated Recovery and the producer-bound edges.
 They are not one state machine: the reader validates the whole trace, while the session is
 nonvalidating and routes per stream. Shipped producers allocate separate ids for native/goal and
 wire classes; explicit rejection of invalid mixed-source producers is H-29.

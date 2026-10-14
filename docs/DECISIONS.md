@@ -1639,11 +1639,25 @@ a v5 producer ID means):
   streams (`launch_limit_exceeded`, `goal_stream_limit_exceeded`) and the native adapter's own
   `RetryFresh` budget. Their verdicts are unchanged.
 
+This removes one way a stall ends recording, not every one: the proxy's per-launch
+connection-failure budget (`MAX_CONNECTION_FAILURES`, `proxy/ingest.rs`) still ends the wire leg
+after 10 failed connections, which lane T's T4 makes count consecutive failures only.
+
+**Recovery lineage is linear.** A Recovery naming a predecessor the chain never recorded supersedes
+every wire producer of the entry. The reader's and session's lineage and the chain writer keep only
+wire producers no recovery has superseded (the writer also drops closed ones), so each producer is
+walked by at most one recovery. A superseded producer is never recovered again, so no verdict
+changes. A crafted trace of 32 768 such recoveries, exactly 65 536 producers, scans in about 2 s in
+the test profile; before, it ran past nextest's 180 s limit. The daemon's sink and receiver still
+make one pass over their producer tables per such recovery, at most 65 536 entries, during the run
+and never again at verification.
+
 **Memory at the new bound.** What an ended epoch leaves behind, measured for 65 536 32-character
 IDs: the receiver's ledger 172 B per ID, the sink's table 107 B, the owner's lost set 59 B, the
 writer's five sets 295 B, and receiver outcomes the owner has not yet taken 200 B. The daemon's
 worst case is 52 MiB per entry, 39.5 MiB once the outcomes are taken, which the owner does on
-every pass. The reader keeps 200 B per ID (12.5 MiB); the proxy's spent set 59 B (3.7 MiB).
+every pass. The reader keeps 200 B per ID (12.5 MiB) and the decode session's lineage 118 B
+(7.4 MiB), about 20 MiB per verifier process; the proxy's spent set 59 B (3.7 MiB).
 
 **The trade, plainly.** No record changes. The reader's `producer_limit_exceeded` now fires above
 65 536 producers; a verifier built before this row flags a trace with more than 128 producers as
@@ -1651,9 +1665,7 @@ invalid, as D53's v0.5.0 readers refuse `harness_build`. The tracer and the serv
 verifier. `docs/CONTRACTS.md` still says 128: it is the historical record of the contract as
 frozen, and is left as written.
 
-**Reconsider when** a run needs more than 65 536 epochs, or a recovery whose predecessor the chain
-never recorded becomes common: such an orphan recovery walks every wire producer the entry has
-had, in the writer and the reader, so a run made only of them costs time quadratic in its epochs.
+**Reconsider when** a run needs more than 65 536 epochs.
 
 ---
 

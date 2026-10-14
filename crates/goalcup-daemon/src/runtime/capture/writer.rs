@@ -32,7 +32,9 @@ pub(super) struct ChainWriter {
     streams: BTreeMap<StreamKey, bool>,
     /// Active connection identity -> the producer whose record opened or re-observed it.
     pub(super) connections: BTreeMap<String, String>,
-    /// Producers with a retained wire record, used to recognize a lost zero-record epoch.
+    /// Producers with a retained wire record that neither closed nor were superseded: what
+    /// recognizes a lost zero-record epoch, and the lineage a Recovery naming one supersedes.
+    /// Each producer leaves once, so recoveries cost time linear in the producers (D58).
     wire_producers: BTreeSet<String>,
     /// Producers with any retained record. Bounded like the reader's producer table: the sink
     /// admits at most `MAX_PRODUCERS`, and only their records are ever written.
@@ -360,18 +362,14 @@ impl ChainWriter {
                 let orphan = !self.wire_producers.contains(previous_producer);
                 self.lost_producers.insert(previous_producer.clone());
                 if orphan {
-                    let closed = &self.closed_producers;
-                    self.lost_producers.extend(
-                        self.wire_producers
-                            .iter()
-                            .filter(|wire| !closed.contains(*wire))
-                            .cloned(),
-                    );
+                    let superseded = std::mem::take(&mut self.wire_producers);
                     self.streams
-                        .retain(|k, _| !self.wire_producers.contains(&k.producer));
+                        .retain(|k, _| !superseded.contains(&k.producer));
                     self.connections
-                        .retain(|_, owner| !self.wire_producers.contains(owner));
+                        .retain(|_, owner| !superseded.contains(owner));
+                    self.lost_producers.extend(superseded);
                 } else {
+                    self.wire_producers.remove(previous_producer);
                     self.streams.retain(|k, _| k.producer != *previous_producer);
                     self.connections
                         .retain(|_, owner| owner != previous_producer);
@@ -381,6 +379,7 @@ impl ChainWriter {
             }
             CaptureRecord::ProducerClosed { producer, .. } => {
                 self.connections.retain(|_, owner| owner != producer);
+                self.wire_producers.remove(producer);
                 self.closed_producers.insert(producer.clone());
             }
             CaptureRecord::Segment { .. }

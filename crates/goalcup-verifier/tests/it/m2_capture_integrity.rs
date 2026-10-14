@@ -1863,6 +1863,34 @@ fn a_trace_with_five_hundred_producers_verifies() {
     );
 }
 
+#[test]
+fn recoveries_naming_unrecorded_predecessors_cost_linear_time() {
+    // The worst case for an untrusted upload: every Recovery names a predecessor the chain never
+    // recorded, so each supersedes the whole wire lineage. A superseded producer is never named
+    // again, so each one is walked once. 32 768 such recoveries admit exactly MAX_PRODUCERS IDs
+    // (D58). Linear, the scan takes about a second in the test profile; walking every wire
+    // producer ever seen took minutes.
+    let recoveries = MAX_PRODUCERS as u64 / 2;
+    let records: Vec<CaptureRecord> = (0..recoveries)
+        .map(|n| recovery_of(&format!("{:032x}", 2 * n), &format!("{:032x}", 2 * n + 1)))
+        .collect();
+    let trace = make_trace(&records, false);
+    let started = std::time::Instant::now();
+    let (report, _) = scan(trace.path());
+    let scanned = started.elapsed();
+    assert!(!has(&report, "producer_limit_exceeded"), "{report:#?}");
+    assert_eq!(report.validated_records, 1 + recoveries);
+    assert!(has(&report, "recovery_names_unrecorded_producer"));
+    let started = std::time::Instant::now();
+    assert_eq!(decoded_segments(&records), 0);
+    let decoded = started.elapsed();
+    eprintln!("{recoveries} orphan recoveries: scan {scanned:?}, decode {decoded:?}");
+    assert!(
+        scanned + decoded < std::time::Duration::from_secs(15),
+        "scan {scanned:?}, decode {decoded:?}"
+    );
+}
+
 fn findings(codes: &[&str]) -> Vec<String> {
     codes.iter().map(|code| code.to_string()).collect()
 }
