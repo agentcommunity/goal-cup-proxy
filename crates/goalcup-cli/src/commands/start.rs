@@ -1313,9 +1313,11 @@ fn run_harness<'a>(
         // The one bound of the wrap-up, for the seal below and the upload's finish later.
         let wrap_up = WrapUp::after(wrap_length);
         *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
-        let mut said =
-            format!("deadline: {reason}. The agent is stopped and the run sealed now.\n")
-                .into_bytes();
+        let line = format!("deadline: {reason}. The agent is stopped and the run sealed now.");
+        // At once, on stderr: the seal below may be asked again for minutes, and the stdout report
+        // that follows it is printed only once it returns.
+        eprintln!("goalcup: {line}");
+        let mut said = format!("{line}\n").into_bytes();
         let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
         // A seal that did not take (the daemon busy or restarting) is asked again through the
         // whole wrap-up: the harness must not run on past its deadline, and only the daemon's

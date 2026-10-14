@@ -501,7 +501,12 @@ mod retries {
         let (report, said, took) = finish(&run, Duration::from_millis(600));
         assert!(!report.sealed, "{report:?}");
         assert!(
-            report.why.as_deref().unwrap_or("").contains("500"),
+            report
+                .why
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("the time left to finish ran out; the last answer was: ")
+                && report.why.as_deref().unwrap_or("").contains("500"),
             "{report:?}"
         );
         assert!(

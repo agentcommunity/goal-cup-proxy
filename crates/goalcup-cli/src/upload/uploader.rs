@@ -233,6 +233,8 @@ enum Attempt {
     Retry(Option<Duration>, String),
     /// Stop uploading this run, and say why.
     Stop(String),
+    /// The finish's wrap-up ran out before a request could begin.
+    RanOut,
 }
 
 /// The least of the wrap-up that is worth a request.
@@ -379,7 +381,7 @@ impl Uploader {
             }
             // Only a finish has a wrap-up; once it has run out, the rest is `goalcup upload`'s.
             let Some(timeout) = left(until, self.policy.put_timeout) else {
-                return Attempt::Stop(RAN_OUT.to_string());
+                return Attempt::RanOut;
             };
             let chunk = match build_chunk(&self.chain(), &self.pos, &self.spool) {
                 Ok(Some(chunk)) => chunk,
@@ -540,7 +542,7 @@ impl Uploader {
                         error.retry_after().map(Duration::from_secs),
                     );
                     if past(until, wait) {
-                        return Err(error.to_string());
+                        return Err(ran_out(Some(&error.to_string())));
                     }
                     say(&format!(
                         "upload: the final heartbeat was not stored ({error}); trying again in {}s",
@@ -859,7 +861,7 @@ impl Uploader {
         loop {
             match self.attempt(until) {
                 Attempt::CaughtUp => break,
-                Attempt::Stop(why) if why == RAN_OUT => {
+                Attempt::RanOut => {
                     return Report::not(ran_out(last.as_deref()), self.pos.offset);
                 }
                 Attempt::Stop(why) => return Report::not(why, self.pos.offset),
@@ -867,7 +869,7 @@ impl Uploader {
                     failures += 1;
                     let wait = backoff(&self.policy, failures, after);
                     if past(until, wait) {
-                        return Report::not(why, self.pos.offset);
+                        return Report::not(ran_out(Some(&why)), self.pos.offset);
                     }
                     say(&format!(
                         "upload: {why}; trying again in {}s",
@@ -903,7 +905,7 @@ impl Uploader {
                         error.retry_after().map(Duration::from_secs),
                     );
                     if past(until, wait) {
-                        return caught_up(false, Some(error.to_string()));
+                        return caught_up(false, Some(ran_out(Some(&error.to_string()))));
                     }
                     say(&format!(
                         "upload: the seal was not stored ({error}); trying again in {}s",
@@ -1033,7 +1035,7 @@ impl Running {
                 Ok(report) => return report,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    return Report::not("the upload did not finish in time", 0);
+                    return Report::not("the upload thread ended without a report", 0);
                 }
             }
         }
@@ -1141,6 +1143,8 @@ fn run(
                         ));
                         stopped = Some(why);
                     }
+                    // Only a finish has a wrap-up to run out; a background attempt has none.
+                    Attempt::RanOut => {}
                 }
             }
         }

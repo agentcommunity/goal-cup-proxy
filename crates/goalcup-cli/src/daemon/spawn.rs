@@ -84,9 +84,9 @@ pub const READY_REPORT_EVERY: Duration = Duration::from_secs(10);
 /// How long a command waits for a daemon it started, and how it waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wait {
-    /// For a daemon whose process is gone: [`SPAWN_WAIT`]. (A started daemon that exits is
-    /// refused at once unless it lost the registry lock, so this bounds the lock waits and
-    /// the respawns.)
+    /// For a daemon whose process is gone or cannot be read: [`SPAWN_WAIT`]. A started daemon
+    /// that exits is refused at once unless it lost the registry lock; the respawns that
+    /// follow a lost lock are bounded by `reopening`, since a held lock is a live holder.
     pub dead: Duration,
     /// For a daemon that is alive but not yet answering: [`DAEMON_READY_BUDGET`]. The process
     /// this command started, or the one holding the registry lock it lost to, is alive.
@@ -232,16 +232,21 @@ pub fn ensure_daemon_waiting(
             return Ok(client);
         }
         let now = Instant::now();
-        match respawn_at {
+        // Alive: the daemon this command started, or the one whose registry lock it lost to (a
+        // held lock is a live holder). Alive is waited for up to the long budget; gone, to the
+        // short one.
+        let alive = match respawn_at {
             Some(at) if now >= at && now < ready_until => {
                 respawn_at = None;
                 (child, said_from) = spawn(&binary, &config, &log)?;
+                true
             }
-            Some(_) => {}
-            None => {
-                if let Ok(Some(status)) = child.try_wait() {
+            Some(_) => true,
+            None => match child.try_wait() {
+                Ok(None) => true,
+                Ok(Some(status)) => {
                     // Lost the registry lock to a daemon that is starting or stopping: start
-                    // again after a pause, until the deadline. Any other early exit is a
+                    // again after a pause, until the wait runs out. Any other early exit is a
                     // daemon that will refuse every time (its configuration), so the wait
                     // ends now. A start race over a fresh artifact root also ends at the
                     // lock: the registry file is opened race-free (`goalcup-platform`).
@@ -255,13 +260,11 @@ pub fn ensure_daemon_waiting(
                     }
                     respawn_at = Some(now + pause);
                     pause = (pause * 2).min(RESPAWN_PAUSE_MAX);
+                    true
                 }
-            }
-        }
-        // Alive: the daemon this command started, or the one whose registry lock it lost to
-        // (a held lock is a live holder). Alive is waited for up to the long budget; gone, to
-        // the short one.
-        let alive = respawn_at.is_some() || matches!(child.try_wait(), Ok(None));
+                Err(_) => false,
+            },
+        };
         if now >= if alive { ready_until } else { dead_until } {
             return Err(not_started(
                 &binary,
