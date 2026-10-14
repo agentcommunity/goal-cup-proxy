@@ -5,7 +5,7 @@
 //!
 //! The faults are the production boundaries and nothing else:
 //!
-//! - the chain is quota-only: `goalcup start --capture-reserve-bytes` sets a logical byte budget,
+//! - the chain is quota-only: the test build's `GOALCUP_TEST_DISK` sets a logical byte budget,
 //!   and nothing is allocated up front, so no size is refused at launch;
 //! - exhaustion is logical: a small quota is spent by the `stream` workload, whose traffic
 //!   keeps flowing through the relay; no filesystem is filled;

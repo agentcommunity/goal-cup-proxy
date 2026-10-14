@@ -86,6 +86,7 @@ fn capture_request(
         run_home: h.root.join("run-home").display().to_string(),
         config_home: h.root.join("config-home").display().to_string(),
         entry_id: None,
+        native_since: None,
     }
 }
 
@@ -1004,6 +1005,7 @@ fn capture_create_request(
             .display()
             .to_string(),
         entry_id: None,
+        native_since: None,
     }
 }
 
@@ -1043,6 +1045,46 @@ async fn a_capture_create_takes_a_server_issued_entry_id_and_reports_its_head() 
             "a refused id created its workspace"
         );
     }
+}
+
+/// A run's start (`native_since`) ahead of the daemon's clock by more than its skew is refused
+/// as malformed before anything is created: a start sent in milliseconds would otherwise admit
+/// no session file at all (D57). A start now is taken.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_create_refuses_a_run_start_in_the_future() {
+    let h = support::empty_control_harness().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    for (name, since) in [
+        ("millis", now * 1000),
+        ("ahead", now + 301),
+        ("max", u64::MAX),
+    ] {
+        let mut request = capture_create_request(&h, name);
+        request.native_since = Some(since);
+        let response = h
+            .post_body(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
+            .await;
+        assert_eq!(response.status(), 400, "{name}: {}", response.body());
+        assert!(
+            response.body().contains("native_since"),
+            "{name}: {}",
+            response.body()
+        );
+        assert!(
+            !h.root.join("workspaces").join(name).exists(),
+            "a refused start created its workspace"
+        );
+    }
+    let mut request = capture_create_request(&h, "now");
+    request.native_since = Some(now);
+    let info: protocol::CaptureWorkspaceInfo = h
+        .post_json(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
+        .await;
+    assert!(!info.entry_id.is_empty());
 }
 
 /// What a refused capture create must leave: a `409`, the outside directory holding only its

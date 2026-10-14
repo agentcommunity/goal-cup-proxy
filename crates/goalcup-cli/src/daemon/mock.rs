@@ -27,7 +27,7 @@
 //! needs that is not here is added here, in this file.
 
 use ed25519_dalek::SigningKey;
-use goalcup_protocol::capture::{DEFAULT_CAPTURE_RESERVE_BYTES, M2Status, StreamKey};
+use goalcup_protocol::capture::{M2Status, StreamKey};
 use goalcup_protocol::control::{
     self, ArmingState, CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest,
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
@@ -196,6 +196,8 @@ impl MockDaemonClient {
                 workspace: info.workspace.clone(),
                 files: Vec::new(),
                 excluded: Vec::new(),
+                git: None,
+                home: None,
             },
             sealed: false,
             processes: Vec::new(),
@@ -207,7 +209,8 @@ impl MockDaemonClient {
                 info: CaptureWorkspaceInfo {
                     entry_id: entry_id.clone(),
                     process_generation: 1,
-                    reserved_bytes: DEFAULT_CAPTURE_RESERVE_BYTES,
+                    // A chain is quota-only: nothing is physically reserved for it.
+                    reserved_bytes: 0,
                     ingest_addr: std::net::SocketAddr::from(([127, 0, 0, 1], 53311)),
                     ingest_secret: "mock-ingest-secret-0123456789abcdef".to_string(),
                     producer_id: "6d6f636b70726f787970726f64756365".to_string(),

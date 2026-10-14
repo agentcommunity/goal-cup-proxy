@@ -226,6 +226,8 @@ pub fn manifest() -> SealManifest {
         workspace: "/ws".to_string(),
         files: vec![],
         excluded: vec![],
+        git: None,
+        home: None,
     }
 }
 

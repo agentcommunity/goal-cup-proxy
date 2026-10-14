@@ -447,7 +447,9 @@ impl Drop for StreamScan<'_> {
 /// would read. A trace it cannot read, a segment that does not decode, or a trace holding no
 /// segment at all is [`ScanOutcome::Incomplete`]: a scan that could not see the evidence has not
 /// shown there is nothing in it, and neither has a chain the reader stopped partway through.
-/// A hit names `<trace dir>/chain.jsonl`.
+/// A hit names the chain as `<trace dir>/chain.jsonl`, whichever part held it. A chain whose
+/// first part was deleted here (uploaded and acknowledged) is [`ScanOutcome::Incomplete`]: only
+/// the server's copy is the whole run.
 pub fn scan_trace(matcher: &FragmentMatcher, trace_dir: &Path) -> ScanOutcome {
     let mut scan = StreamScan::new(matcher);
     let mut segments = 0u64;
@@ -477,12 +479,14 @@ pub fn scan_trace(matcher: &FragmentMatcher, trace_dir: &Path) -> ScanOutcome {
         };
     };
     // The reader answers `Ok` for invalid evidence and simply stops at the first bad record, so
-    // an `Ok` is not "read to the end". Only a chain whose validated prefix is every byte of
-    // `chain.jsonl`, with no torn tail, was seen whole; anything else is a partial read, and a
-    // partial read is never clean. A hit in what was read still counts.
-    let whole = !report.torn_tail
-        && fs::symlink_metadata(trace_dir.join("chain.jsonl"))
-            .is_ok_and(|meta| meta.is_file() && meta.len() == report.validated_bytes);
+    // an `Ok` is not "read to the end". Only a chain whose validated prefix is every byte of its
+    // parts, with no torn tail, was seen whole; anything else is a partial read, and a partial
+    // read is never clean. A hit in what was read still counts.
+    let chain = if report.torn_tail {
+        ChainRead::Partial
+    } else {
+        chain_read(trace_dir, report.validated_bytes)
+    };
     if scan.hit() {
         let lead = trace_dir
             .file_name()
@@ -492,10 +496,20 @@ pub fn scan_trace(matcher: &FragmentMatcher, trace_dir: &Path) -> ScanOutcome {
             relative_paths: vec![lead.join("chain.jsonl")],
         };
     }
-    if !whole {
-        return ScanOutcome::Incomplete {
-            reason: "the trace was not read to its end",
-        };
+    match chain {
+        ChainRead::Whole => {}
+        ChainRead::Partial => {
+            return ScanOutcome::Incomplete {
+                reason: "the trace was not read to its end",
+            };
+        }
+        // The parts before the first one left were uploaded and deleted here: what remains is
+        // not the run, and only the server's copy is.
+        ChainRead::PrunedLocally => {
+            return ScanOutcome::Incomplete {
+                reason: "the start of the trace was deleted from this machine after it was uploaded",
+            };
+        }
     }
     if undecodable {
         return ScanOutcome::Incomplete {
@@ -508,6 +522,35 @@ pub fn scan_trace(matcher: &FragmentMatcher, trace_dir: &Path) -> ScanOutcome {
         };
     }
     ScanOutcome::Clean
+}
+
+/// What the chain parts on disk are, against what the reader validated.
+enum ChainRead {
+    /// Contiguous from byte 0, regular files, and ending where the reader's validated prefix ends.
+    Whole,
+    /// Part 0 is gone: acknowledged parts were deleted here ([`crate::upload::prune`]).
+    PrunedLocally,
+    /// Anything else: unreadable, a link, a gap, bytes the reader did not validate.
+    Partial,
+}
+
+fn chain_read(trace_dir: &Path, validated_bytes: u64) -> ChainRead {
+    let Ok(parts) = crate::upload::prune::parts_now(trace_dir) else {
+        return ChainRead::Partial;
+    };
+    let regular = parts
+        .iter()
+        .all(|part| fs::symlink_metadata(&part.path).is_ok_and(|meta| meta.is_file()));
+    let (Some(first), Some(last)) = (parts.first(), parts.last()) else {
+        return ChainRead::Partial;
+    };
+    if !regular || last.start.saturating_add(last.len) != validated_bytes {
+        ChainRead::Partial
+    } else if first.start > 0 {
+        ChainRead::PrunedLocally
+    } else {
+        ChainRead::Whole
+    }
 }
 
 /// The whole of a run: every file under each of `roots` and under `trace_dir` (the trace's own
@@ -622,7 +665,7 @@ impl Binding {
     pub fn capture(run_dir: &Path, trace_dir: Option<&Path>) -> Binding {
         let chain = match trace_dir {
             None => "none".to_string(),
-            Some(trace) => chain_digest(&trace.join("chain.jsonl")),
+            Some(trace) => chain_digest(trace),
         };
         let mut hasher = Sha256::new();
         let mut count = 0u64;
@@ -678,35 +721,44 @@ fn hex_of(bytes: &[u8]) -> String {
     out
 }
 
-/// `bytes=<n> sha256=<hex>` of the chain file, `absent` when there is none, `unreadable` when it
-/// is a link, a special file, or cannot be read.
-fn chain_digest(chain: &Path) -> String {
-    match fs::symlink_metadata(chain) {
+/// `bytes=<n> sha256=<hex>` of the chain: its parts, in order, as one stream (a chain of one
+/// part gives the digest the single file always gave). `absent` when there is no part,
+/// `unreadable` when a part is a link or a special file, the parts do not follow one another,
+/// or one cannot be read.
+fn chain_digest(trace_dir: &Path) -> String {
+    let parts = match crate::upload::prune::parts_now(trace_dir) {
+        Ok(parts) if parts.is_empty() => return "absent".to_string(),
+        Ok(parts) => parts,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return "absent".to_string(),
-        Ok(meta) if meta.is_file() => {}
-        _ => return UNREADABLE.to_string(),
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let Ok(mut file) = options.open(chain) else {
-        return UNREADABLE.to_string();
+        Err(_) => return UNREADABLE.to_string(),
     };
     let mut hasher = Sha256::new();
     let mut total = 0u64;
     let mut chunk = vec![0u8; READ_CHUNK];
-    loop {
-        match file.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(read) => {
-                hasher.update(&chunk[..read]);
-                total += read as u64;
+    for part in &parts {
+        match fs::symlink_metadata(&part.path) {
+            Ok(meta) if meta.is_file() => {}
+            _ => return UNREADABLE.to_string(),
+        }
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let Ok(mut file) = options.open(&part.path) else {
+            return UNREADABLE.to_string();
+        };
+        loop {
+            match file.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    hasher.update(&chunk[..read]);
+                    total += read as u64;
+                }
+                Err(_) => return UNREADABLE.to_string(),
             }
-            Err(_) => return UNREADABLE.to_string(),
         }
     }
     format!(
@@ -995,6 +1047,64 @@ impl Walk<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn put_part(dir: &Path, start: u64, bytes: &[u8]) {
+        fs::write(
+            dir.join(goalcup_protocol::export::part_file_name(start)),
+            bytes,
+        )
+        .unwrap();
+    }
+
+    /// A chain is whole only when its parts run from byte 0 to the end the reader validated;
+    /// with the first part deleted here, it is the server's copy that is the record.
+    #[test]
+    fn a_chain_is_whole_only_when_its_parts_run_from_byte_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        put_part(dir.path(), 0, b"aaaa\n");
+        put_part(dir.path(), 5, b"bb\n");
+        assert!(matches!(chain_read(dir.path(), 8), ChainRead::Whole));
+        assert!(matches!(chain_read(dir.path(), 5), ChainRead::Partial));
+        assert!(matches!(chain_read(dir.path(), 9), ChainRead::Partial));
+        // The first part acknowledged and deleted: the reader validates the rest up to the same
+        // logical end, and that must not read as the whole chain.
+        fs::remove_file(dir.path().join("chain.jsonl")).unwrap();
+        assert!(matches!(
+            chain_read(dir.path(), 8),
+            ChainRead::PrunedLocally
+        ));
+        assert!(matches!(chain_read(dir.path(), 5), ChainRead::Partial));
+        // No part at all, and a part missing between two others.
+        let empty = tempfile::tempdir().unwrap();
+        assert!(matches!(chain_read(empty.path(), 0), ChainRead::Partial));
+        put_part(dir.path(), 8, b"cc\n");
+        put_part(dir.path(), 20, b"dd\n");
+        assert!(matches!(chain_read(dir.path(), 23), ChainRead::Partial));
+    }
+
+    /// The binding digest is of the parts as one stream: a single part gives what the single
+    /// file always gave, and deleting a part changes it.
+    #[test]
+    fn the_chain_digest_covers_every_part_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(chain_digest(dir.path()), "absent");
+        assert_eq!(chain_digest(&dir.path().join("none")), "absent");
+        put_part(dir.path(), 0, b"aaaa\nbb\n");
+        let single = chain_digest(dir.path());
+        assert!(single.starts_with("bytes=8 "), "{single}");
+        let split = tempfile::tempdir().unwrap();
+        put_part(split.path(), 0, b"aaaa\n");
+        put_part(split.path(), 5, b"bb\n");
+        assert_eq!(chain_digest(split.path()), single);
+        fs::remove_file(split.path().join("chain.jsonl")).unwrap();
+        assert_ne!(chain_digest(split.path()), single);
+        put_part(split.path(), 99, b"x\n");
+        assert_eq!(
+            chain_digest(split.path()),
+            UNREADABLE,
+            "a gap binds nothing"
+        );
+    }
 
     /// The base64 forms are exactly what an encoder produces for the form at each
     /// alignment: encode a longer stream, and find the form's text inside it.

@@ -4,7 +4,7 @@
 # pasted into an interactive shell, and in privileged mode:
 #
 #   /bin/sh -p scripts/with-deepseek-key.sh ENV_FILE start --harness hermes-cli \
-#       --goal-file GOAL [--capture-reserve-bytes N]
+#       --goal-file GOAL
 #
 # (Executing the file does the same: the shebang line above says -p. Invoked without -p, the
 # script runs itself again under `/bin/sh -p` before it does anything else.)
@@ -48,12 +48,12 @@ refuse() {
 check_rest() {
   while [ $# -gt 0 ]; do
     case $1 in
-      --goal-file | --capture-reserve-bytes)
+      --goal-file)
         [ $# -ge 2 ] || refuse "$1 needs a value"
         shift 2
         ;;
-      --goal-file=* | --capture-reserve-bytes=*) shift ;;
-      *) refuse "only --goal-file and --capture-reserve-bytes may follow \`start --harness hermes-cli\`" ;;
+      --goal-file=*) shift ;;
+      *) refuse "only --goal-file may follow \`start --harness hermes-cli\`" ;;
     esac
   done
 }

@@ -390,6 +390,8 @@ fn ack_and_seal_round_trip() {
             },
         ],
         excluded: vec![".claude/settings.json".into()],
+        git: None,
+        home: None,
     }
     .sorted();
     assert_eq!(
@@ -687,6 +689,8 @@ mod parts {
             workspace: "/ws".to_string(),
             files: Vec::new(),
             excluded: Vec::new(),
+            git: None,
+            home: None,
         }
     }
 

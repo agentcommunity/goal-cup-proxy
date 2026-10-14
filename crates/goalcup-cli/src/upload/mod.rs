@@ -19,6 +19,7 @@
 pub mod api;
 pub mod http;
 pub mod policy;
+pub mod prune;
 pub mod uploader;
 
 use crate::CliError;
@@ -365,20 +366,17 @@ pub fn give_back_pending(server: &ServerClient, cfg: &Path) {
     }
 }
 
-/// Wait for the harness to exit, and when `stop` says the run must stop first (its deadline),
-/// call `on_stop` with the reason while the wait goes on. `on_stop` asks the daemon to seal,
-/// which ends the harness (the daemon is the only terminator, D22), and so ends this wait.
-/// With no `stop`, this is `child.wait()`.
+/// Wait for the harness to exit, and when `stop` says the run must stop first (its deadline, or
+/// a full disk), call `on_stop` with the reason while the wait goes on. `on_stop` asks the daemon
+/// to seal, which ends the harness (the daemon is the only terminator, D22), and so ends this
+/// wait. `stop` is the run's one stop channel: whoever has a reason to end the run sends it there.
 pub fn wait_stopping<F: FnOnce(&str) + Send>(
     child: &mut std::process::Child,
-    stop: Option<std::sync::mpsc::Receiver<String>>,
+    stop: std::sync::mpsc::Receiver<String>,
     on_stop: F,
 ) -> std::io::Result<std::process::ExitStatus> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::RecvTimeoutError;
-    let Some(stop) = stop else {
-        return child.wait();
-    };
     let exited = AtomicBool::new(false);
     let exited = &exited;
     std::thread::scope(|scope| {

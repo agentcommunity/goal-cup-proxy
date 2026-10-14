@@ -52,7 +52,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D37 | Autonomous runs, research evidence, contributions | in force (m2) | [entry](#d37-m2-autonomous-runs-research-evidence-and-open-contributions) · capture-first |
 | D38 | Fresh per-run HOME for Claude Code | in force (m2); cheapest-model clause superseded by D52 | [entry](#d38-m2-fresh-per-run-home-for-claude-code-cheapest-models-for-live-tests) · qualification/m2/launch-recipes |
 | D39 | Headless launches, ported patterns, Codex home | in force (m2) | [entry](#d39-m2-headless-capture-launches-ported-extra-redaction-patterns-shared-isolated-codex-home) |
-| D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2); amended 2026-10-14 | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
+| D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2); amended 2026-10-14; budget by D56 | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
 | D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2); model and thinking clause superseded by D52 | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
 | D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47; V1-path clause replaced by D48 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
 | D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2); ruling 3 amended by D49 and D50; ruling 5 by D51; ruling 7 by D53 | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
@@ -64,10 +64,12 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D49 | Admit `AMP_API_KEY` as a child credential | in force (m2) | [entry](#d49-m2-admit-amp_api_key-as-a-child-credential) |
 | D50 | D43 ruling 3: credential + `stdout_json` via one stdout reader | in force (m2) | [entry](#d50-m2-amend-d43-ruling-3-for-stdout_json-identity) |
 | D51 | A connector's argv and env are data; review is the control; credential, CA and redaction lists stay closed | in force (m2) once merged | [entry](#d51-m2-a-connectors-argv-and-env-are-data-review-is-the-control) |
-| D52 | Shipped connectors set no model, effort, sandbox, permission or MCP limit | in force (m2) once merged | [entry](#d52-m2-the-shipped-connectors-set-no-model-effort-sandbox-permission-or-mcp-limit) |
+| D52 | Shipped connectors set no model, effort, sandbox, permission or MCP limit | in force (m2) once merged; amended by D57 | [entry](#d52-m2-the-shipped-connectors-set-no-model-effort-sandbox-permission-or-mcp-limit) |
 | D53 | Record the harness build in v5 (`Launch.harness_build`); v0.5.0 readers refuse such traces | in force (m2) once merged | [entry](#d53-m2-record-the-harness-build-in-v5-accepting-that-v050-readers-refuse-it) |
 | D54 | The protocol carries v5 only: pre-v5 versions, bodies and writers and the Git provenance types leave | in force (m2) once merged | [entry](#d54-m2-the-protocol-carries-v5-only) |
 | D55 | A capture chain may be split into part files named by their logical start offset; records and hashes are unchanged | in force (m2) once merged | [entry](#d55-m2-the-capture-chain-rotates-into-part-files) |
+| D56 | The seal of a clone records its commit and an uncommitted digest; the finish gets three minutes | in force (m2) once merged | [entry](#d56-m2-the-seal-of-a-clone-records-its-commit-and-an-uncommitted-digest-the-finish-gets-minutes) |
+| D57 | Shipped connectors run the harness in chat mode; the participant types the prompt; the session files are every one new or written since the run started | in force (m2) once merged; amends D52 | [entry](#d57-m2-connectors-run-the-harness-in-chat-mode-and-record-every-session-file-since-the-start) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -980,7 +982,7 @@ Task 5/H-11 designs and the H-11 APFS probe).**
   **Reconsider if** total finish wall time (drain + grace + kill + seal) proves too long for an
   operator or for T27 unattended runs, or if a connector needs a grace far beyond 10 s. The
   alternative was capping termination by the capture budget, which made SIGKILL unreachable for a
-  SIGTERM-ignoring harness.
+  SIGTERM-ignoring harness. **(Amended by D56: the capture budget is 180 s; the reserve stays 2 s.)**
 - **Spawn-to-registration window (H-10).** Closed, not declared a residual: the tracer must be
   very stable. A capture launch must not leave a live harness the tracker never durably recorded;
   the design revision chooses the mechanism (for example, the child waits before `exec` until its
@@ -1367,6 +1369,9 @@ Hermes drops `--model` and `agent.reasoning_effort`, and keeps `--provider deeps
 **Reconsider when** a measured run shows a default that breaks capture (a session file not
 written, a second session id).
 
+**Amended by D57:** the shipped connectors run the harness in chat mode, so they set no approval
+or permission option either.
+
 ---
 
 ## D53. **(M2)** Record the harness build in v5, accepting that v0.5.0 readers refuse it.
@@ -1489,6 +1494,125 @@ it is a lower bound.
 
 **Reconsider when** the server stores parts as parts, or a reader needs a pruned chain's capture
 records judged locally.
+
+---
+
+## D56. **(M2)** The seal of a clone records its commit and an uncommitted digest; the finish gets minutes.
+
+**Decision (2026-10-14, owner's 168-hour run plan).** A participant works in a clone of their own
+GitHub repository. The seal records the commit and one digest of what is uncommitted instead of
+walking the work folder, and the local finish gets three minutes instead of 10 seconds.
+
+**Admission (R3 amended).** A workspace that is the root of its own clone (`<workspace>/.git` is a
+directory, and no work tree lies above it) is admitted with its files. Anything else keeps R3: a
+directory inside a work tree, or holding a `.git` file, is refused, and so is one that is not
+empty.
+
+**The manifest.** `SealManifest` gains two optional fields, D53-style: absent, they are not
+written, so every manifest written before them keeps its bytes and its digest.
+- `git` (`WorkspaceGit`): `commit`, the hex id `HEAD` names (`None` for an unborn `HEAD`), and
+  `dirty_sha256`. With `git`, `files` is empty. The baseline and the seal of a clone root take
+  it; any other workspace is walked as before.
+- `home`, on the baseline only: name, size and SHA-256 of each file of the connector's config home
+  before the run, without its native roots, symlinks not followed. A file over 64 MiB is not read:
+  it has its size and the absent digest. The listing stops at 10 000 files: past that it lists the
+  first 10 000 the walk meets, sorted, and marks nothing else.
+
+**A clone root is never walked.** When its Git state cannot be read (a call fails, `git` is
+missing, or the time runs out), the create is refused with "the Git work folder could not be read:
+<why>", and a finish is refused with `finish_deadline` at `workspace_walk`, which the CLI asks again
+with growing waits. Walking instead would let the agent choose a different seal by breaking Git.
+
+**The digest.** SHA-256 over `b"diff\0"` ‖ for each path, sorted bytewise, that is in `HEAD`'s
+tree or in the index and whose work-tree content differs from `HEAD` (compared by
+`git hash-object --no-filters` id, a committed link by its text, or absent from the work tree):
+`path ‖ 0x00 ‖ value ‖ b"\n"` ‖ `b"untracked\0"` ‖ for each
+`git ls-files -z --others --exclude-per-directory=.gitignore` path, sorted bytewise:
+`path ‖ 0x00 ‖ value ‖ b"\n"`. `value` is the hex SHA-256 of the content, `deleted`, or
+`size:<n>` for a file over 64 MiB; anything but a regular file has the seal walk's absent digest.
+An index gitlink that is not the commit's is `path ‖ 0x00 ‖ "gitlink:" ‖ <id> ‖ b"\n"` in the
+first part (a submodule's content belongs to another repository). An untracked directory
+`ls-files` collapses (a nested repository, `dir/`) is listed file by file below it, by the same
+bounded no-follow walk, at most 100 000 such files and within the same deadline, or the state is
+not read. A clean clone digests to `sha256(b"diff\0untracked\0")`. Because the comparison is
+`--no-filters`, a clone whose checkout converts files (LFS, eol or a smudge filter) does not get
+that empty digest even when nothing changed; its digest is still deterministic for the same work
+tree.
+
+**Only `.gitignore` hides a file.** The plan said `--exclude-standard`; this reads `.gitignore`
+files only (controller ruling). `.git/info/exclude` and `core.excludesFile` are outside the
+digest, so an agent could hide work with them unseen; a `.gitignore` is itself tracked or
+untracked, so every ignore rule that applies is covered by the digest. Ignored files are not
+described.
+
+**No agent-configured program runs.** The agent writes `.git/config`, `.gitattributes` and the
+hooks, so the seal runs no program the agent can configure: no fsmonitor, hook, diff driver,
+filter or transport. `git` is the first one on `PATH` under an absolute entry outside the
+workspace. It runs with the environment cleared but `PATH`, a fresh empty `HOME`, no system or
+global configuration, the repository pinned to `<workspace>/.git`, `GIT_ALLOW_PROTOCOL` empty (no
+transport, so an agent-written promisor remote is never fetched from, on any Git version) and
+`GIT_NO_LAZY_FETCH=1`, `-c core.fsmonitor=false -c core.hooksPath=/dev/null`, and only `rev-parse`, `ls-tree`, `ls-files`, `hash-object --no-filters` and `cat-file --batch`.
+The plan's `git diff` was dropped: comparing the work tree runs the repository's clean and process
+filters (`an_agent_written_clean_filter_is_never_run` failed on it). Every call shares one
+deadline, prints at most 64 MiB, and is killed and reaped past the deadline.
+
+**Time.** `LOCAL_CAPTURE_FINISH_BUDGET` is 180 s (it was 10 s; amends D40 and the C6 budget in
+CONTRACTS.md); `FINISH_COMMIT_RESERVE` stays 2 s. The daemon's drain share now ends the reserve
+plus 30 s before the deadline, so a producer that never settles cannot starve the Git read: it
+gets at least 30 s, or all of a smaller budget, and it ends at the commit reserve. The baseline gives Git 20 s, inside the CLI's 30 s
+create call.
+
+**Reconsider when** the server re-derives the uncommitted state from a pushed branch, or a
+harness needs its config home listed beyond 10 000 files.
+
+---
+
+## D57. **(M2)** Connectors run the harness in chat mode and record every session file since the start.
+
+**Decision (2026-10-15, owner's 168-hour run plan; amends D52).** Shipped connectors run the
+harness in its normal chat mode in the participant's terminal; the participant types the prompt;
+connectors set no model, approval, sandbox or permission option (amends D52); identity is every
+session file new or written since the run started, which is safe because runs on a shared home are
+serialized.
+
+**The schema (connector schema 1, additive: every field defaults to today's behaviour).**
+- `[capture] interactive = true` (default `false`). The profile takes no `goal_flag`, its `args`
+  need not end in `--`, it takes no `[capture.credential]`, and its identity is `none`. With
+  `false` every headless rule is unchanged.
+- `[capture] resume_args = [...]` (default `[]`): appended after `args` when a run is continued.
+  Each argument passes the same D51 checks as `args` (one function serves both), and the two lists
+  together hold at most 64 arguments. It may be set with or without `interactive`.
+- `[[capture.native]] since_run_start = true` (default `false`): the store is read from the run's
+  start. It is what admits `identity.source = "none"` on a shared config home, the cross-field
+  rule that otherwise refuses an unscoped source there.
+- `[capture.home] skills_dir = "<relative>"` (optional): where under the config home the harness
+  reads its skills. Declarative; the daemon does not use it.
+
+**The run's start.** `CaptureWorkspaceRequest` gains `native_since`, Unix seconds (UTC) of the
+run's start, optional and not written when absent. A `since_run_start` source admits a matched
+file into its tracked set once the later of the file's modification and status-change times
+(`max(mtime, ctime)`), each truncated to whole seconds, is at or after it, checked before the file
+counts against `max_files`. The change time is there because an agent or harness can set the
+modification time back (`touch -d`, `cp -p`, `tar x`) but cannot set the change time back: the
+rule errs toward recording more. Once admitted a file stays, and is read whole from offset 0, its
+lines from before the run included. Every admitted file is recorded; none is refused and none is
+preferred. A `since_run_start` source with no `native_since` in the request is refused at
+creation, before anything is allocated, rather than reading every old file. A `native_since` more
+than 300 seconds ahead of the daemon's clock is refused as malformed (a start sent in
+milliseconds would otherwise admit nothing), and one no clock can represent is refused rather
+than overflowing. `native_since` is ignored for a source that does not declare
+`since_run_start`.
+
+**The walker's bound.** `NativeCaptureLimits::max_dir_entries` defaults to 8192 (it was 4096), so
+one directory of 5 000 old sessions is enumerated whole on every poll and the new one is found.
+Past the bound, discovery stops for that poll and sets `discovery_capped` in the adapter's
+in-memory report and finish report only: nothing is written to the trace, so a session file past
+the bound can be missed without a record saying so. An old file costs one `fstatat` per poll and
+nothing else.
+
+**Reconsider when** two runs share a config home at the same time; a shared home holds more than
+8 192 entries in one directory; or a harness writes a session file without changing either its
+modification or its change time.
 
 ---
 

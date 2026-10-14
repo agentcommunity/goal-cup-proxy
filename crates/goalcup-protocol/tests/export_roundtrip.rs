@@ -108,6 +108,8 @@ fn manifest() -> SealManifest {
         workspace: "/ws".to_string(),
         files: Vec::new(),
         excluded: Vec::new(),
+        git: None,
+        home: None,
     }
 }
 

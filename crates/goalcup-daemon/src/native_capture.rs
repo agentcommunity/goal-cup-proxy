@@ -21,6 +21,14 @@
 //! root-and-pattern pairs are refused; keeping differently spelled patterns disjoint is the
 //! caller's job, since two sources matching one file capture it twice under two labels.
 //!
+//! A source with [`NativeSourceSpec::modified_since`] (D57) admits a matched file into its
+//! tracked set only once the later of the file's modification and status-change times, in
+//! whole seconds, is at or after it: a harness or agent can set the modification time back,
+//! but not the change time.
+//! The check comes before the file counts against [`NativeCaptureLimits::max_files`], so a
+//! shared store's old sessions are neither tracked nor reported; once admitted, a file stays
+//! and is read from offset 0. Every admitted file is recorded, and none is preferred.
+//!
 //! A harness-supplied session or thread ID never goes into a pattern as text. The caller
 //! passes it as [`NativeSourceSpec::scope_id`] and writes `{id}` where it belongs; the adapter
 //! refuses any ID that is not 1-128 ASCII letters, digits, `-` or `_` before substituting it,
@@ -117,6 +125,7 @@
 //!             hint: Some(NativeHint::new("codex-jsonl").unwrap()),
 //!             // Validated, then substituted for `{id}`: `*`, `?` or `/` is refused.
 //!             scope_id: Some(thread_id.to_string()),
+//!             modified_since: None,
 //!         }],
 //!         limits: NativeCaptureLimits::default(),
 //!     };
@@ -151,6 +160,7 @@ use std::ops::Bound;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 /// Most native sources one adapter reads.
 pub(crate) const MAX_NATIVE_SOURCES: usize = 8;
@@ -223,6 +233,10 @@ pub struct NativeSourceSpec {
     /// validated as 1-128 ASCII letters, digits, `-` or `_`. Required exactly when the
     /// pattern contains `{id}`.
     pub scope_id: Option<String>,
+    /// The run's start (D57): a matched file is tracked only once the later of its
+    /// modification and status-change times, truncated to whole seconds, is at or after it.
+    /// `None` tracks every matched file.
+    pub modified_since: Option<SystemTime>,
 }
 
 /// Per-adapter bounds.
@@ -240,13 +254,14 @@ pub struct NativeCaptureLimits {
 
 impl Default for NativeCaptureLimits {
     /// 16 source chunks per poll (1 MiB, an eighth of the capture queue) and a quarter of the
-    /// entry's open-stream allowance, leaving the rest to wire capture.
+    /// entry's open-stream allowance, leaving the rest to wire capture. 8192 directory entries
+    /// enumerate a shared home's directory of 5 000 old sessions whole on every poll (D57).
     fn default() -> Self {
         NativeCaptureLimits {
             poll_bytes: 16 * MAX_SEGMENT_BYTES as u64,
             max_open_streams: MAX_OPEN_STREAMS / 4,
             max_files: 1024,
-            max_dir_entries: 4096,
+            max_dir_entries: 8192,
         }
     }
 }
@@ -558,6 +573,7 @@ impl NativeCapture {
                 pattern,
                 form: spec.form,
                 hint: spec.hint,
+                modified_since: spec.modified_since.map(whole_seconds),
             });
         }
 
@@ -923,6 +939,14 @@ struct Source {
     pattern: Vec<Component>,
     form: NativeStoreForm,
     hint: Option<NativeHint>,
+    /// [`NativeSourceSpec::modified_since`] in whole seconds since the epoch.
+    modified_since: Option<i64>,
+}
+
+/// `at` truncated to whole seconds since the epoch; a time before it admits every file.
+fn whole_seconds(at: SystemTime) -> i64 {
+    at.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(i64::MIN, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 enum Component {
@@ -1146,18 +1170,18 @@ impl Walker<'_> {
             },
         };
         for name in names {
-            let kind = match dir.observe(&name) {
-                Ok(SourceLookup::Present(observed)) => observed.kind(),
+            let observed = match dir.observe(&name) {
+                Ok(SourceLookup::Present(observed)) => observed,
                 Ok(SourceLookup::Missing) => continue,
                 Err(_) => {
                     self.report.unavailable += 1;
                     continue;
                 }
             };
-            match (kind, last) {
+            match (observed.kind(), last) {
                 (SourceKind::Regular, true) => {
                     prefix.push(name);
-                    self.register(prefix);
+                    self.register(prefix, &observed);
                     prefix.pop();
                 }
                 (SourceKind::Directory, false) => match open_child_dir(dir, &name) {
@@ -1207,10 +1231,18 @@ impl Walker<'_> {
         Ok(names)
     }
 
-    fn register(&mut self, components: &[SourceName]) {
+    fn register(&mut self, components: &[SourceName], observed: &SourceObservation) {
         let key = (self.index, render_relative(components));
         if self.files.contains_key(&key) {
             return;
+        }
+        // Not written or changed since the run started: not this run's yet, and not counted
+        // (D57). The change time cannot be set back, so a backdated file is still seen.
+        if let Some(since) = self.source.modified_since {
+            let facts = observed.facts();
+            if facts.modified_seconds.max(facts.changed_seconds) < since {
+                return;
+            }
         }
         let label_bytes = self.source.name.len() + 1 + key.1.len() + GENERATION_SUFFIX_BYTES;
         if label_bytes > MAX_METADATA_STRING_BYTES {

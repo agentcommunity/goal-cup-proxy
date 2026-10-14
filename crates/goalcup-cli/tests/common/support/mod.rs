@@ -294,6 +294,18 @@ pub fn cfg_with_entry(tmp: &Path, info: &control::WorkspaceInfo) -> PathBuf {
     tmp.to_path_buf()
 }
 
+/// A run's disk sizes for a test: 4 MiB held for the run, no start margin, a tick every 50 ms,
+/// and chains limited to `quota` bytes. No test holds the 3 GiB a participant's run does.
+pub fn disk_of(quota: u64) -> goalcup_cli::run::reserve::DiskPolicy {
+    goalcup_cli::run::reserve::DiskPolicy {
+        reserve_bytes: 4 << 20,
+        start_margin: 0,
+        free_floor: goalcup_cli::run::reserve::FREE_FLOOR,
+        chain_quota: quota,
+        tick: std::time::Duration::from_millis(50),
+    }
+}
+
 /// What one `goalcup start` was asked to do, with the flag a test must never leave on.
 ///
 /// `dev` is `false`, so the default options are a judged run's — a test that wants the door
@@ -304,7 +316,7 @@ pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
         harness: id.to_string(),
         dev: false,
         goal_file: None,
-        capture_reserve_bytes: goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES,
+        disk: disk_of(4 << 20),
         repo: None,
         upload_policy: Default::default(),
     }
