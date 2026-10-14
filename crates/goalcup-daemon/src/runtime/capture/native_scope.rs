@@ -32,7 +32,15 @@ pub(super) fn native_plan(
         .ok_or_else(|| DaemonError::Config("a schema-1 capture has no native source".into()))?;
     let modified_since = match (native.since_run_start, native_since) {
         (false, _) => None,
-        (true, Some(secs)) => Some(std::time::UNIX_EPOCH + Duration::from_secs(secs)),
+        (true, Some(secs)) => Some(
+            std::time::UNIX_EPOCH
+                .checked_add(Duration::from_secs(secs))
+                .ok_or_else(|| {
+                    DaemonError::Config(format!(
+                        "`native_since` {secs} is not a time this machine can represent"
+                    ))
+                })?,
+        ),
         (true, None) => {
             return Err(DaemonError::Config(
                 "the profile reads the session files written since the run started, and the \

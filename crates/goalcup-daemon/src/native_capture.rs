@@ -22,7 +22,9 @@
 //! caller's job, since two sources matching one file capture it twice under two labels.
 //!
 //! A source with [`NativeSourceSpec::modified_since`] (D57) admits a matched file into its
-//! tracked set only once the file's modification time, in whole seconds, is at or after it.
+//! tracked set only once the later of the file's modification and status-change times, in
+//! whole seconds, is at or after it: a harness or agent can set the modification time back,
+//! but not the change time.
 //! The check comes before the file counts against [`NativeCaptureLimits::max_files`], so a
 //! shared store's old sessions are neither tracked nor reported; once admitted, a file stays
 //! and is read from offset 0. Every admitted file is recorded, and none is preferred.
@@ -231,8 +233,9 @@ pub struct NativeSourceSpec {
     /// validated as 1-128 ASCII letters, digits, `-` or `_`. Required exactly when the
     /// pattern contains `{id}`.
     pub scope_id: Option<String>,
-    /// The run's start (D57): a matched file is tracked only once its modification time,
-    /// truncated to whole seconds, is at or after it. `None` tracks every matched file.
+    /// The run's start (D57): a matched file is tracked only once the later of its
+    /// modification and status-change times, truncated to whole seconds, is at or after it.
+    /// `None` tracks every matched file.
     pub modified_since: Option<SystemTime>,
 }
 
@@ -1233,13 +1236,13 @@ impl Walker<'_> {
         if self.files.contains_key(&key) {
             return;
         }
-        // Not written since the run started: not this run's yet, and not counted (D57).
-        if self
-            .source
-            .modified_since
-            .is_some_and(|since| observed.facts().modified_seconds < since)
-        {
-            return;
+        // Not written or changed since the run started: not this run's yet, and not counted
+        // (D57). The change time cannot be set back, so a backdated file is still seen.
+        if let Some(since) = self.source.modified_since {
+            let facts = observed.facts();
+            if facts.modified_seconds.max(facts.changed_seconds) < since {
+                return;
+            }
         }
         let label_bytes = self.source.name.len() + 1 + key.1.len() + GENERATION_SUFFIX_BYTES;
         if label_bytes > MAX_METADATA_STRING_BYTES {

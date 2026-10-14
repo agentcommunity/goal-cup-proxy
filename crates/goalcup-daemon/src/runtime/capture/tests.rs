@@ -1522,6 +1522,16 @@ fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
     .err()
     .expect("no run start, no plan");
     assert!(error.to_string().contains("native_since"), "{error}");
+    // A start no clock can hold is refused, not a panic.
+    let error = native_plan(
+        &manifest.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        Some(u64::MAX),
+    )
+    .err()
+    .expect("an unrepresentable start, no plan");
+    assert!(error.to_string().contains("native_since"), "{error}");
     let plan = native_plan(
         &manifest.capture,
         Path::new("/run"),

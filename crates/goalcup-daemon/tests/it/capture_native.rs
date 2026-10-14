@@ -2165,6 +2165,7 @@ fn hermes_poisoned_scope_ids_are_refused() {
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// Set `path`'s modification time. Its change time becomes now: only the kernel sets that.
 fn set_mtime(path: &Path, when: SystemTime) {
     fs::File::options()
         .write(true)
@@ -2182,22 +2183,34 @@ fn since(root: &Root, started: SystemTime) -> NativeSourceSpec {
     }
 }
 
-/// A minute ago: every file the test writes now is newer, every file dated a day back older.
+fn unix_seconds(at: SystemTime) -> u64 {
+    at.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
+}
+
+/// The run starts at the next whole second, and this returns a little after it. Every file
+/// written (or changed) before the call is from before the run, its change time included,
+/// since the filter compares whole seconds; every file written after it is the run's. The
+/// margin covers a kernel that stamps files from a coarse clock.
 fn run_start() -> SystemTime {
-    SystemTime::now() - Duration::from_secs(60)
+    let started = SystemTime::UNIX_EPOCH + Duration::from_secs(unix_seconds(SystemTime::now()) + 1);
+    let ready = started + Duration::from_millis(50);
+    if let Ok(wait) = ready.duration_since(SystemTime::now()) {
+        std::thread::sleep(wait);
+    }
+    started
 }
 
 #[test]
 fn old_files_are_skipped_and_the_new_one_found_among_5000() {
     let root = root();
-    let started = run_start();
     for n in 0..5000 {
         let old = root.write(
             &format!("sessions/rollout-yesterday-{n:04}.jsonl"),
             b"old\n",
         );
-        set_mtime(&old, started - DAY);
+        set_mtime(&old, SystemTime::now() - DAY);
     }
+    let started = run_start();
     root.write("sessions/rollout-today.jsonl", b"new\n");
     let sink = CollectSink::new();
     let mut capture = start(
@@ -2237,9 +2250,9 @@ fn old_files_are_skipped_and_the_new_one_found_among_5000() {
 #[test]
 fn two_new_session_files_are_both_recorded() {
     let root = root();
-    let started = run_start();
     let old = root.write("sessions/rollout-old.jsonl", b"old\n");
-    set_mtime(&old, started - DAY);
+    set_mtime(&old, SystemTime::now() - DAY);
+    let started = run_start();
     let sink = CollectSink::new();
     let mut capture = start(
         vec![since(&root, started)],
@@ -2282,9 +2295,9 @@ fn two_new_session_files_are_both_recorded() {
 #[test]
 fn an_old_file_written_during_the_run_is_recorded() {
     let root = root();
-    let started = run_start();
     let resumed = root.write("sessions/rollout-resumed.jsonl", b"yesterday\n");
-    set_mtime(&resumed, started - DAY);
+    set_mtime(&resumed, SystemTime::now() - DAY);
+    let started = run_start();
     let sink = CollectSink::new();
     let mut capture = start(
         vec![since(&root, started)],
@@ -2317,5 +2330,85 @@ fn an_old_file_written_during_the_run_is_recorded() {
         b"yesterday\ntoday\n",
         "the whole file is recorded, its lines from before the run included"
     );
+    sink.assert_clean();
+}
+
+#[test]
+fn a_backdated_file_written_during_the_run_is_recorded() {
+    // `touch -d`, `cp -p` and `tar x` set the modification time back; nothing sets the change
+    // time back, so a session file written during the run is still the run's.
+    let root = root();
+    let started = run_start();
+    let backdated = root.write("sessions/rollout-copied.jsonl", b"copied\n");
+    set_mtime(&backdated, started - DAY);
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![since(&root, started)],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    capture.poll();
+    let finished = capture.finish(generous());
+    assert_eq!(finished.completed_streams, 1);
+    let views = replay(&sink.frames());
+    assert_eq!(
+        by_label(&views, "rollout:sessions/rollout-copied.jsonl#g1")
+            .1
+            .data,
+        b"copied\n"
+    );
+    sink.assert_clean();
+}
+
+/// A start a few seconds ahead, at `second` plus `nanos`: the files' change times (now) are
+/// all before it, so their modification times alone decide.
+fn ahead(nanos: u32) -> (u64, SystemTime) {
+    let second = unix_seconds(SystemTime::now()) + 5;
+    let since = SystemTime::UNIX_EPOCH + Duration::new(second, nanos);
+    (second, since)
+}
+
+#[test]
+fn a_file_earlier_in_the_start_second_is_admitted() {
+    let root = root();
+    let (second, start_at) = ahead(700_000_000);
+    let same = root.write("sessions/rollout-same-second.jsonl", b"same\n");
+    set_mtime(
+        &same,
+        SystemTime::UNIX_EPOCH + Duration::new(second, 200_000_000),
+    );
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![since(&root, start_at)],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    capture.poll();
+    assert_eq!(
+        labels(&replay(&sink.frames())),
+        ["rollout:sessions/rollout-same-second.jsonl#g1"],
+        "whole seconds compare equal, so the file is admitted"
+    );
+    sink.assert_clean();
+}
+
+#[test]
+fn a_file_a_second_before_the_start_is_skipped() {
+    let root = root();
+    let (second, start_at) = ahead(0);
+    let before = root.write("sessions/rollout-second-before.jsonl", b"before\n");
+    set_mtime(
+        &before,
+        SystemTime::UNIX_EPOCH + Duration::new(second - 1, 999_000_000),
+    );
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![since(&root, start_at)],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    let report = capture.poll();
+    assert_eq!(report.frames, 0);
+    assert_eq!(capture.loss_report().tracked_files, 0);
     sink.assert_clean();
 }

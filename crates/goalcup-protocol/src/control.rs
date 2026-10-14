@@ -665,8 +665,8 @@ pub struct CaptureWorkspaceRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry_id: Option<String>,
     /// The run's start, Unix seconds (UTC): a native source that declares `since_run_start`
-    /// reads only the files modified at or after it (D57). Required by such a source, ignored
-    /// by any other.
+    /// reads only the files modified or changed at or after it (D57). Required by such a source,
+    /// ignored by any other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_since: Option<u64>,
 }

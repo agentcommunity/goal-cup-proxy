@@ -291,9 +291,10 @@ Globs do not cross `/`.
 
 With `since_run_start = true`, the launcher sends the run's start time (`native_since`, Unix
 seconds) when it creates the capture, and the daemon refuses the creation without it. A file the
-pattern matches is admitted once its modification time, in whole seconds, is at or after that
-start; an older file is not tracked and does not count against the file bound until it is
-written. Once admitted a file stays, and it is recorded whole from offset 0. Every admitted file is
+pattern matches is admitted once the later of its modification and change times, in whole
+seconds, is at or after that start (the change time catches a file whose modification time was
+set back); an older file is not tracked and does not count against the file bound until it is
+written. A start more than 300 seconds ahead of the daemon's clock is refused. Once admitted a file stays, and it is recorded whole from offset 0. Every admitted file is
 recorded: none is refused and none is preferred. This is safe on a shared config home because runs
 against it are serialized.
 

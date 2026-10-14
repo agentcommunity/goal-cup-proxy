@@ -1569,20 +1569,29 @@ serialized.
 
 **The run's start.** `CaptureWorkspaceRequest` gains `native_since`, Unix seconds (UTC) of the
 run's start, optional and not written when absent. A `since_run_start` source admits a matched
-file into its tracked set once the file's modification time, truncated to whole seconds, is at or
-after it, checked before the file counts against `max_files`; once admitted it stays, and is read
-whole from offset 0, its lines from before the run included. Every admitted file is recorded; none
-is refused and none is preferred. A `since_run_start` source with no `native_since` in the request
-is refused at creation, before anything is allocated, rather than reading every old file.
-`native_since` is ignored for a source that does not declare `since_run_start`.
+file into its tracked set once the later of the file's modification and status-change times
+(`max(mtime, ctime)`), each truncated to whole seconds, is at or after it, checked before the file
+counts against `max_files`. The change time is there because an agent or harness can set the
+modification time back (`touch -d`, `cp -p`, `tar x`) but cannot set the change time back: the
+rule errs toward recording more. Once admitted a file stays, and is read whole from offset 0, its
+lines from before the run included. Every admitted file is recorded; none is refused and none is
+preferred. A `since_run_start` source with no `native_since` in the request is refused at
+creation, before anything is allocated, rather than reading every old file. A `native_since` more
+than 300 seconds ahead of the daemon's clock is refused as malformed (a start sent in
+milliseconds would otherwise admit nothing), and one no clock can represent is refused rather
+than overflowing. `native_since` is ignored for a source that does not declare
+`since_run_start`.
 
 **The walker's bound.** `NativeCaptureLimits::max_dir_entries` defaults to 8192 (it was 4096), so
 one directory of 5 000 old sessions is enumerated whole on every poll and the new one is found.
-Past the bound, discovery is capped and reported as a loss, as before. An old file costs one
-`fstatat` per poll and nothing else.
+Past the bound, discovery stops for that poll and sets `discovery_capped` in the adapter's
+in-memory report and finish report only: nothing is written to the trace, so a session file past
+the bound can be missed without a record saying so. An old file costs one `fstatat` per poll and
+nothing else.
 
-**Reconsider when** two runs share a config home at the same time, or a harness writes a session
-file without changing its modification time.
+**Reconsider when** two runs share a config home at the same time; a shared home holds more than
+8 192 entries in one directory; or a harness writes a session file without changing either its
+modification or its change time.
 
 ---
 
