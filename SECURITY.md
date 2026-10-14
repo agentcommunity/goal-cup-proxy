@@ -96,8 +96,9 @@ carries `codex-cli` and `claude-code-cli` as committed ([packaging/README.md](pa
 Listed in [docs/CHEAT-CHECKLIST.md](docs/CHEAT-CHECKLIST.md): redaction (F-07, H-20), key-scan
 blind spots (H-18), and the termination windows in [docs/TERMINATION.md](docs/TERMINATION.md).
 Also stated here: same-user control of the daemon (above), the absent server key (above),
-the macOS executable recheck is neither a coherent snapshot nor inode-bound execution (a same-UID
-writer can mutate the open file from the first read, then replace its pathname before `exec`),
+the harness launch is not inode-bound execution (the CLI reads none of the binary; a same-UID
+writer or an updater can replace its pathname before `exec`, which is a different build the daemon
+records in `Launch.harness_build`),
 shared-home checks do not inspect ACLs and cannot exclude a same-UID replacement after the final
 check, and connector tree loading/staging is a sequence of directory enumeration and file opens,
 not an atomic namespace snapshot. A same-UID process can replace names between those operations;

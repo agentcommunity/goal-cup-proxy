@@ -161,9 +161,6 @@ pub fn reported_line(stdout: &[u8]) -> String {
     if text.is_empty() || !printable {
         return UNREPORTED.to_string();
     }
-    let mut end = text.len().min(MAX_REPORTED_VERSION_BYTES);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
+    // Printable ASCII only, so any byte index is a char boundary.
+    text[..text.len().min(MAX_REPORTED_VERSION_BYTES)].to_string()
 }

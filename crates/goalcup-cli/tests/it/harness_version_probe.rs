@@ -1,6 +1,6 @@
 //! D53: the harness build is recorded, not pinned. Any regular file resolves, a symlink is
-//! refused, and the version the harness reports for its
-//! `version_args` is kept, or `unreported`.
+//! refused, and the version the harness reports for its `version_args` is kept, or
+//! `unreported`.
 
 use goalcup_cli::harness_version::{
     MAX_REPORTED_VERSION_BYTES, UNREPORTED, reported_line, reported_version,
