@@ -21,7 +21,7 @@ use goalcup_protocol::capture::HarnessBuildV1;
 use goalcup_protocol::process::{ProcessHandle, ProcessInstanceStatus, process_instance_status};
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The largest file hashed: a harness binary is 100 to 200 MB today, and a larger file the
 /// launcher registered would only keep the launch post waiting.
@@ -49,38 +49,10 @@ fn image_sha256(handle: &ProcessHandle) -> Option<String> {
     if !same() {
         return None;
     }
-    let digest = sha256_file(&image_path(handle.pid)?)?;
+    let digest = sha256_file(&goalcup_platform::process_image::executable_path(
+        handle.pid,
+    )?)?;
     same().then_some(digest)
-}
-
-#[cfg(target_os = "linux")]
-fn image_path(pid: u32) -> Option<PathBuf> {
-    Some(PathBuf::from(format!("/proc/{pid}/exe")))
-}
-
-#[cfg(target_os = "macos")]
-fn image_path(pid: u32) -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-    let pid = libc::c_int::try_from(pid).ok()?;
-    let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    // SAFETY: the buffer is writable for the length passed, and `proc_pidpath` writes at most
-    // that many bytes and returns how many it wrote.
-    let written = unsafe {
-        libc::proc_pidpath(
-            pid,
-            buffer.as_mut_ptr().cast::<libc::c_void>(),
-            buffer.len() as u32,
-        )
-    };
-    let written = usize::try_from(written).ok().filter(|n| *n > 0)?;
-    Some(PathBuf::from(std::ffi::OsStr::from_bytes(
-        &buffer[..written],
-    )))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn image_path(_pid: u32) -> Option<PathBuf> {
-    None
 }
 
 /// The SHA-256 of a regular file, read to its end, or `None` when it is not one, cannot be

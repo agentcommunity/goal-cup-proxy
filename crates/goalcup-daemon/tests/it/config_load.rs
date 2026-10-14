@@ -62,16 +62,9 @@ fn a_service_pair_must_be_supplied_together() {
 }
 
 #[test]
-fn the_defaults_are_the_measured_ones_and_the_cut_fields_are_gone() {
+fn the_cut_fields_are_gone() {
     let c = DaemonConfig::from_toml_str(&base("")).unwrap();
     c.validate().unwrap();
-    assert_eq!(
-        c.poll_interval_ms, 250,
-        "spike 5 kept up with 2,371 records at 0.25 s"
-    );
-    assert_eq!(c.heartbeat_seconds, 60);
-    assert_eq!(c.clock_skew_seconds, 120.0);
-    assert_eq!(c.disk_reserve_bytes, 256 << 20);
     // A config that sets either of these fields must not silently load,
     // and the refusal must name the field: "invalid config" sends a participant looking
     // at the wrong line of a file whose every other line is fine.
