@@ -42,3 +42,4 @@ mod status_views;
 mod upload_chunks;
 mod upload_open;
 mod upload_server;
+mod upload_server_device;
