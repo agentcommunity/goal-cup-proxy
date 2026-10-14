@@ -105,3 +105,44 @@ fn capture_reserve_bytes_is_no_longer_a_flag() {
         String::from_utf8_lossy(&help.stdout)
     );
 }
+
+/// A run whose reservation the volume cannot hold is refused before anything is created: the
+/// daemon is not asked, there is no run directory beside the goal file, no run record, and no
+/// reserve file.
+#[test]
+fn a_run_that_cannot_take_its_reserve_is_refused_before_anything_is_created() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("cfg");
+    std::fs::create_dir(&cfg).unwrap();
+    let beside = tmp.path().join("goal-folder");
+    std::fs::create_dir(&beside).unwrap();
+    let goal = beside.join("goal.txt");
+    std::fs::write(&goal, "write result.txt").unwrap();
+    let m = support::mock_armed(&tmp, "codex-cli");
+    let mut o = support::start_options("codex-cli");
+    o.goal_file = Some(goal);
+    // More than any volume has, and a margin on top.
+    o.disk.reserve_bytes = 1 << 60;
+    o.disk.start_margin = 1 << 30;
+    let err = goalcup_cli::commands::start::start_with(
+        &m,
+        &support::connectors_dir(),
+        &cfg,
+        &support::clean_env(),
+        &o,
+        &mut Vec::new(),
+    )
+    .expect_err("no volume holds that");
+    assert_eq!(err.exit_code(), 1, "{err}");
+    assert!(err.to_string().contains("this run needs"), "{err}");
+    assert!(
+        m.calls().is_empty(),
+        "the daemon was asked: {:?}",
+        m.calls()
+    );
+    let beside_goal: Vec<_> = std::fs::read_dir(&beside).unwrap().flatten().collect();
+    assert_eq!(beside_goal.len(), 1, "only the goal file: {beside_goal:?}");
+    assert!(!cfg.join("runs").exists(), "no run record");
+    let reserve = goalcup_cli::run::reserve::artifact_root(&cfg).join("reserve");
+    assert!(!reserve.exists(), "no reserve file or folder");
+}

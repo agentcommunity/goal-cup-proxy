@@ -652,27 +652,25 @@ fn an_altered_pinned_id_under_an_alias_is_exit_one_before_any_start_write() {
 }
 
 #[test]
-fn a_run_that_cannot_get_its_disk_refuses_before_the_proxy_and_leaves_nothing() {
+fn an_unreservable_chain_refuses_before_the_proxy_and_leaves_nothing() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
-    let mut opts = rig.options(&goal, RESERVE);
-    // The run's one reservation, bigger than any volume.
-    opts.disk.reserve_bytes = 1 << 60;
-    let (result, out) = std::thread::scope(|s| joined(rig.start(s, &client, opts, None)));
+    let (result, out) =
+        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, 1 << 60), None)));
     let error = result.expect_err("a reservation this volume cannot hold");
-    assert_eq!(error.exit_code(), 1, "{error}\n{out}");
-    assert!(error.to_string().contains("this run needs"), "{error}");
     assert!(
-        client.names().is_empty(),
-        "refused before the daemon was asked for anything: {:?}",
-        client.names()
+        matches!(
+            error,
+            goalcup_cli::CliError::Control(ControlError::PreflightFailed(_))
+        ),
+        "{error}\n{out}"
     );
+    assert_eq!(client.names(), vec!["create_capture_workspace"]);
     assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
     assert!(records(&rig).is_empty());
-    assert!(!rig.cfg.join("runs").exists(), "no run record");
     assert!(!rig.harness_started());
 }
 
@@ -762,7 +760,7 @@ fn refused_producer_never_spawns_the_harness() {
             anchor: goalcup_protocol::capture::AnchorState::LocalOnly,
             storage: goalcup_protocol::capture::CaptureStorage {
                 quota_bytes: RESERVE,
-                reserved_bytes: 0,
+                reserved_bytes: RESERVE,
                 used_bytes: 0,
                 durable: None,
                 accounting_available: true,

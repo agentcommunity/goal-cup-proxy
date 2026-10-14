@@ -36,17 +36,12 @@ pub const RESERVE: u64 = 64 * 1024 * 1024;
 /// participant's run holds.
 const RUN_HELD: u64 = 4 * 1024 * 1024;
 
-/// `GOALCUP_TEST_DISK` for a run held at `held` bytes, with chains limited to `quota`.
-fn disk_spec_of(held: u64, quota: u64) -> String {
-    format!(
-        "{held},0,50,{},{quota}",
-        goalcup_cli::run::reserve::FREE_FLOOR
-    )
-}
-
 /// `GOALCUP_TEST_DISK` for a run whose chains are limited to `quota` bytes.
 fn disk_spec(quota: u64) -> String {
-    disk_spec_of(RUN_HELD, quota)
+    format!(
+        "{RUN_HELD},0,50,{},{quota}",
+        goalcup_cli::run::reserve::FREE_FLOOR
+    )
 }
 
 /// The one goal every run is given.
@@ -210,12 +205,6 @@ impl Vertical {
     /// the harness joins.
     pub fn start(&self, reserve: u64) -> Launcher {
         self.start_with(disk_spec(reserve), None)
-    }
-
-    /// [`Vertical::start`] for a run no volume can hold the reservation of: refused before
-    /// anything is created.
-    pub fn start_unreservable(&self) -> Launcher {
-        self.start_with(disk_spec_of(1 << 60, RESERVE), None)
     }
 
     /// [`Vertical::start`] with `GOALCUP_TEST_PAUSE_DIR` naming `pause_dir`: the launcher holds

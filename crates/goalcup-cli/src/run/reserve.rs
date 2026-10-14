@@ -211,7 +211,7 @@ pub fn human(bytes: u64) -> String {
     const UNITS: [(u64, &str); 3] = [(1 << 30, "GiB"), (1 << 20, "MiB"), (1 << 10, "KiB")];
     for (size, name) in UNITS {
         if bytes >= size {
-            return if bytes % size == 0 {
+            return if bytes.is_multiple_of(size) {
                 format!("{} {name}", bytes / size)
             } else {
                 format!("{:.1} {name}", bytes as f64 / size as f64)

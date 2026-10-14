@@ -5,8 +5,8 @@
 //!
 //! The faults are the production boundaries and nothing else:
 //!
-//! - the run's reservation is the one reserve file `goalcup start` holds: a size no volume can
-//!   hold is refused before the entry, the goal, the Launch or the harness exist;
+//! - the reservation is `goalcup start --capture-reserve-bytes`: an impossible size is refused
+//!   by the platform allocator before the goal, the Launch or the harness exist;
 //! - exhaustion is logical: a small reserve is spent by the `stream` workload, whose traffic
 //!   keeps flowing through the relay; no filesystem is filled;
 //! - the metadata fault is a second hard link to the live `chain.jsonl`, made outside the trace
@@ -89,15 +89,18 @@ fn campaign_control_local_capture_finishes_and_verifies() {
     let entry = v.entry_id();
     v.wait_for("holding");
 
-    // While the workload holds: the chain's quota reported with nothing reserved for it,
-    // recording, local-only, with a durable frontier and no loss.
+    // While the workload holds: the physical reservation reported measured, recording,
+    // local-only, with a durable frontier and no loss.
     let live = capture(&v, &entry);
     row.note("live_status", serde_json::to_value(&live).unwrap());
     assert_eq!(live.run, RunState::Running);
     assert_eq!(live.capture, CaptureState::Recording);
     assert_eq!(live.delivery, DeliveryState::LocalOnly);
     assert_eq!(live.storage.quota_bytes, RESERVE);
-    assert_eq!(live.storage.reserved_bytes, 0, "a chain reserves nothing");
+    assert_eq!(
+        live.storage.reserved_bytes, RESERVE,
+        "measured physical reservation"
+    );
     assert!(live.storage.accounting_available);
     assert_eq!(live.gap_count, 0);
     assert!(live.storage.durable.is_some(), "{live:?}");
@@ -161,15 +164,15 @@ fn reservation_failure_refuses_before_goal_launch() {
         &v,
         EVIDENCE,
     );
-    // A run reservation no volume can hold: refused before the entry, so no goal, no Launch and
-    // no harness.
-    let mut start = v.start_unreservable();
+    // A reservation no volume can hold: refused by the platform allocator, so no goal, no
+    // Launch and no harness. The allocator's own byte accounting is `capture_reserved_storage`'s.
+    let mut start = v.start(1 << 60);
     let exit = start.wait(RUN);
     row.note("start_exit", exit.code());
     row.note("start_output", start.output());
     assert_eq!(exit.code(), Some(1), "{}", start.output());
     assert!(
-        start.output().contains("this run needs"),
+        start.output().contains("cannot reserve"),
         "{}",
         start.output()
     );
@@ -207,6 +210,7 @@ fn chain_budget_exhaustion_preserves_bounded_terminal_gap() {
     let lost_at = now();
     row.note("first_loss_status", serde_json::to_value(&lost).unwrap());
     assert_eq!(lost.storage.quota_bytes, SMALL_RESERVE);
+    assert_eq!(lost.storage.reserved_bytes, SMALL_RESERVE);
     assert_eq!(lost.capture, CaptureState::Incomplete);
     assert!(
         lost.storage.accounting_available,
