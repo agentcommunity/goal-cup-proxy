@@ -37,7 +37,7 @@ validates every discovered schema-1 profile, then selects by declared id. Every 
 `HOME`: Codex and Claude use shared isolated config homes (Claude links the checked Keychains
 directory); Hermes gets a seeded per-run `HERMES_HOME`.
 
-Control API v6 requires the version on mutating requests and binds creation to the daemon's loaded
+Control API v7 requires the version on mutating requests and binds creation to the daemon's loaded
 connector-directory digest. Pre-allocation refusals happen before daemon entry/artifact/workspace
 writes, but CLI run/home/CA/seed preparation may already exist and is cleaned. After restart an
 unfinished v5 capture has status/seal-only authority; other authenticated mutators refuse before

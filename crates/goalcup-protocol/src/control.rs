@@ -47,7 +47,9 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// `arming_recipe`, `posts_dropped`, `posts_dropped_after_seal` and `pins_dropped`, the
 /// `arming_timeout` and `unsupported_connector` error codes, and `ProcessHandle.home_seed`.
 /// An unknown connector is now refused `preflight_failed`.
-pub const CONTROL_API_VERSION: u32 = 6;
+/// V7 lets a capture create carry an upload server's `entry_id`, and adds `chain_head` and
+/// `trace_dir` to its answer (docs/UPLOAD-API.md).
+pub const CONTROL_API_VERSION: u32 = 7;
 
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
 pub const ROUTE_ENTRIES_CURRENT: &str = "/v0/entries/current";
@@ -658,6 +660,10 @@ pub struct CaptureWorkspaceRequest {
     pub run_home: String,
     /// The absolute tracker-isolated harness configuration home, shared across runs.
     pub config_home: String,
+    /// The entry id the upload server issued for this run (`e` and 16 lowercase hex digits),
+    /// which every record then carries. Absent for a local-only run: the daemon mints one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
 }
 
 fn lowercase_sha256<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -699,6 +705,10 @@ pub struct CaptureWorkspaceInfo {
     /// The run key every status document of this entry is signed with; the caller pins it
     /// and verifies against it, as with [`WorkspaceInfo::run_public_key`].
     pub run_public_key: String,
+    /// The chain's head once the baseline is chained: the hash a start receipt signs.
+    pub chain_head: String,
+    /// The entry's trace directory, holding `chain.jsonl`.
+    pub trace_dir: String,
 }
 
 impl std::fmt::Debug for CaptureWorkspaceInfo {
@@ -711,8 +721,20 @@ impl std::fmt::Debug for CaptureWorkspaceInfo {
             .field("ingest_secret", &"<redacted>")
             .field("producer_id", &self.producer_id)
             .field("run_public_key", &self.run_public_key)
+            .field("chain_head", &self.chain_head)
+            .field("trace_dir", &self.trace_dir)
             .finish()
     }
+}
+
+/// Whether `id` is an entry id in the one shape this tree uses: `e` and 16 lowercase hex
+/// digits. A server-issued id names a directory, so nothing else is accepted.
+pub fn is_entry_id(id: &str) -> bool {
+    id.len() == 17
+        && id.starts_with('e')
+        && id[1..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// `POST` [`SUFFIX_CAPTURE_GOAL`]: the initial goal, accepted once. The answer is the goal
@@ -1082,6 +1104,8 @@ mod tests {
             ingest_secret: "ingest-secret-ingest-secret-ingest-secret".to_string(),
             producer_id: "0".repeat(32),
             run_public_key: "k".to_string(),
+            chain_head: "h".to_string(),
+            trace_dir: "/t".to_string(),
         };
         let printed = format!("{info:?}");
         assert!(!printed.contains("ingest-secret"), "{printed}");

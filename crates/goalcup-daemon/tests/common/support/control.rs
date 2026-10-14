@@ -358,6 +358,7 @@ pub async fn capture_control_harness() -> CaptureControlHarness {
         reserve_bytes: 4 * 1024 * 1024,
         run_home: inner.root.join("run-home").display().to_string(),
         config_home: inner.root.join("config-home").display().to_string(),
+        entry_id: None,
     };
     let response = inner
         .client

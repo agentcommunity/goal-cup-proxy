@@ -584,6 +584,7 @@ dependencies = [
 name = "goalcup-cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "base64 0.22.1",
  "clap",
  "ed25519-dalek",
@@ -593,6 +594,7 @@ dependencies = [
  "goalcup-platform",
  "goalcup-protocol",
  "goalcup-verifier",
+ "hex",
  "libc",
  "rand",
  "rcgen",

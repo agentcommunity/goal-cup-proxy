@@ -102,6 +102,10 @@ enum Command {
             default_value_t = goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES
         )]
         capture_reserve_bytes: u64,
+        /// The public GitHub repository your agent pushes to, `https://github.com/<owner>/<repo>`.
+        /// Required once `goalcup login` has connected this tracker to the Goal Cup server.
+        #[arg(long, value_name = "URL")]
+        repo: Option<String>,
     },
     /// Show how a run is doing: recording state, health, storage and any gaps. Starts the
     /// daemon if none is running, so a sealed run is shown too.
@@ -187,11 +191,13 @@ fn run(command: Command) -> Result<u8, CliError> {
             dev,
             goal_file,
             capture_reserve_bytes,
+            repo,
         } => start(commands::start::StartOptions {
             harness,
             dev,
             goal_file,
             capture_reserve_bytes,
+            repo,
         })
         .map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),

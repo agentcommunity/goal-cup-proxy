@@ -246,8 +246,18 @@ pub(super) async fn create_capture_workspace(
         ))
         .into_response();
     }
+    let entry_id = match request.entry_id {
+        Some(id) if goalcup_protocol::control::is_entry_id(&id) => id,
+        Some(id) => {
+            return ControlErrorResponse::new(ControlError::Malformed(format!(
+                "entry_id {id:?} is not `e` and 16 lowercase hex digits"
+            )))
+            .into_response();
+        }
+        None => mint_entry_id(),
+    };
     match state.daemon.create_capture(
-        mint_entry_id(),
+        entry_id,
         FsPath::new(&request.workspace),
         FsPath::new(&request.run_home),
         FsPath::new(&request.config_home),
