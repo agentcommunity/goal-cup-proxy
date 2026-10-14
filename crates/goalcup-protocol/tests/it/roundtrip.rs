@@ -666,8 +666,8 @@ mod parts {
     use goalcup_protocol::chain::Link;
     use goalcup_protocol::envelope::{Envelope, EventBody};
     use goalcup_protocol::export::{
-        CHAIN_FILE, ExportError, PART_MAX_AGE, PART_MAX_BYTES, TraceExport, chain_parts,
-        parse_part_name, part_file_name,
+        CHAIN_FILE, ExportError, PART_MAX_AGE, PART_MAX_BYTES, ResumeSeam, TraceExport,
+        chain_parts, parse_part_name, part_file_name, set_resume_seam_for_test,
     };
     use goalcup_protocol::provenance::{Rfc3339Utc, TerminationMethodV1, TerminationOutcomeV1};
     use goalcup_protocol::seal::SealManifest;
@@ -967,6 +967,141 @@ mod parts {
         assert!(matches!(
             TraceExport::resume(dir.path()),
             Err(ExportError::PartGap { .. })
+        ));
+    }
+
+    /// A rotated chain whose last part is empty: the writer rotated and wrote nothing more.
+    fn ending_in_an_empty_part(root: &Path) -> TraceExport {
+        let mut export = rotated(root, 8);
+        let mut n = 100;
+        while chain_parts(root).unwrap().last().unwrap().len > 0 {
+            export.append_chain(&mut gap(n)).unwrap();
+            export.sync_capture().unwrap();
+            export.rotate_if_due(Instant::now()).unwrap();
+            n += 1;
+        }
+        export
+    }
+
+    #[test]
+    fn a_part_deleted_during_resume_is_still_read() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(rotated(dir.path(), 12));
+        let parts = chain_parts(dir.path()).unwrap();
+        assert!(parts.len() >= 4, "{parts:?}");
+        let full = TraceExport::resume(dir.path()).unwrap().head();
+
+        // The uploader removes two acknowledged parts while the resume holds them open.
+        let doomed: Vec<_> = parts[..2].iter().map(|part| part.path.clone()).collect();
+        set_resume_seam_for_test(ResumeSeam::Opened, move || {
+            for path in doomed {
+                std::fs::remove_file(path).unwrap();
+            }
+        });
+        let resumed = TraceExport::resume(dir.path()).unwrap();
+        assert_eq!(resumed.head(), full);
+        assert!(!parts[0].path.exists() && !parts[1].path.exists());
+        drop(resumed);
+        // The next resume starts at the first surviving part, at the same head.
+        assert_eq!(TraceExport::resume(dir.path()).unwrap().head(), full);
+    }
+
+    #[test]
+    fn a_part_deleted_before_it_is_opened_is_listed_again() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(rotated(dir.path(), 12));
+        let parts = chain_parts(dir.path()).unwrap();
+        let full = TraceExport::resume(dir.path()).unwrap().head();
+
+        // Removed between the listing and the open: the second listing no longer names it.
+        let doomed = parts[0].path.clone();
+        set_resume_seam_for_test(ResumeSeam::Listed, move || {
+            std::fs::remove_file(doomed).unwrap();
+        });
+        let resumed = TraceExport::resume(dir.path()).unwrap();
+        assert_eq!(resumed.head(), full);
+        assert_eq!(chain_parts(dir.path()).unwrap()[0].start, parts[1].start);
+
+        // A middle part removed the same way is a hole, never skipped.
+        drop(resumed);
+        let parts = chain_parts(dir.path()).unwrap();
+        let doomed = parts[1].path.clone();
+        set_resume_seam_for_test(ResumeSeam::Listed, move || {
+            std::fs::remove_file(doomed).unwrap();
+        });
+        assert!(matches!(
+            TraceExport::resume(dir.path()),
+            Err(ExportError::PartGap { .. })
+        ));
+    }
+
+    #[test]
+    fn resume_appends_to_an_empty_last_part() {
+        for pruned in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let export = ending_in_an_empty_part(dir.path());
+            let head = export.head().unwrap();
+            drop(export);
+            let parts = chain_parts(dir.path()).unwrap();
+            assert!(parts.len() >= 3, "{parts:?}");
+            if pruned {
+                std::fs::remove_file(&parts[0].path).unwrap();
+            }
+
+            let mut resumed = TraceExport::resume(dir.path()).unwrap();
+            assert_eq!(resumed.head(), Some(head.clone()), "pruned: {pruned}");
+            resumed.configure_capture_quota(QUOTA).unwrap();
+            let link = resumed.append_chain(&mut gap(999)).unwrap();
+            assert_eq!(link.prev, head.1);
+            drop(resumed);
+            let after = chain_parts(dir.path()).unwrap();
+            assert_eq!(after.len(), parts.len() - usize::from(pruned));
+            assert!(
+                after.last().unwrap().len > 0,
+                "the append went to the empty part"
+            );
+        }
+    }
+
+    #[test]
+    fn only_an_empty_surviving_part_is_a_pruned_head() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(ending_in_an_empty_part(dir.path()));
+        let parts = chain_parts(dir.path()).unwrap();
+        for part in &parts[..parts.len() - 1] {
+            std::fs::remove_file(&part.path).unwrap();
+        }
+        assert!(matches!(
+            TraceExport::resume(dir.path()),
+            Err(ExportError::PrunedHead)
+        ));
+    }
+
+    #[test]
+    fn a_zero_named_part_is_ignored_and_a_symlinked_part_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(rotated(dir.path(), 10));
+        let parts = chain_parts(dir.path()).unwrap();
+        let head = TraceExport::resume(dir.path()).unwrap().head();
+
+        // `chain.<twenty zeros>.jsonl` is not a part name: neither reader looks at it.
+        std::fs::write(
+            dir.path().join("chain.00000000000000000000.jsonl"),
+            b"not a record\n",
+        )
+        .unwrap();
+        assert_eq!(chain_parts(dir.path()).unwrap(), parts);
+        assert_eq!(TraceExport::resume(dir.path()).unwrap().head(), head);
+
+        // A part replaced by a symbolic link to the same bytes is not followed.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let copy = elsewhere.path().join("part");
+        std::fs::copy(&parts[1].path, &copy).unwrap();
+        std::fs::remove_file(&parts[1].path).unwrap();
+        std::os::unix::fs::symlink(&copy, &parts[1].path).unwrap();
+        assert!(matches!(
+            TraceExport::resume(dir.path()),
+            Err(ExportError::Capability(_))
         ));
     }
 }

@@ -932,7 +932,10 @@ impl TraceExport {
     /// path — there is nothing to resume.
     ///
     /// A rotated chain (D55) is read part by part, in order, as one stream, and appended to
-    /// its last part; an empty last part (rotated, then stopped) is valid. A part that does
+    /// its last part; an empty last part (rotated, then stopped) is valid. Every part is held
+    /// open before any is read, so a part another process deletes during the resume (the
+    /// uploader removing an acknowledged part) is still read; a part deleted between the
+    /// listing and its open makes the resume list the parts once more. A part that does
     /// not start where the one before it ends is `PartGap`. When the first surviving part
     /// starts above 0, its earlier parts were acknowledged and removed on this machine: the
     /// scan begins at the first surviving record, taking its `seq` and `prev` as the position
@@ -977,12 +980,13 @@ impl TraceExport {
         root: TraceRoot,
         visit: &mut dyn FnMut(&Envelope),
     ) -> Result<PreparedTraceResume, ExportError> {
-        let mut starts = root.dir.list_parts()?;
-        if starts.is_empty() {
-            // Opening the absent `chain.jsonl` reports it by name.
-            starts.push(0);
-        }
-        let pruned = starts[0] > 0;
+        let parts = open_parts(&root.dir)?;
+        run_resume_seam(ResumeSeam::Opened);
+        let first = parts
+            .earlier
+            .first()
+            .map_or(parts.last.0, |(start, _)| *start);
+        let pruned = first > 0;
         let mut scan = ChainScan {
             next_seq: 0,
             head: GENESIS.to_string(),
@@ -991,33 +995,24 @@ impl TraceExport {
             } else {
                 ChainPhaseReplay::new()
             },
-            validated_bytes: starts[0],
+            validated_bytes: first,
             adopt_first_link: pruned,
         };
-        let mut last = None;
-        for start in starts {
-            if start != scan.validated_bytes {
-                return Err(ExportError::PartGap {
-                    expected: scan.validated_bytes,
-                    found: start,
-                });
-            }
-            let mut part = root.dir.open_part_for_resume(start)?;
+        for (start, mut part) in parts.earlier {
+            scan.expect_part_at(start)?;
             let path = root.display.join(part_file_name(start));
             scan.read_part(BufReader::new(&mut part), &path, visit)?;
-            let found_bytes = start.saturating_add(part.len()?);
-            if found_bytes != scan.validated_bytes {
-                return Err(ExportError::ChainLengthChanged {
-                    validated_bytes: scan.validated_bytes,
-                    found_bytes,
-                });
-            }
-            last = Some((start, part));
+            let len = part.metadata().map_err(|source| io(&path, source))?.len();
+            scan.check_part_end(start, len)?;
         }
+        let (part_start, mut chain) = parts.last;
+        scan.expect_part_at(part_start)?;
+        let path = root.display.join(part_file_name(part_start));
+        scan.read_part(BufReader::new(&mut chain), &path, visit)?;
+        scan.check_part_end(part_start, chain.len()?)?;
         if scan.adopt_first_link {
             return Err(ExportError::PrunedHead);
         }
-        let (part_start, chain) = last.expect("at least one part was read");
 
         Ok(PreparedTraceResume {
             root,
@@ -1735,6 +1730,94 @@ pub fn manifest_sha256(m: &SealManifest) -> Result<String, ExportError> {
     Ok(hex::encode(Sha256::digest(to_json("seal", &canonical)?)))
 }
 
+/// Every chain part, held open: the earlier parts as plain readers (a read handle outlives its
+/// name), the last as the append handle a resume continues.
+struct OpenParts {
+    earlier: Vec<(u64, std::fs::File)>,
+    last: (u64, TraceAppendFile),
+}
+
+/// List the parts and open every one before any is read (D55). A listed part that is gone by
+/// the time it is opened (removed after its acknowledgement) is answered by listing once more;
+/// a second miss is the error. Nothing is skipped: the parts read are contiguous or the resume
+/// refuses.
+fn open_parts(dir: &TraceDir) -> Result<OpenParts, ExportError> {
+    match try_open_parts(dir) {
+        Err(error) if is_not_found(&error) => try_open_parts(dir),
+        other => other,
+    }
+}
+
+fn try_open_parts(dir: &TraceDir) -> Result<OpenParts, ExportError> {
+    let mut starts = dir.list_parts()?;
+    run_resume_seam(ResumeSeam::Listed);
+    // No part at all: opening the absent `chain.jsonl` reports it by name.
+    let last = starts.pop().unwrap_or(0);
+    let mut earlier = Vec::with_capacity(starts.len());
+    for start in starts {
+        let file = dir
+            .read_regular(&part_file_name(start))?
+            .ok_or_else(|| TraceCapError::Io {
+                operation: "open chain part",
+                source: std::io::ErrorKind::NotFound.into(),
+            })?;
+        earlier.push((start, file));
+    }
+    let last = (last, dir.open_part_for_resume(last)?);
+    Ok(OpenParts { earlier, last })
+}
+
+fn is_not_found(error: &ExportError) -> bool {
+    matches!(error, ExportError::Capability(TraceCapError::Io { source, .. })
+        if source.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// Test seams in a resume: after the parts are listed, and after every part is open.
+#[cfg(any(test, feature = "test-hooks"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResumeSeam {
+    Listed,
+    Opened,
+}
+
+#[cfg(not(any(test, feature = "test-hooks")))]
+#[derive(Clone, Copy)]
+enum ResumeSeam {
+    Listed,
+    Opened,
+}
+
+/// The pending seam actions on one thread, each run once.
+#[cfg(any(test, feature = "test-hooks"))]
+type SeamActions = Vec<(ResumeSeam, Box<dyn FnOnce()>)>;
+
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! {
+    static RESUME_SEAMS: std::cell::RefCell<SeamActions> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Test seam: run `action` once, on this thread, the next time a resume reaches `seam`.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn set_resume_seam_for_test(seam: ResumeSeam, action: impl FnOnce() + 'static) {
+    RESUME_SEAMS.with(|seams| seams.borrow_mut().push((seam, Box::new(action))));
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+fn run_resume_seam(seam: ResumeSeam) {
+    let action = RESUME_SEAMS.with(|seams| {
+        let mut seams = seams.borrow_mut();
+        let index = seams.iter().position(|(at, _)| *at == seam)?;
+        Some(seams.remove(index).1)
+    });
+    if let Some(action) = action {
+        action();
+    }
+}
+
+#[cfg(not(any(test, feature = "test-hooks")))]
+fn run_resume_seam(_: ResumeSeam) {}
+
 /// The resume's position while it streams the chain, part after part.
 struct ChainScan {
     next_seq: u64,
@@ -1748,6 +1831,31 @@ struct ChainScan {
 }
 
 impl ChainScan {
+    /// A part must start where the validated chain ends.
+    fn expect_part_at(&self, start: u64) -> Result<(), ExportError> {
+        if start == self.validated_bytes {
+            Ok(())
+        } else {
+            Err(ExportError::PartGap {
+                expected: self.validated_bytes,
+                found: start,
+            })
+        }
+    }
+
+    /// A part read to its end must be exactly as long as what was validated from it.
+    fn check_part_end(&self, start: u64, len: u64) -> Result<(), ExportError> {
+        let found_bytes = start.saturating_add(len);
+        if found_bytes == self.validated_bytes {
+            Ok(())
+        } else {
+            Err(ExportError::ChainLengthChanged {
+                validated_bytes: self.validated_bytes,
+                found_bytes,
+            })
+        }
+    }
+
     /// Validate every line of one part, in order, continuing the scan's position. Each line
     /// is bounded before it is buffered, is its canonical serialization and has its link
     /// checked; anything else is `ChainCorrupt`.

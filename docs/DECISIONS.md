@@ -1483,7 +1483,9 @@ chain over any part file, so a pruned trace is never restarted from seq 0. If ev
 empty, the head is gone and resume refuses. The verifier reads a pruned chain's links, terminal and
 acknowledgements, reports `chain_pruned_locally` (incomplete, exit 1, "verify the server copy") and
 skips acknowledgements of pruned records; capture-record rules that need the pruned records are not
-checked locally.
+checked locally. Resume holds every part open before reading, so a part deleted during a reopen
+is still read. After a pruned restart, the status `gap_count` counts only the surviving gap records:
+it is a lower bound.
 
 **Reconsider when** the server stores parts as parts, or a reader needs a pruned chain's capture
 records judged locally.

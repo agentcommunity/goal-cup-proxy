@@ -902,6 +902,8 @@ struct ChainFacts {
     /// owes the run, already recorded.
     launch_source_gap: bool,
     launched: bool,
+    /// Whether any envelope was visited yet.
+    visited: bool,
     /// The local finish, when the chain already ends in one, and the `seal.json` digest it
     /// binds.
     finish: Option<ChainedFinish>,
@@ -932,6 +934,12 @@ fn bind_seal(export: &TraceExport, finish: &mut ChainedFinish, digest: &str) {
 
 impl ChainFacts {
     fn observe(&mut self, envelope: &Envelope) {
+        // A chain read from above seq 0 lost its first parts after their acknowledgement (D55),
+        // and with them the `Launch`: such a chain launched long ago.
+        if !self.visited && envelope.link.seq > 0 {
+            self.launched = true;
+        }
+        self.visited = true;
         match &envelope.body {
             EventBody::Capture {
                 record: CaptureRecord::Launch { .. },
