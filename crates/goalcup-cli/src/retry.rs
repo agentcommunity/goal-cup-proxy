@@ -8,7 +8,9 @@
 //! calls use the bounded generic retry below. The entry-runtime `/abandon` and the `/process`
 //! handoff share one dephased schedule with separately stated end-to-end limits: the abandon
 //! must span an upload hold, and `/process` is made while a freshly launched child is waiting
-//! for daemon ownership. The capture seal has its own retry against the local-finish budget.
+//! for daemon ownership. The capture seal has its own retry against the local-finish budget,
+//! and the stop of a run asks for that seal again, with growing waits, for the whole wrap-up
+//! ([`retry_capture_seal_until`]).
 //! `conflict` shares the `409` and means the opposite: already sealed, already started, a
 //! lock still on disk. It is never retried, here or anywhere.
 //!
@@ -354,6 +356,103 @@ fn retry_capture_seal_with<T>(
         }
     }
     Err(CaptureSealError::NotAdmitted(ControlError::Busy(said)))
+}
+
+/// The wait before the capture seal is asked again after a whole local-finish budget failed:
+/// ten seconds, doubling per failure to [`SEAL_RETRY_MAX`], with jitter.
+pub const SEAL_RETRY_FIRST: Duration = Duration::from_secs(10);
+
+/// The longest wait between two asks of the capture seal at the wrap-up level.
+pub const SEAL_RETRY_MAX: Duration = Duration::from_secs(5 * 60);
+
+/// How far a seal wait may stray from its nominal length, either way, as a share of it.
+const SEAL_RETRY_JITTER: f64 = 0.25;
+
+/// Whether a failed capture seal is worth asking again at the wrap-up level, minutes after the
+/// last attempt, rather than reported at once.
+///
+/// - **Yes:** a finish whose own budget ran out (`FinishDeadline`: nothing terminal was
+///   written and the entry is still open, a load spike that passes); a daemon that is busy,
+///   restarting or not answering (`Busy`, `Unreachable`, whether or not the request was
+///   written: a repeated finish is answered with the one the daemon committed, so replaying an
+///   ambiguous one is safe).
+/// - **No:** every definitive answer. `Unauthorized` after the restart-following attempt
+///   already re-read `control.json`; `Conflict`, `NotFound`, `Malformed`, `Internal` and the
+///   rest are the daemon saying something that waiting does not change.
+fn seal_worth_asking_again(failure: &CaptureSealError) -> bool {
+    match failure {
+        CaptureSealError::NotAdmitted(error) | CaptureSealError::MaybeAdmitted(error) => {
+            matches!(
+                error,
+                ControlError::FinishDeadline(_)
+                    | ControlError::Busy(_)
+                    | ControlError::Unreachable(_)
+            )
+        }
+    }
+}
+
+/// The capture seal asked again, with growing waits, until `until` (the wrap-up after the
+/// stop): the seal gets minutes, not the ten seconds of one attempt.
+///
+/// `call` is one whole attempt, with its own local-finish budget and its own busy retry
+/// ([`retry_capture_seal`]). A failure [`seal_worth_asking_again`] is followed by a wait of
+/// [`SEAL_RETRY_FIRST`] doubling to [`SEAL_RETRY_MAX`], plus or minus a quarter at random; the
+/// wait is not taken, and the last failure is returned, when it would run past `until` or when
+/// the failure is a definitive one. `say` hears each failed attempt and its wait, so a
+/// participant looking at a terminal for minutes is told why.
+///
+/// The waits are **not** interruptible by Ctrl-C: a run that has stopped must seal, and
+/// [`crate::arming::interrupted`] only speaks for the short window before the launch. The
+/// participant is told to leave the window open.
+pub fn retry_capture_seal_until<T>(
+    until: crate::upload::policy::WrapUp,
+    say: &mut dyn FnMut(&str),
+    call: impl FnMut() -> Result<T, CaptureSealError>,
+) -> Result<T, CaptureSealError> {
+    use rand::Rng;
+    retry_capture_seal_until_with(
+        || until.remaining(),
+        std::thread::sleep,
+        (SEAL_RETRY_FIRST, SEAL_RETRY_MAX),
+        || rand::thread_rng().gen_range(-SEAL_RETRY_JITTER..SEAL_RETRY_JITTER),
+        say,
+        call,
+    )
+}
+
+/// The testable core of [`retry_capture_seal_until`]. `remaining` is what is left of the
+/// wrap-up; `wait` sleeps; `(first, max)` are the first wait and the longest; `jitter` draws
+/// the share a wait strays by, in `(-1, 1)`; `say` hears each failed attempt.
+fn retry_capture_seal_until_with<T>(
+    mut remaining: impl FnMut() -> Duration,
+    mut wait: impl FnMut(Duration),
+    (first, max): (Duration, Duration),
+    mut jitter: impl FnMut() -> f64,
+    say: &mut dyn FnMut(&str),
+    mut call: impl FnMut() -> Result<T, CaptureSealError>,
+) -> Result<T, CaptureSealError> {
+    let mut nominal = first;
+    loop {
+        let failure = match call() {
+            Err(failure) if seal_worth_asking_again(&failure) => failure,
+            answered => return answered,
+        };
+        let delay = nominal.mul_f64(1.0 + jitter());
+        let left = remaining();
+        if left <= delay {
+            return Err(failure);
+        }
+        let (CaptureSealError::NotAdmitted(why) | CaptureSealError::MaybeAdmitted(why)) = &failure;
+        say(&format!(
+            "the seal did not take ({why}); asking again in {} s ({} min of the wrap-up left). \
+             Leave this window open.",
+            delay.as_secs().max(1),
+            left.as_secs() / 60
+        ));
+        wait(delay);
+        nominal = nominal.saturating_mul(2).min(max);
+    }
 }
 
 /// One dephased route wait, without extending the nominal delay at its last slice.
@@ -891,5 +990,176 @@ mod capture_seal_retry_tests {
             Err(CaptureSealError::NotAdmitted(ControlError::Busy(_)))
         ));
         assert_eq!(attempts, 1);
+    }
+}
+
+#[cfg(test)]
+mod capture_seal_until_tests {
+    use super::*;
+    use goalcup_protocol::control::CaptureSealError;
+    use std::cell::{Cell, RefCell};
+
+    fn expired() -> CaptureSealError {
+        CaptureSealError::MaybeAdmitted(ControlError::FinishDeadline("local_finish".into()))
+    }
+
+    const WAITS: (Duration, Duration) = (Duration::from_millis(10), Duration::from_millis(40));
+
+    #[test]
+    fn an_expired_finish_is_retried_with_growing_waits() {
+        let waits = RefCell::new(Vec::new());
+        let attempts = Cell::new(0);
+        let result = retry_capture_seal_until_with(
+            || Duration::from_secs(60),
+            |delay| waits.borrow_mut().push(delay),
+            WAITS,
+            || 0.0,
+            &mut |_| {},
+            || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() < 6 {
+                    Err(expired())
+                } else {
+                    Ok("sealed")
+                }
+            },
+        );
+        assert_eq!(result.unwrap(), "sealed");
+        assert_eq!(attempts.get(), 6);
+        let ms = |n| Duration::from_millis(n);
+        assert_eq!(
+            *waits.borrow(),
+            vec![ms(10), ms(20), ms(40), ms(40), ms(40)],
+            "ten, doubling, up to the longest wait"
+        );
+    }
+
+    #[test]
+    fn a_seal_wait_strays_by_its_jitter_and_no_further() {
+        for (draw, expected_ms) in [(-0.25, 7.5), (0.0, 10.0), (0.25, 12.5)] {
+            let waits = RefCell::new(Vec::new());
+            // Room for the first wait only: the second (20 ms plus its jitter) does not fit.
+            let _ = retry_capture_seal_until_with(
+                || Duration::from_millis(15),
+                |delay| waits.borrow_mut().push(delay),
+                WAITS,
+                || draw,
+                &mut |_| {},
+                || Err::<(), _>(expired()),
+            );
+            assert_eq!(waits.borrow().len(), 1);
+            let got = waits.borrow()[0].as_secs_f64() * 1000.0;
+            assert!(
+                (got - expected_ms).abs() < 0.01,
+                "{got} against {expected_ms}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_seal_is_not_asked_again_past_the_wrap_up() {
+        // 25 ms left: the 10 ms wait fits, the 20 ms one after it does not.
+        let left = Cell::new(25_u64);
+        let attempts = Cell::new(0);
+        let result: Result<(), _> = retry_capture_seal_until_with(
+            || Duration::from_millis(left.get()),
+            |delay| left.set(left.get() - delay.as_millis() as u64),
+            WAITS,
+            || 0.0,
+            &mut |_| {},
+            || {
+                attempts.set(attempts.get() + 1);
+                Err(expired())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(CaptureSealError::MaybeAdmitted(
+                ControlError::FinishDeadline(_)
+            ))
+        ));
+        assert_eq!(
+            attempts.get(),
+            2,
+            "one ask, one wait, one ask, no wait that does not fit"
+        );
+    }
+
+    #[test]
+    fn each_failed_seal_attempt_and_its_wait_is_said() {
+        let said = RefCell::new(Vec::new());
+        let left = Cell::new(100_u64);
+        let attempts = Cell::new(0);
+        let _: Result<(), _> = retry_capture_seal_until_with(
+            || Duration::from_millis(left.get()),
+            |delay| left.set(left.get() - delay.as_millis() as u64),
+            WAITS,
+            || 0.0,
+            &mut |line| said.borrow_mut().push(line.to_string()),
+            || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() == 2 {
+                    Err(CaptureSealError::NotAdmitted(ControlError::Busy(
+                        "held".into(),
+                    )))
+                } else {
+                    Err(expired())
+                }
+            },
+        );
+        // Waits of 10, 20, 40 ms fit in 100 ms; the 40 ms one after them does not.
+        let said = said.borrow();
+        assert_eq!(said.len(), 3, "{said:?}");
+        assert!(
+            said[0].starts_with("the seal did not take (local_finish)"),
+            "{said:?}"
+        );
+        assert!(said[0].contains("asking again in 1 s"), "{said:?}");
+        assert!(
+            said[1].contains("the daemon is busy with this entry: held"),
+            "{said:?}"
+        );
+        assert!(
+            said.iter().all(|l| l.ends_with("Leave this window open.")),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn a_busy_or_unreachable_daemon_is_asked_again_and_a_definitive_answer_is_not() {
+        let asked_again = [
+            CaptureSealError::NotAdmitted(ControlError::Busy("held".into())),
+            CaptureSealError::NotAdmitted(ControlError::Unreachable("refused".into())),
+            CaptureSealError::MaybeAdmitted(ControlError::Unreachable("timed out".into())),
+            CaptureSealError::MaybeAdmitted(ControlError::Busy("held".into())),
+            expired(),
+        ];
+        let returned_at_once = [
+            CaptureSealError::NotAdmitted(ControlError::Unauthorized("token".into())),
+            CaptureSealError::MaybeAdmitted(ControlError::Conflict("sealed".into())),
+            CaptureSealError::MaybeAdmitted(ControlError::NotFound("entry".into())),
+            CaptureSealError::MaybeAdmitted(ControlError::Internal("disk".into())),
+            CaptureSealError::MaybeAdmitted(ControlError::Malformed("body".into())),
+        ];
+        for failure in asked_again {
+            assert!(seal_worth_asking_again(&failure), "{failure:?}");
+        }
+        for failure in returned_at_once {
+            let attempts = Cell::new(0);
+            let mut failure = Some(failure);
+            let result: Result<(), _> = retry_capture_seal_until_with(
+                || Duration::from_secs(60),
+                |_| panic!("a definitive answer must not wait"),
+                WAITS,
+                || 0.0,
+                &mut |line| panic!("a definitive answer must not be said: {line}"),
+                || {
+                    attempts.set(attempts.get() + 1);
+                    Err(failure.take().expect("one call"))
+                },
+            );
+            assert!(result.is_err());
+            assert_eq!(attempts.get(), 1);
+        }
     }
 }
