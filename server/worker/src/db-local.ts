@@ -5,15 +5,23 @@
 // Layout:
 //   state/runs/{run_id}.json     the run, its receipt, its chunks (a few hundred bytes each)
 //   state/open/{member}.json     {"run_id": …}: which run holds the member's one-open-run slot
+//   state/devices/{sha256}.json  a device request, by the hash of its device code
+//   state/usercodes/{sha256}.json  {"device_sha256": …}: the request a user code belongs to
+//   state/credentials/{sha256}.json  a run credential, by its own hash
 //
 // Not built for load: a run's whole state is one object. Fine for a developer and for tests.
 
 import type {
   AbandonResult,
+  ApproveDeviceResult,
+  BindCredentialResult,
   ChunkRecord,
   CommitChunkArgs,
   CommitChunkResult,
+  CreateDeviceArgs,
+  Credential,
   Db,
+  DevicePoll,
   HeartbeatArgs,
   HeartbeatResult,
   OpenRunArgs,
@@ -23,9 +31,9 @@ import type {
   SealResult,
   StoreReceiptResult,
 } from "./db.ts";
-import { ABANDON_AFTER_SECONDS, FIRST_SEQ, GENESIS, isAbandonable } from "./db.ts";
+import { ABANDON_AFTER_SECONDS, FIRST_SEQ, GENESIS, UNBOUND_CREDENTIAL_SECONDS, isAbandonable } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
-import { parseTime, sha256Hex } from "./util.ts";
+import { addSeconds, formatTime, parseTime, sha256Hex, toHex } from "./util.ts";
 
 interface StoredRun extends RunRow {
   harness_version: string;
@@ -38,43 +46,30 @@ interface StoredRun extends RunRow {
   heartbeat_count: number;
 }
 
+interface StoredDevice extends CreateDeviceArgs {
+  status: "pending" | "approved" | "denied";
+  member_id: string | null;
+  decided_at: string | null;
+  picked_up: boolean;
+}
+
 const MAX_CAS_TRIES = 10;
 
 export class LocalDb implements Db {
   readonly #bucket: R2Bucket;
-  readonly #tokens: Map<string, string>; // sha256(token) -> member
   readonly #abandonAfterSeconds: number;
 
-  private constructor(bucket: R2Bucket, tokens: Map<string, string>, abandonAfterSeconds: number) {
+  private constructor(bucket: R2Bucket, abandonAfterSeconds: number) {
     this.#bucket = bucket;
-    this.#tokens = tokens;
     this.#abandonAfterSeconds = abandonAfterSeconds;
   }
 
-  /** Parses DEV_TOKENS ("token1:member1,token2:member2"). Refuses to exist without it. */
-  static async create(
+  static create(
     bucket: R2Bucket,
-    devTokens: string | undefined,
     // Tests only (ABANDON_AFTER_SECONDS, honoured only by this local backend): production is 24 hours.
     abandonAfterSeconds: number = ABANDON_AFTER_SECONDS,
-  ): Promise<LocalDb> {
-    if (!devTokens || devTokens.trim() === "") {
-      throw new Error("DB_BACKEND=local needs DEV_TOKENS (\"token1:member1,token2:member2\"); refusing to start without it");
-    }
-    const tokens = new Map<string, string>();
-    for (const [i, pair] of devTokens.split(",").entries()) {
-      const at = pair.indexOf(":");
-      const token = pair.slice(0, at).trim();
-      const member = pair.slice(at + 1).trim();
-      // Name the entry by position, never by content: it holds a token.
-      if (at < 1 || token === "" || member === "") throw new Error(`DEV_TOKENS entry number ${i + 1} is not token:member`);
-      tokens.set(await sha256Hex(token), member);
-    }
-    return new LocalDb(bucket, tokens, abandonAfterSeconds);
-  }
-
-  async memberForToken(tokenSha256: string): Promise<string | null> {
-    return this.#tokens.get(tokenSha256) ?? null;
+  ): LocalDb {
+    return new LocalDb(bucket, abandonAfterSeconds);
   }
 
   // ---- plumbing --------------------------------------------------------------------------
@@ -111,7 +106,84 @@ export class LocalDb implements Db {
     throw new Error("local state is too contended; try again");
   }
 
-  // ---- Db --------------------------------------------------------------------------------
+  /** Read-modify-write one JSON object atomically (the same etag rule as `#updateRun`). */
+  async #updateObject<T extends object, A>(key: string, missing: A, change: (cur: T) => { next?: T; answer: A }): Promise<A> {
+    for (let i = 0; i < MAX_CAS_TRIES; i++) {
+      const obj = await this.#bucket.get(key);
+      if (obj === null) return missing;
+      const { next, answer } = change((await obj.json()) as T);
+      if (next === undefined) return answer;
+      if ((await this.#bucket.put(key, JSON.stringify(next), { onlyIf: { etagMatches: obj.etag } })) !== null) return answer;
+    }
+    throw new Error("local state is too contended; try again");
+  }
+
+  #deviceKey = (sha: string) => `state/devices/${sha}.json`;
+  #userCodeKey = (sha: string) => `state/usercodes/${sha}.json`;
+  #credentialKey = (sha: string) => `state/credentials/${sha}.json`;
+
+  // ---- Db: device flow and credentials ---------------------------------------------------
+
+  async createDevice(a: CreateDeviceArgs): Promise<void> {
+    const dev: StoredDevice = { ...a, status: "pending", member_id: null, decided_at: null, picked_up: false };
+    const create = { onlyIf: { etagDoesNotMatch: "*" } };
+    if ((await this.#bucket.put(this.#deviceKey(a.device_sha256), JSON.stringify(dev), create)) === null) throw new Error("device code collision");
+    if ((await this.#bucket.put(this.#userCodeKey(a.user_sha256), JSON.stringify({ device_sha256: a.device_sha256 }), create)) === null) {
+      await this.#bucket.delete(this.#deviceKey(a.device_sha256));
+      throw new Error("user code collision");
+    }
+  }
+
+  async pollDevice(deviceSha256: string, now: string): Promise<DevicePoll> {
+    const key = this.#deviceKey(deviceSha256);
+    // Mark an approved request picked up first, with a conditional put, so only one poll gets the result.
+    const won = await this.#updateObject<StoredDevice, StoredDevice | DevicePoll>(key, { kind: "expired" }, (dev) => {
+      if (parseTime(now).getTime() >= parseTime(dev.expires_at).getTime()) return { answer: { kind: "expired" } };
+      if (dev.status === "pending") return { answer: { kind: "pending" } };
+      if (dev.status === "denied") return { answer: { kind: "denied" } };
+      if (dev.picked_up) return { answer: { kind: "expired" } };
+      return { next: { ...dev, picked_up: true }, answer: dev };
+    });
+    if (!("status" in won)) return won;
+    if (won.purpose === "login") return { kind: "approved", purpose: "login", handle: won.member_id ?? "" };
+
+    const plain = "gcr_" + toHex(crypto.getRandomValues(new Uint8Array(32)));
+    const cred: Credential = {
+      member_id: won.member_id ?? "",
+      run_id: null,
+      mode: won.mode,
+      expires_at: formatTime(addSeconds(parseTime(won.decided_at ?? now), UNBOUND_CREDENTIAL_SECONDS)),
+    };
+    await this.#bucket.put(this.#credentialKey(await sha256Hex(plain)), JSON.stringify(cred), { onlyIf: { etagDoesNotMatch: "*" } });
+    return { kind: "approved", purpose: "run", credential_plain: plain, expires_at: cred.expires_at };
+  }
+
+  async approveDevice(userCode: string, memberId: string, approve: boolean, now: string): Promise<ApproveDeviceResult> {
+    const link = await this.#bucket.get(this.#userCodeKey(await sha256Hex(userCode)));
+    if (link === null) return "not_found";
+    const { device_sha256 } = (await link.json()) as { device_sha256: string };
+    return this.#updateObject<StoredDevice, ApproveDeviceResult>(this.#deviceKey(device_sha256), "not_found", (dev) => {
+      if (parseTime(now).getTime() >= parseTime(dev.expires_at).getTime()) return { answer: "expired" };
+      if (dev.status !== "pending") return { answer: "already_decided" };
+      return { next: { ...dev, status: approve ? "approved" : "denied", member_id: memberId, decided_at: now }, answer: "ok" };
+    });
+  }
+
+  async credential(credentialSha256: string, now: string): Promise<Credential | null> {
+    const obj = await this.#bucket.get(this.#credentialKey(credentialSha256));
+    if (obj === null) return null;
+    const cred = (await obj.json()) as Credential;
+    return parseTime(now).getTime() < parseTime(cred.expires_at).getTime() ? cred : null;
+  }
+
+  bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<BindCredentialResult> {
+    return this.#updateObject<Credential, BindCredentialResult>(this.#credentialKey(credentialSha256), "conflict", (cred) => {
+      if (cred.run_id !== null && cred.run_id !== runId) return { answer: "conflict" };
+      return { next: { ...cred, run_id: runId, expires_at: expiresAt }, answer: "bound" };
+    });
+  }
+
+  // ---- Db: runs --------------------------------------------------------------------------
 
   async openRun(a: OpenRunArgs): Promise<OpenRunResult> {
     const openKey = this.#openKey(a.member_id);

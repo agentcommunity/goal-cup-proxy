@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 
 const GOAL: &str = "write hello.txt, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
-const TOKEN: &str = "gct_worker_test_0123456789";
+/// The Worker's test-only approval key (see `TEST_APPROVAL_KEY` in `server/worker/README.md`).
+const APPROVAL_KEY: &str = "gcw_test_approval_key";
 const REPO: &str = "https://github.com/goal-cup/demo";
 /// The Worker's test seed: 32 bytes of 7, the seed the Rust vectors use.
 const SEED_HEX: &str = "0707070707070707070707070707070707070707070707070707070707070707";
@@ -53,7 +54,7 @@ impl Wrangler {
             ("GITHUB_CHECK", "off".to_string()),
             ("EVENT_ID", "practice".to_string()),
             ("RECEIPT_SIGNING_KEY", SEED_HEX.to_string()),
-            ("DEV_TOKENS", format!("{TOKEN}:member-1")),
+            ("TEST_APPROVAL_KEY", APPROVAL_KEY.to_string()),
         ];
         let mut command = Command::new("node");
         command
@@ -98,6 +99,43 @@ impl Wrangler {
             std::thread::sleep(Duration::from_millis(250));
         }
         Wrangler { child, url }
+    }
+
+    /// A run credential for `member-1`, through the device flow with the test approval route:
+    /// the string the tracer's config holds as its token, `gcr_` and 64 hex digits.
+    fn credential(&self) -> String {
+        let post =
+            |path: &str, bearer: Option<&str>, body: serde_json::Value| -> serde_json::Value {
+                let mut request = ureq::post(&format!("{}{path}", self.url))
+                    .set("Content-Type", "application/json");
+                if let Some(key) = bearer {
+                    request = request.set("Authorization", &format!("Bearer {key}"));
+                }
+                let text = request
+                    .send_string(&body.to_string())
+                    .unwrap()
+                    .into_string()
+                    .unwrap();
+                serde_json::from_str(&text).unwrap()
+            };
+        let device = post(
+            "/v1/device",
+            None,
+            serde_json::json!({"purpose": "run", "mode": "practice",
+                               "connector_id": "codex-cli", "tracer_version": "0.1.0"}),
+        );
+        post(
+            "/v1/device/approve",
+            Some(APPROVAL_KEY),
+            serde_json::json!({"user_code": device["user_code"], "member_id": "member-1",
+                               "approve": true}),
+        );
+        let picked = post(
+            "/v1/device/token",
+            None,
+            serde_json::json!({"device_code": device["device_code"]}),
+        );
+        picked["credential"].as_str().unwrap().to_string()
     }
 
     fn get(&self, path: &str, token: &str) -> serde_json::Value {
@@ -195,10 +233,10 @@ fn run_id(rig: &Rig, entry_id: &str) -> String {
 
 /// The Worker holds the whole chain and is sealed, and the trace verifies under its key with a
 /// verified acknowledgement of the last record.
-fn assert_fully_uploaded(rig: &Rig, worker: &Wrangler, entry_id: &str) {
+fn assert_fully_uploaded(rig: &Rig, worker: &Wrangler, credential: &str, entry_id: &str) {
     let trace = rig.trace(entry_id);
     let chain = std::fs::read(trace.join("chain.jsonl")).unwrap();
-    let position = worker.get(&format!("/v1/runs/{}", run_id(rig, entry_id)), TOKEN);
+    let position = worker.get(&format!("/v1/runs/{}", run_id(rig, entry_id)), credential);
     assert_eq!(position["offset"], chain.len() as u64, "{position}");
     assert_eq!(position["status"], "sealed", "{position}");
     let public_key = "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c";
@@ -227,7 +265,8 @@ fn upload_worker_a_run_is_uploaded_and_sealed_and_survives_a_restart() {
     let state = rig.root.join("worker");
     let port = free_port();
     let first = Wrangler::start(&state, port);
-    log_in(&rig, &first.url, TOKEN);
+    let credential = first.credential();
+    log_in(&rig, &first.url, &credential);
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -247,7 +286,7 @@ fn upload_worker_a_run_is_uploaded_and_sealed_and_survives_a_restart() {
     });
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     assert!(out.contains("uploaded: "), "{out}");
-    assert_fully_uploaded(&rig, &worker, &outcome.entry_id);
+    assert_fully_uploaded(&rig, &worker, &credential, &outcome.entry_id);
 }
 
 #[test]
@@ -257,7 +296,8 @@ fn upload_worker_an_incomplete_upload_is_finished_by_goalcup_upload() {
     let state = rig.root.join("worker");
     let port = free_port();
     let first = Wrangler::start(&state, port);
-    log_in(&rig, &first.url, TOKEN);
+    let credential = first.credential();
+    log_in(&rig, &first.url, &credential);
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -284,7 +324,7 @@ fn upload_worker_an_incomplete_upload_is_finished_by_goalcup_upload() {
         &mut said,
     )
     .unwrap_or_else(|e| panic!("{e}\n{}", String::from_utf8_lossy(&said)));
-    assert_fully_uploaded(&rig, &worker, &outcome.entry_id);
+    assert_fully_uploaded(&rig, &worker, &credential, &outcome.entry_id);
 }
 
 #[test]
@@ -318,7 +358,8 @@ fn upload_worker_the_worker_stops_the_run_at_its_deadline() {
         free_port(),
         &[("RUN_SECONDS", "3")],
     );
-    log_in(&rig, &worker.url, TOKEN);
+    let credential = worker.credential();
+    log_in(&rig, &worker.url, &credential);
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -338,9 +379,9 @@ fn upload_worker_the_worker_stops_the_run_at_its_deadline() {
     );
     let position = worker.get(
         &format!("/v1/runs/{}", run_id(&rig, &outcome.entry_id)),
-        TOKEN,
+        &credential,
     );
     assert_eq!(position["stop"], true, "{position}");
     assert!(position["final"].is_object(), "{position}");
-    assert_fully_uploaded(&rig, &worker, &outcome.entry_id);
+    assert_fully_uploaded(&rig, &worker, &credential, &outcome.entry_id);
 }

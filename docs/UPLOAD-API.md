@@ -10,8 +10,9 @@ tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests r
 ## Common rules
 
 - Base URL: what `goalcup login --server` stored. Every path below is under it.
-- Every call carries `Authorization: Bearer <token>`. A missing or unknown token is `401`; a run
-  that belongs to another member is `404`, so a token cannot probe for other members' runs.
+- Every call except the three under "Sign in" carries `Authorization: Bearer gcr_<64 hex>`, the run
+  credential. A missing, unknown or expired credential is `401`. A credential sees one run, the
+  one it opened; any other run id is `404`, so a credential cannot probe for other runs.
 - Request and response bodies are JSON (`Content-Type: application/json`), except the chunk body.
 - Times are RFC 3339 UTC to the second, `YYYY-MM-DDTHH:MM:SSZ`.
 - Identifiers: `run_id` is `r` and 16 lowercase hex digits; `entry_id` is `e` and 16 lowercase
@@ -23,11 +24,11 @@ tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests r
   | Status | `error` | Meaning | Tracer does |
   |---|---|---|---|
   | 400 | `malformed` | A field or header is missing or has the wrong shape. | stops, reports |
-  | 401 | `unauthorized` | No token, or not a token the server knows. | stops: `goalcup login` again |
-  | 403 | `forbidden` | The member may not start a run now (terms not accepted, outside the start window). | stops, reports |
-  | 404 | `not_found` | No such run for this token, or not this run's entry. | stops, reports |
-  | 409 | `conflict` | The request does not continue where the server is (offset, `prev`, seq), or the account already has an open run. | chunk: re-reads the position (`GET`), then continues |
-  | 410 | `closed` | The run is sealed or abandoned, or (after `deadline_at`) the request goes past what the final heartbeat committed. | stops, reports |
+  | 401 | `unauthorized` | No credential, or not one the server knows, or it has expired. | stops: `goalcup login` again |
+  | 403 | `forbidden` | The member may not start a run now (terms not accepted, outside the start window), or a device request was denied. | stops, reports |
+  | 404 | `not_found` | No such run for this credential, or not this run's entry. | stops, reports |
+  | 409 | `conflict` | The request does not continue where the server is (offset, `prev`, seq), the account already has an open run, or the credential already opened a run. | chunk: re-reads the position (`GET`), then continues |
+  | 410 | `closed` | The run is sealed or abandoned, or (after `deadline_at`) the request goes past what the final heartbeat committed. A device request has expired or was already picked up. | stops, reports |
   | 413 | `too_large` | A body over its cap. | stops, reports (a tracer bug) |
   | 422 | `digest_mismatch` | The body's SHA-256 is not `Goalcup-Sha256`. Nothing was stored. | retries with backoff |
   | 429 | `rate_limited` | Too many calls. `Retry-After` says when. | retries with backoff |
@@ -37,6 +38,68 @@ tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests r
   Any other 5xx, and any network failure, is retried with backoff. Backoff starts at 60 s,
   doubles to at most 15 min, with up to 25 % random jitter, and never waits less than a
   `Retry-After` (seconds) the server sent. Recording never waits on any of this.
+
+## Sign in and the run credential
+
+A participant has no password and pastes no token. The tracer asks for a code, the participant
+approves it on the website in a browser, and the tracer picks up a run credential once. Only the
+SHA-256 of the device code, the user code and the credential is stored on the server. The device
+code is only ever in a request body, never in a URL or a log.
+
+### `POST /v1/device` — start a request (no authentication)
+
+```json
+{"purpose": "login" | "run", "mode": "competition" | "practice",
+ "connector_id": "codex-cli", "tracer_version": "0.1.0"}
+```
+
+All four fields are required. `200`:
+
+```json
+{"device_code": "<64 hex>", "user_code": "BCDF-GHJK",
+ "verification_uri": "<the website's approval page>",
+ "verification_uri_complete": "<verification_uri>?code=BCDF-GHJK",
+ "interval": 5, "expires_in": 900}
+```
+
+`user_code` is 8 letters from `BCDFGHJKLMNPQRSTVWXZ`, shown as `XXXX-XXXX`; the website accepts it in
+any case, with or without the dash. `interval` is the seconds between polls, `expires_in` the
+seconds a request lives, counted from its creation, whatever its state. The tracer shows the
+participant `verification_uri_complete` and opens it when it can.
+
+### `POST /v1/device/token` — poll a request (no authentication)
+
+`{"device_code": "<64 hex>"}`. The answer is one of:
+
+| Status | Body | Meaning |
+|---|---|---|
+| `202` | `{"status": "pending"}` | Not decided yet. Ask again after `interval` seconds. |
+| `200` | `{"status": "approved", "purpose": "run", "credential": "gcr_<64 hex>", "expires_at": "…"}` | Approved for a run. The credential is minted now, returned this once, and stored hashed. |
+| `200` | `{"status": "approved", "purpose": "login", "account": {"handle": "…"}}` | Approved for a login. No credential exists. |
+| `403` | `forbidden` | The member denied it. Every poll answers `403` until the request expires. |
+| `410` | `closed` | The request expired, never existed, or was already picked up. |
+
+An approved request answers `200` to the first poll only; every later poll is `410`.
+
+### The run credential
+
+A credential stands for one member and one `mode`, the mode of the request that made it. It is
+unbound until `POST /v1/runs` opens a run with it; that call binds it to the run. From then on
+it may call only that run's paths, and `POST /v1/runs` with it again is the repeat described
+there. The tracer keeps it in a file readable by the participant only, never in the harness's
+environment, in a command line or in a URL.
+
+A credential expires at `approved_at + 1 hour` while it is unbound, and at the run's
+`deadline_at + 24 hours` once it is bound. After that it is `401`.
+
+### `POST /v1/device/approve` — approve a request (tests and staging only)
+
+`Authorization: Bearer <TEST_APPROVAL_KEY>`, body `{"user_code", "member_id", "approve": true|false}`;
+`200 {"status": "approved"|"denied"}`. It stands in for the website's approval page, so a test needs
+no browser. An unknown code is `404`, an expired request `410`, an already decided one `409`. The
+route exists only when the server was given a `TEST_APPROVAL_KEY` and runs with the local database
+or `STAGING=on` (unset: `404`). With a key anywhere else, every call answers `500 misconfigured`.
+Production never has one.
 
 ## `POST /v1/runs` — open a run
 
@@ -57,9 +120,12 @@ event's run hours.
 `-`; the repository is ASCII letters, digits, `-`, `_` and `.`, and is never `.` or `..`. Anything
 else is `400`.
 
-A repeat of the same `session_id` by the same member while that run is open and has no receipt
-returns the same answer with `200`, so a reply lost in transit is not a second run. Another open
-run on the account is `409`.
+A credential opens one run. A repeat of the same `session_id` on a credential that already opened a
+run returns that run's answer with `200`, whatever the run's state, so a reply lost in transit is
+not a second run. Another `session_id` on it is `409`: this credential already opened a run, and
+the participant runs `goalcup continue`. Binding the credential to the new run is conditional on
+it being unbound; if it was bound to another run in the meantime, that too is this `409`. A credential that has not opened a run yet is still held
+to the account's one open run: another open run on the account is `409`.
 
 **Differs from section 4:** `chain_head_at_create` is not sent here. The chain's first link hashes
 the `entry_id`, and the server issues the `entry_id` in this answer, so the head cannot exist yet.
@@ -167,9 +233,15 @@ up to the end of it. The server stamps its own receive time on them, which commi
 that chain position before the bytes arrive. `repo_head` is the 40-hex commit the run's workspace
 repository had checked out when the run ended (final heartbeat only; `null` when there is none).
 
-`200`: `{"stop": <bool>, "deadline_at": "…"}`. `stop` is `true` once the server's clock is at or
-past `deadline_at`: **the run is over**. The tracer then stops the agent at once, seals, and sends
-the final heartbeat.
+Two optional fields may be added: `"recording": "ok" | "gaps" | "failed" | "unknown"` (how the
+tracer sees its own recording) and `"model_requests": <u64>` (model calls seen so far, cumulative,
+at most 2^53 - 1). A heartbeat without them is as before, and `null` means absent, as for
+`repo_head`. The server checks their shape and records nothing else about them yet.
+
+`200`: `{"stop": <bool>, "deadline_at": "…", "reason": null}`. `stop` is `true` once the server's
+clock is at or past `deadline_at`: **the run is over**. The tracer then stops the agent at once,
+seals, and sends the final heartbeat. `reason` says why `stop` is true when the deadline is not
+the only reason (`"deadline"` or `"replaced"`; a later change fills it, today it is `null`).
 
 **The final heartbeat commits the end of the run.** Its `(seq, head)` is the last record the
 server will ever accept for the entry. A repeat with the same `(seq, head)` is `200`; a different
@@ -200,6 +272,24 @@ no late window.
 - Which records count is the verify job's: a record stamped after `deadline_at` does not, however
   it arrived.
 
+## `POST /v1/runs/{run_id}/continue` — one more segment of the same run
+
+**Not built yet: the Worker's next task implements it.** The contract is fixed here so the tracer
+can code against it.
+
+```json
+{"previous_entry_id": "e…", "connector_id": "…", "manifest_sha256": "<hex>",
+ "connector_dir_sha256": "<hex>", "workspace": "…", "session_id": "…",
+ "harness_version": "…", "tracer_version": "…"}
+```
+
+`201 {"entry_id", "segment", "official_start", "deadline_at"}`. The same `session_id` again is `200`
+with the same answer. A `previous_entry_id` that is not the run's latest entry is `409`. At or after
+the run's end (`ends_at = min(deadline_at, replaced_at)`) it is `410`. The receipt, chunks,
+heartbeat and seal calls then address the named `entry_id`, and `GET /v1/runs/{run_id}?entry_id=`
+gives that entry's position.
+
 ## Not built yet
 
-Outage windows, live totals in the heartbeat, and `continue` (section 4) come in later slices.
+Outage windows, live totals in the heartbeat, and the rest of `continue` (section 4) come in later
+slices.
