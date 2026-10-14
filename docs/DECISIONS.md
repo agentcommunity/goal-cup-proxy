@@ -1557,9 +1557,10 @@ filters (`an_agent_written_clean_filter_is_never_run` failed on it). Every call 
 deadline, prints at most 64 MiB, and is killed and reaped past the deadline.
 
 **Time.** `LOCAL_CAPTURE_FINISH_BUDGET` is 180 s (it was 10 s; amends D40 and the C6 budget in
-CONTRACTS.md); `FINISH_COMMIT_RESERVE` stays 2 s. The daemon's drain share now ends the reserve
-plus 30 s before the deadline, so a producer that never settles cannot starve the Git read: it
-gets at least 30 s, or all of a smaller budget, and it ends at the commit reserve. The baseline gives Git 20 s, inside the CLI's 30 s
+CONTRACTS.md); `FINISH_COMMIT_RESERVE` stays 2 s. When the workspace is a clone root, the daemon's drain
+share ends the reserve plus 30 s before the deadline, so a producer that never settles cannot
+starve the Git read: it gets at least 30 s, or all of a smaller budget, and it ends at the commit
+reserve. Any other workspace reads no Git, and its drain share ends at the reserve as before. The baseline gives Git 20 s, inside the CLI's 30 s
 create call.
 
 **Reconsider when** the server re-derives the uncommitted state from a pushed branch, or a

@@ -10,7 +10,8 @@ use super::*;
 pub(super) const FINISH_RESPONSE_MARGIN: Duration = Duration::from_secs(1);
 
 /// What the drain share leaves the seal of a clone's Git state, inside the budget (D56): a
-/// producer that never settles cannot starve it. A smaller budget leaves it all of it.
+/// producer that never settles cannot starve it. A smaller budget leaves it all of it. Only a
+/// finish that reads Git reserves it.
 pub(super) const GIT_READ_FLOOR: Duration = Duration::from_secs(30);
 
 /// The finish reason a local capture finish records on its `LocalFinish` record. A local
@@ -82,17 +83,26 @@ pub(super) struct FinishBudget {
 }
 
 impl FinishBudget {
-    /// `NotStarted` for a zero remainder. The drain share ends [`FINISH_COMMIT_RESERVE`] plus
-    /// [`GIT_READ_FLOOR`] before the deadline, or now when less than that remains.
-    pub(super) fn from_request(request: &CaptureSealRequest) -> Result<FinishBudget, DaemonError> {
+    /// `NotStarted` for a zero remainder. The drain share ends [`FINISH_COMMIT_RESERVE`] before
+    /// the deadline, plus [`GIT_READ_FLOOR`] when the seal `reads_git` (a clone root), or now
+    /// when less than that remains.
+    pub(super) fn from_request(
+        request: &CaptureSealRequest,
+        reads_git: bool,
+    ) -> Result<FinishBudget, DaemonError> {
         let remaining = request.remaining_finish();
         if remaining.is_zero() {
             return Err(refused_at(FinishStage::NotStarted));
         }
         let now = tokio::time::Instant::now();
         let deadline = now + remaining;
+        let floor = if reads_git {
+            GIT_READ_FLOOR
+        } else {
+            Duration::ZERO
+        };
         let drain_end = deadline
-            .checked_sub(FINISH_COMMIT_RESERVE + GIT_READ_FLOOR)
+            .checked_sub(FINISH_COMMIT_RESERVE + floor)
             .map_or(now, |end| end.max(now));
         Ok(FinishBudget {
             drain_end,
@@ -257,7 +267,8 @@ impl Daemon {
                 });
         };
         // Stage 0: a zero budget is refused before anything is closed or flagged.
-        let budget = FinishBudget::from_request(request)?;
+        let reads_git = workspace::is_clone_root(&capture.workspace);
+        let budget = FinishBudget::from_request(request, reads_git)?;
         capture.finishing.store(true, Ordering::Release);
         let abandoned = AbandonGuard {
             capture: capture.clone(),
