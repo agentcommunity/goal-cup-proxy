@@ -71,7 +71,7 @@ impl Rig {
             "POST",
             "/v1/device",
             None,
-            Some(&json!({"purpose": purpose, "mode": "practice",
+            Some(&json!({"purpose": purpose, "mode": "competition",
                          "connector_id": "codex-cli", "tracer_version": "0.1.0"})),
         );
         assert_eq!(r.status, 200, "{}", r.body);
@@ -169,7 +169,7 @@ fn a_device_request_is_approved_at_once_and_picked_up_once() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         (requests[0].purpose.as_str(), requests[0].mode.as_str()),
-        ("run", "practice")
+        ("run", "competition")
     );
     assert_eq!(requests[0].connector_id, "codex-cli");
     assert_eq!(requests[0].tracer_version, "0.1.0");
@@ -319,9 +319,15 @@ fn the_same_session_id_returns_the_same_run_and_another_is_409() {
         other.body
     );
 
-    // A second credential of the same member meets the account's one open run.
+    // A second credential of the same member starts a new run, which replaces the first.
     let second = rig.credential();
-    is_error(&rig.open(&second, "another"), 409, "conflict");
+    let replacing = rig.open(&second, "another");
+    assert_eq!(replacing.status, 201, "{}", replacing.body);
+    assert!(
+        rig.server
+            .replaced_at(first.body["run_id"].as_str().unwrap())
+            .is_some()
+    );
 }
 
 #[test]

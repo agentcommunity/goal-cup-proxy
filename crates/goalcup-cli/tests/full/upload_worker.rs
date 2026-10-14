@@ -121,7 +121,7 @@ impl Wrangler {
         let device = post(
             "/v1/device",
             None,
-            serde_json::json!({"purpose": "run", "mode": "practice",
+            serde_json::json!({"purpose": "run", "mode": "competition",
                                "connector_id": "codex-cli", "tracer_version": "0.1.0"}),
         );
         post(
@@ -180,6 +180,7 @@ fn log_in(rig: &Rig, url: &str, token: &str) {
         &rig.cfg,
         &ServerConfig {
             url: url.to_string(),
+            account: None,
             token: token.to_string(),
         },
     )
@@ -231,14 +232,33 @@ fn run_id(rig: &Rig, entry_id: &str) -> String {
         .run_id
 }
 
-/// The Worker holds the whole chain and is sealed, and the trace verifies under its key with a
-/// verified acknowledgement of the last record.
+/// The Worker holds the whole chain and the entry is sealed, and the trace verifies under its key
+/// with a verified acknowledgement of the last record. The run itself is sealed once it is over,
+/// and stays open until then.
 fn assert_fully_uploaded(rig: &Rig, worker: &Wrangler, credential: &str, entry_id: &str) {
     let trace = rig.trace(entry_id);
     let chain = std::fs::read(trace.join("chain.jsonl")).unwrap();
-    let position = worker.get(&format!("/v1/runs/{}", run_id(rig, entry_id)), credential);
+    let run = run_id(rig, entry_id);
+    let position = worker.get(&format!("/v1/runs/{run}"), credential);
     assert_eq!(position["offset"], chain.len() as u64, "{position}");
-    assert_eq!(position["status"], "sealed", "{position}");
+    let over = position["stop"] == true;
+    assert_eq!(
+        position["status"],
+        if over { "sealed" } else { "open" },
+        "{position}"
+    );
+    // The entry is sealed: other documents are a conflict.
+    let other = ureq::post(&format!("{}/v1/runs/{run}/seal", worker.url))
+        .set("Authorization", &format!("Bearer {credential}"))
+        .set("Content-Type", "application/json")
+        .send_string(
+            &serde_json::json!({"entry_id": entry_id, "seal_json": "{}", "baseline_json": "{}"})
+                .to_string(),
+        );
+    assert!(
+        matches!(other, Err(ureq::Error::Status(409, _))),
+        "the entry is not sealed: {other:?}"
+    );
     let public_key = "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c";
     let options = goalcup_verifier::VerifyOptions {
         extra_server_keys: vec![public_key.to_string()],

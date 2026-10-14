@@ -12,28 +12,109 @@
 import type {
   AbandonResult,
   ApproveDeviceResult,
-  BindCredentialResult,
   ChunkRecord,
   CommitChunkArgs,
   CommitChunkResult,
+  ContinueRunArgs,
+  ContinueRunResult,
   CreateDeviceArgs,
   Credential,
   Db,
   DevicePoll,
+  EntryRow,
   HeartbeatArgs,
   HeartbeatResult,
   OpenRunArgs,
   OpenRunResult,
   RunRow,
+  RunStatus,
   SealArgs,
   SealResult,
   StoreReceiptResult,
 } from "./db.ts";
 import { ApiError } from "./errors.ts";
 import type { StartReceipt } from "./sign.ts";
+import { RUN_ID, isEntryId, isHex64, isTime } from "./util.ts";
+
+const STATUS_WORDS = ["open", "sealed", "incomplete", "abandoned"] as const;
+
+// What a row coming back must look like. The SQL and this file are written apart, so a row is
+// checked field by field before anything trusts it.
+type Check = (v: unknown) => boolean;
+const isObject: Check = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+const text: Check = (v) => typeof v === "string";
+const uint: Check = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+const hex64: Check = isHex64;
+const nullable =
+  (check: Check): Check =>
+  (v) =>
+    v === null || check(v);
+const oneOf =
+  (...words: string[]): Check =>
+  (v) =>
+    typeof v === "string" && words.includes(v);
+const END: Check = (v) => isObject(v) && uint((v as Record<string, unknown>).seq) && hex64((v as Record<string, unknown>).head);
+
+const RUN_SHAPE: Record<string, Check> = {
+  run_id: (v) => typeof v === "string" && RUN_ID.test(v),
+  event_id: text,
+  member_id: text,
+  mode: oneOf("competition", "practice"),
+  status: oneOf(...STATUS_WORDS),
+  official_start: isTime,
+  deadline_at: isTime,
+  replaced_at: nullable(isTime),
+  repo_url: text,
+  first_entry_id: isEntryId,
+  current_entry_id: isEntryId,
+  current_sealed_at: nullable(isTime),
+};
+const ENTRY_SHAPE: Record<string, Check> = {
+  entry_id: isEntryId,
+  run_id: RUN_SHAPE.run_id!,
+  segment: uint,
+  connector_id: text,
+  manifest_sha256: hex64,
+  connector_dir_sha256: hex64,
+  workspace: text,
+  session_id: text,
+  offset: uint,
+  next_seq: uint,
+  head: hex64,
+  last_ack: nullable(isObject),
+  final: nullable(END),
+  receipt: nullable(isObject),
+  seal_sha256: nullable(hex64),
+  baseline_sha256: nullable(hex64),
+  sealed_at: nullable(isTime),
+};
+const CHUNK_SHAPE: Record<string, Check> = {
+  entry_id: isEntryId,
+  offset: uint,
+  length: uint,
+  sha256: hex64,
+  first_seq: uint,
+  last_seq: uint,
+  prev: hex64,
+  head: hex64,
+  r2_key: text,
+  received_at: isTime,
+  ack: isObject,
+};
 
 const SCHEMA = "goalcup";
 const TIMEOUT_MS = 10_000;
+
+/** PostgREST's `code` and `message` out of an error reply, shortened; nothing else it said. */
+async function errorSummary(res: Response): Promise<string> {
+  try {
+    const e = (await res.json()) as { code?: unknown; message?: unknown };
+    const part = (v: unknown) => (typeof v === "string" ? v.slice(0, 200) : "");
+    return `${part(e.code)} ${part(e.message)}`.trim();
+  } catch {
+    return "(no readable error)";
+  }
+}
 
 export class SupabaseDb implements Db {
   readonly #base: string;
@@ -67,8 +148,9 @@ export class SupabaseDb implements Db {
       throw new ApiError(502, "upstream_error", "The database could not be reached.");
     }
     if (!res.ok) {
-      // Log the status and PostgREST's error text (no request data, no keys); tell the client nothing more.
-      console.error(`supabase ${fn}: HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      // Log the status and PostgREST's error `code` and `message` only: its `details` and `hint` can
+      // quote the row (machine, client_ip). Tell the client nothing more.
+      console.error(`supabase ${fn}: HTTP ${res.status}: ${await errorSummary(res)}`);
       throw new ApiError(502, "upstream_error", "The database refused the request.");
     }
     return res.json();
@@ -81,14 +163,22 @@ export class SupabaseDb implements Db {
     throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
   }
 
+  /** A row that has every field of `shape` in the right form, or a 502 that names the fields (never their values). */
+  #row<T>(fn: string, v: unknown, what: string, shape: Record<string, Check>): T {
+    const bad = isObject(v) ? Object.keys(shape).filter((k) => !shape[k]!((v as Record<string, unknown>)[k])) : ["(not an object)"];
+    if (bad.length === 0) return v as T;
+    console.error(`supabase ${fn}: the ${what} has fields that do not look right: ${bad.join(", ")}`);
+    throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+  }
+
+  /** A run and an entry together, as the position and the open and continue calls answer them. */
+  #pair(fn: string, run: unknown, entry: unknown): { run: RunRow; entry: EntryRow } {
+    return { run: this.#row<RunRow>(fn, run, "run", RUN_SHAPE), entry: this.#row<EntryRow>(fn, entry, "entry", ENTRY_SHAPE) };
+  }
+
   async credential(credentialSha256: string, now: string): Promise<Credential | null> {
     const v = await this.#rpc("upload_credential", { p_credential_hash: credentialSha256, p_now: now });
     return (v as Credential | null) ?? null;
-  }
-
-  async bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<BindCredentialResult> {
-    const v = await this.#rpc("upload_bind_credential", { p_credential_hash: credentialSha256, p_run_id: runId, p_expires_at: expiresAt });
-    return this.#word("upload_bind_credential", v, ["bound", "conflict"] as const);
   }
 
   async createDevice(a: CreateDeviceArgs): Promise<void> {
@@ -131,6 +221,7 @@ export class SupabaseDb implements Db {
     const v = (await this.#rpc("upload_open_run", {
       p_member_id: a.member_id,
       p_event_id: a.event_id,
+      p_mode: a.mode,
       p_run_id: a.run_id,
       p_entry_id: a.entry_id,
       p_official_start: a.official_start,
@@ -143,33 +234,62 @@ export class SupabaseDb implements Db {
       p_harness_version: a.harness_version,
       p_tracer_version: a.tracer_version,
       p_repo_url: a.repo_url,
-    })) as { result?: unknown; run?: RunRow; message?: string } | null;
+      p_machine: a.machine,
+      p_client_ip: a.client_ip,
+      p_client_country: a.client_country,
+      p_credential_hash: a.credential,
+      p_credential_expires_at: a.credential_expires_at,
+    })) as { result?: unknown; run?: unknown; entry?: unknown; message?: string } | null;
     const result = this.#word("upload_open_run", v?.result, ["created", "existing", "conflict", "forbidden"] as const);
     if (result === "conflict") return { kind: "conflict" };
     if (result === "forbidden") return { kind: "forbidden", message: v?.message ?? "You may not start a run now." };
-    if (!v?.run) throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
-    return { kind: result, run: v.run };
+    return { kind: result, ...this.#pair("upload_open_run", v?.run, v?.entry) };
   }
 
-  async getRun(memberId: string, runId: string): Promise<RunRow | null> {
-    const v = await this.#rpc("upload_run_position", { p_member_id: memberId, p_run_id: runId });
-    return (v as RunRow | null) ?? null;
+  async continueRun(a: ContinueRunArgs): Promise<ContinueRunResult> {
+    const v = (await this.#rpc("upload_continue_run", {
+      p_member_id: a.member_id,
+      p_run_id: a.run_id,
+      p_previous_entry_id: a.previous_entry_id,
+      p_entry_id: a.entry_id,
+      p_connector_id: a.connector_id,
+      p_manifest_sha256: a.manifest_sha256,
+      p_connector_dir_sha256: a.connector_dir_sha256,
+      p_workspace: a.workspace,
+      p_session_id: a.session_id,
+      p_harness_version: a.harness_version,
+      p_tracer_version: a.tracer_version,
+      p_client_ip: a.client_ip,
+      p_client_country: a.client_country,
+      p_at: a.at,
+    })) as { result?: unknown; run?: unknown; entry?: unknown } | null;
+    const result = this.#word("upload_continue_run", v?.result, ["created", "existing", "conflict", "closed", "not_found"] as const);
+    if (result === "created" || result === "existing") return { kind: result, ...this.#pair("upload_continue_run", v?.run, v?.entry) };
+    return { kind: result };
   }
 
-  async getChunk(memberId: string, runId: string, offset: number): Promise<ChunkRecord | null> {
-    const v = await this.#rpc("upload_get_chunk", { p_member_id: memberId, p_run_id: runId, p_offset: offset });
-    return (v as ChunkRecord | null) ?? null;
+  async getRun(memberId: string, runId: string, entryId: string | null): Promise<{ run: RunRow; entry: EntryRow | null } | null> {
+    const v = (await this.#rpc("upload_run_position", { p_member_id: memberId, p_run_id: runId, p_entry_id: entryId })) as { run?: unknown; entry?: unknown } | null;
+    if (v === null) return null;
+    const run = this.#row<RunRow>("upload_run_position", v.run, "run", RUN_SHAPE);
+    return { run, entry: v.entry === null ? null : this.#row<EntryRow>("upload_run_position", v.entry, "entry", ENTRY_SHAPE) };
   }
 
-  async storeReceipt(memberId: string, runId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult> {
+  async getChunk(memberId: string, runId: string, entryId: string, offset: number): Promise<ChunkRecord | null> {
+    const v = await this.#rpc("upload_get_chunk", { p_member_id: memberId, p_run_id: runId, p_entry_id: entryId, p_offset: offset });
+    return v === null ? null : this.#row<ChunkRecord>("upload_get_chunk", v, "chunk", CHUNK_SHAPE);
+  }
+
+  async storeReceipt(memberId: string, runId: string, entryId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult> {
     const v = (await this.#rpc("upload_issue_receipt", {
       p_member_id: memberId,
       p_run_id: runId,
+      p_entry_id: entryId,
       p_chain_head: chainHead,
       p_receipt: receipt,
     })) as { result?: unknown; receipt?: StartReceipt } | null;
-    const result = this.#word("upload_issue_receipt", v?.result, ["stored", "existing", "conflict", "closed"] as const);
-    if (result === "conflict" || result === "closed") return { kind: result };
+    const result = this.#word("upload_issue_receipt", v?.result, ["stored", "existing", "conflict", "closed", "not_found"] as const);
+    if (result === "conflict" || result === "closed" || result === "not_found") return { kind: result };
     if (!v?.receipt) throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
     return { kind: result, receipt: v.receipt };
   }
@@ -199,13 +319,13 @@ export class SupabaseDb implements Db {
     return this.#word("upload_heartbeat", v, ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"] as const);
   }
 
-  async expireRun(memberId: string, runId: string, at: string): Promise<boolean> {
-    const v = await this.#rpc("upload_expire_run", { p_member_id: memberId, p_run_id: runId, p_at: at });
-    return this.#word("upload_expire_run", v, ["expired", "not_expired"] as const) === "expired";
+  async closeRun(memberId: string, runId: string, at: string): Promise<RunStatus | null> {
+    const v = await this.#rpc("upload_close_run", { p_member_id: memberId, p_run_id: runId, p_at: at });
+    return v === null ? null : this.#word("upload_close_run", v, STATUS_WORDS);
   }
 
   async sealRun(a: SealArgs): Promise<SealResult> {
-    const v = await this.#rpc("upload_seal_run", {
+    const v = (await this.#rpc("upload_seal_run", {
       p_member_id: a.member_id,
       p_run_id: a.run_id,
       p_entry_id: a.entry_id,
@@ -214,7 +334,11 @@ export class SupabaseDb implements Db {
       p_seal_key: a.seal_key,
       p_baseline_key: a.baseline_key,
       p_sealed_at: a.sealed_at,
-    });
-    return this.#word("upload_seal_run", v, ["sealed", "already_sealed", "conflict", "closed", "not_found"] as const);
+    })) as { result?: unknown; run_status?: unknown } | null;
+    const result = this.#word("upload_seal_run", v?.result, ["sealed", "already_sealed", "conflict", "no_final", "chain_behind", "closed", "not_found"] as const);
+    if (result === "sealed" || result === "already_sealed") {
+      return { kind: result, run_status: this.#word("upload_seal_run", v?.run_status, STATUS_WORDS) };
+    }
+    return { kind: result };
   }
 }

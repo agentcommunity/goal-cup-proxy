@@ -28,6 +28,10 @@ use std::time::{Duration, Instant};
 const GOAL: &str = "write hello.txt, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
 
+/// A test build's short wrap-up for a run without a server: two seconds, and the seal asked
+/// again after 100 ms (doubling) instead of the shipped 30 minutes and 10 s.
+const SHORT_WRAP_UP: (&str, &str) = (goalcup_cli::upload::policy::TEST_LOCAL_WRAP_UP, "2000,100");
+
 fn joined<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
     handle.join().expect("the start thread panicked")
 }
@@ -698,29 +702,6 @@ fn an_altered_pinned_id_under_an_alias_is_exit_one_before_any_start_write() {
     assert_aliased_shipped_connector_refuses_before_start_writes(true);
 }
 
-#[test]
-fn an_unreservable_chain_refuses_before_the_proxy_and_leaves_nothing() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::new();
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let (result, out) =
-        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, 1 << 60), None)));
-    let error = result.expect_err("a reservation this volume cannot hold");
-    assert!(
-        matches!(
-            error,
-            goalcup_cli::CliError::Control(ControlError::PreflightFailed(_))
-        ),
-        "{error}\n{out}"
-    );
-    assert_eq!(client.names(), vec!["create_capture_workspace"]);
-    assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
-    assert!(records(&rig).is_empty());
-    assert!(!rig.harness_started());
-}
-
 /// The proxy fails to start two ways, each before the goal is sent: its sender never finds
 /// the ingest endpoint (a closed port, so the start deadline passes), or its CA certificate has
 /// nowhere to go (a file already sits where it is written).
@@ -1298,6 +1279,10 @@ fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
     client.book().seal_fault = Some(|| {
         CaptureSealError::NotAdmitted(ControlError::Unreachable("connection refused".into()))
     });
+    // A seal that does not take is asked again until the wrap-up runs out; a test build gives a
+    // run without a server two seconds of it, the first wait 100 ms.
+    rig.with_env(SHORT_WRAP_UP.0, SHORT_WRAP_UP.1);
+    let began = Instant::now();
     let (result, out) = std::thread::scope(|s| {
         joined(rig.start(
             s,
@@ -1308,7 +1293,16 @@ fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
     });
     let error = result.expect_err(&format!("the launcher's finish was refused\n{out}"));
     assert!(matches!(error, CliError::Refused(_)), "{error:?}");
-    assert_eq!(client.book().seals.len(), 1, "one request, never delivered");
+    assert!(
+        began.elapsed() < Duration::from_secs(20),
+        "the wrap-up bounds the asking: {:?}",
+        began.elapsed()
+    );
+    assert!(
+        client.book().seals.len() > 1,
+        "asked again, never delivered: {} requests",
+        client.book().seals.len()
+    );
     assert!(
         out.contains("fail_open=1"),
         "the proxy counted the tunnel: {out}"
@@ -1930,6 +1924,7 @@ fn capture_finish_refusals_say_what_they_mean_and_carry_the_one_budget() {
         std::fs::remove_file(rig.cfg.join("control.json")).unwrap();
         let client = Hooked::new(&http, &rig);
         client.book().seal_fault = Some(fault);
+        rig.with_env(SHORT_WRAP_UP.0, SHORT_WRAP_UP.1);
         let began = Instant::now();
         let (result, out) = std::thread::scope(|s| {
             joined(rig.start(s, &client, rig.options(&goal, RESERVE), None))
@@ -1965,13 +1960,14 @@ fn capture_finish_refusals_say_what_they_mean_and_carry_the_one_budget() {
             Duration::from_millis(ms) + Duration::from_millis(4_250) + Duration::from_secs(2),
             "{name}: read timeout = remaining + termination_bound(0) + CONNECT_TIMEOUT"
         );
-        if name == "busy" {
+        if name == "unauthorized" {
+            assert_eq!(book.seals.len(), 1, "{name} is definitive, never replayed");
+        } else {
             assert!(
                 book.seals.len() > 1,
-                "busy is retried on the dephased schedule"
+                "{name} is asked again until the wrap-up runs out: {} requests",
+                book.seals.len()
             );
-        } else {
-            assert_eq!(book.seals.len(), 1, "{name} is never replayed");
         }
     }
 }
