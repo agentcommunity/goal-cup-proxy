@@ -198,12 +198,19 @@ impl ChainWriter {
         }
     }
 
-    /// Flush the chain: the only way appended records become the durable frontier.
+    /// Flush the chain: the only way appended records become the durable frontier. A flushed
+    /// part that is due is then closed and the next one opened (D55); a failed rotation stops
+    /// the writer exactly as a failed flush does.
     pub(super) fn sync(&mut self) -> Result<Option<DurableFrontier>, DaemonError> {
         if self.failure.is_some() {
             return Ok(self.export.capture_storage().durable);
         }
-        self.export.sync_capture().map_err(|error| {
+        let synced = self.export.sync_capture().and_then(|frontier| {
+            self.export
+                .rotate_if_due(std::time::Instant::now())
+                .map(|_| frontier)
+        });
+        synced.map_err(|error| {
             self.fail(&error);
             DaemonError::Export(error)
         })

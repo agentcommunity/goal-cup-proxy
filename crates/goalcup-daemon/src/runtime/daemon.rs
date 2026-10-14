@@ -51,6 +51,9 @@ pub(super) struct DaemonInner {
     /// clock and to nothing an `Instant` reads.
     #[cfg(test)]
     pub(super) simulated_sleep_seconds: Mutex<f64>,
+    /// Test seam: the chain part size and age every entry this daemon creates rotates at.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) part_limits: Mutex<Option<(u64, std::time::Duration)>>,
     /// The latest finalization time this process has handed out. The finalization clock is
     /// the wall clock, which keeps counting while the Mac sleeps; this high-water keeps a
     /// wall-clock rollback within one process from moving any phase backwards.
@@ -172,6 +175,8 @@ impl Daemon {
             capture_clock,
             #[cfg(test)]
             simulated_sleep_seconds: Mutex::new(0.0),
+            #[cfg(any(test, feature = "test-hooks"))]
+            part_limits: Mutex::new(None),
             finalization_high_water: Mutex::new(0.0),
             cycles: Arc::new(CycleCounters::default()),
             control_addr: OnceLock::new(),
@@ -506,6 +511,18 @@ impl Daemon {
     /// What the daemon's loop has lost, as the status document carries it.
     pub fn cycle_errors(&self) -> CycleErrors {
         self.inner.cycles.snapshot()
+    }
+
+    /// Test-only: every capture entry this daemon creates from now on rotates its chain into
+    /// parts at `bytes` or `age` (D55), so a test sees parts without writing 256 MiB. An entry
+    /// reopened at start keeps the shipped limits.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn set_chain_part_limits_for_test(&self, bytes: u64, age: std::time::Duration) {
+        *self
+            .inner
+            .part_limits
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some((bytes, age));
     }
 }
 
