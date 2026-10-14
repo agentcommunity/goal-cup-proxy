@@ -10,14 +10,14 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { Signer } from "../src/sign.ts";
 import type { Ack, StartReceipt } from "../src/sign.ts";
-import { Client, GENESIS, makeChunk, openBody, sha256, verifyAck, verifyReceipt } from "./helpers/client.ts";
+import { APPROVAL_KEY, Client, GENESIS, credentialFor, makeChunk, openBody, sha256, verifyAck, verifyReceipt } from "./helpers/client.ts";
 import { TEST_SEED, startWorker, type RunningWorker } from "./helpers/worker.ts";
 
-const ALICE = "tok-alice";
-const BOB = "tok-bob";
-const CAROL = "tok-carol";
-const DAVE = "tok-dave";
-const DEV_TOKENS = `${ALICE}:alice,${BOB}:bob,${CAROL}:carol,${DAVE}:dave`;
+// Run credentials, minted through the device flow in each describe's `before`.
+let ALICE = "";
+let BOB = "";
+let CAROL = "";
+let DAVE = "";
 const ID_RUN = /^r[0-9a-f]{16}$/;
 const ID_ENTRY = /^e[0-9a-f]{16}$/;
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
@@ -63,8 +63,9 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
   let api: Client;
 
   before(async () => {
-    worker = await startWorker({ EVENT_ID: "practice", DEV_TOKENS });
+    worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY });
     api = new Client(worker.url);
+    [ALICE, BOB, CAROL] = [await credentialFor(api, "alice"), await credentialFor(api, "bob"), await credentialFor(api, "carol")];
   });
   after(async () => {
     await worker?.stop();
@@ -124,7 +125,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.deepEqual(r.body, { run_id: runId, entry_id: entryId, official_start: first.body.official_start, deadline_at: first.body.deadline_at });
     });
 
-    test("a different session_id while a run is open is 409", async () => {
+    test("a different session_id on a credential that opened a run is 409", async () => {
       const r = await api.call("POST", "/v1/runs", { token: ALICE, json: openBody({ session_id: "another-session" }) });
       assertError(r, 409, "conflict");
     });
@@ -175,8 +176,10 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assertError(await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: "nope", chain_head: "b".repeat(64) } }), 400, "malformed");
     });
 
-    test("once a receipt exists, repeating the open call is a 409 (only a receipt-less run is returned again)", async () => {
-      assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: openBody() }), 409, "conflict");
+    test("once a receipt exists, repeating the open call is still 200 with the same run", async () => {
+      const r = await api.call("POST", "/v1/runs", { token: ALICE, json: openBody() });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal(r.body.run_id, runId);
     });
   });
 
@@ -203,7 +206,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       const r = await beat();
       assert.equal(r.status, 200, JSON.stringify(r.body));
       const pos = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
-      assert.deepEqual(r.body, { stop: false, deadline_at: pos.body.deadline_at });
+      assert.deepEqual(r.body, { stop: false, deadline_at: pos.body.deadline_at, reason: null });
     });
 
     test("bad fields are 400, a foreign entry 404, another member's run 404, no token 401", async () => {
@@ -406,7 +409,8 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assertError(await api.call("PUT", `/v1/runs/${id}/chunks/0`, { token: CAROL, body: c.body, headers: c.headers }), 410, "closed");
       assertError(await api.call("POST", `/v1/runs/${id}/receipt`, { token: CAROL, json: { entry_id: open.body.entry_id, chain_head: "b".repeat(64) } }), 410, "closed");
 
-      const next = await api.call("POST", "/v1/runs", { token: CAROL, json: openBody({ session_id: "carols-session" }) });
+      // The credential stays with the run it opened; a new approval opens the next one.
+      const next = await api.call("POST", "/v1/runs", { token: await credentialFor(api, "carol"), json: openBody({ session_id: "carols-session" }) });
       assert.equal(next.status, 201, JSON.stringify(next.body));
       assert.notEqual(next.body.run_id, id);
     });
@@ -442,7 +446,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
     });
 
     test("the account is free again after the seal", async () => {
-      const r = await api.call("POST", "/v1/runs", { token: ALICE, json: openBody({ session_id: "second-run" }) });
+      const r = await api.call("POST", "/v1/runs", { token: await credentialFor(api, "alice"), json: openBody({ session_id: "second-run" }) });
       assert.equal(r.status, 201, JSON.stringify(r.body));
       assert.notEqual(r.body.run_id, runId);
     });
@@ -452,7 +456,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
 describe("maintenance switch", () => {
   let worker: RunningWorker;
   before(async () => {
-    worker = await startWorker({ EVENT_ID: "practice", DEV_TOKENS, MAINTENANCE: "on", MAINTENANCE_RETRY_AFTER: "120" });
+    worker = await startWorker({ EVENT_ID: "practice", MAINTENANCE: "on", MAINTENANCE_RETRY_AFTER: "120" });
   });
   after(async () => {
     await worker?.stop();
@@ -462,6 +466,8 @@ describe("maintenance switch", () => {
     const api = new Client(worker.url);
     const c = makeChunk("e" + "1".repeat(16), 1, 1, GENESIS, "m");
     const calls = [
+      api.call("POST", "/v1/device", { json: { purpose: "run", mode: "practice", connector_id: "x", tracer_version: "1" } }),
+      api.call("POST", "/v1/device/token", { json: { device_code: "a".repeat(64) } }),
       api.call("POST", "/v1/runs", { token: ALICE, json: openBody() }),
       api.call("POST", "/v1/runs", { json: openBody() }),
       api.call("GET", "/v1/runs/r0123456789abcdef", { token: ALICE }),
@@ -510,8 +516,9 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
 
   before(async () => {
     // Every run lasts 6 seconds.
-    worker = await startWorker({ EVENT_ID: "practice", DEV_TOKENS, RUN_SECONDS: "6" });
+    worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY, RUN_SECONDS: "6" });
     api = new Client(worker.url);
+    [ALICE, BOB, CAROL, DAVE] = [await credentialFor(api, "alice"), await credentialFor(api, "bob"), await credentialFor(api, "carol"), await credentialFor(api, "dave")];
     [alice, bob, carol, dave] = [await open(ALICE), await open(BOB), await open(CAROL), await open(DAVE)];
     assert.equal(Date.parse(alice.deadline) - Date.parse((await get(alice, ALICE)).body.official_start), 6000);
     a1 = makeChunk(alice.entry, 0, 5, GENESIS, "a1");
@@ -529,7 +536,7 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     assert.equal((await put(alice, ALICE, a1, 0)).status, 200);
     const r = await beat(alice, ALICE, a1.lastSeq, a1.head, false);
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { stop: false, deadline_at: alice.deadline });
+    assert.deepEqual(r.body, { stop: false, deadline_at: alice.deadline, reason: null });
     const g = await get(alice, ALICE);
     assert.equal(g.body.stop, false);
     assert.equal(g.body.final, null);
@@ -558,7 +565,7 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     await sleepUntil(alice.deadline);
     const r = await beat(alice, ALICE, a1.lastSeq, a1.head, false);
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { stop: true, deadline_at: alice.deadline });
+    assert.deepEqual(r.body, { stop: true, deadline_at: alice.deadline, reason: null });
     assert.equal((await get(alice, ALICE)).body.stop, true);
     assert.equal((await get(alice, ALICE)).body.status, "open");
   });
@@ -579,7 +586,7 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
   test("the final heartbeat commits the end; a repeat is 200, a different end is 409", async () => {
     const f = await beat(alice, ALICE, a3.lastSeq, a3.head, true, "a".repeat(40));
     assert.equal(f.status, 200, JSON.stringify(f.body));
-    assert.deepEqual(f.body, { stop: true, deadline_at: alice.deadline });
+    assert.deepEqual(f.body, { stop: true, deadline_at: alice.deadline, reason: null });
     assert.deepEqual((await get(alice, ALICE)).body.final, { seq: 9, head: a3.head });
 
     assert.equal((await beat(alice, ALICE, 9, a3.head, true, "a".repeat(40))).status, 200); // same
@@ -633,8 +640,9 @@ describe("a run unsealed 24 hours after its deadline is abandoned", { concurrenc
 
   before(async () => {
     // Test-only clock: a 2-second run, abandoned 2 seconds after its deadline.
-    worker = await startWorker({ EVENT_ID: "practice", DEV_TOKENS, RUN_SECONDS: "2", ABANDON_AFTER_SECONDS: "2" });
+    worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY, RUN_SECONDS: "2", ABANDON_AFTER_SECONDS: "2" });
     api = new Client(worker.url);
+    [ALICE, BOB, CAROL] = [await credentialFor(api, "alice"), await credentialFor(api, "bob"), await credentialFor(api, "carol")];
   });
   after(async () => {
     await worker?.stop();
@@ -673,10 +681,10 @@ describe("a run unsealed 24 hours after its deadline is abandoned", { concurrenc
       "closed",
     );
     assertError(await api.call("POST", `/v1/runs/${alice.run_id}/seal`, { token: ALICE, json: { entry_id: alice.entry_id, seal_json: "{}", baseline_json: "{}" } }), 410, "closed");
-    assert.equal((await api.call("POST", "/v1/runs", { token: ALICE, json: openBody({ session_id: "a2" }) })).status, 201); // slot free
+    assert.equal((await api.call("POST", "/v1/runs", { token: await credentialFor(api, "alice"), json: openBody({ session_id: "a2" }) })).status, 201); // slot free
 
     // bob never looked at his old run: opening a new one abandons it by itself.
-    assert.equal((await api.call("POST", "/v1/runs", { token: BOB, json: openBody({ session_id: "b2" }) })).status, 201);
+    assert.equal((await api.call("POST", "/v1/runs", { token: await credentialFor(api, "bob"), json: openBody({ session_id: "b2" }) })).status, 201);
     assert.equal((await api.call("GET", `/v1/runs/${bob.run_id}`, { token: BOB })).body.status, "abandoned");
     // carol's sealed run stayed sealed.
     assert.equal((await api.call("GET", `/v1/runs/${carol.run_id}`, { token: CAROL })).body.status, "sealed");
@@ -686,7 +694,7 @@ describe("a run unsealed 24 hours after its deadline is abandoned", { concurrenc
 describe("test-only clocks are refused outside the local backend", () => {
   let worker: RunningWorker;
   before(async () => {
-    worker = await startWorker({ EVENT_ID: "practice", DEV_TOKENS, DB_BACKEND: "supabase", RUN_SECONDS: "5", SUPABASE_URL: "https://unused.invalid", SUPABASE_KEY: "unused" });
+    worker = await startWorker({ EVENT_ID: "practice", DB_BACKEND: "supabase", RUN_SECONDS: "5", SUPABASE_URL: "https://unused.invalid", SUPABASE_KEY: "unused" });
   });
   after(async () => {
     await worker?.stop();

@@ -70,6 +70,32 @@ export class Client {
   }
 }
 
+export const APPROVAL_KEY = "test-approval-key";
+
+/** `POST /v1/device`, the way the tracer sends it. */
+export const deviceBody = (overrides: Record<string, unknown> = {}) => ({
+  purpose: "run",
+  mode: "practice",
+  connector_id: "codex-cli",
+  tracer_version: "0.1.0",
+  ...overrides,
+});
+
+/** The test-only approval of a user code by a member (`approve: false` denies). */
+export const approve = (api: Client, user_code: string, member_id: string, approve = true, key: string | null = APPROVAL_KEY) =>
+  api.call("POST", "/v1/device/approve", { token: key, json: { user_code, member_id, approve } });
+
+/** The whole device flow in one go: a run credential (`gcr_` + 64 hex) for `member`, still unbound. */
+export async function credentialFor(api: Client, member: string): Promise<string> {
+  const d = await api.call("POST", "/v1/device", { json: deviceBody() });
+  if (d.status !== 200) throw new Error(`device: ${d.status} ${JSON.stringify(d.body)}`);
+  const a = await approve(api, d.body.user_code, member);
+  if (a.status !== 200) throw new Error(`approve: ${a.status} ${JSON.stringify(a.body)}`);
+  const t = await api.call("POST", "/v1/device/token", { json: { device_code: d.body.device_code } });
+  if (t.status !== 200) throw new Error(`token: ${t.status} ${JSON.stringify(t.body)}`);
+  return t.body.credential as string;
+}
+
 export function openBody(overrides: Record<string, unknown> = {}) {
   return {
     connector_id: "codex-cli",

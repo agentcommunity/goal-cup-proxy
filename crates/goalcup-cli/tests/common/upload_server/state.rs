@@ -45,6 +45,12 @@ pub struct StoredHeartbeat {
     pub offset_local: u64,
     pub final_: bool,
     pub repo_head: Option<String>,
+    /// How the tracer reported its recording (`ok`, `gaps`, `failed`, `unknown`), if it said.
+    #[serde(default)]
+    pub recording: Option<String>,
+    /// Model calls seen so far, cumulative, if the tracer said.
+    #[serde(default)]
+    pub model_requests: Option<u64>,
     /// The server's clock when it received the heartbeat (RFC 3339, to the second).
     pub received_at: String,
 }
@@ -55,6 +61,46 @@ pub struct FinalCommit {
     pub seq: u64,
     pub head: String,
     pub repo_head: Option<String>,
+}
+
+/// What the stand-in does with a device request the moment it is created. The Worker also has
+/// a pending state, between creation and the member's decision; the stand-in has none, so a
+/// test sees the decision on its first poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Approval {
+    /// The test member approves it: the first poll returns the credential.
+    Auto,
+    /// The member denies it: every poll is `403`.
+    Deny,
+    /// It ran out of time: every poll is `410`.
+    Expire,
+}
+
+/// What `POST /v1/device` asked for, as a test can see it afterwards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRequest {
+    pub purpose: String,
+    pub mode: String,
+    pub connector_id: String,
+    pub tracer_version: String,
+}
+
+/// A device request the stand-in holds (in memory only: a restart forgets pending ones).
+pub struct Device {
+    pub approval: Approval,
+    pub request: DeviceRequest,
+    pub created_at: u64,
+    pub picked_up: bool,
+}
+
+/// A run credential, stored by the sha256 of its text. `run_id` is unset until it opens a run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Credential {
+    pub member: String,
+    pub mode: String,
+    pub run_id: Option<String>,
+    /// Epoch seconds: approved + 1 hour while unbound, the run's deadline + 24 hours once bound.
+    pub expires_at: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,7 +194,16 @@ pub struct Position {
 /// Everything the handlers and the test hooks share.
 pub struct Shared {
     pub store_dir: PathBuf,
+    /// Legacy pasted member tokens: removed with the pasted token (T5).
     pub tokens: HashMap<String, String>,
+    /// The member a device request is approved by (and a login request's handle).
+    pub device_member: String,
+    pub approval: Mutex<Approval>,
+    /// Device requests by the sha256 of the device code.
+    pub devices: Mutex<HashMap<String, Device>>,
+    pub device_log: Mutex<Vec<DeviceRequest>>,
+    /// Run credentials by the sha256 of the credential. Persisted to `credentials.json`.
+    pub credentials: Mutex<HashMap<String, Credential>>,
     /// Run length in seconds: `deadline_at` is `official_start` plus this.
     pub run_secs: u64,
     /// How long after `deadline_at` an unsealed run is abandoned.
@@ -187,6 +242,26 @@ impl Shared {
             }
         }
         runs
+    }
+
+    /// Load the credentials a previous server of this store handed out.
+    pub fn load_credentials(store_dir: &Path) -> HashMap<String, Credential> {
+        match fs::read_to_string(store_dir.join("credentials.json")) {
+            Ok(text) => serde_json::from_str(&text).expect("credentials.json is valid"),
+            Err(_) => HashMap::new(),
+        }
+    }
+
+    /// Write the credentials atomically, like a run file.
+    pub fn persist_credentials(&self, credentials: &HashMap<String, Credential>) {
+        let path = self.store_dir.join("credentials.json");
+        let tmp = self.store_dir.join("credentials.json.tmp");
+        fs::write(
+            &tmp,
+            serde_json::to_vec_pretty(credentials).expect("serialise credentials"),
+        )
+        .expect("write the credentials temp file");
+        fs::rename(&tmp, &path).expect("rename the credentials file into place");
     }
 
     /// Load every run file already in `store_dir`.
