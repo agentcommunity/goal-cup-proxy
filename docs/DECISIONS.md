@@ -67,6 +67,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D52 | Shipped connectors set no model, effort, sandbox, permission or MCP limit | in force (m2) once merged | [entry](#d52-m2-the-shipped-connectors-set-no-model-effort-sandbox-permission-or-mcp-limit) |
 | D53 | Record the harness build in v5 (`Launch.harness_build`); v0.5.0 readers refuse such traces | in force (m2) once merged | [entry](#d53-m2-record-the-harness-build-in-v5-accepting-that-v050-readers-refuse-it) |
 | D54 | The protocol carries v5 only: pre-v5 versions, bodies and writers and the Git provenance types leave | in force (m2) once merged | [entry](#d54-m2-the-protocol-carries-v5-only) |
+| D55 | A capture chain may be split into part files named by their logical start offset; records and hashes are unchanged | in force (m2) once merged | [entry](#d55-m2-the-capture-chain-rotates-into-part-files) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1452,6 +1453,40 @@ appended to before its quota is set fails `CaptureQuotaNotConfigured` instead of
 `UnsupportedProtocolVersion`; the daemon sets the quota before its first append.
 
 **Evidence.** The v5 corpus and the `m2-report-bytes` fixtures pass unchanged; this PR.
+
+---
+
+## D55. **(M2)** The capture chain rotates into part files.
+
+**Decision (2026-10-14, owner's 168-hour run plan).** A capture chain may be split into part files
+named by their logical start offset; records and hashes are unchanged; the server stores one
+stream. Readers before this build read only single-file chains.
+
+**Layout.** The first part is `chain.jsonl`. Each later part is `chain.<start>.jsonl`, where
+`<start>` is the part's first byte in the whole chain, in 20 decimal digits, so names sort in chain
+order. The parts are contiguous: each starts where the one before it ends, and their concatenation
+is exactly the single file the same records would have made; a part missing between two others is
+corrupt (`PartGap` on resume, `chain_part_missing` in the verifier). Every offset (the durable frontier,
+quota use, a reader's validated bytes) stays logical, summed over every part. Acknowledgements stay
+one `acks.jsonl`.
+
+**Rotation.** The writer closes a part at 256 MiB or after 30 minutes, whichever comes first, and
+only at a durable frontier: right after a successful flush, so a closed part never changes again.
+It never rotates a closed chain and never opens a part while the current one is empty. A failed
+rotation stops the daemon's writer as a failed flush does.
+
+**Pruning.** A 168-hour run deletes parts on this machine once they are acknowledged (the uploader's
+rule, not this row's). Resume then starts at the first surviving part: it takes the first surviving
+record's `seq` and `prev` as the position, treats the pruned baseline as present (a second one is
+still refused), and validates every surviving link as before. The writer refuses to create a fresh
+chain over any part file, so a pruned trace is never restarted from seq 0. If every surviving part is
+empty, the head is gone and resume refuses. The verifier reads a pruned chain's links, terminal and
+acknowledgements, reports `chain_pruned_locally` (incomplete, exit 1, "verify the server copy") and
+skips acknowledgements of pruned records; capture-record rules that need the pruned records are not
+checked locally.
+
+**Reconsider when** the server stores parts as parts, or a reader needs a pruned chain's capture
+records judged locally.
 
 ---
 

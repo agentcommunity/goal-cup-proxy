@@ -2520,3 +2520,138 @@ async fn a_workspace_inside_the_tracker_roots_is_refused() {
     let fine = rig.create("codex-cli", &rig.workspace("ok"), RESERVE).await;
     assert_eq!(fine.status(), 200, "{}", fine.body());
 }
+
+/// The chain's parts, once there are at least `count` of them (10 s at most).
+async fn parts_when(trace: &Path, count: usize) -> Vec<goalcup_protocol::export::ChainPart> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let parts = goalcup_protocol::export::chain_parts(trace).unwrap();
+        if parts.len() >= count {
+            return parts;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the chain never rotated into {count} parts: {parts:#?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// D55: the chain rotates into part files as it is flushed, and acknowledged parts are removed
+/// while the daemon is down. The next daemon reopens the entry from the first surviving part
+/// and appends from the true head: its restart gap and its seal continue the same chain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restart_after_parts_were_deleted_keeps_appending() {
+    let rig = Rig::start().await;
+    // Every flush that finds the current part non-empty closes it.
+    rig.daemon
+        .set_chain_part_limits_for_test(1, std::time::Duration::from_secs(3600));
+    let info = rig.created("codex-cli").await;
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let mut launch = launch_request(&goal);
+    // This fixture isolates reopen behavior: no native producer is bound.
+    launch.native_scope = None;
+    let launched = rig.launch(&info.entry_id, &launch).await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    // Exchanges further apart than the owner's flush cadence, so each lands in its own part.
+    let wired = info.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut wire = Wire::connect(&wired, &wired.producer_id);
+        for stream in 1..=3 {
+            let id = fresh_id();
+            wire.send(0, connection(&id, opened(false)));
+            wire.send(stream, request_open(&id));
+            wire.send(stream, bytes(br#"{"input":"hello"}"#));
+            let end = FrameEvent::End {
+                reason: EndReason::Complete,
+            };
+            wire.send(stream, end);
+            let close = ConnectionEvent::Close {
+                outcome: ConnectionOutcome::Complete,
+            };
+            wire.send(0, connection(&id, close));
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        wire.close();
+    })
+    .await
+    .unwrap();
+    let trace = rig.trace_dir(&info.entry_id);
+    // Four parts: the oldest two are deleted, and the third, closed by a rotation, holds
+    // records, so the head survives.
+    parts_when(&trace, 4).await;
+
+    let mut before = None;
+    let rig = rig
+        .restart_planting(|_| {
+            let parts = goalcup_protocol::export::chain_parts(&trace).unwrap();
+            let chain = support::read_chain(&trace);
+            std::fs::remove_file(&parts[0].path).unwrap();
+            std::fs::remove_file(&parts[1].path).unwrap();
+            before = Some((parts, chain));
+        })
+        .await
+        .expect("the daemon starts over the pruned chain");
+    let (parts, chain_before) = before.unwrap();
+    let head = chain_before.last().unwrap().link.clone();
+    let cycles = rig.daemon.cycle_errors();
+    assert_eq!((cycles.tick, cycles.last), (0, None), "the entry reopened");
+    let reopened = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(reopened.run, RunState::Running);
+    let logical_end = parts.last().map(|part| part.start + part.len).unwrap();
+    assert!(
+        reopened
+            .storage
+            .durable
+            .as_ref()
+            .is_some_and(|durable| durable.chain_bytes > logical_end),
+        "offsets stay logical: {reopened:?}"
+    );
+
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let report: CaptureFinishReport = sealed.json().unwrap();
+    assert_eq!(report.seal, LocalSealOutcome::SealWritten);
+
+    // The surviving parts are one contiguous stream from the first part not deleted.
+    let surviving = goalcup_protocol::export::chain_parts(&trace).unwrap();
+    assert_eq!(surviving[0].start, parts[2].start);
+    let chain = support::read_chain(&trace);
+    let first = &chain[0];
+    assert_eq!(
+        first.link,
+        chain_before
+            .iter()
+            .find(|envelope| envelope.link.seq == first.link.seq)
+            .unwrap()
+            .link
+    );
+    for pair in chain.windows(2) {
+        let (prev, next) = (&pair[0], &pair[1]);
+        assert_eq!(next.link.seq, prev.link.seq + 1);
+        assert_eq!(next.link.prev, prev.link.hash);
+        assert_eq!(next.expected_hash(&prev.link.hash).unwrap(), next.link.hash);
+    }
+    // What the second daemon chained follows the first daemon's head.
+    let after: Vec<_> = chain
+        .iter()
+        .filter(|envelope| envelope.link.seq > head.seq)
+        .collect();
+    assert_eq!(after[0].link.prev, head.hash);
+    assert!(matches!(
+        after[0].body,
+        EventBody::Capture {
+            record: CaptureRecord::Gap {
+                stream: None,
+                reason: GapReason::IngestLost,
+                ..
+            }
+        }
+    ));
+    assert!(matches!(
+        after.last().unwrap().body,
+        EventBody::Capture {
+            record: CaptureRecord::LocalFinish { .. }
+        }
+    ));
+}

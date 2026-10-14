@@ -414,7 +414,7 @@ impl TraceDirHandle {
 
     pub(super) fn open_append(
         &self,
-        name: &'static str,
+        name: &str,
         create: bool,
     ) -> Result<AppendFileHandle, TraceCapError> {
         let operation = "open trace append stream";
@@ -543,7 +543,7 @@ impl TraceDirHandle {
 
     pub(super) fn open_matching_reader(
         &self,
-        name: &'static str,
+        name: &str,
         writer: &AppendFileHandle,
     ) -> Result<File, TraceCapError> {
         let operation = "open matching trace reader";
@@ -569,7 +569,7 @@ impl TraceDirHandle {
     /// Require the fixed child name to still be the append writer's own regular file.
     pub(super) fn check_append_binding(
         &self,
-        name: &'static str,
+        name: &str,
         writer: &AppendFileHandle,
     ) -> Result<(), TraceCapError> {
         let operation = "check trace append stream name";

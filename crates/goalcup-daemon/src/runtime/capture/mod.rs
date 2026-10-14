@@ -430,6 +430,10 @@ impl Daemon {
         let entry = self.registry().open_initial_process_handoff(entry_id)?;
         let process_generation = entry.process_handoff_generation();
 
+        #[cfg(any(test, feature = "test-hooks"))]
+        if let Some((bytes, age)) = *lock(&self.inner.part_limits) {
+            export.set_part_limits(bytes, age);
+        }
         let clock = self.inner.capture_clock.clone();
         let writer = ChainWriter::new(export, entry_id.to_string());
         let mut capture = CaptureEntry::new_with_authority(

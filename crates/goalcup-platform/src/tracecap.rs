@@ -1,8 +1,9 @@
 //! Handle-rooted access to the fixed files owned by one trace export.
 //!
 //! The public surface deliberately has no arbitrary child-name writer. A [`TraceDir`]
-//! is an owning directory capability, and the only write operations name the two
-//! append streams, the four once-only documents, or the descriptor replacement.
+//! is an owning directory capability, and the only write operations name the chain's part
+//! files, the acknowledgement stream, the four once-only documents, or the descriptor
+//! replacement.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -263,30 +264,62 @@ impl TraceDir {
             .map(|reader| reader.map(|inner| TraceReadFile { inner }))
     }
 
+    /// The chain's first part, `chain.jsonl`: [`Self::open_part_for_create`] at offset 0.
     pub fn open_chain_for_create(&self) -> Result<TraceAppendFile, TraceCapError> {
-        self.open_append("chain.jsonl", "chain.jsonl", true)
+        self.open_part_for_create(0)
     }
 
     pub fn open_acks_for_create(&self) -> Result<TraceAppendFile, TraceCapError> {
-        self.open_append("acks.jsonl", "acks.jsonl", true)
+        self.open_append("acks.jsonl".to_string(), "acks.jsonl", true)
     }
 
+    /// The chain's first part, `chain.jsonl`: [`Self::open_part_for_resume`] at offset 0.
     pub fn open_chain_for_resume(&self) -> Result<TraceAppendFile, TraceCapError> {
-        self.open_append("chain.jsonl", "chain.jsonl", false)
+        self.open_part_for_resume(0)
     }
 
     pub fn open_acks_for_resume(&self) -> Result<TraceAppendFile, TraceCapError> {
-        self.open_append("acks.jsonl", "acks.jsonl", true)
+        self.open_append("acks.jsonl".to_string(), "acks.jsonl", true)
+    }
+
+    /// Open, creating it if absent, the chain part that starts at logical byte `start`
+    /// ([`part_file_name`]). An existing file is opened, not refused: the caller checks that
+    /// it is empty, exactly as for the single-file chain.
+    pub fn open_part_for_create(&self, start: u64) -> Result<TraceAppendFile, TraceCapError> {
+        self.open_append(part_file_name(start), "chain.jsonl", true)
+    }
+
+    /// Open the existing chain part that starts at logical byte `start`; a missing part is an
+    /// error.
+    pub fn open_part_for_resume(&self, start: u64) -> Result<TraceAppendFile, TraceCapError> {
+        self.open_append(part_file_name(start), "chain.jsonl", false)
+    }
+
+    /// The start offsets of the chain parts in this directory, ascending. Only names
+    /// [`parse_part_name`] accepts are parts; any other entry is ignored. The walk is bounded
+    /// like every other enumeration of a trace directory.
+    pub fn list_parts(&self) -> Result<Vec<u64>, TraceCapError> {
+        let mut budget = EnumerationBudget::default();
+        let mut starts = Vec::new();
+        self.inner.for_each_name(|name| {
+            budget.account(name)?;
+            if let Some(start) = name.to_str().and_then(parse_part_name) {
+                starts.push(start);
+            }
+            Ok(())
+        })?;
+        starts.sort_unstable();
+        Ok(starts)
     }
 
     fn open_append(
         &self,
-        name: &'static str,
+        name: String,
         stream: &'static str,
         create: bool,
     ) -> Result<TraceAppendFile, TraceCapError> {
         self.inner
-            .open_append(name, create)
+            .open_append(&name, create)
             .map(|inner| TraceAppendFile {
                 inner,
                 name,
@@ -333,7 +366,7 @@ impl TraceDir {
             writer.inner.sync_all()?;
             writer.inner.validate()?;
             self.inner
-                .check_append_binding(writer.name, &writer.inner)?;
+                .check_append_binding(&writer.name, &writer.inner)?;
             self.inner.sync()
         })();
         if result.is_err() {
@@ -353,7 +386,7 @@ impl TraceDir {
                 stream: writer.stream,
             });
         }
-        match self.inner.open_matching_reader(writer.name, &writer.inner) {
+        match self.inner.open_matching_reader(&writer.name, &writer.inner) {
             Ok(inner) => Ok(TraceReadFile { inner }),
             Err(error) => {
                 writer.poisoned = true;
@@ -571,10 +604,34 @@ fn validate_component(name: &str) -> Result<(), TraceCapError> {
     Ok(())
 }
 
+/// The name of the chain part that starts at logical byte `start`: `chain.jsonl` for the
+/// first part, `chain.<start, 20 digits>.jsonl` after it, so names sort in chain order.
+pub fn part_file_name(start: u64) -> String {
+    if start == 0 {
+        "chain.jsonl".to_string()
+    } else {
+        format!("chain.{start:020}.jsonl")
+    }
+}
+
+/// The start offset a chain part's name carries, or `None` for any name
+/// [`part_file_name`] does not produce: exactly `chain.jsonl` (0), or `chain.` then 20
+/// decimal digits naming a value above 0, then `.jsonl`.
+pub fn parse_part_name(name: &str) -> Option<u64> {
+    if name == "chain.jsonl" {
+        return Some(0);
+    }
+    let digits = name.strip_prefix("chain.")?.strip_suffix(".jsonl")?;
+    if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok().filter(|start| *start > 0)
+}
+
 /// An append stream whose checks and only write path remain inside this crate.
 pub struct TraceAppendFile {
     inner: imp::AppendFileHandle,
-    name: &'static str,
+    name: String,
     stream: &'static str,
     poisoned: bool,
 }

@@ -653,3 +653,320 @@ fn is_excluded_is_anchored_at_the_workspace_root() {
     assert!(!is_excluded("targeted.py", &p("target")));
     assert!(!is_excluded("", &p("")));
 }
+
+// ---------------------------------------------------------------------------------------
+// The chain as rotating parts (D55). Every fixture is a real `TraceExport` in a temporary
+// directory; every assertion reads the part files back off disk.
+// ---------------------------------------------------------------------------------------
+
+mod parts {
+    use goalcup_protocol::capture::{
+        CaptureRecord, CaptureTime, GapReason, M2_PROTOCOL_VERSION, TERMINAL_RESERVE_BYTES,
+    };
+    use goalcup_protocol::chain::Link;
+    use goalcup_protocol::envelope::{Envelope, EventBody};
+    use goalcup_protocol::export::{
+        CHAIN_FILE, ExportError, PART_MAX_AGE, PART_MAX_BYTES, TraceExport, chain_parts,
+        parse_part_name, part_file_name,
+    };
+    use goalcup_protocol::provenance::{Rfc3339Utc, TerminationMethodV1, TerminationOutcomeV1};
+    use goalcup_protocol::seal::SealManifest;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    const ENTRY: &str = "entry-parts-0001";
+    const QUOTA: u64 = TERMINAL_RESERVE_BYTES * 64;
+    /// Small enough that every flushed record or two closes a part.
+    const SMALL_PART: u64 = 600;
+    const LONG_AGE: Duration = Duration::from_secs(3600);
+
+    fn manifest() -> SealManifest {
+        SealManifest {
+            entry_id: ENTRY.to_string(),
+            sealed_at: "2026-10-14T12:00:00Z".to_string(),
+            workspace: "/ws".to_string(),
+            files: Vec::new(),
+            excluded: Vec::new(),
+        }
+    }
+
+    fn at(mono_ns: u64) -> CaptureTime {
+        CaptureTime {
+            wall: "2026-10-14T12:00:01Z".to_string(),
+            mono_ns,
+            clock_id: "daemon-parts".to_string(),
+        }
+    }
+
+    fn gap(mono_ns: u64) -> Envelope {
+        Envelope {
+            protocol_version: M2_PROTOCOL_VERSION,
+            entry_id: ENTRY.to_string(),
+            source: "daemon".to_string(),
+            recorded_at: "2026-10-14T12:00:01Z".to_string(),
+            link: Link {
+                seq: 0,
+                prev: String::new(),
+                hash: String::new(),
+            },
+            body: EventBody::Capture {
+                record: CaptureRecord::Gap {
+                    stream: None,
+                    observed: at(mono_ns),
+                    reason: GapReason::StorageIo,
+                    lost_bytes: None,
+                },
+            },
+            redaction: None,
+        }
+    }
+
+    fn fresh(root: &Path, part_bytes: Option<u64>) -> TraceExport {
+        let mut export = TraceExport::create(root).unwrap();
+        if let Some(bytes) = part_bytes {
+            export.set_part_limits(bytes, LONG_AGE);
+        }
+        export.configure_capture_quota(QUOTA).unwrap();
+        export
+            .write_baseline_for_protocol(M2_PROTOCOL_VERSION, &manifest())
+            .unwrap();
+        export
+    }
+
+    /// Append `count` gaps from `from`, flushing (and so offering a rotation) after each.
+    fn write_gaps(export: &mut TraceExport, from: u64, count: u64) {
+        for n in from..from + count {
+            export.append_chain(&mut gap(n)).unwrap();
+            export.sync_capture().unwrap();
+            export.rotate_if_due(Instant::now()).unwrap();
+        }
+    }
+
+    /// A chain of the baseline and `count` gaps, rotated into parts of `SMALL_PART` bytes.
+    fn rotated(root: &Path, count: u64) -> TraceExport {
+        let mut export = fresh(root, Some(SMALL_PART));
+        export.sync_capture().unwrap();
+        export.rotate_if_due(Instant::now()).unwrap();
+        write_gaps(&mut export, 1, count);
+        export
+    }
+
+    fn concatenated(root: &Path) -> Vec<u8> {
+        chain_parts(root)
+            .unwrap()
+            .iter()
+            .flat_map(|part| std::fs::read(&part.path).unwrap())
+            .collect()
+    }
+
+    fn confirmed() -> TerminationOutcomeV1 {
+        TerminationOutcomeV1::Confirmed {
+            requested_at: Rfc3339Utc::try_from("2026-10-14T12:00:02Z").unwrap(),
+            confirmed_at: Rfc3339Utc::try_from("2026-10-14T12:00:03Z").unwrap(),
+            method: TerminationMethodV1::ProcessSignal,
+        }
+    }
+
+    #[test]
+    fn chain_parts_names_are_canonical() {
+        assert_eq!(PART_MAX_BYTES, 256 << 20);
+        assert_eq!(PART_MAX_AGE, Duration::from_secs(30 * 60));
+        assert_eq!(part_file_name(0), CHAIN_FILE);
+        assert_eq!(part_file_name(42), "chain.00000000000000000042.jsonl");
+        assert_eq!(part_file_name(u64::MAX), "chain.18446744073709551615.jsonl");
+        for start in [0, 1, 42, 256 << 20, u64::MAX] {
+            assert_eq!(parse_part_name(&part_file_name(start)), Some(start));
+        }
+        for name in [
+            "chain.00000000000000000000.jsonl",
+            "chain.0000000000000000042.jsonl",
+            "chain.000000000000000000042.jsonl",
+            "chain.+0000000000000000042.jsonl",
+            "chain.-0000000000000000042.jsonl",
+            "chain.42.jsonl",
+            "chain.18446744073709551616.jsonl",
+            "chain.jsonl.tmp",
+            "acks.jsonl",
+            "chain..jsonl",
+        ] {
+            assert_eq!(parse_part_name(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_chain_rotates_at_the_part_size_after_a_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut export = fresh(dir.path(), Some(SMALL_PART));
+        // Past the size, but nothing is durable yet: no rotation.
+        while export.capture_storage().used_bytes < SMALL_PART {
+            export.append_chain(&mut gap(1)).unwrap();
+        }
+        assert!(!export.rotate_if_due(Instant::now()).unwrap());
+        assert_eq!(chain_parts(dir.path()).unwrap().len(), 1);
+
+        // At the durable frontier it rotates, and the new part starts where the first ends.
+        export.sync_capture().unwrap();
+        let end = export.capture_storage().used_bytes;
+        assert!(export.rotate_if_due(Instant::now()).unwrap());
+        let parts = chain_parts(dir.path()).unwrap();
+        assert_eq!(
+            parts
+                .iter()
+                .map(|part| (part.start, part.len))
+                .collect::<Vec<_>>(),
+            vec![(0, end), (end, 0)]
+        );
+        assert_eq!(parts[1].path, dir.path().join(part_file_name(end)));
+        // An empty part never rotates.
+        export.sync_capture().unwrap();
+        assert!(!export.rotate_if_due(Instant::now()).unwrap());
+
+        // The next record lands in the new part; the first part is closed.
+        let link = export.append_chain(&mut gap(2)).unwrap();
+        let tail: Envelope = serde_json::from_slice(
+            std::fs::read(&parts[1].path)
+                .unwrap()
+                .strip_suffix(b"\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tail.link, link);
+        assert_eq!(std::fs::metadata(&parts[0].path).unwrap().len(), end);
+
+        // The age limit rotates a non-empty part too.
+        export.set_part_limits(u64::MAX, Duration::ZERO);
+        export.sync_capture().unwrap();
+        assert!(export.rotate_if_due(Instant::now()).unwrap());
+        assert_eq!(chain_parts(dir.path()).unwrap().len(), 3);
+
+        // A closed chain never rotates.
+        export.append_chain(&mut gap(3)).unwrap();
+        export
+            .write_local_finish(&manifest(), at(9), "participant_stop", confirmed())
+            .unwrap();
+        assert!(!export.rotate_if_due(Instant::now()).unwrap());
+        assert_eq!(chain_parts(dir.path()).unwrap().len(), 3);
+
+        // With the shipped limits a young, small part stays one file.
+        let single = tempfile::tempdir().unwrap();
+        let mut export = fresh(single.path(), None);
+        write_gaps(&mut export, 1, 5);
+        assert_eq!(chain_parts(single.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parts_concatenate_to_the_single_file_chain() {
+        let single = tempfile::tempdir().unwrap();
+        let mut export = fresh(single.path(), None);
+        write_gaps(&mut export, 1, 12);
+        drop(export);
+
+        let split = tempfile::tempdir().unwrap();
+        drop(rotated(split.path(), 12));
+
+        let parts = chain_parts(split.path()).unwrap();
+        assert!(parts.len() >= 4, "{parts:?}");
+        assert_eq!(chain_parts(single.path()).unwrap().len(), 1);
+        assert_eq!(
+            concatenated(split.path()),
+            std::fs::read(single.path().join(CHAIN_FILE)).unwrap()
+        );
+    }
+
+    #[test]
+    fn resume_reads_every_part_and_appends_to_the_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let export = rotated(dir.path(), 10);
+        let head = export.head().unwrap();
+        let used = export.capture_storage().used_bytes;
+        drop(export);
+        let before = chain_parts(dir.path()).unwrap();
+        assert!(before.len() >= 3, "{before:?}");
+
+        let mut resumed = TraceExport::resume(dir.path()).unwrap();
+        assert_eq!(resumed.head(), Some(head.clone()));
+        assert_eq!(resumed.capture_storage().used_bytes, used);
+        resumed.configure_capture_quota(QUOTA).unwrap();
+        let link = resumed.append_chain(&mut gap(99)).unwrap();
+        assert_eq!(
+            (link.seq, link.prev.as_str()),
+            (head.0 + 1, head.1.as_str())
+        );
+        resumed.sync_capture().unwrap();
+        drop(resumed);
+
+        // Only the last part grew.
+        let after = chain_parts(dir.path()).unwrap();
+        assert_eq!(after.len(), before.len());
+        for (old, new) in before.iter().zip(&after).take(before.len() - 1) {
+            assert_eq!((old.start, old.len), (new.start, new.len));
+        }
+        assert!(after.last().unwrap().len > before.last().unwrap().len);
+        assert_eq!(
+            TraceExport::resume(dir.path()).unwrap().head(),
+            Some((link.seq, link.hash))
+        );
+    }
+
+    #[test]
+    fn resume_starts_from_the_first_surviving_part() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(rotated(dir.path(), 12));
+        let parts = chain_parts(dir.path()).unwrap();
+        assert!(parts.len() >= 4, "{parts:?}");
+
+        let full = TraceExport::resume(dir.path()).unwrap();
+        let full_head = full.head().unwrap();
+        let full_used = full.capture_storage().used_bytes;
+        drop(full);
+
+        // The two oldest parts were acknowledged and removed.
+        std::fs::remove_file(&parts[0].path).unwrap();
+        std::fs::remove_file(&parts[1].path).unwrap();
+        assert!(matches!(
+            TraceExport::create(dir.path()),
+            Err(ExportError::ChainExists)
+        ));
+
+        let mut pruned = TraceExport::resume(dir.path()).unwrap();
+        // The same head, so the same next seq, and logical offsets that did not move.
+        assert_eq!(pruned.head(), Some(full_head.clone()));
+        assert_eq!(pruned.capture_storage().used_bytes, full_used);
+        pruned.configure_capture_quota(QUOTA).unwrap();
+        // The pruned baseline still counts: there is never a second one.
+        assert!(matches!(
+            pruned.write_baseline_for_protocol(M2_PROTOCOL_VERSION, &manifest()),
+            Err(ExportError::BaselineAlreadyChained)
+        ));
+        let link = pruned.append_chain(&mut gap(99)).unwrap();
+        assert_eq!(link.seq, full_head.0 + 1);
+        assert_eq!(link.prev, full_head.1);
+        pruned
+            .write_local_finish(&manifest(), at(100), "participant_stop", confirmed())
+            .unwrap();
+        let head = pruned.head().unwrap();
+        drop(pruned);
+
+        // What it appended verifies: a second resume re-validates every surviving link.
+        let again = TraceExport::resume(dir.path()).unwrap();
+        assert_eq!(again.head(), Some(head));
+        let surviving = chain_parts(dir.path()).unwrap();
+        assert_eq!(surviving[0].start, parts[2].start);
+    }
+
+    #[test]
+    fn a_gap_between_parts_is_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(rotated(dir.path(), 10));
+        let parts = chain_parts(dir.path()).unwrap();
+        assert!(parts.len() >= 3, "{parts:?}");
+        std::fs::remove_file(&parts[1].path).unwrap();
+
+        let error = chain_parts(dir.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+        assert!(matches!(
+            TraceExport::resume(dir.path()),
+            Err(ExportError::PartGap { .. })
+        ));
+    }
+}

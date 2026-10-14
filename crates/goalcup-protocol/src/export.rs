@@ -3,7 +3,9 @@
 //! Five files make up an entry's evidence — `chain.jsonl`, `acks.jsonl`, `receipt.json`,
 //! `baseline.json` and `seal.json` — and this module owns their bytes. They are written here,
 //! in the crate that defines what is in them, so the daemon and verifier cannot disagree
-//! about a format neither of them owns.
+//! about a format neither of them owns. A long chain continues in part files after
+//! `chain.jsonl`, each named by its logical start offset (D55); concatenated, the parts are
+//! the one chain, byte for byte.
 //!
 //! **The daemon never computes a hash.** `append_chain` takes the envelope's content and
 //! fills `seq`, `prev` and `hash` itself from its own state: a caller that hands over a
@@ -44,6 +46,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// The daemon's chained envelope stream: one `Envelope` per line, `seq` from 0.
 pub const CHAIN_FILE: &str = "chain.jsonl";
@@ -55,6 +58,64 @@ pub const SEAL_FILE: &str = "seal.json";
 /// The pre-v5 trace descriptor's name. No writer produces it; a resume still sweeps its
 /// leftover temporaries, and a CLI test fixture names it.
 pub const DESCRIPTOR_FILE: &str = "trace.toml";
+/// A chain part is closed once it holds this many bytes (D55).
+pub const PART_MAX_BYTES: u64 = 256 << 20;
+/// A chain part is closed once it has been open this long (D55).
+pub const PART_MAX_AGE: Duration = Duration::from_secs(30 * 60);
+
+/// Part names are the capability layer's, so the writer and the directory walk share one
+/// grammar: `chain.jsonl` for the part at offset 0, `chain.<20 digits>.jsonl` after it.
+pub use goalcup_platform::tracecap::{parse_part_name, part_file_name};
+
+/// One part file of a capture chain: the records from logical byte `start` for `len` bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainPart {
+    pub start: u64,
+    pub len: u64,
+    pub path: PathBuf,
+}
+
+/// The chain parts in `trace_dir`, sorted by `start` (D55).
+///
+/// The parts must be contiguous: each starts where the one before it ends. A missing part
+/// between two others is `InvalidData` and no other failure is. The first part may start
+/// above 0: the parts before it were acknowledged and removed on this machine. Names
+/// [`parse_part_name`] refuses are not parts and are ignored. The lengths are measured, not
+/// trusted: a reader opens each part through its own capability and checks what it reads.
+pub fn chain_parts(trace_dir: &Path) -> std::io::Result<Vec<ChainPart>> {
+    let dir = TraceDir::open(trace_dir).map_err(capability_io)?;
+    let mut parts = Vec::new();
+    for start in dir.list_parts().map_err(capability_io)? {
+        let path = trace_dir.join(part_file_name(start));
+        // A measurement only, of the entry itself: every reader opens a part through its own
+        // no-follow capability, which is where a replaced part is refused.
+        let len = std::fs::symlink_metadata(&path)?.len();
+        parts.push(ChainPart { start, len, path });
+    }
+    for pair in parts.windows(2) {
+        if pair[0].start.checked_add(pair[0].len) != Some(pair[1].start) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "chain part {} does not follow the part before it, which ends at byte {}",
+                    pair[1].path.display(),
+                    pair[0].start.saturating_add(pair[0].len)
+                ),
+            ));
+        }
+    }
+    Ok(parts)
+}
+
+/// A capability failure as I/O, keeping a not-found a not-found; never `InvalidData`, which
+/// [`chain_parts`] keeps for a missing part.
+fn capability_io(error: TraceCapError) -> std::io::Error {
+    match error {
+        TraceCapError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound => source,
+        other => std::io::Error::other(other.to_string()),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
     #[error("chain sequence space is exhausted")]
@@ -160,6 +221,13 @@ pub enum ExportError {
     },
     #[error("capture record: {0}")]
     CaptureRecord(#[from] CaptureLimitError),
+    #[error(
+        "the chain part starting at byte {found} does not follow the parts before it, which end \
+         at byte {expected}: a part is missing"
+    )]
+    PartGap { expected: u64, found: u64 },
+    #[error("every surviving chain part is empty: the head was in a part removed on this machine")]
+    PrunedHead,
     #[error("this export already chained a local finish at seq {seq}")]
     LocalFinishAlreadyChained { seq: u64 },
     #[error("the fixed manifest does not match the terminal record's binding")]
@@ -501,6 +569,16 @@ impl ChainPhaseReplay {
         Ok(())
     }
 
+    /// The replay of a chain whose first parts were removed on this machine (D55), from the
+    /// first surviving record: the baseline existed (it is seq 0, and pruned), so a second one
+    /// is still refused, and the chain was open where the surviving parts begin.
+    pub fn after_pruned_prefix() -> Self {
+        Self {
+            phase: ExportPhase::Open,
+            baseline_seq: Some(0),
+        }
+    }
+
     pub fn baseline_seq(&self) -> Option<u64> {
         self.baseline_seq
     }
@@ -663,11 +741,18 @@ impl TraceRoot {
 #[derive(Debug)]
 pub struct TraceExport {
     root: TraceRoot,
+    /// The current (last) chain part: every append goes here.
     chain: TraceAppendFile,
     acks: TraceAppendFile,
-    /// Logical `chain.jsonl` bytes this writer validated or appended: the used-bytes figure
-    /// quota admission is measured against.
+    /// Logical chain bytes this writer validated or appended, summed over every part (pruned
+    /// ones included): the used-bytes figure quota admission is measured against.
     chain_bytes: u64,
+    /// The logical offset the current part starts at.
+    part_start: u64,
+    /// When the current part was opened or reopened: what the part age is measured from.
+    part_opened: Instant,
+    /// The size and age at which [`Self::rotate_if_due`] closes the current part.
+    part_limits: (u64, Duration),
     /// The serialized chain-byte quota, [`TERMINAL_RESERVE_BYTES`] included. Admission
     /// accounting only: it allocates nothing and is never reported as reserved.
     capture_quota: Option<u64>,
@@ -700,7 +785,11 @@ pub struct TraceExport {
 #[derive(Debug)]
 pub struct PreparedTraceResume {
     root: TraceRoot,
+    /// The last part, which a resume appends to.
     chain: TraceAppendFile,
+    /// The logical offset `chain` starts at.
+    part_start: u64,
+    /// The logical end of the validated chain: every part's bytes, pruned ones included.
     validated_bytes: u64,
     next_seq: u64,
     head: String,
@@ -723,8 +812,9 @@ impl PreparedTraceResume {
         self.root.read_fixed(document)
     }
 
-    /// Open a reader for the retained chain's exact identity. Any unsafe acquisition
-    /// permanently poisons this prepared chain and makes finalization refuse.
+    /// Open a reader for the retained chain's exact identity: the last part, which is the
+    /// whole chain until it first rotates. Any unsafe acquisition permanently poisons this
+    /// prepared chain and makes finalization refuse.
     pub fn independent_chain_reader(&mut self) -> Result<TraceReadFile, ExportError> {
         Ok(self.root.dir.open_matching_reader(&mut self.chain)?)
     }
@@ -764,12 +854,13 @@ impl TraceExport {
     /// Both streams are opened here rather than on first write, so a trace directory
     /// names two files that exist and are empty rather than two that may not be there.
     ///
-    /// A directory that already holds a non-empty `chain.jsonl` is `ChainExists`, never
-    /// a fresh start: the handle is opened for append and the counter starts at 0, so
-    /// creating over an existing chain would write a second run's link 0 onto the end of
-    /// the first run's links — one file that reads as one chain and is two. Continuing
-    /// an existing chain is `resume`'s job, and saying which of the two you meant is the
-    /// caller's.
+    /// A directory that already holds a non-empty `chain.jsonl`, or any later chain part, is
+    /// `ChainExists`, never a fresh start: the handle is opened for append and the counter
+    /// starts at 0, so creating over an existing chain would write a second run's link 0
+    /// onto the end of the first run's links — one file that reads as one chain and is two.
+    /// A chain whose first parts were removed after their acknowledgement is still that
+    /// chain. Continuing an existing chain is `resume`'s job, and saying which of the two
+    /// you meant is the caller's.
     pub fn create(root: &Path) -> Result<TraceExport, ExportError> {
         Self::create_from_root(TraceRoot::create(root)?)
     }
@@ -777,6 +868,10 @@ impl TraceExport {
     /// Create a fresh export inside an already-acquired, exclusively-created trace root.
     pub fn create_from_root(root: TraceRoot) -> Result<TraceExport, ExportError> {
         root.dir.sweep_descriptor_temps()?;
+        // Checked before `chain.jsonl` is opened, which creates it.
+        if root.dir.list_parts()?.iter().any(|start| *start > 0) {
+            return Err(ExportError::ChainExists);
+        }
         let mut chain = root.dir.open_chain_for_create()?;
         if chain.len()? > 0 {
             return Err(ExportError::ChainExists);
@@ -801,6 +896,9 @@ impl TraceExport {
             chain,
             acks,
             chain_bytes: 0,
+            part_start: 0,
+            part_opened: Instant::now(),
+            part_limits: (PART_MAX_BYTES, PART_MAX_AGE),
             capture_quota: None,
             durable: None,
             accounting_available: true,
@@ -830,8 +928,17 @@ impl TraceExport {
     ///
     /// An empty `chain.jsonl` resumes at `next_seq` 0 over `GENESIS`: a daemon killed
     /// between `create` and its first record has a chain to start, not one to continue.
-    /// A `chain.jsonl` that is *missing* is an `Io` error naming the path — there is
-    /// nothing to resume. `acks.jsonl` is created if absent: a run may legitimately have
+    /// A `chain.jsonl` that is *missing*, with no later part, is an `Io` error naming the
+    /// path — there is nothing to resume.
+    ///
+    /// A rotated chain (D55) is read part by part, in order, as one stream, and appended to
+    /// its last part; an empty last part (rotated, then stopped) is valid. A part that does
+    /// not start where the one before it ends is `PartGap`. When the first surviving part
+    /// starts above 0, its earlier parts were acknowledged and removed on this machine: the
+    /// scan begins at the first surviving record, taking its `seq` and `prev` as the position
+    /// and [`ChainPhaseReplay::after_pruned_prefix`] as the phase, and every offset stays
+    /// logical. If no surviving part holds a record, the head is gone and that is
+    /// `PrunedHead`. `acks.jsonl` is created if absent: a run may legitimately have
     /// been acknowledged not once.
     ///
     /// The scan **streams**. `chain.jsonl` is the whole run — every captured segment of
@@ -870,105 +977,56 @@ impl TraceExport {
         root: TraceRoot,
         visit: &mut dyn FnMut(&Envelope),
     ) -> Result<PreparedTraceResume, ExportError> {
-        let mut chain = root.dir.open_chain_for_resume()?;
-        let chain_path = root.display.join(CHAIN_FILE);
-        let mut reader = BufReader::new(&mut chain);
-
-        let mut next_seq = 0u64;
-        let mut head = GENESIS.to_string();
-        let mut replay = ChainPhaseReplay::new();
-        let mut validated_bytes = 0u64;
-        let mut i = 0u64;
-        // Every line is bounded before it is buffered.
-        let limit = MAX_ENVELOPE_BYTES as u64;
-        loop {
-            let mut line = Vec::new();
-            let read = (&mut reader)
-                .take(limit)
-                .read_until(b'\n', &mut line)
-                .map_err(|source| io(&chain_path, source))?;
-            if read == 0 {
-                break;
-            }
-            let corrupt = |reason: String| ExportError::ChainCorrupt { seq: i, reason };
-            let read = u64::try_from(read)
-                .map_err(|_| corrupt("record byte count does not fit u64".to_string()))?;
-            validated_bytes = validated_bytes
-                .checked_add(read)
-                .ok_or_else(|| corrupt("validated byte length overflows u64".to_string()))?;
-            if line.last() != Some(&b'\n') {
-                if read == limit {
-                    return Err(corrupt(
-                        "record exceeds the protocol v5 envelope bound".to_string(),
-                    ));
-                }
-                return Err(corrupt(
-                    "record is missing its terminating newline".to_string(),
-                ));
-            }
-            line.pop();
-            // JSON allows a trailing carriage return, so the header parses either way; the
-            // canonical check below refuses it.
-            let header: EnvelopeVersionSeq = serde_json::from_slice(&line)
-                .map_err(|source| corrupt(format!("not an envelope header: {source}")))?;
-            replay.check_version(header.seq, header.protocol_version)?;
-            let env: Envelope = serde_json::from_slice(&line)
-                .map_err(|source| corrupt(format!("not an envelope: {source}")))?;
-            // The link hash covers the decoded content only, so another spelling of a line
-            // (an unknown key, whitespace, a carriage return) is bytes nothing covers, and the
-            // verifier refuses it (`record_not_canonical`). A chain it can never verify is not
-            // one to append to.
-            if !serde_json::to_vec(&env).is_ok_and(|canonical| canonical == line) {
-                return Err(corrupt(
-                    "record is not its canonical serialization (a carriage return, extra \
-                     whitespace or an unknown key was added to the line)"
-                        .to_string(),
-                ));
-            }
-            admit(&env)?;
-            if env.link.seq != next_seq {
-                return Err(corrupt(format!(
-                    "names seq {}, but the chain is at {next_seq}",
-                    env.link.seq
-                )));
-            }
-            if env.link.prev != head {
-                return Err(corrupt(format!(
-                    "prev {} does not name the link before it",
-                    env.link.prev
-                )));
-            }
-            let expected_hash = env
-                .expected_hash(&head)
-                .map_err(|source| corrupt(format!("cannot recompute its hash: {source}")))?;
-            if env.link.hash != expected_hash {
-                return Err(corrupt("hash does not cover this envelope".to_string()));
-            }
-            replay.push(&env)?;
-            visit(&env);
-            head = env.link.hash;
-            next_seq = next_seq
-                .checked_add(1)
-                .ok_or(ExportError::SequenceExhausted)?;
-            i += 1;
+        let mut starts = root.dir.list_parts()?;
+        if starts.is_empty() {
+            // Opening the absent `chain.jsonl` reports it by name.
+            starts.push(0);
         }
-        drop(reader);
-
-        let found_bytes = chain.len()?;
-        if found_bytes != validated_bytes {
-            return Err(ExportError::ChainLengthChanged {
-                validated_bytes,
-                found_bytes,
-            });
+        let pruned = starts[0] > 0;
+        let mut scan = ChainScan {
+            next_seq: 0,
+            head: GENESIS.to_string(),
+            replay: if pruned {
+                ChainPhaseReplay::after_pruned_prefix()
+            } else {
+                ChainPhaseReplay::new()
+            },
+            validated_bytes: starts[0],
+            adopt_first_link: pruned,
+        };
+        let mut last = None;
+        for start in starts {
+            if start != scan.validated_bytes {
+                return Err(ExportError::PartGap {
+                    expected: scan.validated_bytes,
+                    found: start,
+                });
+            }
+            let mut part = root.dir.open_part_for_resume(start)?;
+            let path = root.display.join(part_file_name(start));
+            scan.read_part(BufReader::new(&mut part), &path, visit)?;
+            let found_bytes = start.saturating_add(part.len()?);
+            if found_bytes != scan.validated_bytes {
+                return Err(ExportError::ChainLengthChanged {
+                    validated_bytes: scan.validated_bytes,
+                    found_bytes,
+                });
+            }
+            last = Some((start, part));
         }
+        if scan.adopt_first_link {
+            return Err(ExportError::PrunedHead);
+        }
+        let (part_start, chain) = last.expect("at least one part was read");
 
         Ok(PreparedTraceResume {
             root,
             chain,
-            validated_bytes,
-            next_seq,
-            head,
-            replay,
+            part_start,
+            validated_bytes: scan.validated_bytes,
+            next_seq: scan.next_seq,
+            head: scan.head,
+            replay: scan.replay,
         })
     }
 
@@ -979,7 +1037,7 @@ impl TraceExport {
     /// This detects growth or truncation between preparation and this check. It does not
     /// lock out a same-user rewrite that preserves length or growth after the final check.
     pub fn resume_prepared(mut prepared: PreparedTraceResume) -> Result<TraceExport, ExportError> {
-        let found_bytes = prepared.chain.len()?;
+        let found_bytes = prepared.part_start.saturating_add(prepared.chain.len()?);
         if found_bytes != prepared.validated_bytes {
             return Err(ExportError::ChainLengthChanged {
                 validated_bytes: prepared.validated_bytes,
@@ -995,6 +1053,9 @@ impl TraceExport {
             chain: prepared.chain,
             acks,
             chain_bytes: prepared.validated_bytes,
+            part_start: prepared.part_start,
+            part_opened: Instant::now(),
+            part_limits: (PART_MAX_BYTES, PART_MAX_AGE),
             // A reopened writer has flushed nothing and holds no quota or measured reservation:
             // the owner configures (or re-reserves) its quota again, and the first sync
             // establishes a durable frontier.
@@ -1353,6 +1414,51 @@ impl TraceExport {
         Ok(frontier)
     }
 
+    /// Close the current part and open the next when it is due (D55): it holds the part size
+    /// ([`PART_MAX_BYTES`]) or has been open the part age ([`PART_MAX_AGE`]) at `now`.
+    /// Returns whether it rotated.
+    ///
+    /// Only at a durable frontier — the last [`Self::sync_capture`] flushed every appended
+    /// byte — so a closed part never changes again. Never on a chain past its open phase,
+    /// never from an empty part, and never after an append whose byte count is unknown. The
+    /// new part is named by its logical start, the chain bytes so far, and records and hashes
+    /// are exactly what one file would hold.
+    ///
+    /// On failure this writer stays on its current part, but a new part file may have been
+    /// created beside it: the caller appends nothing more, as after a failed flush.
+    pub fn rotate_if_due(&mut self, now: Instant) -> Result<bool, ExportError> {
+        let (max_bytes, max_age) = self.part_limits;
+        let part_bytes = self.chain_bytes.saturating_sub(self.part_start);
+        let due =
+            part_bytes >= max_bytes || now.saturating_duration_since(self.part_opened) >= max_age;
+        let durable = self
+            .durable
+            .as_ref()
+            .is_some_and(|frontier| frontier.chain_bytes == self.chain_bytes);
+        if !due
+            || part_bytes == 0
+            || !durable
+            || !self.accounting_available
+            || !matches!(self.phase, ExportPhase::Open)
+        {
+            return Ok(false);
+        }
+        let mut part = self.root.dir.open_part_for_create(self.chain_bytes)?;
+        if part.len()? > 0 {
+            return Err(ExportError::ChainExists);
+        }
+        self.chain = part;
+        self.part_start = self.chain_bytes;
+        self.part_opened = now;
+        Ok(true)
+    }
+
+    /// Test seam: the part size and age [`Self::rotate_if_due`] closes a part at.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn set_part_limits(&mut self, bytes: u64, age: Duration) {
+        self.part_limits = (bytes, age);
+    }
+
     /// The chain's storage accounting. `quota_bytes` is the configured serialized-byte
     /// allowance (zero when none is configured); `reserved_bytes` is always zero, because a
     /// chain is quota-only and a quota is never reported as reservation.
@@ -1595,8 +1701,9 @@ impl TraceExport {
         &self.root.display
     }
 
-    /// Open an independent reader at offset zero and require the directory entry to be
-    /// the retained chain writer's exact file identity. Acquisition failure poisons the
+    /// Open an independent reader of the current part at offset zero (the whole chain until
+    /// it first rotates) and require the directory entry to be the retained chain writer's
+    /// exact file identity. Acquisition failure poisons the
     /// chain writer, because a caller may otherwise restore a swapped name and append.
     pub fn independent_chain_reader(&mut self) -> Result<TraceReadFile, ExportError> {
         Ok(self.root.dir.open_matching_reader(&mut self.chain)?)
@@ -1626,6 +1733,113 @@ impl TraceExport {
 pub fn manifest_sha256(m: &SealManifest) -> Result<String, ExportError> {
     let canonical = m.clone().sorted();
     Ok(hex::encode(Sha256::digest(to_json("seal", &canonical)?)))
+}
+
+/// The resume's position while it streams the chain, part after part.
+struct ChainScan {
+    next_seq: u64,
+    head: String,
+    replay: ChainPhaseReplay,
+    /// The logical end of what has been validated.
+    validated_bytes: u64,
+    /// The parts before the first surviving one were removed: the first record read gives
+    /// the position instead of `GENESIS` and seq 0.
+    adopt_first_link: bool,
+}
+
+impl ChainScan {
+    /// Validate every line of one part, in order, continuing the scan's position. Each line
+    /// is bounded before it is buffered, is its canonical serialization and has its link
+    /// checked; anything else is `ChainCorrupt`.
+    fn read_part(
+        &mut self,
+        mut reader: impl BufRead,
+        path: &Path,
+        visit: &mut dyn FnMut(&Envelope),
+    ) -> Result<(), ExportError> {
+        let limit = MAX_ENVELOPE_BYTES as u64;
+        loop {
+            let mut line = Vec::new();
+            let read = (&mut reader)
+                .take(limit)
+                .read_until(b'\n', &mut line)
+                .map_err(|source| io(path, source))?;
+            if read == 0 {
+                return Ok(());
+            }
+            let seq = self.next_seq;
+            let corrupt = |reason: String| ExportError::ChainCorrupt { seq, reason };
+            let read = u64::try_from(read)
+                .map_err(|_| corrupt("record byte count does not fit u64".to_string()))?;
+            self.validated_bytes = self
+                .validated_bytes
+                .checked_add(read)
+                .ok_or_else(|| corrupt("validated byte length overflows u64".to_string()))?;
+            if line.last() != Some(&b'\n') {
+                if read == limit {
+                    return Err(corrupt(
+                        "record exceeds the protocol v5 envelope bound".to_string(),
+                    ));
+                }
+                return Err(corrupt(
+                    "record is missing its terminating newline".to_string(),
+                ));
+            }
+            line.pop();
+            // JSON allows a trailing carriage return, so the header parses either way; the
+            // canonical check below refuses it.
+            let header: EnvelopeVersionSeq = serde_json::from_slice(&line)
+                .map_err(|source| corrupt(format!("not an envelope header: {source}")))?;
+            self.replay
+                .check_version(header.seq, header.protocol_version)?;
+            let env: Envelope = serde_json::from_slice(&line)
+                .map_err(|source| corrupt(format!("not an envelope: {source}")))?;
+            // The link hash covers the decoded content only, so another spelling of a line
+            // (an unknown key, whitespace, a carriage return) is bytes nothing covers, and the
+            // verifier refuses it (`record_not_canonical`). A chain it can never verify is not
+            // one to append to.
+            if !serde_json::to_vec(&env).is_ok_and(|canonical| canonical == line) {
+                return Err(corrupt(
+                    "record is not its canonical serialization (a carriage return, extra \
+                     whitespace or an unknown key was added to the line)"
+                        .to_string(),
+                ));
+            }
+            admit(&env)?;
+            if self.adopt_first_link {
+                // The links before this one were pruned: its own claim is the position. Its
+                // hash is still recomputed over that `prev` below.
+                self.adopt_first_link = false;
+                self.next_seq = env.link.seq;
+                self.head.clone_from(&env.link.prev);
+            }
+            if env.link.seq != self.next_seq {
+                return Err(corrupt(format!(
+                    "names seq {}, but the chain is at {}",
+                    env.link.seq, self.next_seq
+                )));
+            }
+            if env.link.prev != self.head {
+                return Err(corrupt(format!(
+                    "prev {} does not name the link before it",
+                    env.link.prev
+                )));
+            }
+            let expected_hash = env
+                .expected_hash(&self.head)
+                .map_err(|source| corrupt(format!("cannot recompute its hash: {source}")))?;
+            if env.link.hash != expected_hash {
+                return Err(corrupt("hash does not cover this envelope".to_string()));
+            }
+            self.replay.push(&env)?;
+            visit(&env);
+            self.head = env.link.hash;
+            self.next_seq = self
+                .next_seq
+                .checked_add(1)
+                .ok_or(ExportError::SequenceExhausted)?;
+        }
+    }
 }
 
 /// Compact `serde_json`, no trailing newline. The seal's bytes go through a digest, so

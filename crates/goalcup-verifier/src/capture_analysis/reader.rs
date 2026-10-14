@@ -49,8 +49,8 @@ use goalcup_protocol::chain::GENESIS;
 use goalcup_protocol::control::parse_z;
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::export::{
-    ACKS_FILE, BASELINE_FILE, CHAIN_FILE, ChainPhaseReplay, ExportError, RECEIPT_FILE, SEAL_FILE,
-    TerminalKind, check_terminal_manifest, manifest_sha256,
+    ACKS_FILE, BASELINE_FILE, ChainPhaseReplay, ExportError, RECEIPT_FILE, SEAL_FILE, TerminalKind,
+    chain_parts, check_terminal_manifest, manifest_sha256, part_file_name,
 };
 use goalcup_protocol::provenance::{Rfc3339Utc, Sha256Digest, TerminationOutcomeV1};
 use goalcup_protocol::receipt::StartReceipt;
@@ -199,6 +199,12 @@ impl CaptureIntegrityReport {
 /// Scan one v5 capture trace directory, handing each individually validated capture record
 /// to `emit`, and return the whole-trace report.
 ///
+/// A rotated chain is read part by part as one stream (D55); a part missing between two others
+/// is `chain_part_missing`. A chain whose first parts were removed on this machine is read from
+/// its first surviving record: its links, terminal and acknowledgements are checked, the
+/// capture-record rules that need the removed records are not, and the report is incomplete
+/// with `chain_pruned_locally`, because only the server's copy can be judged whole.
+///
 /// `Err` means no usable report. That covers an unreadable or replaced trace artifact (the
 /// no-follow containment policy refuses symbolic links and hard links), a chain whose
 /// first record is not protocol v5 (this build reads no other), an I/O failure, or
@@ -213,8 +219,23 @@ pub fn scan_capture_trace(
     let keys = AcceptedKeys::new(options);
     let mut scan = Scan::new(&keys);
     scan.load_receipt(&root)?;
-    let chain = open_file(&root, CHAIN_FILE)?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the trace has no chain.jsonl"))?;
+    let parts = match chain_parts(dir) {
+        Ok(parts) => parts,
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            scan.fail("chain_part_missing");
+            return Ok(scan.report());
+        }
+        Err(error) => return Err(error),
+    };
+    let no_chain = || io::Error::new(io::ErrorKind::NotFound, "the trace has no chain.jsonl");
+    let first = parts.first().ok_or_else(no_chain)?.start;
+    let mut chain = Vec::with_capacity(parts.len());
+    for part in &parts {
+        chain.push(open_file(&root, &part_file_name(part.start))?.ok_or_else(no_chain)?);
+    }
+    if first > 0 {
+        scan.pruned_before(first);
+    }
     let mut acks = open_file(&root, ACKS_FILE)?.map(AckStream::new);
     scan.read_chain(chain, acks.as_mut(), emit)?;
     if scan.chain_clean {
@@ -401,6 +422,10 @@ struct Scan<'k> {
     torn_tail: bool,
     /// The chain was read to its end with no chain-level violation.
     chain_clean: bool,
+    /// The chain's first parts were removed on this machine (D55).
+    pruned: bool,
+    /// The seq of the first record read: 0, or the first surviving one of a pruned chain.
+    first_seq: u64,
     validated_records: u64,
     validated_bytes: u64,
     head: String,
@@ -430,6 +455,8 @@ impl<'k> Scan<'k> {
             incomplete: false,
             torn_tail: false,
             chain_clean: false,
+            pruned: false,
+            first_seq: 0,
             validated_records: 0,
             validated_bytes: 0,
             head: GENESIS.to_string(),
@@ -447,6 +474,15 @@ impl<'k> Scan<'k> {
             sealed: false,
             terminal_facts: None,
         }
+    }
+
+    /// The parts before logical byte `start` were removed on this machine: offsets stay
+    /// logical, and the phase is the one an open chain had where they end.
+    fn pruned_before(&mut self, start: u64) {
+        self.pruned = true;
+        self.validated_bytes = start;
+        self.replay = ChainPhaseReplay::after_pruned_prefix();
+        self.short("chain_pruned_locally");
     }
 
     fn fail(&mut self, code: &str) {
@@ -521,21 +557,35 @@ impl<'k> Scan<'k> {
         Ok(())
     }
 
+    /// Read the chain's parts, in order, as one stream.
     fn read_chain(
         &mut self,
-        chain: std::fs::File,
+        parts: Vec<std::fs::File>,
         mut acks: Option<&mut AckStream>,
         emit: &mut dyn FnMut(&CaptureRecord) -> io::Result<()>,
     ) -> io::Result<()> {
         let limit = MAX_ENVELOPE_BYTES as u64;
-        let mut reader = BufReader::new(chain);
+        let mut parts = parts.into_iter();
+        let Some(first) = parts.next() else {
+            self.chain_clean = true;
+            return Ok(());
+        };
+        let mut reader = BufReader::new(first);
         let mut line = Vec::with_capacity(16 * 1024);
         loop {
             line.clear();
             let read = (&mut reader).take(limit).read_until(b'\n', &mut line)?;
             if read == 0 {
-                self.chain_clean = true;
-                return Ok(());
+                match parts.next() {
+                    Some(next) => {
+                        reader = BufReader::new(next);
+                        continue;
+                    }
+                    None => {
+                        self.chain_clean = true;
+                        return Ok(());
+                    }
+                }
             }
             if line.last() != Some(&b'\n') {
                 if read as u64 == limit {
@@ -548,12 +598,11 @@ impl<'k> Scan<'k> {
                 return Ok(());
             }
             line.pop();
-            let seq = self.validated_records;
             let Ok(header) = serde_json::from_slice::<VersionSeq>(&line) else {
                 self.fail("record_malformed");
                 return Ok(());
             };
-            if seq == 0 && header.protocol_version != M2_PROTOCOL_VERSION {
+            if self.validated_records == 0 && header.protocol_version != M2_PROTOCOL_VERSION {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
@@ -580,6 +629,13 @@ impl<'k> Scan<'k> {
                 self.fail("record_not_canonical");
                 return Ok(());
             }
+            if self.pruned && self.validated_records == 0 {
+                // The links before this one were removed: its own claim is the position, and
+                // its hash is still recomputed over that `prev`.
+                self.first_seq = env.link.seq;
+                self.head.clone_from(&env.link.prev);
+            }
+            let seq = self.first_seq + self.validated_records;
             if env.link.seq != seq {
                 self.fail("link_seq_mismatch");
                 return Ok(());
@@ -616,7 +672,9 @@ impl<'k> Scan<'k> {
                 }
                 Some(_) => {}
             }
-            if let EventBody::Capture { record } = &env.body
+            // A pruned chain's records name streams and producers its removed parts opened.
+            if !self.pruned
+                && let EventBody::Capture { record } = &env.body
                 && let Err(code) = self.capture.apply(record)
             {
                 self.fail(code);
@@ -689,6 +747,10 @@ impl<'k> Scan<'k> {
                 break;
             }
             let ack = acks.pending.take().expect("checked above");
+            if self.pruned && ack.seq < self.first_seq {
+                // It acknowledges a record removed on this machine: nothing here to check.
+                continue;
+            }
             if ack.seq < seq {
                 // Monotonic ACKs are consumed at their own link; one behind it is out of order.
                 self.acks_failed = true;
@@ -784,8 +846,10 @@ impl<'k> Scan<'k> {
     /// verified receipt and its cutoff. The two terminal modes
     /// are never interchangeable.
     fn bind_terminal(&mut self, root: &TraceRoot) -> io::Result<()> {
+        // A pruned chain may have lost the link a receipt witnessed.
         if let Some(receipt) = &self.receipt
             && !receipt.head_bound
+            && !self.pruned
         {
             self.fail("receipt_chain_head_unbound");
         }
@@ -872,8 +936,9 @@ impl<'k> Scan<'k> {
 
     fn report(mut self) -> CaptureIntegrityReport {
         // Every entry carries a Launch naming a goal stream that ended Complete, the two in
-        // either order. Without that the run is unproven, never forged.
-        if self.capture.launch_goals.is_empty() {
+        // either order. Without that the run is unproven, never forged. A pruned chain's
+        // records are not judged here, and it is already incomplete.
+        if !self.pruned && self.capture.launch_goals.is_empty() {
             self.short("launch_missing");
         } else if !self
             .capture

@@ -15,7 +15,7 @@ publish = false
 # is step zero of the gate in README.md precisely so that stays true: every other gate
 # command builds dev-dependencies, which turn this feature on for the whole package.
 [features]
-test-hooks = []
+test-hooks = ["goalcup-protocol/test-hooks"]
 
 [dependencies]
 goalcup-protocol = { path = "../goalcup-protocol" }
