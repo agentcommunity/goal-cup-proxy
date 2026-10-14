@@ -36,6 +36,10 @@ pub const FAKE_ID: &str = "m2-fake";
 /// under this id, with its program replaced by `fixtures/m2-fake-hermes.sh`.
 pub const HERMES_FAKE_ID: &str = "m2-fake-hermes";
 
+/// The repository `prepare_for` says the participant made, and the made-up token for it.
+pub const PREP_REPO: &str = "https://github.com/goal-cup/demo";
+pub const FAKE_GITHUB_TOKEN: &str = "github_pat_FAKE0123456789abcdefghijkl";
+
 /// The exact path the fake connector records on `localhost`, the host the proxy intercepts.
 pub const EVIDENCE_PATH: &str = "/v1/responses";
 
@@ -225,6 +229,61 @@ impl Rig {
             .lock()
             .unwrap()
             .insert(name.to_string(), value.to_string());
+    }
+
+    /// Make this rig a participant who has logged in to the server at `url` and run `goalcup
+    /// prep`: `server.json`, `prep.json`, `github.json` (a made-up token), an empty bare
+    /// repository standing in for the participant's GitHub repository, and the work folder
+    /// their runs are cloned into. The clone is taken from the stand-in repository through the
+    /// test-only door, so nothing here reaches GitHub.
+    pub fn prepare_for(&self, url: &str) {
+        goalcup_cli::server::write_server_config(
+            &self.cfg,
+            &goalcup_cli::server::ServerConfig {
+                url: url.to_string(),
+                account: Some("member-1".to_string()),
+            },
+        )
+        .unwrap();
+        let source = self.root.join("github-source.git");
+        let git = std::process::Command::new("git")
+            .args(["init", "--quiet", "--bare"])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(git.status.success(), "{git:?}");
+        let work = self.root.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        goalcup_cli::account::github::GithubSetup::new(PREP_REPO, FAKE_GITHUB_TOKEN)
+            .unwrap()
+            .store(&self.cfg)
+            .unwrap();
+        std::fs::write(
+            goalcup_cli::prep_file::prep_path(&self.cfg),
+            serde_json::to_vec(&serde_json::json!({
+                "harness": FAKE_ID, "repo_url": PREP_REPO, "work_root": work,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        self.with_env(
+            goalcup_cli::commands::start::TEST_CLONE_SOURCE,
+            &source.display().to_string(),
+        );
+    }
+
+    /// The folder `prepare_for` made for the clones.
+    pub fn work_root(&self) -> PathBuf {
+        self.root.join("work")
+    }
+
+    /// The clones `goalcup start` made in the work folder.
+    pub fn clones(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(self.work_root())
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        dirs.sort();
+        dirs
     }
 
     /// The directories `goalcup start` made beside the goal file.
@@ -756,7 +815,9 @@ impl DaemonClient for Hooked<'_> {
         self.note("create_capture_workspace");
         self.book().creates.push(request.clone());
         if self.book().occupy_ca_file {
-            let ca = Path::new(&request.workspace).with_file_name("ca");
+            // The run directory's `ca/`: beside `home/` (the workspace of a run on a server is a clone
+            // elsewhere).
+            let ca = Path::new(&request.run_home).with_file_name("ca");
             std::fs::write(ca.join(goalcup_cli::proxy::tls::CA_CERT_FILE_NAME), b"").unwrap();
         }
         let mut info = self.inner.create_capture_workspace(request)?;

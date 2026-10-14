@@ -3,35 +3,31 @@
 
 use crate::common::m2_cli_support::{Hooked, Rig};
 use crate::common::upload_server::{ServerOptions, UploadServer};
-use goalcup_cli::server::{ServerConfig, write_server_config};
 use goalcup_protocol::capture_status::AnchorState;
 use goalcup_verifier::capture_analysis::reader::{CaptureIntegrity, scan_capture_trace};
 
 const GOAL: &str = "write hello.txt, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
-const TOKEN: &str = "gct_test_0123456789abcdef";
-const REPO: &str = "https://github.com/goal-cup/demo";
+const REPO: &str = crate::common::m2_cli_support::PREP_REPO;
 
 fn server(store: &std::path::Path) -> UploadServer {
-    UploadServer::start(
-        store,
-        ServerOptions {
-            tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
-            ..ServerOptions::default()
-        },
-    )
+    UploadServer::start(store, ServerOptions::default())
 }
 
-fn log_in(rig: &Rig, url: &str, token: &str) {
-    write_server_config(
-        &rig.cfg,
-        &ServerConfig {
-            url: url.to_string(),
-            account: None,
-            token: token.to_string(),
-        },
-    )
-    .unwrap();
+/// The participant has logged in to `url` and run `goalcup prep` (`Rig::prepare_for`); each
+/// start then has its run approved by the stand-in, which approves at once.
+fn log_in(rig: &Rig, url: &str) {
+    rig.prepare_for(url);
+}
+
+/// The credential a run saved in its own directory, for a test to hand the stand-in. Reading
+/// the file is how a test gets at it: the tracer's own type never gives the value out.
+fn saved_credential(rig: &Rig, run_id: &str) -> String {
+    let path = goalcup_cli::account::credential::credential_path(&goalcup_cli::run::run_dir(
+        &rig.cfg, run_id,
+    ));
+    let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    stored["credential"].as_str().unwrap().to_string()
 }
 
 /// A logged-in start opens the run before anything is created, runs under the server's entry
@@ -41,13 +37,12 @@ fn a_logged_in_start_runs_under_the_servers_entry_and_keeps_its_receipt() {
     let rig = Rig::new();
     let store = rig.root.join("server");
     let server = server(&store);
-    log_in(&rig, &server.url(), TOKEN);
+    log_in(&rig, &server.url());
     rig.tell("stop", "");
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
-    let mut opts = rig.options(&goal, RESERVE);
-    opts.repo = Some(format!("{REPO}.git"));
+    let opts = rig.options(&goal, RESERVE);
     let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
 
@@ -84,55 +79,56 @@ fn a_logged_in_start_runs_under_the_servers_entry_and_keeps_its_receipt() {
     assert_eq!(record.trace_dir, trace.display().to_string());
 }
 
-/// A token the server does not know refuses the start before the daemon is asked anything:
-/// no entry, no run directory.
+/// An approval the participant denies, or lets expire, starts nothing: no run on the server, no
+/// entry, no run directory, no clone, no credential.
 #[test]
-fn a_refused_token_starts_nothing() {
-    let rig = Rig::new();
-    let server = server(&rig.root.join("server"));
-    log_in(&rig, &server.url(), "gct_not_a_token_the_server_knows");
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let mut opts = rig.options(&goal, RESERVE);
-    opts.repo = Some(REPO.to_string());
-    let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-    let error = result.expect_err("the start was not refused");
-    assert_eq!(error.exit_code(), 1, "{error}");
-    assert!(error.to_string().contains("goalcup login"), "{error}");
-    assert!(!error.to_string().contains("gct_not_a_token"), "{error}");
-    assert!(client.book().creates.is_empty(), "{out}");
-    assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
-    assert!(!rig.harness_started());
-    assert!(server.run_ids().is_empty());
-}
-
-/// No server answering refuses the start the same way, and so does a missing `--repo`.
-#[test]
-fn an_unreachable_server_or_a_missing_repo_starts_nothing() {
-    let rig = Rig::new();
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", closed.local_addr().unwrap());
-    drop(closed);
-    log_in(&rig, &url, TOKEN);
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    for repo in [Some(REPO.to_string()), None] {
-        let mut opts = rig.options(&goal, RESERVE);
-        opts.repo = repo.clone();
+fn a_denied_or_expired_approval_starts_nothing() {
+    use crate::common::upload_server::Approval;
+    for (approval, said) in [(Approval::Deny, "denied"), (Approval::Expire, "expired")] {
+        let rig = Rig::new();
+        let server = server(&rig.root.join("server"));
+        log_in(&rig, &server.url());
+        server.set_approval(approval);
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let opts = rig.options(&goal, RESERVE);
         let (result, out) =
             std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
         let error = result.expect_err("the start was not refused");
         assert_eq!(error.exit_code(), 1, "{error}");
-        let said = error.to_string();
-        match repo {
-            Some(_) => assert!(said.contains("could not be reached"), "{said}"),
-            None => assert!(said.contains("--repo"), "{said}"),
-        }
+        assert!(error.to_string().contains(said), "{error}");
+        assert!(error.to_string().contains("Nothing was created"), "{error}");
         assert!(client.book().creates.is_empty(), "{out}");
-        assert!(rig.run_dirs().is_empty());
+        assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
+        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
+        assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists());
+        assert!(!rig.harness_started());
+        assert!(server.run_ids().is_empty());
     }
+}
+
+/// No server answering refuses the start the same way, before anything is created.
+#[test]
+fn an_unreachable_server_starts_nothing() {
+    let rig = Rig::new();
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    log_in(&rig, &url);
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let opts = rig.options(&goal, RESERVE);
+    let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+    let error = result.expect_err("the start was not refused");
+    assert_eq!(error.exit_code(), 1, "{error}");
+    let said = error.to_string();
+    assert!(said.contains("could not be reached"), "{said}");
+    assert!(said.contains("Nothing was created"), "{said}");
+    assert!(client.book().creates.is_empty(), "{out}");
+    assert!(rig.run_dirs().is_empty());
+    assert!(rig.clones().is_empty());
 }
 
 /// A start that fails after the run opened and before the launch gives the run back, so the
@@ -141,14 +137,13 @@ fn an_unreachable_server_or_a_missing_repo_starts_nothing() {
 fn a_start_that_fails_before_the_launch_gives_the_run_back() {
     let rig = Rig::new();
     let server = server(&rig.root.join("server"));
-    log_in(&rig, &server.url(), TOKEN);
+    log_in(&rig, &server.url());
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     // The proxy cannot write its CA file, after the daemon made the entry.
     client.book().occupy_ca_file = true;
-    let mut opts = rig.options(&goal, RESERVE);
-    opts.repo = Some(REPO.to_string());
+    let opts = rig.options(&goal, RESERVE);
     let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
     result.expect_err("the start did not fail");
     let runs = server.run_ids();
@@ -164,7 +159,7 @@ fn a_start_that_fails_before_the_launch_gives_the_run_back() {
 
 /// The client speaks TLS with this crate's own rustls: a server whose certificate chains to a
 /// trusted root answers, and the same server is refused by a client trusting only the public
-/// roots, before any request (and so before the token) is sent, as a failure that asking again
+/// roots, before any request is sent, as a failure that asking again
 /// does not cure.
 #[test]
 fn the_client_speaks_tls_and_refuses_an_untrusted_certificate() {
@@ -176,20 +171,16 @@ fn the_client_speaks_tls_and_refuses_an_untrusted_certificate() {
         .build()
         .unwrap();
     let upstream = crate::common::m2_cli_support::Upstream::start(&runtime);
-    let config = ServerConfig {
-        url: format!("https://localhost:{}", upstream.port),
-        account: None,
-        token: TOKEN.to_string(),
-    };
+    let url = format!("https://localhost:{}", upstream.port);
     let root =
         rustls::pki_types::CertificateDer::from_pem_slice(upstream.root_pem().as_bytes()).unwrap();
-    let trusted = ServerClient::with_roots(&config, [root]);
+    let trusted = ServerClient::with_roots(&url, [root]);
     let answer: serde_json::Value = trusted
         .json("GET", "/v1/runs/r0000000000000000", None::<&()>)
         .unwrap();
     assert_eq!(answer, serde_json::json!({}));
 
-    let public = ServerClient::new(&config);
+    let public = ServerClient::anonymous(&url);
     let refused = public
         .json::<serde_json::Value>("GET", "/v1/runs/r0000000000000000", None::<&()>)
         .unwrap_err();
@@ -213,13 +204,12 @@ fn assert_nothing_kept(rig: &Rig) {
 fn a_launch_refused_after_the_fork_gives_the_run_back() {
     let rig = Rig::new();
     let server = server(&rig.root.join("server"));
-    log_in(&rig, &server.url(), TOKEN);
+    log_in(&rig, &server.url());
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     client.book().registration = Some(crate::common::m2_cli_support::RegistrationFault::Refused);
-    let mut opts = rig.options(&goal, RESERVE);
-    opts.repo = Some(REPO.to_string());
+    let opts = rig.options(&goal, RESERVE);
     let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
     result.expect_err("the start did not fail");
     let runs = server.run_ids();
@@ -233,17 +223,24 @@ fn a_launch_refused_after_the_fork_gives_the_run_back() {
     assert_nothing_kept(&rig);
 }
 
-/// A start killed between the open and the launch cannot give its run back; it leaves a note,
-/// and the next start gives that run back first instead of meeting "one open run" refused.
+/// A start killed between the open and the launch cannot give its run back; it leaves a note and
+/// the credential in the run's directory, and the next start gives that run back first instead
+/// of meeting "one open run" refused.
 #[test]
 fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
     let rig = Rig::new();
     let server = server(&rig.root.join("server"));
-    log_in(&rig, &server.url(), TOKEN);
-    let config = goalcup_cli::server::read_server_config(&rig.cfg)
-        .unwrap()
-        .unwrap();
-    let client = goalcup_cli::upload::http::ServerClient::new(&config);
+    log_in(&rig, &server.url());
+    // What the killed start had: an approved credential, a run opened with it, and the note and
+    // the credential it kept.
+    let secret = server.mint_credential("member-1");
+    let credential = goalcup_cli::account::credential::RunCredential::new(
+        secret,
+        "2099-01-01T00:00:00Z".to_string(),
+    )
+    .unwrap();
+    let client =
+        goalcup_cli::upload::http::ServerClient::with_credential(&server.url(), &credential);
     let request = goalcup_cli::upload::api::OpenRunRequest {
         connector_id: "m2-fake".into(),
         manifest_sha256: "a".repeat(64),
@@ -253,17 +250,21 @@ fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
         harness_version: "1".into(),
         tracer_version: "0.1.0".into(),
         repo_url: REPO.into(),
+        machine: None,
     };
     let killed = goalcup_cli::upload::open_run(&client, &request).unwrap();
-    // What the killed start left: the note, and nothing that gives the run back.
+    goalcup_cli::account::credential::store(
+        &goalcup_cli::run::run_dir(&rig.cfg, &killed.run_id),
+        &credential,
+    )
+    .unwrap();
     std::mem::forget(goalcup_cli::upload::GiveBack::opened(&client, &rig.cfg, &killed).unwrap());
 
     rig.tell("stop", "");
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let hooked = Hooked::new(&http, &rig);
-    let mut opts = rig.options(&goal, RESERVE);
-    opts.repo = Some(REPO.to_string());
+    let opts = rig.options(&goal, RESERVE);
     let (result, out) = std::thread::scope(|s| rig.start(s, &hooked, opts, None).join().unwrap());
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     assert_eq!(
@@ -273,6 +274,10 @@ fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
     );
     assert_eq!(server.run_ids().len(), 2, "{out}");
     assert!(!goalcup_cli::upload::pending_path(&rig.cfg).exists());
+    assert!(
+        !goalcup_cli::run::run_dir(&rig.cfg, &killed.run_id).exists(),
+        "the given-back run's directory and credential are gone"
+    );
 }
 
 // ------------------------------------------------------------------ the uploader
@@ -380,7 +385,6 @@ fn logged_in_options(
     goal: &std::path::Path,
 ) -> goalcup_cli::commands::start::StartOptions {
     let mut opts = rig.options(goal, RESERVE);
-    opts.repo = Some(REPO.to_string());
     opts.upload_policy = quick_policy();
     opts
 }
@@ -391,7 +395,7 @@ fn logged_in_options(
 fn a_run_is_uploaded_as_it_records_and_sealed_at_the_end() {
     let rig = Rig::new();
     let server = server(&rig.root.join("server"));
-    log_in(&rig, &server.url(), TOKEN);
+    log_in(&rig, &server.url());
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -423,7 +427,7 @@ fn a_server_that_goes_away_mid_run_gets_everything_once_it_is_back() {
     let store = rig.root.join("server");
     let first = server(&store);
     let port = first.port();
-    log_in(&rig, &first.url(), TOKEN);
+    log_in(&rig, &first.url());
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -442,7 +446,6 @@ fn a_server_that_goes_away_mid_run_gets_everything_once_it_is_back() {
         let back = UploadServer::start(
             &store,
             ServerOptions {
-                tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
                 port: Some(port),
                 ..ServerOptions::default()
             },
@@ -465,7 +468,7 @@ fn an_upload_left_incomplete_is_finished_by_goalcup_upload() {
     let store = rig.root.join("server");
     let first = server(&store);
     let port = first.port();
-    log_in(&rig, &first.url(), TOKEN);
+    log_in(&rig, &first.url());
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -494,7 +497,6 @@ fn an_upload_left_incomplete_is_finished_by_goalcup_upload() {
     let server = UploadServer::start(
         &store,
         ServerOptions {
-            tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
             port: Some(port),
             ..ServerOptions::default()
         },
@@ -537,7 +539,7 @@ fn an_upload_left_incomplete_is_finished_by_goalcup_upload() {
 fn a_lost_reply_is_retried_without_a_second_copy() {
     let rig = Rig::new();
     let server = server(&rig.root.join("server"));
-    log_in(&rig, &server.url(), TOKEN);
+    log_in(&rig, &server.url());
     server.drop_next_chunk_reply();
     server.fail_next_chunks(1);
     rig.tell("stop", "");
@@ -552,16 +554,16 @@ fn a_lost_reply_is_retried_without_a_second_copy() {
     assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
 }
 
-/// A token revoked after the run opened stops the upload, says why, and leaves the run
+/// A credential that ended after the run opened stops the upload, says why, and leaves the run
 /// complete on this machine; a local chain that does not continue the server's copy is
 /// refused, not uploaded.
 #[test]
-fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
+fn an_ended_credential_or_a_diverged_chain_stops_the_upload() {
     let rig = Rig::new();
     let store = rig.root.join("server");
     let first = server(&store);
     let port = first.port();
-    log_in(&rig, &first.url(), TOKEN);
+    log_in(&rig, &first.url());
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -581,35 +583,10 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
     });
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
 
-    // The token is no longer known: refused, and the token is not repeated.
+    // Back up, but the local chain was edited past what the server holds.
     let server = UploadServer::start(
         &store,
         ServerOptions {
-            tokens: vec![(
-                "gct_some_other_token_000000".to_string(),
-                "member-1".to_string(),
-            )],
-            port: Some(port),
-            ..ServerOptions::default()
-        },
-    );
-    let refused = goalcup_cli::commands::upload::upload_with(
-        &rig.cfg,
-        &outcome.entry_id,
-        quick_policy(),
-        &mut Vec::new(),
-    )
-    .unwrap_err();
-    assert_eq!(refused.exit_code(), 1, "{refused}");
-    assert!(refused.to_string().contains("401"), "{refused}");
-    assert!(!refused.to_string().contains(TOKEN));
-    server.stop();
-
-    // Back with the token, but the local chain was edited past what the server holds.
-    let server = UploadServer::start(
-        &store,
-        ServerOptions {
-            tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
             port: Some(port),
             ..ServerOptions::default()
         },
@@ -645,6 +622,20 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
         held,
         "nothing more was stored"
     );
+
+    // The credential has ended: refused, and the credential is not repeated.
+    let credential = saved_credential(&rig, &run_id);
+    server.expire_credential(&credential);
+    let refused = goalcup_cli::commands::upload::upload_with(
+        &rig.cfg,
+        &outcome.entry_id,
+        quick_policy(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert_eq!(refused.exit_code(), 1, "{refused}");
+    assert!(refused.to_string().contains("401"), "{refused}");
+    assert!(!refused.to_string().contains(&credential));
 }
 
 // ------------------------------------------------------------------ the final heartbeat
@@ -679,7 +670,7 @@ fn the_final_heartbeat_with_the_commit_reaches_the_server_before_the_server_seal
         } else {
             server(&rig.root.join("server"))
         };
-        log_in(&rig, &server.url(), TOKEN);
+        log_in(&rig, &server.url());
         let goal = rig.goal(GOAL);
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
@@ -735,7 +726,6 @@ fn short_server(store: &std::path::Path, seconds: u64, port: Option<u16>) -> Upl
     UploadServer::start(
         store,
         ServerOptions {
-            tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
             run_seconds: Some(seconds),
             port,
             ..ServerOptions::default()
@@ -758,7 +748,7 @@ fn the_server_stops_the_run_at_its_deadline() {
     // Long enough for the fake harness to start and the agent to commit under a loaded test
     // machine; short enough for a test.
     let server = short_server(&rig.root.join("server"), 8, None);
-    log_in(&rig, &server.url(), TOKEN);
+    log_in(&rig, &server.url());
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -823,7 +813,7 @@ fn without_a_server_the_run_stops_on_its_own_clock_and_is_finished_later() {
     let store = rig.root.join("server");
     let first = short_server(&store, 3, None);
     let port = first.port();
-    log_in(&rig, &first.url(), TOKEN);
+    log_in(&rig, &first.url());
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);

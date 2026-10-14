@@ -24,6 +24,10 @@ pub struct OpenRunRequest {
     pub harness_version: String,
     pub tracer_version: String,
     pub repo_url: String,
+    /// What the machine is, without who it is ([`goalcup_platform::machine::facts`]). Left out
+    /// when a caller has none to send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<goalcup_platform::machine::MachineFacts>,
 }
 
 /// The answer to [`OpenRunRequest`].

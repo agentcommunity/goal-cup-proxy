@@ -411,7 +411,7 @@ fn the_repo_head_is_read_from_the_git_files() {
 mod retries {
     use super::chain;
     use crate::common::upload_server::{ServerOptions, UploadServer};
-    use goalcup_cli::server::ServerConfig;
+    use goalcup_cli::account::credential::RunCredential;
     use goalcup_cli::upload::api::OpenRunRequest;
     use goalcup_cli::upload::http::ServerClient;
     use goalcup_cli::upload::policy::{Policy, WrapUp};
@@ -423,7 +423,14 @@ mod retries {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    const TOKEN: &str = "gct_test_0123456789abcdef";
+    /// A credential for `member-1` that the stand-in minted, as an approval would have.
+    fn credential_of(server: &UploadServer) -> RunCredential {
+        RunCredential::new(
+            server.mint_credential("member-1"),
+            "2099-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap()
+    }
 
     type Fault = Box<dyn FnMut(&str) -> Option<u16> + Send>;
 
@@ -601,6 +608,7 @@ mod retries {
     struct Run {
         _dir: tempfile::TempDir,
         server: UploadServer,
+        credential: RunCredential,
         front: Front,
         record: UploadRecord,
         key: String,
@@ -610,20 +618,10 @@ mod retries {
     impl Run {
         fn new(fault: Fault) -> Run {
             let dir = tempfile::tempdir().unwrap();
-            let server = UploadServer::start(
-                &dir.path().join("server"),
-                ServerOptions {
-                    tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
-                    ..ServerOptions::default()
-                },
-            );
-            let config = |url: String| ServerConfig {
-                url,
-                account: None,
-                token: TOKEN.to_string(),
-            };
+            let server = UploadServer::start(&dir.path().join("server"), ServerOptions::default());
+            let credential = credential_of(&server);
             // The run is opened straight on the stand-in; only the uploader goes through the front.
-            let direct = ServerClient::new(&config(server.url()));
+            let direct = ServerClient::with_credential(&server.url(), &credential);
             let request = OpenRunRequest {
                 connector_id: "fake".into(),
                 manifest_sha256: "a".repeat(64),
@@ -633,6 +631,7 @@ mod retries {
                 harness_version: "1".into(),
                 tracer_version: "0.1.0".into(),
                 repo_url: "https://github.com/goal-cup/demo".into(),
+                machine: None,
             };
             let opened = open_run(&direct, &request).unwrap();
             let receipt =
@@ -658,6 +657,7 @@ mod retries {
             Run {
                 _dir: dir,
                 server,
+                credential,
                 front,
                 record,
                 key: receipt.public_key,
@@ -666,11 +666,7 @@ mod retries {
         }
 
         fn uploader(&self) -> Uploader {
-            let client = ServerClient::new(&ServerConfig {
-                url: self.front.url.clone(),
-                account: None,
-                token: TOKEN.to_string(),
-            });
+            let client = ServerClient::with_credential(&self.front.url, &self.credential);
             Uploader::resume(
                 client,
                 self.record.clone(),
@@ -942,11 +938,7 @@ mod retries {
         goalcup_cli::upload::uploader::Running,
         std::sync::mpsc::Receiver<String>,
     ) {
-        let client = ServerClient::new(&ServerConfig {
-            url: run.front.url.clone(),
-            account: None,
-            token: TOKEN.to_string(),
-        });
+        let client = ServerClient::with_credential(&run.front.url, &run.credential);
         let (stop, stopped) = std::sync::mpsc::channel();
         let running = begin(
             client,

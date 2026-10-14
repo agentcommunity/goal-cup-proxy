@@ -146,3 +146,68 @@ fn a_run_that_cannot_take_its_reserve_is_refused_before_anything_is_created() {
     let reserve = goalcup_cli::run::reserve::artifact_root(&cfg).join("reserve");
     assert!(!reserve.exists(), "no reserve file or folder");
 }
+
+/// `goalcup git-credential` is what a run's clone calls; it is not for the participant, so
+/// `--help` does not list it, and `start` has no `--repo` any more (the repository comes from
+/// `goalcup prep`) but has `--practice`.
+#[test]
+fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
+    let goalcup = env!("CARGO_BIN_EXE_goalcup");
+    let help = std::process::Command::new(goalcup)
+        .arg("--help")
+        .output()
+        .unwrap();
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(!help.contains("git-credential"), "{help}");
+    for shown in [
+        "start", "status", "entries", "seal", "doctor", "login", "upload",
+    ] {
+        assert!(help.contains(shown), "{shown}: {help}");
+    }
+    let start = std::process::Command::new(goalcup)
+        .args(["start", "--help"])
+        .output()
+        .unwrap();
+    let start = String::from_utf8_lossy(&start.stdout);
+    assert!(start.contains("--practice"), "{start}");
+    assert!(!start.contains("--repo"), "{start}");
+    // The command still answers git, and only for the stored repository.
+    let tmp = tempfile::tempdir().unwrap();
+    let token = "github_pat_FAKE0123456789abcdefghijkl";
+    goalcup_cli::account::github::GithubSetup::new("https://github.com/goal-cup/demo", token)
+        .unwrap()
+        .store(tmp.path())
+        .unwrap();
+    let ask = |path: &str, op: &str| {
+        use std::io::Write;
+        let mut child = std::process::Command::new(goalcup)
+            .args(["git-credential", op])
+            .env("GOALCUP_CONFIG_DIR", tmp.path())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(format!("protocol=https\nhost=github.com\npath={path}\n\n").as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let answer = ask("goal-cup/demo.git", "get");
+    assert!(answer.contains("username=x-access-token"), "{answer}");
+    assert!(answer.contains(&format!("password={token}")), "{answer}");
+    assert_eq!(ask("someone/else.git", "get"), "");
+    assert_eq!(ask("goal-cup/demo.git", "store"), "");
+    // An operation git does not use is a usage error.
+    let odd = std::process::Command::new(goalcup)
+        .args(["git-credential", "frobnicate"])
+        .env("GOALCUP_CONFIG_DIR", tmp.path())
+        .output()
+        .unwrap();
+    assert_eq!(odd.status.code(), Some(1));
+}

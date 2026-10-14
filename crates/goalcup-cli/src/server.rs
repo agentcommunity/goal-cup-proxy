@@ -10,20 +10,10 @@
 //! credential is a different thing: the server mints it when the participant approves that run,
 //! and it lives in the run's own directory (`account::credential`), never here.
 //!
-//! The pasted token is legacy until Task T5 removes its callers. A `server.json` an older
-//! `goalcup login` wrote still holds one; while it does, it is treated as it always was:
-//!
-//! - it lives in this one file, at mode 0600 under the tracker's own configuration directory;
-//! - never in a harness's environment or on its command line: the harness environment is
-//!   built from nothing (`launch::process_env` and the launch plan), and nothing reads this
-//!   file into it;
-//! - never printed or logged: [`ServerConfig`]'s `Debug` prints `<redacted>`, and no message
-//!   in this crate formats the token;
-//! - never in a trace: the daemon, which writes the trace, never reads this file.
-//!
-//! Mode 0600 keeps other users out, not the agent: the harness runs as the participant and can
-//! read any file they can. The token only uploads this member's runs and the member can revoke
-//! it on the site (docs/CHEAT-CHECKLIST.md).
+//! A `server.json` an older `goalcup login` wrote may still hold a pasted `token`. It is read
+//! past and ignored (nothing uses it any more), and the next `goalcup login` writes the file
+//! without it. The file is still kept at mode 0600 under the tracker's own configuration
+//! directory.
 
 use crate::CliError;
 use crate::config::write_secret_file;
@@ -40,17 +30,11 @@ pub const ACCOUNT_MAX_LEN: usize = 64;
 /// `<cfg>/server.json`.
 pub const SERVER_FILE_NAME: &str = "server.json";
 
-/// The most of `server.json` [`read_server_config`] reads. The document is a URL, a handle and, in an older file, a token.
+/// The most of `server.json` [`read_server_config`] reads. The document is a URL and a handle.
 const SERVER_FILE_MAX_BYTES: u64 = 16 * 1024;
 
-/// The shortest and longest token accepted. Tokens are minted by the server; these bounds only
-/// catch a paste of the wrong thing (an empty line, a whole page).
-pub const TOKEN_MIN_LEN: usize = 16;
-pub const TOKEN_MAX_LEN: usize = 512;
-
 /// The upload server and the account on it, as `goalcup login` stored them.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerConfig {
     /// The server's base URL, without a trailing slash: `https://…`, or `http://` to a
     /// loopback address for a local test server.
@@ -59,20 +43,6 @@ pub struct ServerConfig {
     /// device flow. Not a secret.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
-    /// The pasted bearer token: legacy, empty for a device-flow login, removed with its callers
-    /// (T5). Never printed.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub token: String,
-}
-
-impl std::fmt::Debug for ServerConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServerConfig")
-            .field("url", &self.url)
-            .field("account", &self.account)
-            .field("token", &"<redacted>")
-            .finish()
-    }
 }
 
 /// `<cfg>/server.json`.
@@ -180,32 +150,6 @@ pub fn checked_account(handle: &str) -> Result<String, CliError> {
     Ok(handle.to_string())
 }
 
-/// `token` as pasted, checked: surrounding whitespace removed, then [`TOKEN_MIN_LEN`] to
-/// [`TOKEN_MAX_LEN`] visible ASCII characters. The refusal never repeats the token.
-pub fn checked_token(token: &str) -> Result<String, CliError> {
-    let token = token.trim();
-    if token.is_empty() {
-        return Err(CliError::Refused(
-            "no token was given. Copy the token from the Goal Cup site and paste it.".into(),
-        ));
-    }
-    if !token.bytes().all(|b| b.is_ascii_graphic()) {
-        return Err(CliError::Refused(
-            "the token holds a space or a character that is not printable ASCII, so it is not \
-             a Goal Cup token. Copy it again from the Goal Cup site."
-                .into(),
-        ));
-    }
-    if !(TOKEN_MIN_LEN..=TOKEN_MAX_LEN).contains(&token.len()) {
-        return Err(CliError::Refused(format!(
-            "the token is {} characters long, and a Goal Cup token is {TOKEN_MIN_LEN} to \
-             {TOKEN_MAX_LEN}. Copy it again from the Goal Cup site.",
-            token.len()
-        )));
-    }
-    Ok(token.to_string())
-}
-
 /// Store `config` at `<cfg>/server.json`, mode 0600, replacing any earlier one.
 pub fn write_server_config(cfg: &Path, config: &ServerConfig) -> Result<PathBuf, CliError> {
     let path = server_path(cfg);
@@ -216,9 +160,8 @@ pub fn write_server_config(cfg: &Path, config: &ServerConfig) -> Result<PathBuf,
 /// `<cfg>/server.json`, or `None` when there is none (local-only mode).
 ///
 /// The file must be the owner's alone: a `server.json` that the group or others can read is
-/// refused, naming the fix, because the token in it would no longer be the participant's
-/// alone. Its URL, its account handle if it has one, and its legacy token if it has one are
-/// checked again as `goalcup login` checked them.
+/// refused, naming the fix. Its URL and its account handle, if it has one, are checked again as
+/// `goalcup login` checked them. A `token` an older login stored is ignored.
 pub fn read_server_config(cfg: &Path) -> Result<Option<ServerConfig>, CliError> {
     use std::io::Read;
 
@@ -238,8 +181,8 @@ pub fn read_server_config(cfg: &Path) -> Result<Option<ServerConfig>, CliError> 
         let mode = file.metadata().map_err(io)?.permissions().mode();
         if mode & 0o077 != 0 {
             return Err(CliError::Refused(format!(
-                "{} can be read by other users (mode {:o}), so the token in it is no longer \
-                 yours alone. Run `goalcup login` again with a new token, or `chmod 600` it.",
+                "{} can be read by other users (mode {:o}). Run `goalcup login` again, or \
+                 `chmod 600` it.",
                 path.display(),
                 mode & 0o777
             )));
@@ -265,10 +208,5 @@ pub fn read_server_config(cfg: &Path) -> Result<Option<ServerConfig>, CliError> 
     Ok(Some(ServerConfig {
         url: checked_server_url(&stored.url)?,
         account: stored.account.as_deref().map(checked_account).transpose()?,
-        token: if stored.token.is_empty() {
-            String::new()
-        } else {
-            checked_token(&stored.token)?
-        },
     }))
 }
