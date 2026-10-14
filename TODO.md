@@ -18,7 +18,9 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
    launch, with the server's entry id and a signed start receipt (item 2,
    [UPLOAD-API](docs/UPLOAD-API.md)); the uploader in `goalcup start` and `goalcup upload`
    (item 3). Next: heartbeats, outages, `goalcup continue`, the deadline stop and pruning
-   (items 4 to 7), and the Worker.
+   (items 4 to 7). The Worker is built and tested locally
+   ([server/worker](server/worker/README.md)); what the owner must create before it is deployed
+   is listed there.
 3. **One admin page.** Entries, first prompt, last upload, outage flags. Researchers read R2
    directly.
 4. **Signed macOS binaries.** Sign and notarize the Homebrew release tarballs

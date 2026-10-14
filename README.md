@@ -309,6 +309,12 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   on stderr, when the server refuses the request itself (a revoked token, a closed run, a TLS
   certificate it cannot trust) or the local chain no longer continues the server's copy; the
   run is still complete on this machine.
+- <a id="server"></a>**The server.** The upload Worker (Cloudflare Workers, R2, Supabase) is in
+  [server/worker](server/worker/README.md), TypeScript, runnable on this machine with
+  `wrangler dev` (`cd server/worker && npm install && npm test`); nothing is deployed. The
+  tracer's end-to-end upload tests run against it too:
+  `cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only
+  -E 'test(/upload_worker/)'` (needs Node 22.18+ and the `npm install`).
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
   `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. An installed one (Homebrew, or an unpacked
   release tarball) finds them at `<bin>/../share/goalcup/connectors`.

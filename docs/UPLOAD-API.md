@@ -4,7 +4,8 @@ The exact wire contract between the tracer (`goalcup`) and the upload server. It
 [SERVER-DESIGN.md](SERVER-DESIGN.md) section 4 for the calls built so far; where it differs from
 that section, this file says so and why. Three things speak it and must agree byte for byte: the
 tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests run
-(`crates/goalcup-cli/tests/common/upload_server/`), and the Worker (still to come).
+(`crates/goalcup-cli/tests/common/upload_server/`), and the Worker
+(`server/worker/`).
 
 ## Common rules
 
