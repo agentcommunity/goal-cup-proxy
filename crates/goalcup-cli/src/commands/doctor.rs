@@ -183,7 +183,7 @@ fn connector_reports(
     Ok(out.into_iter().map(|(_, report)| report).collect())
 }
 
-/// The harness executable `goalcup start` would run: found on `env`'s `PATH` and hashed, by the
+/// The harness executable `goalcup start` would run: found on `env`'s `PATH` and checked, by the
 /// same function `start` calls. Any build passes: it is recorded, not pinned (D53). A harness
 /// that is not installed, or not a regular file, is a `Fail`: `start` would refuse it.
 fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
@@ -192,10 +192,8 @@ fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Che
         Ok(resolved) => Check::pass(
             "harness_executable",
             format!(
-                "`{program}` resolves to `{}` (sha256 {}); the build that runs is recorded, not \
-                 pinned.",
-                resolved.path(),
-                resolved.sha256()
+                "`{program}` resolves to `{}`; the build that runs is recorded, not pinned.",
+                resolved.path()
             ),
         ),
         Err(error) => Check::new(

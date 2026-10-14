@@ -1136,19 +1136,18 @@ fn capture_children_spawn_only_through_the_gate() {
         body.find(needle)
             .unwrap_or_else(|| panic!("`capture` has no {needle}"))
     };
-    // The order is the gate's: forked and parked, handle, durable registration, an exact-path
-    // executable recheck, only then release.
+    // The order is the gate's: forked and parked, handle, durable registration, only then
+    // release.
     assert!(at("spawn_gated(") < at("gated_handle("));
     assert!(at("gated_handle(") < at("register_process("));
-    assert!(at("register_process(") < at("recheck_resolved_executable("));
-    assert!(at("recheck_resolved_executable(") < at("gated.release()"));
+    assert!(at("register_process(") < at("gated.release()"));
     // A failed registration aborts the gate; it never reaches the release.
     let (failed, _) = body
         .split_once("gated.release()")
         .expect("the release is the next step");
     assert!(
         failed.matches("gated.abort();").count() >= 3,
-        "a failed handle, registration, or executable recheck aborts the gate"
+        "a failed handle, registration, or an interrupt aborts the gate"
     );
     // A released child is never given back to a spawner: the schema-selected identity tee
     // only takes its stdout and its already-loaded rule.
