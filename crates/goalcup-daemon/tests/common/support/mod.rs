@@ -112,12 +112,21 @@ pub fn write_config_with(
     path
 }
 
-/// Everything in `chain.jsonl`, in order.
+/// Everything in the chain, in order: every part file that is on disk (D55), from
+/// `chain.jsonl` or the first part that survived pruning.
 pub fn read_chain(trace_dir: &std::path::Path) -> Vec<goalcup_protocol::envelope::Envelope> {
-    let path = trace_dir.join("chain.jsonl");
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("a chain line is an envelope"))
+    let parts = goalcup_protocol::export::chain_parts(trace_dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", trace_dir.display()));
+    assert!(!parts.is_empty(), "{}: no chain part", trace_dir.display());
+    parts
+        .iter()
+        .flat_map(|part| {
+            let text = std::fs::read_to_string(&part.path)
+                .unwrap_or_else(|e| panic!("{}: {e}", part.path.display()));
+            text.lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| serde_json::from_str(l).expect("a chain line is an envelope"))
+                .collect::<Vec<_>>()
+        })
         .collect()
 }
