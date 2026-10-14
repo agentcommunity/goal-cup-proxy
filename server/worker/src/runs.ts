@@ -145,8 +145,10 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
 
   // A credential opens one run. Asking again with the same session_id is a lost reply: the same run.
   if (auth.run_id !== null) {
-    const opened = await ctx.db.getRun(auth.member, auth.run_id, null);
-    if (opened?.entry != null && opened.entry.segment === 0 && opened.entry.session_id === fields.session_id) return json(200, runView(opened.run, opened.entry));
+    // (The session of the open call is segment 0's, whatever `continue` has added since.)
+    let opened = await ctx.db.getRun(auth.member, auth.run_id, null);
+    if (opened !== null && opened.entry?.segment !== 0) opened = await ctx.db.getRun(auth.member, auth.run_id, opened.run.first_entry_id);
+    if (opened?.entry != null && opened.entry.session_id === fields.session_id) return json(200, runView(opened.run, opened.entry));
     throw conflict(OPENED_ALREADY);
   }
 
@@ -172,7 +174,7 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   });
   if (result.kind === "conflict") throw conflict(OPENED_ALREADY);
   if (result.kind === "forbidden") throw new ApiError(403, "forbidden", result.message);
-  return json(201, runView(result.run, result.entry));
+  return json(result.kind === "created" ? 201 : 200, runView(result.run, result.entry));
 }
 
 const runView = ({ run_id, official_start, deadline_at }: RunRow, { entry_id }: EntryRow) => ({ run_id, entry_id, official_start, deadline_at });

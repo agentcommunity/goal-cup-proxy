@@ -287,6 +287,16 @@ describe("continue and segments", () => {
     assert.equal((await r.get(alice, a.run_id)).body.segment, 1);
   });
 
+  lifecycle("a lost-reply repeat of the open is the same run, also after continue", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    assert.equal((await r.cont(alice, a.run_id, a.entry_id, "s-two")).status, 201);
+    const again = await r.open(alice, "s1");
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    assert.deepEqual(again.body, a); // segment 0's entry, the run's own start and deadline
+    assertError(await r.open(alice, "s-two"), 409, "conflict"); // continue's session is not the open call's
+  });
+
   lifecycle("stale previous_entry_id is 409", async (r) => {
     const alice = await r.cred("alice");
     const a = await r.start(alice, "s1");

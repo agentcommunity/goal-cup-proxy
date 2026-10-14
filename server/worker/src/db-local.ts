@@ -49,7 +49,7 @@ interface StoredEntry extends EntryRow {
 }
 
 /** The run and its entries (lowest segment first); `current_*` are worked out when it is read. */
-interface StoredRun extends Omit<RunRow, "current_entry_id" | "current_sealed_at"> {
+interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" | "current_sealed_at"> {
   machine: MachineFacts | null;
   client_ip: string | null;
   client_country: string | null;
@@ -214,10 +214,19 @@ export class LocalDb implements Db {
       if (w.closes !== null && a.official_start > w.closes) return { kind: "forbidden", message: AFTER_WINDOW };
     }
     // The credential binds first, so one that cannot bind opens no run and leaves nothing behind.
-    const bound = await this.#updateObject<Credential, boolean>(this.#credentialKey(a.credential), false, (cred) =>
-      cred.run_id !== null ? { answer: false } : { next: { ...cred, run_id: a.run_id, expires_at: a.credential_expires_at }, answer: true },
+    const bound = await this.#updateObject<Credential, string | null | true>(this.#credentialKey(a.credential), null, (cred) =>
+      cred.run_id !== null ? { answer: cred.run_id } : { next: { ...cred, run_id: a.run_id, expires_at: a.credential_expires_at }, answer: true },
     );
-    if (!bound) return { kind: "conflict" };
+    if (bound !== true) {
+      // Bound to a run already. If that run's first entry has this session, this is a retry that
+      // raced the original open: the same run.
+      const held = bound === null ? null : await this.#readRun(bound);
+      const first = held?.run.entries[0];
+      if (held?.run.member_id === a.member_id && first?.session_id === a.session_id) {
+        return { kind: "existing", run: toRun(held.run), entry: toEntry(first) };
+      }
+      return { kind: "conflict" };
+    }
 
     const run: StoredRun = {
       run_id: a.run_id,
@@ -258,7 +267,7 @@ export class LocalDb implements Db {
         const heldId = ((await marker.json()) as { run_id: string }).run_id;
         await this.#updateRun<null>(heldId, run.member_id, null, (held) =>
           held.mode === "competition" && held.status === "open" && held.replaced_at === null
-            ? { next: { ...held, replaced_at: run.official_start }, answer: null }
+            ? { next: { ...held, replaced_at: held.official_start > run.official_start ? held.official_start : run.official_start }, answer: null }
             : { answer: null },
         );
       }
@@ -428,7 +437,7 @@ const newEntry = (
 function toRun(r: StoredRun): RunRow {
   const { machine: _m, client_ip: _i, client_country: _c, abandon_reason: _a, sealed_at: _s, entries: _e, ...row } = r;
   const cur = currentOf(r);
-  return { ...row, current_entry_id: cur.entry_id, current_sealed_at: cur.sealed_at };
+  return { ...row, first_entry_id: r.entries[0]!.entry_id, current_entry_id: cur.entry_id, current_sealed_at: cur.sealed_at };
 }
 
 /** The public shape of an entry: drop the bookkeeping that only the local store keeps. */

@@ -549,6 +549,21 @@ fn continue_mints_segment_one_with_its_own_entry_and_receipt() {
 }
 
 #[test]
+fn a_lost_reply_repeat_of_the_open_is_the_same_run_also_after_continue() {
+    let rig = Rig::new();
+    let token = rig.server.mint_credential("member-1");
+    let a = rig.start(&token, "s1");
+    assert_eq!(rig.cont(&a, &a.entry, "s-two").status, 201);
+    let again = rig.open(&token, "s1");
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.body["run_id"], a.run.as_str());
+    assert_eq!(again.body["entry_id"], a.entry.as_str()); // segment 0's entry
+    assert_eq!(again.body["deadline_at"], a.deadline_at.as_str());
+    // The session a continue brought is not the open call's.
+    is_error(&rig.open(&token, "s-two"), 409, "conflict");
+}
+
+#[test]
 fn a_stale_previous_entry_id_is_409_and_a_run_that_ended_is_410() {
     let rig = Rig::new();
     let token = rig.server.mint_credential("member-1");

@@ -94,7 +94,7 @@ test("a run ends at its deadline or when it was replaced, and is closed strictly
 test("statusAt: sealed once over with the current entry sealed, incomplete once closed without; stored words stay", () => {
   const run = {
     run_id: R1, event_id: "cup", member_id: "m1", mode: "competition" as const, status: "open" as const, official_start: START,
-    deadline_at: DEADLINE, replaced_at: null as string | null, repo_url: "u", current_entry_id: E1, current_sealed_at: null as string | null,
+    deadline_at: DEADLINE, replaced_at: null as string | null, repo_url: "u", first_entry_id: E1, current_entry_id: E1, current_sealed_at: null as string | null,
   };
   const at = (iso: string, over = {}) => statusAt({ ...run, ...over }, new Date(iso));
   assert.equal(at("2026-11-13T08:59:59Z"), "open");
@@ -176,6 +176,35 @@ test("a credential binds in the step that opens the run: a bound or unknown one 
   assert.equal(await db.getRun("m1", id("r", 3), null), null);
   // A credential that was not used is still free.
   assert.equal((await db.openRun(openArgs(4, "s4", "2026-11-06T09:30:00Z", "2026-11-13T09:30:00Z", c2))).kind, "created");
+});
+
+test("a retry that raced the original open gets that run; another session still conflicts", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()));
+  const c = await credential(db);
+  const first = await db.openRun(openArgs(1, "s1", START, DEADLINE, c));
+  assert.equal(first.kind, "created");
+  // The same session again, with a run id of its own that must not be used.
+  const again = await db.openRun(openArgs(2, "s1", START, DEADLINE, c));
+  assert.equal(again.kind, "existing");
+  if (again.kind !== "existing") return;
+  assert.equal(again.run.run_id, R1);
+  assert.equal(again.entry.entry_id, E1);
+  assert.equal(await db.getRun("m1", id("r", 2), null), null);
+  assert.deepEqual(await db.openRun(openArgs(3, "other", START, DEADLINE, c)), { kind: "conflict" });
+  // After a continue, the session of the open call is still segment 0's.
+  assert.equal((await db.continueRun(contArgs(id("e", 9), E1, "s-two", START))).kind, "created");
+  assert.equal((await db.openRun(openArgs(4, "s1", START, DEADLINE, c))).kind, "existing");
+  assert.deepEqual(await db.openRun(openArgs(5, "s-two", START, DEADLINE, c)), { kind: "conflict" });
+  assert.equal((await db.getRun("m1", R1, null))?.run.first_entry_id, E1);
+});
+
+test("a run is never replaced before it began", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()));
+  const [c1, c2] = [await credential(db), await credential(db)];
+  await db.openRun(openArgs(1, "s1", "2026-11-06T09:30:00Z", "2026-11-13T09:30:00Z", c1));
+  // Two starts racing: the one that began earlier lands second.
+  await db.openRun(openArgs(2, "s2", "2026-11-06T09:00:00Z", "2026-11-13T09:00:00Z", c2));
+  assert.equal((await db.getRun("m1", id("r", 1), null))?.run.replaced_at, "2026-11-06T09:30:00Z");
 });
 
 const mk = async () => {

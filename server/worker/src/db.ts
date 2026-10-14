@@ -79,6 +79,8 @@ export interface RunRow {
   /** Set when a later competition start by the account replaced this run: the run ends then. */
   replaced_at: string | null;
   repo_url: string;
+  /** The entry of segment 0, the one `POST /v1/runs` made. */
+  first_entry_id: string;
   /** The entry of the highest segment. */
   current_entry_id: string;
   /** When that entry was sealed, or null. */
@@ -159,11 +161,12 @@ export interface OpenRunArgs {
 }
 
 /**
- * `conflict`: the credential is unknown or already opened a run; nothing was created.
- * `forbidden`: terms not accepted, or outside the start window.
+ * `existing`: the credential already opened a run whose first entry has this `session_id` (a retry
+ * that raced the original); that run and entry. `conflict`: the credential is unknown or opened
+ * another run; nothing was created. `forbidden`: terms not accepted, or outside the start window.
  */
 export type OpenRunResult =
-  | ({ kind: "created" } & RunAndEntry)
+  | ({ kind: "created" | "existing" } & RunAndEntry)
   | { kind: "conflict" }
   | { kind: "forbidden"; message: string };
 

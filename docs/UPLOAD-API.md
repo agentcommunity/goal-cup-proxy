@@ -146,9 +146,10 @@ edges are inside). Before it opens the answer is `403` ("The start window has no
 after it closes, `403` with the message "after the start window you can only `goalcup continue` your
 run". Practice has no window.
 
-A credential opens one run. A repeat of the same `session_id` on a credential that already opened a
-run returns that run's answer with `200`, whatever the run's state, so a reply lost in transit is
-not a second run. Another `session_id` on it is `409`: this credential already opened a run, and
+A credential opens one run. A repeat of the same `session_id` (the one the open call sent, whatever
+`continue` has added since) on a credential that already opened a run returns that run's answer
+with `200`, whatever the run's state, so a reply lost in transit is not a second run. That includes
+a retry that raced the original call. Another `session_id` on it is `409`: this credential already opened a run, and
 the participant runs `goalcup continue`. The credential is bound to the new run in the same atomic
 step that creates the run, so a credential that cannot bind (it is unknown, or was bound to another
 run in the meantime) is the same `409` and creates nothing.
@@ -256,7 +257,7 @@ awaiting_final` once the run is over; a chain the server does not yet hold up to
 `200 {"status": "sealed", "run_status": "open" | "sealed"}`. The entry is sealed. The run is `sealed`
 only when this is its current entry and the run is over (`ends_at` has passed); a segment sealed
 before the end leaves the run `open`, so it can be continued. A repeat with the same documents is
-`200` again, with the run's status then. Different documents once sealed are `409`.
+`200` again, with the run's status then (`open`, `sealed` or `incomplete`). Different documents once sealed are `409`.
 
 ## `POST /v1/runs/{run_id}/heartbeat` — still running, and where the chain is
 
@@ -308,8 +309,10 @@ in. There is no grace period and no late window.
 - **Before `ends_at`** an entry that has a committed end accepts nothing past it either.
 - **Closed.** 24 hours after `ends_at` the server closes the run: `sealed` if its current entry is
   sealed, else `incomplete` (the last piece is missing; the run is judged on what arrived). It
-  accepts nothing more (`410`) except the repeat of a call it already answered. `abandoned` is only
-  the participant's own `abandon` call before any chunk.
+  accepts nothing more (`410`), including a repeat of the final heartbeat; only a chunk it already
+  stored and a seal it already answered are answered again (`200`). A run that ended at its
+  deadline closes when its credential expires, so for it the participant meets `401`, not `410`.
+  `abandoned` is only the participant's own `abandon` call before any chunk.
 - Which records count is the verify job's: a record stamped after `deadline_at` does not, however
   it arrived.
 

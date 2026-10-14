@@ -439,11 +439,9 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
     // A credential opens one run. The same session again is a lost reply: that run.
     if let Some(opened) = &who.run_id {
         return match runs.get(opened) {
-            Some(run)
-                if run.current().segment == 0
-                    && run.current().session_id == req.fields.session_id =>
-            {
-                Ok(json_response(200, run_view(run, run.current())))
+            // The open call's session is segment 0's, whatever `continue` has added since.
+            Some(run) if run.entries[0].session_id == req.fields.session_id => {
+                Ok(json_response(200, run_view(run, &run.entries[0])))
             }
             _ => Err(opened_already()),
         };
@@ -510,7 +508,9 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
                 && other.status == RunStatus::Open
                 && other.replaced_at.is_none()
             {
-                other.replaced_at = Some(run.official_start.clone());
+                // Never before it began.
+                let began = other.official_start.clone();
+                other.replaced_at = Some(began.max(run.official_start.clone()));
                 s.persist(other);
             }
         }

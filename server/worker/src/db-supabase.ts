@@ -65,6 +65,7 @@ const RUN_SHAPE: Record<string, Check> = {
   deadline_at: isTime,
   replaced_at: nullable(isTime),
   repo_url: text,
+  first_entry_id: isEntryId,
   current_entry_id: isEntryId,
   current_sealed_at: nullable(isTime),
 };
@@ -104,6 +105,17 @@ const CHUNK_SHAPE: Record<string, Check> = {
 const SCHEMA = "goalcup";
 const TIMEOUT_MS = 10_000;
 
+/** PostgREST's `code` and `message` out of an error reply, shortened; nothing else it said. */
+async function errorSummary(res: Response): Promise<string> {
+  try {
+    const e = (await res.json()) as { code?: unknown; message?: unknown };
+    const part = (v: unknown) => (typeof v === "string" ? v.slice(0, 200) : "");
+    return `${part(e.code)} ${part(e.message)}`.trim();
+  } catch {
+    return "(no readable error)";
+  }
+}
+
 export class SupabaseDb implements Db {
   readonly #base: string;
   readonly #key: string;
@@ -136,8 +148,9 @@ export class SupabaseDb implements Db {
       throw new ApiError(502, "upstream_error", "The database could not be reached.");
     }
     if (!res.ok) {
-      // Log the status and PostgREST's error text (no request data, no keys); tell the client nothing more.
-      console.error(`supabase ${fn}: HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      // Log the status and PostgREST's error `code` and `message` only: its `details` and `hint` can
+      // quote the row (machine, client_ip). Tell the client nothing more.
+      console.error(`supabase ${fn}: HTTP ${res.status}: ${await errorSummary(res)}`);
       throw new ApiError(502, "upstream_error", "The database refused the request.");
     }
     return res.json();
@@ -227,10 +240,10 @@ export class SupabaseDb implements Db {
       p_credential_hash: a.credential,
       p_credential_expires_at: a.credential_expires_at,
     })) as { result?: unknown; run?: unknown; entry?: unknown; message?: string } | null;
-    const result = this.#word("upload_open_run", v?.result, ["created", "conflict", "forbidden"] as const);
+    const result = this.#word("upload_open_run", v?.result, ["created", "existing", "conflict", "forbidden"] as const);
     if (result === "conflict") return { kind: "conflict" };
     if (result === "forbidden") return { kind: "forbidden", message: v?.message ?? "You may not start a run now." };
-    return { kind: "created", ...this.#pair("upload_open_run", v?.run, v?.entry) };
+    return { kind: result, ...this.#pair("upload_open_run", v?.run, v?.entry) };
   }
 
   async continueRun(a: ContinueRunArgs): Promise<ContinueRunResult> {

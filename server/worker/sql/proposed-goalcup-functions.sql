@@ -232,6 +232,7 @@ as $$
       'deadline_at',       goalcup.fmt_time(r.deadline_at),
       'replaced_at',       goalcup.fmt_time(r.replaced_at),
       'repo_url',          r.repo_url,
+      'first_entry_id',    first.id,
       'current_entry_id',  cur.id,
       'current_sealed_at', goalcup.fmt_time(cur.sealed_at)),
     'entry', (
@@ -259,6 +260,7 @@ as $$
   )
   from goalcup.runs r
   cross join lateral (select e.id, e.sealed_at from goalcup.entries e where e.run_id = r.id order by e.segment desc limit 1) cur
+  cross join lateral (select e.id from goalcup.entries e where e.run_id = r.id and e.segment = 0) first
   where r.id = p_run_id
 $$;
 
@@ -379,7 +381,8 @@ $$;
 
 -- ---- the run calls -------------------------------------------------------------------------
 
--- POST /v1/runs. Returns {"result": "created"|"conflict"|"forbidden", "run": {...}, "entry": {...}, "message": "..."}.
+-- POST /v1/runs. Returns {"result": "created"|"existing"|"conflict"|"forbidden", "run": {...}, "entry": {...}, "message": "..."}.
+-- "existing": the credential is bound to a run whose segment 0 has this session (a retry that raced the original).
 -- One transaction: a competition start replaces the member's other open competition run, the new run and its
 -- segment 0 are inserted, and the credential is bound to the run. A credential that is unknown or already
 -- bound is "conflict" and nothing is written.
@@ -422,7 +425,16 @@ begin
 
   -- The credential binds in this same transaction: take its row, and refuse one that is unknown or bound.
   select run_id into v_bound from goalcup.run_credentials where credential_hash = p_credential_hash for update;
-  if not found or v_bound is not null then
+  if not found then
+    return jsonb_build_object('result', 'conflict');
+  end if;
+  if v_bound is not null then
+    -- A retry that raced the original open finds the credential bound to the run it made.
+    if exists (select 1 from goalcup.runs r join goalcup.entries e on e.run_id = r.id and e.segment = 0
+                where r.id = v_bound and r.member_id = v_member and e.session_id = p_session_id) then
+      return jsonb_build_object('result', 'existing')
+             || goalcup.run_json(v_bound, (select e.id from goalcup.entries e where e.run_id = v_bound and e.segment = 0));
+    end if;
     return jsonb_build_object('result', 'conflict');
   end if;
 
@@ -430,7 +442,7 @@ begin
   -- racing: the unique index lets one insert through; the other goes round once more and replaces it.
   for v_try in 1..2 loop
     if p_mode = 'competition' then
-      update goalcup.runs set replaced_at = v_start
+      update goalcup.runs set replaced_at = greatest(v_start, official_start)   -- never before it began
        where member_id = v_member and mode = 'competition' and status = 'open' and replaced_at is null;
     end if;
     begin

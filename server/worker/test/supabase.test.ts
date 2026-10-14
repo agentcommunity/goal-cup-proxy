@@ -39,7 +39,7 @@ const H = (c: string) => c.repeat(64);
 const T = "2026-11-06T09:00:00Z";
 const run: RunRow = {
   run_id: "r0000000000000001", event_id: "cup", member_id: "m", mode: "competition", status: "open", official_start: T,
-  deadline_at: "2026-11-13T09:00:00Z", replaced_at: null, repo_url: "https://github.com/a/b", current_entry_id: "e0000000000000001", current_sealed_at: null,
+  deadline_at: "2026-11-13T09:00:00Z", replaced_at: null, repo_url: "https://github.com/a/b", first_entry_id: "e0000000000000001", current_entry_id: "e0000000000000001", current_sealed_at: null,
 };
 const entry: EntryRow = {
   entry_id: "e0000000000000001", run_id: "r0000000000000001", segment: 0, connector_id: "c", manifest_sha256: H("a"), connector_dir_sha256: H("c"),
@@ -107,10 +107,11 @@ const openArgs: OpenRunArgs = {
 };
 
 test("openRun -> upload_open_run with every p_ argument, binding the credential in the same call", async () => {
-  const calls = stub({ result: "created", run, entry }, { result: "conflict" }, { result: "forbidden", message: "no" });
+  const calls = stub({ result: "created", run, entry }, { result: "conflict" }, { result: "forbidden", message: "no" }, { result: "existing", run, entry });
   assert.deepEqual(await db().openRun(openArgs), { kind: "created", run, entry });
   assert.deepEqual(await db().openRun(openArgs), { kind: "conflict" });
   assert.deepEqual(await db().openRun(openArgs), { kind: "forbidden", message: "no" });
+  assert.deepEqual(await db().openRun(openArgs), { kind: "existing", run, entry }); // a retry that raced the original
   assert.equal(calls[0]!.fn, "upload_open_run");
   assert.deepEqual(calls[0]!.args, {
     p_member_id: "m", p_event_id: "cup", p_mode: "competition", p_run_id: "r1", p_entry_id: "e1", p_official_start: "s", p_deadline_at: "d",
@@ -287,4 +288,25 @@ test("an answer outside the agreed words is a 502, not a guess", async () => {
   } finally {
     console.error = quiet;
   }
+});
+
+test("a refused request logs PostgREST's code and message, not its details or hint", async () => {
+  const lines: string[] = [];
+  const quiet = console.error;
+  console.error = (...args: unknown[]) => void lines.push(args.map(String).join(" "));
+  try {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ code: "23505", message: "duplicate key", details: "Key (client_ip)=(203.0.113.9) exists.", hint: 'machine={"os":"macOS"}' }),
+        { status: 409 },
+      )) as typeof fetch;
+    await assert.rejects(db().closeRun("m", "r1", "t"), (e) => e instanceof ApiError && e.status === 502);
+    globalThis.fetch = (async () => new Response("<html>not json 203.0.113.9</html>", { status: 500 })) as typeof fetch;
+    await assert.rejects(db().closeRun("m", "r1", "t"), (e) => e instanceof ApiError && e.status === 502);
+  } finally {
+    console.error = quiet;
+  }
+  assert.match(lines[0] ?? "", /HTTP 409: 23505 duplicate key$/);
+  assert.match(lines[1] ?? "", /HTTP 500: \(no readable error\)$/);
+  assert.ok(!lines.join("\n").includes("203.0.113.9") && !lines.join("\n").includes("macOS"), lines.join("\n"));
 });
