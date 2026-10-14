@@ -1,4 +1,9 @@
-//! The uploader: the entry's `chain.jsonl` to the server in chunks, each acknowledged.
+//! The uploader: the entry's chain to the server in chunks, each acknowledged.
+//!
+//! The chain is one or more part files (`chain.jsonl`, then `chain.<start>.jsonl`; D56), and
+//! every offset here is logical: the byte in the whole chain, wherever its part starts. A
+//! chunk never crosses the end of a part. Parts the server acknowledged long ago may be
+//! deleted ([`super::prune`]); the uploader only ever reads from the server's offset on.
 //!
 //! It reads the chain the daemon writes and never touches it: recording never waits on the
 //! network, and a run whose server is away for a day loses nothing, because every byte is
@@ -36,7 +41,7 @@ use super::policy::Cadence;
 pub use super::policy::{Policy, WrapUp, backoff};
 use crate::CliError;
 use goalcup_protocol::ack::AckCheckpoint;
-use goalcup_protocol::export::{ACKS_FILE, BASELINE_FILE, CHAIN_FILE, SEAL_FILE};
+use goalcup_protocol::export::{ACKS_FILE, BASELINE_FILE, ChainPart, SEAL_FILE};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -122,20 +127,53 @@ fn io_error(path: &Path) -> impl Fn(std::io::Error) -> CliError + '_ {
     }
 }
 
-/// How many complete-line bytes of `chain` lie past `offset` (a torn last line is not
-/// counted, but neither is it looked for: this is the file's length, a cheap upper bound).
-pub fn waiting_bytes(chain: &Path, offset: u64) -> u64 {
-    std::fs::metadata(chain)
-        .map(|m| m.len().saturating_sub(offset))
-        .unwrap_or(0)
+/// How many bytes of `parts` lie past the logical `offset` (a torn last line is not counted,
+/// but neither is it looked for: this is the length of the chain, a cheap upper bound).
+pub fn waiting_bytes(parts: &[ChainPart], offset: u64) -> u64 {
+    parts
+        .last()
+        .map_or(0, |last| last.start.saturating_add(last.len))
+        .saturating_sub(offset)
 }
 
-/// The next chunk of `chain` from `pos`, compressed into `spool`, or `None` when no complete
-/// line waits. Every line's link is checked to continue from `pos`, so a chunk can only ever
-/// extend what the server holds: a local chain that does not is refused, not uploaded.
-pub fn build_chunk(chain: &Path, pos: &Position, spool: &Path) -> Result<Option<Chunk>, CliError> {
+/// The next chunk of the chain `parts` from `pos`, compressed into `spool`, or `None` when no
+/// complete line waits. The chunk is cut from the one part that holds `pos.offset` and stops
+/// at the end of it; the next chunk starts in the next part. Every line's link is checked to
+/// continue from `pos`, so a chunk can only ever extend what the server holds: a local chain
+/// that does not is refused, not uploaded.
+///
+/// A server position below the first surviving part is refused too: those bytes were deleted
+/// here, which only happens to bytes the server acknowledged, so the two copies disagree and
+/// nothing is sent across the gap.
+pub fn build_chunk(
+    parts: &[ChainPart],
+    pos: &Position,
+    spool: &Path,
+) -> Result<Option<Chunk>, CliError> {
+    let Some(first) = parts.first() else {
+        return Err(CliError::Internal(
+            "the entry has no chain part to upload from".to_string(),
+        ));
+    };
+    if pos.offset < first.start {
+        return Err(CliError::Refused(format!(
+            "the server holds {} bytes of this entry's chain, but the first {} bytes were \
+             already deleted from this machine, so the bytes in between cannot be sent. Nothing \
+             more is uploaded for this run; ask the organisers.",
+            pos.offset, first.start
+        )));
+    }
+    // The part that holds the next byte; none when everything on disk is already sent.
+    let Some(part) = parts
+        .iter()
+        .find(|part| pos.offset < part.start.saturating_add(part.len))
+    else {
+        let _ = std::fs::remove_file(spool);
+        return Ok(None);
+    };
+    let chain = part.path.as_path();
     let mut file = std::fs::File::open(chain).map_err(io_error(chain))?;
-    file.seek(SeekFrom::Start(pos.offset))
+    file.seek(SeekFrom::Start(pos.offset - part.start))
         .map_err(io_error(chain))?;
     let mut reader = BufReader::new(file);
     let out = std::fs::OpenOptions::new()
@@ -355,8 +393,10 @@ impl Uploader {
         Ok(uploader)
     }
 
-    fn chain(&self) -> PathBuf {
-        Path::new(&self.record.trace_dir).join(CHAIN_FILE)
+    /// The entry's chain parts as they are on disk now.
+    fn parts(&self) -> Result<Vec<ChainPart>, CliError> {
+        let dir = Path::new(&self.record.trace_dir);
+        super::prune::parts_now(dir).map_err(io_error(dir))
     }
 
     /// This upload worked just now.
@@ -373,7 +413,8 @@ impl Uploader {
 
     /// Bytes of chain waiting to be sent (an upper bound).
     pub fn waiting(&self) -> u64 {
-        waiting_bytes(&self.chain(), self.pos.offset)
+        self.parts()
+            .map_or(0, |parts| waiting_bytes(&parts, self.pos.offset))
     }
 
     /// Keep the server's last acknowledgement if the local chain's record ending at the
@@ -383,7 +424,10 @@ impl Uploader {
         let Some(ack) = &position.last_ack else {
             return;
         };
-        let local = local_link_before(&self.chain(), position.offset);
+        let local = self
+            .parts()
+            .ok()
+            .and_then(|parts| local_link_before(&parts, position.offset));
         if local
             .as_ref()
             .map(|(seq, hash)| (Some(*seq), hash.as_str()))
@@ -405,7 +449,10 @@ impl Uploader {
             let Some(timeout) = left(until, self.policy.put_timeout) else {
                 return Attempt::RanOut;
             };
-            let chunk = match build_chunk(&self.chain(), &self.pos, &self.spool) {
+            let built = self
+                .parts()
+                .and_then(|parts| build_chunk(&parts, &self.pos, &self.spool));
+            let chunk = match built {
                 Ok(Some(chunk)) => chunk,
                 Ok(None) => return Attempt::CaughtUp,
                 Err(error) => {
@@ -482,6 +529,8 @@ impl Uploader {
             });
         }
         self.pos = moved;
+        // What the server holds is what this machine may delete behind.
+        self.acked_offset.store(self.pos.offset, Ordering::SeqCst);
         Ok(())
     }
 
@@ -629,14 +678,26 @@ fn last_ack(acks: &Path) -> Option<(u64, u64)> {
         .and_then(|ack| Some((ack.seq, ack.acked_at_secs()?)))
 }
 
-/// The `seq` and `hash` of the chain record whose line ends exactly at byte `offset`, or
-/// `None` when no whole record ends there.
-pub fn local_link_before(chain: &Path, offset: u64) -> Option<(u64, String)> {
+/// The `seq` and `hash` of the chain record whose line ends exactly at the logical byte
+/// `offset`, or `None` when no whole record ends there (or the part holding it is gone).
+pub fn local_link_before(parts: &[ChainPart], offset: u64) -> Option<(u64, String)> {
+    // The part whose last byte is at `offset - 1`; the last part may have grown since it was
+    // measured, and a record that ends past what was measured is then just not found.
+    let last_start = parts.last()?.start;
+    let part = parts.iter().find(|part| {
+        part.start < offset
+            && (offset <= part.start.saturating_add(part.len) || part.start == last_start)
+    })?;
+    link_before_in(&part.path, offset - part.start)
+}
+
+/// [`local_link_before`] within one part file: the record whose line ends at `offset` in it.
+fn link_before_in(file_path: &Path, offset: u64) -> Option<(u64, String)> {
     if offset == 0 {
         return None;
     }
     let start = offset.saturating_sub(MAX_LINE_BYTES + 1);
-    let mut file = std::fs::File::open(chain).ok()?;
+    let mut file = std::fs::File::open(file_path).ok()?;
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut bytes = vec![0; (offset - start) as usize];
     file.read_exact(&mut bytes).ok()?;
@@ -650,18 +711,27 @@ pub fn local_link_before(chain: &Path, offset: u64) -> Option<(u64, String)> {
     Some((link.seq, link.hash))
 }
 
-/// The last whole record of `chain`: the bytes up to the end of it, its `seq` and its `hash`.
-/// `None` for a chain with no whole record.
-pub fn local_end(chain: &Path) -> Option<(u64, u64, String)> {
-    let len = std::fs::metadata(chain).ok()?.len();
+/// The last whole record of the chain `parts`: the logical bytes up to the end of it, its
+/// `seq` and its `hash`. `None` for a chain with no whole record. A last part that holds no
+/// whole record yet (just rotated) answers from the part before it.
+pub fn local_end(parts: &[ChainPart]) -> Option<(u64, u64, String)> {
+    parts.iter().rev().find_map(|part| {
+        let (end, seq, hash) = end_in(&part.path)?;
+        Some((part.start + end, seq, hash))
+    })
+}
+
+/// [`local_end`] within one part file.
+fn end_in(file_path: &Path) -> Option<(u64, u64, String)> {
+    let len = std::fs::metadata(file_path).ok()?.len();
     let start = len.saturating_sub(2 * (MAX_LINE_BYTES + 1));
-    let mut file = std::fs::File::open(chain).ok()?;
+    let mut file = std::fs::File::open(file_path).ok()?;
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut tail = Vec::new();
     file.take(len - start).read_to_end(&mut tail).ok()?;
     // The end of the last whole line; a torn tail after it is not a record yet.
     let end = start + tail.iter().rposition(|b| *b == b'\n')? as u64 + 1;
-    let (seq, hash) = local_link_before(chain, end)?;
+    let (seq, hash) = link_before_in(file_path, end)?;
     Some((end, seq, hash))
 }
 
@@ -752,7 +822,8 @@ fn heartbeat(
     repo_head: Option<String>,
     timeout: Duration,
 ) -> Option<Result<HeartbeatAnswer, ServerError>> {
-    let (offset_local, seq, head) = local_end(&Path::new(&record.trace_dir).join(CHAIN_FILE))?;
+    let parts = super::prune::parts_now(Path::new(&record.trace_dir)).ok()?;
+    let (offset_local, seq, head) = local_end(&parts)?;
     let request = HeartbeatRequest {
         entry_id: record.entry_id.clone(),
         seq,
@@ -949,6 +1020,7 @@ impl Uploader {
 
 /// The uploader running beside `goalcup start`, on a thread of its own.
 pub struct Running {
+    entry_id: String,
     finish: std::sync::mpsc::Sender<WrapUp>,
     report: std::sync::mpsc::Receiver<Report>,
     last_ok: std::sync::Arc<AtomicU64>,
@@ -1005,6 +1077,7 @@ pub fn begin(
     stop: std::sync::mpsc::Sender<String>,
 ) -> Result<Running, CliError> {
     let lock = lock_entry(&spool_dir, &record.entry_id)?;
+    let entry_id = record.entry_id.clone();
     let (finish, finishing) = std::sync::mpsc::channel::<WrapUp>();
     let (reported, report) = std::sync::mpsc::channel::<Report>();
     let last_ok = std::sync::Arc::new(AtomicU64::new(crate::run::now_unix()));
@@ -1028,6 +1101,7 @@ pub fn begin(
             source,
         })?;
     Ok(Running {
+        entry_id,
         finish,
         report,
         last_ok,
@@ -1052,6 +1126,11 @@ impl Running {
     /// left to send. The run's disk watch calls uploads failing when it is half an hour old.
     pub fn last_ok(&self) -> std::sync::Arc<AtomicU64> {
         self.last_ok.clone()
+    }
+
+    /// The entry this upload sends.
+    pub fn entry_id(&self) -> &str {
+        &self.entry_id
     }
 
     /// Bytes of the chain the server has acknowledged.
