@@ -437,7 +437,7 @@ begin
       insert into goalcup.runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url,
                                 machine, client_ip, client_country)
       values (p_run_id, p_event_id, v_member, p_mode, v_start, p_deadline_at::timestamptz, p_repo_url,
-              p_machine, p_client_ip, p_client_country);
+              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country);   -- a JSON null is no facts
       exit;
     exception when unique_violation then
       if v_try = 2 then raise; end if;
