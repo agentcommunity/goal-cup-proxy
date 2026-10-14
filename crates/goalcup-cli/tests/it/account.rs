@@ -644,3 +644,397 @@ fn the_setup_is_stored_for_the_owner_alone_and_checked_on_the_way_in_and_out() {
     .unwrap();
     assert!(matches!(GithubSetup::load(&cfg), Err(CliError::Refused(_))));
 }
+
+// ============================================================ the device flow and the login
+
+use crate::common::upload_server::{Approval, ServerOptions, UploadServer};
+use goalcup_cli::account::credential::{self, RunCredential};
+use goalcup_cli::account::device::{Approved, Purpose, approve};
+use goalcup_cli::commands::login::{self, LoginArgs};
+use goalcup_cli::server::{ServerConfig, read_server_config};
+use goalcup_cli::upload::http::{ServerClient, ServerError};
+use std::cell::RefCell;
+
+/// The stand-in on loopback, approving every device request as `member-1`, with its store in
+/// `dir`.
+fn stand_in(dir: &Path) -> UploadServer {
+    UploadServer::start(dir, ServerOptions::default())
+}
+
+/// Every file under `dir`, recursively.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(files_under(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Whether `text` holds a run of 64 or more lowercase hex digits (a device code, or the hex of
+/// a credential).
+fn has_hex64(text: &str) -> bool {
+    let mut run = 0;
+    for c in text.chars() {
+        if c.is_ascii_digit() || ('a'..='f').contains(&c) {
+            run += 1;
+            if run >= 64 {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    false
+}
+
+/// Whether `text` holds an `XXXX-XXXX` user code.
+fn has_user_code(text: &str) -> bool {
+    const ALPHABET: &str = "BCDFGHJKLMNPQRSTVWXZ";
+    text.as_bytes().windows(9).any(|w| {
+        w.iter().enumerate().all(|(i, b)| {
+            if i == 4 {
+                *b == b'-'
+            } else {
+                ALPHABET.as_bytes().contains(b)
+            }
+        })
+    })
+}
+
+/// The secret of `c`. `secret()` is crate-private on purpose, so a test reads what the tracker
+/// itself wrote: the `credential` field of the stored file.
+fn secret_of(c: &RunCredential) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    credential::store(dir.path(), c).unwrap();
+    let text = std::fs::read_to_string(dir.path().join("credential")).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+    doc["credential"].as_str().unwrap().to_string()
+}
+
+fn no_browser(_: &str) -> bool {
+    true
+}
+
+#[test]
+fn login_stores_the_handle_and_no_secret() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = stand_in(&tmp.path().join("store"));
+    let cfg = tmp.path().join("cfg");
+    let mut out = Vec::new();
+    login::run(
+        &LoginArgs {
+            server: Some(server.url()),
+        },
+        &cfg,
+        &no_browser,
+        &mut out,
+    )
+    .unwrap();
+
+    let stored = read_server_config(&cfg).unwrap().unwrap();
+    assert_eq!(stored.account.as_deref(), Some("member-1"));
+    assert_eq!(stored.url, server.url());
+    assert!(stored.token.is_empty());
+    let printed = String::from_utf8(out).unwrap();
+    assert!(printed.contains("Logged in as member-1"), "{printed}");
+
+    let files = files_under(&cfg);
+    assert_eq!(files.len(), 1, "{files:?}");
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("gcr_"), "{}", file.display());
+        assert!(!has_hex64(&text), "{}", file.display());
+    }
+    // The login asked for a login, and said nothing of competition.
+    let asked = server.device_requests();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].purpose, "login");
+    assert_eq!(asked[0].mode, "practice");
+}
+
+#[test]
+fn only_the_user_code_is_printed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = stand_in(tmp.path());
+    let opened = RefCell::new(Vec::new());
+    let open = |uri: &str| {
+        opened.borrow_mut().push(uri.to_string());
+        true
+    };
+    let mut out = Vec::new();
+    let approved = approve(
+        &ServerClient::anonymous(&server.url()),
+        Purpose::Run { practice: true },
+        "codex-cli",
+        &open,
+        &mut out,
+    )
+    .unwrap();
+    let Approved::Run(credential) = approved else {
+        panic!("a run approval returns a credential");
+    };
+    let printed = String::from_utf8(out).unwrap();
+    assert!(has_user_code(&printed), "{printed}");
+    assert!(!has_hex64(&printed), "{printed}");
+    assert!(!printed.contains("gcr_"), "{printed}");
+    assert!(!printed.contains(&secret_of(&credential)), "{printed}");
+    let opened = opened.into_inner();
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert!(opened[0].starts_with("https://"), "{opened:?}");
+    assert!(opened[0].contains("?code="), "{opened:?}");
+    assert!(printed.contains(&opened[0]), "{printed}");
+
+    let asked = server.device_requests();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].purpose, "run");
+    assert_eq!(asked[0].mode, "practice");
+    assert_eq!(asked[0].connector_id, "codex-cli");
+    assert_eq!(asked[0].tracer_version, goalcup_cli::CLI_VERSION);
+}
+
+#[test]
+fn a_browser_that_will_not_open_is_asked_for_by_hand() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = stand_in(tmp.path());
+    let mut out = Vec::new();
+    approve(
+        &ServerClient::anonymous(&server.url()),
+        Purpose::Run { practice: false },
+        "codex-cli",
+        &|_: &str| false,
+        &mut out,
+    )
+    .unwrap();
+    let printed = String::from_utf8(out).unwrap();
+    assert!(printed.contains("yourself"), "{printed}");
+    assert_eq!(server.device_requests()[0].mode, "competition");
+}
+
+#[test]
+fn an_expired_code_says_start_again_and_creates_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = stand_in(&tmp.path().join("store"));
+    server.set_approval(Approval::Expire);
+    let cfg = tmp.path().join("cfg");
+    let refusal = login::run(
+        &LoginArgs {
+            server: Some(server.url()),
+        },
+        &cfg,
+        &no_browser,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(matches!(refusal, CliError::Refused(_)), "{refusal:?}");
+    assert!(refusal.to_string().contains("start again"), "{refusal}");
+    assert!(files_under(&cfg).is_empty());
+    assert!(!cfg.join("server.json").exists());
+}
+
+#[test]
+fn a_denied_approval_creates_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = stand_in(&tmp.path().join("store"));
+    server.set_approval(Approval::Deny);
+    let cfg = tmp.path().join("cfg");
+    let refusal = login::run(
+        &LoginArgs {
+            server: Some(server.url()),
+        },
+        &cfg,
+        &no_browser,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(matches!(refusal, CliError::Refused(_)), "{refusal:?}");
+    assert!(refusal.to_string().contains("denied"), "{refusal}");
+    assert!(files_under(&cfg).is_empty());
+}
+
+#[test]
+fn an_unreachable_server_says_nothing_was_created() {
+    // A port nothing listens on: bind, note it, drop.
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let refusal = approve(
+        &ServerClient::anonymous(&format!("http://127.0.0.1:{port}")),
+        Purpose::Login,
+        "none",
+        &no_browser,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(matches!(refusal, CliError::Refused(_)), "{refusal:?}");
+    let said = refusal.to_string();
+    assert!(said.contains("could not be reached"), "{said}");
+    assert!(said.contains("Nothing was created"), "{said}");
+}
+
+#[test]
+fn a_login_keeps_the_server_it_was_given_before() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = stand_in(&tmp.path().join("store"));
+    let cfg = tmp.path().join("cfg");
+    login::run(
+        &LoginArgs {
+            server: Some(server.url()),
+        },
+        &cfg,
+        &no_browser,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    // No `--server` the second time: the stored one is used.
+    login::run(
+        &LoginArgs { server: None },
+        &cfg,
+        &no_browser,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(server.device_requests().len(), 2);
+    let stored = read_server_config(&cfg).unwrap().unwrap();
+    assert_eq!(stored.url, server.url());
+}
+
+#[test]
+fn a_run_approval_is_stored_and_loaded_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let server = stand_in(&tmp.path().join("store"));
+    let anonymous = ServerClient::anonymous(&server.url());
+    let Approved::Run(credential) = approve(
+        &anonymous,
+        Purpose::Run { practice: true },
+        "codex-cli",
+        &no_browser,
+        &mut Vec::new(),
+    )
+    .unwrap() else {
+        panic!("a run approval returns a credential");
+    };
+    let secret = secret_of(&credential);
+    assert!(secret.starts_with("gcr_"));
+    assert_eq!(secret.len(), 68);
+    let shown = format!("{credential:?}");
+    assert!(shown.contains("<redacted>"), "{shown}");
+    assert!(!shown.contains(&secret), "{shown}");
+    assert!(shown.contains(&credential.expires_at), "{shown}");
+
+    let run_dir = tmp.path().join("runs").join("run-1");
+    credential::store(&run_dir, &credential).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let file = run_dir.join("credential");
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "credential is mode {:o}", mode & 0o777);
+        let dir = std::fs::metadata(&run_dir).unwrap().permissions().mode();
+        assert_eq!(dir & 0o777, 0o700, "run dir is mode {:o}", dir & 0o777);
+    }
+    let back = credential::load(&run_dir).unwrap();
+    assert_eq!(secret_of(&back), secret_of(&credential));
+    assert_eq!(back.expires_at, credential.expires_at);
+
+    // The credential authenticates; no header at all does not.
+    let with = ServerClient::with_credential(&server.url(), &back);
+    let unknown_run: Result<serde_json::Value, ServerError> =
+        with.json("GET", "/v1/runs/r0000000000000000", None::<&()>);
+    assert!(
+        matches!(unknown_run, Err(ServerError::Status { status: 404, .. })),
+        "{unknown_run:?}"
+    );
+    let without: Result<serde_json::Value, ServerError> =
+        anonymous.json("GET", "/v1/runs/r0000000000000000", None::<&()>);
+    assert!(
+        matches!(without, Err(ServerError::Status { status: 401, .. })),
+        "{without:?}"
+    );
+}
+
+#[test]
+fn a_credential_file_readable_by_others_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let run_dir = tmp.path().join("run");
+    let secret = format!("gcr_{}", "ab".repeat(32));
+    let credential = RunCredential::new(secret.clone(), "2026-10-14T12:00:00Z".into()).unwrap();
+    credential::store(&run_dir, &credential).unwrap();
+    let file = run_dir.join("credential");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let refusal = credential::load(&run_dir).unwrap_err();
+    assert!(matches!(refusal, CliError::Refused(_)), "{refusal:?}");
+    let said = refusal.to_string();
+    assert!(said.contains("chmod 600"), "{said}");
+    assert!(said.contains(&file.display().to_string()), "{said}");
+    assert!(!said.contains(&secret), "{said}");
+}
+
+#[test]
+fn a_missing_or_damaged_credential_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run_dir = tmp.path().join("run");
+    let missing = credential::load(&run_dir).unwrap_err();
+    assert!(matches!(missing, CliError::Refused(_)), "{missing:?}");
+    assert!(
+        missing.to_string().contains("no saved credential"),
+        "{missing}"
+    );
+
+    // Constructor: exactly gcr_ + 64 lowercase hex, and the refusal never repeats the value.
+    let bad = ["gcr_abc", &format!("gcr_{}", "AB".repeat(32)), "xyz"];
+    for value in bad {
+        let refusal = RunCredential::new(value.into(), "t".into()).unwrap_err();
+        assert!(matches!(refusal, CliError::Refused(_)), "{refusal:?}");
+        assert!(!refusal.to_string().contains(value), "{refusal}");
+    }
+
+    // An unknown field, or a bad credential inside a well-formed file, is refused on load.
+    let good = format!("gcr_{}", "ab".repeat(32));
+    let credential = RunCredential::new(good.clone(), "2026-10-14T12:00:00Z".into()).unwrap();
+    credential::store(&run_dir, &credential).unwrap();
+    let file = run_dir.join("credential");
+    std::fs::write(
+        &file,
+        format!(r#"{{"credential":"{good}","expires_at":"x","extra":1}}"#),
+    )
+    .unwrap();
+    assert!(matches!(
+        credential::load(&run_dir),
+        Err(CliError::Refused(_))
+    ));
+    std::fs::write(&file, r#"{"credential":"gcr_short","expires_at":"x"}"#).unwrap();
+    assert!(matches!(
+        credential::load(&run_dir),
+        Err(CliError::Refused(_))
+    ));
+}
+
+#[test]
+fn the_server_file_keeps_an_account_and_no_token() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = ServerConfig {
+        url: "https://ingest.example.org".into(),
+        account: Some("ada".into()),
+        token: String::new(),
+    };
+    let path = goalcup_cli::server::write_server_config(tmp.path(), &config).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("token"), "{text}");
+    assert_eq!(read_server_config(tmp.path()).unwrap().unwrap(), config);
+    std::fs::write(
+        &path,
+        r#"{"url":"https://ingest.example.org","account":"a\u0007b"}"#,
+    )
+    .unwrap();
+    assert!(read_server_config(tmp.path()).is_err());
+}

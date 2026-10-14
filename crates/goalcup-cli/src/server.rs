@@ -1,18 +1,22 @@
-//! The upload server this tracker sends its trace to, and the participant's token for it.
+//! The upload server this tracker sends its trace to, and the participant's account on it.
 //!
-//! `goalcup login --server <URL>` writes `<cfg>/server.json`; nothing else does. With no such
-//! file the tracker is local only, exactly as before it existed.
+//! `goalcup login` writes `<cfg>/server.json`; nothing else does. With no such file the tracker
+//! is local only, exactly as before it existed.
 //!
-//! # The token stays here
+//! # What the file holds
 //!
-//! The token is the participant's credential for the upload server (docs/SERVER-DESIGN.md,
-//! section 3, step 2). It lives in this one file, at mode 0600 under the tracker's own
-//! configuration directory, and nowhere else:
+//! The file holds the server's URL and the participant's account handle, which `goalcup login`
+//! learns from the approval in the browser (`account::device`). Neither is a secret. A run's
+//! credential is a different thing: the server mints it when the participant approves that run,
+//! and it lives in the run's own directory (`account::credential`), never here.
 //!
+//! The pasted token is legacy until Task T5 removes its callers. A `server.json` an older
+//! `goalcup login` wrote still holds one; while it does, it is treated as it always was:
+//!
+//! - it lives in this one file, at mode 0600 under the tracker's own configuration directory;
 //! - never in a harness's environment or on its command line: the harness environment is
 //!   built from nothing (`launch::process_env` and the launch plan), and nothing reads this
 //!   file into it;
-//! - never on a command line: `goalcup login` reads it from stdin;
 //! - never printed or logged: [`ServerConfig`]'s `Debug` prints `<redacted>`, and no message
 //!   in this crate formats the token;
 //! - never in a trace: the daemon, which writes the trace, never reads this file.
@@ -26,10 +30,17 @@ use crate::config::write_secret_file;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// The upload server a `goalcup login` without `--server` talks to.
+pub const DEFAULT_SERVER_URL: &str = "https://ingest.agentcommunity.org";
+
+/// The longest account handle accepted. Handles are chosen on the site; the bound only catches
+/// a damaged file.
+pub const ACCOUNT_MAX_LEN: usize = 64;
+
 /// `<cfg>/server.json`.
 pub const SERVER_FILE_NAME: &str = "server.json";
 
-/// The most of `server.json` [`read_server_config`] reads. The document is a URL and a token.
+/// The most of `server.json` [`read_server_config`] reads. The document is a URL, a handle and, in an older file, a token.
 const SERVER_FILE_MAX_BYTES: u64 = 16 * 1024;
 
 /// The shortest and longest token accepted. Tokens are minted by the server; these bounds only
@@ -37,14 +48,20 @@ const SERVER_FILE_MAX_BYTES: u64 = 16 * 1024;
 pub const TOKEN_MIN_LEN: usize = 16;
 pub const TOKEN_MAX_LEN: usize = 512;
 
-/// The upload server and the token for it, as `goalcup login` stored them.
+/// The upload server and the account on it, as `goalcup login` stored them.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// The server's base URL, without a trailing slash: `https://…`, or `http://` to a
     /// loopback address for a local test server.
     pub url: String,
-    /// The bearer token. Never printed.
+    /// The account handle the last approval named, when `goalcup login` has run since the
+    /// device flow. Not a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// The pasted bearer token: legacy, empty for a device-flow login, removed with its callers
+    /// (T5). Never printed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
 }
 
@@ -52,6 +69,7 @@ impl std::fmt::Debug for ServerConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerConfig")
             .field("url", &self.url)
+            .field("account", &self.account)
             .field("token", &"<redacted>")
             .finish()
     }
@@ -138,6 +156,20 @@ pub fn checked_server_url(url: &str) -> Result<String, CliError> {
         .to_string())
 }
 
+/// `handle` checked: 1 to [`ACCOUNT_MAX_LEN`] characters, none of them a control character.
+pub fn checked_account(handle: &str) -> Result<String, CliError> {
+    if handle.is_empty()
+        || handle.chars().count() > ACCOUNT_MAX_LEN
+        || handle.chars().any(|c| c.is_control())
+    {
+        return Err(CliError::Refused(format!(
+            "the account handle is not 1 to {ACCOUNT_MAX_LEN} printable characters. Run \
+             `goalcup login` again."
+        )));
+    }
+    Ok(handle.to_string())
+}
+
 /// `token` as pasted, checked: surrounding whitespace removed, then [`TOKEN_MIN_LEN`] to
 /// [`TOKEN_MAX_LEN`] visible ASCII characters. The refusal never repeats the token.
 pub fn checked_token(token: &str) -> Result<String, CliError> {
@@ -175,7 +207,8 @@ pub fn write_server_config(cfg: &Path, config: &ServerConfig) -> Result<PathBuf,
 ///
 /// The file must be the owner's alone: a `server.json` that the group or others can read is
 /// refused, naming the fix, because the token in it would no longer be the participant's
-/// alone. Its URL and token are checked again as `goalcup login` checked them.
+/// alone. Its URL, its account handle if it has one, and its legacy token if it has one are
+/// checked again as `goalcup login` checked them.
 pub fn read_server_config(cfg: &Path) -> Result<Option<ServerConfig>, CliError> {
     use std::io::Read;
 
@@ -221,6 +254,11 @@ pub fn read_server_config(cfg: &Path) -> Result<Option<ServerConfig>, CliError> 
     })?;
     Ok(Some(ServerConfig {
         url: checked_server_url(&stored.url)?,
-        token: checked_token(&stored.token)?,
+        account: stored.account.as_deref().map(checked_account).transpose()?,
+        token: if stored.token.is_empty() {
+            String::new()
+        } else {
+            checked_token(&stored.token)?
+        },
     }))
 }
