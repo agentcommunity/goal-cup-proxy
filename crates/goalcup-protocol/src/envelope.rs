@@ -88,8 +88,12 @@ impl Envelope {
 ///
 /// Adjacently tagged (`tag = "kind"`, `content = "content"`): the variant's fields sit in a
 /// nested `content` object, so a field of a body can never collide with the outer `kind` tag.
+///
+/// `Capture` is far larger than the other four, and it is the body almost every line carries:
+/// boxing it would allocate once per record to shrink the rare ones.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "content", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum EventBody {
     /// The entry's baseline, in the chain, as its FIRST link. Carries the *digest* of
     /// `baseline.json` for the same reason the seal carries the digest of `seal.json`:

@@ -36,7 +36,6 @@ use crate::provenance::{
 };
 use crate::receipt::StartReceipt;
 use crate::seal::SealManifest;
-use crate::submission::{SubmissionManifestV1, SubmissionOutcomeV1};
 use goalcup_platform::tracecap::{
     FixedDocument, TraceAppendFile, TraceCapError, TraceDir, TraceReadFile,
 };
@@ -56,14 +55,6 @@ pub const SEAL_FILE: &str = "seal.json";
 /// The pre-v5 trace descriptor's name. No writer produces it; a resume still sweeps its
 /// leftover temporaries, and a CLI test fixture names it.
 pub const DESCRIPTOR_FILE: &str = "trace.toml";
-/// The fixed daemon-owned root for a captured V4 workspace submission.
-pub const SUBMISSION_DIR: &str = "submission";
-/// The canonical submission manifest, present only for a captured V4 workspace submission.
-pub const SUBMISSION_MANIFEST_FILE: &str = "submission/manifest.json";
-const SUBMISSION_MANIFEST_NAME: &str = "manifest.json";
-/// Content-addressed immutable object storage beneath [`SUBMISSION_DIR`].
-pub const SUBMISSION_SHA256_OBJECTS_DIR: &str = "submission/objects/sha256";
-
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
     #[error("chain sequence space is exhausted")]
@@ -76,12 +67,6 @@ pub enum ExportError {
     },
     #[error("serialising {what}: {source}")]
     Serialise {
-        what: &'static str,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("deserialising {what}: {source}")]
-    Deserialise {
         what: &'static str,
         #[source]
         source: serde_json::Error,
@@ -140,7 +125,7 @@ pub enum ExportError {
     FinalizationBeforeCutoff,
     #[error("this export already chained a finalization at seq {seq}")]
     FinalizationAlreadyChained { seq: u64 },
-    #[error("the finalization or captured submission manifest does not match the cutoff")]
+    #[error("the finalization does not match the cutoff")]
     FinalizationBindingMismatch,
     #[error("the chain is terminal at seq {terminal_seq}: no chain record may follow")]
     Terminal { terminal_seq: u64 },
@@ -1250,16 +1235,13 @@ impl TraceExport {
     ) -> Result<Link, ExportError> {
         finalization.validate()?;
         validate_phase_inputs(entry_id, recorded_at)?;
-        let (cutoff_entry, cutoff_receipt, cutoff_link) = match &self.phase {
+        match &self.phase {
             ExportPhase::Open => return Err(ExportError::FinalizationBeforeCutoff),
             ExportPhase::Cutoff {
                 entry_id: cutoff_entry,
                 receipt_sha256,
-                link,
                 ..
-            } if cutoff_entry == entry_id && receipt_sha256 == finalization.receipt_sha256() => {
-                (cutoff_entry.clone(), receipt_sha256.clone(), link.clone())
-            }
+            } if cutoff_entry == entry_id && receipt_sha256 == finalization.receipt_sha256() => {}
             ExportPhase::Cutoff { .. } => {
                 return Err(ExportError::FinalizationBindingMismatch);
             }
@@ -1271,13 +1253,7 @@ impl TraceExport {
             ExportPhase::Terminal { seq, .. } => {
                 return Err(ExportError::Terminal { terminal_seq: *seq });
             }
-        };
-        self.validate_captured_workspace_submission(
-            &finalization,
-            &cutoff_entry,
-            &cutoff_receipt,
-            &cutoff_link,
-        )?;
+        }
         let mut env = Envelope {
             protocol_version,
             entry_id: entry_id.to_string(),
@@ -1298,51 +1274,6 @@ impl TraceExport {
             kind: TerminalKind::FinalizationV1,
         };
         Ok(link)
-    }
-
-    fn validate_captured_workspace_submission(
-        &self,
-        finalization: &FinalizationV1,
-        cutoff_entry: &str,
-        cutoff_receipt: &Sha256Digest,
-        cutoff_link: &Link,
-    ) -> Result<(), ExportError> {
-        let FinalizationV1::WorkspaceSubmission {
-            submission: SubmissionOutcomeV1::Captured(captured),
-            ..
-        } = finalization
-        else {
-            return Ok(());
-        };
-
-        let submission_dir = match self.root.dir.open_child_dir(SUBMISSION_DIR) {
-            Ok(dir) => dir,
-            Err(TraceCapError::Io { source, .. })
-                if source.kind() == std::io::ErrorKind::NotFound =>
-            {
-                return Err(ExportError::FinalizationBindingMismatch);
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let Some(file) = submission_dir.read_regular(SUBMISSION_MANIFEST_NAME)? else {
-            return Err(ExportError::FinalizationBindingMismatch);
-        };
-        let manifest: SubmissionManifestV1 =
-            serde_json::from_reader(file).map_err(|source| ExportError::Deserialise {
-                what: "submission manifest",
-                source,
-            })?;
-        let manifest_sha256 = manifest.digest()?;
-
-        if manifest_sha256 != captured.manifest_sha256
-            || manifest.entry_id != cutoff_entry
-            || &manifest.receipt_sha256 != cutoff_receipt
-            || manifest.cutoff_seq != cutoff_link.seq
-            || manifest.cutoff_chain_hash.as_str() != cutoff_link.hash
-        {
-            return Err(ExportError::FinalizationBindingMismatch);
-        }
-        Ok(())
     }
 
     pub fn append_ack(&mut self, ack: &AckCheckpoint) -> Result<(), ExportError> {

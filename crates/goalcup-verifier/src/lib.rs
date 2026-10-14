@@ -8,8 +8,6 @@
 pub mod capture_analysis;
 mod trace_fs;
 
-mod submission;
-
 /// `goalcup-verify --capture-integrity TRACE`: the protocol-v5 integrity route.
 pub use capture_analysis::reader::{
     CaptureIntegrityReport, capture_integrity_document, scan_capture_trace,
@@ -71,21 +69,11 @@ pub struct VerifyOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum VerifierError {
-    /// An attacker-controlled evidence document exceeded its declared verifier bound.
-    #[error("evidence {path} exceeds the {limit}-byte verifier limit")]
-    EvidenceTooLarge { path: String, limit: u64 },
     #[error("io {path}: {source}")]
     Io {
         path: String,
         #[source]
         source: std::io::Error,
-    },
-    #[error("json {path} line {line}: {source}")]
-    Json {
-        path: String,
-        line: usize,
-        #[source]
-        source: serde_json::Error,
     },
     #[error("protocol: {0}")]
     Protocol(#[from] goalcup_protocol::ProtocolError),

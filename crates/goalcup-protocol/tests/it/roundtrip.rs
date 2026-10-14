@@ -252,11 +252,6 @@ fn every_signed_document_carries_its_own_domain_tag() {
     use goalcup_protocol::ack::ACK_DOMAIN;
     use goalcup_protocol::chain::CHAIN_DOMAIN;
     use goalcup_protocol::control::STATUS_DOMAIN;
-    use goalcup_protocol::provenance::{
-        PUBLICATION_OBSERVATION_SIGNATURE_DOMAIN, RECOVERY_RECORD_DIGEST_DOMAIN,
-        RECOVERY_SIGNATURE_DOMAIN, REPOSITORY_MANIFEST_DOMAIN, REQUIRED_GIT_OBJECT_HISTORY_DOMAIN,
-        SNAPSHOT_MANIFEST_DOMAIN,
-    };
     use goalcup_protocol::receipt::{RECEIPT_DOMAIN, START_RECEIPT_DIGEST_DOMAIN};
 
     let domains = [
@@ -265,12 +260,6 @@ fn every_signed_document_carries_its_own_domain_tag() {
         ACK_DOMAIN,
         STATUS_DOMAIN,
         START_RECEIPT_DIGEST_DOMAIN,
-        SNAPSHOT_MANIFEST_DOMAIN,
-        REPOSITORY_MANIFEST_DOMAIN,
-        REQUIRED_GIT_OBJECT_HISTORY_DOMAIN,
-        RECOVERY_SIGNATURE_DOMAIN,
-        RECOVERY_RECORD_DIGEST_DOMAIN,
-        PUBLICATION_OBSERVATION_SIGNATURE_DOMAIN,
     ];
     for (i, a) in domains.iter().enumerate() {
         for b in &domains[i + 1..] {

@@ -25,7 +25,7 @@ Five workspace members ([Cargo.toml](../Cargo.toml)).
 |---|---|---|---|
 | `goalcup-platform` | library | none | none |
 | `goalcup-protocol` | library | platform | none |
-| `goalcup-verifier` | `goalcup-verify` | protocol, platform | none |
+| `goalcup-verifier` | `goalcup-verify` | protocol | none |
 | `goalcup-daemon` | `goalcup-daemon` | protocol, platform | itself |
 | `goalcup-cli` | `goalcup` | protocol, verifier, platform | itself, daemon |
 

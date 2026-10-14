@@ -52,12 +52,9 @@ use goalcup_protocol::export::{
     ACKS_FILE, BASELINE_FILE, CHAIN_FILE, ChainPhaseReplay, ExportError, RECEIPT_FILE, SEAL_FILE,
     TerminalKind, check_terminal_manifest, manifest_sha256,
 };
-use goalcup_protocol::provenance::{
-    FinalizationV1, Rfc3339Utc, Sha256Digest, TerminationOutcomeV1,
-};
+use goalcup_protocol::provenance::{Rfc3339Utc, Sha256Digest, TerminationOutcomeV1};
 use goalcup_protocol::receipt::StartReceipt;
 use goalcup_protocol::seal::SealManifest;
-use goalcup_protocol::submission::SubmissionOutcomeV1;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, BufReader, Read};
@@ -389,8 +386,6 @@ struct VerifiedReceipt {
 
 /// The cutoff a signed finalization closes, kept from the one pass.
 struct CutoffFacts {
-    seq: u64,
-    hash: String,
     receipt_sha256: Sha256Digest,
     deadline_at: String,
 }
@@ -661,8 +656,6 @@ impl<'k> Scan<'k> {
             }
             if let EventBody::CutoffReachedV1(cutoff) = &env.body {
                 self.cutoff = Some(CutoffFacts {
-                    seq,
-                    hash: env.link.hash.clone(),
                     receipt_sha256: cutoff.receipt_sha256.clone(),
                     deadline_at: cutoff.deadline_at.as_str().to_string(),
                 });
@@ -786,7 +779,7 @@ impl<'k> Scan<'k> {
 
     /// Bind the validated terminal to what it claims. A local finish or legacy seal binds
     /// its fixed `seal.json`, with no receipt prerequisite. A signed finalization binds its
-    /// verified receipt, its cutoff and any preserved submission. The two terminal modes
+    /// verified receipt and its cutoff. The two terminal modes
     /// are never interchangeable.
     fn bind_terminal(&mut self, root: &TraceRoot) -> io::Result<()> {
         if let Some(receipt) = &self.receipt
@@ -806,7 +799,7 @@ impl<'k> Scan<'k> {
             TerminalKind::LocalFinish | TerminalKind::LegacySeal => {
                 self.bind_fixed_manifest(root, &env)?
             }
-            TerminalKind::FinalizationV1 => self.bind_signed_finalization(root, &env),
+            TerminalKind::FinalizationV1 => self.bind_signed_finalization(&env),
         };
         if bound {
             self.terminal_facts = terminal_facts(&env);
@@ -845,11 +838,11 @@ impl<'k> Scan<'k> {
         Ok(true)
     }
 
-    fn bind_signed_finalization(&mut self, root: &TraceRoot, env: &Envelope) -> bool {
-        let EventBody::FinalizationV1(finalization) = &env.body else {
+    fn bind_signed_finalization(&mut self, env: &Envelope) -> bool {
+        if !matches!(env.body, EventBody::FinalizationV1(_)) {
             self.fail("chain_phase_invalid");
             return false;
-        };
+        }
         let Some(receipt) = &self.receipt else {
             if !self.receipt_present {
                 // A signed-mode terminal whose receipt is not retained cannot be proven.
@@ -867,24 +860,6 @@ impl<'k> Scan<'k> {
         }
         if cutoff.deadline_at != receipt.receipt.claims.deadline_at {
             faults.push("cutoff_deadline_mismatch");
-        }
-        if let FinalizationV1::WorkspaceSubmission {
-            submission: SubmissionOutcomeV1::Captured(captured),
-            ..
-        } = finalization
-        {
-            match crate::submission::verify_submission(root, captured) {
-                Err(_) => faults.push("submission_invalid"),
-                Ok(manifest) => {
-                    if Some(manifest.entry_id.as_str()) != self.entry_id.as_deref()
-                        || manifest.receipt_sha256 != receipt.digest
-                        || manifest.cutoff_seq != cutoff.seq
-                        || manifest.cutoff_chain_hash.as_str() != cutoff.hash
-                    {
-                        faults.push("submission_binding_mismatch");
-                    }
-                }
-            }
         }
         let proven = receipt.bound && receipt.head_bound;
         for fault in &faults {
@@ -991,11 +966,7 @@ fn terminal_facts(env: &Envelope) -> Option<CaptureTerminalFacts> {
             Some(seal_manifest_sha256.clone()),
         ),
         EventBody::FinalizationV1(finalization) => {
-            let termination = match finalization {
-                FinalizationV1::Captured { termination, .. }
-                | FinalizationV1::CaptureUnavailable { termination, .. }
-                | FinalizationV1::WorkspaceSubmission { termination, .. } => termination.clone(),
-            };
+            let termination = finalization.termination().clone();
             (
                 None,
                 env.recorded_at.clone(),
