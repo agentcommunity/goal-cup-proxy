@@ -20,6 +20,8 @@ fn chain(dir: &Path, quota: u64) -> ChainWriter {
         workspace: "/w".to_string(),
         files: Vec::new(),
         excluded: Vec::new(),
+        git: None,
+        home: None,
     };
     export
         .write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)
@@ -1314,11 +1316,11 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
         })
     ));
 
-    // The full budget: an 8 s drain share, a 2 s commit reserve, 1 s of it the margin.
+    // The full budget (D56): a 178 s drain share, a 2 s commit reserve, 1 s of it the margin.
     let full = FinishBudget::from_request(&request(None)).unwrap();
     assert_eq!(full.deadline - full.drain_end, FINISH_COMMIT_RESERVE);
     let native = full.native_budget();
-    assert!(native <= Duration::from_secs(8) && native > Duration::from_millis(7_500));
+    assert!(native <= Duration::from_secs(178) && native > Duration::from_millis(177_500));
     assert!(full.admits(Duration::ZERO));
     assert_eq!(
         full.last_start(Duration::ZERO) + FINISH_RESPONSE_MARGIN,
@@ -1340,7 +1342,10 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
 
     // Larger than the budget is clamped to it.
     let large = FinishBudget::from_request(&request(Some(u64::MAX))).unwrap();
-    assert!(large.deadline - tokio::time::Instant::now() <= Duration::from_secs(10));
+    assert!(
+        large.deadline - tokio::time::Instant::now()
+            <= goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET
+    );
 }
 
 #[test]

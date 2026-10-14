@@ -52,7 +52,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D37 | Autonomous runs, research evidence, contributions | in force (m2) | [entry](#d37-m2-autonomous-runs-research-evidence-and-open-contributions) · capture-first |
 | D38 | Fresh per-run HOME for Claude Code | in force (m2); cheapest-model clause superseded by D52 | [entry](#d38-m2-fresh-per-run-home-for-claude-code-cheapest-models-for-live-tests) · qualification/m2/launch-recipes |
 | D39 | Headless launches, ported patterns, Codex home | in force (m2) | [entry](#d39-m2-headless-capture-launches-ported-extra-redaction-patterns-shared-isolated-codex-home) |
-| D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2); amended 2026-10-14 | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
+| D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2); amended 2026-10-14; budget by D56 | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
 | D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2); model and thinking clause superseded by D52 | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
 | D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47; V1-path clause replaced by D48 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
 | D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2); ruling 3 amended by D49 and D50; ruling 5 by D51; ruling 7 by D53 | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
@@ -68,6 +68,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D53 | Record the harness build in v5 (`Launch.harness_build`); v0.5.0 readers refuse such traces | in force (m2) once merged | [entry](#d53-m2-record-the-harness-build-in-v5-accepting-that-v050-readers-refuse-it) |
 | D54 | The protocol carries v5 only: pre-v5 versions, bodies and writers and the Git provenance types leave | in force (m2) once merged | [entry](#d54-m2-the-protocol-carries-v5-only) |
 | D55 | A capture chain may be split into part files named by their logical start offset; records and hashes are unchanged | in force (m2) once merged | [entry](#d55-m2-the-capture-chain-rotates-into-part-files) |
+| D56 | The seal of a clone records its commit and an uncommitted digest; the finish gets three minutes | in force (m2) once merged | [entry](#d56-m2-the-seal-of-a-clone-records-its-commit-and-an-uncommitted-digest-the-finish-gets-minutes) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -980,7 +981,7 @@ Task 5/H-11 designs and the H-11 APFS probe).**
   **Reconsider if** total finish wall time (drain + grace + kill + seal) proves too long for an
   operator or for T27 unattended runs, or if a connector needs a grace far beyond 10 s. The
   alternative was capping termination by the capture budget, which made SIGKILL unreachable for a
-  SIGTERM-ignoring harness.
+  SIGTERM-ignoring harness. **(Amended by D56: the capture budget is 180 s; the reserve stays 2 s.)**
 - **Spawn-to-registration window (H-10).** Closed, not declared a residual: the tracer must be
   very stable. A capture launch must not leave a live harness the tracker never durably recorded;
   the design revision chooses the mechanism (for example, the child waits before `exec` until its
@@ -1489,6 +1490,55 @@ it is a lower bound.
 
 **Reconsider when** the server stores parts as parts, or a reader needs a pruned chain's capture
 records judged locally.
+
+---
+
+## D56. **(M2)** The seal of a clone records its commit and an uncommitted digest; the finish gets minutes.
+
+**Decision (2026-10-14, owner's 168-hour run plan).** A participant works in a clone of their own
+GitHub repository. The seal records the commit and one digest of what is uncommitted instead of
+walking the work folder, and the local finish gets three minutes instead of 10 seconds.
+
+**Admission (R3 amended).** A workspace that is the root of its own clone (`<workspace>/.git` is a
+directory, and no work tree lies above it) is admitted with its files. Anything else keeps R3: a
+directory inside a work tree, or holding a `.git` file, is refused, and so is one that is not
+empty.
+
+**The manifest.** `SealManifest` gains two optional fields, D53-style: absent, they are not
+written, so every manifest written before them keeps its bytes and its digest.
+- `git` (`WorkspaceGit`): `commit`, the hex id `HEAD` names (`None` for an unborn `HEAD`), and
+  `dirty_sha256`. With `git`, `files` is empty. The baseline and the seal both take it when the
+  workspace is a Git work folder, and walk it otherwise. A `None` state (no `.git` directory, a
+  failed call, or the time ran out) falls back to the walk.
+- `home`, on the baseline only: name, size and SHA-256 of each file of the connector's config home
+  before the run, without its native roots, symlinks not followed. It stops at 10 000 files: past
+  that it lists the first 10 000 the walk meets, sorted, and marks nothing else.
+
+**The digest.** SHA-256 over `b"diff\0"` ‖ for each path, sorted bytewise, that is in `HEAD`'s
+tree or in the index and whose work-tree content differs from `HEAD` (compared by
+`git hash-object --no-filters` id, or absent from the work tree): `path ‖ 0x00 ‖ value ‖ b"\n"`
+‖ `b"untracked\0"` ‖ for each `git ls-files -z --others --exclude-standard` path, sorted bytewise:
+`path ‖ 0x00 ‖ value ‖ b"\n"`. `value` is the hex SHA-256 of the content, `deleted`, or
+`size:<n>` for a file over 64 MiB; anything but a regular file has the seal walk's absent digest.
+A clean clone digests to `sha256(b"diff\0untracked\0")`. Submodules and ignored files are not
+described.
+
+**No agent-configured program runs.** The agent writes `.git/config`, `.gitattributes` and the
+hooks, so the seal runs no program the agent can configure: no fsmonitor, hook, diff driver or
+filter. `git` runs with the environment cleared but `PATH`, a fresh empty `HOME`, no system or
+global configuration, the repository pinned to `<workspace>/.git`, `-c core.fsmonitor=false -c
+core.hooksPath=/dev/null -c diff.external=`, and only `rev-parse`, `ls-tree`, `ls-files`,
+`hash-object --no-filters` and `cat-file --batch`. The plan's `git diff` was dropped: comparing the
+work tree runs the repository's clean and process filters (`an_agent_written_clean_filter_is_never_run`
+failed on it). Every call shares one deadline; a call past it is killed and reaped.
+
+**Time.** `LOCAL_CAPTURE_FINISH_BUDGET` is 180 s (it was 10 s; amends D40 and the C6 budget in
+CONTRACTS.md); `FINISH_COMMIT_RESERVE` stays 2 s. At the seal, Git gets half of what remains
+before the last start, so the walk it falls back to has the other half. The baseline gives Git
+20 s, inside the CLI's 30 s create call.
+
+**Reconsider when** the server re-derives the uncommitted state from a pushed branch, or a
+harness needs its config home listed beyond 10 000 files.
 
 ---
 

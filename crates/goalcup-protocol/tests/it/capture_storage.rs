@@ -53,6 +53,8 @@ fn manifest() -> SealManifest {
             sha256: "ab".repeat(32),
         }],
         excluded: Vec::new(),
+        git: None,
+        home: None,
     }
 }
 

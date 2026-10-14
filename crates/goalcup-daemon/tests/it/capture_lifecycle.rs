@@ -2655,3 +2655,91 @@ async fn a_restart_after_parts_were_deleted_keeps_appending() {
         }
     ));
 }
+
+// ---------------------------------------------------------------- a clone as the workspace (D56)
+
+fn read_manifest(path: &Path) -> goalcup_protocol::seal::SealManifest {
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+/// The participant's own clone is the workspace: admitted with its files, and neither the
+/// baseline nor the seal walks it. Both record the commit and the digest of what is
+/// uncommitted instead.
+#[tokio::test]
+async fn a_clone_is_admitted_non_empty_and_not_walked() {
+    let rig = Rig::start().await;
+    let ws = rig.workspace("clone");
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let git = |args: &[&str]| {
+        let out = goalcup_daemon::workspace_git::command(&ws, &home)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(ws.join("README.md"), b"# entry\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&["commit", "-q", "-m", "first"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    let trace = rig.trace_dir(&info.entry_id);
+    let baseline = read_manifest(&trace.join("baseline.json"));
+    assert_eq!(baseline.files, [], "the clone is not walked");
+    let empty = hex::encode(Sha256::digest(b"diff\0untracked\0"));
+    assert_eq!(
+        baseline.git,
+        Some(goalcup_protocol::seal::WorkspaceGit {
+            commit: Some(commit.clone()),
+            dirty_sha256: empty.clone(),
+        })
+    );
+
+    std::fs::write(ws.join("hello.txt"), b"hello\n").unwrap();
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let seal = read_manifest(&trace.join("seal.json"));
+    assert_eq!(seal.files, [], "the seal does not walk the clone either");
+    assert_eq!(
+        seal.home, None,
+        "the harness home is listed on the baseline only"
+    );
+    let git_state = seal.git.expect("the seal records the Git state");
+    assert_eq!(git_state.commit, Some(commit));
+    assert_ne!(
+        git_state.dirty_sha256, empty,
+        "the untracked file moved the digest"
+    );
+}
+
+/// The baseline lists the connector's config home as it was before the run, without the
+/// native root the harness writes its sessions into.
+#[tokio::test]
+async fn the_baseline_lists_the_harness_home_without_its_session_folder() {
+    let rig = Rig::start().await;
+    let config_home = rig.root.join("config-home");
+    std::fs::create_dir_all(config_home.join("sessions/2026/10")).unwrap();
+    std::fs::write(config_home.join("config.toml"), b"model = \"m\"\n").unwrap();
+    std::fs::write(config_home.join("sessions/2026/10/old.jsonl"), b"{}\n").unwrap();
+
+    let info = rig.created("codex-cli").await;
+    let baseline = read_manifest(&rig.trace_dir(&info.entry_id).join("baseline.json"));
+    let home = baseline.home.expect("the baseline lists the harness home");
+    assert_eq!(
+        home,
+        [goalcup_protocol::seal::SealedFile {
+            path: "config.toml".to_string(),
+            bytes: 12,
+            sha256: hex::encode(Sha256::digest(b"model = \"m\"\n")),
+        }]
+    );
+    assert_eq!(baseline.git, None, "a fresh workspace is no clone");
+}

@@ -205,3 +205,274 @@ fn the_seal_walk_finishes_over_a_fifo_a_device_link_and_an_unreadable_directory(
         assert_eq!(digest(p), absent, "{p}");
     }
 }
+
+// ---------------------------------------------------------------- a clone of the participant's repository (D56)
+
+/// Run `git` in `ws` with the seal's own sanitized environment and a test identity; `home` is
+/// the test's empty `HOME`, so no user or system configuration reaches the repository.
+fn git(ws: &Path, home: &Path, args: &[&str]) {
+    let status = goalcup_daemon::workspace_git::command(ws, home)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "git {args:?}");
+}
+
+/// A repository at `<t>/ws` with one commit holding `a.txt`, a link to it and a `.gitignore`
+/// for `target`.
+fn committed_clone(t: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let ws = t.join("ws");
+    let home = t.join("home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    git(&ws, &home, &["init", "-q"]);
+    std::fs::write(ws.join("a.txt"), b"one\n").unwrap();
+    std::fs::write(ws.join(".gitignore"), b"target\n").unwrap();
+    std::os::unix::fs::symlink("a.txt", ws.join("link.txt")).unwrap();
+    git(&ws, &home, &["add", "a.txt", ".gitignore", "link.txt"]);
+    git(&ws, &home, &["commit", "-q", "-m", "first"]);
+    (ws, home)
+}
+
+fn head(ws: &Path, home: &Path) -> String {
+    let out = goalcup_daemon::workspace_git::command(ws, home)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+const BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[test]
+fn a_fresh_clone_seals_no_commit_and_the_empty_digest() {
+    use goalcup_daemon::workspace_git::state;
+    let empty = sha256_hex(b"diff\0untracked\0");
+
+    // An unborn HEAD: the clone of an empty repository.
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    let home = t.path().join("home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    git(&ws, &home, &["init", "-q"]);
+    let got = state(&ws, BUDGET).expect("a Git work folder has a state");
+    assert_eq!(got.commit, None, "no commit yet");
+    assert_eq!(got.dirty_sha256, empty);
+
+    // A clean clone with a commit: the commit, and still nothing uncommitted. An ignored file
+    // is not uncommitted work.
+    let t = tempfile::tempdir().unwrap();
+    let (ws, home) = committed_clone(t.path());
+    std::fs::create_dir_all(ws.join("target")).unwrap();
+    std::fs::write(ws.join("target/build.o"), b"ignored").unwrap();
+    let got = state(&ws, BUDGET).unwrap();
+    assert_eq!(got.commit.as_deref(), Some(head(&ws, &home).as_str()));
+    assert_eq!(got.commit.as_ref().unwrap().len(), 40);
+    assert_eq!(got.dirty_sha256, empty);
+
+    // Not a Git work folder: no state, and the walk takes over.
+    let plain = t.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    assert_eq!(state(&plain, BUDGET), None);
+}
+
+#[test]
+fn the_digest_moves_with_an_untracked_file_and_a_tracked_edit() {
+    use goalcup_daemon::workspace_git::state;
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
+    let framed = |diff: &[u8], untracked: &[u8]| {
+        let mut bytes = b"diff\0".to_vec();
+        bytes.extend_from_slice(diff);
+        bytes.extend_from_slice(b"untracked\0");
+        bytes.extend_from_slice(untracked);
+        sha256_hex(&bytes)
+    };
+    let line = |path: &str, value: &str| format!("{path}\0{value}\n").into_bytes();
+
+    std::fs::write(ws.join("new.txt"), b"fresh\n").unwrap();
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(ws.join("src/lib.rs"), b"fn f() {}\n").unwrap();
+    let untracked = [
+        line("new.txt", &sha256_hex(b"fresh\n")),
+        line("src/lib.rs", &sha256_hex(b"fn f() {}\n")),
+    ]
+    .concat();
+    assert_eq!(
+        state(&ws, BUDGET).unwrap().dirty_sha256,
+        framed(b"", &untracked),
+        "each untracked file, sorted, with its content digest"
+    );
+
+    std::fs::write(ws.join("a.txt"), b"two\n").unwrap();
+    assert_eq!(
+        state(&ws, BUDGET).unwrap().dirty_sha256,
+        framed(&line("a.txt", &sha256_hex(b"two\n")), &untracked),
+        "a tracked edit is listed with its new content"
+    );
+
+    std::fs::remove_file(ws.join("a.txt")).unwrap();
+    assert_eq!(
+        state(&ws, BUDGET).unwrap().dirty_sha256,
+        framed(&line("a.txt", "deleted"), &untracked),
+        "a tracked file removed is listed as deleted"
+    );
+
+    // A link pointed elsewhere is listed, never followed: the walk's absent digest.
+    std::fs::remove_file(ws.join("link.txt")).unwrap();
+    std::os::unix::fs::symlink("/dev/zero", ws.join("link.txt")).unwrap();
+    let absent = "0".repeat(64);
+    assert_eq!(
+        state(&ws, BUDGET).unwrap().dirty_sha256,
+        framed(
+            &[line("a.txt", "deleted"), line("link.txt", &absent)].concat(),
+            &untracked
+        ),
+    );
+}
+
+/// The agent writes `.git/config`: an fsmonitor hook there would run inside the daemon at the
+/// seal. It must not.
+#[test]
+fn an_agent_written_fsmonitor_is_never_run() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
+    let marker = t.path().join("fsmonitor-ran");
+    let hook = t.path().join("fsmonitor.sh");
+    std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(ws.join(".git/config"))
+        .unwrap();
+    use std::io::Write;
+    writeln!(
+        config,
+        "[core]\n\tfsmonitor = {}\n\tuntrackedCache = true",
+        hook.display()
+    )
+    .unwrap();
+    drop(config);
+    std::fs::write(ws.join("a.txt"), b"edited\n").unwrap();
+    std::fs::write(ws.join("b.txt"), b"new\n").unwrap();
+
+    assert!(goalcup_daemon::workspace_git::state(&ws, BUDGET).is_some());
+    assert!(
+        !marker.exists(),
+        "the agent's fsmonitor ran inside the seal"
+    );
+}
+
+/// Ruling A: `git diff` against the work tree runs a repository-configured clean filter (or a
+/// long-running process filter) on every file `.gitattributes` assigns it to. The agent writes
+/// both files, so the seal must never run one.
+#[test]
+fn an_agent_written_clean_filter_is_never_run() {
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
+    let clean = t.path().join("clean-ran");
+    let process = t.path().join("process-ran");
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(ws.join(".git/config"))
+        .unwrap();
+    use std::io::Write;
+    writeln!(
+        config,
+        "[filter \"evil\"]\n\tclean = \"touch '{}'; cat\"\n\tprocess = \"sh -c 'touch {}'\"",
+        clean.display(),
+        process.display()
+    )
+    .unwrap();
+    drop(config);
+    std::fs::write(ws.join(".gitattributes"), b"* filter=evil\n").unwrap();
+    std::fs::write(ws.join(".git/info/attributes"), b"* filter=evil\n").unwrap_or(());
+    std::fs::write(ws.join("a.txt"), b"edited\n").unwrap();
+
+    let got = goalcup_daemon::workspace_git::state(&ws, BUDGET);
+    assert!(
+        !process.exists(),
+        "the agent's process filter ran inside the seal"
+    );
+    assert!(
+        !clean.exists(),
+        "the agent's clean filter ran inside the seal"
+    );
+    let got = got.expect("a filter the seal does not run cannot fail it either");
+    assert_ne!(
+        got.dirty_sha256,
+        sha256_hex(b"diff\0untracked\0"),
+        "the edit is seen"
+    );
+}
+
+#[test]
+fn a_workspace_inside_another_work_tree_is_refused() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("outer/.git")).unwrap();
+    let art = t.path().join("tracker/art");
+
+    // A clone inside another work tree: its own `.git` does not make it a root.
+    let nested = t.path().join("outer/ws");
+    std::fs::create_dir_all(nested.join(".git")).unwrap();
+    std::fs::write(nested.join("a.txt"), b"x").unwrap();
+    let err = check_workspace_available(&Roots {
+        workspace: nested,
+        artifact_root: art.clone(),
+    })
+    .expect_err("R3: a work tree inside another is refused");
+    assert!(format!("{err}").contains("Git worktree"), "got {err}");
+
+    // A linked worktree (`.git` is a file) is not the root of its own clone.
+    let linked = t.path().join("linked");
+    std::fs::create_dir_all(&linked).unwrap();
+    std::fs::write(linked.join(".git"), b"gitdir: /elsewhere\n").unwrap();
+    let err = check_workspace_available(&Roots {
+        workspace: linked,
+        artifact_root: art.clone(),
+    })
+    .expect_err("only a `.git` directory makes a clone root");
+    assert!(format!("{err}").contains("Git worktree"), "got {err}");
+
+    // The root of its own clone is admitted with its files.
+    let clone = t.path().join("clone");
+    std::fs::create_dir_all(clone.join(".git")).unwrap();
+    std::fs::write(clone.join("a.txt"), b"x").unwrap();
+    check_workspace_available(&Roots {
+        workspace: clone,
+        artifact_root: art,
+    })
+    .expect("a clone root is admitted non-empty");
+}
+
+#[test]
+fn a_non_git_workspace_still_walks() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("main.py"), b"print(1)").unwrap();
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    assert_eq!(m.git, None);
+    assert_eq!(m.home, None);
+    assert_eq!(m.files.len(), 1);
+    assert_eq!(m.files[0].path, "main.py");
+    assert_eq!(m.files[0].sha256, sha256_hex(b"print(1)"));
+
+    // A clone seals its Git state and walks nothing.
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    assert!(m.git.is_some());
+    assert!(m.files.is_empty(), "{:?}", m.files);
+}

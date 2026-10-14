@@ -31,7 +31,7 @@ pub(super) enum FinishStage {
     OwnerDrain,
     /// Stage 6: ending the registered process tree.
     Termination,
-    /// Stage 7: the workspace walk into the seal manifest.
+    /// Stage 7: the workspace into the seal manifest: a clone's Git state, else the walk.
     WorkspaceWalk,
     /// Stage 8: `LocalFinish`, sync, `seal.json` and the registry row.
     LocalFinish,
@@ -403,21 +403,28 @@ impl Daemon {
         // The time this attempt spent ending the harness is added back to the deadline.
         let excluded = if ran { began.elapsed() } else { Duration::ZERO };
 
-        // Stage 7: the workspace walk.
+        // Stage 7: the workspace seal.
         capture.pause_before(FinishStage::WorkspaceWalk);
         if !budget.admits(excluded) {
             return Err(capture.expire(FinishStage::WorkspaceWalk, None, Some(termination)));
         }
         let sealed_at = now_rfc3339();
-        let manifest = match workspace::list_workspace(&row.workspace, &entry_id, &sealed_at, &[]) {
-            Ok(manifest) => manifest,
-            Err(error) => {
-                // The harness was ended above; a later finish must not read that as "ended on
-                // its own".
-                capture.keep_termination(termination);
-                return Err(error);
-            }
-        };
+        // A clone's Git state gets half of what is left, so the walk it falls back to has the
+        // other half (D56).
+        let git_budget = budget
+            .last_start(excluded)
+            .saturating_duration_since(tokio::time::Instant::now())
+            / 2;
+        let manifest =
+            match workspace::seal_workspace(&row.workspace, &entry_id, &sealed_at, git_budget) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    // The harness was ended above; a later finish must not read that as "ended on
+                    // its own".
+                    capture.keep_termination(termination);
+                    return Err(error);
+                }
+            };
 
         // Stage 8: the terminal. Once it begins it completes under the existing no-retry rule;
         // only its registry half (`commit_finish`) is retried as it stands.

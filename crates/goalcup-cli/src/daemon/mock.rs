@@ -196,6 +196,8 @@ impl MockDaemonClient {
                 workspace: info.workspace.clone(),
                 files: Vec::new(),
                 excluded: Vec::new(),
+                git: None,
+                home: None,
             },
             sealed: false,
             processes: Vec::new(),

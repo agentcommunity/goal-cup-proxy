@@ -10,14 +10,31 @@ pub struct SealedFile {
     pub sha256: String,
 }
 
+/// The Git state of a workspace that is the root of its own clone (D56).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceGit {
+    /// The commit `HEAD` names, lowercase hex; `None` for an unborn `HEAD`.
+    pub commit: Option<String>,
+    /// SHA-256, hex, of what differs from that commit (D56 gives the framing).
+    pub dirty_sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SealManifest {
     pub entry_id: String,
     pub sealed_at: String,
     pub workspace: String,
+    /// Every file of a walked workspace. Empty when `git` is set: a clone is not walked.
     pub files: Vec<SealedFile>,
     /// Paths excluded by the connector's `workspace_exclusions[]` plus tracker config.
     pub excluded: Vec<String>,
+    /// The commit and uncommitted digest of a workspace that is its own clone (D56).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<WorkspaceGit>,
+    /// The baseline only: the connector's config home before the run, without its native
+    /// roots, at most 10 000 files (D56).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<Vec<SealedFile>>,
 }
 
 impl SealManifest {
@@ -25,22 +42,19 @@ impl SealManifest {
     pub fn sorted(mut self) -> SealManifest {
         self.files.sort_by(|a, b| a.path.cmp(&b.path));
         self.excluded.sort();
+        if let Some(home) = &mut self.home {
+            home.sort_by(|a, b| a.path.cmp(&b.path));
+        }
         self
     }
 }
 
 /// **The single definition of the seal-exclusion rule.**
 ///
-/// Every caller uses it and there must never be a second implementation:
-///
-/// - `goalcup-verifier/src/attribution.rs` — deciding which sealed files need an
-///   explanation;
-/// - `goalcup-daemon/src/workspace.rs`: deciding what the seal walk lists in the first
-///   place;
-/// - `goalcup-cli/src/seal.rs` — the CLI's mirror self-check.
-///
-/// Implementations with different semantics would exclude `a/b/.git/HEAD` in one place and
-/// *attribute* it in another.
+/// Its one caller is `goalcup-daemon/src/workspace.rs`, deciding what the seal walk lists and
+/// what the baseline's harness-home listing leaves out. A later reader of sealed paths uses
+/// this function and never a second implementation: two with different semantics would
+/// exclude `a/b/.git/HEAD` in one place and *attribute* it in another.
 ///
 /// **Workspace-root-anchored.** A pattern matches `rel` when it equals
 /// `rel`, or is a leading path prefix (`rel` starts with `p` + `/`). A pattern beginning
