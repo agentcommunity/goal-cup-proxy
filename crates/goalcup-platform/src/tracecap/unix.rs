@@ -8,7 +8,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 const ROOT_OPERATION: &str = "open trace root";
-const RESERVE_OPERATION: &str = "reserve trace append stream";
 
 pub(super) struct TraceDirHandle {
     fd: OwnedFd,
@@ -856,83 +855,6 @@ impl AppendFileHandle {
         self.file
             .sync_all()
             .map_err(|source| TraceCapError::io("sync trace append stream", source))
-    }
-}
-
-/// macOS (the measured T01 recipe): `F_PREALLOCATE` with `F_ALLOCATEALL | F_ALLOCATEPERSIST`
-/// and `F_PEOFPOSMODE` grants all of the `missing` bytes or none, from the physical end of
-/// file. It is additive, so a satisfied target (`missing == 0`) asks for nothing.
-#[cfg(target_os = "macos")]
-#[allow(dead_code)] // no caller here since chains became quota-only; the run host's disk module takes it
-fn allocate(fd: RawFd, _total_bytes: u64, missing: u64) -> Result<(), TraceCapError> {
-    if missing == 0 {
-        return Ok(());
-    }
-    let length = libc::off_t::try_from(missing)
-        .map_err(|_| TraceCapError::refused(RESERVE_OPERATION, RefusalKind::InsufficientSpace))?;
-    let mut store = libc::fstore_t {
-        fst_flags: libc::F_ALLOCATEALL | libc::F_ALLOCATEPERSIST,
-        fst_posmode: libc::F_PEOFPOSMODE,
-        fst_offset: 0,
-        fst_length: length,
-        fst_bytesalloc: 0,
-    };
-    let result = unsafe {
-        // SAFETY: the retained append descriptor is live and `store` is a valid, writable
-        // fstore_t for the duration of the call. F_ALLOCATEALL grants all or nothing; the
-        // call never changes the logical length.
-        libc::fcntl(fd, libc::F_PREALLOCATE, &raw mut store)
-    };
-    if result == -1 {
-        return Err(TraceCapError::io(
-            RESERVE_OPERATION,
-            io::Error::last_os_error(),
-        ));
-    }
-    // `fst_bytesalloc` echoes the request; the caller's remeasurement is the evidence.
-    Ok(())
-}
-
-/// Linux (measured in Docker on ext4 and XFS): `fallocate(FALLOC_FL_KEEP_SIZE)` over the byte
-/// range `[0, total_bytes)`. `KEEP_SIZE` is the macOS shape: blocks are granted behind the
-/// logical end as unwritten extents and `st_size` never moves. The range is absolute rather
-/// than "the missing difference from the physical end" because Linux has no physical-EOF mode;
-/// it is idempotent, so a satisfied range grants nothing, and it is issued even when the block
-/// count already looks sufficient because `st_blocks` also counts extent-map blocks, which
-/// could otherwise hide a short data range. Unlike `F_ALLOCATEALL` a failure is not all or
-/// nothing: ext4 and XFS may keep part of a failed request. That part is never logical content
-/// (the size is kept) and the next call tops it up, so the failure is still a plain refusal.
-///
-/// `EOPNOTSUPP` is the 0xEF53 magic's ext2 and ext3 cases (indirect-block files have no
-/// unwritten extents): an unsupported filesystem, not an I/O error.
-#[cfg(target_os = "linux")]
-#[allow(dead_code)] // no caller here since chains became quota-only; the run host's disk module takes it
-fn allocate(fd: RawFd, total_bytes: u64, _missing: u64) -> Result<(), TraceCapError> {
-    if total_bytes == 0 {
-        return Ok(());
-    }
-    let length = libc::off_t::try_from(total_bytes)
-        .map_err(|_| TraceCapError::refused(RESERVE_OPERATION, RefusalKind::InsufficientSpace))?;
-    loop {
-        let result = unsafe {
-            // SAFETY: the retained append descriptor is live; KEEP_SIZE allocates blocks in
-            // the range and never changes the logical length or any byte of content.
-            libc::fallocate(fd, libc::FALLOC_FL_KEEP_SIZE, 0, length)
-        };
-        if result == 0 {
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(libc::EINTR) => continue,
-            Some(libc::EOPNOTSUPP) => {
-                return Err(TraceCapError::refused(
-                    RESERVE_OPERATION,
-                    RefusalKind::UnsupportedFileSystem,
-                ));
-            }
-            _ => return Err(TraceCapError::io(RESERVE_OPERATION, error)),
-        }
     }
 }
 

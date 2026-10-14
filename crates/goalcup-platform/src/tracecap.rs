@@ -45,7 +45,6 @@ impl FixedDocument {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RefusalKind {
     UnsupportedRoot,
-    UnsupportedFileSystem,
     ReparsePoint,
     OfflineOrRecall,
     NotDirectory,
@@ -57,12 +56,6 @@ pub enum RefusalKind {
     DirectoryEntryLimit,
     DirectoryNameLimit,
     NameTooLong,
-    /// A physical reservation's missing bytes exceed the space the volume reports available,
-    /// or cannot be expressed to the allocator. Refused before any allocation is attempted.
-    InsufficientSpace,
-    /// A physical reservation did not remeasure as requested: fewer bytes allocated than the
-    /// target, or a logical length that moved during the call.
-    AllocationNotRetained,
 }
 
 /// A failure to acquire or use a handle-rooted trace object.
