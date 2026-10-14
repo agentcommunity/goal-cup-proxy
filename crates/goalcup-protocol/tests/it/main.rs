@@ -1,8 +1,6 @@
 //! Fast tier: the protocol crate's integration tests, folded into one binary.
-//! `export_roundtrip` (process umask) and `capture_reserved_storage` (re-executes itself by
-//! test name) stay separate binaries.
+//! `export_roundtrip` (process umask) stays a separate binary.
 
-mod addenda;
 mod capture_storage;
 mod capture_terminals;
 mod chain_golden;

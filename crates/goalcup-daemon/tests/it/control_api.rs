@@ -100,44 +100,6 @@ async fn create_capture(
     .await
 }
 
-/// A volume the chain cannot be reserved on is refused with the sentence naming what does
-/// qualify, and only that refusal carries it: a reservation that fails for another reason must
-/// not send the participant to move their trace folder.
-///
-/// The fault is thread-local and one-shot; the control listener runs on this test's
-/// current-thread runtime, so the handler that consumes it is on the thread that set it.
-#[cfg(debug_assertions)]
-#[tokio::test]
-async fn an_unqualified_filesystem_refusal_names_what_qualifies() {
-    use goalcup_platform::tracecap::{ReservationFault, inject_reservation_fault};
-    const QUALIFIED: &str = "the trace folder must be on APFS (macOS) or ext4 or XFS (Linux); move artifact_root in daemon.toml";
-    let h = support::empty_control_harness().await;
-    for (fault, names_qualified) in [
-        (ReservationFault::UnqualifiedFileSystem, true),
-        (ReservationFault::AllocatorGrantsNothing, false),
-    ] {
-        let request = capture_request(&h, &format!("refused-{fault:?}"));
-        inject_reservation_fault(fault);
-        let response = h
-            .post_body(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
-            .await;
-        assert_eq!(response.status(), 422, "{}", response.body());
-        let body: protocol::ErrorBody = response.json().unwrap();
-        assert_eq!(body.error.code, "preflight_failed");
-        assert!(
-            body.error.message.contains("cannot reserve"),
-            "{fault:?}: {}",
-            body.error.message
-        );
-        assert_eq!(
-            body.error.message.contains(QUALIFIED),
-            names_qualified,
-            "{fault:?}: {}",
-            body.error.message
-        );
-    }
-}
-
 /// The authentication rule, asserted from both sides of the same function: the CLI's
 /// `is_public_route` and the daemon's answer have to agree route for route, because the
 /// failure this test exists to prevent is the two drifting apart and making the status

@@ -266,7 +266,6 @@ fn v5_cutoff_and_finalization_keep_version_five() {
 
     // The phase replay and a reopened writer both reconstruct the same terminal.
     let replayed = replay(tmp.path()).unwrap();
-    assert_eq!(replayed.format(), Some(ChainFormat::Capture));
     assert_eq!(
         replayed.terminal(),
         Some(ChainTerminal {
@@ -284,71 +283,42 @@ fn v5_cutoff_and_finalization_keep_version_five() {
     ));
 }
 
+/// The reserved writers take a version only so the fixtures can name it; nothing but v5 is
+/// admitted, and a refused version writes nothing.
 #[test]
-fn legacy_terminal_wrappers_still_write_version_four() {
+fn reserved_writers_refuse_every_version_but_five_before_writing() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut export = TraceExport::create(tmp.path()).unwrap();
-    export.write_baseline(&manifest()).unwrap();
-    let cutoff_link = export
-        .write_cutoff(ENTRY, "2026-09-27T12:00:03Z", cutoff())
-        .unwrap();
-    let final_link = export
-        .write_finalization(ENTRY, "2026-09-27T12:00:04Z", finalization())
-        .unwrap();
-    let chain = assert_recomputed_chain(tmp.path());
-    assert_eq!(chain.len(), 3);
-    assert!(
-        chain
-            .iter()
-            .all(|env| env.protocol_version == goalcup_protocol::PROTOCOL_VERSION),
-        "the unversioned wrappers keep the legacy default"
-    );
-    assert_eq!(goalcup_protocol::PROTOCOL_VERSION, 4);
-    assert_eq!(chain[1].link, cutoff_link);
-    assert_eq!(chain[2].link, final_link);
-    assert_eq!(
-        replay(tmp.path()).unwrap().terminal().map(|t| t.kind),
-        Some(TerminalKind::FinalizationV1)
-    );
-    assert_eq!(
-        replay(tmp.path()).unwrap().format(),
-        Some(ChainFormat::Legacy)
-    );
-
-    // A legacy export refuses the v5 writers; a capture export refuses the v4 wrappers.
-    let legacy = tempfile::tempdir().unwrap();
-    let mut export = TraceExport::create(legacy.path()).unwrap();
-    export.write_baseline(&manifest()).unwrap();
-    let before = snapshot(legacy.path());
+    let mut export = capture_export(tmp.path());
+    let before = snapshot(tmp.path());
+    for version in [1, 4] {
+        assert!(matches!(
+            export.write_cutoff_for_protocol(version, ENTRY, "2026-09-27T12:00:03Z", cutoff()),
+            Err(ExportError::InvalidCaptureEnvelope { .. })
+        ));
+        assert!(matches!(
+            export.write_seal_for_protocol(version, &manifest()),
+            Err(ExportError::InvalidCaptureEnvelope { .. })
+        ));
+    }
     assert!(matches!(
-        export.write_cutoff_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:03Z",
-            cutoff()
-        ),
+        export.write_cutoff_for_protocol(6, ENTRY, "2026-09-27T12:00:03Z", cutoff()),
         Err(ExportError::UnsupportedProtocolVersion {
-            protocol_version: 5,
+            protocol_version: 6,
             ..
         })
     ));
-    assert!(matches!(
-        export.write_local_finish(&manifest(), at(1), "participant_stop", confirmed()),
-        Err(ExportError::UnsupportedProtocolVersion {
-            protocol_version: 5,
-            ..
-        })
-    ));
-    assert_eq!(snapshot(legacy.path()), before);
+    assert_eq!(snapshot(tmp.path()), before);
 
-    let capture = tempfile::tempdir().unwrap();
-    let mut export = capture_export(capture.path());
-    let before = snapshot(capture.path());
+    let fresh = tempfile::tempdir().unwrap();
+    let mut export = TraceExport::create(fresh.path()).unwrap();
+    export.configure_capture_quota(QUOTA).unwrap();
+    let before = snapshot(fresh.path());
     assert!(matches!(
-        export.write_cutoff(ENTRY, "2026-09-27T12:00:03Z", cutoff()),
+        export.write_baseline_for_protocol(4, &manifest()),
         Err(ExportError::InvalidCaptureEnvelope { .. })
     ));
-    assert_eq!(snapshot(capture.path()), before);
+    assert_eq!(export.head(), None);
+    assert_eq!(snapshot(fresh.path()), before);
 }
 
 #[test]
@@ -472,11 +442,11 @@ fn ordinary_append_cannot_forge_local_finish() {
     assert_eq!(snapshot(tmp.path()), before);
     assert_eq!(export.head().unwrap().0, 0);
 
-    // A hand-written local finish under a legacy version is not terminal evidence.
+    // A hand-written local finish under a retired version is not terminal evidence.
     let head = export.head().unwrap();
     drop(export);
     let mut legacy_labelled = v5(local_finish_record(&digest));
-    legacy_labelled.protocol_version = goalcup_protocol::PROTOCOL_VERSION;
+    legacy_labelled.protocol_version = 4;
     legacy_labelled.recorded_at = at(900).wall;
     append_raw(tmp.path(), &linked_line(&head, legacy_labelled));
     assert!(TraceExport::resume(tmp.path()).is_err());
@@ -812,12 +782,13 @@ fn phase_replay_applies_the_writer_terminal_rules() {
         Some(TerminalKind::LocalFinish)
     );
 
-    // Version admission before decoding: legacy after v5, v5 after legacy, unknown versions.
+    // Version admission before decoding: a retired version after v5, an unknown version, and a
+    // retired-version genesis.
     let mut capture = ChainPhaseReplay::new();
     capture.check_version(0, M2_PROTOCOL_VERSION).unwrap();
     capture.push(&envelopes(open.path())[0]).unwrap();
     assert!(matches!(
-        capture.check_version(1, goalcup_protocol::PROTOCOL_VERSION),
+        capture.check_version(1, 4),
         Err(ExportError::InvalidCaptureEnvelope { seq: 1, .. })
     ));
     assert!(matches!(
@@ -827,19 +798,16 @@ fn phase_replay_applies_the_writer_terminal_rules() {
             ..
         })
     ));
-    let mut legacy = ChainPhaseReplay::new();
-    legacy
-        .check_version(0, goalcup_protocol::PROTOCOL_VERSION)
-        .unwrap();
-    let mut legacy_baseline = envelopes(open.path())[0].clone();
-    legacy_baseline.protocol_version = goalcup_protocol::PROTOCOL_VERSION;
-    legacy.push(&legacy_baseline).unwrap();
+    let mut retired = ChainPhaseReplay::new();
     assert!(matches!(
-        legacy.check_version(1, M2_PROTOCOL_VERSION),
-        Err(ExportError::UnsupportedProtocolVersion {
-            protocol_version: 5,
-            ..
-        })
+        retired.check_version(0, 4),
+        Err(ExportError::InvalidCaptureEnvelope { seq: 0, .. })
+    ));
+    let mut retired_baseline = envelopes(open.path())[0].clone();
+    retired_baseline.protocol_version = 4;
+    assert!(matches!(
+        retired.push(&retired_baseline),
+        Err(ExportError::InvalidCaptureEnvelope { seq: 0, .. })
     ));
 }
 

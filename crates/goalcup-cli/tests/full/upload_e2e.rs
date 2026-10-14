@@ -468,8 +468,8 @@ fn an_upload_left_incomplete_is_finished_by_goalcup_upload() {
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = logged_in_options(&rig, &goal);
-    // A finish budget the closed server outlasts.
-    opts.upload_policy.finish_budget = std::time::Duration::from_millis(300);
+    // A wrap-up the closed server outlasts.
+    opts.upload_policy.wrap_up = std::time::Duration::from_millis(300);
     let (result, out) = std::thread::scope(|s| {
         let running = rig.start(s, &client, opts, None);
         wait_until("a first chunk", || {
@@ -564,7 +564,7 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = logged_in_options(&rig, &goal);
-    opts.upload_policy.finish_budget = std::time::Duration::from_millis(300);
+    opts.upload_policy.wrap_up = std::time::Duration::from_millis(300);
     let (result, out) = std::thread::scope(|s| {
         let running = rig.start(s, &client, opts, None);
         wait_until("a first chunk", || {
@@ -748,7 +748,7 @@ fn without_a_server_the_run_stops_on_its_own_clock_and_is_finished_later() {
     let client = Hooked::new(&http, &rig);
     let mut opts = logged_in_options(&rig, &goal);
     opts.upload_policy = beating_policy();
-    opts.upload_policy.finish_budget = std::time::Duration::from_millis(300);
+    opts.upload_policy.wrap_up = std::time::Duration::from_millis(300);
     let (result, out) = std::thread::scope(|s| {
         let running = rig.start(s, &client, opts, None);
         wait_until("a first chunk", || {

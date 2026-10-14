@@ -62,7 +62,7 @@ pub fn upload_with(
             &spool,
         ) {
             Ok(uploader) => break uploader,
-            Err(error) if error.is_retryable() => {
+            Err(error) if !error.ends_upload() => {
                 failures += 1;
                 let wait = crate::upload::uploader::backoff(
                     &policy,

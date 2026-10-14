@@ -4,6 +4,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod account;
 mod amp_child_secret;
 #[cfg(unix)]
 mod capture_gate;

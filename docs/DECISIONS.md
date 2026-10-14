@@ -52,7 +52,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D37 | Autonomous runs, research evidence, contributions | in force (m2) | [entry](#d37-m2-autonomous-runs-research-evidence-and-open-contributions) · capture-first |
 | D38 | Fresh per-run HOME for Claude Code | in force (m2); cheapest-model clause superseded by D52 | [entry](#d38-m2-fresh-per-run-home-for-claude-code-cheapest-models-for-live-tests) · qualification/m2/launch-recipes |
 | D39 | Headless launches, ported patterns, Codex home | in force (m2) | [entry](#d39-m2-headless-capture-launches-ported-extra-redaction-patterns-shared-isolated-codex-home) |
-| D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2) | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
+| D40 | Finish grace, spawn gate, release waits, DeepSeek | in force (m2); amended 2026-10-14 | [entry](#d40-m2-finish-keeps-the-termination-grace-the-spawn-window-is-closed-reservation-release-waits-hermes-uses-deepseek) · LEDGER H-10, H-11 |
 | D41 | Hermes reference row rules (CA rule amended by D43) | in force (m2); model and thinking clause superseded by D52 | [entry](#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) · qualification/m2-hermes-reference-row |
 | D42 | Open-source v0.5: V1 behind `v1-compat`, data-only harnesses, open harness PRs | in force (m2); DCO clause amended by D47; V1-path clause replaced by D48 | [entry](#d42-m2-open-source-v05-v1-path-behind-a-feature-data-only-harnesses-open-harness-prs) |
 | D43 | Harness contract v1 rulings; D41 CA rule generalised | in force (m2); ruling 3 amended by D49 and D50; ruling 5 by D51; ruling 7 by D53 | [entry](#d43-m2-harness-contract-v1-owner-rulings-and-d41s-ca-rule-generalised) |
@@ -66,6 +66,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D51 | A connector's argv and env are data; review is the control; credential, CA and redaction lists stay closed | in force (m2) once merged | [entry](#d51-m2-a-connectors-argv-and-env-are-data-review-is-the-control) |
 | D52 | Shipped connectors set no model, effort, sandbox, permission or MCP limit | in force (m2) once merged | [entry](#d52-m2-the-shipped-connectors-set-no-model-effort-sandbox-permission-or-mcp-limit) |
 | D53 | Record the harness build in v5 (`Launch.harness_build`); v0.5.0 readers refuse such traces | in force (m2) once merged | [entry](#d53-m2-record-the-harness-build-in-v5-accepting-that-v050-readers-refuse-it) |
+| D54 | The protocol carries v5 only: pre-v5 versions, bodies and writers and the Git provenance types leave | in force (m2) once merged | [entry](#d54-m2-the-protocol-carries-v5-only) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -983,12 +984,10 @@ Task 5/H-11 designs and the H-11 APFS probe).**
   very stable. A capture launch must not leave a live harness the tracker never durably recorded;
   the design revision chooses the mechanism (for example, the child waits before `exec` until its
   record is durable).
-- **Reservation release (H-11).** Deferred. On macOS 26.6.2 APFS only grow-then-shrink frees
-  `F_ALLOCATEPERSIST` blocks, and a crash between grow and shrink leaves the sealed chain followed
-  by a zero tail, which the reader rejects. Making valid evidence invalid is not acceptable, so
-  capture reservations stay small (as T24 already does) and are not released. A separate-reservation
-  design that can never touch the chain is to be designed before T27 or any repeated large-reserve
-  endurance run.
+- **Reservation release (H-11).** Closed by the amendment below. It was deferred: on macOS
+  26.6.2 APFS only grow-then-shrink frees `F_ALLOCATEPERSIST` blocks, and a crash between grow and
+  shrink leaves the sealed chain followed by a zero tail, which the reader rejects. Making valid
+  evidence invalid was not acceptable, so reservations stayed small and were never released.
 - **Hermes provider.** The Hermes reference row uses Hermes's `deepseek` provider with the
   owner's DeepSeek API key in `DEEPSEEK_API_KEY`, passed to the child only. No DeepSeek base-URL
   variable or config `base_url` is set. The `openai-codex` OAuth login in the isolated Hermes home
@@ -996,6 +995,16 @@ Task 5/H-11 designs and the H-11 APFS probe).**
 
 **Evidence.** `.superpowers/sdd/2026-10-01-m2-phase-1-local-reliability/`
 `task-4-design-review.md`, `task-5-design-review.md`, `task-5-probe.md`; LEDGER H-10, H-11.
+
+**Amendment (2026-10-14, run-lifecycle plan, task R1).** There is one disk reservation for each
+run, held by the run host (one 3 GB reserve file, reused all week and released after the last
+upload); there is none for each entry or segment. A chain is quota-only: the daemon calls
+`configure_capture_quota` and nothing else, preallocates nothing, and `CaptureStorage.reserved_bytes`
+reports 0. The quota is a logical admission ceiling (`CHAIN_QUOTA_BYTES`, 1 TiB), not disk. The
+chain file therefore never carries a persistent allocation behind its end, so the grow-then-shrink
+release and its zero-tail crash window cannot occur: H-11 is closed by removing the thing it
+released. The per-entry allocator seam (`reserve_capture`, `reserve_append`, `ReservationFault`)
+is deleted.
 
 ---
 
@@ -1401,6 +1410,48 @@ environment but `PATH` and a throwaway `HOME` removed afterwards, ten-second tim
 used to carry the connector's pinned version: a change of meaning this row accepts, since the
 field was always display text and the digests are the record. The connector-directory pin
 (`pins/connector-dirs.txt`) stays: it is what stops a connector smuggling a base URL.
+
+---
+
+## D54. **(M2)** The protocol carries v5 only.
+
+**Decision:** requested 2026-10-13 as part of the dead-code cleanup; the owner confirms in review.
+
+`goalcup-protocol` and `goalcup-verifier` drop what only the pre-v5 path used:
+- **Versions 1–4.** The version/body matrix (`Envelope::validate_version_body_compatibility`),
+  `PROTOCOL_VERSION = 4` and the other version constants, the thirteen `EventBody` variants a v5
+  chain never admitted (leg-1 and leg-2 records, health, heartbeats, home seeding, repository
+  observations and the rest), `chain::Chain` and the V1 redaction log.
+- **The legacy export.** `ChainFormat` and the legacy resume, the writers that defaulted to v4
+  (`write_baseline`, `write_seal`, `write_cutoff`, `write_finalization`), `write_descriptor`,
+  `write_manifest` and `TraceDescriptorDoc`. Every export is now a v5 chain.
+- **Git provenance and publication.** Repository observation, snapshot, history, commit,
+  publisher-attempt, recovery and observation documents and the `MAX_GIT_*` limits;
+  `FinalizationV1::Captured` and `::WorkspaceSubmission`, the submission manifest and the
+  verifier's submission reader.
+
+**Why.** No shipped writer has produced any of it since D48. The v5 daemon writes a baseline,
+capture records and a local finish; the v0.5.0 daemon wrote workspace submissions only into
+protocol v4 chains, which the v5 reader already refused.
+
+**What stays frozen.** v5 chain bytes and every v5 trace's verdict: `Envelope::chain_bytes`,
+`link_hash`, the five v5 bodies, receipts and acknowledgements, and
+`FinalizationV1::CaptureUnavailable` with all its types and variants, which the corpus case
+`signed-receipt-ack-finalization` carries. A line declaring version 1–4 is still
+`capture_envelope_invalid` and any other non-v5 version `protocol_version_unsupported`.
+
+**Changed on hostile input only.** A v5 line carrying a removed body or finalization arm no
+longer decodes, so the reader reports `record_malformed` where it reported
+`capture_envelope_invalid`, and a signed `captured` or `workspace_submission` finalization it
+used to bind is now `record_malformed` too. Keeping the old code would mean keeping every removed
+type just to decode it. No writer could produce such a line. The codes that only the removed
+paths could raise are gone: `envelope_incompatible`, `submission_invalid` and
+`submission_binding_mismatch`. On the writer side, which no shipped writer reaches,
+`TraceExport::resume` refuses a version 1–4 chain instead of resuming it as legacy, and an export
+appended to before its quota is set fails `CaptureQuotaNotConfigured` instead of
+`UnsupportedProtocolVersion`; the daemon sets the quota before its first append.
+
+**Evidence.** The v5 corpus and the `m2-report-bytes` fixtures pass unchanged; this PR.
 
 ---
 

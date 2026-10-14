@@ -44,8 +44,7 @@ pub use submission_types::CaptureResourceLimitsV1;
 pub mod terminate;
 pub mod workspace;
 
-/// This build's version, for `trace.toml` and for the `VersionChange` the daemon chains
-/// when it observes its own binary change under a running entry.
+/// This build's version, as the daemon reports it: health, `control.json` and status documents.
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// What `goalcup-daemon --version` prints.

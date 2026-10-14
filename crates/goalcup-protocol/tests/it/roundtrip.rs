@@ -1,25 +1,25 @@
 use ed25519_dalek::SigningKey;
 use goalcup_protocol::ack::AckCheckpoint;
-use goalcup_protocol::chain::Chain;
-use goalcup_protocol::cursor::CursorUnit;
+use goalcup_protocol::capture::{CaptureRecord, CaptureTime, GapReason, M2_PROTOCOL_VERSION};
+use goalcup_protocol::chain::{GENESIS, Link, link_hash};
 use goalcup_protocol::envelope::{Envelope, EventBody};
-use goalcup_protocol::events::{
-    ConfigDeviation, ForeignScanOutcome, ForeignScanUnavailableReason, HOME_SEED_VALUE_MAX_BYTES,
-    HealthEvent, HealthState, HomeSeedRecord, SeededFile, SeededKey, StoreCursor, TailNoticeKind,
-    VersionChange,
-};
+use goalcup_protocol::events::HealthState;
 use goalcup_protocol::provenance::{
-    CaptureUnavailableV1, CompleteOrUnavailableV1, CutoffReachedV1, FinalizationV1,
-    GitObjectFormat, NoRepositoryReasonV1, ObservedHeadV1, ObservedRepositoryStateV1,
-    PortableRelativePathOrRoot, PreCutoffDrainOutcomeV1, PublisherNotAttemptedReasonV1,
-    PublisherNotAttemptedV1, RepositoryNonSelectionV1, RepositoryObservedV1,
-    RepositoryTransitionV1, Rfc3339Utc, Sha256Digest, SnapshotNotAttemptedV1, TerminationOutcomeV1,
+    CaptureUnavailableV1, CutoffReachedV1, FinalizationV1, NoRepositoryReasonV1,
+    PreCutoffDrainOutcomeV1, PublisherNotAttemptedReasonV1, PublisherNotAttemptedV1,
+    RepositoryNonSelectionV1, Rfc3339Utc, Sha256Digest, SnapshotNotAttemptedV1,
+    TerminationOutcomeV1,
 };
 use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
-use goalcup_protocol::redaction::{RedactionRecord, RedactionSpan, redaction_digest};
 use goalcup_protocol::seal::{SealManifest, SealedFile};
-use goalcup_protocol::submission::{SubmissionCapturedV1, SubmissionOutcomeV1};
-use goalcup_protocol::{LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION};
+
+/// A v5 baseline body: the smallest body a v5 chain carries.
+fn baseline_body() -> EventBody {
+    EventBody::Baseline {
+        manifest_sha256: "aa".repeat(32),
+        file_count: 1,
+    }
+}
 
 fn claims() -> StartReceiptClaims {
     StartReceiptClaims {
@@ -41,137 +41,25 @@ fn claims() -> StartReceiptClaims {
 
 #[test]
 fn envelope_round_trips_every_body() {
-    let mut chain = Chain::new();
     let bodies = vec![
-        EventBody::Leg1Record {
-            store: "main".into(),
-            payload: serde_json::json!({"type": "user", "promptId": "58740b59"}),
-        },
-        EventBody::Leg2Post {
-            event: "UserPromptSubmit".into(),
-            payload: serde_json::json!({"prompt": "keep going"}),
-            path: None,
-            receiver_meta: None,
-        },
-        EventBody::ConfigDeviation(ConfigDeviation {
-            path: ".claude/settings.json".into(),
-            expected_sha256: "92328c425e7ff8380addb05b658f6f7b7d0059ce5c1019ef29c9ab8947855c0c"
-                .into(),
-            observed_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-                .into(),
-            detected_at: "2026-09-03T07:45:00Z".into(),
-            diff: "-  \"SessionStart\"".into(),
-            restored: true,
-            arming_lost: false,
-        }),
-        EventBody::VersionChange(VersionChange {
-            component: "claude".into(),
-            from: "2.1.259".into(),
-            to: "2.1.260".into(),
-            detected_at: "2026-09-03T08:00:00Z".into(),
-        }),
-        EventBody::Health(HealthEvent {
-            state: HealthState::ArmingLost,
-            at: "2026-09-03T08:01:00Z".into(),
-            detail: "hooks.json restored; Codex trust hash invalidated".into(),
-        }),
-        EventBody::Redaction(RedactionRecord {
-            store: "main".into(),
-            target_seq: 42,
-            salt: "0f1e2d3c4b5a6978".into(),
-            spans: vec![RedactionSpan {
-                kind: "anthropic_key".into(),
-                start: 10,
-                end: 58,
-                digest: redaction_digest("0f1e2d3c4b5a6978", "sk-ant-api03-DEADBEEF"),
-            }],
-        }),
-        EventBody::TailNotice {
-            store: "main".into(),
-            path: "/Users/team/goalcup/homes/entry-0001/projects/ws/95addb64.jsonl".into(),
-            kind: TailNoticeKind::Truncated,
-            offset_before: 481_233,
-            offset_after: 0,
-            inode_before: Some(8_612_004),
-            inode_after: Some(8_612_004),
-            at: "2026-09-03T08:10:00Z".into(),
-        },
-        EventBody::ForeignSession {
-            harness: "codex-cli".into(),
-            session_id: "01a06616-1c2e-7f1a-9d55-2b0f45b7f104".into(),
-            store_path: "/Users/team/.codex/sessions/2026/09/03/rollout-01a06616.jsonl".into(),
-            first_seen: "2026-09-03T08:11:00Z".into(),
-        },
-        EventBody::ForeignScanCoverage {
-            declaring_connector: "opencode".into(),
-            declaring_manifest_sha256: "ab".repeat(32),
-            scan_index: 0,
-            outcome: ForeignScanOutcome::Unavailable(ForeignScanUnavailableReason::Schema),
-            at: "2026-09-03T08:11:01Z".into(),
-        },
-        EventBody::Heartbeat {
-            ts: "2026-09-03T08:12:00Z".into(),
-            stores_seen: vec![
-                StoreCursor {
-                    store: "main".into(),
-                    unit: CursorUnit::Bytes,
-                    position: Some(4096),
-                    describe: "inode:8612004,offset:4096".into(),
+        baseline_body(),
+        EventBody::Capture {
+            record: CaptureRecord::Gap {
+                stream: None,
+                observed: CaptureTime {
+                    wall: "2026-09-03T07:42:00.250Z".into(),
+                    mono_ns: 9000,
+                    clock_id: "daemon-5b0c3a1e".into(),
                 },
-                StoreCursor {
-                    store: "event".into(),
-                    unit: CursorUnit::Records,
-                    position: Some(512),
-                    describe: "rowid:512".into(),
-                },
-            ],
-            receiver_ok: true,
-        },
-        EventBody::DaemonRestart {
-            at: "2026-09-03T08:13:00Z".into(),
-            previous_head_seq: 206,
-            previous_head_hash: "cd69fd57bba70605571379c4bfb0f48b085373f0878cef8e44204e727ea0dabc"
-                .into(),
-        },
-        // The value rule is exercised here as well as in its own test below:
-        // a boolean and a short string are carried, and the object is named and not quoted.
-        EventBody::HomeSeeded(HomeSeedRecord {
-            handoff_generation: None,
-            handoff_request_digest: None,
-            connector: "claude-code-cli".into(),
-            from: "{home}/.claude.json".into(),
-            keys: vec![
-                SeededKey::new("claudeInChromeDefaultEnabled", &serde_json::json!(true)),
-                SeededKey::new("theme", &serde_json::json!("dark")),
-                SeededKey::new(
-                    "oauthAccount",
-                    &serde_json::json!({"emailAddress": "x@y.z"}),
-                ),
-            ],
-            keys_unchanged: vec!["theme".into()],
-            written: vec![SeededKey::new(
-                "hasTrustDialogAccepted",
-                &serde_json::json!(true),
-            )],
-            files: vec![SeededFile {
-                name: "auth.json".into(),
-                bytes: 1163,
-            }],
-            files_kept: Vec::new(),
-            files_missing: vec!["config.toml".into()],
-            wire_layout: Default::default(),
-        }),
-        EventBody::RepositoryObservedV1(RepositoryObservedV1 {
-            transition: RepositoryTransitionV1::Appeared,
-            state: ObservedRepositoryStateV1::Present {
-                workspace_relative_root: PortableRelativePathOrRoot::try_from("").unwrap(),
-                object_format: GitObjectFormat::Sha1,
-                head: ObservedHeadV1::Unborn,
-                parents: CompleteOrUnavailableV1::Complete(Vec::new()),
-                remotes: CompleteOrUnavailableV1::Complete(Vec::new()),
-                commits: CompleteOrUnavailableV1::Complete(Vec::new()),
+                reason: GapReason::ProducerLost,
+                lost_bytes: None,
             },
-        }),
+        },
+        EventBody::Seal {
+            manifest_sha256: "bb".repeat(32),
+            sealed_at: "2026-09-10T07:42:00Z".into(),
+            file_count: 1,
+        },
         EventBody::CutoffReachedV1(CutoffReachedV1 {
             receipt_sha256: Sha256Digest::try_from("aa".repeat(32)).unwrap(),
             deadline_at: Rfc3339Utc::try_from("2026-09-10T07:42:00Z").unwrap(),
@@ -191,39 +79,26 @@ fn envelope_round_trips_every_body() {
                 reason: PublisherNotAttemptedReasonV1::SelectionFailed,
             },
         }),
-        EventBody::FinalizationV1(FinalizationV1::WorkspaceSubmission {
-            receipt_sha256: Sha256Digest::try_from("aa".repeat(32)).unwrap(),
-            termination: TerminationOutcomeV1::AlreadyStopped {
-                checked_at: Rfc3339Utc::try_from("2026-09-10T07:42:01Z").unwrap(),
-            },
-            submission: SubmissionOutcomeV1::Captured(SubmissionCapturedV1 {
-                manifest_sha256: Sha256Digest::try_from("bb".repeat(32)).unwrap(),
-            }),
-        }),
     ];
-    assert_eq!(
-        bodies.len(),
-        16,
-        "EventBody is closed at seventeen event variants, with baseline and seal exercised \
-         through the export-owned methods"
-    );
+    assert_eq!(bodies.len(), 5, "EventBody is closed at the five v5 bodies");
 
-    for body in bodies {
-        let raw = serde_json::to_vec(&body).unwrap();
-        let protocol_version = if matches!(&body, EventBody::Redaction(_)) {
-            LEGACY_PROTOCOL_VERSION
-        } else {
-            PROTOCOL_VERSION
-        };
-        let env = Envelope {
-            protocol_version,
+    let mut prev = GENESIS.to_string();
+    for (seq, body) in bodies.into_iter().enumerate() {
+        let mut env = Envelope {
+            protocol_version: M2_PROTOCOL_VERSION,
             entry_id: "entry-0001".into(),
             source: "daemon".into(),
             recorded_at: "2026-09-03T07:42:00.673Z".into(),
-            link: chain.try_append(&raw).unwrap(),
+            link: Link {
+                seq: seq as u64,
+                prev: prev.clone(),
+                hash: String::new(),
+            },
             body,
             redaction: None,
         };
+        env.link.hash = env.expected_hash(&prev).unwrap();
+        prev = env.link.hash.clone();
         let text = serde_json::to_string(&env).unwrap();
         let back: Envelope = serde_json::from_str(&text).unwrap();
         assert_eq!(env, back);
@@ -233,25 +108,6 @@ fn envelope_round_trips_every_body() {
         assert!(v.get("prev").is_some());
         assert!(v.get("hash").is_some());
     }
-}
-
-#[test]
-fn the_legacy_redaction_log_remains_a_readable_event_body() {
-    let body = EventBody::Redaction(RedactionRecord {
-        store: "main".into(),
-        target_seq: 42,
-        salt: "0f1e2d3c4b5a6978".into(),
-        spans: vec![RedactionSpan {
-            kind: "anthropic_key".into(),
-            start: 10,
-            end: 58,
-            digest: redaction_digest("0f1e2d3c4b5a6978", "sk-ant-api03-DEADBEEF"),
-        }],
-    });
-    let text = serde_json::to_string(&body).unwrap();
-    assert!(text.contains(r#""kind":"redaction""#), "got {text}");
-    let back: EventBody = serde_json::from_str(&text).unwrap();
-    assert_eq!(body, back);
 }
 
 #[test]
@@ -396,11 +252,6 @@ fn every_signed_document_carries_its_own_domain_tag() {
     use goalcup_protocol::ack::ACK_DOMAIN;
     use goalcup_protocol::chain::CHAIN_DOMAIN;
     use goalcup_protocol::control::STATUS_DOMAIN;
-    use goalcup_protocol::provenance::{
-        PUBLICATION_OBSERVATION_SIGNATURE_DOMAIN, RECOVERY_RECORD_DIGEST_DOMAIN,
-        RECOVERY_SIGNATURE_DOMAIN, REPOSITORY_MANIFEST_DOMAIN, REQUIRED_GIT_OBJECT_HISTORY_DOMAIN,
-        SNAPSHOT_MANIFEST_DOMAIN,
-    };
     use goalcup_protocol::receipt::{RECEIPT_DOMAIN, START_RECEIPT_DIGEST_DOMAIN};
 
     let domains = [
@@ -409,12 +260,6 @@ fn every_signed_document_carries_its_own_domain_tag() {
         ACK_DOMAIN,
         STATUS_DOMAIN,
         START_RECEIPT_DIGEST_DOMAIN,
-        SNAPSHOT_MANIFEST_DOMAIN,
-        REPOSITORY_MANIFEST_DOMAIN,
-        REQUIRED_GIT_OBJECT_HISTORY_DOMAIN,
-        RECOVERY_SIGNATURE_DOMAIN,
-        RECOVERY_RECORD_DIGEST_DOMAIN,
-        PUBLICATION_OBSERVATION_SIGNATURE_DOMAIN,
     ];
     for (i, a) in domains.iter().enumerate() {
         for b in &domains[i + 1..] {
@@ -558,59 +403,6 @@ fn ack_and_seal_round_trip() {
 }
 
 #[test]
-fn the_four_observation_variants_carry_their_documented_tags() {
-    let notice = EventBody::TailNotice {
-        store: "main".into(),
-        path: "/tmp/main.jsonl".into(),
-        kind: TailNoticeKind::FileReplaced,
-        offset_before: 100,
-        offset_after: 0,
-        inode_before: Some(1),
-        inode_after: Some(2),
-        at: "2026-09-03T08:10:00Z".into(),
-    };
-    let text = serde_json::to_string(&notice).unwrap();
-    assert!(text.contains(r#""kind":"tail_notice""#), "got {text}");
-    assert!(
-        text.contains(r#""kind":"file_replaced""#),
-        "the notice kind is nested: {text}"
-    );
-
-    for (body, tag) in [
-        (
-            EventBody::ForeignSession {
-                harness: "codex-cli".into(),
-                session_id: "s".into(),
-                store_path: "/tmp/r.jsonl".into(),
-                first_seen: "2026-09-03T08:11:00Z".into(),
-            },
-            "foreign_session",
-        ),
-        (
-            EventBody::Heartbeat {
-                ts: "2026-09-03T08:12:00Z".into(),
-                stores_seen: vec![],
-                receiver_ok: false,
-            },
-            "heartbeat",
-        ),
-        (
-            EventBody::DaemonRestart {
-                at: "2026-09-03T08:13:00Z".into(),
-                previous_head_seq: 1,
-                previous_head_hash: "ab".repeat(32),
-            },
-            "daemon_restart",
-        ),
-    ] {
-        let text = serde_json::to_string(&body).unwrap();
-        assert!(text.contains(&format!(r#""kind":"{tag}""#)), "got {text}");
-        let back: EventBody = serde_json::from_str(&text).unwrap();
-        assert_eq!(body, back);
-    }
-}
-
-#[test]
 fn health_state_carries_the_fifteen_r14_states_including_the_two_new_ones() {
     let all = [
         HealthState::Online,
@@ -685,29 +477,29 @@ fn an_acknowledgement_verifies_and_rejects_a_rewritten_hash() {
 
 #[test]
 fn chain_bytes_are_domain_tagged_canonical_json_over_the_six_fields() {
-    use goalcup_protocol::chain::{CHAIN_DOMAIN, GENESIS, Link, link_hash};
-    use goalcup_protocol::envelope::{Envelope, EventBody};
+    use goalcup_protocol::chain::CHAIN_DOMAIN;
 
     let env = Envelope {
-        protocol_version: 1,
+        protocol_version: M2_PROTOCOL_VERSION,
         entry_id: "e1".to_string(),
-        source: "main".to_string(),
+        source: "daemon".to_string(),
         recorded_at: "2026-09-04T00:00:00Z".to_string(),
         link: Link {
             seq: 0,
             prev: GENESIS.to_string(),
             hash: String::new(),
         },
-        body: EventBody::Leg1Record {
-            store: "main".to_string(),
-            payload: serde_json::Value::String("{\"a\":1}".to_string()),
-        },
+        body: baseline_body(),
         redaction: None,
     };
 
     let mut want: Vec<u8> = CHAIN_DOMAIN.to_vec();
     want.extend_from_slice(
-        br#"{"protocol_version":1,"entry_id":"e1","source":"main","recorded_at":"2026-09-04T00:00:00Z","seq":0,"body":{"kind":"leg1_record","content":{"store":"main","payload":"{\"a\":1}"}}}"#,
+        format!(
+            r#"{{"protocol_version":5,"entry_id":"e1","source":"daemon","recorded_at":"2026-09-04T00:00:00Z","seq":0,"body":{{"kind":"baseline","content":{{"manifest_sha256":"{}","file_count":1}}}}}}"#,
+            "aa".repeat(32)
+        )
+        .as_bytes(),
     );
     assert_eq!(env.chain_bytes().unwrap(), want);
 
@@ -729,22 +521,21 @@ fn chain_bytes_are_domain_tagged_canonical_json_over_the_six_fields() {
     assert_ne!(env.expected_hash(GENESIS).unwrap(), undomained);
 }
 
+/// A v5 envelope never carries envelope-level redaction (the export refuses one), but the
+/// field is typed and inside the hash: a line that gains or loses it no longer links.
 #[test]
-fn a_v2_inline_redaction_audit_is_preserved_and_hash_covered() {
-    use goalcup_protocol::chain::{GENESIS, Link};
-    use goalcup_protocol::envelope::Envelope;
-
+fn an_envelope_redaction_field_is_typed_and_hash_covered() {
     let wire = serde_json::json!({
-        "protocol_version": 2,
+        "protocol_version": 5,
         "entry_id": "e1",
-        "source": "main",
+        "source": "daemon",
         "recorded_at": "2026-09-04T00:00:00Z",
         "seq": 0,
         "prev": GENESIS,
         "hash": "",
         "body": {
-            "kind": "leg1_record",
-            "content": {"store": "main", "payload": "<redacted:anthropic_key>"}
+            "kind": "baseline",
+            "content": {"manifest_sha256": "aa".repeat(32), "file_count": 1}
         },
         "redaction": {
             "spans": [{"kind": "anthropic_key", "start": 0, "end": 38}]
@@ -754,7 +545,7 @@ fn a_v2_inline_redaction_audit_is_preserved_and_hash_covered() {
     let round_trip = serde_json::to_value(&env).unwrap();
     assert_eq!(
         round_trip["redaction"], wire["redaction"],
-        "the inline audit is typed data, not an ignored extension"
+        "the envelope audit is typed data, not an ignored extension"
     );
 
     let mut without_audit = round_trip;
@@ -763,7 +554,7 @@ fn a_v2_inline_redaction_audit_is_preserved_and_hash_covered() {
     assert_ne!(
         env.expected_hash(GENESIS).unwrap(),
         without_audit.expected_hash(GENESIS).unwrap(),
-        "changing the inline audit changes the link"
+        "changing the envelope audit changes the link"
     );
 
     // Keep the link construction in this test honest: neither parser supplied a hash.
@@ -799,11 +590,8 @@ fn redaction_audit_rejects_unknown_fields_and_untyped_offsets() {
 
 #[test]
 fn recorded_at_is_rfc3339_and_parses_to_seconds() {
-    use goalcup_protocol::chain::{GENESIS, Link};
-    use goalcup_protocol::envelope::{Envelope, EventBody};
-
     let env = Envelope {
-        protocol_version: 1,
+        protocol_version: M2_PROTOCOL_VERSION,
         entry_id: "e1".to_string(),
         source: "daemon".to_string(),
         recorded_at: "2026-09-04T12:00:00Z".to_string(),
@@ -812,11 +600,7 @@ fn recorded_at_is_rfc3339_and_parses_to_seconds() {
             prev: GENESIS.to_string(),
             hash: "aa".repeat(32),
         },
-        body: EventBody::Heartbeat {
-            ts: "2026-09-04T12:00:00Z".to_string(),
-            stores_seen: Vec::new(),
-            receiver_ok: true,
-        },
+        body: baseline_body(),
         redaction: None,
     };
     assert_eq!(env.recorded_at_secs(), Some(1_788_523_200));
@@ -838,72 +622,6 @@ fn recorded_at_is_rfc3339_and_parses_to_seconds() {
         None,
         "a bad clock is None, never 0"
     );
-}
-
-#[test]
-fn the_two_capacity_notice_kinds_serialise_under_their_own_names() {
-    use goalcup_protocol::events::TailNoticeKind;
-    assert_eq!(
-        serde_json::to_string(&TailNoticeKind::OverlongLine).unwrap(),
-        "\"overlong_line\""
-    );
-    assert_eq!(
-        serde_json::to_string(&TailNoticeKind::OversizeFile).unwrap(),
-        "\"oversize_file\""
-    );
-    // And the three rewrite signatures keep their spelling, because V9 reads them.
-    for (k, s) in [
-        (TailNoticeKind::Truncated, "\"truncated\""),
-        (TailNoticeKind::FileReplaced, "\"file_replaced\""),
-        (TailNoticeKind::Reread, "\"reread\""),
-    ] {
-        assert_eq!(serde_json::to_string(&k).unwrap(), s);
-    }
-}
-
-#[test]
-fn v1_v2_v3_and_current_v4_are_supported() {
-    assert_eq!(goalcup_protocol::PROTOCOL_VERSION, 4);
-    assert!(goalcup_protocol::is_supported_protocol_version(
-        goalcup_protocol::PROTOCOL_VERSION
-    ));
-    assert!(goalcup_protocol::is_supported_protocol_version(1));
-    assert!(goalcup_protocol::is_supported_protocol_version(2));
-    assert!(goalcup_protocol::is_supported_protocol_version(3));
-    assert!(!goalcup_protocol::is_supported_protocol_version(0));
-    assert!(!goalcup_protocol::is_supported_protocol_version(5));
-}
-
-#[test]
-fn v1_v2_and_v3_ordinary_chain_claim_bytes_are_unchanged() {
-    for version in [1, 2, 3] {
-        let envelope = Envelope {
-            protocol_version: version,
-            entry_id: "e1".to_string(),
-            source: "main".to_string(),
-            recorded_at: "2026-09-10T00:00:00Z".to_string(),
-            link: goalcup_protocol::chain::Link {
-                seq: 7,
-                prev: String::new(),
-                hash: String::new(),
-            },
-            body: EventBody::Leg1Record {
-                store: "main".to_string(),
-                payload: serde_json::json!({"raw":"bytes"}),
-            },
-            redaction: None,
-        };
-        let expected = format!(
-            concat!(
-                "goalcup-chain-v1\0{{\"protocol_version\":{},\"entry_id\":\"e1\",",
-                "\"source\":\"main\",\"recorded_at\":\"2026-09-10T00:00:00Z\",",
-                "\"seq\":7,\"body\":{{\"kind\":\"leg1_record\",",
-                "\"content\":{{\"store\":\"main\",\"payload\":{{\"raw\":\"bytes\"}}}}}}}}"
-            ),
-            version
-        );
-        assert_eq!(envelope.chain_bytes().unwrap(), expected.as_bytes());
-    }
 }
 
 #[test]
@@ -934,203 +652,4 @@ fn is_excluded_is_anchored_at_the_workspace_root() {
     // And still never a substring test.
     assert!(!is_excluded("targeted.py", &p("target")));
     assert!(!is_excluded("", &p("")));
-}
-
-#[test]
-fn a_legacy_v1_redaction_span_remains_readable_with_its_salted_digest() {
-    use goalcup_protocol::redaction::{RedactionRecord, RedactionSpan, redaction_digest};
-
-    let a = redaction_digest("salt-a", "hunter2");
-    let b = redaction_digest("salt-b", "hunter2");
-    assert_ne!(
-        a, b,
-        "the same secret under two salts must not be recognisable"
-    );
-    assert_eq!(a.len(), 16);
-    assert_eq!(
-        a,
-        redaction_digest("salt-a", "hunter2"),
-        "deterministic within a record"
-    );
-
-    let rec = RedactionRecord {
-        store: "main".to_string(),
-        target_seq: 9,
-        salt: "salt-a".to_string(),
-        spans: vec![RedactionSpan {
-            kind: "anthropic_key".to_string(),
-            start: 10,
-            end: 17,
-            digest: a.clone(),
-        }],
-    };
-    let text = serde_json::to_string(&rec).unwrap();
-    assert!(text.contains("\"salt\":\"salt-a\""));
-    assert!(
-        !text.contains("sha256_8"),
-        "the unsalted oracle field is gone"
-    );
-    let back: RedactionRecord = serde_json::from_str(&text).unwrap();
-    assert_eq!(back, rec);
-}
-
-/// The shape rule of `HomeSeedRecord`, asserted where the rule lives.
-///
-/// Booleans, numbers and strings of at most `HOME_SEED_VALUE_MAX_BYTES` bytes are the
-/// participant's decisions and are carried verbatim. An object, an array, `null` and a longer
-/// string are named and never quoted — `oauthAccount` is an object holding an account, and no
-/// key of the manifest's is ever marked "identity" by hand, because a hand-kept list is a
-/// place to forget an entry.
-#[test]
-fn a_seeded_key_carries_a_decision_and_never_a_document() {
-    let carried = |v: serde_json::Value| SeededKey::new("k", &v).value;
-    assert_eq!(
-        carried(serde_json::json!(true)),
-        Some(serde_json::json!(true))
-    );
-    assert_eq!(carried(serde_json::json!(3)), Some(serde_json::json!(3)));
-    assert_eq!(
-        carried(serde_json::json!("dark")),
-        Some(serde_json::json!("dark"))
-    );
-
-    let at_the_line = "x".repeat(HOME_SEED_VALUE_MAX_BYTES);
-    assert_eq!(
-        carried(serde_json::json!(at_the_line)),
-        Some(serde_json::json!(at_the_line)),
-        "the cap is inclusive"
-    );
-    let over_the_line = "x".repeat(HOME_SEED_VALUE_MAX_BYTES + 1);
-    assert_eq!(carried(serde_json::json!(over_the_line)), None);
-
-    // The cap is 32 so that a 64-hex account identifier — Claude Code's
-    // `userID`, constant across every entry that participant ever runs — is name-only.
-    // Chain events are not redacted, so a carried value here is a value in the published
-    // verdict, and two traces carrying the same one prove the same account ran both.
-    assert_eq!(HOME_SEED_VALUE_MAX_BYTES, 32);
-    let user_id = "9f".repeat(32);
-    assert_eq!(user_id.len(), 64);
-    assert_eq!(carried(serde_json::json!(user_id)), None);
-    // …while every key whose value is a DECISION still is one.
-    for decision in ["dark", "native", "1.0.128", "2026-01-15T12:34:56.789Z"] {
-        assert_eq!(
-            carried(serde_json::json!(decision)),
-            Some(serde_json::json!(decision)),
-            "`{decision}` is an answer the participant gave their harness"
-        );
-    }
-
-    assert_eq!(carried(serde_json::json!({"emailAddress": "x@y.z"})), None);
-    assert_eq!(carried(serde_json::json!(["a"])), None);
-    assert_eq!(carried(serde_json::json!(null)), None);
-
-    // Absent, never null: a reader must not have to tell "the value was JSON null" from
-    // "this record does not carry values of that shape".
-    let named_only = SeededKey::new("oauthAccount", &serde_json::json!({"a": 1}));
-    let text = serde_json::to_string(&named_only).unwrap();
-    assert_eq!(text, r#"{"name":"oauthAccount"}"#);
-
-    // And a seeded FILE is a name and a length, with no digest of the credential's bytes:
-    // a digest is a stable identifier for that credential across public
-    // traces.
-    let file = SeededFile {
-        name: "auth.json".into(),
-        bytes: 1163,
-    };
-    assert_eq!(
-        serde_json::to_string(&file).unwrap(),
-        r#"{"name":"auth.json","bytes":1163}"#
-    );
-}
-
-/// The compatibility reader may retain the old record shape only for a historical link.
-/// Every newly constructed seed remains in the privacy-preserving later layout.
-#[test]
-fn a_new_home_seed_record_never_reintroduces_the_legacy_digest_layout() {
-    let current = HomeSeedRecord {
-        handoff_generation: None,
-        handoff_request_digest: None,
-        connector: "fixture".into(),
-        from: "{home}/.codex".into(),
-        keys: vec![SeededKey::new("theme", &serde_json::json!("dark"))],
-        keys_unchanged: vec!["theme".into()],
-        written: Vec::new(),
-        files: vec![SeededFile {
-            name: "auth.json".into(),
-            bytes: 3,
-        }],
-        files_kept: Vec::new(),
-        files_missing: Vec::new(),
-        wire_layout: Default::default(),
-    };
-
-    let wire = serde_json::to_value(current).unwrap();
-    assert_eq!(wire["keys_unchanged"], serde_json::json!(["theme"]));
-    assert_eq!(wire["written"], serde_json::json!([]));
-    assert_eq!(
-        wire["files"][0],
-        serde_json::json!({"name": "auth.json", "bytes": 3})
-    );
-    assert!(wire.get("keys_kept").is_none());
-    assert!(wire["files"][0].get("sha256").is_none());
-}
-
-/// Additive: appending `HomeSeeded` to `EventBody` leaves every other variant's chain bytes
-/// exactly as they were, which is what "every older chain hashes as it did" means.
-///
-/// The constant is the one a chain written before `HomeSeeded` existed produced for this
-/// body, computed by the same `chain_bytes` the daemon and the verifier both call.
-///
-/// It carries the same weight for every field appended to `Leg2Post` — `path` and
-/// `receiver_meta` — because both are `skip_serializing_if = "Option::is_none"`: a
-/// post that carries neither hashes as this literal string and nothing else. The second
-/// half of the test shows what a post that DOES carry that field hashes as: the same
-/// bytes with one key appended, and no other byte moved.
-#[test]
-fn the_new_variant_did_not_move_an_older_body_s_chain_bytes() {
-    let env = Envelope {
-        protocol_version: PROTOCOL_VERSION,
-        entry_id: "entry-0001".into(),
-        source: "hooks".into(),
-        recorded_at: "2026-09-03T07:42:00.673Z".into(),
-        link: Chain::new().try_append(b"seed").unwrap(),
-        body: EventBody::Leg2Post {
-            event: "UserPromptSubmit".into(),
-            payload: serde_json::json!({"prompt": "keep going"}),
-            path: None,
-            receiver_meta: None,
-        },
-        redaction: None,
-    };
-    let bytes = env.chain_bytes().unwrap();
-    let text = String::from_utf8(bytes[goalcup_protocol::chain::CHAIN_DOMAIN.len()..].to_vec())
-        .expect("the claims are JSON");
-    let without_meta = format!(
-        r#"{{"protocol_version":{PROTOCOL_VERSION},"entry_id":"entry-0001","source":"hooks","recorded_at":"2026-09-03T07:42:00.673Z","seq":1,"body":{{"kind":"leg2_post","content":{{"event":"UserPromptSubmit","payload":{{"prompt":"keep going"}}}}}}}}"#
-    );
-    assert_eq!(text, without_meta);
-
-    // The same body with the receiver's record on it: one key appended, in declaration
-    // order, and every byte before it identical. That is the whole of what "additive"
-    // buys — a chain written before the field verifies against the same `chain_bytes` that
-    // reads a chain written after it.
-    let with_meta = Envelope {
-        body: EventBody::Leg2Post {
-            event: "UserPromptSubmit".into(),
-            payload: serde_json::json!({"prompt": "keep going"}),
-            path: None,
-            receiver_meta: Some(serde_json::json!({"seq": 3, "source": "shim"})),
-        },
-        ..env
-    };
-    let text = String::from_utf8(
-        with_meta.chain_bytes().unwrap()[goalcup_protocol::chain::CHAIN_DOMAIN.len()..].to_vec(),
-    )
-    .expect("the claims are JSON");
-    let (head, tail) = without_meta.split_at(without_meta.len() - 3);
-    assert_eq!(tail, "}}}", "the three braces the appended key sits inside");
-    assert_eq!(
-        text,
-        format!(r#"{head},"receiver_meta":{{"seq":3,"source":"shim"}}{tail}"#)
-    );
 }
