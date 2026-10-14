@@ -70,6 +70,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D55 | A capture chain may be split into part files named by their logical start offset; records and hashes are unchanged | in force (m2) once merged | [entry](#d55-m2-the-capture-chain-rotates-into-part-files) |
 | D56 | The seal of a clone records its commit and an uncommitted digest; the finish gets three minutes | in force (m2) once merged | [entry](#d56-m2-the-seal-of-a-clone-records-its-commit-and-an-uncommitted-digest-the-finish-gets-minutes) |
 | D57 | Shipped connectors run the harness in chat mode; the participant types the prompt; the session files are every one new or written since the run started | in force (m2) once merged; amends D52 | [entry](#d57-m2-connectors-run-the-harness-in-chat-mode-and-record-every-session-file-since-the-start) |
+| D58 | `MAX_PRODUCERS` (distinct IDs per entry, ever) rises to 65 536; a new `MAX_LIVE_PRODUCERS` = 128 bounds live producers; pre-change readers flag traces past 128 | in force (m2) once merged | [entry](#d58-m2-a-week-of-stalls-never-exhausts-the-producer-ids) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1613,6 +1614,46 @@ nothing else.
 **Reconsider when** two runs share a config home at the same time; a shared home holds more than
 8 192 entries in one directory; or a harness writes a session file without changing either its
 modification or its change time.
+
+---
+
+## D58. **(M2)** A week of stalls never exhausts the producer IDs.
+
+**Decision (2026-10-15, owner's rule that short stalls never end recording).** Every recovered wire
+epoch spends one fresh producer ID, and `MAX_PRODUCERS` counted every ID an entry ever used,
+completed epochs included. At 128, about 127 daemon stall-and-recover cycles in one launch switched
+the wire leg off for good. The constant is split, and no ID is ever reused (reuse would change what
+a v5 producer ID means):
+
+- `MAX_PRODUCERS` keeps its meaning, distinct producer IDs per entry ever, and rises to 65 536: one
+  recovery every 9.2 s for 168 hours. It bounds the receiver's ledger, the owner sink's producer
+  table and pending IDs, the chain writer's producer sets, the reader's producer summaries and
+  lineage set, and the proxy's spent-ID set and recovery budget.
+- `MAX_LIVE_PRODUCERS` = 128 bounds what scales with producers live at once. The receiver refuses
+  a handshake while 128 producers are unsettled (admitting, live or closing), so partly received
+  bodies stay at most `MAX_LIVE_PRODUCERS × MAX_INGEST_FRAME_BYTES` per entry. The owner sink
+  answers a fresh epoch `Pending` while live producers and queued closes or loss markers together
+  number 128, so the control reserve (`MAX_LIVE_PRODUCERS × CONTROL_ITEM_COST`) still holds every
+  terminal control.
+- Bounds that only reused the number keep 128: the reader's launch goal streams and completed goal
+  streams (`launch_limit_exceeded`, `goal_stream_limit_exceeded`) and the native adapter's own
+  `RetryFresh` budget. Their verdicts are unchanged.
+
+**Memory at the new bound.** What an ended epoch leaves behind, measured for 65 536 32-character
+IDs: the receiver's ledger 172 B per ID, the sink's table 107 B, the owner's lost set 59 B, the
+writer's five sets 295 B, and receiver outcomes the owner has not yet taken 200 B. The daemon's
+worst case is 52 MiB per entry, 39.5 MiB once the outcomes are taken, which the owner does on
+every pass. The reader keeps 200 B per ID (12.5 MiB); the proxy's spent set 59 B (3.7 MiB).
+
+**The trade, plainly.** No record changes. The reader's `producer_limit_exceeded` now fires above
+65 536 producers; a verifier built before this row flags a trace with more than 128 producers as
+invalid, as D53's v0.5.0 readers refuse `harness_build`. The tracer and the server ship their own
+verifier. `docs/CONTRACTS.md` still says 128: it is the historical record of the contract as
+frozen, and is left as written.
+
+**Reconsider when** a run needs more than 65 536 epochs, or a recovery whose predecessor the chain
+never recorded becomes common: such an orphan recovery walks every wire producer the entry has
+had, in the writer and the reader, so a run made only of them costs time quadratic in its epochs.
 
 ---
 

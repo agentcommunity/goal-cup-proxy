@@ -23,9 +23,10 @@
 //!
 //! An authenticated handshake consumes its producer ID for the entry, frames or not: the
 //! entry ledger holds at most [`MAX_PRODUCERS`] IDs, including any the caller declares were
-//! consumed before this authorization ([`EntryGrant::prior_producers`]). The same ID never
-//! connects twice. After the sink admits the epoch (`try_begin_epoch` returns `Ready`), each
-//! frame is checked in arrival order before it is offered to the sink:
+//! consumed before this authorization ([`EntryGrant::prior_producers`]), and at most
+//! [`MAX_LIVE_PRODUCERS`] of them are unsettled at once. The same ID never connects twice.
+//! After the sink admits the epoch (`try_begin_epoch` returns `Ready`), each frame is checked
+//! in arrival order before it is offered to the sink:
 //!
 //! - it names the handshake's producer, and `seq` is exactly the next sequence of that
 //!   producer, shared by every stream and control, starting at zero;
@@ -91,9 +92,10 @@
 //!   receiver keeps no frame queue of its own: a frame is decoded, checked and offered to the
 //!   sink before the next is read, so the sink's bounded queue and the socket buffer are the
 //!   only backlog. The worst case per entry, reachable only by a token holder, is
-//!   `MAX_PRODUCERS × MAX_INGEST_FRAME_BYTES` of partly received bodies.
-//! - Per entry: at most [`MAX_PRODUCERS`] ledger slots, [`MAX_OPEN_STREAMS`] open-stream
-//!   records and one latched outcome per admitted producer.
+//!   `MAX_LIVE_PRODUCERS × MAX_INGEST_FRAME_BYTES` of partly received bodies.
+//! - Per entry: at most [`MAX_PRODUCERS`] ledger slots (a settled one holds no connection or
+//!   buffer), [`MAX_OPEN_STREAMS`] open-stream records and one latched outcome per admitted
+//!   producer until the owner takes it.
 //!
 //! # Authentication installation and removal
 //!
@@ -122,8 +124,9 @@
 use crate::control::constant_time_eq;
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureLimitError, CaptureSink, CaptureTime, EpochAdmission, FrameEvent,
-    GapReason, IngestMessage, MAX_HANDSHAKE_BYTES, MAX_INGEST_FRAME_BYTES, MAX_OPEN_STREAMS,
-    MAX_PRODUCERS, SubmitResult, checked_frame_len, decode_ingest_message, is_capture_id,
+    GapReason, IngestMessage, MAX_HANDSHAKE_BYTES, MAX_INGEST_FRAME_BYTES, MAX_LIVE_PRODUCERS,
+    MAX_OPEN_STREAMS, MAX_PRODUCERS, SubmitResult, checked_frame_len, decode_ingest_message,
+    is_capture_id,
 };
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -394,7 +397,7 @@ pub struct ListenerStats {
     pub rejected_at_capacity: u64,
     pub handshakes_timed_out: u64,
     /// Oversized, malformed, unknown entry, wrong token, invalid or consumed producer ID,
-    /// exhausted producer budget, or closed admission.
+    /// exhausted producer budget, too many unsettled producers, or closed admission.
     pub handshakes_refused: u64,
     /// Unauthenticated sockets held right now.
     pub pending_handshakes: u64,
@@ -1068,12 +1071,19 @@ impl EntryShared {
         self.events.send_modify(|n| *n = n.wrapping_add(1));
     }
 
-    /// Consume `producer` for this entry: fresh, within budget, while admission is open.
+    /// Consume `producer` for this entry: fresh, within budget, with fewer than
+    /// [`MAX_LIVE_PRODUCERS`] unsettled, while admission is open.
     fn reserve(&self, producer: &str) -> Option<watch::Receiver<bool>> {
         let mut state = self.lock();
         if !state.admission_open
             || state.producers.contains_key(producer)
             || state.prior_producers + state.producers.len() >= MAX_PRODUCERS
+            || state
+                .producers
+                .values()
+                .filter(|p| p.status.unsettled())
+                .count()
+                >= MAX_LIVE_PRODUCERS
         {
             return None;
         }

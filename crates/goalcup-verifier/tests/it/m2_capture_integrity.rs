@@ -1649,21 +1649,13 @@ fn stream_ids_and_bounded_state_limits_are_enforced() {
     );
     assert_eq!(report.validated_records, 1 + MAX_OPEN_STREAMS as u64);
 
-    // One more distinct producer than the bound admits per entry, completed epochs included.
-    let producers: Vec<CaptureRecord> = (1..=MAX_PRODUCERS as u64 + 1)
-        .map(|n| closed(&format!("{n:032x}"), None))
-        .collect();
-    let (report, _) = scan(make_trace(&producers, false).path());
-    assert_eq!(report.exit_code(), 2);
-    assert!(
-        has(&report, "producer_limit_exceeded"),
-        "{:?}",
-        report.findings
-    );
-    assert_eq!(report.validated_records, 1 + MAX_PRODUCERS as u64);
+    // The distinct-producer bound (MAX_PRODUCERS, completed epochs included) is checked at its
+    // edges by the reader's unit tests: a trace that reaches it takes seconds to build (D58).
 
-    // Launch goals and completed goal streams are each held to the same bound.
-    let launches: Vec<CaptureRecord> = (1..=MAX_PRODUCERS as u64 + 1)
+    // Launch goals and completed goal streams are each held to 128, the producer bound before
+    // D58 raised it: these verdicts did not change.
+    const GOAL_STREAMS: u64 = 128;
+    let launches: Vec<CaptureRecord> = (1..=GOAL_STREAMS + 1)
         .map(|stream| launch_naming(key(GOAL, stream)))
         .collect();
     let (report, _) = scan(make_trace(&launches, false).path());
@@ -1673,8 +1665,8 @@ fn stream_ids_and_bounded_state_limits_are_enforced() {
         "{:?}",
         report.findings
     );
-    assert_eq!(report.validated_records, 1 + MAX_PRODUCERS as u64);
-    let goals: Vec<CaptureRecord> = (1..=MAX_PRODUCERS as u64 + 1)
+    assert_eq!(report.validated_records, 1 + GOAL_STREAMS);
+    let goals: Vec<CaptureRecord> = (1..=GOAL_STREAMS + 1)
         .flat_map(|stream| [open_goal(stream), end(GOAL, stream)])
         .collect();
     let (report, _) = scan(make_trace(&goals, false).path());
@@ -1684,7 +1676,7 @@ fn stream_ids_and_bounded_state_limits_are_enforced() {
         "{:?}",
         report.findings
     );
-    assert_eq!(report.validated_records, 2 + 2 * MAX_PRODUCERS as u64);
+    assert_eq!(report.validated_records, 2 + 2 * GOAL_STREAMS);
 }
 
 #[test]
@@ -1846,6 +1838,31 @@ fn recovery_releases_the_old_epoch_and_reobserves_connections() {
     );
 }
 
+#[test]
+fn a_trace_with_five_hundred_producers_verifies() {
+    // Every daemon stall ends an epoch and its recovery is a fresh producer. Five hundred in
+    // one entry, each re-observing the surviving socket, raise no producer limit (D58).
+    const PRODUCERS: u64 = 500;
+    let id = |n: u64| format!("{n:032x}");
+    let mut records = vec![conn_open(&id(1), false)];
+    for n in 2..=PRODUCERS {
+        records.push(gap(None));
+        records.push(recovery_of(&id(n - 1), &id(n)));
+        records.push(conn_open(&id(n), true));
+    }
+    records.push(conn_close(&id(PRODUCERS)));
+    records.push(closed(&id(PRODUCERS), Some(2)));
+    let (report, _) = scan(make_trace(&launched(records), true).path());
+    assert_eq!(report.exit_code(), 1, "{report:#?}");
+    assert_eq!(report.integrity, CaptureIntegrity::Incomplete);
+    assert_eq!(report.gap_count, PRODUCERS - 1);
+    assert_eq!(
+        report.findings,
+        findings(&["gap_recorded", "producer_recovered"]),
+        "explicit loss at every stall, and no producer limit"
+    );
+}
+
 fn findings(codes: &[&str]) -> Vec<String> {
     codes.iter().map(|code| code.to_string()).collect()
 }
@@ -1907,68 +1924,8 @@ fn recovery_naming_unrecorded_producer_supersedes_the_wire_lineage() {
         assert_eq!(report.validated_records, 1 + 5, "{code}");
     }
 
-    // The unrecorded Q is admitted: it counts toward MAX_PRODUCERS like any recorded one.
-    let mut crowded: Vec<CaptureRecord> = (1..MAX_PRODUCERS as u64)
-        .map(|n| closed(&format!("{n:032x}"), None))
-        .collect();
-    crowded.push(recovery_of(IN_FLIGHT, RECOVERED));
-    let (report, _) = scan(make_trace(&crowded, false).path());
-    assert_eq!(report.exit_code(), 2, "{report:#?}");
-    assert!(
-        has(&report, "producer_limit_exceeded"),
-        "{:?}",
-        report.findings
-    );
-    assert!(
-        has(&report, "recovery_names_unrecorded_producer"),
-        "the rejected cap-edge recovery still identifies its unrecorded predecessor: {:?}",
-        report.findings
-    );
-    assert_eq!(report.validated_records, MAX_PRODUCERS as u64);
-
-    // With one of the 127 admitted producers still a live wire epoch, the failed recovery
-    // retains the parent's sequential state: it supersedes that epoch before fresh admission
-    // fails, so finalization must not invent `producer_unclosed` on top of the cap error.
-    let mut crowded_live: Vec<CaptureRecord> = (1..MAX_PRODUCERS as u64 - 1)
-        .map(|n| closed(&format!("{n:032x}"), None))
-        .collect();
-    crowded_live.push(conn_open(WIRE, false));
-    crowded_live.push(recovery_of(IN_FLIGHT, RECOVERED));
-    let (report, _) = scan(make_trace(&crowded_live, false).path());
-    assert!(has(&report, "producer_limit_exceeded"), "{report:#?}");
-    assert!(
-        has(&report, "recovery_names_unrecorded_producer"),
-        "{report:#?}"
-    );
-    assert!(!has(&report, "producer_unclosed"), "{report:#?}");
-
-    // With all 128 slots already occupied, the parent failed before admitting the unseen
-    // predecessor and therefore emitted no unrecorded-predecessor detail.
-    let mut full: Vec<CaptureRecord> = (1..=MAX_PRODUCERS as u64)
-        .map(|n| closed(&format!("{n:032x}"), None))
-        .collect();
-    full.push(recovery_of(IN_FLIGHT, RECOVERED));
-    let (report, _) = scan(make_trace(&full, false).path());
-    assert!(has(&report, "producer_limit_exceeded"), "{report:#?}");
-    assert!(
-        !has(&report, "recovery_names_unrecorded_producer"),
-        "{report:#?}"
-    );
-
-    // At a full table with a recorded live predecessor, the parent marked that predecessor
-    // lost before fresh admission failed. Finalization therefore adds no producer_unclosed.
-    let mut full_recorded: Vec<CaptureRecord> = (1..MAX_PRODUCERS as u64)
-        .map(|n| closed(&format!("{n:032x}"), None))
-        .collect();
-    full_recorded.push(conn_open(WIRE, false));
-    full_recorded.push(recovery_of(WIRE, RECOVERED));
-    let (report, _) = scan(make_trace(&full_recorded, false).path());
-    assert!(has(&report, "producer_limit_exceeded"), "{report:#?}");
-    assert!(!has(&report, "producer_unclosed"), "{report:#?}");
-    assert!(
-        !has(&report, "recovery_names_unrecorded_producer"),
-        "{report:#?}"
-    );
+    // The unrecorded Q counts toward MAX_PRODUCERS like any recorded one. The reader's unit
+    // test `producer_bound_edges_keep_the_sequential_rule` holds the cap-edge cases (D58).
 }
 
 /// A stream-less gap on `producer`'s own clock: what the daemon chains for a `Loss` frame
@@ -2167,12 +2124,13 @@ fn repeated_and_cap_edge_recoveries_are_bounded_for_the_nonvalidating_session() 
     assert!(has(&report, "producer_recovered_twice"));
     assert_eq!(decoded_segments(&repeated), 1);
 
-    // Admit OTHER's probe before filling to 127 identities. At that edge an unseen predecessor
-    // and a fresh producer cannot both fit: the non-validating session admits the Recovery's
-    // fresh owner in the final slot and cascades the live probe. Reopen OTHER, then compare a
-    // recovery naming that recorded owner with an unseen predecessor: the former preserves the
-    // probe and delivers one segment; the latter cascades it before a second segment. If the
-    // critical fresh producer was not admitted, both recoveries cascade and the count is zero.
+    // Admit OTHER's probe before filling to MAX_PRODUCERS - 1 identities. At that edge an unseen
+    // predecessor and a fresh producer cannot both fit: the non-validating session admits the
+    // Recovery's fresh owner in the final slot and cascades the live probe. Reopen OTHER, then
+    // compare a recovery naming that recorded owner with an unseen predecessor: the former
+    // preserves the probe and delivers one segment; the latter cascades it before a second segment.
+    // If the critical fresh producer was not admitted, both recoveries cascade and the count is
+    // zero.
     let mut capped = vec![probe_open(open_wire(OTHER, 1, 2, None))];
     capped.extend((1..(MAX_PRODUCERS as u64 - 1)).map(|n| closed(&format!("f{n:031x}"), None)));
     capped.push(recovery_of(IN_FLIGHT, RECOVERED));
@@ -2185,10 +2143,7 @@ fn repeated_and_cap_edge_recoveries_are_bounded_for_the_nonvalidating_session() 
         "dddddddddddddddddddddddddddddddd",
     ));
     capped.push(segment(OTHER, 3, 0, 0, b"unseen predecessor cascades"));
-    let (report, _) = scan(make_trace(&capped, false).path());
-    assert_eq!(report.integrity, CaptureIntegrity::Invalid, "{report:#?}");
-    assert!(has(&report, "producer_limit_exceeded"));
-    assert!(has(&report, "recovery_names_unrecorded_producer"));
+    // The reader's verdicts on this edge are its unit test's; only the session runs here.
     assert_eq!(decoded_segments(&capped), 1);
 }
 

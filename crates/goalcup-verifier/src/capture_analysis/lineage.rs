@@ -4,10 +4,22 @@
 use goalcup_protocol::capture::MAX_PRODUCERS;
 use std::collections::BTreeSet;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct Lineage {
     seen: BTreeSet<String>,
     wire: BTreeSet<String>,
+    /// [`MAX_PRODUCERS`]; unit tests reach the edge with a smaller one.
+    limit: usize,
+}
+
+impl Default for Lineage {
+    fn default() -> Self {
+        Self {
+            seen: BTreeSet::new(),
+            wire: BTreeSet::new(),
+            limit: MAX_PRODUCERS,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -21,11 +33,19 @@ pub(super) struct Supersession {
 }
 
 impl Lineage {
+    #[cfg(test)]
+    pub(super) fn with_limit(limit: usize) -> Self {
+        Self {
+            limit,
+            ..Self::default()
+        }
+    }
+
     /// Notes a producer. `false` means a new id did not fit; existing ids still update their
     /// wire classification.
     pub(super) fn note(&mut self, producer: &str, wire: bool) -> bool {
         if !self.seen.contains(producer) {
-            if self.seen.len() >= MAX_PRODUCERS {
+            if self.seen.len() >= self.limit {
                 return false;
             }
             self.seen.insert(producer.to_string());
@@ -54,14 +74,14 @@ impl Lineage {
             .filter(|id| !self.seen.contains(*id))
             .collect::<BTreeSet<_>>()
             .len();
-        let predecessor_fits = self.seen.contains(previous) || self.seen.len() < MAX_PRODUCERS;
-        let admitted = self.seen.len().saturating_add(new_ids) <= MAX_PRODUCERS;
+        let predecessor_fits = self.seen.contains(previous) || self.seen.len() < self.limit;
+        let admitted = self.seen.len().saturating_add(new_ids) <= self.limit;
         if admitted {
             self.note(previous, true);
             self.note(fresh, true);
         } else {
             // DecodeSession intentionally accepts unvalidated input without panicking. Preserve
-            // its historical bounded behavior at the 127/128 edge: the fresh producer is the
+            // its historical bounded behavior one below the limit: the fresh producer is the
             // recovery record's owner and consumes the one remaining slot; the unrecorded
             // predecessor is not partially invented. The validating reader rejects this record.
             self.note(fresh, true);

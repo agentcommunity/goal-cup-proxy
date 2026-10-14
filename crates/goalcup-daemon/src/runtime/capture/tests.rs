@@ -1060,6 +1060,73 @@ fn full_queue_gap_is_sticky() {
     assert_eq!(lock(&writer).gaps, 1);
 }
 
+/// A producer ID past the 255 that `id` spells.
+fn wide(n: u32) -> String {
+    format!("{n:032x}")
+}
+
+#[test]
+fn five_hundred_recovered_epochs_are_admitted_and_chained() {
+    // Each daemon stall ends an epoch and its recovery is a fresh producer (D58).
+    const EPOCHS: u32 = 500;
+    let dir = tempfile::tempdir().unwrap();
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let socket = id(200);
+    assert_eq!(sink.try_begin_epoch(&wide(1)), EpochAdmission::Ready);
+    assert_eq!(
+        sink.try_submit(connection(&wide(1), 0, &socket, connection_open(false))),
+        SubmitResult::Queued
+    );
+    for n in 2..=EPOCHS {
+        let fresh = wide(n);
+        assert_eq!(
+            sink.try_begin_epoch(&fresh),
+            EpochAdmission::Ready,
+            "epoch {n}"
+        );
+        assert_eq!(
+            sink.try_submit(recovery(&fresh, &wide(n - 1))),
+            SubmitResult::Queued
+        );
+        assert_eq!(
+            sink.try_submit(connection(&fresh, 1, &socket, connection_open(true))),
+            SubmitResult::Queued
+        );
+        owner.drain_all();
+    }
+    owner.flush_all();
+    let records = records(dir.path());
+    let recoveries = records
+        .iter()
+        .filter(|r| matches!(r, CaptureRecord::Recovery { .. }))
+        .count();
+    assert_eq!(recoveries, EPOCHS as usize - 1);
+    assert_eq!(gaps(&records, GapReason::ProducerLost), EPOCHS as usize - 1);
+    assert_eq!(lock(&writer).connections.get(&socket), Some(&wide(EPOCHS)));
+}
+
+#[test]
+fn a_fresh_epoch_waits_while_max_live_producers_are_live_or_queued() {
+    let sink = OwnerSink::default();
+    for n in 1..=MAX_LIVE_PRODUCERS as u32 {
+        assert_eq!(sink.try_begin_epoch(&wide(n)), EpochAdmission::Ready);
+    }
+    let over = wide(MAX_LIVE_PRODUCERS as u32 + 1);
+    assert_eq!(sink.try_begin_epoch(&over), EpochAdmission::Pending);
+
+    // A close moves one live producer to a queued control: the reserve still counts it.
+    assert_eq!(sink.try_close_epoch(&wide(1), None), SubmitResult::Queued);
+    assert_eq!(sink.try_begin_epoch(&over), EpochAdmission::Pending);
+    assert_eq!(sink.drain(usize::MAX, Duration::ZERO).len(), 1);
+    assert_eq!(sink.try_begin_epoch(&over), EpochAdmission::Ready);
+    assert_eq!(
+        sink.try_begin_epoch(&wide(MAX_LIVE_PRODUCERS as u32 + 2)),
+        EpochAdmission::Pending
+    );
+}
+
 #[test]
 fn capacity_exhaustion_uses_bounded_terminal_records() {
     let dir = tempfile::tempdir().unwrap();

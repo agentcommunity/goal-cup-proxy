@@ -103,8 +103,8 @@ use goalcup_protocol::capture::{
     AnalysisState, AnchorState, CaptureFrame, CaptureMeta, CaptureRecord, CaptureSink,
     CaptureSource, CaptureState, CaptureTime, ConnectionEvent, DeliveryState, DurableFrontier,
     EndReason, EpochAdmission, FrameEvent, GapReason, M2_PROTOCOL_VERSION, M2Status,
-    MAX_CAPTURE_QUEUE_BYTES, MAX_OPEN_CONNECTIONS, MAX_OPEN_STREAMS, MAX_PRODUCERS,
-    MAX_SEGMENT_BYTES, RunState, StreamKey, SubmitResult, is_capture_id,
+    MAX_CAPTURE_QUEUE_BYTES, MAX_LIVE_PRODUCERS, MAX_OPEN_CONNECTIONS, MAX_OPEN_STREAMS,
+    MAX_PRODUCERS, MAX_SEGMENT_BYTES, RunState, StreamKey, SubmitResult, is_capture_id,
 };
 
 use goalcup_protocol::chain::Link;
