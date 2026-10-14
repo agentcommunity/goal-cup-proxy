@@ -15,7 +15,9 @@ How do the M2 recorder's parts fit, and where is each guarantee tested? For cont
   history at `6494030`.
 - **V1** lives on `v1/trunk`. Its hook leg is not in this tree
   ([D48](DECISIONS.md#d48-m2-the-v1-path-leaves-the-tree)), and neither are the verifier's
-  V1 checks for pre-v5 traces: `goalcup-verify` reads protocol v5 only.
+  V1 checks for pre-v5 traces: `goalcup-verify` reads protocol v5 only. Since
+  [D54](DECISIONS.md#d54-m2-the-protocol-carries-v5-only) the protocol crate carries v5 only
+  too.
 
 ## 2. Crates and the dependency rule
 
