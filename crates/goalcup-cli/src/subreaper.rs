@@ -436,51 +436,61 @@ mod linux {
             assert_eq!(field("exit"), 1, "a straggler at the bound exits 1: {line}");
         }
 
-        /// The grace the host sweeps with: one second of SIGTERM that every orphan ignores.
+        /// The grace the host sweeps with: one second of SIGTERM that the chain ignores.
         const HOST_GRACE: Duration = Duration::from_secs(1);
 
-        /// The host's spawner, SIGKILLed and reaped however the host ends short of a kill.
-        struct Spawner(std::process::Child);
+        /// The chain's length. Past the grace a pass consumes at most one link and then sleeps a
+        /// [`POLL`], so the slack holds at most 250 such passes; 50 more are the margin.
+        const LINKS: u128 = SWEEP_SLACK.as_millis() / POLL.as_millis() + 50;
 
-        impl Drop for Spawner {
+        /// A child older than the root, SIGKILLed and reaped however the host ends.
+        struct Elder(std::process::Child);
+
+        impl Drop for Elder {
             fn drop(&mut self) {
                 let _ = self.0.kill();
                 let _ = self.0.wait();
             }
         }
 
-        /// The sweep's host, run only by [`the_bound_reports_what_keeps_arriving`]. A spawner
-        /// that ignores SIGTERM is started before the root, so the start filter never lets the
-        /// sweep touch it; from 300 ms on it keeps handing this process new orphans, four per
-        /// `sh -c 'sleep 30 & …'` that exits at once and leaves its `sleep`s (which ignore SIGTERM
-        /// too), every few milliseconds: about twenty per 20 ms poll (measured in Docker: some 6000
-        /// in a run, 20 to 24 named at the bound), so no pass that reaps only zombies, and looks
-        /// again at once, finds this process childless. Without the 2 ms pause the loop forked
-        /// some 52 000 in a run, a load the parallel fast tier does not need.
-        /// The sweep can never find this process childless, so it must stop at its bound and
-        /// name what it last saw.
+        /// The chain's process group, SIGKILLed whole however the host ends.
+        struct Chain(i32);
+
+        impl Drop for Chain {
+            fn drop(&mut self) {
+                // SAFETY: two integers. The group is the chain's own, made at its head's spawn;
+                // with every member gone the call fails with ESRCH and does nothing.
+                unsafe { libc::kill(-self.0, libc::SIGKILL) };
+            }
+        }
+
+        /// The sweep's host, run only by [`the_bound_reports_what_keeps_arriving`]. A plain
+        /// `sleep` is started before the root, so the start filter must keep the sweep off it:
+        /// any signal ends it. After the root, the host starts a chain of [`LINKS`] processes,
+        /// each the parent of the next, that ignore SIGTERM, and waits until the last is up.
+        /// The sweep reaches only the chain's head, its one child. SIGKILL ends the head, and the
+        /// kernel hands the head's child to this process before the head turns zombie, so every
+        /// pass finds the next link: the sweep can never find this process childless, and must
+        /// stop at its bound and name what it last saw.
+        /// The chain replaced a loop that handed over four orphans every few milliseconds. On a
+        /// loaded 4-vCPU x86_64 runner that loop fell behind the 20 ms poll, the sweep found the
+        /// host childless and ended early (2 runs in 4); a chain does not depend on any timing.
         #[test]
         #[ignore = "the sweep's host process; run by the_bound_reports_what_keeps_arriving"]
         fn sweep_host() {
+            use std::os::unix::process::CommandExt;
+
             if std::env::var_os(HOST).is_none() {
                 return;
             }
             crate::subreaper::arm().expect("this process becomes a child subreaper");
-            // The loop ends itself once its parent is no longer this host (a host that panicked
-            // or was killed): `$PPID` is fixed at start, the live parent is field 4 of its own
-            // `/proc/$$/stat` (`comm` is `(sh)`, no spaces), read with a builtin, no fork.
-            let mut spawner = Spawner(
+            let mut elder = Elder(
                 std::process::Command::new("/bin/sh")
-                    .args([
-                        "-c",
-                        "trap '' TERM; sleep 0.3; \
-                         while read -r _ _ _ parent _ < /proc/$$/stat && [ \"$parent\" = \"$PPID\" ]; \
-                         do sh -c 'sleep 30 & sleep 30 & sleep 30 & sleep 30 &'; sleep 0.002; done",
-                    ])
+                    .args(["-c", "exec sleep 60"])
                     .spawn()
                     .unwrap(),
             );
-            // At least one clock tick (10 ms) after the spawner, so it is older than the root.
+            // At least one clock tick (10 ms) after the elder, so it is older than the root.
             std::thread::sleep(Duration::from_millis(50));
             let mut root = std::process::Command::new("/bin/sh")
                 .args(["-c", "exit 0"])
@@ -488,14 +498,40 @@ mod linux {
                 .unwrap();
             let root_start = stat(root.id()).expect("the root's stat").start;
             root.wait().unwrap();
-            // Until the spawner has started handing over orphans, so the first pass finds some.
-            std::thread::sleep(Duration::from_millis(400));
+            // Each link starts the next in the background and becomes a `sleep`; the last one
+            // creates `$READY` first. The ignored SIGTERM is inherited through every fork and
+            // exec, and the links all share the head's process group.
+            let ready = std::env::temp_dir()
+                .join(format!("goalcup-subreaper-chain-{}", std::process::id()));
+            let head = std::process::Command::new("/bin/sh")
+                .args(["-c", "trap '' TERM; exec sh -c \"$LINK\" link \"$LINKS\""])
+                .env(
+                    "LINK",
+                    "if [ \"$1\" -gt 0 ]; then sh -c \"$LINK\" link $(($1 - 1)) & \
+                     else : > \"$READY\"; fi; exec sleep 60",
+                )
+                .env("LINKS", LINKS.to_string())
+                .env("READY", &ready)
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let chain = Chain(head.id() as i32);
+            let up_by = Instant::now() + Duration::from_secs(20);
+            while !ready.exists() {
+                assert!(
+                    Instant::now() < up_by,
+                    "the chain's last link never came up"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let _ = std::fs::remove_file(&ready);
             let began = Instant::now();
             let swept = sweep(root_start, HOST_GRACE);
             let took = began.elapsed();
-            let spawner_alive = spawner.0.try_wait().unwrap().is_none();
-            drop(spawner);
-            // Everything this process still holds, the spawner's last orphans included.
+            let spawner_alive = elder.0.try_wait().unwrap().is_none();
+            drop(elder);
+            drop(chain);
+            // Everything this process still holds, the chain's last links included.
             let cleanup = sweep(0, Duration::ZERO);
             println!(
                 "{RESULT} took_ms={} swept={} left={} unlisted={} spawner_alive={} cleanup_left={} \
