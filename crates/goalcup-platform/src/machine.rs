@@ -52,7 +52,7 @@ pub fn facts(artifact_root: &Path) -> MachineFacts {
         disk_total_bytes: disk.map(|d| d.0),
         disk_free_bytes: disk.map(|d| d.1),
         wsl: Some(is_wsl()),
-        container: Some(in_container()),
+        container: in_container(),
         ac_power: on_ac_power(),
     }
 }
@@ -155,9 +155,10 @@ pub fn open_url(url: &str) -> bool {
         let mut c = Command::new(wslview);
         c.arg(url);
         c
-    } else if is_wsl() && find_on_path("cmd.exe").is_some() {
-        let mut c = Command::new("cmd.exe");
-        c.args(["/c", "start", "", url]);
+    } else if is_wsl() && find_on_path("rundll32.exe").is_some() {
+        // Not `cmd.exe /c start`: cmd would interpret `&`, `|`, `^` and `%` inside the URL.
+        let mut c = Command::new("rundll32.exe");
+        c.args(["url.dll,FileProtocolHandler", url]);
         c
     } else {
         let mut c = Command::new("xdg-open");
@@ -180,15 +181,22 @@ pub fn open_url(url: &str) -> bool {
     }
 }
 
-fn in_container() -> bool {
-    if Path::new("/.dockerenv").exists() || Path::new("/run/.containerenv").exists() {
-        return true;
-    }
-    std::fs::read_to_string("/proc/1/cgroup").is_ok_and(|s| {
+/// `Some(true)` when a container marker is found. Absence proves nothing (cgroup v2 hides the
+/// answer), so the fact is left out rather than reported as `false`.
+fn in_container() -> Option<bool> {
+    let marked = [
+        "/.dockerenv",
+        "/run/.containerenv",
+        "/run/systemd/container",
+    ]
+    .iter()
+    .any(|p| Path::new(p).exists());
+    let cgroup = std::fs::read_to_string("/proc/1/cgroup").is_ok_and(|s| {
         ["docker", "kubepods", "containerd", "libpod"]
             .iter()
             .any(|marker| s.contains(marker))
-    })
+    });
+    (marked || cgroup).then_some(true)
 }
 
 fn os_version() -> Option<String> {

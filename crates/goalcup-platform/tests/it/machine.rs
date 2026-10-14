@@ -90,6 +90,59 @@ fn facts_name_no_host_or_user() {
     }
 }
 
+/// Whether `needle` appears in `hay` bounded by non-alphanumeric characters (or the ends).
+fn contains_word(hay: &str, needle: &str) -> bool {
+    hay.match_indices(needle).any(|(i, m)| {
+        let before = hay[..i].chars().next_back();
+        let after = hay[i + m.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
+}
+
+/// Every JSON string value (not keys), lowercased.
+fn values(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::String(s) => out.push(s.to_lowercase()),
+        serde_json::Value::Array(a) => a.iter().for_each(|x| values(x, out)),
+        serde_json::Value::Object(o) => o.values().for_each(|x| values(x, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn facts_hold_no_paths_and_no_whole_word_identity() {
+    let json = serde_json::to_value(facts(&std::env::temp_dir())).unwrap();
+    let mut vals = Vec::new();
+    values(&json, &mut vals);
+
+    assert!(
+        !vals.iter().any(|v| v.contains('/')),
+        "a fact holds a path: {json}"
+    );
+    if let Some(home) = std::env::var("HOME").ok().filter(|h| h.len() >= 3) {
+        let home = home.to_lowercase();
+        assert!(
+            !vals.iter().any(|v| v.contains(&home)),
+            "home leaked: {json}"
+        );
+    }
+    let host = host_name().map(|h| h.split('.').next().unwrap_or("").to_lowercase());
+    let user = std::env::var("USER").ok().map(|u| u.to_lowercase());
+    for secret in [host, user].into_iter().flatten().filter(|s| s.len() >= 3) {
+        for v in vals.iter().filter(|v| v.len() >= 4) {
+            assert!(!contains_word(v, &secret), "{secret:?} named in {v:?}");
+        }
+    }
+}
+
+#[test]
+fn contains_word_respects_boundaries() {
+    assert!(contains_word("macos 15.1 bob", "bob"));
+    assert!(contains_word("bob", "bob"));
+    assert!(!contains_word("bobcat 1", "bob"));
+    assert!(!contains_word("rootfs", "root"));
+}
+
 #[test]
 fn facts_are_present_for_the_basics() {
     let f = facts(&std::env::temp_dir());
