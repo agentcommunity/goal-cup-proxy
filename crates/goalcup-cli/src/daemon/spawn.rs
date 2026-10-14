@@ -30,9 +30,9 @@
 //! module adds no second mechanism. Two commands that race both start a daemon; the loser
 //! refuses at `Registry::open` and exits 1, and both commands then find the winner through
 //! `control.json`. A daemon that is stopping holds the lock until it has stopped, so a start
-//! that lost to it is tried again, with a growing pause, until the wait's deadline. A daemon
-//! that exits for any other reason before it answers (a configuration it refuses) ends the wait at
-//! once, naming its exit status and `daemon.log`.
+//! that lost to it is tried again, with a growing pause, for as long as the holder is waited for
+//! ([`Wait`]). A daemon that exits for any other reason before it answers (a configuration it
+//! refuses) ends the wait at once, naming its exit status and `daemon.log`.
 //!
 //! # The configuration names this command's connectors
 //!
@@ -73,6 +73,37 @@ pub const DAEMON_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 /// tree's hardware that is well under a second.
 pub const SPAWN_WAIT: Duration = Duration::from_secs(10);
 
+/// How long a command waits for a daemon that is alive but not yet answering: one reopening a
+/// long run's chain before it writes `control.json`. A daemon that is slow is not a daemon that
+/// is dead, and the wait says so every [`READY_REPORT_EVERY`].
+pub const DAEMON_READY_BUDGET: Duration = Duration::from_secs(600);
+
+/// How often a command waiting for a live daemon says it is still waiting.
+pub const READY_REPORT_EVERY: Duration = Duration::from_secs(10);
+
+/// How long a command waits for a daemon it started, and how it waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Wait {
+    /// For a daemon whose process is gone or cannot be read: [`SPAWN_WAIT`]. A started daemon
+    /// that exits is refused at once unless it lost the registry lock; the respawns that
+    /// follow a lost lock are bounded by `reopening`, since a held lock is a live holder.
+    pub dead: Duration,
+    /// For a daemon that is alive but not yet answering: [`DAEMON_READY_BUDGET`]. The process
+    /// this command started, or the one holding the registry lock it lost to, is alive.
+    pub reopening: Duration,
+    /// How often the wait says "the daemon is reopening the run (N s)".
+    pub report_every: Duration,
+}
+
+impl Wait {
+    /// What every command that may need a daemon started waits.
+    pub const SHIPPED: Wait = Wait {
+        dead: SPAWN_WAIT,
+        reopening: DAEMON_READY_BUDGET,
+        report_every: READY_REPORT_EVERY,
+    };
+}
+
 /// The pause before starting a daemon again after the last one exited early,
 /// doubling up to [`RESPAWN_PAUSE_MAX`]. A daemon that is idling out holds the lock until it
 /// has stopped, and a start that met it refuses.
@@ -107,7 +138,10 @@ pub enum MissingConfig<'a> {
     Refuse,
 }
 
-/// A client for a daemon that answers, starting one if none does, before `deadline`.
+/// A client for a daemon that answers, starting one if none does, before `deadline`. A daemon
+/// that is alive but slow is not waited for past it: this is the short wait of the seal's own
+/// restart path, whose budget is seconds, and the retry above it comes back (see
+/// [`ensure_daemon_waiting`] for the wait a command makes).
 ///
 /// A daemon speaking another control API version that still answers is refused with the
 /// sentence [`HttpDaemonClient::from_config_dir`] gives: starting a second one beside it would
@@ -121,6 +155,32 @@ pub fn ensure_daemon(
     missing: MissingConfig<'_>,
     deadline: Instant,
 ) -> Result<HttpDaemonClient, CliError> {
+    let wait = Wait {
+        dead: deadline.saturating_duration_since(Instant::now()),
+        reopening: Duration::ZERO,
+        report_every: READY_REPORT_EVERY,
+    };
+    ensure_daemon_waiting(cfg, missing, None, wait, &mut |_| {})
+}
+
+/// [`ensure_daemon`] with the waits named, for a command that can afford to wait for a daemon
+/// that is alive: `dead` for a daemon that is gone, `wait.reopening` for one whose process (the
+/// one started here, or the one holding the registry lock this command's lost to) is alive and
+/// not yet answering, saying so through `say` every `wait.report_every`. `binary` is the
+/// daemon to start (the one beside this executable or on `PATH`, with `None`).
+///
+/// A started daemon that exits for any reason but the registry lock ends the wait at once: it
+/// is dead, and waiting for it would be waiting for nothing.
+pub fn ensure_daemon_waiting(
+    cfg: &Path,
+    missing: MissingConfig<'_>,
+    binary: Option<&Path>,
+    wait: Wait,
+    say: &mut dyn FnMut(&str),
+) -> Result<HttpDaemonClient, CliError> {
+    let began = Instant::now();
+    let dead_until = began + wait.dead;
+    let ready_until = began + wait.reopening.max(wait.dead);
     let config = cfg.join(DAEMON_CONFIG_NAME);
     let live = live_daemon(cfg)?;
     match missing {
@@ -152,11 +212,15 @@ pub fn ensure_daemon(
             }
         }
     }
-    let binary = daemon_binary()?;
+    let binary = match binary {
+        Some(binary) => binary.to_path_buf(),
+        None => daemon_binary()?,
+    };
     let log = cfg.join(DAEMON_LOG_NAME);
     let (mut child, mut said_from) = spawn(&binary, &config, &log)?;
     let mut pause = RESPAWN_PAUSE;
     let mut respawn_at: Option<Instant> = None;
+    let mut next_report = began + wait.report_every;
     loop {
         if let Some(client) = live_daemon(cfg)? {
             // The daemon is in a session of its own and outlives this process. A thread waits
@@ -168,24 +232,21 @@ pub fn ensure_daemon(
             return Ok(client);
         }
         let now = Instant::now();
-        if now >= deadline {
-            return Err(not_started(
-                &binary,
-                &config,
-                &log,
-                "it did not answer in time",
-            ));
-        }
-        match respawn_at {
-            Some(at) if now >= at => {
+        // Alive: the daemon this command started, or the one whose registry lock it lost to (a
+        // held lock is a live holder). Alive is waited for up to the long budget; gone, to the
+        // short one.
+        let alive = match respawn_at {
+            Some(at) if now >= at && now < ready_until => {
                 respawn_at = None;
                 (child, said_from) = spawn(&binary, &config, &log)?;
+                true
             }
-            Some(_) => {}
-            None => {
-                if let Ok(Some(status)) = child.try_wait() {
+            Some(_) => true,
+            None => match child.try_wait() {
+                Ok(None) => true,
+                Ok(Some(status)) => {
                     // Lost the registry lock to a daemon that is starting or stopping: start
-                    // again after a pause, until the deadline. Any other early exit is a
+                    // again after a pause, until the wait runs out. Any other early exit is a
                     // daemon that will refuse every time (its configuration), so the wait
                     // ends now. A start race over a fresh artifact root also ends at the
                     // lock: the registry file is opened race-free (`goalcup-platform`).
@@ -199,8 +260,32 @@ pub fn ensure_daemon(
                     }
                     respawn_at = Some(now + pause);
                     pause = (pause * 2).min(RESPAWN_PAUSE_MAX);
+                    true
                 }
-            }
+                Err(_) => false,
+            },
+        };
+        if now >= if alive { ready_until } else { dead_until } {
+            return Err(not_started(
+                &binary,
+                &config,
+                &log,
+                &if alive && wait.reopening > wait.dead {
+                    format!(
+                        "it was still reopening the run after {} s",
+                        began.elapsed().as_secs()
+                    )
+                } else {
+                    "it did not answer in time".to_string()
+                },
+            ));
+        }
+        if alive && !wait.reopening.is_zero() && now >= next_report {
+            say(&format!(
+                "the daemon is reopening the run ({} s)",
+                now.duration_since(began).as_secs()
+            ));
+            next_report += wait.report_every;
         }
         std::thread::sleep(POLL);
     }
@@ -216,11 +301,15 @@ pub fn ensure_daemon(
 /// mid-run is unfinished: the started daemon reopens it for status and seal only (chaining the
 /// lost interval as one gap) and stays up until `goalcup seal` finishes it, so a later seal
 /// meets the same daemon and chains no second gap.
-pub fn daemon_to_read(cfg: &Path, deadline: Instant) -> Result<Option<HttpDaemonClient>, CliError> {
+pub fn daemon_to_read(
+    cfg: &Path,
+    wait: Wait,
+    say: &mut dyn FnMut(&str),
+) -> Result<Option<HttpDaemonClient>, CliError> {
     if !cfg.join(DAEMON_CONFIG_NAME).is_file() {
         return live_daemon(cfg);
     }
-    ensure_daemon(cfg, MissingConfig::Refuse, deadline).map(Some)
+    ensure_daemon_waiting(cfg, MissingConfig::Refuse, None, wait, say).map(Some)
 }
 
 /// A client for the daemon `control.json` names, if that daemon answers.

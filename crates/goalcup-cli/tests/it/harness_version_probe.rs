@@ -1,12 +1,12 @@
-//! D53: the harness build is recorded, not pinned. Any regular file resolves; the release
-//! refuses one swapped since it was resolved; and the version the harness reports for its
-//! `version_args` is kept, or `unreported`.
+//! D53: the harness build is recorded, not pinned. Any regular file resolves, a symlink is
+//! refused, and the version the harness reports for its `version_args` is kept, or
+//! `unreported`.
 
 use goalcup_cli::harness_version::{
     MAX_REPORTED_VERSION_BYTES, UNREPORTED, reported_line, reported_version,
     reported_version_in_scratch_home, reported_version_within,
 };
-use goalcup_cli::launch::{recheck_resolved_executable, resolve_harness_executable};
+use goalcup_cli::launch::resolve_harness_executable;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -164,34 +164,18 @@ fn only_a_bounded_printable_first_line_is_kept() {
     assert_eq!(reported_line(b"v1\x1b[0m\n"), UNREPORTED);
     let longest = "9".repeat(MAX_REPORTED_VERSION_BYTES);
     assert_eq!(reported_line(longest.as_bytes()), longest);
-    let longer = "9".repeat(MAX_REPORTED_VERSION_BYTES + 1);
-    assert_eq!(reported_line(longer.as_bytes()), UNREPORTED);
+    // A longer line is cut to its first 64 bytes, never refused: a version never stops a run.
+    assert_eq!(MAX_REPORTED_VERSION_BYTES, 64);
+    let long_line: String = (0..100u8).map(|i| char::from(b'a' + i % 26)).collect();
+    assert_eq!(long_line.len(), 100);
+    assert_eq!(reported_line(long_line.as_bytes()), long_line[..64]);
 }
 
 #[test]
-fn the_release_refuses_a_file_swapped_since_it_was_resolved() {
+fn a_symlink_is_refused_not_followed() {
     let (_tmp, root, _home) = scratch();
     let exe = stub(&root, "toy", "echo 'toy 1.2.3'");
-    let resolved = resolve_harness_executable(&exe).unwrap();
-    recheck_resolved_executable(&resolved).expect("the same bytes pass");
-
-    // Another build put in its place, atomically, as an updater would.
-    let other = stub(&root, "toy-next", "echo 'toy 1.2.4'");
-    std::fs::rename(&other, &exe).unwrap();
-    let refusal = recheck_resolved_executable(&resolved)
-        .expect_err("a swap mid-launch is refused")
-        .to_string();
-    assert!(
-        refusal.contains("was replaced after it was resolved")
-            && refusal.contains(resolved.sha256()),
-        "{refusal}"
-    );
-    // Resolved again, the new build is as acceptable as the old one was.
-    let again = resolve_harness_executable(&exe).unwrap();
-    assert_ne!(again.sha256(), resolved.sha256());
-    recheck_resolved_executable(&again).unwrap();
-
-    // A symlink is refused, not followed.
+    resolve_harness_executable(&exe).expect("a regular file resolves");
     let link = root.join("toy-link");
     std::os::unix::fs::symlink(&exe, &link).unwrap();
     let refusal = resolve_harness_executable(&link)

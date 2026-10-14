@@ -1,10 +1,6 @@
 //! Protocol-v5 local capture through the real daemon and its control API: creation with a
-//! physically reserved chain and no server, the one-shot goal, the launch record, and the
+//! quota-only chain and no server, the one-shot goal, the launch record, and the
 //! signed status projection.
-//!
-//! Runs on macOS (APFS) and on Linux (ext4 or XFS): the chain reservation is qualified on those
-//! filesystems alone and refuses everywhere else, so every entry here is created on the
-//! temporary directory's volume, which must be one of them.
 
 use crate::common::capture_lifecycle_support;
 use crate::common::support;
@@ -101,10 +97,7 @@ async fn local_capture_create_needs_no_server_config() {
     let rig = Rig::start().await;
     let info = rig.created("codex-cli").await;
 
-    assert_eq!(
-        info.reserved_bytes, RESERVE,
-        "the requested bytes are reserved"
-    );
+    assert_eq!(info.reserved_bytes, 0, "a chain is quota-only");
     assert!(info.ingest_addr.ip().is_loopback());
     assert!(is_capture_id(&info.producer_id));
     assert!(info.ingest_secret.len() >= 32);
@@ -128,6 +121,48 @@ async fn local_capture_create_needs_no_server_config() {
         0,
         "nothing ever connects to the configured upload URL"
     );
+}
+
+/// The blocks `chain.jsonl` holds beyond its logical end. A chain is a quota, not a
+/// reservation: the run host holds the one reserve file, so nothing here may allocate ahead.
+fn blocks_beyond_the_end(trace: &Path) -> (u64, u64) {
+    let file = std::fs::metadata(trace.join("chain.jsonl")).unwrap();
+    let allocated = file.blocks() * 512;
+    (allocated.saturating_sub(file.len()), file.blksize())
+}
+
+#[tokio::test]
+async fn a_sealed_entry_holds_no_blocks_beyond_its_end() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+
+    let (beyond, block) = blocks_beyond_the_end(&rig.trace_dir(&info.entry_id));
+    assert!(
+        beyond <= block,
+        "{beyond} bytes are allocated past the sealed chain's end; one block is {block}"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_reserves_nothing() {
+    let rig = Rig::start().await;
+    let mut ids = Vec::new();
+    for _ in 0..5 {
+        ids.push(rig.created("codex-cli").await.entry_id);
+    }
+
+    let rig = rig.restart().await;
+    for id in &ids {
+        let reopened = rig.status(id).await.payload.capture.unwrap();
+        assert_eq!(reopened.storage.reserved_bytes, 0, "{id}");
+        let (beyond, block) = blocks_beyond_the_end(&rig.trace_dir(id));
+        assert!(
+            beyond <= block,
+            "{id}: {beyond} bytes are allocated past the reopened chain's end; one block is {block}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -158,8 +193,8 @@ async fn v5_capture_uses_real_inline_chain_without_redb() {
 
     let file = std::fs::metadata(trace.join("chain.jsonl")).unwrap();
     assert!(
-        file.blocks() * 512 >= RESERVE,
-        "the chain file itself holds the reservation"
+        file.blocks() * 512 <= file.len() + file.blksize(),
+        "the chain file holds no blocks beyond its end"
     );
     let storage = rig
         .status(&info.entry_id)
@@ -169,7 +204,7 @@ async fn v5_capture_uses_real_inline_chain_without_redb() {
         .unwrap()
         .storage;
     assert_eq!(storage.quota_bytes, RESERVE);
-    assert_eq!(storage.reserved_bytes, RESERVE);
+    assert_eq!(storage.reserved_bytes, 0);
     assert_eq!(storage.used_bytes, file.len());
     let durable = storage.durable.expect("the baseline is synced");
     assert_eq!((durable.seq, durable.chain_bytes), (0, file.len()));
@@ -788,7 +823,7 @@ async fn both_shipped_manifests_compile_at_preflight() {
     let rig = Rig::start().await;
     for profile in ["codex-cli", "claude-code-cli"] {
         let info = rig.created(profile).await;
-        assert_eq!(info.reserved_bytes, RESERVE, "{profile}");
+        assert_eq!(info.reserved_bytes, 0, "{profile}");
     }
 
     // A connector whose carried pattern has no streaming recognizer: the daemon refuses the
@@ -1090,28 +1125,6 @@ async fn a_reopened_capture_accepts_only_status_and_seal() {
 }
 
 #[tokio::test]
-async fn an_unreservable_chain_refuses_creation_and_leaves_nothing() {
-    let rig = Rig::start().await;
-    let workspace = rig.workspace("too-big");
-    let refused = rig.create("codex-cli", &workspace, 1 << 60).await;
-    assert_eq!(refused.status(), 422, "{}", refused.body());
-    assert!(refused.body().contains("reserve"), "{}", refused.body());
-    assert!(!workspace.exists(), "no workspace is left behind");
-    let artifacts = rig.config.artifact_root.join("artifacts");
-    assert!(
-        std::fs::read_dir(&artifacts).map_or(true, |mut dir| dir.next().is_none()),
-        "no entry artifacts are left behind"
-    );
-    let retried = rig.create("codex-cli", &workspace, RESERVE).await;
-    assert_eq!(
-        retried.status(),
-        200,
-        "the same workspace is free: {}",
-        retried.body()
-    );
-}
-
-#[tokio::test]
 async fn the_goal_producer_is_closed_inside_the_goal_sync() {
     let rig = Rig::start().await;
     let info = rig.created("codex-cli").await;
@@ -1216,7 +1229,7 @@ async fn abandon_before_launch_leaves_nothing_and_later_is_refused() {
     assert_eq!(abandoned.status(), 204, "{}", abandoned.body());
     assert!(
         !rig.artifact_dir(&info.entry_id).exists(),
-        "the reserved chain is gone"
+        "the chain is gone"
     );
     assert!(rig.daemon.registry().get(&info.entry_id).unwrap().is_none());
     assert!(!workspace.exists(), "the still-empty workspace is gone");
@@ -2313,7 +2326,7 @@ async fn a_recovered_capture_that_never_launched_can_be_abandoned() {
     assert_eq!(abandoned.status(), 204, "{}", abandoned.body());
     assert!(
         !rig.artifact_dir(&info.entry_id).exists(),
-        "the reserved chain is gone"
+        "the chain is gone"
     );
     assert!(rig.daemon.registry().get(&info.entry_id).unwrap().is_none());
 }
@@ -2352,7 +2365,7 @@ async fn a_stale_capture_that_never_launched_is_abandoned_by_the_daemon() {
         .abandon_stale_unlaunched(std::time::Duration::ZERO);
     assert!(
         !rig.artifact_dir(&stale.entry_id).exists(),
-        "the reserved chain is gone"
+        "the chain is gone"
     );
     assert!(
         rig.artifact_dir(&registered.entry_id).exists(),

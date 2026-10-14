@@ -34,8 +34,11 @@ pub const MAX_ENVELOPE_BYTES: usize = 128 * 1024;
 pub const MAX_INGEST_FRAME_BYTES: usize = 512 * 1024;
 /// Aggregate capture queue memory, controls included.
 pub const MAX_CAPTURE_QUEUE_BYTES: usize = 8 * 1024 * 1024;
-/// Default serialized chain-byte reservation per entry.
-pub const DEFAULT_CAPTURE_RESERVE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+/// The logical byte quota of one entry's chain: admission accounting, never allocated. The run
+/// host holds the run's one disk reservation.
+pub const CHAIN_QUOTA_BYTES: u64 = 1 << 40;
+/// The old name of [`CHAIN_QUOTA_BYTES`], kept until the last caller moves.
+pub const DEFAULT_CAPTURE_RESERVE_BYTES: u64 = CHAIN_QUOTA_BYTES;
 /// Terminal allowance: part of, not additional to, the reservation.
 pub const TERMINAL_RESERVE_BYTES: u64 = 1024 * 1024;
 /// Simultaneously open payload streams per entry.

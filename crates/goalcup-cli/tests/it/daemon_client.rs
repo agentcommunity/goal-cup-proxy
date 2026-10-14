@@ -1044,12 +1044,16 @@ fn pause_points_exist_only_under_test_support() {
 
 /// The only places this crate starts a process are the launch module's one command builder
 /// (which the ordinary spawn and the gate both run), the run-scoped daemon's start
-/// (`daemon/spawn.rs`) and the D53 version probe (`harness_version.rs`); the V1 version probe
+/// (`daemon/spawn.rs`), the D53 version probe (`harness_version.rs`) and the `git` that clones
+/// the participant's GitHub repository (`account/github.rs`); the V1 version probe
 /// went with the V1 manifest (OS-29). The child-only credential is set on the one launch
-/// builder, so a fourth site would be another place a key could be forgotten or leaked. The
+/// builder, so another site would be another place a key could be forgotten or leaked. The
 /// daemon's start and the version probe carry no key: both clear their environment, which
 /// `run_scoped_daemon::the_started_daemon_inherits_none_of_the_clis_secrets_or_descriptors`
-/// observes for the daemon and `harness_version_probe` for the probe.
+/// observes for the daemon and `harness_version_probe` for the probe. The GitHub token is
+/// never given to a child: `git` is run with the repository's public URL and no token in its
+/// argv or environment (`account::the_token_never_appears_in_a_git_argv`), and gets the token
+/// only by running `goalcup git-credential` itself, later, from the agent's own `git push`.
 #[test]
 fn the_only_command_site_is_the_launch_builder() {
     fn sites(dir: &std::path::Path, found: &mut Vec<String>) {
@@ -1082,7 +1086,7 @@ fn the_only_command_site_is_the_launch_builder() {
     let files: Vec<&str> = found.iter().map(|f| f.split(':').next().unwrap()).collect();
     assert_eq!(
         files,
-        ["harness_version.rs", "launch.rs", "spawn.rs"],
+        ["github.rs", "harness_version.rs", "launch.rs", "spawn.rs"],
         "{found:?}"
     );
     let spawn = include_str!("../../src/daemon/spawn.rs");
@@ -1136,19 +1140,18 @@ fn capture_children_spawn_only_through_the_gate() {
         body.find(needle)
             .unwrap_or_else(|| panic!("`capture` has no {needle}"))
     };
-    // The order is the gate's: forked and parked, handle, durable registration, an exact-path
-    // executable recheck, only then release.
+    // The order is the gate's: forked and parked, handle, durable registration, only then
+    // release.
     assert!(at("spawn_gated(") < at("gated_handle("));
     assert!(at("gated_handle(") < at("register_process("));
-    assert!(at("register_process(") < at("recheck_resolved_executable("));
-    assert!(at("recheck_resolved_executable(") < at("gated.release()"));
+    assert!(at("register_process(") < at("gated.release()"));
     // A failed registration aborts the gate; it never reaches the release.
     let (failed, _) = body
         .split_once("gated.release()")
         .expect("the release is the next step");
     assert!(
         failed.matches("gated.abort();").count() >= 3,
-        "a failed handle, registration, or executable recheck aborts the gate"
+        "a failed handle, registration, or an interrupt aborts the gate"
     );
     // A released child is never given back to a spawner: the schema-selected identity tee
     // only takes its stdout and its already-loaded rule.

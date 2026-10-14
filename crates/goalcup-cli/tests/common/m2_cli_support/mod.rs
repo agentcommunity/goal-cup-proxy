@@ -555,17 +555,6 @@ pub enum LaunchFault {
     Conflict,
 }
 
-/// A replacement made after durable process registration while the child is still parked.
-#[derive(Clone, Copy)]
-pub enum ExecutableFault {
-    /// Atomically replace the resolved regular file with different regular-file bytes.
-    Atomic,
-    /// Replace the resolved regular file with a symlink to another executable.
-    Symlink,
-    /// Replace the resolved regular file with a FIFO whose delayed writer exposes blocking opens.
-    Fifo,
-}
-
 /// What a [`Hooked`] client saw, and the faults armed on it.
 #[derive(Default)]
 pub struct Book {
@@ -592,8 +581,6 @@ pub struct Book {
     /// Let the daemon accept the goal, then lose its answer.
     pub lose_goal_answer: bool,
     pub registration: Option<RegistrationFault>,
-    pub executable_fault: Option<ExecutableFault>,
-    pub executable_faulted_at: Option<std::time::Instant>,
     /// Hold every `register_process` this long before it acts, so a harness started before its
     /// registration has time to show it (the fake writes its pid file within milliseconds).
     pub registration_delay: Option<Duration>,
@@ -619,7 +606,6 @@ pub struct Hooked<'a> {
     inner: &'a (dyn DaemonClient + Sync),
     out: PathBuf,
     started: PathBuf,
-    executable: PathBuf,
     relay_on: Option<&'a tokio::runtime::Runtime>,
     book: Mutex<Book>,
 }
@@ -630,7 +616,6 @@ impl<'a> Hooked<'a> {
             inner,
             out: rig.out.clone(),
             started: rig.out.join("started"),
-            executable: rig.root.join("bin/m2-fake-harness"),
             relay_on: None,
             book: Mutex::default(),
         }
@@ -689,49 +674,6 @@ impl<'a> Hooked<'a> {
         let started = self.started.exists();
         self.book().calls.push((name.to_string(), started));
     }
-
-    fn replace_executable(&self) {
-        let fault = {
-            let mut book = self.book();
-            let fault = book.executable_fault.take();
-            if fault.is_some() {
-                book.executable_faulted_at = Some(std::time::Instant::now());
-            }
-            fault
-        };
-        let Some(fault) = fault else {
-            return;
-        };
-        match fault {
-            ExecutableFault::Atomic => {
-                let replacement = self.executable.with_extension("replacement");
-                std::fs::write(&replacement, b"#!/bin/sh\nexit 0\n").unwrap();
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o755))
-                    .unwrap();
-                std::fs::rename(replacement, &self.executable).unwrap();
-            }
-            ExecutableFault::Symlink => {
-                std::fs::remove_file(&self.executable).unwrap();
-                std::os::unix::fs::symlink("/bin/true", &self.executable).unwrap();
-            }
-            ExecutableFault::Fifo => {
-                std::fs::remove_file(&self.executable).unwrap();
-                use std::os::unix::ffi::OsStrExt;
-                let path = std::ffi::CString::new(self.executable.as_os_str().as_bytes()).unwrap();
-                // SAFETY: `path` is a live NUL-terminated path and `mkfifo` retains no pointer.
-                assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o700) }, 0);
-                let fifo = self.executable.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_secs(2));
-                    use std::os::unix::fs::OpenOptionsExt;
-                    let mut writer = std::fs::OpenOptions::new();
-                    writer.write(true).custom_flags(libc::O_NONBLOCK);
-                    let _ = writer.open(fifo);
-                });
-            }
-        }
-    }
 }
 
 impl DaemonClient for Hooked<'_> {
@@ -781,11 +723,7 @@ impl DaemonClient for Hooked<'_> {
         }
         let fault = self.book().registration.take();
         match fault {
-            None => {
-                self.inner.register_process(entry_id, request)?;
-                self.replace_executable();
-                Ok(())
-            }
+            None => self.inner.register_process(entry_id, request),
             Some(RegistrationFault::Refused) => Err(ControlError::Conflict(
                 "the test refuses this process registration".to_string(),
             )),
