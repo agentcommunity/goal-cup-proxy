@@ -9,33 +9,30 @@ import { ApiError } from "../src/errors.ts";
 import { openRun } from "../src/runs.ts";
 import { openBody } from "./helpers/client.ts";
 
-const AUTH: Auth = { member: "m", credential: "c".repeat(64), run_id: null, mode: "practice" };
+const AUTH: Auth = { member: "m", credential: "c".repeat(64), run_id: null, mode: "competition" };
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-function ctxWith(githubCheck: boolean, token?: string, bind: "bound" | "conflict" = "bound") {
+function ctxWith(githubCheck: boolean, token?: string, result: "created" | "conflict" = "created") {
   const opened: OpenRunArgs[] = [];
-  const bound: { credential: string; run_id: string; expires_at: string }[] = [];
   const db = {
-    async bindCredential(credential: string, run_id: string, expires_at: string) {
-      bound.push({ credential, run_id, expires_at });
-      return bind;
-    },
     async openRun(a: OpenRunArgs) {
       opened.push(a);
-      return { kind: "created" as const, run: { run_id: a.run_id, entry_id: a.entry_id, official_start: a.official_start, deadline_at: a.deadline_at } };
+      if (result === "conflict") return { kind: "conflict" as const };
+      const run = { run_id: a.run_id, official_start: a.official_start, deadline_at: a.deadline_at };
+      return { kind: "created" as const, run, entry: { entry_id: a.entry_id } };
     },
   } as unknown as Db;
   const ctx = {
     env: { GITHUB_TOKEN: token },
     db,
-    cfg: { eventId: "practice", runSeconds: 168 * 3600, abandonAfterSeconds: 86400, githubCheck },
+    cfg: { eventId: "cup", practiceEventId: "practice", runSeconds: 168 * 3600, practiceRunSeconds: 600, closeAfterSeconds: 86400, startWindow: undefined, githubCheck },
     now: () => new Date("2026-11-06T09:00:00Z"),
   } as unknown as Ctx;
-  return { ctx, opened, bound };
+  return { ctx, opened };
 }
 
 const req = () => new Request("https://x.example/v1/runs", { method: "POST", body: JSON.stringify(openBody()) });
@@ -51,14 +48,32 @@ function stubGithub(reply: () => Response) {
 
 test("off: GitHub is never asked", async () => {
   const calls = stubGithub(() => new Response("{}", { status: 500 }));
-  const { ctx, opened, bound } = ctxWith(false);
+  const { ctx, opened } = ctxWith(false);
   const res = await openRun(ctx, AUTH, req());
   assert.equal(res.status, 201);
-  // The credential is bound to the new run until 24 hours after its deadline.
-  assert.deepEqual(bound, [{ credential: AUTH.credential, run_id: opened[0]!.run_id, expires_at: "2026-11-14T09:00:00Z" }]);
+  // The credential is bound to the new run, in the step that opens it, until 24 hours after its deadline.
+  assert.equal(opened[0]!.credential, AUTH.credential);
+  assert.equal(opened[0]!.credential_expires_at, "2026-11-14T09:00:00Z");
   assert.equal(calls.length, 0);
   assert.equal(opened[0]!.official_start, "2026-11-06T09:00:00Z");
   assert.equal(opened[0]!.deadline_at, "2026-11-13T09:00:00Z");
+  assert.equal(opened[0]!.event_id, "cup");
+  assert.equal(opened[0]!.mode, "competition");
+});
+
+test("a practice credential opens a practice run: the practice event, the practice length", async () => {
+  const { ctx, opened } = ctxWith(false);
+  assert.equal((await openRun(ctx, { ...AUTH, mode: "practice" }, req())).status, 201);
+  assert.equal(opened[0]!.event_id, "practice");
+  assert.equal(opened[0]!.mode, "practice");
+  assert.equal(opened[0]!.deadline_at, "2026-11-06T09:10:00Z");
+  assert.equal(opened[0]!.credential_expires_at, "2026-11-07T09:10:00Z");
+});
+
+test("the connection's facts go to the database as given, nulls when absent", async () => {
+  const { ctx, opened } = ctxWith(false);
+  await openRun(ctx, AUTH, req());
+  assert.deepEqual([opened[0]!.client_ip, opened[0]!.client_country, opened[0]!.machine], [null, null, null]);
 });
 
 test("on: a public repository passes, and the token is sent when configured", async () => {

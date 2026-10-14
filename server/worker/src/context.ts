@@ -1,18 +1,25 @@
 // Per-request context: parsed configuration, the database, the signer.
 
-import { ABANDON_AFTER_SECONDS, type Db } from "./db.ts";
+import { CLOSE_AFTER_SECONDS, type Db } from "./db.ts";
 import { LocalDb } from "./db-local.ts";
 import { SupabaseDb } from "./db-supabase.ts";
 import type { Env } from "./env.ts";
 import { ApiError } from "./errors.ts";
 import { Signer } from "./sign.ts";
+import { isTime } from "./util.ts";
 
 export interface Config {
+  /** The event of competition runs, and of practice runs. */
   eventId: string;
+  practiceEventId: string;
   /** deadline_at = official_start + this. RUN_HOURS * 3600, or RUN_SECONDS (local backend only). */
   runSeconds: number;
-  /** Unsealed this long after deadline_at -> abandoned. 24 h, or ABANDON_AFTER_SECONDS (local backend only). */
-  abandonAfterSeconds: number;
+  /** The same for a practice run: PRACTICE_RUN_MINUTES * 60. */
+  practiceRunSeconds: number;
+  /** A run is closed this long after it ends. 24 h, or CLOSE_AFTER_SECONDS (local backend only). */
+  closeAfterSeconds: number;
+  /** The competition start window (local backend only); undefined: the database's, or always open. */
+  startWindow: { opens: string | null; closes: string | null } | undefined;
   githubCheck: boolean;
 }
 
@@ -34,15 +41,27 @@ function positiveNumber(name: string, raw: string | undefined, fallback: number,
 }
 
 /**
- * RUN_SECONDS and ABANDON_AFTER_SECONDS exist so tests can run a whole deadline in seconds.
- * They are honoured only with DB_BACKEND=local; anywhere else their presence is a mistake worth
- * stopping for, not a value to ignore.
+ * RUN_SECONDS, CLOSE_AFTER_SECONDS and the START_WINDOW_* edges exist so tests can run a whole
+ * lifecycle in seconds. They are honoured only with DB_BACKEND=local; anywhere else their
+ * presence is a mistake worth stopping for, not a value to ignore.
  */
-function testOnlySeconds(env: Env, name: "RUN_SECONDS" | "ABANDON_AFTER_SECONDS"): number | undefined {
+function testOnly(env: Env, name: "RUN_SECONDS" | "CLOSE_AFTER_SECONDS" | "START_WINDOW_OPENS" | "START_WINDOW_CLOSES"): string | undefined {
   const raw = env[name];
   if (raw === undefined || raw === "") return undefined;
   if (env.DB_BACKEND !== "local") throw misconfigured(`${name} is for DB_BACKEND=local (tests) only.`);
-  return positiveNumber(name, raw, 0, "seconds", 365 * 24 * 3600);
+  return raw;
+}
+
+const testOnlySeconds = (env: Env, name: "RUN_SECONDS" | "CLOSE_AFTER_SECONDS"): number | undefined => {
+  const raw = testOnly(env, name);
+  return raw === undefined ? undefined : positiveNumber(name, raw, 0, "seconds", 365 * 24 * 3600);
+};
+
+function testOnlyTime(env: Env, name: "START_WINDOW_OPENS" | "START_WINDOW_CLOSES"): string | null {
+  const raw = testOnly(env, name);
+  if (raw === undefined) return null;
+  if (!isTime(raw)) throw misconfigured(`${name} must be an RFC 3339 time like 2026-11-06T09:00:00Z.`);
+  return raw;
 }
 
 /**
@@ -63,10 +82,18 @@ export function readConfig(env: Env): Config {
   if (typeof env.EVENT_ID !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(env.EVENT_ID)) {
     throw misconfigured("EVENT_ID must be lowercase letters, digits and dashes.");
   }
+  if (typeof env.PRACTICE_EVENT_ID !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(env.PRACTICE_EVENT_ID)) {
+    throw misconfigured("PRACTICE_EVENT_ID must be lowercase letters, digits and dashes.");
+  }
+  const opens = testOnlyTime(env, "START_WINDOW_OPENS");
+  const closes = testOnlyTime(env, "START_WINDOW_CLOSES");
   return {
     eventId: env.EVENT_ID,
+    practiceEventId: env.PRACTICE_EVENT_ID,
     runSeconds: testOnlySeconds(env, "RUN_SECONDS") ?? positiveNumber("RUN_HOURS", env.RUN_HOURS, 168, "hours", 24 * 365) * 3600,
-    abandonAfterSeconds: testOnlySeconds(env, "ABANDON_AFTER_SECONDS") ?? ABANDON_AFTER_SECONDS,
+    practiceRunSeconds: positiveNumber("PRACTICE_RUN_MINUTES", env.PRACTICE_RUN_MINUTES, 10, "minutes", 24 * 60) * 60,
+    closeAfterSeconds: testOnlySeconds(env, "CLOSE_AFTER_SECONDS") ?? CLOSE_AFTER_SECONDS,
+    startWindow: opens === null && closes === null ? undefined : { opens, closes },
     githubCheck: env.GITHUB_CHECK === "on",
   };
 }
@@ -90,7 +117,10 @@ export async function getDb(env: Env): Promise<Db> {
   const backend = env.DB_BACKEND ?? "supabase";
   try {
     if (backend === "supabase") return new SupabaseDb(env.SUPABASE_URL, env.SUPABASE_KEY);
-    if (backend === "local") return LocalDb.create(env.TRACES, readConfig(env).abandonAfterSeconds);
+    if (backend === "local") {
+      const cfg = readConfig(env);
+      return LocalDb.create(env.TRACES, { closeAfterSeconds: cfg.closeAfterSeconds, startWindow: cfg.startWindow });
+    }
   } catch (e) {
     // The detail goes to the Worker's log only: a caller without a credential gets this answer too,
     // and a configuration error must not echo configuration.

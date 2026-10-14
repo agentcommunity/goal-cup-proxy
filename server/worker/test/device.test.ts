@@ -160,11 +160,20 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
     assert.deepEqual((await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "same" }) })).body, first.body);
   });
 
-  test("a member's second credential cannot open a second run while the first is open", async () => {
+  test("a member's second credential opens a second run, which replaces the first", async () => {
     const one = await credentialFor(api, "erin");
-    assert.equal((await api.call("POST", "/v1/runs", { token: one, json: openBody({ session_id: "e1" }) })).status, 201);
+    const first = await api.call("POST", "/v1/runs", { token: one, json: openBody({ session_id: "e1" }) });
+    assert.equal(first.status, 201);
     const two = await credentialFor(api, "erin");
-    assertError(await api.call("POST", "/v1/runs", { token: two, json: openBody({ session_id: "e2" }) }), 409, "conflict");
+    const second = await api.call("POST", "/v1/runs", { token: two, json: openBody({ session_id: "e2" }) });
+    assert.equal(second.status, 201, JSON.stringify(second.body)); // no more "already has an open run"
+    const beat = (token: string, run: { run_id: string; entry_id: string }) =>
+      api.call("POST", `/v1/runs/${run.run_id}/heartbeat`, {
+        token,
+        json: { entry_id: run.entry_id, seq: 0, head: GENESIS, offset_local: 0, final: false, repo_head: null },
+      });
+    assert.equal((await beat(one, first.body)).body.reason, "replaced");
+    assert.equal((await beat(two, second.body)).body.reason, null);
   });
 
   test("the heartbeat takes recording and model_requests, and answers reason null", async () => {

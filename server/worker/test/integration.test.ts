@@ -188,8 +188,8 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       const r = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
       assert.equal(r.status, 200);
       assert.deepEqual(r.body, {
-        run_id: runId, entry_id: entryId, status: "open",
-        official_start: r.body.official_start, deadline_at: r.body.deadline_at,
+        run_id: runId, entry_id: entryId, segment: 0, status: "open",
+        official_start: r.body.official_start, deadline_at: r.body.deadline_at, ends_at: r.body.deadline_at,
         offset: 0, next_seq: 0, head: GENESIS, last_ack: null, stop: false, final: null,
       });
     });
@@ -426,26 +426,47 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assertError(await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: "e" + "3".repeat(16), ...docs } }), 404, "not_found");
     });
 
+    test("a seal needs the final heartbeat first, and the chain held up to it", async () => {
+      const p = (await api.call("GET", `/v1/runs/${runId}`, { token: ALICE })).body;
+      const noFinal = await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, ...docs } });
+      assertError(noFinal, 409, "conflict");
+      assert.match(noFinal.body.message, /final heartbeat/);
+      // An end the server does not hold the chain up to yet.
+      const beat = (seq: number, head: string) =>
+        api.call("POST", `/v1/runs/${runId}/heartbeat`, { token: ALICE, json: { entry_id: entryId, seq, head, offset_local: 1, final: true, repo_head: null } });
+      assert.equal((await beat(p.next_seq + 3, "d".repeat(64))).status, 200);
+      assertError(await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, ...docs } }), 409, "conflict");
+    });
+
     test("200, a repeat with the same documents is 200, different documents are 409", async () => {
-      const r = await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, ...docs } });
+      // A fresh run whose end is committed where the server holds the chain.
+      const token = await credentialFor(api, "dora");
+      const run = (await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "doras-session" }) })).body;
+      const c = makeChunk(run.entry_id, 0, 3, GENESIS, "dora");
+      assert.equal((await api.call("PUT", `/v1/runs/${run.run_id}/chunks/0`, { token, body: c.body, headers: c.headers })).status, 200);
+      const final = await api.call("POST", `/v1/runs/${run.run_id}/heartbeat`, { token, json: { entry_id: run.entry_id, seq: c.lastSeq, head: c.head, offset_local: 1, final: true, repo_head: null } });
+      assert.equal(final.status, 200, JSON.stringify(final.body));
+      const seal = (body: Record<string, unknown>) => api.call("POST", `/v1/runs/${run.run_id}/seal`, { token, json: { entry_id: run.entry_id, ...body } });
+
+      const r = await seal(docs);
       assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(r.body, { status: "sealed" });
-      const again = await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, ...docs } });
+      // Before the run's end, a sealed entry leaves the run open.
+      assert.deepEqual(r.body, { status: "sealed", run_status: "open" });
+      const again = await seal(docs);
       assert.equal(again.status, 200);
-      assert.deepEqual(again.body, { status: "sealed" });
-      assertError(await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, seal_json: '{"sealed":false}', baseline_json: docs.baseline_json } }), 409, "conflict");
-      assertError(await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, seal_json: docs.seal_json, baseline_json: "{}" } }), 409, "conflict");
+      assert.deepEqual(again.body, { status: "sealed", run_status: "open" });
+      assertError(await seal({ seal_json: '{"sealed":false}', baseline_json: docs.baseline_json }), 409, "conflict");
+      assertError(await seal({ seal_json: docs.seal_json, baseline_json: "{}" }), 409, "conflict");
+
+      // The sealed entry takes no more, and the run (open until its end) is still readable.
+      const p = await api.call("GET", `/v1/runs/${run.run_id}`, { token });
+      assert.equal(p.body.status, "open");
+      const late = makeChunk(run.entry_id, p.body.next_seq, 1, p.body.head, "after");
+      assertError(await api.call("PUT", `/v1/runs/${run.run_id}/chunks/${p.body.offset}`, { token, body: late.body, headers: late.headers }), 410, "closed");
+      assertError(await api.call("POST", `/v1/runs/${run.run_id}/abandon`, { token, json: { reason: "x" } }), 409, "conflict"); // it holds chunks
     });
 
-    test("after the seal the run is closed (410) and still readable", async () => {
-      const p = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
-      assert.equal(p.body.status, "sealed");
-      const c = makeChunk(entryId, p.body.next_seq, 1, p.body.head, "after");
-      assertError(await api.call("PUT", `/v1/runs/${runId}/chunks/${p.body.offset}`, { token: ALICE, body: c.body, headers: c.headers }), 410, "closed");
-      assertError(await api.call("POST", `/v1/runs/${runId}/abandon`, { token: ALICE, json: { reason: "x" } }), 410, "closed");
-    });
-
-    test("the account is free again after the seal", async () => {
+    test("a later start by the same account is a new run", async () => {
       const r = await api.call("POST", "/v1/runs", { token: await credentialFor(api, "alice"), json: openBody({ session_id: "second-run" }) });
       assert.equal(r.status, 201, JSON.stringify(r.body));
       assert.notEqual(r.body.run_id, runId);
@@ -565,7 +586,7 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     await sleepUntil(alice.deadline);
     const r = await beat(alice, ALICE, a1.lastSeq, a1.head, false);
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { stop: true, deadline_at: alice.deadline, reason: null });
+    assert.deepEqual(r.body, { stop: true, deadline_at: alice.deadline, reason: "deadline" });
     assert.equal((await get(alice, ALICE)).body.stop, true);
     assert.equal((await get(alice, ALICE)).body.status, "open");
   });
@@ -586,7 +607,7 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
   test("the final heartbeat commits the end; a repeat is 200, a different end is 409", async () => {
     const f = await beat(alice, ALICE, a3.lastSeq, a3.head, true, "a".repeat(40));
     assert.equal(f.status, 200, JSON.stringify(f.body));
-    assert.deepEqual(f.body, { stop: true, deadline_at: alice.deadline, reason: null });
+    assert.deepEqual(f.body, { stop: true, deadline_at: alice.deadline, reason: "deadline" });
     assert.deepEqual((await get(alice, ALICE)).body.final, { seq: 9, head: a3.head });
 
     assert.equal((await beat(alice, ALICE, 9, a3.head, true, "a".repeat(40))).status, 200); // same
@@ -634,13 +655,13 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
   });
 });
 
-describe("a run unsealed 24 hours after its deadline is abandoned", { concurrency: false }, () => {
+describe("a run still unsealed 24 hours after it ends is closed as incomplete", { concurrency: false }, () => {
   let worker: RunningWorker;
   let api: Client;
 
   before(async () => {
-    // Test-only clock: a 2-second run, abandoned 2 seconds after its deadline.
-    worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY, RUN_SECONDS: "2", ABANDON_AFTER_SECONDS: "2" });
+    // Test-only clock: a 2-second run, closed 2 seconds after its deadline.
+    worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY, RUN_SECONDS: "2", CLOSE_AFTER_SECONDS: "2" });
     api = new Client(worker.url);
     [ALICE, BOB, CAROL] = [await credentialFor(api, "alice"), await credentialFor(api, "bob"), await credentialFor(api, "carol")];
   });
@@ -648,7 +669,7 @@ describe("a run unsealed 24 hours after its deadline is abandoned", { concurrenc
     await worker?.stop();
   });
 
-  test("it answers 410 to everything, shows as abandoned, and frees the account's open slot", async () => {
+  test("it answers 410 to everything, shows as incomplete; a sealed run stays sealed", async () => {
     const open = async (token: string, session: string) => {
       const r = await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: session }) });
       assert.equal(r.status, 201, JSON.stringify(r.body));
@@ -659,7 +680,13 @@ describe("a run unsealed 24 hours after its deadline is abandoned", { concurrenc
     const carol = await open(CAROL, "c1");
     const c = makeChunk(alice.entry_id, 0, 3, GENESIS, "x");
     assert.equal((await api.call("PUT", `/v1/runs/${alice.run_id}/chunks/0`, { token: ALICE, body: c.body, headers: c.headers })).status, 200);
-    // carol seals in time; a sealed run is never abandoned.
+    // carol commits her end and seals in time; a sealed run is never closed as incomplete.
+    const cc = makeChunk(carol.entry_id, 0, 2, GENESIS, "carol");
+    assert.equal((await api.call("PUT", `/v1/runs/${carol.run_id}/chunks/0`, { token: CAROL, body: cc.body, headers: cc.headers })).status, 200);
+    assert.equal(
+      (await api.call("POST", `/v1/runs/${carol.run_id}/heartbeat`, { token: CAROL, json: { entry_id: carol.entry_id, seq: cc.lastSeq, head: cc.head, offset_local: 1, final: true, repo_head: null } })).status,
+      200,
+    );
     assert.equal(
       (await api.call("POST", `/v1/runs/${carol.run_id}/seal`, { token: CAROL, json: { entry_id: carol.entry_id, seal_json: "{}", baseline_json: "{}" } })).status,
       200,
@@ -672,7 +699,7 @@ describe("a run unsealed 24 hours after its deadline is abandoned", { concurrenc
     await sleep(3300); // the server clock counts whole seconds, and "past" is strictly past
     const g = await api.call("GET", `/v1/runs/${alice.run_id}`, { token: ALICE });
     assert.equal(g.status, 200);
-    assert.equal(g.body.status, "abandoned");
+    assert.equal(g.body.status, "incomplete");
     const more = makeChunk(alice.entry_id, 3, 1, c.head, "y");
     assertError(await api.call("PUT", `/v1/runs/${alice.run_id}/chunks/${c.length}`, { token: ALICE, body: more.body, headers: more.headers }), 410, "closed");
     assertError(
@@ -681,11 +708,8 @@ describe("a run unsealed 24 hours after its deadline is abandoned", { concurrenc
       "closed",
     );
     assertError(await api.call("POST", `/v1/runs/${alice.run_id}/seal`, { token: ALICE, json: { entry_id: alice.entry_id, seal_json: "{}", baseline_json: "{}" } }), 410, "closed");
-    assert.equal((await api.call("POST", "/v1/runs", { token: await credentialFor(api, "alice"), json: openBody({ session_id: "a2" }) })).status, 201); // slot free
-
-    // bob never looked at his old run: opening a new one abandons it by itself.
-    assert.equal((await api.call("POST", "/v1/runs", { token: await credentialFor(api, "bob"), json: openBody({ session_id: "b2" }) })).status, 201);
-    assert.equal((await api.call("GET", `/v1/runs/${bob.run_id}`, { token: BOB })).body.status, "abandoned");
+    // bob never looked at his old run: it is incomplete the first time he does.
+    assert.equal((await api.call("GET", `/v1/runs/${bob.run_id}`, { token: BOB })).body.status, "incomplete");
     // carol's sealed run stayed sealed.
     assert.equal((await api.call("GET", `/v1/runs/${carol.run_id}`, { token: CAROL })).body.status, "sealed");
   });
