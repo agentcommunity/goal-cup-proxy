@@ -276,8 +276,16 @@ pub struct HarnessManifest {
 #[non_exhaustive]
 pub struct CaptureSpec {
     /// The measured headless argument template: ends in `--` (the goal follows as one
-    /// argument) unless [`Self::goal_flag`] names the slot.
+    /// argument) unless [`Self::goal_flag`] names the slot. With [`Self::interactive`] there
+    /// is no slot, and the arguments start the harness's chat.
     pub args: Vec<String>,
+    /// The harness runs in its normal chat mode in the participant's terminal and the
+    /// participant types the prompt (D57): no goal slot, no credential, identity `none`.
+    #[serde(default)]
+    pub interactive: bool,
+    /// Appended after [`Self::args`] when a run is continued, under the same rules (D51).
+    #[serde(default)]
+    pub resume_args: Vec<String>,
     /// The long option that carries the goal as one `--flag=<goal>` argument.
     #[serde(default)]
     pub goal_flag: Option<String>,
@@ -389,6 +397,10 @@ pub struct HomeSpec {
     pub seed: Vec<SeedFile>,
     /// `{user_home}/<rel>` directories the daemon refuses a config home at or under.
     pub real_dirs: Vec<String>,
+    /// Where under the config home the harness reads its skills. Declarative: the daemon does
+    /// not use it.
+    #[serde(default)]
+    pub skills_dir: Option<String>,
 }
 
 impl HomeSpec {
@@ -491,6 +503,10 @@ pub struct NativeSpec {
     /// a `[[capture.hosts]]` entry names, with the same grammar ([`valid_hint`]).
     #[serde(default)]
     pub protocol_hint: Option<String>,
+    /// Read only the files new or written since the run started (D57): what admits
+    /// `identity.source = "none"` on a shared config home.
+    #[serde(default)]
+    pub since_run_start: bool,
 }
 
 /// `[capture.argv_guard]`: the generic form of a harness that acts on some of its own argv
@@ -625,6 +641,15 @@ pub struct ExtraPattern {
 }
 
 impl HarnessManifest {
+    /// Every argument the launch may pass, `args` then `resume_args`, each with its field.
+    fn every_arg(&self) -> impl Iterator<Item = (&'static str, &String)> {
+        let c = &self.capture;
+        c.args
+            .iter()
+            .map(|a| ("capture.args", a))
+            .chain(c.resume_args.iter().map(|a| ("capture.resume_args", a)))
+    }
+
     /// The termination spec with its defaults applied.
     pub fn termination(&self) -> TerminationSpec {
         self.capture.termination.clone().unwrap_or_default()
@@ -785,6 +810,32 @@ fn check_template(field: &str, what: &str, value: &str) -> Result<(), ProtocolEr
         }
     }
     Ok(())
+}
+
+/// One argument of `capture.args` or `capture.resume_args` under the D51 rules, refused as
+/// `field`.
+fn check_arg(field: &str, origin: Origin, a: &str) -> Result<(), ProtocolError> {
+    if a.len() > MAX_CAPTURE_ARG_BYTES || has_control(a) {
+        return Err(refuse(
+            field,
+            "an argument is longer than the bound or contains a control character",
+        ));
+    }
+    // A `Dev` argument that is an absolute path is one the kit or the controlled workload
+    // substituted (`@STAND_IN@`); its directory names (a checkout under `.../hook-fix/`) are
+    // not flags, so the word rules do not read them.
+    let substituted_path = origin == Origin::Dev && a.starts_with('/');
+    if !substituted_path && let Some(why) = capture_arg_denied(a) {
+        return Err(refuse(field, format!("`{a}` {why}")));
+    }
+    // N1: the one observable predicate. A pinned connector never needs an absolute path; the
+    // controlled workload and the kit substitute them (`Origin::Dev`).
+    if origin == Origin::Pinned
+        && let Some(why) = arg_path_denied(a)
+    {
+        return Err(refuse(field, format!("`{a}` {why}")));
+    }
+    check_template(field, &format!("`{a}`"), a)
 }
 
 /// Whether `value` uses `{name}` as a token.
@@ -1092,27 +1143,16 @@ impl HarnessManifest {
             ));
         }
         for a in &c.args {
-            if a.len() > MAX_CAPTURE_ARG_BYTES || has_control(a) {
-                return Err(refuse(
-                    "capture.args",
-                    "an argument is longer than the bound or contains a control character",
-                ));
-            }
-            // A `Dev` argument that is an absolute path is one the kit or the controlled
-            // workload substituted (`@STAND_IN@`); its directory names (a checkout under
-            // `.../hook-fix/`) are not flags, so the word rules do not read them.
-            let substituted_path = origin == Origin::Dev && a.starts_with('/');
-            if !substituted_path && let Some(why) = capture_arg_denied(a) {
-                return Err(refuse("capture.args", format!("`{a}` {why}")));
-            }
-            // N1: the one observable predicate. A pinned connector never needs an absolute
-            // path; the controlled workload and the kit substitute them (`Origin::Dev`).
-            if origin == Origin::Pinned
-                && let Some(why) = arg_path_denied(a)
-            {
-                return Err(refuse("capture.args", format!("`{a}` {why}")));
-            }
-            check_template("capture.args", &format!("`{a}`"), a)?;
+            check_arg("capture.args", origin, a)?;
+        }
+        if c.args.len() + c.resume_args.len() > MAX_CAPTURE_ARGS {
+            return Err(refuse(
+                "capture.resume_args",
+                format!("with `args`, holds more than {MAX_CAPTURE_ARGS} arguments"),
+            ));
+        }
+        for a in &c.resume_args {
+            check_arg("capture.resume_args", origin, a)?;
         }
         if let Some(flag) = &c.goal_flag {
             let mut b = flag.bytes();
@@ -1135,10 +1175,20 @@ impl HarnessManifest {
                 return Err(refuse("capture.goal_flag", format!("`{flag}` {why}")));
             }
         }
-        // The goal is placed exactly one way: after a closing `--`, or inside `goal_flag`.
-        let slots = usize::from(c.args.last().is_some_and(|a| a == "--"))
-            + usize::from(c.goal_flag.is_some());
-        if slots != 1 {
+        // The goal is placed exactly one way: after a closing `--`, or inside `goal_flag`. An
+        // interactive profile has no slot: the participant types the prompt (D57).
+        if c.interactive {
+            if c.goal_flag.is_some() {
+                return Err(refuse(
+                    "capture.goal_flag",
+                    "an `interactive` profile takes no goal: the participant types the prompt \
+                     in the harness",
+                ));
+            }
+        } else if usize::from(c.args.last().is_some_and(|a| a == "--"))
+            + usize::from(c.goal_flag.is_some())
+            != 1
+        {
             return Err(refuse(
                 "capture.goal_flag",
                 "the goal is placed exactly one way: `args` end in `--` and the goal follows as \
@@ -1296,6 +1346,11 @@ impl HarnessManifest {
                 return Err(refuse("capture.home.seed", format!("`{}` {why}", s.file)));
             }
         }
+        if let Some(d) = &h.skills_dir
+            && let Some(why) = relative_path_problem(d, 4)
+        {
+            return Err(refuse("capture.home.skills_dir", format!("`{d}` {why}")));
+        }
         if let Some(d) = has_duplicate(h.seed.iter().map(|s| s.file.as_str())) {
             return Err(refuse(
                 "capture.home.seed",
@@ -1323,6 +1378,13 @@ impl HarnessManifest {
     }
 
     fn check_credential(&self) -> Result<(), ProtocolError> {
+        if self.capture.interactive && self.capture.credential.is_some() {
+            return Err(refuse(
+                "capture.credential",
+                "an `interactive` profile takes no credential: the participant signs in to the \
+                 harness as they always do",
+            ));
+        }
         if let Some(c) = &self.capture.credential
             && !CREDENTIAL_ENV.contains(&c.env.as_str())
         {
@@ -1379,6 +1441,13 @@ impl HarnessManifest {
 
     fn check_identity(&self) -> Result<(), ProtocolError> {
         let i = &self.capture.identity;
+        if self.capture.interactive && i.source != IdentitySource::None {
+            return Err(refuse(
+                "capture.identity.source",
+                "an `interactive` profile takes `none`: its sessions are the files its native \
+                 source finds, not one the launch names",
+            ));
+        }
         // Which sibling fields each source requires and refuses.
         let json = (&i.match_field, &i.match_value, &i.id_field);
         let line = (&i.prefix, &i.grammar);
@@ -1591,9 +1660,9 @@ impl HarnessManifest {
                 }
             }
         }
-        for a in &self.capture.args {
+        for (field, a) in self.every_arg() {
             if let Some(why) = g.denies(a) {
-                return Err(refuse("capture.args", format!("`{a}` {why}")));
+                return Err(refuse(field, format!("`{a}` {why}")));
             }
         }
         if let Some(flag) = &self.capture.goal_flag
@@ -1802,10 +1871,10 @@ impl HarnessManifest {
     /// upload. Schema 1 has no field for one, and `deny_unknown_fields` keeps it that way.
     fn check_delivery_agnostic(&self) -> Result<(), ProtocolError> {
         let c = &self.capture;
-        for a in &c.args {
+        for (field, a) in self.every_arg() {
             if mentions_goalcup(a) {
                 return Err(refuse(
-                    "capture.args",
+                    field,
                     format!("`{a}` names the tracker: a harness is delivery-agnostic"),
                 ));
             }
@@ -1879,7 +1948,9 @@ impl HarnessManifest {
         }
 
         // `{session_id}` and `preassigned` imply each other.
+        let resume_uses_session = c.resume_args.iter().any(|a| uses_token(a, "session_id"));
         let uses_session = c.args.iter().any(|a| uses_token(a, "session_id"))
+            || resume_uses_session
             || c.env.values().any(|v| uses_token(v, "session_id"));
         let args_use_session = c.args.iter().any(|a| uses_token(a, "session_id"));
         match i.source {
@@ -1893,7 +1964,11 @@ impl HarnessManifest {
             IdentitySource::Preassigned => {}
             _ if uses_session => {
                 return Err(refuse(
-                    "capture.args",
+                    if resume_uses_session && !args_use_session {
+                        "capture.resume_args"
+                    } else {
+                        "capture.args"
+                    },
                     "`{session_id}` needs `identity.source = \"preassigned\"`: otherwise the \
                      id is not one the tracker minted",
                 ));
@@ -1916,15 +1991,21 @@ impl HarnessManifest {
             }
         }
 
-        // `none` must read a per-run root: another run's sessions are not this run's.
+        // `none` must read a per-run root, or only what was written since the run started:
+        // another run's sessions are not this run's, and runs on a shared home are serialized.
         let native = &c.native[0];
         let (root_home, root_rel) = split_native_root(&native.root).expect("checked by native");
-        if i.source == IdentitySource::None && root_home == RootHome::Config && !per_run {
+        if i.source == IdentitySource::None
+            && root_home == RootHome::Config
+            && !per_run
+            && !native.since_run_start
+        {
             return Err(refuse(
                 "capture.native.root",
                 "with `identity.source = \"none\"` the root must be per run: `{run_home}/...`, \
-                 or `{config_home}/...` with `config_home = \"per_run\"`; an unscoped source in \
-                 a shared home would read other runs' sessions",
+                 or `{config_home}/...` with `config_home = \"per_run\"`, unless the native \
+                 source declares `since_run_start = true`; an unscoped source in a shared home \
+                 would read other runs' sessions",
             ));
         }
 

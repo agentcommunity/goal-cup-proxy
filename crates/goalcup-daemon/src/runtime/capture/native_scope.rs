@@ -18,15 +18,37 @@ pub(super) struct NativePlan {
     pub(super) unread_stores: usize,
 }
 
+/// `native_since` is the run's start in Unix seconds, which a `since_run_start` source needs
+/// (D57) and any other ignores.
 pub(super) fn native_plan(
     capture: &CaptureSpec,
     run_home: &Path,
     config_home: &Path,
+    native_since: Option<u64>,
 ) -> Result<NativePlan, DaemonError> {
     let native = capture
         .native
         .first()
         .ok_or_else(|| DaemonError::Config("a schema-1 capture has no native source".into()))?;
+    let modified_since = match (native.since_run_start, native_since) {
+        (false, _) => None,
+        (true, Some(secs)) => Some(
+            std::time::UNIX_EPOCH
+                .checked_add(Duration::from_secs(secs))
+                .ok_or_else(|| {
+                    DaemonError::Config(format!(
+                        "`native_since` {secs} is not a time this machine can represent"
+                    ))
+                })?,
+        ),
+        (true, None) => {
+            return Err(DaemonError::Config(
+                "the profile reads the session files written since the run started, and the \
+                 request names no `native_since`: the launcher must send the run's start time"
+                    .into(),
+            ));
+        }
+    };
     let root = native_root(&native.root, run_home, config_home)?;
     let form = match native.form {
         goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
@@ -50,6 +72,7 @@ pub(super) fn native_plan(
         form,
         hint,
         scope_id: None,
+        modified_since,
     };
     if native.pattern.contains("{id}") {
         let initial_binding = match capture.identity.binding {

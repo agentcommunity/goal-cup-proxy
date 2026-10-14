@@ -206,6 +206,9 @@ fn parse_optional_body<T: serde::de::DeserializeOwned + Default>(
     }
 }
 
+/// How far ahead of the daemon's clock a run's start (`native_since`) may be.
+const NATIVE_SINCE_SKEW_SECS: u64 = 300;
+
 /// `POST /v0/capture-workspaces` — a v5 local capture entry: the profile's connector, the
 /// workspace, the reserved chain and the ingest authorization. No server is asked anything.
 pub(super) async fn create_capture_workspace(
@@ -246,6 +249,20 @@ pub(super) async fn create_capture_workspace(
         ))
         .into_response();
     }
+    // A start time ahead of this clock (beyond a few minutes of skew) is a launcher bug, a
+    // time in milliseconds the likeliest: it would silently admit no session file (D57).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if let Some(since) = request.native_since
+        && since > now.saturating_add(NATIVE_SINCE_SKEW_SECS)
+    {
+        return ControlErrorResponse::new(ControlError::Malformed(format!(
+            "native_since {since} is later than this machine's clock ({now}) by more than \
+             {NATIVE_SINCE_SKEW_SECS} seconds: it is the run's start in Unix seconds"
+        )))
+        .into_response();
+    }
     let entry_id = match request.entry_id {
         Some(id) if goalcup_protocol::control::is_entry_id(&id) => id,
         Some(id) => {
@@ -265,6 +282,7 @@ pub(super) async fn create_capture_workspace(
         &digests,
         &every_loaded_real_dir,
         request.reserve_bytes,
+        request.native_since,
     ) {
         Ok(info) => axum::Json(info).into_response(),
         Err(e) => ControlErrorResponse::from(e).into_response(),
