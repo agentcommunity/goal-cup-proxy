@@ -294,8 +294,21 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   created: the server issues the entry id, the official start and the deadline, and signs a start
   receipt that is kept as the trace's `receipt.json` (and in `$GOALCUP_CONFIG_DIR/uploads/`). If
   the server refuses or cannot be reached, nothing starts and the message says why. A harness
-  given a provider key (Hermes) is never uploaded. Uploading the trace itself is the next step
-  ([TODO](TODO.md), step 2); the wire contract is [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
+  given a provider key (Hermes) is never uploaded. The wire contract is
+  [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
+- <a id="upload"></a>**Uploading.** While the run records, `goalcup start` sends the trace's
+  `chain.jsonl` to the server in compressed chunks: the first as soon as the agent launches,
+  then every hour, or sooner once 256 MiB of chain is waiting (a chunk is at most 32 MiB
+  compressed). Each chunk is acknowledged with a signature, and the acknowledgement is added to
+  the trace's `acks.jsonl`, which `goalcup-verify` checks. Recording never waits on the network:
+  when the server cannot be reached the upload waits (a minute, doubling to fifteen) and tries
+  again, and the run goes on. After the seal, `start` sends the rest and the seal for at most two
+  minutes; if that is not enough it says so, and `goalcup upload <entry>` finishes the job
+  (after a crash too). It asks the server where it got to and is safe to run again, though not
+  while the run's own `start` is still uploading (it says so). Uploading stops, with the reason
+  on stderr, when the server refuses the request itself (a revoked token, a closed run, a TLS
+  certificate it cannot trust) or the local chain no longer continues the server's copy; the
+  run is still complete on this machine.
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
   `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. An installed one (Homebrew, or an unpacked
   release tarball) finds them at `<bin>/../share/goalcup/connectors`.

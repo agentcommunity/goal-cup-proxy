@@ -1,6 +1,6 @@
 //! `goalcup` — the participant's command line.
 //!
-//! The six sub-commands live in [`commands`]; the upload server and the participant's token
+//! The seven sub-commands live in [`commands`]; the upload server and the participant's token
 //! for it live in [`server`]; the tracker's own configuration directory
 //! and the documents in it live in [`config`]; the shipped connector manifests and the
 //! release-hash allowlist over them live in [`connector`], and the version grammar those

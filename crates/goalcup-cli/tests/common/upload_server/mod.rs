@@ -117,9 +117,12 @@ impl UploadServer {
                         _ = stop_rx => {}
                     }
                 });
-                // Dropping the runtime cancels every connection task still alive, so a pooled
-                // keep-alive connection cannot outlive `stop` and keep answering.
-                drop(rt);
+                // Shutting the runtime down cancels every connection task still alive, so a
+                // pooled keep-alive connection cannot outlive `stop` and keep answering. A plain
+                // drop would also wait for a blocking task still reading a chunk body, which
+                // holds `stop` until the tracer's own timeout ends the request; a server that
+                // goes away does not wait for its clients.
+                rt.shutdown_timeout(std::time::Duration::from_millis(100));
             })
             .expect("spawn the stand-in thread");
         let port = ready_rx

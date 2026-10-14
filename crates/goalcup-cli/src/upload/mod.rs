@@ -18,6 +18,7 @@
 
 pub mod api;
 pub mod http;
+pub mod uploader;
 
 use crate::CliError;
 use crate::config::write_secret_file;

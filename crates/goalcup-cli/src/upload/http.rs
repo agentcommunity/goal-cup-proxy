@@ -14,7 +14,7 @@ use std::time::Duration;
 /// How long a connection may take to open.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a JSON call may take as a whole.
-const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// The most of a response body read. Every answer in docs/UPLOAD-API.md is a few kilobytes.
 const MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 
@@ -139,6 +139,10 @@ impl ServerClient {
         // nothing in `src/` panics, so a failure falls back to an agent that refuses https.
         .map(|builder| Arc::new(builder.with_root_certificates(store).with_no_client_auth()));
         let mut agent = ureq::AgentBuilder::new()
+            // One connection per call: calls are minutes apart, and a kept connection to a
+            // server that has since restarted is one more way for a call to hang.
+            .max_idle_connections(0)
+            .max_idle_connections_per_host(0)
             // A redirect would carry the bearer token to an address nobody configured.
             .redirects(0)
             .timeout_connect(CONNECT_TIMEOUT)
@@ -166,9 +170,20 @@ impl ServerClient {
         path: &str,
         body: Option<&impl serde::Serialize>,
     ) -> Result<T, ServerError> {
+        self.json_timed(method, path, body, CALL_TIMEOUT)
+    }
+
+    /// [`ServerClient::json`] within `timeout` for the whole call.
+    pub fn json_timed<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&impl serde::Serialize>,
+        timeout: Duration,
+    ) -> Result<T, ServerError> {
         let request = self
             .request(method, path)
-            .timeout(CALL_TIMEOUT)
+            .timeout(timeout)
             .set("Accept", "application/json");
         let sent = match body {
             Some(body) => {

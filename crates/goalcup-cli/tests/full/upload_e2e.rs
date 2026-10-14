@@ -272,3 +272,375 @@ fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
     assert_eq!(server.run_ids().len(), 2, "{out}");
     assert!(!goalcup_cli::upload::pending_path(&rig.cfg).exists());
 }
+
+// ------------------------------------------------------------------ the uploader
+
+/// A cadence a test can watch: an "hour" of 200 ms, polled every 25 ms, backoff from 100 ms to
+/// 400 ms, up to 10 s to finish after the seal, and 3 s for one chunk.
+fn quick_policy() -> goalcup_cli::upload::uploader::Policy {
+    goalcup_cli::upload::uploader::Policy::from_test_spec("200,25,100,400,10000,268435456,3000")
+        .unwrap()
+}
+
+/// End a fake harness that is already running: it reads `stop` once, so one that got there
+/// first is waiting on its one `sleep`, which is ended here.
+fn end_harness(rig: &Rig) {
+    rig.tell("stop", "");
+    wait_until("the harness to see stop or start its sleep", || {
+        rig.harness_file("done").is_some() || rig.harness_file("sleeper").is_some()
+    });
+    if let Some(pid) = rig
+        .harness_file("sleeper")
+        .and_then(|pid| pid.trim().parse::<i32>().ok())
+    {
+        // SAFETY: two integers; the pid is the fake harness's own `sleep`.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+}
+
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} never happened"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+/// The server's copy of an entry: its chunks, decompressed and joined in offset order.
+fn server_copy(server: &UploadServer, run_id: &str) -> Vec<u8> {
+    let mut chunks = server.chunks(run_id);
+    chunks.sort_by_key(|c| c.offset);
+    let mut joined = Vec::new();
+    for chunk in chunks {
+        assert_eq!(chunk.offset, joined.len() as u64, "chunks leave no hole");
+        let body = std::fs::read(&chunk.body_path).unwrap();
+        let raw = zstd::decode_all(body.as_slice()).unwrap();
+        assert_eq!(raw.len() as u64, chunk.length);
+        joined.extend_from_slice(&raw);
+    }
+    joined
+}
+
+/// The server holds the whole chain and the seal, the trace's `acks.jsonl` holds a verified
+/// acknowledgement of its last record, and the trace verifies under the server's key.
+fn assert_fully_uploaded(rig: &Rig, server: &UploadServer, run_id: &str, entry_id: &str) {
+    let trace = rig.trace(entry_id);
+    let chain = std::fs::read(trace.join("chain.jsonl")).unwrap();
+    assert_eq!(
+        server_copy(server, run_id),
+        chain,
+        "the server's copy is the chain"
+    );
+    let (seal_json, baseline_json) = server.seal(run_id).expect("the seal was sent");
+    assert_eq!(
+        seal_json.as_bytes(),
+        std::fs::read(trace.join("seal.json")).unwrap()
+    );
+    assert_eq!(
+        baseline_json.as_bytes(),
+        std::fs::read(trace.join("baseline.json")).unwrap()
+    );
+    let options = goalcup_verifier::VerifyOptions {
+        extra_server_keys: vec![server.public_key_hex()],
+        ..Default::default()
+    };
+    let report = scan_capture_trace(&trace, &options, &mut |_| Ok(())).unwrap();
+    assert_eq!(report.integrity, CaptureIntegrity::Valid, "{report:?}");
+    assert_eq!(report.anchor, AnchorState::Signed, "{report:?}");
+    let last_seq = chain
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+        .count() as u64
+        - 1;
+    let acked = report
+        .verified_ack
+        .as_ref()
+        .expect("a verified acknowledgement");
+    assert_eq!(acked.seq, last_seq, "the last record is acknowledged");
+    // Each acknowledgement is kept once.
+    let acks = std::fs::read_to_string(trace.join("acks.jsonl")).unwrap();
+    let seqs: Vec<u64> = acks
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["seq"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect();
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "{seqs:?}");
+}
+
+fn logged_in_options(
+    rig: &Rig,
+    goal: &std::path::Path,
+) -> goalcup_cli::commands::start::StartOptions {
+    let mut opts = rig.options(goal, RESERVE);
+    opts.repo = Some(REPO.to_string());
+    opts.upload_policy = quick_policy();
+    opts
+}
+
+/// A normal run: the first chunk goes at the launch, more follow, and at the end the rest and
+/// the seal; everything is acknowledged.
+#[test]
+fn a_run_is_uploaded_as_it_records_and_sealed_at_the_end() {
+    let rig = Rig::new();
+    let server = server(&rig.root.join("server"));
+    log_in(&rig, &server.url(), TOKEN);
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let opts = logged_in_options(&rig, &goal);
+    let (result, out) = std::thread::scope(|s| {
+        let running = rig.start(s, &client, opts, None);
+        // The first chunk lands while the harness is still running.
+        wait_until("a first chunk", || {
+            server
+                .run_ids()
+                .first()
+                .is_some_and(|run| !server.chunks(run).is_empty())
+        });
+        end_harness(&rig);
+        running.join().unwrap()
+    });
+    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(out.contains("uploaded: "), "{out}");
+    let run_id = server.run_ids()[0].clone();
+    assert!(server.chunks(&run_id).len() >= 2, "{out}");
+    assert_eq!(server.status(&run_id).as_deref(), Some("sealed"));
+    assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
+}
+
+/// The server goes away mid-run and comes back: nothing is lost, and the run ends uploaded.
+#[test]
+fn a_server_that_goes_away_mid_run_gets_everything_once_it_is_back() {
+    let rig = Rig::new();
+    let store = rig.root.join("server");
+    let first = server(&store);
+    let port = first.port();
+    log_in(&rig, &first.url(), TOKEN);
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let opts = logged_in_options(&rig, &goal);
+    let (result, out, server) = std::thread::scope(|s| {
+        let running = rig.start(s, &client, opts, None);
+        wait_until("a first chunk", || {
+            first
+                .run_ids()
+                .first()
+                .is_some_and(|run| !first.chunks(run).is_empty())
+        });
+        first.stop();
+        // Long enough for the uploader to meet the closed port more than once.
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let back = UploadServer::start(
+            &store,
+            ServerOptions {
+                tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
+                port: Some(port),
+                ..ServerOptions::default()
+            },
+        );
+        end_harness(&rig);
+        let (result, out) = running.join().unwrap();
+        (result, out, back)
+    });
+    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(out.contains("uploaded: "), "{out}");
+    let run_id = server.run_ids()[0].clone();
+    assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
+}
+
+/// The server is away at the end: `goalcup start` says the upload is incomplete, and a later
+/// `goalcup upload` asks the server where it is and finishes, sealing it.
+#[test]
+fn an_upload_left_incomplete_is_finished_by_goalcup_upload() {
+    let rig = Rig::new();
+    let store = rig.root.join("server");
+    let first = server(&store);
+    let port = first.port();
+    log_in(&rig, &first.url(), TOKEN);
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let mut opts = logged_in_options(&rig, &goal);
+    // A finish budget the closed server outlasts.
+    opts.upload_policy.finish_budget = std::time::Duration::from_millis(300);
+    let (result, out) = std::thread::scope(|s| {
+        let running = rig.start(s, &client, opts, None);
+        wait_until("a first chunk", || {
+            first
+                .run_ids()
+                .first()
+                .is_some_and(|run| !first.chunks(run).is_empty())
+        });
+        first.stop();
+        end_harness(&rig);
+        running.join().unwrap()
+    });
+    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(out.contains("upload incomplete"), "{out}");
+    assert!(
+        out.contains(&format!("goalcup upload {}", outcome.entry_id)),
+        "{out}"
+    );
+
+    let server = UploadServer::start(
+        &store,
+        ServerOptions {
+            tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
+            port: Some(port),
+            ..ServerOptions::default()
+        },
+    );
+    let run_id = server.run_ids()[0].clone();
+    assert_ne!(server.status(&run_id).as_deref(), Some("sealed"));
+    let mut said = Vec::new();
+    goalcup_cli::commands::upload::upload_with(
+        &rig.cfg,
+        &outcome.entry_id,
+        quick_policy(),
+        &mut said,
+    )
+    .unwrap();
+    let said = String::from_utf8(said).unwrap();
+    assert!(said.contains("and its seal"), "{said}");
+    assert!(
+        server
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("GET /v1/runs/")),
+        "the upload began by asking the server where it is"
+    );
+    assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
+    // And again: nothing is sent twice.
+    let chunks = server.chunks(&run_id).len();
+    goalcup_cli::commands::upload::upload_with(
+        &rig.cfg,
+        &outcome.entry_id,
+        quick_policy(),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(server.chunks(&run_id).len(), chunks);
+}
+
+/// A reply lost after the server stored a chunk: the retry gets the stored acknowledgement,
+/// the chunk is stored once, and the acknowledgement is kept once.
+#[test]
+fn a_lost_reply_is_retried_without_a_second_copy() {
+    let rig = Rig::new();
+    let server = server(&rig.root.join("server"));
+    log_in(&rig, &server.url(), TOKEN);
+    server.drop_next_chunk_reply();
+    server.fail_next_chunks(1);
+    rig.tell("stop", "");
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let opts = logged_in_options(&rig, &goal);
+    let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(out.contains("uploaded: "), "{out}");
+    let run_id = server.run_ids()[0].clone();
+    assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
+}
+
+/// A token revoked after the run opened stops the upload, says why, and leaves the run
+/// complete on this machine; a local chain that does not continue the server's copy is
+/// refused, not uploaded.
+#[test]
+fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
+    let rig = Rig::new();
+    let store = rig.root.join("server");
+    let first = server(&store);
+    let port = first.port();
+    log_in(&rig, &first.url(), TOKEN);
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let mut opts = logged_in_options(&rig, &goal);
+    opts.upload_policy.finish_budget = std::time::Duration::from_millis(300);
+    let (result, out) = std::thread::scope(|s| {
+        let running = rig.start(s, &client, opts, None);
+        wait_until("a first chunk", || {
+            first
+                .run_ids()
+                .first()
+                .is_some_and(|run| !first.chunks(run).is_empty())
+        });
+        first.stop();
+        end_harness(&rig);
+        running.join().unwrap()
+    });
+    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+
+    // The token is no longer known: refused, and the token is not repeated.
+    let server = UploadServer::start(
+        &store,
+        ServerOptions {
+            tokens: vec![(
+                "gct_some_other_token_000000".to_string(),
+                "member-1".to_string(),
+            )],
+            port: Some(port),
+            ..ServerOptions::default()
+        },
+    );
+    let refused = goalcup_cli::commands::upload::upload_with(
+        &rig.cfg,
+        &outcome.entry_id,
+        quick_policy(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert_eq!(refused.exit_code(), 1, "{refused}");
+    assert!(refused.to_string().contains("401"), "{refused}");
+    assert!(!refused.to_string().contains(TOKEN));
+    server.stop();
+
+    // Back with the token, but the local chain was edited past what the server holds.
+    let server = UploadServer::start(
+        &store,
+        ServerOptions {
+            tokens: vec![(TOKEN.to_string(), "member-1".to_string())],
+            port: Some(port),
+            ..ServerOptions::default()
+        },
+    );
+    let run_id = server.run_ids()[0].clone();
+    let held = server_copy(&server, &run_id).len();
+    let chain_path = rig.trace(&outcome.entry_id).join("chain.jsonl");
+    let chain = std::fs::read(&chain_path).unwrap();
+    let (kept, rest) = chain.split_at(held);
+    let rest = String::from_utf8(rest.to_vec()).unwrap();
+    let next: serde_json::Value = serde_json::from_str(rest.lines().next().unwrap()).unwrap();
+    let prev = next["prev"].as_str().unwrap();
+    let edited = rest.replacen(
+        &format!("\"prev\":\"{prev}\""),
+        &format!("\"prev\":\"{}\"", "1".repeat(64)),
+        1,
+    );
+    assert_ne!(edited, rest, "the next record's link was found");
+    std::fs::write(&chain_path, [kept, edited.as_bytes()].concat()).unwrap();
+    let refused = goalcup_cli::commands::upload::upload_with(
+        &rig.cfg,
+        &outcome.entry_id,
+        quick_policy(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(
+        refused.to_string().contains("does not continue"),
+        "{refused}"
+    );
+    assert_eq!(
+        server_copy(&server, &run_id).len(),
+        held,
+        "nothing more was stored"
+    );
+}
