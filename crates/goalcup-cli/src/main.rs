@@ -363,12 +363,11 @@ impl Drop for EchoOff {
 fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
-    let client = goalcup_cli::daemon::ensure_daemon(
+    let client = ensure_daemon(
         &cfg,
         goalcup_cli::daemon::MissingConfig::WriteDefault {
             connectors: &connectors,
         },
-        daemon_deadline(),
     )?;
     // Linux: before the gated spawn, so what the harness leaves behind is reparented here and
     // swept before the seal (`subreaper.rs`). Only this binary arms it, never an in-process start.
@@ -460,7 +459,7 @@ fn test_upstream_roots(
 fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     commands::status::pinned(&cfg, entry.as_deref())?;
-    let client = match goalcup_cli::daemon::daemon_to_read(&cfg, daemon_deadline())? {
+    let client = match daemon_to_read(&cfg)? {
         Some(client) => client,
         // A record but no configuration: say there is no daemon, naming `control.json`.
         None => goalcup_cli::daemon::HttpDaemonClient::from_config_dir(&cfg)?,
@@ -491,11 +490,7 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
 fn seal(entry: Option<String>) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
-    let client = goalcup_cli::daemon::ensure_daemon(
-        &cfg,
-        goalcup_cli::daemon::MissingConfig::Refuse,
-        daemon_deadline(),
-    )?;
+    let client = ensure_daemon(&cfg, goalcup_cli::daemon::MissingConfig::Refuse)?;
     let entry_id = resolve_entry(&cfg, entry)?;
     commands::seal::seal_with(
         &client,
@@ -532,15 +527,42 @@ fn resolve_entry(cfg: &std::path::Path, entry: Option<String>) -> Result<String,
 fn entries(json: bool) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let mut out = std::io::stdout();
-    match goalcup_cli::daemon::daemon_to_read(&cfg, daemon_deadline())? {
+    match daemon_to_read(&cfg)? {
         Some(client) => commands::entries::entries_with(&client, json, &mut out),
         None => commands::entries::render_entries(&[], json, &mut out),
     }
 }
 
-/// How long a command waits for a daemon it had to start.
-fn daemon_deadline() -> std::time::Instant {
-    std::time::Instant::now() + goalcup_cli::daemon::spawn::SPAWN_WAIT
+/// Say, on stderr, that a command is still waiting for a daemon that is reopening a run.
+fn say_waiting(line: &str) {
+    eprintln!("goalcup: {line}");
+}
+
+/// A client for the daemon a command needs, started if none answers. A daemon that is gone is
+/// waited for [`goalcup_cli::daemon::spawn::SPAWN_WAIT`]; one that is alive and reopening a run
+/// for up to [`goalcup_cli::daemon::spawn::DAEMON_READY_BUDGET`], saying so every ten seconds.
+fn ensure_daemon(
+    cfg: &std::path::Path,
+    missing: goalcup_cli::daemon::MissingConfig<'_>,
+) -> Result<goalcup_cli::daemon::HttpDaemonClient, CliError> {
+    goalcup_cli::daemon::spawn::ensure_daemon_waiting(
+        cfg,
+        missing,
+        None,
+        goalcup_cli::daemon::spawn::Wait::SHIPPED,
+        &mut say_waiting,
+    )
+}
+
+/// The daemon `status` and `entries` ask, if there is one to ask, with the same waits.
+fn daemon_to_read(
+    cfg: &std::path::Path,
+) -> Result<Option<goalcup_cli::daemon::HttpDaemonClient>, CliError> {
+    goalcup_cli::daemon::spawn::daemon_to_read(
+        cfg,
+        goalcup_cli::daemon::spawn::Wait::SHIPPED,
+        &mut say_waiting,
+    )
 }
 
 /// This machine's clock, in the one spelling this tree writes a time in.

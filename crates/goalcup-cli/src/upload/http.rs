@@ -111,9 +111,16 @@ impl std::fmt::Debug for ServerClient {
 impl ServerClient {
     /// A client for `config`, trusting the public web roots.
     pub fn new(config: &ServerConfig) -> ServerClient {
+        ServerClient::bearer(&config.url, &config.token)
+    }
+
+    /// A client for any `base` URL and bearer `token`, trusting the public web roots. The
+    /// GitHub repository check (`account::github::check`) uses it: GitHub's API takes the
+    /// same `Authorization: Bearer` header the upload server does.
+    pub(crate) fn bearer(base: &str, token: &str) -> ServerClient {
         let mut store = rustls::RootCertStore::empty();
         store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        ServerClient::with_store(config, store)
+        ServerClient::with_store(base, token, store)
     }
 
     /// A client trusting exactly `roots`, for a test server with a certificate of its own. A
@@ -127,10 +134,10 @@ impl ServerClient {
         for root in roots {
             let _ = store.add(root);
         }
-        ServerClient::with_store(config, store)
+        ServerClient::with_store(&config.url, &config.token, store)
     }
 
-    fn with_store(config: &ServerConfig, store: rustls::RootCertStore) -> ServerClient {
+    fn with_store(base: &str, token: &str, store: rustls::RootCertStore) -> ServerClient {
         let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
@@ -152,8 +159,9 @@ impl ServerClient {
             agent = agent.tls_connector(Arc::new(RustlsConnector(tls)));
         }
         ServerClient {
-            base: config.url.clone(),
-            token: config.token.clone(),
+            // Without a trailing slash, so `base` + `/path` is one slash whichever door built it.
+            base: base.trim_end_matches('/').to_string(),
+            token: token.to_string(),
             agent: agent.build(),
         }
     }

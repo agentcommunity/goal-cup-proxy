@@ -1085,12 +1085,9 @@ carry their own amendments and point here for shared text.
 > ¶2 *Registration before release.* The launcher registers the parked child with the existing
 > `/process` call (`gated_handle`: the fork-time `process_start`, which `exec` does not change, and
 > no native hint) and writes the release byte only after the daemon's `204`, which follows the
-> durable `Registered` row. After that response and any registered-pause test point, it re-opens
-> the exact already-canonical executable path with `O_NOFOLLOW|O_NONBLOCK`, requires a regular file,
-> and streams the open descriptor to EOF into SHA-256. This is not a coherent file snapshot. A
-> failed open or digest mismatch aborts and reaps the parked child,
-> seals the registered entry, and writes no `Launch`; no re-canonicalisation chooses a new target.
-> A launcher that dies, a registration that fails or is ambiguous, a failed executable recheck, or a
+> durable `Registered` row. After that response and any registered-pause test point, it looks once
+> at the interrupt flag; the harness binary is neither hashed nor re-opened here (D53). A
+> launcher that dies, a registration that fails or is ambiguous, or a
 > child that dies while parked never leads to an `exec`: the child reads EOF, or writes into a dead
 > socket and takes SIGPIPE, and ends. `release()` is `Ok` only on the acknowledgement and std's
 > successful `exec`; every `Err` means no harness ran, except the one sub-case in ¶5(f), so no
@@ -1146,11 +1143,10 @@ carry their own amendments and point here for shared text.
 > child stalled for 5 s or more: SIGSTOP, or extreme load) but before the gate closes: the child
 > `exec`s, `release()` returns `Err`, and `reap_failed_gate` SIGKILLs it with no grace. So "every
 > `Err` means no harness ran" is exact except here, where a harness ran for milliseconds on an
-> entry that is then sealed (`AlreadyStopped`). (g) The final executable recheck narrows but does
-> not eliminate same-UID races on macOS. Its window begins with the first streaming read: an
-> in-place writer can make the read sequence hash to the pin while the file's final bytes differ.
-> After that read, `exec` resolves the path rather than the open inode, so pathname replacement can
-> change what runs. This contract claims neither a coherent snapshot nor exact-byte/inode binding.
+> entry that is then sealed (`AlreadyStopped`). (g) There is no executable recheck (D53): `exec`
+> resolves the path rather than an open inode, so a pathname replacement or an updater rewriting
+> the file can change what runs, and the daemon records the build that ran. This contract claims
+> neither a coherent snapshot nor exact-byte/inode binding.
 
 > **Amendment 2026-10-02 (C1/C3 proxy loss in the stream, H-16).** Supersedes C1's "Only those two
 > FrameEvent variants may use stream zero", and makes the 2026-09-29 "GapReason mapping"'s seal-request

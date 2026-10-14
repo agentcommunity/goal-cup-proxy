@@ -25,8 +25,10 @@ pub const UNREPORTED: &str = "unreported";
 /// How long the probe may run before it is killed and [`UNREPORTED`] is recorded.
 pub const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The longest version line kept; a longer one is [`UNREPORTED`].
-pub const MAX_REPORTED_VERSION_BYTES: usize = 128;
+/// The longest version line kept; a longer one is cut to this many bytes, never refused (D53:
+/// a version never stops a run). It matches the server's bound on `harness_version`, so a line
+/// the CLI keeps is one the server accepts.
+pub const MAX_REPORTED_VERSION_BYTES: usize = 64;
 
 /// How much of the probe's stdout is read. The first line is all that is kept.
 const MAX_PROBE_STDOUT_BYTES: u64 = 4096;
@@ -146,8 +148,9 @@ pub fn reported_version_within(
     }
 }
 
-/// The first line of `stdout`, trimmed, if it is 1 to [`MAX_REPORTED_VERSION_BYTES`] bytes of
-/// printable ASCII; [`UNREPORTED`] otherwise.
+/// The first line of `stdout`, trimmed, if it is printable ASCII and not empty; [`UNREPORTED`]
+/// otherwise. A line longer than [`MAX_REPORTED_VERSION_BYTES`] is cut to its first
+/// [`MAX_REPORTED_VERSION_BYTES`] bytes.
 pub fn reported_line(stdout: &[u8]) -> String {
     let line = stdout.split(|b| *b == b'\n').next().unwrap_or_default();
     let Ok(text) = std::str::from_utf8(line) else {
@@ -155,8 +158,9 @@ pub fn reported_line(stdout: &[u8]) -> String {
     };
     let text = text.trim();
     let printable = text.bytes().all(|b| (b' '..=b'~').contains(&b));
-    if text.is_empty() || text.len() > MAX_REPORTED_VERSION_BYTES || !printable {
+    if text.is_empty() || !printable {
         return UNREPORTED.to_string();
     }
-    text.to_string()
+    // Printable ASCII only, so any byte index is a char boundary.
+    text[..text.len().min(MAX_REPORTED_VERSION_BYTES)].to_string()
 }
