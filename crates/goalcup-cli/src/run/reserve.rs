@@ -38,8 +38,9 @@ pub const KEEP_AFTER_DEADLINE: Duration = Duration::from_secs(24 * 60 * 60);
 /// How often the watch looks at the disk.
 pub const WATCH_PERIOD: Duration = Duration::from_secs(30);
 
-/// A change smaller than this is not worth a call to the volume when the reserve grows.
-const GROW_STEP: u64 = 1 << 20;
+/// The reserve gives space back at once, but takes it again only when this much is missing, so
+/// that it does not take freed space straight back on every tick.
+pub const GROW_STEP: u64 = 256 << 20;
 
 /// The sizes one start works with. Shipped builds use [`DiskPolicy::default`]; a test build can
 /// name smaller ones ([`DiskPolicy::from_test_spec`]) so no test allocates 3 GiB.
@@ -137,14 +138,22 @@ pub enum DiskVerdict {
 
 /// The verdict on one reading.
 ///
-/// `free_beyond_reserve` is read **after** the reserve has been resized to [`target`], so
-/// below [`FREE_FLOOR`] it means the reserve has nothing more to give back. The footprint
-/// alone never stops a run: it may grow past 3 GiB while the disk has room, which is why it
-/// does not enter the verdict.
-pub fn verdict(footprint: u64, free_beyond_reserve: u64, uploads_failing: bool) -> DiskVerdict {
+/// `held` is what the reserve holds and `free_beyond_reserve` what the volume has beyond it,
+/// both read after the reserve was resized to [`target`]. `Stop` needs all three: the reserve
+/// drawn down to nothing (`held == 0`), the free space below [`FREE_FLOOR`], and uploads
+/// failing. Free space just under the floor while the reserve still holds bytes is a reserve
+/// that has more to give back, not a full disk. The footprint alone never stops a run: it may
+/// grow past 3 GiB while the disk has room, which is why it does not enter the verdict.
+pub fn verdict(
+    footprint: u64,
+    held: u64,
+    free_beyond_reserve: u64,
+    uploads_failing: bool,
+) -> DiskVerdict {
     verdict_with(
         &DiskPolicy::default(),
         footprint,
+        held,
         free_beyond_reserve,
         uploads_failing,
     )
@@ -154,10 +163,11 @@ pub fn verdict(footprint: u64, free_beyond_reserve: u64, uploads_failing: bool) 
 pub fn verdict_with(
     policy: &DiskPolicy,
     _footprint: u64,
+    held: u64,
     free_beyond_reserve: u64,
     uploads_failing: bool,
 ) -> DiskVerdict {
-    if free_beyond_reserve < policy.free_floor && uploads_failing {
+    if held == 0 && free_beyond_reserve < policy.free_floor && uploads_failing {
         DiskVerdict::Stop
     } else if free_beyond_reserve < LOW_DISK_BYTES {
         DiskVerdict::Low {
@@ -221,11 +231,28 @@ pub fn human(bytes: u64) -> String {
     format!("{bytes} B")
 }
 
-/// The run's reserve file, held for as long as the run records.
+/// The run's reserve file, held for as long as the run records, and locked (`flock`, held by
+/// this open file) for as long as this value lives. A process that dies takes the lock with it,
+/// which is how a later start tells a reserve nobody holds from one a live run does.
 #[derive(Debug)]
 pub struct RunReserve {
     file: ReserveFile,
     dir: PathBuf,
+    /// Holds the lock; never read.
+    _lock: std::fs::File,
+}
+
+/// Open `path` for locking, never through a symlink, creating it when asked.
+fn open_lockable(path: &Path, create: bool) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(create)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
 }
 
 /// Refuse, before anything is created, a volume that cannot hold the reserve and the start
@@ -270,18 +297,37 @@ impl RunReserve {
         })?;
         crate::config::create_private_dir(dir)?;
         let free = room(dir, policy)?;
+        let io = |source| CliError::Io {
+            path: path.display().to_string(),
+            source,
+        };
+        // The file exists and is locked before any block is allocated, so a start looking for
+        // stale reserves never sees this one unlocked.
+        let lock = open_lockable(path, true).map_err(io)?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(CliError::Refused(format!(
+                    "another goalcup is holding the reservation {}.",
+                    path.display()
+                )));
+            }
+            Err(std::fs::TryLockError::Error(source)) => return Err(io(source)),
+        }
         match ReserveFile::hold(path, policy.reserve_bytes) {
             Ok(file) => Ok(RunReserve {
                 file,
                 dir: dir.to_path_buf(),
+                _lock: lock,
             }),
-            Err(source) if source.kind() == std::io::ErrorKind::StorageFull => {
-                Err(refusal(dir, policy, free))
+            Err(source) => {
+                let _ = std::fs::remove_file(path);
+                if source.kind() == std::io::ErrorKind::StorageFull {
+                    Err(refusal(dir, policy, free))
+                } else {
+                    Err(io(source))
+                }
             }
-            Err(source) => Err(CliError::Io {
-                path: path.display().to_string(),
-                source,
-            }),
         }
     }
 
@@ -295,29 +341,30 @@ impl RunReserve {
         free_bytes(&self.dir)
     }
 
-    /// Give back or take blocks so the reserve holds about `bytes`.
+    /// Give back or take blocks so the reserve holds `bytes`.
     pub fn resize(&mut self, bytes: u64) -> std::io::Result<()> {
-        let held = self.allocated();
-        // Giving back is always done; growing waits for a step worth the call.
-        if held > bytes || bytes.saturating_sub(held) >= GROW_STEP {
-            self.file.resize(bytes)?;
-        }
-        Ok(())
+        self.file.resize(bytes)
     }
 
     /// Give the whole reserve back to the volume.
     pub fn release(self) -> std::io::Result<()> {
-        self.file.release()
+        let RunReserve { file, _lock, .. } = self;
+        let released = file.release();
+        drop(_lock);
+        released
     }
 }
 
-/// Remove the reserve of every run whose deadline passed more than [`KEEP_AFTER_DEADLINE`] ago
-/// (its last upload had that long), and say how many went. Called when a start begins.
+/// Remove the reserves nobody will use again, and say how many went. Called when a start
+/// begins.
 ///
-/// A run is known by its record under `cfg`. A local run has no deadline, and nothing on disk
-/// says it has ended, so its reserve is left alone: a local run releases its own at its end,
-/// and one that died keeps it until a later step can tell. A reserve with no record is not
-/// this build's to judge and stays.
+/// A run is known by its record under `cfg`.
+/// - A run opened on a server keeps its reserve until its deadline and a day ([`KEEP_AFTER_DEADLINE`])
+///   have passed, whether or not anything holds it: its harness may have exited early and
+///   `continue` will want the reserve again.
+/// - A local run has no deadline. Its reserve goes when no process holds its lock (the run's
+///   `goalcup start` died; a live one holds it for as long as it records).
+/// - A reserve with no run record goes the same way, when its lock is free.
 pub fn release_stale(cfg: &Path, artifact_root: &Path, now: u64) -> usize {
     let Ok(files) = std::fs::read_dir(artifact_root.join("reserve")) else {
         return 0;
@@ -327,19 +374,30 @@ pub fn release_stale(cfg: &Path, artifact_root: &Path, now: u64) -> usize {
         let Some(run_id) = file.file_name().to_str().map(str::to_owned) else {
             continue;
         };
-        let Ok(Some(record)) = super::read_if_any(cfg, &run_id) else {
+        let Ok(record) = super::read_if_any(cfg, &run_id) else {
             continue;
         };
-        let over = record
-            .deadline_at
-            .as_deref()
-            .and_then(goalcup_protocol::control::parse_z)
-            .is_some_and(|deadline| now >= deadline.saturating_add(KEEP_AFTER_DEADLINE.as_secs()));
-        if over && std::fs::remove_file(file.path()).is_ok() {
+        let gone = match record.as_ref().and_then(|r| r.deadline_at.as_deref()) {
+            Some(deadline) => goalcup_protocol::control::parse_z(deadline).is_some_and(|d| {
+                now >= d.saturating_add(KEEP_AFTER_DEADLINE.as_secs())
+                    && std::fs::remove_file(file.path()).is_ok()
+            }),
+            None => remove_if_unheld(&file.path()),
+        };
+        if gone {
             released += 1;
         }
     }
     released
+}
+
+/// Unlink `path` when no process holds its lock; the lock is taken for the unlink, so a run
+/// that takes the file at that moment finds it locked or gone, never half-removed.
+fn remove_if_unheld(path: &Path) -> bool {
+    let Ok(lock) = open_lockable(path, false) else {
+        return false;
+    };
+    lock.try_lock().is_ok() && std::fs::remove_file(path).is_ok()
 }
 
 #[cfg(test)]
@@ -362,8 +420,8 @@ mod tests {
         assert_eq!(target(5 * GIB, 50 * GIB, 0), 0);
         assert!(pressure(5 * GIB));
         assert!(!pressure(3 * GIB));
-        assert_eq!(verdict(5 * GIB, 50 * GIB, true), DiskVerdict::Ok);
-        assert_eq!(verdict(5 * GIB, 50 * GIB, false), DiskVerdict::Ok);
+        assert_eq!(verdict(5 * GIB, 0, 50 * GIB, true), DiskVerdict::Ok);
+        assert_eq!(verdict(5 * GIB, 0, 50 * GIB, false), DiskVerdict::Ok);
     }
 
     #[test]
@@ -377,7 +435,7 @@ mod tests {
         let freed = 100 * MIB + (2 * GIB - held);
         assert_eq!(freed, FREE_FLOOR);
         assert_eq!(
-            verdict(0, freed, true),
+            verdict(0, held, freed, true),
             DiskVerdict::Low { free: FREE_FLOOR }
         );
     }
@@ -390,23 +448,39 @@ mod tests {
 
     #[test]
     fn a_full_disk_with_failing_uploads_stops() {
-        assert_eq!(verdict(GIB, 100 * MIB, true), DiskVerdict::Stop);
-        assert_eq!(verdict(0, 0, true), DiskVerdict::Stop);
+        assert_eq!(verdict(GIB, 0, 100 * MIB, true), DiskVerdict::Stop);
+        assert_eq!(verdict(0, 0, 0, true), DiskVerdict::Stop);
+    }
+
+    #[test]
+    fn a_reserve_that_still_holds_bytes_is_never_a_full_disk() {
+        // Free space just under the floor with the reserve holding GiB: it has more to give.
+        assert_eq!(
+            verdict(0, 2 * GIB, FREE_FLOOR - 4096, true),
+            DiskVerdict::Low {
+                free: FREE_FLOOR - 4096
+            }
+        );
+        assert_eq!(
+            verdict(0, 1, 0, true),
+            DiskVerdict::Low { free: 0 },
+            "even one byte held"
+        );
     }
 
     #[test]
     fn a_full_disk_with_working_uploads_does_not_stop() {
         assert_eq!(
-            verdict(GIB, 100 * MIB, false),
+            verdict(GIB, 0, 100 * MIB, false),
             DiskVerdict::Low { free: 100 * MIB }
         );
     }
 
     #[test]
     fn low_below_five_gib_beyond_the_reservation() {
-        assert_eq!(verdict(0, 5 * GIB, true), DiskVerdict::Ok);
+        assert_eq!(verdict(0, 0, 5 * GIB, true), DiskVerdict::Ok);
         assert_eq!(
-            verdict(0, 5 * GIB - 1, true),
+            verdict(0, 0, 5 * GIB - 1, true),
             DiskVerdict::Low { free: 5 * GIB - 1 }
         );
     }
@@ -471,47 +545,76 @@ mod tests {
         assert!(!path.exists());
     }
 
-    #[test]
-    fn only_a_run_past_its_deadline_and_a_day_loses_its_reserve() {
-        let cfg = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let policy = DiskPolicy {
+    fn record(cfg: &Path, id: &str, deadline_at: Option<String>) {
+        super::super::write(
+            cfg,
+            &super::super::RunRecord {
+                run_id: id.to_string(),
+                server_url: deadline_at
+                    .as_ref()
+                    .map(|_| "https://server.example".into()),
+                practice: false,
+                connector_id: "c".to_string(),
+                workspace: PathBuf::from("/w"),
+                started_at_unix: 0,
+                deadline_at,
+                entries: Vec::new(),
+            },
+        )
+        .unwrap();
+    }
+
+    fn small() -> DiskPolicy {
+        DiskPolicy {
             reserve_bytes: MIB,
             start_margin: 0,
             free_floor: FREE_FLOOR,
             chain_quota: CHAIN_QUOTA_BYTES,
             tick: Duration::from_millis(50),
-        };
-        let deadline = |at: u64| Some(goalcup_protocol::control::format_z(at));
-        for (id, deadline_at) in [
-            ("r-old", deadline(1_000)),
-            ("r-new", deadline(1_000_000)),
-            ("r-local", None),
-        ] {
-            super::super::write(
-                cfg.path(),
-                &super::super::RunRecord {
-                    run_id: id.to_string(),
-                    server_url: None,
-                    practice: false,
-                    connector_id: "c".to_string(),
-                    workspace: PathBuf::from("/w"),
-                    started_at_unix: 0,
-                    deadline_at,
-                    entries: Vec::new(),
-                },
-            )
-            .unwrap();
-            RunReserve::take(&reserve_path(root.path(), id), &policy).unwrap();
         }
-        // A reserve with no record at all.
-        RunReserve::take(&reserve_path(root.path(), "r-orphan"), &policy).unwrap();
+    }
 
+    #[test]
+    fn a_server_run_keeps_its_reserve_until_its_deadline_and_a_day_have_passed() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let deadline = |at: u64| Some(goalcup_protocol::control::format_z(at));
+        for (id, deadline_at) in [("r-old", deadline(1_000)), ("r-new", deadline(1_000_000))] {
+            record(cfg.path(), id, deadline_at);
+            // No process holds either lock after this: only the deadline decides.
+            drop(RunReserve::take(&reserve_path(root.path(), id), &small()).unwrap());
+        }
         let now = 1_000 + KEEP_AFTER_DEADLINE.as_secs() - 1;
         assert_eq!(release_stale(cfg.path(), root.path(), now), 0);
         assert_eq!(release_stale(cfg.path(), root.path(), now + 1), 1);
         let left = |id: &str| reserve_path(root.path(), id).exists();
-        assert!(!left("r-old"));
-        assert!(left("r-new") && left("r-local") && left("r-orphan"));
+        assert!(!left("r-old") && left("r-new"));
+    }
+
+    #[test]
+    fn a_local_reserve_left_by_a_killed_run_is_removed_and_a_held_one_is_not() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        record(cfg.path(), "r-dead", None);
+        record(cfg.path(), "r-live", None);
+        // The killed run: its file is there and nothing holds the lock any more.
+        drop(RunReserve::take(&reserve_path(root.path(), "r-dead"), &small()).unwrap());
+        // No record either, and no holder.
+        drop(RunReserve::take(&reserve_path(root.path(), "r-orphan"), &small()).unwrap());
+        // The live runs: a run with a record, and one whose record is not written yet.
+        let live = RunReserve::take(&reserve_path(root.path(), "r-live"), &small()).unwrap();
+        let starting =
+            RunReserve::take(&reserve_path(root.path(), "r-starting"), &small()).unwrap();
+
+        assert_eq!(release_stale(cfg.path(), root.path(), 1), 2);
+        let left = |id: &str| reserve_path(root.path(), id).exists();
+        assert!(!left("r-dead") && !left("r-orphan"));
+        assert!(left("r-live") && left("r-starting"));
+        // A second holder cannot take a held reserve.
+        let again = RunReserve::take(&reserve_path(root.path(), "r-live"), &small());
+        assert!(again.is_err());
+        // Once their holders are done, the next start takes them too.
+        drop((live, starting));
+        assert_eq!(release_stale(cfg.path(), root.path(), 1), 2);
     }
 }

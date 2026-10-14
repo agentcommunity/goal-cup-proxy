@@ -1,21 +1,23 @@
-//! The watch tick: while a run records, every [`super::reserve::WATCH_PERIOD`] it measures the
-//! disk, resizes the run's reserve, and stops the run cleanly if the disk is full and uploads
-//! are failing.
+//! The watch tick: while a run records and while its upload wraps up, every
+//! [`super::reserve::WATCH_PERIOD`] it measures the disk, resizes the run's reserve, and stops
+//! the run cleanly if the disk is full and uploads are failing.
 //!
-//! The tick runs on a thread beside the harness's wait. It never touches the recording; its
-//! only way to end a run is to send on the run's one stop channel, which takes the same path as
-//! the run's deadline (the daemon seals, the uploader sends the seal).
+//! The tick runs on a thread of its own, started before the wait for the harness and ended just
+//! before the reserve is released ([`Watching::end`]). It never touches the recording; its only
+//! way to end a run is to send on the run's one stop channel, which takes the same path as the
+//! run's deadline (the daemon seals, the uploader sends the seal). After the harness has gone
+//! nothing listens on that channel and the tick only keeps the reserve sized.
 
 use super::RunRecord;
 use super::reserve::{
-    DiskPolicy, DiskVerdict, RunReserve, UPLOAD_FAILING_AFTER, footprint, human, target_with,
-    verdict_with,
+    DiskPolicy, DiskVerdict, GROW_STEP, RunReserve, UPLOAD_FAILING_AFTER, footprint, human,
+    target_with, verdict_with,
 };
 use std::io;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::thread::{Scope, ScopedJoinHandle};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// What is said when the disk ends a run.
@@ -35,8 +37,6 @@ pub struct Watch {
     /// uploaded (a local run, or an upload that could not start): nothing will ever free space
     /// then, so uploads count as failing.
     pub uploads: Vec<Arc<AtomicU64>>,
-    /// Set when the harness has gone and the recording is over.
-    pub done: Arc<AtomicBool>,
     pub policy: DiskPolicy,
 }
 
@@ -47,42 +47,87 @@ pub fn uploads_failing(uploads: &[Arc<AtomicU64>], now: u64) -> bool {
     })
 }
 
-/// Start the tick on `scope`. It measures at once and then every `policy.tick` until `done`,
-/// and hands the reserve back when it ends: what becomes of the reserve is the run's end to
-/// decide.
-pub fn watch_beside<'scope, 'env>(
-    scope: &'scope Scope<'scope, 'env>,
-    watch: Watch,
-) -> ScopedJoinHandle<'scope, RunReserve> {
-    scope.spawn(move || {
-        let Watch {
-            mut reserve,
-            run,
-            stop,
-            uploads,
-            done,
-            policy,
-        } = watch;
-        let mut tick = Tick::default();
-        while !done.load(Ordering::SeqCst) {
-            let failing = uploads_failing(&uploads, super::now_unix());
-            let stop_now = tick.step(
-                &mut reserve,
-                &policy,
-                footprint(&run.entries),
-                failing,
-                &mut |line| eprintln!("goalcup: {line}"),
-            );
-            if stop_now {
-                let _ = stop.send(DISK_STOP_REASON.to_string());
-            }
-            let wake = Instant::now() + policy.tick;
-            while Instant::now() < wake && !done.load(Ordering::SeqCst) {
-                std::thread::sleep(LOOK_EVERY.min(wake.saturating_duration_since(Instant::now())));
-            }
+/// A running tick. Ending it ([`Watching::end`]) hands the reserve back; dropping it stops the
+/// tick and leaves the reserve with whoever drops it last (the file stays, its lock goes).
+pub struct Watching {
+    done: Arc<AtomicBool>,
+    reserve: Option<Arc<Mutex<RunReserve>>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Watching {
+    /// Stop the tick, wait for it, and hand the reserve back, whether or not the tick thread
+    /// panicked: what becomes of the reserve is the run's end to decide.
+    pub fn end(mut self) -> Option<RunReserve> {
+        self.done.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            eprintln!("goalcup: disk: the disk watch stopped unexpectedly");
         }
-        reserve
-    })
+        let reserve = self.reserve.take()?;
+        Arc::try_unwrap(reserve)
+            .ok()
+            .map(|held| held.into_inner().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+/// Start the tick on a thread of its own. It measures at once and then every `policy.tick`
+/// until it is ended.
+pub fn watch_beside(watch: Watch) -> Watching {
+    let Watch {
+        reserve,
+        run,
+        stop,
+        uploads,
+        policy,
+    } = watch;
+    let done = Arc::new(AtomicBool::new(false));
+    let reserve = Arc::new(Mutex::new(reserve));
+    let beside = (Arc::clone(&done), Arc::clone(&reserve));
+    let thread = std::thread::Builder::new()
+        .name("goalcup-disk-watch".into())
+        .spawn(move || {
+            let (done, reserve) = beside;
+            let mut tick = Tick::default();
+            while !done.load(Ordering::SeqCst) {
+                let failing = uploads_failing(&uploads, super::now_unix());
+                let stop_now = tick.step(
+                    &mut *reserve.lock().unwrap_or_else(PoisonError::into_inner),
+                    &policy,
+                    footprint(&run.entries),
+                    failing,
+                    &mut |line| eprintln!("goalcup: {line}"),
+                );
+                if stop_now {
+                    let _ = stop.send(DISK_STOP_REASON.to_string());
+                }
+                let wake = Instant::now() + policy.tick;
+                while Instant::now() < wake && !done.load(Ordering::SeqCst) {
+                    std::thread::sleep(
+                        LOOK_EVERY.min(wake.saturating_duration_since(Instant::now())),
+                    );
+                }
+            }
+        });
+    let thread = match thread {
+        Ok(thread) => Some(thread),
+        Err(error) => {
+            eprintln!("goalcup: disk: the disk watch could not start ({error})");
+            None
+        }
+    };
+    Watching {
+        done,
+        reserve: Some(reserve),
+        thread,
+    }
 }
 
 /// What the tick reads and changes: the reserve and the volume under it.
@@ -118,10 +163,11 @@ pub struct Tick {
 }
 
 impl Tick {
-    /// One look at the disk. Resizes the reserve to what [`target_of`] says, reads the free
-    /// space again (so it is what is left once the reserve has given what it can), and judges
-    /// it. Lines for the participant go to `say`. Answers `true` exactly once: the disk is
-    /// full, uploads are failing, and the run must stop.
+    /// One look at the disk. Resizes the reserve to what [`target_with`] says (giving back at
+    /// once, taking back only when [`GROW_STEP`] is missing), reads what the reserve holds and
+    /// what the volume has free again, and judges them. Lines for the participant go to `say`.
+    /// Answers `true` exactly once: the reserve is drawn down to nothing, the disk is full,
+    /// uploads are failing, and the run must stop.
     pub fn step(
         &mut self,
         disk: &mut dyn Disk,
@@ -131,16 +177,19 @@ impl Tick {
         say: &mut dyn FnMut(&str),
     ) -> bool {
         let measured = disk.free().and_then(|free| {
-            let wanted = target_with(policy, footprint, free, disk.held());
-            disk.resize(wanted).or_else(|error| match error.kind() {
-                // The disk filled between the two looks: the next tick gives back instead.
-                io::ErrorKind::StorageFull => Ok(()),
-                _ => Err(error),
-            })?;
-            disk.free()
+            let held = disk.held();
+            let wanted = target_with(policy, footprint, free, held);
+            if wanted < held || wanted - held >= GROW_STEP {
+                disk.resize(wanted).or_else(|error| match error.kind() {
+                    // The disk filled between the two looks: the next tick gives back instead.
+                    io::ErrorKind::StorageFull => Ok(()),
+                    _ => Err(error),
+                })?;
+            }
+            Ok((disk.held(), disk.free()?))
         });
-        let free = match measured {
-            Ok(free) => free,
+        let (held, free) = match measured {
+            Ok(reading) => reading,
             Err(error) => {
                 if !std::mem::replace(&mut self.trouble_said, true) {
                     say(&format!(
@@ -151,7 +200,7 @@ impl Tick {
             }
         };
         self.trouble_said = false;
-        match verdict_with(policy, footprint, free, uploads_failing) {
+        match verdict_with(policy, footprint, held, free, uploads_failing) {
             DiskVerdict::Ok => {
                 self.low_said = false;
                 false
@@ -184,6 +233,9 @@ mod tests {
         others: u64,
         reserve: u64,
         resizes: Vec<u64>,
+        /// Free space lost after each resize: the agent's writes in between, or block
+        /// accounting (extent-tree blocks) that the reserve's own size does not show.
+        leak: u64,
     }
 
     impl Disk for Volume {
@@ -196,6 +248,7 @@ mod tests {
         fn resize(&mut self, bytes: u64) -> io::Result<()> {
             self.resizes.push(bytes);
             self.reserve = bytes;
+            self.others += self.leak;
             Ok(())
         }
     }
@@ -219,6 +272,7 @@ mod tests {
             others: 10 * GIB,
             reserve: 3 * GIB,
             resizes: Vec::new(),
+            leak: 0,
         };
         let (stop, said) = run(&mut volume, GIB, true);
         assert!(!stop && said.is_empty(), "{said:?}");
@@ -238,6 +292,7 @@ mod tests {
             others: 20 * GIB - 2 * GIB - 100 * MIB,
             reserve: 2 * GIB,
             resizes: Vec::new(),
+            leak: 0,
         };
         let (stop, said) = run(&mut volume, 0, true);
         assert!(!stop);
@@ -254,6 +309,7 @@ mod tests {
             others: 0,
             reserve: GIB / 2,
             resizes: Vec::new(),
+            leak: 0,
         };
         let mut tick = Tick::default();
         let mut said = Vec::new();
@@ -275,12 +331,74 @@ mod tests {
     }
 
     #[test]
+    fn free_space_lost_at_each_resize_never_stops_a_run_that_still_holds_a_reserve() {
+        // A few KiB of free space go missing after every give-back, so each reading is just under
+        // the floor while the reserve still holds hundreds of MiB.
+        let mut volume = Volume {
+            capacity: 20 * GIB,
+            others: 20 * GIB - 2 * GIB - 100 * MIB,
+            reserve: 2 * GIB,
+            resizes: Vec::new(),
+            leak: 4096,
+        };
+        let mut tick = Tick::default();
+        let mut said = Vec::new();
+        for _ in 0..6 {
+            let stop = tick.step(&mut volume, &DiskPolicy::default(), 0, true, &mut |l| {
+                said.push(l.to_string())
+            });
+            assert!(!stop, "stopped holding {} bytes", volume.reserve);
+            assert!(volume.reserve > 0);
+        }
+        // The agent now takes everything the reserve gives back: it is drawn down, and only
+        // then does the run stop, once.
+        let mut stops = Vec::new();
+        for _ in 0..8 {
+            volume.others = volume.capacity - volume.reserve - 10 * MIB;
+            if tick.step(&mut volume, &DiskPolicy::default(), 0, true, &mut |l| {
+                said.push(l.to_string())
+            }) {
+                stops.push(volume.reserve);
+            }
+        }
+        assert_eq!(stops, vec![0]);
+    }
+
+    #[test]
+    fn the_reserve_gives_back_at_once_and_grows_only_by_a_step() {
+        let volume = |reserve: u64| Volume {
+            capacity: 500 * GIB,
+            others: 10 * GIB,
+            reserve,
+            resizes: Vec::new(),
+            leak: 0,
+        };
+        let policy = DiskPolicy::default();
+        let step = |volume: &mut Volume, footprint: u64| {
+            Tick::default().step(volume, &policy, footprint, false, &mut |_| {});
+        };
+        // A byte too much is given back on the spot.
+        let mut v = volume(3 * GIB);
+        step(&mut v, 1);
+        assert_eq!(v.resizes, vec![3 * GIB - 1]);
+        // Space freed (parts removed) is not taken straight back for less than a step...
+        let mut v = volume(3 * GIB - GROW_STEP + 1);
+        step(&mut v, 0);
+        assert!(v.resizes.is_empty(), "{:?}", v.resizes);
+        // ...and is at a step.
+        let mut v = volume(3 * GIB - GROW_STEP);
+        step(&mut v, 0);
+        assert_eq!(v.resizes, vec![3 * GIB]);
+    }
+
+    #[test]
     fn a_full_disk_with_working_uploads_does_not_stop() {
         let mut volume = Volume {
             capacity: 20 * GIB,
             others: 20 * GIB - 10 * MIB,
             reserve: 0,
             resizes: Vec::new(),
+            leak: 0,
         };
         let (stop, said) = run(&mut volume, 4 * GIB, false);
         assert!(!stop);
@@ -294,6 +412,7 @@ mod tests {
             others,
             reserve: 3 * GIB,
             resizes: Vec::new(),
+            leak: 0,
         };
         let low = 100 * GIB - 3 * GIB - GIB;
         let mut tick = Tick::default();
@@ -312,6 +431,31 @@ mod tests {
             }
         }
         assert_eq!(said.len(), 2, "{said:?}");
+    }
+
+    #[test]
+    fn a_tick_that_panics_still_hands_the_reserve_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = DiskPolicy {
+            reserve_bytes: MIB,
+            start_margin: 0,
+            ..DiskPolicy::default()
+        };
+        let path = crate::run::reserve::reserve_path(dir.path(), "r1");
+        let reserve = Arc::new(Mutex::new(RunReserve::take(&path, &policy).unwrap()));
+        let beside = Arc::clone(&reserve);
+        let thread = std::thread::spawn(move || {
+            let _held = beside.lock().unwrap();
+            panic!("the tick died while holding the reserve");
+        });
+        let watching = Watching {
+            done: Arc::new(AtomicBool::new(false)),
+            reserve: Some(reserve),
+            thread: Some(thread),
+        };
+        let back = watching.end().expect("the reserve comes back");
+        back.release().unwrap();
+        assert!(!path.exists());
     }
 
     #[test]

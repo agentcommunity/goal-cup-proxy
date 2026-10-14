@@ -552,9 +552,12 @@ struct Forked<'a> {
     upload: Option<UploadStart>,
     /// This machine's record of the run.
     record: RunRecord,
-    /// The run's one disk reservation, held from the entry's creation to the run's end. The
-    /// watch tick has it while the harness runs.
+    /// The run's one disk reservation, held from the entry's creation to the run's end, until
+    /// the watch tick takes it over when the harness is released.
     reserve: Option<RunReserve>,
+    /// The watch tick, which has the reservation from the harness's release to just before the
+    /// reservation is released.
+    watching: Option<crate::run::watch::Watching>,
 }
 
 /// What the uploader of a run opened on a server starts from.
@@ -1096,6 +1099,7 @@ fn create_and_gate<'a>(
             .and_then(|o| o.give_back.borrow_mut().take()),
         record,
         reserve,
+        watching: None,
     };
     let gate = Gate {
         plan,
@@ -1353,67 +1357,57 @@ fn run_harness<'a>(
     let proxy_slot = std::sync::Mutex::new(forked.proxied.take());
     let (client, cfg) = (forked.client, forked.cfg);
     let grace = handed.grace_seconds;
-    // The watch tick runs beside the wait, with the reservation, and hands it back at its end.
-    let watching = forked
-        .reserve
-        .take()
-        .map(|reserve| crate::run::watch::Watch {
+    // The watch tick runs on a thread of its own from here to just before the reservation is
+    // released (it keeps the reservation sized through the upload's wrap-up too).
+    forked.watching = forked.reserve.take().map(|reserve| {
+        crate::run::watch::watch_beside(crate::run::watch::Watch {
             reserve,
             run: forked.record.clone(),
             stop: stop_tx,
             uploads: uploading.iter().map(|running| running.last_ok()).collect(),
-            done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             policy: cx.opts.disk,
-        });
-    let done = watching.as_ref().map(|watch| Arc::clone(&watch.done));
-    let (status, reserve) = std::thread::scope(|scope| {
-        let watching = watching.map(|watch| crate::run::watch::watch_beside(scope, watch));
-        let status = crate::upload::wait_stopping(&mut child, stop_rx, |reason| {
-            let Some(proxied) = proxy_slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
-                return;
-            };
-            // The commit the workspace has now, before the harness's grace lets it change.
-            note_repo_head();
-            // The one bound of the wrap-up, for the seal below and the upload's finish later.
-            let wrap_up = WrapUp::after(wrap_length);
-            *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
-            let label = if reason == crate::run::watch::DISK_STOP_REASON {
-                "stopped"
-            } else {
-                "deadline"
-            };
-            let line = format!("{label}: {reason}. The agent is stopped and the run sealed now.");
-            // At once, on stderr: the seal below may be asked again for minutes, and the stdout report
-            // that follows it is printed only once it returns.
-            eprintln!("goalcup: {line}");
-            let mut said = format!("{line}\n").into_bytes();
-            let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
-            // A seal that did not take (the daemon busy or restarting) is asked again through the
-            // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
-            // seal ends it.
-            let finished = finish(
-                client,
-                &entry_id,
-                proxied,
-                deadline,
-                wrap_up,
-                termination_bound(grace),
-                None,
-                Some(cfg),
-                &mut said,
-            );
-            *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));
         })
-        .map_err(|source| CliError::Io {
-            path: handed.program.clone(),
-            source,
-        });
-        if let Some(done) = &done {
-            done.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-        (status, watching.and_then(|watch| watch.join().ok()))
     });
-    forked.reserve = reserve;
+    let status = crate::upload::wait_stopping(&mut child, stop_rx, |reason| {
+        let Some(proxied) = proxy_slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            return;
+        };
+        // The commit the workspace has now, before the harness's grace lets it change.
+        note_repo_head();
+        // The one bound of the wrap-up, for the seal below and the upload's finish later.
+        let wrap_up = WrapUp::after(wrap_length);
+        *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
+        let label = if reason == crate::run::watch::DISK_STOP_REASON {
+            "stopped"
+        } else {
+            "deadline"
+        };
+        let line = format!("{label}: {reason}. The agent is stopped and the run sealed now.");
+        // At once, on stderr: the seal below may be asked again for minutes, and the stdout report
+        // that follows it is printed only once it returns.
+        eprintln!("goalcup: {line}");
+        let mut said = format!("{line}\n").into_bytes();
+        let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+        // A seal that did not take (the daemon busy or restarting) is asked again through the
+        // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
+        // seal ends it.
+        let finished = finish(
+            client,
+            &entry_id,
+            proxied,
+            deadline,
+            wrap_up,
+            termination_bound(grace),
+            None,
+            Some(cfg),
+            &mut said,
+        );
+        *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));
+    })
+    .map_err(|source| CliError::Io {
+        path: handed.program.clone(),
+        source,
+    });
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
     // A run that ended on its own stopped just now.
     let wrap_up = stopped_wrap
@@ -1479,7 +1473,7 @@ fn finish_and_scan(
         info,
         run,
         proxied,
-        reserve,
+        watching,
         ..
     } = forked;
     let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
@@ -1540,6 +1534,9 @@ fn finish_and_scan(
         };
         let _ = say(out, &line);
     }
+    // The tick ends here, just before the reservation goes (or is left to the next start): it
+    // hands the reservation back even if it died on the way.
+    let reserve = watching.and_then(crate::run::watch::Watching::end);
     if release && let Some(reserve) = reserve {
         let _ = reserve.release();
     }

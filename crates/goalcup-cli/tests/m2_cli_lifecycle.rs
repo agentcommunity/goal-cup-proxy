@@ -410,7 +410,34 @@ fn a_stale_reserve_is_released_by_the_next_start() {
         )
         .unwrap();
     }
-    assert_eq!(reserve_files(&rig).len(), 2);
+    // Two local runs: one whose `goalcup start` was killed (its file is there, nothing holds the
+    // lock), and one still running (this test holds the lock).
+    let mut held = Vec::new();
+    for (id, killed) in [("r0000000000000003", true), ("r0000000000000004", false)] {
+        goalcup_cli::run::write(
+            &rig.cfg,
+            &goalcup_cli::run::RunRecord {
+                run_id: id.to_string(),
+                server_url: None,
+                practice: false,
+                connector_id: FAKE_ID.to_string(),
+                workspace: rig.root.join("old"),
+                started_at_unix: 1,
+                deadline_at: None,
+                entries: Vec::new(),
+            },
+        )
+        .unwrap();
+        let reserve = goalcup_cli::run::reserve::RunReserve::take(
+            &goalcup_cli::run::reserve::reserve_path(&root, id),
+            &support::disk_of(RESERVE),
+        )
+        .unwrap();
+        if !killed {
+            held.push(reserve);
+        }
+    }
+    assert_eq!(reserve_files(&rig).len(), 4);
 
     let goal = rig.goal(GOAL);
     rig.tell("stop", "");
@@ -423,11 +450,17 @@ fn a_stale_reserve_is_released_by_the_next_start() {
         .iter()
         .map(|f| f.file_name().to_string_lossy().into_owned())
         .collect();
+    let mut left = left;
+    left.sort();
     assert_eq!(
         left,
-        vec!["r0000000000000002".to_string()],
-        "only the live run's"
+        vec![
+            "r0000000000000002".to_string(),
+            "r0000000000000004".to_string()
+        ],
+        "the server run before its deadline, and the local run that is still held"
     );
+    drop(held);
 }
 
 #[test]
