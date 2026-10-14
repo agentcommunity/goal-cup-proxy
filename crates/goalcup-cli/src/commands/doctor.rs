@@ -344,12 +344,11 @@ fn daemon_check(client: Option<&dyn DaemonClient>, cfg: &Path) -> Check {
         Ok(h) => Check::pass(
             "daemon",
             format!(
-                "daemon v{} is up (control API v{}, {} entr{} open, upload {}).",
+                "daemon v{} is up (control API v{}, {} entr{} open).",
                 h.daemon_version,
                 h.control_api_version,
                 h.entries_open,
-                if h.entries_open == 1 { "y" } else { "ies" },
-                if h.upload_ok { "ok" } else { "failing" }
+                if h.entries_open == 1 { "y" } else { "ies" }
             ),
         ),
         Err(e) => unreachable(e.to_string()),
