@@ -10,6 +10,9 @@ compile_error!(
     "goalcup-platform builds on unix targets only; Windows is not yet supported (it is planned)"
 );
 
+/// Free space on a volume and the run reserve file that holds blocks against a full disk.
+#[cfg(unix)]
+pub mod disk;
 /// The calling thread's `errno`, for the `readdir` end-of-directory idiom.
 #[cfg(unix)]
 pub mod errno;
