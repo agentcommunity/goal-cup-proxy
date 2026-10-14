@@ -227,55 +227,23 @@ fn local_finish_without_service_is_complete() {
 
 #[test]
 #[ignore = "real processes and sockets; run by name with --ignored"]
-fn reserved_chain_precedes_production_launch() {
-    use std::os::unix::fs::MetadataExt;
+fn chain_exists_before_production_launch() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("plain", json!({"hold": true}));
     let mut start = v.start(RESERVE);
-    // The workload's first act: the chain's physical allocation, as it stands then.
+    // The workload's first act: the chain already exists, holding the pre-launch records only.
     v.harness_pid();
     let entry = v.entry_id();
     let meta = std::fs::metadata(v.trace(&entry).join("chain.jsonl")).unwrap();
-    assert!(
-        meta.blocks() * 512 >= RESERVE,
-        "{} of {RESERVE} bytes allocated when the workload began",
-        meta.blocks() * 512
-    );
+    assert!(meta.len() > 0, "the chain precedes the workload");
     assert!(
         meta.len() < RESERVE / 64,
-        "the reservation is not logical growth"
+        "the chain is logical growth, not an allocation"
     );
     let storage = v.status(&entry).payload.capture.unwrap().storage;
     assert_eq!(storage.quota_bytes, RESERVE);
-    assert_eq!(
-        storage.reserved_bytes, RESERVE,
-        "reported only once measured"
-    );
     v.release();
     assert!(start.wait(RUN).success(), "{}", start.output());
-
-    // A reservation this volume cannot hold: refused before anything runs.
-    let refused = Vertical::new("plain", json!({}));
-    let mut start = refused.start(1 << 60);
-    let exit = start.wait(RUN);
-    assert_eq!(exit.code(), Some(1), "{}", start.output());
-    assert!(
-        start.output().contains("cannot reserve"),
-        "{}",
-        start.output()
-    );
-    assert!(!refused.out.join("pid").exists(), "the workload never ran");
-    assert_eq!(refused.run_dir(), None);
-    assert!(
-        std::fs::read_dir(refused.cfg.join("entries"))
-            .map(|d| d.count() == 0)
-            .unwrap_or(true)
-    );
-    let left: Vec<_> = files_under(&refused.artifacts.join("artifacts"))
-        .into_iter()
-        .map(|(p, _)| p)
-        .collect();
-    assert!(left.is_empty(), "no chain was left: {left:?}");
 }
 
 #[test]

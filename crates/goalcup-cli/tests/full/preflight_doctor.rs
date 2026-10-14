@@ -263,8 +263,8 @@ fn an_unpinned_rulebook_is_a_doctor_failure_whose_fix_names_the_one_door() {
 }
 
 /// `goalcup doctor` fails when the harness `goalcup start` would run is not there, and passes
-/// any build that is (D53: recorded, not pinned): the same lookup and hash `start` makes,
-/// without starting anything.
+/// any build that is (D53: recorded, not pinned): the same lookup `start` makes, without
+/// starting anything or hashing the file; the report names the path only.
 #[test]
 fn doctor_fails_naming_a_missing_harness_and_passes_any_build_it_finds() {
     let cfg = cfg_with_a_daemon();
@@ -299,7 +299,7 @@ fn doctor_fails_naming_a_missing_harness_and_passes_any_build_it_finds() {
         "naming the program and the harness: {line}"
     );
 
-    // Something called `codex` that is not any measured build: it passes, named by its digest.
+    // Something called `codex` that is not any measured build: it passes, named by its path.
     let impostor = bin.join("codex");
     let marker = bin.join("ran");
     std::fs::write(
@@ -328,11 +328,11 @@ fn doctor_fails_naming_a_missing_harness_and_passes_any_build_it_finds() {
     assert!(
         line.contains("PASS")
             && line.contains(&canonical.display().to_string())
-            && line.contains(&digest)
+            && !line.contains(&digest)
             && line.contains("recorded, not pinned"),
-        "naming the path and its digest: {line}"
+        "naming the path and no digest: {line}"
     );
-    assert!(!marker.exists(), "and it was hashed, never run");
+    assert!(!marker.exists(), "and it was never run");
 }
 
 // ------------------------------------------------------ the two ways the daemon check fails

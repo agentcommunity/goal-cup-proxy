@@ -3,7 +3,7 @@
 
 import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
-import { type RunRow, boundCredentialExpiry, isAbandonable, isPastDeadline } from "./db.ts";
+import { type EntryRow, type MachineFacts, type RunRow, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, statusAt } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
 import {
   REPO_URL,
@@ -55,83 +55,163 @@ function takeDocument(body: Record<string, unknown>, name: string): Uint8Array {
   return bytes;
 }
 
+/** A run and one of its entries. */
+export interface Found {
+  run: RunRow;
+  entry: EntryRow;
+}
+
 /**
- * The caller's own run, or 404. A run that belongs to someone else is indistinguishable from none.
- * A run that was never sealed 24 hours after its deadline is abandoned here, the first time anyone
- * looks at it, so every call sees it as abandoned (410) and its account's open slot is free.
+ * The caller's own run and the entry named (or, with none named, the current one), or 404. A run
+ * that belongs to someone else is indistinguishable from none, and so is an entry of another run.
+ * A run that is over is closed here, the first time anyone looks at it once it is: `sealed` if its
+ * current entry is sealed, else `incomplete` after the close time.
  */
-export async function requireRun(ctx: Ctx, member: string, runId: string): Promise<RunRow> {
-  const run = await ctx.db.getRun(member, runId);
-  if (run === null) throw notFound("No such run for this credential.");
-  if (run.status === "open" && isAbandonable(run.deadline_at, ctx.now(), ctx.cfg.abandonAfterSeconds)) {
-    if (await ctx.db.expireRun(member, runId, formatTime(ctx.now()))) return { ...run, status: "abandoned" };
-    return (await ctx.db.getRun(member, runId)) ?? run;
-  }
-  return run;
+export async function requireRun(ctx: Ctx, member: string, runId: string, entryId: string | null = null): Promise<Found> {
+  const found = await ctx.db.getRun(member, runId, entryId);
+  if (found === null) throw notFound("No such run for this credential.");
+  if (found.entry === null) throw notFound("That entry does not belong to this run.");
+  let run = found.run;
+  const status = statusAt(run, ctx.now(), ctx.cfg.closeAfterSeconds);
+  if (status !== run.status) run = { ...run, status: (await ctx.db.closeRun(member, runId, formatTime(ctx.now()))) ?? status };
+  return { run, entry: found.entry };
 }
 
-/** 410 unless the run is open (not sealed, not abandoned). */
-export function requireOpen(run: RunRow): void {
-  if (run.status !== "open") throw closed(`This run is ${run.status}.`);
+/** 410 unless the run still takes uploads: it is not abandoned, and it has not been over for the close time. */
+export function requireAccepting(ctx: Ctx, run: RunRow): void {
+  if (run.status === "abandoned") throw closed("This run is abandoned.");
+  if (isPastClose(run, ctx.now(), ctx.cfg.closeAfterSeconds)) throw closed("This run is closed.");
 }
 
-/** `stop`: the server's clock is at or past `deadline_at`; the run is over. */
-export const isStopped = (ctx: Ctx, run: RunRow): boolean => isPastDeadline(run.deadline_at, ctx.now());
+/** [requireAccepting], and the entry is not sealed. */
+export function requireOpen(ctx: Ctx, run: RunRow, entry: EntryRow): void {
+  requireAccepting(ctx, run);
+  if (entry.sealed_at !== null) throw closed("This entry is sealed.");
+}
+
+/** A heartbeat's answer: is the run over now, and if so why (a later start replaced it, or its deadline came)? */
+function answerStop(ctx: Ctx, run: RunRow) {
+  const stop = isPastEnd(run, ctx.now());
+  const reason = !stop ? null : run.replaced_at !== null && run.replaced_at < run.deadline_at ? "replaced" : "deadline";
+  return { stop, deadline_at: run.deadline_at, reason };
+}
 
 // ---- POST /v1/runs ------------------------------------------------------------------------
 
 const OPENED_ALREADY = "This credential already opened a run; run `goalcup continue`.";
+const MACHINE_MAX_BYTES = 4096;
+
+/** The facts about a connector and a session that an open or a continue call sends. */
+function connectorFields(b: Record<string, unknown>) {
+  const session_id = strField(b, "session_id", 128);
+  if (!/^[A-Za-z0-9._:-]+$/.test(session_id)) throw malformed("session_id has characters a session id never has.");
+  return {
+    connector_id: strField(b, "connector_id", 128),
+    manifest_sha256: hexField(b, "manifest_sha256"),
+    connector_dir_sha256: hexField(b, "connector_dir_sha256"),
+    workspace: strField(b, "workspace", 4096),
+    session_id,
+    harness_version: strField(b, "harness_version", 64),
+    tracer_version: strField(b, "tracer_version", 64),
+  };
+}
+
+/** `machine`, if sent: a flat object of strings, numbers, booleans and nulls, at most 4 KiB. Null is absent. */
+function machineField(b: Record<string, unknown>): MachineFacts | null {
+  if (b.machine === undefined || b.machine === null) return null;
+  const machine = asObject(b.machine, "machine");
+  for (const [key, value] of Object.entries(machine)) {
+    const flat = value === null || ["string", "number", "boolean"].includes(typeof value);
+    if (!flat) throw malformed("machine must be a flat object of strings, numbers, booleans and nulls.");
+    if (!key.isWellFormed() || (typeof value === "string" && !value.isWellFormed())) throw malformed("machine is not well-formed Unicode.");
+  }
+  if (new TextEncoder().encode(JSON.stringify(machine)).length > MACHINE_MAX_BYTES) throw malformed("machine is over 4 KiB.");
+  return machine as MachineFacts;
+}
+
+/** What Cloudflare says about the connection: kept on the run, never shown, never in a key or a log. */
+function clientFacts(request: Request): { client_ip: string | null; client_country: string | null } {
+  const ip = request.headers.get("cf-connecting-ip");
+  const country = request.cf?.country;
+  return { client_ip: ip === null || ip === "" ? null : ip.slice(0, 64), client_country: typeof country === "string" ? country.slice(0, 8) : null };
+}
 
 export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<Response> {
   const b = await readJson(request, JSON_BODY_MAX);
-  const connector_id = strField(b, "connector_id", 128);
-  const manifest_sha256 = hexField(b, "manifest_sha256");
-  const connector_dir_sha256 = hexField(b, "connector_dir_sha256");
-  const workspace = strField(b, "workspace", 4096);
-  const session_id = strField(b, "session_id", 128);
-  if (!/^[A-Za-z0-9._:-]+$/.test(session_id)) throw malformed("session_id has characters a session id never has.");
-  const harness_version = strField(b, "harness_version", 64);
-  const tracer_version = strField(b, "tracer_version", 64);
+  const fields = connectorFields(b);
   const repo_url = strField(b, "repo_url", 200);
   if (!REPO_URL.test(repo_url)) throw malformed("repo_url must look like https://github.com/<owner>/<repo>.");
+  const machine = machineField(b);
 
   // A credential opens one run. Asking again with the same session_id is a lost reply: the same run.
   if (auth.run_id !== null) {
-    const opened = await ctx.db.getRun(auth.member, auth.run_id);
-    if (opened !== null && opened.session_id === session_id) return json(200, runView(opened));
+    // (The session of the open call is segment 0's, whatever `continue` has added since.)
+    let opened = await ctx.db.getRun(auth.member, auth.run_id, null);
+    if (opened !== null && opened.entry?.segment !== 0) opened = await ctx.db.getRun(auth.member, auth.run_id, opened.run.first_entry_id);
+    if (opened?.entry != null && opened.entry.session_id === fields.session_id) return json(200, runView(opened.run, opened.entry));
     throw conflict(OPENED_ALREADY);
   }
 
   if (ctx.cfg.githubCheck) await requirePublicGithubRepo(ctx, repo_url);
 
   const now = ctx.now();
+  const practice = auth.mode === "practice";
+  const deadline_at = formatTime(addSeconds(now, practice ? ctx.cfg.practiceRunSeconds : ctx.cfg.runSeconds));
   const result = await ctx.db.openRun({
     member_id: auth.member,
-    event_id: ctx.cfg.eventId,
+    event_id: practice ? ctx.cfg.practiceEventId : ctx.cfg.eventId,
+    mode: auth.mode,
     run_id: newId("r"),
     entry_id: newId("e"),
     official_start: formatTime(now), // the server's clock, not the participant's
-    deadline_at: formatTime(addSeconds(now, ctx.cfg.runSeconds)),
-    connector_id,
-    manifest_sha256,
-    connector_dir_sha256,
-    workspace,
-    session_id,
-    harness_version,
-    tracer_version,
+    deadline_at,
+    ...fields,
     repo_url,
+    machine,
+    ...clientFacts(request),
+    credential: auth.credential,
+    credential_expires_at: boundCredentialExpiry(deadline_at),
   });
-  if (result.kind === "conflict") throw conflict("This account already has an open run.");
+  if (result.kind === "conflict") throw conflict(OPENED_ALREADY);
   if (result.kind === "forbidden") throw new ApiError(403, "forbidden", result.message);
-
-  // The credential binds to this run only if it is still unbound (or already bound to it).
-  if ((await ctx.db.bindCredential(auth.credential, result.run.run_id, boundCredentialExpiry(result.run.deadline_at))) === "conflict") {
-    throw conflict(OPENED_ALREADY);
-  }
-  return json(result.kind === "created" ? 201 : 200, runView(result.run));
+  return json(result.kind === "created" ? 201 : 200, runView(result.run, result.entry));
 }
 
-const runView = ({ run_id, entry_id, official_start, deadline_at }: RunRow) => ({ run_id, entry_id, official_start, deadline_at });
+const runView = ({ run_id, official_start, deadline_at }: RunRow, { entry_id }: EntryRow) => ({ run_id, entry_id, official_start, deadline_at });
+
+// ---- POST /v1/runs/{id}/continue ----------------------------------------------------------
+
+export async function continueRun(ctx: Ctx, auth: Auth, runId: string, request: Request): Promise<Response> {
+  const b = await readJson(request, JSON_BODY_MAX);
+  const previous_entry_id = b.previous_entry_id;
+  if (!isEntryId(previous_entry_id)) throw malformed("previous_entry_id must be e and 16 lowercase hex digits.");
+  const fields = connectorFields(b);
+  const result = await ctx.db.continueRun({
+    member_id: auth.member,
+    run_id: runId,
+    previous_entry_id,
+    entry_id: newId("e"),
+    ...fields,
+    ...clientFacts(request),
+    at: formatTime(ctx.now()),
+  });
+  switch (result.kind) {
+    case "created":
+    case "existing":
+      return json(result.kind === "created" ? 201 : 200, {
+        entry_id: result.entry.entry_id,
+        segment: result.entry.segment,
+        official_start: result.run.official_start,
+        deadline_at: result.run.deadline_at,
+      });
+    case "conflict":
+      throw conflict("previous_entry_id is not the latest entry of this run; read the position.");
+    case "closed":
+      throw closed("This run is over; there is nothing left to continue.");
+    case "not_found":
+      throw notFound("No such run for this credential.");
+  }
+}
 
 /** GitHub says the repository exists and is public. Failures to ask are 502, so the tracer retries. */
 async function requirePublicGithubRepo(ctx: Ctx, repoUrl: string): Promise<void> {
@@ -157,46 +237,48 @@ async function requirePublicGithubRepo(ctx: Ctx, repoUrl: string): Promise<void>
 // ---- POST /v1/runs/{id}/receipt -----------------------------------------------------------
 
 export async function issueReceipt(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
-  const run = await requireRun(ctx, member, runId);
   const b = await readJson(request, JSON_BODY_MAX);
   const entry_id = b.entry_id;
   if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
   const chain_head = hexField(b, "chain_head");
-  if (entry_id !== run.entry_id) throw notFound("That entry does not belong to this run.");
-  requireOpen(run);
+  const { run, entry } = await requireRun(ctx, member, runId, entry_id);
+  requireOpen(ctx, run, entry);
 
-  if (run.receipt !== null) {
-    if (run.receipt.claims.chain_head !== chain_head) throw conflict("This run already has a receipt for a different chain_head.");
-    return json(200, { start_receipt: run.receipt });
+  if (entry.receipt !== null) {
+    if (entry.receipt.claims.chain_head !== chain_head) throw conflict("This entry already has a receipt for a different chain_head.");
+    return json(200, { start_receipt: entry.receipt });
   }
 
+  // The entry's own connector facts and session, the run's start and deadline.
   const receipt = await ctx.signer.signReceipt({
-    entry_id: run.entry_id,
-    connector_id: run.connector_id,
-    workspace: run.workspace,
-    session_id: run.session_id,
+    entry_id: entry.entry_id,
+    connector_id: entry.connector_id,
+    workspace: entry.workspace,
+    session_id: entry.session_id,
     started_at: run.official_start,
     deadline_at: run.deadline_at,
-    manifest_sha256: run.manifest_sha256,
+    manifest_sha256: entry.manifest_sha256,
     chain_head,
-    connector_dir_sha256: run.connector_dir_sha256,
+    connector_dir_sha256: entry.connector_dir_sha256,
   });
-  const stored = await ctx.db.storeReceipt(member, runId, chain_head, receipt);
+  const stored = await ctx.db.storeReceipt(member, runId, entry.entry_id, chain_head, receipt);
   switch (stored.kind) {
     case "stored":
     case "existing":
       return json(200, { start_receipt: stored.receipt });
     case "conflict":
-      throw conflict("This run already has a receipt for a different chain_head.");
+      throw conflict("This entry already has a receipt for a different chain_head.");
     case "closed":
       throw closed("This run is no longer open.");
+    case "not_found":
+      throw notFound("That entry does not belong to this run.");
   }
 }
 
 // ---- POST /v1/runs/{id}/abandon -----------------------------------------------------------
 
 export async function abandonRun(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
-  const run = await requireRun(ctx, member, runId);
+  const { run } = await requireRun(ctx, member, runId);
   const b = await readJson(request, JSON_BODY_MAX);
   const reason = strField(b, "reason", 4000, true);
   if ([...reason].length > 500) throw malformed("reason is longer than 500 characters.");
@@ -218,22 +300,26 @@ export async function abandonRun(ctx: Ctx, member: string, runId: string, reques
   }
 }
 
-// ---- GET /v1/runs/{id} --------------------------------------------------------------------
+// ---- GET /v1/runs/{id}[?entry_id=…] -------------------------------------------------------
 
-export async function getPosition(ctx: Ctx, member: string, runId: string): Promise<Response> {
-  const r = await requireRun(ctx, member, runId);
+export async function getPosition(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
+  const asked = new URL(request.url).searchParams.get("entry_id");
+  if (asked !== null && !isEntryId(asked)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
+  const { run, entry } = await requireRun(ctx, member, runId, asked);
   return json(200, {
-    run_id: r.run_id,
-    entry_id: r.entry_id,
-    status: r.status,
-    official_start: r.official_start,
-    deadline_at: r.deadline_at,
-    offset: r.offset,
-    next_seq: r.next_seq,
-    head: r.head,
-    last_ack: r.last_ack,
-    stop: isStopped(ctx, r),
-    final: r.final,
+    run_id: run.run_id,
+    entry_id: entry.entry_id,
+    segment: entry.segment,
+    status: run.status,
+    official_start: run.official_start,
+    deadline_at: run.deadline_at,
+    ends_at: endsAt(run),
+    offset: entry.offset,
+    next_seq: entry.next_seq,
+    head: entry.head,
+    last_ack: entry.last_ack,
+    stop: isPastEnd(run, ctx.now()),
+    final: entry.final,
   });
 }
 
@@ -243,7 +329,6 @@ export const FINAL_RETRY_AFTER = 60;
 // ---- POST /v1/runs/{id}/heartbeat ---------------------------------------------------------
 
 export async function heartbeat(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
-  const run = await requireRun(ctx, member, runId);
   const b = await readJson(request, JSON_BODY_MAX);
   const entry_id = b.entry_id;
   if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
@@ -253,20 +338,20 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
   if (typeof b.final !== "boolean") throw malformed("final must be true or false.");
   const repo = b.repo_head ?? null;
   if (repo !== null && (typeof repo !== "string" || !/^[0-9a-f]{40}$/.test(repo))) throw malformed("repo_head must be null or 40 lowercase hex digits.");
-  // Optional facts about the recording; null is absent, as for repo_head. W2 stores them; for now
-  // only their shape is checked.
+  // Optional facts about the recording; null is absent, as for repo_head. Only their shape is
+  // checked for now.
   if (b.recording != null && !["ok", "gaps", "failed", "unknown"].includes(b.recording as string)) {
     throw malformed('recording must be "ok", "gaps", "failed" or "unknown".');
   }
   if (b.model_requests != null) uintField(b, "model_requests");
-  if (entry_id !== run.entry_id) throw notFound("That entry does not belong to this run.");
-  // An abandoned run accepts nothing more, a final heartbeat included. A sealed one still takes the final.
-  if (run.status === "abandoned") throw closed("This run is abandoned.");
+  const { run, entry } = await requireRun(ctx, member, runId, entry_id);
+  // An abandoned or closed run accepts nothing more, a final heartbeat included.
+  requireAccepting(ctx, run);
 
   const result = await ctx.db.recordHeartbeat({
     member_id: member,
     run_id: runId,
-    entry_id: run.entry_id,
+    entry_id: entry.entry_id,
     seq,
     head,
     offset_local,
@@ -278,11 +363,11 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
     case "recorded":
     case "final_committed":
     case "final_existing":
-      return json(200, { stop: isStopped(ctx, run), deadline_at: run.deadline_at, reason: null });
+      return json(200, answerStop(ctx, run));
     case "final_conflict":
       throw conflict("A different end of the run is already committed, or the server already holds a different chain than this final heartbeat names.");
     case "closed":
-      throw closed("This run is abandoned.");
+      throw closed("This run is no longer open.");
     case "not_found":
       throw notFound("No such run for this credential.");
   }
@@ -296,39 +381,41 @@ function uintField(o: Record<string, unknown>, name: string): number {
 
 // ---- POST /v1/runs/{id}/seal --------------------------------------------------------------
 
+const SEND_FINAL_FIRST = "Send the final heartbeat first: a seal needs the end of the entry committed.";
+const CHAIN_BEHIND = "The server does not hold the chain up to the end the final heartbeat committed yet; read the position and upload the rest.";
+
 export async function sealRun(ctx: Ctx, member: string, runId: string, request: Request): Promise<Response> {
-  const run = await requireRun(ctx, member, runId);
   const b = await readJson(request, SEAL_BODY_MAX);
   const entry_id = b.entry_id;
   if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
   const sealBytes = takeDocument(b, "seal_json");
   const baselineBytes = takeDocument(b, "baseline_json");
-  if (entry_id !== run.entry_id) throw notFound("That entry does not belong to this run.");
+  const { run, entry } = await requireRun(ctx, member, runId, entry_id);
 
   const sealSha = await sha256Hex(sealBytes);
   const baselineSha = await sha256Hex(baselineBytes);
 
   // Already sealed: same documents is a repeat (200), different documents is a conflict.
-  if (run.status === "sealed") {
-    if (run.seal_sha256 === sealSha && run.baseline_sha256 === baselineSha) return json(200, { status: "sealed" });
-    throw conflict("This run is sealed with different documents.");
+  if (entry.sealed_at !== null) {
+    if (entry.seal_sha256 === sealSha && entry.baseline_sha256 === baselineSha) return json(200, { status: "sealed", run_status: run.status });
+    throw conflict("This entry is sealed with different documents.");
   }
-  if (run.status !== "open") throw closed(`This run is ${run.status}.`);
+  requireAccepting(ctx, run);
 
-  // After the deadline the seal is accepted only for the end the final heartbeat committed, and
-  // only once the server holds the chain all the way to it. (The chain cannot grow past the
-  // committed end, so a check against this snapshot cannot be overtaken.)
-  // A committed end binds the seal before the deadline too.
-  if (isStopped(ctx, run) && run.final === null) {
-    throw new ApiError(503, "awaiting_final", "Send the final heartbeat before sealing a run past its deadline.", { "retry-after": String(FINAL_RETRY_AFTER) });
+  // A seal needs the end the final heartbeat committed, and the chain held all the way to it. (The
+  // chain cannot grow past the committed end, so a check against this snapshot cannot be
+  // overtaken; the database checks it again in the step that seals.)
+  if (entry.final === null) {
+    if (isPastEnd(run, ctx.now())) {
+      throw new ApiError(503, "awaiting_final", "Send the final heartbeat before sealing a run past its end.", { "retry-after": String(FINAL_RETRY_AFTER) });
+    }
+    throw conflict(SEND_FINAL_FIRST);
   }
-  if (run.final !== null && (run.next_seq - 1 !== run.final.seq || run.head !== run.final.head)) {
-    throw conflict("The server does not hold the chain up to the end the final heartbeat committed yet; read the position and upload the rest.");
-  }
+  if (entry.next_seq - 1 !== entry.final.seq || entry.head !== entry.final.head) throw conflict(CHAIN_BEHIND);
 
   // Store the documents first, under names that contain their hash (so they can never be
   // overwritten with different content), then record the seal.
-  const prefix = `traces/${run.event_id}/${run.run_id}/${run.entry_id}`;
+  const prefix = `traces/${run.event_id}/${run.run_id}/${entry.entry_id}`;
   const sealKey = `${prefix}/seal-${sealSha}.json`;
   const baselineKey = `${prefix}/baseline-${baselineSha}.json`;
   await putDocument(ctx, sealKey, sealBytes, sealSha);
@@ -337,23 +424,27 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   const r = await ctx.db.sealRun({
     member_id: member,
     run_id: runId,
-    entry_id: run.entry_id,
+    entry_id: entry.entry_id,
     seal_sha256: sealSha,
     baseline_sha256: baselineSha,
     seal_key: sealKey,
     baseline_key: baselineKey,
     sealed_at: formatTime(ctx.now()),
   });
-  switch (r) {
+  switch (r.kind) {
     case "sealed":
     case "already_sealed":
-      return json(200, { status: "sealed" });
+      return json(200, { status: "sealed", run_status: r.run_status });
     case "conflict":
-      throw conflict("This run is sealed with different documents.");
+      throw conflict("This entry is sealed with different documents.");
+    case "no_final":
+      throw conflict(SEND_FINAL_FIRST);
+    case "chain_behind":
+      throw conflict(CHAIN_BEHIND);
     case "closed":
       throw closed("This run is no longer open.");
     case "not_found":
-      throw notFound("No such run for this credential.");
+      throw notFound("That entry does not belong to this run.");
   }
 }
 

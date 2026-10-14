@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use axum::Router;
 use axum::body::{Body, Bytes, HttpBody};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -30,15 +30,19 @@ use sha2::{Digest, Sha256};
 
 use super::KillListener;
 use super::state::{
-    Approval, Credential, Device, DeviceRequest, FinalCommit, RunRecord, RunStatus, Shared,
-    StoredChunk, StoredHeartbeat, now_secs,
+    Approval, Credential, Device, DeviceRequest, EntryRecord, FinalCommit, RunRecord, RunStatus,
+    Shared, StoredChunk, StoredHeartbeat, now_secs,
 };
 
 /// The cap on a chunk's compressed body (`Content-Length`).
 const MAX_CHUNK_BYTES: u64 = 32 * 1024 * 1024;
 /// The cap on each document a seal carries.
 const MAX_SEAL_DOC_BYTES: usize = 16 * 1024 * 1024;
+/// `reason` is at most 500 characters (code points) and 4000 UTF-16 code units, as the Worker counts.
 const MAX_ABANDON_REASON_CHARS: usize = 500;
+const MAX_ABANDON_REASON_UNITS: usize = 4000;
+/// `machine`, serialized.
+const MAX_MACHINE_BYTES: usize = 4096;
 /// The largest whole number the Worker (a JavaScript number) can hold exactly.
 const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 /// A device request lives this long from its creation, whatever its state.
@@ -75,6 +79,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
         .route("/v1/runs/{run_id}/chunks/{offset}", put(put_chunk))
         .route("/v1/runs/{run_id}/seal", post(seal))
         .route("/v1/runs/{run_id}/heartbeat", post(heartbeat))
+        .route("/v1/runs/{run_id}/continue", post(continue_run))
         // A seal carries two documents of up to 16 MiB each inside one JSON body.
         .layer(DefaultBodyLimit::max(2 * MAX_SEAL_DOC_BYTES + 1024 * 1024))
         .layer(middleware::from_fn_with_state(shared.clone(), gate))
@@ -172,6 +177,8 @@ struct Who {
     credential: Option<String>,
     /// The run the credential opened, if it has opened one.
     run_id: Option<String>,
+    /// `competition` or `practice`; a legacy token is a competition one.
+    mode: String,
 }
 
 impl Who {
@@ -204,6 +211,7 @@ fn auth(s: &Shared, headers: &HeaderMap) -> Result<Who, ApiError> {
             member: member.clone(),
             credential: None,
             run_id: None,
+            mode: "competition".to_string(),
         });
     }
     let hash = sha256_hex(token);
@@ -213,6 +221,7 @@ fn auth(s: &Shared, headers: &HeaderMap) -> Result<Who, ApiError> {
             member: c.member.clone(),
             credential: Some(hash),
             run_id: c.run_id.clone(),
+            mode: c.mode.clone(),
         }),
         _ => Err(unauthorized()),
     }
@@ -272,19 +281,44 @@ fn valid_repo_url(url: &str) -> bool {
     owner_ok && repo_ok
 }
 
-fn run_view(run: &RunRecord) -> Value {
+/// The length of a text as the Worker counts it: UTF-16 code units.
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// A text field of 1 to `max` UTF-16 code units.
+fn check_text(name: &str, value: &str, max: usize) -> Result<(), ApiError> {
+    if value.is_empty() {
+        return Err(ApiError::malformed(format!("{name} must not be empty.")));
+    }
+    if utf16_len(value) > max {
+        return Err(ApiError::malformed(format!(
+            "{name} is longer than {max} characters."
+        )));
+    }
+    Ok(())
+}
+
+fn is_entry_id(text: &str) -> bool {
+    text.len() == 17
+        && text.starts_with('e')
+        && text[1..]
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn run_view(run: &RunRecord, entry: &EntryRecord) -> Value {
     json!({
         "run_id": run.run_id,
-        "entry_id": run.entry_id,
+        "entry_id": entry.entry_id,
         "official_start": run.official_start,
         "deadline_at": run.deadline_at,
     })
 }
 
-// ---- POST /v1/runs -----------------------------------------------------------------------
-
+/// What a connector and a session are, as an open or a continue call sends them.
 #[derive(Deserialize)]
-struct OpenRequest {
+struct ConnectorFields {
     connector_id: String,
     manifest_sha256: String,
     connector_dir_sha256: String,
@@ -292,94 +326,197 @@ struct OpenRequest {
     session_id: String,
     harness_version: String,
     tracer_version: String,
-    repo_url: String,
 }
+
+impl ConnectorFields {
+    fn check(&self) -> Result<(), ApiError> {
+        check_text("connector_id", &self.connector_id, 128)?;
+        check_text("workspace", &self.workspace, 4096)?;
+        check_text("session_id", &self.session_id, 128)?;
+        if !self
+            .session_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'))
+        {
+            return Err(ApiError::malformed(
+                "session_id has characters a session id never has.",
+            ));
+        }
+        check_text("harness_version", &self.harness_version, 64)?;
+        check_text("tracer_version", &self.tracer_version, 64)?;
+        for (name, value) in [
+            ("manifest_sha256", &self.manifest_sha256),
+            ("connector_dir_sha256", &self.connector_dir_sha256),
+        ] {
+            if !is_hex64(value) {
+                return Err(ApiError::malformed(format!(
+                    "{name} is not 64 lowercase hex digits."
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn into_entry(self, entry_id: String, segment: u64) -> EntryRecord {
+        EntryRecord {
+            entry_id,
+            segment,
+            session_id: self.session_id,
+            connector_id: self.connector_id,
+            manifest_sha256: self.manifest_sha256,
+            connector_dir_sha256: self.connector_dir_sha256,
+            workspace: self.workspace,
+            harness_version: self.harness_version,
+            tracer_version: self.tracer_version,
+            receipt: None,
+            chunks: Vec::new(),
+            seal: None,
+            heartbeats: Vec::new(),
+            final_commit: None,
+        }
+    }
+}
+
+/// `machine`, if sent: a flat object of strings, numbers, booleans and nulls, at most 4 KiB
+/// serialized. (`null` is absent.)
+fn check_machine(machine: Option<Value>) -> Result<Option<Value>, ApiError> {
+    let Some(machine) = machine else {
+        return Ok(None);
+    };
+    let Value::Object(map) = &machine else {
+        return Err(ApiError::malformed("machine must be a JSON object."));
+    };
+    if map.values().any(|v| v.is_array() || v.is_object()) {
+        return Err(ApiError::malformed(
+            "machine must be a flat object of strings, numbers, booleans and nulls.",
+        ));
+    }
+    if machine.to_string().len() > MAX_MACHINE_BYTES {
+        return Err(ApiError::malformed("machine is over 4 KiB."));
+    }
+    Ok(Some(machine))
+}
+
+/// What the connection says about itself: Cloudflare's headers, when a test sends them.
+fn client_facts(headers: &HeaderMap) -> (Option<String>, Option<String>) {
+    let get = |name: &str, max: usize| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| !v.is_empty())
+            .map(|v| v.chars().take(max).collect::<String>())
+    };
+    (get("cf-connecting-ip", 64), get("cf-ipcountry", 8))
+}
+
+// ---- POST /v1/runs -----------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct OpenRequest {
+    #[serde(flatten)]
+    fields: ConnectorFields,
+    repo_url: String,
+    #[serde(default)]
+    machine: Option<Value>,
+}
+
+const BEFORE_WINDOW: &str = "The start window has not opened yet.";
+const AFTER_WINDOW: &str = "after the start window you can only `goalcup continue` your run";
 
 async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
     let who = auth(&s, &headers)?;
     let req: OpenRequest = parse_json(&body)?;
-    for (name, value) in [
-        ("connector_id", &req.connector_id),
-        ("workspace", &req.workspace),
-        ("session_id", &req.session_id),
-        ("harness_version", &req.harness_version),
-        ("tracer_version", &req.tracer_version),
-    ] {
-        if value.is_empty() {
-            return Err(ApiError::malformed(format!("{name} is empty.")));
-        }
-    }
-    for (name, value) in [
-        ("manifest_sha256", &req.manifest_sha256),
-        ("connector_dir_sha256", &req.connector_dir_sha256),
-    ] {
-        if !is_hex64(value) {
-            return Err(ApiError::malformed(format!(
-                "{name} is not 64 lowercase hex digits."
-            )));
-        }
-    }
+    req.fields.check()?;
+    check_text("repo_url", &req.repo_url, 200)?;
     if !valid_repo_url(&req.repo_url) {
         return Err(ApiError::malformed(
             "repo_url is not https://github.com/<owner>/<repo>.",
         ));
     }
+    let machine = check_machine(req.machine)?;
 
     let mut runs = lock_runs(&s);
     // A credential opens one run. The same session again is a lost reply: that run.
     if let Some(opened) = &who.run_id {
         return match runs.get(opened) {
-            Some(run) if run.session_id == req.session_id => Ok(json_response(200, run_view(run))),
+            // The open call's session is segment 0's, whatever `continue` has added since.
+            Some(run) if run.entries[0].session_id == req.fields.session_id => {
+                Ok(json_response(200, run_view(run, &run.entries[0])))
+            }
             _ => Err(opened_already()),
         };
     }
     let member = who.member.clone();
-    if let Some(open) = runs
-        .values()
-        .find(|r| r.member == member && r.status == RunStatus::Open)
-    {
-        // A lost reply to the first call is not a second run.
-        if open.session_id == req.session_id && open.receipt.is_none() {
-            if !bind_credential(&s, who.credential.as_deref(), open) {
-                return Err(opened_already());
-            }
-            return Ok(json_response(200, run_view(open)));
+    let practice = who.mode == "practice";
+    let start_secs = now_secs();
+    if !practice {
+        if s.window_opens.is_some_and(|opens| start_secs < opens) {
+            return Err(ApiError::new(403, "forbidden", BEFORE_WINDOW));
         }
-        return Err(ApiError::conflict("The account already has an open run."));
+        if s.window_closes.is_some_and(|closes| start_secs > closes) {
+            return Err(ApiError::new(403, "forbidden", AFTER_WINDOW));
+        }
+    }
+    // A legacy token (no credential to bind) asking again with the same session after a lost
+    // reply is still that run.
+    if who.credential.is_none()
+        && let Some(open) = runs.values().find(|r| {
+            r.member == member
+                && r.mode == "competition"
+                && r.status == RunStatus::Open
+                && r.replaced_at.is_none()
+        })
+        && open.current().session_id == req.fields.session_id
+        && open.current().receipt.is_none()
+    {
+        return Ok(json_response(200, run_view(open, open.current())));
     }
 
     let run_id = random_id('r', |id| runs.contains_key(id));
-    let entry_id = random_id('e', |id| runs.values().any(|r| r.entry_id == id));
-    let start_secs = now_secs();
+    let entry_id = random_id('e', |id| runs.values().any(|r| r.entry(id).is_some()));
     let run = RunRecord {
         run_id: run_id.clone(),
-        entry_id,
-        member,
-        session_id: req.session_id,
-        connector_id: req.connector_id,
-        manifest_sha256: req.manifest_sha256,
-        connector_dir_sha256: req.connector_dir_sha256,
-        workspace: req.workspace,
-        harness_version: req.harness_version,
-        tracer_version: req.tracer_version,
+        member: member.clone(),
+        mode: who.mode.clone(),
         repo_url: req.repo_url,
         official_start: format_z(start_secs),
-        deadline_at: format_z(start_secs + s.run_secs),
+        deadline_at: format_z(
+            start_secs
+                + if practice {
+                    s.practice_secs
+                } else {
+                    s.run_secs
+                },
+        ),
+        replaced_at: None,
         status: RunStatus::Open,
         abandon_reason: None,
-        receipt: None,
-        chunks: Vec::new(),
-        seal: None,
-        heartbeats: Vec::new(),
-        final_commit: None,
-        auto_abandoned: false,
+        machine,
+        client_ip: client_facts(&headers).0,
+        client_country: client_facts(&headers).1,
+        entries: vec![req.fields.into_entry(entry_id, 0)],
     };
     // Bind before anything is kept: a credential that cannot bind opens no run.
     if !bind_credential(&s, who.credential.as_deref(), &run) {
         return Err(opened_already());
     }
+    // A competition start replaces the member's other open competition run: it ends now.
+    if !practice {
+        for other in runs.values_mut() {
+            if other.member == member
+                && other.mode == "competition"
+                && other.status == RunStatus::Open
+                && other.replaced_at.is_none()
+            {
+                // Never before it began.
+                let began = other.official_start.clone();
+                other.replaced_at = Some(began.max(run.official_start.clone()));
+                s.persist(other);
+            }
+        }
+    }
     s.persist(&run);
-    let view = run_view(&run);
+    let view = run_view(&run, run.current());
     runs.insert(run_id, run);
     Ok(json_response(201, view))
 }
@@ -406,32 +543,145 @@ pub fn bind_credential(s: &Shared, credential: Option<&str>, run: &RunRecord) ->
     true
 }
 
+// ---- POST /v1/runs/{run_id}/continue -----------------------------------------------------
+
+#[derive(Deserialize)]
+struct ContinueRequest {
+    previous_entry_id: String,
+    #[serde(flatten)]
+    fields: ConnectorFields,
+}
+
+async fn continue_run(
+    State(s): St,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let who = auth(&s, &headers)?;
+    let req: ContinueRequest = parse_json(&body)?;
+    if !is_entry_id(&req.previous_entry_id) {
+        return Err(ApiError::malformed(
+            "previous_entry_id must be e and 16 lowercase hex digits.",
+        ));
+    }
+    req.fields.check()?;
+    let mut runs = lock_runs(&s);
+    find_run(&runs, &who, &run_id)?;
+    let entry_id = random_id('e', |id| runs.values().any(|r| r.entry(id).is_some()));
+    let run = runs.get_mut(&run_id).expect("just found");
+    let view = |run: &RunRecord, entry: &EntryRecord| {
+        json!({"entry_id": entry.entry_id, "segment": entry.segment,
+               "official_start": run.official_start, "deadline_at": run.deadline_at})
+    };
+    // The same call again: the current entry came from this session, after that entry.
+    let current = run.current();
+    let previous = run.entries.len().checked_sub(2).map(|i| &run.entries[i]);
+    if current.segment > 0
+        && current.session_id == req.fields.session_id
+        && previous.is_some_and(|p| p.entry_id == req.previous_entry_id)
+    {
+        return Ok(json_response(200, view(run, current)));
+    }
+    if run.status != RunStatus::Open || run.stopped() {
+        return Err(ApiError::closed(
+            "This run is over; there is nothing left to continue.",
+        ));
+    }
+    if current.entry_id != req.previous_entry_id {
+        return Err(ApiError::conflict(
+            "previous_entry_id is not the latest entry of this run; read the position.",
+        ));
+    }
+    let segment = current.segment + 1;
+    run.entries.push(req.fields.into_entry(entry_id, segment));
+    let (ip, country) = client_facts(&headers);
+    run.client_ip = ip;
+    run.client_country = country;
+    s.persist(run);
+    Ok(json_response(201, view(run, run.current())))
+}
+
 // ---- GET /v1/runs/{run_id} ---------------------------------------------------------------
+
+/// `name=value` out of a query string; the value as sent (entry ids need no decoding).
+fn query_param(uri: &Uri, name: &str) -> Option<String> {
+    uri.query()?
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| value.to_string())
+}
+
+/// The entry a request names, or the run's current one; 404 if the run has no such entry.
+fn named_entry<'a>(
+    run: &'a RunRecord,
+    entry_id: Option<&str>,
+) -> Result<&'a EntryRecord, ApiError> {
+    match entry_id {
+        None => Ok(run.current()),
+        Some(id) => run.entry(id).ok_or_else(entry_not_found),
+    }
+}
+
+fn entry_not_found() -> ApiError {
+    ApiError::new(404, "not_found", "That entry does not belong to this run.")
+}
 
 async fn get_run(
     State(s): St,
     headers: HeaderMap,
+    uri: Uri,
     Path(run_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let who = auth(&s, &headers)?;
+    let asked = query_param(&uri, "entry_id");
+    if asked.as_deref().is_some_and(|id| !is_entry_id(id)) {
+        return Err(ApiError::malformed(
+            "entry_id must be e and 16 lowercase hex digits.",
+        ));
+    }
     let runs = lock_runs(&s);
     let run = find_run(&runs, &who, &run_id)?;
+    let entry = named_entry(run, asked.as_deref())?;
     Ok(json_response(
         200,
         json!({
             "run_id": run.run_id,
-            "entry_id": run.entry_id,
+            "entry_id": entry.entry_id,
+            "segment": entry.segment,
             "status": run.status.as_str(),
             "official_start": run.official_start,
             "deadline_at": run.deadline_at,
-            "offset": run.offset(),
-            "next_seq": run.next_seq(),
-            "head": run.head(),
-            "last_ack": run.chunks.last().map(|c| &c.ack),
+            "ends_at": run.ends_at(),
+            "offset": entry.offset(),
+            "next_seq": entry.next_seq(),
+            "head": entry.head(),
+            "last_ack": entry.chunks.last().map(|c| &c.ack),
             "stop": run.stopped(),
-            "final": run.final_commit.as_ref().map(|f| json!({"seq": f.seq, "head": f.head})),
+            "final": entry.final_commit.as_ref().map(|f| json!({"seq": f.seq, "head": f.head})),
         }),
     ))
+}
+
+/// 410 for a run that takes nothing more: abandoned, or over for the close time.
+fn require_accepting(s: &Shared, run: &RunRecord) -> Result<(), ApiError> {
+    if run.status == RunStatus::Abandoned {
+        return Err(ApiError::closed("This run is abandoned."));
+    }
+    if run.past_close(s.close_after_secs) {
+        return Err(ApiError::closed("This run is closed."));
+    }
+    Ok(())
+}
+
+/// [`require_accepting`], and the entry is not sealed.
+fn require_open(s: &Shared, run: &RunRecord, entry: &EntryRecord) -> Result<(), ApiError> {
+    require_accepting(s, run)?;
+    if entry.seal.is_some() {
+        return Err(ApiError::closed("This entry is sealed."));
+    }
+    Ok(())
 }
 
 // ---- POST /v1/runs/{run_id}/receipt ------------------------------------------------------
@@ -450,21 +700,21 @@ async fn post_receipt(
 ) -> Result<Response, ApiError> {
     let who = auth(&s, &headers)?;
     let req: ReceiptRequest = parse_json(&body)?;
-    let mut runs = lock_runs(&s);
-    find_run(&runs, &who, &run_id)?;
-    let run = runs.get_mut(&run_id).expect("just found");
-    if run.status != RunStatus::Open {
-        return Err(ApiError::closed("The run is not open."));
-    }
-    if req.entry_id != run.entry_id {
-        return Err(ApiError::not_found());
+    if !is_entry_id(&req.entry_id) {
+        return Err(ApiError::malformed(
+            "entry_id must be e and 16 lowercase hex digits.",
+        ));
     }
     if !is_hex64(&req.chain_head) {
         return Err(ApiError::malformed(
             "chain_head is not 64 lowercase hex digits.",
         ));
     }
-    if let Some(existing) = &run.receipt {
+    let mut runs = lock_runs(&s);
+    let run = find_run(&runs, &who, &run_id)?;
+    let entry = named_entry(run, Some(&req.entry_id))?;
+    require_open(&s, run, entry)?;
+    if let Some(existing) = &entry.receipt {
         if existing.claims.chain_head == req.chain_head {
             return Ok(json_response(200, json!({"start_receipt": existing})));
         }
@@ -472,21 +722,23 @@ async fn post_receipt(
             "A start receipt was already issued for a different chain head.",
         ));
     }
+    // The entry's own connector facts and session, the run's start and deadline.
     let claims = StartReceiptClaims {
-        entry_id: run.entry_id.clone(),
-        connector_id: run.connector_id.clone(),
-        workspace: run.workspace.clone(),
-        session_id: run.session_id.clone(),
+        entry_id: entry.entry_id.clone(),
+        connector_id: entry.connector_id.clone(),
+        workspace: entry.workspace.clone(),
+        session_id: entry.session_id.clone(),
         started_at: run.official_start.clone(),
         deadline_at: run.deadline_at.clone(),
-        manifest_sha256: run.manifest_sha256.clone(),
+        manifest_sha256: entry.manifest_sha256.clone(),
         chain_head: req.chain_head,
-        connector_dir_sha256: Some(run.connector_dir_sha256.clone()),
+        connector_dir_sha256: Some(entry.connector_dir_sha256.clone()),
         run_public_key: None,
         questionnaire_version: None,
     };
     let receipt = StartReceipt::sign(claims, &s.key).expect("sign the start receipt");
-    run.receipt = Some(receipt.clone());
+    let run = runs.get_mut(&run_id).expect("just found");
+    run.entry_mut(&req.entry_id).expect("just found").receipt = Some(receipt.clone());
     s.persist(run);
     Ok(json_response(200, json!({"start_receipt": receipt})))
 }
@@ -506,6 +758,11 @@ async fn abandon(
 ) -> Result<Response, ApiError> {
     let who = auth(&s, &headers)?;
     let req: AbandonRequest = parse_json(&body)?;
+    if utf16_len(&req.reason) > MAX_ABANDON_REASON_UNITS {
+        return Err(ApiError::malformed(
+            "reason is longer than 4000 characters.",
+        ));
+    }
     if req.reason.chars().count() > MAX_ABANDON_REASON_CHARS {
         return Err(ApiError::malformed("reason is longer than 500 characters."));
     }
@@ -514,14 +771,13 @@ async fn abandon(
     let run = runs.get_mut(&run_id).expect("just found");
     match run.status {
         // A repeat whose reply was lost is not an error.
-        RunStatus::Abandoned if !run.auto_abandoned => {
+        RunStatus::Abandoned => {
             return Ok(json_response(200, json!({"status": "abandoned"})));
         }
-        RunStatus::Abandoned => return Err(ApiError::closed("The run was abandoned.")),
-        RunStatus::Sealed => return Err(ApiError::closed("The run is sealed.")),
         RunStatus::Open => {}
+        other => return Err(ApiError::closed(format!("The run is {}.", other.as_str()))),
     }
-    if !run.chunks.is_empty() {
+    if run.entries.iter().any(|e| !e.chunks.is_empty()) {
         return Err(ApiError::conflict(
             "The run has stored chunks and cannot be abandoned.",
         ));
@@ -578,6 +834,11 @@ fn chunk_headers(h: &HeaderMap) -> Result<ChunkHeaders, ApiError> {
         head: header_hex64(h, "goalcup-head")?,
         content_length: header_u64(h, "content-length")?,
     };
+    if !is_entry_id(&parsed.entry_id) {
+        return Err(ApiError::malformed(
+            "The goalcup-entry-id header is not e and 16 lowercase hex digits.",
+        ));
+    }
     if parsed.length == 0 {
         return Err(ApiError::malformed("Goalcup-Length is zero."));
     }
@@ -589,16 +850,20 @@ fn chunk_headers(h: &HeaderMap) -> Result<ChunkHeaders, ApiError> {
     Ok(parsed)
 }
 
-/// The deadline rules for a chunk: after `deadline_at` nothing is taken until a final heartbeat
-/// has committed the end, and once an end is committed nothing past it is taken, before or
-/// after `deadline_at`.
-fn chunk_deadline_gate(run: &RunRecord, hdr: &ChunkHeaders) -> Result<(), ApiError> {
-    let Some(end) = &run.final_commit else {
+/// The end rules for a chunk of an entry: once the run is over nothing is taken until the
+/// entry's final heartbeat has committed the end, and once an end is committed nothing past it
+/// is taken, over or not.
+fn chunk_deadline_gate(
+    run: &RunRecord,
+    entry: &EntryRecord,
+    hdr: &ChunkHeaders,
+) -> Result<(), ApiError> {
+    let Some(end) = &entry.final_commit else {
         if run.stopped() {
             let mut e = ApiError::new(
                 503,
                 "awaiting_final",
-                "The run is past its deadline and no final heartbeat has arrived yet.",
+                "The run is over and no final heartbeat has arrived yet.",
             );
             e.retry_after = Some(1);
             return Err(e);
@@ -659,38 +924,40 @@ async fn put_chunk(
     let (hdr, entry_id) = {
         let runs = lock_runs(&s);
         let run = find_run(&runs, &who, &run_id)?;
-        if run.status != RunStatus::Open {
-            return Err(ApiError::closed("The run is not open."));
-        }
         let hdr = chunk_headers(&headers)?;
-        if hdr.entry_id != run.entry_id {
-            return Err(ApiError::not_found());
-        }
         if hdr.content_length > MAX_CHUNK_BYTES {
             return Err(ApiError::too_large("The chunk is over 32 MiB."));
         }
-        chunk_deadline_gate(run, &hdr)?;
-        // A retry is answered from the stored acknowledgement, body unread.
-        if let Some(held) = run.chunks.iter().find(|c| c.offset == offset) {
-            if held.length == hdr.length && held.head == hdr.head {
-                return Ok(chunk_reply(held));
-            }
+        let entry = named_entry(run, Some(&hdr.entry_id))?;
+        // A retry is answered from the stored acknowledgement, body unread, whatever the state
+        // of the run has become since.
+        if offset < entry.offset()
+            && let Some(held) = entry.chunks.iter().find(|c| c.offset == offset)
+            && held.length == hdr.length
+            && held.head == hdr.head
+        {
+            return Ok(chunk_reply(held));
+        }
+        require_open(&s, run, entry)?;
+        chunk_deadline_gate(run, entry, &hdr)?;
+        if offset < entry.offset() {
             return Err(ApiError::conflict(
                 "A chunk at this offset is stored with a different length or head.",
             ));
         }
-        if offset != run.offset() {
+        if offset != entry.offset() {
             return Err(ApiError::conflict("The offset is not where the server is."));
         }
-        if hdr.prev != run.head() {
+        if hdr.prev != entry.head() {
             return Err(ApiError::conflict("Goalcup-Prev is not the server's head."));
         }
-        if hdr.first_seq != run.next_seq() {
+        if hdr.first_seq != entry.next_seq() {
             return Err(ApiError::conflict(
                 "Goalcup-First-Seq is not the server's next seq.",
             ));
         }
-        (hdr, run.entry_id.clone())
+        let entry_id = entry.entry_id.clone();
+        (hdr, entry_id)
     };
 
     // Stream the body to disk while hashing it; keep it only if the hash is the declared one.
@@ -742,14 +1009,16 @@ async fn put_chunk(
     // then create-only link into place and record.
     let mut runs = lock_runs(&s);
     let run = runs.get_mut(&run_id).expect("runs are never removed");
-    if run.status != RunStatus::Open {
-        return Err(ApiError::closed("The run is not open."));
-    }
-    chunk_deadline_gate(run, &hdr)?;
-    if offset != run.offset() || hdr.prev != run.head() || hdr.first_seq != run.next_seq() {
-        return Err(ApiError::conflict(
-            "The server moved while the body was being read.",
-        ));
+    {
+        let entry = run.entry(&entry_id).expect("entries are never removed");
+        require_open(&s, run, entry)?;
+        chunk_deadline_gate(run, entry, &hdr)?;
+        if offset != entry.offset() || hdr.prev != entry.head() || hdr.first_seq != entry.next_seq()
+        {
+            return Err(ApiError::conflict(
+                "The server moved while the body was being read.",
+            ));
+        }
     }
     let final_path = dir.join(format!("{offset:016}-{}.zst", hdr.sha256));
     match fs::hard_link(&temp.path, &final_path) {
@@ -782,7 +1051,10 @@ async fn put_chunk(
         ack,
     };
     let reply = chunk_reply(&chunk);
-    run.chunks.push(chunk);
+    run.entry_mut(&entry_id)
+        .expect("entries are never removed")
+        .chunks
+        .push(chunk);
     s.persist(run);
 
     // The chunk is committed. Lost-reply hook: cut the connection so the caller never hears.
@@ -812,50 +1084,64 @@ async fn seal(
 ) -> Result<Response, ApiError> {
     let who = auth(&s, &headers)?;
     let req: SealRequest = parse_json(&body)?;
-    let mut runs = lock_runs(&s);
-    find_run(&runs, &who, &run_id)?;
-    let run = runs.get_mut(&run_id).expect("just found");
-    if run.status == RunStatus::Abandoned {
-        return Err(ApiError::closed("The run was abandoned."));
+    if !is_entry_id(&req.entry_id) {
+        return Err(ApiError::malformed(
+            "entry_id must be e and 16 lowercase hex digits.",
+        ));
     }
-    if req.entry_id != run.entry_id {
-        return Err(ApiError::not_found());
+    if req.seal_json.is_empty() || req.baseline_json.is_empty() {
+        return Err(ApiError::malformed(
+            "A document must be a non-empty string.",
+        ));
     }
     if req.seal_json.len() > MAX_SEAL_DOC_BYTES || req.baseline_json.len() > MAX_SEAL_DOC_BYTES {
         return Err(ApiError::too_large("A document is over 16 MiB."));
     }
-    if let Some((seal_json, baseline_json)) = &run.seal {
+    let mut runs = lock_runs(&s);
+    find_run(&runs, &who, &run_id)?;
+    let run = runs.get_mut(&run_id).expect("just found");
+    let entry = named_entry(run, Some(&req.entry_id))?;
+    if let Some((seal_json, baseline_json)) = &entry.seal {
         if *seal_json == req.seal_json && *baseline_json == req.baseline_json {
-            return Ok(json_response(200, json!({"status": "sealed"})));
+            return Ok(json_response(
+                200,
+                json!({"status": "sealed", "run_status": run.status.as_str()}),
+            ));
         }
         return Err(ApiError::conflict(
-            "The run is sealed with other documents.",
+            "This entry is sealed with other documents.",
         ));
     }
-    // After the deadline the seal is taken only when the server holds the chain up to the end
-    // the final heartbeat committed.
-    // After the deadline the seal waits for the final heartbeat, and a committed end (before
-    // or after the deadline) binds it: the server must hold the chain up to that end.
-    if run.stopped() && run.final_commit.is_none() {
-        let mut e = ApiError::new(
-            503,
-            "awaiting_final",
-            "The run is past its deadline and no final heartbeat has arrived yet.",
-        );
-        e.retry_after = Some(1);
-        return Err(e);
-    }
-    if let Some(end) = run.final_commit.as_ref()
-        && !(run.next_seq() == end.seq + 1 && run.head() == end.head)
-    {
+    require_accepting(&s, run)?;
+    // A seal needs the end the entry's final heartbeat committed, and the chain held up to it.
+    let Some(end) = entry.final_commit.as_ref() else {
+        if run.stopped() {
+            let mut e = ApiError::new(
+                503,
+                "awaiting_final",
+                "The run is over and no final heartbeat has arrived yet.",
+            );
+            e.retry_after = Some(1);
+            return Err(e);
+        }
+        return Err(ApiError::conflict(
+            "Send the final heartbeat first: a seal needs the end of the entry committed.",
+        ));
+    };
+    if !(entry.next_seq() == end.seq + 1 && entry.head() == end.head) {
         return Err(ApiError::conflict(
             "The server does not hold the chain up to the committed end.",
         ));
     }
-    run.seal = Some((req.seal_json, req.baseline_json));
-    run.status = RunStatus::Sealed;
+    let entry_id = req.entry_id.clone();
+    run.entry_mut(&entry_id).expect("just found").seal = Some((req.seal_json, req.baseline_json));
+    // The run is sealed when its current entry is, once it is over.
+    run.status = run.status_now(s.close_after_secs);
     s.persist(run);
-    Ok(json_response(200, json!({"status": "sealed"})))
+    Ok(json_response(
+        200,
+        json!({"status": "sealed", "run_status": run.status.as_str()}),
+    ))
 }
 
 // ---- POST /v1/runs/{run_id}/heartbeat ----------------------------------------------------
@@ -883,6 +1169,11 @@ async fn heartbeat(
 ) -> Result<Response, ApiError> {
     let who = auth(&s, &headers)?;
     let req: HeartbeatRequest = parse_json(&body)?;
+    if !is_entry_id(&req.entry_id) {
+        return Err(ApiError::malformed(
+            "entry_id must be e and 16 lowercase hex digits.",
+        ));
+    }
     if !is_hex64(&req.head) {
         return Err(ApiError::malformed("head is not 64 lowercase hex digits."));
     }
@@ -909,27 +1200,42 @@ async fn heartbeat(
     let mut runs = lock_runs(&s);
     find_run(&runs, &who, &run_id)?;
     let run = runs.get_mut(&run_id).expect("just found");
-    if req.entry_id != run.entry_id {
-        return Err(ApiError::not_found());
-    }
-    match run.status {
-        RunStatus::Abandoned => return Err(ApiError::closed("The run was abandoned.")),
-        // The final heartbeat follows the seal in the tracer's wrap-up, so a sealed run still
-        // takes it; a plain heartbeat has nothing left to say.
-        RunStatus::Sealed if !req.final_ => return Err(ApiError::closed("The run is sealed.")),
-        RunStatus::Sealed | RunStatus::Open => {}
-    }
-    if req.final_ {
-        match &run.final_commit {
+    named_entry(run, Some(&req.entry_id))?;
+    // An abandoned or closed run accepts nothing more, a final heartbeat included.
+    require_accepting(&s, run)?;
+    let stop = run.stopped();
+    let reason = match (stop, &run.replaced_at) {
+        (false, _) => Value::Null,
+        (true, Some(replaced)) if *replaced < run.deadline_at => json!("replaced"),
+        (true, _) => json!("deadline"),
+    };
+    let answer = json!({"stop": stop, "deadline_at": run.deadline_at, "reason": reason});
+    let entry = run.entry_mut(&req.entry_id).expect("just found");
+    if !req.final_ {
+        // A sealed entry has nothing left to record.
+        if entry.seal.is_some() {
+            return Ok(json_response(200, answer));
+        }
+    } else {
+        match &entry.final_commit {
             // A repeat of the committed end, whose reply may have been lost.
             Some(end) if end.seq == req.seq && end.head == req.head => {}
             Some(_) => {
                 return Err(ApiError::conflict(
-                    "A final heartbeat already committed a different end of the run.",
+                    "A final heartbeat already committed a different end of the entry.",
                 ));
             }
             None => {
-                run.final_commit = Some(FinalCommit {
+                // It cannot contradict the chain the server already holds.
+                let stored = entry.chunks.last().map(|c| (c.last_seq, c.head.clone()));
+                if let Some((last_seq, head)) = stored
+                    && (last_seq > req.seq || (last_seq == req.seq && head != req.head))
+                {
+                    return Err(ApiError::conflict(
+                        "The server already holds a different chain than this final heartbeat names.",
+                    ));
+                }
+                entry.final_commit = Some(FinalCommit {
                     seq: req.seq,
                     head: req.head.clone(),
                     repo_head: req.repo_head.clone(),
@@ -937,7 +1243,7 @@ async fn heartbeat(
             }
         }
     }
-    run.heartbeats.push(StoredHeartbeat {
+    entry.heartbeats.push(StoredHeartbeat {
         entry_id: req.entry_id,
         seq: req.seq,
         head: req.head,
@@ -949,10 +1255,7 @@ async fn heartbeat(
         received_at: now_z(),
     });
     s.persist(run);
-    Ok(json_response(
-        200,
-        json!({"stop": run.stopped(), "deadline_at": run.deadline_at, "reason": null}),
-    ))
+    Ok(json_response(200, answer))
 }
 
 // ---- POST /v1/device, POST /v1/device/token ----------------------------------------------
@@ -1000,7 +1303,7 @@ async fn create_device(State(s): St, body: Bytes) -> Result<Response, ApiError> 
         ("connector_id", &req.connector_id, 128),
         ("tracer_version", &req.tracer_version, 64),
     ] {
-        if value.is_empty() || value.chars().count() > max {
+        if value.is_empty() || utf16_len(value) > max {
             return Err(ApiError::malformed(format!(
                 "{name} must be 1 to {max} characters."
             )));

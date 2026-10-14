@@ -23,11 +23,14 @@ bucket_name = "replace-me-goalcup-traces"
 preview_bucket_name = "replace-me-goalcup-traces-preview"
 
 [vars]
-# Which event new runs belong to. Until the website's `goalcup.events` table is wired in,
-# one Worker deployment serves one event (practice, dry-run, competition).
-EVENT_ID = "practice"
+# Which event new competition runs belong to, and which one practice runs belong to. Until the
+# website's `goalcup.events` table is wired in, one Worker deployment serves one of each.
+EVENT_ID = "competition"
+PRACTICE_EVENT_ID = "practice"
 # Run length in hours. There is no grace period: at `deadline_at` the run is over.
 RUN_HOURS = "168"
+# A practice run lasts this many minutes. Practice has no start window and never replaces a run.
+PRACTICE_RUN_MINUTES = "10"
 # Production default. `local` exists for `wrangler dev` and tests only (see README).
 DB_BACKEND = "supabase"
 # Check with the GitHub API that repo_url is a public repository. "on" in production;

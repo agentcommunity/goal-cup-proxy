@@ -50,14 +50,14 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/index.ts` | Routing, maintenance switch, authentication, error mapping |
 | `src/device.ts` | The device flow: start, poll, and the test-only approval |
 | `src/auth.ts` | Bearer run credential -> member, and the one run it may touch |
-| `src/runs.ts` | Open, receipt, abandon, position, seal |
+| `src/runs.ts` | Open, continue, receipt, abandon, position, heartbeat, seal |
 | `src/chunks.ts` | The chunk upload (early refusals, retry rule, streaming to R2, atomic commit) |
 | `src/sign.ts` | Ed25519 receipts and acks (byte-exact with the Rust formats) |
 | `src/db.ts` | The `Db` interface: one method per step |
 | `src/db-supabase.ts` | Production: one Postgres function per step, via PostgREST RPC |
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `sql/proposed-goalcup-functions.sql` | **Proposal** for the schema and functions SupabaseDb calls |
-| `test/` | `sign.test.ts` (Rust vectors), `config.test.ts`, `github.test.ts`, `supabase.test.ts` (RPC names and arguments, stubbed fetch), `local-db.test.ts`, `integration.test.ts`, `device.test.ts` (HTTP against `wrangler dev`), `device-unit.test.ts` |
+| `test/` | `sign.test.ts` (Rust vectors), `config.test.ts`, `github.test.ts`, `supabase.test.ts` (RPC names and arguments, stubbed fetch), `local-db.test.ts`, `integration.test.ts`, `device.test.ts` and `segments.test.ts` (HTTP against `wrangler dev`), `lifecycle.test.ts` (the Worker in this process on a clock the test moves: replace, window, continue, close), `device-unit.test.ts` |
 
 ## Configuration
 
@@ -65,16 +65,19 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 
 | Name | Default | Meaning |
 |---|---|---|
-| `EVENT_ID` | none (required) | Event that new runs belong to, e.g. `practice`. Lowercase letters, digits, dashes; it becomes part of every R2 key. One deployment serves one event for now. |
-| `RUN_HOURS` | `168` | `deadline_at` = `official_start` + this many hours. |
+| `EVENT_ID` | none (required) | Event that new competition runs belong to. Lowercase letters, digits, dashes; it becomes part of every R2 key. |
+| `PRACTICE_EVENT_ID` | none (required) | Event that practice runs belong to (same rules). One deployment serves one competition and one practice event for now. |
+| `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
+| `PRACTICE_RUN_MINUTES` | `10` | A practice run's `deadline_at` = `official_start` + this many minutes. |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local`. `local` is for `wrangler dev` and tests. Never set it in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | placeholder in `wrangler.toml` | The website's page where a member approves a device request, without a query string. The Worker answers `verification_uri` with it and `verification_uri_complete` with `?code=<user code>` added. |
 | `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. |
 | `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask the GitHub API that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off so they need no network). A missing or private repository is `400`; GitHub being unreachable or rate-limiting is `502`, which the tracer retries. |
 | `MAINTENANCE` | off | `on` makes every call answer `503 maintenance` with `Retry-After`, before authentication and before any body is read. |
 | `MAINTENANCE_RETRY_AFTER` | `300` | Seconds for that header. |
-| `RUN_SECONDS` | none | **Tests only, honoured only with `DB_BACKEND=local`** (anywhere else the Worker answers `500 misconfigured`): run length in seconds, replacing `RUN_HOURS`, so a test can run a whole deadline in seconds. |
-| `ABANDON_AFTER_SECONDS` | `86400` | **Tests only, same rule as `RUN_SECONDS`:** how long after `deadline_at` an unsealed run is abandoned (production: 24 hours, fixed). |
+| `RUN_SECONDS` | none | **Tests only, honoured only with `DB_BACKEND=local`** (anywhere else the Worker answers `500 misconfigured`): competition run length in seconds, replacing `RUN_HOURS`, so a test can run a whole deadline in seconds. |
+| `CLOSE_AFTER_SECONDS` | `86400` | **Tests only, same rule as `RUN_SECONDS`:** how long after a run ends it is closed (`sealed`, or `incomplete`); production: 24 hours, fixed. |
+| `START_WINDOW_OPENS`, `START_WINDOW_CLOSES` | none | **Tests only, same rule as `RUN_SECONDS`:** the competition start window, RFC 3339 like `2026-11-06T09:00:00Z`; an unset edge is open, both unset means always open. In production the window is the event's row in the database. Practice has none. |
 
 Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 
@@ -88,13 +91,13 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 
 ## What is checked where
 
-- **Before a chunk body is read:** credential, run exists and is the credential's own, run is open, the deadline rules
-  below allow it (after `deadline_at`: `503` until the final heartbeat, then nothing past the committed
-  end), `Content-Length` present and at most 33,554,432, `Content-Type` and all seven
-  `Goalcup-*` headers well formed, entry id matches, maintenance switch.
-- **Then:** a chunk at an offset the server already holds with the same `Goalcup-Length` and
-  `Goalcup-Head` is answered `200` with the stored ack (body unread); otherwise offset, `prev` and
-  first sequence must continue exactly where the run stands (`409`).
+- **Before a chunk body is read:** credential, run exists and is the credential's own, the entry is one of
+  the run's, a chunk the server already holds (same offset, `Goalcup-Length` and `Goalcup-Head`) is
+  answered `200` with the stored ack, the run is not abandoned or closed and the entry not sealed, the
+  end rules below allow it (after the run's `ends_at`: `503` until the entry's final heartbeat, then
+  nothing past the committed end), `Content-Length` present and at most 33,554,432, `Content-Type`
+  and all seven `Goalcup-*` headers well formed, maintenance switch.
+- **Then:** offset, `prev` and first sequence must continue exactly where the entry stands (`409`).
 - **Storage:** the body is piped (never buffered) into R2 with a create-only put and R2 checks
   the SHA-256 (`422 digest_mismatch`, nothing stored). Key:
   `traces/{event}/{run_id}/{entry_id}/{offset:016}-{sha256}.zst`. The hash is part of the name, so
@@ -151,7 +154,7 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
      and `authenticated`, as the proposal does.
 5. **Not built yet** (SERVER-DESIGN sections 4, 11): per-credential rate limiting (`429`; do it with a
    Cloudflare rate-limiting rule on the route), the per-run storage quota, live totals in the
-   heartbeat, outages, `continue`, the verify job, `live.json`, monitoring. The organizer pause on new starts is not a
+   heartbeat, outages, the verify job, `live.json`, monitoring. The organizer pause on new starts is not a
    separate switch; `MAINTENANCE=on` stops everything.
 
 ## Decisions where the contract is silent
@@ -160,8 +163,8 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
   a fresh run reports `next_seq: 0` and `head` = 64 zeros.
 - A credential opens one run. `POST /v1/runs` repeated with the same `session_id` on a credential
   that already opened a run returns that run (`200`), also after the receipt; another `session_id`
-  is `409`. A credential that has not opened a run yet still meets the member-level rule: another
-  open run on the account is `409` (a later task replaces that rule).
+  is `409`. A competition start by the account replaces its other open competition run (that run
+  ends then; see `replaced_at`); a practice start replaces nothing.
 - A credential sees only the run it opened: another run id, or any run id before it has opened
   one, is `404`. Unknown or expired is `401`. It lasts an hour from the approval until it opens a
   run, then until 24 hours after that run's `deadline_at`.
@@ -184,26 +187,30 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
 - Database or storage failures are `502 upstream_error` and misconfiguration is
   `500 misconfigured` (the same generic sentence for every cause: the detail, which may hold
   configuration, goes to the Worker's log only); the tracer retries any 5xx.
-- An unsealed run more than 24 hours past its `deadline_at` is abandoned the first time anyone
-  looks at it (any call naming the run) or its member opens a new run; it then answers `410` and
-  no longer holds the member's one open slot. There is no scheduled job.
+- A run that is over is closed the first time anyone looks at it (any call naming the run) once it
+  is: `sealed` if its current entry is sealed, `incomplete` more than 24 hours after its end
+  without that; it then answers `410`. There is no scheduled job yet. (`abandoned` is only the
+  participant's own `abandon`.)
 
-## The deadline, as implemented
+## The end of a run, as implemented
 
-(`docs/UPLOAD-API.md`, "The deadline" and the heartbeat call.)
+(`docs/UPLOAD-API.md`, "When a run ends" and the heartbeat call.) A run ends at
+`ends_at = min(deadline_at, replaced_at)`; every rule below is against that, per entry.
 
 - `POST /v1/runs/{id}/heartbeat` stores the last heartbeat and answers
-  `{"stop": <now >= deadline_at>, "deadline_at": …}`. `GET` reports the same `stop` and `final`.
-- The final heartbeat commits `(seq, head, repo_head)` once. The same `(seq, head)` again is `200`
-  (a different `repo_head` is ignored); a different one is `409`. It is also `409` if the server
-  already holds chain past that `seq`, or holds that `seq` with another head: such a final names a
-  chain that is not the one stored. It is accepted on an open or sealed run, never on an abandoned one.
-- A chunk after `deadline_at` while no final is committed is `503` (error code `maintenance`, the
-  contract's only 503 code) with `Retry-After: 60`. Once a final is committed, before or after the
-  deadline, a chunk ending after the committed `seq`, or ending at it with another head, is `410`.
-  The same rule runs again inside the atomic commit, so a final committed during an upload wins.
-- Seal after `deadline_at`: `503` with `Retry-After: 60` if no final is committed; `409` if the
-  stored chain has not reached the committed `(seq, head)` yet (the tracer reads the position and
-  uploads the rest); `200` otherwise. Before the deadline the seal has no such condition.
+  `{"stop": <now >= ends_at>, "deadline_at": …, "reason": "deadline"|"replaced"|null}`. `GET`
+  reports the same `stop`, `ends_at` and the entry's `final`.
+- The final heartbeat commits `(seq, head, repo_head)` once per entry. The same `(seq, head)` again
+  is `200` (a different `repo_head` is ignored); a different one is `409`. It is also `409` if the
+  server already holds chain past that `seq`, or holds that `seq` with another head: such a final
+  names a chain that is not the one stored. It is accepted until the run is abandoned or closed.
+- A chunk after `ends_at` while the entry has no final committed is `503` (error code
+  `awaiting_final`) with `Retry-After: 60`. Once a final is committed, before or after the end, a
+  chunk ending after the committed `seq`, or ending at it with another head, is `410`. The same rule
+  runs again inside the atomic commit, so a final committed during an upload wins.
+- A seal needs the entry's committed end and the chain held up to it, both checked in the atomic
+  seal step: no final is `409` (`503` with `Retry-After: 60` once the run is over); a chain not yet
+  at the committed `(seq, head)` is `409` (the tracer reads the position and uploads the rest); `200`
+  otherwise.
 - There is no grace period and no late window.
-- Testing a deadline takes seconds with the local-only `RUN_SECONDS` and `ABANDON_AFTER_SECONDS`.
+- Testing a deadline takes seconds with the local-only `RUN_SECONDS` and `CLOSE_AFTER_SECONDS`.
