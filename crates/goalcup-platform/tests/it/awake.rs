@@ -36,6 +36,46 @@ fn false_tool() -> PathBuf {
         .expect("a `false` binary at /usr/bin or /bin")
 }
 
+/// A directory holding a fake `systemd-inhibit`, removed on drop.
+#[cfg(target_os = "linux")]
+struct FakeInhibitor(PathBuf);
+
+#[cfg(target_os = "linux")]
+impl FakeInhibitor {
+    /// Write `body` as an executable `#!/bin/sh` script named `systemd-inhibit`.
+    fn new(body: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "goalcup-awake-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tool = dir.join("systemd-inhibit");
+        std::fs::write(&tool, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self(dir)
+    }
+
+    fn tool(&self) -> PathBuf {
+        self.0.join("systemd-inhibit")
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for FakeInhibitor {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn found(tool: PathBuf) -> impl Fn(&str) -> Option<PathBuf> {
+    move |_: &str| Some(tool.clone())
+}
+
 #[test]
 fn a_sleep_lock_dies_with_its_value() {
     let lock: SleepLock = match hold("goalcup awake test") {
@@ -90,6 +130,51 @@ fn an_inhibitor_that_exits_at_once_is_an_err() {
     );
 }
 
+/// A host that grants the lock: the fake skips its own options and runs the command, as the real
+/// tool does once the lock is taken. The lock was asked for on a thread that is gone by the time
+/// it is checked.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_granted_lock_made_on_a_short_lived_thread_outlives_it() {
+    let fake = FakeInhibitor::new(
+        r#"while [ $# -gt 0 ]; do case "$1" in --*) shift ;; *) break ;; esac; done
+exec "$@""#,
+    );
+    let which = found(fake.tool());
+    let lock = std::thread::spawn(move || hold_with("why", &which, false))
+        .join()
+        .unwrap()
+        .unwrap_or_else(|why| panic!("a granted lock must be an Ok: {why}"));
+    let pid = lock.pid();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        running(pid),
+        "the inhibitor must still be running (state {:?}) after the thread that asked ended",
+        state(pid)
+    );
+    drop(lock);
+    assert!(
+        state(pid).is_none(),
+        "the inhibitor must be gone and reaped after the drop"
+    );
+}
+
+/// A host where the tool is installed but cannot take the lock (no bus, policy denial) fails after
+/// a delay, without ever running the command. That must be an Err, however late the tool gives up.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_inhibitor_that_fails_late_is_an_err() {
+    let fake = FakeInhibitor::new("sleep 0.4\nexit 1");
+    let err = match hold_with("why", &found(fake.tool()), false) {
+        Ok(_) => panic!("a tool that never ran its command must not count as a hold"),
+        Err(e) => e,
+    };
+    assert!(
+        err.starts_with("the sleep inhibitor exited at once"),
+        "{err}"
+    );
+}
+
 #[test]
 fn a_lock_made_on_a_short_lived_thread_outlives_it() {
     let made = std::thread::spawn(|| hold("goalcup awake thread test"))
@@ -105,6 +190,7 @@ fn a_lock_made_on_a_short_lived_thread_outlives_it() {
             return;
         }
     };
+    // An Ok is only returned once the lock is demonstrably held, so nothing here may be lost.
     let pid = lock.pid();
     // The spawning thread is gone; a signal tied to it would have left a zombie by now.
     std::thread::sleep(std::time::Duration::from_millis(200));
