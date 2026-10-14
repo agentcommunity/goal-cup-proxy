@@ -77,14 +77,26 @@ use goalcup_protocol::process::ProcessRegistration;
 use std::path::Path;
 use std::time::Duration;
 
-/// The most bytes this client reads from any control response.
+/// The most bytes this client reads from any control response but the entries list.
 ///
 /// The daemon's own request limit is a megabyte and its answers are smaller than that by an
 /// order of magnitude — an entry summary, a workspace document, a seal manifest. Sixty-four
 /// kibibytes is well past every one of them and small enough that a daemon answering
 /// something this client did not ask for cannot make it allocate. A body over the cap is
 /// refused having read the cap and one byte, never read whole and then rejected.
+///
+/// The entries list is the one answer that is not that size: see [`MAX_LIST_RESPONSE_BYTES`].
 pub const MAX_RESPONSE_BYTES: u64 = 64 * 1024;
+
+/// The most bytes this client reads from the entries list, `GET /v0/entries`.
+///
+/// The list is every row the registry ever held, open and sealed, at about 330 bytes a row,
+/// so it grows with the life of the daemon and not with the size of any one answer. A
+/// launcher that relaunches the harness every couple of minutes passes the ordinary cap's
+/// two hundred rows within hours. Sixteen mebibytes is about fifty thousand rows, which no
+/// run reaches, and is still a bound: a daemon answering the list with more cannot make this
+/// client allocate without limit. Read the same way as [`MAX_RESPONSE_BYTES`].
+pub const MAX_LIST_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// How long this client waits for the loopback to accept a connection.
 ///
@@ -254,12 +266,15 @@ impl HttpDaemonClient {
     /// [`crate::retry`] policy decides whether to ask again.
     ///
     /// `path` is the raw request target, query and all, exactly as it will go on the wire.
+    /// `max_response` is the most bytes of the answer this call reads: the ordinary
+    /// [`MAX_RESPONSE_BYTES`] everywhere but the entries list.
     fn call(
         &self,
         method: &str,
         path: &str,
         body: Option<&serde_json::Value>,
         read_timeout: Duration,
+        max_response: u64,
     ) -> Result<CallResponse, CallError> {
         let url = format!("{}{path}", self.base);
         let mut request = match method {
@@ -341,7 +356,7 @@ impl HttpDaemonClient {
         // `ureq` correctly hides a 204's chunk bytes, so header framing is the remaining
         // evidence that a peer wrote something this route must not accept as an ack.
         let has_transfer_encoding = !response.all("transfer-encoding").is_empty();
-        let text = read_bounded(&url, response).map_err(CallError::Uncertain)?;
+        let text = read_bounded(&url, response, max_response).map_err(CallError::Uncertain)?;
         if (200..300).contains(&status) {
             // The ordinary JSON callers only need a null sentinel for a zero-byte body. The
             // `/process` acknowledgement additionally needs to distinguish that body from
@@ -377,7 +392,14 @@ impl HttpDaemonClient {
 
     /// `GET`, with the ordinary deadline.
     fn get(&self, path: &str) -> Result<serde_json::Value, ControlError> {
-        self.call("GET", path, None, CALL_TIMEOUT)
+        self.call("GET", path, None, CALL_TIMEOUT, MAX_RESPONSE_BYTES)
+            .map(|response| response.value)
+            .map_err(CallError::into_error)
+    }
+
+    /// `GET` of the entries list, with the ordinary deadline and [`MAX_LIST_RESPONSE_BYTES`].
+    fn get_list(&self, path: &str) -> Result<serde_json::Value, ControlError> {
+        self.call("GET", path, None, CALL_TIMEOUT, MAX_LIST_RESPONSE_BYTES)
             .map(|response| response.value)
             .map_err(CallError::into_error)
     }
@@ -389,7 +411,7 @@ impl HttpDaemonClient {
         body: Option<&serde_json::Value>,
         read_timeout: Duration,
     ) -> Result<serde_json::Value, ControlError> {
-        self.call("POST", path, body, read_timeout)
+        self.call("POST", path, body, read_timeout, MAX_RESPONSE_BYTES)
             .map(|response| response.value)
             .map_err(CallError::into_error)
     }
@@ -490,17 +512,17 @@ pub fn seal_capture_following_restart(
     answer
 }
 
-/// The response body, up to [`MAX_RESPONSE_BYTES`], or a refusal naming the cap.
+/// The response body, up to `cap` bytes, or a refusal naming the cap.
 ///
 /// One byte past the cap, so a body exactly at it still reads and anything larger is caught
 /// having read the cap and no more: the shape `config::read_control_file` also uses.
-fn read_bounded(url: &str, response: ureq::Response) -> Result<String, ControlError> {
+fn read_bounded(url: &str, response: ureq::Response, cap: u64) -> Result<String, ControlError> {
     use std::io::Read;
 
     let mut text = String::new();
     let read = response
         .into_reader()
-        .take(MAX_RESPONSE_BYTES + 1)
+        .take(cap + 1)
         .read_to_string(&mut text)
         // A body that stopped early, or one that is not UTF-8, is a daemon that answered
         // badly — not a daemon that is not there. `Unreachable` is the sentence a
@@ -513,9 +535,9 @@ fn read_bounded(url: &str, response: ureq::Response) -> Result<String, ControlEr
             }
             _ => ControlError::Unreachable(format!("{url}: {e}")),
         })?;
-    if read as u64 > MAX_RESPONSE_BYTES {
+    if read as u64 > cap {
         return Err(ControlError::Malformed(format!(
-            "{url} answered with more than {MAX_RESPONSE_BYTES} bytes, which is more than \
+            "{url} answered with more than {cap} bytes, which is more than \
              any control API answer"
         )));
     }
@@ -585,7 +607,7 @@ impl DaemonClient for HttpDaemonClient {
     }
 
     fn entries(&self) -> Result<Vec<EntrySummary>, ControlError> {
-        let answer = self.get(ROUTE_ENTRIES)?;
+        let answer = self.get_list(ROUTE_ENTRIES)?;
         parsed(ROUTE_ENTRIES, answer)
     }
 
@@ -608,7 +630,13 @@ impl DaemonClient for HttpDaemonClient {
     ) -> Result<(), ControlError> {
         let body = document(request)?;
         let path = entry_route(entry_id, SUFFIX_PROCESS);
-        match self.call("POST", &path, Some(&body), PROCESS_HANDOFF_CALL_TIMEOUT) {
+        match self.call(
+            "POST",
+            &path,
+            Some(&body),
+            PROCESS_HANDOFF_CALL_TIMEOUT,
+            MAX_RESPONSE_BYTES,
+        ) {
             Ok(response) if response.status == 204 && response.body_is_empty => Ok(()),
             Ok(_) => Err(ControlError::Malformed(format!(
                 "{path}: expected HTTP 204 No Content for a process registration acknowledgement"
@@ -687,7 +715,7 @@ impl DaemonClient for HttpDaemonClient {
     ) -> Result<CaptureFinishReport, CaptureSealError> {
         let body = document(request).map_err(CaptureSealError::MaybeAdmitted)?;
         let path = entry_route(entry_id, SUFFIX_SEAL);
-        match self.call("POST", &path, Some(&body), read_timeout) {
+        match self.call("POST", &path, Some(&body), read_timeout, MAX_RESPONSE_BYTES) {
             Ok(answer) => parsed(&path, answer.value).map_err(CaptureSealError::MaybeAdmitted),
             Err(CallError::NotConnected(error)) => Err(CaptureSealError::NotAdmitted(error)),
             Err(CallError::Refusal {
