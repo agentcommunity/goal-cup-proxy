@@ -833,23 +833,23 @@ as $$
           or least(r.deadline_at, coalesce(r.replaced_at, r.deadline_at)) >= p_at::timestamptz - interval '48 hours')
 $$;
 
--- Queue a notice in the outbox. True when this call queued it, false when one with the same run, kind and
--- dedupe key was there already (or the run is not this member's).
-create function goalcup.upload_queue_notice(
-  p_run_id text, p_member_id text, p_kind text, p_dedupe_key text, p_payload jsonb, p_at text
-) returns boolean
+-- Queue notices in the outbox, all in one call: p_notices is a JSON array of {run_id, member_id, kind, dedupe_key,
+-- payload, at}. One call because the cron queues for every open run each tick (a call each would pass the Worker's
+-- subrequest limit). A notice whose run, kind and dedupe key are there already is skipped, so a batch that is sent
+-- again is safe; one whose run is not that member's is skipped. Returns how many rows this call inserted.
+create function goalcup.upload_queue_notices(p_notices jsonb) returns integer
 language plpgsql security definer set search_path = goalcup, pg_temp
 as $$
 declare
   v_rows integer;
 begin
   insert into goalcup.notices (run_id, member_id, kind, dedupe_key, payload, created_at)
-  select r.id, r.member_id, p_kind, p_dedupe_key, coalesce(p_payload, '{}'::jsonb), p_at::timestamptz
-    from goalcup.runs r
-   where r.id = p_run_id and r.member_id = p_member_id::uuid
+  select r.id, r.member_id, n.kind, n.dedupe_key, coalesce(n.payload, '{}'::jsonb), n.at::timestamptz
+    from jsonb_to_recordset(p_notices) as n(run_id text, member_id text, kind text, dedupe_key text, payload jsonb, at text)
+    join goalcup.runs r on r.id = n.run_id and r.member_id = n.member_id::uuid
   on conflict (run_id, kind, dedupe_key) do nothing;
   get diagnostics v_rows = row_count;
-  return v_rows = 1;
+  return v_rows;
 end $$;
 
 -- Keep the commit GitHub had at the deadline ('none' when it has no such repository). The first one stays.
@@ -893,7 +893,7 @@ grant execute on function
   goalcup.upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text, bigint, text, text, text),
   goalcup.upload_close_run(text, text, text),
   goalcup.upload_runs_for_tick(text),
-  goalcup.upload_queue_notice(text, text, text, text, jsonb, text),
+  goalcup.upload_queue_notices(jsonb),
   goalcup.upload_record_final_commit(text, text, text, text)
 to goalcup_worker;
 
@@ -905,7 +905,7 @@ to goalcup_worker;
 --    only checks that the event exists and, for a competition run, the window.
 --  * The mailer: it reads goalcup.notices where sent_at is null, writes the email for each kind (started, silence,
 --    idle_3h, idle_6h, recording, ended; the payload has what it needs), sends it and sets sent_at. Nothing here
---    sends mail, and goalcup_worker can write the outbox only through upload_queue_notice.
+--    sends mail, and goalcup_worker can write the outbox only through upload_queue_notices.
 --  * The approval page: it calls goalcup.goalcup_approve_device(user_code, member_id, approve) for the
 --    signed-in member, and replaces goalcup.member_handle with the real handle column.
 --  * Whether PostgREST should expose schema goalcup at all (required for RPC), or whether thin

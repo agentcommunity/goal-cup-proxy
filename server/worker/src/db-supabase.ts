@@ -354,16 +354,12 @@ export class SupabaseDb implements Db {
     return v.map((row) => this.#row<TickRun>("upload_runs_for_tick", row, "run", TICK_SHAPE));
   }
 
-  async queueNotice(n: NoticeArgs): Promise<boolean> {
-    const v = await this.#rpc("upload_queue_notice", {
-      p_run_id: n.run_id,
-      p_member_id: n.member_id,
-      p_kind: n.kind,
-      p_dedupe_key: n.dedupe_key,
-      p_payload: n.payload,
-      p_at: n.at,
-    });
-    return this.#flag("upload_queue_notice", v);
+  async queueNotices(notices: NoticeArgs[]): Promise<number> {
+    if (notices.length === 0) return 0;
+    const v = await this.#rpc("upload_queue_notices", { p_notices: notices });
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= notices.length) return v;
+    console.error(`supabase upload_queue_notices: unexpected result ${JSON.stringify(v)?.slice(0, 200)}`);
+    throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
   }
 
   async recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {

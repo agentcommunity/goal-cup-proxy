@@ -201,17 +201,20 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
 `wrangler.toml`). It builds the same context a request does and runs three steps, each with its own
 try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`. All take the time as a parameter. They
 read `Db.runsForTick(now)` (open runs, and runs that ended in the last 48 hours; never abandoned
-ones) and write with `Db.closeRun`, `Db.recordFinalCommit` and `Db.queueNotice`. The constants
+ones) and write with `Db.closeRun`, `Db.recordFinalCommit` and `Db.queueNotices` (one call for the whole batch). The constants
 (20 minutes of silence, idle at 3 and 6 hours, an hour to wait for the commit, 50 GitHub calls per
 tick) are in `notices.ts` and have no variable. The rules are in `docs/UPLOAD-API.md`, "What the
 server does on its own". Locally, `wrangler dev --test-scheduled` and `curl
 localhost:8787/__scheduled` run one tick; the outbox rows are the objects under `state/notices/`.
-Cost: a tick reads the run list with one call and then makes one `queueNotice` call per owed
-notice per open run (every open run owes `started` each tick, which the database answers "already
-there"), so with about 1,500 open runs it is a few thousand subrequests per tick, plus up to 50
-GitHub calls. That assumes the paid Workers plan (the free plan allows 50 subrequests per
-invocation). Each run is handled in its own try/catch: one that fails is logged
-(`tick <step> <run_id>: <message>`) and the rest go on.
+Cost: each step reads the run list with one call (three in all), `queueNotices` makes one call for
+the whole batch of notices however many runs there are (every open run owes `started` each tick; the
+database skips what is there already), `closeRuns` makes one call per run that is due to close, and
+`recordFinalCommits` makes at most 50 GitHub fetches and 50 writes. That is about a hundred
+subrequests in a busy tick, not one per open run. It still assumes the paid Workers plan (the free
+plan allows 50 subrequests per invocation). A run that fails in `closeRuns` or `recordFinalCommits`
+is logged (`tick <step> <run_id>: <message>`) and the rest go on; a failed notice batch is logged
+once (`tick queueNotices: <message>`) and the next tick sends the same batch again, which is safe
+because a notice is stored once per run, kind and key.
 The Worker's tests call `worker.scheduled` on a moved clock (`test/helpers/inproc.ts`, `tick`).
 
 ## Staging

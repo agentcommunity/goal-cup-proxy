@@ -382,10 +382,14 @@ export class LocalDb implements Db {
     return runs.sort((x, y) => (x.official_start + x.run_id).localeCompare(y.official_start + y.run_id)).map(toTick);
   }
 
-  async queueNotice(n: NoticeArgs): Promise<boolean> {
-    const key = `state/notices/${n.run_id}.${n.kind}.${encodeURIComponent(n.dedupe_key) || "-"}.json`;
-    const row = { run_id: n.run_id, member_id: n.member_id, kind: n.kind, dedupe_key: n.dedupe_key, payload: n.payload, created_at: n.at, sent_at: null };
-    return (await this.#bucket.put(key, JSON.stringify(row), { onlyIf: { etagDoesNotMatch: "*" } })) !== null;
+  async queueNotices(notices: NoticeArgs[]): Promise<number> {
+    let queued = 0;
+    for (const n of notices) {
+      const key = `state/notices/${n.run_id}.${n.kind}.${encodeURIComponent(n.dedupe_key) || "-"}.json`;
+      const row = { run_id: n.run_id, member_id: n.member_id, kind: n.kind, dedupe_key: n.dedupe_key, payload: n.payload, created_at: n.at, sent_at: null };
+      if ((await this.#bucket.put(key, JSON.stringify(row), { onlyIf: { etagDoesNotMatch: "*" } })) !== null) queued++;
+    }
+    return queued;
   }
 
   recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {

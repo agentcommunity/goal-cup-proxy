@@ -298,22 +298,23 @@ test("runsForTick -> upload_runs_for_tick(p_at), each row checked", async () => 
   assert.ok(lines.some((l) => l.includes("last_model_request_at") && !l.includes("yesterday")), lines.join("\n"));
 });
 
-test("queueNotice -> upload_queue_notice, true only for a notice that was new", async () => {
+test("queueNotices -> one upload_queue_notices call with the whole batch, the count back", async () => {
   const n: NoticeArgs = { run_id: "r1", member_id: "m", kind: "silence", dedupe_key: T, payload: { last_heartbeat_at: T }, at: "t" };
-  const calls = stub(true, false, "yes");
-  assert.equal(await db().queueNotice(n), true);
-  assert.equal(await db().queueNotice(n), false);
+  const batch = [n, { ...n, run_id: "r2", kind: "started" as const, dedupe_key: "" }];
+  const calls = stub(2, 0, "two", -1, 1.5);
+  assert.equal(await db().queueNotices(batch), 2);
+  assert.equal(await db().queueNotices(batch), 0);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], { fn: "upload_queue_notices", args: { p_notices: batch } });
   const quiet = console.error;
   console.error = () => {};
   try {
-    await assert.rejects(db().queueNotice(n), (e) => e instanceof ApiError && e.status === 502);
+    for (let i = 0; i < 3; i++) await assert.rejects(db().queueNotices(batch), (e) => e instanceof ApiError && e.status === 502);
   } finally {
     console.error = quiet;
   }
-  assert.deepEqual(calls[0], {
-    fn: "upload_queue_notice",
-    args: { p_run_id: "r1", p_member_id: "m", p_kind: "silence", p_dedupe_key: T, p_payload: { last_heartbeat_at: T }, p_at: "t" },
-  });
+  assert.equal(await db().queueNotices([]), 0);
+  assert.equal(calls.length, 5, "an empty batch is not sent");
 });
 
 test("recordFinalCommit -> upload_record_final_commit", async () => {

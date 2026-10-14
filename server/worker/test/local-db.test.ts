@@ -517,15 +517,22 @@ test("runsForTick: open runs and recently ended ones, with the run's own facts; 
   assert.deepEqual(await ids(START), [id("r", 2), id("r", 3)]);
 });
 
-test("queueNotice writes a notice once per run, kind and key", async () => {
+test("queueNotices writes a notice once per run, kind and key, and counts what it wrote", async () => {
   const bucket = new FakeBucket();
   const db = LocalDb.create(asR2(bucket));
   const n = { run_id: R1, member_id: "m1", kind: "silence" as const, dedupe_key: START, payload: { last_heartbeat_at: START }, at: "2026-11-06T09:21:00Z" };
-  assert.equal(await db.queueNotice(n), true);
-  assert.equal(await db.queueNotice({ ...n, payload: { other: true } }), false); // the first stays
-  assert.equal(await db.queueNotice({ ...n, dedupe_key: "2026-11-06T09:30:00Z" }), true);
-  assert.equal(await db.queueNotice({ ...n, kind: "started", dedupe_key: "" }), true);
-  assert.equal(await db.queueNotice({ ...n, run_id: id("r", 2), dedupe_key: "" , kind: "started" }), true);
+  assert.equal(await db.queueNotices([]), 0);
+  assert.equal(await db.queueNotices([n, { ...n, payload: { twice: true } }]), 1); // the same key twice in one batch
+  assert.equal(await db.queueNotices([{ ...n, payload: { other: true } }]), 0); // the first stays
+  assert.equal(
+    await db.queueNotices([
+      n,
+      { ...n, dedupe_key: "2026-11-06T09:30:00Z" },
+      { ...n, kind: "started", dedupe_key: "" },
+      { ...n, run_id: id("r", 2), dedupe_key: "", kind: "started" },
+    ]),
+    3,
+  );
   const stored = [...bucket.map.entries()].filter(([k]) => k.startsWith("state/notices/")).map(([, v]) => JSON.parse(v.text));
   assert.equal(stored.length, 4);
   assert.deepEqual(stored.find((x) => x.kind === "silence" && x.dedupe_key === START), {

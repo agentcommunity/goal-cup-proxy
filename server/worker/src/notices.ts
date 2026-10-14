@@ -116,24 +116,18 @@ function owed(run: TickRun, now: Date): { kind: NoticeKind; key: string; payload
   return notices;
 }
 
-/** Queue the notices that are due. Returns how many were queued by this call (not already there). */
+/**
+ * Queue the notices that are due, all in one database call (a call per notice would pass the
+ * Worker's subrequest limit at about a thousand open runs, and every open run owes `started`
+ * every tick). Returns how many were queued by this call (not already there). If the call fails the
+ * tick logs it and the next tick sends the same batch again: the key makes that safe.
+ */
 export async function queueNotices(ctx: Ctx, now: Date): Promise<number> {
-  const runs = (await ctx.db.runsForTick(formatTime(now))).filter((r) => r.mode === "competition");
-  return eachRun("queueNotices", runs, async (run) => {
-    let queued = 0;
-    for (const n of owed(run, now)) {
-      const added = await ctx.db.queueNotice({
-        run_id: run.run_id,
-        member_id: run.member_id,
-        kind: n.kind,
-        dedupe_key: n.key,
-        payload: n.payload,
-        at: formatTime(now),
-      });
-      if (added) queued++;
-    }
-    return queued;
-  });
+  const at = formatTime(now);
+  const batch = (await ctx.db.runsForTick(at))
+    .filter((r) => r.mode === "competition")
+    .flatMap((run) => owed(run, now).map((n) => ({ run_id: run.run_id, member_id: run.member_id, kind: n.kind, dedupe_key: n.key, payload: n.payload, at })));
+  return batch.length === 0 ? 0 : ctx.db.queueNotices(batch);
 }
 
 /** One cron tick. Each step is on its own: one that fails is logged and the others still run. */

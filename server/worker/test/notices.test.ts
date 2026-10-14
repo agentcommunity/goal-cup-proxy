@@ -280,40 +280,85 @@ lifecycle("the open keeps its IP and country; heartbeats and a continue keep the
   assert.ok(![...r.bucket.map.keys()].some((k) => k.includes("203.0.113")), "an address in a storage key");
 }, undefined, undefined, { country: "DE" });
 
-lifecycle("one run that fails does not stop the others in a step", async (r) => {
+lifecycle("one run whose commit cannot be written does not stop the others", async (r) => {
   stubGithub(() => head(SHA));
   const [a, b] = [await r.cred("alice"), await r.cred("bob")];
   const first = await r.start(a, "s1");
   const second = await r.start(b, "s2");
-  const queue = LocalDb.prototype.queueNotice;
-  const broken = mock.method(LocalDb.prototype, "queueNotice", function (this: LocalDb, n: Parameters<typeof queue>[0]) {
-    if (n.run_id === first.run_id) throw new Error("boom");
-    return queue.call(this, n);
+  const record = LocalDb.prototype.recordFinalCommit;
+  const bad = mock.method(LocalDb.prototype, "recordFinalCommit", function (this: LocalDb, member: string, run: string, ...rest: [string, string]) {
+    if (run === first.run_id) throw new Error("boom");
+    return record.call(this, member, run, ...rest);
+  });
+  const logged: string[] = [];
+  const log = mock.method(console, "error", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+  try {
+    r.at(first.deadline_at);
+    await r.tick();
+  } finally {
+    bad.mock.restore();
+    log.mock.restore();
+  }
+  assert.equal(r.storedRun(second.run_id).final_commit, SHA);
+  assert.equal(r.storedRun(first.run_id).final_commit ?? null, null);
+  assert.ok(logged.some((l) => l.includes("recordFinalCommits") && l.includes(first.run_id) && l.includes("boom")), logged.join("\n"));
+}, HOUR);
+
+lifecycle("a tick makes one queue call however many runs there are, and a repeat inserts none", async (r) => {
+  for (let i = 0; i < 12; i++) await r.start(await r.cred(`m${i}`), `s${i}`);
+  const queue = LocalDb.prototype.queueNotices;
+  const sent: { count: number; inserted: number }[] = [];
+  const spy = mock.method(LocalDb.prototype, "queueNotices", async function (this: LocalDb, notices: Parameters<typeof queue>[0]) {
+    const inserted = await queue.call(this, notices);
+    sent.push({ count: notices.length, inserted });
+    return inserted;
+  });
+  try {
+    await r.tick();
+    assert.deepEqual(sent, [{ count: 12, inserted: 12 }]); // twelve started notices, one call
+    await r.tick();
+    assert.deepEqual(sent.slice(1), [{ count: 12, inserted: 0 }]); // all there already
+  } finally {
+    spy.mock.restore();
+  }
+  assert.equal(only(r, "started").length, 12);
+});
+
+lifecycle("no run owes anything: no queue call at all", async (r) => {
+  const spy = mock.method(LocalDb.prototype, "queueNotices", async () => 0);
+  try {
+    await r.tick(); // no runs
+    assert.equal(spy.mock.callCount(), 0);
+  } finally {
+    spy.mock.restore();
+  }
+});
+
+lifecycle("a batch that fails is logged once and the next tick retries all of it", async (r) => {
+  const [a, b] = [await r.cred("alice"), await r.cred("bob")];
+  const first = await r.start(a, "s1");
+  const second = await r.start(b, "s2");
+  const queue = LocalDb.prototype.queueNotices;
+  let fail = true;
+  const flaky = mock.method(LocalDb.prototype, "queueNotices", async function (this: LocalDb, notices: Parameters<typeof queue>[0]) {
+    if (fail) throw new Error("boom");
+    return queue.call(this, notices);
   });
   const logged: string[] = [];
   const log = mock.method(console, "error", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
   try {
     await r.tick();
-    assert.deepEqual(kinds(r, second.run_id), ["started"]);
-    assert.deepEqual(kinds(r, first.run_id), []);
-    // The same for the commit step: one run's failing write leaves the other's recorded.
-    broken.mock.restore();
-    const record = LocalDb.prototype.recordFinalCommit;
-    const bad = mock.method(LocalDb.prototype, "recordFinalCommit", function (this: LocalDb, member: string, run: string, ...rest: [string, string]) {
-      if (run === first.run_id) throw new Error("boom");
-      return record.call(this, member, run, ...rest);
-    });
-    r.at(first.deadline_at);
+    assert.deepEqual(kinds(r), []);
+    assert.equal(logged.filter((l) => l.includes("boom")).length, 1, logged.join("\n"));
+    assert.match(logged.join("\n"), /tick queueNotices/);
+    fail = false;
+    r.after(5 * MIN);
     await r.tick();
-    bad.mock.restore();
-    assert.equal(r.storedRun(second.run_id).final_commit, SHA);
-    assert.equal(r.storedRun(first.run_id).final_commit ?? null, null);
   } finally {
-    broken.mock.restore();
+    flaky.mock.restore();
     log.mock.restore();
   }
-  assert.ok(logged.some((l) => l.includes("queueNotices") && l.includes(first.run_id) && l.includes("boom")), logged.join("\n"));
-  assert.ok(logged.some((l) => l.includes("recordFinalCommits") && l.includes(first.run_id)), logged.join("\n"));
+  assert.deepEqual([kinds(r, first.run_id), kinds(r, second.run_id)], [["started"], ["started"]]);
 });
 
 lifecycle("the end queues one ended notice with the commit", async (r) => {

@@ -366,8 +366,11 @@ export interface Db {
   closeRun(memberId: string, runId: string, at: string): Promise<RunStatus | null>;
   /** Every run that is open, and every run that ended within `TICK_LOOKBACK_SECONDS` before `now`, except abandoned ones. Oldest first. */
   runsForTick(now: string): Promise<TickRun[]>;
-  /** Queue a notice unless one with the same run, kind and key exists. True when this call queued it. */
-  queueNotice(notice: NoticeArgs): Promise<boolean>;
+  /**
+   * Queue notices, each unless one with the same run, kind and key exists, in one call. Returns how
+   * many this call queued. A batch that fails is retried whole: the key makes that safe.
+   */
+  queueNotices(notices: NoticeArgs[]): Promise<number>;
   /** Store the commit found at the deadline (a 40-hex sha, or `none`). The first one stored stays. */
   recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void>;
   /** A stored chunk of the entry that starts at `offset`, or null. */
