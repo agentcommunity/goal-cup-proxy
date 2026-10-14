@@ -70,6 +70,9 @@ impl Drop for SleepLock {
 /// `Ok` means `caffeinate` stayed alive for a short settling time. The caller owns the returned
 /// lock; it may be held and dropped on any thread, because the inhibitor is owned by a thread of
 /// its own.
+///
+/// Worst case on Linux: `hold` blocks until `systemd-inhibit` has the lock or gives up. If its
+/// D-Bus call hangs, that is bounded by the bus method-call timeout, on the order of 25 seconds.
 pub fn hold(why: &str) -> Result<SleepLock, String> {
     hold_with(why, &find_tool, is_wsl())
 }

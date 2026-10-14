@@ -44,6 +44,7 @@ struct FakeInhibitor(PathBuf);
 impl FakeInhibitor {
     /// Write `body` as an executable `#!/bin/sh` script named `systemd-inhibit`.
     fn new(body: &str) -> Self {
+        use std::io::Write as _;
         use std::os::unix::fs::PermissionsExt as _;
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -54,13 +55,35 @@ impl FakeInhibitor {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let tool = dir.join("systemd-inhibit");
-        std::fs::write(&tool, format!("#!/bin/sh\n{body}\n")).unwrap();
+        {
+            // The handle is closed before the script is ever executed.
+            let mut file = std::fs::File::create(&tool).unwrap();
+            file.write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+                .unwrap();
+        }
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
         Self(dir)
     }
 
     fn tool(&self) -> PathBuf {
         self.0.join("systemd-inhibit")
+    }
+
+    /// `hold_with` using this fake. The tests run as threads of one process, so another thread
+    /// can fork while this script's write handle is open and make the exec fail with ETXTBSY;
+    /// that one error, and no other, is retried (about 5 tries, 20 ms apart).
+    fn hold(&self) -> Result<SleepLock, String> {
+        let which = found(self.tool());
+        let mut tries = 1;
+        loop {
+            match hold_with("why", &which, false) {
+                Err(why) if why.contains("Text file busy") && tries < 5 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                other => return other,
+            }
+        }
     }
 }
 
@@ -140,11 +163,14 @@ fn a_granted_lock_made_on_a_short_lived_thread_outlives_it() {
         r#"while [ $# -gt 0 ]; do case "$1" in --*) shift ;; *) break ;; esac; done
 exec "$@""#,
     );
-    let which = found(fake.tool());
-    let lock = std::thread::spawn(move || hold_with("why", &which, false))
-        .join()
-        .unwrap()
-        .unwrap_or_else(|why| panic!("a granted lock must be an Ok: {why}"));
+    let fake = std::sync::Arc::new(fake);
+    let lock = std::thread::spawn({
+        let fake = fake.clone();
+        move || fake.hold()
+    })
+    .join()
+    .unwrap()
+    .unwrap_or_else(|why| panic!("a granted lock must be an Ok: {why}"));
     let pid = lock.pid();
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert!(
@@ -165,7 +191,7 @@ exec "$@""#,
 #[test]
 fn an_inhibitor_that_fails_late_is_an_err() {
     let fake = FakeInhibitor::new("sleep 0.4\nexit 1");
-    let err = match hold_with("why", &found(fake.tool()), false) {
+    let err = match fake.hold() {
         Ok(_) => panic!("a tool that never ran its command must not count as a hold"),
         Err(e) => e,
     };
