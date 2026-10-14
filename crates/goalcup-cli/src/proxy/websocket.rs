@@ -111,8 +111,10 @@ pub async fn relay_websocket(upgrade: Upgrade) -> io::Result<()> {
         base,
         next_index: Mutex::new(0),
     });
-    let mut from_client = Direction::new(Side::Client, connection.as_ref(), negotiated);
-    let mut from_server = Direction::new(Side::Server, connection.as_ref(), negotiated);
+    let emitter = &*context.emitter;
+    let mut from_client =
+        Direction::new(Side::Client, connection.as_ref(), negotiated, Some(emitter));
+    let mut from_server = Direction::new(Side::Server, connection.as_ref(), negotiated, None);
     let RelayPair { client, upstream } = pair;
     let (client_read, client_write) = tokio::io::split(client);
     let (upstream_read, upstream_write) = tokio::io::split(upstream);
@@ -412,6 +414,9 @@ impl Framer {
 
 /// One direction of the relay: its framing, and its capture when the upgrade is captured.
 struct Direction<'c> {
+    /// Counts each data message this direction carries as a request of a captured host: the
+    /// client's direction only.
+    counting: Option<&'c CaptureEmitter>,
     framer: Framer,
     /// The last data frame did not carry FIN: a fragmented message is still open.
     in_message: bool,
@@ -420,7 +425,12 @@ struct Direction<'c> {
 }
 
 impl<'c> Direction<'c> {
-    fn new(side: Side, connection: Option<&'c Connection>, negotiated: Negotiated) -> Self {
+    fn new(
+        side: Side,
+        connection: Option<&'c Connection>,
+        negotiated: Negotiated,
+        counting: Option<&'c CaptureEmitter>,
+    ) -> Self {
         let mode = match negotiated {
             Negotiated::Plain => Mode::Plain,
             Negotiated::Unsupported => Mode::Unsupported,
@@ -435,6 +445,7 @@ impl<'c> Direction<'c> {
             },
         };
         Direction {
+            counting,
             framer: Framer::default(),
             in_message: false,
             close_seen: false,
@@ -471,6 +482,11 @@ impl<'c> Direction<'c> {
                 }
                 if !header.control() {
                     self.in_message = !header.fin;
+                    if header.opcode != OP_CONTINUATION
+                        && let Some(emitter) = self.counting
+                    {
+                        emitter.record_model_request();
+                    }
                 }
                 if let Some(capture) = &mut self.capture {
                     capture.header(&header, observed);

@@ -8,12 +8,17 @@
 //! way to end a run is to send on the run's one stop channel, which takes the same path as the
 //! run's deadline (the daemon seals, the uploader sends the seal). After the harness has gone
 //! nothing listens on that channel and the tick only keeps the reserve sized.
+//!
+//! Each tick also asks the daemon how the recording is (a bounded wait: no answer is
+//! [`Recording::Unknown`], never a failure), and writes the run's `state.json` ([`Beat`]).
+//! That is where the disk's low-space warning, the upload's trouble and the recording's gaps
+//! are said; `goalcup status` reads them back.
 
 use super::reserve::{
     DiskPolicy, DiskVerdict, GROW_STEP, RunReserve, UPLOAD_FAILING_AFTER, human, pressure,
     target_with, verdict_with,
 };
-use super::{EntryRef, RunRecord};
+use super::{DiskState, EntryRef, Recording, RunRecord, StateKeeper, UploadState, Vitals};
 use crate::upload::prune::{AckAges, deletable, parts_now};
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -27,6 +32,44 @@ pub const DISK_STOP_REASON: &str = "the disk is nearly full and uploads are fail
 
 /// How often a sleeping tick looks at `done`, so a run that ends is not kept waiting on it.
 const LOOK_EVERY: Duration = Duration::from_millis(100);
+
+/// How long one tick waits for the daemon to say how the recording is. A daemon that is slow
+/// is waited for this long and then read as not having answered.
+pub const RECORDING_WAIT: Duration = crate::daemon::CALL_TIMEOUT;
+
+/// Asks the daemon how the recording is: `None` when it cannot say.
+pub type AskRecording = Arc<dyn Fn() -> Option<Recording> + Send + Sync>;
+
+/// What the tick writes to `state.json` and shares with the heartbeat.
+pub struct Beat {
+    pub keeper: StateKeeper,
+    pub vitals: Vitals,
+    pub ask: AskRecording,
+}
+
+/// Ask for the recording, waiting at most `within` (and not past `done`). The question runs on
+/// a thread of its own, so a daemon that does not answer holds nothing but its own call; no
+/// answer in time is [`Recording::Unknown`], never a verdict.
+pub fn recording_within(within: Duration, done: &AtomicBool, ask: AskRecording) -> Recording {
+    let (tell, answer) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("goalcup-recording".into())
+        .spawn(move || {
+            let _ = tell.send(ask());
+        });
+    if spawned.is_err() {
+        return Recording::Unknown;
+    }
+    let wake = Instant::now() + within;
+    while Instant::now() < wake && !done.load(Ordering::SeqCst) {
+        match answer.recv_timeout(LOOK_EVERY.min(wake.saturating_duration_since(Instant::now()))) {
+            Ok(said) => return said.unwrap_or(Recording::Unknown),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Recording::Unknown
+}
 
 /// Everything the tick needs.
 pub struct Watch {
@@ -44,6 +87,8 @@ pub struct Watch {
     /// server, an earlier segment) has nothing acknowledged: none of its parts is ever deleted.
     pub acked: Vec<(String, Arc<AtomicU64>)>,
     pub policy: DiskPolicy,
+    /// The run's state file and what the tick tells the heartbeat. `None` writes nothing.
+    pub beat: Option<Beat>,
 }
 
 /// Whether no upload was acknowledged for [`UPLOAD_FAILING_AFTER`] at `now` (unix seconds).
@@ -94,6 +139,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
         uploads,
         acked,
         policy,
+        beat,
     } = watch;
     let done = Arc::new(AtomicBool::new(false));
     let reserve = Arc::new(Mutex::new(reserve));
@@ -126,6 +172,22 @@ pub fn watch_beside(watch: Watch) -> Watching {
                 );
                 if stop_now {
                     let _ = stop.send(DISK_STOP_REASON.to_string());
+                }
+                if let Some(beat) = &beat {
+                    let recording = recording_within(RECORDING_WAIT, &done, beat.ask.clone());
+                    beat.vitals.set_recording(recording);
+                    let (problem, stopped) = beat.vitals.upload_problem();
+                    let last_ok_at = uploads.iter().map(|last| last.load(Ordering::SeqCst)).max();
+                    let disk = tick.disk();
+                    beat.keeper.update(|state| {
+                        state.recording = recording;
+                        state.upload = UploadState {
+                            last_ok_at,
+                            problem,
+                            stopped,
+                        };
+                        state.disk = disk;
+                    });
                 }
                 let wake = Instant::now() + policy.tick;
                 while Instant::now() < wake && !done.load(Ordering::SeqCst) {
@@ -266,8 +328,9 @@ impl Disk for RunReserve {
 /// What the ticks so far remember, so each thing is said once.
 #[derive(Default)]
 pub struct Tick {
-    /// The disk is low, and the participant has been told so.
-    low_said: bool,
+    /// The last measurement, for `state.json`: low space is told there and by `goalcup status`,
+    /// not on the terminal the agent is using.
+    disk: DiskState,
     /// The stop has been asked for.
     stopped: bool,
     /// A measurement or resize failed, and the participant has been told so.
@@ -275,9 +338,15 @@ pub struct Tick {
 }
 
 impl Tick {
+    /// The disk as the last look found it.
+    pub fn disk(&self) -> DiskState {
+        self.disk.clone()
+    }
+
     /// One look at the disk. Resizes the reserve to what [`target_with`] says (giving back at
     /// once, taking back only when [`GROW_STEP`] is missing), reads what the reserve holds and
-    /// what the volume has free again, and judges them. Lines for the participant go to `say`.
+    /// what the volume has free again, and judges them. Trouble keeping the reservation goes to
+    /// `say`; low space does not (it is [`Tick::disk`]).
     /// Answers `true` exactly once: the reserve is drawn down to nothing, the disk is full,
     /// uploads are failing, and the run must stop.
     pub fn step(
@@ -312,20 +381,14 @@ impl Tick {
             }
         };
         self.trouble_said = false;
-        match verdict_with(policy, footprint, held, free, uploads_failing) {
-            DiskVerdict::Ok => {
-                self.low_said = false;
-                false
-            }
-            DiskVerdict::Low { free } => {
-                if !std::mem::replace(&mut self.low_said, true) {
-                    say(&format!(
-                        "disk: {} free beyond the reservation",
-                        human(free)
-                    ));
-                }
-                false
-            }
+        let verdict = verdict_with(policy, footprint, held, free, uploads_failing);
+        self.disk = DiskState {
+            free_bytes: free,
+            reserve_bytes: held,
+            low: matches!(verdict, DiskVerdict::Low { .. }),
+        };
+        match verdict {
+            DiskVerdict::Ok | DiskVerdict::Low { .. } => false,
             DiskVerdict::Stop => !std::mem::replace(&mut self.stopped, true),
         }
     }
@@ -365,16 +428,18 @@ mod tests {
         }
     }
 
-    fn run(volume: &mut Volume, footprint: u64, failing: bool) -> (bool, Vec<String>) {
+    /// One tick: whether it stops the run, what it said, and the disk it found.
+    fn run(volume: &mut Volume, footprint: u64, failing: bool) -> (bool, Vec<String>, DiskState) {
         let mut said = Vec::new();
-        let stop = Tick::default().step(
+        let mut tick = Tick::default();
+        let stop = tick.step(
             volume,
             &DiskPolicy::default(),
             footprint,
             failing,
             &mut |l| said.push(l.to_string()),
         );
-        (stop, said)
+        (stop, said, tick.disk())
     }
 
     #[test]
@@ -386,12 +451,12 @@ mod tests {
             resizes: Vec::new(),
             leak: 0,
         };
-        let (stop, said) = run(&mut volume, GIB, true);
-        assert!(!stop && said.is_empty(), "{said:?}");
+        let (stop, said, disk) = run(&mut volume, GIB, true);
+        assert!(!stop && said.is_empty() && !disk.low, "{said:?}");
         assert_eq!(volume.reserve, 2 * GIB);
         // Past 3 GiB of parts there is no reserve left, and the roomy disk is not a problem.
-        let (stop, said) = run(&mut volume, 5 * GIB, true);
-        assert!(!stop && said.is_empty(), "{said:?}");
+        let (stop, said, disk) = run(&mut volume, 5 * GIB, true);
+        assert!(!stop && said.is_empty() && !disk.low, "{said:?}");
         assert_eq!(volume.reserve, 0);
     }
 
@@ -406,12 +471,20 @@ mod tests {
             resizes: Vec::new(),
             leak: 0,
         };
-        let (stop, said) = run(&mut volume, 0, true);
+        let (stop, said, disk) = run(&mut volume, 0, true);
         assert!(!stop);
         assert_eq!(volume.reserve, 2 * GIB + 100 * MIB - FREE_FLOOR);
         assert_eq!(volume.free().unwrap(), FREE_FLOOR);
-        assert_eq!(said.len(), 1, "{said:?}");
-        assert!(said[0].contains("free beyond the reservation"), "{said:?}");
+        // Low space is not said on the terminal: it is the state file's (and `status`'s).
+        assert!(said.is_empty(), "{said:?}");
+        assert_eq!(
+            disk,
+            DiskState {
+                free_bytes: FREE_FLOOR,
+                reserve_bytes: volume.reserve,
+                low: true
+            }
+        );
     }
 
     #[test]
@@ -512,13 +585,13 @@ mod tests {
             resizes: Vec::new(),
             leak: 0,
         };
-        let (stop, said) = run(&mut volume, 4 * GIB, false);
+        let (stop, said, disk) = run(&mut volume, 4 * GIB, false);
         assert!(!stop);
-        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said.is_empty() && disk.low, "{said:?} {disk:?}");
     }
 
     #[test]
-    fn low_is_said_once_for_each_low_period() {
+    fn low_follows_each_reading_and_is_never_said_on_the_terminal() {
         let volume = |others: u64| Volume {
             capacity: 100 * GIB,
             others,
@@ -529,6 +602,7 @@ mod tests {
         let low = 100 * GIB - 3 * GIB - GIB;
         let mut tick = Tick::default();
         let mut said = Vec::new();
+        let mut lows = Vec::new();
         for others in [low, low, 10 * GIB, low] {
             tick.step(
                 &mut volume(others),
@@ -537,12 +611,10 @@ mod tests {
                 false,
                 &mut |l| said.push(l.to_string()),
             );
-            // The first two readings are one low period; the third ends it; the fourth is new.
-            if others == 10 * GIB {
-                assert_eq!(said.len(), 1, "{said:?}");
-            }
+            lows.push(tick.disk().low);
         }
-        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(lows, [true, true, false, true]);
+        assert!(said.is_empty(), "{said:?}");
     }
 
     #[test]
@@ -742,6 +814,73 @@ mod tests {
             said.push(l.to_string())
         });
         assert_eq!(part_starts(dir.path()), [10, 20]);
+    }
+
+    #[test]
+    fn a_daemon_that_does_not_answer_is_unknown_not_failed() {
+        let done = AtomicBool::new(false);
+        let ask = |answer: fn() -> Option<Recording>| -> AskRecording { Arc::new(answer) };
+        // Nobody to ask, or no answer: not a verdict.
+        assert_eq!(
+            recording_within(Duration::from_secs(5), &done, ask(|| None)),
+            Recording::Unknown
+        );
+        // A daemon that is slow is waited for, but only so long.
+        let slow: AskRecording = Arc::new(|| {
+            std::thread::sleep(Duration::from_secs(3));
+            Some(Recording::Failed)
+        });
+        let began = Instant::now();
+        assert_eq!(
+            recording_within(Duration::from_millis(200), &done, slow.clone()),
+            Recording::Unknown
+        );
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            began.elapsed()
+        );
+        // A run that ends does not wait for the answer at all.
+        let ended = AtomicBool::new(true);
+        let began = Instant::now();
+        assert_eq!(
+            recording_within(Duration::from_secs(60), &ended, slow),
+            Recording::Unknown
+        );
+        assert!(began.elapsed() < Duration::from_secs(2));
+        // What the daemon says is what is recorded.
+        for (said, recording) in [
+            (Recording::Ok, Recording::Ok),
+            (Recording::Gaps, Recording::Gaps),
+            (Recording::Failed, Recording::Failed),
+        ] {
+            let answer: AskRecording = Arc::new(move || Some(said));
+            assert_eq!(
+                recording_within(Duration::from_secs(5), &done, answer),
+                recording
+            );
+        }
+    }
+
+    #[test]
+    fn the_daemons_capture_states_map_to_recording() {
+        use goalcup_protocol::capture_status::CaptureState;
+        assert_eq!(
+            Recording::of_capture(CaptureState::Recording),
+            Recording::Ok
+        );
+        assert_eq!(
+            Recording::of_capture(CaptureState::Incomplete),
+            Recording::Gaps
+        );
+        assert_eq!(
+            Recording::of_capture(CaptureState::Failed),
+            Recording::Failed
+        );
+        assert_eq!(
+            Recording::of_capture(CaptureState::Starting),
+            Recording::Unknown
+        );
     }
 
     #[test]

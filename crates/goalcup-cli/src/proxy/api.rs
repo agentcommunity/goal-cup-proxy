@@ -252,6 +252,9 @@ pub struct CaptureEmitter {
     local_refusals: AtomicU64,
     /// See [`CaptureEmitter::opaque_fallbacks`]; outside the lock for the same reason.
     opaque_fallbacks: AtomicU64,
+    /// See [`CaptureEmitter::record_model_request`]; shared, so the run's heartbeat can read it
+    /// without asking the proxy.
+    model_requests: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for CaptureEmitter {
@@ -297,6 +300,7 @@ impl CaptureEmitter {
             }),
             local_refusals: AtomicU64::new(0),
             opaque_fallbacks: AtomicU64::new(0),
+            model_requests: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -312,6 +316,23 @@ impl CaptureEmitter {
     /// capture, each counted once by its relay when it falls back, however it then ends.
     pub(crate) fn opaque_fallbacks(&self) -> u64 {
         self.opaque_fallbacks.load(Ordering::SeqCst)
+    }
+
+    /// Requests the harness made of a captured host: each request relayed on an intercepted
+    /// connection, and each client-to-server WebSocket message on one. Counted when the relay
+    /// sees it, whether or not it is captured. Reading it never waits on a relay.
+    pub fn model_requests(&self) -> u64 {
+        self.model_requests.load(Ordering::SeqCst)
+    }
+
+    /// The counter itself, for a reader that outlives the proxy's handle.
+    pub fn model_requests_counter(&self) -> Arc<AtomicU64> {
+        self.model_requests.clone()
+    }
+
+    /// Count one request of a captured host.
+    pub(crate) fn record_model_request(&self) {
+        self.model_requests.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Counts the fallback and records it in the stream ([`ProxyLoss::OpaqueFallback`]).

@@ -436,6 +436,10 @@ mod retries {
         /// When set, the position the server reports (`GET /v1/runs/{id}`) is rewritten to this
         /// `(offset, next_seq, head)`: a server that is wrong, or lying.
         lie: Arc<Mutex<Option<(u64, u64, String)>>>,
+        /// When set, every heartbeat answer is rewritten to `stop: true` with this `reason`
+        /// (`null` for none): a server that says the run is over, as W2's does for a run a
+        /// newer start replaced.
+        stop_reason: Arc<Mutex<Option<Option<String>>>>,
     }
 
     impl Front {
@@ -447,19 +451,22 @@ mod retries {
             let stop = Arc::new(AtomicBool::new(false));
             let fault = Arc::new(Mutex::new(fault));
             let lie = Arc::new(Mutex::new(None));
-            let (seen_in, stop_in, lie_in) = (seen.clone(), stop.clone(), lie.clone());
+            let stop_reason = Arc::new(Mutex::new(None));
+            let (seen_in, stop_in, lie_in, reason_in) =
+                (seen.clone(), stop.clone(), lie.clone(), stop_reason.clone());
             std::thread::spawn(move || {
                 while !stop_in.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let (target, fault, seen, lie) = (
+                            let (target, fault, seen, lie, reason) = (
                                 target.clone(),
                                 fault.clone(),
                                 seen_in.clone(),
                                 lie_in.clone(),
+                                reason_in.clone(),
                             );
                             std::thread::spawn(move || {
-                                answer(stream, &target, &fault, &seen, &lie)
+                                answer(stream, &target, &fault, &seen, &lie, &reason)
                             });
                         }
                         Err(_) => std::thread::sleep(Duration::from_millis(5)),
@@ -471,6 +478,7 @@ mod retries {
                 seen,
                 stop,
                 lie,
+                stop_reason,
             }
         }
 
@@ -496,6 +504,7 @@ mod retries {
         fault: &Mutex<Fault>,
         seen: &Mutex<Vec<String>>,
         lie: &Mutex<Option<(u64, u64, String)>>,
+        stop_reason: &Mutex<Option<Option<String>>>,
     ) {
         stream.set_nonblocking(false).unwrap();
         stream
@@ -564,6 +573,16 @@ mod retries {
                     json["offset"] = offset.into();
                     json["next_seq"] = next_seq.into();
                     json["head"] = head.into();
+                    reply = serde_json::to_vec(&json).unwrap();
+                }
+                if method == "POST"
+                    && path.ends_with("/heartbeat")
+                    && status == 200
+                    && let Some(reason) = stop_reason.lock().unwrap().clone()
+                {
+                    let mut json: serde_json::Value = serde_json::from_slice(&reply).unwrap();
+                    json["stop"] = true.into();
+                    json["reason"] = reason.into();
                     reply = serde_json::to_vec(&json).unwrap();
                 }
                 (status, content_type, reply)
@@ -901,5 +920,113 @@ mod retries {
             took < Duration::from_secs(5),
             "and stopped when it ran out: {took:?}"
         );
+    }
+
+    // ------------------------------------------------------------- what the heartbeat says
+
+    use goalcup_cli::run::{Recording, Vitals};
+    use goalcup_cli::upload::uploader::begin;
+    use std::sync::atomic::AtomicU64;
+
+    /// A heartbeat every 50 ms, a chunk interval and a poll long enough to stay out of the way.
+    fn beating() -> Policy {
+        Policy::from_test_spec("60000,20,10,40,5000,268435456,2000,50").unwrap()
+    }
+
+    fn start_beating(
+        run: &Run,
+        vitals: Vitals,
+    ) -> (
+        goalcup_cli::upload::uploader::Running,
+        std::sync::mpsc::Receiver<String>,
+    ) {
+        let client = ServerClient::new(&ServerConfig {
+            url: run.front.url.clone(),
+            token: TOKEN.to_string(),
+        });
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let running = begin(
+            client,
+            run.record.clone(),
+            run.key.clone(),
+            beating(),
+            run.spool.clone(),
+            None,
+            stop,
+            vitals,
+        )
+        .unwrap();
+        (running, stopped)
+    }
+
+    fn wait_for<T>(what: &str, mut found: impl FnMut() -> Option<T>) -> T {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(found) = found() {
+                return found;
+            }
+            assert!(Instant::now() < deadline, "{what} never happened");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn the_heartbeat_carries_recording_and_model_requests() {
+        let run = Run::new(Box::new(|_| None));
+        let counter = Arc::new(AtomicU64::new(7));
+        let vitals = Vitals::counting(counter.clone());
+        vitals.set_recording(Recording::Gaps);
+        let (running, _stopped) = start_beating(&run, vitals.clone());
+        let id = run.record.run_id.clone();
+        let said = |recording: &str, requests: u64| {
+            let heartbeats = run.server.heartbeats(&id);
+            heartbeats
+                .iter()
+                .any(|h| {
+                    !h.final_
+                        && h.recording.as_deref() == Some(recording)
+                        && h.model_requests == Some(requests)
+                })
+                .then_some(())
+        };
+        wait_for("a heartbeat saying gaps and 7", || said("gaps", 7));
+        // What the tick and the proxy learn later is what the next heartbeat says.
+        vitals.set_recording(Recording::Ok);
+        counter.store(10, Ordering::SeqCst);
+        wait_for("a heartbeat saying ok and 10", || said("ok", 10));
+        drop(running);
+    }
+
+    #[test]
+    fn a_replaced_answer_stops_the_run_with_its_reason() {
+        let run = Run::new(Box::new(|_| None));
+        let (running, stopped) = start_beating(&run, Vitals::default());
+        // Beating along, and the server says nothing about stopping.
+        wait_for("a first heartbeat", || {
+            (run.front.count("POST /v1/runs/") >= 1).then_some(())
+        });
+        assert!(stopped.try_recv().is_err(), "stopped without a reason");
+        *run.front.stop_reason.lock().unwrap() = Some(Some("replaced".to_string()));
+        let reason = stopped
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the run was not stopped");
+        assert_eq!(reason, "a newer run on your account replaced this one");
+        drop(running);
+
+        // The same answer with the reason `deadline`, or none at all (an older server), is the
+        // deadline sentence.
+        for reason in [Some("deadline".to_string()), None] {
+            let run = Run::new(Box::new(|_| None));
+            *run.front.stop_reason.lock().unwrap() = Some(reason);
+            let (running, stopped) = start_beating(&run, Vitals::default());
+            let said = stopped
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the run was not stopped");
+            assert!(
+                said.starts_with("the server says the run is over (its deadline was"),
+                "{said}"
+            );
+            drop(running);
+        }
     }
 }

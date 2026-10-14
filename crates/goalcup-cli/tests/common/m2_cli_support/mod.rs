@@ -598,6 +598,9 @@ pub struct Book {
     pub sealed_seen: Vec<bool>,
     /// Put a file where the proxy's CA certificate goes, before the proxy starts.
     pub occupy_ca_file: bool,
+    /// Called as each capture seal begins, before the daemon is asked: what a test wants to
+    /// know "at the seal".
+    pub on_seal: Option<Box<dyn Fn() + Send>>,
     relay: Option<Relay>,
 }
 
@@ -818,6 +821,12 @@ impl DaemonClient for Hooked<'_> {
         read_timeout: Duration,
     ) -> Result<CaptureFinishReport, CaptureSealError> {
         self.note("seal_capture");
+        // Taken out and put back, so the hook runs outside the book's lock.
+        let on_seal = self.book().on_seal.take();
+        if let Some(on_seal) = on_seal {
+            on_seal();
+            self.book().on_seal = Some(on_seal);
+        }
         let fault = {
             let mut book = self.book();
             book.seals.push(request.clone());

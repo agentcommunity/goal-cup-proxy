@@ -15,12 +15,17 @@ use crate::CliError;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// `<cfg>/runs`: one directory per run.
 pub const RUNS_DIR_NAME: &str = "runs";
 
 /// The run's record inside its directory.
 pub const RUN_FILE_NAME: &str = "run.json";
+
+/// What the run is doing now, inside its directory.
+pub const STATE_FILE_NAME: &str = "state.json";
 
 /// The most of a run record this build reads: it is a few hundred bytes, plus one line per
 /// segment of the run.
@@ -56,10 +61,340 @@ pub struct RunRecord {
     pub entries: Vec<EntryRef>,
 }
 
-/// What a run is doing now, kept at `<run_dir>/state.json`. The watch tick writes it and
-/// `goalcup status` reads it; it has no fields yet, and the task that adds them fills this in.
+/// How the tracker sees its own recording. It is what the heartbeat tells the server
+/// (`recording`) and what `goalcup status` puts first when it is not `Ok`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Recording {
+    Ok,
+    /// The daemon says the trace is missing something.
+    Gaps,
+    /// The daemon says capture failed.
+    Failed,
+    /// No answer from the daemon (yet): not a verdict, never read as "dead".
+    #[default]
+    Unknown,
+}
+
+impl Recording {
+    /// The heartbeat's word for it.
+    pub fn wire(self) -> &'static str {
+        match self {
+            Recording::Ok => "ok",
+            Recording::Gaps => "gaps",
+            Recording::Failed => "failed",
+            Recording::Unknown => "unknown",
+        }
+    }
+
+    /// What the daemon's capture state means for the run. A capture that has not started
+    /// recording yet says nothing.
+    pub fn of_capture(capture: goalcup_protocol::capture_status::CaptureState) -> Recording {
+        use goalcup_protocol::capture_status::CaptureState;
+        match capture {
+            CaptureState::Recording => Recording::Ok,
+            CaptureState::Incomplete => Recording::Gaps,
+            CaptureState::Failed => Recording::Failed,
+            CaptureState::Starting => Recording::Unknown,
+        }
+    }
+
+    fn from_u8(n: u8) -> Recording {
+        match n {
+            0 => Recording::Ok,
+            1 => Recording::Gaps,
+            2 => Recording::Failed,
+            _ => Recording::Unknown,
+        }
+    }
+}
+
+/// Where the agent's process is.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunState {}
+#[serde(rename_all = "snake_case")]
+pub enum HarnessState {
+    #[default]
+    Running,
+    /// The process ended; `status` says how, in words.
+    Exited { status: String },
+}
+
+/// The upload, as far as the participant needs to know.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadState {
+    /// The unix second the upload last worked (a chunk or the seal acknowledged, or nothing
+    /// left to send). `None` for a run with no server.
+    pub last_ok_at: Option<u64>,
+    /// The uploader's last failure, in a sentence; `None` while it works.
+    pub problem: Option<String>,
+    /// The uploader gave up on the run (a refusal that asking again does not cure).
+    #[serde(default)]
+    pub stopped: bool,
+}
+
+/// The disk, as the last tick measured it.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskState {
+    /// Free bytes beyond the reservation.
+    pub free_bytes: u64,
+    /// Bytes the reservation holds.
+    pub reserve_bytes: u64,
+    /// Less than the warning level is free beyond the reservation.
+    pub low: bool,
+}
+
+/// What a run is doing now, kept at `<run_dir>/state.json`. The watch tick writes it, and the
+/// host at each change of the agent's process; `goalcup status` reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunState {
+    /// The unix second of the last write.
+    pub updated_at: u64,
+    pub entry_id: String,
+    pub harness: HarnessState,
+    pub recording: Recording,
+    pub upload: UploadState,
+    pub disk: DiskState,
+    /// `Err` says why the machine was not kept awake. The run goes on either way.
+    pub sleep_lock: Result<(), String>,
+    /// Set when the host ended the agent on purpose (the deadline, a newer run, a full disk):
+    /// an agent that exited with this unset left on its own.
+    #[serde(default)]
+    pub stopped: Option<String>,
+    /// The host has finished its wrap-up and written its last word.
+    #[serde(default)]
+    pub ended: bool,
+}
+
+impl RunState {
+    /// A run that has just launched its agent.
+    pub fn launched(entry_id: &str, sleep_lock: Result<(), String>) -> RunState {
+        RunState {
+            updated_at: now_unix(),
+            entry_id: entry_id.to_string(),
+            harness: HarnessState::Running,
+            recording: Recording::Unknown,
+            upload: UploadState::default(),
+            disk: DiskState::default(),
+            sleep_lock,
+            stopped: None,
+            ended: false,
+        }
+    }
+
+    /// Everything wrong with the run at `now` (unix seconds), one sentence each, worst first.
+    /// Nothing wrong is an empty list.
+    pub fn problems(&self, now: u64) -> Vec<String> {
+        let mut lines = Vec::new();
+        match self.recording {
+            Recording::Gaps => lines.push("recording has gaps".to_string()),
+            Recording::Failed => lines.push("recording failed".to_string()),
+            Recording::Ok | Recording::Unknown => {}
+        }
+        if let Some(why) = &self.upload.problem {
+            // A run that is over is told what became of its upload; one that records is told
+            // only once the failure has lasted.
+            let age = self
+                .upload
+                .last_ok_at
+                .map_or(0, |last_ok| now.saturating_sub(last_ok));
+            let failing = age >= reserve::UPLOAD_FAILING_AFTER.as_secs();
+            if self.ended || self.upload.stopped || failing {
+                lines.push(format!("last upload {} ago: {why}", age_words(age)));
+            }
+        }
+        if self.disk.low && !self.ended {
+            lines.push(format!(
+                "disk: {} free beyond the reservation",
+                reserve::human(self.disk.free_bytes)
+            ));
+        }
+        if let Err(why) = &self.sleep_lock
+            && !self.ended
+        {
+            lines.push(format!("the machine may sleep: {why}"));
+        }
+        if let HarnessState::Exited { status } = &self.harness
+            && self.stopped.is_none()
+        {
+            lines.push(format!(
+                "the agent's process exited ({status}): run goalcup continue"
+            ));
+        }
+        lines
+    }
+}
+
+/// A span in words: `45 s`, `12 min`, `3 h 5 min`, `2 d 4 h`.
+fn age_words(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs} s"),
+        60..3600 => format!("{} min", secs / 60),
+        3600..86_400 => format!("{} h {} min", secs / 3600, secs % 3600 / 60),
+        _ => format!("{} d {} h", secs / 86_400, secs % 86_400 / 3600),
+    }
+}
+
+/// What the threads of one run tell each other: the recording as the last tick saw it, the
+/// proxy's count of model requests, and how the upload is doing. Cloning shares it.
+#[derive(Debug, Clone)]
+pub struct Vitals {
+    recording: Arc<AtomicU8>,
+    model_requests: Arc<AtomicU64>,
+    upload: Arc<Mutex<UploadVital>>,
+    announced: Arc<Mutex<Option<(u64, String)>>>,
+}
+
+#[derive(Debug, Default)]
+struct UploadVital {
+    problem: Option<String>,
+    stopped: bool,
+}
+
+impl Default for Vitals {
+    /// Nothing known: the recording unknown, no model request.
+    fn default() -> Self {
+        Vitals::counting(Arc::default())
+    }
+}
+
+impl Vitals {
+    /// Vitals that read model requests from `counter` (the proxy's).
+    pub fn counting(counter: Arc<AtomicU64>) -> Vitals {
+        Vitals {
+            recording: Arc::new(AtomicU8::new(Recording::Unknown as u8)),
+            model_requests: counter,
+            upload: Arc::default(),
+            announced: Arc::default(),
+        }
+    }
+
+    pub fn recording(&self) -> Recording {
+        Recording::from_u8(self.recording.load(Ordering::SeqCst))
+    }
+
+    pub fn set_recording(&self, recording: Recording) {
+        self.recording.store(recording as u8, Ordering::SeqCst);
+    }
+
+    /// Model requests so far, cumulative.
+    pub fn model_requests(&self) -> u64 {
+        self.model_requests.load(Ordering::SeqCst)
+    }
+
+    fn upload(&self) -> MutexGuard<'_, UploadVital> {
+        self.upload.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The upload failed, and will be asked again.
+    pub fn upload_failed(&self, why: &str) {
+        self.upload().problem = Some(why.to_string());
+    }
+
+    /// The upload gave up on the run.
+    pub fn upload_stopped(&self, why: &str) {
+        let mut upload = self.upload();
+        upload.problem = Some(why.to_string());
+        upload.stopped = true;
+    }
+
+    /// The upload works.
+    pub fn upload_ok(&self) {
+        let mut upload = self.upload();
+        if !upload.stopped {
+            upload.problem = None;
+        }
+    }
+
+    /// Keep the end (`seq` and chain hash) the host announced to the server before the seal.
+    pub fn set_announced_end(&self, seq: u64, head: String) {
+        *self
+            .announced
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((seq, head));
+    }
+
+    /// The end the host announced before the seal, if the server took it.
+    pub fn announced_end(&self) -> Option<(u64, String)> {
+        self.announced
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The uploader's last failure, and whether it gave up.
+    pub fn upload_problem(&self) -> (Option<String>, bool) {
+        let upload = self.upload();
+        (upload.problem.clone(), upload.stopped)
+    }
+}
+
+/// The run's `state.json`, shared by the tick and the host: every change goes through
+/// [`StateKeeper::update`], which writes the whole file again, atomically and mode 0600.
+#[derive(Debug, Clone)]
+pub struct StateKeeper {
+    inner: Arc<KeeperInner>,
+}
+
+#[derive(Debug)]
+struct KeeperInner {
+    path: PathBuf,
+    state: Mutex<RunState>,
+}
+
+impl StateKeeper {
+    /// Keep `state` at `<run_dir>/state.json`, writing it now.
+    pub fn begin(run_dir: &Path, state: RunState) -> StateKeeper {
+        let keeper = StateKeeper {
+            inner: Arc::new(KeeperInner {
+                path: run_dir.join(STATE_FILE_NAME),
+                state: Mutex::new(state),
+            }),
+        };
+        keeper.update(|_| {});
+        keeper
+    }
+
+    /// Change the state and write it. A write that fails leaves the state in memory and the
+    /// next change tries again: a run never stops for it.
+    pub fn update(&self, change: impl FnOnce(&mut RunState)) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        change(&mut state);
+        state.updated_at = now_unix();
+        if let Ok(mut text) = serde_json::to_vec_pretty(&*state) {
+            text.push(b'\n');
+            let _ = crate::config::write_secret_file(&self.inner.path, &text);
+        }
+    }
+
+    /// The state as last written.
+    pub fn snapshot(&self) -> RunState {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// The most of a `state.json` this build reads.
+const STATE_FILE_MAX_BYTES: u64 = 64 * 1024;
+
+/// The run's state as last written, or `None` when there is none or it cannot be read.
+pub fn read_state(run_dir: &Path) -> Option<RunState> {
+    let file = std::fs::File::open(run_dir.join(STATE_FILE_NAME)).ok()?;
+    let mut text = Vec::new();
+    file.take(STATE_FILE_MAX_BYTES + 1)
+        .read_to_end(&mut text)
+        .ok()?;
+    if text.len() as u64 > STATE_FILE_MAX_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&text).ok()
+}
 
 /// `<cfg>/runs`.
 pub fn runs_dir(cfg: &Path) -> PathBuf {
@@ -73,7 +408,7 @@ pub fn run_dir(cfg: &Path, run_id: &str) -> PathBuf {
 
 /// `<cfg>/runs/<run_id>/state.json`.
 pub fn state_path(cfg: &Path, run_id: &str) -> PathBuf {
-    run_dir(cfg, run_id).join("state.json")
+    run_dir(cfg, run_id).join(STATE_FILE_NAME)
 }
 
 /// Whether `id` can be a directory name here: ids come from the server and the daemon, and a
@@ -227,6 +562,69 @@ mod tests {
         let cfg = tempfile::tempdir().unwrap();
         assert!(write(cfg.path(), &record("../x", 1, "e")).is_err());
         assert!(read_if_any(cfg.path(), "../x").unwrap().is_none());
+    }
+
+    #[test]
+    fn the_state_is_kept_atomically_and_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_state(dir.path()).is_none(), "no file, no state");
+        let keeper = StateKeeper::begin(dir.path(), RunState::launched("e1", Ok(())));
+        let first = read_state(dir.path()).expect("written at once");
+        assert_eq!(first.entry_id, "e1");
+        assert_eq!(first.harness, HarnessState::Running);
+        keeper.update(|state| {
+            state.recording = Recording::Gaps;
+            state.harness = HarnessState::Exited {
+                status: "exit code 2".to_string(),
+            };
+            state.sleep_lock = Err("no inhibitor".to_string());
+        });
+        let second = read_state(dir.path()).unwrap();
+        assert_eq!(second, keeper.snapshot());
+        assert_eq!(second.recording, Recording::Gaps);
+        assert_eq!(second.sleep_lock, Err("no inhibitor".to_string()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join(STATE_FILE_NAME))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // No temporary file is left beside it.
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(names, [std::ffi::OsString::from(STATE_FILE_NAME)]);
+        // Something that is not a state is none.
+        std::fs::write(dir.path().join(STATE_FILE_NAME), b"{ not json").unwrap();
+        assert!(read_state(dir.path()).is_none());
+    }
+
+    #[test]
+    fn problems_come_in_the_order_the_participant_should_act() {
+        let now = 1_000_000;
+        let mut state = RunState::launched("e1", Ok(()));
+        assert!(state.problems(now).is_empty());
+        state.recording = Recording::Unknown;
+        state.upload.problem = Some("busy".to_string());
+        state.upload.last_ok_at = Some(now - 29 * 60);
+        assert!(
+            state.problems(now).is_empty(),
+            "29 minutes is not yet a problem"
+        );
+        state.upload.last_ok_at = Some(now - 3 * 3600 - 5 * 60);
+        assert_eq!(state.problems(now), ["last upload 3 h 5 min ago: busy"]);
+        // A run that is over is told how its upload ended, whatever the age, and nothing about
+        // what only matters while it records.
+        state.upload.last_ok_at = Some(now - 10);
+        state.ended = true;
+        state.disk.low = true;
+        state.sleep_lock = Err("x".into());
+        assert_eq!(state.problems(now), ["last upload 10 s ago: busy"]);
     }
 
     #[test]

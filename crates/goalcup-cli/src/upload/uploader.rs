@@ -40,6 +40,7 @@ use super::http::{ServerClient, ServerError};
 use super::policy::Cadence;
 pub use super::policy::{Policy, WrapUp, backoff};
 use crate::CliError;
+use crate::run::Vitals;
 use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::export::{ACKS_FILE, BASELINE_FILE, ChainPart, SEAL_FILE};
 use sha2::{Digest, Sha256};
@@ -309,6 +310,9 @@ fn ran_out(last: Option<&str>) -> String {
     }
 }
 
+/// What a background upload says when it stops between chunks because the run must stop.
+const STOPPING: &str = "the run is stopping";
+
 /// What a finish says when the wrap-up ran out before an attempt could begin.
 const RAN_OUT: &str = "the time left to finish ran out";
 
@@ -367,6 +371,9 @@ pub struct Uploader {
     last_ok: std::sync::Arc<AtomicU64>,
     /// Bytes of the chain the server holds, as of the last acknowledgement.
     acked_offset: std::sync::Arc<AtomicU64>,
+    /// Beside a recording run only: what the run tells its heartbeats, and where the end the
+    /// host announced before the seal is kept.
+    vitals: Option<Vitals>,
 }
 
 impl Uploader {
@@ -396,6 +403,7 @@ impl Uploader {
             halt: None,
             last_ok: std::sync::Arc::new(AtomicU64::new(crate::run::now_unix())),
             acked_offset: std::sync::Arc::new(AtomicU64::new(0)),
+            vitals: None,
         };
         uploader.adopt_server_ack(&position);
         uploader.adopt_verified_offset(&position);
@@ -479,7 +487,7 @@ impl Uploader {
         loop {
             // A background upload stops between chunks once the run must stop.
             if until.is_none() && self.halt.as_ref().is_some_and(|h| h.load(Ordering::SeqCst)) {
-                return Attempt::Retry(None, "the run is stopping".to_string());
+                return Attempt::Retry(None, STOPPING.to_string());
             }
             // Only a finish has a wrap-up; once it has run out, the rest is `goalcup upload`'s.
             let Some(timeout) = left(until, self.policy.put_timeout) else {
@@ -627,11 +635,25 @@ impl Uploader {
 
     /// The final heartbeat: commit the sealed chain's last record as the run's end, asking
     /// again after each failure that does not end the upload, within the wrap-up `until`.
+    ///
+    /// A host that announced the end before sealing ([`announce_end`]) already told the server;
+    /// the server then holds that end, and this does not tell it again unless the sealed chain
+    /// ends somewhere else.
     fn commit_end(
         &mut self,
         until: Option<WrapUp>,
         say: &mut dyn FnMut(&str),
     ) -> Result<(), String> {
+        let announced = self.vitals.as_ref().and_then(Vitals::announced_end);
+        if let Some((seq, head)) = &announced
+            && self
+                .parts()
+                .ok()
+                .and_then(|parts| local_end(&parts))
+                .is_some_and(|(_, local_seq, local_head)| local_seq == *seq && &local_head == head)
+        {
+            return Ok(());
+        }
         let mut failures = 0;
         let mut last = None::<String>;
         loop {
@@ -639,9 +661,24 @@ impl Uploader {
                 return Err(ran_out(last.as_deref()));
             };
             let repo_head = noted_repo_head(&self.spool, &self.record.entry_id);
-            match heartbeat(&self.server, &self.record, true, repo_head, timeout) {
+            match heartbeat(
+                &self.server,
+                &self.record,
+                true,
+                repo_head,
+                self.vitals.as_ref(),
+                timeout,
+            ) {
                 None => return Err("the chain holds no whole record".to_string()),
                 Some(Ok(_)) => return Ok(()),
+                // The server holds the end announced before the seal, which is earlier than the
+                // sealed chain's: asking again cannot change it.
+                Some(Err(error)) if error.is_conflict() && announced.is_some() => {
+                    say(&format!(
+                        "upload: the server holds the end announced when the run stopped ({error})"
+                    ));
+                    return Ok(());
+                }
                 Some(Err(error)) if !error.ends_upload() => {
                     failures += 1;
                     let wait = backoff(
@@ -842,19 +879,26 @@ pub fn note_repo_head(spool_dir: &Path, record: &UploadRecord) {
 
 /// The commit [`note_repo_head`] noted for the entry whose spool is `spool`, if any.
 fn noted_repo_head(spool: &Path, entry_id: &str) -> Option<String> {
-    let text = std::fs::read_to_string(repo_head_path(spool.parent()?, entry_id)).ok()?;
+    noted_repo_head_in(spool.parent()?, entry_id)
+}
+
+/// [`noted_repo_head`] given the spool directory itself.
+fn noted_repo_head_in(spool_dir: &Path, entry_id: &str) -> Option<String> {
+    let text = std::fs::read_to_string(repo_head_path(spool_dir, entry_id)).ok()?;
     let text = text.trim();
     (text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit())).then(|| text.to_string())
 }
 
 /// `POST /v1/runs/{id}/heartbeat` with the local chain's last whole record: `final` once the
-/// run has ended, with the workspace repository's commit. `None` when the chain holds no
-/// whole record yet.
+/// run has ended, with the workspace repository's commit. `vitals` adds how the recording is
+/// and how many model requests were seen; a heartbeat without them (`goalcup upload`) says
+/// neither. `None` when the chain holds no whole record yet.
 fn heartbeat(
     server: &ServerClient,
     record: &UploadRecord,
     is_final: bool,
     repo_head: Option<String>,
+    vitals: Option<&Vitals>,
     timeout: Duration,
 ) -> Option<Result<HeartbeatAnswer, ServerError>> {
     let parts = super::prune::parts_now(Path::new(&record.trace_dir)).ok()?;
@@ -866,6 +910,8 @@ fn heartbeat(
         offset_local,
         is_final,
         repo_head,
+        recording: vitals.map(|vitals| vitals.recording().wire().to_string()),
+        model_requests: vitals.map(Vitals::model_requests),
     };
     Some(server.json_timed(
         "POST",
@@ -873,6 +919,59 @@ fn heartbeat(
         Some(&request),
         timeout,
     ))
+}
+
+/// The longest the host waits to tell the server that the run is over, before it seals.
+pub const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whether the heartbeat sent before the seal is the `final` one, which commits the chain's
+/// last record as the end of the run (docs/UPLOAD-API.md).
+///
+/// It is not, yet. The server refuses every record past a committed end, and the seal itself
+/// adds records (the proxy's close, the terminal record): a `final` heartbeat sent before the
+/// seal would commit an end the sealed chain goes past, and the rest of the run could never
+/// be uploaded (measured against the stand-in: `409` on the real final, then the tail
+/// refused). So the host sends the run's last word (`recording`, `model_requests`, and the
+/// workspace's commit) before the seal as an ordinary heartbeat, and the upload's finish
+/// commits the end after it, as before. Set this to `true` when the server accepts a later
+/// final heartbeat that extends an earlier one, or when the end can be known before the seal.
+pub const ANNOUNCE_IS_FINAL: bool = false;
+
+/// Tell the server the run is over: one heartbeat with the workspace's commit (the one
+/// [`note_repo_head`] noted when the run stopped), sent before the seal so that the server
+/// has the run's last word even if the seal or the upload never completes. It is the `final`
+/// one when [`ANNOUNCE_IS_FINAL`] says so. Nothing waits on it: one attempt, at most `within`,
+/// and the seal goes ahead whatever the answer. A committed end is kept in `vitals`, for the
+/// upload's own finish.
+pub fn announce_end(
+    server: &ServerClient,
+    record: &UploadRecord,
+    spool_dir: &Path,
+    vitals: &Vitals,
+    within: Duration,
+) -> Result<(), String> {
+    let repo_head = noted_repo_head_in(spool_dir, &record.entry_id);
+    match heartbeat(
+        server,
+        record,
+        ANNOUNCE_IS_FINAL,
+        repo_head,
+        Some(vitals),
+        within,
+    ) {
+        None => Err("the chain holds no whole record yet".to_string()),
+        Some(Ok(_)) => {
+            if ANNOUNCE_IS_FINAL
+                && let Some((_, seq, head)) = super::prune::parts_now(Path::new(&record.trace_dir))
+                    .ok()
+                    .and_then(|parts| local_end(&parts))
+            {
+                vitals.set_announced_end(seq, head);
+            }
+            Ok(())
+        }
+        Some(Err(error)) => Err(error.to_string()),
+    }
 }
 
 /// Sets its flag when dropped: the watcher thread's signal that the uploader has returned.
@@ -888,13 +987,33 @@ impl Drop for SetOnDrop {
 /// hangs cannot hold the local deadline check back for long.
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// What the run is told when a newer run on the account has replaced it.
+pub const REPLACED_REASON: &str = "a newer run on your account replaced this one";
+
+/// Why the run must stop, from a heartbeat answer that says `stop`: a newer run replaced it,
+/// or (also from a server that gives no reason) its deadline came.
+pub fn stop_reason(answer: &HeartbeatAnswer) -> Option<String> {
+    if !answer.stop {
+        return None;
+    }
+    Some(match answer.reason.as_deref() {
+        Some("replaced") => REPLACED_REASON.to_string(),
+        _ => format!(
+            "the server says the run is over (its deadline was {})",
+            answer.deadline_at
+        ),
+    })
+}
+
 /// Send a heartbeat every `policy.heartbeat` and watch the run's own deadline, until the run
 /// must stop (said once on `stopping`, and `over` set) or the uploader is `done`.
+#[allow(clippy::too_many_arguments)]
 fn watch_deadline(
     server: &ServerClient,
     record: &UploadRecord,
     policy: Policy,
     local_deadline: Option<LocalDeadline>,
+    vitals: &Vitals,
     stopping: &std::sync::mpsc::Sender<String>,
     over: &AtomicBool,
     done: &AtomicBool,
@@ -913,11 +1032,8 @@ fn watch_deadline(
             local
         } else if Instant::now() >= next_beat {
             next_beat = Instant::now() + policy.heartbeat;
-            match heartbeat(server, record, false, None, HEARTBEAT_TIMEOUT) {
-                Some(Ok(answer)) if answer.stop => Some(format!(
-                    "the server says the run is over (its deadline was {})",
-                    answer.deadline_at
-                )),
+            match heartbeat(server, record, false, None, Some(vitals), HEARTBEAT_TIMEOUT) {
+                Some(Ok(answer)) => stop_reason(&answer),
                 _ => None,
             }
         } else {
@@ -1100,8 +1216,11 @@ const FINISH_SLICE: Duration = Duration::from_secs(5);
 /// cadence. Its waits and failures are said on stderr, prefixed `goalcup: upload:`; nothing it
 /// does can stop or slow the recording.
 ///
-/// `stop` is the run's one stop channel: when the server says the run is over, or this
-/// machine's count of the run's length runs out, the reason is sent on it once.
+/// `stop` is the run's one stop channel: when the server says the run is over (its deadline,
+/// or a newer run replacing this one), or this machine's count of the run's length runs out,
+/// the reason is sent on it once. `vitals` is what the heartbeats say about the recording, and
+/// where the uploader leaves its own trouble for `goalcup status`.
+#[allow(clippy::too_many_arguments)]
 pub fn begin(
     server: ServerClient,
     record: UploadRecord,
@@ -1110,6 +1229,7 @@ pub fn begin(
     spool_dir: PathBuf,
     local_deadline: Option<LocalDeadline>,
     stop: std::sync::mpsc::Sender<String>,
+    vitals: Vitals,
 ) -> Result<Running, CliError> {
     let lock = lock_entry(&spool_dir, &record.entry_id)?;
     let entry_id = record.entry_id.clone();
@@ -1127,6 +1247,7 @@ pub fn begin(
                 stopping: stop,
                 local_deadline,
                 shared,
+                vitals,
             };
             let ended = run(server, record, receipt_key, policy, &spool_dir, beside);
             let _ = reported.send(ended);
@@ -1153,6 +1274,7 @@ struct Beside {
     local_deadline: Option<LocalDeadline>,
     /// The counters [`Running::last_ok`] and [`Running::acked_offset`] read.
     shared: (std::sync::Arc<AtomicU64>, std::sync::Arc<AtomicU64>),
+    vitals: Vitals,
 }
 
 impl Running {
@@ -1213,6 +1335,7 @@ fn run(
         stopping,
         local_deadline,
         shared,
+        vitals,
     } = beside;
     let mut say = |line: &str| eprintln!("goalcup: {line}");
     let mut uploader: Option<Uploader> = None;
@@ -1228,6 +1351,7 @@ fn run(
     let _done_on_return = SetOnDrop(done.clone());
     {
         let (server, record, over, done) = (server.clone(), record.clone(), over.clone(), done);
+        let vitals = vitals.clone();
         let _ = std::thread::Builder::new()
             .name("goalcup-heartbeat".into())
             .spawn(move || {
@@ -1236,6 +1360,7 @@ fn run(
                     &record,
                     policy,
                     local_deadline,
+                    &vitals,
                     &stopping,
                     &over,
                     &done,
@@ -1256,6 +1381,7 @@ fn run(
                     Ok(mut resumed) => {
                         resumed.halt = Some(over.clone());
                         resumed.share(&shared.0, &shared.1);
+                        resumed.vitals = Some(vitals.clone());
                         uploader = Some(resumed);
                     }
                     Err(error) if !error.ends_upload() => {
@@ -1269,12 +1395,14 @@ fn run(
                             "upload: {error}; trying again in {}s",
                             wait.as_secs().max(1)
                         ));
+                        vitals.upload_failed(&error.to_string());
                         wait_until = now + wait;
                     }
                     Err(error) => {
                         say(&format!(
                             "upload stopped: {error}. The run goes on recording on this machine."
                         ));
+                        vitals.upload_stopped(&error.to_string());
                         stopped = Some(error.to_string());
                     }
                 }
@@ -1285,6 +1413,7 @@ fn run(
                 && up.waiting() == 0
             {
                 up.mark_ok();
+                vitals.upload_ok();
             }
             if let Some(up) = uploader.as_mut()
                 && (now >= next_due || up.waiting() >= policy.eager_bytes)
@@ -1293,6 +1422,7 @@ fn run(
                     Attempt::CaughtUp => {
                         failures = 0;
                         next_due = cadence.next_due(now);
+                        vitals.upload_ok();
                     }
                     Attempt::Retry(after, why) => {
                         failures += 1;
@@ -1301,12 +1431,16 @@ fn run(
                             "upload: {why}; trying again in {}s",
                             wait.as_secs().max(1)
                         ));
+                        if why != STOPPING {
+                            vitals.upload_failed(&why);
+                        }
                         wait_until = now + wait;
                     }
                     Attempt::Stop(why) => {
                         say(&format!(
                             "upload stopped: {why}. The run goes on recording on this machine."
                         ));
+                        vitals.upload_stopped(&why);
                         stopped = Some(why);
                     }
                     // Only a finish has a wrap-up to run out; a background attempt has none.
@@ -1330,6 +1464,7 @@ fn run(
                     None => match Uploader::resume(server, record, key, policy, spool_dir) {
                         Ok(mut up) => {
                             up.share(&shared.0, &shared.1);
+                            up.vitals = Some(vitals.clone());
                             up
                         }
                         Err(error) => return Report::not(error.to_string(), 0),

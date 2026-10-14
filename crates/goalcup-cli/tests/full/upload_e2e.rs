@@ -645,6 +645,87 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
     );
 }
 
+// ------------------------------------------------------------------ the end, told first
+
+/// At the stop, and when the agent leaves on its own, the server is told the run is over (a
+/// heartbeat with the workspace's commit, how the recording was, and how many requests were
+/// seen) before the seal is asked for, so it has the run's last word even if the seal or the
+/// upload never completes. (It is not the `final` heartbeat yet: see `ANNOUNCE_IS_FINAL`.)
+#[test]
+fn the_server_is_told_the_run_is_over_before_the_seal() {
+    let commit = "89abcdef0123456789abcdef0123456789abcdef";
+    for stopped_by_the_deadline in [false, true] {
+        let rig = Rig::new();
+        let server = std::sync::Arc::new(if stopped_by_the_deadline {
+            short_server(&rig.root.join("server"), 8, None)
+        } else {
+            server(&rig.root.join("server"))
+        });
+        log_in(&rig, &server.url(), TOKEN);
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        // At each seal: the heartbeats the server had taken, as (commit, recording, requests).
+        type Told = Vec<(Option<String>, Option<String>, Option<u64>)>;
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Told>::new()));
+        {
+            let (seen, server) = (seen.clone(), server.clone());
+            client.book().on_seal = Some(Box::new(move || {
+                let told = server
+                    .run_ids()
+                    .first()
+                    .map(|run| {
+                        server
+                            .heartbeats(run)
+                            .into_iter()
+                            .map(|h| (h.repo_head, h.recording, h.model_requests))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                seen.lock().unwrap().push(told);
+            }));
+        }
+        let mut opts = logged_in_options(&rig, &goal);
+        if stopped_by_the_deadline {
+            opts.upload_policy = beating_policy();
+        }
+        let (result, out) = std::thread::scope(|s| {
+            let running = rig.start(s, &client, opts, None);
+            wait_until("the harness to start", || {
+                rig.harness_pid().is_some() || running.is_finished()
+            });
+            let workspace = std::path::PathBuf::from(&client.book().creates[0].workspace);
+            let git = workspace.join(".git");
+            std::fs::create_dir_all(git.join("refs/heads")).unwrap();
+            std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            std::fs::write(git.join("refs/heads/main"), format!("{commit}\n")).unwrap();
+            if !stopped_by_the_deadline {
+                end_harness(&rig);
+            }
+            running.join().unwrap()
+        });
+        result.unwrap_or_else(|e| panic!("deadline: {stopped_by_the_deadline}: {e}\n{out}"));
+        let seen = seen.lock().unwrap().clone();
+        assert!(
+            !seen.is_empty()
+                && seen
+                    .iter()
+                    .all(|told| told.iter().any(|(head, recording, requests)| {
+                        head.as_deref() == Some(commit) && recording.is_some() && requests.is_some()
+                    })),
+            "deadline: {stopped_by_the_deadline}: the server had not been told the run was over \
+             when the seal began: {seen:?}\n{out}"
+        );
+        let run_id = server.run_ids()[0].clone();
+        let committed = server.final_commit(&run_id).expect("a final heartbeat");
+        assert_eq!(
+            committed.repo_head.as_deref(),
+            Some(commit),
+            "deadline: {stopped_by_the_deadline}"
+        );
+    }
+}
+
 // ------------------------------------------------------------------ the deadline
 
 /// A server whose runs last `seconds`.

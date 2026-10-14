@@ -76,7 +76,14 @@ pub struct StartOptions {
     pub repo: Option<String>,
     /// When the run's chunks go and how failures wait ([`crate::upload::uploader::Policy`]).
     pub upload_policy: crate::upload::uploader::Policy,
+    /// How the machine is kept awake for the run's life: [`goalcup_platform::awake::hold`] in
+    /// every shipped build. A lock that cannot be taken never refuses or stops a run; it is
+    /// said by `goalcup status`.
+    pub sleep_lock: SleepLockFn,
 }
+
+/// Takes the sleep lock, given why ([`StartOptions::sleep_lock`]).
+pub type SleepLockFn = fn(&str) -> Result<goalcup_platform::awake::SleepLock, String>;
 
 /// What one `goalcup start` did.
 #[derive(Debug)]
@@ -711,6 +718,49 @@ struct Exited<'a> {
     /// Linux: the refusal the command ends with, after the seal, when the sweep left a process
     /// running or could not read `/proc` after it had signalled one.
     left_running: Option<CliError>,
+    /// The run's state file.
+    keeper: crate::run::StateKeeper,
+    /// What tells the server, before the seal, that the run is over (a run on a server).
+    announce: Option<Announce>,
+}
+
+/// Tells the server the run is over, before the seal ([`crate::upload::uploader::announce_end`]).
+#[derive(Clone)]
+struct Announce {
+    server: crate::upload::http::ServerClient,
+    record: crate::upload::UploadRecord,
+    spool_dir: PathBuf,
+    vitals: crate::run::Vitals,
+}
+
+impl Announce {
+    /// One `final` heartbeat with the workspace's commit, waited for at most
+    /// [`crate::upload::uploader::ANNOUNCE_TIMEOUT`]. Nothing depends on it: a failure is said
+    /// and the seal goes ahead.
+    fn send(&self, out: &mut dyn std::io::Write) {
+        if let Err(why) = crate::upload::uploader::announce_end(
+            &self.server,
+            &self.record,
+            &self.spool_dir,
+            &self.vitals,
+            crate::upload::uploader::ANNOUNCE_TIMEOUT,
+        ) {
+            let _ = say(
+                out,
+                &format!("  (the server was not told the run is over: {why})"),
+            );
+        }
+    }
+}
+
+/// How the daemon says the recording is, read through a client made from `control.json` each
+/// time, so a restarted daemon is followed. `None` when it cannot say.
+fn ask_recording(cfg: &Path, entry_id: &str) -> Option<crate::run::Recording> {
+    let client = crate::daemon::HttpDaemonClient::from_config_dir(cfg).ok()?;
+    let status = retry_busy(|| client.status(entry_id)).ok()?;
+    Some(crate::run::Recording::of_capture(
+        status.payload.capture?.capture,
+    ))
 }
 
 /// A v5 local capture run.
@@ -759,9 +809,19 @@ fn capture(
     };
     let mut prep = prepare(&cx, goal, out)?;
     let (forked, gate) = create_and_gate(&cx, roots, &prep, out)?;
+    // Right before the launch the machine is told to stay awake, and it stays so to the end of
+    // the wrap-up. A lock that cannot be taken is no reason to refuse or stop a run: it is
+    // kept as the reason in the run's state, and `goalcup status` says it.
+    let (awake, sleep_lock) =
+        match (opts.sleep_lock)(&format!("goalcup run {}", forked.record.run_id)) {
+            Ok(lock) => (Some(lock), Ok(())),
+            Err(why) => (None, Err(why)),
+        };
     let released = register_and_release(forked, gate, &mut prep, out)?;
-    let exited = run_harness(&cx, prep.scope, released, out)?;
-    finish_and_scan(exited, prep.matcher.as_ref(), out)
+    let exited = run_harness(&cx, prep.scope, released, sleep_lock, out)?;
+    let finished = finish_and_scan(exited, prep.matcher.as_ref(), out);
+    drop(awake);
+    finished
 }
 
 /// Phase one: every refusal that comes before anything is created.
@@ -1241,6 +1301,7 @@ fn run_harness<'a>(
     cx: &CaptureRun<'_>,
     scope: LaunchScope,
     released: Released<'a>,
+    sleep_lock: Result<(), String>,
     out: &mut dyn std::io::Write,
 ) -> Result<Exited<'a>, CliError> {
     let Released {
@@ -1324,6 +1385,25 @@ fn run_harness<'a>(
             crate::upload::uploader::note_repo_head(&uploads_dir, record);
         }
     };
+    // The run's state file, which the watch tick keeps and this function changes at each
+    // transition of the agent; what the threads of the run tell each other; and, for a run on a
+    // server, what tells it that the run is over before the seal.
+    let keeper = crate::run::StateKeeper::begin(
+        &crate::run::run_dir(forked.cfg, &forked.record.run_id),
+        crate::run::RunState::launched(&entry_id, sleep_lock),
+    );
+    let vitals = match forked.proxied.as_ref() {
+        Some(proxied) => crate::run::Vitals::counting(proxied.proxy.model_requests()),
+        None => crate::run::Vitals::default(),
+    };
+    let announce = forked.upload.as_ref().and_then(|start| {
+        Some(Announce {
+            server: start.server.clone()?,
+            record: start.record.clone(),
+            spool_dir: uploads_dir.clone(),
+            vitals: vitals.clone(),
+        })
+    });
     // The run's one stop channel: the uploader's deadline or heartbeat stop and the watch's disk
     // stop both send on it, and the wait for the harness receives from it.
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<String>();
@@ -1338,6 +1418,7 @@ fn run_harness<'a>(
             spool,
             start.local_deadline,
             stop_tx.clone(),
+            vitals.clone(),
         ) {
             Ok(running) => Some(running),
             Err(e) => {
@@ -1370,6 +1451,14 @@ fn run_harness<'a>(
                 .map(|running| (running.entry_id().to_string(), running.acked_offset()))
                 .collect(),
             policy: cx.opts.disk,
+            beat: Some(crate::run::watch::Beat {
+                keeper: keeper.clone(),
+                vitals: vitals.clone(),
+                ask: {
+                    let (cfg, entry_id) = (cfg.to_path_buf(), entry_id.clone());
+                    Arc::new(move || ask_recording(&cfg, &entry_id))
+                },
+            }),
         })
     });
     let status = crate::upload::wait_stopping(&mut child, stop_rx, |reason| {
@@ -1381,7 +1470,10 @@ fn run_harness<'a>(
         // The one bound of the wrap-up, for the seal below and the upload's finish later.
         let wrap_up = WrapUp::after(wrap_length);
         *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
-        let label = if reason == crate::run::watch::DISK_STOP_REASON {
+        keeper.update(|state| state.stopped = Some(reason.to_string()));
+        let label = if reason == crate::run::watch::DISK_STOP_REASON
+            || reason == crate::upload::uploader::REPLACED_REASON
+        {
             "stopped"
         } else {
             "deadline"
@@ -1391,6 +1483,10 @@ fn run_harness<'a>(
         // that follows it is printed only once it returns.
         eprintln!("goalcup: {line}");
         let mut said = format!("{line}\n").into_bytes();
+        // The server is told the run is over before the seal, which may take minutes.
+        if let Some(announce) = &announce {
+            announce.send(&mut said);
+        }
         let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
         // A seal that did not take (the daemon busy or restarting) is asked again through the
         // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
@@ -1413,6 +1509,14 @@ fn run_harness<'a>(
         source,
     });
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    keeper.update(|state| {
+        state.harness = crate::run::HarnessState::Exited {
+            status: match &status {
+                Ok(status) => describe_exit(status),
+                Err(error) => error.to_string(),
+            },
+        };
+    });
     // A run that ended on its own stopped just now.
     let wrap_up = stopped_wrap
         .into_inner()
@@ -1450,6 +1554,8 @@ fn run_harness<'a>(
         uploading,
         wrap_up,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
+        keeper,
+        announce,
     })
 }
 
@@ -1470,6 +1576,8 @@ fn finish_and_scan(
         uploading,
         wrap_up,
         left_running,
+        keeper,
+        announce,
     } = exited;
     let Forked {
         client,
@@ -1486,21 +1594,27 @@ fn finish_and_scan(
     let stopped = finished_early.is_some();
     let finished = match (finished_early, proxied) {
         (Some(finished), _) => finished,
-        (None, Some(proxied)) => finish(
-            client,
-            &info.entry_id,
-            proxied,
-            deadline,
-            wrap_up,
-            termination_bound(0),
-            if tees.late_scope {
-                tees.marked.as_ref()
-            } else {
-                None
-            },
-            Some(cfg),
-            out,
-        ),
+        (None, Some(proxied)) => {
+            // The harness left on its own: the server is told before the seal, as at a stop.
+            if let Some(announce) = &announce {
+                announce.send(out);
+            }
+            finish(
+                client,
+                &info.entry_id,
+                proxied,
+                deadline,
+                wrap_up,
+                termination_bound(0),
+                if tees.late_scope {
+                    tees.marked.as_ref()
+                } else {
+                    None
+                },
+                Some(cfg),
+                out,
+            )
+        }
         (None, None) => Err(CliError::Internal(
             "the run's proxy was stopped and nothing finished the run".to_string(),
         )),
@@ -1514,6 +1628,7 @@ fn finish_and_scan(
     // After the seal: the rest of the chain and the seal itself, within the finish budget.
     // A local run has nothing to upload, so its reservation is done with.
     let mut release = true;
+    let mut upload_report = None;
     if let Some(running) = uploading {
         let report = running.finish(wrap_up);
         // A run on a server keeps its reservation unless the run is over and the server holds all
@@ -1537,10 +1652,29 @@ fn finish_and_scan(
             ),
         };
         let _ = say(out, &line);
+        upload_report = Some(report);
     }
     // The tick ends here, just before the reservation goes (or is left to the next start): it
     // hands the reservation back even if it died on the way.
     let reserve = watching.and_then(crate::run::watch::Watching::end);
+    // The host's last word on the run's state, now that nothing else writes it: what became of
+    // the upload is what `goalcup status` tells from here on.
+    keeper.update(|state| {
+        state.ended = true;
+        if let Some(report) = &upload_report {
+            state.upload.stopped = false;
+            state.upload.problem = if report.caught_up && report.sealed {
+                None
+            } else {
+                Some(
+                    report
+                        .why
+                        .clone()
+                        .unwrap_or_else(|| "the seal was not sent".to_string()),
+                )
+            };
+        }
+    });
     if release && let Some(reserve) = reserve {
         let _ = reserve.release();
     }

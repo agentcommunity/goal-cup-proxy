@@ -378,6 +378,12 @@ impl ProxyHandle {
         &self.producer
     }
 
+    /// The proxy's count of model requests ([`ProxyHealth::model_requests`]), shared: it keeps
+    /// its last value when the proxy stops.
+    pub fn model_requests(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.shared.emitter.model_requests_counter()
+    }
+
     /// A snapshot of the counters. It never waits on a connection or the sink.
     pub fn health(&self) -> ProxyHealth {
         self.shared.health()
@@ -653,6 +659,10 @@ pub struct ProxyHealth {
     pub producers_admitted: u64,
     /// Connection tasks that panicked.
     pub task_panics: u64,
+    /// Requests the harness made of a captured host: each request relayed on an intercepted
+    /// connection, and each client-to-server WebSocket message on one. The run's heartbeat
+    /// sends it, cumulative, so the server can tell a harness that has gone quiet.
+    pub model_requests: u64,
     /// Upstream outage windows since start: stretches of consecutive admissions whose upstream
     /// connect failed after every retry, each ended by the next one that reached an upstream
     /// ([`outage`]). Zero on a run whose network never failed it.
@@ -764,6 +774,8 @@ impl Counters {
             sink_refusals: read(&self.sink_refusals),
             producers_admitted: read(&self.producers_admitted),
             task_panics: read(&self.task_panics),
+            // Counted on the emitter by the relays; `Shared::health` fills it in.
+            model_requests: 0,
             // Kept by `Shared::outages`; `Shared::health` fills them in.
             upstream_outages: 0,
             outage_windows: Vec::new(),
@@ -805,6 +817,7 @@ impl Shared {
         let mut health = self.counters.snapshot();
         health.sink_refusals += self.emitter.local_refusals();
         health.opaque_fallbacks = self.emitter.opaque_fallbacks();
+        health.model_requests = self.emitter.model_requests();
         (health.upstream_outages, health.outage_windows) = self.outages.snapshot();
         health
     }

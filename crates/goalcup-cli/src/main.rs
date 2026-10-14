@@ -197,6 +197,7 @@ fn run(command: Command) -> Result<u8, CliError> {
             disk: disk_policy()?,
             repo,
             upload_policy: upload_policy()?,
+            sleep_lock: goalcup_platform::awake::hold,
         })
         .map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),

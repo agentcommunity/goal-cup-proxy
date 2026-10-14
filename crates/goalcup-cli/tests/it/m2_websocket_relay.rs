@@ -218,6 +218,40 @@ async fn relay_only_upgrade_forwards_everything_and_captures_nothing() {
     assert!(sink.log().is_empty(), "relay-only touched the sink");
 }
 
+/// Each message the client sends over an upgraded connection is one model request: not the
+/// server's messages, not control frames, not the continuation frames of a message, and
+/// whether or not the connection is captured.
+#[tokio::test]
+async fn client_websocket_messages_are_model_requests_and_the_servers_are_not() {
+    for captured in [true, false] {
+        let sink = RecordingSink::new();
+        let emitter = emitter(&sink);
+        announce(&emitter, CONN_A);
+        let setup = if captured {
+            Setup::captured(CONN_A)
+        } else {
+            Setup::relay_only(CONN_A)
+        };
+        let mut relay = start(&emitter, setup).await;
+        relay
+            .pass_client(&Frame::text("one").masked(key(1)).encode())
+            .await;
+        relay
+            .pass_client(&Frame::text("two, ").fin(false).masked(key(2)).encode())
+            .await;
+        relay
+            .pass_client(&Frame::ping("p").masked(key(3)).encode())
+            .await;
+        relay
+            .pass_client(&Frame::cont("in two frames").masked(key(4)).encode())
+            .await;
+        relay.pass_server(&Frame::text("a reply").encode()).await;
+        relay.pass_server(&Frame::text("another").encode()).await;
+        relay.close().await.expect("clean close");
+        assert_eq!(emitter.model_requests(), 2, "captured: {captured}");
+    }
+}
+
 #[tokio::test]
 async fn message_streams_keep_the_handed_over_path_and_protocol_hint_in_both_directions() {
     let bases = [
