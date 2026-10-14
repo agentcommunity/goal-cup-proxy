@@ -28,6 +28,7 @@ use goalcup_protocol::chain::Link;
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::export::{
     ACKS_FILE, BASELINE_FILE, CHAIN_FILE, RECEIPT_FILE, SEAL_FILE, TraceExport, manifest_sha256,
+    part_file_name,
 };
 use goalcup_protocol::provenance::{
     CaptureUnavailableV1, CutoffReachedV1, FinalizationV1, NoRepositoryReasonV1,
@@ -2974,4 +2975,115 @@ fn verifier_reads_a_recorded_harness_build_for_its_shape_only() {
         assert_eq!(bad.exit_code(), 2, "{bad:#?}");
         assert!(has(&bad, "record_field_invalid"), "{bad:#?}");
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// The chain as rotating parts (D55).
+// ---------------------------------------------------------------------------------------
+
+/// Split a closed single-file chain into part files before the given line indices: the names
+/// and bytes a rotating writer leaves, because rotation never changes a byte of the chain.
+fn split_into_parts(dir: &Path, cuts: &[usize]) -> Vec<PathBuf> {
+    let bytes = std::fs::read(dir.join(CHAIN_FILE)).unwrap();
+    let lines: Vec<&[u8]> = bytes.split_inclusive(|byte| *byte == b'\n').collect();
+    let mut bounds = vec![0];
+    bounds.extend_from_slice(cuts);
+    bounds.push(lines.len());
+    let mut start = 0u64;
+    let mut paths = Vec::new();
+    for pair in bounds.windows(2) {
+        let part = lines[pair[0]..pair[1]].concat();
+        let path = dir.join(part_file_name(start));
+        std::fs::write(&path, &part).unwrap();
+        start += part.len() as u64;
+        paths.push(path);
+    }
+    paths
+}
+
+#[test]
+fn a_rotated_chain_verifies_like_one_file() {
+    let one = make_trace(&launched(complete_wire(None)), true);
+    let rotated = make_trace(&launched(complete_wire(None)), true);
+    let parts = split_into_parts(rotated.path(), &[1, 4, 9]);
+    assert_eq!(parts.len(), 4);
+
+    let (single, single_records) = scan(one.path());
+    let (split, split_records) = scan(rotated.path());
+    assert_eq!(single.exit_code(), 0, "{single:#?}");
+    assert_eq!(
+        serde_json::to_value(&split).unwrap(),
+        serde_json::to_value(&single).unwrap()
+    );
+    assert_eq!(split_records, single_records);
+
+    // A part missing between two others is a chain with a hole in it.
+    std::fs::remove_file(&parts[2]).unwrap();
+    let (holed, _) = scan(rotated.path());
+    assert_eq!(holed.integrity, CaptureIntegrity::Invalid, "{holed:#?}");
+    assert!(has(&holed, "chain_part_missing"), "{holed:#?}");
+}
+
+#[test]
+fn a_chain_missing_its_first_part_says_verify_the_server_copy() {
+    let key = server_key();
+    let options = supplied(&key);
+    let dir = tempfile::tempdir().unwrap();
+    let mut export = capture_export(dir.path());
+    let links: Vec<Link> = launched(complete_wire(None))
+        .iter()
+        .map(|record| append(&mut export, record))
+        .collect();
+    let (_, finish) = export
+        .write_local_finish(&manifest(), finish_time(), "participant_stop", confirmed())
+        .unwrap();
+    // One acknowledgement inside the part removed below, one after it.
+    export
+        .append_ack_synced(&sign_ack(&key, &links[1], "2026-09-27T12:01:00Z"))
+        .unwrap();
+    export
+        .append_ack_synced(&sign_ack(&key, &links[9], "2026-09-27T12:01:30Z"))
+        .unwrap();
+    drop(export);
+    let chain = chain_lines(dir.path());
+    let total = chain_len(dir.path());
+    let parts = split_into_parts(dir.path(), &[4, 8]);
+    std::fs::remove_file(&parts[0]).unwrap();
+
+    let (report, _) = scan_with(dir.path(), &options);
+    assert_eq!(
+        report.integrity,
+        CaptureIntegrity::Incomplete,
+        "{report:#?}"
+    );
+    assert_eq!(report.exit_code(), 1);
+    assert_eq!(
+        report.findings,
+        findings(&["chain_pruned_locally", "server_key_unpinned"])
+    );
+    // What survived is still checked link by link, through the bound terminal.
+    assert!(report.sealed, "{report:#?}");
+    assert_eq!(report.validated_records, chain.len() as u64 - 4);
+    assert_eq!(report.validated_head, Some(finish.hash.clone()));
+    assert_eq!(
+        report.terminal.map(|terminal| terminal.hash),
+        Some(finish.hash)
+    );
+    assert_eq!(report.validated_bytes, total, "offsets stay logical");
+    // The acknowledgement of a pruned record is skipped, not refused.
+    assert_eq!(report.verified_ack.map(|ack| ack.seq), Some(links[9].seq));
+
+    let output = bin()
+        .arg("--capture-integrity")
+        .arg(dir.path())
+        .arg("--dev-key")
+        .arg(hex::encode(key.verifying_key().to_bytes()))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("pruned on this machine: verify the server copy"),
+        "{stderr}"
+    );
 }

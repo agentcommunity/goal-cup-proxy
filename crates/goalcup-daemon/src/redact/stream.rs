@@ -134,8 +134,8 @@ const EMAIL_LOCAL_MAX: u16 = 1024;
 /// Positions of the two `generic_secret_assignment` literals in the shared list, counting
 /// `masked_key` at index 2. A rule inserted before them shifts both, which `policy_ready`
 /// catches by refusing to stream.
-const JSON_LITERAL: usize = 9;
-const SHELL_LITERAL: usize = 10;
+const JSON_LITERAL: usize = 10;
+const SHELL_LITERAL: usize = 11;
 
 // ── units ──────────────────────────────────────────────────────────────────────────────
 
@@ -223,6 +223,10 @@ fn fold_extra(u: Unit) -> bool {
 /// `[A-Za-z0-9]`
 fn word(u: Unit) -> bool {
     ascii_where(u, |b| b.is_ascii_alphanumeric())
+}
+/// `[A-Za-z0-9_]`
+fn word_underscore(u: Unit) -> bool {
+    ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'_')
 }
 /// `[A-Za-z0-9_\-]`
 fn token(u: Unit) -> bool {
@@ -369,7 +373,7 @@ const fn prefixed(
 /// recognizer never decides a span below the bound — the regex does — it says how long a
 /// candidate must be held, and how long a fail-closed redaction must run. `policy_ready`
 /// refuses to run if this list and the compiled shared list ever disagree.
-static SHAPES: [Shape; 19] = [
+static SHAPES: [Shape; 20] = [
     prefixed(
         "anthropic_key",
         r"sk-ant-[A-Za-z0-9_\-]{20,}",
@@ -400,6 +404,16 @@ static SHAPES: [Shape; 19] = [
         source: r"(?i)sk-[A-Za-z0-9-]{1,8}(?:\.{3}|…|\\u2026|\*{3,64})[A-Za-z0-9]{3,4}",
         form: Form::MaskedKey,
     },
+    prefixed(
+        "github_token",
+        r"github_pat_[A-Za-z0-9_]{22,}",
+        &[
+            b"g", b"i", b"t", b"h", b"u", b"b", b"_", b"p", b"a", b"t", b"_",
+        ],
+        word_underscore,
+        22,
+        None,
+    ),
     prefixed(
         "github_token",
         r"gh[pousr]_[A-Za-z0-9]{20,}",

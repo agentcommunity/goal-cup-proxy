@@ -12,13 +12,19 @@
 //! * It checks exactly what the contract says the server checks, and nothing more. It does not
 //!   decompress a chunk and does not look inside the chain.
 //!
-//! The deadline rules (heartbeats, the committed end, the 410/503 answers after `deadline_at`,
-//! abandonment) are in `handlers.rs`; `ServerOptions::run_seconds` and `abandon_after_seconds`
-//! shorten them for tests.
+//! The end rules (heartbeats, the committed end, the 410/503 answers once a run is over, the
+//! close 24 hours later) are in `handlers.rs`; `ServerOptions::run_seconds`,
+//! `practice_run_seconds` and `close_after_seconds` shorten them for tests. A run is one or
+//! more entries (segments, added by `continue`); the accessors below answer for the current
+//! entry, and the `*_of` ones for the entry they name.
 //!
 //! The device flow and the run credential (`handlers.rs`): `set_approval` says what happens to the
 //! next device request, `mint_credential` makes a credential without HTTP, `expire_credential`
 //! ends one. A bearer that is not a credential is looked up among `ServerOptions::tokens`.
+//!
+//! The run lifecycle: a competition start replaces the member's other open competition run, a
+//! practice credential opens a practice run (never replacing, no window), and
+//! `ServerOptions::start_window_opens` / `start_window_closes` bound competition starts.
 //!
 //! Test hooks (not part of the contract): `set_maintenance`, `set_maintenance_retry_after`,
 //! `fail_next_chunks`, `drop_next_chunk_reply`, `set_approval`, `mint_credential`,
@@ -58,8 +64,14 @@ pub struct ServerOptions {
     pub run_hours: u64,
     /// Overrides `run_hours` when set, so a test can have a run end after a second or two.
     pub run_seconds: Option<u64>,
-    /// How long after `deadline_at` a run with no seal is abandoned (default 24 hours).
-    pub abandon_after_seconds: u64,
+    /// A practice run's length (default 10 minutes).
+    pub practice_run_seconds: u64,
+    /// How long after a run ends it is closed, `sealed` or `incomplete` (default 24 hours).
+    pub close_after_seconds: u64,
+    /// The competition start window, in epoch seconds (practice has none). An unset edge is open;
+    /// both unset, the default, means always open.
+    pub start_window_opens: Option<u64>,
+    pub start_window_closes: Option<u64>,
     /// Seed of the Ed25519 key that signs receipts and acknowledgements.
     pub signing_seed: [u8; 32],
     /// A fixed port, so a test can restart on the same one. `None` picks a free port.
@@ -73,7 +85,10 @@ impl Default for ServerOptions {
             device_member: "member-1".to_string(),
             run_hours: 168,
             run_seconds: None,
-            abandon_after_seconds: 24 * 3600,
+            practice_run_seconds: 600,
+            close_after_seconds: 24 * 3600,
+            start_window_opens: None,
+            start_window_closes: None,
             signing_seed: [7u8; 32],
             port: None,
         }
@@ -102,7 +117,10 @@ impl UploadServer {
             device_log: Mutex::new(Vec::new()),
             credentials: Mutex::new(Shared::load_credentials(store_dir)),
             run_secs: config.run_seconds.unwrap_or(config.run_hours * 3600),
-            abandon_after_secs: config.abandon_after_seconds,
+            practice_secs: config.practice_run_seconds,
+            close_after_secs: config.close_after_seconds,
+            window_opens: config.start_window_opens,
+            window_closes: config.start_window_closes,
             key,
             runs: Mutex::new(Shared::load_runs(store_dir)),
             calls: Mutex::new(Vec::new()),
@@ -222,9 +240,14 @@ impl UploadServer {
             .unwrap_or_else(|e| e.into_inner()) = approval;
     }
 
-    /// A fresh unbound credential for `member`, made without a device request. It lasts an hour,
-    /// like an approved one.
+    /// A fresh unbound competition credential for `member`, made without a device request. It
+    /// lasts an hour, like an approved one.
     pub fn mint_credential(&self, member: &str) -> String {
+        handlers::mint_credential(&self.shared, member, "competition", state::now_secs())
+    }
+
+    /// The same for a practice credential.
+    pub fn mint_practice_credential(&self, member: &str) -> String {
         handlers::mint_credential(&self.shared, member, "practice", state::now_secs())
     }
 
@@ -282,56 +305,134 @@ impl UploadServer {
         runs.get(run_id).map(f)
     }
 
+    /// `f` of one entry of one run (entry ids are unique across runs).
+    fn with_entry<T>(&self, entry_id: &str, f: impl FnOnce(&state::EntryRecord) -> T) -> Option<T> {
+        let runs = self.shared.lock_runs();
+        runs.values().find_map(|r| r.entry(entry_id)).map(f)
+    }
+
     /// Every run the server holds, ordered by id.
     pub fn run_ids(&self) -> Vec<String> {
         let runs = self.shared.lock_runs();
         runs.keys().cloned().collect()
     }
 
-    pub fn position(&self, run_id: &str) -> Option<Position> {
-        self.with_run(run_id, |r| Position {
-            offset: r.offset(),
-            next_seq: r.next_seq(),
-            head: r.head(),
+    /// The run's entries, segment 0 first.
+    pub fn entry_ids(&self, run_id: &str) -> Vec<String> {
+        self.with_run(run_id, |r| {
+            r.entries.iter().map(|e| e.entry_id.clone()).collect()
         })
+        .unwrap_or_default()
+    }
+
+    /// The run's current entry (the highest segment).
+    pub fn current_entry(&self, run_id: &str) -> Option<String> {
+        self.with_run(run_id, |r| r.current().entry_id.clone())
+    }
+
+    fn position_of_entry(e: &state::EntryRecord) -> Position {
+        Position {
+            offset: e.offset(),
+            next_seq: e.next_seq(),
+            head: e.head(),
+        }
+    }
+
+    pub fn position(&self, run_id: &str) -> Option<Position> {
+        self.with_run(run_id, |r| Self::position_of_entry(r.current()))
+    }
+
+    pub fn position_of(&self, entry_id: &str) -> Option<Position> {
+        self.with_entry(entry_id, Self::position_of_entry)
     }
 
     pub fn chunks(&self, run_id: &str) -> Vec<StoredChunk> {
-        self.with_run(run_id, |r| r.chunks.clone())
+        self.with_run(run_id, |r| r.current().chunks.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn chunks_of(&self, entry_id: &str) -> Vec<StoredChunk> {
+        self.with_entry(entry_id, |e| e.chunks.clone())
             .unwrap_or_default()
     }
 
     /// `(seal_json, baseline_json)` once sealed.
     pub fn seal(&self, run_id: &str) -> Option<(String, String)> {
-        self.with_run(run_id, |r| r.seal.clone()).flatten()
-    }
-
-    pub fn receipt(&self, run_id: &str) -> Option<StartReceipt> {
-        self.with_run(run_id, |r| r.receipt.clone()).flatten()
-    }
-
-    pub fn last_ack(&self, run_id: &str) -> Option<AckCheckpoint> {
-        self.with_run(run_id, |r| r.chunks.last().map(|c| c.ack.clone()))
+        self.with_run(run_id, |r| r.current().seal.clone())
             .flatten()
     }
 
-    /// Every heartbeat the server accepted for the run, in order.
+    pub fn seal_of(&self, entry_id: &str) -> Option<(String, String)> {
+        self.with_entry(entry_id, |e| e.seal.clone()).flatten()
+    }
+
+    pub fn receipt(&self, run_id: &str) -> Option<StartReceipt> {
+        self.with_run(run_id, |r| r.current().receipt.clone())
+            .flatten()
+    }
+
+    pub fn receipt_of(&self, entry_id: &str) -> Option<StartReceipt> {
+        self.with_entry(entry_id, |e| e.receipt.clone()).flatten()
+    }
+
+    pub fn last_ack(&self, run_id: &str) -> Option<AckCheckpoint> {
+        self.with_run(run_id, |r| r.current().chunks.last().map(|c| c.ack.clone()))
+            .flatten()
+    }
+
+    /// Every heartbeat the server accepted for the run's current entry, in order.
     pub fn heartbeats(&self, run_id: &str) -> Vec<StoredHeartbeat> {
-        self.with_run(run_id, |r| r.heartbeats.clone())
+        self.with_run(run_id, |r| r.current().heartbeats.clone())
             .unwrap_or_default()
     }
 
-    /// The end a final heartbeat committed, if one has.
-    pub fn final_commit(&self, run_id: &str) -> Option<FinalCommit> {
-        self.with_run(run_id, |r| r.final_commit.clone()).flatten()
+    pub fn heartbeats_of(&self, entry_id: &str) -> Vec<StoredHeartbeat> {
+        self.with_entry(entry_id, |e| e.heartbeats.clone())
+            .unwrap_or_default()
     }
 
-    /// `open`, `sealed` or `abandoned`.
+    /// The end a final heartbeat committed for the run's current entry, if one has.
+    pub fn final_commit(&self, run_id: &str) -> Option<FinalCommit> {
+        self.with_run(run_id, |r| r.current().final_commit.clone())
+            .flatten()
+    }
+
+    pub fn final_of(&self, entry_id: &str) -> Option<FinalCommit> {
+        self.with_entry(entry_id, |e| e.final_commit.clone())
+            .flatten()
+    }
+
+    /// `open`, `sealed`, `incomplete` or `abandoned`. For the tracer's tests a run whose current
+    /// entry is sealed reads `sealed` here even before the run's end; the API's own `status`
+    /// (`GET /v1/runs/{id}`) says `open` until then, so that the run can still be continued.
     pub fn status(&self, run_id: &str) -> Option<String> {
         self.with_run(run_id, |r: &state::RunRecord| {
             let s: RunStatus = r.status;
+            if s == RunStatus::Open && r.current().seal.is_some() {
+                return RunStatus::Sealed.as_str().to_string();
+            }
             s.as_str().to_string()
         })
+    }
+
+    /// When a later start replaced the run, if one has (RFC 3339).
+    pub fn replaced_at(&self, run_id: &str) -> Option<String> {
+        self.with_run(run_id, |r| r.replaced_at.clone()).flatten()
+    }
+
+    /// `competition` or `practice`.
+    pub fn mode(&self, run_id: &str) -> Option<String> {
+        self.with_run(run_id, |r| r.mode.clone())
+    }
+
+    /// The `machine` facts the open call sent, which no answer shows.
+    pub fn machine(&self, run_id: &str) -> Option<serde_json::Value> {
+        self.with_run(run_id, |r| r.machine.clone()).flatten()
+    }
+
+    /// The connection facts kept on the run, which no answer shows: `(ip, country)`.
+    pub fn client(&self, run_id: &str) -> Option<(Option<String>, Option<String>)> {
+        self.with_run(run_id, |r| (r.client_ip.clone(), r.client_country.clone()))
     }
 
     /// Every request the server saw, in order, as `"<METHOD> <path>"` (maintenance answers

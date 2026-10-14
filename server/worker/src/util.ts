@@ -47,10 +47,6 @@ export function formatTime(d: Date): string {
   return d.toISOString().slice(0, 19) + "Z";
 }
 
-export function parseTime(s: string): Date {
-  return new Date(s);
-}
-
 export function addSeconds(d: Date, seconds: number): Date {
   return new Date(d.getTime() + Math.round(seconds) * 1000);
 }

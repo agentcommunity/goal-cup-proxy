@@ -646,6 +646,8 @@ name = "goalcup-platform"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -654,6 +656,7 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "goalcup-platform",
+ "goalcup-protocol",
  "hex",
  "libc",
  "serde",

@@ -11,7 +11,6 @@ export type ErrorCode =
   | "closed" // 410
   | "too_large" // 413
   | "digest_mismatch" // 422
-  | "rate_limited" // 429 (not produced by this Worker yet; rate limits belong at the Cloudflare edge)
   | "maintenance" // 503
   | "awaiting_final" // 503: past deadline_at, before the final heartbeat
   | "misconfigured" // 500: the deployment is wrong, not the request

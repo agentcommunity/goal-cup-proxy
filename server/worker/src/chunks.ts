@@ -2,16 +2,17 @@
 // the order of steps below is SERVER-DESIGN.md section 4, "Acceptance of a chunk".
 //
 //   1. refuse early, before the body is read (token, offset, size, headers, run state)
-//   2. a retry of a chunk already stored: answer with the stored ack, body unread
-//   3. offset / prev / first_seq must continue exactly where the run stands (409 otherwise)
+//   2. a retry of a chunk already stored: answer with the stored ack, body unread (before the
+//      run state is looked at, so a retry is answered whatever has happened since)
+//   3. offset / prev / first_seq must continue exactly where the entry stands (409 otherwise)
 //   4. stream the body into R2, create-only, with R2 checking the sha256 (422 if wrong)
 //   5. one atomic database step advances offset/head and records chunk + ack
 //   6. sign and return the ack
 
 import type { Ctx } from "./context.ts";
-import type { ChunkRecord, RunRow } from "./db.ts";
+import { type ChunkRecord, type EntryRow, type RunRow, isPastEnd } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
-import { FINAL_RETRY_AFTER, isStopped, requireOpen, requireRun } from "./runs.ts";
+import { FINAL_RETRY_AFTER, requireOpen, requireRun } from "./runs.ts";
 import { formatTime, isEntryId, isHex64, parseSafeUint } from "./util.ts";
 
 export const MAX_CHUNK_BYTES = 33_554_432; // 32 MiB, compressed
@@ -33,45 +34,46 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   const contentLength = checkContentLength(request);
   const h = parseHeaders(request);
 
-  // 1. ...and the run: it must be this member's and open (not sealed, not abandoned).
-  const run = await requireRun(ctx, member, runId);
-  requireOpen(run);
-  if (h.entryId !== run.entry_id) throw notFound("That entry does not belong to this run.");
-
-  // 1. ...and the deadline. Past `deadline_at` a chunk is accepted only once the final heartbeat
-  //    has committed where the chain ends (until then: wait, 503). Once an end is committed, whether
-  //    or not the deadline has passed, nothing may go beyond it (410).
-  if (run.final === null && isStopped(ctx, run)) {
-    throw new ApiError(503, "awaiting_final", "The run is past its deadline: send the final heartbeat, then upload the rest.", {
-      "retry-after": String(FINAL_RETRY_AFTER),
-    });
-  }
-  if (run.final !== null && goesBeyond(h, run.final)) {
-    throw closed("This chunk goes past the end of the run that the final heartbeat committed.");
-  }
+  // 1. ...and the run and entry: this member's, and the entry one of the run's segments.
+  const { run, entry } = await requireRun(ctx, member, runId, h.entryId);
 
   // 2. A chunk the server already holds, sent again (a reply was lost): same offset, same length,
   //    same head -> the stored ack, without touching the body.
-  if (offset < run.offset) {
-    const stored = await ctx.db.getChunk(member, runId, offset);
-    if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored);
-    throw conflict(`The server already holds bytes up to offset ${run.offset} and nothing like this chunk at ${offset}.`);
+  const held = offset < entry.offset ? await ctx.db.getChunk(member, runId, entry.entry_id, offset) : null;
+  if (held !== null && held.length === h.length && held.head === h.head) return storedAnswer(held);
+
+  // 1. ...and the run state: open (not abandoned, not closed) and the entry not sealed.
+  requireOpen(ctx, run, entry);
+
+  // 1. ...and the end. Once the run is over a chunk is accepted only after the final heartbeat has
+  //    committed where the entry's chain ends (until then: wait, 503). Once an end is committed,
+  //    whether or not the run is over, nothing may go beyond it (410).
+  if (entry.final === null && isPastEnd(run, ctx.now())) {
+    throw new ApiError(503, "awaiting_final", "The run is over: send the final heartbeat, then upload the rest.", {
+      "retry-after": String(FINAL_RETRY_AFTER),
+    });
+  }
+  if (entry.final !== null && goesBeyond(h, entry.final)) {
+    throw closed("This chunk goes past the end of the entry that the final heartbeat committed.");
+  }
+  if (offset < entry.offset) {
+    throw conflict(`The server already holds bytes up to offset ${entry.offset} and nothing like this chunk at ${offset}.`);
   }
 
   // 3. Continue exactly where the server is.
-  if (offset !== run.offset) throw conflict(`This chunk starts at ${offset} but the server expects offset ${run.offset}.`);
-  if (h.prev !== run.head) throw conflict("Goalcup-Prev is not the head the server holds.");
-  if (h.firstSeq !== run.next_seq) throw conflict(`Goalcup-First-Seq is ${h.firstSeq} but the server expects ${run.next_seq}.`);
+  if (offset !== entry.offset) throw conflict(`This chunk starts at ${offset} but the server expects offset ${entry.offset}.`);
+  if (h.prev !== entry.head) throw conflict("Goalcup-Prev is not the head the server holds.");
+  if (h.firstSeq !== entry.next_seq) throw conflict(`Goalcup-First-Seq is ${h.firstSeq} but the server expects ${entry.next_seq}.`);
 
   // 4. Stream into R2.
-  const key = chunkKey(run, offset, h.sha256);
+  const key = chunkKey(run, entry, offset, h.sha256);
   await storeBody(ctx, request, contentLength, key, h.sha256);
 
   // 5. + 6. Ack, then one atomic step that records everything.
   const receivedAt = formatTime(ctx.now());
-  const ack = await ctx.signer.signAck(run.entry_id, h.lastSeq, h.head, receivedAt);
+  const ack = await ctx.signer.signAck(entry.entry_id, h.lastSeq, h.head, receivedAt);
   const chunk: ChunkRecord = {
-    entry_id: run.entry_id,
+    entry_id: entry.entry_id,
     offset,
     length: h.length,
     sha256: h.sha256,
@@ -90,16 +92,16 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
     case "conflict": {
       // Someone moved the run between our check and our commit. If that someone was a retry of
       // this very chunk, its ack is the answer; otherwise the tracer must re-read the position.
-      const stored = await ctx.db.getChunk(member, runId, offset);
+      const stored = await ctx.db.getChunk(member, runId, entry.entry_id, offset);
       if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored);
       throw conflict("The run moved while this chunk was being stored; read the position again.");
     }
     case "beyond_final":
-      throw closed("This chunk goes past the end of the run that the final heartbeat committed.");
+      throw closed("This chunk goes past the end of the entry that the final heartbeat committed.");
     case "closed":
       throw closed("This run is no longer open.");
     case "not_found":
-      throw notFound("No such run for this token.");
+      throw notFound("That entry does not belong to this run.");
   }
 }
 
@@ -113,8 +115,8 @@ function storedAnswer(c: ChunkRecord): Response {
 }
 
 /** traces/{event}/{run_id}/{entry_id}/{offset:016}-{sha256}.zst. The hash is in the name, so a name is only ever those bytes. */
-function chunkKey(run: RunRow, offset: number, sha256: string): string {
-  return `traces/${run.event_id}/${run.run_id}/${run.entry_id}/${String(offset).padStart(16, "0")}-${sha256}.zst`;
+function chunkKey(run: RunRow, entry: EntryRow, offset: number, sha256: string): string {
+  return `traces/${run.event_id}/${run.run_id}/${entry.entry_id}/${String(offset).padStart(16, "0")}-${sha256}.zst`;
 }
 
 function checkContentLength(request: Request): number {
