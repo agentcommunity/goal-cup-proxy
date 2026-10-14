@@ -453,14 +453,17 @@ mod linux {
             }
         }
 
-        /// The chain's process group, SIGKILLed whole however the host ends.
-        struct Chain(i32);
+        /// The chain's head, whose process group every link shares: the group is SIGKILLed
+        /// whole and the head reaped however the host ends. A head the sweep already reaped
+        /// makes the `wait` fail with ECHILD, which is ignored.
+        struct Chain(std::process::Child);
 
         impl Drop for Chain {
             fn drop(&mut self) {
                 // SAFETY: two integers. The group is the chain's own, made at its head's spawn;
                 // with every member gone the call fails with ESRCH and does nothing.
-                unsafe { libc::kill(-self.0, libc::SIGKILL) };
+                unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
+                let _ = self.0.wait();
             }
         }
 
@@ -503,19 +506,20 @@ mod linux {
             // exec, and the links all share the head's process group.
             let ready = std::env::temp_dir()
                 .join(format!("goalcup-subreaper-chain-{}", std::process::id()));
-            let head = std::process::Command::new("/bin/sh")
-                .args(["-c", "trap '' TERM; exec sh -c \"$LINK\" link \"$LINKS\""])
-                .env(
-                    "LINK",
-                    "if [ \"$1\" -gt 0 ]; then sh -c \"$LINK\" link $(($1 - 1)) & \
-                     else : > \"$READY\"; fi; exec sleep 60",
-                )
-                .env("LINKS", LINKS.to_string())
-                .env("READY", &ready)
-                .process_group(0)
-                .spawn()
-                .unwrap();
-            let chain = Chain(head.id() as i32);
+            let chain = Chain(
+                std::process::Command::new("/bin/sh")
+                    .args(["-c", "trap '' TERM; exec sh -c \"$LINK\" link \"$LINKS\""])
+                    .env(
+                        "LINK",
+                        "if [ \"$1\" -gt 0 ]; then sh -c \"$LINK\" link $(($1 - 1)) & \
+                         else : > \"$READY\"; fi; exec sleep 60",
+                    )
+                    .env("LINKS", LINKS.to_string())
+                    .env("READY", &ready)
+                    .process_group(0)
+                    .spawn()
+                    .unwrap(),
+            );
             let up_by = Instant::now() + Duration::from_secs(20);
             while !ready.exists() {
                 assert!(
