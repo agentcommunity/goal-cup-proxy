@@ -1,0 +1,21 @@
+{
+  "name": "goalcup-upload-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Goal Cup trace upload Worker (Cloudflare Workers + R2 + Supabase). Contract: docs/UPLOAD-API.md",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "wrangler dev --env-file .dev.vars --var DB_BACKEND:local",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p test",
+    "test": "npm run typecheck && node --test --test-timeout=120000 \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261013.1",
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3",
+    "wrangler": "4.149.0"
+  }
+}

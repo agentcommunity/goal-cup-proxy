@@ -288,8 +288,43 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   never printed, never put in the agent's environment or on its command line, and never written
   into a trace; the agent runs as you, so it could still read the file, and you can revoke the
   token on the site ([checklist](docs/CHEAT-CHECKLIST.md)). A `server.json` other users can
-  read is refused. Run it again to replace the token. Uploading runs to the server is being
-  built ([TODO](TODO.md), step 2): until it lands, the login is stored and runs stay local.
+  read is refused. Run it again to replace the token; delete the file to go back to local-only
+  runs. Once logged in, `goalcup start` needs `--repo https://github.com/<owner>/<repo>` (the
+  public repository the agent pushes to) and opens the run on the server before anything is
+  created: the server issues the entry id, the official start and the deadline, and signs a start
+  receipt that is kept as the trace's `receipt.json` (and in `$GOALCUP_CONFIG_DIR/uploads/`). If
+  the server refuses or cannot be reached, nothing starts and the message says why. A harness
+  given a provider key (Hermes) is never uploaded. The wire contract is
+  [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
+- <a id="upload"></a>**Uploading.** While the run records, `goalcup start` sends the trace's
+  `chain.jsonl` to the server in compressed chunks: the first as soon as the agent launches,
+  then every hour, or sooner once 256 MiB of chain is waiting (a chunk is at most 32 MiB
+  compressed). Each chunk is acknowledged with a signature, and the acknowledgement is added to
+  the trace's `acks.jsonl`, which `goalcup-verify` checks. Recording never waits on the network:
+  when the server cannot be reached the upload waits (a minute, doubling to fifteen) and tries
+  again, and the run goes on. After the seal, `start` sends the rest and the seal for at most two
+  minutes; if that is not enough it says so, and `goalcup upload <entry>` finishes the job
+  (after a crash too). It asks the server where it got to and is safe to run again, though not
+  while the run's own `start` is still uploading (it says so). Uploading stops, with the reason
+  on stderr, when the server refuses the request itself (a revoked token, a closed run, a TLS
+  certificate it cannot trust) or the local chain no longer continues the server's copy; the
+  run is still complete on this machine.
+- <a id="deadline"></a>**The deadline.** A run on the server lasts until its `deadline_at` (168
+  hours after its official start) and not a second longer, in whatever state the agent is in.
+  While it records, `goalcup start` sends the server a heartbeat every 5 minutes; once the server
+  answers that the deadline has come, or, without a network, once the run's length has passed
+  on this machine's clock (which keeps counting while the machine sleeps), it stops the agent
+  there and then and seals the run. It then tells the server where the chain ends and which
+  commit the workspace repository had checked out (the final heartbeat), and uploads the rest
+  up to that end; `goalcup upload <entry>` finishes that later if the network was down. The
+  server accepts nothing past that end, and a run not sealed on the server 24 hours after its
+  deadline is abandoned. There is no late window.
+- <a id="server"></a>**The server.** The upload Worker (Cloudflare Workers, R2, Supabase) is in
+  [server/worker](server/worker/README.md), TypeScript, runnable on this machine with
+  `wrangler dev` (`cd server/worker && npm install && npm test`); nothing is deployed. The
+  tracer's end-to-end upload tests run against it too:
+  `cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only
+  -E 'test(/upload_worker/)'` (needs Node 22.18+ and the `npm install`).
 - **A binary copied out of `target/release`** cannot find the connectors on its own: export
   `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`. An installed one (Homebrew, or an unpacked
   release tarball) finds them at `<bin>/../share/goalcup/connectors`.

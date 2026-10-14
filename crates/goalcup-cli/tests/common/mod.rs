@@ -26,6 +26,7 @@ pub mod m2_vertical_support;
 pub mod m2_ws_support;
 pub mod secret_support;
 pub mod support;
+pub mod upload_server;
 
 // Shared with goalcup-daemon's process-table tests; one mutex per test binary.
 #[path = "../../../goalcup-daemon/tests/common/support/table_lock.rs"]

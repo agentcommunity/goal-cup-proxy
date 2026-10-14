@@ -85,6 +85,7 @@ fn capture_request(
         reserve_bytes: 4 * 1024 * 1024,
         run_home: h.root.join("run-home").display().to_string(),
         config_home: h.root.join("config-home").display().to_string(),
+        entry_id: None,
     }
 }
 
@@ -1040,6 +1041,45 @@ fn capture_create_request(
             .join(format!("{name}-config-home"))
             .display()
             .to_string(),
+        entry_id: None,
+    }
+}
+
+/// A capture create may carry the entry id an upload server issued: the entry, its chain and
+/// every record carry that id, and the answer names the trace directory and the head the
+/// baseline left, which is what a start receipt signs. An id in any other shape is refused
+/// before anything is created.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_create_takes_a_server_issued_entry_id_and_reports_its_head() {
+    let h = support::empty_control_harness().await;
+    let mut request = capture_create_request(&h, "server-issued");
+    request.entry_id = Some("e0123456789abcdef".to_string());
+    let info: protocol::CaptureWorkspaceInfo = h
+        .post_json(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
+        .await;
+    assert_eq!(info.entry_id, "e0123456789abcdef");
+    let chain =
+        std::fs::read_to_string(std::path::Path::new(&info.trace_dir).join("chain.jsonl")).unwrap();
+    let first: serde_json::Value = serde_json::from_str(chain.lines().next().unwrap()).unwrap();
+    assert_eq!(first["entry_id"], "e0123456789abcdef");
+    assert_eq!(first["seq"], 0);
+    assert_eq!(first["hash"], info.chain_head.as_str());
+
+    for bad in ["E0123456789ABCDEF", "e0123", "../e0123456789abcd", ""] {
+        let mut request = capture_create_request(&h, &format!("bad-{}", bad.len()));
+        request.entry_id = Some(bad.to_string());
+        let response = h
+            .post_body(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
+            .await;
+        assert_eq!(response.status(), 400, "{bad:?}: {}", response.body());
+        assert!(
+            !h.root
+                .join("workspaces")
+                .join(format!("bad-{}", bad.len()))
+                .exists(),
+            "a refused id created its workspace"
+        );
     }
 }
 

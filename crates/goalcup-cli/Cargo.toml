@@ -76,6 +76,10 @@ rand.workspace = true
 # The key-fragment scan decodes each trace stream's base64 segments (`src/key_scan.rs`). The
 # workspace version the daemon and the verifier already link, so no new crate.
 base64.workspace = true
+# The upload chunks (`src/upload/uploader.rs`): each is one zstd frame, built in a spool file
+# and streamed from it. `hex` spells their SHA-256 and the acknowledgement signatures.
+zstd.workspace = true
+hex.workspace = true
 
 # `killpg` at the version probe's deadline (`preflight/probe.rs`): `process_group(0)` puts the
 # harness in a group of its own, and a helper it backgrounded is only reachable by
@@ -107,6 +111,9 @@ x509-parser.workspace = true
 # daemon in code and that this line stays under `[dev-dependencies]`. There is no cycle:
 # `goalcup-daemon` depends on neither this crate nor anything that does.
 goalcup-daemon = { path = "../goalcup-daemon", features = ["test-hooks"] }
+# Tests only: the local stand-in for the upload server (`tests/common/upload_server/`) is an axum
+# app on loopback, the same crate and features the daemon's control endpoint already links.
+axum.workspace = true
 
 [[bin]]
 name = "goalcup"

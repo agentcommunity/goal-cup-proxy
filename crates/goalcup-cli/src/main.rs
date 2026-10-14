@@ -35,10 +35,10 @@ use std::process::ExitCode;
     after_help = AFTER_HELP,
     subcommand_required = true,
     arg_required_else_help = true,
-    // So the list under `Commands:` is exactly the six sub-commands below. clap's built-in
-    // `help` sub-command would be a seventh line in it, indistinguishable to a reader — and to a
+    // So the list under `Commands:` is exactly the seven sub-commands below. clap's built-in
+    // `help` sub-command would be an eighth line in it, indistinguishable to a reader — and to a
     // test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
-    // the same help by the route the other six already take.
+    // the same help by the route the other seven already take.
     disable_help_subcommand = true
 )]
 struct Args {
@@ -75,7 +75,7 @@ installed. No daemon running is not a failure: `goalcup start` starts one.
 Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
 are not using can make this command exit 1.";
 
-/// The sub-commands: six. `verify` is deliberately absent:
+/// The sub-commands: seven. `verify` is deliberately absent:
 /// see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
@@ -102,6 +102,10 @@ enum Command {
             default_value_t = goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES
         )]
         capture_reserve_bytes: u64,
+        /// The public GitHub repository your agent pushes to, `https://github.com/<owner>/<repo>`.
+        /// Required once `goalcup login` has connected this tracker to the Goal Cup server.
+        #[arg(long, value_name = "URL")]
+        repo: Option<String>,
     },
     /// Show how a run is doing: recording state, health, storage and any gaps. Starts the
     /// daemon if none is running, so a sealed run is shown too.
@@ -152,6 +156,13 @@ enum Command {
         #[arg(long, value_name = "URL")]
         server: String,
     },
+    /// Finish uploading a run to the Goal Cup server, after `goalcup start` could not: the
+    /// server was away, the laptop slept, or the process was killed. Safe to run again.
+    Upload {
+        /// The entry id (`goalcup entries` lists them).
+        #[arg(value_name = "ENTRY")]
+        entry: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -187,11 +198,14 @@ fn run(command: Command) -> Result<u8, CliError> {
             dev,
             goal_file,
             capture_reserve_bytes,
+            repo,
         } => start(commands::start::StartOptions {
             harness,
             dev,
             goal_file,
             capture_reserve_bytes,
+            repo,
+            upload_policy: upload_policy()?,
         })
         .map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),
@@ -201,8 +215,28 @@ fn run(command: Command) -> Result<u8, CliError> {
             doctor(commands::doctor::DoctorOptions { json, harness })
         }
         Command::Login { server } => login(&server).map(|()| 0),
+        Command::Upload { entry } => {
+            let cfg = goalcup_cli::config::config_dir()?;
+            commands::upload::upload_with(&cfg, &entry, upload_policy()?, &mut std::io::stdout())
+                .map(|()| 0)
+        }
     }
 }
+
+/// When chunks go and how failures wait: the shipped policy, or in a test build one named by
+/// [`TEST_UPLOAD_POLICY`].
+fn upload_policy() -> Result<goalcup_cli::upload::uploader::Policy, CliError> {
+    #[cfg(feature = "test-support")]
+    if let Ok(spec) = std::env::var(TEST_UPLOAD_POLICY) {
+        return goalcup_cli::upload::uploader::Policy::from_test_spec(&spec)
+            .ok_or_else(|| CliError::Refused(format!("{TEST_UPLOAD_POLICY} is malformed")));
+    }
+    Ok(goalcup_cli::upload::uploader::Policy::default())
+}
+
+/// A test build's upload timing, so a test can see an hour's cadence in a second.
+#[cfg(feature = "test-support")]
+const TEST_UPLOAD_POLICY: &str = "GOALCUP_TEST_UPLOAD_POLICY";
 
 /// `goalcup login`: the token is read from stdin with terminal echo off when stdin is a
 /// terminal, so a pasted token is never on the screen. Piped input is read as it is.

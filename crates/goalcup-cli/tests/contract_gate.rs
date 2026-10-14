@@ -577,12 +577,12 @@ fn doctor_json_is_one_parseable_document_on_stdout_through_the_binary() {
 
 // ------------------------------------------------------------------ the capture CLI (D48)
 //
-// The binary is the M2 capture CLI: six commands, and the removed V1 ones refuse by name
+// The binary is the M2 capture CLI: seven commands, and the removed V1 ones refuse by name
 // instead of vanishing into a clap usage error.
 
 /// The commands `goalcup --help` lists, in order, and nothing else.
 #[test]
-fn goalcup_lists_the_six_commands_and_nothing_else() {
+fn goalcup_lists_the_seven_commands_and_nothing_else() {
     for flag in ["-h", "--help"] {
         let out = goalcup().arg(flag).output().unwrap();
         assert!(out.status.success());
@@ -596,7 +596,9 @@ fn goalcup_lists_the_six_commands_and_nothing_else() {
             .collect();
         assert_eq!(
             listed,
-            ["start", "status", "entries", "seal", "doctor", "login"],
+            [
+                "start", "status", "entries", "seal", "doctor", "login", "upload"
+            ],
             "`goalcup {flag}` lists the capture commands and nothing else"
         );
         assert!(
