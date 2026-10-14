@@ -4,7 +4,11 @@
 #[cfg(unix)]
 mod artifact_root_unix;
 #[cfg(unix)]
+mod awake;
+#[cfg(unix)]
 mod disk;
+#[cfg(unix)]
+mod machine;
 #[cfg(unix)]
 mod readcap_unix;
 #[cfg(unix)]
