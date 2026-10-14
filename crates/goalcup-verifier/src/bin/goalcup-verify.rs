@@ -92,6 +92,7 @@ fn capture_options(args: Args) -> VerifyOptions {
         );
     }
     VerifyOptions {
+        allow_descriptor_key: false,
         extra_server_keys: args.dev_key,
     }
 }

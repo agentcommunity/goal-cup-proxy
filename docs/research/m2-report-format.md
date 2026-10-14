@@ -66,7 +66,7 @@ The research-report kind vocabulary (schemas 1 and 2) is closed at these ten val
 | `type`, `schema_version` | `"summary"`, `2`. Schema 2 (2026-10-14) adds `analysis.models`, `analysis.models_omitted` and `analysis.cross_leg`; every schema-1 key keeps its meaning and observation lines are unchanged. |
 | `exit_code` | The verifier/report exit code (below), not the harness run's exit code. |
 | `verifier_version` | The verifier build that wrote the report. |
-| `options` | The effective options: `dev_mode` and `allow_descriptor_key` (both always `false`), `extra_server_keys`. |
+| `options` | The effective options: `dev_mode`, `allow_descriptor_key`, `extra_server_keys`. |
 | `key_source` | Which key checked the receipt and ACK signatures: `pinned`, `supplied` or `none`. This build pins no key, so it is never `pinned`. |
 | `input` | The validated chain prefix the report covers: `validated_head` (the link hash of its last record), `validated_records`, `validated_bytes`. |
 | `run.launch` | The first `Launch` record as retained: profile, profile digest, harness version, recorder revision, continuation and the goal stream it names, and, when the daemon wrote them (contract S1), `run_public_key` and `connector_dir_sha256`. Both are additive and absent from a trace written before S1, so a consumer treats a missing key as unknown rather than as an error. `null` when there is none. |

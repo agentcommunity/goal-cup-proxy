@@ -1132,6 +1132,7 @@ fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
     let key = SigningKey::from_bytes(&[0x42; 32]);
     let options = VerifyOptions {
         extra_server_keys: vec![hex::encode(key.verifying_key().to_bytes())],
+        ..VerifyOptions::default()
     };
     let reader_facts = |dir: &Path| {
         let report = scan_capture_trace(dir, &options, &mut |_| Ok(())).unwrap();

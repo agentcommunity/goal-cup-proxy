@@ -33,6 +33,10 @@ pub(crate) const SERVER_PUBLIC_KEYS: [&str; 0] = [];
 /// Knobs a caller may turn. Every field defaults to the strict reading.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VerifyOptions {
+    /// Accept a trace-named key that is not in `SERVER_PUBLIC_KEYS`. A v5 capture trace names
+    /// none, so this has no effect. It stays because the research report records the options
+    /// it ran with, and because callers build these options with a struct update.
+    pub allow_descriptor_key: bool,
     /// Server public keys this run will accept, hex, supplied by the caller rather than
     /// pinned into the build. `goalcup-verify --dev-key <hex>` is what fills it.
     ///

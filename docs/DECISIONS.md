@@ -1430,8 +1430,7 @@ protocol v4 chains, which the v5 reader already refused.
 `link_hash`, the five v5 bodies, receipts and acknowledgements, and
 `FinalizationV1::CaptureUnavailable` with all its types and variants, which the corpus case
 `signed-receipt-ack-finalization` carries. A line declaring version 1–4 is still
-`capture_envelope_invalid` and any other non-v5 version `protocol_version_unsupported`. The
-research report still writes `"allow_descriptor_key": false`.
+`capture_envelope_invalid` and any other non-v5 version `protocol_version_unsupported`.
 
 **Changed on hostile input only.** A v5 line carrying a removed body or finalization arm no
 longer decodes, so the reader reports `record_malformed` where it reported
