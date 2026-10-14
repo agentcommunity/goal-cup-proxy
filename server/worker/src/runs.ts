@@ -80,6 +80,8 @@ export const isStopped = (ctx: Ctx, run: RunRow): boolean => isPastDeadline(run.
 
 // ---- POST /v1/runs ------------------------------------------------------------------------
 
+const OPENED_ALREADY = "This credential already opened a run; run `goalcup continue`.";
+
 export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<Response> {
   const b = await readJson(request, JSON_BODY_MAX);
   const connector_id = strField(b, "connector_id", 128);
@@ -97,7 +99,7 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   if (auth.run_id !== null) {
     const opened = await ctx.db.getRun(auth.member, auth.run_id);
     if (opened !== null && opened.session_id === session_id) return json(200, runView(opened));
-    throw conflict("This credential already opened a run; run `goalcup continue`.");
+    throw conflict(OPENED_ALREADY);
   }
 
   if (ctx.cfg.githubCheck) await requirePublicGithubRepo(ctx, repo_url);
@@ -122,7 +124,10 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   if (result.kind === "conflict") throw conflict("This account already has an open run.");
   if (result.kind === "forbidden") throw new ApiError(403, "forbidden", result.message);
 
-  await ctx.db.bindCredential(auth.credential, result.run.run_id, boundCredentialExpiry(result.run.deadline_at));
+  // The credential binds to this run only if it is still unbound (or already bound to it).
+  if ((await ctx.db.bindCredential(auth.credential, result.run.run_id, boundCredentialExpiry(result.run.deadline_at))) === "conflict") {
+    throw conflict(OPENED_ALREADY);
+  }
   return json(result.kind === "created" ? 201 : 200, runView(result.run));
 }
 
@@ -248,11 +253,12 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
   if (typeof b.final !== "boolean") throw malformed("final must be true or false.");
   const repo = b.repo_head ?? null;
   if (repo !== null && (typeof repo !== "string" || !/^[0-9a-f]{40}$/.test(repo))) throw malformed("repo_head must be null or 40 lowercase hex digits.");
-  // Optional facts about the recording. W2 stores them; for now only their shape is checked.
-  if (b.recording !== undefined && !["ok", "gaps", "failed", "unknown"].includes(b.recording as string)) {
+  // Optional facts about the recording; null is absent, as for repo_head. W2 stores them; for now
+  // only their shape is checked.
+  if (b.recording != null && !["ok", "gaps", "failed", "unknown"].includes(b.recording as string)) {
     throw malformed('recording must be "ok", "gaps", "failed" or "unknown".');
   }
-  if (b.model_requests !== undefined) uintField(b, "model_requests");
+  if (b.model_requests != null) uintField(b, "model_requests");
   if (entry_id !== run.entry_id) throw notFound("That entry does not belong to this run.");
   // An abandoned run accepts nothing more, a final heartbeat included. A sealed one still takes the final.
   if (run.status === "abandoned") throw closed("This run is abandoned.");

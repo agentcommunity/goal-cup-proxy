@@ -12,6 +12,7 @@
 import type {
   AbandonResult,
   ApproveDeviceResult,
+  BindCredentialResult,
   ChunkRecord,
   CommitChunkArgs,
   CommitChunkResult,
@@ -85,9 +86,9 @@ export class SupabaseDb implements Db {
     return (v as Credential | null) ?? null;
   }
 
-  async bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<void> {
+  async bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<BindCredentialResult> {
     const v = await this.#rpc("upload_bind_credential", { p_credential_hash: credentialSha256, p_run_id: runId, p_expires_at: expiresAt });
-    this.#word("upload_bind_credential", v, ["bound"] as const);
+    return this.#word("upload_bind_credential", v, ["bound", "conflict"] as const);
   }
 
   async createDevice(a: CreateDeviceArgs): Promise<void> {

@@ -39,6 +39,8 @@ const MAX_CHUNK_BYTES: u64 = 32 * 1024 * 1024;
 /// The cap on each document a seal carries.
 const MAX_SEAL_DOC_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ABANDON_REASON_CHARS: usize = 500;
+/// The largest whole number the Worker (a JavaScript number) can hold exactly.
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 /// A device request lives this long from its creation, whatever its state.
 const DEVICE_EXPIRES_IN: u64 = 900;
 const DEVICE_INTERVAL: u64 = 5;
@@ -328,9 +330,7 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
     if let Some(opened) = &who.run_id {
         return match runs.get(opened) {
             Some(run) if run.session_id == req.session_id => Ok(json_response(200, run_view(run))),
-            _ => Err(ApiError::conflict(
-                "This credential already opened a run; run `goalcup continue`.",
-            )),
+            _ => Err(opened_already()),
         };
     }
     let member = who.member.clone();
@@ -340,7 +340,9 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
     {
         // A lost reply to the first call is not a second run.
         if open.session_id == req.session_id && open.receipt.is_none() {
-            bind_credential(&s, &who, open);
+            if !bind_credential(&s, who.credential.as_deref(), open) {
+                return Err(opened_already());
+            }
             return Ok(json_response(200, run_view(open)));
         }
         return Err(ApiError::conflict("The account already has an open run."));
@@ -372,22 +374,36 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
         final_commit: None,
         auto_abandoned: false,
     };
+    // Bind before anything is kept: a credential that cannot bind opens no run.
+    if !bind_credential(&s, who.credential.as_deref(), &run) {
+        return Err(opened_already());
+    }
     s.persist(&run);
-    bind_credential(&s, &who, &run);
     let view = run_view(&run);
     runs.insert(run_id, run);
     Ok(json_response(201, view))
 }
 
-/// The credential that opened `run` is bound to it, until 24 hours after its deadline.
-fn bind_credential(s: &Shared, who: &Who, run: &RunRecord) {
-    let Some(hash) = &who.credential else { return };
+fn opened_already() -> ApiError {
+    ApiError::conflict("This credential already opened a run; run `goalcup continue`.")
+}
+
+/// The credential (by hash; `None` is a legacy token, which has nothing to bind) that opened
+/// `run` is bound to it, until 24 hours after its deadline. Only a credential that is unbound,
+/// or already bound to this run, binds; false means it did not.
+pub fn bind_credential(s: &Shared, credential: Option<&str>, run: &RunRecord) -> bool {
+    let Some(hash) = credential else { return true };
     let mut credentials = s.credentials.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(c) = credentials.get_mut(hash) {
-        c.run_id = Some(run.run_id.clone());
-        c.expires_at = run.deadline_secs() + BOUND_CREDENTIAL_EXTRA_SECS;
+    let Some(c) = credentials.get_mut(hash) else {
+        return false;
+    };
+    if c.run_id.as_ref().is_some_and(|bound| *bound != run.run_id) {
+        return false;
     }
+    c.run_id = Some(run.run_id.clone());
+    c.expires_at = run.deadline_secs() + BOUND_CREDENTIAL_EXTRA_SECS;
     s.persist_credentials(&credentials);
+    true
 }
 
 // ---- GET /v1/runs/{run_id} ---------------------------------------------------------------
@@ -880,6 +896,9 @@ async fn heartbeat(
             "repo_head is not 40 lowercase hex digits.",
         ));
     }
+    if req.model_requests.is_some_and(|n| n > MAX_SAFE_INTEGER) {
+        return Err(ApiError::malformed("model_requests is over 2^53 - 1."));
+    }
     if let Some(recording) = &req.recording
         && !["ok", "gaps", "failed", "unknown"].contains(&recording.as_str())
     {
@@ -977,10 +996,15 @@ async fn create_device(State(s): St, body: Bytes) -> Result<Response, ApiError> 
     if !["competition", "practice"].contains(&req.mode.as_str()) {
         return Err(ApiError::malformed("mode is not competition or practice."));
     }
-    if req.connector_id.is_empty() || req.tracer_version.is_empty() {
-        return Err(ApiError::malformed(
-            "connector_id or tracer_version is empty.",
-        ));
+    for (name, value, max) in [
+        ("connector_id", &req.connector_id, 128),
+        ("tracer_version", &req.tracer_version, 64),
+    ] {
+        if value.is_empty() || value.chars().count() > max {
+            return Err(ApiError::malformed(format!(
+                "{name} must be 1 to {max} characters."
+            )));
+        }
     }
     let device_code = format!(
         "{:016x}{:016x}{:016x}{:016x}",

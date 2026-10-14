@@ -123,7 +123,8 @@ else is `400`.
 A credential opens one run. A repeat of the same `session_id` on a credential that already opened a
 run returns that run's answer with `200`, whatever the run's state, so a reply lost in transit is
 not a second run. Another `session_id` on it is `409`: this credential already opened a run, and
-the participant runs `goalcup continue`. A credential that has not opened a run yet is still held
+the participant runs `goalcup continue`. Binding the credential to the new run is conditional on
+it being unbound; if it was bound to another run in the meantime, that too is this `409`. A credential that has not opened a run yet is still held
 to the account's one open run: another open run on the account is `409`.
 
 **Differs from section 4:** `chain_head_at_create` is not sent here. The chain's first link hashes
@@ -233,14 +234,14 @@ that chain position before the bytes arrive. `repo_head` is the 40-hex commit th
 repository had checked out when the run ended (final heartbeat only; `null` when there is none).
 
 Two optional fields may be added: `"recording": "ok" | "gaps" | "failed" | "unknown"` (how the
-tracer sees its own recording) and `"model_requests": <u64>` (model calls seen so far, cumulative).
-A heartbeat without them is as before. The server checks their shape and records nothing else
-about them yet.
+tracer sees its own recording) and `"model_requests": <u64>` (model calls seen so far, cumulative,
+at most 2^53 - 1). A heartbeat without them is as before, and `null` means absent, as for
+`repo_head`. The server checks their shape and records nothing else about them yet.
 
-`200`: `{"stop": <bool>, "deadline_at": "…", "reason": null}`. `reason` says why `stop` is true when
-the deadline is not the only reason (`"deadline"` or `"replaced"`; a later change fills it, today it
-is `null`). `stop` is `true` once the server's clock is at or past `deadline_at`: **the run is over**. The tracer then stops the agent at once, seals, and sends
-the final heartbeat.
+`200`: `{"stop": <bool>, "deadline_at": "…", "reason": null}`. `stop` is `true` once the server's
+clock is at or past `deadline_at`: **the run is over**. The tracer then stops the agent at once,
+seals, and sends the final heartbeat. `reason` says why `stop` is true when the deadline is not
+the only reason (`"deadline"` or `"replaced"`; a later change fills it, today it is `null`).
 
 **The final heartbeat commits the end of the run.** Its `(seq, head)` is the last record the
 server will ever accept for the entry. A repeat with the same `(seq, head)` is `200`; a different

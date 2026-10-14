@@ -181,6 +181,21 @@ test("credential expiry: approved+1h unbound, deadline+24h bound", async () => {
   assert.equal(await db.credential(await sha256Hex("gcr_unknown"), "2026-11-06T09:07:00Z"), null);
 });
 
+test("a credential binds once: the same run again is fine, another run or an unknown credential is a conflict", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()));
+  await db.createDevice(await newDevice());
+  await db.approveDevice(CODE, "m1", true, "2026-11-06T09:05:00Z");
+  const got = await db.pollDevice(await sha256Hex("device-1"), "2026-11-06T09:06:00Z");
+  const hash = await sha256Hex(got.kind === "approved" ? (got.credential_plain ?? "") : "");
+  const until = "2026-11-14T09:00:00Z";
+
+  assert.equal(await db.bindCredential(hash, "r0000000000000001", until), "bound");
+  assert.equal(await db.bindCredential(hash, "r0000000000000001", until), "bound"); // a lost reply, asked again
+  assert.equal(await db.bindCredential(hash, "r0000000000000002", "2026-12-01T00:00:00Z"), "conflict");
+  assert.deepEqual(await db.credential(hash, "2026-11-07T00:00:00Z"), { member_id: "m1", run_id: "r0000000000000001", mode: "practice", expires_at: until });
+  assert.equal(await db.bindCredential(await sha256Hex("gcr_unknown"), "r0000000000000001", until), "conflict");
+});
+
 test("a request that is not decided in time is expired; a denial is 403 until then", async () => {
   const db = LocalDb.create(asR2(new FakeBucket()));
   const dev = await newDevice();
