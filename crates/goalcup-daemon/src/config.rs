@@ -16,8 +16,9 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 /// Read through [`DaemonConfigFile`], whose `deny_unknown_fields` is the whole mechanism behind
-/// the two "cut fields are load errors" assertions in `tests/it/config_load.rs`: without it, a
-/// config still setting `unix_socket` or `foreign_scan_interval_ms` would load and be
+/// the cut-field assertions in `tests/it/config_load.rs` (`the_cut_fields_are_gone` refuses
+/// them; `the_v1_fields_nothing_reads_load_with_any_value` accepts the retired ones): without
+/// it, a config still setting `unix_socket` or `foreign_scan_interval_ms` would load and be
 /// silently ignored — the participant would believe a transport was configured and a
 /// scan scheduled, and neither would exist.
 #[derive(Debug, Clone, Deserialize)]
