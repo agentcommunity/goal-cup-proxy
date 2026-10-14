@@ -44,7 +44,6 @@ impl FixedDocument {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RefusalKind {
     UnsupportedRoot,
-    UnsupportedFileSystem,
     ReparsePoint,
     OfflineOrRecall,
     NotDirectory,
