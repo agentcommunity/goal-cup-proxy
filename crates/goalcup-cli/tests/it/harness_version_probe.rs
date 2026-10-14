@@ -164,8 +164,11 @@ fn only_a_bounded_printable_first_line_is_kept() {
     assert_eq!(reported_line(b"v1\x1b[0m\n"), UNREPORTED);
     let longest = "9".repeat(MAX_REPORTED_VERSION_BYTES);
     assert_eq!(reported_line(longest.as_bytes()), longest);
-    let longer = "9".repeat(MAX_REPORTED_VERSION_BYTES + 1);
-    assert_eq!(reported_line(longer.as_bytes()), UNREPORTED);
+    // A longer line is cut to its first 64 bytes, never refused: a version never stops a run.
+    assert_eq!(MAX_REPORTED_VERSION_BYTES, 64);
+    let long_line: String = (0..100u8).map(|i| char::from(b'a' + i % 26)).collect();
+    assert_eq!(long_line.len(), 100);
+    assert_eq!(reported_line(long_line.as_bytes()), long_line[..64]);
 }
 
 #[test]
