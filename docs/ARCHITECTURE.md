@@ -83,8 +83,8 @@ CLI phases are in [commands/start.rs]; daemon finish stages are in
 [finish.rs](../crates/goalcup-daemon/src/runtime/capture/finish.rs).
 
 1. **Prepare:** refuse unsafe profile, pin, executable, credential or home identity before allocation (D39).
-2. **Create/reserve:** after CLI run/home/CA/seed setup, daemon compares D46 before its allocation or
-   writes; refusal cleans CLI prep, success writes Baseline/reservation, starts proxy and records Goal.
+2. **Create:** after CLI run/home/CA/seed setup, daemon compares D46 before its allocation or
+   writes; refusal cleans CLI prep, success writes Baseline (the chain is quota-only; the run host holds one reserve per run, D40 as amended), starts proxy and records Goal.
 3. **Spawn gate:** park before `exec`; after durable registration, re-open the exact pinned path
    with `O_NOFOLLOW|O_NONBLOCK`, stream-hash a regular file, then release; no snapshot/inode claim.
 4. **Run:** append `Launch`, tee identity output and capture native plus wire legs.
@@ -212,7 +212,6 @@ Test paths are under `crates/`. The "Record" column names the measurement that b
 | One orphan rule (sink, receiver, writer, reader) | `goalcup-daemon/src/runtime/capture/tests.rs`, `goalcup-daemon/tests/it/capture_ingest.rs`, `goalcup-verifier/tests/it/m2_capture_integrity.rs` | T23 (CP-A4) |
 | Integrity exits 0/1/2/3; baseline and seal binding | `goalcup-verifier/tests/it/m2_capture_integrity.rs` | T23 |
 | Streaming = whole-stream redaction; 16 KiB fail closed | `goalcup-daemon/tests/it/capture_redaction.rs`, `goalcup-daemon/tests/it/capture_redaction_extra.rs`, `goalcup-daemon/tests/it/redaction.rs` | E00 |
-| Reservation on the real chain file | `goalcup-protocol/tests/capture_reserved_storage.rs` | T01, T25 storage |
 | Native scope, no symlink, deferred Hermes scope | `goalcup-daemon/tests/it/capture_native.rs`, `goalcup-daemon/tests/it/capture_deferred_scope.rs` | 3c rows, Hermes row |
 | TLS and CONNECT, HTTP and WebSocket relay | `goalcup-cli/tests/it/m2_tls_connect.rs`, `goalcup-cli/tests/it/m2_http_relay.rs`, `goalcup-cli/tests/it/m2_websocket_relay.rs` | E00 |
 | Frozen wire contracts; connector pins | `goalcup-protocol/tests/it/m2_contract.rs`, `goalcup-protocol/tests/it/harness_schema.rs`, `goalcup-protocol/tests/it/harness_loader.rs`, `goalcup-protocol/tests/it/harness_conformance.rs`, `goalcup-protocol/tests/it/connector_pins.rs` | none |

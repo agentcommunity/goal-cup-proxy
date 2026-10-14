@@ -106,7 +106,6 @@ use goalcup_protocol::harness::{CaptureSpec, IdGrammar, IdentitySource, Platform
 use goalcup_protocol::manifest::{Kill, LaunchMode};
 use goalcup_protocol::process::{ProcessHandle, find_named, process_start_identity, snapshot};
 use goalcup_protocol::template::{TemplateVars, render};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -460,37 +459,26 @@ fn child_secret_named(
     }))
 }
 
-/// A harness executable as a launch resolved it: the canonical path it runs and the SHA-256 of
-/// its bytes at resolution.
+/// A harness executable as a launch resolved it: the canonical path it runs.
 ///
-/// The build is recorded, never pinned (D53): nothing compares the digest with the connector,
-/// and the daemon hashes the registered program and the running image into
-/// `Launch.harness_build` itself. The digest is kept for one consistency check: after durable
-/// process registration and immediately before gate release, the launcher re-opens this exact
-/// canonical path and streams it into SHA-256 again ([`recheck_resolved_executable`]), so a file
-/// swapped mid-launch is refused. That read is neither a coherent snapshot nor inode-bound
-/// execution: same-UID mutation from the first read or pathname replacement before `exec`
-/// remains a stated residual.
+/// The build is recorded, never pinned (D53): the daemon hashes the registered program and the
+/// running image into `Launch.harness_build` itself, so the CLI keeps no digest and reads none
+/// of the file's bytes. Only the shape is checked, because the launch execs this exact path:
+/// absolute, not a symlink, a regular file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedExecutable {
     path: String,
-    sha256: String,
 }
 
 impl ResolvedExecutable {
-    /// The absolute path that was hashed, which is the path the capture launch runs.
+    /// The absolute canonical path the capture launch runs.
     pub fn path(&self) -> &str {
         &self.path
-    }
-
-    /// The lowercase SHA-256 of its bytes when it was resolved.
-    pub fn sha256(&self) -> &str {
-        &self.sha256
     }
 }
 
 /// The connector's program as the `PATH` in `env` finds it, followed to the file an updater's
-/// link names. That file is the one the launch runs. It is hashed, never started here:
+/// link names. That file is the one the launch runs. It is checked, never started here:
 /// `goalcup start` and `goalcup doctor` both ask this one question.
 pub(crate) fn capture_executable(
     c: &HarnessConnector,
@@ -512,22 +500,22 @@ pub(crate) fn capture_executable(
     resolve_harness_executable(&file)
 }
 
-/// Hash the regular file at `path` and keep the digest, so the release can refuse a swap.
+/// Check the regular file at `path` and keep its canonical path.
 ///
 /// `path` is resolved by the caller: the measured recipes run the native binary (not the
 /// Codex npm wrapper) and the versioned Claude Code binary (not the symlink its updater
 /// moves), whose location depends on how the harness was installed. The kind of file is
-/// checked on the open handle.
+/// checked on the open handle; no byte of it is read.
 ///
 /// **A symlink is refused, not followed** (exec the versioned path directly).
 /// `~/.local/bin/claude` is retargeted by the next updater, so a link would run whatever it
-/// names at spawn time rather than the file that was hashed. Directory links above the file
-/// (`/var` → `/private/var`) are resolved, and the resolved path is the canonical one; the file
+/// names at spawn time rather than the file that was named. Directory links above the file
+/// (`/var` -> `/private/var`) are resolved, and the resolved path is the canonical one; the file
 /// itself is then opened without following a link, so a name swapped for a link after the
 /// check is refused by the open.
 ///
-/// Refusals: a relative or non-UTF-8 path, a symlink, or anything but a regular file —
-/// [`CliError::Refused`], naming the path; a file this process cannot read — [`CliError::Io`].
+/// Refusals: a relative or non-UTF-8 path, a symlink, or anything but a regular file:
+/// [`CliError::Refused`], naming the path; a file this process cannot open: [`CliError::Io`].
 pub fn resolve_harness_executable(path: &Path) -> Result<ResolvedExecutable, CliError> {
     let Some(given) = path.to_str().filter(|_| path.is_absolute()) else {
         return Err(CliError::Refused(format!(
@@ -557,60 +545,27 @@ pub fn resolve_harness_executable(path: &Path) -> Result<ResolvedExecutable, Cli
              launched."
         )));
     };
-    let sha256 = sha256_regular_file_no_follow(&canonical, given)?;
+    require_regular_file_no_follow(&canonical, given)?;
     Ok(ResolvedExecutable {
         path: text.to_string(),
-        sha256,
     })
 }
 
-/// Re-open the exact canonical path that was resolved, without canonicalising it again, and
-/// hash the whole regular file. This is the last check before the parked capture child is
-/// released: it refuses a file swapped since resolution, not a build.
-pub fn recheck_resolved_executable(executable: &ResolvedExecutable) -> Result<(), CliError> {
-    let path = Path::new(executable.path());
-    let observed = sha256_regular_file_no_follow(path, executable.path()).map_err(|_| {
-        CliError::Refused(format!(
-            "the capture executable `{}` was replaced after it was resolved: it could not be \
-             re-opened as the same regular file. Nothing is launched.",
-            executable.path()
-        ))
-    })?;
-    if observed != executable.sha256() {
-        return Err(CliError::Refused(format!(
-            "the capture executable `{}` was replaced after it was resolved: its sha256 is now \
-             {observed}, and it was {} when this launch resolved it. Nothing is launched.",
-            executable.path(),
-            executable.sha256()
-        )));
-    }
-    Ok(())
-}
-
-/// Hash all bytes from one exact regular-file path. The final component is opened read-only,
-/// nonblocking and without following a symlink, so a substituted FIFO cannot strand the parked
-/// child before `metadata` rejects it. Callers decide whether the path may first be canonicalised.
-fn sha256_regular_file_no_follow(path: &Path, display: &str) -> Result<String, CliError> {
+/// Open the exact path read-only, nonblocking and without following a symlink at its final
+/// component, so a substituted FIFO cannot hang the check before `metadata` rejects it, and
+/// refuse anything that is not a regular file. Nothing is read.
+fn require_regular_file_no_follow(path: &Path, display: &str) -> Result<(), CliError> {
     let io = |source| CliError::Io {
         path: display.to_string(),
         source,
     };
-    let mut file = open_no_follow(path).map_err(io)?;
+    let file = open_no_follow(path).map_err(io)?;
     if !file.metadata().map_err(io)?.is_file() {
         return Err(CliError::Refused(format!(
             "the capture executable `{display}` is not a regular file. Nothing is launched."
         )));
     }
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    loop {
-        let n = std::io::Read::read(&mut file, &mut buf).map_err(io)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex_lower(&hasher.finalize()))
+    Ok(())
 }
 
 /// Open `path` for reading, refusing (with `ELOOP`) rather than following a symlink at its
@@ -625,10 +580,6 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
             .custom_flags(libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     options.open(path)
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// What a capture launch needs that its connector's profile cannot say.

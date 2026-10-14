@@ -2,7 +2,7 @@
 //!
 //! Every fixture is a real `TraceExport` in a temporary directory and every assertion reads
 //! the bytes back off disk. The quota here is serialized-byte accounting only: nothing in this
-//! file claims, or may claim, a physical reservation (that is `capture_reserved_storage.rs`'s).
+//! file claims, or may claim, a physical reservation: chains hold none.
 
 use goalcup_platform::tracecap::{RefusalKind, TraceCapError};
 use goalcup_protocol::ack::AckCheckpoint;
@@ -405,6 +405,77 @@ fn terminal_budget_is_finite() {
         ),
         "a quota cannot be lowered below the chain bytes already written"
     );
+}
+
+/// An assistance record, the fact that a person intervened, is bounded and rare: with the
+/// payload part of the quota full, it spends the terminal allowance rather than being refused
+/// as payload.
+#[test]
+fn assistance_spends_the_terminal_allowance() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut export = capture_export(tmp.path(), LARGE_QUOTA);
+    // A quota whose payload part the baseline fills exactly.
+    let payload_end = export.capture_storage().used_bytes;
+    export
+        .configure_capture_quota(payload_end + TERMINAL_RESERVE_BYTES)
+        .unwrap();
+    let payload = export.append_chain(&mut v5(segment(0, 0)));
+    assert!(
+        matches!(
+            payload,
+            Err(ExportError::CaptureStorageFull {
+                available: 0,
+                terminal_allowance: false,
+                ..
+            })
+        ),
+        "{payload:?}"
+    );
+
+    export
+        .append_chain(&mut v5(CaptureRecord::Assistance {
+            observed: at(30),
+            action: "manual_resume".to_string(),
+        }))
+        .unwrap();
+    assert!(export.capture_storage().used_bytes > payload_end);
+    assert!(export.capture_storage().accounting_available);
+    assert_eq!(chain(tmp.path()).iter().filter(|b| **b == b'\n').count(), 2);
+}
+
+/// The link hash covers a record's decoded content only, so a v5 line that is not its own
+/// canonical serialization (an unknown key, a carriage return, whitespace) keeps its hash and
+/// still fails the verifier (`record_not_canonical`). A resume must refuse it rather than
+/// append to a chain that can never verify.
+#[test]
+fn a_resume_refuses_a_v5_line_that_is_not_canonical() {
+    type Respell = fn(&str) -> String;
+    let respell: [(&str, Respell); 3] = [
+        ("an unknown key", |line| {
+            format!("{},\"note\":\"unhashed\"}}", &line[..line.len() - 1])
+        }),
+        ("a carriage return", |line| format!("{line}\r")),
+        ("whitespace", |line| format!("{line} ")),
+    ];
+    for (what, respell) in respell {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut export = capture_export(tmp.path(), LARGE_QUOTA);
+        export.append_chain(&mut v5(segment(0, 64))).unwrap();
+        export.sync_capture().unwrap();
+        drop(export);
+        TraceExport::resume(tmp.path()).expect("the written chain resumes");
+
+        let path = tmp.path().join(CHAIN_FILE);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let rewritten = format!("{}\n{}\n", lines[0], respell(lines[1]));
+        std::fs::write(&path, rewritten).unwrap();
+        let refused = TraceExport::resume(tmp.path());
+        assert!(
+            matches!(refused, Err(ExportError::ChainCorrupt { seq: 1, .. })),
+            "{what}: {refused:?}"
+        );
+    }
 }
 
 #[test]

@@ -85,8 +85,9 @@ connector directory: that is what stops a connector smuggling a base URL, a prox
   `HTTPS_PROXY` now gets a recorded run, and the verifier has no check that the session file's
   model turns match model calls on the wire. Before refusal goes, the verifier must note "native
   turns with no wire model call" (or, until it does, a CHEAT-CHECKLIST row tells judges to look).
-- **The launch-time consistency check stays**: a file swapped between registration and release
-  is still refused. It refuses a swap, not a build.
+- **No launch-time hash or re-check**: the CLI reads none of the harness binary. A file swapped
+  between resolve and release is a different build, which the daemon records in
+  `Launch.harness_build`.
 
 New connectors during the 24-hour window still need a tracer release, because connector
 directories are pinned by digests compiled into the binaries. Moving accepted connector digests

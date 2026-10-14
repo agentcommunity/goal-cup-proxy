@@ -183,7 +183,7 @@ fn connector_reports(
     Ok(out.into_iter().map(|(_, report)| report).collect())
 }
 
-/// The harness executable `goalcup start` would run: found on `env`'s `PATH` and hashed, by the
+/// The harness executable `goalcup start` would run: found on `env`'s `PATH` and checked, by the
 /// same function `start` calls. Any build passes: it is recorded, not pinned (D53). A harness
 /// that is not installed, or not a regular file, is a `Fail`: `start` would refuse it.
 fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
@@ -192,10 +192,8 @@ fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Che
         Ok(resolved) => Check::pass(
             "harness_executable",
             format!(
-                "`{program}` resolves to `{}` (sha256 {}); the build that runs is recorded, not \
-                 pinned.",
-                resolved.path(),
-                resolved.sha256()
+                "`{program}` resolves to `{}`; the build that runs is recorded, not pinned.",
+                resolved.path()
             ),
         ),
         Err(error) => Check::new(
@@ -346,12 +344,11 @@ fn daemon_check(client: Option<&dyn DaemonClient>, cfg: &Path) -> Check {
         Ok(h) => Check::pass(
             "daemon",
             format!(
-                "daemon v{} is up (control API v{}, {} entr{} open, upload {}).",
+                "daemon v{} is up (control API v{}, {} entr{} open).",
                 h.daemon_version,
                 h.control_api_version,
                 h.entries_open,
-                if h.entries_open == 1 { "y" } else { "ies" },
-                if h.upload_ok { "ok" } else { "failing" }
+                if h.entries_open == 1 { "y" } else { "ies" }
             ),
         ),
         Err(e) => unreachable(e.to_string()),

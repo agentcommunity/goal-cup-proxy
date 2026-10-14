@@ -7,9 +7,7 @@
 //! "Amendment 2026-10-02 (C6 local finish budget, H-10 4a)" ¶9). Every other profile is scoped at
 //! launch and ignores a scope on the finish.
 //!
-//! Runs on macOS (APFS) and on Linux (ext4 or XFS): every entry is reserved on the temporary
-//! directory's volume, which must be one of them. Every file here
-//! lives in the rig's temporary root; nothing resolves a real `HOME` or any `.hermes`.
+//! Every file here lives in the rig's temporary root; nothing resolves a real `HOME` or any `.hermes`.
 
 use crate::common::capture_lifecycle_support;
 use crate::common::support;

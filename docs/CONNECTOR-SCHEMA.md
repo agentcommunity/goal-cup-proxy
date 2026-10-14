@@ -82,14 +82,15 @@ refused. `{session_id}` has the identity rules described below.
 | `capture.executable.version_args` | optional, default `[]` | Empty, or exactly one of `--version`, `-v`, `-V`, `version`: the probe runs before the capture, with no proxy and no record. |
 
 No build is pinned (D53). `goalcup start` resolves `program` on `PATH`, follows the symlinks above
-the file, refuses a symlink or anything but a regular file at the end, hashes that file, and runs
-it; before releasing the parked child it hashes the same path again and refuses a file swapped in
-between. The daemon records the build that ran in `Launch.harness_build`. With `version_args`,
+the file, refuses a symlink or anything but a regular file at the end, and runs it; the CLI
+reads none of its bytes, and a file replaced between resolve and release is simply a different
+build. The daemon records the build that ran in `Launch.harness_build`. With `version_args`,
 the launcher runs `<program> <version_args>` once before the harness, with an empty environment
 except `PATH` and a throwaway `HOME` beside the run's own (made for the probe and removed after
 it, so whatever the probe writes never reaches the run's `HOME`), stdin `/dev/null` and a ten-second timeout, and records
-the first line of its stdout (trimmed, printable ASCII, at most 128 bytes) as
-`Launch.harness_version`; without them, or when that fails, it records `unreported`. The version
+the first line of its stdout (trimmed, printable ASCII; a longer line is cut to its first 64
+bytes, never refused) as `Launch.harness_version`; without them, or when that fails, it records
+`unreported`. The version
 is reported by the harness, not proven.
 
 `capture.executable.sha256` and `capture.executable.version` (and the same keys in a

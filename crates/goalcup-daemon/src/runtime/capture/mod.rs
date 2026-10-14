@@ -1,8 +1,8 @@
 //! Protocol-v5 local capture entries.
 //!
 //! A capture entry is created without a server, grant or receipt. Its registry row is marked
-//! [`CaptureRowV1`]; its chain is a v5 [`TraceExport`] physically reserved before the entry
-//! is ready and written inline, with no redb payload buffer; and one authorization on the
+//! [`CaptureRowV1`]; its chain is a v5 [`TraceExport`] with a logical quota and no
+//! preallocation, written inline with no redb payload buffer; and one authorization on the
 //! daemon's ingest listener carries its launch-scoped secret. It lives in its own map beside
 //! the legacy entries, so no tick, arming gate, upload pump or deadline reaches it.
 //!
@@ -97,7 +97,7 @@ use crate::workspace::{self, Roots};
 
 use crate::{DAEMON_VERSION, DaemonError, now_rfc3339, status};
 
-use goalcup_platform::tracecap::{EntryArtifactRoot, RefusalKind, TraceCapError};
+use goalcup_platform::tracecap::EntryArtifactRoot;
 
 use goalcup_protocol::capture::{
     AnalysisState, AnchorState, CaptureFrame, CaptureMeta, CaptureRecord, CaptureSink,
@@ -290,7 +290,7 @@ pub(super) fn fresh_capture_id() -> String {
 
 impl Daemon {
     /// Create a v5 local capture entry for `manifest`'s capture profile: preflight the
-    /// profile's redaction, reserve the chain, chain the v5 baseline of the fresh workspace,
+    /// profile's redaction, set the chain's quota, chain the v5 baseline of the fresh workspace,
     /// write the row, authorize ingest and start the owner. A refusal leaves no artifact, row
     /// or created workspace behind.
     #[allow(clippy::too_many_arguments)]
@@ -379,25 +379,15 @@ impl Daemon {
             trace,
             artifact_dir.join("trace"),
         ))?;
-        // Selects v5 on the empty chain, before the baseline.
-        export.reserve_capture(reserve_bytes).map_err(|error| {
-            let mut message =
-                format!("the capture chain cannot reserve {reserve_bytes} bytes: {error}");
-            // Only this refusal is cured by moving the folder; a short volume or a failed
-            // allocation is not, and must not say so.
-            if matches!(
-                error,
-                ExportError::Capability(TraceCapError::Refused {
-                    reason: RefusalKind::UnsupportedFileSystem,
-                    ..
-                })
-            ) {
-                message.push_str(
-                    "; the trace folder must be on APFS (macOS) or ext4 or XFS (Linux); move artifact_root in daemon.toml",
-                );
-            }
-            DaemonError::Config(message)
-        })?;
+        // Selects v5 on the empty chain, before the baseline. A quota only: the run host holds
+        // the run's one disk reservation.
+        export
+            .configure_capture_quota(reserve_bytes)
+            .map_err(|error| {
+                DaemonError::Config(format!(
+                    "the capture chain cannot take a {reserve_bytes} byte quota: {error}"
+                ))
+            })?;
         std::fs::create_dir_all(workspace).map_err(|source| DaemonError::Io {
             path: workspace.display().to_string(),
             source,
@@ -743,10 +733,7 @@ impl Daemon {
             TraceRoot::from_acquired(trace, row.trace_dir.clone()),
             &mut |envelope| chained.observe(envelope),
         )?;
-        // Remeasures the retained allocation; a volume that cannot reserve keeps the quota.
-        if export.reserve_capture(reserve_bytes).is_err() {
-            export.configure_capture_quota(reserve_bytes)?;
-        }
+        export.configure_capture_quota(reserve_bytes)?;
         export.sync_capture()?;
         if let (Some(finish), Some(digest)) = (chained.finish.as_mut(), &chained.seal_digest) {
             bind_seal(&export, finish, digest);
