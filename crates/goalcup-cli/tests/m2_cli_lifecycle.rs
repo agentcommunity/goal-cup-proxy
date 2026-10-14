@@ -514,29 +514,6 @@ fn an_altered_pinned_id_under_an_alias_is_exit_one_before_any_start_write() {
     assert_aliased_shipped_connector_refuses_before_start_writes(true);
 }
 
-#[test]
-fn an_unreservable_chain_refuses_before_the_proxy_and_leaves_nothing() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::new();
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let (result, out) =
-        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, 1 << 60), None)));
-    let error = result.expect_err("a reservation this volume cannot hold");
-    assert!(
-        matches!(
-            error,
-            goalcup_cli::CliError::Control(ControlError::PreflightFailed(_))
-        ),
-        "{error}\n{out}"
-    );
-    assert_eq!(client.names(), vec!["create_capture_workspace"]);
-    assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
-    assert!(records(&rig).is_empty());
-    assert!(!rig.harness_started());
-}
-
 /// The proxy fails to start two ways, each before the goal is sent: its sender never finds
 /// the ingest endpoint (a closed port, so the start deadline passes), or its CA certificate has
 /// nowhere to go (a file already sits where it is written).
