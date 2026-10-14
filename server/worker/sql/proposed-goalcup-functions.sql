@@ -248,15 +248,19 @@ as $$
    where c.credential_hash = p_credential_hash and p_now::timestamptz < c.expires_at
 $$;
 
--- The credential opened this run: from now on it sees only this run, until p_expires_at.
+-- The credential opened this run: from now on it sees only this run, until p_expires_at. Only an
+-- unbound credential (or one already bound to this run) binds; "conflict" otherwise, or if unknown.
 create function goalcup.upload_bind_credential(p_credential_hash text, p_run_id text, p_expires_at text) returns text
 language plpgsql security definer set search_path = goalcup, pg_temp
 as $$
+declare
+  v_rows integer;
 begin
   update goalcup.run_credentials
      set run_id = p_run_id, expires_at = p_expires_at::timestamptz
    where credential_hash = p_credential_hash and (run_id is null or run_id = p_run_id);
-  return 'bound';
+  get diagnostics v_rows = row_count;
+  return case when v_rows = 1 then 'bound' else 'conflict' end;
 end $$;
 
 -- POST /v1/device. A repeated hash is a unique violation (the Worker answers 502 and the tracer retries).
@@ -634,7 +638,8 @@ grant execute on function
   goalcup.upload_bind_credential(text, text, text),
   goalcup.upload_create_device(text, text, text, text, text, text, text, text),
   goalcup.upload_poll_device(text, text),
-  goalcup.upload_approve_device(text, text, boolean, text),
+  goalcup.upload_approve_device(text, text, boolean, text),  -- STAGING ONLY: approves a request as any member.
+                                                              -- Owner decision: grant it only to a staging Worker role.
   goalcup.upload_open_run(text, text, text, text, text, text, text, text, text, text, text, text, text, text),
   goalcup.upload_run_position(text, text),
   goalcup.upload_get_chunk(text, text, bigint),

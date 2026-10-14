@@ -14,6 +14,7 @@
 import type {
   AbandonResult,
   ApproveDeviceResult,
+  BindCredentialResult,
   ChunkRecord,
   CommitChunkArgs,
   CommitChunkResult,
@@ -175,11 +176,11 @@ export class LocalDb implements Db {
     return parseTime(now).getTime() < parseTime(cred.expires_at).getTime() ? cred : null;
   }
 
-  async bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<void> {
-    await this.#updateObject<Credential, void>(this.#credentialKey(credentialSha256), undefined, (cred) => ({
-      next: { ...cred, run_id: runId, expires_at: expiresAt },
-      answer: undefined,
-    }));
+  bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<BindCredentialResult> {
+    return this.#updateObject<Credential, BindCredentialResult>(this.#credentialKey(credentialSha256), "conflict", (cred) => {
+      if (cred.run_id !== null && cred.run_id !== runId) return { answer: "conflict" };
+      return { next: { ...cred, run_id: runId, expires_at: expiresAt }, answer: "bound" };
+    });
   }
 
   // ---- Db: runs --------------------------------------------------------------------------

@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use goalcup_protocol::control::parse_z;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -52,8 +53,12 @@ struct Rig {
 
 impl Rig {
     fn new() -> Rig {
+        Rig::with(ServerOptions::default())
+    }
+
+    fn with(options: ServerOptions) -> Rig {
         let dir = TempDir::new().expect("tempdir");
-        let server = UploadServer::start(dir.path(), ServerOptions::default());
+        let server = UploadServer::start(dir.path(), options);
         Rig { dir, server }
     }
 
@@ -235,6 +240,21 @@ fn bad_device_requests_are_400() {
             "malformed",
         );
     }
+    // The Worker's caps: 128 characters of connector_id, 64 of tracer_version.
+    for (field, len) in [("connector_id", 128), ("tracer_version", 64)] {
+        let mut body = good.clone();
+        body[field] = json!("x".repeat(len));
+        assert_eq!(
+            rig.send("POST", "/v1/device", None, Some(&body)).status,
+            200
+        );
+        body[field] = json!("x".repeat(len + 1));
+        is_error(
+            &rig.send("POST", "/v1/device", None, Some(&body)),
+            400,
+            "malformed",
+        );
+    }
     is_error(
         &rig.send(
             "POST",
@@ -387,9 +407,26 @@ fn the_heartbeat_takes_recording_and_model_requests_and_answers_reason_null() {
     }
     is_error(&beat(json!({"recording": "fine"})), 400, "malformed");
     is_error(&beat(json!({"model_requests": -1})), 400, "malformed");
+    // null is absent, as for repo_head.
+    let nulls = beat(json!({"recording": null, "model_requests": null}));
+    assert_eq!(nulls.status, 200, "{}", nulls.body);
+    // The Worker's number is a JavaScript one: 2^53 - 1 at most.
+    assert_eq!(
+        beat(json!({"model_requests": 9007199254740991u64})).status,
+        200
+    );
+    is_error(
+        &beat(json!({"model_requests": 9007199254740992u64})),
+        400,
+        "malformed",
+    );
 
     let seen = rig.server.heartbeats(id);
-    assert_eq!(seen.len(), 5);
+    assert_eq!(seen.len(), 7);
+    assert_eq!(
+        (seen[5].recording.as_deref(), seen[5].model_requests),
+        (None, None)
+    );
     assert_eq!(
         (seen[0].recording.as_deref(), seen[0].model_requests),
         (None, None)
@@ -397,6 +434,57 @@ fn the_heartbeat_takes_recording_and_model_requests_and_answers_reason_null() {
     assert_eq!(
         (seen[1].recording.as_deref(), seen[1].model_requests),
         (Some("ok"), Some(12))
+    );
+}
+
+#[test]
+fn a_credential_binds_once_and_only_to_the_run_it_opened() {
+    let rig = Rig::new();
+    let a = rig.mint_credential_for("member-a");
+    let b = rig.mint_credential_for("member-b");
+    let run_a = rig.open(&a, "sa").body["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let run_b = rig.open(&b, "sb").body["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A bind that races the open and loses is refused; the same run again is fine.
+    assert!(!rig.server.bind_credential(&a, &run_b));
+    assert!(rig.server.bind_credential(&a, &run_a));
+    assert!(
+        !rig.server
+            .bind_credential(&format!("gcr_{}", "0".repeat(64)), &run_a)
+    );
+    assert!(!rig.server.bind_credential(&a, "r0123456789abcdef"));
+    assert_eq!(rig.get(&run_a, &a).status, 200);
+    is_error(&rig.get(&run_b, &a), 404, "not_found");
+}
+
+#[test]
+fn a_credential_lasts_an_hour_unbound_and_a_day_past_the_deadline_once_bound() {
+    let rig = Rig::with(ServerOptions {
+        run_seconds: Some(5),
+        ..ServerOptions::default()
+    });
+    let credential = rig.mint_credential_for("member-a");
+    let unbound = rig.server.credential_expires_at(&credential).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!(
+        (now + 3600 - 2..=now + 3600 + 2).contains(&unbound),
+        "{unbound} vs {now}"
+    );
+
+    let opened = rig.open(&credential, "s");
+    let deadline = parse_z(opened.body["deadline_at"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        rig.server.credential_expires_at(&credential),
+        Some(deadline + 24 * 3600)
     );
 }
 

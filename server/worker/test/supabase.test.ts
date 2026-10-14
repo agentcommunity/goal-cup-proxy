@@ -53,8 +53,9 @@ test("credential -> upload_credential(p_credential_hash, p_now)", async () => {
 });
 
 test("bindCredential -> upload_bind_credential", async () => {
-  const calls = stub("bound");
-  await db().bindCredential(H("a"), "r0000000000000001", "2026-11-14T09:00:00Z");
+  const calls = stub("bound", "conflict");
+  assert.equal(await db().bindCredential(H("a"), "r0000000000000001", "2026-11-14T09:00:00Z"), "bound");
+  assert.equal(await db().bindCredential(H("a"), "r0000000000000002", "2026-11-14T09:00:00Z"), "conflict");
   assert.deepEqual(calls[0], {
     fn: "upload_bind_credential",
     args: { p_credential_hash: H("a"), p_run_id: "r0000000000000001", p_expires_at: "2026-11-14T09:00:00Z" },

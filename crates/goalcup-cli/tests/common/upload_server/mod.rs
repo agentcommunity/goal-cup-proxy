@@ -22,7 +22,7 @@
 //!
 //! Test hooks (not part of the contract): `set_maintenance`, `set_maintenance_retry_after`,
 //! `fail_next_chunks`, `drop_next_chunk_reply`, `set_approval`, `mint_credential`,
-//! `expire_credential` and `device_requests`.
+//! `expire_credential`, `bind_credential`, `credential_expires_at` and `device_requests`.
 
 mod handlers;
 mod state;
@@ -239,6 +239,33 @@ impl UploadServer {
             c.expires_at = 0;
         }
         self.shared.persist_credentials(&credentials);
+    }
+
+    /// Try to bind `credential` to `run_id` as if it had just opened that run; false if it is
+    /// unknown or already bound to another run. (Over HTTP only a race can get here.)
+    pub fn bind_credential(&self, credential: &str, run_id: &str) -> bool {
+        let runs = self.shared.lock_runs();
+        match runs.get(run_id) {
+            Some(run) => handlers::bind_credential(
+                &self.shared,
+                Some(&handlers::sha256_hex(credential)),
+                run,
+            ),
+            None => false,
+        }
+    }
+
+    /// When a credential ends, in epoch seconds: an hour after its approval while it is unbound,
+    /// 24 hours after its run's deadline once it is bound.
+    pub fn credential_expires_at(&self, credential: &str) -> Option<u64> {
+        let credentials = self
+            .shared
+            .credentials
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        credentials
+            .get(&handlers::sha256_hex(credential))
+            .map(|c| c.expires_at)
     }
 
     /// Every device request the server was asked for, in order.

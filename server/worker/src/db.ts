@@ -166,6 +166,9 @@ export type SealResult = "sealed" | "already_sealed" | "conflict" | "closed" | "
 export type DevicePurpose = "login" | "run";
 export type RunMode = "competition" | "practice";
 
+/** `conflict`: the credential is unknown, or already bound to another run. */
+export type BindCredentialResult = "bound" | "conflict";
+
 export interface CreateDeviceArgs {
   device_sha256: string;
   /** sha256 of the user code without the dash, as `normalizeUserCode` gives it. */
@@ -209,8 +212,11 @@ export interface Db {
   approveDevice(userCode: string, memberId: string, approve: boolean, now: string): Promise<ApproveDeviceResult>;
   /** sha256 hex of a bearer credential -> what it stands for, or null if unknown or past `expires_at`. */
   credential(credentialSha256: string, now: string): Promise<Credential | null>;
-  /** The credential opened this run: from now on it sees only this run, until `expiresAt`. */
-  bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<void>;
+  /**
+   * The credential opened this run: from now on it sees only this run, until `expiresAt`. Binds
+   * only a credential that is unbound or already bound to this run; anything else is `conflict`.
+   */
+  bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<BindCredentialResult>;
   openRun(args: OpenRunArgs): Promise<OpenRunResult>;
   getRun(memberId: string, runId: string): Promise<RunRow | null>;
   /** Note a heartbeat; a final one commits the end of the run (once). */
