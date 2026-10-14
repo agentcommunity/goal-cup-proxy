@@ -944,6 +944,7 @@ mod retries {
     ) {
         let client = ServerClient::new(&ServerConfig {
             url: run.front.url.clone(),
+            account: None,
             token: TOKEN.to_string(),
         });
         let (stop, stopped) = std::sync::mpsc::channel();
