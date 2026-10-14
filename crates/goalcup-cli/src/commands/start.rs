@@ -1366,6 +1366,10 @@ fn run_harness<'a>(
             run: forked.record.clone(),
             stop: stop_tx,
             uploads: uploading.iter().map(|running| running.last_ok()).collect(),
+            acked: uploading
+                .iter()
+                .map(|running| (running.entry_id().to_string(), running.acked_offset()))
+                .collect(),
             policy: cx.opts.disk,
         })
     });
