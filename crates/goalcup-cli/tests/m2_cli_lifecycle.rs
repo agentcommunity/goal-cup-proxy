@@ -439,6 +439,22 @@ fn an_unreachable_provider_host_refuses_the_start_before_anything_is_created() {
 fn an_unpinned_connector_without_dev_is_refused_before_anything_is_created() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
+    // Without `--dev` the directory is checked as a pinned one, and a pinned manifest may not
+    // name a loopback host: the fixture's `localhost` would be refused by that rule (exit 3)
+    // before the missing `--dev` is reached. A non-loopback test name leaves the pin refusal as
+    // the only one this test can see.
+    let manifest = rig.capture_connectors.join(FAKE_ID).join("harness.toml");
+    let source = std::fs::read_to_string(&manifest).unwrap();
+    assert!(source.contains("host = \"localhost\""));
+    std::fs::write(
+        &manifest,
+        source.replacen(
+            "host = \"localhost\"",
+            "host = \"unpinned-fixture.invalid\"",
+            1,
+        ),
+    )
+    .unwrap();
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
