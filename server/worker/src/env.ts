@@ -14,8 +14,17 @@ export interface Env {
 
   /** "supabase" (default) or "local" (wrangler dev and tests only). */
   DB_BACKEND?: string;
-  /** Local backend only: "token1:member1,token2:member2". */
-  DEV_TOKENS?: string;
+
+  /** Where the member approves a device request: the website's page, without a query string. */
+  APPROVAL_URL?: string;
+  /**
+   * Secret, tests only: switches on `POST /v1/device/approve`, which approves a device request as
+   * any member. Honoured only with DB_BACKEND=local or STAGING=on; set anywhere else, every call
+   * answers 500 misconfigured. Leave it unset in production.
+   */
+  TEST_APPROVAL_KEY?: string;
+  /** "on" marks a staging deployment (the only non-local place TEST_APPROVAL_KEY may be set). */
+  STAGING?: string;
 
   /** "on" answers every call 503 + Retry-After. */
   MAINTENANCE?: string;

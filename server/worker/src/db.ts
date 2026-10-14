@@ -4,12 +4,14 @@
 //
 // Rules every implementation keeps:
 //   * A run belongs to one member. Asking for another member's run gives null ("not found"),
-//     never a different answer, so a token cannot probe for other members' runs.
+//     never a different answer, so a credential cannot probe for other members' runs.
+//   * Codes and credentials are stored as sha256 only. The one exception is the instant a
+//     credential is minted: `pollDevice` returns it once, and keeps its hash.
 //   * Every write is atomic: it either applies fully against the state the caller saw, or it
 //     reports why not and changes nothing.
 
 import type { Ack, StartReceipt } from "./sign.ts";
-import { addSeconds, parseTime } from "./util.ts";
+import { addSeconds, formatTime, parseTime } from "./util.ts";
 
 /** A run that is still unsealed this long (24 hours) after its `deadline_at` is abandoned. */
 export const ABANDON_AFTER_SECONDS = 24 * 3600;
@@ -22,6 +24,16 @@ export function isAbandonable(deadlineAt: string, now: Date, afterSeconds: numbe
 /** True once the server's clock is at or past `deadlineAt`: the run is over. */
 export function isPastDeadline(deadlineAt: string, now: Date): boolean {
   return now.getTime() >= parseTime(deadlineAt).getTime();
+}
+
+/** A run credential that has not opened a run yet lasts this long after the approval. */
+export const UNBOUND_CREDENTIAL_SECONDS = 3600;
+/** Once it has opened a run, a credential lasts until this long after the run's `deadline_at`. */
+export const BOUND_CREDENTIAL_EXTRA_SECONDS = 24 * 3600;
+
+/** The `expires_at` of a credential that has opened a run with this deadline. */
+export function boundCredentialExpiry(deadlineAt: string): string {
+  return formatTime(addSeconds(parseTime(deadlineAt), BOUND_CREDENTIAL_EXTRA_SECONDS));
 }
 
 export type RunStatus = "open" | "sealed" | "abandoned";
@@ -151,9 +163,54 @@ export interface SealArgs {
 }
 export type SealResult = "sealed" | "already_sealed" | "conflict" | "closed" | "not_found";
 
+export type DevicePurpose = "login" | "run";
+export type RunMode = "competition" | "practice";
+
+export interface CreateDeviceArgs {
+  device_sha256: string;
+  /** sha256 of the user code without the dash, as `normalizeUserCode` gives it. */
+  user_sha256: string;
+  purpose: DevicePurpose;
+  mode: RunMode;
+  connector_id: string;
+  tracer_version: string;
+  created_at: string;
+  expires_at: string;
+}
+
+/**
+ * What a poll of a device request finds. `approved` is returned once: a run request carries the
+ * freshly minted `credential_plain` (stored hashed) and its `expires_at`, a login request the
+ * member's `handle`. Every later poll, and any poll at or after `expires_at`, is `expired`.
+ */
+export type DevicePoll =
+  | { kind: "pending" }
+  | { kind: "approved"; purpose: DevicePurpose; credential_plain?: string; expires_at?: string; handle?: string }
+  | { kind: "denied" }
+  | { kind: "expired" };
+
+/** `expired`: the request ran out of time. `already_decided`: it was approved or denied before. */
+export type ApproveDeviceResult = "ok" | "not_found" | "expired" | "already_decided";
+
+/** What a run credential stands for. `run_id` is null until it opens a run. */
+export interface Credential {
+  member_id: string;
+  run_id: string | null;
+  mode: RunMode;
+  expires_at: string;
+}
+
 export interface Db {
-  /** sha256 hex of the bearer token -> member id, or null if unknown or revoked. */
-  memberForToken(tokenSha256: string): Promise<string | null>;
+  /** Start a device request. The two hashes must be new. */
+  createDevice(args: CreateDeviceArgs): Promise<void>;
+  /** See `DevicePoll`. */
+  pollDevice(deviceSha256: string, now: string): Promise<DevicePoll>;
+  /** Decide a pending request by its user code (8 letters, upper case, no dash) as `member_id`. */
+  approveDevice(userCode: string, memberId: string, approve: boolean, now: string): Promise<ApproveDeviceResult>;
+  /** sha256 hex of a bearer credential -> what it stands for, or null if unknown or past `expires_at`. */
+  credential(credentialSha256: string, now: string): Promise<Credential | null>;
+  /** The credential opened this run: from now on it sees only this run, until `expiresAt`. */
+  bindCredential(credentialSha256: string, runId: string, expiresAt: string): Promise<void>;
   openRun(args: OpenRunArgs): Promise<OpenRunResult>;
   getRun(memberId: string, runId: string): Promise<RunRow | null>;
   /** Note a heartbeat; a final one commits the end of the run (once). */

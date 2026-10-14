@@ -1,5 +1,5 @@
 # Copy to .dev.vars (git-ignored) for `npm run dev`. Test values only: this seed is the
 # well-known 32 bytes of 0x07 that the Rust test vectors use. Never put a real key here.
 RECEIPT_SIGNING_KEY=0707070707070707070707070707070707070707070707070707070707070707
-DEV_TOKENS=dev-token-1:member1,dev-token-2:member2
+TEST_APPROVAL_KEY=dev-approval-key
 GITHUB_CHECK=off

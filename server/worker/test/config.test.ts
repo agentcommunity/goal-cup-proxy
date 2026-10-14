@@ -31,32 +31,8 @@ test("the default database backend is supabase, and it refuses to start without 
   await assert.rejects(getDb({ ...baseEnv }), (e) => e instanceof ApiError && e.code === "misconfigured" && !/SUPABASE/.test(e.message)); // ...not in the answer
 });
 
-test("the local backend refuses to start without DEV_TOKENS", async () => {
-  const logged = await captureErrors(() => getDb({ ...baseEnv, DB_BACKEND: "local" }));
-  assert.match(logged, /DEV_TOKENS/);
-  await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local" }), (e) => e instanceof ApiError && e.status === 500 && e.code === "misconfigured");
-  await captureErrors(async () => {
-    await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "  " }), ApiError);
-    await assert.rejects(getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "no-colon" }), ApiError);
-  });
-  await getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: "t1:m1,t2:m2" }); // fine
-});
-
-test("a bad DEV_TOKENS entry is never echoed to the caller or the log", async () => {
-  const secret = "super-secret-token-text";
-  let answer = "";
-  const logged = await captureErrors(async () => {
-    try {
-      await getDb({ ...baseEnv, DB_BACKEND: "local", DEV_TOKENS: `t1:m1,${secret}` });
-    } catch (e) {
-      answer = (e as ApiError).message;
-      throw e;
-    }
-  });
-  assert.ok(answer.length > 0);
-  assert.ok(!answer.includes(secret), "the answer echoes the token");
-  assert.ok(!logged.includes(secret), "the log echoes the token");
-  assert.match(logged, /entry number 2/);
+test("the local backend needs nothing else to start", async () => {
+  await getDb({ ...baseEnv, DB_BACKEND: "local" });
 });
 
 test("an unknown backend is refused", async () => {
@@ -87,6 +63,18 @@ test("RUN_SECONDS and ABANDON_AFTER_SECONDS are honoured only with the local bac
   }
   assert.throws(() => readConfig({ ...local, RUN_SECONDS: "0" }), ApiError);
   assert.throws(() => readConfig({ ...local, RUN_SECONDS: "x" }), ApiError);
+});
+
+test("TEST_APPROVAL_KEY is honoured only with the local backend or STAGING=on", () => {
+  const key = { ...baseEnv, TEST_APPROVAL_KEY: "k" };
+  readConfig({ ...key, DB_BACKEND: "local" });
+  readConfig({ ...key, STAGING: "on" });
+  readConfig({ ...key, DB_BACKEND: "supabase", STAGING: "on" });
+  readConfig(baseEnv); // no key, nothing to refuse
+  readConfig({ ...baseEnv, STAGING: "on" });
+  for (const env of [key, { ...key, DB_BACKEND: "supabase" }, { ...key, STAGING: "yes" }, { ...key, STAGING: "off" }]) {
+    assert.throws(() => readConfig(env), (e) => e instanceof ApiError && e.status === 500 && e.code === "misconfigured");
+  }
 });
 
 test("repo_url shape", () => {
@@ -133,32 +121,33 @@ function stubFetch(reply: (url: string, init: RequestInit) => Response) {
 }
 
 test("SupabaseDb calls PostgREST RPC in schema goalcup with the dedicated key", async () => {
-  const calls = stubFetch(() => new Response(JSON.stringify("member-uuid"), { status: 200, headers: { "content-type": "application/json" } }));
+  const cred = { member_id: "member-uuid", run_id: null, mode: "practice", expires_at: "2026-11-06T10:05:00Z" };
+  const calls = stubFetch(() => new Response(JSON.stringify(cred), { status: 200, headers: { "content-type": "application/json" } }));
   const db = new SupabaseDb("https://proj.supabase.example/", "service-key");
-  assert.equal(await db.memberForToken("ab".repeat(32)), "member-uuid");
+  assert.deepEqual(await db.credential("ab".repeat(32), "2026-11-06T09:06:00Z"), cred);
   const c = calls[0]!;
-  assert.equal(c.url, "https://proj.supabase.example/rest/v1/rpc/upload_lookup_token");
+  assert.equal(c.url, "https://proj.supabase.example/rest/v1/rpc/upload_credential");
   assert.equal(c.init.method, "POST");
   const h = c.init.headers as Record<string, string>;
   assert.equal(h["content-profile"], "goalcup");
   assert.equal(h["accept-profile"], "goalcup");
   assert.equal(h.apikey, "service-key");
   assert.equal(h.authorization, "Bearer service-key");
-  assert.deepEqual(JSON.parse(c.init.body as string), { p_token_hash: "ab".repeat(32) });
+  assert.deepEqual(JSON.parse(c.init.body as string), { p_credential_hash: "ab".repeat(32), p_now: "2026-11-06T09:06:00Z" });
 });
 
-test("SupabaseDb: unknown token is null; errors become 502; odd answers become 502", async () => {
+test("SupabaseDb: unknown credential is null; errors become 502; odd answers become 502", async () => {
   const db = new SupabaseDb("https://p.example", "k");
   stubFetch(() => new Response("null", { status: 200 }));
-  assert.equal(await db.memberForToken("x"), null);
+  assert.equal(await db.credential("x", "t"), null);
   stubFetch(() => new Response('{"message":"boom"}', { status: 500 }));
-  await assert.rejects(db.memberForToken("x"), (e) => e instanceof ApiError && e.status === 502);
+  await assert.rejects(db.credential("x", "t"), (e) => e instanceof ApiError && e.status === 502);
   stubFetch(() => new Response('"surprise"', { status: 200 }));
   await assert.rejects(db.abandonRun("m", "r0000000000000000", "why", "2026-11-06T09:00:00Z"), (e) => e instanceof ApiError && e.status === 502);
   stubFetch(() => {
     throw new TypeError("network down");
   });
-  await assert.rejects(db.memberForToken("x"), (e) => e instanceof ApiError && e.status === 502);
+  await assert.rejects(db.credential("x", "t"), (e) => e instanceof ApiError && e.status === 502);
 });
 
 test("SupabaseDb maps the open_run answers", async () => {

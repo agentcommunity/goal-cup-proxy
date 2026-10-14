@@ -3,12 +3,13 @@
 --
 -- It was loaded once into a throwaway local PostgreSQL 17 (with stub roles anon, authenticated,
 -- authenticator) and its functions were exercised by hand: open / repeat / conflict, receipt,
--- commit (stale offset refused), abandon, seal, and the role's lack of table privileges. That
+-- commit (stale offset refused), abandon, seal, the device flow (create, poll, approve, deny, expire,
+-- pickup once, credential minted, bound, expired) and the role's lack of table privileges. That
 -- proves the SQL parses and behaves as the Worker expects. It does NOT prove anything about
 -- Supabase itself: PostgREST exposure of the schema, the JWT role, RLS defaults.
 --
--- The website repo owns the `goalcup` schema, its migrations, token minting, the terms
--- checkbox and the connect page. This file is what the upload Worker (server/worker/) expects
+-- The website repo owns the `goalcup` schema, its migrations, the sign-up, the terms checkbox
+-- and the approval page for device requests. This file is what the upload Worker (server/worker/) expects
 -- to find, written so the website's owner can adopt, change or reject it. Expect to adjust names
 -- and types on first contact with the real project.
 --
@@ -32,7 +33,7 @@
 --     or write. Members read their own runs through a separate read-only function the website
 --     owns (not part of the Worker's needs).
 --   * Every function that takes a run takes the member as well and returns "not found" for a
---     run of another member, so a token cannot probe for other members' runs.
+--     run of another member, so a credential cannot probe for other members' runs.
 -- =====================================================================================
 
 create schema if not exists goalcup;
@@ -62,13 +63,21 @@ create table goalcup.consents (
   primary key (member_id, terms_version)
 );
 
--- Only the sha256 of a token is stored. Minted by a server-side function in the website
--- repo, never by inserting rows from a client.
-create table goalcup.tokens (
-  token_hash  text primary key check (token_hash ~ '^[0-9a-f]{64}$'),
-  member_id   uuid not null,
-  created_at  timestamptz not null default now(),
-  revoked_at  timestamptz
+-- The device flow: the tracer asks (POST /v1/device), the member approves on the website, the
+-- tracer picks up a run credential once. Only the sha256 of the codes is stored.
+create table goalcup.device_requests (
+  device_hash    text primary key check (device_hash ~ '^[0-9a-f]{64}$'),
+  user_hash      text not null unique check (user_hash ~ '^[0-9a-f]{64}$'),   -- of the 8 letters, upper case, no dash
+  purpose        text not null check (purpose in ('login', 'run')),
+  mode           text not null check (mode in ('competition', 'practice')),
+  connector_id   text not null,
+  tracer_version text not null,
+  created_at     timestamptz not null,
+  expires_at     timestamptz not null,                                       -- created_at + 900 s, for every state
+  status         text not null default 'pending' check (status in ('pending', 'approved', 'denied')),
+  member_id      uuid,
+  decided_at     timestamptz,
+  picked_up_at   timestamptz                                                 -- set by the one pickup
 );
 
 create table goalcup.runs (
@@ -101,6 +110,18 @@ create table goalcup.runs (
 
 -- One open run per member, enforced by the database, so two simultaneous starts cannot both win.
 create unique index runs_one_open_per_member on goalcup.runs (member_id) where status = 'open';
+
+-- A run credential replaces the pasted member token. Minted at pickup (upload_poll_device), only its
+-- sha256 is stored. It stands for one member; until it opens a run it is unbound and lasts one hour
+-- from the approval, and once bound to a run it lasts until 24 hours after that run's deadline.
+create table goalcup.run_credentials (
+  credential_hash text primary key check (credential_hash ~ '^[0-9a-f]{64}$'),
+  member_id       uuid not null,
+  mode            text not null check (mode in ('competition', 'practice')),
+  run_id          text references goalcup.runs (id),
+  expires_at      timestamptz not null,
+  created_at      timestamptz not null default now()
+);
 
 create table goalcup.entries (
   id            text primary key check (id ~ '^e[0-9a-f]{16}$'),   -- the entry_id
@@ -154,7 +175,8 @@ create table goalcup.chunks (
 
 alter table goalcup.events   enable row level security;
 alter table goalcup.consents enable row level security;
-alter table goalcup.tokens   enable row level security;
+alter table goalcup.device_requests enable row level security;
+alter table goalcup.run_credentials enable row level security;
 alter table goalcup.runs     enable row level security;
 alter table goalcup.entries  enable row level security;
 alter table goalcup.chunks   enable row level security;
@@ -213,14 +235,116 @@ as $$
   where r.id = p_run_id
 $$;
 
--- ---- the six calls (+ token lookup) ------------------------------------------------------
+-- ---- the device flow and the run credential ----------------------------------------------
 
--- Token (sha256 hex) -> member id as text, or null if unknown or revoked.
-create function goalcup.upload_lookup_token(p_token_hash text) returns text
+-- Credential (sha256 hex) -> {"member_id", "run_id" (null until it opens a run), "mode", "expires_at"},
+-- or null if unknown or past its expiry. Every authenticated call starts here.
+create function goalcup.upload_credential(p_credential_hash text, p_now text) returns jsonb
 language sql stable security definer set search_path = goalcup, pg_temp
 as $$
-  select member_id::text from goalcup.tokens where token_hash = p_token_hash and revoked_at is null
+  select jsonb_build_object('member_id', c.member_id::text, 'run_id', c.run_id, 'mode', c.mode,
+                            'expires_at', goalcup.fmt_time(c.expires_at))
+    from goalcup.run_credentials c
+   where c.credential_hash = p_credential_hash and p_now::timestamptz < c.expires_at
 $$;
+
+-- The credential opened this run: from now on it sees only this run, until p_expires_at.
+create function goalcup.upload_bind_credential(p_credential_hash text, p_run_id text, p_expires_at text) returns text
+language plpgsql security definer set search_path = goalcup, pg_temp
+as $$
+begin
+  update goalcup.run_credentials
+     set run_id = p_run_id, expires_at = p_expires_at::timestamptz
+   where credential_hash = p_credential_hash and (run_id is null or run_id = p_run_id);
+  return 'bound';
+end $$;
+
+-- POST /v1/device. A repeated hash is a unique violation (the Worker answers 502 and the tracer retries).
+create function goalcup.upload_create_device(
+  p_device_hash text, p_user_hash text, p_purpose text, p_mode text,
+  p_connector_id text, p_tracer_version text, p_created_at text, p_expires_at text
+) returns text
+language plpgsql security definer set search_path = goalcup, pg_temp
+as $$
+begin
+  insert into goalcup.device_requests (device_hash, user_hash, purpose, mode, connector_id, tracer_version, created_at, expires_at)
+  values (p_device_hash, p_user_hash, p_purpose, p_mode, p_connector_id, p_tracer_version, p_created_at::timestamptz, p_expires_at::timestamptz);
+  return 'created';
+end $$;
+
+-- PROPOSAL: the account handle a login request hands back. The website replaces this body with its
+-- member/profile handle column.
+create function goalcup.member_handle(p_member uuid) returns text
+language sql stable security definer set search_path = goalcup, pg_temp
+as $$ select p_member::text $$;
+
+-- POST /v1/device/token. {"result": "pending"|"approved"|"denied"|"expired", ...}. "approved" comes back
+-- once: a run request mints its credential here ("credential" is the only plain copy, "expires_at" is
+-- the approval plus one hour), a login request returns the member's "handle". Every later poll, and any
+-- poll at or after the request's expiry, is "expired".
+create function goalcup.upload_poll_device(p_device_hash text, p_now text) returns jsonb
+language plpgsql security definer set search_path = goalcup, pg_temp
+as $$
+declare
+  v_now     timestamptz := p_now::timestamptz;
+  v_dev     goalcup.device_requests;
+  v_plain   text;
+  v_expires timestamptz;
+begin
+  select * into v_dev from goalcup.device_requests where device_hash = p_device_hash for update;
+  if not found or v_now >= v_dev.expires_at or v_dev.picked_up_at is not null then
+    return jsonb_build_object('result', 'expired');
+  end if;
+  if v_dev.status = 'pending' then return jsonb_build_object('result', 'pending'); end if;
+  if v_dev.status = 'denied' then return jsonb_build_object('result', 'denied'); end if;
+
+  update goalcup.device_requests set picked_up_at = v_now where device_hash = p_device_hash;
+  if v_dev.purpose = 'login' then
+    return jsonb_build_object('result', 'approved', 'purpose', 'login', 'handle', goalcup.member_handle(v_dev.member_id));
+  end if;
+
+  -- "gcr_" and 64 lowercase hex digits (two UUIDs without dashes; gen_random_uuid() needs no extension).
+  v_plain := 'gcr_' || replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  v_expires := v_dev.decided_at + interval '1 hour';
+  insert into goalcup.run_credentials (credential_hash, member_id, mode, expires_at)
+  values (encode(sha256(convert_to(v_plain, 'UTF8')), 'hex'), v_dev.member_id, v_dev.mode, v_expires);
+  return jsonb_build_object('result', 'approved', 'purpose', 'run', 'credential', v_plain,
+                            'expires_at', goalcup.fmt_time(v_expires));
+end $$;
+
+-- Decide a pending request by its user code (the Worker passes 8 upper-case letters; the dash and case are
+-- also accepted here). "ok" | "not_found" | "expired" | "already_decided".
+create function goalcup.upload_approve_device(p_user_code text, p_member_id text, p_approve boolean, p_now text) returns text
+language plpgsql security definer set search_path = goalcup, pg_temp
+as $$
+declare
+  v_now timestamptz := p_now::timestamptz;
+  v_dev goalcup.device_requests;
+begin
+  select * into v_dev from goalcup.device_requests
+   where user_hash = encode(sha256(convert_to(upper(replace(p_user_code, '-', '')), 'UTF8')), 'hex')
+     for update;
+  if not found then return 'not_found'; end if;
+  if v_now >= v_dev.expires_at then return 'expired'; end if;
+  if v_dev.status <> 'pending' then return 'already_decided'; end if;
+  update goalcup.device_requests
+     set status = case when p_approve then 'approved' else 'denied' end,
+         member_id = p_member_id::uuid, decided_at = v_now
+   where device_hash = v_dev.device_hash;
+  return 'ok';
+end $$;
+
+-- PROPOSAL, for the website's approval page. The page has signed the member in and passes the member's
+-- id from its own session. Not granted to goalcup_worker (the Worker's own route is the test-only
+-- upload_approve_device above, reachable only with STAGING=on or DB_BACKEND=local); the website grants
+-- it to whichever role its server uses.
+create function goalcup.goalcup_approve_device(p_user_code text, p_member_id uuid, p_approve boolean) returns text
+language sql security definer set search_path = goalcup, pg_temp
+as $$
+  select goalcup.upload_approve_device(p_user_code, p_member_id::text, p_approve, goalcup.fmt_time(now()))
+$$;
+
+-- ---- the six calls ------------------------------------------------------------------------
 
 -- POST /v1/runs. Returns {"result": "created"|"existing"|"conflict"|"forbidden", "run": {...}, "message": "..."}.
 create function goalcup.upload_open_run(
@@ -506,7 +630,11 @@ revoke all on all tables    in schema goalcup from public, anon, authenticated;
 -- ---- grants: the Worker may execute exactly these, nothing else -----------------------------
 
 grant execute on function
-  goalcup.upload_lookup_token(text),
+  goalcup.upload_credential(text, text),
+  goalcup.upload_bind_credential(text, text, text),
+  goalcup.upload_create_device(text, text, text, text, text, text, text, text),
+  goalcup.upload_poll_device(text, text),
+  goalcup.upload_approve_device(text, text, boolean, text),
   goalcup.upload_open_run(text, text, text, text, text, text, text, text, text, text, text, text, text, text),
   goalcup.upload_run_position(text, text),
   goalcup.upload_get_chunk(text, text, bigint),
@@ -523,6 +651,7 @@ to goalcup_worker;
 --  * Seeding goalcup.events: one row per event (practice, dry_run, competition) with its window,
 --    run_hours. The Worker currently takes EVENT_ID / RUN_HOURS from
 --    its own variables and only checks in upload_open_run that the event exists and is open for starts.
---  * Minting tokens (insert sha256(token) into goalcup.tokens from a server-side function).
+--  * The approval page: it calls goalcup.goalcup_approve_device(user_code, member_id, approve) for the
+--    signed-in member, and replaces goalcup.member_handle with the real handle column.
 --  * Whether PostgREST should expose schema goalcup at all (required for RPC), or whether thin
 --    wrappers in `public` should be called instead (then drop the Content-Profile header in db-supabase.ts).
