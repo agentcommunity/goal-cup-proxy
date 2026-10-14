@@ -4,12 +4,18 @@
 //! `systemd-inhibit` on Linux). Dropping the [`SleepLock`] kills and reaps it; on Linux the
 //! child also receives `SIGTERM` if this process dies first.
 //!
+//! On Linux a hold counts as taken only once the inhibitor has run its command: `systemd-inhibit`
+//! takes the lock first and then executes the command it was given, so the command is run as
+//! `sh -c 'echo ready; exec sleep infinity'` and the hold waits for that `ready`. On macOS
+//! `caffeinate` has no such moment, so a fresh child must merely stay alive for a short while.
+//!
 //! The child is spawned by a dedicated thread that owns it for its whole life. That matters on
 //! Linux: the parent-death signal fires when the *spawning thread* exits, not the process, so a
 //! short-lived caller thread must not be the one that spawns the inhibitor.
 
+use std::io::{BufRead as _, BufReader};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -19,7 +25,8 @@ use crate::machine::{find_on_path, is_executable, is_wsl};
 const WSL_REFUSAL: &str =
     "the Windows host decides when this machine sleeps; set its power settings";
 const NONE_FOUND: &str = "no sleep inhibitor on this machine";
-/// How long a fresh inhibitor must stay alive before the hold counts as taken.
+/// How long a fresh `caffeinate` must stay alive before the hold counts as taken (macOS only; the
+/// Linux path waits for proof instead).
 const SETTLE: Duration = Duration::from_millis(150);
 
 /// An inhibitor child process; the machine may sleep again once this is dropped.
@@ -57,9 +64,15 @@ impl Drop for SleepLock {
 ///
 /// `why` is shown to the user by the platform's power tooling where it has such a place.
 ///
-/// Returns an error when the inhibitor cannot start or exits within a moment of starting
-/// (power policy denied, no session bus). The caller owns the returned lock; it may be held and
-/// dropped on any thread, because the inhibitor is owned by a thread of its own.
+/// Returns an error when the inhibitor cannot start or cannot take the lock (power policy
+/// denied, no session bus). On Linux an `Ok` means the inhibitor has taken the lock and is
+/// running its command, however long that took; there is no fixed wait to outlast. On macOS an
+/// `Ok` means `caffeinate` stayed alive for a short settling time. The caller owns the returned
+/// lock; it may be held and dropped on any thread, because the inhibitor is owned by a thread of
+/// its own.
+///
+/// Worst case on Linux: `hold` blocks until `systemd-inhibit` has the lock or gives up. If its
+/// D-Bus call hangs, that is bounded by the bus method-call timeout, on the order of 25 seconds.
 pub fn hold(why: &str) -> Result<SleepLock, String> {
     hold_with(why, &find_tool, is_wsl())
 }
@@ -74,6 +87,8 @@ pub fn hold_with(
     if wsl {
         return Err(WSL_REFUSAL.into());
     }
+    // Linux: the inhibitor's command reports back once it runs, which is proof of the lock.
+    let proof = !cfg!(target_os = "macos");
     let mut command = if cfg!(target_os = "macos") {
         let tool = which("caffeinate").ok_or_else(|| String::from(NONE_FOUND))?;
         let mut c = Command::new(tool);
@@ -87,8 +102,9 @@ pub fn hold_with(
             "--mode=block",
             "--who=goalcup",
             &format!("--why={why}"),
-            "sleep",
-            "infinity",
+            "sh",
+            "-c",
+            "echo ready; exec sleep infinity",
         ]);
         #[cfg(target_os = "linux")]
         {
@@ -113,13 +129,16 @@ pub fn hold_with(
     };
     command
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(if proof { Stdio::piped() } else { Stdio::null() })
         .stderr(Stdio::null());
-    start(command)
+    start(command, proof)
 }
 
 /// Spawn `command` from a dedicated thread that keeps the child until told to stop.
-fn start(mut command: Command) -> Result<SleepLock, String> {
+///
+/// With `proof` the child's stdout is piped and the hold waits for its first line, `ready`;
+/// without, the child must merely stay alive for [`SETTLE`].
+fn start(mut command: Command, proof: bool) -> Result<SleepLock, String> {
     let (ready_tx, ready_rx) = mpsc::channel::<Result<u32, String>>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let thread = std::thread::Builder::new()
@@ -132,28 +151,20 @@ fn start(mut command: Command) -> Result<SleepLock, String> {
                     return;
                 }
             };
-            let deadline = Instant::now() + SETTLE;
-            loop {
-                match child.try_wait() {
-                    // `try_wait` has already reaped it.
-                    Ok(Some(status)) => {
-                        let _ = ready_tx
-                            .send(Err(format!("the sleep inhibitor exited at once: {status}")));
-                        return;
-                    }
-                    Ok(None) if Instant::now() < deadline => {
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    Ok(None) => break,
-                    Err(e) => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        let _ = ready_tx.send(Err(format!("the sleep inhibitor is lost: {e}")));
-                        return;
-                    }
+            let taken = if proof {
+                await_ready(&mut child)
+            } else {
+                await_settled(&mut child)
+            };
+            match taken {
+                Ok(()) => {
+                    let _ = ready_tx.send(Ok(child.id()));
+                }
+                Err(why) => {
+                    let _ = ready_tx.send(Err(why));
+                    return;
                 }
             }
-            let _ = ready_tx.send(Ok(child.id()));
             // A message or a dropped sender both mean the lock is gone.
             let _ = stop_rx.recv();
             let _ = child.kill();
@@ -173,6 +184,68 @@ fn start(mut command: Command) -> Result<SleepLock, String> {
         Err(_) => {
             let _ = thread.join();
             Err("the sleep inhibitor thread ended unexpectedly".into())
+        }
+    }
+}
+
+/// Wait for the child's first stdout line to be `ready`. On any other outcome the child has been
+/// reaped (or killed and reaped) when this returns.
+///
+/// The read has no timeout of its own. It ends when the command prints, or when the inhibitor
+/// fails and exits (the pipe reaches end of file); a stuck bus call is bounded by systemd's own
+/// D-Bus timeout, after which `systemd-inhibit` fails.
+fn await_ready(child: &mut Child) -> Result<(), String> {
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("the sleep inhibitor is lost: no output pipe".into());
+    };
+    let mut line = String::new();
+    let read = BufReader::new(stdout).read_line(&mut line);
+    // The read end is dropped here: the command prints nothing after `ready`.
+    match read {
+        Ok(_) if line.trim_end() == "ready" => Ok(()),
+        Ok(0) => {
+            // End of file: the inhibitor failed before it ran the command, and is exiting.
+            let status = child
+                .wait()
+                .map_err(|e| format!("the sleep inhibitor is lost: {e}"))?;
+            Err(format!("the sleep inhibitor exited at once: {status}"))
+        }
+        Ok(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(format!(
+                "the sleep inhibitor said {:?}, not ready",
+                line.trim_end()
+            ))
+        }
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(format!("the sleep inhibitor is lost: {e}"))
+        }
+    }
+}
+
+/// Wait [`SETTLE`] and require the child to still be running.
+fn await_settled(child: &mut Child) -> Result<(), String> {
+    let deadline = Instant::now() + SETTLE;
+    loop {
+        match child.try_wait() {
+            // `try_wait` has already reaped it.
+            Ok(Some(status)) => {
+                return Err(format!("the sleep inhibitor exited at once: {status}"));
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => return Ok(()),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("the sleep inhibitor is lost: {e}"));
+            }
         }
     }
 }
