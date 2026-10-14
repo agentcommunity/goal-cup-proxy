@@ -491,6 +491,19 @@ describe("facts about the machine and the connection", () => {
     }
   });
 
+  test("string caps count UTF-16 code units: 32 emoji fill a 64-character field", async () => {
+    const r = rig({}, T0);
+    try {
+      const emoji = "\u{1F600}";
+      assert.equal((await r.open(await r.cred("alice"), "s1", { harness_version: emoji.repeat(32) })).status, 201);
+      assertError(await r.open(await r.cred("bob"), "s2", { harness_version: emoji.repeat(33) }), 400, "malformed");
+      assert.equal((await r.open(await r.cred("carol"), "s3", { connector_id: "c".repeat(128) })).status, 201);
+      assertError(await r.open(await r.cred("dave"), "s4", { connector_id: "c".repeat(129) }), 400, "malformed");
+    } finally {
+      r.stop();
+    }
+  });
+
   test("a run opened with no machine, no IP and no country stores nulls", async () => {
     const r = rig({}, T0);
     try {
