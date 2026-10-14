@@ -3,7 +3,23 @@
 
 use goalcup_cli::upload::uploader::{Policy, Position, backoff, build_chunk};
 use goalcup_protocol::chain::GENESIS;
+use goalcup_protocol::export::{ChainPart, chain_parts, part_file_name};
+use std::path::Path;
 use std::time::Duration;
+
+/// The chain parts in `dir`, as the uploader lists them.
+fn parts_in(dir: &Path) -> Vec<ChainPart> {
+    chain_parts(dir).unwrap()
+}
+
+/// Write `bytes` as the parts of a chain in `dir`, cut at the byte offsets `cuts`.
+fn write_parts(dir: &Path, bytes: &[u8], cuts: &[usize]) {
+    let mut start = 0;
+    for end in cuts.iter().copied().chain([bytes.len()]) {
+        std::fs::write(dir.join(part_file_name(start as u64)), &bytes[start..end]).unwrap();
+        start = end;
+    }
+}
 
 /// A chain of `n` records, each line carrying only its link (as the envelope does, at the top
 /// level) and some filler, and the hash each record leaves.
@@ -41,7 +57,9 @@ fn a_chunk_takes_whole_lines_from_the_servers_position_and_leaves_a_torn_tail() 
         next_seq: 0,
         head: GENESIS.to_string(),
     };
-    let chunk = build_chunk(&path, &start, &spool).unwrap().unwrap();
+    let chunk = build_chunk(&parts_in(tmp.path()), &start, &spool)
+        .unwrap()
+        .unwrap();
     assert_eq!((chunk.first_seq, chunk.last_seq), (0, 4));
     assert_eq!(chunk.length, whole as u64);
     assert_eq!(chunk.head, hashes[4]);
@@ -59,7 +77,9 @@ fn a_chunk_takes_whole_lines_from_the_servers_position_and_leaves_a_torn_tail() 
         next_seq: 2,
         head: hashes[1].clone(),
     };
-    let chunk = build_chunk(&path, &middle, &spool).unwrap().unwrap();
+    let chunk = build_chunk(&parts_in(tmp.path()), &middle, &spool)
+        .unwrap()
+        .unwrap();
     assert_eq!((chunk.first_seq, chunk.last_seq), (2, 4));
 
     // Caught up: nothing complete waits, and no spool is left.
@@ -68,7 +88,11 @@ fn a_chunk_takes_whole_lines_from_the_servers_position_and_leaves_a_torn_tail() 
         next_seq: 5,
         head: hashes[4].clone(),
     };
-    assert!(build_chunk(&path, &end, &spool).unwrap().is_none());
+    assert!(
+        build_chunk(&parts_in(tmp.path()), &end, &spool)
+            .unwrap()
+            .is_none()
+    );
     assert!(!spool.exists());
 }
 
@@ -85,7 +109,8 @@ fn a_chain_that_does_not_continue_the_servers_copy_is_refused() {
             next_seq,
             head,
         };
-        let refused = build_chunk(&path, &wrong, &tmp.path().join("s.zst")).unwrap_err();
+        let refused =
+            build_chunk(&parts_in(tmp.path()), &wrong, &tmp.path().join("s.zst")).unwrap_err();
         assert!(
             refused.to_string().contains("does not continue"),
             "{refused}"
@@ -120,14 +145,230 @@ fn the_record_ending_at_an_offset_is_found_and_nothing_else() {
     let path = tmp.path().join("chain.jsonl");
     std::fs::write(&path, &bytes).unwrap();
     let line = (bytes.len() / 3) as u64;
-    assert_eq!(local_link_before(&path, line), Some((0, hashes[0].clone())));
+    let parts = parts_in(tmp.path());
     assert_eq!(
-        local_link_before(&path, 3 * line),
+        local_link_before(&parts, line),
+        Some((0, hashes[0].clone()))
+    );
+    assert_eq!(
+        local_link_before(&parts, 3 * line),
         Some((2, hashes[2].clone()))
     );
     for nowhere in [0, line - 1, line + 5, 4 * line] {
-        assert_eq!(local_link_before(&path, nowhere), None, "{nowhere}");
+        assert_eq!(local_link_before(&parts, nowhere), None, "{nowhere}");
     }
+}
+
+/// The same chain in three parts, the first two later deleted: the record ending at an offset
+/// is found in whichever surviving part holds it, at its logical offset.
+#[test]
+fn the_record_ending_at_an_offset_is_found_in_its_part() {
+    use goalcup_cli::upload::uploader::local_link_before;
+    let tmp = tempfile::tempdir().unwrap();
+    let (bytes, hashes) = chain(6);
+    let line = bytes.len() / 6;
+    write_parts(tmp.path(), &bytes, &[2 * line, 4 * line]);
+    let parts = parts_in(tmp.path());
+    // On a part boundary the record belongs to the part that ends there.
+    for (record, end) in [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6)] {
+        assert_eq!(
+            local_link_before(&parts, end * line as u64),
+            Some((record, hashes[record as usize].clone())),
+            "record {record}"
+        );
+    }
+    std::fs::remove_file(tmp.path().join(part_file_name(0))).unwrap();
+    let parts = parts_in(tmp.path());
+    assert_eq!(
+        local_link_before(&parts, line as u64),
+        None,
+        "that part is gone"
+    );
+    assert_eq!(
+        local_link_before(&parts, 3 * line as u64),
+        Some((2, hashes[2].clone()))
+    );
+}
+
+#[test]
+fn a_chunk_stops_at_a_part_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (bytes, hashes) = chain(6);
+    let line = bytes.len() / 6;
+    write_parts(tmp.path(), &bytes, &[2 * line, 5 * line]);
+    let spool = tmp.path().join("spool.zst");
+    let parts = parts_in(tmp.path());
+
+    // From the start: the first part's two records, though four more wait.
+    let mut pos = Position {
+        offset: 0,
+        next_seq: 0,
+        head: GENESIS.to_string(),
+    };
+    let chunk = build_chunk(&parts, &pos, &spool).unwrap().unwrap();
+    assert_eq!((chunk.offset, chunk.length), (0, 2 * line as u64));
+    assert_eq!((chunk.first_seq, chunk.last_seq), (0, 1));
+    assert_eq!(
+        zstd::decode_all(std::fs::read(&spool).unwrap().as_slice()).unwrap(),
+        &bytes[..2 * line]
+    );
+
+    // The next chunk starts at the logical offset where the part ended, in the next part.
+    pos = Position {
+        offset: chunk.offset + chunk.length,
+        next_seq: chunk.last_seq + 1,
+        head: chunk.head.clone(),
+    };
+    let chunk = build_chunk(&parts, &pos, &spool).unwrap().unwrap();
+    assert_eq!((chunk.first_seq, chunk.last_seq), (2, 4));
+    assert_eq!(chunk.length, 3 * line as u64);
+    assert_eq!(chunk.prev, hashes[1]);
+
+    // From the middle of a part, still not past its end.
+    let middle = Position {
+        offset: 3 * line as u64,
+        next_seq: 3,
+        head: hashes[2].clone(),
+    };
+    let chunk = build_chunk(&parts, &middle, &spool).unwrap().unwrap();
+    assert_eq!((chunk.first_seq, chunk.last_seq), (3, 4));
+
+    // The last part, then caught up.
+    let last = Position {
+        offset: 5 * line as u64,
+        next_seq: 5,
+        head: hashes[4].clone(),
+    };
+    let chunk = build_chunk(&parts, &last, &spool).unwrap().unwrap();
+    assert_eq!((chunk.first_seq, chunk.last_seq), (5, 5));
+    let end = Position {
+        offset: 6 * line as u64,
+        next_seq: 6,
+        head: hashes[5].clone(),
+    };
+    assert!(build_chunk(&parts, &end, &spool).unwrap().is_none());
+    assert!(!spool.exists());
+}
+
+#[test]
+fn upload_continues_from_the_server_offset_after_parts_were_deleted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (bytes, hashes) = chain(6);
+    let line = bytes.len() / 6;
+    write_parts(tmp.path(), &bytes, &[2 * line, 4 * line]);
+    // The first part was acknowledged and deleted.
+    std::fs::remove_file(tmp.path().join(part_file_name(0))).unwrap();
+    let spool = tmp.path().join("spool.zst");
+    let parts = parts_in(tmp.path());
+    assert_eq!(parts[0].start, 2 * line as u64);
+
+    // The server holds the first three records: the chunk is cut from the second part, at the
+    // logical offset.
+    let at = Position {
+        offset: 3 * line as u64,
+        next_seq: 3,
+        head: hashes[2].clone(),
+    };
+    let chunk = build_chunk(&parts, &at, &spool).unwrap().unwrap();
+    assert_eq!(chunk.offset, 3 * line as u64);
+    assert_eq!((chunk.first_seq, chunk.last_seq), (3, 3));
+
+    // The server is behind what was deleted: nothing is sent across the gap, and the sentence
+    // says why.
+    let behind = Position {
+        offset: line as u64,
+        next_seq: 1,
+        head: hashes[0].clone(),
+    };
+    std::fs::remove_file(&spool).unwrap();
+    let refused = build_chunk(&parts, &behind, &spool)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("already deleted from this machine"),
+        "{refused}"
+    );
+    assert!(!spool.exists());
+
+    // Waiting bytes are logical too.
+    use goalcup_cli::upload::uploader::waiting_bytes;
+    assert_eq!(waiting_bytes(&parts, 3 * line as u64), 3 * line as u64);
+    assert_eq!(waiting_bytes(&parts, 6 * line as u64), 0);
+    assert_eq!(waiting_bytes(&[], 0), 0);
+}
+
+#[test]
+fn a_closed_part_without_a_whole_record_is_an_error_not_a_stall() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (bytes, hashes) = chain(3);
+    let line = bytes.len() / 3;
+    // Part 0 ends in a torn line (it cannot be, for a part the daemon closed); a later part
+    // exists.
+    std::fs::write(tmp.path().join(part_file_name(0)), &bytes[..line + 10]).unwrap();
+    std::fs::write(
+        tmp.path().join(part_file_name(line as u64 + 10)),
+        &bytes[line + 10..],
+    )
+    .unwrap();
+    let at = Position {
+        offset: line as u64,
+        next_seq: 1,
+        head: hashes[0].clone(),
+    };
+    let error = build_chunk(&parts_in(tmp.path()), &at, &tmp.path().join("s.zst"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("closed but holds no whole record"),
+        "{error}"
+    );
+    // The same torn tail in the last (live) part just waits.
+    std::fs::remove_file(tmp.path().join(part_file_name(line as u64 + 10))).unwrap();
+    assert!(
+        build_chunk(&parts_in(tmp.path()), &at, &tmp.path().join("s.zst"))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn local_end_reads_the_last_part() {
+    use goalcup_cli::upload::uploader::local_end;
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut bytes, hashes) = chain(6);
+    let line = bytes.len() / 6;
+    let whole = bytes.len();
+    write_parts(tmp.path(), &bytes, &[2 * line, 4 * line]);
+    assert_eq!(
+        local_end(&parts_in(tmp.path())),
+        Some((whole as u64, 5, hashes[5].clone()))
+    );
+    // A torn tail in the last part is not a record.
+    bytes.extend_from_slice(b"{\"seq\":6,");
+    write_parts(tmp.path(), &bytes, &[2 * line, 4 * line]);
+    assert_eq!(
+        local_end(&parts_in(tmp.path())),
+        Some((whole as u64, 5, hashes[5].clone()))
+    );
+    // A part just opened by a rotation holds nothing yet: the part before it answers.
+    std::fs::write(tmp.path().join(part_file_name(whole as u64)), b"").unwrap();
+    std::fs::write(
+        tmp.path().join(part_file_name(4 * line as u64)),
+        &bytes[4 * line..whole],
+    )
+    .unwrap();
+    assert_eq!(
+        local_end(&parts_in(tmp.path())),
+        Some((whole as u64, 5, hashes[5].clone()))
+    );
+    // With the earlier parts deleted, offsets stay logical.
+    std::fs::remove_file(tmp.path().join(part_file_name(0))).unwrap();
+    std::fs::remove_file(tmp.path().join(part_file_name(2 * line as u64))).unwrap();
+    assert_eq!(
+        local_end(&parts_in(tmp.path())),
+        Some((whole as u64, 5, hashes[5].clone()))
+    );
+    assert_eq!(local_end(&[]), None);
 }
 
 /// The workspace repository's checked-out commit, from `.git` files alone.
@@ -192,6 +433,9 @@ mod retries {
         url: String,
         seen: Arc<Mutex<Vec<String>>>,
         stop: Arc<AtomicBool>,
+        /// When set, the position the server reports (`GET /v1/runs/{id}`) is rewritten to this
+        /// `(offset, next_seq, head)`: a server that is wrong, or lying.
+        lie: Arc<Mutex<Option<(u64, u64, String)>>>,
     }
 
     impl Front {
@@ -202,20 +446,32 @@ mod retries {
             let seen = Arc::new(Mutex::new(Vec::new()));
             let stop = Arc::new(AtomicBool::new(false));
             let fault = Arc::new(Mutex::new(fault));
-            let (seen_in, stop_in) = (seen.clone(), stop.clone());
+            let lie = Arc::new(Mutex::new(None));
+            let (seen_in, stop_in, lie_in) = (seen.clone(), stop.clone(), lie.clone());
             std::thread::spawn(move || {
                 while !stop_in.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let (target, fault, seen) =
-                                (target.clone(), fault.clone(), seen_in.clone());
-                            std::thread::spawn(move || answer(stream, &target, &fault, &seen));
+                            let (target, fault, seen, lie) = (
+                                target.clone(),
+                                fault.clone(),
+                                seen_in.clone(),
+                                lie_in.clone(),
+                            );
+                            std::thread::spawn(move || {
+                                answer(stream, &target, &fault, &seen, &lie)
+                            });
                         }
                         Err(_) => std::thread::sleep(Duration::from_millis(5)),
                     }
                 }
             });
-            Front { url, seen, stop }
+            Front {
+                url,
+                seen,
+                stop,
+                lie,
+            }
         }
 
         fn count(&self, prefix: &str) -> usize {
@@ -239,6 +495,7 @@ mod retries {
         target: &str,
         fault: &Mutex<Fault>,
         seen: &Mutex<Vec<String>>,
+        lie: &Mutex<Option<(u64, u64, String)>>,
     ) {
         stream.set_nonblocking(false).unwrap();
         stream
@@ -297,11 +554,19 @@ mod retries {
                     .header("Content-Type")
                     .unwrap_or("application/json")
                     .to_string();
-                (
-                    response.status(),
-                    content_type,
-                    response.into_string().unwrap().into_bytes(),
-                )
+                let status = response.status();
+                let mut reply = response.into_string().unwrap().into_bytes();
+                if method == "GET"
+                    && path.matches('/').count() == 3
+                    && let Some((offset, next_seq, head)) = lie.lock().unwrap().clone()
+                {
+                    let mut json: serde_json::Value = serde_json::from_slice(&reply).unwrap();
+                    json["offset"] = offset.into();
+                    json["next_seq"] = next_seq.into();
+                    json["head"] = head.into();
+                    reply = serde_json::to_vec(&json).unwrap();
+                }
+                (status, content_type, reply)
             }
         };
         let head = format!(
@@ -482,6 +747,125 @@ mod retries {
             said.iter().any(|line| line.contains("400")),
             "the refused calls were said: {said:?}"
         );
+    }
+
+    #[test]
+    fn a_chain_in_parts_is_uploaded_and_the_upload_goes_on_after_the_first_part_is_deleted() {
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        let (bytes, hashes) = chain(3);
+        let line = bytes.len() / 3;
+        // Not sealed yet, and two records in the first part.
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        std::fs::write(trace.join("chain.jsonl"), &bytes[..2 * line]).unwrap();
+        let (report, said, _) = finish(&run, Duration::from_secs(20));
+        assert!(report.caught_up, "{report:?}\n{said:?}");
+        assert_eq!(report.offset, 2 * line as u64);
+
+        // The daemon rotated and recorded one more record; the first part was acknowledged and
+        // is deleted. A new uploader (after a restart) resumes at the server's offset.
+        std::fs::write(
+            trace.join(goalcup_protocol::export::part_file_name(2 * line as u64)),
+            &bytes[2 * line..],
+        )
+        .unwrap();
+        std::fs::remove_file(trace.join("chain.jsonl")).unwrap();
+        let (report, said, _) = finish(&run, Duration::from_secs(20));
+        assert!(report.caught_up, "{report:?}\n{said:?}");
+        assert_eq!(report.offset, 3 * line as u64);
+        let chunks = run.server.chunks(&run.record.run_id);
+        assert_eq!(chunks.len(), 2, "one chunk for each part");
+        assert_eq!(chunks[1].offset, 2 * line as u64);
+        assert_eq!(chunks[1].head, hashes[2]);
+    }
+
+    /// A run whose chain is two records in `chain.jsonl` and one in a later part, unsealed.
+    fn run_in_two_parts(fault: Fault) -> (Run, usize) {
+        let run = Run::new(fault);
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        let (bytes, _) = chain(3);
+        let line = bytes.len() / 3;
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        std::fs::write(trace.join("chain.jsonl"), &bytes[..2 * line]).unwrap();
+        std::fs::write(
+            trace.join(goalcup_protocol::export::part_file_name(2 * line as u64)),
+            &bytes[2 * line..],
+        )
+        .unwrap();
+        (run, line)
+    }
+
+    fn sweep_far_ahead(run: &Run, acknowledged: u64) -> usize {
+        use goalcup_cli::run::{EntryRef, watch::Pruner};
+        let entry = EntryRef {
+            entry_id: run.record.entry_id.clone(),
+            trace_dir: std::path::PathBuf::from(&run.record.trace_dir),
+        };
+        let mut pruner = Pruner::default();
+        let t0 = Instant::now();
+        pruner.sweep(
+            std::slice::from_ref(&entry),
+            &|_| acknowledged,
+            t0,
+            &mut |_| {},
+        );
+        pruner.sweep(
+            std::slice::from_ref(&entry),
+            &|_| acknowledged,
+            t0 + Duration::from_secs(3 * 3600),
+            &mut |_| {},
+        );
+        goalcup_protocol::export::chain_parts(&entry.trace_dir)
+            .unwrap()
+            .len()
+    }
+
+    #[test]
+    fn a_server_position_the_local_chain_does_not_confirm_is_not_an_acknowledgement() {
+        // Resume against a server that says it holds far more than exists, with a foreign head.
+        let (run, _) = run_in_two_parts(Box::new(|_| None));
+        *run.front.lie.lock().unwrap() = Some((10_000_000, 99_999, "f".repeat(64)));
+        let uploader = run.uploader();
+        assert_eq!(uploader.acknowledged(), 0);
+        assert_eq!(
+            sweep_far_ahead(&run, uploader.acknowledged()),
+            2,
+            "nothing is deleted behind a number the server only claimed"
+        );
+        drop(uploader);
+
+        // An honest server: a signed acknowledgement raises the offset, and only that.
+        *run.front.lie.lock().unwrap() = None;
+        let mut uploader = run.uploader();
+        let first = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |_| {});
+        assert!(first.caught_up, "{first:?}");
+        assert_eq!(uploader.acknowledged(), first.offset);
+        assert!(first.offset > 0);
+    }
+
+    #[test]
+    fn a_409_reread_moves_the_acknowledged_offset_only_to_a_confirmed_position() {
+        // The first chunk is stored but its reply is lost: the retry gets a 409, and the
+        // re-read reports a position the local chain confirms, which is then the offset.
+        let (run, line) = run_in_two_parts(Box::new(|_| None));
+        run.server.drop_next_chunk_reply();
+        let mut uploader = run.uploader();
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |_| {});
+        assert!(report.caught_up, "{report:?}");
+        assert_eq!(uploader.acknowledged(), 3 * line as u64);
+
+        // Now the same 409 path, but the re-read reports a far offset and a foreign head: the
+        // uploader stops, and the offset it has verified does not move.
+        let (run, line) = run_in_two_parts(Box::new(|label| {
+            // Every chunk is answered 409 by the front itself.
+            label.starts_with("PUT /v1/runs/").then_some(409)
+        }));
+        let mut uploader = run.uploader();
+        *run.front.lie.lock().unwrap() = Some((line as u64, 1, "f".repeat(64)));
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |_| {});
+        assert!(!report.caught_up, "{report:?}");
+        assert_eq!(uploader.acknowledged(), 0);
+        assert_eq!(sweep_far_ahead(&run, uploader.acknowledged()), 2);
     }
 
     #[test]

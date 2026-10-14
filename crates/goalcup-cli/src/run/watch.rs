@@ -1,6 +1,7 @@
 //! The watch tick: while a run records and while its upload wraps up, every
-//! [`super::reserve::WATCH_PERIOD`] it measures the disk, resizes the run's reserve, and stops
-//! the run cleanly if the disk is full and uploads are failing.
+//! [`super::reserve::WATCH_PERIOD`] it deletes the chain parts the server acknowledged long
+//! ago ([`Pruner`]), measures the disk, resizes the run's reserve, and stops the run cleanly if
+//! the disk is full and uploads are failing.
 //!
 //! The tick runs on a thread of its own, started before the wait for the harness and ended just
 //! before the reserve is released ([`Watching::end`]). It never touches the recording; its only
@@ -8,11 +9,12 @@
 //! run's deadline (the daemon seals, the uploader sends the seal). After the harness has gone
 //! nothing listens on that channel and the tick only keeps the reserve sized.
 
-use super::RunRecord;
 use super::reserve::{
-    DiskPolicy, DiskVerdict, GROW_STEP, RunReserve, UPLOAD_FAILING_AFTER, footprint, human,
+    DiskPolicy, DiskVerdict, GROW_STEP, RunReserve, UPLOAD_FAILING_AFTER, human, pressure,
     target_with, verdict_with,
 };
+use super::{EntryRef, RunRecord};
+use crate::upload::prune::{AckAges, deletable, parts_now};
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
@@ -37,6 +39,10 @@ pub struct Watch {
     /// uploaded (a local run, or an upload that could not start): nothing will ever free space
     /// then, so uploads count as failing.
     pub uploads: Vec<Arc<AtomicU64>>,
+    /// For each entry that is uploaded, its id and the bytes of its chain the server holds
+    /// ([`crate::upload::uploader::Running::acked_offset`]). An entry not listed (a run with no
+    /// server, an earlier segment) has nothing acknowledged: none of its parts is ever deleted.
+    pub acked: Vec<(String, Arc<AtomicU64>)>,
     pub policy: DiskPolicy,
 }
 
@@ -86,6 +92,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
         run,
         stop,
         uploads,
+        acked,
         policy,
     } = watch;
     let done = Arc::new(AtomicBool::new(false));
@@ -96,12 +103,24 @@ pub fn watch_beside(watch: Watch) -> Watching {
         .spawn(move || {
             let (done, reserve) = beside;
             let mut tick = Tick::default();
+            let mut pruner = Pruner::default();
             while !done.load(Ordering::SeqCst) {
                 let failing = uploads_failing(&uploads, super::now_unix());
+                let on_disk = pruner.sweep(
+                    &run.entries,
+                    &|entry| {
+                        acked
+                            .iter()
+                            .find(|(id, _)| id == entry)
+                            .map_or(0, |(_, offset)| offset.load(Ordering::SeqCst))
+                    },
+                    Instant::now(),
+                    &mut |line| eprintln!("goalcup: {line}"),
+                );
                 let stop_now = tick.step(
                     &mut *reserve.lock().unwrap_or_else(PoisonError::into_inner),
                     &policy,
-                    footprint(&run.entries),
+                    on_disk,
                     failing,
                     &mut |line| eprintln!("goalcup: {line}"),
                 );
@@ -127,6 +146,99 @@ pub fn watch_beside(watch: Watch) -> Watching {
         done,
         reserve: Some(reserve),
         thread,
+    }
+}
+
+/// The most chain parts deleted from one entry in one sweep. A daemon that reopens the entry
+/// lists its parts and opens them one by one, and lists once more when one has vanished
+/// (D55); with deletions a whole tick apart, a second miss cannot happen.
+const PARTS_PER_SWEEP: usize = 1;
+
+/// Deletes the chain parts the server acknowledged [`crate::upload::prune::PRUNE_AFTER`] ago,
+/// or at once while the parts alone are past the reservation.
+#[derive(Default)]
+pub struct Pruner {
+    ages: AckAges,
+    /// A part could not be deleted, and the participant has been told so.
+    trouble_said: bool,
+}
+
+impl Pruner {
+    /// One sweep over `entries`: delete what [`deletable`] allows (at most
+    /// [`PARTS_PER_SWEEP`] parts of each entry, oldest first, stopping at the first failure so
+    /// that the parts left are always a contiguous suffix) and answer the chain bytes still on
+    /// disk. `acked` gives an entry's acknowledged offset. A failed delete is said once and
+    /// never stops the run.
+    pub fn sweep(
+        &mut self,
+        entries: &[EntryRef],
+        acked: &dyn Fn(&str) -> u64,
+        now: Instant,
+        say: &mut dyn FnMut(&str),
+    ) -> u64 {
+        let listed: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry, parts_now(&entry.trace_dir).ok()))
+            .collect();
+        let total: u64 = listed
+            .iter()
+            .flat_map(|(_, parts)| parts.iter().flatten())
+            .map(|part| part.len)
+            .sum();
+        let under_pressure = pressure(total);
+        let mut left = total;
+        let mut freed = 0u64;
+        for (entry, parts) in &listed {
+            // Parts that could not be listed this tick are left alone: they are looked at again
+            // at the next one, and their ages are kept.
+            let Some(parts) = parts else { continue };
+            let due = deletable(
+                &entry.entry_id,
+                parts,
+                acked(&entry.entry_id),
+                &mut self.ages,
+                now,
+                under_pressure,
+            );
+            for path in due.into_iter().take(PARTS_PER_SWEEP) {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {}
+                    // Gone already: the same as deleted.
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        if !std::mem::replace(&mut self.trouble_said, true) {
+                            say(&format!(
+                                "disk: {} could not be deleted ({error}); it was uploaded and \
+                                 can be deleted by hand",
+                                path.display()
+                            ));
+                        }
+                        break;
+                    }
+                }
+                self.trouble_said = false;
+                if let Some(part) = parts.iter().find(|part| part.path == path) {
+                    left = left.saturating_sub(part.len);
+                    freed += part.len;
+                }
+            }
+        }
+        if freed > 0 {
+            say(&if under_pressure {
+                format!(
+                    "disk: {} of the recording, already uploaded, was deleted from this machine \
+                     to make room",
+                    human(freed)
+                )
+            } else {
+                format!(
+                    "disk: {} of the recording, uploaded over two hours ago, was deleted from \
+                     this machine",
+                    human(freed)
+                )
+            });
+        }
+        left
     }
 }
 
@@ -456,6 +568,180 @@ mod tests {
         let back = watching.end().expect("the reserve comes back");
         back.release().unwrap();
         assert!(!path.exists());
+    }
+
+    /// A trace directory of `n` parts of `len` bytes each, and its entry.
+    fn entry_with_parts(dir: &std::path::Path, n: u64, len: u64) -> EntryRef {
+        for i in 0..n {
+            std::fs::write(
+                dir.join(goalcup_protocol::export::part_file_name(i * len)),
+                vec![b'x'; len as usize],
+            )
+            .unwrap();
+        }
+        EntryRef {
+            entry_id: "e1".to_string(),
+            trace_dir: dir.to_path_buf(),
+        }
+    }
+
+    fn part_starts(dir: &std::path::Path) -> Vec<u64> {
+        goalcup_protocol::export::chain_parts(dir)
+            .unwrap()
+            .iter()
+            .map(|part| part.start)
+            .collect()
+    }
+
+    #[test]
+    fn the_sweep_waits_two_hours_then_deletes_one_part_a_tick_from_the_front() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 5, 10);
+        let (mut pruner, t0) = (Pruner::default(), Instant::now());
+        let acked = |_: &str| 45;
+        let mut said = Vec::new();
+        let mut sweep = |pruner: &mut Pruner, at: Instant| {
+            pruner.sweep(std::slice::from_ref(&entry), &acked, at, &mut |l| {
+                said.push(l.to_string())
+            })
+        };
+        // Four parts end before byte 45, and the fifth is live. None is two hours old.
+        assert_eq!(sweep(&mut pruner, t0), 50);
+        assert_eq!(part_starts(dir.path()), [0, 10, 20, 30, 40]);
+        // Two hours on: one part per tick, the oldest first, and the bytes left are answered.
+        let due = t0 + crate::upload::prune::PRUNE_AFTER;
+        assert_eq!(sweep(&mut pruner, due), 40);
+        assert_eq!(part_starts(dir.path()), [10, 20, 30, 40]);
+        assert_eq!(sweep(&mut pruner, due + Duration::from_secs(30)), 30);
+        assert_eq!(part_starts(dir.path()), [20, 30, 40]);
+        // The record ending at 45 is in the live part (40..50), which is never deleted: the
+        // deletions go on until only it is left, and then nothing more.
+        sweep(&mut pruner, due + Duration::from_secs(60));
+        sweep(&mut pruner, due + Duration::from_secs(90));
+        sweep(&mut pruner, due + Duration::from_secs(120));
+        assert_eq!(part_starts(dir.path()), [40]);
+        assert!(
+            said.iter().all(|l| l.contains("deleted from this machine")),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn an_entry_whose_parts_cannot_be_listed_keeps_its_clocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 3, 10);
+        let gone = EntryRef {
+            entry_id: "e1".to_string(),
+            trace_dir: dir.path().join("moved"),
+        };
+        let (mut pruner, t0) = (Pruner::default(), Instant::now());
+        let sweep = |pruner: &mut Pruner, entry: &EntryRef, at: Instant| {
+            pruner.sweep(std::slice::from_ref(entry), &|_| 25, at, &mut |_| {})
+        };
+        sweep(&mut pruner, &entry, t0);
+        // One tick where the directory cannot be listed must not restart the two hours.
+        assert_eq!(sweep(&mut pruner, &gone, t0 + Duration::from_secs(3600)), 0);
+        sweep(&mut pruner, &entry, t0 + crate::upload::prune::PRUNE_AFTER);
+        assert_eq!(part_starts(dir.path()), [10, 20]);
+    }
+
+    #[test]
+    fn the_deletion_line_says_why_the_parts_went() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 3, 10);
+        let (mut pruner, t0) = (Pruner::default(), Instant::now());
+        let mut said = Vec::new();
+        let due = t0 + crate::upload::prune::PRUNE_AFTER;
+        pruner.sweep(std::slice::from_ref(&entry), &|_| 25, t0, &mut |l| {
+            said.push(l.to_string())
+        });
+        pruner.sweep(std::slice::from_ref(&entry), &|_| 25, due, &mut |l| {
+            said.push(l.to_string())
+        });
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("uploaded over two hours ago"), "{said:?}");
+    }
+
+    #[test]
+    fn nothing_is_deleted_for_a_run_with_nothing_acknowledged() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 4, 10);
+        let mut pruner = Pruner::default();
+        let far = Instant::now() + Duration::from_secs(100 * 3600);
+        for _ in 0..3 {
+            let left = pruner.sweep(std::slice::from_ref(&entry), &|_| 0, far, &mut |_| {});
+            assert_eq!(left, 40);
+        }
+        assert_eq!(part_starts(dir.path()), [0, 10, 20, 30]);
+    }
+
+    #[test]
+    fn parts_are_deleted_at_once_while_the_parts_are_past_the_reservation() {
+        use crate::run::reserve::RUN_RESERVE_BYTES;
+        let dir = tempfile::tempdir().unwrap();
+        // Two sparse parts of 2 GiB each and a small live part: 4 GiB on the books.
+        let big = RUN_RESERVE_BYTES * 2 / 3;
+        for (start, len) in [(0, big), (big, big), (2 * big, 10)] {
+            let file = std::fs::File::create(
+                dir.path()
+                    .join(goalcup_protocol::export::part_file_name(start)),
+            )
+            .unwrap();
+            file.set_len(len).unwrap();
+        }
+        let entry = EntryRef {
+            entry_id: "e1".to_string(),
+            trace_dir: dir.path().to_path_buf(),
+        };
+        let mut pruner = Pruner::default();
+        let mut said = Vec::new();
+        let left = pruner.sweep(
+            std::slice::from_ref(&entry),
+            &|_| 3 * big,
+            Instant::now(),
+            &mut |l| said.push(l.to_string()),
+        );
+        assert_eq!(
+            left,
+            big + 10,
+            "young, yet deleted: the parts are past the reservation"
+        );
+        assert_eq!(part_starts(dir.path()), [big, 2 * big]);
+        assert!(said.iter().any(|l| l.contains("to make room")), "{said:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_part_that_cannot_be_deleted_is_said_once_and_stops_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 3, 10);
+        let mode =
+            |bits| std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(bits));
+        mode(0o555).unwrap();
+        if std::fs::File::create(dir.path().join("probe")).is_ok() {
+            return; // running as a user the mode does not bind
+        }
+        let (mut pruner, mut said) = (Pruner::default(), Vec::new());
+        let t0 = Instant::now();
+        let due = t0 + crate::upload::prune::PRUNE_AFTER;
+        // The first sweep starts the clocks; the later ones find the first part due and fail.
+        for at in [t0, due, due, due] {
+            let left = pruner.sweep(std::slice::from_ref(&entry), &|_| 25, at, &mut |l| {
+                said.push(l.to_string())
+            });
+            assert_eq!(left, 30, "nothing was deleted, so nothing is subtracted");
+        }
+        mode(0o755).unwrap();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("could not be deleted"), "{said:?}");
+        assert_eq!(part_starts(dir.path()), [0, 10, 20]);
+        // Once the directory allows it, the same part goes at the next tick, and the trouble
+        // is forgotten.
+        pruner.sweep(std::slice::from_ref(&entry), &|_| 25, due, &mut |l| {
+            said.push(l.to_string())
+        });
+        assert_eq!(part_starts(dir.path()), [10, 20]);
     }
 
     #[test]

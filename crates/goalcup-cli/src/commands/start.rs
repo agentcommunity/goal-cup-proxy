@@ -959,6 +959,7 @@ fn create_and_gate<'a>(
         run_home: run.home.display().to_string(),
         config_home: config_home.display().to_string(),
         entry_id: opened.as_ref().map(|o| o.run.entry_id.clone()),
+        native_since: None,
     };
     let info = match retry_busy(|| client.create_capture_workspace(&request)) {
         Ok(info) => info,
@@ -1365,6 +1366,10 @@ fn run_harness<'a>(
             run: forked.record.clone(),
             stop: stop_tx,
             uploads: uploading.iter().map(|running| running.last_ok()).collect(),
+            acked: uploading
+                .iter()
+                .map(|running| (running.entry_id().to_string(), running.acked_offset()))
+                .collect(),
             policy: cx.opts.disk,
         })
     });

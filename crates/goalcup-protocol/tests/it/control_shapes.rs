@@ -698,6 +698,20 @@ fn seal_response_preserves_legacy_bytes_and_closes_the_workspace_shape() {
 
 // ---------------------------------------------------------------- H-10 4a: one finish budget
 
+/// The finish gets minutes, not 10 seconds (D56): a stated remainder of 170 s is granted whole
+/// rather than clamped to the old budget.
+#[test]
+fn a_finish_may_take_three_minutes() {
+    use goalcup_protocol::control::CaptureSealRequest;
+    use std::time::Duration;
+    let request = CaptureSealRequest {
+        proxy: None,
+        remaining_finish_ms: Some(170_000),
+        native_scope: None,
+    };
+    assert_eq!(request.remaining_finish(), Duration::from_secs(170));
+}
+
 #[test]
 fn capture_seal_request_remaining_defaults_clamps_and_refuses_zero() {
     use goalcup_protocol::control::{
@@ -705,8 +719,8 @@ fn capture_seal_request_remaining_defaults_clamps_and_refuses_zero() {
     };
     use std::time::Duration;
 
-    // The shipped constants: the one 10-second budget and its 2-second commit share.
-    assert_eq!(LOCAL_CAPTURE_FINISH_BUDGET, Duration::from_secs(10));
+    // The shipped constants: the one three-minute budget (D56) and its 2-second commit share.
+    assert_eq!(LOCAL_CAPTURE_FINISH_BUDGET, Duration::from_secs(180));
     assert_eq!(FINISH_COMMIT_RESERVE, Duration::from_secs(2));
 
     // Absent: an older CLI's body decodes, and the finish gets the full budget.

@@ -19,6 +19,7 @@
 pub mod api;
 pub mod http;
 pub mod policy;
+pub mod prune;
 pub mod uploader;
 
 use crate::CliError;

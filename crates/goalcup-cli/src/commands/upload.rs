@@ -2,7 +2,8 @@
 //! server was away at the end, the laptop slept, or the process was killed.
 //!
 //! It asks the server where it is (`GET /v1/runs/{id}`), sends every complete line of the
-//! local chain from there, and the seal once the run is sealed, waiting out a server that is
+//! local chain from there (across its parts; the bytes below the server's offset may already be
+//! deleted here), and the seal once the run is sealed, waiting out a server that is
 //! away with the same backoff the run uses. Safe to run again: the server takes nothing twice.
 //! It is refused while another process (the run's own `goalcup start`) uploads the entry.
 

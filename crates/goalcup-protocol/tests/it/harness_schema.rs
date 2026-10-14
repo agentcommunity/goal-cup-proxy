@@ -2898,3 +2898,189 @@ fn a_connector_reserves_its_own_env_namespace_as_data() {
         refused(&t, PINNED, &["capture.reserved_env_prefixes"]);
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// Chat mode (D57): the participant types the prompt; the session files are every one new or
+// written since the run started
+// ---------------------------------------------------------------------------------------
+
+/// A chat-mode connector on a shared home: no goal slot, no credential, identity `none`, and a
+/// native source read from the run's start.
+fn chat() -> Table {
+    r#"
+schema_version = 1
+id = "chat-cli"
+
+[capture]
+interactive = true
+args = ["chat"]
+resume_args = ["resume", "--last"]
+continuation = "chat: the participant types the prompt and may type keep going"
+
+[capture.executable]
+program = "chat-agent"
+version_args = ["--version"]
+
+[capture.home]
+run_home = "empty"
+config_home = "shared"
+env = "CHAT_HOME"
+real_dirs = ["{user_home}/.chat"]
+skills_dir = "skills"
+
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+[capture.identity]
+source = "none"
+
+[[capture.native]]
+name = "session"
+root = "{config_home}/sessions"
+pattern = "*/*/*/rollout-*.jsonl"
+form = "append_only"
+since_run_start = true
+
+[[capture.hosts]]
+host = "api.chat.example"
+evidence_paths = ["/v1/responses"]
+"#
+    .parse()
+    .expect("TOML")
+}
+
+#[test]
+fn an_interactive_profile_takes_no_goal_and_no_credential() {
+    admitted(&chat(), PINNED);
+    // `args` need not end in `--`, and may: the rule is lifted, not turned around.
+    let mut t = chat();
+    set(&mut t, &["capture"], "args", strings(&["chat", "--"]));
+    admitted(&t, PINNED);
+    // No goal flag: the participant types the prompt.
+    let mut t = chat();
+    set(&mut t, &["capture"], "goal_flag", "--prompt");
+    refused(&t, PINNED, &["capture.goal_flag", "interactive"]);
+    // No credential, even with the per-run home a credential otherwise needs.
+    let t = with_credential(chat(), true);
+    refused(&t, PINNED, &["capture.credential", "interactive"]);
+    // Identity `none` only.
+    let mut t = chat();
+    let id = tbl(&mut t, &["capture", "identity"]);
+    id.insert("source".into(), "preassigned".into());
+    id.insert("binding".into(), "at_launch".into());
+    refused(
+        &t,
+        PINNED,
+        &["capture.identity.source", "interactive", "`none`"],
+    );
+    // Without `interactive` every headless rule holds again: the goal needs its one slot.
+    let mut t = chat();
+    set(&mut t, &["capture"], "interactive", false);
+    refused(&t, PINNED, &["the goal is placed exactly one way"]);
+    tbl(&mut t, &["capture"]).remove("interactive");
+    refused(&t, PINNED, &["the goal is placed exactly one way"]);
+    // `skills_dir` is a relative path under the config home.
+    for bad in ["/skills", "../skills", "a//b", ".", "a/../b"] {
+        let mut t = chat();
+        set(&mut t, &["capture", "home"], "skills_dir", bad);
+        refused(&t, PINNED, &["capture.home.skills_dir"]);
+    }
+    let mut t = chat();
+    set(&mut t, &["capture", "home"], "skills_dir", ".agents/skills");
+    admitted(&t, PINNED);
+}
+
+#[test]
+fn none_on_a_shared_home_needs_since_run_start() {
+    // Without it, an unscoped source on a shared home would read every other run's sessions.
+    let mut t = chat();
+    tbl(&mut t, &["capture", "native"]).remove("since_run_start");
+    refused(
+        &t,
+        PINNED,
+        &["capture.native.root", "must be per run", "since_run_start"],
+    );
+    set(&mut t, &["capture", "native"], "since_run_start", false);
+    refused(&t, PINNED, &["must be per run", "since_run_start"]);
+    set(&mut t, &["capture", "native"], "since_run_start", true);
+    admitted(&t, PINNED);
+    // The same holds for a headless profile with no session identity.
+    let mut t = workload();
+    set(&mut t, &["capture", "native"], "root", "{config_home}");
+    refused(&t, DEV, &["must be per run", "since_run_start"]);
+    set(&mut t, &["capture", "native"], "since_run_start", true);
+    admitted(&t, DEV);
+    // A per-run root needs no filter, and a scoped source may take one.
+    let mut t = workload();
+    set(&mut t, &["capture", "native"], "since_run_start", true);
+    admitted(&t, DEV);
+    let mut t = codex();
+    set(&mut t, &["capture", "native"], "since_run_start", true);
+    admitted(&t, PINNED);
+}
+
+#[test]
+fn resume_args_follow_the_argv_rules() {
+    // Optional, with or without `interactive`.
+    let mut t = chat();
+    tbl(&mut t, &["capture"]).remove("resume_args");
+    admitted(&t, PINNED);
+    let mut t = codex();
+    set(
+        &mut t,
+        &["capture"],
+        "resume_args",
+        strings(&["resume", "--last"]),
+    );
+    admitted(&t, PINNED);
+    // Each argument is held to the rules `args` is (D51).
+    for (bad, needle) in [
+        ("--url", "names a server"),
+        ("--profile", "configuration profile"),
+        ("/etc/passwd", "absolute path"),
+        ("a\u{7}b", "control character"),
+        ("{session_id}", "preassigned"),
+        ("{nope}", "not a token here"),
+        ("--tag=goalcup", "delivery-agnostic"),
+    ] {
+        let mut t = chat();
+        set(
+            &mut t,
+            &["capture"],
+            "resume_args",
+            strings(&["resume", bad]),
+        );
+        refused(&t, PINNED, &["capture.resume_args", needle]);
+    }
+    // A substituted absolute path is the one relaxation, as for `args`.
+    let mut t = chat();
+    set(
+        &mut t,
+        &["capture"],
+        "resume_args",
+        strings(&["/work/state"]),
+    );
+    admitted(&t, DEV);
+    // The argument guard applies to them too.
+    let mut t = chat();
+    set(
+        &mut t,
+        &["capture"],
+        "argv_guard",
+        Value::Table(
+            [("long".to_string(), strings(&["help"]))]
+                .into_iter()
+                .collect(),
+        ),
+    );
+    admitted(&t, PINNED);
+    set(&mut t, &["capture"], "resume_args", strings(&["--help"]));
+    refused(&t, PINNED, &["capture.resume_args", "before its parser"]);
+    // Together with `args` they stay within the argument bound.
+    let mut t = chat();
+    let many: Vec<String> = (0..64).map(|n| format!("a{n}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    set(&mut t, &["capture"], "resume_args", strings(&many));
+    refused(&t, PINNED, &["capture.resume_args", "64"]);
+}

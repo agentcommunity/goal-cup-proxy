@@ -438,6 +438,8 @@ mod tests {
             workspace: "/ws".to_string(),
             files: vec![],
             excluded: vec![],
+            git: None,
+            home: None,
         };
         let mut export = TraceExport::create(root).unwrap();
         export.configure_capture_quota(1 << 30).unwrap();

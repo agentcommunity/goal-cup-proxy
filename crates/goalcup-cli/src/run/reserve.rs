@@ -184,28 +184,13 @@ pub fn pressure(footprint: u64) -> bool {
     footprint > RUN_RESERVE_BYTES
 }
 
-/// The bytes of one entry's chain on disk: `chain.jsonl` and every `chain.<start>.jsonl` part
-/// beside it. A missing directory or file counts for nothing.
+/// The bytes of one entry's chain on disk: the sum of its parts' lengths
+/// ([`goalcup_protocol::export::chain_parts`]). A missing directory, or a chain that cannot be
+/// listed, counts for nothing.
 pub fn chain_footprint(trace_dir: &Path) -> u64 {
-    let Ok(dir) = std::fs::read_dir(trace_dir) else {
-        return 0;
-    };
-    dir.flatten()
-        .filter(|file| is_chain_file(&file.file_name().to_string_lossy()))
-        .filter_map(|file| file.metadata().ok())
-        .filter(|meta| meta.is_file())
-        .map(|meta| meta.len())
-        .sum()
-}
-
-/// `chain.jsonl`, or `chain.<digits>.jsonl`.
-fn is_chain_file(name: &str) -> bool {
-    if name == "chain.jsonl" {
-        return true;
-    }
-    name.strip_prefix("chain.")
-        .and_then(|rest| rest.strip_suffix(".jsonl"))
-        .is_some_and(|start| !start.is_empty() && start.bytes().all(|b| b.is_ascii_digit()))
+    crate::upload::prune::parts_now(trace_dir)
+        .map(|parts| parts.iter().map(|part| part.len).sum())
+        .unwrap_or(0)
 }
 
 /// The chain bytes on disk across all of a run's entries.
@@ -495,6 +480,9 @@ mod tests {
         write("seal.json", 9).unwrap();
         write("chain.x.jsonl", 5).unwrap();
         assert_eq!(chain_footprint(dir.path()), 140);
+        // The first parts deleted after their acknowledgement: what is left is counted.
+        std::fs::remove_file(dir.path().join("chain.jsonl")).unwrap();
+        assert_eq!(chain_footprint(dir.path()), 40);
         assert_eq!(chain_footprint(&dir.path().join("missing")), 0);
         assert_eq!(chain_footprint(Path::new("")), 0);
     }
