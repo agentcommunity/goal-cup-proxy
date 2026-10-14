@@ -3,7 +3,7 @@
 //! This crate carries no rule logic (DECISIONS D3). It defines the hash chain, the shipped
 //! envelope, the signed start receipt, the acknowledgement checkpoint, the health states, the
 //! seal manifest, the v5 capture records, and the connector contract. It carries protocol v5
-//! only ([`capture::M2_PROTOCOL_VERSION`], D51):
+//! only ([`capture::M2_PROTOCOL_VERSION`], D54):
 //!
 //! * [`harness`]: the harness manifest (`harness.toml`, schema 1) and its one loader;
 //! * [`capture_policy`]: the reviewed trust tables a harness manifest is checked against;

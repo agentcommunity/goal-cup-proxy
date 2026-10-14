@@ -21,7 +21,7 @@ pub use crate::capture_status::{
     M2Status, RunState,
 };
 
-/// The protocol version of every envelope this crate writes or reads (D51).
+/// The protocol version of every envelope this crate writes or reads (D54).
 pub const M2_PROTOCOL_VERSION: u32 = 5;
 
 /// Bound on one source chunk and, separately, on one sanitized segment's bytes.

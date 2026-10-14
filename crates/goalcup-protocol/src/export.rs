@@ -323,7 +323,7 @@ fn validate_new_phase_envelope(env: &Envelope) -> Result<(), String> {
 /// Every v5 entry has a v5 baseline, and a baseline is only ever the genesis.
 const CAPTURE_GENESIS_NOT_BASELINE: &str = "a capture chain begins with its v5 baseline";
 
-/// Protocol versions 1–4, which the pre-v5 writer produced (D51). A line declaring one is a
+/// Protocol versions 1–4, which the pre-v5 writer produced (D54). A line declaring one is a
 /// known, retired format rather than an unknown future one, and is refused as an envelope that
 /// does not belong in a v5 chain.
 fn is_retired_protocol_version(protocol_version: u32) -> bool {

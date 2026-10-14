@@ -1436,8 +1436,12 @@ protocol v4 chains, which the v5 reader already refused.
 longer decodes, so the reader reports `record_malformed` where it reported
 `capture_envelope_invalid`, and a signed `captured` or `workspace_submission` finalization it
 used to bind is now `record_malformed` too. Keeping the old code would mean keeping every removed
-type just to decode it. No writer could produce such a line. The unreachable
-`envelope_incompatible` code is gone.
+type just to decode it. No writer could produce such a line. The codes that only the removed
+paths could raise are gone: `envelope_incompatible`, `submission_invalid` and
+`submission_binding_mismatch`. On the writer side, which no shipped writer reaches,
+`TraceExport::resume` refuses a version 1–4 chain instead of resuming it as legacy, and an export
+appended to before its quota is set fails `CaptureQuotaNotConfigured` instead of
+`UnsupportedProtocolVersion`; the daemon sets the quota before its first append.
 
 **Evidence.** The v5 corpus and the `m2-report-bytes` fixtures pass unchanged; this PR.
 

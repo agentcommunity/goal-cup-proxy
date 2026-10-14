@@ -1,7 +1,7 @@
 //! Workspace-submission vocabulary that outlived the V4 submission writer: the daemon
 //! configuration's profile and limits, and the outcome a status document reports.
 //!
-//! The submission manifest, and the finalization arm that bound it, left with D51: no v5
+//! The submission manifest, and the finalization arm that bound it, left with D54: no v5
 //! writer produced either.
 
 use crate::provenance::Sha256Digest;

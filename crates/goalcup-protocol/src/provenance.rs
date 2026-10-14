@@ -10,7 +10,7 @@
 //! corpus case `signed-receipt-ack-finalization` carries it, so its types stay exactly as they
 //! were, every enum variant included: dropping one would change how a hostile line reads. The
 //! repository observations, snapshot, history, commit, publication and recovery documents were
-//! never produced by any writer and left with D51.
+//! never produced by any writer and left with D54.
 
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -583,7 +583,7 @@ pub enum PublisherNotAttemptedReasonV1 {
 
 /// The signed-mode terminal bound to the preceding cutoff. One arm: the frozen corpus case
 /// `signed-receipt-ack-finalization` carries it. The `captured` and `workspace_submission`
-/// arms left with D51; no v5 writer ever produced either.
+/// arms left with D54; no v5 writer ever produced either.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum FinalizationV1 {

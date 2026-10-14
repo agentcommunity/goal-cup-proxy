@@ -79,7 +79,7 @@ impl Envelope {
 
 /// Closed by design at the five bodies a protocol-v5 chain may carry: the daemon interprets
 /// nothing (D3). The pre-v5 bodies (leg-1 and leg-2 records, health, heartbeats, home seeding,
-/// repository observations and the rest) left the protocol with D51: no writer has produced
+/// repository observations and the rest) left the protocol with D54: no writer has produced
 /// them since D48, and a v5 chain never admitted them.
 ///
 /// **Variants are additive.** An adjacently tagged enum serialises each variant on its own, so
