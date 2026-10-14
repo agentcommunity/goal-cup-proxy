@@ -267,6 +267,19 @@ mod tests {
     fn concurrent_outcomes_never_record_times_out_of_order() {
         use std::sync::atomic::{AtomicU64, Ordering};
         static TICK: AtomicU64 = AtomicU64::new(0);
+        fn succeeds(worker: u64, round: u64) -> bool {
+            (worker + round).is_multiple_of(6)
+        }
+        let outcomes = || (0..8u64).flat_map(|w| (0..20u64).map(move |r| succeeds(w, r)));
+        let succeeded = outcomes().filter(|s| *s).count();
+        let failed = outcomes().filter(|s| !s).count() as u64;
+        // Each success closes at most one window and one more can be open at the end, so the
+        // run opens at most `succeeded + 1` windows, however the threads interleave. All of them
+        // must be kept for the failures below to add up.
+        assert!(
+            succeeded < MAX_KEPT_OUTAGE_WINDOWS,
+            "{succeeded} successes can open more windows than are kept"
+        );
         let tracker = OutageTracker::with_clock(|| {
             let n = TICK.fetch_add(1, Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_micros(200));
@@ -277,7 +290,7 @@ mod tests {
                 let tracker = &tracker;
                 scope.spawn(move || {
                     for round in 0..20 {
-                        if (worker + round) % 5 == 0 {
+                        if succeeds(worker, round) {
                             tracker.success();
                         } else {
                             tracker.failure();
@@ -288,12 +301,9 @@ mod tests {
         });
         let (total, windows) = tracker.snapshot();
         assert!(!windows.is_empty());
-        // Nothing lost: every failure is in exactly one window (all are kept at this size).
-        let failed = (0..8u64)
-            .flat_map(|w| (0..20u64).map(move |r| (w + r) % 5 != 0))
-            .filter(|f| *f)
-            .count() as u64;
-        assert!(total as usize <= MAX_KEPT_OUTAGE_WINDOWS);
+        assert!(total as usize <= succeeded + 1, "{total} windows");
+        // Nothing lost: every window is kept, and every failure is in exactly one of them.
+        assert_eq!(windows.len() as u64, total);
         assert_eq!(windows.iter().map(|w| w.failures).sum::<u64>(), failed);
         for w in &windows {
             assert!(w.first_failure <= w.last_failure, "{w:?}");
