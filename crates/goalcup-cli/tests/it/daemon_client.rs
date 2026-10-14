@@ -15,8 +15,10 @@ use goalcup_cli::CliError;
 use goalcup_cli::daemon::{CALL_TIMEOUT, HttpDaemonClient, MockDaemonClient, SLOW_CALL_TIMEOUT};
 use goalcup_cli::retry::{BUSY_ATTEMPTS, BUSY_BACKOFF, BUSY_BUDGET, retry_busy, retry_busy_within};
 use goalcup_protocol::control::{
-    self, ControlError, DaemonClient, SUFFIX_SEAL, SUFFIX_STATUS, entry_route, is_public_route,
+    self, ArmingState, ControlError, DaemonClient, EntrySummary, SUFFIX_SEAL, SUFFIX_STATUS,
+    entry_route, is_public_route,
 };
+use goalcup_protocol::events::HealthState;
 use goalcup_protocol::manifest::KillStrategy;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
 use std::time::{Duration, Instant};
@@ -494,7 +496,7 @@ fn no_refusal_this_client_raises_ever_carries_the_control_token() {
     // A `200` larger than the client's cap.
     let srv = support::oversized_daemon(goalcup_cli::daemon::MAX_RESPONSE_BYTES as usize + 64);
     let oversized = HttpDaemonClient::new(srv.base(), token.into()).expect("a loopback base");
-    match oversized.entries() {
+    match oversized.health() {
         Err(e) => {
             said.push(e.to_string());
             said.push(format!("{e:?}"));
@@ -507,6 +509,78 @@ fn no_refusal_this_client_raises_ever_carries_the_control_token() {
             !text.contains(token),
             "the control token reached a message a participant can read: {text}"
         );
+    }
+}
+
+/// `n` well-formed rows, as the daemon's `GET /v0/entries` answers them: every row the
+/// registry ever held, open and sealed.
+fn entries_body(n: usize) -> Vec<u8> {
+    let rows: Vec<EntrySummary> = (0..n)
+        .map(|i| EntrySummary {
+            entry_id: format!("entry-{i:08}"),
+            connector_id: "codex-cli".to_string(),
+            workspace: "/Users/participant/goalcup/workspace".to_string(),
+            arming: ArmingState::Started,
+            health: HealthState::Online,
+            started_at: Some("2026-10-13T00:00:00Z".to_string()),
+            deadline_at: Some("2026-10-20T00:00:00Z".to_string()),
+            sealed_at: Some("2026-10-13T00:02:00Z".to_string()),
+        })
+        .collect();
+    serde_json::to_vec(&rows).expect("rows serialize")
+}
+
+/// A participant whose launcher relaunches the harness every couple of minutes passes two
+/// hundred rows within hours, and the list is every row ever held. It must not trip the
+/// ordinary cap, which is for answers that do not grow.
+#[test]
+fn an_entries_list_past_the_ordinary_cap_is_read_and_parsed() {
+    let body = entries_body(400);
+    assert!(
+        body.len() as u64 > goalcup_cli::daemon::MAX_RESPONSE_BYTES,
+        "the fixture must be past the ordinary cap to mean anything: {} bytes",
+        body.len()
+    );
+    assert!((body.len() as u64) < goalcup_cli::daemon::MAX_LIST_RESPONSE_BYTES);
+    let srv = support::raw_response_daemon(200, version_header(), body);
+    let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+
+    let rows = client.entries().expect("a list under the list cap is read");
+
+    assert_eq!(rows.len(), 400);
+    assert_eq!(rows[399].entry_id, "entry-00000399");
+}
+
+/// The list cap is larger, not absent: a daemon answering with more than it cannot make
+/// this client allocate without limit, and the refusal names the cap that was hit.
+#[test]
+fn an_entries_list_past_the_list_cap_is_refused_naming_it() {
+    let cap = goalcup_cli::daemon::MAX_LIST_RESPONSE_BYTES;
+    let srv = support::oversized_daemon(cap as usize + 64);
+    let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+
+    match client.entries() {
+        Err(ControlError::Malformed(message)) => assert!(
+            message.contains(&format!("more than {cap} bytes")),
+            "the refusal names the cap: {message}"
+        ),
+        other => panic!("a list over the list cap is refused, not read: {other:?}"),
+    }
+}
+
+/// Only the list gets the larger cap: every other route still refuses at the ordinary one.
+#[test]
+fn a_non_list_answer_past_the_ordinary_cap_is_still_refused() {
+    let cap = goalcup_cli::daemon::MAX_RESPONSE_BYTES;
+    let srv = support::oversized_daemon(cap as usize + 64);
+    let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+
+    match client.health() {
+        Err(ControlError::Malformed(message)) => assert!(
+            message.contains(&format!("more than {cap} bytes")),
+            "the refusal names the cap: {message}"
+        ),
+        other => panic!("a body over the ordinary cap is refused, not read: {other:?}"),
     }
 }
 
