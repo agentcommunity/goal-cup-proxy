@@ -39,10 +39,9 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
   the removal of the placeholder notice nothing reads the key.
 - Delete `DaemonClient::current_entry` and the daemon's `GET /v0/entries/current`: no `goalcup`
   command calls it.
-- Delete the protocol's pre-v5 trace surface the removed V1 verifier was the reader of:
-  `TraceExport::{write_descriptor, write_manifest}`, `TraceDescriptorDoc`, `DESCRIPTOR_FILE`,
-  `MANIFEST_FILE`, the V1 `human_rule` types in `manifest.rs`, and the parts of
-  `tests/export_roundtrip.rs` that only exercise them. No shipped binary calls them.
+- Delete `export::DESCRIPTOR_FILE` and the resume's sweep of `trace.toml` temporaries once the
+  CLI test fixture `mock_sealable` (`crates/goalcup-cli/tests/common/support/mod.rs`) stops
+  naming the file. No writer produces it.
 - Speed up the two P1 redaction tests that each run over 30 s
   (`capture_redaction::a_masked_key_around_the_hold_bound_is_never_retained`,
   `capture_redaction_extra::seeded_random_chunking_matches_the_oracle_with_extra_patterns`); they

@@ -66,6 +66,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D51 | A connector's argv and env are data; review is the control; credential, CA and redaction lists stay closed | in force (m2) once merged | [entry](#d51-m2-a-connectors-argv-and-env-are-data-review-is-the-control) |
 | D52 | Shipped connectors set no model, effort, sandbox, permission or MCP limit | in force (m2) once merged | [entry](#d52-m2-the-shipped-connectors-set-no-model-effort-sandbox-permission-or-mcp-limit) |
 | D53 | Record the harness build in v5 (`Launch.harness_build`); v0.5.0 readers refuse such traces | in force (m2) once merged | [entry](#d53-m2-record-the-harness-build-in-v5-accepting-that-v050-readers-refuse-it) |
+| D54 | The protocol carries v5 only: pre-v5 versions, bodies and writers and the Git provenance types leave | in force (m2) once merged | [entry](#d54-m2-the-protocol-carries-v5-only) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1409,6 +1410,48 @@ environment but `PATH` and a throwaway `HOME` removed afterwards, ten-second tim
 used to carry the connector's pinned version: a change of meaning this row accepts, since the
 field was always display text and the digests are the record. The connector-directory pin
 (`pins/connector-dirs.txt`) stays: it is what stops a connector smuggling a base URL.
+
+---
+
+## D54. **(M2)** The protocol carries v5 only.
+
+**Decision:** requested 2026-10-13 as part of the dead-code cleanup; the owner confirms in review.
+
+`goalcup-protocol` and `goalcup-verifier` drop what only the pre-v5 path used:
+- **Versions 1–4.** The version/body matrix (`Envelope::validate_version_body_compatibility`),
+  `PROTOCOL_VERSION = 4` and the other version constants, the thirteen `EventBody` variants a v5
+  chain never admitted (leg-1 and leg-2 records, health, heartbeats, home seeding, repository
+  observations and the rest), `chain::Chain` and the V1 redaction log.
+- **The legacy export.** `ChainFormat` and the legacy resume, the writers that defaulted to v4
+  (`write_baseline`, `write_seal`, `write_cutoff`, `write_finalization`), `write_descriptor`,
+  `write_manifest` and `TraceDescriptorDoc`. Every export is now a v5 chain.
+- **Git provenance and publication.** Repository observation, snapshot, history, commit,
+  publisher-attempt, recovery and observation documents and the `MAX_GIT_*` limits;
+  `FinalizationV1::Captured` and `::WorkspaceSubmission`, the submission manifest and the
+  verifier's submission reader.
+
+**Why.** No shipped writer has produced any of it since D48. The v5 daemon writes a baseline,
+capture records and a local finish; the v0.5.0 daemon wrote workspace submissions only into
+protocol v4 chains, which the v5 reader already refused.
+
+**What stays frozen.** v5 chain bytes and every v5 trace's verdict: `Envelope::chain_bytes`,
+`link_hash`, the five v5 bodies, receipts and acknowledgements, and
+`FinalizationV1::CaptureUnavailable` with all its types and variants, which the corpus case
+`signed-receipt-ack-finalization` carries. A line declaring version 1–4 is still
+`capture_envelope_invalid` and any other non-v5 version `protocol_version_unsupported`.
+
+**Changed on hostile input only.** A v5 line carrying a removed body or finalization arm no
+longer decodes, so the reader reports `record_malformed` where it reported
+`capture_envelope_invalid`, and a signed `captured` or `workspace_submission` finalization it
+used to bind is now `record_malformed` too. Keeping the old code would mean keeping every removed
+type just to decode it. No writer could produce such a line. The codes that only the removed
+paths could raise are gone: `envelope_incompatible`, `submission_invalid` and
+`submission_binding_mismatch`. On the writer side, which no shipped writer reaches,
+`TraceExport::resume` refuses a version 1–4 chain instead of resuming it as legacy, and an export
+appended to before its quota is set fails `CaptureQuotaNotConfigured` instead of
+`UnsupportedProtocolVersion`; the daemon sets the quota before its first append.
+
+**Evidence.** The v5 corpus and the `m2-report-bytes` fixtures pass unchanged; this PR.
 
 ---
 

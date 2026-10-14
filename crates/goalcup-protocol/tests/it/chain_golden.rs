@@ -1,4 +1,10 @@
-use goalcup_protocol::chain::{Chain, GENESIS, link_hash};
+//! The link formula, pinned against hashes recorded before any of this code existed.
+//!
+//! `link_hash(prev, bytes)` is `hex(sha256(prev_hex_ascii || bytes))` from the 64-zero
+//! `GENESIS`. Every v5 chain links its envelopes through it, so a change to it is a change to
+//! every chain ever written, and these goldens are what would catch one.
+
+use goalcup_protocol::chain::{GENESIS, link_hash};
 use std::path::PathBuf;
 
 fn fixture(rel: &str) -> PathBuf {
@@ -7,45 +13,47 @@ fn fixture(rel: &str) -> PathBuf {
         .join(rel)
 }
 
+/// Fold `link_hash` over `lines` from `head`, returning how many links were made and the
+/// last hash.
+fn fold<'a>(head: &str, lines: impl IntoIterator<Item = &'a [u8]>) -> (u64, String) {
+    let mut count = 0u64;
+    let mut head = head.to_string();
+    for line in lines {
+        head = link_hash(&head, line);
+        count += 1;
+    }
+    (count, head)
+}
+
 /// The first two links of the M0 leg-1 capture
 /// (spikes/claude-code-cli/out/run-20260903T073054Z/leg1/capture.jsonl, git-ignored).
-/// If these two values change, the daemon's chain no longer verifies the M0 captures.
+/// If these two values change, the formula no longer reproduces the M0 captures.
 #[test]
 fn reproduces_the_m0_leg1_capture_links() {
     let line1 =
         br#"{"type":"mode","mode":"normal","sessionId":"95addb64-9dac-4046-8ef6-8aa53fa0c7f1"}"#;
     let line2 = br#"{"type":"permission-mode","permissionMode":"auto","sessionId":"95addb64-9dac-4046-8ef6-8aa53fa0c7f1"}"#;
 
-    let mut chain = Chain::new();
-    let l1 = chain.try_append(line1).unwrap();
-    assert_eq!(l1.seq, 1);
-    assert_eq!(l1.prev, GENESIS);
+    let l1 = link_hash(GENESIS, line1);
     assert_eq!(
-        l1.hash,
+        l1,
         "4e8c478cc81cc43c4fcd273ffd454b5383ed3963c2a07bdf238a33d2afd6d6ca"
     );
-
-    let l2 = chain.try_append(line2).unwrap();
-    assert_eq!(l2.seq, 2);
-    assert_eq!(l2.prev, l1.hash);
+    let l2 = link_hash(&l1, line2);
     assert_eq!(
-        l2.hash,
+        l2,
         "eb231e6e0a99e829966ba74b109c8f582e0659e687631d9fed4df14912638018"
     );
-    assert_eq!(chain.head(), l2.hash);
-    assert_eq!(chain.seq(), 2);
 }
 
 fn chain_over_file(rel: &str) -> (u64, String) {
     let text = std::fs::read_to_string(fixture(rel)).expect("fixture readable");
-    let mut chain = Chain::new();
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        chain.try_append(line.as_bytes()).unwrap();
-    }
-    (chain.seq(), chain.head().to_string())
+    fold(
+        GENESIS,
+        text.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::as_bytes),
+    )
 }
 
 #[test]
@@ -73,29 +81,22 @@ fn chains_the_committed_claude_code_fixtures() {
     );
 }
 
+/// A chain continued from a recorded head is the chain that would have been written in one
+/// go: the head is the whole state a continuation needs.
 #[test]
-fn resume_continues_an_existing_chain() {
-    let mut a = Chain::new();
-    a.try_append(b"one").unwrap();
-    let l2 = a.try_append(b"two").unwrap();
-
-    let mut b = Chain::resume(l2.seq, l2.hash.clone());
-    let l3 = b.try_append(b"three").unwrap();
-    assert_eq!(l3.seq, 3);
-    assert_eq!(l3.prev, l2.hash);
-    assert_eq!(l3.hash, link_hash(&l2.hash, b"three"));
+fn continuing_from_a_head_equals_one_pass() {
+    let records: [&[u8]; 3] = [b"one", b"two", b"three"];
+    let (_, whole) = fold(GENESIS, records);
+    let (_, head) = fold(GENESIS, records[..2].iter().copied());
+    let (_, continued) = fold(&head, records[2..].iter().copied());
+    assert_eq!(continued, whole);
+    assert_eq!(continued, link_hash(&head, b"three"));
 }
 
+/// A stray edit to any earlier record moves every later hash: the property P2 rests on.
 #[test]
-fn a_resumed_maximum_sequence_refuses_to_wrap() {
-    let mut chain = Chain::resume(u64::MAX, "f".repeat(64));
-    let error = chain
-        .try_append(b"one more record")
-        .expect_err("a writer cannot represent a successor after u64::MAX");
-    assert_eq!(error.to_string(), "chain sequence exhausted");
-    assert_eq!(
-        chain.seq(),
-        u64::MAX,
-        "refusal leaves the existing head intact"
-    );
+fn an_edit_to_an_earlier_record_moves_the_head() {
+    let honest: [&[u8]; 3] = [b"one", b"two", b"three"];
+    let edited: [&[u8]; 3] = [b"one", b"tw0", b"three"];
+    assert_ne!(fold(GENESIS, honest).1, fold(GENESIS, edited).1);
 }

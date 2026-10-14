@@ -8,8 +8,6 @@ publish = false
 
 [dependencies]
 goalcup-protocol = { path = "../goalcup-protocol" }
-# `errno::clear` for the openat directory walker; the one shared thread-errno accessor.
-goalcup-platform = { path = "../goalcup-platform" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -6,8 +6,7 @@
 //! `CARGO_BIN_EXE_goalcup-daemon` is the binary the test harness built, so this runs against
 //! the shipped argument parser rather than against `Args` as a Rust type.
 
-/// `DAEMON_VERSION` is chained as `EventBody::VersionChange` and served on
-/// `GET /v0/health`, so the one process that knows which binary is running could only be
+/// `DAEMON_VERSION` is served on `GET /v0/health`, so the one process that knows which binary is running could only be
 /// asked over an authenticated socket while it was up. `--version` is the answer when it is
 /// not, and it is the same string, from the same constant, rather than a second spelling.
 #[test]
