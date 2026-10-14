@@ -647,7 +647,7 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
     );
 }
 
-// ------------------------------------------------------------------ the end, told first
+// ------------------------------------------------------------------ the final heartbeat
 
 /// Make the workspace a Git repository with one commit, as an agent would, and answer the
 /// commit. A real one: the seal asks `git` about the workspace.
@@ -667,43 +667,22 @@ fn commit_in(workspace: &std::path::Path) -> String {
     git(&["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// At the stop, and when the agent leaves on its own, the server is told the run is over (a
-/// heartbeat with the workspace's commit, how the recording was, and how many requests were
-/// seen) before the seal is asked for, so it has the run's last word even if the seal or the
-/// upload never completes. (It is not the `final` heartbeat yet: see `ANNOUNCE_IS_FINAL`.)
+/// Whether the agent left on its own or the run was stopped at its deadline, the upload's finish
+/// sends the final heartbeat, with the workspace's commit and what the heartbeats say, before it
+/// sends the server the seal; the stand-in refuses a seal that comes first.
 #[test]
-fn the_server_is_told_the_run_is_over_before_the_seal() {
+fn the_final_heartbeat_with_the_commit_reaches_the_server_before_the_server_seal() {
     for stopped_by_the_deadline in [false, true] {
         let rig = Rig::new();
-        let server = std::sync::Arc::new(if stopped_by_the_deadline {
+        let server = if stopped_by_the_deadline {
             short_server(&rig.root.join("server"), 8, None)
         } else {
             server(&rig.root.join("server"))
-        });
+        };
         log_in(&rig, &server.url(), TOKEN);
         let goal = rig.goal(GOAL);
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
-        // At each seal: the heartbeats the server had taken, as (commit, recording, requests).
-        type Told = Vec<(Option<String>, Option<String>, Option<u64>)>;
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Told>::new()));
-        {
-            let (seen, server) = (seen.clone(), server.clone());
-            client.book().on_seal = Some(Box::new(move || {
-                let told = server
-                    .run_ids()
-                    .first()
-                    .map(|run| {
-                        server
-                            .heartbeats(run)
-                            .into_iter()
-                            .map(|h| (h.repo_head, h.recording, h.model_requests))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                seen.lock().unwrap().push(told);
-            }));
-        }
         let mut opts = logged_in_options(&rig, &goal);
         if stopped_by_the_deadline {
             opts.upload_policy = beating_policy();
@@ -721,25 +700,30 @@ fn the_server_is_told_the_run_is_over_before_the_seal() {
             let (result, out) = running.join().unwrap();
             (commit, result, out)
         });
-        let commit = commit.as_str();
         result.unwrap_or_else(|e| panic!("deadline: {stopped_by_the_deadline}: {e}\n{out}"));
-        let seen = seen.lock().unwrap().clone();
-        assert!(
-            !seen.is_empty()
-                && seen
-                    .iter()
-                    .all(|told| told.iter().any(|(head, recording, requests)| {
-                        head.as_deref() == Some(commit) && recording.is_some() && requests.is_some()
-                    })),
-            "deadline: {stopped_by_the_deadline}: the server had not been told the run was over \
-             when the seal began: {seen:?}\n{out}"
-        );
         let run_id = server.run_ids()[0].clone();
         let committed = server.final_commit(&run_id).expect("a final heartbeat");
         assert_eq!(
             committed.repo_head.as_deref(),
-            Some(commit),
+            Some(commit.as_str()),
             "deadline: {stopped_by_the_deadline}"
+        );
+        let last_final = server
+            .heartbeats(&run_id)
+            .into_iter()
+            .rfind(|h| h.final_)
+            .expect("a final heartbeat");
+        assert!(
+            last_final.recording.is_some() && last_final.model_requests.is_some(),
+            "the final heartbeat says how the recording was and how many requests it saw"
+        );
+        let calls = server.calls();
+        let at = |what: &str| calls.iter().rposition(|c| c.contains(what));
+        let seal = at("/seal").unwrap_or_else(|| panic!("no seal in {calls:?}"));
+        let heartbeat = at("/heartbeat").expect("a heartbeat");
+        assert!(
+            heartbeat < seal,
+            "deadline: {stopped_by_the_deadline}: the last heartbeat came after the seal: {calls:?}"
         );
     }
 }

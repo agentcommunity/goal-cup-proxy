@@ -157,7 +157,8 @@ pub struct RunState {
     /// `Err` says why the machine was not kept awake. The run goes on either way.
     pub sleep_lock: Result<(), String>,
     /// Set when the host ended the agent on purpose (the deadline, a newer run, a full disk):
-    /// an agent that exited with this unset left on its own.
+    /// an agent that exited with this unset left on its own. Only a stop because the run is
+    /// over (not a full disk) makes the agent's exit no problem.
     #[serde(default)]
     pub stopped: Option<String>,
     /// The host has finished its wrap-up and written its last word.
@@ -185,6 +186,15 @@ impl RunState {
     /// Nothing wrong is an empty list.
     pub fn problems(&self, now: u64) -> Vec<String> {
         let mut lines = Vec::new();
+        // The tick writes the state every watch period; a run not over whose state has not
+        // moved for a few of them has no tracker writing it.
+        let silent = now.saturating_sub(self.updated_at);
+        if !self.ended && silent > STATE_STALE_AFTER_TICKS * reserve::WATCH_PERIOD.as_secs() {
+            lines.push(format!(
+                "run state not updated for {}: the tracer may have stopped; run goalcup continue",
+                age_words(silent)
+            ));
+        }
         match self.recording {
             Recording::Gaps => lines.push("recording has gaps".to_string()),
             Recording::Failed => lines.push("recording failed".to_string()),
@@ -213,8 +223,14 @@ impl RunState {
         {
             lines.push(format!("the machine may sleep: {why}"));
         }
+        // An agent the host ended because the run is over (its deadline, a newer run) is not a
+        // problem; one that left while the run is open, or that a full disk stopped, is.
+        let over = self
+            .stopped
+            .as_deref()
+            .is_some_and(|why| why != watch::DISK_STOP_REASON);
         if let HarnessState::Exited { status } = &self.harness
-            && self.stopped.is_none()
+            && !over
         {
             lines.push(format!(
                 "the agent's process exited ({status}): run goalcup continue"
@@ -223,6 +239,9 @@ impl RunState {
         lines
     }
 }
+
+/// How many watch periods without a write make a run's state stale.
+pub const STATE_STALE_AFTER_TICKS: u64 = 3;
 
 /// A span in words: `45 s`, `12 min`, `3 h 5 min`, `2 d 4 h`.
 fn age_words(secs: u64) -> String {
@@ -241,7 +260,6 @@ pub struct Vitals {
     recording: Arc<AtomicU8>,
     model_requests: Arc<AtomicU64>,
     upload: Arc<Mutex<UploadVital>>,
-    announced: Arc<Mutex<Option<(u64, String)>>>,
 }
 
 #[derive(Debug, Default)]
@@ -264,7 +282,6 @@ impl Vitals {
             recording: Arc::new(AtomicU8::new(Recording::Unknown as u8)),
             model_requests: counter,
             upload: Arc::default(),
-            announced: Arc::default(),
         }
     }
 
@@ -303,22 +320,6 @@ impl Vitals {
         if !upload.stopped {
             upload.problem = None;
         }
-    }
-
-    /// Keep the end (`seq` and chain hash) the host announced to the server before the seal.
-    pub fn set_announced_end(&self, seq: u64, head: String) {
-        *self
-            .announced
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((seq, head));
-    }
-
-    /// The end the host announced before the seal, if the server took it.
-    pub fn announced_end(&self) -> Option<(u64, String)> {
-        self.announced
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
     }
 
     /// The uploader's last failure, and whether it gave up.
@@ -625,6 +626,47 @@ mod tests {
         state.disk.low = true;
         state.sleep_lock = Err("x".into());
         assert_eq!(state.problems(now), ["last upload 10 s ago: busy"]);
+    }
+
+    #[test]
+    fn a_state_nobody_has_written_for_three_ticks_is_a_problem_until_the_run_ends() {
+        let mut state = RunState::launched("e1", Ok(()));
+        state.updated_at = 1_000;
+        let period = reserve::WATCH_PERIOD.as_secs();
+        let fresh = 1_000 + STATE_STALE_AFTER_TICKS * period;
+        assert!(
+            state.problems(fresh).is_empty(),
+            "three ticks late is not yet stale"
+        );
+        assert_eq!(
+            state.problems(fresh + 1),
+            ["run state not updated for 1 min: the tracer may have stopped; run goalcup continue"]
+        );
+        state.ended = true;
+        assert!(state.problems(fresh + 10_000).is_empty());
+    }
+
+    #[test]
+    fn an_agent_that_left_is_a_problem_unless_the_run_is_over() {
+        let mut state = RunState::launched("e1", Ok(()));
+        state.harness = HarnessState::Exited {
+            status: "exit code 1".to_string(),
+        };
+        let now = state.updated_at;
+        let line = "the agent's process exited (exit code 1): run goalcup continue";
+        // It left while the run is open.
+        assert_eq!(state.problems(now), [line]);
+        // The host ended it because the run is over: the deadline, or a newer run.
+        for why in [
+            "the server says the run is over (its deadline was 2026-10-21T00:00:00Z)",
+            "a newer run on your account replaced this one",
+        ] {
+            state.stopped = Some(why.to_string());
+            assert!(state.problems(now).is_empty(), "{why}");
+        }
+        // A full disk ended it, the run is still open: it can be continued.
+        state.stopped = Some(watch::DISK_STOP_REASON.to_string());
+        assert_eq!(state.problems(now), [line]);
     }
 
     #[test]

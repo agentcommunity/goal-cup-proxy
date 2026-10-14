@@ -371,8 +371,7 @@ pub struct Uploader {
     last_ok: std::sync::Arc<AtomicU64>,
     /// Bytes of the chain the server holds, as of the last acknowledgement.
     acked_offset: std::sync::Arc<AtomicU64>,
-    /// Beside a recording run only: what the run tells its heartbeats, and where the end the
-    /// host announced before the seal is kept.
+    /// Beside a recording run only: what the run tells its heartbeats.
     vitals: Option<Vitals>,
 }
 
@@ -635,25 +634,11 @@ impl Uploader {
 
     /// The final heartbeat: commit the sealed chain's last record as the run's end, asking
     /// again after each failure that does not end the upload, within the wrap-up `until`.
-    ///
-    /// A host that announced the end before sealing ([`announce_end`]) already told the server;
-    /// the server then holds that end, and this does not tell it again unless the sealed chain
-    /// ends somewhere else.
     fn commit_end(
         &mut self,
         until: Option<WrapUp>,
         say: &mut dyn FnMut(&str),
     ) -> Result<(), String> {
-        let announced = self.vitals.as_ref().and_then(Vitals::announced_end);
-        if let Some((seq, head)) = &announced
-            && self
-                .parts()
-                .ok()
-                .and_then(|parts| local_end(&parts))
-                .is_some_and(|(_, local_seq, local_head)| local_seq == *seq && &local_head == head)
-        {
-            return Ok(());
-        }
         let mut failures = 0;
         let mut last = None::<String>;
         loop {
@@ -671,14 +656,6 @@ impl Uploader {
             ) {
                 None => return Err("the chain holds no whole record".to_string()),
                 Some(Ok(_)) => return Ok(()),
-                // The server holds the end announced before the seal, which is earlier than the
-                // sealed chain's: asking again cannot change it.
-                Some(Err(error)) if error.is_conflict() && announced.is_some() => {
-                    say(&format!(
-                        "upload: the server holds the end announced when the run stopped ({error})"
-                    ));
-                    return Ok(());
-                }
                 Some(Err(error)) if !error.ends_upload() => {
                     failures += 1;
                     let wait = backoff(
@@ -919,59 +896,6 @@ fn heartbeat(
         Some(&request),
         timeout,
     ))
-}
-
-/// The longest the host waits to tell the server that the run is over, before it seals.
-pub const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Whether the heartbeat sent before the seal is the `final` one, which commits the chain's
-/// last record as the end of the run (docs/UPLOAD-API.md).
-///
-/// It is not, yet. The server refuses every record past a committed end, and the seal itself
-/// adds records (the proxy's close, the terminal record): a `final` heartbeat sent before the
-/// seal would commit an end the sealed chain goes past, and the rest of the run could never
-/// be uploaded (measured against the stand-in: `409` on the real final, then the tail
-/// refused). So the host sends the run's last word (`recording`, `model_requests`, and the
-/// workspace's commit) before the seal as an ordinary heartbeat, and the upload's finish
-/// commits the end after it, as before. Set this to `true` when the server accepts a later
-/// final heartbeat that extends an earlier one, or when the end can be known before the seal.
-pub const ANNOUNCE_IS_FINAL: bool = false;
-
-/// Tell the server the run is over: one heartbeat with the workspace's commit (the one
-/// [`note_repo_head`] noted when the run stopped), sent before the seal so that the server
-/// has the run's last word even if the seal or the upload never completes. It is the `final`
-/// one when [`ANNOUNCE_IS_FINAL`] says so. Nothing waits on it: one attempt, at most `within`,
-/// and the seal goes ahead whatever the answer. A committed end is kept in `vitals`, for the
-/// upload's own finish.
-pub fn announce_end(
-    server: &ServerClient,
-    record: &UploadRecord,
-    spool_dir: &Path,
-    vitals: &Vitals,
-    within: Duration,
-) -> Result<(), String> {
-    let repo_head = noted_repo_head_in(spool_dir, &record.entry_id);
-    match heartbeat(
-        server,
-        record,
-        ANNOUNCE_IS_FINAL,
-        repo_head,
-        Some(vitals),
-        within,
-    ) {
-        None => Err("the chain holds no whole record yet".to_string()),
-        Some(Ok(_)) => {
-            if ANNOUNCE_IS_FINAL
-                && let Some((_, seq, head)) = super::prune::parts_now(Path::new(&record.trace_dir))
-                    .ok()
-                    .and_then(|parts| local_end(&parts))
-            {
-                vitals.set_announced_end(seq, head);
-            }
-            Ok(())
-        }
-        Some(Err(error)) => Err(error.to_string()),
-    }
 }
 
 /// Sets its flag when dropped: the watcher thread's signal that the uploader has returned.

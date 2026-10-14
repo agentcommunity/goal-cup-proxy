@@ -1115,6 +1115,44 @@ async fn ready_then_remote_eof_cannot_reset_retry_budget() {
     );
 }
 
+/// Every epoch takes one item and is closed at once. That is not a connection that worked
+/// (the epoch did not stay up `STABLE_EPOCH`): each still counts, and the tenth in a row
+/// disables the sink.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_epoch_that_takes_one_item_and_closes_at_once_still_runs_out_at_ten() {
+    let emulator = Emulator::start();
+    emulator.set_policy(Policy::CloseAfterItems(1));
+    let mut n = 0xf00u128;
+    let sink = connect_sink(config(emulator.addr(), &id(n))).unwrap();
+    let mut readies = 0u64;
+    let terminal = loop {
+        let producer = id(n);
+        match admit(&sink, &producer).await {
+            EpochAdmission::Ready => {
+                readies += 1;
+                let failures = sink.stats().failures;
+                assert_eq!(
+                    sink.try_submit(frame(&producer, 0, 0, conn_open(&id(0xc9)))),
+                    SubmitResult::Queued
+                );
+                eventually("the endpoint's close", || sink.stats().failures > failures).await;
+                n += 1;
+            }
+            EpochAdmission::RetryFresh => n += 1,
+            EpochAdmission::Disabled(reason) => break reason,
+            EpochAdmission::Pending => unreachable!(),
+        }
+    };
+    assert_eq!(terminal, GapReason::IngestLost);
+    let stats = sink.stats();
+    assert_eq!(readies, MAX_CONNECTION_FAILURES);
+    assert_eq!(
+        (stats.epochs_ready, stats.failures, stats.items_written),
+        (10, 10, 10),
+        "every epoch took its item"
+    );
+}
+
 /// Nine failures, one connection that takes an item, nine more failures: the count restarted
 /// at the hand-off, so capture is still on (a week of short stalls must not switch the wire
 /// leg off for good). Only the tenth in a row ends it.

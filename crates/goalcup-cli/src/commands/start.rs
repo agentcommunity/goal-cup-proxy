@@ -719,37 +719,6 @@ struct Exited<'a> {
     left_running: Option<CliError>,
     /// The run's state file.
     keeper: crate::run::StateKeeper,
-    /// What tells the server, before the seal, that the run is over (a run on a server).
-    announce: Option<Announce>,
-}
-
-/// Tells the server the run is over, before the seal ([`crate::upload::uploader::announce_end`]).
-#[derive(Clone)]
-struct Announce {
-    server: crate::upload::http::ServerClient,
-    record: crate::upload::UploadRecord,
-    spool_dir: PathBuf,
-    vitals: crate::run::Vitals,
-}
-
-impl Announce {
-    /// One `final` heartbeat with the workspace's commit, waited for at most
-    /// [`crate::upload::uploader::ANNOUNCE_TIMEOUT`]. Nothing depends on it: a failure is said
-    /// and the seal goes ahead.
-    fn send(&self, out: &mut dyn std::io::Write) {
-        if let Err(why) = crate::upload::uploader::announce_end(
-            &self.server,
-            &self.record,
-            &self.spool_dir,
-            &self.vitals,
-            crate::upload::uploader::ANNOUNCE_TIMEOUT,
-        ) {
-            let _ = say(
-                out,
-                &format!("  (the server was not told the run is over: {why})"),
-            );
-        }
-    }
 }
 
 /// How the daemon says the recording is, read through a client made from `control.json` each
@@ -1386,8 +1355,7 @@ fn run_harness<'a>(
         }
     };
     // The run's state file, which the watch tick keeps and this function changes at each
-    // transition of the agent; what the threads of the run tell each other; and, for a run on a
-    // server, what tells it that the run is over before the seal.
+    // transition of the agent; and what the threads of the run tell each other.
     let keeper = crate::run::StateKeeper::begin(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
         crate::run::RunState::launched(&entry_id, sleep_lock),
@@ -1396,14 +1364,7 @@ fn run_harness<'a>(
         Some(proxied) => crate::run::Vitals::counting(proxied.proxy.model_requests()),
         None => crate::run::Vitals::default(),
     };
-    let announce = forked.upload.as_ref().and_then(|start| {
-        Some(Announce {
-            server: start.server.clone()?,
-            record: start.record.clone(),
-            spool_dir: uploads_dir.clone(),
-            vitals: vitals.clone(),
-        })
-    });
+
     // The run's one stop channel: the uploader's deadline or heartbeat stop and the watch's disk
     // stop both send on it, and the wait for the harness receives from it.
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<String>();
@@ -1483,10 +1444,7 @@ fn run_harness<'a>(
         // that follows it is printed only once it returns.
         eprintln!("goalcup: {line}");
         let mut said = format!("{line}\n").into_bytes();
-        // The server is told the run is over before the seal, which may take minutes.
-        if let Some(announce) = &announce {
-            announce.send(&mut said);
-        }
+
         let deadline = std::time::Instant::now() + crate::finish_budget();
         // A seal that did not take (the daemon busy or restarting) is asked again through the
         // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
@@ -1555,7 +1513,6 @@ fn run_harness<'a>(
         wrap_up,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
         keeper,
-        announce,
     })
 }
 
@@ -1577,7 +1534,6 @@ fn finish_and_scan(
         wrap_up,
         left_running,
         keeper,
-        announce,
     } = exited;
     let Forked {
         client,
@@ -1594,27 +1550,21 @@ fn finish_and_scan(
     let stopped = finished_early.is_some();
     let finished = match (finished_early, proxied) {
         (Some(finished), _) => finished,
-        (None, Some(proxied)) => {
-            // The harness left on its own: the server is told before the seal, as at a stop.
-            if let Some(announce) = &announce {
-                announce.send(out);
-            }
-            finish(
-                client,
-                &info.entry_id,
-                proxied,
-                deadline,
-                wrap_up,
-                termination_bound(0),
-                if tees.late_scope {
-                    tees.marked.as_ref()
-                } else {
-                    None
-                },
-                Some(cfg),
-                out,
-            )
-        }
+        (None, Some(proxied)) => finish(
+            client,
+            &info.entry_id,
+            proxied,
+            deadline,
+            wrap_up,
+            termination_bound(0),
+            if tees.late_scope {
+                tees.marked.as_ref()
+            } else {
+                None
+            },
+            Some(cfg),
+            out,
+        ),
         (None, None) => Err(CliError::Internal(
             "the run's proxy was stopped and nothing finished the run".to_string(),
         )),
