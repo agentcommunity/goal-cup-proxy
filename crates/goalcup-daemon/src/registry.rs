@@ -200,8 +200,8 @@ impl RunKeys {
 ///
 /// `chain_seq`/`chain_head` are a **mirror of the export's own head, never an input to
 /// it**: `TraceExport::resume` takes the trace root and nothing else, and reads its
-/// position off `chain.jsonl`. These two fields exist so a status, a `DaemonRestart`
-/// body or a receipt claim can be produced without opening the export. `chain_seq` is an
+/// position off `chain.jsonl`. These two fields exist so a status or a receipt
+/// claim can be produced without opening the export. `chain_seq` is an
 /// `Option` for the same reason `TraceExport::head()` is: "nothing written" and "seq 0
 /// written" are two states.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
