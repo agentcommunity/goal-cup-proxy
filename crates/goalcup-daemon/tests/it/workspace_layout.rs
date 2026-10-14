@@ -212,6 +212,7 @@ fn the_seal_walk_finishes_over_a_fifo_a_device_link_and_an_unreadable_directory(
 /// the test's empty `HOME`, so no user or system configuration reaches the repository.
 fn git(ws: &Path, home: &Path, args: &[&str]) {
     let status = goalcup_daemon::workspace_git::command(ws, home)
+        .expect("git on PATH")
         .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
         .args([
             "-c",
@@ -227,8 +228,8 @@ fn git(ws: &Path, home: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?}");
 }
 
-/// A repository at `<t>/ws` with one commit holding `a.txt`, a link to it and a `.gitignore`
-/// for `target`.
+/// A repository at `<t>/ws` with one commit holding `a.txt`, a link to it, a file whose name
+/// ends in a carriage return and a `.gitignore` for `target`.
 fn committed_clone(t: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let ws = t.join("ws");
     let home = t.join("home");
@@ -238,13 +239,20 @@ fn committed_clone(t: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     std::fs::write(ws.join("a.txt"), b"one\n").unwrap();
     std::fs::write(ws.join(".gitignore"), b"target\n").unwrap();
     std::os::unix::fs::symlink("a.txt", ws.join("link.txt")).unwrap();
-    git(&ws, &home, &["add", "a.txt", ".gitignore", "link.txt"]);
+    // A name a line read would cut short: `hash-object` must still hash this file.
+    std::fs::write(ws.join("cr\r"), b"carriage\n").unwrap();
+    git(
+        &ws,
+        &home,
+        &["add", "a.txt", ".gitignore", "link.txt", "cr\r"],
+    );
     git(&ws, &home, &["commit", "-q", "-m", "first"]);
     (ws, home)
 }
 
 fn head(ws: &Path, home: &Path) -> String {
     let out = goalcup_daemon::workspace_git::command(ws, home)
+        .expect("git on PATH")
         .args(["rev-parse", "HEAD"])
         .output()
         .unwrap();
@@ -283,7 +291,7 @@ fn a_fresh_clone_seals_no_commit_and_the_empty_digest() {
     // Not a Git work folder: no state, and the walk takes over.
     let plain = t.path().join("plain");
     std::fs::create_dir_all(&plain).unwrap();
-    assert_eq!(state(&plain, BUDGET), None);
+    assert!(state(&plain, BUDGET).is_err());
 }
 
 #[test]
@@ -367,7 +375,7 @@ fn an_agent_written_fsmonitor_is_never_run() {
     std::fs::write(ws.join("a.txt"), b"edited\n").unwrap();
     std::fs::write(ws.join("b.txt"), b"new\n").unwrap();
 
-    assert!(goalcup_daemon::workspace_git::state(&ws, BUDGET).is_some());
+    assert!(goalcup_daemon::workspace_git::state(&ws, BUDGET).is_ok());
     assert!(
         !marker.exists(),
         "the agent's fsmonitor ran inside the seal"
@@ -462,7 +470,9 @@ fn a_non_git_workspace_still_walks() {
     let ws = t.path().join("ws");
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::write(ws.join("main.py"), b"print(1)").unwrap();
-    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET)
+        .unwrap()
+        .unwrap();
     assert_eq!(m.git, None);
     assert_eq!(m.home, None);
     assert_eq!(m.files.len(), 1);
@@ -472,7 +482,126 @@ fn a_non_git_workspace_still_walks() {
     // A clone seals its Git state and walks nothing.
     let t = tempfile::tempdir().unwrap();
     let (ws, _home) = committed_clone(t.path());
-    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET)
+        .unwrap()
+        .unwrap();
     assert!(m.git.is_some());
     assert!(m.files.is_empty(), "{:?}", m.files);
+
+    // A clone whose Git state cannot be read is never walked instead (D56).
+    std::fs::write(ws.join(".git/HEAD"), b"not a ref\n").unwrap();
+    let why = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET)
+        .unwrap()
+        .expect_err("a broken clone is refused, not walked");
+    assert!(!why.is_empty());
+}
+
+/// Review C1: Git before 2.44 ignores `GIT_NO_LAZY_FETCH`. A promisor remote the agent writes,
+/// with an `ext::` URL it allows, and one tree object it deletes would make `ls-tree -r HEAD`
+/// run the agent's command. No transport is allowed, so it never runs.
+#[test]
+fn an_agent_written_promisor_remote_is_never_fetched() {
+    let t = tempfile::tempdir().unwrap();
+    let (ws, home) = committed_clone(t.path());
+    std::fs::create_dir_all(ws.join("sub")).unwrap();
+    std::fs::write(ws.join("sub/f"), b"x\n").unwrap();
+    git(&ws, &home, &["add", "sub/f"]);
+    git(&ws, &home, &["commit", "-q", "-m", "sub"]);
+    let out = goalcup_daemon::workspace_git::command(&ws, &home)
+        .expect("git on PATH")
+        .args(["rev-parse", "HEAD:sub"])
+        .output()
+        .unwrap();
+    let tree = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    std::fs::remove_file(ws.join(".git/objects").join(&tree[..2]).join(&tree[2..])).unwrap();
+    let marker = t.path().join("fetched");
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(ws.join(".git/config"))
+        .unwrap();
+    use std::io::Write;
+    writeln!(
+        config,
+        "[core]\n\trepositoryformatversion = 1\n[extensions]\n\tpartialClone = origin\n\
+         [remote \"origin\"]\n\turl = ext::sh -c touch% {}\n\tpromisor = true\n\
+         [protocol \"ext\"]\n\tallow = always",
+        marker.display()
+    )
+    .unwrap();
+    drop(config);
+
+    // The transport guard alone, as on a Git that ignores `GIT_NO_LAZY_FETCH`.
+    let _ = goalcup_daemon::workspace_git::command(&ws, &home)
+        .expect("git on PATH")
+        .env_remove("GIT_NO_LAZY_FETCH")
+        .args(["ls-tree", "-r", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(
+        !marker.exists(),
+        "the agent's promisor remote ran a command"
+    );
+    assert!(goalcup_daemon::workspace_git::state(&ws, BUDGET).is_err());
+    assert!(
+        !marker.exists(),
+        "the seal fetched from the agent's promisor remote"
+    );
+}
+
+/// Review I1: a nested repository `ls-files` collapses to `nested/` is hashed file by file.
+#[test]
+fn a_nested_repository_is_hashed_file_by_file() {
+    use goalcup_daemon::workspace_git::state;
+    let t = tempfile::tempdir().unwrap();
+    let (ws, home) = committed_clone(t.path());
+    let nested = ws.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    git(&nested, &home, &["init", "-q"]);
+    std::fs::write(nested.join("work.rs"), b"one").unwrap();
+    let before = state(&ws, BUDGET).unwrap().dirty_sha256;
+    std::fs::write(nested.join("work.rs"), b"two").unwrap();
+    let after = state(&ws, BUDGET).unwrap().dirty_sha256;
+    assert_ne!(
+        before, after,
+        "work inside a nested repository moves the digest"
+    );
+}
+
+/// Review I1: a gitlink staged in the index, with no commit of it, is recorded by its id.
+#[test]
+fn an_index_only_gitlink_is_recorded() {
+    use goalcup_daemon::workspace_git::state;
+    let t = tempfile::tempdir().unwrap();
+    let (ws, home) = committed_clone(t.path());
+    let clean = state(&ws, BUDGET).unwrap().dirty_sha256;
+    let id = "1".repeat(40);
+    git(
+        &ws,
+        &home,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{id},vendored"),
+        ],
+    );
+    let mut bytes = b"diff\0vendored\0gitlink:".to_vec();
+    bytes.extend_from_slice(id.as_bytes());
+    bytes.extend_from_slice(b"\nuntracked\0");
+    let got = state(&ws, BUDGET).unwrap().dirty_sha256;
+    assert_ne!(got, clean);
+    assert_eq!(got, sha256_hex(&bytes));
+}
+
+/// Review I1: only `.gitignore` files hide an untracked file; `.git/info/exclude`, which no
+/// digest covers, does not.
+#[test]
+fn an_agent_written_exclude_file_hides_nothing() {
+    use goalcup_daemon::workspace_git::state;
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
+    let clean = state(&ws, BUDGET).unwrap().dirty_sha256;
+    std::fs::write(ws.join(".git/info/exclude"), b"hidden.txt\n").unwrap();
+    std::fs::write(ws.join("hidden.txt"), b"work").unwrap();
+    assert_ne!(state(&ws, BUDGET).unwrap().dirty_sha256, clean);
 }

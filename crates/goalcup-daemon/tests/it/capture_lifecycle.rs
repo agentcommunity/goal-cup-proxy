@@ -2674,6 +2674,7 @@ async fn a_clone_is_admitted_non_empty_and_not_walked() {
     std::fs::create_dir_all(&home).unwrap();
     let git = |args: &[&str]| {
         let out = goalcup_daemon::workspace_git::command(&ws, &home)
+            .expect("git on PATH")
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
             .args(["-c", "commit.gpgsign=false"])
             .args(args)
@@ -2720,6 +2721,66 @@ async fn a_clone_is_admitted_non_empty_and_not_walked() {
     );
 }
 
+/// A clone whose Git state cannot be read is never walked instead (D56): the create is refused
+/// with a sentence, and a finish is refused as out of time, which the CLI asks again; once Git
+/// reads, the next finish seals.
+#[tokio::test]
+async fn a_clone_git_cannot_read_is_refused_never_walked() {
+    let rig = Rig::start().await;
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let clone = |name: &str| {
+        let ws = rig.workspace(name);
+        std::fs::create_dir_all(&ws).unwrap();
+        let out = goalcup_daemon::workspace_git::command(&ws, &home)
+            .expect("git on PATH")
+            .args(["init", "-q"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        std::fs::write(ws.join("README.md"), b"# entry\n").unwrap();
+        ws
+    };
+
+    let broken = clone("broken");
+    std::fs::write(broken.join(".git/HEAD"), b"not a ref\n").unwrap();
+    let refused = rig.create("codex-cli", &broken, RESERVE).await;
+    assert_ne!(refused.status(), 200, "{}", refused.body());
+    assert!(
+        refused
+            .body()
+            .contains("the Git work folder could not be read"),
+        "{}",
+        refused.body()
+    );
+
+    let ws = clone("later-broken");
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    let head = std::fs::read(ws.join(".git/HEAD")).unwrap();
+    std::fs::write(ws.join(".git/HEAD"), b"not a ref\n").unwrap();
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 409, "{}", sealed.body());
+    assert!(
+        sealed.body().contains("finish_deadline"),
+        "{}",
+        sealed.body()
+    );
+    let trace = rig.trace_dir(&info.entry_id);
+    assert!(
+        !trace.join("seal.json").exists(),
+        "nothing was walked or sealed"
+    );
+
+    std::fs::write(ws.join(".git/HEAD"), head).unwrap();
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let seal = read_manifest(&trace.join("seal.json"));
+    assert!(seal.git.is_some());
+    assert_eq!(seal.files, []);
+}
+
 /// The baseline lists the connector's config home as it was before the run, without the
 /// native root the harness writes its sessions into.
 #[tokio::test]
@@ -2729,17 +2790,29 @@ async fn the_baseline_lists_the_harness_home_without_its_session_folder() {
     std::fs::create_dir_all(config_home.join("sessions/2026/10")).unwrap();
     std::fs::write(config_home.join("config.toml"), b"model = \"m\"\n").unwrap();
     std::fs::write(config_home.join("sessions/2026/10/old.jsonl"), b"{}\n").unwrap();
+    // Over 64 MiB: its size alone, never read (a sparse file).
+    std::fs::File::create(config_home.join("big.bin"))
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
 
     let info = rig.created("codex-cli").await;
     let baseline = read_manifest(&rig.trace_dir(&info.entry_id).join("baseline.json"));
     let home = baseline.home.expect("the baseline lists the harness home");
     assert_eq!(
         home,
-        [goalcup_protocol::seal::SealedFile {
-            path: "config.toml".to_string(),
-            bytes: 12,
-            sha256: hex::encode(Sha256::digest(b"model = \"m\"\n")),
-        }]
+        [
+            goalcup_protocol::seal::SealedFile {
+                path: "big.bin".to_string(),
+                bytes: 64 * 1024 * 1024 + 1,
+                sha256: "0".repeat(64),
+            },
+            goalcup_protocol::seal::SealedFile {
+                path: "config.toml".to_string(),
+                bytes: 12,
+                sha256: hex::encode(Sha256::digest(b"model = \"m\"\n")),
+            },
+        ]
     );
     assert_eq!(baseline.git, None, "a fresh workspace is no clone");
 }

@@ -9,6 +9,10 @@ use super::*;
 /// before its transport timeout. It is a part of [`FINISH_COMMIT_RESERVE`], not another budget.
 pub(super) const FINISH_RESPONSE_MARGIN: Duration = Duration::from_secs(1);
 
+/// What the drain share leaves the seal of a clone's Git state, inside the budget (D56): a
+/// producer that never settles cannot starve it. A smaller budget leaves it all of it.
+pub(super) const GIT_READ_FLOOR: Duration = Duration::from_secs(30);
+
 /// The finish reason a local capture finish records on its `LocalFinish` record. A local
 /// capture has no signed deadline, so a finish is always one the participant's seal asked for.
 pub(super) const LOCAL_FINISH_REASON: &str = "manual";
@@ -78,8 +82,8 @@ pub(super) struct FinishBudget {
 }
 
 impl FinishBudget {
-    /// `NotStarted` for a zero remainder. The drain share ends [`FINISH_COMMIT_RESERVE`]
-    /// before the deadline, or now when less than the reserve remains.
+    /// `NotStarted` for a zero remainder. The drain share ends [`FINISH_COMMIT_RESERVE`] plus
+    /// [`GIT_READ_FLOOR`] before the deadline, or now when less than that remains.
     pub(super) fn from_request(request: &CaptureSealRequest) -> Result<FinishBudget, DaemonError> {
         let remaining = request.remaining_finish();
         if remaining.is_zero() {
@@ -88,7 +92,7 @@ impl FinishBudget {
         let now = tokio::time::Instant::now();
         let deadline = now + remaining;
         let drain_end = deadline
-            .checked_sub(FINISH_COMMIT_RESERVE)
+            .checked_sub(FINISH_COMMIT_RESERVE + GIT_READ_FLOOR)
             .map_or(now, |end| end.max(now));
         Ok(FinishBudget {
             drain_end,
@@ -409,15 +413,25 @@ impl Daemon {
             return Err(capture.expire(FinishStage::WorkspaceWalk, None, Some(termination)));
         }
         let sealed_at = now_rfc3339();
-        // A clone's Git state gets half of what is left, so the walk it falls back to has the
-        // other half (D56).
-        let git_budget = budget
-            .last_start(excluded)
-            .saturating_duration_since(tokio::time::Instant::now())
-            / 2;
+        // A clone's Git state may take what is left but the commit reserve; the drain share left
+        // it at least `GIT_READ_FLOOR` (D56).
+        let git_budget = (budget.deadline + excluded)
+            .checked_sub(FINISH_COMMIT_RESERVE)
+            .map_or(Duration::ZERO, |end| {
+                end.saturating_duration_since(tokio::time::Instant::now())
+            });
         let manifest =
             match workspace::seal_workspace(&row.workspace, &entry_id, &sealed_at, git_budget) {
-                Ok(manifest) => manifest,
+                Ok(Ok(manifest)) => manifest,
+                // A clone whose Git state could not be read is never walked instead: the finish
+                // is refused as out of time, which the CLI asks again with growing waits (D56).
+                Ok(Err(_)) => {
+                    return Err(capture.expire(
+                        FinishStage::WorkspaceWalk,
+                        None,
+                        Some(termination),
+                    ));
+                }
                 Err(error) => {
                     // The harness was ended above; a later finish must not read that as "ended on
                     // its own".

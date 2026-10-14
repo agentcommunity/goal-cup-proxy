@@ -163,7 +163,7 @@ use self::writer::*;
 const IDLE_WAIT: Duration = Duration::from_millis(25);
 
 /// What reading a clone's Git state may take at the baseline (D56): inside the CLI's 30 s
-/// create call, with room for the walk it falls back to.
+/// create call. A clone not read in it is refused, never walked.
 const BASELINE_GIT_BUDGET: Duration = Duration::from_secs(20);
 
 /// One v5 capture entry of this daemon.
@@ -405,7 +405,10 @@ impl Daemon {
             source,
         })?;
         let mut baseline =
-            workspace::seal_workspace(&workspace, entry_id, &now_rfc3339(), BASELINE_GIT_BUDGET)?;
+            workspace::seal_workspace(&workspace, entry_id, &now_rfc3339(), BASELINE_GIT_BUDGET)?
+                .map_err(|why| {
+                DaemonError::Refused(format!("the Git work folder could not be read: {why}"))
+            })?;
         baseline.home = listed_home(&manifest.capture, run_home, config_home);
         export.write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)?;
         export.sync_capture()?;

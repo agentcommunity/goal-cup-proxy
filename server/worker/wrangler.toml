@@ -33,6 +33,9 @@ DB_BACKEND = "supabase"
 # Check with the GitHub API that repo_url is a public repository. "on" in production;
 # `npm run dev` and the tests turn it off so they need no network.
 GITHUB_CHECK = "on"
+# PLACEHOLDER: the website's page where a member approves a device request (no query string).
+# The tracer opens it with `?code=<user code>`.
+APPROVAL_URL = "https://example.org/goalcup/approve"
 # Set to "on" and redeploy to make every call answer 503 + Retry-After.
 MAINTENANCE = "off"
 MAINTENANCE_RETRY_AFTER = "300"
@@ -42,3 +45,5 @@ MAINTENANCE_RETRY_AFTER = "300"
 #   SUPABASE_URL         https://<project>.supabase.co
 #   SUPABASE_KEY         key of the dedicated role limited to schema goalcup
 #   GITHUB_TOKEN         optional, read-only, raises the GitHub API rate limit
+#   TEST_APPROVAL_KEY    never in production. Staging only (with STAGING = "on"): switches on
+#                        POST /v1/device/approve, which approves a device request as any member.
