@@ -152,7 +152,7 @@ pub fn list_workspace(
         entry_id: entry_id.to_string(),
         sealed_at: at.to_string(),
         workspace: workspace.to_string_lossy().to_string(),
-        files: walk(workspace, excluded, usize::MAX)?,
+        files: walk(workspace, excluded, usize::MAX, u64::MAX)?,
         excluded: excluded.to_vec(),
         git: None,
         home: None,
@@ -160,18 +160,23 @@ pub fn list_workspace(
     .sorted())
 }
 
-/// The workspace's seal (D56): the Git state of a workspace that is its own clone, read within
-/// `budget`, or the walk when there is none or it could not be read in time.
+/// The workspace's seal (D56). The root of its own clone ([`is_clone_root`]) is never walked:
+/// its Git state, read within `budget`, or `Ok(Err(why))` when it could not be read, which the
+/// caller refuses rather than walk. Any other workspace is walked, as before.
 pub fn seal_workspace(
     workspace: &Path,
     entry_id: &str,
     at: &str,
     budget: std::time::Duration,
-) -> Result<SealManifest, DaemonError> {
-    let Some(git) = crate::workspace_git::state(workspace, budget) else {
-        return list_workspace(workspace, entry_id, at, &[]);
+) -> Result<Result<SealManifest, String>, DaemonError> {
+    if !is_clone_root(workspace) {
+        return list_workspace(workspace, entry_id, at, &[]).map(Ok);
+    }
+    let git = match crate::workspace_git::state(workspace, budget) {
+        Ok(git) => git,
+        Err(why) => return Ok(Err(why)),
     };
-    Ok(SealManifest {
+    Ok(Ok(SealManifest {
         entry_id: entry_id.to_string(),
         sealed_at: at.to_string(),
         workspace: workspace.to_string_lossy().to_string(),
@@ -179,26 +184,32 @@ pub fn seal_workspace(
         excluded: Vec::new(),
         git: Some(git),
         home: None,
-    })
+    }))
 }
 
 /// The most files the baseline lists of the harness home (D56).
 pub const HOME_FILE_LIMIT: usize = 10_000;
 
+/// A file larger than this is described by its size alone: in the Git digest, and in the
+/// baseline's harness-home listing, where it carries the absent digest beside its size (D56).
+pub(crate) const HASH_LIMIT: u64 = 64 * 1024 * 1024;
+
 /// The connector's config home for the baseline (D56): every file the walk meets, without
 /// `excluded` (its native roots), symlinks unfollowed, stopping at [`HOME_FILE_LIMIT`] files,
-/// sorted. `None` when the home cannot be read.
+/// sorted. A file over [`HASH_LIMIT`] is not read. `None` when the home cannot be read.
 pub fn list_home(home: &Path, excluded: &[String]) -> Option<Vec<SealedFile>> {
-    let mut files = walk(home, excluded, HOME_FILE_LIMIT).ok()?;
+    let mut files = walk(home, excluded, HOME_FILE_LIMIT, HASH_LIMIT).ok()?;
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Some(files)
 }
 
-/// Every file below `workspace` the exclusions leave, at most `limit` of them, in walk order.
-fn walk(
+/// Every file below `workspace` the exclusions leave, at most `limit` of them, in walk order. A
+/// regular file over `hash_limit` bytes is listed with its size and the absent digest, unread.
+pub(crate) fn walk(
     workspace: &Path,
     excluded: &[String],
     limit: usize,
+    hash_limit: u64,
 ) -> Result<Vec<SealedFile>, DaemonError> {
     let mut files = Vec::new();
     let mut stack = vec![workspace.to_path_buf()];
@@ -258,7 +269,7 @@ fn walk(
                 stack.push(path);
                 continue;
             }
-            let (bytes, sha256) = measure(&path);
+            let (bytes, sha256) = measure(&path, hash_limit);
             files.push(SealedFile {
                 path: rel,
                 bytes,
@@ -286,7 +297,9 @@ fn relative_to(workspace: &Path, path: &Path) -> String {
 /// blocking, never read, so an agent's `mkfifo` cannot wedge the seal), a socket, a device, a
 /// file whose permissions changed under the walk — is still listed, with the absent digest:
 /// dropping it would make the seal quieter than the workspace it describes.
-pub(crate) fn measure(path: &Path) -> (u64, String) {
+///
+/// A regular file over `hash_limit` bytes is not read: its size, with the absent digest.
+pub(crate) fn measure(path: &Path, hash_limit: u64) -> (u64, String) {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
     let Ok(mut file) = std::fs::OpenOptions::new()
@@ -296,8 +309,14 @@ pub(crate) fn measure(path: &Path) -> (u64, String) {
     else {
         return (0, ABSENT.to_string());
     };
-    if !file.metadata().is_ok_and(|m| m.file_type().is_file()) {
+    let Ok(meta) = file.metadata() else {
         return (0, ABSENT.to_string());
+    };
+    if !meta.file_type().is_file() {
+        return (0, ABSENT.to_string());
+    }
+    if meta.len() > hash_limit {
+        return (meta.len(), ABSENT.to_string());
     }
     let mut hasher = Sha256::new();
     let mut total = 0u64;

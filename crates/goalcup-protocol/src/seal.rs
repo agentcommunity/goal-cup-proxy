@@ -32,7 +32,7 @@ pub struct SealManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<WorkspaceGit>,
     /// The baseline only: the connector's config home before the run, without its native
-    /// roots, at most 10 000 files (D56).
+    /// roots, at most 10 000 files; one over 64 MiB has its size and the absent digest (D56).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<Vec<SealedFile>>,
 }

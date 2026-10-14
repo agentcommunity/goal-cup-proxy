@@ -1316,11 +1316,15 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
         })
     ));
 
-    // The full budget (D56): a 178 s drain share, a 2 s commit reserve, 1 s of it the margin.
+    // The full budget (D56): a 148 s drain share, 30 s left for a clone's Git read, a 2 s
+    // commit reserve, 1 s of it the margin.
     let full = FinishBudget::from_request(&request(None)).unwrap();
-    assert_eq!(full.deadline - full.drain_end, FINISH_COMMIT_RESERVE);
+    assert_eq!(
+        full.deadline - full.drain_end,
+        FINISH_COMMIT_RESERVE + GIT_READ_FLOOR
+    );
     let native = full.native_budget();
-    assert!(native <= Duration::from_secs(178) && native > Duration::from_millis(177_500));
+    assert!(native <= Duration::from_secs(148) && native > Duration::from_millis(147_500));
     assert!(full.admits(Duration::ZERO));
     assert_eq!(
         full.last_start(Duration::ZERO) + FINISH_RESPONSE_MARGIN,
