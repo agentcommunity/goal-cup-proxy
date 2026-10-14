@@ -1,13 +1,13 @@
-//! The Phase 1 storage and accounting fault campaign, Task 2 slice of T25: four rows against the
+//! The Phase 1 storage and accounting fault campaign, Task 2 slice of T25: three rows against the
 //! real `goalcup`, `goalcup-daemon`, in-process proxy and `goalcup-verify`, on the synthetic
-//! workload of `m2_synthetic_vertical`. A control, a refused reservation, an exhausted
-//! reservation and a refused metadata append.
+//! workload of `m2_synthetic_vertical`. A control, an exhausted quota and a refused metadata
+//! append.
 //!
 //! The faults are the production boundaries and nothing else:
 //!
-//! - the reservation is `goalcup start --capture-reserve-bytes`: an impossible size is refused
-//!   by the platform allocator before the goal, the Launch or the harness exist;
-//! - exhaustion is logical: a small reserve is spent by the `stream` workload, whose traffic
+//! - the chain is quota-only: the test build's `GOALCUP_TEST_DISK` sets a logical byte budget,
+//!   and nothing is allocated up front, so no size is refused at launch;
+//! - exhaustion is logical: a small quota is spent by the `stream` workload, whose traffic
 //!   keeps flowing through the relay; no filesystem is filled;
 //! - the metadata fault is a second hard link to the live `chain.jsonl`, made outside the trace
 //!   directory and removed once the refusal has been observed. The append capability refuses a
@@ -89,7 +89,7 @@ fn campaign_control_local_capture_finishes_and_verifies() {
     let entry = v.entry_id();
     v.wait_for("holding");
 
-    // While the workload holds: the physical reservation reported measured, recording,
+    // While the workload holds: the quota reported, recording,
     // local-only, with a durable frontier and no loss.
     let live = capture(&v, &entry);
     row.note("live_status", serde_json::to_value(&live).unwrap());
@@ -97,10 +97,6 @@ fn campaign_control_local_capture_finishes_and_verifies() {
     assert_eq!(live.capture, CaptureState::Recording);
     assert_eq!(live.delivery, DeliveryState::LocalOnly);
     assert_eq!(live.storage.quota_bytes, RESERVE);
-    assert_eq!(
-        live.storage.reserved_bytes, RESERVE,
-        "measured physical reservation"
-    );
     assert!(live.storage.accounting_available);
     assert_eq!(live.gap_count, 0);
     assert!(live.storage.durable.is_some(), "{live:?}");
@@ -156,43 +152,6 @@ fn campaign_control_local_capture_finishes_and_verifies() {
 
 #[test]
 #[ignore = "real processes and sockets; run by name with --ignored"]
-fn reservation_failure_refuses_before_goal_launch() {
-    let _lock = TableLock::acquire();
-    let v = Vertical::new("plain", json!({}));
-    let mut row = Row::new(
-        "reservation_failure_refuses_before_goal_launch",
-        &v,
-        EVIDENCE,
-    );
-    // A reservation no volume can hold: refused by the platform allocator, so no goal, no
-    // Launch and no harness. The allocator's own byte accounting is `capture_reserved_storage`'s.
-    let mut start = v.start(1 << 60);
-    let exit = start.wait(RUN);
-    row.note("start_exit", exit.code());
-    row.note("start_output", start.output());
-    assert_eq!(exit.code(), Some(1), "{}", start.output());
-    assert!(
-        start.output().contains("cannot reserve"),
-        "{}",
-        start.output()
-    );
-
-    // Nothing ran and nothing was left behind.
-    assert!(!v.out.join("pid").exists(), "the workload never ran");
-    assert_eq!(v.run_dir(), None, "no run directory");
-    let entries = std::fs::read_dir(v.cfg.join("entries")).map_or(0, |d| d.count());
-    assert_eq!(entries, 0, "no entry record");
-    let left: Vec<_> = m2_vertical_support::files_under(&v.artifacts.join("artifacts"))
-        .into_iter()
-        .map(|(path, _)| path)
-        .collect();
-    row.note("artifact_files_left", left.len());
-    assert!(left.is_empty(), "no trace was left: {left:?}");
-    assert_eq!(v.upload_dials(), 0);
-}
-
-#[test]
-#[ignore = "real processes and sockets; run by name with --ignored"]
 fn chain_budget_exhaustion_preserves_bounded_terminal_gap() {
     let _lock = TableLock::acquire();
     let v = Vertical::new("stream", json!({}));
@@ -210,7 +169,6 @@ fn chain_budget_exhaustion_preserves_bounded_terminal_gap() {
     let lost_at = now();
     row.note("first_loss_status", serde_json::to_value(&lost).unwrap());
     assert_eq!(lost.storage.quota_bytes, SMALL_RESERVE);
-    assert_eq!(lost.storage.reserved_bytes, SMALL_RESERVE);
     assert_eq!(lost.capture, CaptureState::Incomplete);
     assert!(
         lost.storage.accounting_available,
@@ -602,7 +560,10 @@ fn local_finish_under_backlog_has_one_deadline() {
     let v = Vertical::new("stream", json!({"descendant": true}));
     let mut row = Row::new("local_finish_under_backlog_has_one_deadline", &v, EVIDENCE);
     let pause = armed(&v, "capture-finish-started");
-    let mut start = v.start_paused(RESERVE, &pause);
+    // The wrap-up of a run without a server is one second in a test build: the first attempt
+    // spends the whole 10 s budget, so no later ask is made and the one deadline is what is
+    // measured. (At the shipped 30 minutes a frozen daemon is asked again, by design.)
+    let mut start = v.start_paused_short_wrap_up(RESERVE, &pause, 1_000);
     let entry = v.entry_id();
     v.wait_for("pid");
     v.wait_for_echoes(5);

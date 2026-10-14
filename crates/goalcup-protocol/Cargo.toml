@@ -6,6 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+# Test-only seams, never in a shipped build: `TraceExport::set_part_limits`. The daemon's own
+# `test-hooks` turns this on; this crate's tests get it from the dev-dependency below.
+[features]
+test-hooks = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -26,5 +31,8 @@ libc.workspace = true
 #   tempfile — `tests/export_roundtrip.rs` writes a real trace directory: `TraceExport`
 #     owns bytes on disk, so its tests have to read those bytes back rather than trust a
 #     returned value.
+#   goalcup-protocol — this crate, back to itself, with `test-hooks` on, so `tests/` can set
+#     small chain part limits.
 [dev-dependencies]
 tempfile.workspace = true
+goalcup-protocol = { path = ".", features = ["test-hooks"] }

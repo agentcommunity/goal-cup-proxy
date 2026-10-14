@@ -180,6 +180,7 @@ fn log_in(rig: &Rig, url: &str, token: &str) {
         &rig.cfg,
         &ServerConfig {
             url: url.to_string(),
+            account: None,
             token: token.to_string(),
         },
     )

@@ -216,7 +216,7 @@ impl Rig {
     pub fn options(&self, goal: &Path, reserve: u64) -> StartOptions {
         let mut opts = super::support::start_options(FAKE_ID);
         opts.goal_file = Some(goal.to_path_buf());
-        opts.capture_reserve_bytes = reserve;
+        opts.disk = super::support::disk_of(reserve);
         opts.dev = true;
         opts
     }

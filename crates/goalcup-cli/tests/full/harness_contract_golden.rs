@@ -1434,17 +1434,6 @@ fn the_deepseek_loader_script_behaviour_is_pinned() {
             ),
         ),
         (
-            "hermes_with_reserve_option",
-            loader(
-                &start(
-                    "hermes-cli",
-                    vec!["--goal-file", "/g.txt", "--capture-reserve-bytes", "9"],
-                ),
-                &good,
-                0o600,
-            ),
-        ),
-        (
             "hermes_with_equals_options",
             loader(
                 &start("hermes-cli", vec!["--goal-file=/g.txt"]),

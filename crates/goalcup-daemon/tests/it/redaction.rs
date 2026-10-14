@@ -2,6 +2,10 @@
 //! audit the altered envelope carries beside the redacted bytes.
 
 use goalcup_daemon::redact::Redactor;
+use goalcup_daemon::redact::stream::StreamRedactor;
+use goalcup_protocol::capture::CaptureRecord;
+
+use crate::common::redaction::stream_through;
 
 #[test]
 fn a_key_is_removed_with_kind_only_marker_and_original_offsets() {
@@ -123,6 +127,9 @@ fn the_shared_set_kinds_are_in_the_documented_order() {
             // A masked provider key (`sk-ab***wxyz`).
             "masked_key",
             "github_token",
+            // The fine-grained form, ahead of the classic one: it wins an overlap with a `ghp_`
+            // inside its own body.
+            "github_token",
             "aws_access_key",
             "bearer",
             "jwt",
@@ -143,7 +150,7 @@ fn the_shared_set_kinds_are_in_the_documented_order() {
             "digitalocean_token",
         ]
     );
-    assert_eq!(goalcup_daemon::redact::patterns().len(), 19);
+    assert_eq!(goalcup_daemon::redact::patterns().len(), 20);
 }
 
 /// Every one of the script's ten still fires, on the shapes it was written for. The spike
@@ -1321,7 +1328,11 @@ fn spikes_redact_py_patterns_match_the_shared_set() {
             )
         })
         .collect();
-    assert_eq!(script.len(), 11, "the script's ten rules and masked_key");
+    assert_eq!(
+        script.len(),
+        12,
+        "the script's ten rules, the fine-grained github_token and masked_key"
+    );
     let shared = goalcup_daemon::redact::patterns();
 
     let mut paired = vec![false; shared.len()];
@@ -1388,6 +1399,7 @@ fn spikes_redact_py_patterns_match_the_shared_set() {
 const SCRIPT_KINDS: &[&str] = &[
     "anthropic_key",
     "openai_key",
+    "github_token",
     "github_token",
     "aws_access_key",
     "bearer",
@@ -1456,6 +1468,10 @@ fn shared_rule_probes() -> Vec<String> {
     }
     add(format!("ghp_{}", a(19)));
     add(format!("ghx_{}", a(20)));
+    // the fine-grained form
+    add(format!("github_pat_{}_{}", a(22), a(59)));
+    add(format!("github_pat_{}", a(22)));
+    add(format!("github_pat_{}", a(21)));
     // aws_access_key
     add("AKIAIOSFODNN7EXAMPLE and AKIA0123456789ABCDEF".into());
     add("AKIAIOSFODNN7EXAMPL".into());
@@ -2269,6 +2285,111 @@ fn a_secret_in_json_escaped_text_is_redacted_and_the_record_stays_json() {
             if let Some(arg) = inner["cmd"].get(2).and_then(|a| a.as_str()) {
                 serde_json::from_str::<serde_json::Value>(arg)
                     .expect("the twice-escaped text is JSON");
+            }
+        }
+    }
+}
+
+/// A fine-grained GitHub token (`github_pat_` and 82 more characters, underscores among them)
+/// is removed under the one `github_token` kind, by the whole-record redactor and by the
+/// streaming one at every chunking, a cut inside the prefix and inside the body included.
+/// The token is synthetic.
+#[test]
+fn a_fine_grained_github_token_is_redacted_in_stream_and_whole() {
+    let body: String = "A1_".repeat(28).chars().take(82).collect();
+    let token = format!("github_pat_{body}");
+    assert_eq!(token.len(), 93);
+    let text = format!("export GH={token}; done");
+
+    let whole = Redactor::new().apply(text.as_bytes());
+    assert_eq!(
+        String::from_utf8(whole.bytes.clone()).unwrap(),
+        "export GH=<redacted:github_token>; done"
+    );
+    assert_eq!(whole.spans.len(), 1);
+    assert_eq!(whole.spans[0].kind, "github_token");
+    assert_eq!(
+        &text.as_bytes()[whole.spans[0].start as usize..whole.spans[0].end as usize],
+        token.as_bytes(),
+        "the span is the whole token, underscores and all"
+    );
+    // The shortest body the rule takes, and one short of it.
+    let short = format!("github_pat_{}", "A".repeat(22));
+    assert_eq!(
+        Redactor::new().apply(short.as_bytes()).bytes,
+        b"<redacted:github_token>"
+    );
+    let near = format!("github_pat_{}", "A".repeat(21));
+    assert_eq!(
+        Redactor::new().apply(near.as_bytes()).bytes,
+        near.as_bytes()
+    );
+
+    for chunks in [&[1usize][..], &[5], &[11], &[12], &[40, 3], &[1000]] {
+        for flush_every in [0, 1, 3] {
+            let records =
+                stream_through(StreamRedactor::new(), text.as_bytes(), chunks, flush_every);
+            let mut kept = Vec::new();
+            for r in &records {
+                if let CaptureRecord::Segment { data_b64, .. } = r {
+                    use base64::{Engine, engine::general_purpose::STANDARD};
+                    kept.extend(STANDARD.decode(data_b64).unwrap());
+                }
+            }
+            let kept = String::from_utf8(kept).unwrap();
+            assert!(
+                !kept.contains("github_pat_"),
+                "{chunks:?}/{flush_every}: {kept}"
+            );
+            assert!(!kept.contains("A1_A1_"), "{chunks:?}/{flush_every}: {kept}");
+            assert_eq!(
+                kept, "export GH=<redacted:github_token>; done",
+                "{chunks:?}/{flush_every}: the stream equals the whole-record result"
+            );
+        }
+    }
+}
+
+/// The first segment of a fine-grained token may end in `ghp`, `gho`, `ghu`, `ghs` or `ghr`,
+/// and then `ghp_` and the body after it is also a classic token. The fine-grained rule claims
+/// first, so the whole token goes and neither `github_pat_` nor the start of the body stays
+/// raw. The token is synthetic.
+#[test]
+fn a_fine_grained_token_containing_a_classic_prefix_is_redacted_whole() {
+    for k in ["p", "o", "u", "s", "r"] {
+        let token = format!(
+            "github_pat_{}gh{k}_{}",
+            "B2".repeat(9) + "x",
+            "C3d".repeat(20)
+        );
+        assert_eq!(token.len(), 11 + 22 + 1 + 60);
+        let text = format!("remote https://x:{token}@host done");
+        let expect = "remote https://x:<redacted:github_token>@host done";
+
+        let whole = Redactor::new().apply(text.as_bytes());
+        assert_eq!(String::from_utf8(whole.bytes).unwrap(), expect, "gh{k}");
+        assert_eq!(
+            whole.spans.len(),
+            1,
+            "gh{k}: one span, not a classic one inside"
+        );
+
+        for chunks in [&[1usize][..], &[7], &[13], &[30, 2], &[1000]] {
+            for flush_every in [0, 1] {
+                let records =
+                    stream_through(StreamRedactor::new(), text.as_bytes(), chunks, flush_every);
+                let mut kept = Vec::new();
+                for r in &records {
+                    if let CaptureRecord::Segment { data_b64, .. } = r {
+                        use base64::{Engine, engine::general_purpose::STANDARD};
+                        kept.extend(STANDARD.decode(data_b64).unwrap());
+                    }
+                }
+                assert_eq!(
+                    String::from_utf8(kept).unwrap(),
+                    expect,
+                    "gh{k} {chunks:?}/{flush_every}"
+                );
             }
         }
     }

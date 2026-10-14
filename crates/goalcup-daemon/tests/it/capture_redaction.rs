@@ -219,6 +219,7 @@ const FRAGMENTS: &[&[u8]] = &[
     b"sk_live_",
     b"rk_live_",
     b"ghp_",
+    b"github_pat_",
     b"gho_",
     b"ghx_",
     b"AKIA",
@@ -1033,6 +1034,7 @@ fn adversarial_input(rng: &mut Rng) -> Vec<u8> {
                             b"hf_",
                             b"sk-ant-api03-",
                             b"ghp_",
+                            b"github_pat_",
                             b"x@y.",
                             b"-",
                             b".",
@@ -1227,6 +1229,7 @@ fn seeded_long_inputs_never_expose_a_whole_record_secret() {
         b"x@y.",
         b"sk-ant-api03-",
         b"ghp_",
+        b"github_pat_",
         b"dop_v1_",
     ];
     let mut failures = Vec::new();

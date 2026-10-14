@@ -94,14 +94,6 @@ enum Command {
         /// outside any git repository.
         #[arg(long, value_name = "PATH", required = true)]
         goal_file: Option<std::path::PathBuf>,
-        /// Disk space, in bytes, reserved for the recording before the harness starts.
-        #[arg(
-            long,
-            value_name = "BYTES",
-            requires = "goal_file",
-            default_value_t = goalcup_protocol::capture::DEFAULT_CAPTURE_RESERVE_BYTES
-        )]
-        capture_reserve_bytes: u64,
         /// The public GitHub repository your agent pushes to, `https://github.com/<owner>/<repo>`.
         /// Required once `goalcup login` has connected this tracker to the Goal Cup server.
         #[arg(long, value_name = "URL")]
@@ -197,13 +189,12 @@ fn run(command: Command) -> Result<u8, CliError> {
             harness,
             dev,
             goal_file,
-            capture_reserve_bytes,
             repo,
         } => start(commands::start::StartOptions {
             harness,
             dev,
             goal_file,
-            capture_reserve_bytes,
+            disk: disk_policy()?,
             repo,
             upload_policy: upload_policy()?,
         })
@@ -233,6 +224,22 @@ fn upload_policy() -> Result<goalcup_cli::upload::uploader::Policy, CliError> {
     }
     Ok(goalcup_cli::upload::uploader::Policy::default())
 }
+
+/// The sizes of the run's disk reservation: the shipped ones, or in a test build ones named by
+/// [`TEST_DISK_POLICY`], so that no test holds 3 GiB.
+fn disk_policy() -> Result<goalcup_cli::run::reserve::DiskPolicy, CliError> {
+    #[cfg(feature = "test-support")]
+    if let Ok(spec) = std::env::var(TEST_DISK_POLICY) {
+        return goalcup_cli::run::reserve::DiskPolicy::from_test_spec(&spec)
+            .ok_or_else(|| CliError::Refused(format!("{TEST_DISK_POLICY} is malformed")));
+    }
+    Ok(goalcup_cli::run::reserve::DiskPolicy::default())
+}
+
+/// A test build's disk sizes: `reserve_bytes,start_margin_bytes,tick_ms`, then optionally
+/// `free_floor_bytes` and, after it, `chain_quota_bytes`.
+#[cfg(feature = "test-support")]
+const TEST_DISK_POLICY: &str = "GOALCUP_TEST_DISK";
 
 /// A test build's upload timing, so a test can see an hour's cadence in a second.
 #[cfg(feature = "test-support")]

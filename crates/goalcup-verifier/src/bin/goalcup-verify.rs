@@ -111,6 +111,12 @@ fn capture_integrity(trace: &Path, args: Args) -> std::process::ExitCode {
                 integrity.as_str().unwrap_or("unknown"),
                 anchor.as_str().unwrap_or("unknown")
             );
+            if report.findings.iter().any(|f| f == "chain_pruned_locally") {
+                eprintln!(
+                    "goalcup-verify: the chain's first parts were pruned on this machine: \
+                     verify the server copy"
+                );
+            }
             std::process::ExitCode::from(code)
         }
         Err(e) => {

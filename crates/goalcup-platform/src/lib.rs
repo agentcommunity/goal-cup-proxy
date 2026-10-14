@@ -10,8 +10,9 @@ compile_error!(
     "goalcup-platform builds on unix targets only; Windows is not yet supported (it is planned)"
 );
 
+/// A held sleep inhibitor that lives and dies with its value.
+pub mod awake;
 /// Free space on a volume and the run reserve file that holds blocks against a full disk.
-#[cfg(unix)]
 pub mod disk;
 /// The calling thread's `errno`, for the `readdir` end-of-directory idiom.
 #[cfg(unix)]
@@ -19,6 +20,8 @@ pub mod errno;
 /// Contained file access rooted in an owned directory capability.
 pub mod filecap;
 pub mod handle_budget;
+/// Facts about the machine and small host helpers, with no identity in them.
+pub mod machine;
 pub mod readcap;
 pub mod sourcecap;
 pub mod tracecap;

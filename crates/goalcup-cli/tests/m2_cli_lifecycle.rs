@@ -28,6 +28,10 @@ use std::time::{Duration, Instant};
 const GOAL: &str = "write hello.txt, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
 
+/// A test build's short wrap-up for a run without a server: two seconds, and the seal asked
+/// again after 100 ms (doubling) instead of the shipped 30 minutes and 10 s.
+const SHORT_WRAP_UP: (&str, &str) = (goalcup_cli::upload::policy::TEST_LOCAL_WRAP_UP, "2000,100");
+
 fn joined<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
     handle.join().expect("the start thread panicked")
 }
@@ -279,6 +283,190 @@ fn local_pilot_never_requests_receipt() {
     );
 }
 
+/// The reserve files in the artifact root `goalcup start` used for this rig.
+fn reserve_files(rig: &Rig) -> Vec<std::fs::DirEntry> {
+    let dir = goalcup_cli::run::reserve::artifact_root(&rig.cfg).join("reserve");
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
+    use std::os::unix::fs::MetadataExt;
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::new();
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let (started, held, record) = std::thread::scope(|s| {
+        let start = rig.start(s, &client, rig.options(&goal, RESERVE), None);
+        rig.wait_for("sleeper");
+        let entry_id = client.created().entry_id;
+        let held: Vec<(String, u64)> = reserve_files(&rig)
+            .iter()
+            .map(|f| {
+                (
+                    f.file_name().to_string_lossy().into_owned(),
+                    f.metadata().unwrap().blocks() * 512,
+                )
+            })
+            .collect();
+        let record = goalcup_cli::run::read(&rig.cfg, &entry_id);
+        // Ending the run through the daemon ends the harness.
+        let mut sealed = Vec::new();
+        goalcup_cli::commands::seal::seal_with(
+            &http,
+            &rig.connectors,
+            &rig.cfg,
+            &entry_id,
+            &mut sealed,
+        )
+        .unwrap();
+        (joined(start), held, record)
+    });
+    let (result, out) = started;
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    let entry_id = client.created().entry_id;
+    // One file, named for the run (a local run's id is its entry's), holding its blocks.
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].0, entry_id);
+    assert!(held[0].1 >= RESERVE, "{held:?}");
+    // The record the run left: no server, no deadline, the entry and its trace folder.
+    let record = record.expect("a run record while the run records");
+    assert_eq!(record.run_id, entry_id);
+    assert_eq!((record.server_url, record.deadline_at), (None, None));
+    assert_eq!(record.connector_id, FAKE_ID);
+    assert_eq!(record.entries.len(), 1);
+    assert_eq!(record.entries[0].entry_id, entry_id);
+    assert_eq!(
+        goalcup_cli::run::of_entry(&rig.cfg, &entry_id)
+            .unwrap()
+            .map(|r| r.run_id),
+        Some(entry_id.clone())
+    );
+    assert_eq!(
+        goalcup_cli::run::newest(&rig.cfg)
+            .unwrap()
+            .map(|r| r.run_id),
+        Some(entry_id)
+    );
+    // And at the run's end the reservation is gone.
+    assert!(reserve_files(&rig).is_empty(), "{:?}", reserve_files(&rig));
+}
+
+#[test]
+fn a_full_disk_with_no_upload_ends_the_run_through_the_one_stop_channel() {
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::new();
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let mut opts = rig.options(&goal, RESERVE);
+    // The disk always reads as full: a floor above any free space. A local run uploads nothing,
+    // so its uploads count as failing, and the watch stops the run as the deadline would.
+    opts.disk.free_floor = u64::MAX / 2;
+    let (result, out) = std::thread::scope(|s| joined(rig.start(s, &client, opts, None)));
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(
+        out.contains("stopped: the disk is nearly full and uploads are failing"),
+        "{out}"
+    );
+    assert!(out.contains("finished locally"), "{out}");
+    let entry_id = client.created().entry_id;
+    let (report, _) = rig.read_trace(&entry_id);
+    assert!(report.sealed, "{:?}", report.findings);
+    assert!(reserve_files(&rig).is_empty());
+}
+
+#[test]
+fn a_stale_reserve_is_released_by_the_next_start() {
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::new();
+    let root = goalcup_cli::run::reserve::artifact_root(&rig.cfg);
+    // An earlier server run, past its deadline by more than a day, still holding its reserve;
+    // and one whose deadline has not come.
+    let long_gone = goalcup_protocol::control::format_z(1_000);
+    let ahead = goalcup_protocol::control::format_z(goalcup_cli::run::now_unix() + 3_600);
+    for (id, deadline) in [
+        ("r0000000000000001", long_gone),
+        ("r0000000000000002", ahead),
+    ] {
+        goalcup_cli::run::write(
+            &rig.cfg,
+            &goalcup_cli::run::RunRecord {
+                run_id: id.to_string(),
+                server_url: Some("https://server.example".to_string()),
+                practice: false,
+                connector_id: FAKE_ID.to_string(),
+                workspace: rig.root.join("old"),
+                started_at_unix: 1,
+                deadline_at: Some(deadline),
+                entries: Vec::new(),
+            },
+        )
+        .unwrap();
+        goalcup_cli::run::reserve::RunReserve::take(
+            &goalcup_cli::run::reserve::reserve_path(&root, id),
+            &support::disk_of(RESERVE),
+        )
+        .unwrap();
+    }
+    // Two local runs: one whose `goalcup start` was killed (its file is there, nothing holds the
+    // lock), and one still running (this test holds the lock).
+    let mut held = Vec::new();
+    for (id, killed) in [("r0000000000000003", true), ("r0000000000000004", false)] {
+        goalcup_cli::run::write(
+            &rig.cfg,
+            &goalcup_cli::run::RunRecord {
+                run_id: id.to_string(),
+                server_url: None,
+                practice: false,
+                connector_id: FAKE_ID.to_string(),
+                workspace: rig.root.join("old"),
+                started_at_unix: 1,
+                deadline_at: None,
+                entries: Vec::new(),
+            },
+        )
+        .unwrap();
+        let reserve = goalcup_cli::run::reserve::RunReserve::take(
+            &goalcup_cli::run::reserve::reserve_path(&root, id),
+            &support::disk_of(RESERVE),
+        )
+        .unwrap();
+        if !killed {
+            held.push(reserve);
+        }
+    }
+    assert_eq!(reserve_files(&rig).len(), 4);
+
+    let goal = rig.goal(GOAL);
+    rig.tell("stop", "");
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let (result, out) =
+        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    let left: Vec<String> = reserve_files(&rig)
+        .iter()
+        .map(|f| f.file_name().to_string_lossy().into_owned())
+        .collect();
+    let mut left = left;
+    left.sort();
+    assert_eq!(
+        left,
+        vec![
+            "r0000000000000002".to_string(),
+            "r0000000000000004".to_string()
+        ],
+        "the server run before its deadline, and the local run that is still held"
+    );
+    drop(held);
+}
+
 #[test]
 fn local_owned_stop_and_seal_need_no_anchor() {
     let _lock = table_lock::TableLock::acquire();
@@ -512,29 +700,6 @@ fn a_byte_identical_shipped_alias_is_exit_one_before_any_start_write() {
 fn an_altered_pinned_id_under_an_alias_is_exit_one_before_any_start_write() {
     let _lock = table_lock::TableLock::acquire();
     assert_aliased_shipped_connector_refuses_before_start_writes(true);
-}
-
-#[test]
-fn an_unreservable_chain_refuses_before_the_proxy_and_leaves_nothing() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::new();
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let (result, out) =
-        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, 1 << 60), None)));
-    let error = result.expect_err("a reservation this volume cannot hold");
-    assert!(
-        matches!(
-            error,
-            goalcup_cli::CliError::Control(ControlError::PreflightFailed(_))
-        ),
-        "{error}\n{out}"
-    );
-    assert_eq!(client.names(), vec!["create_capture_workspace"]);
-    assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
-    assert!(records(&rig).is_empty());
-    assert!(!rig.harness_started());
 }
 
 /// The proxy fails to start two ways, each before the goal is sent: its sender never finds
@@ -1114,6 +1279,10 @@ fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
     client.book().seal_fault = Some(|| {
         CaptureSealError::NotAdmitted(ControlError::Unreachable("connection refused".into()))
     });
+    // A seal that does not take is asked again until the wrap-up runs out; a test build gives a
+    // run without a server two seconds of it, the first wait 100 ms.
+    rig.with_env(SHORT_WRAP_UP.0, SHORT_WRAP_UP.1);
+    let began = Instant::now();
     let (result, out) = std::thread::scope(|s| {
         joined(rig.start(
             s,
@@ -1124,7 +1293,16 @@ fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
     });
     let error = result.expect_err(&format!("the launcher's finish was refused\n{out}"));
     assert!(matches!(error, CliError::Refused(_)), "{error:?}");
-    assert_eq!(client.book().seals.len(), 1, "one request, never delivered");
+    assert!(
+        began.elapsed() < Duration::from_secs(20),
+        "the wrap-up bounds the asking: {:?}",
+        began.elapsed()
+    );
+    assert!(
+        client.book().seals.len() > 1,
+        "asked again, never delivered: {} requests",
+        client.book().seals.len()
+    );
     assert!(
         out.contains("fail_open=1"),
         "the proxy counted the tunnel: {out}"
@@ -1299,8 +1477,8 @@ fn a_test_build_trusts_the_upstream_roots_its_environment_names() {
         std::process::Command::new(env!("CARGO_BIN_EXE_goalcup"))
             .args(["start", "--harness", FAKE_ID, "--dev", "--goal-file"])
             .arg(&goal)
-            .args(["--capture-reserve-bytes", &RESERVE.to_string()])
             .env_clear()
+            .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"))
             .env("PATH", rig.path())
             .env("GOALCUP_CONFIG_DIR", &rig.cfg)
             .env("GOALCUP_CONNECTORS_DIR", &rig.capture_connectors)
@@ -1746,6 +1924,7 @@ fn capture_finish_refusals_say_what_they_mean_and_carry_the_one_budget() {
         std::fs::remove_file(rig.cfg.join("control.json")).unwrap();
         let client = Hooked::new(&http, &rig);
         client.book().seal_fault = Some(fault);
+        rig.with_env(SHORT_WRAP_UP.0, SHORT_WRAP_UP.1);
         let began = Instant::now();
         let (result, out) = std::thread::scope(|s| {
             joined(rig.start(s, &client, rig.options(&goal, RESERVE), None))
@@ -1781,13 +1960,14 @@ fn capture_finish_refusals_say_what_they_mean_and_carry_the_one_budget() {
             Duration::from_millis(ms) + Duration::from_millis(4_250) + Duration::from_secs(2),
             "{name}: read timeout = remaining + termination_bound(0) + CONNECT_TIMEOUT"
         );
-        if name == "busy" {
+        if name == "unauthorized" {
+            assert_eq!(book.seals.len(), 1, "{name} is definitive, never replayed");
+        } else {
             assert!(
                 book.seals.len() > 1,
-                "busy is retried on the dephased schedule"
+                "{name} is asked again until the wrap-up runs out: {} requests",
+                book.seals.len()
             );
-        } else {
-            assert_eq!(book.seals.len(), 1, "{name} is never replayed");
         }
     }
 }

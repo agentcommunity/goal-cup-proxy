@@ -29,8 +29,20 @@ use std::time::{Duration, Instant};
 /// The development connector's id.
 pub const CONNECTOR: &str = "m2-controlled-workload";
 
-/// The chain bytes every run but the refused one reserves.
+/// The logical size a chain may grow to in every run but the small-quota ones.
 pub const RESERVE: u64 = 64 * 1024 * 1024;
+
+/// What the run itself holds on disk (its one reservation) in every test: far below the 3 GiB a
+/// participant's run holds.
+const RUN_HELD: u64 = 4 * 1024 * 1024;
+
+/// `GOALCUP_TEST_DISK` for a run whose chains are limited to `quota` bytes.
+fn disk_spec(quota: u64) -> String {
+    format!(
+        "{RUN_HELD},0,50,{},{quota}",
+        goalcup_cli::run::reserve::FREE_FLOOR
+    )
+}
 
 /// The one goal every run is given.
 pub const GOAL: &str = "exchange the controlled traffic plan through the recording proxy";
@@ -188,29 +200,52 @@ impl Vertical {
         command
     }
 
-    /// `goalcup start --harness m2-controlled-workload --dev --goal-file GOAL
-    /// --capture-reserve-bytes RESERVE`, in a process group of its own, which the harness
-    /// joins.
+    /// `goalcup start --harness m2-controlled-workload --dev --goal-file GOAL`, with chains
+    /// limited to `reserve` bytes (`GOALCUP_TEST_DISK`), in a process group of its own, which
+    /// the harness joins.
     pub fn start(&self, reserve: u64) -> Launcher {
-        self.start_with(reserve, None)
+        self.start_with(disk_spec(reserve), None)
     }
 
     /// [`Vertical::start`] with `GOALCUP_TEST_PAUSE_DIR` naming `pause_dir`: the launcher holds
     /// at each point whose `<point>.arm` file is there (see `commands/start.rs::pause_at`).
     pub fn start_paused(&self, reserve: u64, pause_dir: &Path) -> Launcher {
-        self.start_with(reserve, Some(pause_dir))
+        self.start_with(disk_spec(reserve), Some(pause_dir))
     }
 
-    fn start_with(&self, reserve: u64, pause_dir: Option<&Path>) -> Launcher {
+    /// [`Vertical::start_paused`] with a test build's wrap-up for a run without a server
+    /// shortened to `wrap_up_ms` (`GOALCUP_TEST_LOCAL_WRAP_UP`).
+    pub fn start_paused_short_wrap_up(
+        &self,
+        reserve: u64,
+        pause_dir: &Path,
+        wrap_up_ms: u64,
+    ) -> Launcher {
+        self.start_launcher(disk_spec(reserve), Some(pause_dir), Some(wrap_up_ms))
+    }
+
+    fn start_with(&self, disk: String, pause_dir: Option<&Path>) -> Launcher {
+        self.start_launcher(disk, pause_dir, None)
+    }
+
+    fn start_launcher(
+        &self,
+        disk: String,
+        pause_dir: Option<&Path>,
+        wrap_up_ms: Option<u64>,
+    ) -> Launcher {
         use std::os::unix::process::CommandExt;
         let mut command = self.goalcup();
         command
             .args(["start", "--harness", CONNECTOR, "--dev", "--goal-file"])
             .arg(&self.goal)
-            .args(["--capture-reserve-bytes", &reserve.to_string()])
+            .env("GOALCUP_TEST_DISK", disk)
             .env("GOALCUP_TEST_UPSTREAM_ROOTS", &self.upstream_pem);
         if let Some(dir) = pause_dir {
             command.env("GOALCUP_TEST_PAUSE_DIR", dir);
+        }
+        if let Some(ms) = wrap_up_ms {
+            command.env("GOALCUP_TEST_LOCAL_WRAP_UP", ms.to_string());
         }
         let child = command
             .stdout(log(&self.logs, "start.out"))

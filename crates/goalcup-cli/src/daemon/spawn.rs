@@ -630,8 +630,13 @@ fn create_config(config: &Path, text: &str) -> Result<(), CliError> {
 /// The `connectors_dir` a configuration names, when it is written as one TOML string on its own
 /// line (a basic `"..."` string, read with JSON's escapes, or a literal `'...'` one).
 fn connectors_dir_in(text: &str) -> Option<PathBuf> {
+    path_in(text, "connectors_dir")
+}
+
+/// The path a configuration gives `key`, read the way [`connectors_dir_in`] reads one.
+fn path_in(text: &str, key: &str) -> Option<PathBuf> {
     text.lines().find_map(|line| {
-        let rest = line.trim_start().strip_prefix("connectors_dir")?;
+        let rest = line.trim_start().strip_prefix(key)?;
         let value = rest.trim_start().strip_prefix('=')?.trim_start();
         if value.starts_with('"') {
             let mut values = serde_json::Deserializer::from_str(value).into_iter::<String>();
@@ -640,6 +645,21 @@ fn connectors_dir_in(text: &str) -> Option<PathBuf> {
             let (literal, _) = value.strip_prefix('\'')?.split_once('\'')?;
             Some(PathBuf::from(literal))
         }
+    })
+}
+
+/// The `artifact_root` the daemon is configured with in `<cfg>/daemon.toml`: where traces are
+/// kept, so the run's reserve can sit on the same volume. When the file is missing or does not
+/// name one, the default (`<cfg>-artifacts`) the file would have been written with.
+pub fn artifact_root(cfg: &Path) -> PathBuf {
+    let named = read_config(&cfg.join(DAEMON_CONFIG_NAME))
+        .ok()
+        .flatten()
+        .and_then(|text| path_in(&text, "artifact_root"));
+    named.unwrap_or_else(|| {
+        let mut leaf = cfg.file_name().unwrap_or_default().to_os_string();
+        leaf.push("-artifacts");
+        cfg.with_file_name(leaf)
     })
 }
 

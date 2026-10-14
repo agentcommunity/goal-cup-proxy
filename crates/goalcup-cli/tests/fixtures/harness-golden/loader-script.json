@@ -71,24 +71,6 @@
       "stderr_has_key": false,
       "stdout_has_key": false
     },
-    "hermes_with_reserve_option": {
-      "exit": 0,
-      "goalcup_argv": [
-        "start",
-        "--harness",
-        "hermes-cli",
-        "--goal-file",
-        "/g.txt",
-        "--capture-reserve-bytes",
-        "9"
-      ],
-      "key_length_in_goalcup_env": "31",
-      "other_variables_leaked": [],
-      "ran_goalcup": true,
-      "refusal_prefix": false,
-      "stderr_has_key": false,
-      "stdout_has_key": false
-    },
     "key_with_a_space_is_refused": {
       "exit": 1,
       "goalcup_argv": null,
