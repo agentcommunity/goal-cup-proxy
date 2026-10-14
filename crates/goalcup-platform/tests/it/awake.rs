@@ -6,6 +6,36 @@ fn alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
+/// The process state letter, or `None` when no such process exists. A zombie reads as `Z`.
+fn state(pid: u32) -> Option<String> {
+    if cfg!(target_os = "linux") {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // The command name sits in parentheses and may hold spaces; the state follows the last one.
+        let after = &stat[stat.rfind(')')? + 1..];
+        after.split_whitespace().next().map(str::to_string)
+    } else {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!text.is_empty()).then_some(text)
+    }
+}
+
+/// Alive and not a zombie (`kill(pid, 0)` also succeeds for an unreaped zombie).
+fn running(pid: u32) -> bool {
+    state(pid).is_some_and(|s| !s.starts_with('Z'))
+}
+
+fn false_tool() -> PathBuf {
+    ["/usr/bin/false", "/bin/false"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.exists())
+        .expect("a `false` binary at /usr/bin or /bin")
+}
+
 #[test]
 fn a_sleep_lock_dies_with_its_value() {
     let lock: SleepLock = match hold("goalcup awake test") {
@@ -48,7 +78,8 @@ fn no_inhibitor_is_an_err_not_a_panic() {
 
 #[test]
 fn an_inhibitor_that_exits_at_once_is_an_err() {
-    let fake = |_: &str| -> Option<PathBuf> { Some(PathBuf::from("/usr/bin/false")) };
+    let tool = false_tool();
+    let fake = move |_: &str| -> Option<PathBuf> { Some(tool.clone()) };
     let err = match hold_with("why", &fake, false) {
         Ok(_) => panic!("a tool that exits at once must not count as a hold"),
         Err(e) => e,
@@ -64,15 +95,27 @@ fn a_lock_made_on_a_short_lived_thread_outlives_it() {
     let made = std::thread::spawn(|| hold("goalcup awake thread test"))
         .join()
         .unwrap();
-    let Ok(lock) = made else {
-        return;
+    let lock = match made {
+        Ok(lock) => lock,
+        Err(why) => {
+            if cfg!(target_os = "macos") {
+                panic!("macOS ships caffeinate, hold must succeed: {why}");
+            }
+            eprintln!("skipped: no sleep inhibitor on this host ({why})");
+            return;
+        }
     };
     let pid = lock.pid();
+    // The spawning thread is gone; a signal tied to it would have left a zombie by now.
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert!(
-        alive(pid),
-        "the inhibitor must outlive the thread that asked"
+        running(pid),
+        "the inhibitor must still be running (state {:?}) after the thread that asked ended",
+        state(pid)
     );
     drop(lock);
-    assert!(!alive(pid));
+    assert!(
+        state(pid).is_none(),
+        "the inhibitor must be gone and reaped after the drop"
+    );
 }

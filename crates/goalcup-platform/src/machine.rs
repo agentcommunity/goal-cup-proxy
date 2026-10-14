@@ -181,16 +181,22 @@ pub fn open_url(url: &str) -> bool {
     }
 }
 
+/// Whether the content of `/run/systemd/container` names a container. systemd also writes
+/// `wsl` there on WSL2, which is a virtual machine, not a container.
+#[doc(hidden)]
+pub fn container_from_systemd(content: &str) -> bool {
+    let kind = content.trim();
+    !kind.is_empty() && !kind.eq_ignore_ascii_case("wsl")
+}
+
 /// `Some(true)` when a container marker is found. Absence proves nothing (cgroup v2 hides the
 /// answer), so the fact is left out rather than reported as `false`.
 fn in_container() -> Option<bool> {
-    let marked = [
-        "/.dockerenv",
-        "/run/.containerenv",
-        "/run/systemd/container",
-    ]
-    .iter()
-    .any(|p| Path::new(p).exists());
+    let marked = ["/.dockerenv", "/run/.containerenv"]
+        .iter()
+        .any(|p| Path::new(p).exists())
+        || std::fs::read_to_string("/run/systemd/container")
+            .is_ok_and(|s| container_from_systemd(&s));
     let cgroup = std::fs::read_to_string("/proc/1/cgroup").is_ok_and(|s| {
         ["docker", "kubepods", "containerd", "libpod"]
             .iter()

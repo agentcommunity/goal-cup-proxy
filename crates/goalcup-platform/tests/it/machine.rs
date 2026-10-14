@@ -1,4 +1,6 @@
-use goalcup_platform::machine::{ac_from_pmset, facts, is_wsl_from, on_windows_drive_with};
+use goalcup_platform::machine::{
+    ac_from_pmset, container_from_systemd, facts, is_wsl_from, on_windows_drive_with,
+};
 use std::path::Path;
 
 #[test]
@@ -126,13 +128,33 @@ fn facts_hold_no_paths_and_no_whole_word_identity() {
             "home leaked: {json}"
         );
     }
+    // `os` and `os_version` legitimately hold distribution names such as "ubuntu 24.04", which a
+    // host or user may share, so only the other fields are checked for identity.
+    let mut other = Vec::new();
+    if let Some(map) = json.as_object() {
+        for (key, v) in map {
+            if key != "os" && key != "os_version" {
+                values(v, &mut other);
+            }
+        }
+    }
     let host = host_name().map(|h| h.split('.').next().unwrap_or("").to_lowercase());
     let user = std::env::var("USER").ok().map(|u| u.to_lowercase());
     for secret in [host, user].into_iter().flatten().filter(|s| s.len() >= 3) {
-        for v in vals.iter().filter(|v| v.len() >= 4) {
+        for v in other.iter().filter(|v| v.len() >= 4) {
             assert!(!contains_word(v, &secret), "{secret:?} named in {v:?}");
         }
     }
+}
+
+#[test]
+fn systemd_container_marker_ignores_wsl() {
+    assert!(container_from_systemd("docker\n"));
+    assert!(container_from_systemd("podman"));
+    assert!(!container_from_systemd("wsl\n"));
+    assert!(!container_from_systemd("WSL"));
+    assert!(!container_from_systemd(""));
+    assert!(!container_from_systemd("\n"));
 }
 
 #[test]
