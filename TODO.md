@@ -166,7 +166,7 @@ UTC. Every change passes `gate.sh fast`; Worker changes also pass `npm test`; ev
 - Native Windows.
 - An admin page. For 7 Nov, organizers use the Supabase table view.
 - Signing and notarizing the macOS tarballs. A `curl` download is not quarantined, so the
-  brew path runs without them.
+  install script runs them without it.
 - Full registration and team system.
 - New harnesses: builders bring them ([HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md)).
 - Speed up the two P1 redaction tests that each run over 30 s
