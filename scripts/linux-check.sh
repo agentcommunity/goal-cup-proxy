@@ -43,9 +43,12 @@ cpus=$(docker info --format '{{.NCPU}}' 2>/dev/null)
 case $cpus in '' | *[!0-9]* | 0) cpus=6 ;; esac
 [ "$cpus" -le 6 ] || cpus=6
 # --init: something must reap orphans, as it does on a real host or WSL2.
-docker run -d --name "$name" --label "$label" --privileged --init --cpus="$cpus" -v "$PWD":/src \
+# The checkout is mounted at its own path: cargo keys a workspace crate's build by its path, so
+# two checkouts sharing the target volume each get their own crates and never one another's
+# (at one shared path, an older tree's sources could take a newer build of another tree).
+docker run -d --name "$name" --label "$label" --privileged --init --cpus="$cpus" -v "$PWD":"$PWD" \
     -v "$registry":/usr/local/cargo/registry -v goalcup-linux-check-target:/target \
-    -w /src "$img" sleep infinity >/dev/null || { echo "linux-check: FAIL container"; exit 1; }
+    -w "$PWD" "$img" sleep infinity >/dev/null || { echo "linux-check: FAIL container"; exit 1; }
 docker exec "$name" sh -c 'set -e; chown dev /target; mkdir -p /mnt/ext4 /mnt/xfs
     truncate -s 8G /ext4.img; mkfs.ext4 -q -F /ext4.img; mount -o loop /ext4.img /mnt/ext4
     truncate -s 2G /xfs.img; mkfs.xfs -q -f /xfs.img; mount -o loop /xfs.img /mnt/xfs
@@ -71,6 +74,6 @@ step "daemon full" 'cargo nextest run --offline -p goalcup-daemon --test full'
 # rebuild puts the shipped binaries back in /target/debug after the test builds.
 if [ "${LINUX_CHECK_HARNESSES:-0}" = 1 ]; then
     step "harness smoke" 'cargo build --offline --locked --workspace &&
-        GOALCUP_CONNECTORS_DIR=/src/connectors PATH=/target/debug:$PATH sh scripts/linux-harness-smoke.sh'
+        GOALCUP_CONNECTORS_DIR="$(pwd)/connectors" PATH=/target/debug:$PATH sh scripts/linux-harness-smoke.sh'
 fi
 echo "linux-check: PASS"
