@@ -20,6 +20,12 @@ pub fn upload_with(
     policy: Policy,
     out: &mut dyn std::io::Write,
 ) -> Result<(), CliError> {
+    // A reserve nothing will use again goes back to the disk, whatever becomes of this upload.
+    crate::run::reserve::release_stale(
+        cfg,
+        &crate::run::reserve::artifact_root(cfg),
+        crate::run::now_unix(),
+    );
     let record = crate::upload::read_record(cfg, entry_id)?.ok_or_else(|| {
         CliError::Refused(format!(
             "entry {entry_id} was not opened on a server from this machine (there is no {}), \
@@ -92,10 +98,21 @@ pub fn upload_with(
             caught_up: true,
             sealed: true,
             ..
-        } => say(&format!(
-            "uploaded: {} bytes of entry {entry_id}, acknowledged, and its seal, on {}.",
-            report.offset, record.server_url
-        )),
+        } => {
+            say(&format!(
+                "uploaded: {} bytes of entry {entry_id}, acknowledged, and its seal, on {}.",
+                report.offset, record.server_url
+            ));
+            // The last entry of the run is on the server: if the run is over (or cannot be
+            // continued), its reserve has no more use.
+            crate::run::reserve::release_if_done(
+                cfg,
+                &crate::run::reserve::artifact_root(cfg),
+                &run.run_id,
+                report.run_ended,
+                crate::run::now_unix(),
+            );
+        }
         crate::upload::uploader::Report {
             caught_up: true,
             why: None,

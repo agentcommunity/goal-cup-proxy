@@ -509,6 +509,69 @@ mod server_runs {
         assert_eq!(refused.exit_code(), 1, "{refused}");
     }
 
+    fn reserve_files(rig: &Rig) -> Vec<PathBuf> {
+        std::fs::read_dir(goalcup_cli::run::reserve::artifact_root(&rig.cfg).join("reserve"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect()
+    }
+
+    /// A run on the server whose agent ended by itself, and whose connector is headless (it has
+    /// no `continue`): its reserve goes back to the disk once all of it is on the server, and not
+    /// before. A run whose upload fell short keeps it until `goalcup upload` finishes the job.
+    #[test]
+    fn a_headless_run_gives_its_reserve_back_once_it_is_all_on_the_server() {
+        // Everything is sent at the end: nothing is left to hold the reserve for.
+        let rig = Rig::new();
+        let whole = server(&rig);
+        rig.prepare_for(&whole.url());
+        let ended = run_to_end(&rig, false);
+        assert!(ended.out.contains("uploaded:"), "{}", ended.out);
+        assert!(
+            reserve_files(&rig).is_empty(),
+            "{:?}\n{}",
+            reserve_files(&rig),
+            ended.out
+        );
+
+        // The server stores no chunk: the upload falls short, the run is not over, and `continue`
+        // cannot restart it. The reserve stays for now.
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        server.fail_next_chunks(1_000_000);
+        rig.tell("stop", "");
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.options(&goal, RESERVE);
+        opts.upload_policy = quick_policy();
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+        assert!(out.contains("upload incomplete"), "{out}");
+        assert_eq!(reserve_files(&rig).len(), 1, "{out}");
+
+        // `goalcup upload` finishes the last entry: the reserve goes.
+        server.fail_next_chunks(0);
+        let mut said = Vec::new();
+        goalcup_cli::commands::upload::upload_with(
+            &rig.cfg,
+            &outcome.entry_id,
+            quick_policy(),
+            &mut said,
+        )
+        .unwrap_or_else(|e| panic!("{e}\n{}", String::from_utf8_lossy(&said)));
+        assert!(
+            reserve_files(&rig).is_empty(),
+            "{:?}\n{}",
+            reserve_files(&rig),
+            String::from_utf8_lossy(&said)
+        );
+    }
+
     /// A server run needs `goalcup prep` first: its repository and work folder in `prep.json`
     /// and the GitHub token in `github.json`. Whatever is missing, the refusal is the one
     /// sentence, and it comes before the participant is asked to approve anything and before
@@ -970,6 +1033,67 @@ mod server_runs {
             self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
             let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
         }
+    }
+
+    /// The open of a run failed to keep its record (after the run was opened on the server): the
+    /// note of the open and the credential are deleted only once the server has taken the run
+    /// back. With the server away they stay, so the next start can give the run back.
+    #[test]
+    fn a_failed_open_keeps_its_note_and_credential_until_the_server_takes_the_run_back() {
+        let run_id = "r0123456789abcdef";
+        let credential = || {
+            goalcup_cli::account::credential::RunCredential::new(
+                format!("gcr_{}", "ab".repeat(32)),
+                "2099-01-01T00:00:00Z".to_string(),
+            )
+            .unwrap()
+        };
+        let kept = |cfg: &Path| {
+            let dir = goalcup_cli::run::run_dir(cfg, run_id);
+            goalcup_cli::account::credential::store(&dir, &credential()).unwrap();
+            goalcup_cli::config::write_secret_file(
+                &goalcup_cli::upload::pending_path(cfg),
+                format!(r#"{{"run_id":"{run_id}","server_url":"http://127.0.0.1:1"}}"#).as_bytes(),
+            )
+            .unwrap();
+            dir
+        };
+
+        // The server is away (nothing listens on port 1): nothing is deleted.
+        let cfg = tempfile::tempdir().unwrap();
+        let dir = kept(cfg.path());
+        let away = goalcup_cli::upload::http::ServerClient::with_credential(
+            "http://127.0.0.1:1",
+            &credential(),
+        );
+        assert!(!goalcup_cli::upload::undo_open(&away, cfg.path(), run_id));
+        assert!(goalcup_cli::upload::pending_path(cfg.path()).exists());
+        assert!(goalcup_cli::account::credential::credential_path(&dir).exists());
+        // And the next start, with the server back, gives the run back with that credential.
+        let waiting = Waiting::start();
+        let back = waiting.url();
+        goalcup_cli::config::write_secret_file(
+            &goalcup_cli::upload::pending_path(cfg.path()),
+            format!(r#"{{"run_id":"{run_id}","server_url":"{back}"}}"#).as_bytes(),
+        )
+        .unwrap();
+        goalcup_cli::upload::give_back_pending(&back, cfg.path());
+        assert_eq!(waiting.asked(&format!("POST /v1/runs/{run_id}/abandon")), 1);
+        assert!(!goalcup_cli::upload::pending_path(cfg.path()).exists());
+        assert!(
+            !goalcup_cli::account::credential::credential_path(&dir).exists(),
+            "the kept credential goes once the run is given back"
+        );
+        assert!(!dir.exists(), "and so does the run's directory");
+
+        // The server answers (it holds no such run: gone is settled): note and credential go.
+        let cfg = tempfile::tempdir().unwrap();
+        let dir = kept(cfg.path());
+        let near =
+            goalcup_cli::upload::http::ServerClient::with_credential(&waiting.url(), &credential());
+        assert!(goalcup_cli::upload::undo_open(&near, cfg.path(), run_id));
+        assert!(!goalcup_cli::upload::pending_path(cfg.path()).exists());
+        assert!(!dir.exists(), "the run's directory and credential are gone");
     }
 
     /// A Ctrl-C while the participant has not yet approved ends the start with one sentence:

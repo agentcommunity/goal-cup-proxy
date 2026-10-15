@@ -430,16 +430,62 @@ impl RunReserve {
     }
 }
 
-/// Remove the reserves nobody will use again, and say how many went. Called when a start
-/// begins.
+/// The longest a run's reserve can be needed: the run's 168 hours, the day past its deadline the
+/// server still takes its last upload ([`KEEP_AFTER_DEADLINE`]), and an hour of wrap-up. A
+/// reserve whose `run.json` cannot be read, and that nobody holds, is released once its file is
+/// older than this: nothing can still be using it.
+pub const LONGEST_RUN: Duration =
+    Duration::from_secs(168 * 60 * 60 + KEEP_AFTER_DEADLINE.as_secs() + 60 * 60);
+
+/// Whether the run's reserve is no longer needed, from what this machine knows of the run.
 ///
-/// A run is known by its record under `cfg`.
-/// - A run opened on a server keeps its reserve until its deadline and a day ([`KEEP_AFTER_DEADLINE`])
-///   have passed, whether or not anything holds it: its harness may have exited early and
-///   `continue` will want the reserve again.
+/// - A run with no server is done: it has no `continue`, and its host held the reserve for as
+///   long as it recorded (the caller checks that nobody holds it).
+/// - A run that has ended is done, whatever became of its upload: its deadline passed, its host
+///   stopped it for its end (the server's stop, a newer run replacing it), or the server said it
+///   is sealed or incomplete (`server_ended`).
+/// - A run that is not over is done when `goalcup continue` cannot restart it (a headless
+///   connector, or no credential here) and every one of its entries is sealed and sent. A run
+///   with a chat-mode connector keeps its reserve: `continue` reuses it.
+pub fn run_is_done(cfg: &Path, record: &super::RunRecord, server_ended: bool, now: u64) -> bool {
+    if record.server_url.is_none() || server_ended {
+        return true;
+    }
+    let state = super::read_state(&super::run_dir(cfg, &record.run_id));
+    if super::is_over(record, state.as_ref(), now) {
+        return true;
+    }
+    // Not over (settled above): the same answer the host and `goalcup status` give.
+    if super::can_continue(
+        cfg,
+        record,
+        state.as_ref().is_some_and(|s| s.continuable),
+        false,
+    ) {
+        return false;
+    }
+    let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
+    !record.entries.is_empty()
+        && record
+            .entries
+            .iter()
+            .all(|entry| crate::upload::uploader::is_sent(&spool, &entry.entry_id))
+}
+
+/// Remove the reserves nobody will use again, and say how many went. Called when a start begins,
+/// and by `goalcup status` and `goalcup upload`. A reserve held by a process (a live run's host)
+/// is never touched. A removal that fails is said.
+///
+/// A run is known by its record under `cfg`, and [`run_is_done`] judges it.
+/// - A run opened on a server keeps its reserve while `goalcup continue` may still want it: until
+///   its deadline, or until it is over by another sign, or sent whole when it cannot be
+///   continued.
 /// - A local run has no deadline. Its reserve goes when no process holds its lock (the run's
 ///   `goalcup start` died; a live one holds it for as long as it records).
 /// - A reserve with no run record goes the same way, when its lock is free.
+/// - A reserve whose `run.json` cannot be read goes when its lock is free and the file is older
+///   than [`LONGEST_RUN`]: a record that cannot be read must not pin 3 GiB for ever, but the run
+///   may still be live, so nothing younger is touched.
 pub fn release_stale(cfg: &Path, artifact_root: &Path, now: u64) -> usize {
     let Ok(files) = std::fs::read_dir(artifact_root.join("reserve")) else {
         return 0;
@@ -449,30 +495,76 @@ pub fn release_stale(cfg: &Path, artifact_root: &Path, now: u64) -> usize {
         let Some(run_id) = file.file_name().to_str().map(str::to_owned) else {
             continue;
         };
-        let Ok(record) = super::read_if_any(cfg, &run_id) else {
-            continue;
+        let wanted = match super::read_if_any(cfg, &run_id) {
+            Ok(Some(record)) => !run_is_done(cfg, &record, false, now),
+            Ok(None) => false,
+            Err(_) => !older_than(&file.path(), LONGEST_RUN, now),
         };
-        let gone = match record.as_ref().and_then(|r| r.deadline_at.as_deref()) {
-            Some(deadline) => goalcup_protocol::control::parse_z(deadline).is_some_and(|d| {
-                now >= d.saturating_add(KEEP_AFTER_DEADLINE.as_secs())
-                    && std::fs::remove_file(file.path()).is_ok()
-            }),
-            None => remove_if_unheld(&file.path()),
-        };
-        if gone {
+        if !wanted && remove_if_unheld(&file.path()) == Removal::Removed {
             released += 1;
         }
     }
     released
 }
 
-/// Unlink `path` when no process holds its lock; the lock is taken for the unlink, so a run
-/// that takes the file at that moment finds it locked or gone, never half-removed.
-fn remove_if_unheld(path: &Path) -> bool {
-    let Ok(lock) = open_lockable(path, false) else {
+/// Release the reserve of `run_id` if the run is done ([`run_is_done`]) and nobody holds it, and
+/// say so when the removal fails. For the commands that finish a run's last entry (`goalcup
+/// upload`, `goalcup seal`); `server_ended` is the server's word that the run is sealed or
+/// incomplete.
+pub fn release_if_done(
+    cfg: &Path,
+    artifact_root: &Path,
+    run_id: &str,
+    server_ended: bool,
+    now: u64,
+) -> bool {
+    let Ok(Some(record)) = super::read_if_any(cfg, run_id) else {
         return false;
     };
-    lock.try_lock().is_ok() && std::fs::remove_file(path).is_ok()
+    run_is_done(cfg, &record, server_ended, now)
+        && remove_if_unheld(&reserve_path(artifact_root, run_id)) == Removal::Removed
+}
+
+/// Whether `path` was last changed more than `age` before `now`. A file whose age cannot be read
+/// is not old.
+fn older_than(path: &Path, age: Duration, now: u64) -> bool {
+    std::fs::symlink_metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .is_some_and(|modified| now.saturating_sub(modified.as_secs()) > age.as_secs())
+}
+
+/// What [`remove_if_unheld`] came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Removal {
+    Removed,
+    /// Held by a process, or not there: nothing to say.
+    Left,
+    /// The unlink failed (said).
+    Failed,
+}
+
+/// Unlink `path` when no process holds its lock; the lock is taken for the unlink, so a run
+/// that takes the file at that moment finds it locked or gone, never half-removed. A failed
+/// unlink is said.
+fn remove_if_unheld(path: &Path) -> Removal {
+    let Ok(lock) = open_lockable(path, false) else {
+        return Removal::Left;
+    };
+    if lock.try_lock().is_err() {
+        return Removal::Left;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => Removal::Removed,
+        Err(error) => {
+            crate::host_log::say(&format!(
+                "the reservation {} could not be removed ({error}); it keeps its disk space",
+                path.display()
+            ));
+            Removal::Failed
+        }
+    }
 }
 
 #[cfg(test)]
@@ -654,20 +746,169 @@ mod tests {
     }
 
     #[test]
-    fn a_server_run_keeps_its_reserve_until_its_deadline_and_a_day_have_passed() {
+    fn a_server_run_keeps_its_reserve_until_its_deadline() {
         let cfg = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         let deadline = |at: u64| Some(goalcup_protocol::control::format_z(at));
         for (id, deadline_at) in [("r-old", deadline(1_000)), ("r-new", deadline(1_000_000))] {
             record(cfg.path(), id, deadline_at);
-            // No process holds either lock after this: only the deadline decides.
+            // No process holds either lock after this: only the run decides.
             drop(RunReserve::take(&reserve_path(root.path(), id), &small()).unwrap());
         }
-        let now = 1_000 + KEEP_AFTER_DEADLINE.as_secs() - 1;
-        assert_eq!(release_stale(cfg.path(), root.path(), now), 0);
-        assert_eq!(release_stale(cfg.path(), root.path(), now + 1), 1);
+        assert_eq!(release_stale(cfg.path(), root.path(), 999), 0);
+        assert_eq!(release_stale(cfg.path(), root.path(), 1_000), 1);
         let left = |id: &str| reserve_path(root.path(), id).exists();
         assert!(!left("r-old") && left("r-new"));
+    }
+
+    /// A server run on this machine: its record with `entries` entries, its state (`continuable`
+    /// or not), and a `.sent` mark for each entry in `sent`.
+    fn server_run(
+        cfg: &Path,
+        id: &str,
+        deadline_at: u64,
+        continuable: bool,
+        entries: &[&str],
+        sent: &[&str],
+    ) {
+        super::super::write(
+            cfg,
+            &super::super::RunRecord {
+                run_id: id.to_string(),
+                server_url: Some("https://server.example".into()),
+                practice: false,
+                test: false,
+                connector_id: "c".to_string(),
+                workspace: PathBuf::from("/w"),
+                started_at_unix: 0,
+                deadline_at: Some(goalcup_protocol::control::format_z(deadline_at)),
+                entries: entries
+                    .iter()
+                    .map(|entry| super::super::EntryRef {
+                        entry_id: entry.to_string(),
+                        trace_dir: PathBuf::from("/t"),
+                    })
+                    .collect(),
+            },
+        )
+        .unwrap();
+        let mut state = super::super::RunState::launched(entries[0], Ok(()));
+        state.continuable = continuable;
+        state.harness = super::super::HarnessState::Exited {
+            status: "exit code 0".into(),
+        };
+        super::super::StateKeeper::begin(&super::super::run_dir(cfg, id), state);
+        let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
+        std::fs::create_dir_all(&spool).unwrap();
+        for entry in sent {
+            std::fs::write(spool.join(format!("{entry}.sent")), b"").unwrap();
+        }
+    }
+
+    fn credential(cfg: &Path, id: &str) {
+        let credential = crate::account::credential::RunCredential::new(
+            format!("gcr_{}", "ab".repeat(32)),
+            "2099-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+        crate::account::credential::store(&super::super::run_dir(cfg, id), &credential).unwrap();
+    }
+
+    #[test]
+    fn a_run_whose_harness_left_early_keeps_its_reserve_only_when_continue_can_use_it() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let now = 10_000;
+        let later = now + 100_000;
+        // Chat-mode: `goalcup continue` reuses the reserve, sent or not.
+        server_run(cfg.path(), "r-chat", later, true, &["e1"], &["e1"]);
+        credential(cfg.path(), "r-chat");
+        // Headless, everything sent: nothing will use the reserve again.
+        server_run(cfg.path(), "r-sent", later, false, &["e2"], &["e2"]);
+        // Chat-mode, but this machine holds no credential for it: `continue` is refused, so
+        // once everything is sent nothing will use the reserve.
+        server_run(cfg.path(), "r-nocred", later, true, &["e7"], &["e7"]);
+        // Headless, the upload fell short: the reserve stays until the run is over.
+        server_run(cfg.path(), "r-unsent", later, false, &["e3"], &[]);
+        // Headless, two segments, one still unsent.
+        server_run(cfg.path(), "r-half", later, false, &["e4", "e5"], &["e4"]);
+        // Chat-mode but stopped for the run's end (a newer run replaced it).
+        server_run(cfg.path(), "r-replaced", later, true, &["e6"], &[]);
+        credential(cfg.path(), "r-replaced");
+        let dir = super::super::run_dir(cfg.path(), "r-replaced");
+        let mut state = super::super::read_state(&dir).unwrap();
+        state.stopped = Some("a newer run on your account replaced this one".into());
+        super::super::StateKeeper::begin(&dir, state);
+        for id in [
+            "r-chat",
+            "r-sent",
+            "r-unsent",
+            "r-half",
+            "r-replaced",
+            "r-nocred",
+        ] {
+            drop(RunReserve::take(&reserve_path(root.path(), id), &small()).unwrap());
+        }
+        assert_eq!(release_stale(cfg.path(), root.path(), now), 3);
+        let left = |id: &str| reserve_path(root.path(), id).exists();
+        assert!(left("r-chat") && left("r-unsent") && left("r-half"));
+        assert!(!left("r-sent") && !left("r-replaced") && !left("r-nocred"));
+        // The deadline ends the rest.
+        assert_eq!(release_stale(cfg.path(), root.path(), later), 3);
+    }
+
+    #[test]
+    fn a_command_that_finishes_the_last_entry_releases_a_reserve_that_nothing_will_use() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let now = 10_000;
+        server_run(cfg.path(), "r-chat", now + 1, true, &["e1"], &["e1"]);
+        credential(cfg.path(), "r-chat");
+        drop(RunReserve::take(&reserve_path(root.path(), "r-chat"), &small()).unwrap());
+        let release = |ended: bool| release_if_done(cfg.path(), root.path(), "r-chat", ended, now);
+        assert!(!release(false), "a run `continue` can restart keeps it");
+        assert!(reserve_path(root.path(), "r-chat").exists());
+        // The server says the run is sealed or incomplete: it has ended.
+        let held = RunReserve::take(&reserve_path(root.path(), "r-chat"), &small()).unwrap();
+        assert!(!release(true), "a reserve a live host holds is not touched");
+        drop(held);
+        assert!(release(true));
+        assert!(!reserve_path(root.path(), "r-chat").exists());
+        assert!(!release(true), "and a second release has nothing to remove");
+    }
+
+    #[test]
+    fn a_reserve_whose_run_record_cannot_be_read_goes_once_it_is_older_than_any_run() {
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let run_dir = super::super::run_dir(cfg.path(), "r-torn");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(run_dir.join(super::super::RUN_FILE_NAME), b"{ torn").unwrap();
+        let path = reserve_path(root.path(), "r-torn");
+        drop(RunReserve::take(&path, &small()).unwrap());
+        let now = super::super::now_unix();
+        assert_eq!(release_stale(cfg.path(), root.path(), now), 0, "young");
+        assert_eq!(
+            release_stale(cfg.path(), root.path(), now + LONGEST_RUN.as_secs() - 60),
+            0,
+            "not yet the longest a run can last"
+        );
+        // Held by a live process, however old.
+        let held = RunReserve::take(&path, &small()).unwrap();
+        let old = now + LONGEST_RUN.as_secs() + 60;
+        assert_eq!(release_stale(cfg.path(), root.path(), old), 0, "held");
+        drop(held);
+        assert_eq!(
+            release_stale(cfg.path(), root.path(), old),
+            1,
+            "old and free"
+        );
+        assert!(!path.exists());
+        assert_eq!(
+            LONGEST_RUN,
+            Duration::from_secs((168 + 24 + 1) * 3600),
+            "168 h of run, 24 h for its last upload, 1 h of wrap-up"
+        );
     }
 
     #[test]
@@ -743,6 +984,7 @@ mod tests {
         FREE_READING.with(|pinned| pinned.set(None));
         assert!(reused.is_ok());
         assert!(fresh.is_err());
+        assert!(!other.exists(), "a refused new reserve leaves nothing behind");
     }
 
     #[test]

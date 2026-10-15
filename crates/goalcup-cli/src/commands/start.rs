@@ -879,6 +879,8 @@ struct Forked<'a> {
     upload: Option<UploadStart>,
     /// This machine's record of the run.
     record: RunRecord,
+    /// The connector is a chat-mode one: `goalcup continue` can restart a run of it.
+    chat_mode: bool,
     /// The run's one disk reservation, held from the entry's creation to the run's end, until
     /// the watch tick takes it over when the harness is released.
     reserve: Option<RunReserve>,
@@ -973,13 +975,15 @@ impl Forked<'_> {
         error
     }
 
-    /// Whether the run's reserve file outlives a launch that failed: a segment that follows
-    /// others, or any segment of a server run that is not over, goes on to be continued, and its
-    /// one reservation is the run's, not the segment's. A new run that is given back to the
-    /// server is over, and takes its reserve with it.
+    /// Whether the run's reserve file outlives a launch that failed: a segment of a server run
+    /// with a chat-mode connector that is not over goes on to be continued, and its one
+    /// reservation is the run's, not the segment's. A new run that is given back to the server,
+    /// a headless run (it has no `continue`), and a run that is over take their reserve with
+    /// them.
     fn keeps_reserve(&self) -> bool {
         self.give_back.is_none()
             && self.record.server_url.is_some()
+            && self.chat_mode
             && !deadline_passed(self.record.deadline_at.as_deref())
     }
 
@@ -1042,7 +1046,18 @@ fn end_reserve(reserve: RunReserve, keep: bool) {
     if keep {
         drop(reserve);
     } else {
-        let _ = reserve.release();
+        release_and_say(reserve);
+    }
+}
+
+/// Give the run's reserve back to the disk, and say so when that fails: the file keeps its
+/// space until a later start or `goalcup status` removes it.
+fn release_and_say(reserve: RunReserve) {
+    if let Err(error) = reserve.release() {
+        crate::host_log::say(&format!(
+            "the run's disk reservation could not be released ({error}); it keeps its space \
+             until a later goalcup command removes it"
+        ));
     }
 }
 
@@ -1119,10 +1134,29 @@ struct Exited<'a> {
 }
 
 /// How the daemon says the recording is, read through a client made from `control.json` each
-/// time, so a restarted daemon is followed. `None` when it cannot say.
-fn ask_recording(cfg: &Path, entry_id: &str) -> Option<crate::run::Recording> {
+/// time, so a restarted daemon is followed. `None` when it cannot say, or when what answered is
+/// not the daemon that opened the entry (see [`recording_of`]).
+fn ask_recording(
+    cfg: &Path,
+    entry_id: &str,
+    run_public_key: &str,
+) -> Option<crate::run::Recording> {
     let client = crate::daemon::HttpDaemonClient::from_config_dir(cfg).ok()?;
+    recording_of(&client, entry_id, run_public_key)
+}
+
+/// The recording as the entry's own signed status says it. The status route is unauthenticated,
+/// so a document counts only when it is signed by the run key the entry's creation named and is
+/// about this entry: the heartbeat tells the server this word, and a forged "ok" must not.
+fn recording_of(
+    client: &dyn DaemonClient,
+    entry_id: &str,
+    run_public_key: &str,
+) -> Option<crate::run::Recording> {
     let status = retry_busy(|| client.status(entry_id)).ok()?;
+    if status.verify_with(run_public_key).is_err() || status.payload.entry_id != entry_id {
+        return None;
+    }
     Some(crate::run::Recording::of_capture(
         status.payload.capture?.capture,
     ))
@@ -1183,7 +1217,8 @@ fn capture(
         work_folder.as_deref(),
         "Nothing was created.",
     )?;
-    // A run past its deadline and a day has sent what it will: its reservation goes back.
+    // A reserve nothing will use again (a run that is over, or one `continue` cannot restart and
+    // that is all sent) goes back to the disk.
     release_stale(cfg, &artifact_root(cfg), crate::run::now_unix());
     let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;
     let profile = &c.loaded.manifest.capture;
@@ -1818,7 +1853,7 @@ fn create_and_gate<'a>(
             if let Some(held) = reserve.take() {
                 // A continued run's reserve is the run's, and outlives this segment.
                 if cx.continuing.is_none() {
-                    let _ = held.release();
+                    release_and_say(held);
                 }
             }
             let unmade = unmake(client, cfg, &info.entry_id, &run, &error, out);
@@ -1875,6 +1910,7 @@ fn create_and_gate<'a>(
             .as_ref()
             .and_then(|o| o.give_back.borrow_mut().take()),
         record,
+        chat_mode: profile.interactive,
         reserve,
         watching: None,
         chat: None,
@@ -2151,9 +2187,13 @@ fn run_harness<'a>(
     };
     // The run's state file, which the watch tick keeps and this function changes at each
     // transition of the agent; and what the threads of the run tell each other.
+    let mut launched = crate::run::RunState::launched(&entry_id, sleep_lock);
+    // What `goalcup status` may advise of `goalcup continue` for this run: only a run on a server
+    // with a chat-mode connector can be restarted by it.
+    launched.continuable = forked.record.server_url.is_some() && forked.chat_mode;
     let keeper = crate::run::StateKeeper::begin(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
-        crate::run::RunState::launched(&entry_id, sleep_lock),
+        launched,
     );
     let vitals = match forked.proxied.as_ref() {
         Some(proxied) => crate::run::Vitals::counting(proxied.proxy.model_requests()),
@@ -2224,7 +2264,8 @@ fn run_harness<'a>(
                 vitals: vitals.clone(),
                 ask: {
                     let (cfg, entry_id) = (cfg.to_path_buf(), entry_id.clone());
-                    Arc::new(move || ask_recording(&cfg, &entry_id))
+                    let key = forked.info.run_public_key.clone();
+                    Arc::new(move || ask_recording(&cfg, &entry_id, &key))
                 },
             }),
         })
@@ -2376,10 +2417,11 @@ fn finish_and_scan(
         chat,
         record,
         home_lock,
+        chat_mode,
         ..
     } = forked;
     // Only a chat-mode run says that it can be continued: only its harness can be.
-    let continuable = chat.is_some();
+    let continuable = chat_mode;
     // A chat-mode run's hold on the terminal (its hangup absorbed, its log open) lasts to the end
     // of this function: the seal and the upload's wrap-up below must outlive a closed window.
     let _chat = chat;
@@ -2417,13 +2459,16 @@ fn finish_and_scan(
         .is_some_and(|why| why != crate::run::watch::DISK_STOP_REASON);
     let on_server = record.server_url.is_some();
     let over = !on_server || ended_by_stop || deadline_passed(record.deadline_at.as_deref());
+    // `goalcup continue` can restart the run: a run on a server with a chat-mode connector that
+    // is not over. Only such a run keeps its reserve past this host.
+    let run_goes_on = crate::run::can_continue(cfg, &record, continuable, over);
     // The entry is sealed and the run goes on: the reserve is handed over before anything else
     // is let go. This host's watch stops managing it and its lock is dropped, the file kept, so
     // that a `goalcup continue` takes the same file at once instead of finding it held for as
     // long as this host's wrap-up lasts (an hour at most). The upload that follows needs none
     // of it, and the next segment's watch prunes this entry's acknowledged parts.
     let mut watching = watching;
-    if !over {
+    if run_goes_on {
         drop(watching.take().and_then(crate::run::watch::Watching::end));
     }
     // The shared harness home is free for the next segment or run, and the upload that follows
@@ -2435,31 +2480,57 @@ fn finish_and_scan(
     if let Ok(status) = &status {
         let _ = say(out, &format!("harness exited: {}.", describe_exit(status)));
     }
-    if let (true, true, false, Some(deadline_at)) =
-        (on_server, continuable, over, record.deadline_at.as_deref())
-    {
+    if on_server {
         let how = match &status {
             Ok(status) => describe_exit(status),
             Err(error) => error.to_string(),
         };
-        let _ = say(
-            out,
-            &format!(
-                "The agent's process ended ({how}). Your run stays open until {deadline_at}; run \
-                 `goalcup continue` to restart it."
-            ),
-        );
+        // `goalcup continue` is advised only when it can restart the run; otherwise what is
+        // true is said.
+        match (run_goes_on, over, record.deadline_at.as_deref()) {
+            (true, _, Some(deadline_at)) => {
+                let _ = say(
+                    out,
+                    &format!(
+                        "The agent's process ended ({how}). Your run stays open until \
+                         {deadline_at}; run `goalcup continue` to restart it."
+                    ),
+                );
+            }
+            // Stopped for its end: the stop was said when it happened.
+            (false, true, _) if ended_by_stop => {}
+            (false, true, _) => {
+                let _ = say(
+                    out,
+                    &format!(
+                        "The agent's process ended ({how}). The run is over: its deadline has passed."
+                    ),
+                );
+            }
+            (false, false, Some(deadline_at)) => {
+                let _ = say(
+                    out,
+                    &format!(
+                        "The agent's process ended ({how}). This run cannot be continued: its \
+                         connector runs headless and was given one goal. It stays open on the \
+                         server until {deadline_at}, with nothing more recorded."
+                    ),
+                );
+            }
+            _ => {}
+        }
     }
     // After the seal: the rest of the chain and the seal itself, within the finish budget.
-    // A local run has nothing to upload, so its reservation is done with.
-    let mut release = over;
+    // A local run has nothing to upload, so there is nothing of it left to send.
+    let mut sent_whole = !on_server;
+    let mut server_ended = false;
     let mut upload_report = None;
     if let Some(running) = uploading {
         let report = running.finish(wrap_up);
-        // A run on a server keeps its reservation unless the run is over and the server holds all
-        // of it: a harness that left before the deadline may be started again, and an upload that
-        // fell short is finished later. `release_stale` takes it back a day past the deadline.
-        release = over && report.caught_up && report.sealed;
+        // Everything this entry has is on the server, and the seal; and the server may say the
+        // run itself is sealed or incomplete.
+        sent_whole = report.caught_up && report.sealed;
+        server_ended = report.run_ended;
         let line = match &report {
             crate::upload::uploader::Report {
                 caught_up: true,
@@ -2480,12 +2551,12 @@ fn finish_and_scan(
         upload_report = Some(report);
     }
     // The earlier segments of a continued run were being closed beside this one: what became of
-    // each is said, and a reservation is kept while one is unsent.
+    // each is said, and none is left unsent for a run that cannot be continued.
     for drain in draining {
         let entry = drain.entry_id().to_string();
         let how_to_finish = drain.how_to_finish();
         let report = drain.wait(wrap_up);
-        release &= report.caught_up;
+        sent_whole &= report.caught_up;
         let line = if report.caught_up {
             format!("uploaded: entry {entry}, an earlier segment of this run, acknowledged.")
         } else {
@@ -2518,8 +2589,25 @@ fn finish_and_scan(
             };
         }
     });
-    if release && let Some(reserve) = reserve {
-        let _ = reserve.release();
+    // The reserve is released when the run has ended (its deadline, a stop for its end, or the
+    // server's word that it is sealed or incomplete), whatever became of its upload; or when the
+    // run goes on but `goalcup continue` cannot restart it and all of it is on the server. A run
+    // `continue` can restart keeps it. A reserve already handed over (the lock dropped, the
+    // file kept) for a run the server now calls over is removed by the same rule.
+    let release = over || server_ended || (!run_goes_on && sent_whole);
+    match reserve {
+        Some(reserve) if release => release_and_say(reserve),
+        Some(_) => {}
+        None if server_ended => {
+            crate::run::reserve::release_if_done(
+                cfg,
+                &artifact_root(cfg),
+                &record.run_id,
+                true,
+                crate::run::now_unix(),
+            );
+        }
+        None => {}
     }
     // After the finish report, before this run's artifacts are called anything: the key scan.
     let trace_scanned = finished
@@ -3660,13 +3748,31 @@ impl Uploading {
                 segment: None,
             }),
             Err(error) => {
-                let _ = crate::upload::abandon_run(
-                    &self.server,
-                    &run.run_id,
-                    "goalcup start failed before the launch",
-                );
-                let _ = std::fs::remove_file(crate::upload::pending_path(cx.cfg));
-                crate::run::remove(cx.cfg, &run.run_id);
+                // The note of the open and the credential are deleted only once the server has
+                // taken the run back; while it is away they are the only way to give it back.
+                if !crate::upload::undo_open(&self.server, cx.cfg, &run.run_id) {
+                    remove_run_keeping_pending_credential(cx.cfg, &run.run_id);
+                    let kept = crate::upload::pending_path(cx.cfg).exists()
+                        && crate::account::credential::credential_path(&crate::run::run_dir(
+                            cx.cfg,
+                            &run.run_id,
+                        ))
+                        .exists();
+                    crate::host_log::say(&if kept {
+                        format!(
+                            "run {} could not be given back to the server just now; the next \
+                             goalcup start gives it back",
+                            run.run_id
+                        )
+                    } else {
+                        format!(
+                            "run {} could not be given back to the server, and this machine \
+                             cannot ask again; the server ends it at its deadline or when your \
+                             account starts another",
+                            run.run_id
+                        )
+                    });
+                }
                 Err(error)
             }
         }
@@ -3919,6 +4025,52 @@ mod tests {
         assert!(!crate::run::reserve::held_by_another(&path), "and unlocked");
         end_reserve(RunReserve::take(&path, &policy).unwrap(), false);
         assert!(!path.exists(), "released");
+    }
+
+    /// The recording the heartbeat reports is the entry's own signed status: a document signed by
+    /// another key, about another entry, or edited after it was signed says nothing.
+    #[test]
+    fn the_recording_is_read_from_the_verified_status_only() {
+        use goalcup_protocol::capture::*;
+        let tmp = tempfile::tempdir().unwrap();
+        let daemon = MockDaemonClient::armed_ok(tmp.path(), "fake");
+        daemon.set_capture_status(
+            M2Status {
+                run: RunState::Running,
+                capture: CaptureState::Incomplete,
+                delivery: DeliveryState::LocalOnly,
+                analysis: AnalysisState::NotRun,
+                anchor: AnchorState::LocalOnly,
+                storage: CaptureStorage {
+                    quota_bytes: 1,
+                    reserved_bytes: 1,
+                    used_bytes: 0,
+                    durable: None,
+                    accounting_available: true,
+                },
+                gap_count: 1,
+                assistance_observed: false,
+            },
+            "gaps",
+            1,
+            0,
+        );
+        let info = daemon.info();
+        let key = info.run_public_key.clone();
+        let entry = info.entry_id.clone();
+        assert_eq!(
+            recording_of(&daemon, &entry, &key),
+            Some(crate::run::Recording::Gaps),
+            "signed by the entry's key, about the entry"
+        );
+        // Another run key: a process that bound the control port first, with a key of its own.
+        let other = "00".repeat(32);
+        assert_eq!(recording_of(&daemon, &entry, &other), None);
+        // A good signature about another entry.
+        assert_eq!(recording_of(&daemon, "entry-other", &key), None);
+        // Edited after it was signed.
+        daemon.tamper_status_payload();
+        assert_eq!(recording_of(&daemon, &entry, &key), None);
     }
 
     /// #7: a Ctrl-C started this abandon; the daemon's ordinary `busy` must be ridden out, not

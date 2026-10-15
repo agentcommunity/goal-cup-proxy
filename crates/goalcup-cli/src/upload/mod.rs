@@ -379,6 +379,22 @@ impl GiveBack {
     }
 }
 
+/// A start that failed after the run opened and before this machine could keep what gives it
+/// back (the note of the open, the credential): ask the server to take the run back, once.
+/// When the server settles it, the note and the run's directory go and the answer is `true`.
+/// When it cannot (it is away), the note and the credential stay, so that the next start
+/// gives the run back with them, and the answer is `false`: nothing may be deleted until the
+/// give-back has settled.
+pub fn undo_open(server: &ServerClient, cfg: &Path, run_id: &str) -> bool {
+    let given = abandon_run(server, run_id, "goalcup start failed before the launch");
+    if !settled(&given) {
+        return false;
+    }
+    let _ = std::fs::remove_file(pending_path(cfg));
+    crate::run::remove(cfg, run_id);
+    true
+}
+
 /// Whether an abandon's answer settles the run: given back, or past giving back (gone,
 /// holding chunks, or closed).
 fn settled(answer: &Result<(), ServerError>) -> bool {
