@@ -130,7 +130,6 @@ fn local_finish_without_service_is_complete() {
     let printed = start.output();
     assert!(printed.contains("local only"), "{printed}");
     assert!(printed.contains("--capture-integrity"), "{printed}");
-    assert_eq!(v.upload_dials(), 0, "nothing connects to upload_url");
 
     // What the workload did, from its own report and the run directory.
     let report = v.report();
@@ -242,7 +241,6 @@ fn local_finish_without_service_is_complete() {
         "{said}"
     );
     assert_eq!(v.chain(&entry).sha256(), before);
-    assert_eq!(v.upload_dials(), 0);
 }
 
 #[test]

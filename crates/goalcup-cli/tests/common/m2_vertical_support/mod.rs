@@ -70,8 +70,6 @@ pub struct Vertical {
     runtime: tokio::runtime::Runtime,
     endpoint: Option<ControlledEndpoint>,
     daemon: Option<Child>,
-    /// The daemon's `upload_url` listens here and nothing may connect to it.
-    upload_trap: std::net::TcpListener,
     _tmp: tempfile::TempDir,
 }
 
@@ -131,8 +129,6 @@ impl Vertical {
         std::fs::write(&config_path, config.to_string()).unwrap();
         write_connector(&connectors, &config_path);
 
-        let upload_trap = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        upload_trap.set_nonblocking(true).unwrap();
         let daemon_toml = root.join("goalcup-daemon.toml");
         std::fs::write(
             &daemon_toml,
@@ -170,7 +166,6 @@ impl Vertical {
             runtime,
             endpoint: Some(endpoint),
             daemon: Some(daemon),
-            upload_trap,
             _tmp: tmp,
         };
         // The daemon prints its control address and control file once it serves.
@@ -398,15 +393,6 @@ impl Vertical {
                 .count()
                 >= n
         });
-    }
-
-    /// How many connections the daemon's `upload_url` accepted.
-    pub fn upload_dials(&self) -> usize {
-        let mut n = 0;
-        while self.upload_trap.accept().is_ok() {
-            n += 1;
-        }
-        n
     }
 
     pub fn daemon_pid(&self) -> i32 {

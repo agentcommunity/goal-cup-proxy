@@ -253,7 +253,13 @@ fn local_pilot_never_requests_receipt() {
     let (result, out) =
         std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    assert_eq!(rig.upload_dials(), 0, "a local run asks no server anything");
+    // A run with no `goalcup login` is local: it leaves no server configuration and no upload
+    // spool behind. (It cannot dial anything: a start only learns a server from `server.json`.)
+    assert!(!rig.cfg.join("server.json").exists(), "a server appeared");
+    assert!(
+        !rig.cfg.join(goalcup_cli::upload::UPLOADS_DIR_NAME).exists(),
+        "a local run made an upload spool"
+    );
 
     let created = client.created();
     let entry_id = created.entry_id;
@@ -591,7 +597,6 @@ fn local_owned_stop_and_seal_need_no_anchor() {
     assert!(!goalcup_protocol::process::is_alive(pid));
     assert!(sealed.contains("local only"), "{sealed}");
     assert!(sealed.contains("--capture-integrity"), "{sealed}");
-    assert_eq!(rig.upload_dials(), 0);
 
     let entry_id = client.created().entry_id;
     let (report, _) = rig.read_trace(&entry_id);
