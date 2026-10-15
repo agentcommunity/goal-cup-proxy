@@ -1334,6 +1334,25 @@ fn verifier_accepts_a_paired_tool_allowance_for_any_profile_and_refuses_an_unpai
 }
 
 #[test]
+fn verifier_refuses_a_paired_tool_allowance_whose_rule_is_not_bounded_text() {
+    let mut records = launched(complete_wire(None));
+    if let Some(CaptureRecord::Launch {
+        allowed_tool_rule,
+        process_handoff_digest,
+        ..
+    }) = records
+        .iter_mut()
+        .find(|record| matches!(record, CaptureRecord::Launch { .. }))
+    {
+        *allowed_tool_rule = Some("Bash(\n)".into());
+        *process_handoff_digest = Some("d".repeat(64));
+    }
+    let (refused, _) = scan(make_trace(&records, true).path());
+    assert_eq!(refused.exit_code(), 2, "{refused:#?}");
+    assert!(has(&refused, "record_field_invalid"), "{refused:#?}");
+}
+
+#[test]
 fn missing_terminal_is_incomplete_not_pass() {
     let dir = make_trace(&launched(complete_wire(None)), false);
     let (report, _) = scan(dir.path());

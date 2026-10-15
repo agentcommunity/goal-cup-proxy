@@ -3,7 +3,8 @@
 //! Every source file of the protocol, daemon and verifier crates is scanned for string literals
 //! that contain a harness name. The capture paths of the CLI and platform crates are held to the
 //! narrower rule they had before: no literal that is exactly a family name. Comments and
-//! identifiers are not scanned. A file where a name is data stays in `ALLOWED`, with its reason.
+//! identifiers are not scanned. A literal where a name is data is listed in `ALLOWED`, by file
+//! and exact text, with its reason; any other hit in the same file still fails.
 
 use std::path::{Path, PathBuf};
 
@@ -16,20 +17,79 @@ const FORBIDDEN: &[&str] = &["hermes", "codex", "claude"];
 /// The literals the CLI and platform capture paths may not be.
 const FAMILY_LITERALS: &[&str] = &["hermes", "codex", "claude-code"];
 
-/// Files whose harness names are data, relative to the repository root. Each must still hold a
-/// hit, so a cleaned file leaves this list.
-const ALLOWED: &[(&str, &str)] = &[
+/// String literals whose harness name is data: (file relative to the repository root, the
+/// literal's text with line continuations joined, reason). Any other hit in the same file
+/// fails, and an entry no literal matches any more fails as stale.
+const ALLOWED: &[(&str, &str, &str)] = &[
     (
         "crates/goalcup-protocol/src/capture_policy.rs",
-        "closed launch-environment tables (CA registry, refused names, provider prefixes); a policy cannot come from the connector it constrains (D41, D43)",
+        "CODEX_CA_CERTIFICATE",
+        "a CA_REGISTRY row: the variable a harness reads its extra CA from (D41, D43)",
+    ),
+    (
+        "crates/goalcup-protocol/src/capture_policy.rs",
+        "HERMES_CA_BUNDLE",
+        "a CA_REGISTRY row: the variable a harness reads its CA bundle from (D41, D43)",
+    ),
+    (
+        "crates/goalcup-protocol/src/capture_policy.rs",
+        "CLAUDE_CODE_SHELL_PREFIX",
+        "a refused launch variable: it makes the harness run a command",
+    ),
+    (
+        "crates/goalcup-protocol/src/capture_policy.rs",
+        "CLAUDE_ENV_FILE",
+        "a refused launch variable: it makes the harness load a file",
+    ),
+    (
+        "crates/goalcup-protocol/src/capture_policy.rs",
+        "CLAUDE_CODE_USE_",
+        "a refused launch prefix: it switches the harness to another model provider",
     ),
     (
         "crates/goalcup-verifier/src/capture_analysis/native.rs",
-        "the native decoders keyed by the `protocol_hint` a connector declares, and the decoder ids a report prints",
+        "codex-jsonl",
+        "the protocol_hint a connector declares for this native decoder",
+    ),
+    (
+        "crates/goalcup-verifier/src/capture_analysis/native.rs",
+        "claude-code-jsonl",
+        "the protocol_hint a connector declares for this native decoder",
+    ),
+    (
+        "crates/goalcup-verifier/src/capture_analysis/native.rs",
+        "codex-native",
+        "the decoder id a report prints",
+    ),
+    (
+        "crates/goalcup-verifier/src/capture_analysis/native.rs",
+        "claude-code-native",
+        "the decoder id a report prints",
     ),
     (
         "crates/goalcup-verifier/src/capture_analysis/registry.rs",
-        "each built-in decoder's evidence note names the harness build it was measured against",
+        "Codex CLI 0.153.0 rollout JSONL: a cli-launched session and real exec-launched chains",
+        "evidence note: the harness build this decoder was measured against",
+    ),
+    (
+        "crates/goalcup-verifier/src/capture_analysis/registry.rs",
+        "Claude Code project JSONL: 2.1.259 sessions and real 2.1.283 chains",
+        "evidence note: the harness build this decoder was measured against",
+    ),
+    (
+        "crates/goalcup-verifier/src/capture_analysis/registry.rs",
+        "the WebSocket traffic of one live Codex CLI 0.153.0 run",
+        "evidence note: the harness build this decoder was measured against",
+    ),
+    (
+        "crates/goalcup-verifier/src/capture_analysis/registry.rs",
+        "one real Claude Code 2.1.283 exchange",
+        "evidence note: the harness build this decoder was measured against",
+    ),
+    (
+        "crates/goalcup-verifier/src/capture_analysis/registry.rs",
+        "no real traffic yet: the live Hermes/DeepSeek row predates this decoder and has not been re-decoded",
+        "evidence note: the harness build this decoder was measured against",
     ),
 ];
 
@@ -136,6 +196,19 @@ fn string_literals(source: &str) -> Vec<(usize, String)> {
     out
 }
 
+/// A literal's text with each `\` line continuation and the indentation after it removed, as
+/// the compiler reads it.
+fn joined(literal: &str) -> String {
+    let mut out = String::new();
+    let mut rest = literal;
+    while let Some(at) = rest.find("\\\n") {
+        out.push_str(&rest[..at]);
+        rest = rest[at + 2..].trim_start();
+    }
+    out.push_str(rest);
+    out
+}
+
 fn is_ident(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
@@ -154,6 +227,7 @@ fn the_scanner_reads_literals_only() {
             (5, "Codex".to_string()),
         ]
     );
+    assert_eq!(joined("one \\\n        two"), "one two");
 }
 
 #[test]
@@ -190,7 +264,6 @@ fn core_code_names_no_harness_in_a_string_literal() {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        let allowed = ALLOWED.iter().position(|(file, _)| *file == relative);
         let narrow = capture_paths.contains(path);
         let source =
             std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
@@ -201,11 +274,16 @@ fn core_code_names_no_harness_in_a_string_literal() {
             } else {
                 FORBIDDEN.iter().any(|name| lower.contains(name))
             };
-            if named {
-                match allowed {
-                    Some(n) => allowed_hit[n] = true,
-                    None => hits.push(format!("{relative}:{line}: {literal:?}")),
-                }
+            if !named {
+                continue;
+            }
+            let text = joined(&literal);
+            match ALLOWED
+                .iter()
+                .position(|(file, allowed, _)| *file == relative && *allowed == text)
+            {
+                Some(n) => allowed_hit[n] = true,
+                None => hits.push(format!("{relative}:{line}: {text:?}")),
             }
         }
     }
@@ -219,10 +297,11 @@ fn core_code_names_no_harness_in_a_string_literal() {
         .iter()
         .zip(&allowed_hit)
         .filter(|(_, hit)| !**hit)
-        .map(|((file, _), _)| *file)
+        .map(|((file, literal, _), _)| format!("{file}: {literal:?}"))
         .collect();
     assert!(
         stale.is_empty(),
-        "allowed files that no longer name a harness: {stale:?}"
+        "allowed literals no longer in their file:\n{}",
+        stale.join("\n")
     );
 }
