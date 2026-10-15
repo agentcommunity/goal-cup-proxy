@@ -460,6 +460,29 @@ fn put_refuses_a_second_entry_bound_to_the_same_workspace() {
     assert_eq!(r.all().unwrap().len(), 1);
 }
 
+/// A continued run makes its next segment in the workspace its last one had: an entry the caller
+/// says is finished with its workspace no longer holds it, and one it does not say so of still
+/// does.
+#[test]
+fn an_entry_that_lets_go_of_its_workspace_does_not_hold_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let r = Registry::open(&tmp.path().join("registry.redb")).unwrap();
+    let first = entry(tmp.path(), "e1");
+    r.put(&first).unwrap();
+    let mut second = entry(tmp.path(), "e2");
+    second.workspace = first.workspace.clone();
+    r.put_letting_go(&second, &|stored| stored.entry_id != "e1")
+        .unwrap_err();
+    r.put_letting_go(&second, &|stored| stored.entry_id == "e1")
+        .unwrap();
+    assert_eq!(r.all().unwrap().len(), 2);
+    // The second entry holds it now.
+    let mut third = entry(tmp.path(), "e3");
+    third.workspace = first.workspace.clone();
+    let err = r.put(&third).unwrap_err();
+    assert!(err.to_string().contains("e1") || err.to_string().contains("e2"));
+}
+
 /// The registry is the daemon's memory across a crash. Reopening the same file must give
 /// back the same entries, field for field.
 #[test]

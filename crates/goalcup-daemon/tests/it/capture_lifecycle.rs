@@ -2951,3 +2951,82 @@ async fn a_symlinked_native_root_component_is_refused() {
     );
     assert!(!workspace.exists(), "a refused create leaves no workspace");
 }
+
+/// A continued run makes its next segment in the workspace its last entry had (D4): the last
+/// entry is sealed, so it no longer holds the workspace. An entry still open does.
+#[tokio::test]
+async fn a_continued_segment_takes_the_workspace_of_its_sealed_entry() {
+    let rig = Rig::start().await;
+    // A clone root, so the next create is admitted whatever the last entry left in it (R3).
+    let ws = rig.workspace("continued");
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let init = goalcup_daemon::workspace_git::command(&ws, &home)
+        .expect("git on PATH")
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init");
+
+    let first: CaptureWorkspaceInfo = {
+        let created = rig.create("codex-cli", &ws, RESERVE).await;
+        assert_eq!(created.status(), 200, "{}", created.body());
+        created.json().unwrap()
+    };
+    // Open and unsealed, it holds the workspace.
+    let held = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(held.status(), 409, "{}", held.body());
+    assert!(
+        held.body().contains("one workspace holds one entry"),
+        "{}",
+        held.body()
+    );
+
+    let sealed = rig.seal(&first.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let second = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(second.status(), 200, "{}", second.body());
+    let second: CaptureWorkspaceInfo = second.json().unwrap();
+    assert_ne!(second.entry_id, first.entry_id);
+
+    // The new segment holds it in turn.
+    let held = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(held.status(), 409, "{}", held.body());
+    assert!(
+        held.body().contains("one workspace holds one entry"),
+        "{}",
+        held.body()
+    );
+}
+
+/// An entry this daemon could not reopen routes nothing, so it lets go of its workspace too: a
+/// run whose chain was lost can still be continued where it ran.
+#[tokio::test]
+async fn a_continued_segment_takes_the_workspace_of_an_entry_that_failed_to_reopen() {
+    let rig = Rig::start().await;
+    let ws = rig.workspace("lost");
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let init = goalcup_daemon::workspace_git::command(&ws, &home)
+        .expect("git on PATH")
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init");
+
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let first: CaptureWorkspaceInfo = created.json().unwrap();
+    std::fs::remove_file(rig.trace_dir(&first.entry_id).join("chain.jsonl")).unwrap();
+
+    let rig = rig.restart().await;
+    assert_ne!(
+        rig.daemon.cycle_errors().last,
+        None,
+        "the lost chain was not reopened"
+    );
+    let second = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(second.status(), 200, "{}", second.body());
+}
