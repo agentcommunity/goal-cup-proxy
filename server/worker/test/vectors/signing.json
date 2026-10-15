@@ -1,0 +1,26 @@
+{
+  "_comment": "Signing vectors shared by both sides. Rust reads this in crates/goalcup-protocol/tests/it/signing_vectors.rs, the Worker in server/worker/test/sign.test.ts. Ed25519 seed is 32 bytes of 0x07. Change a value only when the signing bytes change on purpose.",
+  "seed_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+  "public_key": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  "receipt": {
+    "claims": {
+      "entry_id": "e0123456789abcdef",
+      "connector_id": "codex-cli",
+      "workspace": "/Users/p/goal-1/run-x/workspace — ünï",
+      "session_id": "6f1c2d3e-0000-4000-8000-000000000001",
+      "started_at": "2026-11-06T09:00:00Z",
+      "deadline_at": "2026-11-13T09:00:00Z",
+      "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "chain_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "connector_dir_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "signature": "d3ffe33dbe7b663e63d246027245cc7540b458b1e33c9c888396b84745bc5bf2527621ea0068f7d015a8c22fe860590620735e1a5f8247c5c831e79bdc5c3f02"
+  },
+  "ack": {
+    "entry_id": "e0123456789abcdef",
+    "seq": 812,
+    "hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "acked_at": "2026-11-06T10:00:00Z",
+    "server_signature": "5acf66735c55ef842f15a40f962e774eb26adb78d10d2c80942b06ea67b4eb7c6583b0bb7bc45ab169c6996e3b4f7cab19ccd17890a68cba1269c9dd980c440d"
+  }
+}
