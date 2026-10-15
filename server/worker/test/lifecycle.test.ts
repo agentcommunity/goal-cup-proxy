@@ -13,6 +13,8 @@ import { type Opened, T0, WINDOW, lifecycle, rig } from "./helpers/rig.ts";
 import { TEST_SEED } from "./helpers/worker.ts";
 
 const publicKey = (await Signer.fromSeedHex(TEST_SEED)).publicKeyHex;
+/** The default run length (RUN_HOURS 168), in seconds. */
+const WEEK = 168 * 3600;
 
 function assertError(r: { status: number; body: { error?: string; message?: string } }, status: number, code: string) {
   assert.equal(r.status, status, JSON.stringify(r.body));
@@ -35,7 +37,8 @@ describe("one main run per account", () => {
     // The first run is told to stop, and why; its deadline is unchanged.
     const hb = await r.beat(c1, a.run_id, a.entry_id);
     assert.equal(hb.status, 200, JSON.stringify(hb.body));
-    assert.deepEqual(hb.body, { stop: true, deadline_at: a.deadline_at, reason: "replaced" });
+    // seconds_left counts to deadline_at, which a replacement does not move; stop is what ends it.
+    assert.deepEqual(hb.body, { stop: true, deadline_at: a.deadline_at, seconds_left: WEEK - 60, reason: "replaced" });
     const pos = await r.get(c1, a.run_id);
     assert.equal(pos.body.stop, true);
     assert.equal(pos.body.status, "open");
@@ -43,8 +46,8 @@ describe("one main run per account", () => {
     assert.equal(pos.body.deadline_at, a.deadline_at);
 
     // The second runs on; another account's run is not touched; the replaced run keeps its credential.
-    assert.deepEqual((await r.beat(c2, b.run_id, b.entry_id)).body, { stop: false, deadline_at: b.deadline_at, reason: null });
-    assert.deepEqual((await r.beat(bob, bobRun.run_id, bobRun.entry_id)).body, { stop: false, deadline_at: bobRun.deadline_at, reason: null });
+    assert.deepEqual((await r.beat(c2, b.run_id, b.entry_id)).body, { stop: false, deadline_at: b.deadline_at, seconds_left: WEEK, reason: null });
+    assert.deepEqual((await r.beat(bob, bobRun.run_id, bobRun.entry_id)).body, { stop: false, deadline_at: bobRun.deadline_at, seconds_left: WEEK - 60, reason: null });
     assert.equal((await r.get(c2, b.run_id)).body.ends_at, b.deadline_at);
 
     // A lost reply is still the same run, not a third start.
@@ -57,7 +60,7 @@ describe("one main run per account", () => {
     r.after(60);
     const c = await r.start(c3, "s3");
     assert.equal((await r.get(c1, a.run_id)).body.ends_at, "2026-11-06T09:01:00Z");
-    assert.deepEqual((await r.beat(c2, b.run_id, b.entry_id)).body, { stop: true, deadline_at: b.deadline_at, reason: "replaced" });
+    assert.deepEqual((await r.beat(c2, b.run_id, b.entry_id)).body, { stop: true, deadline_at: b.deadline_at, seconds_left: WEEK - 60, reason: "replaced" });
     assert.equal((await r.beat(c3, c.run_id, c.entry_id)).body.stop, false);
   });
 
@@ -128,7 +131,7 @@ describe("the start window and practice runs", () => {
 
     // The first practice run ends at 09:10, the second at 09:11; the competition run goes on.
     r.at("2026-11-06T09:10:00Z");
-    assert.deepEqual((await r.beat(p1c, p1.run_id, p1.entry_id)).body, { stop: true, deadline_at: p1.deadline_at, reason: "deadline" });
+    assert.deepEqual((await r.beat(p1c, p1.run_id, p1.entry_id)).body, { stop: true, deadline_at: p1.deadline_at, seconds_left: 0, reason: "deadline" });
     assert.equal((await r.beat(p2c, p2.run_id, p2.entry_id)).body.stop, false);
     assert.equal((await r.beat(comp, c.run_id, c.entry_id)).body.stop, false);
 
@@ -167,7 +170,8 @@ describe("continue and segments", () => {
 
     const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
     assert.equal(c.status, 201, JSON.stringify(c.body));
-    assert.deepEqual(Object.keys(c.body), ["entry_id", "segment", "official_start", "deadline_at"]);
+    assert.deepEqual(Object.keys(c.body), ["entry_id", "segment", "official_start", "deadline_at", "seconds_left"]);
+    assert.equal(c.body.seconds_left, WEEK - 300); // what is left of the run, not a new run's length
     assert.match(c.body.entry_id, /^e[0-9a-f]{16}$/);
     assert.notEqual(c.body.entry_id, a.entry_id);
     assert.equal(c.body.segment, 1);
@@ -313,6 +317,33 @@ describe("continue and segments", () => {
     r.at(a.deadline_at);
     assert.equal((await r.get(alice, a.run_id)).body.status, "sealed");
     assertError(await r.cont(alice, a.run_id, a.entry_id, "s-two"), 410, "closed");
+  });
+});
+
+describe("the time left, on the server's clock (WP11)", () => {
+  lifecycle("open, continue and every heartbeat say seconds_left, down to 0 at the deadline and after it", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    // The open answer: the whole run, counted on the server's clock.
+    assert.equal((a as Opened & { seconds_left: number }).seconds_left, WEEK);
+    r.after(3600);
+    assert.equal((await r.beat(alice, a.run_id, a.entry_id)).body.seconds_left, WEEK - 3600);
+    // A continue says what is left of the run, not a new run's length.
+    const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
+    assert.equal(c.status, 201, JSON.stringify(c.body));
+    assert.equal(c.body.seconds_left, WEEK - 3600);
+    // A lost-reply repeat of the open answers the time left now.
+    r.after(60);
+    assert.equal((await r.open(alice, "s1")).body.seconds_left, WEEK - 3660);
+
+    // One second before the deadline, one second is left and the run goes on.
+    r.at(new Date(Date.parse(a.deadline_at) - 1000).toISOString());
+    assert.deepEqual((await r.beat(alice, a.run_id, c.body.entry_id)).body, { stop: false, deadline_at: a.deadline_at, seconds_left: 1, reason: null });
+    // At the deadline nothing is left, and the run stops; later it stays 0, never negative.
+    r.at(a.deadline_at);
+    assert.deepEqual((await r.beat(alice, a.run_id, c.body.entry_id)).body, { stop: true, deadline_at: a.deadline_at, seconds_left: 0, reason: "deadline" });
+    r.after(3600);
+    assert.deepEqual((await r.beat(alice, a.run_id, c.body.entry_id)).body, { stop: true, deadline_at: a.deadline_at, seconds_left: 0, reason: "deadline" });
   });
 });
 

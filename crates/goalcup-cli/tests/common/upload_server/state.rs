@@ -213,6 +213,12 @@ impl RunRecord {
         format_z(self.ends_secs())
     }
 
+    /// Whole seconds from the server's clock to `deadline_at`, 0 once it has come: what the open,
+    /// continue and heartbeat answers say as `seconds_left`.
+    pub fn seconds_left(&self) -> u64 {
+        self.deadline_secs().saturating_sub(now_secs())
+    }
+
     /// True once the server's clock is at or past the end of the run.
     pub fn stopped(&self) -> bool {
         now_secs() >= self.ends_secs()

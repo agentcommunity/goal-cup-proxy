@@ -136,8 +136,16 @@ Called by `goalcup start` after its local checks and before anything is created 
  "machine": {"os": "macOS", "cpus": 8, "ac_power": true}}
 ```
 
-`201`: `{"run_id", "entry_id", "official_start", "deadline_at"}`. The server mints both ids and
-stamps `official_start` from its own clock. `entry_id` is the run's first entry, segment 0.
+`201`: `{"run_id", "entry_id", "official_start", "deadline_at", "seconds_left"}`. The server mints
+both ids and stamps `official_start` from its own clock. `entry_id` is the run's first entry,
+segment 0.
+
+`seconds_left` is the time left, on the server's clock: whole seconds from the server's now to
+`deadline_at`, rounded up, and `0` once `deadline_at` has come (never negative). The open, the
+continue and every heartbeat answer carry it. **The server is the clock:** the tracer counts the
+run down from the last `seconds_left` it was given and never reads the machine's own date for the
+deadline (see "When a run ends"). It counts to `deadline_at`, not `ends_at`: a run that a later start
+replaced learns it from `stop`.
 
 `deadline_at` = `official_start` + the run length: the event's run hours for a competition run,
 `PRACTICE_RUN_MINUTES` (10) for a practice run. The credential's `mode` decides which: a `practice`
@@ -300,7 +308,8 @@ heartbeat time (whichever entry sent it), and the server keeps the connection's 
 country on the heartbeat and as the run's latest pair, as for the open call. The notices that follow
 from these are under "What the server does on its own".
 
-`200`: `{"stop": <bool>, "deadline_at": "…", "reason": "deadline" | "replaced" | null}`. `stop` is
+`200`: `{"stop": <bool>, "deadline_at": "…", "seconds_left": <u64>, "reason": "deadline" | "replaced" | null}`.
+`seconds_left` is the time left (see the open call). `stop` is
 `true` once the server's clock is at or past `ends_at`: **the run is over**. The tracer then stops
 the agent at once, seals, and sends the final heartbeat. `reason` says why: `"replaced"` when a
 later start replaced the run, `"deadline"` when `deadline_at` came, `null` while `stop` is `false`.
@@ -317,9 +326,14 @@ later competition start replaced it. At `ends_at` the run is over, in whatever s
 in. There is no grace period and no late window.
 
 - **The server says stop.** Every heartbeat answered at or after `ends_at` carries `stop: true` and
-  the `reason`. The tracer stops recording at once. Without a network it stops on its own clock:
-  `deadline_at − official_start` after the run opened, counted on a clock that keeps running while
-  the machine sleeps. (A replaced run learns of it from its next heartbeat.)
+  the `reason`. The tracer stops recording at once. Without a network it stops on its own count:
+  the `seconds_left` of the last answer it had (the open, the continue or a heartbeat), counted
+  from just before that call on a clock that keeps running while the machine sleeps. Each answer
+  sets the count again, and the server's answer wins. The machine's date is never read for it, so
+  changing the date does not move the deadline. (A replaced run learns of it from its next
+  heartbeat.) An answer from an older server has no `seconds_left`; the tracer then counts
+  `deadline_at − official_start` from when the run opened, and for a continued segment
+  `deadline_at` less the machine's date.
 - **The wrap-up upload has no time limit, but it can only complete each entry's chain up to its
   committed end.** After `ends_at`, a chunk is accepted only once the entry's final heartbeat has
   committed `(seq, head)`, and only if its `Goalcup-Last-Seq` is at most that `seq` (and the chunk
@@ -352,8 +366,10 @@ calls address the entry they name.
  "harness_version": "…", "tracer_version": "…"}
 ```
 
-`201 {"entry_id", "segment", "official_start", "deadline_at"}`: the new entry, and the run's own
-`official_start` and `deadline_at` (a segment is not a new run, and the deadline does not move).
+`201 {"entry_id", "segment", "official_start", "deadline_at", "seconds_left"}`: the new entry, and
+the run's own `official_start` and `deadline_at` (a segment is not a new run, and the deadline does
+not move). `seconds_left` is what is left of the run now, on the server's clock (see the open call);
+the continued segment counts down from it.
 The previous entry is not sealed or closed by this; it may still upload its wrap-up.
 
 - `previous_entry_id` must be the run's latest entry, else `409`.

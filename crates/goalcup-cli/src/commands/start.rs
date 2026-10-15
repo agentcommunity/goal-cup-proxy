@@ -1908,13 +1908,15 @@ fn create_and_gate<'a>(
         template,
         upload: bound.map(|(record, key)| UploadStart {
             server: upload.map(|u| u.server.clone()),
-            local_deadline: match cx.continuing {
-                // The segment's own count is what is left of the run, from now.
-                Some(_) => crate::upload::uploader::LocalDeadline::until(&record.deadline_at),
-                None => opened
-                    .as_ref()
-                    .and_then(|o| crate::upload::uploader::LocalDeadline::of(&record, o.opened_at)),
-            },
+            // The server's time left, counted from when it was asked (WP11).
+            local_deadline: opened.as_ref().and_then(|o| {
+                crate::upload::uploader::LocalDeadline::at_start(
+                    &record,
+                    o.run.seconds_left,
+                    o.opened_at,
+                    cx.continuing.is_some(),
+                )
+            }),
             record,
             key,
             policy: opts.upload_policy,
@@ -3857,6 +3859,7 @@ impl Uploading {
                 entry_id: segment.entry_id,
                 official_start: segment.official_start,
                 deadline_at: segment.deadline_at,
+                seconds_left: segment.seconds_left,
             },
             request: carried.clone(),
             opened_at,

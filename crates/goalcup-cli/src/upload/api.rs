@@ -52,6 +52,11 @@ pub struct ContinueRun {
     pub segment: u64,
     pub official_start: String,
     pub deadline_at: String,
+    /// Whole seconds from the server's clock to `deadline_at` when it answered (0 once it has
+    /// come). The tracer counts the run down from this, never from this machine's date. An
+    /// older server leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds_left: Option<u64>,
 }
 
 /// The answer to [`OpenRunRequest`].
@@ -61,6 +66,11 @@ pub struct OpenRun {
     pub entry_id: String,
     pub official_start: String,
     pub deadline_at: String,
+    /// Whole seconds from the server's clock to `deadline_at` when it answered (0 once it has
+    /// come). The tracer counts the run down from this, never from this machine's date. An
+    /// older server leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds_left: Option<u64>,
 }
 
 /// `POST /v1/runs/{run_id}/receipt`.
@@ -141,6 +151,11 @@ pub struct HeartbeatAnswer {
     /// The run is over: stop now.
     pub stop: bool,
     pub deadline_at: String,
+    /// Whole seconds from the server's clock to `deadline_at` when it answered (0 once it has
+    /// come). The tracer counts the run down from this, never from this machine's date. An
+    /// older server leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds_left: Option<u64>,
     /// Why `stop` is true when the deadline is not all of it: `deadline` or `replaced`. An
     /// older server leaves it out.
     #[serde(default)]

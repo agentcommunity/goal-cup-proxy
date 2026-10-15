@@ -1151,6 +1151,7 @@ fn ordinary_beat(
     record: &UploadRecord,
     vitals: &Vitals,
     ended: &EndedGate,
+    count: &mut Option<LocalDeadline>,
 ) -> Option<String> {
     let ended = ended.lock().unwrap_or_else(PoisonError::into_inner);
     if *ended {
@@ -1165,9 +1166,12 @@ fn ordinary_beat(
             ));
         }
     };
+    // Taken before the call: the server's time left is counted from no later than it answered.
+    let asked = goalcup_protocol::clock::ContinuousOrigin::now();
     match heartbeat(server, record, false, None, Some(vitals), HEARTBEAT_TIMEOUT) {
         Beat::Answer(Ok(answer)) => {
             vitals.heartbeat_ok();
+            LocalDeadline::heard(count, &answer, asked);
             stop_reason(&answer)
         }
         Beat::Answer(Err(error)) => {
@@ -1187,7 +1191,8 @@ fn ordinary_beat(
 }
 
 /// Send a heartbeat every `policy.heartbeat` and watch the run's own deadline, until the run
-/// must stop (said once on `stopping`, and `over` set) or the uploader is `done`.
+/// must stop (said once on `stopping`, and `over` set) or the uploader is `done`. Each answer
+/// that says how much time is left sets the count again ([`LocalDeadline`]).
 #[allow(clippy::too_many_arguments)]
 fn watch_deadline(
     server: &ServerClient,
@@ -1200,6 +1205,7 @@ fn watch_deadline(
     done: &AtomicBool,
     ended: &EndedGate,
 ) {
+    let mut local_deadline = local_deadline;
     let mut next_beat = Instant::now();
     let tick = policy.poll.min(Duration::from_secs(1));
     while !done.load(Ordering::SeqCst) {
@@ -1214,7 +1220,7 @@ fn watch_deadline(
             local
         } else if Instant::now() >= next_beat {
             next_beat = Instant::now() + policy.heartbeat;
-            ordinary_beat(server, record, vitals, ended)
+            ordinary_beat(server, record, vitals, ended, &mut local_deadline)
         } else {
             None
         };
@@ -1391,17 +1397,56 @@ impl Drop for Running {
     }
 }
 
-/// The run's own deadline, for when the server cannot say it: its length
-/// (`deadline_at − official_start`) counted from when it opened on a clock that keeps running
-/// while the machine sleeps.
+/// The run's countdown to its deadline, for when the server cannot say stop. The server is the
+/// clock (WP11): the count is set from the `seconds_left` of the open or continue answer, and set
+/// again from every heartbeat answer that carries it, whatever it says (the server's answer
+/// wins). It runs on a clock that keeps running while the machine sleeps
+/// ([`goalcup_protocol::clock::ContinuousOrigin`]), and never reads this machine's date, which
+/// the participant can change. During an outage it goes on counting down from the last answer.
+///
+/// Only an older server, whose answers carry no `seconds_left`, leaves the count to the rules
+/// it had before: the run's length from when it opened ([`LocalDeadline::of`]), and for a
+/// continued segment `deadline_at` less this machine's date ([`LocalDeadline::until`]).
 #[derive(Debug, Clone, Copy)]
 pub struct LocalDeadline {
-    pub opened: goalcup_protocol::clock::ContinuousOrigin,
-    pub length: Duration,
+    /// When the count was last set: taken before the call whose answer set it, so the count
+    /// never ends later than the server's.
+    pub from: goalcup_protocol::clock::ContinuousOrigin,
+    /// What was left of the run at `from`.
+    pub left: Duration,
 }
 
 impl LocalDeadline {
-    /// The run's length from the record's two server times, from `opened`.
+    /// `seconds_left` as a server answered it, counted from `asked`, which was taken before the
+    /// call.
+    pub fn left_from(
+        seconds_left: u64,
+        asked: goalcup_protocol::clock::ContinuousOrigin,
+    ) -> LocalDeadline {
+        LocalDeadline {
+            from: asked,
+            left: Duration::from_secs(seconds_left),
+        }
+    }
+
+    /// The count for an entry that `goalcup start` (or `continue`, `continued`) has just had
+    /// opened: the answer's `seconds_left` from `asked`, taken before the call. An older server's
+    /// answer has none: then the run's length ([`LocalDeadline::of`]), or for a continued
+    /// segment what this machine's date says is left ([`LocalDeadline::until`]).
+    pub fn at_start(
+        record: &UploadRecord,
+        seconds_left: Option<u64>,
+        asked: goalcup_protocol::clock::ContinuousOrigin,
+        continued: bool,
+    ) -> Option<LocalDeadline> {
+        match (seconds_left, continued) {
+            (Some(seconds), _) => Some(LocalDeadline::left_from(seconds, asked)),
+            (None, false) => LocalDeadline::of(record, asked),
+            (None, true) => LocalDeadline::until(&record.deadline_at),
+        }
+    }
+
+    /// An older server only: the run's length from the record's two server times, from `opened`.
     pub fn of(
         record: &UploadRecord,
         opened: goalcup_protocol::clock::ContinuousOrigin,
@@ -1409,24 +1454,42 @@ impl LocalDeadline {
         let start = goalcup_protocol::control::parse_z(&record.official_start)?;
         let deadline = goalcup_protocol::control::parse_z(&record.deadline_at)?;
         Some(LocalDeadline {
-            opened,
-            length: Duration::from_secs(deadline.checked_sub(start)?),
+            from: opened,
+            left: Duration::from_secs(deadline.checked_sub(start)?),
         })
     }
 
-    /// What is left of a run that is already under way: its `deadline_at` less this machine's
-    /// clock now (nothing if it has passed), counted from now on the continuous clock. For a
-    /// segment that follows others, which did not open the run.
+    /// An older server only: what is left of a run that is already under way, its `deadline_at`
+    /// less this machine's date now (nothing if it has passed), counted from now on the
+    /// continuous clock. This is the one place the date is read, and only because such a server
+    /// says nothing better.
     pub fn until(deadline_at: &str) -> Option<LocalDeadline> {
+        LocalDeadline::until_at(deadline_at, crate::run::now_unix())
+    }
+
+    /// [`LocalDeadline::until`] with this machine's date given (`now_unix`, epoch seconds).
+    fn until_at(deadline_at: &str, now_unix: u64) -> Option<LocalDeadline> {
         let deadline = goalcup_protocol::control::parse_z(deadline_at)?;
         Some(LocalDeadline {
-            opened: goalcup_protocol::clock::ContinuousOrigin::now(),
-            length: Duration::from_secs(deadline.saturating_sub(crate::run::now_unix())),
+            from: goalcup_protocol::clock::ContinuousOrigin::now(),
+            left: Duration::from_secs(deadline.saturating_sub(now_unix)),
         })
+    }
+
+    /// A heartbeat answer came, to a call made at `asked`: its `seconds_left` is the count from
+    /// then on. An answer without one (an older server) leaves the count as it is.
+    fn heard(
+        count: &mut Option<LocalDeadline>,
+        answer: &HeartbeatAnswer,
+        asked: goalcup_protocol::clock::ContinuousOrigin,
+    ) {
+        if let Some(seconds) = answer.seconds_left {
+            *count = Some(LocalDeadline::left_from(seconds, asked));
+        }
     }
 
     fn passed(&self) -> bool {
-        u128::from(self.opened.elapsed_ns()) >= self.length.as_nanos()
+        u128::from(self.from.elapsed_ns()) >= self.left.as_nanos()
     }
 }
 
@@ -1972,6 +2035,110 @@ mod tests {
         };
         note_repo_head_unless_noted(dir.path(), &other);
         assert_eq!(noted_repo_head_in(dir.path(), "e2"), Some(later));
+    }
+
+    // ---- the server is the clock (WP11)
+
+    fn answer_with(seconds_left: Option<u64>) -> HeartbeatAnswer {
+        HeartbeatAnswer {
+            stop: false,
+            deadline_at: "2026-11-14T00:00:00Z".into(),
+            seconds_left,
+            reason: None,
+        }
+    }
+
+    /// Each answer that says how much is left sets the count again, also to more time than the
+    /// count had (the server's answer wins). An older server's answer leaves it alone, and with
+    /// no answer at all (an outage) it goes on counting down from the last one.
+    #[test]
+    fn each_answer_sets_the_count_again_and_an_outage_counts_on_from_the_last() {
+        use goalcup_protocol::clock::ContinuousOrigin;
+        let mut count = Some(LocalDeadline::left_from(3600, ContinuousOrigin::now()));
+        assert!(!count.unwrap().passed());
+        LocalDeadline::heard(&mut count, &answer_with(Some(0)), ContinuousOrigin::now());
+        assert!(
+            count.unwrap().passed(),
+            "nothing left: the count has run out"
+        );
+        LocalDeadline::heard(
+            &mut count,
+            &answer_with(Some(7200)),
+            ContinuousOrigin::now(),
+        );
+        assert!(
+            !count.unwrap().passed(),
+            "the next answer wins, with more time"
+        );
+        assert_eq!(count.unwrap().left, Duration::from_secs(7200));
+        LocalDeadline::heard(&mut count, &answer_with(None), ContinuousOrigin::now());
+        assert_eq!(
+            count.unwrap().left,
+            Duration::from_secs(7200),
+            "an older server's answer changes nothing"
+        );
+        // A run whose record gave no count takes the first answer's.
+        let mut none = None;
+        LocalDeadline::heard(&mut none, &answer_with(Some(5)), ContinuousOrigin::now());
+        assert_eq!(none.unwrap().left, Duration::from_secs(5));
+
+        // The outage: no answer comes, and the count runs out on its own.
+        let last = LocalDeadline {
+            from: ContinuousOrigin::now(),
+            left: Duration::from_millis(200),
+        };
+        assert!(!last.passed());
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(last.passed(), "the count went on through the outage");
+    }
+
+    /// An entry's first count is the server's `seconds_left`, whatever this machine's date says,
+    /// for a new run and a continued segment alike. Only an older server's answer, which has
+    /// none, falls back to the run's length or (continued) to the date.
+    #[test]
+    fn the_first_count_is_the_servers_time_left_and_never_the_date() {
+        use goalcup_protocol::clock::ContinuousOrigin;
+        let record = UploadRecord {
+            official_start: "2099-01-01T00:00:00Z".into(),
+            deadline_at: "2099-01-08T00:00:00Z".into(),
+            ..record_in(Path::new("/nowhere"))
+        };
+        let asked = ContinuousOrigin::now();
+        for continued in [false, true] {
+            let count = LocalDeadline::at_start(&record, Some(90), asked, continued).unwrap();
+            assert_eq!(count.left, Duration::from_secs(90));
+            assert_eq!(count.from, asked, "counted from when the server was asked");
+        }
+        let fresh = LocalDeadline::at_start(&record, None, asked, false).unwrap();
+        assert_eq!(
+            fresh.left,
+            Duration::from_secs(168 * 3600),
+            "the run's length"
+        );
+        // A continued segment on an older server reads the date (now, long before the deadline).
+        let continued = LocalDeadline::at_start(&record, None, asked, true).unwrap();
+        assert!(continued.left > Duration::ZERO);
+    }
+
+    /// The older server's rule for a continued segment, on a skewed date: a deadline the date
+    /// says has passed gives nothing left, and one in the future is counted on the continuous
+    /// clock from now. (A date set a day back gives a day more: why the server's count wins.)
+    #[test]
+    fn until_on_a_skewed_date_counts_what_the_date_says_on_the_continuous_clock() {
+        let deadline = "2026-11-14T00:00:00Z";
+        let at = goalcup_protocol::control::parse_z(deadline).unwrap();
+        let past = LocalDeadline::until_at(deadline, at + 24 * 3600).unwrap();
+        assert_eq!(past.left, Duration::ZERO);
+        assert!(past.passed(), "a deadline in the past has run out at once");
+        let future = LocalDeadline::until_at(deadline, at - 90).unwrap();
+        assert_eq!(future.left, Duration::from_secs(90));
+        assert!(
+            future.from.elapsed_ns() < 5_000_000_000,
+            "counted from now on the continuous clock"
+        );
+        assert!(!future.passed());
+        let set_back = LocalDeadline::until_at(deadline, at - 90 - 24 * 3600).unwrap();
+        assert_eq!(set_back.left, Duration::from_secs(90 + 24 * 3600));
     }
 
     #[test]

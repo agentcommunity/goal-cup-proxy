@@ -96,6 +96,19 @@ struct Rig {
 }
 
 /// The keys of an object, in sorted order, however the JSON library orders them.
+/// A heartbeat answer without its `seconds_left`, and that number: the clock moves while a test
+/// runs, so a test that is not about the time left compares the rest exactly.
+fn split_left(answer: &Value) -> (Value, u64) {
+    let mut rest = answer.clone();
+    let left = rest
+        .as_object_mut()
+        .unwrap()
+        .remove("seconds_left")
+        .and_then(|v| v.as_u64())
+        .unwrap_or_else(|| panic!("no seconds_left in {answer}"));
+    (rest, left)
+}
+
 fn sorted_keys(value: &Value) -> Vec<String> {
     let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
     keys.sort();
@@ -299,10 +312,13 @@ fn a_second_competition_start_replaces_the_first_and_its_heartbeat_says_stop_rep
 
     let hb = rig.beat(&a, &a.entry, 0, GENESIS, false);
     assert_eq!(hb.status, 200, "{}", hb.body);
+    // The time left counts to `deadline_at`, which a replacement does not move; `stop` ends it.
+    let (rest, left) = split_left(&hb.body);
     assert_eq!(
-        hb.body,
+        rest,
         json!({"stop": true, "deadline_at": a.deadline_at, "reason": "replaced"})
     );
+    assert!(left > 0, "{}", hb.body);
     let pos = rig.get(&a, None).body;
     assert_eq!(
         (pos["stop"].clone(), pos["status"].clone()),
@@ -313,10 +329,12 @@ fn a_second_competition_start_replaces_the_first_and_its_heartbeat_says_stop_rep
         pos["ends_at"],
         rig.server.replaced_at(&a.run).unwrap().as_str()
     );
+    let (rest, left) = split_left(&rig.beat(&b, &b.entry, 0, GENESIS, false).body);
     assert_eq!(
-        rig.beat(&b, &b.entry, 0, GENESIS, false).body,
+        rest,
         json!({"stop": false, "deadline_at": b.deadline_at, "reason": null})
     );
+    assert!(left > 168 * 3600 - 60 && left <= 168 * 3600, "{left}");
     assert_eq!(rig.get(&b, None).body["ends_at"], b.deadline_at.as_str());
     assert_eq!(
         rig.beat(&bystander, &bystander.entry, 0, GENESIS, false)
@@ -438,7 +456,7 @@ fn a_practice_run_ends_after_its_length() {
     std::thread::sleep(Duration::from_millis(2100));
     assert_eq!(
         rig.beat(&p, &p.entry, 0, GENESIS, false).body,
-        json!({"stop": true, "deadline_at": p.deadline_at, "reason": "deadline"})
+        json!({"stop": true, "deadline_at": p.deadline_at, "seconds_left": 0, "reason": "deadline"})
     );
 }
 
@@ -502,8 +520,15 @@ fn continue_mints_segment_one_with_its_own_entry_and_receipt() {
     assert_eq!(c.status, 201, "{}", c.body);
     assert_eq!(
         sorted_keys(&c.body),
-        ["deadline_at", "entry_id", "official_start", "segment"]
+        [
+            "deadline_at",
+            "entry_id",
+            "official_start",
+            "seconds_left",
+            "segment"
+        ]
     );
+    assert!(c.body["seconds_left"].as_u64().unwrap() <= 168 * 3600);
     assert_ne!(c.body["entry_id"], a.entry.as_str());
     assert_eq!(c.body["segment"], 1);
     let start = rig.get(&a, None).body["official_start"].clone();
