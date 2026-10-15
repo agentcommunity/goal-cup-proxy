@@ -26,7 +26,8 @@ the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far 
 ## The loop
 
 1. Check the tracer is installed: `goalcup --version`. If it is not, tell the person how to
-   install it (the guide's section 1) and stop.
+   install it (the guide's section 1: `brew install agentcommunity/tap/goalcup` from the first
+   release on 23–24 October 2026; on Windows, inside WSL2) and stop.
 2. Run `goalcup prep --json`. It asks nothing and opens nothing. It prints one JSON array of six
    objects, in order, each `{"step", "state", "human", "say"}`:
    - `step` is `login`, `harness`, `harness_home`, `github`, `machine` or `practice`;
@@ -40,7 +41,8 @@ the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far 
    is not a full path) gives no array: prep prints one plain sentence instead and exits non-zero.
    Show that sentence to the person verbatim.
 3. If every `state` is `ok`, tell the person they are ready, and that they start their run with
-   `goalcup start --harness <id>` inside the start window. If the `machine` step's `say` asks them
+   `goalcup start --harness <id>` inside the start window. The window opens on 7 November 2026 at
+   00:00 UTC and lasts 24 hours. If the `machine` step's `say` asks them
    to keep the machine awake themselves, pass that on too. Stop.
 4. Otherwise take the **first** step whose `state` is not `ok`:
    - **`"human": false`**: do it yourself where a command can. Run the command its `say` names,
@@ -60,3 +62,7 @@ the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far 
 
 `goalcup prep` is safe to run again at any time: it does not redo what it has settled. A `fail`
 whose `say` you cannot act on goes to the person verbatim.
+
+## When you are stuck
+
+Show the person the exact text prep printed. For help they can write to goalcup@agentcommunity.org.
