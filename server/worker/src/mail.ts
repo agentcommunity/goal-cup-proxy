@@ -32,7 +32,8 @@ export async function sendNotices(ctx: Ctx, now: Date): Promise<number> {
   const at = formatTime(now);
   let sent = 0;
   for (const n of await ctx.db.claimNotices(NOTICES_PER_TICK, at)) {
-    const to = override ?? n.to;
+    // Staging: always the test address (the database gives staging no address anyway).
+    const to = ctx.env.STAGING === "on" ? override : (override ?? n.to);
     if (to === null) {
       await ctx.db.finishNotice(n.id, "skipped", null, "no_address", at);
       continue;

@@ -154,8 +154,9 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
      is deployed with; the proposal checks that the event exists and that now is inside its start
      window, while `RUN_HOURS` comes from the Worker's variables;
    - where "accepted the current terms" lives (the proposal assumes `goalcup.consents`);
-   - the mailer: it reads the unsent rows of `goalcup.notices` (the Worker's cron queues them: `started`,
-     `silence`, `idle_3h`, `idle_6h`, `recording`, `ended`), writes each email, sends it and sets `sent_at`;
+   - the mailer: done in this Worker (`src/mail.ts`) with the email text, address and suppression
+     from the database; production needs its own send-only Resend key (staging has
+     `goalcup-ingest-staging`, send-only, domain member.agentcommunity.org);
    - the approval page for device requests (it calls `goalcup.goalcup_approve_device`; only the
      `sha256` of codes and credentials is stored), and the member's handle for `member_handle`;
    - exposing schema `goalcup` to PostgREST (RPC needs it) while revoking everything from `anon`
@@ -244,7 +245,8 @@ them into an environment. `test/config.test.ts` reads the file and fails if the 
   approval).
 - Secrets: `RECEIPT_SIGNING_KEY` (a fresh staging seed, generated on deploy and not kept anywhere
   else; its public key is in every receipt), `SUPABASE_URL`, `SUPABASE_KEY`, `TEST_APPROVAL_KEY`,
-  `RESEND_API_KEY` (the website's Resend key), `GITHUB_TOKEN` (the website's existing read token).
+  `RESEND_API_KEY` (its own Resend key `goalcup-ingest-staging`: sending access only, domain
+  member.agentcommunity.org), `GITHUB_TOKEN` (the website's existing read token).
 - Approval page: `https://agentcommunity.org/goalcup/approve?code=XXXX-XXXX` (website).
 - Emails: every notice goes to `delivered@resend.dev`, never to a member.
 

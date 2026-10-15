@@ -1,7 +1,7 @@
 // What the server does on its own, every 5 minutes (the `scheduled` export; wrangler.toml has the
-// cron): close runs that are over, record the GitHub commit at each deadline, and queue the run
-// emails into the outbox. The Worker never sends mail: the website's mailer reads the unsent
-// rows of `notices`, writes the email and marks the row sent. Contract: docs/UPLOAD-API.md,
+// cron): close runs that are over, record the GitHub commit at each deadline, queue the run
+// emails into the outbox, and send them (src/mail.ts: each queued row once, through Resend; the
+// database writes the email and picks the address, and gives a staging Worker none). Contract: docs/UPLOAD-API.md,
 // "What the server does on its own".
 //
 // Every notice is decided here, in `queueNotices`, never in a request handler. A notice is

@@ -2,6 +2,7 @@
 --   supabase/migrations/20261015120000_goal_cup_tracer_upload.sql      (schema and functions)
 --   supabase/migrations/20261015120100_goal_cup_tracer_staging_events.sql (the two staging events)
 --   supabase/migrations/20261015130000_goal_cup_tracer_deployment_fence.sql (staging fenced from production)
+--   supabase/migrations/20261015140000_goal_cup_tracer_member_binding.sql (credential bound to its member; no address for staging)
 -- Applied to the Agent Community Supabase project on 2026-10-15. It replaces the earlier proposal
 -- (proposed-goalcup-functions.sql): tables in the private schema goal_cup_tracer, functions renamed
 -- public.goal_cup_upload_* (src/db-supabase.ts adds the prefix), the website approval functions,
@@ -1628,3 +1629,141 @@ END $$;
 REVOKE ALL ON FUNCTION goal_cup_tracer.caller_is_staging() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.goal_cup_upload_approve_device(text, text, boolean, text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.goal_cup_upload_approve_device(text, text, boolean, text) TO goal_cup_ingest_staging;
+
+-- ======================== 20261015140000_goal_cup_tracer_member_binding.sql ========================
+
+-- Goal Cup tracer: bind a run credential to its member; staging never sees an address
+-- (review of goal-cup-tracer PR #127, 2026-10-15).
+--
+--   * goal_cup_upload_open_run: the credential must belong to p_member_id (and to p_mode). Before,
+--     a holder of the staging Worker's key could test-approve a synthetic member and then open a
+--     staging run under any real member id.
+--   * goal_cup_upload_claim_notices: for a staging caller "to" is always null and auth.users is not
+--     read, so the database itself never hands the staging Worker a member's email address.
+--
+-- Replaces two functions created by 20261015130000 (same signatures, so their grants are kept).
+-- No table or row changes.
+
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_open_run(
+  p_member_id text, p_event_id text, p_mode text, p_run_id text, p_entry_id text,
+  p_official_start text, p_deadline_at text,
+  p_connector_id text, p_manifest_sha256 text, p_connector_dir_sha256 text,
+  p_workspace text, p_session_id text, p_harness_version text, p_tracer_version text, p_repo_url text,
+  p_machine jsonb, p_client_ip text, p_client_country text,
+  p_credential_hash text, p_credential_expires_at text
+) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_member  uuid := p_member_id::uuid;
+  v_staging boolean := caller_is_staging();
+  v_event   events;
+  v_start   timestamptz := p_official_start::timestamptz;
+  v_bound   text;
+  v_try     integer;
+BEGIN
+  SELECT * INTO v_event FROM events WHERE id = p_event_id AND staging = v_staging;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'This event is not open for runs.');
+  END IF;
+  IF NOT has_current_terms(v_member) THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'Accept the Goal Cup terms on the website first.');
+  END IF;
+  IF p_mode = 'competition' THEN
+    IF v_start < v_event.start_window_opens THEN
+      RETURN jsonb_build_object('result', 'forbidden', 'message', 'The start window has not opened yet.');
+    END IF;
+    IF v_start > v_event.start_window_closes THEN
+      RETURN jsonb_build_object('result', 'forbidden',
+                                'message', 'after the start window you can only `goalcup continue` your run');
+    END IF;
+  END IF;
+
+  -- The credential opens runs for its own member and mode only: a credential approved for one
+  -- member can never open (or replace) a run of another.
+  SELECT run_id INTO v_bound FROM run_credentials
+   WHERE credential_hash = p_credential_hash AND staging = v_staging
+     AND member_id = v_member AND mode = p_mode FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+  IF v_bound IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM runs r JOIN entries e ON e.run_id = r.id AND e.segment = 0
+                WHERE r.id = v_bound AND r.member_id = v_member AND r.staging = v_staging AND e.session_id = p_session_id) THEN
+      RETURN jsonb_build_object('result', 'existing')
+             || run_json(v_bound, (SELECT e.id FROM entries e WHERE e.run_id = v_bound AND e.segment = 0));
+    END IF;
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+
+  FOR v_try IN 1..2 LOOP
+    IF p_mode = 'competition' THEN
+      UPDATE runs SET replaced_at = greatest(v_start, official_start)
+       WHERE member_id = v_member AND mode = 'competition' AND status = 'open' AND replaced_at IS NULL
+         AND staging = v_staging;
+    END IF;
+    BEGIN
+      INSERT INTO runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url,
+                        machine, client_ip, client_country, staging)
+      VALUES (p_run_id, p_event_id, v_member, p_mode, v_start, p_deadline_at::timestamptz, p_repo_url,
+              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country, v_staging);
+      EXIT;
+    EXCEPTION WHEN unique_violation THEN
+      IF v_try = 2 THEN RAISE; END IF;
+    END;
+  END LOOP;
+
+  INSERT INTO entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256,
+                       workspace, session_id, harness_version, tracer_version)
+  VALUES (p_entry_id, p_run_id, 0, p_connector_id, p_manifest_sha256, p_connector_dir_sha256,
+          p_workspace, p_session_id, p_harness_version, p_tracer_version);
+  UPDATE run_credentials
+     SET run_id = p_run_id, expires_at = p_credential_expires_at::timestamptz
+   WHERE credential_hash = p_credential_hash;
+  RETURN jsonb_build_object('result', 'created') || run_json(p_run_id);
+END $$;
+
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_claim_notices(p_limit integer, p_now text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_now timestamptz := p_now::timestamptz;
+  v_out jsonb := '[]'::jsonb;
+  v_n   record;
+  v_to  text;
+  v_has_user boolean;
+BEGIN
+  FOR v_n IN
+    SELECT n.* FROM notices n JOIN runs r ON r.id = n.run_id AND r.staging = caller_is_staging()
+     WHERE n.sent_at IS NULL AND n.skipped_at IS NULL
+       AND (n.claimed_at IS NULL OR n.claimed_at < v_now - interval '15 minutes')
+       AND n.attempts < 5
+     ORDER BY n.created_at, n.id
+     LIMIT greatest(least(coalesce(p_limit, 20), 50), 0)
+     FOR UPDATE OF n SKIP LOCKED
+  LOOP
+    -- A staging caller never learns a member's address: "to" is always null there, and the
+    -- staging Worker sends to its test address (or skips).
+    IF caller_is_staging() THEN
+      v_to := NULL; v_has_user := NULL;
+    ELSE
+      SELECT u.email, true INTO v_to, v_has_user FROM auth.users u WHERE u.id = v_n.member_id;
+    END IF;
+    IF v_has_user IS NULL THEN
+      v_to := NULL;
+    ELSIF v_to IS NULL OR btrim(v_to) = '' THEN
+      UPDATE notices SET skipped_at = v_now, skipped_reason = 'no_address' WHERE id = v_n.id;
+      CONTINUE;
+    ELSIF EXISTS (SELECT 1 FROM public.email_suppression_list s
+                   WHERE lower(s.email) = lower(v_to) AND (s.expires_at IS NULL OR s.expires_at > v_now)) THEN
+      UPDATE notices SET skipped_at = v_now, skipped_reason = 'suppressed' WHERE id = v_n.id;
+      CONTINUE;
+    END IF;
+    UPDATE notices SET claimed_at = v_now, attempts = attempts + 1 WHERE id = v_n.id;
+    v_out := v_out || jsonb_build_array(
+      jsonb_build_object('id', v_n.id, 'kind', v_n.kind, 'run_id', v_n.run_id, 'to', v_to)
+      || notice_text(v_n.kind, v_n.payload, v_n.run_id));
+    v_has_user := NULL;
+  END LOOP;
+  RETURN v_out;
+END $$;

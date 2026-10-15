@@ -330,7 +330,7 @@ export const TICK_LOOKBACK_SECONDS = 48 * 3600;
 
 export type NoticeKind = "started" | "silence" | "idle_3h" | "idle_6h" | "recording" | "ended";
 
-/** One row for the outbox: the website's mailer turns it into an email. */
+/** One row for the outbox: src/mail.ts sends it, once, with the text and address the database gives. */
 export interface NoticeArgs {
   run_id: string;
   member_id: string;
