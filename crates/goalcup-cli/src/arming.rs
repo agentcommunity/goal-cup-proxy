@@ -2,10 +2,10 @@
 //!
 //! **Every connector arms on its own transcript**. The daemon arms
 //! an entry on the first chained transcript record, so there is no start signal for this CLI
-//! to wait for: the launch plus that first record is the start, and a capture run reports
-//! [`GateOutcome::NotRequired`]. The V1 gate reads (`wait_foreground` and `watch_beside`),
-//! which read a settled refusal (`control::ArmingState::Refused`) off the signed status,
-//! were removed by D48, and the start-signal long poll with them.
+//! to wait for: the launch plus that first record is the start. The V1 gate
+//! reads (`wait_foreground` and `watch_beside`), which read a settled refusal
+//! (`control::ArmingState::Refused`) off the signed status, were removed by D48, and the
+//! start-signal long poll with them.
 //!
 //! # The Ctrl-C handler is here too
 //!
@@ -22,19 +22,6 @@
 //! handler records nothing, so the busy backoffs in `retry.rs` (the flag's other readers) run
 //! their full schedule for the launch record, the seal and the abandon that a Ctrl-C itself
 //! started.
-
-/// What the gate said. One answer is left.
-///
-/// [`GateOutcome::NotRequired`] is every connector's ordinary case and not an absence of a
-/// gate: the launch plus the first transcript record is the start, and the daemon is
-/// already watching for it. The V1 gate's other two answers, `Refused` (a settled
-/// `refused` on the wire, exit 4) and `Interrupted` (a Ctrl-C inside the abandon window),
-/// went with the V1 gate reads (D48).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GateOutcome {
-    /// Nothing to wait for: the first transcript record arms the entry.
-    NotRequired,
-}
 
 // ------------------------------------------------------------------ Ctrl-C
 

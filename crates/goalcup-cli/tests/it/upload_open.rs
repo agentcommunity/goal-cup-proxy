@@ -45,7 +45,7 @@ fn only_a_transient_failure_is_retried() {
 #[cfg(unix)]
 mod server_runs {
     use crate::common::m2_cli_support::{FAKE_GITHUB_TOKEN, Hooked, PREP_REPO, Rig};
-    use crate::common::upload_server::{Approval, ServerOptions, UploadServer};
+    use crate::common::upload_server::{ServerOptions, UploadServer};
     use goalcup_cli::account::device::RunMode;
     use goalcup_cli::commands::start::StartOutcome;
     use goalcup_cli::upload::uploader::Policy;
@@ -1133,27 +1133,5 @@ mod server_runs {
         assert_eq!(waiting.asked("POST /v1/runs"), 0, "a run was opened");
         // The code was shown, and the user was told what to do with it.
         assert!(out.contains("BCDF-GHJK"), "{out}");
-    }
-
-    /// A denial and an expiry end the same way (see `upload_e2e` for the full-tier twin): one
-    /// sentence, and no run on the server.
-    #[test]
-    fn a_denied_approval_opens_no_run() {
-        let rig = Rig::new();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        server.set_approval(Approval::Deny);
-        let goal = rig.goal(GOAL);
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let opts = rig.options(&goal, RESERVE);
-        let (result, out) =
-            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let refused = result.expect_err("denied");
-        assert!(refused.to_string().contains("denied"), "{refused}");
-        assert!(client.book().creates.is_empty(), "{out}");
-        assert!(rig.run_dirs().is_empty());
-        assert!(rig.clones().is_empty());
-        assert!(server.run_ids().is_empty());
     }
 }

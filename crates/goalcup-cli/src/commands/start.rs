@@ -64,7 +64,6 @@
 //! a check, and a run that came through it says so on stdout and in the entry record.
 
 use crate::CliError;
-use crate::arming::GateOutcome;
 use crate::connector::HarnessConnector;
 use crate::entries::{EntryRecord, remove_entry, write_entry};
 use crate::key_scan::FragmentMatcher;
@@ -143,7 +142,6 @@ pub type SleepLockFn = fn(&str) -> Result<goalcup_platform::awake::SleepLock, St
 #[derive(Debug)]
 pub struct StartOutcome {
     pub entry_id: String,
-    pub gate: GateOutcome,
     /// How the harness exited, where this command launched one and waited for it.
     pub exit_status: Option<ExitStatus>,
 }
@@ -576,7 +574,6 @@ fn try_lock_shared_home(
     connector: &str,
 ) -> Result<Result<std::fs::File, PathBuf>, CliError> {
     use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::io::AsRawFd;
     let path = home_lock_path(config_home, connector);
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -590,16 +587,15 @@ fn try_lock_shared_home(
             path: path.display().to_string(),
             source,
         })?;
-    // SAFETY: `file` owns a live descriptor; `flock` reads nothing else.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        let source = std::io::Error::last_os_error();
-        if source.kind() == std::io::ErrorKind::WouldBlock {
-            return Ok(Err(path));
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => return Ok(Err(path)),
+        Err(std::fs::TryLockError::Error(source)) => {
+            return Err(CliError::Io {
+                path: path.display().to_string(),
+                source,
+            });
         }
-        return Err(CliError::Io {
-            path: path.display().to_string(),
-            source,
-        });
     }
     Ok(Ok(file))
 }
@@ -2675,7 +2671,6 @@ fn finish_and_scan(
     }
     Ok(StartOutcome {
         entry_id: info.entry_id.clone(),
-        gate: GateOutcome::NotRequired,
         exit_status: Some(status?),
     })
 }
