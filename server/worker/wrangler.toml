@@ -82,12 +82,17 @@ DEVICE_TOKEN_PER_MINUTE = "1200"
 [triggers]
 crons = ["*/5 * * * *"]
 
-# Workers Logs: keeps every invocation and its console.error lines (misconfigured, supabase <fn>,
+# Workers Logs: keeps the Worker's own console.error lines (misconfigured, supabase <fn>,
 # tick <step>, r2-put-...) for the dashboard, so a bad night can be read the next morning without a
-# live `wrangler tail`. The Worker's own lines carry no addresses, keys or PostgREST details. Staging
-# repeats it.
+# live `wrangler tail`. The Worker's own lines carry no addresses, keys or PostgREST details.
+# invocation_logs = false: Cloudflare's per-request invocation log would keep request details
+# (headers such as Authorization, the client IP), which the data policy does not allow. Staging
+# repeats both settings.
 [observability]
 enabled = true
+
+[observability.logs]
+invocation_logs = false
 
 # Staging: `wrangler deploy --env staging` makes a second Worker, goalcup-ingest-staging, on its own
 # bucket and its own events. It is the only deployment that may hold TEST_APPROVAL_KEY (a secret,
@@ -108,6 +113,9 @@ crons = ["*/5 * * * *"]
 
 [env.staging.observability]
 enabled = true
+
+[env.staging.observability.logs]
+invocation_logs = false
 
 # wrangler does not inherit durable_objects into an environment. Staging's limiter is its own
 # class instance set (a different Worker), with low limits in its vars so a test sees the 429.

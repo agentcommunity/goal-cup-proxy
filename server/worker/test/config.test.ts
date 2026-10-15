@@ -247,3 +247,9 @@ test("Workers Logs are on in production and in staging", () => {
   assert.equal(tables.observability!.enabled, "true");
   assert.equal(tables["env.staging.observability"]!.enabled, "true"); // pinned here, not left to inheritance
 });
+
+test("Workers Logs keep the Worker's own console lines and no invocation logs, in production and in staging", () => {
+  const tables = wranglerTables();
+  assert.equal(tables["observability.logs"]!.invocation_logs, "false");
+  assert.equal(tables["env.staging.observability.logs"]!.invocation_logs, "false"); // pinned here, not left to inheritance
+});
