@@ -30,6 +30,30 @@ pub struct OpenRunRequest {
     pub machine: Option<goalcup_platform::machine::MachineFacts>,
 }
 
+/// `POST /v1/runs/{run_id}/continue`: a new segment of a run that is still open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinueRequest {
+    /// The run's latest entry as this machine knows it; the server answers `409` to any other.
+    pub previous_entry_id: String,
+    pub connector_id: String,
+    pub manifest_sha256: String,
+    pub connector_dir_sha256: String,
+    pub workspace: String,
+    pub session_id: String,
+    pub harness_version: String,
+    pub tracer_version: String,
+}
+
+/// The answer to [`ContinueRequest`]: the new entry, and the run's own start and deadline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinueRun {
+    pub entry_id: String,
+    /// The segment's number: 1 for the first continue.
+    pub segment: u64,
+    pub official_start: String,
+    pub deadline_at: String,
+}
+
 /// The answer to [`OpenRunRequest`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenRun {

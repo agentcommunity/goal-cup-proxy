@@ -685,6 +685,28 @@ pub fn build_capture_launch(
     workspace: &Path,
     launch: &CaptureLaunch<'_>,
 ) -> Result<LaunchPlan, CliError> {
+    build_launch(c, v, workspace, launch, false)
+}
+
+/// [`build_capture_launch`] for a run that is being continued (`goalcup continue`): the
+/// profile's `resume_args` follow its `args`, so the harness picks up its last session. Only a
+/// chat-mode profile can be continued, as it takes no goal.
+pub fn build_resumed_launch(
+    c: &HarnessConnector,
+    v: &TemplateVars,
+    workspace: &Path,
+    launch: &CaptureLaunch<'_>,
+) -> Result<LaunchPlan, CliError> {
+    build_launch(c, v, workspace, launch, true)
+}
+
+fn build_launch(
+    c: &HarnessConnector,
+    v: &TemplateVars,
+    workspace: &Path,
+    launch: &CaptureLaunch<'_>,
+    resume: bool,
+) -> Result<LaunchPlan, CliError> {
     let id = &c.loaded.manifest.id;
     let profile = &c.loaded.manifest.capture;
     let platform = PlatformKey::current();
@@ -737,6 +759,24 @@ pub fn build_capture_launch(
             )));
         }
         argv.push(arg);
+    }
+    // A continued launch adds the profile's resume arguments after its own, under the same
+    // rules; it places no goal, so a headless profile cannot be continued.
+    if resume {
+        if goal.is_some() {
+            return Err(CliError::Internal(format!(
+                "`{id}` runs headless, and only a chat-mode launch is continued"
+            )));
+        }
+        for template in &profile.resume_args {
+            let arg = render(template, v)?;
+            if let Some(why) = harness_arg_refusal(profile, &arg) {
+                return Err(CliError::Refused(format!(
+                    "`{arg}` {why}. Nothing is launched."
+                )));
+            }
+            argv.push(arg);
+        }
     }
     // A chat-mode launch places no goal: its argv is the profile's args alone.
     let capture = match goal {
