@@ -317,6 +317,22 @@ fn pause_at(point: &'static str) {
 #[inline(always)]
 fn pause_at(_point: &'static str) {}
 
+/// A test build's way to make a background thread panic while a chat-mode run is quiet
+/// (`GOALCUP_TEST_PANIC_WHILE_QUIET` set): the panic must reach `host.log`, not the terminal.
+#[cfg(feature = "test-support")]
+fn panic_while_quiet_for_test() {
+    if std::env::var_os("GOALCUP_TEST_PANIC_WHILE_QUIET").is_some() {
+        let _ = std::thread::Builder::new()
+            .name("goalcup-test-panic".into())
+            .spawn(|| panic!("a test panic while the host is quiet"))
+            .map(std::thread::JoinHandle::join);
+    }
+}
+
+#[cfg(not(feature = "test-support"))]
+#[inline(always)]
+fn panic_while_quiet_for_test() {}
+
 /// The soft open-file limit `goalcup start` asks for: a relayed connection holds two
 /// descriptors, and the rest is room for the runtime, the sender and this process.
 const OPEN_FILES_WANTED: u64 = 2 * MAX_CONNECTION_TASKS + 256;
@@ -612,10 +628,11 @@ struct Forked<'a> {
 }
 
 /// What a chat-mode run holds while the harness owns the terminal (D57): the terminal's signals
-/// absorbed, and the host quiet.
+/// absorbed, the host quiet, and the terminal's modes as they were before the harness took it.
 struct ChatTerminal {
     shield: goalcup_platform::terminal::Shield,
     quiet: crate::host_log::Quiet,
+    modes: Option<goalcup_platform::terminal::Modes>,
 }
 
 impl ChatTerminal {
@@ -628,16 +645,23 @@ impl ChatTerminal {
         Ok(ChatTerminal {
             shield,
             quiet: crate::host_log::quiet(run_dir),
+            modes: goalcup_platform::terminal::Modes::save(libc::STDIN_FILENO),
         })
     }
 
     /// The harness has exited: Ctrl-C, Ctrl-\ and Ctrl-Z are this command's own again, and it
     /// speaks again if the terminal is still there. A hangup stays absorbed until the wrap-up is
     /// done ([`Drop`]), so a window closed now does not cut the seal or the upload short.
+    /// The terminal's modes are put back first, while the terminal is there: a harness ended in
+    /// raw mode would leave the participant's shell typing blind.
     fn harness_exited(&mut self) {
-        self.shield
-            .release(&[libc::SIGINT, libc::SIGQUIT, libc::SIGTSTP]);
-        self.quiet.harness_exited();
+        self.shield.harness_exited();
+        if self.quiet.harness_exited()
+            && let Some(modes) = &self.modes
+            && let Err(e) = modes.restore()
+        {
+            crate::host_log::say(&format!("the terminal's modes could not be put back ({e})"));
+        }
     }
 }
 
@@ -986,6 +1010,22 @@ fn make_native_roots(
     Ok(())
 }
 
+/// A chat-mode harness reads and draws on this terminal: `goalcup start`'s input must be a
+/// terminal it holds in the foreground (or the harness's first read stops it with `SIGTTIN` and
+/// the run records a frozen harness), and its output must be a terminal too (a harness drawing
+/// into a file is not a chat). `then` says what was left behind.
+fn holds_the_terminal(id: &str, then: &str) -> Result<(), CliError> {
+    use goalcup_platform::terminal::{is_foreground, is_terminal};
+    if is_foreground(libc::STDIN_FILENO) && is_terminal(libc::STDOUT_FILENO) {
+        return Ok(());
+    }
+    Err(CliError::Refused(format!(
+        "`{id}` runs in chat mode in this terminal, so `goalcup start` must run in the \
+         foreground of a terminal, with its input and its output that terminal: one of them is \
+         not, or the command was moved to the background. {then}"
+    )))
+}
+
 /// What a chat-mode run records as its goal. The v5 `Launch` record names the goal stream it
 /// was launched with and the daemon records a launch only after a goal, so a run whose harness
 /// was handed none records this fixed sentence instead: never sent to the harness, and never
@@ -1052,15 +1092,8 @@ fn prepare(
         Some(secret) => Some(FragmentMatcher::new(secret.expose())?),
         None => None,
     };
-    // A chat-mode harness reads this terminal: `goalcup start` must hold it in the foreground,
-    // or the harness's first read stops it (`SIGTTIN`) and the run records a frozen harness.
-    if profile.interactive && !goalcup_platform::terminal::is_foreground(libc::STDIN_FILENO) {
-        return Err(CliError::Refused(format!(
-            "`{}` runs in chat mode in this terminal, so `goalcup start` must run in the \
-             foreground of a terminal: its input is not one, or it was started in the \
-             background. Nothing was created.",
-            c.loaded.manifest.id
-        )));
+    if profile.interactive {
+        holds_the_terminal(&c.loaded.manifest.id, "Nothing was created.")?;
     }
     let executable = crate::launch::capture_executable(c, profile, env)?;
     // The provider hosts answer a TCP connect before anything is created (the proxy module's
@@ -1461,6 +1494,15 @@ fn register_and_release<'a>(
     // this command prints there, and from here the terminal's signals are absorbed and every
     // message goes to `host.log` until the harness exits.
     if chat {
+        // Moved to the background, or its terminal gone, while the run was approved and cloned:
+        // the harness is never released onto a terminal it cannot read.
+        if let Err(e) = holds_the_terminal(
+            &forked.template.connector_id,
+            "Nothing was launched, and the entry is sealed without a launch.",
+        ) {
+            gated.abort();
+            return Err(forked.unlaunched(e, out));
+        }
         let run_dir = crate::run::run_dir(forked.cfg, &forked.record.run_id);
         let line = chat_launch_line(
             &forked.template.connector_id,
@@ -1473,7 +1515,10 @@ fn register_and_release<'a>(
             })
         });
         match ChatTerminal::take(&run_dir) {
-            Ok(terminal) => forked.chat = Some(terminal),
+            Ok(terminal) => {
+                forked.chat = Some(terminal);
+                panic_while_quiet_for_test();
+            }
             Err(e) => {
                 gated.abort();
                 return Err(forked.unlaunched(e, out));
@@ -1725,46 +1770,64 @@ fn run_harness<'a>(
             }),
         })
     });
-    let status = crate::upload::wait_stopping(&mut child, stop_rx, |reason| {
-        let Some(proxied) = proxy_slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
-            return;
-        };
-        // The commit the workspace has now, before the harness's grace lets it change.
-        note_repo_head();
-        // The one bound of the wrap-up, for the seal below and the upload's finish later.
-        let wrap_up = wrap_spec.begin();
-        *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
-        keeper.update(|state| state.stopped = Some(reason.to_string()));
-        let label = if reason == crate::run::watch::DISK_STOP_REASON
-            || reason == crate::upload::uploader::REPLACED_REASON
-        {
-            "stopped"
-        } else {
-            "deadline"
-        };
-        let line = format!("{label}: {reason}. The agent is stopped and the run sealed now.");
-        // At once, on stderr: the seal below may be asked again for minutes, and the stdout report
-        // that follows it is printed only once it returns. A chat-mode run's goes to its log.
-        crate::host_log::say(&line);
-        let mut said = format!("{line}\n").into_bytes();
+    // A chat-mode harness that suspends itself is continued at once: suspension is not supported
+    // during a run, and a stopped harness would hold the participant's terminal frozen.
+    let mut continued = |signal: i32| {
+        crate::host_log::say(&format!(
+            "the harness stopped itself (signal {signal}); a run cannot be suspended, so it \
+             was continued at once"
+        ));
+    };
+    let on_stopped: Option<&mut dyn FnMut(i32)> = if forked.chat.is_some() {
+        Some(&mut continued)
+    } else {
+        None
+    };
+    let status = crate::upload::wait_stopping(
+        &mut child,
+        stop_rx,
+        |reason| {
+            let Some(proxied) = proxy_slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+                return;
+            };
+            // The commit the workspace has now, before the harness's grace lets it change.
+            note_repo_head();
+            // The one bound of the wrap-up, for the seal below and the upload's finish later.
+            let wrap_up = wrap_spec.begin();
+            *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
+            keeper.update(|state| state.stopped = Some(reason.to_string()));
+            let label = if reason == crate::run::watch::DISK_STOP_REASON
+                || reason == crate::upload::uploader::REPLACED_REASON
+            {
+                "stopped"
+            } else {
+                "deadline"
+            };
+            let line = format!("{label}: {reason}. The agent is stopped and the run sealed now.");
+            // At once, on stderr: the seal below may be asked again for minutes, and the stdout report
+            // that follows it is printed only once it returns. A chat-mode run's goes to its log.
+            crate::host_log::say(&line);
+            let mut said = format!("{line}\n").into_bytes();
 
-        let deadline = std::time::Instant::now() + crate::finish_budget();
-        // A seal that did not take (the daemon busy or restarting) is asked again through the
-        // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
-        // seal ends it.
-        let finished = finish(
-            client,
-            &entry_id,
-            proxied,
-            deadline,
-            wrap_up,
-            termination_bound(grace),
-            None,
-            Some(cfg),
-            &mut said,
-        );
-        *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));
-    })
+            let deadline = std::time::Instant::now() + crate::finish_budget();
+            // A seal that did not take (the daemon busy or restarting) is asked again through the
+            // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
+            // seal ends it.
+            let finished = finish(
+                client,
+                &entry_id,
+                proxied,
+                deadline,
+                wrap_up,
+                termination_bound(grace),
+                None,
+                Some(cfg),
+                &mut said,
+            );
+            *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));
+        },
+        on_stopped,
+    )
     .map_err(|source| CliError::Io {
         path: handed.program.clone(),
         source,

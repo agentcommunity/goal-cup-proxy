@@ -219,7 +219,7 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
 /// and still seals and uploads when the window is closed.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod chat {
-    use crate::common::m2_cli_support::{CHAT_ID, Hooked, Rig};
+    use crate::common::m2_cli_support::{CHAT_ID, Hooked, Launcher, OnPty, Rig};
     use crate::common::upload_server::{ServerOptions, UploadServer};
     use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
     use std::collections::BTreeMap;
@@ -398,23 +398,28 @@ mod chat {
         assert_eq!(mode & 0o777, 0o600, "{}", log.display());
     }
 
-    /// The window is closed while the harness runs: the harness ends, and the host, which
-    /// cannot print any more, still seals the run, sends the final heartbeat and uploads it.
-    /// What it would have said is in `host.log`.
+    /// The window is closed while the harness runs, as a participant closes it: the terminal's
+    /// master side goes, the kernel hangs up the shell that leads the session, and then the
+    /// foreground group (the host and the harness). The harness ends, and the host, which cannot
+    /// print any more, still seals the run, sends the final heartbeat and uploads it. What it
+    /// would have said is in `host.log`.
     #[test]
     fn closing_the_window_still_seals_and_uploads_the_segment() {
         let rig = Rig::chat();
         let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
         rig.prepare_for(&server.url());
-        let mut run = rig.start_on_pty(&[DISK, BEATING]);
+        let mut run = rig.start_under_a_shell_on_pty(&[DISK, BEATING]);
         run.wait_shown("tui: ready");
+        let shell = run.child.id();
+        let host = OnPty::descendant(shell, "goalcup").expect("goalcup below the shell");
         run.type_line("hello");
         run.wait_shown("tui: noted hello");
-        run.signal_foreground(libc::SIGHUP);
         run.close();
-        let status = run.wait();
-        assert!(status.success(), "{status:?}\n{}", run.shown());
-        assert_eq!(harness(&rig, "tui.end"), "hup");
+        run.wait();
+        crate::common::support::wait_until_gone(host);
+        // The hangup may reach the harness's read before its signal does.
+        let end = harness(&rig, "tui.end");
+        assert!(end == "hup" || end == "eof", "{end}");
 
         let runs = server.run_ids();
         assert_eq!(runs.len(), 1);
@@ -434,6 +439,136 @@ mod chat {
         );
         let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
         assert!(log.contains("uploaded:"), "{log}");
+    }
+
+    /// A Ctrl-\ reaches the foreground group: the harness ends on it, the host rides it out and
+    /// seals the run.
+    #[test]
+    fn a_quit_from_the_terminal_ends_the_harness_and_the_run_still_seals() {
+        let rig = Rig::chat();
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        run.signal_foreground(libc::SIGQUIT);
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+        assert_eq!(harness(&rig, "tui.end"), "quit");
+        let (report, _) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// The terminal's Ctrl-C, Ctrl-\ and a hangup reach the harness, and neither the host nor the
+    /// lock that keeps the machine awake: the inhibitor leads a process group of its own.
+    #[test]
+    fn the_terminals_signals_spare_the_host_and_the_sleep_lock() {
+        let rig = Rig::chat();
+        rig.tell("tui.endure", "");
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        let host = run.child.id();
+        let inhibitor = OnPty::descendant(host, "caffeinate")
+            .or_else(|| OnPty::descendant(host, "systemd-inhibit"));
+        if cfg!(target_os = "macos") {
+            assert!(inhibitor.is_some(), "macOS ships caffeinate");
+        }
+        for (signal, said) in [
+            (libc::SIGINT, "tui: endured int"),
+            (libc::SIGQUIT, "tui: endured quit"),
+            (libc::SIGHUP, "tui: endured hup"),
+        ] {
+            run.signal_foreground(signal);
+            run.wait_shown(said);
+            assert!(matches!(run.child.try_wait(), Ok(None)), "the host lives");
+            if let Some(inhibitor) = inhibitor {
+                assert!(
+                    goalcup_protocol::process::is_alive(inhibitor),
+                    "the sleep lock lives after {said}"
+                );
+            }
+        }
+        run.type_line("/exit");
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+        let (report, _) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// A harness that suspends itself (its own Ctrl-Z handling, alone or with its whole group) is
+    /// continued at once: a run cannot be suspended, and a stopped harness would hold the
+    /// participant's terminal frozen behind a host still waiting for it. The run still seals.
+    #[test]
+    fn a_harness_that_suspends_itself_is_continued_and_the_run_seals() {
+        let rig = Rig::chat();
+        // Under a job-control shell: a process group with no parent in its session is orphaned,
+        // and the kernel discards a stop signal sent to one.
+        let mut run = rig.start_under_a_shell_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        run.type_line("/suspend");
+        run.wait_shown("tui: resumed");
+        run.type_line("/suspend-group");
+        wait_until("the second resume", || {
+            run.shown().matches("tui: resumed").count() == 2
+        });
+        run.type_line("/exit");
+        run.wait_shown("shell: ");
+        assert!(run.shown().contains("shell: 0"), "{}", run.shown());
+        run.wait();
+        assert_eq!(harness(&rig, "tui.end"), "exit");
+        let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
+        assert_eq!(
+            log.matches("the harness stopped itself").count(),
+            2,
+            "{log}"
+        );
+        let (report, _) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// A panic on one of the host's threads while it is quiet is a message like any other: it is
+    /// in `host.log`, and the terminal does not show it.
+    #[test]
+    fn a_panic_while_quiet_goes_to_the_log_not_the_terminal() {
+        let rig = Rig::chat();
+        let mut run =
+            rig.start_on_pty(&[DISK, LOCAL_WRAP_UP, ("GOALCUP_TEST_PANIC_WHILE_QUIET", "1")]);
+        run.wait_shown("tui: ready");
+        run.type_line("/exit");
+        let status = run.wait();
+        let shown = run.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert!(!shown.contains("panicked"), "{shown}");
+        let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
+        assert!(
+            log.contains("panicked") && log.contains("a test panic while the host is quiet"),
+            "{log}"
+        );
+    }
+
+    /// A chat-mode run needs its terminal for input and for output: from a pipe, or with its
+    /// output in a file, it is refused before anything is created.
+    #[test]
+    fn a_chat_run_needs_the_terminal_for_its_input_and_its_output() {
+        let rig = Rig::chat();
+        let out = rig
+            .chat_command(&[DISK], Launcher::Direct)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{said}");
+        assert!(said.contains("foreground of a terminal"), "{said}");
+        assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
+
+        let file = std::fs::File::create(rig.root.join("stdout.txt")).unwrap();
+        let mut run = rig.start_on_pty_writing_to(&[DISK], file);
+        let status = run.wait();
+        assert_eq!(status.code(), Some(1), "{}", run.shown());
+        assert!(
+            run.shown().contains("foreground of a terminal"),
+            "{}",
+            run.shown()
+        );
+        assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
+        assert!(rig.harness_file("tui.pid").is_none(), "no harness ran");
     }
 
     /// The prompt is typed, not passed: it reaches the record through the session file the
@@ -470,6 +605,18 @@ mod chat {
         let native = native_bytes(&records);
         assert!(native.contains(r#""text":"hello""#), "{native}");
         assert!(!native.contains("an older run"), "{native}");
+        // The verifier's reading of a chat-mode trace (lane R owns the verifier: findings are
+        // reported, not changed here).
+        let verified = std::process::Command::new(crate::common::support::verify_binary())
+            .arg("--capture-integrity")
+            .arg(rig.trace(&newest_entry(&rig)))
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&verified.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&verified.stdout)));
+        println!("goalcup-verify on a chat-mode trace: {report:#}");
+        assert_eq!(report["findings"], serde_json::json!([]), "{report:#}");
+        assert_eq!(verified.status.code(), Some(0), "{report:#}");
         // No goal was handed to the harness: its argv is the connector's args alone.
         assert_eq!(
             harness(&rig, "tui.argv").lines().collect::<Vec<_>>().len(),

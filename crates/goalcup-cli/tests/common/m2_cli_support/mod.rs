@@ -134,11 +134,47 @@ impl Rig {
     /// would start it. It runs in `<root>/runs`, so the run's folder is made there, against this
     /// rig's daemon and connectors; `env` is added to its environment.
     pub fn start_on_pty(&self, env: &[(&str, &str)]) -> OnPty {
+        OnPty::spawn(self.chat_command(env, Launcher::Direct), None)
+    }
+
+    /// [`Rig::start_on_pty`] the way a participant's terminal runs it: a shell is the session's
+    /// leader (the controlling process) and `goalcup start` its foreground command, so closing
+    /// the window hangs up the shell and the kernel then hangs up the foreground group.
+    pub fn start_under_a_shell_on_pty(&self, env: &[(&str, &str)]) -> OnPty {
+        OnPty::spawn(self.chat_command(env, Launcher::Shell), None)
+    }
+
+    /// [`Rig::start_on_pty`] with its output going to `stdout` instead of the terminal.
+    pub fn start_on_pty_writing_to(&self, env: &[(&str, &str)], stdout: std::fs::File) -> OnPty {
+        OnPty::spawn(self.chat_command(env, Launcher::Direct), Some(stdout))
+    }
+
+    /// The command [`Rig::start_on_pty`] runs, without its terminal.
+    pub fn chat_command(&self, env: &[(&str, &str)], launcher: Launcher) -> std::process::Command {
         let runs = self.root.join("runs");
         std::fs::create_dir_all(&runs).unwrap();
-        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_goalcup"));
+        let goalcup = env!("CARGO_BIN_EXE_goalcup");
+        let mut command = match launcher {
+            Launcher::Direct => {
+                let mut command = std::process::Command::new(goalcup);
+                command.args(["start", "--harness", CHAT_ID, "--dev"]);
+                command
+            }
+            Launcher::Shell => {
+                // Not the last command, so the shell cannot `exec` it and stays the leader.
+                // With job control (`set -m`), as in a window: `goalcup start` runs as the
+                // foreground job in a process group of its own, whose parent (the shell) is in
+                // the same session, so its group is not orphaned and a stop signal stops.
+                let mut command = std::process::Command::new("/bin/sh");
+                command.args([
+                    "-c",
+                    &format!("set -m; \"$0\" start --harness {CHAT_ID} --dev; echo \"shell: $?\""),
+                    goalcup,
+                ]);
+                command
+            }
+        };
         command
-            .args(["start", "--harness", CHAT_ID, "--dev"])
             .current_dir(&runs)
             .env_clear()
             .env("PATH", self.path())
@@ -158,7 +194,7 @@ impl Rig {
         for (key, value) in env {
             command.env(key, value);
         }
-        OnPty::spawn(command)
+        command
     }
 
     /// The capture rig with **no daemon running**, for the binary to start one: its roots are
@@ -717,6 +753,14 @@ protocol_hint = "openai-responses"
     std::fs::write(dir.join("harness.toml"), harness).unwrap();
 }
 
+/// How [`Rig::chat_command`] starts `goalcup start`.
+pub enum Launcher {
+    /// `goalcup` is the session's leader.
+    Direct,
+    /// A shell is, as in a participant's window.
+    Shell,
+}
+
 /// `goalcup start` running on a pseudo-terminal of its own ([`Rig::start_on_pty`]): the test
 /// holds the terminal's master side, types into it, reads everything shown on it, and can close
 /// it as a participant closes their window.
@@ -724,10 +768,13 @@ pub struct OnPty {
     pub child: std::process::Child,
     master: Option<std::os::fd::OwnedFd>,
     shown: Arc<Mutex<Vec<u8>>>,
+    /// Tells the reader to let go of its copy of the master, so a close is a real hangup.
+    closing: Arc<AtomicBool>,
+    reader: Option<std::thread::JoinHandle<()>>,
 }
 
 impl OnPty {
-    fn spawn(mut command: std::process::Command) -> OnPty {
+    pub fn spawn(mut command: std::process::Command, stdout: Option<std::fs::File>) -> OnPty {
         use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
         use std::os::unix::process::CommandExt;
         let (mut master, mut slave) = (-1, -1);
@@ -757,8 +804,11 @@ impl OnPty {
         unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) };
         command
             .stdin(slave.try_clone().unwrap())
-            .stdout(slave.try_clone().unwrap())
             .stderr(slave.try_clone().unwrap());
+        match stdout {
+            Some(file) => command.stdout(file),
+            None => command.stdout(slave.try_clone().unwrap()),
+        };
         // SAFETY: `setsid` and `ioctl` are async-signal-safe; the child makes itself the leader
         // of a new session and takes its stdin, the slave, as its controlling terminal.
         unsafe {
@@ -776,25 +826,38 @@ impl OnPty {
         drop(slave);
         let shown = Arc::new(Mutex::new(Vec::new()));
         let reader = master.try_clone().unwrap();
-        {
-            let shown = Arc::clone(&shown);
+        let closing = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (shown, closing) = (Arc::clone(&shown), Arc::clone(&closing));
             std::thread::spawn(move || {
                 use std::io::Read;
+                let mut poll = libc::pollfd {
+                    fd: reader.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
                 let mut file = std::fs::File::from(reader);
                 let mut buf = [0u8; 4096];
-                // Ends at EOF, or EIO once every slave descriptor is closed.
-                while let Ok(n) = file.read(&mut buf) {
-                    if n == 0 {
-                        break;
+                // Ends at EOF, at EIO once every slave descriptor is closed, or when the window
+                // is closed (this copy of the master must go with it).
+                while !closing.load(Ordering::SeqCst) {
+                    // SAFETY: one live `pollfd` on a descriptor `file` owns.
+                    if unsafe { libc::poll(&mut poll, 1, 25) } <= 0 {
+                        continue;
                     }
-                    shown.lock().unwrap().extend_from_slice(&buf[..n]);
+                    match file.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => shown.lock().unwrap().extend_from_slice(&buf[..n]),
+                    }
                 }
-            });
-        }
+            })
+        };
         OnPty {
             child,
             master: Some(master),
             shown,
+            closing,
+            reader: Some(reader),
         }
     }
 
@@ -848,8 +911,30 @@ impl OnPty {
         assert_eq!(unsafe { libc::kill(-group, signal) }, 0);
     }
 
+    /// The pid of the first process below `parent` whose command name ends with `name`.
+    pub fn descendant(parent: u32, name: &str) -> Option<u32> {
+        let table = goalcup_protocol::process::snapshot().ok()?;
+        let mut parents = vec![parent];
+        let mut seen = 0;
+        while seen < parents.len() {
+            let at = parents[seen];
+            seen += 1;
+            for row in table.iter().filter(|r| r.ppid == at) {
+                if row.comm.ends_with(name) {
+                    return Some(row.pid);
+                }
+                parents.push(row.pid);
+            }
+        }
+        None
+    }
+
     /// Close the window: the master side goes, so the terminal is gone for good.
     pub fn close(&mut self) {
+        self.closing.store(true, Ordering::SeqCst);
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
         self.master = None;
     }
 

@@ -231,3 +231,26 @@ fn a_lock_made_on_a_short_lived_thread_outlives_it() {
         "the inhibitor must be gone and reaped after the drop"
     );
 }
+
+/// The inhibitor leads a process group of its own, so what a terminal sends the host's
+/// foreground group (a Ctrl-C, a closed window) never reaches it; the host rides those out to
+/// seal and upload, and the machine must stay awake meanwhile. (`goalcup-cli`'s chat-mode pty
+/// test sends the signals.)
+#[test]
+fn the_inhibitor_is_outside_the_hosts_process_group() {
+    let lock = match hold("goalcup awake test") {
+        Ok(lock) => lock,
+        Err(why) => {
+            if cfg!(target_os = "macos") {
+                panic!("macOS ships caffeinate, hold must succeed: {why}");
+            }
+            return;
+        }
+    };
+    let pid = lock.pid() as libc::pid_t;
+    // SAFETY: integers only.
+    let (group, ours) = unsafe { (libc::getpgid(pid), libc::getpgrp()) };
+    assert_eq!(group, pid, "the inhibitor leads its own group");
+    assert_ne!(group, ours, "and it is not the host's");
+    drop(lock);
+}

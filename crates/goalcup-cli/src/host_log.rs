@@ -40,11 +40,20 @@ fn sink() -> std::sync::MutexGuard<'static, Sink> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The host is quiet while this is held: see the module header. Dropping it closes the log
-/// and lets the host speak again.
-#[derive(Debug)]
+/// The panic hook a [`Quiet`] replaced, which it chains to and puts back.
+type Hook = std::sync::Arc<Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>>;
+
+/// The host is quiet while this is held: see the module header. Dropping it closes the log,
+/// puts the previous panic hook back and lets the host speak again.
 pub struct Quiet {
     path: PathBuf,
+    previous_hook: Hook,
+}
+
+impl std::fmt::Debug for Quiet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Quiet").field("path", &self.path).finish()
+    }
 }
 
 /// Go quiet, and open `<run_dir>/host.log` for what would have been said. A log that cannot
@@ -53,10 +62,51 @@ pub struct Quiet {
 pub fn quiet(run_dir: &Path) -> Quiet {
     let path = run_dir.join(HOST_LOG_NAME);
     let log = open_log(&path).ok();
-    let mut sink = sink();
-    sink.log = log;
-    sink.quiet = true;
-    Quiet { path }
+    {
+        let mut sink = sink();
+        sink.log = log;
+        sink.quiet = true;
+    }
+    // A panic on any thread (the uploader's, the disk watch's) is a message like any other:
+    // to the log while the host is quiet, and through the hook it replaced otherwise.
+    let previous_hook: Hook = std::sync::Arc::new(std::panic::take_hook());
+    let chained = std::sync::Arc::clone(&previous_hook);
+    std::panic::set_hook(Box::new(move |info| {
+        if !panic_to_log(info) {
+            chained(info);
+        }
+    }));
+    Quiet {
+        path,
+        previous_hook,
+    }
+}
+
+/// Write a panic to the log if the host is quiet, and answer whether it was handled. The sink is
+/// tried for a moment rather than waited on: a panic while the sink is held on this very thread
+/// must not deadlock, and a quiet host never prints the panic instead.
+fn panic_to_log(info: &std::panic::PanicHookInfo<'_>) -> bool {
+    for _ in 0..100 {
+        let mut sink = match SINK.try_lock() {
+            Ok(sink) => sink,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            }
+        };
+        if !sink.quiet {
+            return false;
+        }
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("<unnamed>");
+        if let Some(log) = sink.log.as_mut() {
+            let _ = writeln!(log, "goalcup: thread '{name}' panicked: {info}");
+        }
+        return true;
+    }
+    // The sink stayed held: say nothing rather than write on the harness's terminal.
+    true
 }
 
 fn open_log(path: &Path) -> std::io::Result<std::fs::File> {
@@ -87,9 +137,19 @@ impl Quiet {
 
 impl Drop for Quiet {
     fn drop(&mut self) {
-        let mut sink = sink();
-        sink.log = None;
-        sink.quiet = false;
+        {
+            let mut sink = sink();
+            sink.log = None;
+            sink.quiet = false;
+        }
+        // Ours goes, and the one it replaced is back (wrapped once: a hook is not `Clone`). Not
+        // while this thread unwinds: the hook cannot be changed then, and trying would abort.
+        if std::thread::panicking() {
+            return;
+        }
+        let _ = std::panic::take_hook();
+        let previous = std::sync::Arc::clone(&self.previous_hook);
+        std::panic::set_hook(Box::new(move |info| previous(info)));
     }
 }
 
