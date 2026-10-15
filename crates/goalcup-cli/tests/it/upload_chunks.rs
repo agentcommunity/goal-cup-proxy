@@ -450,6 +450,9 @@ mod retries {
         /// How many final heartbeats still have their answer lost: the stand-in stores them,
         /// and the tracer is answered `503`.
         lose_finals: Arc<Mutex<u32>>,
+        /// Seconds added to every `official_start` and `deadline_at` the server answers: how the
+        /// server's times look from a machine whose date is this far behind the server's.
+        skew: Arc<AtomicU64>,
     }
 
     impl Front {
@@ -463,27 +466,30 @@ mod retries {
             let lie = Arc::new(Mutex::new(None));
             let stop_reason = Arc::new(Mutex::new(None));
             let lose_finals = Arc::new(Mutex::new(0u32));
-            let (seen_in, stop_in, lie_in, reason_in, lose_in) = (
+            let skew = Arc::new(AtomicU64::new(0));
+            let (seen_in, stop_in, lie_in, reason_in, lose_in, skew_in) = (
                 seen.clone(),
                 stop.clone(),
                 lie.clone(),
                 stop_reason.clone(),
                 lose_finals.clone(),
+                skew.clone(),
             );
             std::thread::spawn(move || {
                 while !stop_in.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let (target, fault, seen, lie, reason, lose) = (
+                            let (target, fault, seen, lie, reason, lose, skew) = (
                                 target.clone(),
                                 fault.clone(),
                                 seen_in.clone(),
                                 lie_in.clone(),
                                 reason_in.clone(),
                                 lose_in.clone(),
+                                skew_in.clone(),
                             );
                             std::thread::spawn(move || {
-                                answer(stream, &target, &fault, &seen, &lie, &reason, &lose)
+                                answer(stream, &target, &fault, &seen, &lie, &reason, &lose, &skew)
                             });
                         }
                         Err(_) => std::thread::sleep(Duration::from_millis(5)),
@@ -497,6 +503,7 @@ mod retries {
                 lie,
                 stop_reason,
                 lose_finals,
+                skew,
             }
         }
 
@@ -516,6 +523,7 @@ mod retries {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn answer(
         mut stream: TcpStream,
         target: &str,
@@ -524,6 +532,7 @@ mod retries {
         lie: &Mutex<Option<(u64, u64, String)>>,
         stop_reason: &Mutex<Option<Option<String>>>,
         lose_finals: &Mutex<u32>,
+        skew: &AtomicU64,
     ) {
         stream.set_nonblocking(false).unwrap();
         stream
@@ -621,6 +630,22 @@ mod retries {
                     json["reason"] = reason.into();
                     reply = serde_json::to_vec(&json).unwrap();
                 }
+                let skew = skew.load(Ordering::SeqCst);
+                if skew > 0
+                    && status < 300
+                    && let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&reply)
+                    && json.is_object()
+                {
+                    for key in ["official_start", "deadline_at"] {
+                        if let Some(time) = json[key]
+                            .as_str()
+                            .and_then(goalcup_protocol::control::parse_z)
+                        {
+                            json[key] = goalcup_protocol::control::format_z(time + skew).into();
+                        }
+                    }
+                    reply = serde_json::to_vec(&json).unwrap();
+                }
                 (status, content_type, reply)
             }
         };
@@ -646,8 +671,12 @@ mod retries {
 
     impl Run {
         fn new(fault: Fault) -> Run {
+            Run::with(ServerOptions::default(), fault)
+        }
+
+        fn with(options: ServerOptions, fault: Fault) -> Run {
             let dir = tempfile::tempdir().unwrap();
-            let server = UploadServer::start(&dir.path().join("server"), ServerOptions::default());
+            let server = UploadServer::start(&dir.path().join("server"), options);
             let credential = credential_of(&server);
             // The run is opened straight on the stand-in; only the uploader goes through the front.
             let direct = ServerClient::with_credential(&server.url(), &credential);
@@ -1052,6 +1081,92 @@ mod retries {
             );
             drop(running);
         }
+    }
+
+    // ------------------------------------------------- the server is the clock (WP11)
+
+    use goalcup_cli::upload::api::ContinueRequest;
+    use goalcup_cli::upload::uploader::LocalDeadline;
+    use goalcup_cli::upload::{Continued, continue_run};
+    use goalcup_protocol::clock::ContinuousOrigin;
+
+    /// Mid-run, this machine's date falls a day behind the server's (the participant set it
+    /// back). The run is then continued, the server answers one heartbeat and goes away. The
+    /// continued segment still stops when the server's time left runs out, not a day later.
+    #[test]
+    fn a_date_set_a_day_back_does_not_lengthen_a_continued_segment() {
+        let away = Arc::new(AtomicBool::new(false));
+        let away_in = away.clone();
+        let run = Run::with(
+            ServerOptions {
+                // Long enough for the setup on a loaded machine; a day short of what the date says.
+                run_seconds: Some(8),
+                ..ServerOptions::default()
+            },
+            Box::new(move |label| {
+                (away_in.load(Ordering::SeqCst) && label.ends_with("/heartbeat")).then_some(503)
+            }),
+        );
+        run.front.skew.store(24 * 3600, Ordering::SeqCst);
+        let client = ServerClient::with_credential(&run.front.url, &run.credential);
+        let started = Instant::now();
+        // As `goalcup continue` does: the count starts from before the call.
+        let asked = ContinuousOrigin::now();
+        let request = ContinueRequest {
+            previous_entry_id: run.record.entry_id.clone(),
+            connector_id: "fake".into(),
+            manifest_sha256: "a".repeat(64),
+            connector_dir_sha256: "b".repeat(64),
+            workspace: "/nowhere".into(),
+            session_id: "00000000-0000-4000-8000-000000000002".into(),
+            harness_version: "1".into(),
+            tracer_version: "0.1.0".into(),
+        };
+        let segment = match continue_run(&client, &run.record.run_id, &request).unwrap() {
+            Continued::Segment(segment) => segment,
+            other => panic!("not a segment: {other:?}"),
+        };
+        let record = UploadRecord {
+            entry_id: segment.entry_id.clone(),
+            official_start: segment.official_start.clone(),
+            deadline_at: segment.deadline_at.clone(),
+            ..run.record.clone()
+        };
+        // By this machine's date a day more is left than the server says: the scenario is real.
+        let by_date = LocalDeadline::until(&record.deadline_at).unwrap();
+        assert!(by_date.left > Duration::from_secs(24 * 3600), "{by_date:?}");
+        let count = LocalDeadline::at_start(&record, segment.seconds_left, asked, true);
+        assert!(
+            count.is_some_and(|c| c.left <= Duration::from_secs(8)),
+            "{count:?} from {segment:?}"
+        );
+
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let running = begin(
+            client,
+            record,
+            run.key.clone(),
+            beating(),
+            run.spool.clone(),
+            count,
+            stop,
+            Vitals::default(),
+        )
+        .unwrap();
+        wait_for("a heartbeat of the segment", || {
+            (!run.server.heartbeats_of(&segment.entry_id).is_empty()).then_some(())
+        });
+        away.store(true, Ordering::SeqCst);
+        let reason = stopped
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the segment was not stopped");
+        assert!(reason.contains("by this machine's clock"), "{reason}");
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "it stopped {:?} after the continue, for a run with 8 seconds left",
+            started.elapsed()
+        );
+        drop(running);
     }
 
     // --------------------------------------------- a local error is retried, never the end

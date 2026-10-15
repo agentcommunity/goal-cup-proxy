@@ -872,11 +872,20 @@ fn stop_is_false_before_the_deadline_and_true_after() {
     assert_eq!(hb.status, 200, "{}", hb.body);
     assert_eq!(hb.body["stop"], false);
     assert_eq!(hb.body["deadline_at"], opened.body["deadline_at"]);
+    // The time left on the server's clock: at most the run's 2 seconds.
+    assert!(
+        hb.body["seconds_left"]
+            .as_u64()
+            .is_some_and(|left| left <= 2),
+        "{}",
+        hb.body
+    );
 
     rig.wait_for_stop(&run);
     let hb = rig.heartbeat(&run, &entry, 3, &head(3), false, None);
     assert_eq!((hb.status, &hb.body["stop"]), (200, &json!(true)));
     assert_eq!(hb.body["deadline_at"], opened.body["deadline_at"]);
+    assert_eq!(hb.body["seconds_left"], 0, "nothing is left once it stops");
     // The run is still open: past the deadline is not abandoned.
     assert_eq!(rig.get(&run, TOKEN).body["status"], "open");
 }

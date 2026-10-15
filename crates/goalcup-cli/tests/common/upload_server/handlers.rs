@@ -313,6 +313,7 @@ fn run_view(run: &RunRecord, entry: &EntryRecord) -> Value {
         "entry_id": entry.entry_id,
         "official_start": run.official_start,
         "deadline_at": run.deadline_at,
+        "seconds_left": run.seconds_left(),
     })
 }
 
@@ -573,7 +574,8 @@ async fn continue_run(
     let run = runs.get_mut(&run_id).expect("just found");
     let view = |run: &RunRecord, entry: &EntryRecord| {
         json!({"entry_id": entry.entry_id, "segment": entry.segment,
-               "official_start": run.official_start, "deadline_at": run.deadline_at})
+               "official_start": run.official_start, "deadline_at": run.deadline_at,
+               "seconds_left": run.seconds_left()})
     };
     // The same call again: the current entry came from this session, after that entry.
     let current = run.current();
@@ -1210,7 +1212,8 @@ async fn heartbeat(
         (true, Some(replaced)) if *replaced < run.deadline_at => json!("replaced"),
         (true, _) => json!("deadline"),
     };
-    let answer = json!({"stop": stop, "deadline_at": run.deadline_at, "reason": reason});
+    let answer = json!({"stop": stop, "deadline_at": run.deadline_at,
+                        "seconds_left": run.seconds_left(), "reason": reason});
     let entry = run.entry_mut(&req.entry_id).expect("just found");
     if !req.final_ {
         // A sealed entry has nothing left to record.

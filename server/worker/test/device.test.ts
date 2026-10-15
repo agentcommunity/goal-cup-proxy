@@ -187,13 +187,13 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
     for (const recording of ["ok", "gaps", "failed", "unknown"]) {
       const r = await beat({ recording, model_requests: 12 });
       assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(r.body, { stop: false, deadline_at: run.deadline_at, reason: null });
+      assert.deepEqual({ ...r.body, seconds_left: undefined }, { stop: false, deadline_at: run.deadline_at, seconds_left: undefined, reason: null });
     }
     assert.equal((await beat({})).status, 200);
     // null is absent, as for repo_head.
     const nulls = await beat({ recording: null, model_requests: null });
     assert.equal(nulls.status, 200, JSON.stringify(nulls.body));
-    assert.deepEqual(nulls.body, { stop: false, deadline_at: run.deadline_at, reason: null });
+    assert.deepEqual({ ...nulls.body, seconds_left: undefined }, { stop: false, deadline_at: run.deadline_at, seconds_left: undefined, reason: null });
     assertError(await beat({ model_requests: 2 ** 53 }), 400, "malformed");
     assertError(await beat({ recording: "fine" }), 400, "malformed");
     assertError(await beat({ model_requests: -1 }), 400, "malformed");

@@ -106,7 +106,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       const before = Date.now();
       const r = await api.call("POST", "/v1/runs", { token: ALICE, json: openBody() });
       assert.equal(r.status, 201, JSON.stringify(r.body));
-      assert.deepEqual(Object.keys(r.body).sort(), ["deadline_at", "entry_id", "official_start", "run_id"]);
+      assert.deepEqual(Object.keys(r.body).sort(), ["deadline_at", "entry_id", "official_start", "run_id", "seconds_left"]);
       assert.match(r.body.run_id, ID_RUN);
       assert.match(r.body.entry_id, ID_ENTRY);
       assert.match(r.body.official_start, TIME);
@@ -114,6 +114,9 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       const start = Date.parse(r.body.official_start);
       assert.ok(Math.abs(start - before) < 30_000, "official_start is the server's clock");
       assert.equal(Date.parse(r.body.deadline_at) - start, 168 * 3600 * 1000);
+      // The time left, on the server's clock: the whole run, less the second or two this call took.
+      assert.ok(Number.isSafeInteger(r.body.seconds_left), JSON.stringify(r.body));
+      assert.ok(r.body.seconds_left <= 168 * 3600 && r.body.seconds_left > 168 * 3600 - 30, JSON.stringify(r.body));
       runId = r.body.run_id;
       entryId = r.body.entry_id;
     });
@@ -122,7 +125,9 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       const first = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
       const r = await api.call("POST", "/v1/runs", { token: ALICE, json: openBody() });
       assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(r.body, { run_id: runId, entry_id: entryId, official_start: first.body.official_start, deadline_at: first.body.deadline_at });
+      const { seconds_left, ...rest } = r.body;
+      assert.deepEqual(rest, { run_id: runId, entry_id: entryId, official_start: first.body.official_start, deadline_at: first.body.deadline_at });
+      assert.ok(seconds_left > 0 && seconds_left <= 168 * 3600, JSON.stringify(r.body));
     });
 
     test("a different session_id on a credential that opened a run is 409", async () => {
@@ -206,7 +211,9 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       const r = await beat();
       assert.equal(r.status, 200, JSON.stringify(r.body));
       const pos = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
-      assert.deepEqual(r.body, { stop: false, deadline_at: pos.body.deadline_at, reason: null });
+      const { seconds_left, ...rest } = r.body;
+      assert.deepEqual(rest, { stop: false, deadline_at: pos.body.deadline_at, reason: null });
+      assert.ok(seconds_left > 168 * 3600 - 300 && seconds_left <= 168 * 3600, JSON.stringify(r.body));
     });
 
     test("bad fields are 400, a foreign entry 404, another member's run 404, no token 401", async () => {
@@ -557,7 +564,10 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     assert.equal((await put(alice, ALICE, a1, 0)).status, 200);
     const r = await beat(alice, ALICE, a1.lastSeq, a1.head, false);
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { stop: false, deadline_at: alice.deadline, reason: null });
+    const { seconds_left, ...rest } = r.body;
+    assert.deepEqual(rest, { stop: false, deadline_at: alice.deadline, reason: null });
+    // The 6-second run has between 1 and 6 seconds left, on the server's clock.
+    assert.ok(seconds_left >= 1 && seconds_left <= 6, JSON.stringify(r.body));
     const g = await get(alice, ALICE);
     assert.equal(g.body.stop, false);
     assert.equal(g.body.final, null);
@@ -586,7 +596,7 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     await sleepUntil(alice.deadline);
     const r = await beat(alice, ALICE, a1.lastSeq, a1.head, false);
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { stop: true, deadline_at: alice.deadline, reason: "deadline" });
+    assert.deepEqual(r.body, { stop: true, deadline_at: alice.deadline, seconds_left: 0, reason: "deadline" });
     assert.equal((await get(alice, ALICE)).body.stop, true);
     assert.equal((await get(alice, ALICE)).body.status, "open");
   });
@@ -607,7 +617,7 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
   test("the final heartbeat commits the end; a repeat is 200, a different end is 409", async () => {
     const f = await beat(alice, ALICE, a3.lastSeq, a3.head, true, "a".repeat(40));
     assert.equal(f.status, 200, JSON.stringify(f.body));
-    assert.deepEqual(f.body, { stop: true, deadline_at: alice.deadline, reason: "deadline" });
+    assert.deepEqual(f.body, { stop: true, deadline_at: alice.deadline, seconds_left: 0, reason: "deadline" });
     assert.deepEqual((await get(alice, ALICE)).body.final, { seq: 9, head: a3.head });
 
     assert.equal((await beat(alice, ALICE, 9, a3.head, true, "a".repeat(40))).status, 200); // same

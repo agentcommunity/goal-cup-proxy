@@ -90,11 +90,21 @@ export function requireOpen(ctx: Ctx, run: RunRow, entry: EntryRow): void {
   if (entry.sealed_at !== null) throw closed("This entry is sealed.");
 }
 
+/**
+ * Whole seconds from the server's clock now to the run's `deadline_at`, rounded up, and 0 once it
+ * has come. The tracer counts down from this and never from its own machine's date (WP11), so it
+ * is on every answer that tells the tracer about the deadline: open, continue and heartbeat.
+ */
+export function secondsLeft(run: { deadline_at: string }, now: Date): number {
+  return Math.max(0, Math.ceil((Date.parse(run.deadline_at) - now.getTime()) / 1000));
+}
+
 /** A heartbeat's answer: is the run over now, and if so why (a later start replaced it, or its deadline came)? */
 function answerStop(ctx: Ctx, run: RunRow) {
-  const stop = isPastEnd(run, ctx.now());
+  const now = ctx.now();
+  const stop = isPastEnd(run, now);
   const reason = !stop ? null : isReplaced(run) ? "replaced" : "deadline";
-  return { stop, deadline_at: run.deadline_at, reason };
+  return { stop, deadline_at: run.deadline_at, seconds_left: secondsLeft(run, now), reason };
 }
 
 // ---- POST /v1/runs ------------------------------------------------------------------------
@@ -149,7 +159,7 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
     // (The session of the open call is segment 0's, whatever `continue` has added since.)
     let opened = await ctx.db.getRun(auth.member, auth.run_id, null);
     if (opened !== null && opened.entry?.segment !== 0) opened = await ctx.db.getRun(auth.member, auth.run_id, opened.run.first_entry_id);
-    if (opened?.entry != null && opened.entry.session_id === fields.session_id) return json(200, runView(opened.run, opened.entry));
+    if (opened?.entry != null && opened.entry.session_id === fields.session_id) return json(200, runView(ctx, opened.run, opened.entry));
     throw conflict(OPENED_ALREADY);
   }
 
@@ -178,10 +188,16 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   });
   if (result.kind === "conflict") throw conflict(OPENED_ALREADY);
   if (result.kind === "forbidden") throw new ApiError(403, "forbidden", result.message);
-  return json(result.kind === "created" ? 201 : 200, runView(result.run, result.entry));
+  return json(result.kind === "created" ? 201 : 200, runView(ctx, result.run, result.entry));
 }
 
-const runView = ({ run_id, official_start, deadline_at }: RunRow, { entry_id }: EntryRow) => ({ run_id, entry_id, official_start, deadline_at });
+const runView = (ctx: Ctx, run: RunRow, { entry_id }: EntryRow) => ({
+  run_id: run.run_id,
+  entry_id,
+  official_start: run.official_start,
+  deadline_at: run.deadline_at,
+  seconds_left: secondsLeft(run, ctx.now()),
+});
 
 // ---- POST /v1/runs/{id}/continue ----------------------------------------------------------
 
@@ -207,6 +223,7 @@ export async function continueRun(ctx: Ctx, auth: Auth, runId: string, request: 
         segment: result.entry.segment,
         official_start: result.run.official_start,
         deadline_at: result.run.deadline_at,
+        seconds_left: secondsLeft(result.run, ctx.now()),
       });
     case "conflict":
       throw conflict("previous_entry_id is not the latest entry of this run; read the position.");

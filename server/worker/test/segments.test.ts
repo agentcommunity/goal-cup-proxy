@@ -70,7 +70,9 @@ describe("replace, practice and segments against wrangler dev", { concurrency: f
 
     const f = await beat(a.run_id, c1, a.entry_id, a2.lastSeq, a2.head, true);
     assert.equal(f.status, 200, JSON.stringify(f.body));
-    assert.deepEqual(f.body, { stop: true, deadline_at: a.deadline_at, reason: "replaced" });
+    const { seconds_left, ...rest } = f.body;
+    assert.deepEqual(rest, { stop: true, deadline_at: a.deadline_at, reason: "replaced" });
+    assert.ok(seconds_left > 0, "a replaced run's deadline_at has not come; stop ends it");
     assert.equal((await put(a.run_id, c1, a2, a1.length)).status, 200);
     assertError(await put(a.run_id, c1, a3, a1.length + a2.length), 410, "closed"); // past the committed end
 
