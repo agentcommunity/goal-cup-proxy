@@ -544,6 +544,12 @@ mod retries {
         let (method, path) = (parts.next().unwrap(), parts.next().unwrap());
         let label = format!("{method} {path}");
         seen.lock().unwrap().push(label.clone());
+        // A final heartbeat is marked in the order of what was seen, for the tests that ask
+        // what came after it.
+        if path.ends_with("/heartbeat") && String::from_utf8_lossy(&body).contains("\"final\":true")
+        {
+            seen.lock().unwrap().push("FINAL".to_string());
+        }
         let injected = (fault.lock().unwrap())(&label);
         let (status, content_type, reply) = match injected {
             Some(status) => (
@@ -1023,5 +1029,221 @@ mod retries {
             );
             drop(running);
         }
+    }
+
+    // --------------------------------------------- a local error is retried, never the end
+
+    use std::os::unix::fs::PermissionsExt;
+
+    fn chmod(path: &std::path::Path, mode: u32) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// A finish whose `say` runs `on_first_retry` once, at the first thing it says.
+    fn finish_curing(run: &Run, on_first_retry: impl Fn()) -> (Report, Vec<String>) {
+        let mut uploader = run.uploader();
+        let mut said = Vec::new();
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |line| {
+            if said.is_empty() {
+                on_first_retry();
+            }
+            said.push(line.to_string());
+        });
+        (report, said)
+    }
+
+    #[test]
+    fn a_chunk_that_cannot_be_built_is_retried_and_then_sent() {
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        // Not sealed: the build is the first thing that goes wrong. The chain file cannot be
+        // opened for a while (a part briefly unreadable); it is a local error, not the end.
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        let chain_file = trace.join("chain.jsonl");
+        chmod(&chain_file, 0o000);
+        let (report, said) = finish_curing(&run, || chmod(&chain_file, 0o644));
+        assert!(report.caught_up, "{report:?}\n{said:?}");
+        assert!(
+            said[0].contains("the next chunk could not be built")
+                && said[0].contains("trying again"),
+            "the retry was said: {said:?}"
+        );
+        assert_eq!(run.server.chunks(&run.record.run_id).len(), 1);
+        assert_eq!(run.front.count("PUT /v1/runs/"), 1);
+    }
+
+    #[test]
+    fn a_chain_that_does_not_continue_the_servers_copy_still_ends_the_upload() {
+        // The one build error that is not this machine's trouble: the two copies differ.
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        let mut uploader = run.uploader();
+        let wrong = String::from_utf8(chain(3).0)
+            .unwrap()
+            .replace("\"seq\":0", "\"seq\":9");
+        std::fs::write(trace.join("chain.jsonl"), wrong).unwrap();
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |_| {});
+        assert!(!report.caught_up, "{report:?}");
+        assert!(
+            report
+                .why
+                .as_deref()
+                .unwrap_or("")
+                .contains("does not continue"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn an_acknowledgement_that_cannot_be_written_is_retried_and_its_chunk_is_not_sent_again() {
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        let acks = trace.join("acks.jsonl");
+        // A link where `acks.jsonl` belongs, to a file elsewhere: the write must be refused,
+        // not followed.
+        let elsewhere = trace.parent().unwrap().join("elsewhere.jsonl");
+        std::os::unix::fs::symlink(&elsewhere, &acks).unwrap();
+        let (report, said) = finish_curing(&run, || std::fs::remove_file(&acks).unwrap());
+        assert!(report.caught_up && report.sealed, "{report:?}\n{said:?}");
+        assert!(
+            said.iter()
+                .any(|line| line.contains("acks.jsonl") && line.contains("trying again")),
+            "the retry was said: {said:?}"
+        );
+        assert!(!elsewhere.exists(), "the link was followed");
+        let kept = std::fs::read_to_string(&acks).unwrap();
+        assert_eq!(
+            kept.lines().count(),
+            1,
+            "the acknowledgement is kept once: {kept}"
+        );
+        assert_eq!(
+            run.front.count("PUT /v1/runs/"),
+            1,
+            "the chunk the server took is not sent again for the file's sake"
+        );
+    }
+
+    #[test]
+    fn the_final_heartbeat_reads_a_chain_it_could_not_read_again() {
+        // One I/O error from the chain was taken for "no whole record" for good; it is asked
+        // again after a backoff, whether the directory or a part is what cannot be read.
+        for directory in [true, false] {
+            let run = Run::new(Box::new(|_| None));
+            let trace = std::path::PathBuf::from(&run.record.trace_dir);
+            let (locked, open_mode) = if directory {
+                // Names can be looked up, but the directory cannot be listed.
+                (trace.clone(), 0o755)
+            } else {
+                (trace.join("chain.jsonl"), 0o644)
+            };
+            chmod(&locked, if directory { 0o311 } else { 0o000 });
+            let (report, said) = finish_curing(&run, || chmod(&locked, open_mode));
+            assert!(report.caught_up && report.sealed, "{report:?}\n{said:?}");
+            assert!(
+                said[0].contains("the final heartbeat could not read the chain"),
+                "{said:?}"
+            );
+            assert!(run.server.final_commit(&run.record.run_id).is_some());
+        }
+    }
+
+    // ------------------------------------------------------------------- the heartbeat
+
+    #[test]
+    fn heartbeat_failures_are_counted_and_one_stored_clears_them() {
+        let failing = Arc::new(AtomicBool::new(true));
+        let in_fault = failing.clone();
+        let run = Run::new(Box::new(move |label| {
+            (label.ends_with("/heartbeat") && in_fault.load(Ordering::SeqCst)).then_some(503)
+        }));
+        let vitals = Vitals::default();
+        let (running, stopped) = start_beating(&run, vitals.clone());
+        let trouble = wait_for("three failed heartbeats", || {
+            let trouble = vitals.heartbeat_trouble();
+            (trouble.failures >= 3).then_some(trouble)
+        });
+        assert!(
+            trouble
+                .last_failure
+                .as_deref()
+                .unwrap_or("")
+                .contains("503"),
+            "{trouble:?}"
+        );
+        assert!(stopped.try_recv().is_err(), "a 503 does not stop the run");
+        failing.store(false, Ordering::SeqCst);
+        wait_for("a stored heartbeat", || {
+            (vitals.heartbeat_trouble().failures == 0).then_some(())
+        });
+        assert_eq!(vitals.heartbeat_trouble().last_failure, None);
+        drop(running);
+    }
+
+    #[test]
+    fn a_401_or_410_on_a_heartbeat_stops_the_run_and_names_it() {
+        for status in [401, 410] {
+            let run = Run::new(Box::new(move |label| {
+                label.ends_with("/heartbeat").then_some(status)
+            }));
+            let (running, stopped) = start_beating(&run, Vitals::default());
+            let reason = stopped
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the run was not stopped");
+            assert!(
+                goalcup_cli::upload::uploader::refused_run(&reason)
+                    && reason.contains(&status.to_string()),
+                "{reason}"
+            );
+            drop(running);
+        }
+        // Any other refusal is counted and asked again.
+        let run = Run::new(Box::new(|label| {
+            label.ends_with("/heartbeat").then_some(404)
+        }));
+        let vitals = Vitals::default();
+        let (running, stopped) = start_beating(&run, vitals.clone());
+        wait_for("failed heartbeats", || {
+            (vitals.heartbeat_trouble().failures >= 2).then_some(())
+        });
+        assert!(stopped.try_recv().is_err());
+        drop(running);
+    }
+
+    #[test]
+    fn no_ordinary_heartbeat_is_sent_after_the_final_one() {
+        // The seal takes half a second: the heartbeat thread, beating every 50 ms, would send
+        // ordinary heartbeats behind the final one for the whole of it.
+        let run = Run::new(Box::new(|label| {
+            if label.ends_with("/seal") {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            None
+        }));
+        let (running, _stopped) = start_beating(&run, Vitals::default());
+        wait_for("a first heartbeat", || {
+            (run.front.count("POST /v1/runs/") >= 1).then_some(())
+        });
+        let report = running.finish(WrapUp::after(Duration::from_secs(20)));
+        assert!(report.caught_up && report.sealed, "{report:?}");
+        let seen = run.front.seen.lock().unwrap().clone();
+        let end = seen
+            .iter()
+            .position(|line| line == "FINAL")
+            .expect("a final heartbeat");
+        let seal = seen
+            .iter()
+            .position(|line| line.ends_with("/seal"))
+            .expect("a seal");
+        assert!(end < seal, "{seen:?}");
+        let behind: Vec<_> = seen[end + 1..]
+            .iter()
+            .filter(|line| line.ends_with("/heartbeat"))
+            .collect();
+        assert!(
+            behind.is_empty(),
+            "heartbeats after the final one: {seen:?}"
+        );
     }
 }

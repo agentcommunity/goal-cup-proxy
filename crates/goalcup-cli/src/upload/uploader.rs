@@ -25,7 +25,9 @@
 //!   `401`, `404` and `410` ([`ServerError::ends_upload`]: the token, the run, or the run's
 //!   being closed) stop the uploader and say why, and so do a local chain that does not
 //!   continue the server's copy and an acknowledgement that does not verify; the run goes on
-//!   recording. After the stop the same asking goes on for the wrap-up ([`Policy::wrap_up`],
+//!   recording. A local error (the disk full, a part briefly missing, `acks.jsonl` not
+//!   writable) is this machine's trouble of the moment, not the server's verdict: it is said
+//!   and asked again after the same backoff. After the stop the same asking goes on for the wrap-up ([`Policy::wrap_up`],
 //!   an hour, counted through machine sleep): the final heartbeat, the rest of the chain and
 //!   the seal. What is still unsent then is `goalcup upload`'s.
 //! - **Acknowledgements:** each one is checked (this entry, the chunk's last `seq` and head,
@@ -47,6 +49,7 @@ use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// The most a chunk body may be, compressed: the server's cap.
@@ -287,6 +290,20 @@ enum Attempt {
     RanOut,
 }
 
+/// Why an acknowledgement was not kept.
+enum AckError {
+    /// It does not match the chunk, or is not signed by this run's key: the server's fault, and
+    /// the end of the upload.
+    Rejected(String),
+    /// `acks.jsonl` could not be written: this machine's trouble, asked again later.
+    Local(String),
+}
+
+/// The sentence for an acknowledgement that could not be written to `acks.jsonl` yet.
+fn ack_not_kept(why: &str) -> String {
+    format!("the server's acknowledgement could not be written to acks.jsonl ({why})")
+}
+
 /// The least of the wrap-up that is worth a request.
 const LEAST_CALL: Duration = Duration::from_millis(100);
 
@@ -376,7 +393,19 @@ pub struct Uploader {
     /// A segment closed from its tail (no seal): [`Uploader::finish`] still commits its end in
     /// a final heartbeat, and sends the chain up to it, but has no seal to send.
     close_unsealed: bool,
+    /// An acknowledgement the server gave and this machine could not write to `acks.jsonl`
+    /// yet, with the `seq` and head of the chunk it answers: written before anything else is
+    /// sent, so the chunk it belongs to is not sent again for it.
+    owed_ack: Option<(AckCheckpoint, u64, String)>,
+    /// Whether the run's final heartbeat has been stored; the lock is held while a heartbeat
+    /// goes, so that the run's ordinary heartbeats never land after the final one.
+    ended: EndedGate,
 }
+
+/// Set once the final heartbeat is stored. The run's heartbeat thread sends an ordinary
+/// heartbeat only while it is unset, holding the lock for the whole call; the final heartbeat
+/// is sent under the same lock, so an ordinary one is never in flight behind it or after it.
+pub type EndedGate = std::sync::Arc<Mutex<bool>>;
 
 /// `GET /v1/runs/{run}?entry_id={entry}`: where the server is for the entry this record names,
 /// which is not the run's latest once the run has had a segment after it.
@@ -412,6 +441,8 @@ impl Uploader {
             acked_offset: std::sync::Arc::new(AtomicU64::new(0)),
             vitals: None,
             close_unsealed: false,
+            owed_ack: None,
+            ended: EndedGate::default(),
         };
         uploader.adopt_server_ack(&position);
         uploader.adopt_verified_offset(&position);
@@ -510,6 +541,10 @@ impl Uploader {
             let Some(timeout) = left(until, self.policy.put_timeout) else {
                 return Attempt::RanOut;
             };
+            // An acknowledgement the last chunk left unwritten is written first.
+            if let Some(retry) = self.write_owed_ack() {
+                return retry;
+            }
             let built = self
                 .parts()
                 .and_then(|parts| build_chunk(&parts, &self.pos, &self.spool));
@@ -518,17 +553,36 @@ impl Uploader {
                 Ok(None) => return Attempt::CaughtUp,
                 Err(error) => {
                     let _ = std::fs::remove_file(&self.spool);
-                    return Attempt::Stop(error.to_string());
+                    return match error {
+                        // The local chain and the server's copy disagree: asking again
+                        // changes neither, so this is the one build error that ends the upload.
+                        CliError::Refused(_) => Attempt::Stop(error.to_string()),
+                        // Anything else is this machine's trouble of the moment (the disk
+                        // full, a part briefly missing): the server has said nothing against
+                        // the run, so the chunk is built again after a backoff.
+                        local => Attempt::Retry(
+                            None,
+                            format!("the next chunk could not be built ({local})"),
+                        ),
+                    };
                 }
             };
             let sent = self.put(&chunk, timeout);
             let _ = std::fs::remove_file(&chunk.spool);
             match sent {
                 Ok(answer) => {
-                    if let Err(why) = self.keep_ack(&answer.ack, Some(chunk.last_seq), &chunk.head)
-                    {
-                        return Attempt::Stop(why);
-                    }
+                    let kept = self.keep_ack(&answer.ack, Some(chunk.last_seq), &chunk.head);
+                    let owed = match kept {
+                        Ok(()) => None,
+                        Err(AckError::Rejected(why)) => return Attempt::Stop(why),
+                        // The server has the chunk: it is not sent again for the file's
+                        // sake. The signed acknowledgement waits, and is written before
+                        // anything else is.
+                        Err(AckError::Local(why)) => {
+                            self.owed_ack = Some((answer.ack, chunk.last_seq, chunk.head.clone()));
+                            Some(why)
+                        }
+                    };
                     self.pos = Position {
                         offset: chunk.offset + chunk.length,
                         next_seq: chunk.last_seq + 1,
@@ -536,6 +590,9 @@ impl Uploader {
                     };
                     self.acked_offset.store(self.pos.offset, Ordering::SeqCst);
                     self.mark_ok();
+                    if let Some(why) = owed {
+                        return Attempt::Retry(None, ack_not_kept(&why));
+                    }
                 }
                 // The server is somewhere else: read where, and go on from there.
                 Err(error) if error.is_conflict() => match self.reread() {
@@ -624,17 +681,17 @@ impl Uploader {
         ack: &AckCheckpoint,
         seq: Option<u64>,
         head: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), AckError> {
         let at = goalcup_protocol::provenance::Rfc3339Utc::try_from(ack.acked_at.as_str())
             .ok()
             .and(ack.acked_at_secs());
         let fits = ack.entry_id == self.record.entry_id && Some(ack.seq) == seq && ack.hash == head;
         let (Some(at), true, Ok(())) = (at, fits, ack.verify(&self.key)) else {
-            return Err(format!(
+            return Err(AckError::Rejected(format!(
                 "the server's acknowledgement of seq {} does not match the chunk it answers, is \
                  not signed by the key of this run's start receipt, or has no valid time",
                 ack.seq
-            ));
+            )));
         };
         if self
             .acked
@@ -642,14 +699,31 @@ impl Uploader {
         {
             return Ok(());
         }
-        append_ack(&Path::new(&self.record.trace_dir).join(ACKS_FILE), ack)
-            .map_err(|e| e.to_string())?;
+        append_ack(Path::new(&self.record.trace_dir), ack)
+            .map_err(|e| AckError::Local(e.to_string()))?;
         self.acked = Some((ack.seq, at));
         Ok(())
     }
 
+    /// Write the acknowledgement [`Self::owed_ack`] holds, if any. `Some` is the attempt that
+    /// must end here: it could not be written yet, and is asked again after a backoff.
+    fn write_owed_ack(&mut self) -> Option<Attempt> {
+        let (ack, seq, head) = self.owed_ack.take()?;
+        match self.keep_ack(&ack, Some(seq), &head) {
+            Ok(()) => None,
+            Err(AckError::Local(why)) => {
+                self.owed_ack = Some((ack, seq, head));
+                Some(Attempt::Retry(None, ack_not_kept(&why)))
+            }
+            // It verified when it came, and nothing it is checked against has changed.
+            Err(AckError::Rejected(why)) => Some(Attempt::Stop(why)),
+        }
+    }
+
     /// The final heartbeat: commit the sealed chain's last record as the run's end, asking
-    /// again after each failure that does not end the upload, within the wrap-up `until`.
+    /// again after each failure that does not end the upload, within the wrap-up `until`. A
+    /// chain that cannot be read just now is a failure of that kind too: it is read again after
+    /// the same backoff, not taken for a chain with no whole record.
     fn commit_end(
         &mut self,
         until: Option<WrapUp>,
@@ -662,35 +736,47 @@ impl Uploader {
                 return Err(ran_out(last.as_deref()));
             };
             let repo_head = noted_repo_head(&self.spool, &self.record.entry_id);
-            match heartbeat(
-                &self.server,
-                &self.record,
-                true,
-                repo_head,
-                self.vitals.as_ref(),
-                timeout,
-            ) {
-                None => return Err("the chain holds no whole record".to_string()),
-                Some(Ok(_)) => return Ok(()),
-                Some(Err(error)) if !error.ends_upload() => {
-                    failures += 1;
-                    let wait = backoff(
-                        &self.policy,
-                        failures,
-                        error.retry_after().map(Duration::from_secs),
-                    );
-                    if past(until, wait) {
-                        return Err(ran_out(Some(&error.to_string())));
+            // Under the lock the run's ordinary heartbeats take, so none is in flight behind
+            // this one; once it is stored, none is sent.
+            let (retry_after, why) = {
+                let mut ended = self.ended.lock().unwrap_or_else(PoisonError::into_inner);
+                match heartbeat(
+                    &self.server,
+                    &self.record,
+                    true,
+                    repo_head,
+                    self.vitals.as_ref(),
+                    timeout,
+                ) {
+                    Beat::Empty => return Err("the chain holds no whole record".to_string()),
+                    Beat::Answer(Ok(_)) => {
+                        *ended = true;
+                        return Ok(());
                     }
-                    say(&format!(
-                        "upload: the final heartbeat was not stored ({error}); trying again in {}s",
-                        wait.as_secs().max(1)
-                    ));
-                    last = Some(error.to_string());
-                    std::thread::sleep(wait);
+                    Beat::Answer(Err(error)) if error.ends_upload() => {
+                        return Err(error.to_string());
+                    }
+                    Beat::Answer(Err(error)) => (
+                        error.retry_after().map(Duration::from_secs),
+                        format!("the final heartbeat was not stored ({error})"),
+                    ),
+                    Beat::Unreadable(error) => (
+                        None,
+                        format!("the final heartbeat could not read the chain ({error})"),
+                    ),
                 }
-                Some(Err(error)) => return Err(error.to_string()),
+            };
+            failures += 1;
+            let wait = backoff(&self.policy, failures, retry_after);
+            if past(until, wait) {
+                return Err(ran_out(Some(&why)));
             }
+            say(&format!(
+                "upload: {why}; trying again in {}s",
+                wait.as_secs().max(1)
+            ));
+            last = Some(why);
+            std::thread::sleep(wait);
         }
     }
 
@@ -758,46 +844,70 @@ pub fn local_link_before(parts: &[ChainPart], offset: u64) -> Option<(u64, Strin
 
 /// [`local_link_before`] within one part file: the record whose line ends at `offset` in it.
 fn link_before_in(file_path: &Path, offset: u64) -> Option<(u64, String)> {
+    link_before_io(file_path, offset).ok().flatten()
+}
+
+/// [`link_before_in`], telling a file that could not be read (`Err`) from one that holds no
+/// record there (`Ok(None)`).
+fn link_before_io(file_path: &Path, offset: u64) -> std::io::Result<Option<(u64, String)>> {
     if offset == 0 {
-        return None;
+        return Ok(None);
     }
     let start = offset.saturating_sub(MAX_LINE_BYTES + 1);
-    let mut file = std::fs::File::open(file_path).ok()?;
-    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut file = std::fs::File::open(file_path)?;
+    file.seek(SeekFrom::Start(start))?;
     let mut bytes = vec![0; (offset - start) as usize];
-    file.read_exact(&mut bytes).ok()?;
-    let body = bytes.strip_suffix(b"\n")?;
+    file.read_exact(&mut bytes)?;
+    let Some(body) = bytes.strip_suffix(b"\n") else {
+        return Ok(None);
+    };
     let line = match body.iter().rposition(|b| *b == b'\n') {
         Some(at) => &body[at + 1..],
         None if start == 0 => body,
-        None => return None,
+        None => return Ok(None),
     };
-    let link = serde_json::from_slice::<LinkOnly>(line).ok()?.link;
-    Some((link.seq, link.hash))
+    Ok(serde_json::from_slice::<LinkOnly>(line)
+        .ok()
+        .map(|record| (record.link.seq, record.link.hash)))
 }
 
 /// The last whole record of the chain `parts`: the logical bytes up to the end of it, its
 /// `seq` and its `hash`. `None` for a chain with no whole record. A last part that holds no
 /// whole record yet (just rotated) answers from the part before it.
 pub fn local_end(parts: &[ChainPart]) -> Option<(u64, u64, String)> {
-    parts.iter().rev().find_map(|part| {
-        let (end, seq, hash) = end_in(&part.path)?;
-        Some((part.start + end, seq, hash))
-    })
+    local_end_io(parts).ok().flatten()
 }
 
-/// [`local_end`] within one part file.
-fn end_in(file_path: &Path) -> Option<(u64, u64, String)> {
-    let len = std::fs::metadata(file_path).ok()?.len();
+/// [`local_end`], telling a chain that could not be read (`Err`) from one with no whole record
+/// (`Ok(None)`): the first is asked again, the second is just not there yet.
+fn local_end_io(parts: &[ChainPart]) -> std::io::Result<Option<(u64, u64, String)>> {
+    for part in parts.iter().rev() {
+        match end_in_io(&part.path) {
+            Ok(Some((end, seq, hash))) => return Ok(Some((part.start + end, seq, hash))),
+            Ok(None) => {}
+            // A part deleted since it was listed holds no record any more: the one before it
+            // answers, as for a part that holds none yet.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(None)
+}
+
+/// The end of the last whole line of one part file, with the record that ends there.
+fn end_in_io(file_path: &Path) -> std::io::Result<Option<(u64, u64, String)>> {
+    let len = std::fs::metadata(file_path)?.len();
     let start = len.saturating_sub(2 * (MAX_LINE_BYTES + 1));
-    let mut file = std::fs::File::open(file_path).ok()?;
-    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut file = std::fs::File::open(file_path)?;
+    file.seek(SeekFrom::Start(start))?;
     let mut tail = Vec::new();
-    file.take(len - start).read_to_end(&mut tail).ok()?;
+    file.take(len - start).read_to_end(&mut tail)?;
     // The end of the last whole line; a torn tail after it is not a record yet.
-    let end = start + tail.iter().rposition(|b| *b == b'\n')? as u64 + 1;
-    let (seq, hash) = link_before_in(file_path, end)?;
-    Some((end, seq, hash))
+    let Some(newline) = tail.iter().rposition(|b| *b == b'\n') else {
+        return Ok(None);
+    };
+    let end = start + newline as u64 + 1;
+    Ok(link_before_io(file_path, end)?.map(|(seq, hash)| (end, seq, hash)))
 }
 
 /// The 40-hex commit `workspace`'s repository has checked out, read from its `.git` files (no
@@ -870,14 +980,26 @@ fn repo_head_path(spool_dir: &Path, entry_id: &str) -> PathBuf {
 /// final heartbeat to send whenever it goes (a later `goalcup upload` included). Nothing is
 /// noted when there is no repository.
 pub fn note_repo_head(spool_dir: &Path, record: &UploadRecord) {
+    note_repo_head_saying(spool_dir, record, &mut crate::host_log::say);
+}
+
+/// [`note_repo_head`], saying through `say` when the note cannot be written: the final
+/// heartbeat then goes without the commit, and the participant is told so, not left to find the
+/// commit missing from the entry.
+fn note_repo_head_saying(spool_dir: &Path, record: &UploadRecord, say: &mut dyn FnMut(&str)) {
     if record.workspace.is_empty() {
         return;
     }
-    if let Some(commit) = repo_head(Path::new(&record.workspace)) {
-        let _ = crate::config::write_secret_file(
+    if let Some(commit) = repo_head(Path::new(&record.workspace))
+        && let Err(error) = crate::config::write_secret_file(
             &repo_head_path(spool_dir, &record.entry_id),
             commit.as_bytes(),
-        );
+        )
+    {
+        say(&format!(
+            "upload: the workspace's commit could not be noted ({error}); the final heartbeat \
+             will go without it"
+        ));
     }
 }
 
@@ -903,10 +1025,20 @@ fn noted_repo_head_in(spool_dir: &Path, entry_id: &str) -> Option<String> {
     (text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit())).then(|| text.to_string())
 }
 
+/// What sending a heartbeat came to.
+enum Beat {
+    /// The server answered, or did not.
+    Answer(Result<HeartbeatAnswer, ServerError>),
+    /// The chain holds no whole record yet: there is nothing to say.
+    Empty,
+    /// The chain could not be read just now (the error): not the same as having no record.
+    Unreadable(String),
+}
+
 /// `POST /v1/runs/{id}/heartbeat` with the local chain's last whole record: `final` once the
 /// run has ended, with the workspace repository's commit. `vitals` adds how the recording is
 /// and how many model requests were seen; a heartbeat without them (`goalcup upload`) says
-/// neither. `None` when the chain holds no whole record yet.
+/// neither.
 fn heartbeat(
     server: &ServerClient,
     record: &UploadRecord,
@@ -914,9 +1046,16 @@ fn heartbeat(
     repo_head: Option<String>,
     vitals: Option<&Vitals>,
     timeout: Duration,
-) -> Option<Result<HeartbeatAnswer, ServerError>> {
-    let parts = super::prune::parts_now(Path::new(&record.trace_dir)).ok()?;
-    let (offset_local, seq, head) = local_end(&parts)?;
+) -> Beat {
+    let parts = match super::prune::parts_now(Path::new(&record.trace_dir)) {
+        Ok(parts) => parts,
+        Err(error) => return Beat::Unreadable(error.to_string()),
+    };
+    let (offset_local, seq, head) = match local_end_io(&parts) {
+        Ok(Some(end)) => end,
+        Ok(None) => return Beat::Empty,
+        Err(error) => return Beat::Unreadable(error.to_string()),
+    };
     let request = HeartbeatRequest {
         entry_id: record.entry_id.clone(),
         seq,
@@ -927,7 +1066,7 @@ fn heartbeat(
         recording: vitals.map(|vitals| vitals.recording().wire().to_string()),
         model_requests: vitals.map(Vitals::model_requests),
     };
-    Some(server.json_timed(
+    Beat::Answer(server.json_timed(
         "POST",
         &format!("/v1/runs/{}/heartbeat", record.run_id),
         Some(&request),
@@ -966,6 +1105,73 @@ pub fn stop_reason(answer: &HeartbeatAnswer) -> Option<String> {
     })
 }
 
+/// What the run is told when the server refuses its heartbeat for good (`401`, or `410`): the
+/// reason starts with this, which `goalcup start` words its stop by ([`refused_run`]).
+pub const HEARTBEAT_REFUSED: &str = "the server refused the run's heartbeat";
+
+/// Whether `reason` (as sent on the run's stop channel) is the server's refusal of the run's
+/// heartbeat.
+pub fn refused_run(reason: &str) -> bool {
+    reason.starts_with(HEARTBEAT_REFUSED)
+}
+
+/// The sentence that stops the run when a heartbeat is answered `401` (the token is no longer
+/// accepted) or `410` (the run is closed): what every other call ends the upload for, so the run
+/// stops here too. Any other failure is asked again at the next beat.
+fn heartbeat_refusal(error: &ServerError) -> Option<String> {
+    matches!(
+        error,
+        ServerError::Status {
+            status: 401 | 410,
+            ..
+        }
+    )
+    .then(|| format!("{HEARTBEAT_REFUSED} ({error}), so this run can no longer be uploaded"))
+}
+
+/// One ordinary heartbeat, counted in `vitals` and said when it fails; `Some` is why the run
+/// must stop. Nothing is sent once the final heartbeat is stored (`ended`), and none is in
+/// flight while it goes: the lock is held for the call.
+fn ordinary_beat(
+    server: &ServerClient,
+    record: &UploadRecord,
+    vitals: &Vitals,
+    ended: &EndedGate,
+) -> Option<String> {
+    let ended = ended.lock().unwrap_or_else(PoisonError::into_inner);
+    if *ended {
+        return None;
+    }
+    let failed = |why: String| {
+        let failures = vitals.heartbeat_failed(&why);
+        // Said when it starts and when it has lasted; `goalcup status` shows it from then on.
+        if failures == 1 || failures == crate::run::HEARTBEATS_FAILING_AFTER {
+            crate::host_log::say(&format!(
+                "heartbeat: {why} ({failures} in a row); it is sent again at the next beat"
+            ));
+        }
+    };
+    match heartbeat(server, record, false, None, Some(vitals), HEARTBEAT_TIMEOUT) {
+        Beat::Answer(Ok(answer)) => {
+            vitals.heartbeat_ok();
+            stop_reason(&answer)
+        }
+        Beat::Answer(Err(error)) => {
+            let refusal = heartbeat_refusal(&error);
+            if refusal.is_none() {
+                failed(error.to_string());
+            }
+            refusal
+        }
+        Beat::Unreadable(error) => {
+            failed(format!("the chain could not be read ({error})"));
+            None
+        }
+        // Nothing recorded yet: nothing to say, and nothing failed.
+        Beat::Empty => None,
+    }
+}
+
 /// Send a heartbeat every `policy.heartbeat` and watch the run's own deadline, until the run
 /// must stop (said once on `stopping`, and `over` set) or the uploader is `done`.
 #[allow(clippy::too_many_arguments)]
@@ -978,6 +1184,7 @@ fn watch_deadline(
     stopping: &std::sync::mpsc::Sender<String>,
     over: &AtomicBool,
     done: &AtomicBool,
+    ended: &EndedGate,
 ) {
     let mut next_beat = Instant::now();
     let tick = policy.poll.min(Duration::from_secs(1));
@@ -993,10 +1200,7 @@ fn watch_deadline(
             local
         } else if Instant::now() >= next_beat {
             next_beat = Instant::now() + policy.heartbeat;
-            match heartbeat(server, record, false, None, Some(vitals), HEARTBEAT_TIMEOUT) {
-                Some(Ok(answer)) => stop_reason(&answer),
-                _ => None,
-            }
+            ordinary_beat(server, record, vitals, ended)
         } else {
             None
         };
@@ -1009,17 +1213,25 @@ fn watch_deadline(
     }
 }
 
-/// Append one acknowledgement as one line, in one write, and make it durable.
-fn append_ack(acks: &Path, ack: &AckCheckpoint) -> Result<(), CliError> {
+/// Append one acknowledgement as one line, in one write, and make it durable. The file is opened
+/// through the trace directory's capability ([`goalcup_platform::tracecap`]): `acks.jsonl` is
+/// reached by its own name from a retained directory handle, never through a link, and must be
+/// a regular file with one name, so an agent that left a link in its place cannot have the
+/// acknowledgement written elsewhere. The handle is fresh for each acknowledgement: a refused
+/// or failed write poisons a capability writer for good, and the next try must be able to start
+/// again.
+fn append_ack(trace_dir: &Path, ack: &AckCheckpoint) -> Result<(), CliError> {
+    let acks = trace_dir.join(ACKS_FILE);
+    let refused = |error: goalcup_platform::tracecap::TraceCapError| CliError::Io {
+        path: acks.display().to_string(),
+        source: std::io::Error::other(error.to_string()),
+    };
     let mut line = serde_json::to_vec(ack)?;
     line.push(b'\n');
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(acks)
-        .map_err(io_error(acks))?;
-    file.write_all(&line).map_err(io_error(acks))?;
-    file.sync_data().map_err(io_error(acks))
+    let dir = goalcup_platform::tracecap::TraceDir::open(trace_dir).map_err(refused)?;
+    let mut file = dir.open_acks_for_resume().map_err(refused)?;
+    file.append_checked(&line).map_err(refused)?;
+    dir.sync_append(&mut file).map_err(refused)
 }
 
 /// How an upload ended, for the participant.
@@ -1210,6 +1422,45 @@ pub fn begin(
     stop: std::sync::mpsc::Sender<String>,
     vitals: Vitals,
 ) -> Result<Running, CliError> {
+    begin_spawning(
+        &spawn_thread,
+        server,
+        record,
+        receipt_key,
+        policy,
+        spool_dir,
+        local_deadline,
+        stop,
+        vitals,
+    )
+}
+
+/// A thread named `name` running `work`, detached.
+type Spawn<'a> = &'a dyn Fn(&str, Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+fn spawn_thread(name: &str, work: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(work)
+        .map(|_| ())
+}
+
+/// [`begin`], starting its threads with `spawn`. The heartbeat thread starts first, and a
+/// thread that cannot start is an error of `begin`: a run whose heartbeats and deadline watch
+/// cannot run is not begun, because nothing would tell the server it was alive, or stop it at
+/// its deadline.
+#[allow(clippy::too_many_arguments)]
+fn begin_spawning(
+    spawn: Spawn<'_>,
+    server: ServerClient,
+    record: UploadRecord,
+    receipt_key: String,
+    policy: Policy,
+    spool_dir: PathBuf,
+    local_deadline: Option<LocalDeadline>,
+    stop: std::sync::mpsc::Sender<String>,
+    vitals: Vitals,
+) -> Result<Running, CliError> {
     let lock = lock_entry(&spool_dir, &record.entry_id)?;
     let entry_id = record.entry_id.clone();
     let (finish, finishing) = std::sync::mpsc::channel::<WrapUp>();
@@ -1217,24 +1468,62 @@ pub fn begin(
     let last_ok = std::sync::Arc::new(AtomicU64::new(crate::run::now_unix()));
     let acked_offset = std::sync::Arc::new(AtomicU64::new(0));
     let shared = (last_ok.clone(), acked_offset.clone());
-    std::thread::Builder::new()
-        .name("goalcup-upload".into())
-        .spawn(move || {
+    // Heartbeats and the deadline run on a thread of their own, so a slow chunk upload never
+    // delays a stop. Once the run must stop, uploading waits for the finish.
+    let over = std::sync::Arc::new(AtomicBool::new(false));
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let ended = EndedGate::default();
+    let spawn_error = |what: &str| {
+        let what = what.to_string();
+        move |source| CliError::Io {
+            path: format!("the {what} thread"),
+            source,
+        }
+    };
+    {
+        let (server, record, vitals) = (server.clone(), record.clone(), vitals.clone());
+        let (over, done, ended) = (over.clone(), done.clone(), ended.clone());
+        spawn(
+            "goalcup-heartbeat",
+            Box::new(move || {
+                watch_deadline(
+                    &server,
+                    &record,
+                    policy,
+                    local_deadline,
+                    &vitals,
+                    &stop,
+                    &over,
+                    &done,
+                    &ended,
+                )
+            }),
+        )
+        .map_err(spawn_error("heartbeat"))?;
+    }
+    let beside = Beside {
+        finishing,
+        over,
+        ended,
+        shared,
+        vitals,
+    };
+    let heartbeats_done = done.clone();
+    spawn(
+        "goalcup-upload",
+        Box::new(move || {
             let _lock = lock;
-            let beside = Beside {
-                finishing,
-                stopping: stop,
-                local_deadline,
-                shared,
-                vitals,
-            };
+            let _done_on_return = SetOnDrop(done);
             let ended = run(server, record, receipt_key, policy, &spool_dir, beside);
             let _ = reported.send(ended);
-        })
-        .map_err(|source| CliError::Io {
-            path: "the upload thread".to_string(),
-            source,
-        })?;
+        }),
+    )
+    .map_err(|source| {
+        // The heartbeat thread is already running: it is told to end, as the upload thread
+        // would have told it.
+        heartbeats_done.store(true, Ordering::SeqCst);
+        spawn_error("upload")(source)
+    })?;
     Ok(Running {
         entry_id,
         finish,
@@ -1248,9 +1537,10 @@ pub fn begin(
 struct Beside {
     /// The run is sealed: finish within this wrap-up.
     finishing: std::sync::mpsc::Receiver<WrapUp>,
-    /// The run must stop now, and why.
-    stopping: std::sync::mpsc::Sender<String>,
-    local_deadline: Option<LocalDeadline>,
+    /// Set by the heartbeat thread once the run must stop.
+    over: std::sync::Arc<AtomicBool>,
+    /// Set when the final heartbeat is stored, after which no ordinary one is sent.
+    ended: EndedGate,
     /// The counters [`Running::last_ok`] and [`Running::acked_offset`] read.
     shared: (std::sync::Arc<AtomicU64>, std::sync::Arc<AtomicU64>),
     vitals: Vitals,
@@ -1473,8 +1763,8 @@ fn run(
     use std::sync::mpsc::RecvTimeoutError;
     let Beside {
         finishing,
-        stopping,
-        local_deadline,
+        over,
+        ended,
         shared,
         vitals,
     } = beside;
@@ -1485,29 +1775,6 @@ fn run(
     let mut wait_until = Instant::now();
     let mut next_due = Instant::now();
     let mut cadence = Cadence::new(&policy);
-    // Heartbeats and the deadline run on a thread of their own, so a slow chunk upload never
-    // delays a stop. Once the run must stop, uploading waits for the finish.
-    let over = std::sync::Arc::new(AtomicBool::new(false));
-    let done = std::sync::Arc::new(AtomicBool::new(false));
-    let _done_on_return = SetOnDrop(done.clone());
-    {
-        let (server, record, over, done) = (server.clone(), record.clone(), over.clone(), done);
-        let vitals = vitals.clone();
-        let _ = std::thread::Builder::new()
-            .name("goalcup-heartbeat".into())
-            .spawn(move || {
-                watch_deadline(
-                    &server,
-                    &record,
-                    policy,
-                    local_deadline,
-                    &vitals,
-                    &stopping,
-                    &over,
-                    &done,
-                )
-            });
-    }
     loop {
         let now = Instant::now();
         if !over.load(Ordering::SeqCst) && stopped.is_none() && now >= wait_until {
@@ -1523,6 +1790,7 @@ fn run(
                         resumed.halt = Some(over.clone());
                         resumed.share(&shared.0, &shared.1);
                         resumed.vitals = Some(vitals.clone());
+                        resumed.ended = ended.clone();
                         uploader = Some(resumed);
                     }
                     Err(error) if !error.ends_upload() => {
@@ -1606,6 +1874,7 @@ fn run(
                         Ok(mut up) => {
                             up.share(&shared.0, &shared.1);
                             up.vitals = Some(vitals.clone());
+                            up.ended = ended.clone();
                             up
                         }
                         Err(error) => return Report::not(error.to_string(), 0),
@@ -1673,5 +1942,116 @@ mod tests {
         std::fs::write(sent_path(dir.path(), "e1"), b"sent\n").unwrap();
         assert!(is_sent(dir.path(), "e1"));
         assert!(!is_sent(dir.path(), "e2"));
+    }
+
+    fn record_in(dir: &Path) -> UploadRecord {
+        UploadRecord {
+            run_id: "r0123456789abcdef".into(),
+            entry_id: "e1".into(),
+            server_url: String::new(),
+            trace_dir: dir.join("trace").display().to_string(),
+            official_start: String::new(),
+            deadline_at: String::new(),
+            workspace: String::new(),
+        }
+    }
+
+    /// A heartbeat thread that cannot start is an error of `begin`, and the upload thread is
+    /// never started behind it.
+    #[test]
+    fn a_heartbeat_thread_that_cannot_start_is_an_error_of_begin() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawned = Mutex::new(Vec::<String>::new());
+        let spawn = |name: &str, _work: Box<dyn FnOnce() + Send>| {
+            spawned.lock().unwrap().push(name.to_string());
+            Err(std::io::Error::other("no threads left"))
+        };
+        let (stop, _stopped) = std::sync::mpsc::channel();
+        let result = begin_spawning(
+            &spawn,
+            ServerClient::anonymous("http://127.0.0.1:1"),
+            record_in(dir.path()),
+            "key".into(),
+            Policy::default(),
+            dir.path().join("uploads"),
+            None,
+            stop,
+            Vitals::default(),
+        );
+        match result {
+            Err(CliError::Io { path, source }) => {
+                assert!(path.contains("heartbeat"), "{path}");
+                assert!(source.to_string().contains("no threads left"), "{source}");
+            }
+            Err(other) => panic!("a different error: {other}"),
+            Ok(_) => panic!("begin went on without its heartbeat thread"),
+        }
+        assert_eq!(*spawned.lock().unwrap(), ["goalcup-heartbeat"]);
+    }
+
+    /// An upload thread that cannot start is an error too, and the heartbeat thread that is
+    /// already running is told to end rather than left beating for a run that never began.
+    #[test]
+    fn an_upload_thread_that_cannot_start_ends_the_heartbeat_thread_it_leaves() {
+        let dir = tempfile::tempdir().unwrap();
+        let heartbeat = Mutex::new(None);
+        let spawn = |name: &str, work: Box<dyn FnOnce() + Send>| {
+            if name == "goalcup-heartbeat" {
+                *heartbeat.lock().unwrap() = Some(std::thread::spawn(work));
+                Ok(())
+            } else {
+                Err(std::io::Error::other("no threads left"))
+            }
+        };
+        let (stop, _stopped) = std::sync::mpsc::channel();
+        let result = begin_spawning(
+            &spawn,
+            ServerClient::anonymous("http://127.0.0.1:1"),
+            record_in(dir.path()),
+            "key".into(),
+            Policy::default(),
+            dir.path().join("uploads"),
+            None,
+            stop,
+            Vitals::default(),
+        );
+        assert!(
+            matches!(result, Err(CliError::Io { ref path, .. }) if path.contains("upload")),
+            "begin refused"
+        );
+        // Joins only if the thread was told to end.
+        heartbeat.lock().unwrap().take().unwrap().join().unwrap();
+    }
+
+    /// A commit that cannot be noted is said, so the participant is not left to find it missing.
+    #[test]
+    fn a_commit_that_cannot_be_noted_is_said() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("work");
+        std::fs::create_dir_all(workspace.join(".git")).unwrap();
+        std::fs::write(workspace.join(".git/HEAD"), format!("{}\n", "a".repeat(40))).unwrap();
+        let record = UploadRecord {
+            workspace: workspace.display().to_string(),
+            ..record_in(dir.path())
+        };
+        // A spool directory that is a file: nothing can be written beneath it.
+        let spool = dir.path().join("uploads");
+        std::fs::write(&spool, b"not a directory").unwrap();
+        let mut said = Vec::new();
+        note_repo_head_saying(&spool, &record, &mut |line| said.push(line.to_string()));
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("could not be noted") && said[0].contains("without it"),
+            "{said:?}"
+        );
+        assert_eq!(noted_repo_head_in(&spool, "e1"), None);
+
+        // Written, nothing is said.
+        let spool = dir.path().join("spool");
+        std::fs::create_dir_all(&spool).unwrap();
+        let mut said = Vec::new();
+        note_repo_head_saying(&spool, &record, &mut |line| said.push(line.to_string()));
+        assert!(said.is_empty(), "{said:?}");
+        assert_eq!(noted_repo_head_in(&spool, "e1"), Some("a".repeat(40)));
     }
 }

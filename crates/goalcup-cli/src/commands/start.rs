@@ -2201,6 +2201,7 @@ fn run_harness<'a>(
             keeper.update(|state| state.stopped = Some(reason.to_string()));
             let label = if reason == crate::run::watch::DISK_STOP_REASON
                 || reason == crate::upload::uploader::REPLACED_REASON
+                || crate::upload::uploader::refused_run(reason)
             {
                 "stopped"
             } else {
