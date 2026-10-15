@@ -106,6 +106,18 @@ enum Command {
         #[arg(long)]
         practice: bool,
     },
+    /// Restart the agent of a run whose agent ended before the run's time was up.
+    ///
+    /// An agent that exits, a closed window or a reboot ends one segment of your run; the run
+    /// stays open until its deadline. This opens the next segment on this machine, with the
+    /// run's saved credential (nothing is approved again), in the run's clone, and the harness
+    /// picks up its last session. A run can be continued only on the machine that started it,
+    /// and only while another run is not recording there.
+    Continue {
+        /// The run to continue. Defaults to the newest run started on this machine.
+        #[arg(value_name = "RUN_ID")]
+        run: Option<String>,
+    },
     /// Show how a run is doing: recording state, health, storage and any gaps. Starts the
     /// daemon if none is running, so a sealed run is shown too.
     Status {
@@ -227,6 +239,7 @@ fn run(command: Command) -> Result<u8, CliError> {
             sleep_lock: goalcup_platform::awake::hold,
         })
         .map(|()| 0),
+        Command::Continue { run } => continue_run(run).map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),
         Command::Entries { json } => entries(json).map(|()| 0),
         Command::Seal { entry } => seal(entry).map(|()| 0),
@@ -367,6 +380,37 @@ fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
         &mut std::io::stdout(),
     )?;
     Ok(())
+}
+
+/// `goalcup continue`, with what it reads from this machine resolved here, as `start` does. A run
+/// this machine did not start is refused before a daemon is asked for or started.
+fn continue_run(run: Option<String>) -> Result<(), CliError> {
+    let cfg = goalcup_cli::config::config_dir()?;
+    let connectors = goalcup_cli::config::connectors_dir()?;
+    commands::continue_run::resolve(&cfg, run.as_deref())?;
+    let client = ensure_daemon(&cfg, goalcup_cli::daemon::MissingConfig::Refuse)?;
+    if let Err(e) = goalcup_cli::subreaper::arm() {
+        eprintln!(
+            "goalcup: this command could not become a child subreaper ({e}), so a process the \
+             harness leaves behind after it exits is not swept before the seal, and the daemon's \
+             walk may not see it (docs/TERMINATION.md)."
+        );
+    }
+    let env = goalcup_cli::launch::process_env();
+    commands::continue_run::continue_with(
+        &client,
+        &connectors,
+        &cfg,
+        &env,
+        &commands::continue_run::ContinueOptions {
+            run,
+            run_folder: std::env::current_dir().ok(),
+            disk: disk_policy()?,
+            upload_policy: upload_policy()?,
+            sleep_lock: goalcup_platform::awake::hold,
+        },
+        &mut std::io::stdout(),
+    )
 }
 
 /// A test build's one extra input to `goalcup start`: a PEM file of certificates the proxy

@@ -5,6 +5,7 @@
 //! line pointing at it. A `goalcup verify` that shelled out to that binary would be a second
 //! place the verifier's flags and exit codes are spelled, and the first one to drift.
 
+pub mod continue_run;
 pub mod doctor;
 pub mod entries;
 pub mod login;

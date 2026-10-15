@@ -848,3 +848,583 @@ fn without_a_server_the_run_stops_on_its_own_clock_and_is_finished_later() {
     assert!(server.final_commit(&run_id).is_some());
     assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
 }
+
+// ------------------------------------------------------------------ segments and `continue`
+
+/// A run in chat mode on a terminal, its agent ending before the run's end, and `goalcup
+/// continue` restarting it as the next segment: the binaries, a terminal each, the stand-in.
+mod segments {
+    use super::{REPO, wait_until};
+    use crate::common::m2_cli_support::Rig;
+    use crate::common::upload_server::{ServerOptions, UploadServer};
+    use goalcup_cli::run::reserve::{artifact_root, reserve_path};
+    use goalcup_protocol::capture_status::AnchorState;
+    use goalcup_verifier::capture_analysis::reader::{CaptureIntegrity, scan_capture_trace};
+    use std::path::{Path, PathBuf};
+
+    /// A test build's disk sizes: the reservation, no margin, a 50 ms watch.
+    const DISK: (&str, &str) = ("GOALCUP_TEST_DISK", "4194304,0,50");
+    /// The uploader's cadence a test can watch, with a heartbeat every 100 ms.
+    const BEATING: (&str, &str) = (
+        "GOALCUP_TEST_UPLOAD_POLICY",
+        "200,25,100,400,10000,268435456,3000,100",
+    );
+
+    fn server(rig: &Rig, options: ServerOptions) -> UploadServer {
+        let server = UploadServer::start(&rig.root.join("server"), options);
+        rig.prepare_for(&server.url());
+        server
+    }
+
+    fn harness(rig: &Rig, name: &str) -> String {
+        rig.harness_file(name)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    /// End the fake agent the way a crash does.
+    fn kill_agent(rig: &Rig) {
+        let pid: i32 = harness(rig, "tui.pid").parse().expect("the agent's pid");
+        // SAFETY: two integers; the pid is the fake harness's own.
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+    }
+
+    fn the_run(server: &UploadServer) -> String {
+        let runs = server.run_ids();
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        runs[0].clone()
+    }
+
+    /// The run as the server's API answers for it, with the credential the run saved.
+    fn api_run(rig: &Rig, server: &UploadServer, run_id: &str) -> serde_json::Value {
+        let dir = goalcup_cli::run::run_dir(&rig.cfg, run_id);
+        let credential = goalcup_cli::account::credential::load(&dir).unwrap();
+        goalcup_cli::upload::http::ServerClient::with_credential(&server.url(), &credential)
+            .json("GET", &format!("/v1/runs/{run_id}"), None::<&()>)
+            .unwrap()
+    }
+
+    fn reserve_dir(rig: &Rig) -> PathBuf {
+        artifact_root(&rig.cfg).join("reserve")
+    }
+
+    fn reserve_files(rig: &Rig) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(reserve_dir(rig))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// The server's copy of an entry's chain.
+    fn copy_of(server: &UploadServer, entry_id: &str) -> Vec<u8> {
+        let mut chunks = server.chunks_of(entry_id);
+        chunks.sort_by_key(|c| c.offset);
+        let mut joined = Vec::new();
+        for chunk in chunks {
+            assert_eq!(chunk.offset, joined.len() as u64, "chunks leave no hole");
+            let raw =
+                zstd::decode_all(std::fs::read(&chunk.body_path).unwrap().as_slice()).unwrap();
+            joined.extend_from_slice(&raw);
+        }
+        joined
+    }
+
+    /// The server holds all of the entry's chain and its seal, and the trace verifies under the
+    /// server's key with a signed anchor.
+    fn assert_entry_uploaded(rig: &Rig, server: &UploadServer, entry_id: &str) {
+        let trace = rig.trace(entry_id);
+        let chain = std::fs::read(trace.join("chain.jsonl")).unwrap();
+        assert_eq!(copy_of(server, entry_id), chain, "{entry_id}: the chain");
+        let (seal, baseline) = server
+            .seal_of(entry_id)
+            .unwrap_or_else(|| panic!("{entry_id} was not sealed on the server"));
+        assert_eq!(
+            seal.as_bytes(),
+            std::fs::read(trace.join("seal.json")).unwrap()
+        );
+        assert_eq!(
+            baseline.as_bytes(),
+            std::fs::read(trace.join("baseline.json")).unwrap()
+        );
+        assert!(
+            server.heartbeats_of(entry_id).iter().any(|h| h.final_),
+            "{entry_id}: a final heartbeat"
+        );
+        let options = goalcup_verifier::VerifyOptions {
+            extra_server_keys: vec![server.public_key_hex()],
+            ..Default::default()
+        };
+        let report = scan_capture_trace(&trace, &options, &mut |_| Ok(())).unwrap();
+        assert_eq!(report.integrity, CaptureIntegrity::Valid, "{report:?}");
+        assert_eq!(report.anchor, AnchorState::Signed, "{report:?}");
+    }
+
+    fn lock_is_free(path: &Path) -> bool {
+        use std::os::fd::AsRawFd;
+        let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+        else {
+            return true;
+        };
+        // SAFETY: `flock` on a descriptor this function owns.
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+    }
+
+    /// The agent of a run is killed: the host seals the segment, sends its final heartbeat and
+    /// uploads it, says the run stays open, and exits 0. `goalcup continue` then restarts the
+    /// agent with no second approval, with the harness's resume arguments, as segment 1 of the
+    /// same run; both segments end up on the server, sealed.
+    #[test]
+    fn a_killed_agent_leaves_the_run_open_and_continue_makes_segment_one() {
+        let rig = Rig::chat();
+        let server = server(&rig, ServerOptions::default());
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        first.type_line("hello");
+        first.wait_shown("tui: noted hello");
+        kill_agent(&rig);
+        let status = first.wait();
+        let shown = first.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+
+        let run_id = the_run(&server);
+        let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
+        let deadline_at = record.deadline_at.clone().unwrap();
+        assert!(
+            shown.contains(&format!(
+                "The agent's process ended (ended by signal 9). Your run stays open until \
+                 {deadline_at}; run `goalcup continue` to restart it."
+            )),
+            "{shown}"
+        );
+        // The run is open on the server; its one segment is sealed and sent.
+        assert_eq!(api_run(&rig, &server, &run_id)["status"], "open");
+        let entries = server.entry_ids(&run_id);
+        assert_eq!(entries.len(), 1);
+        assert_entry_uploaded(&rig, &server, &entries[0]);
+        assert_eq!(server.device_requests().len(), 1);
+        assert_eq!(reserve_files(&rig).len(), 1, "the reserve stays");
+        let workspace = record.workspace.clone();
+        let first_pid = harness(&rig, "tui.pid");
+
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        assert_ne!(harness(&rig, "tui.pid"), first_pid, "a new agent");
+        let argv: Vec<String> = harness(&rig, "tui.argv")
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            argv,
+            [
+                "chat",
+                "-C",
+                &workspace.display().to_string(),
+                "resume",
+                "--last"
+            ],
+            "the profile's arguments, then its resume arguments, in the run's clone"
+        );
+        second.type_line("again");
+        second.wait_shown("tui: noted again");
+        second.type_line("/exit");
+        let status = second.wait();
+        let shown = second.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert!(shown.contains("Your run stays open until"), "{shown}");
+
+        // No second approval, no second clone; one run with two segments, both sent.
+        assert_eq!(server.device_requests().len(), 1);
+        assert_eq!(server.run_ids(), std::slice::from_ref(&run_id));
+        assert_eq!(rig.clones().len(), 1);
+        let entries = server.entry_ids(&run_id);
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        for entry in &entries {
+            assert_entry_uploaded(&rig, &server, entry);
+        }
+        let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
+        assert_eq!(
+            record
+                .entries
+                .iter()
+                .map(|e| e.entry_id.clone())
+                .collect::<Vec<_>>(),
+            entries
+        );
+        assert_eq!(
+            record.workspace.display().to_string(),
+            workspace.display().to_string()
+        );
+        assert_eq!(api_run(&rig, &server, &run_id)["status"], "open");
+        let (report, _) = rig.read_trace(&entries[1]);
+        assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// The seal is where the shared harness home is let go: the sentence is printed after it,
+    /// and while the upload is still being retried (the server is gone) the next segment, or any
+    /// other run, may take the home.
+    #[test]
+    fn the_shared_home_is_let_go_at_the_seal_not_at_the_end_of_the_upload() {
+        let rig = Rig::chat();
+        let first_server = server(&rig, ServerOptions::default());
+        let mut run = rig.start_on_pty(&[DISK, BEATING]);
+        run.wait_shown("tui: ready");
+        run.type_line("hello");
+        run.wait_shown("tui: noted hello");
+        let lock = rig
+            .cfg
+            .join("capture-homes")
+            .join(format!("{}.lock", crate::common::m2_cli_support::CHAT_ID));
+        assert!(
+            !lock_is_free(&lock),
+            "the run holds the home while it records"
+        );
+        first_server.stop();
+        kill_agent(&rig);
+        run.wait_shown("Your run stays open until");
+        assert!(
+            matches!(run.child.try_wait(), Ok(None)),
+            "the host is still sending its segment"
+        );
+        assert!(lock_is_free(&lock), "and the home is free");
+        run.child.kill().unwrap();
+        run.wait();
+    }
+
+    /// A segment that follows another reuses the run's one reserve file: it is not taken a
+    /// second time and not replaced.
+    #[test]
+    fn a_continue_reuses_the_runs_reserve_file_and_never_takes_a_second() {
+        use std::os::unix::fs::MetadataExt;
+        let rig = Rig::chat();
+        let server = server(&rig, ServerOptions::default());
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        kill_agent(&rig);
+        assert!(first.wait().success());
+        let run_id = the_run(&server);
+        let files = reserve_files(&rig);
+        assert_eq!(files, [reserve_path(&artifact_root(&rig.cfg), &run_id)]);
+        let identity = |path: &Path| {
+            let meta = std::fs::metadata(path).unwrap();
+            (meta.dev(), meta.ino())
+        };
+        let before = identity(&files[0]);
+
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        assert_eq!(
+            reserve_files(&rig),
+            files,
+            "no second reserve while it runs"
+        );
+        assert_eq!(identity(&files[0]), before, "the same file");
+        second.type_line("/exit");
+        assert!(second.wait().success());
+        assert_eq!(reserve_files(&rig), files);
+        assert_eq!(identity(&files[0]), before);
+    }
+
+    /// A run that was over before `continue` is refused, and nothing is made for it: no entry
+    /// on the server, none here, no clone, no run directory, no second agent.
+    #[test]
+    fn continue_after_the_deadline_is_refused_and_creates_nothing() {
+        let rig = Rig::chat();
+        let server = server(
+            &rig,
+            ServerOptions {
+                run_seconds: Some(6),
+                ..ServerOptions::default()
+            },
+        );
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        kill_agent(&rig);
+        assert!(first.wait().success());
+        let run_id = the_run(&server);
+        let deadline = goalcup_protocol::control::parse_z(
+            goalcup_cli::run::read(&rig.cfg, &run_id)
+                .unwrap()
+                .deadline_at
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        wait_until("the run's deadline", || {
+            goalcup_cli::run::now_unix() > deadline
+        });
+        let uploads = || {
+            let mut names: Vec<_> = std::fs::read_dir(rig.cfg.join("uploads"))
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let (agent, folders, kept) = (harness(&rig, "tui.pid"), rig.run_dirs(), uploads());
+
+        let mut again = rig.continue_on_pty(&[DISK, BEATING], None);
+        let status = again.wait();
+        let said = again.shown();
+        assert_eq!(status.code(), Some(1), "{said}");
+        assert!(said.contains("is over"), "{said}");
+        assert!(said.contains(&run_id), "{said}");
+        assert_eq!(server.entry_ids(&run_id).len(), 1, "no entry was made");
+        assert_eq!(
+            goalcup_cli::run::read(&rig.cfg, &run_id)
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+        assert_eq!(rig.clones().len(), 1);
+        assert_eq!(rig.run_dirs(), folders);
+        assert_eq!(uploads(), kept);
+        assert_eq!(harness(&rig, "tui.pid"), agent, "no second agent");
+    }
+
+    /// A run this machine did not start, or has no credential for, is refused alike, and nothing
+    /// is started or asked of the daemon or the server.
+    #[test]
+    fn continue_of_a_run_not_started_here_is_refused() {
+        let rig = Rig::chat();
+        let server = server(&rig, ServerOptions::default());
+        let said =
+            |output: &std::process::Output| String::from_utf8_lossy(&output.stderr).into_owned();
+        // Named, and unknown here.
+        let output = rig
+            .continue_command(&[], Some("r0123456789abcdef"))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{}", said(&output));
+        assert!(
+            said(&output).contains("this run was not started on this machine"),
+            "{}",
+            said(&output)
+        );
+        // No run at all.
+        let output = rig.continue_command(&[], None).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{}", said(&output));
+        assert!(said(&output).contains("this run was not started on this machine"));
+        // A record without the run's credential (it was copied from another machine).
+        let run_id = "r0123456789abcdef";
+        goalcup_cli::run::write(
+            &rig.cfg,
+            &goalcup_cli::run::RunRecord {
+                run_id: run_id.to_string(),
+                server_url: Some(server.url()),
+                practice: false,
+                connector_id: crate::common::m2_cli_support::CHAT_ID.to_string(),
+                workspace: rig.root.join("somewhere"),
+                started_at_unix: 1,
+                deadline_at: Some(goalcup_protocol::control::format_z(
+                    goalcup_cli::run::now_unix() + 3600,
+                )),
+                entries: Vec::new(),
+            },
+        )
+        .unwrap();
+        let output = rig.continue_command(&[], Some(run_id)).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{}", said(&output));
+        assert!(said(&output).contains("this run was not started on this machine"));
+        assert!(server.calls().is_empty(), "{:?}", server.calls());
+        assert!(!rig.harness_started());
+        assert!(rig.run_dirs().is_empty());
+        assert!(rig.clones().is_empty());
+        let _ = REPO;
+    }
+
+    /// While the run's agent is recording, `continue` is refused, by the run's name, and the
+    /// running segment goes on undisturbed.
+    #[test]
+    fn continue_while_a_run_records_is_refused_by_name() {
+        let rig = Rig::chat();
+        let server = server(&rig, ServerOptions::default());
+        let mut run = rig.start_on_pty(&[DISK, BEATING]);
+        run.wait_shown("tui: ready");
+        run.type_line("hello");
+        run.wait_shown("tui: noted hello");
+        let run_id = the_run(&server);
+
+        let output = rig
+            .continue_command(&[DISK, BEATING], None)
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert_eq!(output.status.code(), Some(1), "{said}");
+        assert!(
+            said.contains(&format!("run {run_id} is still recording")),
+            "{said}"
+        );
+        assert_eq!(server.entry_ids(&run_id).len(), 1, "no segment was made");
+
+        run.type_line("/exit");
+        assert!(run.wait().success());
+        assert_eq!(harness(&rig, "tui.end"), "exit");
+        assert_eq!(server.entry_ids(&run_id).len(), 1);
+    }
+
+    /// The host and the daemon die together (a reboot), and the chain's last line is cut. The
+    /// daemon cannot reopen the entry, `continue` repairs nothing: it closes the segment from
+    /// the last whole record of its chain, as an incomplete segment (no seal), sends it, and
+    /// starts segment 1.
+    #[test]
+    fn continue_after_a_reboot_closes_an_unreopenable_segment_from_its_tail() {
+        let mut rig = Rig::chat();
+        let server = server(&rig, ServerOptions::default());
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        first.type_line("hello");
+        first.wait_shown("tui: noted hello");
+        let run_id = the_run(&server);
+        let entry = server.entry_ids(&run_id)[0].clone();
+        wait_until("a chunk of the first segment", || {
+            !server.chunks_of(&entry).is_empty()
+        });
+        // The machine goes down: the host, its agent and the daemon.
+        // SAFETY: two integers; the pids are this test's own children.
+        unsafe { libc::kill(first.child.id() as i32, libc::SIGKILL) };
+        kill_agent(&rig);
+        first.close();
+        first.wait();
+        let daemon = rig.daemon.take().expect("the rig's daemon");
+        rig.runtime.block_on(daemon.stop());
+        // The last line of the chain was being written.
+        let trace = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap().entries[0]
+            .trace_dir
+            .clone();
+        let last = goalcup_cli::upload::prune::parts_now(&trace)
+            .unwrap()
+            .pop()
+            .expect("a chain part")
+            .path;
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&last)
+            .unwrap()
+            .write_all(b"{\"torn\":\"a line cut short")
+            .unwrap();
+        let torn = std::fs::read(&last).unwrap();
+        let whole = torn.len() - b"{\"torn\":\"a line cut short".len();
+        // The machine is back, and its daemon with it.
+        rig.daemon = Some(
+            rig.runtime
+                .block_on(goalcup_daemon::runtime::Daemon::start(rig.config.clone()))
+                .unwrap(),
+        );
+
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        second.type_line("back");
+        second.wait_shown("tui: noted back");
+        second.type_line("/exit");
+        let status = second.wait();
+        let shown = second.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert!(shown.contains("incomplete segment"), "{shown}");
+
+        let entries = server.entry_ids(&run_id);
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        // Nothing was repaired: the torn bytes are still the chain's last.
+        assert_eq!(std::fs::read(&last).unwrap(), torn);
+        // The first segment ends at its last whole record; it has no seal.
+        let end = server
+            .final_of(&entries[0])
+            .expect("its end was committed in a final heartbeat");
+        assert_eq!(
+            copy_of(&server, &entries[0]),
+            torn[..whole].to_vec(),
+            "the server holds the chain up to the last whole line"
+        );
+        let last_line = torn[..whole]
+            .split(|b| *b == b'\n')
+            .rfind(|l| !l.is_empty())
+            .unwrap();
+        let last_line: serde_json::Value = serde_json::from_slice(last_line).unwrap();
+        assert_eq!(end.seq, last_line["seq"].as_u64().unwrap());
+        assert_eq!(end.head, last_line["hash"].as_str().unwrap());
+        assert!(
+            server.seal_of(&entries[0]).is_none(),
+            "an incomplete segment"
+        );
+        // The new segment is whole.
+        assert_entry_uploaded(&rig, &server, &entries[1]);
+        assert_eq!(api_run(&rig, &server, &run_id)["status"], "open");
+    }
+
+    /// A second start on the account replaces the run that is recording: the stand-in answers the
+    /// first host's next heartbeat with stop and `replaced`; the first host stops the agent,
+    /// seals, sends everything, exits 0, and, the run being over, gives its reserve back.
+    #[test]
+    fn a_second_start_replaces_the_first_run() {
+        let rig = Rig::chat();
+        let server = server(&rig, ServerOptions::default());
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        first.type_line("hello");
+        first.wait_shown("tui: noted hello");
+        let run_id = the_run(&server);
+        let entry = server.entry_ids(&run_id)[0].clone();
+        assert_eq!(reserve_files(&rig).len(), 1);
+
+        // The account starts another competition run (here, directly against the server).
+        let credential = goalcup_cli::account::credential::RunCredential::new(
+            server.mint_credential("member-1"),
+            "2099-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+        let other =
+            goalcup_cli::upload::http::ServerClient::with_credential(&server.url(), &credential);
+        let second = goalcup_cli::upload::open_run(
+            &other,
+            &goalcup_cli::upload::api::OpenRunRequest {
+                connector_id: "m2-fake".into(),
+                manifest_sha256: "a".repeat(64),
+                connector_dir_sha256: "b".repeat(64),
+                workspace: "/nowhere/workspace".into(),
+                session_id: "00000000-0000-4000-8000-000000000002".into(),
+                harness_version: "1".into(),
+                tracer_version: "0.1.0".into(),
+                repo_url: REPO.into(),
+                machine: None,
+            },
+        )
+        .unwrap();
+        assert_ne!(second.run_id, run_id);
+        assert!(server.replaced_at(&run_id).is_some());
+
+        let status = first.wait();
+        let shown = first.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert_eq!(
+            harness(&rig, "tui.end"),
+            "",
+            "the agent was ended by the seal"
+        );
+        assert_entry_uploaded(&rig, &server, &entry);
+        let state = goalcup_cli::run::read_state(&goalcup_cli::run::run_dir(&rig.cfg, &run_id))
+            .expect("the run's last state");
+        assert_eq!(
+            state.stopped.as_deref(),
+            Some(goalcup_cli::upload::uploader::REPLACED_REASON)
+        );
+        assert!(state.ended);
+        assert!(
+            !shown.contains("run `goalcup continue` to restart it"),
+            "a replaced run is over, not open: {shown}"
+        );
+        assert!(
+            !reserve_path(&artifact_root(&rig.cfg), &run_id).exists(),
+            "a replaced run is over: its reserve goes back after the last acknowledgement"
+        );
+    }
+}
