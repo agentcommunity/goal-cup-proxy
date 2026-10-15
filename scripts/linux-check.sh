@@ -9,6 +9,8 @@
 # hand (`docker volume ls`, `docker volume rm <name>`). The old shared volume of every checkout,
 # goalcup-linux-check-target, is no longer used and can be removed:
 # `docker volume rm goalcup-linux-check-target`.
+# From a linked worktree (Worktrunk), `.git` is a file that points into the main repository's git
+# directory. That directory is mounted read-only at its own host path, so git works in the container.
 # The script takes no lock itself: do not run it alongside other heavy test runs.
 # Usage: sh scripts/linux-check.sh      (LINUX_CHECK_HARNESSES=1 adds the harness smoke)
 # Last line: `linux-check: PASS` or `linux-check: FAIL <step>`.
@@ -28,6 +30,15 @@ label=goalcup-linux-check=$checkout
 # checkout's goalcup-platform). A volume per checkout keeps each one's builds its own.
 volume=goalcup-linux-check-target-$checkout
 registry=$cargo_home/registry
+# Extra docker args. In a linked worktree, `.git` is a file naming a directory of the main
+# repository, which the container does not see; `git ls-files` (scripts/check-version.py) then
+# fails. Mount that common git directory read-only at the same absolute path. A plain checkout has
+# its .git inside the mount already. If git cannot say, nothing is mounted and the fast gate fails.
+set --
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+if [ -d "$common" ] && [ "$common" != "$(pwd -P)/.git" ]; then
+    set -- -v "$common:$common:ro"
+fi
 
 [ -d "$registry" ] || { echo "linux-check: FAIL registry (run cargo fetch --locked first)"; exit 1; }
 docker build -q -t "$img" - >/dev/null <<'DOCKERFILE' || { echo "linux-check: FAIL image"; exit 1; }
@@ -55,7 +66,7 @@ case $cpus in '' | *[!0-9]* | 0) cpus=6 ;; esac
 # --init: something must reap orphans, as it does on a real host or WSL2.
 docker run -d --name "$name" --label "$label" --privileged --init --cpus="$cpus" -v "$PWD":/src \
     -v "$registry":/usr/local/cargo/registry -v "$volume":/target \
-    -w /src "$img" sleep infinity >/dev/null || { echo "linux-check: FAIL container"; exit 1; }
+    "$@" -w /src "$img" sleep infinity >/dev/null || { echo "linux-check: FAIL container"; exit 1; }
 docker exec "$name" sh -c 'set -e; chown dev /target; mkdir -p /mnt/ext4 /mnt/xfs
     truncate -s 8G /ext4.img; mkfs.ext4 -q -F /ext4.img; mount -o loop /ext4.img /mnt/ext4
     truncate -s 2G /xfs.img; mkfs.xfs -q -f /xfs.img; mount -o loop /xfs.img /mnt/xfs

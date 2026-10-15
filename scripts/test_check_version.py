@@ -45,6 +45,32 @@ class CheckVersionTests(unittest.TestCase):
     def test_this_repository_is_clean(self) -> None:
         self.assertEqual(check_version.check(SCRIPT.parent.parent), [])
 
+    def test_a_tree_git_cannot_list_fails_instead_of_passing(self) -> None:
+        # A linked worktree whose gitdir is missing (the case inside a container that does not
+        # mount the main repository): `git ls-files` exits 128. It must not pass and not crash.
+        (self.root / ".git").write_text("gitdir: /nonexistent/main/.git/worktrees/x\n")
+        with self.assertRaises(check_version.NoFileList):
+            check_version.check(self.root)
+        run = subprocess.run(
+            ["python3", str(SCRIPT), "--root", str(self.root)], capture_output=True, text=True
+        )
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertIn("cannot list the tracked files", run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+
+    def test_a_linked_worktree_is_checked_like_any_checkout(self) -> None:
+        self.assertEqual(self.findings(), [])
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@t"}
+        git = ["git", "-c", "commit.gpgsign=false"]
+        subprocess.run([*git, "commit", "-q", "-m", "x"], cwd=self.root, check=True, env=env)
+        linked = self.root / "linked"
+        subprocess.run(["git", "worktree", "add", "-q", str(linked)], cwd=self.root, check=True)
+        (linked / "docs/GUIDE.md").write_text("goalcup 0.6.0 is out.\n")
+        subprocess.run(["git", "add", "-A"], cwd=linked, check=True)
+        found = check_version.check(linked)
+        self.assertIn("docs/GUIDE.md:1: writes the current version 0.6.0", found)
+
     def test_a_crate_with_its_own_version_is_flagged(self) -> None:
         self.write("crates/c/Cargo.toml", '[package]\nname = "goalcup-c"\nversion = "0.6.0"\n')
         found = self.findings()

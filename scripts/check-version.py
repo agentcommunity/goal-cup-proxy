@@ -25,7 +25,8 @@ Test code and fixtures are not scanned: they send made-up versions to fake serve
 records (docs/harnesses/, docs/research/, connectors/, spikes/) carry the versions of the
 harnesses, not of the tracer, and are not scanned either.
 
-Exit status 0 when clean, 1 with one line per finding otherwise.
+Exit status 0 when clean, 1 with one line per finding otherwise, 2 when git cannot list the
+tracked files (nothing was checked; this is never a pass).
 """
 
 from __future__ import annotations
@@ -89,10 +90,21 @@ BINARY_VERSION = re.compile(rf"\bgoalcup(?:-daemon|-verify)? {SEMVER}{END}")
 ACTION_PIN = re.compile(r"uses: [\w./-]+@[0-9a-f]{40}")
 
 
+class NoFileList(Exception):
+    """git could not list the tracked files, so nothing was checked."""
+
+
 def tracked(root: Path) -> list[str]:
-    out = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=root, check=True, capture_output=True
-    ).stdout
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=root, check=True, capture_output=True
+        ).stdout
+    except (subprocess.CalledProcessError, OSError) as error:
+        detail = getattr(error, "stderr", b"") or b""
+        raise NoFileList(
+            f"cannot list the tracked files of {root} with git: "
+            f"{detail.decode(errors='replace').strip() or error}"
+        ) from error
     return [name for name in out.decode().split("\0") if name]
 
 
@@ -169,7 +181,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=str(Path(__file__).resolve().parent.parent))
     args = parser.parse_args()
-    findings = check(Path(args.root))
+    try:
+        findings = check(Path(args.root))
+    except NoFileList as error:
+        # Never a pass: a check that could not read the tree has checked nothing.
+        print(f"check-version: FAIL, {error}", file=sys.stderr)
+        return 2
     for finding in findings:
         print(f"check-version: {finding}", file=sys.stderr)
     if findings:
