@@ -34,6 +34,7 @@
 //! callback error ends the scan as an I/O error, and no report is produced.
 
 use super::lineage::Lineage;
+use super::wire::SegmentView;
 use crate::SERVER_PUBLIC_KEYS;
 use crate::VerifyOptions;
 use base64::Engine as _;
@@ -41,9 +42,10 @@ use base64::engine::general_purpose::STANDARD;
 use goalcup_platform::tracecap::{RefusalKind, TraceCapError, TraceDir};
 use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::capture::{
-    CaptureFrame, CaptureRecord, CaptureSource, CaptureTime, ConnectionEvent, EndReason,
-    FrameEvent, M2_PROTOCOL_VERSION, MAX_ENVELOPE_BYTES, MAX_METADATA_STRING_BYTES,
-    MAX_OPEN_CONNECTIONS, MAX_OPEN_STREAMS, MAX_SEGMENT_BYTES, StreamKey, is_capture_id,
+    CaptureFrame, CaptureMeta, CaptureRecord, CaptureSource, CaptureTime, ConnectionEvent,
+    EndReason, FrameEvent, GapReason, M2_PROTOCOL_VERSION, MAX_ENVELOPE_BYTES,
+    MAX_METADATA_STRING_BYTES, MAX_OPEN_CONNECTIONS, MAX_OPEN_STREAMS, MAX_SEGMENT_BYTES,
+    StreamKey, is_capture_id,
 };
 use goalcup_protocol::capture_status::AnchorState;
 use goalcup_protocol::chain::GENESIS;
@@ -1463,201 +1465,32 @@ impl CaptureState {
         self.producers.values().any(|p| !p.closed && !p.lost)
     }
 
+    /// The capture-record rules, one method per record kind.
     fn apply(&mut self, record: &CaptureRecord) -> Result<(), Violation> {
         match record {
             CaptureRecord::ProducerClosed {
                 producer,
                 observed,
                 final_seq,
-            } => {
-                check_time(observed)?;
-                if self.producers.get(producer).is_some_and(|p| p.closed) {
-                    return Err("producer_closed_twice");
-                }
-                if self.streams.keys().any(|k| k.producer == *producer) {
-                    return Err("producer_closed_with_open_streams");
-                }
-                let state = owner(&mut self.producers, &mut self.lineage, producer)?;
-                // A receiver attestation: `final_seq` is the last accepted frame sequence,
-                // None only for zero frames. The persisted records give a lower bound.
-                let consistent = match final_seq {
-                    None => state.frames == 0,
-                    Some(seq) => seq.checked_add(1).is_none_or(|count| count >= state.frames),
-                };
-                if !consistent {
-                    return Err("producer_closed_final_seq_inconsistent");
-                }
-                state.closed = true;
-                self.connections.retain(|_, owner| owner != producer);
-            }
+            } => self.producer_closed(producer, observed, *final_seq),
             CaptureRecord::Connection {
                 producer,
                 connection,
                 observed,
                 event,
-            } => {
-                check_frame(
-                    &StreamKey {
-                        producer: producer.clone(),
-                        stream: 0,
-                    },
-                    observed,
-                    FrameEvent::Connection {
-                        connection: connection.clone(),
-                        event: event.clone(),
-                    },
-                )?;
-                let state = owner(&mut self.producers, &mut self.lineage, producer)?;
-                state.frames = state.frames.saturating_add(1);
-                state.wire = true;
-                self.lineage.note(producer, true);
-                let recovered = state.recovered;
-                match event {
-                    ConnectionEvent::Open { already_open, .. } => {
-                        // A current observation of a surviving socket, allowed only in an
-                        // epoch that began with a Recovery. It is not reconstructed history.
-                        if *already_open && !recovered {
-                            return Err("connection_reobserved_outside_recovery");
-                        }
-                        if self.connections.contains_key(connection) {
-                            return Err("connection_already_open");
-                        }
-                        if self.connections.len() >= MAX_OPEN_CONNECTIONS {
-                            return Err("connection_limit_exceeded");
-                        }
-                        self.connections
-                            .insert(connection.clone(), producer.clone());
-                    }
-                    ConnectionEvent::UpgradedWebSocket => {
-                        if self.connections.get(connection) != Some(producer) {
-                            return Err("connection_not_open");
-                        }
-                    }
-                    ConnectionEvent::Close { .. } => {
-                        if self.connections.get(connection) != Some(producer) {
-                            return Err("connection_not_open");
-                        }
-                        self.connections.remove(connection);
-                    }
-                }
-            }
+            } => self.connection(producer, connection, observed, event),
             CaptureRecord::Recovery {
                 previous_producer,
                 producer,
                 observed,
                 reason,
-            } => {
-                check_frame(
-                    &StreamKey {
-                        producer: producer.clone(),
-                        stream: 0,
-                    },
-                    observed,
-                    FrameEvent::Recovery {
-                        previous_producer: previous_producer.clone(),
-                        reason: *reason,
-                    },
-                )?;
-                // The fresh epoch's first frame is its Recovery.
-                if self.producers.contains_key(producer) {
-                    return Err("recovery_producer_not_fresh");
-                }
-                // A previous producer with no earlier record was lost in flight
-                // (`Queued` is not persisted). It is admitted here as a lost zero-record
-                // producer and counts toward MAX_PRODUCERS.
-                if let Some(previous) = self.producers.get(previous_producer) {
-                    // Only a wire producer is ever recovered; a native or goal producer is not.
-                    if !previous.wire {
-                        return Err("recovery_names_non_wire_producer");
-                    }
-                    if previous.closed {
-                        return Err("recovery_after_producer_closed");
-                    }
-                    if previous.lost {
-                        return Err("producer_recovered_twice");
-                    }
-                }
-                let supersession = self.lineage.supersedes(previous_producer, producer);
-                if !supersession.admitted {
-                    if supersession.predecessor_fits {
-                        // Preserve the reader's sequential admission behavior: an existing
-                        // predecessor, or an unseen predecessor that consumes the last slot,
-                        // is marked lost before admitting the fresh epoch fails. At a completely
-                        // full table an unseen predecessor does not fit, so nothing changes.
-                        if supersession.unrecorded {
-                            self.producers
-                                .insert(previous_producer.clone(), ProducerState::default());
-                        }
-                        for id in &supersession.producers {
-                            if let Some(state) = self.producers.get_mut(id)
-                                && !state.closed
-                            {
-                                state.lost = true;
-                            }
-                        }
-                        if supersession.unrecorded {
-                            self.unrecorded_recoveries =
-                                self.unrecorded_recoveries.saturating_add(1);
-                        }
-                    }
-                    return Err("producer_limit_exceeded");
-                }
-                admit(&mut self.producers, &mut self.lineage, previous_producer)?;
-                for id in &supersession.producers {
-                    if let Some(state) = self.producers.get_mut(id)
-                        && !state.closed
-                    {
-                        state.lost = true;
-                    }
-                }
-                if supersession.unrecorded {
-                    self.unrecorded_recoveries = self.unrecorded_recoveries.saturating_add(1);
-                }
-                let fresh = admit(&mut self.producers, &mut self.lineage, producer)?;
-                fresh.recovered = true;
-                fresh.wire = true;
-                fresh.frames = 1;
-                // Producer loss invalidates the superseded epochs' stream keys and
-                // connection contexts; surviving sockets are re-observed by the fresh
-                // epoch, never transferred. Only this arm sets `lost`, and a lost producer
-                // can hold nothing afterwards, so only those superseded here still do.
-                self.streams
-                    .retain(|k, _| !supersession.producers.contains(&k.producer));
-                self.connections
-                    .retain(|_, owner| !supersession.producers.contains(owner));
-                self.recoveries = self.recoveries.saturating_add(1);
-            }
+            } => self.recovery(previous_producer, producer, observed, *reason),
             CaptureRecord::Open {
                 stream,
                 observed,
                 source,
                 metadata,
-            } => {
-                check_frame(
-                    stream,
-                    observed,
-                    FrameEvent::Open {
-                        source: *source,
-                        metadata: metadata.clone(),
-                    },
-                )?;
-                let state = owner(&mut self.producers, &mut self.lineage, &stream.producer)?;
-                if stream.stream <= state.high_stream {
-                    return Err("stream_id_not_increasing");
-                }
-                if self.streams.len() >= MAX_OPEN_STREAMS {
-                    return Err("open_stream_limit_exceeded");
-                }
-                state.high_stream = stream.stream;
-                state.frames = state.frames.saturating_add(1);
-                self.streams.insert(
-                    stream.clone(),
-                    StreamState {
-                        goal: *source == CaptureSource::Goal,
-                        ..StreamState::default()
-                    },
-                );
-            }
+            } => self.open(stream, observed, *source, metadata),
             CaptureRecord::Segment {
                 stream,
                 part,
@@ -1668,183 +1501,426 @@ impl CaptureState {
                 data_b64,
                 audit,
             } => {
-                check_time(first)?;
-                check_time(last)?;
-                if first.clock_id == last.clock_id && first.mono_ns > last.mono_ns {
-                    return Err("segment_time_reversed");
-                }
-                let state = self.streams.get_mut(stream).ok_or("stream_not_open")?;
-                if *part != state.next_part {
-                    return Err("segment_part_out_of_order");
-                }
-                let end = source_offset
-                    .checked_add(*source_len)
-                    .ok_or("segment_range_invalid")?;
-                if *source_offset < state.next_offset {
-                    return Err("segment_source_overlap");
-                }
-                if *source_offset > state.next_offset && !state.gap_pending {
-                    return Err("segment_source_unexplained_hole");
-                }
-                if data_b64.len() > MAX_SEGMENT_B64_BYTES {
-                    return Err("segment_data_too_large");
-                }
-                self.decoded.clear();
-                STANDARD
-                    .decode_vec(data_b64.as_bytes(), &mut self.decoded)
-                    .map_err(|_| "segment_data_not_base64")?;
-                if self.decoded.len() > MAX_SEGMENT_BYTES {
-                    return Err("segment_data_too_large");
-                }
-                // Audit spans are absolute source offsets inside this segment's own range.
-                for span in &audit.spans {
-                    if span.start > span.end
-                        || span.start < *source_offset
-                        || span.end > end
-                        || span.kind.is_empty()
-                        || !bounded_text(&span.kind)
-                    {
-                        return Err("segment_audit_out_of_range");
-                    }
-                }
-                // Unredacted sanitized bytes are the source bytes they claim to cover.
-                if audit.spans.is_empty() && self.decoded.len() as u64 != *source_len {
-                    return Err("segment_length_mismatch");
-                }
-                state.next_part = part.checked_add(1).ok_or("segment_range_invalid")?;
-                state.next_offset = end;
-                state.gap_pending = false;
+                let view = SegmentView {
+                    part: *part,
+                    first,
+                    last,
+                    audit: &audit.spans,
+                    source_offset: *source_offset,
+                    source_len: *source_len,
+                };
+                self.segment(stream, &view, data_b64)
             }
             CaptureRecord::End {
                 stream,
                 observed,
                 reason,
-            } => {
-                check_frame(stream, observed, FrameEvent::End { reason: *reason })?;
-                let state = self.streams.remove(stream).ok_or("stream_not_open")?;
-                if state.goal && *reason == EndReason::Complete {
-                    remember(
-                        &mut self.goal_complete,
-                        stream,
-                        "goal_stream_limit_exceeded",
-                    )?;
-                }
-                if let Some(state) = self.producers.get_mut(&stream.producer) {
-                    state.frames = state.frames.saturating_add(1);
-                }
-            }
+            } => self.end(stream, observed, *reason),
             CaptureRecord::Gap {
                 stream,
                 observed,
                 reason,
                 lost_bytes,
-            } => {
-                match stream {
-                    None => check_time(observed)?,
-                    Some(key) => {
-                        check_frame(
-                            key,
-                            observed,
-                            FrameEvent::Gap {
-                                reason: *reason,
-                                lost_bytes: *lost_bytes,
-                            },
-                        )?;
-                        // A loss marker may name a stream of a lost or closed epoch, but
-                        // only one that was actually opened.
-                        let opened = self
-                            .producers
-                            .get(&key.producer)
-                            .is_some_and(|p| key.stream <= p.high_stream);
-                        if !opened {
-                            return Err("gap_on_unknown_stream");
-                        }
-                        if let Some(state) = self.streams.get_mut(key) {
-                            state.gap_pending = true;
-                        }
-                    }
-                }
-                self.gaps = self.gaps.saturating_add(1);
-            }
-            CaptureRecord::Launch {
-                observed,
-                goal_stream,
-                profile_id,
-                profile_digest,
-                harness_version,
-                recorder_revision,
-                continuation,
-                allowed_tool_rule,
-                process_handoff_digest,
-                run_public_key,
-                connector_dir_sha256,
-                harness_build,
-            } => {
-                check_time(observed)?;
-                if !is_capture_id(&goal_stream.producer) || goal_stream.stream == 0 {
-                    return Err("record_field_invalid");
-                }
-                if ![
-                    profile_id,
-                    profile_digest,
-                    harness_version,
-                    recorder_revision,
-                    continuation,
-                ]
-                .iter()
-                .all(|value| bounded_text(value))
-                {
-                    return Err("record_field_invalid");
-                }
-                // The tool allowance is held to shape only, for every profile: both present,
-                // bounded text and SHA-256 hex, or both absent.
-                match (allowed_tool_rule, process_handoff_digest) {
-                    (None, None) => {}
-                    (Some(rule), Some(digest))
-                        if bounded_text(rule)
-                            && Sha256Digest::try_from(digest.as_str()).is_ok() => {}
-                    _ => return Err("record_field_invalid"),
-                }
-                // Contract S1: both optional fields are valid absent forever. A present
-                // key is canonical lowercase hex of a usable Ed25519 point (agreement with a
-                // receipt's key is checked where the receipt is in hand, in `read_chain`); a
-                // present directory digest is canonical lowercase SHA-256 hex and is never
-                // compared against a pin here.
-                if let Some(key) = run_public_key {
-                    let canonical = goalcup_protocol::provenance::canonical_run_public_key(key);
-                    if canonical.as_deref() != Ok(key.as_str()) {
-                        return Err("record_field_invalid");
-                    }
-                }
-                if let Some(digest) = connector_dir_sha256
-                    && Sha256Digest::try_from(digest.as_str()).is_err()
-                {
-                    return Err("record_field_invalid");
-                }
-                // D53: the observed build is recorded, never judged here. Each present digest is
-                // canonical SHA-256 hex, and the platform is bounded text.
-                if let Some(build) = harness_build {
-                    let digests_ok = [&build.program_sha256, &build.image_sha256]
-                        .into_iter()
-                        .flatten()
-                        .all(|digest| Sha256Digest::try_from(digest.as_str()).is_ok());
-                    if !digests_ok || build.platform.is_empty() || !bounded_text(&build.platform) {
-                        return Err("record_field_invalid");
-                    }
-                }
-                remember(&mut self.launch_goals, goal_stream, "launch_limit_exceeded")?;
+            } => self.gap(stream.as_ref(), observed, *reason, *lost_bytes),
+            CaptureRecord::Launch { goal_stream, .. } => {
+                check_launch(record)?;
+                remember(&mut self.launch_goals, goal_stream, "launch_limit_exceeded")
             }
             CaptureRecord::Assistance { observed, action } => {
                 check_time(observed)?;
                 if action.is_empty() || !bounded_text(action) {
                     return Err("record_field_invalid");
                 }
+                Ok(())
             }
             // Its fields, position and envelope time are the phase replay's to judge.
-            CaptureRecord::LocalFinish { .. } => {}
+            CaptureRecord::LocalFinish { .. } => Ok(()),
+        }
+    }
+
+    fn producer_closed(
+        &mut self,
+        producer: &str,
+        observed: &CaptureTime,
+        final_seq: Option<u64>,
+    ) -> Result<(), Violation> {
+        check_time(observed)?;
+        if self.producers.get(producer).is_some_and(|p| p.closed) {
+            return Err("producer_closed_twice");
+        }
+        if self.streams.keys().any(|k| k.producer == producer) {
+            return Err("producer_closed_with_open_streams");
+        }
+        let state = owner(&mut self.producers, &mut self.lineage, producer)?;
+        // A receiver attestation: `final_seq` is the last accepted frame sequence,
+        // None only for zero frames. The persisted records give a lower bound.
+        let consistent = match final_seq {
+            None => state.frames == 0,
+            Some(seq) => seq.checked_add(1).is_none_or(|count| count >= state.frames),
+        };
+        if !consistent {
+            return Err("producer_closed_final_seq_inconsistent");
+        }
+        state.closed = true;
+        self.connections.retain(|_, owner| owner != producer);
+        Ok(())
+    }
+
+    fn connection(
+        &mut self,
+        producer: &str,
+        connection: &str,
+        observed: &CaptureTime,
+        event: &ConnectionEvent,
+    ) -> Result<(), Violation> {
+        check_frame(
+            &StreamKey {
+                producer: producer.to_string(),
+                stream: 0,
+            },
+            observed,
+            FrameEvent::Connection {
+                connection: connection.to_string(),
+                event: event.clone(),
+            },
+        )?;
+        let state = owner(&mut self.producers, &mut self.lineage, producer)?;
+        state.frames = state.frames.saturating_add(1);
+        state.wire = true;
+        self.lineage.note(producer, true);
+        let recovered = state.recovered;
+        match event {
+            ConnectionEvent::Open { already_open, .. } => {
+                // A current observation of a surviving socket, allowed only in an
+                // epoch that began with a Recovery. It is not reconstructed history.
+                if *already_open && !recovered {
+                    return Err("connection_reobserved_outside_recovery");
+                }
+                if self.connections.contains_key(connection) {
+                    return Err("connection_already_open");
+                }
+                if self.connections.len() >= MAX_OPEN_CONNECTIONS {
+                    return Err("connection_limit_exceeded");
+                }
+                self.connections
+                    .insert(connection.to_string(), producer.to_string());
+            }
+            ConnectionEvent::UpgradedWebSocket => {
+                if self.connections.get(connection).map(String::as_str) != Some(producer) {
+                    return Err("connection_not_open");
+                }
+            }
+            ConnectionEvent::Close { .. } => {
+                if self.connections.get(connection).map(String::as_str) != Some(producer) {
+                    return Err("connection_not_open");
+                }
+                self.connections.remove(connection);
+            }
         }
         Ok(())
     }
+
+    fn recovery(
+        &mut self,
+        previous_producer: &str,
+        producer: &str,
+        observed: &CaptureTime,
+        reason: GapReason,
+    ) -> Result<(), Violation> {
+        check_frame(
+            &StreamKey {
+                producer: producer.to_string(),
+                stream: 0,
+            },
+            observed,
+            FrameEvent::Recovery {
+                previous_producer: previous_producer.to_string(),
+                reason,
+            },
+        )?;
+        // The fresh epoch's first frame is its Recovery.
+        if self.producers.contains_key(producer) {
+            return Err("recovery_producer_not_fresh");
+        }
+        // A previous producer with no earlier record was lost in flight
+        // (`Queued` is not persisted). It is admitted here as a lost zero-record
+        // producer and counts toward MAX_PRODUCERS.
+        if let Some(previous) = self.producers.get(previous_producer) {
+            // Only a wire producer is ever recovered; a native or goal producer is not.
+            if !previous.wire {
+                return Err("recovery_names_non_wire_producer");
+            }
+            if previous.closed {
+                return Err("recovery_after_producer_closed");
+            }
+            if previous.lost {
+                return Err("producer_recovered_twice");
+            }
+        }
+        let supersession = self.lineage.supersedes(previous_producer, producer);
+        if !supersession.admitted {
+            if supersession.predecessor_fits {
+                // Preserve the reader's sequential admission behavior: an existing
+                // predecessor, or an unseen predecessor that consumes the last slot,
+                // is marked lost before admitting the fresh epoch fails. At a completely
+                // full table an unseen predecessor does not fit, so nothing changes.
+                if supersession.unrecorded {
+                    self.producers
+                        .insert(previous_producer.to_string(), ProducerState::default());
+                }
+                for id in &supersession.producers {
+                    if let Some(state) = self.producers.get_mut(id)
+                        && !state.closed
+                    {
+                        state.lost = true;
+                    }
+                }
+                if supersession.unrecorded {
+                    self.unrecorded_recoveries = self.unrecorded_recoveries.saturating_add(1);
+                }
+            }
+            return Err("producer_limit_exceeded");
+        }
+        admit(&mut self.producers, &mut self.lineage, previous_producer)?;
+        for id in &supersession.producers {
+            if let Some(state) = self.producers.get_mut(id)
+                && !state.closed
+            {
+                state.lost = true;
+            }
+        }
+        if supersession.unrecorded {
+            self.unrecorded_recoveries = self.unrecorded_recoveries.saturating_add(1);
+        }
+        let fresh = admit(&mut self.producers, &mut self.lineage, producer)?;
+        fresh.recovered = true;
+        fresh.wire = true;
+        fresh.frames = 1;
+        // Producer loss invalidates the superseded epochs' stream keys and
+        // connection contexts; surviving sockets are re-observed by the fresh
+        // epoch, never transferred. Only this method sets `lost`, and a lost producer
+        // can hold nothing afterwards, so only those superseded here still do.
+        self.streams
+            .retain(|k, _| !supersession.producers.contains(&k.producer));
+        self.connections
+            .retain(|_, owner| !supersession.producers.contains(owner));
+        self.recoveries = self.recoveries.saturating_add(1);
+        Ok(())
+    }
+
+    fn open(
+        &mut self,
+        stream: &StreamKey,
+        observed: &CaptureTime,
+        source: CaptureSource,
+        metadata: &CaptureMeta,
+    ) -> Result<(), Violation> {
+        check_frame(
+            stream,
+            observed,
+            FrameEvent::Open {
+                source,
+                metadata: metadata.clone(),
+            },
+        )?;
+        let state = owner(&mut self.producers, &mut self.lineage, &stream.producer)?;
+        if stream.stream <= state.high_stream {
+            return Err("stream_id_not_increasing");
+        }
+        if self.streams.len() >= MAX_OPEN_STREAMS {
+            return Err("open_stream_limit_exceeded");
+        }
+        state.high_stream = stream.stream;
+        state.frames = state.frames.saturating_add(1);
+        self.streams.insert(
+            stream.clone(),
+            StreamState {
+                goal: source == CaptureSource::Goal,
+                ..StreamState::default()
+            },
+        );
+        Ok(())
+    }
+
+    fn segment(
+        &mut self,
+        stream: &StreamKey,
+        view: &SegmentView<'_>,
+        data_b64: &str,
+    ) -> Result<(), Violation> {
+        let (first, last) = (view.first, view.last);
+        check_time(first)?;
+        check_time(last)?;
+        if first.clock_id == last.clock_id && first.mono_ns > last.mono_ns {
+            return Err("segment_time_reversed");
+        }
+        let state = self.streams.get_mut(stream).ok_or("stream_not_open")?;
+        if view.part != state.next_part {
+            return Err("segment_part_out_of_order");
+        }
+        let end = view
+            .source_offset
+            .checked_add(view.source_len)
+            .ok_or("segment_range_invalid")?;
+        if view.source_offset < state.next_offset {
+            return Err("segment_source_overlap");
+        }
+        if view.source_offset > state.next_offset && !state.gap_pending {
+            return Err("segment_source_unexplained_hole");
+        }
+        if data_b64.len() > MAX_SEGMENT_B64_BYTES {
+            return Err("segment_data_too_large");
+        }
+        self.decoded.clear();
+        STANDARD
+            .decode_vec(data_b64.as_bytes(), &mut self.decoded)
+            .map_err(|_| "segment_data_not_base64")?;
+        if self.decoded.len() > MAX_SEGMENT_BYTES {
+            return Err("segment_data_too_large");
+        }
+        // Audit spans are absolute source offsets inside this segment's own range.
+        for span in view.audit {
+            if span.start > span.end
+                || span.start < view.source_offset
+                || span.end > end
+                || span.kind.is_empty()
+                || !bounded_text(&span.kind)
+            {
+                return Err("segment_audit_out_of_range");
+            }
+        }
+        // Unredacted sanitized bytes are the source bytes they claim to cover.
+        if view.audit.is_empty() && self.decoded.len() as u64 != view.source_len {
+            return Err("segment_length_mismatch");
+        }
+        state.next_part = view.part.checked_add(1).ok_or("segment_range_invalid")?;
+        state.next_offset = end;
+        state.gap_pending = false;
+        Ok(())
+    }
+
+    fn end(
+        &mut self,
+        stream: &StreamKey,
+        observed: &CaptureTime,
+        reason: EndReason,
+    ) -> Result<(), Violation> {
+        check_frame(stream, observed, FrameEvent::End { reason })?;
+        let state = self.streams.remove(stream).ok_or("stream_not_open")?;
+        if state.goal && reason == EndReason::Complete {
+            remember(
+                &mut self.goal_complete,
+                stream,
+                "goal_stream_limit_exceeded",
+            )?;
+        }
+        if let Some(state) = self.producers.get_mut(&stream.producer) {
+            state.frames = state.frames.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    fn gap(
+        &mut self,
+        stream: Option<&StreamKey>,
+        observed: &CaptureTime,
+        reason: GapReason,
+        lost_bytes: Option<u64>,
+    ) -> Result<(), Violation> {
+        match stream {
+            None => check_time(observed)?,
+            Some(key) => {
+                check_frame(key, observed, FrameEvent::Gap { reason, lost_bytes })?;
+                // A loss marker may name a stream of a lost or closed epoch, but
+                // only one that was actually opened.
+                let opened = self
+                    .producers
+                    .get(&key.producer)
+                    .is_some_and(|p| key.stream <= p.high_stream);
+                if !opened {
+                    return Err("gap_on_unknown_stream");
+                }
+                if let Some(state) = self.streams.get_mut(key) {
+                    state.gap_pending = true;
+                }
+            }
+        }
+        self.gaps = self.gaps.saturating_add(1);
+        Ok(())
+    }
+}
+
+/// The field rules of a `Launch` record. Its goal stream is remembered by the caller.
+fn check_launch(record: &CaptureRecord) -> Result<(), Violation> {
+    let CaptureRecord::Launch {
+        observed,
+        goal_stream,
+        profile_id,
+        profile_digest,
+        harness_version,
+        recorder_revision,
+        continuation,
+        allowed_tool_rule,
+        process_handoff_digest,
+        run_public_key,
+        connector_dir_sha256,
+        harness_build,
+    } = record
+    else {
+        return Ok(());
+    };
+    check_time(observed)?;
+    if !is_capture_id(&goal_stream.producer) || goal_stream.stream == 0 {
+        return Err("record_field_invalid");
+    }
+    if ![
+        profile_id,
+        profile_digest,
+        harness_version,
+        recorder_revision,
+        continuation,
+    ]
+    .iter()
+    .all(|value| bounded_text(value))
+    {
+        return Err("record_field_invalid");
+    }
+    // The tool allowance is held to shape only, for every profile: both present,
+    // bounded text and SHA-256 hex, or both absent.
+    match (allowed_tool_rule, process_handoff_digest) {
+        (None, None) => {}
+        (Some(rule), Some(digest))
+            if bounded_text(rule) && Sha256Digest::try_from(digest.as_str()).is_ok() => {}
+        _ => return Err("record_field_invalid"),
+    }
+    // Contract S1: both optional fields are valid absent forever. A present
+    // key is canonical lowercase hex of a usable Ed25519 point (agreement with a
+    // receipt's key is checked where the receipt is in hand, in `read_chain`); a
+    // present directory digest is canonical lowercase SHA-256 hex and is never
+    // compared against a pin here.
+    if let Some(key) = run_public_key {
+        let canonical = goalcup_protocol::provenance::canonical_run_public_key(key);
+        if canonical.as_deref() != Ok(key.as_str()) {
+            return Err("record_field_invalid");
+        }
+    }
+    if let Some(digest) = connector_dir_sha256
+        && Sha256Digest::try_from(digest.as_str()).is_err()
+    {
+        return Err("record_field_invalid");
+    }
+    // D53: the observed build is recorded, never judged here. Each present digest is
+    // canonical SHA-256 hex, and the platform is bounded text.
+    if let Some(build) = harness_build {
+        let digests_ok = [&build.program_sha256, &build.image_sha256]
+            .into_iter()
+            .flatten()
+            .all(|digest| Sha256Digest::try_from(digest.as_str()).is_ok());
+        if !digests_ok || build.platform.is_empty() || !bounded_text(&build.platform) {
+            return Err("record_field_invalid");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
