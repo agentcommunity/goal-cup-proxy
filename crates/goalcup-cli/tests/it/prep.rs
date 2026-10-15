@@ -480,7 +480,8 @@ fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
     );
     assert!(line(&text, "machine").starts_with("[ok]"), "{text}");
 
-    // On WSL2 the machine is not asked to be kept awake: Windows decides, and prep says so.
+    // On WSL2 the machine cannot be kept awake by the tracker: Windows decides. That alone never
+    // holds the step back; prep says what to set in Windows.
     let (_, text) = prep(
         &rig,
         &["--work-root", "/home/me/goalcup-work"],
@@ -488,7 +489,39 @@ fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
     );
     let machine = line(&text, "machine");
     assert!(
-        machine.starts_with("[todo] machine:") && machine.contains("Windows decides"),
+        machine.starts_with("[ok] machine:")
+            && machine.contains("Windows decides")
+            && machine.contains("set sleep to Never"),
+        "{text}"
+    );
+}
+
+#[test]
+fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
+    let rig = Rig::chat();
+    let github = FakeGithub::good();
+    let (_, text) = prep(
+        &rig,
+        &["--work-root", "/home/me/goalcup-work"],
+        &facts(&github.base, &["wsl=2", "awake=no_inhibitor"]),
+    );
+    let machine = line(&text, "machine");
+    assert!(
+        machine.starts_with("[ok] machine:")
+            && machine.contains("Windows Settings, System, Power, set sleep to Never"),
+        "{text}"
+    );
+    // On battery the step still waits for the plug, and the sleep sentence is still said.
+    let (_, text) = prep(
+        &rig,
+        &["--work-root", "/home/me/goalcup-work"],
+        &facts(&github.base, &["wsl=2", "awake=no_inhibitor", "ac=battery"]),
+    );
+    let machine = line(&text, "machine");
+    assert!(
+        machine.starts_with("[todo] machine:")
+            && machine.contains("on battery")
+            && machine.contains("Windows decides"),
         "{text}"
     );
 }
@@ -706,7 +739,12 @@ fn the_machine_step_judges_power_space_git_and_the_network() {
         unreachable.starts_with("[fail]") && unreachable.contains("ingest.example.org"),
         "{unreachable}"
     );
-    assert!(machine(&["awake=no_inhibitor"]).starts_with("[todo]"));
+    // A sleep lock that cannot be taken is said, and never holds the step back.
+    let no_lock = machine(&["awake=no_inhibitor"]);
+    assert!(
+        no_lock.starts_with("[ok]") && no_lock.contains("keep it awake yourself"),
+        "{no_lock}"
+    );
 
     // No git on PATH: the harness is still found (the rig's directory is on it), git is not.
     let out = prep_command(&rig, &[], &facts(&github.base, &[]))

@@ -16,7 +16,7 @@
 //! 5. **machine**: mains power, free space for a run's reservation, the server's and the
 //!    provider's hosts reachable, `git` on `PATH`, under WSL the WSL2 version and a work folder,
 //!    artifact root and configuration folder that are not on a Windows-host filesystem, and a
-//!    sleep lock the machine can take.
+//!    sleep lock the machine can take (one it cannot take is said, and is never a `todo`).
 //! 6. **practice**: a practice run of this harness whose every entry was sealed and uploaded.
 //!    Prep never starts a run: it says `goalcup start --practice` and stops.
 //!
@@ -842,28 +842,35 @@ fn machine_step(
         }
     }
 
-    match doors.sleep_lock() {
-        Ok(()) => note(State::Ok, "the machine can be kept awake".to_string()),
-        Err(_) if wsl => note(
-            State::Todo,
+    // A sleep lock the machine cannot take never makes the step not-ok (WSL2 never has one, nor
+    // does a Linux without `systemd-inhibit`): the person is told to keep the machine awake
+    // themselves, whatever else the step says.
+    let keep_awake = match doors.sleep_lock() {
+        Ok(()) => {
+            note(State::Ok, "the machine can be kept awake".to_string());
+            None
+        }
+        Err(_) if wsl => Some(
             "Windows decides when this machine sleeps: in Windows Settings, System, Power, set \
              sleep to Never for the week of your run"
                 .to_string(),
         ),
-        Err(why) => note(
-            State::Todo,
-            format!(
-                "the machine could not be kept awake ({why}): turn sleep off yourself for the \
-                 week of your run"
-            ),
-        ),
-    }
+        Err(why) => Some(format!(
+            "{why}; keep it awake yourself for the week of your run"
+        )),
+    };
 
-    let say = if problems.is_empty() {
+    let mut say = if problems.is_empty() {
         fine.join(", ")
     } else {
         problems.join(". ")
     };
+    if let Some(keep_awake) = keep_awake {
+        if !say.is_empty() {
+            say.push_str(". ");
+        }
+        say.push_str(&keep_awake);
+    }
     Machine {
         step: step(STEP_MACHINE, worst, false, say),
         work_root_ok: work_check.is_ok(),

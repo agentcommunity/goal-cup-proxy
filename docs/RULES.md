@@ -59,7 +59,7 @@ The latest possible run ends 192 hours after T0.
 - Each run begins with one text prompt, which you type as the first message in the harness's own terminal. It is recorded exactly, in the harness's session files and its model traffic, and becomes public with the entry after the run.
 - The prompt should be no more than **4,000 characters**. A longer one is not refused; the review sees its length. Attachments are allowed.
 - Any instruction file your harness reads from the workspace at the start (`AGENTS.md`, `CLAUDE.md` and the like) is part of the prompt: it is recorded with it and published with it. Prepared context is allowed; hidden context is not, and there is nowhere to hide it.
-- **After the first prompt, the only human message permitted is "keep going".** Every message a human sends to the agent, by any channel, is recorded so the review can see it. Any other human message removes the run from the qualifying runs at review.
+- **After the first prompt, the only human message permitted is "keep going".** Every message a human sends to the agent, by any channel, is recorded so the review can see it. Any other human message is reviewed, and it may remove the run at review.
 - The review works out who said each message from what the model saw and how the harness structures its messages. That is a detection, not a proof. A message it cannot explain is reviewed by an organizer.
 - The tracker never sends anything to the agent, and never relays, edits or blocks your input: no reminders, no automatic "keep going", no automatic restart. `goalcup continue` is yours to run.
 - An agent that stops early and stays idle until the deadline is permitted. Its idle time is in the record.
@@ -123,7 +123,7 @@ Cloud and remote execution modes (Claude Code on the web, Codex cloud, Cursor cl
 
 We ran a capture test on every harness on 2026-09-03, one per harness and mode, and the results are public in `docs/CAPTURE-RESEARCH.md` (git history at `6494030`). This is the support list that came out of it. **Full** means the capture is complete enough to verify automatically. **Elevated review** means an organizer reads the trace before your entry is accepted; it is not a penalty and it does not affect judging.
 
-**This table is the event's target set, not the list of what a release supports.** **For 6 November the supported harnesses are Codex CLI (`codex-cli`) and Claude Code CLI (`claude-code-cli`), in chat mode, on macOS, Linux and Windows through WSL2.** `hermes-cli` also ships, but it needs a provider key, and a run of a harness given a provider key is never uploaded, so it cannot make an entry. No other row has a connector. Anything below about another harness describes its intended event behavior, not a current support claim.
+**This table is the event's target set, not the list of what a release supports.** **This build ships two chat-mode connectors, Codex CLI (`codex-cli`) and Claude Code CLI (`claude-code-cli`), on macOS, Linux and Windows through WSL2; others may join through a merged connector pull request before T0.** `hermes-cli` also ships, but it needs a provider key, and a run of a harness given a provider key is never uploaded, so it cannot make an entry. No other row has a connector yet. Anything below about another harness describes its intended event behavior, not a current support claim.
 
 | Harness | Mode | Support | What you need to know |
 |---|---|---|---|

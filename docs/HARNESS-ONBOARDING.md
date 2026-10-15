@@ -61,14 +61,14 @@ itself changes, so send the facts sheet alone (below).
 ## What we ask of you
 
 1. **A connector PR.** A connector is a small folder, `connectors/<id>/`, with one data file,
-   `harness.toml`, and any seed files it needs. It tells the tracer how to start your harness
-   (in chat mode, or headless), where its session file lands, and which hosts carry model traffic. No Rust code:
-   your arguments, model name and environment variables are data, checked by rules that apply to
-   every connector. A few things stay closed lists in the tracer's code, because each is a
+   `harness.toml`, and any seed files it needs. It tells the tracer how to start your harness (in
+   chat mode, or headless), where its session file lands, and which hosts carry model traffic. No
+   Rust code: your arguments, model name and environment variables are data, checked by rules that
+   apply to every connector. A few things stay closed lists in the tracer's code, because each is a
    security decision: the name of an API-key variable the tracer hands your process, a
-   CA-certificate variable and a redaction pattern; new session-id carriers and session-file
-   forms are core changes too. If you need a new one, the decision table says so at step 3 and
-   we add it first.
+   CA-certificate variable and a redaction pattern; new session-id carriers and session-file forms
+   are core changes too. If you need a new one, the decision table says so at step 3 and we add it
+   first.
 2. **A public facts sheet**, `docs/harnesses/<id>.md`: where your harness keeps sessions,
    config and logins on macOS, Linux and Windows, how it authenticates and what it talks to.
    [Why it exists](harnesses/README.md).

@@ -83,9 +83,9 @@ reservation, D40 as amended.)
   body. Measured false on the pilot path; re-measure on the eight-hour chain.
 - **H-20 (step 1):** redaction residuals: invalid UTF-8 inside a key body leaves the key raw, and a
   lone `BEGIN` redacts to the end of the record. Fix before any upload surface sees raw bytes.
-- **H-28 (before any research access):** Anthropic usage objects pass through the private research observations;
-  allowlist token fields structurally and strip plan, credit and billing data (D26) before
-  anything is published or read from R2.
+- **H-28 (before any research access):** Anthropic usage objects pass through the private research
+  observations; allowlist token fields structurally and strip plan, credit and billing data (D26)
+  before anything is published or read from R2.
 - **T24 (step 3):** the release tarballs are unsigned and carry only the Codex and Claude
   connectors (`scripts/package-release.sh`, H-21). (H-19, the persistent launchd agent an evidence install left behind, is closed:
   the daemon is run-scoped and nothing is installed as a service.)

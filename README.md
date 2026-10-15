@@ -108,12 +108,12 @@ other tools the tests need are in [the gate](#the-gate).
 - **The configuration directory.** With `GOALCUP_CONFIG_DIR` unset it is `$XDG_CONFIG_HOME/goalcup`,
   else `~/.config/goalcup`; an empty `$XDG_CONFIG_HOME` counts as unset
   (`crates/goalcup-cli/src/config.rs`). The quickstart sets `GOALCUP_CONFIG_DIR` and skips this.
-- **The Claude Code login.** Linux has no Keychain, and the Claude Code
-  connector links only the macOS Keychains directory into the run. Its login is expected in its
-  config directory, so sign in once in the tracker's own: `goalcup prep --harness
-  claude-code-cli` opens Claude Code there for you to sign in.
-  **This is not yet measured:** where Claude Code 2.1.283 keeps its login on Linux has not been
-  checked, and nor has the Codex login location (Codex signs in through `goalcup prep` the same way).
+- **The Claude Code login.** Linux has no Keychain, and the Claude Code connector links only the
+  macOS Keychains directory into the run. Its login is expected in its config directory, so sign in
+  once in the tracker's own: `goalcup prep --harness claude-code-cli` opens Claude Code there for
+  you to sign in. **This is not yet measured:** where Claude Code 2.1.283 keeps its login on Linux
+  has not been checked, and nor has the Codex login location (Codex signs in through `goalcup prep`
+  the same way).
 
 **Measured, in Docker** (rust:1.99, Linux 7.0.12, arm64): the full workspace builds and the fast
 gate passes; the reservation reserves on ext4 and XFS and refuses overlayfs, tmpfs and FUSE; the
@@ -310,58 +310,57 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   `daemon.toml` you wrote for an earlier build belongs at `$GOALCUP_CONFIG_DIR/daemon.toml`;
   otherwise the first `start` writes a default with other roots. The configuration's keys are in
   [OPERATING](docs/OPERATING.md#running-the-daemon).
-- <a id="login"></a>**Connecting to the Goal Cup server.** `goalcup login [--server <URL>]` shows
-  an address and a short code, opens your browser at the address, and waits while you check the
-  code and approve on the Goal Cup site. Nothing secret is typed or stored: the server's address
-  and your account's name go in `$GOALCUP_CONFIG_DIR/server.json`, readable by your user alone
-  (an older `server.json` that holds a pasted token is still read; the token is ignored).
-  Delete the file to go back to local-only runs. Once logged in, and after `goalcup prep` has
-  stored your empty public GitHub repository, your work folder and a token that can push to that
-  repository, `goalcup start` asks you to approve **each run** in the browser (`--practice` for
-  a practice run) before it creates anything: a Ctrl-C, a denial, an expired code or a server
-  that cannot be reached ends the start with one sentence and leaves no run, entry, clone or credential (the recording daemon may already be running). Then it
-  clones your repository into `<work folder>/goalcup-<id>`, which is the agent's workspace, and
-  opens the run on the server, with the machine's facts (system, architecture, CPUs, memory,
-  disk, WSL2, container, AC power; no names or serial numbers): the server issues the entry id,
-  the official start and the deadline, and signs a start receipt that is kept as the trace's
-  `receipt.json` (and in `$GOALCUP_CONFIG_DIR/uploads/`). The approval returns a credential for
-  that run alone; it is kept at `$GOALCUP_CONFIG_DIR/runs/<run id>/credential` (mode 0600),
-  found again by `goalcup upload <entry>`, and never put in the agent's environment or on its
+- <a id="login"></a>**Connecting to the Goal Cup server.** `goalcup login [--server <URL>]` shows an
+  address and a short code, opens your browser at the address, and waits while you check the code
+  and approve on the Goal Cup site. Nothing secret is typed or stored: the server's address and your
+  account's name go in `$GOALCUP_CONFIG_DIR/server.json`, readable by your user alone (an older
+  `server.json` that holds a pasted token is still read; the token is ignored). Delete the file to
+  go back to local-only runs. Once logged in, and after `goalcup prep` has stored your empty public
+  GitHub repository, your work folder and a token that can push to that repository, `goalcup start`
+  asks you to approve **each run** in the browser (`--practice` for a practice run) before it
+  creates anything: a Ctrl-C, a denial, an expired code or a server that cannot be reached ends the
+  start with one sentence and leaves no run, entry, clone or credential (the recording daemon may
+  already be running). Then it clones your repository into `<work folder>/goalcup-<id>`, which is
+  the agent's workspace, and opens the run on the server, with the machine's facts (system,
+  architecture, CPUs, memory, disk, WSL2, container, AC power; no names or serial numbers): the
+  server issues the entry id, the official start and the deadline, and signs a start receipt that is
+  kept as the trace's `receipt.json` (and in `$GOALCUP_CONFIG_DIR/uploads/`). The approval returns a
+  credential for that run alone; it is kept at `$GOALCUP_CONFIG_DIR/runs/<run id>/credential` (mode
+  0600), found again by `goalcup upload <entry>`, and never put in the agent's environment or on its
   command line, a trace or a log. The clone's remote holds no token: when the agent's `git push`
   asks for a password, git runs the hidden `goalcup git-credential`, which answers for your
   repository alone. A practice run's clone has no such helper and cannot push, so the repository
-  stays empty until the competition run. `--test` opens an organizer test run, which only
-  organizer accounts can open. A run stays on the machine that started it. A harness given a provider key
+  stays empty until the competition run. `--test` opens an organizer test run, which only organizer
+  accounts can open. A run stays on the machine that started it. A harness given a provider key
   (Hermes) is never uploaded. The wire contract is [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
-- <a id="upload"></a>**Uploading.** While the run records, `goalcup start` sends the trace's
-  chain (its part files, `chain.jsonl` and the parts after it) to the server in compressed
-  chunks: the first as soon as the agent launches, then every 30 minutes (the first interval is a
-  random share of that, so runs started together do not send together), or sooner once 256 MiB
-  of chain is waiting (a chunk is at most 32 MiB compressed). An acknowledged part is deleted
-  locally two hours later, or at once when the parts alone have outgrown the run's 3 GiB
-  reservation. Each chunk is acknowledged with a signature, and the acknowledgement is added to
-  the trace's `acks.jsonl`, which `goalcup-verify` checks. Recording never waits on the network:
-  when the server cannot be reached the upload waits (a minute, doubling to fifteen) and tries
-  again, and the run goes on. After the stop, `start` seals and sends the rest and the seal for at
-  most one hour (the wrap-up); if that is not enough it says so, and `goalcup upload <entry>` finishes the job
-  (after a crash too). It asks the server where it got to and is safe to run again, though not
-  while the run's own `start` is still uploading (it says so). Uploading stops, with the reason
-  on stderr, when the server refuses the request itself (an ended credential, a closed run, a TLS
-  certificate it cannot trust) or the local chain no longer continues the server's copy; the
-  run is still complete on this machine.
+- <a id="upload"></a>**Uploading.** While the run records, `goalcup start` sends the trace's chain
+  (its part files, `chain.jsonl` and the parts after it) to the server in compressed chunks: the
+  first as soon as the agent launches, then every 30 minutes (the first interval is a random share
+  of that, so runs started together do not send together), or sooner once 256 MiB of chain is
+  waiting (a chunk is at most 32 MiB compressed). An acknowledged part is deleted locally two hours
+  later, or at once when the parts alone have outgrown the run's 3 GiB reservation. Each chunk is
+  acknowledged with a signature, and the acknowledgement is added to the trace's `acks.jsonl`, which
+  `goalcup-verify` checks. Recording never waits on the network: when the server cannot be reached
+  the upload waits (a minute, doubling to fifteen) and tries again, and the run goes on. After the
+  stop, `start` seals and sends the rest and the seal for at most one hour (the wrap-up); if that is
+  not enough it says so, and `goalcup upload <entry>` finishes the job (after a crash too). It asks
+  the server where it got to and is safe to run again, though not while the run's own `start` is
+  still uploading (it says so). Uploading stops, with the reason on stderr, when the server refuses
+  the request itself (an ended credential, a closed run, a TLS certificate it cannot trust) or the
+  local chain no longer continues the server's copy; the run is still complete on this machine.
 - <a id="deadline"></a>**The deadline.** A run on the server lasts until its `deadline_at` (168
-  hours after its official start) and not a second longer, in whatever state the agent is in.
-  While it records, `goalcup start` sends the server a heartbeat every 5 minutes; once the server
-  answers that the deadline has come, or, without a network, once the run's length has passed
-  on this machine's clock (which keeps counting while the machine sleeps), it stops the agent
-  there and then and seals the run. It then tells the server where the chain ends and which
-  commit the workspace repository had checked out (the final heartbeat), and uploads the rest
-  up to that end; `goalcup upload <entry>` finishes that later if the network was down. The
-  server accepts nothing past that end. 24 hours after the run's end the server closes it:
-  `sealed` when its last segment is sealed there, else `incomplete`, judged on what arrived. No
-  upload is accepted after that. A run also ends early when a later competition start on the
-  same account replaces it (one main run per account; [UPLOAD-API](docs/UPLOAD-API.md)). The
-  server records the repository's commit at the deadline. There is no late window.
+  hours after its official start) and not a second longer, in whatever state the agent is in. While
+  it records, `goalcup start` sends the server a heartbeat every 5 minutes; once the server answers
+  that the deadline has come, or, without a network, once the run's length has passed on this
+  machine's clock (which keeps counting while the machine sleeps), it stops the agent there and then
+  and seals the run. It then tells the server where the chain ends and which commit the workspace
+  repository had checked out (the final heartbeat), and uploads the rest up to that end; `goalcup
+  upload <entry>` finishes that later if the network was down. The server accepts nothing past that
+  end. 24 hours after the run's end the server closes it: `sealed` when its last segment is sealed
+  there, else `incomplete`, judged on what arrived. No upload is accepted after that. A run also
+  ends early when a later competition start on the same account replaces it (one main run per
+  account; [UPLOAD-API](docs/UPLOAD-API.md)). The server records the repository's commit at the
+  deadline. There is no late window.
 - <a id="server"></a>**The server.** The upload Worker (Cloudflare Workers, R2, Supabase) is in
   [server/worker](server/worker/README.md), TypeScript, runnable on this machine with
   `wrangler dev` (`cd server/worker && npm install && npm test`). Production runs at

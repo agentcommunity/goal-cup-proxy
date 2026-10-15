@@ -63,15 +63,18 @@ every step is ok it says `goalcup prep: ready.` and prints the start command.
    skills you want your agent to have. Then exit the harness normally. Your runs use this home.
    Nothing is recorded while prep has it open.
 4. **github.** Create a new repository on GitHub: public and empty (create it without a README,
-   licence or `.gitignore`, so it has no commits). Then create a fine-grained token for that one repository with Contents set to read and write.
-   Run `goalcup prep --repo https://github.com/<owner>/<repo>` and paste the token when asked; it
-   is not shown as you type. Your agent pushes its work to this repository, and the tracer hands
-   the token to `git` when it pushes; it is never in the agent's environment.
-5. **machine.** Mains power, enough free disk (a run reserves 3 GiB and warns when less than
-   5 GiB is free beyond that), the server and your model provider reachable, `git` installed, and
-   that the machine can be kept awake. Under WSL2 it also checks that you are on WSL2 (not WSL1)
-   and that the tracer's folders are not on a Windows drive such as `/mnt/c`. The folder each
-   run's clone is made in is `goalcup-work` in your home folder; choose another with
+   licence or `.gitignore`, so it has no commits). Then create a fine-grained token for that one
+   repository with Contents set to read and write. Run `goalcup prep --repo
+   https://github.com/<owner>/<repo>` and paste the token when asked; it is not shown as you type.
+   Your agent pushes its work to this repository, and the tracer hands the token to `git` when it
+   pushes; it is never in the agent's environment.
+5. **machine.** Mains power, enough free disk (a run reserves 3 GiB and warns when less than 5 GiB
+   is free beyond that), the server and your model provider reachable, and `git` installed. It also
+   says whether the tracer can keep the machine awake. When it cannot (always under WSL2, and on
+   Linux without `systemd-inhibit`), the step still passes and tells you to keep the machine awake
+   yourself; under WSL2, set sleep to Never in Windows. Under WSL2 it also checks that you are on
+   WSL2 (not WSL1) and that the tracer's folders are not on a Windows drive such as `/mnt/c`. The
+   folder each run's clone is made in is `goalcup-work` in your home folder; choose another with
    `--work-root <full path>`.
 6. **practice.** A practice run of this harness, sealed and uploaded (the next section).
 
@@ -102,8 +105,10 @@ event page.
 goalcup start --harness <id>
 ```
 
-Run it from your home folder or another folder of your own. Do not run it from inside a clone
-in your work folder; the tracer refuses that. Under WSL2, do not run it from a Windows drive.
+Run it from your home folder or another folder of your own: `goalcup start` makes a folder named
+`goalcup-` and a random name in the folder you run it from, for the harness's home during the
+run. Do not run it from any folder inside your work folder; the tracer refuses that. Under WSL2,
+do not run it from a Windows drive.
 
 1. The tracer prints `Open <address> and check that it shows the code <code>.` and opens your
    browser. Approve this run. Each competition run is approved this way.
@@ -120,14 +125,16 @@ another terminal to see the run.
 **One run counts.** Your account has one main run. If you start a second competition run inside
 the window, it replaces the first: the server stops the first run, and only the new one counts.
 After the window closes you cannot start a new competition run; you can only `goalcup continue`
-the one you have.
+the one you have. To replace a run on the same machine with the same harness, exit the first
+run's harness before you start again: a second `goalcup start` of that harness is refused while
+the first is still recording.
 
 ## 6. Leaving the machine
 
 The run lasts a week. For all of it:
 
-- **Keep the machine on mains power.** On a Mac the tracer keeps the machine awake only while it
-  is on power.
+- **Keep the machine on mains power.** On battery a Mac can still sleep, through its lid or its
+  power settings.
 - **Keep a laptop's lid open.** A Mac sleeps when its lid closes, whatever the tracer does.
 - **Keep it online.** Recording does not need the network, but uploads and the server's
   heartbeat do. The tracer retries for as long as the run lasts.
@@ -162,7 +169,13 @@ line each, then the recording's state, health and storage. A run with nothing wr
 | `disk: … free beyond the reservation` | Less than 5 GiB is free beyond the run's reservation. | Free some disk. If the disk fills while uploads are failing, the tracer stops the agent and the run stays open: free space, then `goalcup continue`. |
 | `the machine may sleep: …` | The tracer could not keep the machine awake. Under WSL2 this line is always there, because Windows decides. | Plug the machine in, or turn sleep off yourself (WSL2: the Windows power setting above). |
 | `the agent's process exited (…): run goalcup continue` | The agent ended before the deadline: it crashed, you closed the window, or it quit. | Run `goalcup continue`. |
-| `the agent's process exited (…); the run is over` or `the agent finished; the run is over` | The run reached its deadline, or a newer run replaced it. | Nothing. |
+| `the agent's process exited (…); the run is over` | The agent left on its own, and the run's time has passed since. | Nothing. |
+| `the agent's process exited (…); this run cannot be continued` | The agent left, and this run cannot be restarted: it is not on the server, its harness runs headless, or this machine has no credential for it. | Nothing to restart. |
+
+When the tracer stops the agent itself, at the deadline or because a newer run replaced this one,
+`status` shows no line about it. An agent that exited normally gets a plain line, not a
+`PROBLEM:`: `the agent finished; the run is over` or `the agent finished; this run cannot be
+continued`.
 
 ## 8. Restarting the agent: `goalcup continue`
 
@@ -200,7 +213,7 @@ You type your prompt as the first message. After it, the only message you may ty
 is "keep going". Use it when the agent has stopped and you want it to carry on.
 
 Every message you type into the harness is recorded. Any other message (an answer, a hint, an
-approval, a correction) is seen at review, and it may remove your run from the qualifying runs.
+approval, a correction) is seen at review, and it may remove the run at review.
 The tracer itself never types to the agent, never says "keep going" for you, and never restarts
 it by itself.
 
