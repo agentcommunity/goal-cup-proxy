@@ -435,7 +435,7 @@ mod tests {
             strategy: goalcup_protocol::manifest::KillStrategy::NativePid,
             grace_seconds: 1,
             launched_at: "2026-09-04T00:00:00Z".to_string(),
-            program: "codex".to_string(),
+            program: "agent".to_string(),
             argv: argv.iter().map(|a| a.to_string()).collect(),
             env_keys: Vec::new(),
         }

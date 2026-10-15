@@ -500,11 +500,12 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
     if !bind_credential(&s, who.credential.as_deref(), &run) {
         return Err(opened_already());
     }
-    // A competition start replaces the member's other open competition run: it ends now.
+    // A competition start replaces the member's other open competition run: it ends now. A
+    // test run replaces only another test run, and a competition run never replaces a test one.
     if !practice {
         for other in runs.values_mut() {
             if other.member == member
-                && other.mode == "competition"
+                && other.mode == who.mode
                 && other.status == RunStatus::Open
                 && other.replaced_at.is_none()
             {
@@ -1296,8 +1297,10 @@ async fn create_device(State(s): St, body: Bytes) -> Result<Response, ApiError> 
     if !["login", "run"].contains(&req.purpose.as_str()) {
         return Err(ApiError::malformed("purpose is not login or run."));
     }
-    if !["competition", "practice"].contains(&req.mode.as_str()) {
-        return Err(ApiError::malformed("mode is not competition or practice."));
+    if !["competition", "practice", "test"].contains(&req.mode.as_str()) {
+        return Err(ApiError::malformed(
+            "mode is not competition, practice or test.",
+        ));
     }
     for (name, value, max) in [
         ("connector_id", &req.connector_id, 128),

@@ -1376,6 +1376,11 @@ written, a second session id).
 **Amended by D57:** the shipped connectors run the harness in chat mode, so they set no approval
 or permission option either.
 
+**Amended 2026-10-15 (no harness names in core):** the verifier no longer names a harness for
+`allowed_tool_rule`. Both fields present, the rule bounded text and the digest SHA-256 hex, or
+both absent, for any `profile_id`; anything else stays `record_field_invalid`. Every trace that
+verified before still does.
+
 ---
 
 ## D53. **(M2)** Record the harness build in v5, accepting that v0.5.0 readers refuse it.

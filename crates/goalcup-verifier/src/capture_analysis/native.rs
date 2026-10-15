@@ -113,6 +113,9 @@ struct SegmentStamp<'a> {
     last: &'a CaptureTime,
 }
 
+/// The `protocol_hint` a connector declares for a rollout-JSONL native source.
+pub(crate) const ROLLOUT_JSONL_HINT: &str = "codex-jsonl";
+
 /// Which native format one assembler decodes. Both formats share every bounded byte-assembly
 /// rule; only the JSON interpretation differs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,7 +129,7 @@ impl Format {
     /// recorded in every observation's `fields.format`.
     const fn hint(self) -> &'static str {
         match self {
-            Format::Codex => "codex-jsonl",
+            Format::Codex => ROLLOUT_JSONL_HINT,
             Format::ClaudeCode => "claude-code-jsonl",
         }
     }

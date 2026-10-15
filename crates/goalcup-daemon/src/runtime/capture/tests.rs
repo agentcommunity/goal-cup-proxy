@@ -33,7 +33,7 @@ fn chain(dir: &Path, quota: u64) -> ChainWriter {
 fn entry(dir: &Path) -> Entry {
     Entry::new(
         "e1",
-        "codex-cli",
+        "test-cli",
         PathBuf::from("/w"),
         dir.to_path_buf(),
         "digest",
@@ -1515,27 +1515,51 @@ fn owner_post_stop_drain_fits_commit_reserve() {
     );
 }
 
-/// The frozen headless Codex or Claude manifest (`{id}`-scoped native source), not the shipped
-/// one, so these tests keep their subject when the shipped connectors change mode.
-fn headless_manifest_path(id: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../goalcup-protocol/tests/fixtures/headless-connectors")
-        .join(id)
-        .join("harness.toml")
+/// The frozen headless connector fixtures (`{id}`-scoped native sources), not the shipped
+/// ones, so these tests keep their subject when the shipped connectors change mode.
+fn headless_manifest_paths() -> Vec<PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../goalcup-protocol/tests/fixtures/headless-connectors");
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join("harness.toml"))
+        .collect();
+    paths.sort();
+    paths
 }
 
-fn schema_harness(id: &str) -> HarnessManifest {
-    let path = if id == "m2-controlled-workload" {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../goalcup-cli/tests/fixtures/m2-controlled-workload/harness.toml")
-    } else if id == "hermes-cli" {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../connectors")
-            .join(id)
-            .join("harness.toml")
-    } else {
-        headless_manifest_path(id)
-    };
+/// The shipped connector directories, sorted by folder name.
+fn shipped_connector_dirs() -> Vec<PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|dir| dir.join("harness.toml").is_file())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+/// One shipped connector with a single real home: its directory, manifest text and parsed
+/// manifest. Any one serves; these tests are about the loader, not about a harness.
+pub(super) fn shipped_connector() -> (PathBuf, String, HarnessManifest) {
+    shipped_connector_dirs()
+        .into_iter()
+        .find_map(|dir| {
+            let text = std::fs::read_to_string(dir.join("harness.toml")).unwrap();
+            let manifest = HarnessManifest::from_toml_str(&text).ok()?;
+            (manifest.capture.home.real_dirs.len() == 1).then_some((dir, text, manifest))
+        })
+        .expect("a shipped connector with one real home")
+}
+
+/// `text` with its one `from` replaced by `to`; the replacement must happen.
+pub(super) fn replaced_once(text: &str, from: &str, to: &str) -> String {
+    assert!(text.contains(from), "{from} is not in the manifest");
+    text.replacen(from, to, 1)
+}
+
+fn manifest_at(path: &Path) -> HarnessManifest {
     let text = std::fs::read_to_string(path)
         .unwrap()
         .replace("@WORKLOAD@", "/synthetic/workload.py")
@@ -1543,33 +1567,27 @@ fn schema_harness(id: &str) -> HarnessManifest {
     HarnessManifest::from_toml_str(&text).unwrap()
 }
 
+/// The plan copies what each connector declares: binding, label, hint and form for a scoped
+/// source, a controlled root for one that is not. Every headless fixture, every shipped
+/// connector and the controlled workload are read; none is named here.
 #[test]
 fn schema_native_plan_copies_binding_label_hint_and_form() {
-    let cases = [
-        (
-            "codex-cli",
-            NativeBinding::AtLaunch,
-            "rollout",
-            NativeStoreForm::AppendOnly,
-            Some("codex-jsonl"),
-        ),
-        (
-            "claude-code-cli",
-            NativeBinding::AtLaunch,
-            "main",
-            NativeStoreForm::AppendOnly,
-            Some("claude-code-jsonl"),
-        ),
-        (
-            "hermes-cli",
-            NativeBinding::Deferred,
-            "session",
-            NativeStoreForm::Snapshot,
-            None,
-        ),
-    ];
-    for (id, binding, name, form, hint) in cases {
-        let manifest = schema_harness(id);
+    let mut paths = headless_manifest_paths();
+    paths.extend(
+        shipped_connector_dirs()
+            .into_iter()
+            .map(|dir| dir.join("harness.toml")),
+    );
+    paths.push(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../goalcup-cli/tests/fixtures/m2-controlled-workload/harness.toml"),
+    );
+    let (mut scoped, mut controlled) = (0, 0);
+    for path in paths {
+        let manifest = manifest_at(&path);
+        let Some(native) = manifest.capture.native.first() else {
+            continue;
+        };
         let plan = native_plan(
             &manifest.capture,
             Path::new("/run"),
@@ -1577,32 +1595,56 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
             0,
         )
         .unwrap();
-        let source = plan.scoped.expect("the shipped source is scoped");
-        assert_eq!(plan.initial_binding, binding, "{id}");
-        assert_eq!((source.name.as_str(), source.form), (name, form), "{id}");
-        assert_eq!(source.hint.as_ref().map(NativeHint::as_str), hint, "{id}");
+        let at = path.display();
+        if !native.pattern.contains("{id}") {
+            assert_eq!(plan.initial_binding, NativeBinding::NotRequired, "{at}");
+            assert!(plan.scoped.is_none(), "{at}");
+            let root = native
+                .root
+                .replace("{run_home}", "/run")
+                .replace("{config_home}", "/config");
+            assert_eq!(plan.controlled[0].root, Path::new(&root), "{at}");
+            controlled += 1;
+            continue;
+        }
+        let binding = match manifest.capture.identity.binding {
+            Some(goalcup_protocol::harness::Binding::AtLaunch) => NativeBinding::AtLaunch,
+            Some(goalcup_protocol::harness::Binding::Deferred) => NativeBinding::Deferred,
+            other => panic!("{at}: a scoped source with binding {other:?}"),
+        };
+        let form = match native.form {
+            goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
+            goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
+            other => panic!("{at}: form {other:?}"),
+        };
+        let source = plan.scoped.expect("a scoped source");
+        assert_eq!(plan.initial_binding, binding, "{at}");
+        assert_eq!(
+            (source.name.as_str(), source.form),
+            (native.name.as_str(), form),
+            "{at}"
+        );
+        assert_eq!(
+            source.hint.as_ref().map(NativeHint::as_str),
+            native.protocol_hint.as_deref(),
+            "{at}"
+        );
+        scoped += 1;
     }
-    let workload = schema_harness("m2-controlled-workload");
-    let plan = native_plan(
-        &workload.capture,
-        Path::new("/run"),
-        Path::new("/config"),
-        0,
-    )
-    .unwrap();
-    assert_eq!(plan.initial_binding, NativeBinding::NotRequired);
-    assert!(plan.scoped.is_none());
-    assert_eq!(plan.controlled[0].root, Path::new("/run"));
+    assert!(
+        scoped >= 2 && controlled >= 1,
+        "{scoped} scoped, {controlled} controlled"
+    );
 }
 
 #[test]
 fn a_since_run_start_source_filters_from_the_run_start() {
-    let text = std::fs::read_to_string(headless_manifest_path("codex-cli"))
-        .unwrap()
-        .replace(
-            "form = \"append_only\"",
-            "form = \"append_only\"\nsince_run_start = true",
-        );
+    let headless = headless_manifest_paths().remove(0);
+    let text = replaced_once(
+        &std::fs::read_to_string(&headless).unwrap(),
+        "form = \"append_only\"",
+        "form = \"append_only\"\nsince_run_start = true",
+    );
     let manifest = HarnessManifest::from_toml_str(&text).unwrap();
     // A start no clock can hold is refused, not a panic.
     let error = native_plan(
@@ -1626,7 +1668,7 @@ fn a_since_run_start_source_filters_from_the_run_start() {
         Some(std::time::UNIX_EPOCH + Duration::from_secs(1_760_000_000))
     );
     // A source that does not declare it ignores the start time.
-    let shipped = schema_harness("codex-cli");
+    let shipped = manifest_at(&headless);
     let plan = native_plan(
         &shipped.capture,
         Path::new("/run"),
@@ -1644,12 +1686,17 @@ fn a_since_run_start_source_filters_from_the_run_start() {
 
 #[test]
 fn unknown_valid_native_hint_is_copied_byte_for_byte() {
-    let text = std::fs::read_to_string(headless_manifest_path("codex-cli"))
-        .unwrap()
-        .replace(
-            "protocol_hint = \"codex-jsonl\"",
-            "protocol_hint = \"future-hint-v7\"",
-        );
+    let headless = headless_manifest_paths().remove(0);
+    let original = manifest_at(&headless);
+    let hint = original.capture.native[0]
+        .protocol_hint
+        .as_deref()
+        .expect("the fixture's native source declares a hint");
+    let text = replaced_once(
+        &std::fs::read_to_string(&headless).unwrap(),
+        &format!("protocol_hint = {hint:?}"),
+        "protocol_hint = \"future-hint-v7\"",
+    );
     let manifest = HarnessManifest::from_toml_str(&text).unwrap();
     let plan = native_plan(
         &manifest.capture,
@@ -1711,15 +1758,10 @@ fn a_nonshipped_real_dir_is_part_of_the_config_home_refusal() {
     std::fs::create_dir(&home).unwrap();
     // The real homes are data: each connector's `real_dirs`, never a list in this crate.
     let shipped_real_dirs = [
-        "{user_home}/.codex".to_string(),
-        "{user_home}/.claude".to_string(),
-        "{user_home}/.hermes".to_string(),
+        "{user_home}/.first".to_string(),
+        "{user_home}/.second".to_string(),
     ];
-    for path in [
-        home.join(".codex"),
-        home.join(".claude"),
-        home.join(".hermes"),
-    ] {
+    for path in [home.join(".first"), home.join(".second")] {
         assert!(matches!(
             isolated_config_home_for(&path, &shipped_real_dirs, &home),
             Err(DaemonError::Refused(_))
@@ -1733,10 +1775,7 @@ fn a_nonshipped_real_dir_is_part_of_the_config_home_refusal() {
 
     let connectors = temp.path().join("connectors");
     std::fs::create_dir(&connectors).unwrap();
-    let shipped = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors/codex-cli/harness.toml"),
-    )
-    .unwrap();
+    let (_, shipped, manifest) = shipped_connector();
     for (folder, id, real_dir) in [
         ("selected", "selected-dev", ".selected"),
         ("nonshipped", "nonshipped-dev", ".nonshipped"),
@@ -1745,12 +1784,15 @@ fn a_nonshipped_real_dir_is_part_of_the_config_home_refusal() {
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(
             dir.join("harness.toml"),
-            shipped
-                .replace("id = \"codex-cli\"", &format!("id = \"{id}\""))
-                .replace(
-                    "real_dirs = [\"{user_home}/.codex\"]",
-                    &format!("real_dirs = [\"{{user_home}}/{real_dir}\"]"),
+            replaced_once(
+                &replaced_once(
+                    &shipped,
+                    &format!("id = {:?}", manifest.id),
+                    &format!("id = {id:?}"),
                 ),
+                &format!("real_dirs = [{:?}]", manifest.capture.home.real_dirs[0]),
+                &format!("real_dirs = [\"{{user_home}}/{real_dir}\"]"),
+            ),
         )
         .unwrap();
     }
