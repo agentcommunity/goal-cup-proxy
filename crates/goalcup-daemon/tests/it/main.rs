@@ -20,7 +20,6 @@ mod capture_native;
 mod capture_redaction;
 mod capture_redaction_extra;
 mod config_load;
-mod contract_present;
 mod control_api;
 mod redaction;
 mod registry_roundtrip;

@@ -33,14 +33,6 @@ pub enum LaunchMode {
     AttachOnly,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ForeignScanRoot {
-    #[default]
-    Home,
-    OwnConfigDir,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RedactionPattern {
