@@ -6,7 +6,9 @@
 # Unpacks it, checks that all three binaries print <version>, and checks through
 # `goalcup doctor --json` what the Homebrew formula's test checks: the unpacked goalcup finds
 # the connectors it ships, and every one's pin passes. doctor exits 1 when no harness is
-# installed, so only its report is judged. It runs with an environment built from nothing, so
+# installed, so only its report is judged. It also checks that the tarball holds every folder of
+# the repository's connectors/ (the checkout this script is in), so a harness that was merged
+# but not packaged fails the release. It runs with an environment built from nothing, so
 # neither $GOALCUP_CONNECTORS_DIR nor a real config directory can stand in for the tarball's.
 set -eu
 
@@ -35,13 +37,16 @@ for binary in goalcup goalcup-daemon goalcup-verify; do
 done
 
 run "$root/bin/goalcup" doctor --json >"$work/doctor.json" || true
-python3 - "$work/doctor.json" "$root/share/goalcup/connectors" <<'PY'
+python3 - "$work/doctor.json" "$root/share/goalcup/connectors" "$(dirname "$0")/../connectors" <<'PY'
 import json, os, sys
 try:
     report = json.load(open(sys.argv[1]))
 except ValueError:
     sys.exit("smoke: goalcup doctor --json printed no report:\n" + open(sys.argv[1]).read())
-shipped = sorted(os.listdir(sys.argv[2]))
+shipped = sorted(d for d in os.listdir(sys.argv[2]) if os.path.isdir(os.path.join(sys.argv[2], d)))
+committed = sorted(d for d in os.listdir(sys.argv[3]) if os.path.isdir(os.path.join(sys.argv[3], d)))
+if shipped != committed:
+    sys.exit(f"smoke: the tarball ships connectors {shipped}, the repository has {committed}")
 pins = {c["connector_id"]: next((k["level"] for k in c["checks"] if k["id"] == "manifest_pin"), None)
         for c in report["connectors"]}
 if sorted(pins) != shipped or set(pins.values()) != {"pass"}:
