@@ -1,5 +1,5 @@
 // Goal Cup upload Worker: routing, maintenance switch, authentication, error mapping, and the
-// 5-minute cron (notices.ts). Contract: docs/UPLOAD-API.md. No framework; eleven routes.
+// 5-minute cron (notices.ts). Contract: docs/UPLOAD-API.md. No framework; eleven routes and a health check.
 
 import { type Auth, authenticate } from "./auth.ts";
 import { putChunk } from "./chunks.ts";
@@ -60,7 +60,10 @@ function route(path: string): Route | null {
 }
 
 async function handle(request: Request, env: Env): Promise<Response> {
-  const matched = route(new URL(request.url).pathname);
+  const path = new URL(request.url).pathname;
+  // Liveness only: no database, no configuration, nothing about runs.
+  if (path === "/v1/health" && request.method === "GET") return json(200, { status: "ok" });
+  const matched = route(path);
   if (matched === null) throw new ApiError(404, "not_found", "No such endpoint.");
   if (request.method !== matched.method) {
     throw new ApiError(405, "method_not_allowed", "That method is not allowed here.", { allow: matched.method });

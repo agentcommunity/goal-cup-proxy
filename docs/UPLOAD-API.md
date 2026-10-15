@@ -16,7 +16,9 @@ missing). It is not in CI.
 
 ## Common rules
 
-- Base URL: what `goalcup login --server` stored. Every path below is under it.
+- Base URL: what `goalcup login --server` stored (default `https://ingest.agentcommunity.org`,
+  the production server; staging is `https://goalcup-ingest-staging.b-9a5.workers.dev`). Every
+  path below is under it. `GET /v1/health` answers `200 {"status":"ok"}` and touches nothing.
 - Every call except the three under "Sign in" carries `Authorization: Bearer gcr_<64 hex>`, the run
   credential. A missing, unknown or expired credential is `401`. A credential sees one run, the
   one it opened; any other run id is `404`, so a credential cannot probe for other runs.
@@ -56,7 +58,7 @@ code is only ever in a request body, never in a URL or a log.
 ### `POST /v1/device` — start a request (no authentication)
 
 ```json
-{"purpose": "login" | "run", "mode": "competition" | "practice",
+{"purpose": "login" | "run", "mode": "competition" | "practice" | "test",
  "connector_id": "codex-cli", "tracer_version": "0.1.0"}
 ```
 
@@ -73,6 +75,19 @@ All four fields are required. `200`:
 any case, with or without the dash. `interval` is the seconds between polls, `expires_in` the
 seconds a request lives, counted from its creation, whatever its state. The tracer shows the
 participant `verification_uri_complete` and opens it when it can.
+
+Both device calls are rate-limited per client address (production: 20 starts and 120 polls a
+minute); over the limit is `429 rate_limited` with `Retry-After: 60`. One tracer's normal use
+(one start, a poll every 5 seconds) stays far below it.
+
+**Test runs (`"mode": "test"`).** An organizer's own test run. Only accounts on the server's
+allowlist of test operators can approve one or open one (anyone else: the website refuses the
+approval; an open is `403`). A test run belongs to the server's test event (production `test`,
+R2 prefix `traces/test/`, never locked; staging `test-staging`), lasts that event's run hours
+(168 by default), never replaces a competition run and is never replaced, and its emails go to
+the operator with `[TEST]` before the subject. Test runs are left out of every live number and
+research report, and `server/worker/scripts/delete-test-runs.sh` deletes all of them (rows and
+R2 objects) in one go.
 
 ### `POST /v1/device/token` — poll a request (no authentication)
 

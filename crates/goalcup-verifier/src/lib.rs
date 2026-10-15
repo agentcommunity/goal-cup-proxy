@@ -23,12 +23,14 @@ pub const VERIFIER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// from. The allowlist lives in the binary: a key the participant could name is not an
 /// anchor.
 ///
-/// **Empty until the organiser's real key exists.** No key whose seed is written in this
-/// repository may be on it, because anybody could then sign a start and have it reported as
-/// `key_source: pinned`. With the list empty, a receipt or acknowledgement verifies only
-/// under a key the caller supplies for one run (`goalcup-verify --dev-key`), which the
-/// report records as `supplied`.
-pub(crate) const SERVER_PUBLIC_KEYS: [&str; 0] = [];
+/// One key: the production upload Worker's (`goalcup-ingest` on ingest.agentcommunity.org,
+/// deployed 2026-10-15). Its seed was generated offline and is held by the organiser, never in
+/// this repository: no key whose seed is written here may be on this list, because anybody could
+/// then sign a start and have it reported as `key_source: pinned`. Any other key (the staging
+/// Worker's, a test signer's) verifies only when the caller supplies it for one run
+/// (`goalcup-verify --dev-key`), which the report records as `supplied`.
+pub(crate) const SERVER_PUBLIC_KEYS: [&str; 1] =
+    ["6fadf49c804f89248de400d17eb0a8c8aa657b82676d81e026f10e6f7bf9079c"];
 
 /// Knobs a caller may turn. Every field defaults to the strict reading.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

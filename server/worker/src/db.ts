@@ -17,7 +17,8 @@ import { addSeconds, formatTime } from "./util.ts";
 export const CLOSE_AFTER_SECONDS = 24 * 3600;
 
 export type RunStatus = "open" | "sealed" | "incomplete" | "abandoned";
-export type RunMode = "competition" | "practice";
+/** `test`: an organizer's test run (allowlisted accounts only, its own event and R2 prefix, deleted in one go). */
+export type RunMode = "competition" | "practice" | "test";
 
 /** The instant a run is over: `deadline_at`, or earlier if a later start replaced it. (Times compare as text.) */
 export function endsAt(run: { deadline_at: string; replaced_at: string | null }): string {

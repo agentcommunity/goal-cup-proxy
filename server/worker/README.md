@@ -223,6 +223,28 @@ once (`tick queueNotices: <message>`) and the next tick sends the same batch aga
 because a notice is stored once per run, kind and key.
 The Worker's tests call `worker.scheduled` on a moved clock (`test/helpers/inproc.ts`, `tick`).
 
+## Production, as deployed (2026-10-15)
+
+- Worker `goalcup-ingest` on `https://ingest.agentcommunity.org` (custom domain; no workers.dev),
+  cron every 5 minutes, no test switch (no `STAGING`, no `TEST_APPROVAL_KEY`, no recipient
+  override: members get their run emails).
+- R2 bucket `goalcup-traces`. Bucket lock rule `goalcup-cup-2026-180d`: objects under
+  `traces/goalcup-cup-2026/` cannot be deleted or overwritten for 180 days after upload. The dry
+  run (`traces/goalcup-dryrun-2026/`), practice (`traces/goalcup-practice/`) and test
+  (`traces/test/`) prefixes are not locked. No lifecycle (deletion) rule yet: deleting the raw
+  traces after appeals is a later owner step.
+- Events (website migration `20261015150000`): `goalcup-practice` (always open),
+  `goalcup-dryrun-2026` and `goalcup-cup-2026` (placeholder start windows 28 Oct and 6 Nov
+  16:00 UTC + 24 h, to be confirmed), `test`. `EVENT_ID` is the dry run now: switch it to
+  `goalcup-cup-2026` and redeploy after the dry run.
+- Keys: Supabase secret key `goalcup_ingest_production` (role `goal_cup_ingest_production`:
+  the upload functions only, never the test approval); Resend key `goalcup-ingest-production`
+  (sending access, member.agentcommunity.org); `RECEIPT_SIGNING_KEY` from a seed made offline,
+  whose public key is pinned in `goalcup-verifier` (`SERVER_PUBLIC_KEYS`).
+- Rate limits `RL_DEVICE_START` (20/min) and `RL_DEVICE_TOKEN` (120/min) per hashed client address.
+
+Deploy again: `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy` (top level, no `--env`).
+
 ## Staging
 
 `wrangler deploy --env staging` makes a second Worker, `goalcup-ingest-staging`, with its own

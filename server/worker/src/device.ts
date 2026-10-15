@@ -10,6 +10,7 @@
 import type { Ctx } from "./context.ts";
 import type { DevicePurpose, RunMode } from "./db.ts";
 import { ApiError, closed, json, malformed, notFound, unauthorized } from "./errors.ts";
+import { rateLimit } from "./ratelimit.ts";
 import { readJson } from "./runs.ts";
 import { addSeconds, constantTimeEqual, formatTime, hexField, sha256Hex, strField, toHex } from "./util.ts";
 
@@ -45,9 +46,10 @@ export function normalizeUserCode(input: string): string | null {
 // ---- POST /v1/device ----------------------------------------------------------------------
 
 export async function createDevice(ctx: Ctx, request: Request): Promise<Response> {
+  await rateLimit(ctx.env.RL_DEVICE_START, request, "start");
   const b = await readJson(request, BODY_MAX);
   const purpose = enumField<DevicePurpose>(b, "purpose", ["login", "run"]);
-  const mode = enumField<RunMode>(b, "mode", ["competition", "practice"]);
+  const mode = enumField<RunMode>(b, "mode", ["competition", "practice", "test"]);
   const connector_id = strField(b, "connector_id", 128);
   const tracer_version = strField(b, "tracer_version", 64);
 
@@ -93,6 +95,7 @@ function enumField<T extends string>(o: Record<string, unknown>, name: string, a
 // ---- POST /v1/device/token ----------------------------------------------------------------
 
 export async function pollDevice(ctx: Ctx, request: Request): Promise<Response> {
+  await rateLimit(ctx.env.RL_DEVICE_TOKEN, request, "token");
   const b = await readJson(request, BODY_MAX);
   const deviceSha = await sha256Hex(hexField(b, "device_code"));
   const poll = await ctx.db.pollDevice(deviceSha, formatTime(ctx.now()));

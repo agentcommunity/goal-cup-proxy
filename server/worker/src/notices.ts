@@ -126,7 +126,7 @@ function owed(run: TickRun, now: Date): { kind: NoticeKind; key: string; payload
 export async function queueNotices(ctx: Ctx, now: Date): Promise<number> {
   const at = formatTime(now);
   const batch = (await ctx.db.runsForTick(at))
-    .filter((r) => r.mode === "competition")
+    .filter((r) => r.mode === "competition" || r.mode === "test") // test runs mail their operator ("[TEST]", from the database)
     .flatMap((run) => owed(run, now).map((n) => ({ run_id: run.run_id, member_id: run.member_id, kind: n.kind, dedupe_key: n.key, payload: n.payload, at })));
   return batch.length === 0 ? 0 : ctx.db.queueNotices(batch);
 }

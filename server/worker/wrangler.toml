@@ -1,10 +1,10 @@
 # Goal Cup upload Worker. Contract: docs/UPLOAD-API.md. Design: docs/SERVER-DESIGN.md.
 #
-# Nothing in this file names a real Cloudflare account or resource. The owner fills in the
-# placeholders below when deploying (see README.md, "What the owner must create before deploying").
-# No `account_id` on purpose: wrangler takes it from the owner's login or CLOUDFLARE_ACCOUNT_ID.
+# Production: Worker goalcup-ingest on https://ingest.agentcommunity.org (deployed 2026-10-15),
+# bucket goalcup-traces. Staging: the [env.staging] block below. No `account_id` on purpose:
+# wrangler takes it from CLOUDFLARE_ACCOUNT_ID (the Agent Community account).
 
-name = "goalcup-upload"
+name = "goalcup-ingest"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
@@ -12,21 +12,37 @@ compatibility_date = "2026-10-01"
 workers_dev = false
 preview_urls = false
 
-# Custom domain (owner decides the name; needs the zone on the same Cloudflare account):
-# routes = [{ pattern = "ingest.example.org", custom_domain = true }]
+# Custom domain on the agentcommunity.org zone (wrangler creates its DNS record and certificate).
+routes = [{ pattern = "ingest.agentcommunity.org", custom_domain = true }]
+
+# Rate limits on the device flow (src/ratelimit.ts), per hashed client address. Namespace ids are
+# account-wide: 4001-4019 belong to the website, 4101-4102 to this Worker. Production only.
+[[ratelimits]]
+name = "RL_DEVICE_START"
+namespace_id = "4101"
+simple = { limit = 20, period = 60 }
+
+[[ratelimits]]
+name = "RL_DEVICE_TOKEN"
+namespace_id = "4102"
+simple = { limit = 120, period = 60 }
 
 [[r2_buckets]]
 binding = "TRACES"
-# PLACEHOLDER: the private bucket the owner creates (with a 180-day bucket lock).
-bucket_name = "replace-me-goalcup-traces"
-# `wrangler dev` runs against a local simulation of R2, so this name is not used there.
-preview_bucket_name = "replace-me-goalcup-traces-preview"
+# Private; a 180-day bucket lock covers the competition prefix only (traces/goalcup-cup-2026/).
+bucket_name = "goalcup-traces"
+# Only `wrangler dev --remote` uses this; it must never be the production bucket.
+preview_bucket_name = "goalcup-traces-staging"
 
 [vars]
-# Which event new competition runs belong to, and which one practice runs belong to. Until the
-# website's `goalcup.events` table is wired in, one Worker deployment serves one of each.
-EVENT_ID = "competition"
-PRACTICE_EVENT_ID = "practice"
+# Which event new competition runs belong to, and which one practice runs belong to (rows of
+# goal_cup_tracer.events). One deployment serves one of each: the dry run now; switch EVENT_ID to
+# "goalcup-cup-2026" and redeploy after the dry run, before the competition window opens.
+EVENT_ID = "goalcup-dryrun-2026"
+PRACTICE_EVENT_ID = "goalcup-practice"
+# Organizer test runs (mode "test"; allowlisted accounts only, enforced by the database). R2 prefix
+# traces/test/, never locked; delete them all with scripts/delete-test-runs.sh.
+TEST_EVENT_ID = "test"
 # Run length in hours. There is no grace period: at `deadline_at` the run is over.
 RUN_HOURS = "168"
 # A practice run lasts this many minutes. Practice has no start window and never replaces a run.
@@ -36,9 +52,9 @@ DB_BACKEND = "supabase"
 # Check with the GitHub API that repo_url is a public repository. "on" in production;
 # `npm run dev` and the tests turn it off so they need no network.
 GITHUB_CHECK = "on"
-# PLACEHOLDER: the website's page where a member approves a device request (no query string).
+# The website's page where a member approves a device request (no query string).
 # The tracer opens it with `?code=<user code>`.
-APPROVAL_URL = "https://example.org/goalcup/approve"
+APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
 # Set to "on" and redeploy to make every call answer 503 + Retry-After.
 MAINTENANCE = "off"
 MAINTENANCE_RETRY_AFTER = "300"
@@ -84,6 +100,7 @@ STAGING = "on"
 # Rows of goal_cup_tracer.events (website migration 20261015120100_goal_cup_tracer_staging_events.sql).
 EVENT_ID = "goalcup-dryrun-staging"
 PRACTICE_EVENT_ID = "goalcup-practice-staging"
+TEST_EVENT_ID = "test-staging"
 RUN_HOURS = "168"
 PRACTICE_RUN_MINUTES = "10"
 DB_BACKEND = "supabase"
