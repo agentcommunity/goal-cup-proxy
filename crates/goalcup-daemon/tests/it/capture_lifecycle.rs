@@ -449,8 +449,8 @@ fn gaps_after_launch(records: &[CaptureRecord]) -> Vec<GapReason> {
 /// V1 supplemental stores add no gaps. A controlled family retains run-HOME capture.
 #[tokio::test]
 async fn a_launch_marks_each_store_it_does_not_read() {
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
     let mut request = launch_request(&goal);
     request.native_scope = None;
@@ -481,19 +481,19 @@ async fn native_scope_excludes_other_runs_files() {
     use base64::Engine as _;
     for (profile, directory, own_name, other_name) in [
         (
-            "codex-cli",
+            "headless-codex-cli",
             "sessions/2026/09/30",
             "rollout-now-test-session.jsonl",
             "rollout-now-foreign.jsonl",
         ),
         (
-            "claude-code-cli",
+            "headless-claude-code-cli",
             "projects/workspace",
             "test-session.jsonl",
             "foreign.jsonl",
         ),
     ] {
-        let rig = Rig::start().await;
+        let rig = Rig::start_headless().await;
         let native = rig.root.join("config-home").join(directory);
         std::fs::create_dir_all(&native).unwrap();
         std::fs::write(native.join(own_name), b"own session\n").unwrap();
@@ -686,8 +686,8 @@ async fn refused_native_roots_child_half() {
 #[tokio::test]
 async fn native_scope_unavailable_records_named_gap() {
     for scope in [None, Some("../foreign"), Some(""), Some("bad.scope")] {
-        for profile in ["codex-cli", "claude-code-cli"] {
-            let rig = Rig::start().await;
+        for profile in ["headless-codex-cli", "headless-claude-code-cli"] {
+            let rig = Rig::start_headless().await;
             let info = rig.created(profile).await;
             let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
             let mut request = launch_request(&goal);
@@ -705,11 +705,11 @@ async fn native_scope_unavailable_records_named_gap() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scoped_native_source_never_opened_is_a_gap() {
     for vanished in [false, true] {
-        let rig = Rig::start().await;
+        let rig = Rig::start_headless().await;
         let source = rig
             .root
             .join("config-home/sessions/2026/09/30/rollout-now-test-session.jsonl");
-        let info = rig.created("codex-cli").await;
+        let info = rig.created("headless-codex-cli").await;
         let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
         assert_eq!(
             rig.launch(&info.entry_id, &launch_request(&goal))
@@ -730,8 +730,8 @@ async fn scoped_native_source_never_opened_is_a_gap() {
         assert_eq!(local_finishes(&records), 1);
     }
     // A fixed source root that disappears after create cannot be constructed at Launch.
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     std::fs::remove_dir(rig.root.join("config-home/sessions")).unwrap();
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
     rig.launch(&info.entry_id, &launch_request(&goal)).await;
@@ -864,8 +864,8 @@ async fn both_shipped_manifests_compile_at_preflight() {
 
 #[tokio::test]
 async fn a_restart_never_rebuilds_a_capture_row_as_a_legacy_runtime() {
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
     let mut launch = launch_request(&goal);
     // This fixture isolates reopen behavior: no native producer is bound.

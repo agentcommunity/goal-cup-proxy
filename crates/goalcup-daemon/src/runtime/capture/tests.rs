@@ -1515,15 +1515,26 @@ fn owner_post_stop_drain_fits_commit_reserve() {
     );
 }
 
+/// The frozen headless Codex or Claude manifest (`{id}`-scoped native source), not the shipped
+/// one, so these tests keep their subject when the shipped connectors change mode.
+fn headless_manifest_path(id: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../goalcup-protocol/tests/fixtures/headless-connectors")
+        .join(id)
+        .join("harness.toml")
+}
+
 fn schema_harness(id: &str) -> HarnessManifest {
     let path = if id == "m2-controlled-workload" {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../goalcup-cli/tests/fixtures/m2-controlled-workload/harness.toml")
-    } else {
+    } else if id == "hermes-cli" {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../connectors")
             .join(id)
             .join("harness.toml")
+    } else {
+        headless_manifest_path(id)
     };
     let text = std::fs::read_to_string(path)
         .unwrap()
@@ -1586,14 +1597,12 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
 
 #[test]
 fn a_since_run_start_source_filters_from_the_run_start() {
-    let text = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors/codex-cli/harness.toml"),
-    )
-    .unwrap()
-    .replace(
-        "form = \"append_only\"",
-        "form = \"append_only\"\nsince_run_start = true",
-    );
+    let text = std::fs::read_to_string(headless_manifest_path("codex-cli"))
+        .unwrap()
+        .replace(
+            "form = \"append_only\"",
+            "form = \"append_only\"\nsince_run_start = true",
+        );
     let manifest = HarnessManifest::from_toml_str(&text).unwrap();
     // A start no clock can hold is refused, not a panic.
     let error = native_plan(
@@ -1635,14 +1644,12 @@ fn a_since_run_start_source_filters_from_the_run_start() {
 
 #[test]
 fn unknown_valid_native_hint_is_copied_byte_for_byte() {
-    let text = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors/codex-cli/harness.toml"),
-    )
-    .unwrap()
-    .replace(
-        "protocol_hint = \"codex-jsonl\"",
-        "protocol_hint = \"future-hint-v7\"",
-    );
+    let text = std::fs::read_to_string(headless_manifest_path("codex-cli"))
+        .unwrap()
+        .replace(
+            "protocol_hint = \"codex-jsonl\"",
+            "protocol_hint = \"future-hint-v7\"",
+        );
     let manifest = HarnessManifest::from_toml_str(&text).unwrap();
     let plan = native_plan(
         &manifest.capture,
