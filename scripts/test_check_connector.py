@@ -19,7 +19,7 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("check-connector.sh")
 SKIP_LINE = "SKIPPED: harness kit runs on macOS and Linux only; a maintainer runs it"
-DAEMON_SKIP = "SKIPPED: the daemon's live goldens (toy-cli.daemon.json, native-stream-labels.json)"
+DAEMON_SKIP = "SKIPPED: the daemon's live golden (toy-cli.daemon.json) is macOS-only"
 PINS = "crates/goalcup-protocol/pins/connector-dirs.txt"
 HEX = "a" * 64
 
@@ -31,7 +31,7 @@ echo "${GOALCUP_REGEN_HARNESS_GOLDEN-unset}" >>"$FAKE_CARGO_LOG.regen"
 if [ -n "${FAKE_CARGO_FAIL:-}" ]; then
   case "$*" in *"$FAKE_CARGO_FAIL"*)
     [ -n "${GOALCUP_REGEN_HARNESS_GOLDEN:-}" ] && exit 0
-    echo "enumeration.json differs from what the code now produces; first difference"
+    echo "toy-cli.json differs from what the code now produces; first difference"
     exit 101 ;;
   esac
 fi
@@ -176,10 +176,10 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertIn(DAEMON_SKIP, result.stdout)
         self.assertIn("toy-cli: 6 passed, 0 failed, 1 skipped", result.stdout)
         calls = self.cargo_calls()
-        kit = "test -p goalcup-cli --test full harness_contract_kit::"
+        kit = "test -p goalcup-cli --test it harness_contract_kit::"
         self.assertIn(kit, calls)
         self.assertLess(calls.index("build"), calls.index(kit))
-        self.assertIn("test -p goalcup-daemon --test full harness_contract_golden::", calls)
+        self.assertIn("test -p goalcup-daemon --test it harness_contract_golden::", calls)
 
     def test_another_system_skips_the_kit_loudly_and_fails_without_the_flag(self) -> None:
         result = self.run_script("toy-cli", uname="FreeBSD")
@@ -199,8 +199,8 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertIn(
             "test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::", calls
         )
-        self.assertIn("test -p goalcup-cli --test full harness_contract_golden::", calls)
-        self.assertIn("test -p goalcup-daemon --test full harness_contract_golden::", calls)
+        self.assertIn("test -p goalcup-cli --test it harness_contract_golden::", calls)
+        self.assertIn("test -p goalcup-daemon --test it harness_contract_golden::", calls)
 
     def test_macos_builds_then_runs_the_kit(self) -> None:
         result = self.run_script("toy-cli", uname="Darwin")
@@ -208,7 +208,7 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertNotIn("SKIPPED", result.stdout)
         self.assertIn("toy-cli: 6 passed, 0 failed, 0 skipped", result.stdout)
         calls = self.cargo_calls()
-        kit = "test -p goalcup-cli --test full harness_contract_kit::"
+        kit = "test -p goalcup-cli --test it harness_contract_kit::"
         self.assertIn(kit, calls)
         self.assertLess(calls.index("build"), calls.index(kit))
 
@@ -216,27 +216,27 @@ class CheckConnectorTest(unittest.TestCase):
 
     def test_a_golden_failure_prints_the_regeneration_hint(self) -> None:
         result = self.run_script(
-            "--allow-no-kit", "toy-cli", FAKE_CARGO_FAIL="goalcup-daemon --test full harness"
+            "--allow-no-kit", "toy-cli", FAKE_CARGO_FAIL="goalcup-daemon --test it harness"
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn(
-            "GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test full "
+            "GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test it "
             "harness_contract_golden::",
             result.stdout,
         )
         self.assertIn("PASS goldens (goalcup-cli)", result.stdout)
-        self.assertIn("FAIL goldens (goalcup-daemon): enumeration.json", result.stdout)
-        self.assertIn("does not mention 'toy-cli'", result.stdout)
+        self.assertIn("FAIL goldens (goalcup-daemon): toy-cli.json", result.stdout)
+        self.assertIn("any other file did not change because of your connector", result.stdout)
 
     def test_an_exported_regeneration_variable_cannot_turn_a_failure_into_a_pass(self) -> None:
         result = self.run_script(
             "--allow-no-kit",
             "toy-cli",
-            FAKE_CARGO_FAIL="goalcup-cli --test full harness",
+            FAKE_CARGO_FAIL="goalcup-cli --test it harness",
             GOALCUP_REGEN_HARNESS_GOLDEN="1",
         )
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("FAIL goldens (goalcup-cli): enumeration.json", result.stdout)
+        self.assertIn("FAIL goldens (goalcup-cli): toy-cli.json", result.stdout)
         seen = Path(f"{self.log}.regen").read_text().splitlines()
         self.assertTrue(seen)
         self.assertEqual(set(seen), {"unset"}, seen)
@@ -299,7 +299,7 @@ class CheckConnectorTest(unittest.TestCase):
         result = self.run_script("toy-cli", uname="Darwin")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("PASS files (chat mode)", result.stdout)
-        self.assertIn("test -p goalcup-cli --test full harness_contract_kit::", self.cargo_calls())
+        self.assertIn("test -p goalcup-cli --test it harness_contract_kit::", self.cargo_calls())
 
     def test_a_chat_mode_connector_with_a_placeholder_left_fails_the_files_step(self) -> None:
         shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")

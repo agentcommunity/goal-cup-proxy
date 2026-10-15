@@ -1,10 +1,84 @@
 {
-  "claude_chat": {
-    "argv": [],
-    "identity": "none",
-    "names_the_launch_session_id": false
+  "stderr_line_limit_bytes": 4096,
+  "stderr_line_marker": {
+    "a_codex_style_token": {
+      "marker": "absent"
+    },
+    "a_uuid": {
+      "marker": "absent"
+    },
+    "absent": {
+      "marker": "absent"
+    },
+    "conflicting": {
+      "marker": "conflicting"
+    },
+    "embedded_in_a_line": {
+      "marker": "absent"
+    },
+    "empty_stream": {
+      "marker": "absent"
+    },
+    "hex_above_f": {
+      "marker": "absent"
+    },
+    "leading_space": {
+      "marker": "absent"
+    },
+    "letters_in_date": {
+      "marker": "absent"
+    },
+    "long_hex": {
+      "marker": "absent"
+    },
+    "no_space_after_colon": {
+      "marker": "absent"
+    },
+    "overlong_line_before_marker": {
+      "id": "20260930_141500_a1b2c3",
+      "marker": "one"
+    },
+    "overlong_marker_line": {
+      "marker": "absent"
+    },
+    "prefix_case": {
+      "marker": "absent"
+    },
+    "short_hex": {
+      "marker": "absent"
+    },
+    "split_across_chunks": {
+      "id": "20260930_141500_a1b2c3",
+      "marker": "one"
+    },
+    "trailing_cr": {
+      "marker": "absent"
+    },
+    "trailing_text": {
+      "marker": "absent"
+    },
+    "two_spaces": {
+      "marker": "absent"
+    },
+    "unterminated_last_line": {
+      "marker": "absent"
+    },
+    "uppercase_hex": {
+      "marker": "absent"
+    },
+    "valid": {
+      "id": "20260930_141500_a1b2c3",
+      "marker": "one"
+    },
+    "valid_repeated": {
+      "id": "20260930_141500_a1b2c3",
+      "marker": "one"
+    },
+    "wrong_separator": {
+      "marker": "absent"
+    }
   },
-  "codex_stdout_tee": {
+  "stdout_json_tee": {
     "after_noise": {
       "announced": [
         "t-2"
@@ -134,84 +208,5 @@
       "result": "ok"
     }
   },
-  "hermes_stderr_marker": {
-    "a_codex_style_token": {
-      "marker": "absent"
-    },
-    "a_uuid": {
-      "marker": "absent"
-    },
-    "absent": {
-      "marker": "absent"
-    },
-    "conflicting": {
-      "marker": "conflicting"
-    },
-    "embedded_in_a_line": {
-      "marker": "absent"
-    },
-    "empty_stream": {
-      "marker": "absent"
-    },
-    "hex_above_f": {
-      "marker": "absent"
-    },
-    "leading_space": {
-      "marker": "absent"
-    },
-    "letters_in_date": {
-      "marker": "absent"
-    },
-    "long_hex": {
-      "marker": "absent"
-    },
-    "no_space_after_colon": {
-      "marker": "absent"
-    },
-    "overlong_line_before_marker": {
-      "id": "20260930_141500_a1b2c3",
-      "marker": "one"
-    },
-    "overlong_marker_line": {
-      "marker": "absent"
-    },
-    "prefix_case": {
-      "marker": "absent"
-    },
-    "short_hex": {
-      "marker": "absent"
-    },
-    "split_across_chunks": {
-      "id": "20260930_141500_a1b2c3",
-      "marker": "one"
-    },
-    "trailing_cr": {
-      "marker": "absent"
-    },
-    "trailing_text": {
-      "marker": "absent"
-    },
-    "two_spaces": {
-      "marker": "absent"
-    },
-    "unterminated_last_line": {
-      "marker": "absent"
-    },
-    "uppercase_hex": {
-      "marker": "absent"
-    },
-    "valid": {
-      "id": "20260930_141500_a1b2c3",
-      "marker": "one"
-    },
-    "valid_repeated": {
-      "id": "20260930_141500_a1b2c3",
-      "marker": "one"
-    },
-    "wrong_separator": {
-      "marker": "absent"
-    }
-  },
-  "stderr_line_limit_bytes": 4096,
   "stdout_line_limit_bytes": 1048576
 }

@@ -15,6 +15,10 @@ mod capture_stderr_tee;
 mod credential_stdout_identity;
 mod daemon_client;
 mod dependency_bans;
+#[cfg(unix)]
+mod harness_contract_golden;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod harness_contract_kit;
 mod harness_kit_credential;
 mod harness_launch_plan;
 #[cfg(unix)]
@@ -36,6 +40,7 @@ mod m2_ipc_compose;
 mod m2_proxy_integration;
 mod m2_tls_connect;
 mod m2_websocket_relay;
+mod preflight_doctor;
 mod prep;
 mod process_handoff;
 mod seal_scan;

@@ -80,7 +80,7 @@ does.
   `tests/fixtures/m2-report-bytes/*.ndjson` (regenerate with `REGENERATE_REPORT_BYTES=1 cargo test
   --offline -p goalcup-verifier --test it m2_research_report::report_bytes_are_pinned`) and to
   `goalcup-cli/tests/fixtures/harness-golden/decoder-selection.json` (regenerate with
-  `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-verifier --test full harness_contract_golden::`).
+  `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-verifier --test it harness_contract_golden::`).
   Check the diffs are only the new row (and, in the golden, the probes your hint now reads).
   Also edit the id list in `m2_decoder_v1.rs` (registry order) and `DECODERS` in
   `m2_research_report.rs`, whose mixed trace must say whether your decoder saw a stream. The v5

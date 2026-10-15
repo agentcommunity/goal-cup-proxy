@@ -22,10 +22,11 @@
 #   3. schema: `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
 #   4. goldens: the CLI and daemon `harness_contract_golden` tests, without regeneration (an
 #      exported GOALCUP_REGEN_HARNESS_GOLDEN is unset first). On a failure the regeneration
-#      command is printed; review its diff before committing. Off macOS the daemon's live
-#      goldens (<id>.daemon.json, native-stream-labels.json) compile to nothing, so they are
-#      SKIPPED (not a failure); a maintainer checks them on a Mac.
-#   5. kit (macOS and Linux): `cargo build`, then `cargo test -p goalcup-cli --test full
+#      command is printed; review its diff before committing. A new connector adds only its
+#      own files, <id>.json and <id>.daemon.json; no shared golden names a connector. Off macOS
+#      the daemon's live golden (<id>.daemon.json) compiles to nothing, so it is SKIPPED (not a
+#      failure); a maintainer checks it on a Mac.
+#   5. kit (macOS and Linux): `cargo build`, then `cargo test -p goalcup-cli --test it
 #      harness_contract_kit::`. On any other system the kit compiles to zero tests, so the step
 #      is SKIPPED and the script exits non-zero unless --allow-no-kit is given.
 #
@@ -251,17 +252,17 @@ os=$(uname -s 2>/dev/null || echo unknown)
 log=$(mktemp "${TMPDIR:-/tmp}/check-connector.XXXXXX")
 trap 'rm -f "$log"' EXIT
 for crate in goalcup-cli goalcup-daemon; do
-  step "goldens: cargo test -p $crate --test full harness_contract_golden::"
-  { cargo test -p "$crate" --test full harness_contract_golden:: 2>&1; echo "exit=$?"; } | tee "$log"
+  step "goldens: cargo test -p $crate --test it harness_contract_golden::"
+  { cargo test -p "$crate" --test it harness_contract_golden:: 2>&1; echo "exit=$?"; } | tee "$log"
   if [ "$(tail -n 1 "$log")" = exit=0 ]; then
     pass "goldens ($crate)"
   else
     files=$(awk '/ differs from what the code now produces/ || / is missing \(/ {
       n = $1; sub(/.*\//, "", n); print n }' "$log" | sort -u | tr '\n' ' ')
     echo "golden files that differ: ${files:-(see the output above)}"
-    echo "a file for '$id' (<id>.json, or a row for '$id'): regenerate, then review the diff:"
-    echo "  GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p $crate --test full harness_contract_golden::"
-    echo "a file that does not mention '$id' did not change because of your connector: do not"
+    echo "a file for '$id' ($id.json or $id.daemon.json): regenerate, then review the diff:"
+    echo "  GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p $crate --test it harness_contract_golden::"
+    echo "any other file did not change because of your connector: do not"
     echo "commit its regenerated form; restore it with git checkout and name it in the PR"
     fail "goldens ($crate): ${files:-see output}"
   fi
@@ -269,16 +270,16 @@ done
 if [ "$os" != Darwin ]; then
   skipped=$((skipped + 1))
   echo
-  echo "SKIPPED: the daemon's live goldens ($id.daemon.json, native-stream-labels.json) are"
-  echo "  macOS-only ($os); a maintainer checks them on a Mac"
-  note "check-connector: SKIPPED daemon live goldens (macOS-only; a maintainer checks them)"
+  echo "SKIPPED: the daemon's live golden ($id.daemon.json) is macOS-only ($os); a maintainer"
+  echo "  checks it on a Mac"
+  note "check-connector: SKIPPED daemon live golden (macOS-only; a maintainer checks it)"
 fi
 
 # 5. The harness kit, on macOS and Linux.
 case $os in
   Darwin | Linux)
-    step "kit: cargo build && cargo test -p goalcup-cli --test full harness_contract_kit::"
-    if cargo build && cargo test -p goalcup-cli --test full harness_contract_kit::; then
+    step "kit: cargo build && cargo test -p goalcup-cli --test it harness_contract_kit::"
+    if cargo build && cargo test -p goalcup-cli --test it harness_contract_kit::; then
       pass "kit"
     else
       fail "kit"

@@ -96,6 +96,27 @@ fn cfg_with_a_daemon() -> std::path::PathBuf {
     cfg
 }
 
+/// Two shipped connectors to use as subjects: the one a test asks after, and another.
+fn two_subjects() -> (String, String) {
+    let ids = shipped_connector_ids();
+    assert!(
+        ids.len() >= 2,
+        "these tests need two shipped connectors: {ids:?}"
+    );
+    (ids[0].clone(), ids[1].clone())
+}
+
+/// The program a shipped connector's capture runs.
+fn program_of(id: &str) -> String {
+    goalcup_cli::connector::load_harness(&support::connectors_dir(), id, false)
+        .unwrap_or_else(|e| panic!("{id}: {e}"))
+        .loaded
+        .manifest
+        .capture
+        .executable
+        .program
+}
+
 fn doctor_at(
     connectors: &std::path::Path,
     cfg: &std::path::Path,
@@ -109,19 +130,20 @@ fn doctor_at(
 /// `--harness <id>` narrows the report AND the number to one connector.
 ///
 /// "Is this machine healthy" and "can I start THIS harness" are two questions, and a
-/// participant about to start one harness is asking the second: a machine can start Codex
-/// perfectly well while another connector's check fails and `goalcup doctor` leaves under 1.
-/// The failure planted here is an edited `claude-code-cli/harness.toml`, which no longer
-/// matches its pin; `codex-cli` is untouched.
+/// participant about to start one harness is asking the second: a machine can start one
+/// harness perfectly well while another connector's check fails and `goalcup doctor` leaves
+/// under 1. The failure planted here is the other connector's edited `harness.toml`, which no
+/// longer matches its pin; the asked-after one is untouched.
 #[test]
 fn harness_scopes_the_doctor_report_and_its_exit_code_to_one_connector() {
+    let (asked, other) = two_subjects();
     let cfg = cfg_with_a_daemon();
     let dir = support::empty_cfg();
     support::copy_connectors_into(&dir);
-    let claude = dir.join("claude-code-cli/harness.toml");
-    let text = std::fs::read_to_string(&claude).unwrap();
+    let edited = dir.join(&other).join("harness.toml");
+    let text = std::fs::read_to_string(&edited).unwrap();
     std::fs::write(
-        &claude,
+        &edited,
         format!("{text}\n# edited: no longer the pinned bytes\n"),
     )
     .unwrap();
@@ -138,14 +160,14 @@ fn harness_scopes_the_doctor_report_and_its_exit_code_to_one_connector() {
         );
     }
 
-    // No `PATH` here, so codex-cli's own `harness_executable` fails; what is pinned is that
-    // claude-code-cli's failure is not in the scoped report, and so not in its number.
+    // No `PATH` here, so the asked-after connector's own `harness_executable` fails; what is
+    // pinned is that the other's failure is not in the scoped report, and so not in its number.
     let mut scoped = opts();
-    scoped.harness = Some("codex-cli".to_string());
+    scoped.harness = Some(asked.clone());
     let (_, text) = doctor_at(&dir, &cfg, &scoped).unwrap();
-    assert!(text.contains("codex-cli"));
+    assert!(text.contains(&asked));
     assert!(
-        !text.contains("claude-code-cli"),
+        !text.contains(&other),
         "a scoped report is about the one connector: {text}"
     );
     scoped.json = true;
@@ -172,10 +194,12 @@ fn harness_scopes_the_doctor_report_and_its_exit_code_to_one_connector() {
     let err = doctor_at(&dir, &cfg, &absent)
         .expect_err("a harness this build does not ship is a refusal");
     assert_eq!(err.exit_code(), 1);
-    assert!(
-        format!("{err}").contains("codex-cli"),
-        "and it names the ids that are there: {err}"
-    );
+    for id in shipped_connector_ids() {
+        assert!(
+            format!("{err}").contains(&id),
+            "and it names the ids that are there: {err}"
+        );
+    }
 }
 
 /// An id roster drops exactly the connector whose `harness.toml` does not parse, because it
@@ -209,13 +233,19 @@ fn a_connector_whose_harness_toml_does_not_parse_is_a_named_failure_rather_than_
 /// same check without the report mentioning `--dev` at all.
 #[test]
 fn an_unpinned_rulebook_is_a_doctor_failure_whose_fix_names_the_one_door() {
+    let (base, _) = two_subjects();
+    let fork = "zz-unpinned-fork";
     let dir = support::empty_cfg();
     support::copy_connectors_into(&dir);
-    let forked = dir.join("codex-synthetic");
+    let forked = dir.join(fork);
     std::fs::create_dir(&forked).unwrap();
-    let text = std::fs::read_to_string(dir.join("codex-cli/harness.toml"))
+    let text = std::fs::read_to_string(dir.join(&base).join("harness.toml"))
         .unwrap()
-        .replacen("id = \"codex-cli\"", "id = \"codex-synthetic\"", 1);
+        .replacen(&format!("id = \"{base}\""), &format!("id = \"{fork}\""), 1);
+    assert!(
+        text.contains(&format!("id = \"{fork}\"")),
+        "the fork has its own id"
+    );
     std::fs::write(forked.join("harness.toml"), text).unwrap();
 
     let mut json = opts();
@@ -239,7 +269,7 @@ fn an_unpinned_rulebook_is_a_doctor_failure_whose_fix_names_the_one_door() {
             })
             .unwrap_or_else(|| panic!("{id} carries the pin gate: {document:#}"))
     };
-    let unpinned = gate("codex-synthetic");
+    let unpinned = gate(fork);
     assert_eq!(unpinned["level"], "fail", "{unpinned:#}");
     assert!(
         unpinned["fix"].as_str().unwrap().contains("--dev"),
@@ -263,9 +293,11 @@ fn an_unpinned_rulebook_is_a_doctor_failure_whose_fix_names_the_one_door() {
 /// starting anything or hashing the file; the report names the path only.
 #[test]
 fn doctor_fails_naming_a_missing_harness_and_passes_any_build_it_finds() {
+    let (asked, _) = two_subjects();
+    let program = program_of(&asked);
     let cfg = cfg_with_a_daemon();
     let mut scoped = opts();
-    scoped.harness = Some("codex-cli".to_string());
+    scoped.harness = Some(asked.clone());
     let bin = support::empty_cfg();
     let env = std::collections::BTreeMap::from([("PATH".to_string(), bin.display().to_string())]);
     let check = |text: &str| -> String {
@@ -290,12 +322,13 @@ fn doctor_fails_naming_a_missing_harness_and_passes_any_build_it_finds() {
     let line = check(&text);
     assert!(line.contains("FAIL"), "{line}");
     assert!(
-        line.contains("`codex` is not on PATH") && line.contains("codex-cli"),
+        line.contains(&format!("`{program}` is not on PATH")) && line.contains(&asked),
         "naming the program and the harness: {line}"
     );
 
-    // Something called `codex` that is not any measured build: it passes, named by its path.
-    let impostor = bin.join("codex");
+    // Something called by the program's name that is not any measured build: it passes, named
+    // by its path.
+    let impostor = bin.join(&program);
     let marker = bin.join("ran");
     std::fs::write(
         &impostor,

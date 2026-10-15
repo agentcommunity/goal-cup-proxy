@@ -1,24 +1,23 @@
-//! Characterization goldens for the harness contract (D42, slice S0): the daemon half that is
-//! reachable through the public surface.
+//! Characterization goldens for the harness contract (D42): the daemon half that is reachable
+//! through the public surface.
 //!
 //! * `<id>.daemon.json` per connector, through a real daemon (macOS only, like every test that
 //!   reserves a capture chain): what a capture entry created for the connector records and
-//!   answers. The `Launch` record's profile id and digest relation (the digest is the SHA-256 of
-//!   the connector's `harness.toml`), the native process identity the daemon admits into the
-//!   process handoff (`capture.termination.native_binary`, taken from the harness at create), and
-//!   the gaps a launch with and without a native scope leaves in the chain (the connector's native
-//!   binding: at launch, deferred, or not required).
-//! * `native-stream-labels.json`: the label and protocol hint of the native stream each
-//!   connector's entry opens (`<source>:<path relative to the source root>#g<n>`), which is
-//!   where the controlled workload's `native/` prefix is visible.
-//! * `redaction-extra-patterns.json`: the extra redaction patterns each connector carries, which
-//!   of them the streaming redactor accepts, a refusal for a pattern it has no recognizer for,
-//!   and the bytes and audit spans the redactor produces for each shipped connector over a fixed
-//!   corpus. `EXTRA_SHAPES` is private, so its recognizers are pinned by what they do.
+//!   answers. The `Launch` record's profile id, its digest relation (the SHA-256 of the
+//!   connector's `harness.toml`) and whether its folder digest matches the pin; the native
+//!   process identity the daemon admits into the process handoff
+//!   (`capture.termination.native_binary`); the gaps a launch with and without a native scope
+//!   leaves in the chain; and the label and protocol hint of each native stream the entry opens
+//!   (`<source>:<path relative to the source root>#g<n>`).
+//! * `redaction-extra-patterns.json`, shared: each streaming recognizer the daemon pins
+//!   (`EXTRA_PATTERN_SOURCES`, the regexes of the private `EXTRA_SHAPES`), what it does alone
+//!   and all together over a fixed corpus, and the refusals for a pattern with no recognizer
+//!   or a bad kind. It is keyed by recognizer, not by connector. Every shipped connector's own
+//!   list is checked to stream, and the list itself is in its `<id>.json`.
 //!
-//! The connector list is the `connectors/` directory (folders holding a `harness.toml`, sorted)
-//! and the per-connector fields come from each connector's files, so a new connector folder
-//! needs no edit here, only regenerated goldens.
+//! The connector list is `shipped_connector_ids()` and the per-connector fields come from each
+//! connector's files, so a new connector folder needs no edit here, only its regenerated
+//! `<id>.daemon.json`.
 //!
 //! Schema-driven native-plan and config-home refusals are tested in
 //! `src/runtime/capture/tests.rs`, because those items are `pub(super)`. Goldens are compared
@@ -31,8 +30,10 @@ use crate::common::redaction;
 use base64::Engine as _;
 use goalcup_daemon::redact::stream::StreamRedactor;
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource, EndReason};
+use goalcup_protocol::capture_policy::EXTRA_PATTERN_SOURCES;
 use goalcup_protocol::harness::HarnessManifest;
 use goalcup_protocol::manifest::RedactionPattern;
+use goalcup_protocol::pins::shipped_connector_ids;
 use redaction::{P1, Producer, daemon_time};
 use serde_json::{Value, json};
 #[cfg(target_os = "macos")]
@@ -94,28 +95,17 @@ fn connectors_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors")
 }
 
-/// The shipped connectors, by the rule the loaders discover them with: the folders under
-/// `connectors/` that hold a `harness.toml`, sorted. A new folder needs no edit here.
-fn shipped_ids() -> Vec<String> {
-    goalcup_protocol::harness::discover_connector_dirs(&connectors_root())
-        .expect("the connectors directory")
-        .iter()
-        .map(|d| d.file_name().unwrap().to_str().unwrap().to_string())
-        .collect()
-}
-
 fn shipped_harness(id: &str) -> HarnessManifest {
     let path = connectors_root().join(id).join("harness.toml");
     HarnessManifest::from_toml_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-/// The family the golden shape carries: the connector's capture program. Never keyed by id.
-fn family(id: &str) -> String {
-    shipped_harness(id).capture.executable.program
-}
-
-fn redaction_patterns(id: &str) -> Vec<RedactionPattern> {
-    goalcup_daemon::redact::extra_patterns_of(&shipped_harness(id))
+/// The recognizer for `EXTRA_PATTERN_SOURCES[i]`, under a kind of the test's own.
+fn recognizer(i: usize) -> RedactionPattern {
+    RedactionPattern {
+        kind: format!("extra_{i}"),
+        regex: EXTRA_PATTERN_SOURCES[i].to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -168,8 +158,15 @@ fn through(redactor: StreamRedactor, corpus: &[&[u8]]) -> Value {
     })
 }
 
+fn verdict(patterns: &[RedactionPattern]) -> &'static str {
+    match StreamRedactor::with_extra_patterns(patterns) {
+        Ok(_) => "ok",
+        Err(_) => "refused",
+    }
+}
+
 #[test]
-fn the_extra_redaction_patterns_and_their_recognizers_are_pinned() {
+fn the_extra_redaction_recognizers_are_pinned() {
     let corpus: Vec<&[u8]> = vec![
         TOKEN_COUNT,
         SSE_EVENT,
@@ -179,33 +176,20 @@ fn the_extra_redaction_patterns_and_their_recognizers_are_pinned() {
         HERMES_LINE,
         NEAR_MISS,
     ];
-    let mut per_connector = serde_json::Map::new();
-    for id in shipped_ids() {
-        let patterns = redaction_patterns(&id);
-        let family = family(&id);
-        let accepted = StreamRedactor::with_extra_patterns(&patterns).map(|_| "ok");
-        let each: Vec<Value> = patterns
-            .iter()
-            .map(|p| {
-                json!({
-                    "kind": p.kind,
-                    "regex": p.regex,
-                    "alone": StreamRedactor::with_extra_patterns(std::slice::from_ref(p))
-                        .map(|_| "ok").map_err(|_| "refused").unwrap_or_else(|e| e),
-                })
-            })
-            .collect();
-        let redactor = StreamRedactor::with_extra_patterns(&patterns).unwrap();
-        per_connector.insert(
-            id.clone(),
+    let all: Vec<RedactionPattern> = (0..EXTRA_PATTERN_SOURCES.len()).map(recognizer).collect();
+    let each: Vec<Value> = all
+        .iter()
+        .map(|p| {
             json!({
-                "family": family,
-                "extra_patterns": each,
-                "streaming_redactor_accepts_the_list": accepted.map_err(|_| "refused").unwrap_or_else(|e| e),
-                "over_the_corpus": through(redactor, &corpus),
-            }),
-        );
-    }
+                "kind": p.kind,
+                "regex": p.regex,
+                "alone": verdict(std::slice::from_ref(p)),
+                "over_the_corpus": StreamRedactor::with_extra_patterns(std::slice::from_ref(p))
+                    .map(|r| through(r, &corpus))
+                    .unwrap_or(Value::Null),
+            })
+        })
+        .collect();
     // A pattern with no recognizer is refused whatever its kind or regex; the empty list is the
     // shared policy alone.
     let stranger = RedactionPattern {
@@ -214,27 +198,37 @@ fn the_extra_redaction_patterns_and_their_recognizers_are_pinned() {
     };
     let bad_kind = RedactionPattern {
         kind: "has space".to_string(),
-        regex: redaction_patterns("codex-cli")[1].regex.clone(),
-    };
-    let known_under_another_kind = RedactionPattern {
-        kind: "renamed_plan_type".to_string(),
-        regex: redaction_patterns("codex-cli")[1].regex.clone(),
-    };
-    let verdict = |ps: &[RedactionPattern]| match StreamRedactor::with_extra_patterns(ps) {
-        Ok(_) => "ok",
-        Err(_) => "refused",
+        regex: EXTRA_PATTERN_SOURCES[1].to_string(),
     };
     check_golden(
         "redaction-extra-patterns.json",
         &json!({
-            "connectors": per_connector,
+            "recognizers": each,
+            "all_together": verdict(&all),
+            "all_together_over_the_corpus": through(StreamRedactor::with_extra_patterns(&all).unwrap(), &corpus),
             "unknown_regex": verdict(std::slice::from_ref(&stranger)),
-            "shipped_regex_under_a_bad_kind": verdict(std::slice::from_ref(&bad_kind)),
-            "shipped_regex_under_another_kind": verdict(std::slice::from_ref(&known_under_another_kind)),
+            "known_regex_under_a_bad_kind": verdict(std::slice::from_ref(&bad_kind)),
             "empty_list": verdict(&[]),
             "shared_policy_alone_over_the_corpus": through(StreamRedactor::new(), &corpus),
         }),
     );
+}
+
+/// Every shipped connector's `[redaction].extra_patterns` streams: each regex is one the daemon
+/// pins a recognizer for, and the list as a whole is accepted.
+#[test]
+fn every_shipped_connector_redaction_list_streams() {
+    for id in shipped_connector_ids() {
+        let patterns = goalcup_daemon::redact::extra_patterns_of(&shipped_harness(&id));
+        for p in &patterns {
+            assert!(
+                EXTRA_PATTERN_SOURCES.contains(&p.regex.as_str()),
+                "{id}: {:?} has no pinned streaming recognizer",
+                p.kind
+            );
+        }
+        assert_eq!(verdict(&patterns), "ok", "{id}: its list does not stream");
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -251,7 +245,7 @@ mod live {
     /// The shipped connectors and the controlled workload, as a connectors directory.
     fn connectors() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        for id in shipped_ids() {
+        for id in shipped_connector_ids() {
             support::copy_tree(&support::shipped_connector_dir(&id), &dir.path().join(&id));
         }
         let template = std::fs::read_to_string(
@@ -327,27 +321,16 @@ mod live {
                 launch.1 == hex::encode(Sha256::digest(&harness)),
             "launch_allowed_tool_rule": launch.2,
             "launch_process_handoff_digest": launch.3,
-            "launch_connector_dir_sha256": launch.4,
+            "launch_connector_dir_sha256_matches_pin": launch.4.is_some_and(|d| goalcup_protocol::pins::connector_dir_is_pinned(id, &d)),
             "gaps_after_launch": gaps,
         })
     }
-
-    /// File names under the config home that the first recording of these goldens used where
-    /// a native pattern has `*` segments. Optional: any other connector's native file is
-    /// derived from its first `[[capture.native]]` entry, `*` read as `unknown`.
-    const RECORDED_NATIVE_FILES: [(&str, &str); 2] = [
-        (
-            "codex-cli",
-            "sessions/2026/09/30/rollout-fixture-test-session.jsonl",
-        ),
-        ("claude-code-cli", "projects/a-slug/test-session.jsonl"),
-    ];
 
     /// The native streams a connector's entry opens, labelled and hinted: the label is
     /// `<source name>:<path relative to the source root>#g<generation>`, so it names the root
     /// and pattern each connector's native source resolves to.
     async fn native_opens(id: &str) -> Value {
-        const HERMES_ID: &str = "20260930_141500_a1b2c3";
+        const TIMESTAMP_HEX_ID: &str = "20260930_141500_a1b2c3";
         let dir = connectors();
         let harness = HarnessManifest::from_toml_str(
             &std::fs::read_to_string(dir.path().join(id).join("harness.toml")).unwrap(),
@@ -363,7 +346,7 @@ mod live {
                 (IdentitySource::None, _) => ("unused", Some("unused"), None),
                 (_, Some(Binding::Deferred)) => {
                     let session = match identity.grammar {
-                        Some(IdGrammar::TimestampHex) => HERMES_ID,
+                        Some(IdGrammar::TimestampHex) => TIMESTAMP_HEX_ID,
                         _ => "test-session",
                     };
                     (session, None, Some(session))
@@ -373,31 +356,30 @@ mod live {
         let path = dir.path().to_path_buf();
         let rig = Rig::start_with(move |config| config.connectors_dir = path).await;
         let config_home = rig.root.join("config-home");
-        let file = match RECORDED_NATIVE_FILES.iter().find(|(c, _)| *c == id) {
-            Some((_, rel)) => config_home.join(rel),
-            None => PathBuf::from(
-                native
-                    .root
-                    .replace("{config_home}", config_home.to_str().unwrap())
-                    .replace("{run_home}", rig.run_home_for(id).to_str().unwrap()),
-            )
-            .join(
-                native
-                    .pattern
-                    .replace("{id}", session)
-                    .replace('*', "unknown"),
-            ),
-        };
+        // The native file the first `[[capture.native]]` entry names, each `*` read as `unknown`.
+        let file = PathBuf::from(
+            native
+                .root
+                .replace("{config_home}", config_home.to_str().unwrap())
+                .replace("{run_home}", rig.run_home_for(id).to_str().unwrap()),
+        )
+        .join(
+            native
+                .pattern
+                .replace("{id}", session)
+                .replace('*', "unknown"),
+        );
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(&file, b"{\"type\":\"native\"}\n").unwrap();
         let info = rig.created_at_its_home(id).await;
+        // Written after the create, so a `since_run_start` source (which reads from the create
+        // time, in whole seconds) never misses it at a second boundary.
+        std::fs::write(&file, b"{\"type\":\"native\"}\n").unwrap();
         let goal = rig.goal_accepted(&info.entry_id, b"say hi").await;
         let mut request = launch_request(&goal);
         request.native_scope = launch_scope.map(str::to_string);
         assert_eq!(rig.launch(&info.entry_id, &request).await.status(), 204);
         if launch_scope.is_none() {
-            // A deferred identity (Hermes) is learnt at the end of the turn: the finish
-            // carries it.
+            // A deferred identity is learnt at the end of the turn: the finish carries it.
             let sealed = rig
                 .seal_with(
                     &info.entry_id,
@@ -440,15 +422,6 @@ mod live {
     }
 
     #[tokio::test]
-    async fn the_native_stream_labels_and_hints_of_each_connector_are_pinned() {
-        let mut out = serde_json::Map::new();
-        for id in shipped_ids().iter().map(String::as_str).chain([CONTROLLED]) {
-            out.insert(id.to_string(), native_opens(id).await);
-        }
-        check_golden("native-stream-labels.json", &Value::Object(out));
-    }
-
-    #[tokio::test]
     async fn the_daemon_side_of_each_connector_is_pinned() {
         let dir = connectors();
         let path = dir.path().to_path_buf();
@@ -456,9 +429,14 @@ mod live {
         // Every differing connector is reported together, not just the first.
         let mut checked = 0;
         let mut mismatches = Vec::new();
-        for id in shipped_ids().iter().map(String::as_str).chain([CONTROLLED]) {
+        for id in shipped_connector_ids()
+            .iter()
+            .map(String::as_str)
+            .chain([CONTROLLED])
+        {
             let with_scope = entry(&rig, id, Some("test-session")).await;
             let without_scope = entry(&rig, id, None).await;
+            let native_streams = native_opens(id).await;
             let name = format!("{id}.daemon.json");
             checked += 1;
             mismatches.extend(golden_mismatch(
@@ -467,6 +445,7 @@ mod live {
                     "connector": id,
                     "launched_with_a_native_scope": with_scope,
                     "launched_without_a_native_scope": without_scope,
+                    "native_streams_opened": native_streams,
                 }),
             ));
         }

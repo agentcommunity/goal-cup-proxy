@@ -1,5 +1,5 @@
 # Template for crates/goalcup-cli/tests/fixtures/harness-kit/<HARNESS_ID>/expect.toml.
-# Format (parse_expect in crates/goalcup-cli/tests/full/harness_contract_kit.rs):
+# Format (parse_expect in crates/goalcup-cli/tests/it/harness_contract_kit.rs):
 # - one `key = "value"` per line; the value is a JSON string ("\n" and "\"" escapes work);
 # - `#` starts a comment ANYWHERE on a line, even inside quotes: no value may contain `#`;
 # - an optional key may be left out or set to "" (both mean absent);

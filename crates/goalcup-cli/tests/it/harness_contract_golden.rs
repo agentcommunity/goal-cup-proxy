@@ -1,34 +1,25 @@
-//! Characterization goldens for the harness contract (D42, slice S0).
+//! Characterization goldens for the harness contract (D42).
 //!
-//! Every per-connector fact the capture path takes from a `family` string, a connector id or
-//! `capture_*` manifest data is rendered here as deterministic JSON and compared byte for byte
-//! with a committed file under `tests/fixtures/harness-golden/`. The later data-only refactor
-//! (a harness is a `harness.toml`, not a `match family`) has to leave every file in that
-//! directory unchanged, except for the differences its design names.
+//! Every per-connector fact the capture path takes from a connector's files is rendered here as
+//! deterministic JSON and compared byte for byte with a committed file under
+//! `tests/fixtures/harness-golden/`. The daemon and the verifier render their own halves in their
+//! `harness_contract_golden` tests, into the same directory.
 //!
-//! What this file renders (the daemon-side and verifier-side sites are in the daemon's and the
-//! verifier's own `harness_contract_golden` tests, writing into the same directory):
+//! * One file per connector, `<id>.json`: the capture profile as declared, whether the folder's
+//!   digest matches its pin, the resolved capture plan (program, argv with the goal placement,
+//!   environment, process group, kill fields), the stream decision and its pipes, the per-run
+//!   home tree where there is one, the CA variables, the credential verdicts, the registered
+//!   process handle, the redaction patterns, and the argv and environment probes whose verdict
+//!   for this connector differs from the shared policy.
+//! * Shared files, which no connector changes: `policy.json` (the generic argv and environment
+//!   deny verdicts over fixed probe lists, the CA registry and the credential names),
+//!   `identity-grammar.json` (the stdout JSON tee and the stderr marker grammar over fixture
+//!   streams) and `loader-script.json`.
 //!
-//! * per connector (`<id>.json`): the capture profile as declared, the resolved capture plan
-//!   (program, argv with the goal placement, environment names and values, process group, kill
-//!   fields), the `CaptureStreams` decision and its pipes, the per-run home tree where there is
-//!   one (every path, type, mode and file SHA-256), the CA variables and their mode, the
-//!   credential variable and the verdicts on its value, the argv and environment deny
-//!   decisions over fixed probe lists, the registered
-//!   `ProcessHandle` fields that come from the manifest, the termination settings and the
-//!   redaction patterns the profile carries;
-//! * across families (`cross-family.json`): the CA, credential and argv-guard decisions over
-//!   every family string, and the stream decision for every family and credential;
-//! * identity (`identity-grammar.json`): the Codex stdout tee and the Hermes stderr marker
-//!   grammar over fixture streams;
-//! * the loader script (`loader-script.json`) and the connector enumeration
-//!   (`enumeration.json`).
-//!
-//! The connector list is the `connectors/` directory, discovered by the rule the loaders use,
-//! and every per-connector field is derived from the connector's own files. Adding a schema-1
-//! connector folder therefore needs no edit here: regenerate, and review the new `<id>.json`
-//! and the `enumeration.json` diff in the same PR
-//! (`a_new_schema1_connector_needs_no_edit_to_this_file` proves it).
+//! The connector list is `shipped_connector_ids()`, and every per-connector field is derived
+//! from the connector's own files. Adding a connector folder therefore needs no edit here and
+//! changes no shared file: regenerate, and review the new `<id>.json` in the same PR
+//! (`a_new_connector_needs_no_edit_to_this_file` proves it).
 //!
 //! Values are synthetic. Only run-specific paths are normalised (the test's temporary
 //! directory becomes `<TMP>`, the loopback proxy URL becomes `<PROXY_URL>`); everything else is
@@ -36,13 +27,12 @@
 //! process variable.
 //!
 //! To regenerate after a deliberate change: `GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline
-//! -p goalcup-cli --test full harness_contract_golden::`, then read the diff. The switch is off unless
-//! set to exactly `1`.
+//! -p goalcup-cli --test it harness_contract_golden::`, then read the diff. The switch is off
+//! unless set to exactly `1`.
 
 use crate::common::m2_profile_support;
 
 use goalcup_cli::connector::HarnessConnector;
-use goalcup_cli::key_scan::FragmentMatcher;
 use goalcup_cli::launch::{
     LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, build_capture_launch,
     child_secret_for_harness, handle, spawn, stdout_tee, tee_marked,
@@ -53,6 +43,7 @@ use goalcup_protocol::capture_policy::{
     CA_REGISTRY, CREDENTIAL_ENV, CaMode, EnvContext, capture_arg_denied, env_key_denied,
 };
 use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, Origin};
+use goalcup_protocol::pins::shipped_connector_ids;
 use m2_profile_support as s;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -65,14 +56,6 @@ use std::time::{Duration, Instant};
 
 /// The controlled test workload: a fixture of this file, never a folder under `connectors/`.
 const CONTROLLED: &str = "m2-controlled-workload";
-/// Every family string a manifest of this tree can carry, and one nobody ships.
-const FAMILIES: [&str; 5] = [
-    "codex",
-    "claude-code",
-    "hermes",
-    "controlled-workload",
-    "opencode",
-];
 /// The synthetic provider key every probe uses where a key must be well formed.
 const WELL_FORMED_KEY: &str = "sk-0000111122223333444455556666";
 
@@ -214,13 +197,6 @@ fn declared(id: &str) -> Subject {
     }
 }
 
-/// The connector as the launch tests use it: its base recipe ([`base_recipe`]).
-fn base_subject(id: &str) -> Subject {
-    let mut subject = declared(id);
-    subject.connector = base_recipe(&subject.connector);
-    subject
-}
-
 /// A copy of `c` without its `capture.platform` table: the plan is the base recipe on every
 /// platform, so the golden bytes are the same wherever it runs. The declared overrides are in
 /// `capture_profile`.
@@ -260,8 +236,9 @@ fn verdict(r: Result<(), ProtocolError>) -> String {
 // Fixed probe lists.
 // ---------------------------------------------------------------------------------------
 
-/// Arguments the deny lists are asked about: every row of both lists in several spellings, the
-/// Hermes pre-argparse options, abbreviations and clusters, and ordinary arguments.
+/// Arguments the deny lists are asked about: every row of the generic list in several spellings,
+/// options an argv guard may name before the harness's own parser, abbreviations and clusters,
+/// and ordinary arguments.
 const ARGV_PROBES: &[&str] = &[
     "--remote",
     "--remote=host",
@@ -509,44 +486,6 @@ fn tree(root: &Path) -> Vec<Value> {
     out
 }
 
-fn streams_json(family: &str, credential: Option<&str>) -> Value {
-    let (decision, stdout, stderr) = if family == "hermes" || credential.is_some() {
-        ("MarkedAndScanned", true, true)
-    } else if family == "codex" {
-        ("CodexStdout", true, false)
-    } else if family == "claude-code" {
-        ("PreassignedSession", false, false)
-    } else {
-        ("Inherit", false, false)
-    };
-    json!({
-        "decision": decision,
-        "pipes": {"stdout": stdout, "stderr": stderr},
-    })
-}
-
-/// The V1-era fields the golden shape still carries for one connector, derived from its files
-/// and never from its id, so a new folder needs no edit here. Every shipped connector is
-/// schema 1 only (OS-29): capture only, and its family is its program. The controlled workload
-/// is this file's own fixture, not a folder under `connectors/`.
-struct Legacy {
-    family: String,
-    capture_only: bool,
-}
-
-fn legacy(c: &HarnessConnector) -> Legacy {
-    if c.loaded.manifest.id == CONTROLLED {
-        return Legacy {
-            family: "controlled-workload".to_string(),
-            capture_only: false,
-        };
-    }
-    Legacy {
-        family: profile(c).executable.program.clone(),
-        capture_only: true,
-    }
-}
-
 /// The stream decision of one connector, named from the launcher's own plan over its profile:
 /// the `StreamPlan` stream uses and the `LaunchScope`. A key scan pipes both streams; otherwise
 /// the stream that carries the identity and when the native store binds name the decision.
@@ -577,13 +516,11 @@ fn connector_streams_json(p: &CaptureSpec) -> Value {
     })
 }
 
-/// The schema-1 fields projected into the historical golden shape. The golden bytes remain a
-/// migration oracle; they are not a second launch input.
+/// The capture profile as declared: what the launch, the identity and the native binding read.
 fn profile_json(p: &CaptureSpec) -> Value {
     let mut out = serde_json::Map::new();
     out.insert("args".into(), json!(p.args));
     out.insert("auth_hosts".into(), json!(p.auth_hosts));
-    out.insert("automatic_goal".into(), json!(true));
     out.insert("ca_env".into(), json!(p.ca.env));
     out.insert("config_home".into(), json!(p.home.config_home.as_str()));
     out.insert("continuation".into(), json!(p.continuation));
@@ -610,6 +547,22 @@ fn profile_json(p: &CaptureSpec) -> Value {
         );
     }
     out.insert("home".into(), json!(p.home.run_home.as_str()));
+    let id = &p.identity;
+    out.insert(
+        "identity".into(),
+        json!({
+            "source": id.source.as_str(),
+            "binding": id.binding.map(|b| b.as_str()),
+            "grammar": id.grammar.map(|g| g.as_str()),
+            "match_field": id.match_field,
+            "match_value": id.match_value,
+            "id_field": id.id_field,
+            "prefix": id.prefix,
+        }),
+    );
+    out.insert("interactive".into(), json!(p.interactive));
+    out.insert("resume_args".into(), json!(p.resume_args));
+    out.insert("skills_dir".into(), json!(p.home.skills_dir));
     out.insert(
         "hosts".into(),
         json!(
@@ -652,58 +605,91 @@ fn credential_json(p: &CaptureSpec) -> Value {
     }
     json!({
         "credential_env": p.credential.as_ref().map(|c| c.env.as_str()),
-        "allowed_names": CREDENTIAL_ENV,
-        format!("child_secret_{}", "from_env"): out,
+        "child_secret_from_env": out,
     })
 }
 
+/// Each CA variable the profile names: its registry mode and the value the plan gives it.
 fn ca_json(l: &s::Layout, p: &CaptureSpec, plan: &LaunchPlan) -> Value {
     let rows: Vec<Value> =
         p.ca.env
             .iter()
             .map(|name| {
-                let mode = match CA_REGISTRY.iter().find(|(n, _)| *n == name) {
-                    Some((_, CaMode::Extend)) => "extends_roots",
-                    Some((_, CaMode::Replace)) => "replaces_roots_for_one_family",
-                    Some(_) => "unlisted",
-                    None => "unlisted",
-                };
                 json!({
                     "name": name,
-                    "mode": mode,
+                    "registry_mode": ca_mode(name),
                     "value_in_plan": plan.env_set.get(name).map(|v| norm(l, v)),
                 })
             })
             .collect();
-    json!({
-        "ca_env": rows,
-        "extends_roots_list": CA_REGISTRY.iter().filter_map(|(name, mode)| (*mode == CaMode::Extend).then_some(*name)).collect::<Vec<_>>(),
-        "replaces_roots_by_family": [["hermes", "HERMES_CA_BUNDLE"]],
-    })
+    json!(rows)
 }
 
-fn legacy_env_refusal(key: &str, home_env: Option<&str>) -> Option<&'static str> {
-    if home_env.is_some_and(|h| key.eq_ignore_ascii_case(h)) {
-        return Some("is pinned by the capture launch itself");
-    }
-    match env_key_denied(key, EnvContext::CaptureEnv) {
-        Some(
-            "changes certificate trust: a CA variable belongs in `capture.ca`, not `capture.env`",
-        ) => Some(
-            "changes certificate trust: a CA variable belongs in `capture.ca_env`, not `capture.env`",
-        ),
-        other => other,
+fn ca_mode(name: &str) -> &'static str {
+    match CA_REGISTRY.iter().find(|(n, _)| *n == name) {
+        Some((_, CaMode::Extend)) => "extend",
+        Some((_, CaMode::Replace)) => "replace",
+        Some(_) | None => "unlisted",
     }
 }
 
-fn legacy_guard_refusal(p: &CaptureSpec, arg: &str) -> Option<&'static str> {
-    p.argv_guard.as_ref().and_then(|guard| guard.denies(arg)).map(|_| {
-        if arg.starts_with("--") {
-            "is, or abbreviates, an option Hermes acts on before argparse (a profile, a mode or help)"
-        } else {
-            "names `-p` or `-h`, which Hermes acts on before argparse (a profile or help)"
-        }
-    })
+/// What validation says when `edit` is applied to the connector's manifest.
+fn validated_with(
+    m: &HarnessManifest,
+    origin: Origin,
+    edit: impl FnOnce(&mut CaptureSpec),
+) -> String {
+    let mut m = m.clone();
+    edit(&mut m.capture);
+    verdict(m.validate(origin))
+}
+
+/// The verdict the shared policy alone gives a probe placed in `field`.
+fn policy_verdict(field: &str, denied: Option<&str>) -> String {
+    match denied {
+        Some(_) => format!("refused:{field}"),
+        None => "ok".to_string(),
+    }
+}
+
+/// The argv probes whose verdict, as the first element of this connector's `capture.args`,
+/// differs from the shared policy's (`policy.json`): what this connector's own rules add.
+fn argv_differences(m: &HarnessManifest, origin: Origin) -> Vec<Value> {
+    ARGV_PROBES
+        .iter()
+        .filter_map(|arg| {
+            let got = validated_with(m, origin, |p| p.args.insert(0, arg.to_string()));
+            (got != policy_verdict("capture.args", capture_arg_denied(arg))).then(|| {
+                json!({
+                    "arg": arg,
+                    "in_capture_args": got,
+                    "argv_guard": m.capture.argv_guard.as_ref().and_then(|g| g.denies(arg)),
+                })
+            })
+        })
+        .collect()
+}
+
+/// The environment probes whose verdict, as one more `capture.env` key of this connector,
+/// differs from the shared policy's (`policy.json`).
+fn env_differences(m: &HarnessManifest, origin: Origin) -> Vec<Value> {
+    ENV_PROBES
+        .iter()
+        .filter_map(|name| {
+            // A value every value rule admits, so the verdict is about the name.
+            let value = if name.eq_ignore_ascii_case("SHELL") {
+                "/bin/sh"
+            } else {
+                "1"
+            };
+            let got = validated_with(m, origin, |p| {
+                p.env.insert(name.to_string(), value.to_string());
+            });
+            let policy = env_key_denied(name, EnvContext::CaptureEnv);
+            (got != policy_verdict("capture.env", policy))
+                .then(|| json!({"name": name, "in_capture_env": got}))
+        })
+        .collect()
 }
 
 fn termination_json(m: &HarnessManifest) -> Value {
@@ -811,34 +797,16 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         }
     };
 
-    let home_env = dp.home.env.as_deref();
-    let argv_deny: Vec<Value> = ARGV_PROBES
-        .iter()
-        .map(|arg| {
-            json!({
-                "arg": arg,
-                "generic": capture_arg_denied(arg),
-                "for_family": legacy_guard_refusal(dp, arg),
-            })
-        })
-        .collect();
-    let env_deny: Vec<Value> = ENV_PROBES
-        .iter()
-        .map(|name| json!({"name": name, "denied": legacy_env_refusal(name, home_env)}))
-        .collect();
-
-    let legacy = legacy(dc);
     let origin = origin_of(id);
+    let m = &dc.loaded.manifest;
 
     json!({
         "connector": {
-            "id": dc.loaded.manifest.id,
-            "family": legacy.family,
-            "capture_only": legacy.capture_only,
+            "id": m.id,
             "launch_program": dp.executable.program,
             "launch_home_env": dp.home.env,
-            "validates": verdict(dc.loaded.manifest.validate(origin)),
-            format!("validate_{}", "capture"): verdict(dc.loaded.manifest.validate(origin)),
+            "validates": verdict(m.validate(origin)),
+            "dir_digest_matches_its_pin": goalcup_protocol::pins::connector_dir_is_pinned(id, &dc.loaded.connector_dir_sha256),
             "files_dir": files,
         },
         "capture_profile": profile_json(dp),
@@ -849,37 +817,36 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         "ca": ca_json(&l, dp, &plan),
         "credential": credential_json(dp),
         "termination": {
-            "kill": termination_json(&dc.loaded.manifest),
+            "kill": termination_json(m),
             "registered_handle": handle_json,
         },
-        "argv_deny": argv_deny,
-        "env_deny": env_deny,
+        "argv_differs_from_policy": argv_differences(m, origin),
+        "env_differs_from_policy": env_differences(m, origin),
         "redaction": {
-            "extra_patterns": dc.loaded.manifest.redaction.as_ref()
+            "extra_patterns": m.redaction.as_ref()
                 .map(|r| r.extra_patterns.iter().map(|p| json!({"kind": p.kind, "regex": p.regex})).collect::<Vec<_>>())
                 .unwrap_or_default(),
         },
     })
 }
 
-/// Every per-connector golden for the connectors directory `root`: one `(<id>.json, value)` per
-/// connector it holds, in discovery order.
-fn goldens(root: &Path) -> Vec<(String, Value)> {
-    connector_ids(root)
-        .into_iter()
+/// One `(<id>.json, value)` per connector of `ids`, each loaded from the connectors directory
+/// `root`.
+fn goldens(root: &Path, ids: &[String]) -> Vec<(String, Value)> {
+    ids.iter()
         .map(|id| {
-            let c = goalcup_cli::connector::load_harness(root, &id, false)
+            let c = goalcup_cli::connector::load_harness(root, id, false)
                 .unwrap_or_else(|e| panic!("{id}: {e}"));
             (format!("{id}.json"), connector_golden(&c))
         })
         .collect()
 }
 
-/// One `<id>.json` per connector the directory holds: a new folder under `connectors/` gets its
-/// golden from the regenerate switch, with no edit here. Every differing connector is reported.
+/// One `<id>.json` per shipped connector: a new folder under `connectors/` gets its golden from
+/// the regenerate switch, with no edit here. Every differing connector is reported.
 #[test]
 fn every_shipped_connector_capture_behaviour_is_pinned() {
-    check_goldens(&goldens(&s::connectors_dir()));
+    check_goldens(&goldens(&s::connectors_dir(), &shipped_connector_ids()));
 }
 
 #[test]
@@ -892,158 +859,31 @@ fn the_controlled_workload_capture_behaviour_is_pinned() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Across families.
+// The shared policy.
 // ---------------------------------------------------------------------------------------
 
-/// A valid base manifest whose family, CA variables and credential the matrices vary. The
-/// shipped Codex manifest accepts every family's argv guard, so a refusal in a row is the
-/// field the row varies.
-fn base() -> HarnessManifest {
-    s::shipped("codex-cli").loaded.manifest
-}
-
-fn legacy_ca_verdict(family: &str, names: &[&str]) -> String {
-    let duplicate = names
-        .iter()
-        .enumerate()
-        .any(|(i, name)| names[..i].contains(name));
-    let listed = names.iter().all(|name| {
-        matches!(
-            *name,
-            "CODEX_CA_CERTIFICATE" | "NODE_EXTRA_CA_CERTS" | "HERMES_CA_BUNDLE"
-        )
-    });
-    let replacing_for_other = family != "hermes" && names.contains(&"HERMES_CA_BUNDLE");
-    if names.is_empty() || duplicate || !listed || replacing_for_other {
-        "refused:capture.ca_env".to_string()
-    } else {
-        "ok".to_string()
-    }
-}
-
-fn legacy_credential_verdict(family: &str, name: Option<&str>) -> String {
-    match name {
-        None => "ok",
-        Some("DEEPSEEK_API_KEY") if family != "codex" => "ok",
-        _ => "refused:capture.credential_env",
-    }
-    .to_string()
-}
-
-fn legacy_family_guard(family: &str, arg: &str) -> Option<&'static str> {
-    if family != "hermes" {
-        return None;
-    }
-    let hermes = s::shipped("hermes-cli");
-    legacy_guard_refusal(&hermes.loaded.manifest.capture, arg)
-}
-
+/// The capture policy every connector shares, over the fixed probe lists: the generic argv and
+/// environment deny verdicts, the CA registry and the admitted credential names. A connector's
+/// own file lists only the probes whose verdict differs for it, so a policy change rewrites this
+/// one file, not one per connector.
 #[test]
-fn the_family_keyed_decisions_over_every_family_are_pinned() {
-    // The CA variable a family may name.
-    let ca_sets: [(&str, Vec<&str>); 10] = [
-        ("codex_ca", vec!["CODEX_CA_CERTIFICATE"]),
-        ("node_extra_ca", vec!["NODE_EXTRA_CA_CERTS"]),
-        ("hermes_ca", vec!["HERMES_CA_BUNDLE"]),
-        ("ssl_cert_file", vec!["SSL_CERT_FILE"]),
-        ("requests_ca_bundle", vec!["REQUESTS_CA_BUNDLE"]),
-        ("empty_name", vec![""]),
-        ("none", vec![]),
-        (
-            "duplicate",
-            vec!["NODE_EXTRA_CA_CERTS", "NODE_EXTRA_CA_CERTS"],
-        ),
-        ("two", vec!["CODEX_CA_CERTIFICATE", "NODE_EXTRA_CA_CERTS"]),
-        (
-            "measured_and_replacing",
-            vec!["NODE_EXTRA_CA_CERTS", "HERMES_CA_BUNDLE"],
-        ),
-    ];
-    let mut ca = BTreeMap::new();
-    for family in FAMILIES {
-        let mut row = BTreeMap::new();
-        for (label, names) in &ca_sets {
-            row.insert(*label, legacy_ca_verdict(family, names));
-        }
-        ca.insert(family, row);
-    }
-
-    // The credential variable a family may name.
-    let credentials: [(&str, Option<&str>); 4] = [
-        ("none", None),
-        ("deepseek", Some("DEEPSEEK_API_KEY")),
-        ("openai", Some("OPENAI_API_KEY")),
-        ("empty", Some("")),
-    ];
-    let mut credential = BTreeMap::new();
-    for family in FAMILIES {
-        let mut row = BTreeMap::new();
-        for (label, name) in credentials {
-            row.insert(label, legacy_credential_verdict(family, name));
-        }
-        credential.insert(family, row);
-    }
-
-    // The argv guard of every family over the probe list.
-    let mut argv = BTreeMap::new();
-    for family in FAMILIES {
-        let row: Vec<Value> = ARGV_PROBES
-            .iter()
-            .map(|arg| json!([arg, legacy_family_guard(family, arg)]))
-            .collect();
-        argv.insert(family, row);
-    }
-
-    // The same argument as one more element of the recipe: whether validation refuses it.
-    let mut argv_in_recipe = BTreeMap::new();
-    for family in FAMILIES {
-        let mut row = BTreeMap::new();
-        for arg in [
-            "--profile=x",
-            "--tui",
-            "-p",
-            "-Qh",
-            "--prof",
-            "--query=x",
-            "-Q",
-        ] {
-            let refused =
-                capture_arg_denied(arg).is_some() || legacy_family_guard(family, arg).is_some();
-            row.insert(
-                arg,
-                if refused {
-                    "refused:capture.args".to_string()
-                } else {
-                    "ok".to_string()
-                },
-            );
-        }
-        argv_in_recipe.insert(family, row);
-    }
-
-    // The stream decision for every family and credential.
-    let mut streams = BTreeMap::new();
-    for family in FAMILIES {
-        let mut row = BTreeMap::new();
-        for (label, name) in [
-            ("no_credential", None),
-            ("credential", Some("DEEPSEEK_API_KEY")),
-        ] {
-            row.insert(label, streams_json(family, name));
-        }
-        streams.insert(family, row);
-    }
-
+fn the_shared_capture_policy_is_pinned() {
     check_golden(
-        "cross-family.json",
+        "policy.json",
         &json!({
-            "families": FAMILIES,
-            "base_manifest": {"id": base().id, "family": "codex", "baseline": "ok"},
-            "ca_env_by_family": ca,
-            "credential_by_family": credential,
-            "argv_guard_by_family": argv,
-            "argv_in_recipe_by_family": argv_in_recipe,
-            "capture_streams_by_family": streams,
+            "argv": ARGV_PROBES
+                .iter()
+                .map(|arg| json!({"arg": arg, "denied": capture_arg_denied(arg)}))
+                .collect::<Vec<_>>(),
+            "env": ENV_PROBES
+                .iter()
+                .map(|name| json!({"name": name, "denied": env_key_denied(name, EnvContext::CaptureEnv)}))
+                .collect::<Vec<_>>(),
+            "ca_registry": CA_REGISTRY
+                .iter()
+                .map(|(name, _)| json!({"name": name, "mode": ca_mode(name)}))
+                .collect::<Vec<_>>(),
+            "credential_env_names": CREDENTIAL_ENV,
         }),
     );
 }
@@ -1105,8 +945,9 @@ fn started(id: &str) -> Vec<u8> {
     format!("{{\"type\":\"thread.started\",\"thread_id\":\"{id}\"}}\n").into_bytes()
 }
 
-/// What the Codex stdout tee announced for these chunks, and what it forwarded.
-fn codex_tee(chunks: Vec<Vec<u8>>, closed: bool) -> Value {
+/// What the stdout JSON tee (`identity.source = "stdout_json"`) announced for these chunks,
+/// and what it forwarded.
+fn stdout_json_tee(chunks: Vec<Vec<u8>>, closed: bool) -> Value {
     let input: Vec<u8> = chunks.iter().flatten().copied().collect();
     let (tx, rx) = std::sync::mpsc::channel();
     let sink = Sink::default();
@@ -1125,8 +966,8 @@ fn codex_tee(chunks: Vec<Vec<u8>>, closed: bool) -> Value {
     })
 }
 
-/// What the Hermes stderr tee read as the session marker.
-fn hermes_marker(chunks: Vec<Vec<u8>>) -> Value {
+/// What the stderr tee (`identity.source = "stderr_line"`) read as the session marker.
+fn stderr_marker(chunks: Vec<Vec<u8>>) -> Value {
     let tee = tee_marked(Chunks::new(chunks), Sink::default(), None).unwrap();
     let marker = tee.marker_until(Instant::now() + Duration::from_secs(20));
     match marker {
@@ -1152,11 +993,14 @@ fn the_identity_grammars_are_pinned() {
     let mut at_limit = big(limit);
     at_limit.push(b'\n');
 
-    let codex_cases: Vec<(&str, Value)> = vec![
-        ("thread_started", codex_tee(vec![started("t-1")], false)),
+    let stdout_cases: Vec<(&str, Value)> = vec![
+        (
+            "thread_started",
+            stdout_json_tee(vec![started("t-1")], false),
+        ),
         (
             "after_noise",
-            codex_tee(
+            stdout_json_tee(
                 vec![
                     line("not json"),
                     line("{\"type\":\"turn.started\"}"),
@@ -1167,95 +1011,95 @@ fn the_identity_grammars_are_pinned() {
         ),
         (
             "one_byte_chunks",
-            codex_tee(
+            stdout_json_tee(
                 started("t-3").chunks(1).map(<[u8]>::to_vec).collect(),
                 false,
             ),
         ),
         (
             "no_thread_id",
-            codex_tee(vec![line("{\"type\":\"thread.started\"}")], false),
+            stdout_json_tee(vec![line("{\"type\":\"thread.started\"}")], false),
         ),
         (
             "numeric_thread_id",
-            codex_tee(
+            stdout_json_tee(
                 vec![line("{\"type\":\"thread.started\",\"thread_id\":7}")],
                 false,
             ),
         ),
         (
             "never_started",
-            codex_tee(vec![line("{\"type\":\"turn.started\"}")], false),
+            stdout_json_tee(vec![line("{\"type\":\"turn.started\"}")], false),
         ),
         (
             "unterminated_last_line",
-            codex_tee(
+            stdout_json_tee(
                 vec![started("t-4").strip_suffix(b"\n").unwrap().to_vec()],
                 false,
             ),
         ),
         (
             "first_of_two_wins",
-            codex_tee(vec![started("first"), started("second")], false),
+            stdout_json_tee(vec![started("first"), started("second")], false),
         ),
         (
             "type_must_be_exact",
-            codex_tee(
+            stdout_json_tee(
                 vec![line("{\"type\":\"thread.started.x\",\"thread_id\":\"t\"}")],
                 false,
             ),
         ),
         (
             "crlf",
-            codex_tee(
+            stdout_json_tee(
                 vec![b"{\"type\":\"thread.started\",\"thread_id\":\"t-5\"}\r\n".to_vec()],
                 false,
             ),
         ),
         (
             "long_id_is_not_judged_here",
-            codex_tee(vec![started(&"a".repeat(200))], false),
+            stdout_json_tee(vec![started(&"a".repeat(200))], false),
         ),
         (
             "overlong_noise_then_started",
-            codex_tee(vec![overlong_noise.clone(), started("late")], false),
+            stdout_json_tee(vec![overlong_noise.clone(), started("late")], false),
         ),
         (
             "overlong_started_line_is_skipped",
-            codex_tee(vec![overlong_started, started("after")], false),
+            stdout_json_tee(vec![overlong_started, started("after")], false),
         ),
         (
             "line_exactly_at_the_limit_then_started",
-            codex_tee(vec![at_limit, started("ok")], false),
+            stdout_json_tee(vec![at_limit, started("ok")], false),
         ),
         (
             "closed_destination_still_announces",
-            codex_tee(vec![started("t-6")], true),
+            stdout_json_tee(vec![started("t-6")], true),
         ),
-        ("empty_stream", codex_tee(vec![], false)),
+        ("empty_stream", stdout_json_tee(vec![], false)),
     ];
 
     let id = "20260930_141500_a1b2c3";
     let other = "20260930_141501_ffeedd";
-    let marker = |text: String| hermes_marker(vec![line(&text)]);
-    let hermes_cases: Vec<(&str, Value)> = vec![
+    let marker = |text: String| stderr_marker(vec![line(&text)]);
+    let stderr_cases: Vec<(&str, Value)> = vec![
         ("valid", marker(format!("session_id: {id}"))),
         (
             "valid_repeated",
-            hermes_marker(vec![
+            stderr_marker(vec![
                 line(&format!("session_id: {id}")),
                 line(&format!("session_id: {id}")),
             ]),
         ),
         (
             "conflicting",
-            hermes_marker(vec![
+            stderr_marker(vec![
                 line(&format!("session_id: {id}")),
                 line(&format!("session_id: {other}")),
             ]),
         ),
-        ("absent", hermes_marker(vec![line("hello")])),
-        ("empty_stream", hermes_marker(vec![])),
+        ("absent", stderr_marker(vec![line("hello")])),
+        ("empty_stream", stderr_marker(vec![])),
         ("no_space_after_colon", marker(format!("session_id:{id}"))),
         ("two_spaces", marker(format!("session_id:  {id}"))),
         ("leading_space", marker(format!(" session_id: {id}"))),
@@ -1263,7 +1107,7 @@ fn the_identity_grammars_are_pinned() {
         ("trailing_text", marker(format!("session_id: {id} x"))),
         (
             "trailing_cr",
-            hermes_marker(vec![format!("session_id: {id}\r\n").into_bytes()]),
+            stderr_marker(vec![format!("session_id: {id}\r\n").into_bytes()]),
         ),
         (
             "uppercase_hex",
@@ -1300,7 +1144,7 @@ fn the_identity_grammars_are_pinned() {
         ("prefix_case", marker(format!("Session_id: {id}"))),
         (
             "split_across_chunks",
-            hermes_marker(vec![
+            stderr_marker(vec![
                 b"session_".to_vec(),
                 b"id: 2026".to_vec(),
                 b"0930_141500_a1b2c3\n".to_vec(),
@@ -1308,11 +1152,11 @@ fn the_identity_grammars_are_pinned() {
         ),
         (
             "unterminated_last_line",
-            hermes_marker(vec![format!("session_id: {id}").into_bytes()]),
+            stderr_marker(vec![format!("session_id: {id}").into_bytes()]),
         ),
         (
             "overlong_line_before_marker",
-            hermes_marker(vec![
+            stderr_marker(vec![
                 big(5000),
                 b"\n".to_vec(),
                 line(&format!("session_id: {id}")),
@@ -1320,7 +1164,7 @@ fn the_identity_grammars_are_pinned() {
         ),
         (
             "overlong_marker_line",
-            hermes_marker(vec![
+            stderr_marker(vec![
                 format!("session_id: {id}").into_bytes(),
                 big(5000),
                 b"\n".to_vec(),
@@ -1328,37 +1172,15 @@ fn the_identity_grammars_are_pinned() {
         ),
     ];
 
-    // Claude Code in chat mode (D57) is told no identity and names none: its sessions are every
-    // transcript new or written since the run started.
-    let l = s::Layout::new();
-    let exe = s::fake_harness(&l.bin);
-    let claude = base_subject("claude-code-cli");
-    let resolved = s::resolved(&exe);
-    let proxy = s::proxy_url();
-    let parent = s::parent_env();
-    let plan = build_capture_launch(
-        &claude.connector,
-        &s::vars(&l),
-        &l.workspace,
-        &s::chat_launch(&l, &resolved, &proxy, &parent),
-    )
-    .unwrap();
-
     check_golden(
         "identity-grammar.json",
         &json!({
-            "codex_stdout_tee": codex_cases.into_iter().collect::<BTreeMap<_, _>>(),
-            "hermes_stderr_marker": hermes_cases.into_iter().collect::<BTreeMap<_, _>>(),
-            "claude_chat": {
-                "argv": plan.argv,
-                "names_the_launch_session_id": plan.argv.iter().any(|a| a.contains(s::SESSION)),
-                "identity": claude.connector.loaded.manifest.capture.identity.source.as_str(),
-            },
+            "stdout_json_tee": stdout_cases.into_iter().collect::<BTreeMap<_, _>>(),
+            "stderr_line_marker": stderr_cases.into_iter().collect::<BTreeMap<_, _>>(),
             "stdout_line_limit_bytes": limit,
             "stderr_line_limit_bytes": goalcup_cli::capture_tee::LINE_LIMIT,
         }),
     );
-    let _ = FragmentMatcher::new(WELL_FORMED_KEY.as_bytes());
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1546,8 +1368,8 @@ fn the_deepseek_loader_script_behaviour_is_pinned() {
 // The connectors this tree ships.
 // ---------------------------------------------------------------------------------------
 
-/// The schema-1 connector folders under `root`, by the rule `goalcup start` and the daemon
-/// discover them with: real directories holding a `harness.toml`, sorted.
+/// The connector folders under `root`, by the rule `goalcup start` and the daemon discover them
+/// with: real directories holding a `harness.toml`, sorted.
 fn connector_ids(root: &Path) -> Vec<String> {
     goalcup_protocol::harness::discover_connector_dirs(root)
         .unwrap_or_else(|e| panic!("{}: {e}", root.display()))
@@ -1556,34 +1378,40 @@ fn connector_ids(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// `enumeration.json` for the connectors directory `root`.
-fn enumeration(root: &Path) -> Value {
-    let ids = connector_ids(root);
-    let mut rows = Vec::new();
-    for id in &ids {
-        let c = goalcup_cli::connector::load_harness(root, id, false)
-            .unwrap_or_else(|e| panic!("{id}: {e}"));
-        let legacy = legacy(&c);
-        rows.push(json!({
-            "dir": id,
-            "id": c.loaded.manifest.id,
-            "family": legacy.family,
-            "has_capture_profile": true,
-            "capture_only": legacy.capture_only,
-            "has_pinned_dir_digest": goalcup_protocol::pins::pinned_connector_dir_sha256(id).is_some(),
-            "dir_digest_matches_its_pin": goalcup_protocol::pins::connector_dir_is_pinned(id, &c.loaded.connector_dir_sha256),
-        }));
-    }
-    json!({
-        "shipped": ids,
-        "controlled_workload_fixture": CONTROLLED,
-        "rows": rows,
-    })
-}
+/// The golden files no connector owns, written by this crate, the daemon and the verifier. None
+/// of them is keyed by a connector, so adding one changes none of them.
+const SHARED_GOLDENS: &[&str] = &[
+    "decoder-selection.json",
+    "identity-grammar.json",
+    "launch-allowance-reader.json",
+    "loader-script.json",
+    "policy.json",
+    "redaction-extra-patterns.json",
+];
 
+/// Every file under `harness-golden/` is a shared golden or belongs to a shipped connector (or to
+/// the controlled workload fixture): its `<id>.json`, or the daemon's `<id>.daemon.json`. A
+/// removed connector's goldens fail here until they go too.
 #[test]
-fn the_shipped_connector_enumeration_is_pinned() {
-    check_golden("enumeration.json", &enumeration(&s::connectors_dir()));
+fn every_golden_file_belongs_to_a_shipped_connector_or_is_shared() {
+    let mut owners = shipped_connector_ids();
+    owners.push(CONTROLLED.to_string());
+    let mut strays: Vec<String> = std::fs::read_dir(golden_dir())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|name| {
+            let id = name
+                .strip_suffix(".daemon.json")
+                .or_else(|| name.strip_suffix(".json"));
+            !SHARED_GOLDENS.contains(&name.as_str())
+                && !id.is_some_and(|id| owners.iter().any(|o| o == id))
+        })
+        .collect();
+    strays.sort();
+    assert!(
+        strays.is_empty(),
+        "no shipped connector or shared table owns {strays:?}: delete them"
+    );
 }
 
 /// The id of the synthetic connector the data-only proof adds.
@@ -1649,20 +1477,20 @@ fn connectors_plus_one() -> tempfile::TempDir {
     tmp
 }
 
-/// Adding a schema-1 connector is data only. The same bodies the real tests pin the repo with,
-/// [`goldens`] and [`enumeration`], run over a copy of `connectors/` plus one synthetic folder
-/// and one stray folder: the synthetic connector gets its `<id>.json` with the derived fields,
-/// its enumeration row, and the stray folder gets neither, while the shipped rows do not move.
-/// Only the regenerated JSON changes in such a PR, never this file.
+/// Adding a connector is data only. The body that pins the repo, [`goldens`], runs over a copy
+/// of `connectors/` plus one synthetic folder and one stray folder: the synthetic connector gets
+/// its `<id>.json` with the derived fields, the stray folder gets none, and every shipped
+/// connector's golden is what it is without them. The shared goldens take no connector input.
+/// Only the new `<id>.json` is added in such a PR, never an edit to this file.
 #[test]
-fn a_new_schema1_connector_needs_no_edit_to_this_file() {
+fn a_new_connector_needs_no_edit_to_this_file() {
     let tmp = connectors_plus_one();
     let root = tmp.path();
     assert!(
         root.join(STRAY).is_dir(),
         "the temp tree holds the stray folder"
     );
-    let mut want = connector_ids(&s::connectors_dir());
+    let mut want = shipped_connector_ids();
     want.push(EXTRA.to_string());
     want.sort();
 
@@ -1674,19 +1502,25 @@ fn a_new_schema1_connector_needs_no_edit_to_this_file() {
         }
     };
 
-    // The per-connector goldens, from the body that pins the repo.
-    let plus_goldens = goldens(root);
+    let plus = goldens(root, &connector_ids(root));
     expect(
         "the per-connector golden files",
-        json!(plus_goldens.iter().map(|(n, _)| n).collect::<Vec<_>>()),
+        json!(plus.iter().map(|(n, _)| n).collect::<Vec<_>>()),
         json!(
             want.iter()
                 .map(|id| format!("{id}.json"))
                 .collect::<Vec<_>>()
         ),
     );
+    for (name, value) in goldens(&s::connectors_dir(), &shipped_connector_ids()) {
+        expect(
+            &format!("{name} beside the new connector"),
+            json!(plus.iter().any(|(n, v)| *n == name && *v == value)),
+            json!(true),
+        );
+    }
     let extra_file = format!("{EXTRA}.json");
-    let extra = plus_goldens
+    let extra = plus
         .iter()
         .find(|(n, _)| *n == extra_file)
         .map(|(_, v)| v.clone())
@@ -1697,54 +1531,14 @@ fn a_new_schema1_connector_needs_no_edit_to_this_file() {
         json!(EXTRA),
     );
     expect(
-        "family (the program)",
-        extra["connector"]["family"].clone(),
-        json!("synthtool"),
-    );
-    expect(
-        "capture_only",
-        extra["connector"]["capture_only"].clone(),
-        json!(true),
+        "an unpinned folder's digest",
+        extra["connector"]["dir_digest_matches_its_pin"].clone(),
+        json!(false),
     );
     expect(
         "streams (from the stderr_line identity)",
         extra["streams"].clone(),
         json!({"decision": "MarkedStderr", "pipes": {"stdout": false, "stderr": true}}),
-    );
-
-    // The enumeration, from the body that pins the repo.
-    let real = enumeration(&s::connectors_dir());
-    let plus = enumeration(root);
-    expect("the enumeration", plus["shipped"].clone(), json!(want));
-    let rows = plus["rows"].as_array().unwrap();
-    for row in real["rows"].as_array().unwrap() {
-        expect(
-            &format!("shipped row {}", row["id"]),
-            json!(rows.contains(row)),
-            json!(true),
-        );
-    }
-    let row = rows.iter().find(|r| r["dir"] == EXTRA);
-    expect(
-        "the new connector's row",
-        row.map(|r| {
-            json!([
-                r["id"],
-                r["family"],
-                r["capture_only"],
-                r["has_pinned_dir_digest"]
-            ])
-        })
-        .unwrap_or(Value::Null),
-        json!([EXTRA, "synthtool", true, false]),
-    );
-    expect(
-        "the stray folder in the enumeration",
-        json!(
-            plus["shipped"].as_array().unwrap().contains(&json!(STRAY))
-                || rows.iter().any(|r| r["dir"] == STRAY)
-        ),
-        json!(false),
     );
     assert!(
         gaps.is_empty(),

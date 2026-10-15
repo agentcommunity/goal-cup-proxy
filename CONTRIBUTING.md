@@ -81,9 +81,9 @@ A data-only harness PR contains:
 - the pin diff from `sh scripts/pin-manifests.sh`: exactly one line of
   `crates/goalcup-protocol/pins/connector-dirs.txt` per connector you add or edit. Commit what the
   script writes. Never hand-edit or hand-merge it; re-run it on the merged tree;
-- the regenerated golden JSON in `crates/goalcup-cli/tests/fixtures/harness-golden/` (the new
-  `<id>.json` and the changed `enumeration.json` and `redaction-extra-patterns.json`). On macOS
-  also `<id>.daemon.json` and `native-stream-labels.json`: the daemon goldens run on macOS only;
+- the regenerated golden JSON in `crates/goalcup-cli/tests/fixtures/harness-golden/`: the new
+  `<id>.json`, and on macOS also `<id>.daemon.json`. No shared golden changes for a new
+  connector. The daemon's live golden runs on macOS only;
 - the facts sheet `docs/harnesses/<id>.md`, from
   `skills/adding-a-capture-harness/templates/harness-facts.md` ([docs/harnesses](docs/harnesses/README.md));
 - headless connectors only: a harness-kit case under

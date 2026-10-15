@@ -1,6 +1,6 @@
 #!/bin/sh
 # A chat-mode stand-in for any shipped chat-mode connector in the harness contract kit
-# (`tests/full/harness_contract_kit.rs`). The kit installs it under the connector's program
+# (`tests/it/harness_contract_kit.rs`). The kit installs it under the connector's program
 # name with `#!/usr/bin/env node` in place of this first line, beside a stand-in `node`, as the
 # npm harnesses are installed. The kit writes three variables into it, all derived from the
 # connector's `harness.toml`, so this file knows no harness:
