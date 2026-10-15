@@ -1712,7 +1712,12 @@ value of `run_home` (beside `empty` and `keychain_link`, whose meaning is unchan
 to the rules of a shared config home, not to new ones:
 - runs on it are serialized (D39's lock);
 - the daemon refuses it at the participant's `HOME` or under any loaded connector's `real_dirs`,
-  the check it makes of a config home;
+  the check it makes of a config home, and refuses it anywhere but directly under
+  `<config_dir>/capture-homes`, where the launcher keeps every shared home (the daemon does not
+  ask this of a config home, whose fixtures sit elsewhere; a run home is new, so it can);
+- the baseline lists it (D56), with the same 10 000-file bound, no-follow walk and 64 MiB
+  size-only rule, without its `{run_home}` native roots: it is the home kept across runs, and
+  the per-run config home beside it is then empty and not listed;
 - a `{run_home}` native root with identity `none` needs `since_run_start = true` (D57), as a
   `{config_home}` root on a shared config home does;
 - a missing `{run_home}` native root is created at entry create, the run `HOME` itself too if it

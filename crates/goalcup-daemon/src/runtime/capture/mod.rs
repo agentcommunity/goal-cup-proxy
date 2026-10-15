@@ -321,6 +321,7 @@ impl Daemon {
             manifest.capture.home.run_home,
             run_home,
             every_loaded_real_dir,
+            &self.config().config_dir,
         )?;
         // The run's start, or else this entry's create time, which its row keeps (D57).
         let created_at = now_rfc3339();

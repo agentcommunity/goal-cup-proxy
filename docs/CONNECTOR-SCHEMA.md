@@ -229,10 +229,11 @@ harness never reads, admitted to record nothing.
 
 That run `HOME` is fresh each run, so a login made before the run is lost. `run_home = "shared"`
 keeps it instead (D59): one empty directory per connector, made by the tracker and kept across
-runs, held to the rules of a shared config home. Runs on it are serialized, the daemon refuses it
-at the participant's `HOME` or a `real_dirs` path, a missing `{run_home}` native root is created
-as a `{config_home}` root is, a `{run_home}` native root with identity
-`none` needs `since_run_start = true`, and a credential is refused. It is refused with
+runs, held to the rules of a shared config home. Runs on it are serialized; the daemon refuses it
+at the participant's `HOME`, at a `real_dirs` path or anywhere but directly under
+`<config_dir>/capture-homes`; the baseline lists it in place of the config home; a missing
+`{run_home}` native root is created as a `{config_home}` root is; a `{run_home}` native root with
+identity `none` needs `since_run_start = true`; and a credential is refused. It is refused with
 `capture.home.env`: such a harness shares its config home instead.
 
 ## Credential and CA

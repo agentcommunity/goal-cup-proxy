@@ -1052,7 +1052,10 @@ fn node_use_env_proxy_is_admitted_only_as_1() {
         refused(
             &t,
             PINNED,
-            &["capture.env", "NODE_USE_ENV_PROXY is admitted only as `1`"],
+            &[
+                "capture.env",
+                "`NODE_USE_ENV_PROXY` must be exactly `1` (D59)",
+            ],
         );
     }
     // Every other proxy name keeps its refusal, whatever the value.

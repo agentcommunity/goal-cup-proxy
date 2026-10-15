@@ -3142,11 +3142,9 @@ async fn a_missing_native_root_under_the_config_home_is_created() {
     );
 }
 
-/// D59: under a shared run `HOME` a `{run_home}` root is created as a `{config_home}` root is.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_missing_native_root_under_a_shared_run_home_is_created() {
-    use std::os::unix::fs::PermissionsExt;
-    let (rig, _config_home, _connectors) = chat_rig_with(|harness| {
+/// The chat rig with its sessions under a shared run `HOME` instead of a config home (D59).
+async fn shared_run_home_rig() -> (Rig, tempfile::TempDir) {
+    let (rig, _config_home, connectors) = chat_rig_with(|harness| {
         harness
             .replacen("run_home = \"empty\"", "run_home = \"shared\"", 1)
             .replacen("config_home = \"shared\"", "config_home = \"per_run\"", 1)
@@ -3155,12 +3153,38 @@ async fn a_missing_native_root_under_a_shared_run_home_is_created() {
             .replacen("{config_home}/sessions", "{run_home}/sessions", 1)
     })
     .await;
-    let sessions = rig.run_home().join("sessions");
+    std::fs::create_dir_all(shared_run_home(&rig).parent().unwrap()).unwrap();
+    (rig, connectors)
+}
+
+/// Where the launcher keeps a shared run `HOME`: under `<config_dir>/capture-homes`.
+fn shared_run_home(rig: &Rig) -> PathBuf {
+    rig.config
+        .config_dir
+        .join("capture-homes/capture-dev.run-home")
+}
+
+/// A create naming the shared run `HOME` as its run home.
+async fn created_on_shared_run_home(rig: &Rig) -> CaptureWorkspaceInfo {
+    let mut request = rig.request("capture-dev", &rig.workspace("shared-run-home"), RESERVE);
+    request.run_home = shared_run_home(rig).display().to_string();
+    let response = rig.create_request(&request).await;
+    assert_eq!(response.status(), 200, "{}", response.body());
+    response.json().unwrap()
+}
+
+/// D59: under a shared run `HOME` a `{run_home}` root is created as a `{config_home}` root is,
+/// the run home itself too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_native_root_under_a_shared_run_home_is_created() {
+    use std::os::unix::fs::PermissionsExt;
+    let (rig, _connectors) = shared_run_home_rig().await;
+    let sessions = shared_run_home(&rig).join("sessions");
     assert!(
-        !sessions.exists(),
-        "a fresh run home has no session store yet"
+        !shared_run_home(&rig).exists(),
+        "a first run has no run home yet"
     );
-    let info = rig.created("capture-dev").await;
+    let info = created_on_shared_run_home(&rig).await;
     let made = std::fs::symlink_metadata(&sessions).expect("the root was created");
     assert!(made.is_dir());
     assert_eq!(made.permissions().mode() & 0o777, 0o700);
@@ -3175,6 +3199,44 @@ async fn a_missing_native_root_under_a_shared_run_home_is_created() {
         native_labels(&rig.records(&info.entry_id)),
         ["rollout:2026/10/15/rollout-first.jsonl#g1"]
     );
+}
+
+/// D59: what carries across runs on a shared run `HOME` is the run home, so the baseline lists
+/// it (D56), without its session folder; the per-run config home is not listed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_baseline_lists_a_shared_run_home_without_its_session_folder() {
+    let (rig, _connectors) = shared_run_home_rig().await;
+    let home = shared_run_home(&rig);
+    std::fs::create_dir_all(home.join("sessions/2026/10")).unwrap();
+    std::fs::write(home.join(".chatrc"), b"theme = dark\n").unwrap();
+    std::fs::write(home.join("sessions/2026/10/old.jsonl"), b"{}\n").unwrap();
+    std::fs::write(rig.root.join("config-home/stray.toml"), b"x\n").unwrap();
+    let info = created_on_shared_run_home(&rig).await;
+    let baseline = read_manifest(&rig.trace_dir(&info.entry_id).join("baseline.json"));
+    assert_eq!(
+        baseline.home.expect("the baseline lists the run home"),
+        [goalcup_protocol::seal::SealedFile {
+            path: ".chatrc".to_string(),
+            bytes: 13,
+            sha256: hex::encode(Sha256::digest(b"theme = dark\n")),
+        }]
+    );
+}
+
+/// D59: a shared run `HOME` is kept under `<config_dir>/capture-homes`, nowhere else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shared_run_home_outside_capture_homes_is_refused() {
+    let (rig, _connectors) = shared_run_home_rig().await;
+    let workspace = rig.workspace("outside-capture-homes");
+    // The rig's own run home, `<root>/run-home`, is not under the capture homes.
+    let response = rig.create("capture-dev", &workspace, RESERVE).await;
+    assert_ne!(response.status(), 200, "{}", response.body());
+    assert!(
+        response.body().contains("capture-homes"),
+        "{}",
+        response.body()
+    );
+    assert!(!workspace.exists(), "a refused create leaves no workspace");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

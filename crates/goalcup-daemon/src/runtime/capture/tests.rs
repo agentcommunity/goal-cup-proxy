@@ -1668,20 +1668,38 @@ fn unknown_valid_native_hint_is_copied_byte_for_byte() {
 fn a_shared_run_home_is_held_to_the_config_home_isolation() {
     use goalcup_protocol::harness::RunHome;
     let temp = tempfile::tempdir().unwrap();
+    let config_dir = temp.path().join("config");
+    std::fs::create_dir(&config_dir).unwrap();
     let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("a test HOME"));
     let real_dirs = ["{user_home}/.example".to_string()];
-    // D59: a run `HOME` kept across runs is never the participant's own, nor a real harness home.
+    // D59: a run `HOME` kept across runs is never the participant's own, nor a real harness
+    // home, and the refusal says which.
     for refused in [home.clone(), home.join(".example/sessions")] {
-        assert!(matches!(
-            isolated_run_home(RunHome::Shared, &refused, &real_dirs),
-            Err(DaemonError::Refused(_))
-        ));
+        let error = isolated_run_home(RunHome::Shared, &refused, &real_dirs, &config_dir)
+            .expect_err("refused");
+        assert!(matches!(error, DaemonError::Refused(_)), "{error}");
+        assert!(error.to_string().contains("real_dirs"), "{error}");
     }
-    let isolated = temp.path().join("capture-homes/example");
-    assert!(isolated_run_home(RunHome::Shared, &isolated, &real_dirs).is_ok());
+    // It lives under `<config_dir>/capture-homes`, nowhere else.
+    for refused in [
+        temp.path().join("elsewhere/example.run-home"),
+        config_dir.join("example.run-home"),
+        config_dir.join("capture-homes"),
+    ] {
+        let error = isolated_run_home(RunHome::Shared, &refused, &real_dirs, &config_dir)
+            .expect_err("outside the capture homes");
+        assert!(error.to_string().contains("capture-homes"), "{error}");
+    }
+    let kept = config_dir.join("capture-homes/example.run-home");
+    assert_eq!(
+        isolated_run_home(RunHome::Shared, &kept, &real_dirs, &config_dir).unwrap(),
+        std::fs::canonicalize(&config_dir)
+            .unwrap()
+            .join("capture-homes/example.run-home")
+    );
     // A per-run `HOME` is the launcher's, fresh inside the run directory: not judged here.
     assert_eq!(
-        isolated_run_home(RunHome::Empty, &home, &real_dirs).unwrap(),
+        isolated_run_home(RunHome::Empty, &home, &real_dirs, &config_dir).unwrap(),
         home
     );
 }

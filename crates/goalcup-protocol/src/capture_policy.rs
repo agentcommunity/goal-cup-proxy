@@ -526,7 +526,7 @@ pub fn env_value_denied(key: &str, value: &str) -> Option<&'static str> {
         };
     }
     if key.eq_ignore_ascii_case(NODE_USE_ENV_PROXY) {
-        return (value != "1").then_some("NODE_USE_ENV_PROXY is admitted only as `1`");
+        return (value != "1").then_some("`NODE_USE_ENV_PROXY` must be exactly `1` (D59)");
     }
     if value.starts_with('/') || value.starts_with('~') {
         return Some(

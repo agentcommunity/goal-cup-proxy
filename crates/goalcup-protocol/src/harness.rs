@@ -124,6 +124,10 @@ macro_rules! closed_enum {
     };
 }
 
+/// The folder under the tracker's configuration directory that holds every home kept across
+/// runs: a shared config home (D39) and a shared run `HOME` (D59).
+pub const CAPTURE_HOMES_DIR: &str = "capture-homes";
+
 closed_enum! {
     /// What `HOME` holds for a run.
     RunHome, "capture.home.run_home", special: &[];
@@ -134,7 +138,8 @@ closed_enum! {
     KeychainLink = "keychain_link",
     /// One empty directory per connector kept across runs, so a harness with no `home.env`
     /// keeps its login (D59). Held to the rules of a shared config home: runs on it are
-    /// serialized, and the daemon refuses it at the participant's `HOME` or a `real_dirs` path.
+    /// serialized, and the daemon refuses it outside `<config_dir>/`[`CAPTURE_HOMES_DIR`], at
+    /// the participant's `HOME` or at a `real_dirs` path.
     Shared = "shared",
 }
 
