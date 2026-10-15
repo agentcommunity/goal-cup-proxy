@@ -1,4 +1,4 @@
-//! No harness or vendor name in core code: a harness is connector data plus shared modules.
+//! No harness or product name in core code: a harness is connector data plus shared modules.
 //!
 //! Every source file of the protocol, daemon and verifier crates is scanned for string literals
 //! that contain a harness name. The capture paths of the CLI and platform crates are held to the

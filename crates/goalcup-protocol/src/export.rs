@@ -93,17 +93,19 @@ pub fn chain_parts(trace_dir: &Path) -> std::io::Result<Vec<ChainPart>> {
         parts.push(ChainPart { start, len, path });
     }
     for pair in parts.windows(2) {
-        if let Err(ExportError::PartGap { expected, .. }) =
-            check_part_follows(pair[0].start.checked_add(pair[0].len), pair[1].start)
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "chain part {} does not follow the part before it, which ends at byte \
-                     {expected}",
-                    pair[1].path.display(),
-                ),
-            ));
+        match check_part_follows(pair[0].start.checked_add(pair[0].len), pair[1].start) {
+            Ok(()) => {}
+            Err(ExportError::PartGap { expected, .. }) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "chain part {} does not follow the part before it, which ends at byte \
+                         {expected}",
+                        pair[1].path.display(),
+                    ),
+                ));
+            }
+            Err(other) => return Err(std::io::Error::other(other.to_string())),
         }
     }
     Ok(parts)

@@ -25,9 +25,11 @@ regexes (code in the signed daemon).
 (decoder family ids, secret shapes, provider prefixes); the ban is on harness and product names
 (codex, claude-code, hermes, …). `crates/goalcup-protocol/tests/it/no_family_literals.rs`
 enforces it on every source file of the protocol, daemon and verifier crates, with each allowed
-literal listed by file and reason.
+literal listed by file and reason. The closed security lists in `capture_policy.rs` (CA rows,
+refused launch variables such as the `CLAUDE_*` ones) and the decoder evidence notes in
+`registry.rs` name harness variables and builds by design, each listed in `ALLOWED`.
 
-One place still names a harness:
+One decoder path still names a harness:
 
 - **Native decoders**: the verifier reads two transcript shapes (`Format { Codex, ClaudeCode }`
   in `capture_analysis/native.rs`), chosen by the connector's `protocol_hint` (`codex-jsonl`,
@@ -40,8 +42,9 @@ Already data or gone:
 
 - **The tool allowance** (`allowed_tool_rule`): no CLI flag and no daemon path write it since D52.
   The protocol and verifier hold it to shape only (both fields present, bounded text and a
-  SHA-256 hex digest, or both absent) for any `profile_id`, so v5 traces that carry it stay valid
-  (D52, amended 2026-10-15).
+  SHA-256 hex digest, or both absent) for any `profile_id`: the protocol keeps the fields; the
+  verifier holds them to shape only, so v5 traces that carry them stay valid (D52, amended
+  2026-10-15).
 - **The identity wait**: `capture.identity.wait_seconds`, a connector field defaulting to
   `DEFAULT_STDOUT_WAIT_SECONDS` (120 s).
 - **Home directories**: each connector's `real_dirs` names its own (`{user_home}/.codex` and so

@@ -2724,6 +2724,16 @@ fn replaced_evidence_is_refused_not_followed() {
     .unwrap();
     assert!(scan_capture_trace(dir.path(), &VerifyOptions::default(), &mut |_| Ok(())).is_err());
 
+    // A selected root that is a symbolic link to a valid trace is refused, however it is spelled.
+    let links = tempfile::tempdir().unwrap();
+    let link = links.path().join("link");
+    std::os::unix::fs::symlink(elsewhere.path(), &link).unwrap();
+    for spelling in ["", "/", "/."] {
+        let selected = std::path::PathBuf::from(format!("{}{spelling}", link.display()));
+        let result = scan_capture_trace(&selected, &VerifyOptions::default(), &mut |_| Ok(()));
+        assert!(result.is_err(), "{}", selected.display());
+    }
+
     // Likewise the fixed manifest a terminal binds.
     let dir = make_trace(&complete_wire(None), true);
     std::fs::remove_file(dir.path().join(SEAL_FILE)).unwrap();

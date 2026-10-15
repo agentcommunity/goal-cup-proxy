@@ -285,8 +285,9 @@ pub fn capture_integrity_document(
 type Violation = &'static str;
 
 /// A trace capability failure as I/O. An I/O failure keeps its kind; a refused artifact is
-/// `InvalidData`, and a non-regular or hard-linked one keeps the wording callers match on.
+/// `InvalidData` with a `trace: ` message, worded as the verifier's own reader worded it.
 fn trace_error(name: &str, error: TraceCapError) -> io::Error {
+    let refused = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
     match error {
         TraceCapError::Io { source, .. } => {
             io::Error::new(source.kind(), format!("{name}: {source}"))
@@ -294,18 +295,18 @@ fn trace_error(name: &str, error: TraceCapError) -> io::Error {
         TraceCapError::Refused {
             reason: RefusalKind::NotRegularFile,
             ..
-        } => io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("trace path {name:?} is not a regular file"),
-        ),
+        } => refused(format!("trace: trace path {name:?} is not a regular file")),
         TraceCapError::Refused {
             reason: RefusalKind::MultipleLinks,
             ..
-        } => io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("trace path {name:?} is hard linked"),
-        ),
-        other => io::Error::new(io::ErrorKind::InvalidData, format!("{name}: {other}")),
+        } => refused(format!("trace: trace path {name:?} is hard linked")),
+        TraceCapError::Refused {
+            reason: RefusalKind::UnsupportedRoot,
+            ..
+        } => refused(format!(
+            "trace: selected {name} is empty or contains an interior NUL"
+        )),
+        other => refused(format!("trace: {name}: {other}")),
     }
 }
 
