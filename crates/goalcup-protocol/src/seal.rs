@@ -12,11 +12,37 @@ pub struct SealedFile {
 
 /// The Git state of a workspace that is the root of its own clone (D56).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkspaceGit {
     /// The commit `HEAD` names, lowercase hex; `None` for an unborn `HEAD`.
     pub commit: Option<String>,
     /// SHA-256, hex, of what differs from that commit (D56 gives the framing).
     pub dirty_sha256: String,
+}
+
+/// What the baseline or the seal of a clone root records of its Git state (D56): the state, or
+/// why Git could not read it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum GitState {
+    /// Written as the [`WorkspaceGit`] object itself, so a manifest written before `Unreadable`
+    /// existed keeps its bytes and its digest.
+    Read(WorkspaceGit),
+    /// `{"unreadable": "<why>"}`: a short sentence with no path and no file content. The clone
+    /// is not walked instead, and the verifier reports the trace incomplete. Never empty.
+    Unreadable {
+        #[serde(deserialize_with = "non_empty")]
+        unreadable: String,
+    },
+}
+
+/// A reason that says something: an empty one is malformed.
+fn non_empty<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let reason = String::deserialize(deserializer)?;
+    if reason.is_empty() {
+        return Err(serde::de::Error::custom("an empty reason"));
+    }
+    Ok(reason)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,9 +54,10 @@ pub struct SealManifest {
     pub files: Vec<SealedFile>,
     /// Paths excluded by the connector's `workspace_exclusions[]` plus tracker config.
     pub excluded: Vec<String>,
-    /// The commit and uncommitted digest of a workspace that is its own clone (D56).
+    /// The commit and uncommitted digest of a workspace that is its own clone, or why they could
+    /// not be read (D56).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub git: Option<WorkspaceGit>,
+    pub git: Option<GitState>,
     /// The baseline only: the connector's config home before the run, without its native
     /// roots, at most 10 000 files; one over 64 MiB has its size and the absent digest (D56).
     #[serde(default, skip_serializing_if = "Option::is_none")]

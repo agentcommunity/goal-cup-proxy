@@ -1238,6 +1238,7 @@ mod segments {
                 run_id: run_id.to_string(),
                 server_url: Some(server.url()),
                 practice: false,
+                test: false,
                 connector_id: crate::common::m2_cli_support::CHAT_ID.to_string(),
                 workspace: rig.root.join("somewhere"),
                 started_at_unix: 1,

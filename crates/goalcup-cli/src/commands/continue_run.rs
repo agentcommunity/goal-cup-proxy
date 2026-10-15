@@ -274,7 +274,7 @@ pub fn continue_with(
         goal_file: None,
         run_folder: Some(folder),
         disk: opts.disk,
-        practice: record.practice,
+        mode: record.mode(),
         open_url: |_| false,
         upload_policy: opts.upload_policy,
         sleep_lock: opts.sleep_lock,

@@ -103,8 +103,13 @@ enum Command {
         /// A practice run: the server keeps it apart from the competition, and it never
         /// replaces your competition run. Needs `goalcup login` and `goalcup prep` first,
         /// like a competition run.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "test")]
         practice: bool,
+        /// An organizer test run: full length like a competition run, opened only by
+        /// organizer accounts, and deleted from the server in one go afterwards. Not for
+        /// participants.
+        #[arg(long)]
+        test: bool,
     },
     /// Restart the agent of a run whose agent ended before the run's time was up.
     ///
@@ -257,13 +262,20 @@ fn run(command: Command) -> Result<u8, CliError> {
             dev,
             goal_file,
             practice,
+            test,
         } => start(commands::start::StartOptions {
             harness,
             dev,
             goal_file,
             run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
-            practice,
+            mode: if test {
+                goalcup_cli::account::device::RunMode::Test
+            } else if practice {
+                goalcup_cli::account::device::RunMode::Practice
+            } else {
+                goalcup_cli::account::device::RunMode::Competition
+            },
             open_url: browser_opener(),
             upload_policy: upload_policy()?,
             sleep_lock: goalcup_platform::awake::hold,

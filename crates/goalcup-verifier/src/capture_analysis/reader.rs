@@ -54,7 +54,7 @@ use goalcup_protocol::export::{
 };
 use goalcup_protocol::provenance::{Rfc3339Utc, Sha256Digest, TerminationOutcomeV1};
 use goalcup_protocol::receipt::StartReceipt;
-use goalcup_protocol::seal::SealManifest;
+use goalcup_protocol::seal::{GitState, SealManifest};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, BufReader, Read};
@@ -62,6 +62,9 @@ use std::path::Path;
 
 /// The capture-integrity report document schema version.
 pub(crate) const CAPTURE_INTEGRITY_SCHEMA_VERSION: u32 = 1;
+
+/// The most characters of a recorded Git reason the report repeats.
+const GIT_UNREADABLE_CHARS: usize = 200;
 /// At most this many distinct finding codes are retained; the rest are counted into one
 /// final `findings_omitted:<n>` code.
 pub const MAX_FINDING_CODES: usize = 128;
@@ -174,6 +177,10 @@ pub struct CaptureIntegrityReport {
     /// Which key checked the receipt and ACK signatures: `pinned`, `supplied` or `none`.
     pub key_source: KeySource,
     pub findings: Vec<String>,
+    /// Why the workspace's Git state could not be read at the baseline or the seal (D56), one
+    /// sentence each, when it could not. Either makes the report incomplete.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_unreadable: Vec<String>,
     pub verified_ack: Option<VerifiedAckPosition>,
     pub receipt_clock: Option<VerifiedReceiptClock>,
     pub terminal: Option<CaptureTerminalFacts>,
@@ -447,6 +454,9 @@ struct Scan<'k> {
     verified_ack: Option<VerifiedAckPosition>,
     sealed: bool,
     terminal_facts: Option<CaptureTerminalFacts>,
+    git_unreadable: Vec<String>,
+    /// The bound baseline recorded a clone's Git state, read or not.
+    baseline_git: bool,
 }
 
 impl<'k> Scan<'k> {
@@ -476,6 +486,8 @@ impl<'k> Scan<'k> {
             verified_ack: None,
             sealed: false,
             terminal_facts: None,
+            git_unreadable: Vec::new(),
+            baseline_git: false,
         }
     }
 
@@ -840,8 +852,28 @@ impl<'k> Scan<'k> {
             && self.entry_id.as_deref() == Some(manifest.entry_id.as_str());
         if !bound {
             self.fail("baseline_manifest_mismatch");
+        } else {
+            self.baseline_git = manifest.git.is_some();
+            self.git_read(&manifest, "baseline");
         }
         Ok(())
+    }
+
+    /// A bound manifest whose clone Git could not read: the trace is incomplete, and the report
+    /// says why (D56). The reason is the daemon's sentence, at most [`GIT_UNREADABLE_CHARS`]
+    /// characters of it, control characters replaced.
+    fn git_read(&mut self, manifest: &SealManifest, at: &str) {
+        if let Some(GitState::Unreadable { unreadable }) = &manifest.git {
+            self.short(&format!("{at}_git_unreadable"));
+            let why: String = unreadable
+                .chars()
+                .take(GIT_UNREADABLE_CHARS)
+                .map(|c| if c.is_control() { '?' } else { c })
+                .collect();
+            self.git_unreadable.push(format!(
+                "the workspace's Git state could not be read at the {at}: {why}"
+            ));
+        }
     }
 
     /// Bind the validated terminal to what it claims. A local finish or legacy seal binds
@@ -903,6 +935,12 @@ impl<'k> Scan<'k> {
         if check_terminal_manifest(env, &manifest).is_err() {
             self.fail("seal_manifest_mismatch");
             return Ok(false);
+        }
+        self.git_read(&manifest, "seal");
+        // A clone's seal records its Git state, or why it could not: a walk instead (an older
+        // daemon, or a removed `.git`) leaves the clone's work unproven (D56).
+        if self.baseline_git && manifest.git.is_none() {
+            self.short("seal_git_missing");
         }
         Ok(true)
     }
@@ -1001,6 +1039,7 @@ impl<'k> Scan<'k> {
             torn_tail: self.torn_tail,
             key_source: self.anchor.map_or(KeySource::None, |(_, source)| source),
             findings: self.findings.finish(),
+            git_unreadable: self.git_unreadable,
             verified_ack: self.verified_ack,
             receipt_clock,
             terminal: self.terminal_facts,
@@ -1593,13 +1632,12 @@ impl CaptureState {
                 {
                     return Err("record_field_invalid");
                 }
+                // The tool allowance is held to shape only, for every profile: both present,
+                // bounded text and SHA-256 hex, or both absent.
                 match (allowed_tool_rule, process_handoff_digest) {
                     (None, None) => {}
                     (Some(rule), Some(digest))
-                        if profile_id == "claude-code-cli"
-                            && goalcup_protocol::capture::is_claude_capture_allowed_tool_rule(
-                                rule,
-                            )
+                        if bounded_text(rule)
                             && Sha256Digest::try_from(digest.as_str()).is_ok() => {}
                     _ => return Err("record_field_invalid"),
                 }

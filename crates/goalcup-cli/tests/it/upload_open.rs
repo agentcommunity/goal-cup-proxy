@@ -46,6 +46,7 @@ fn only_a_transient_failure_is_retried() {
 mod server_runs {
     use crate::common::m2_cli_support::{FAKE_GITHUB_TOKEN, Hooked, PREP_REPO, Rig};
     use crate::common::upload_server::{Approval, ServerOptions, UploadServer};
+    use goalcup_cli::account::device::RunMode;
     use goalcup_cli::commands::start::StartOutcome;
     use goalcup_cli::upload::uploader::Policy;
     use std::path::{Path, PathBuf};
@@ -86,12 +87,21 @@ mod server_runs {
     }
 
     fn run_to_end_with(rig: &Rig, practice: bool, goal: &Path) -> Ended {
+        let mode = if practice {
+            RunMode::Practice
+        } else {
+            RunMode::Competition
+        };
+        run_to_end_in(rig, mode, goal)
+    }
+
+    fn run_to_end_in(rig: &Rig, mode: RunMode, goal: &Path) -> Ended {
         rig.tell("stop", "");
         let http = rig.client();
         let client = Hooked::new(&http, rig);
         let mut opts = rig.options(goal, RESERVE);
         opts.upload_policy = quick_policy();
-        opts.practice = practice;
+        opts.mode = mode;
         let (result, out) =
             std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
         let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
@@ -284,6 +294,42 @@ mod server_runs {
             "{config}"
         );
         assert_eq!(helper_lines(&ended.workspace), [""], "{config}");
+    }
+
+    /// `--test` asks for a test approval; the run is a competition run in every other way: its
+    /// clone keeps the push helper (not the practice no-push rule), its deadline is the
+    /// server's, and `run.json` says it is a test run.
+    #[test]
+    fn a_test_start_asks_for_test_mode_and_clones_with_the_push_helper() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let goal = rig.goal(GOAL);
+        let ended = run_to_end_in(&rig, RunMode::Test, &goal);
+        let run_id = server.run_ids()[0].clone();
+        let requests = server.device_requests();
+        assert_eq!(requests.len(), 1, "{}", ended.out);
+        assert_eq!(
+            (requests[0].purpose.as_str(), requests[0].mode.as_str()),
+            ("run", "test"),
+            "{}",
+            ended.out
+        );
+        assert_eq!(server.mode(&run_id).as_deref(), Some("test"));
+        let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
+        assert!(record.test && !record.practice, "{record:?}");
+        assert_eq!(record.mode(), RunMode::Test);
+        let kept = goalcup_cli::upload::read_record(&rig.cfg, &ended.outcome.entry_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record.deadline_at.as_deref(),
+            Some(kept.deadline_at.as_str())
+        );
+        let helpers = helper_lines(&ended.workspace);
+        assert_eq!(helpers.len(), 2, "{helpers:?}");
+        assert_eq!(helpers[0], "");
+        assert!(helpers[1].ends_with("git-credential"), "{helpers:?}");
     }
 
     /// Nothing of the credential, the GitHub token or the device code reaches the harness: not
@@ -694,7 +740,7 @@ mod server_runs {
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let mut opts = rig.options(&goal, RESERVE);
-        opts.practice = true;
+        opts.mode = RunMode::Practice;
         let (result, out) =
             std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
         let refused = result.expect_err("refused");
@@ -708,6 +754,53 @@ mod server_runs {
         assert!(client.book().creates.is_empty(), "{out}");
         assert!(rig.run_dirs().is_empty());
         assert!(!rig.harness_started());
+    }
+
+    /// `--test` is a run on the server too: without a login it is refused before anything is
+    /// created, rather than becoming a local run that status would still call a test run.
+    #[test]
+    fn test_without_a_server_is_refused_before_anything_is_created() {
+        let rig = Rig::new();
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.options(&goal, RESERVE);
+        opts.mode = RunMode::Test;
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("refused");
+        assert_eq!(refused.exit_code(), 1, "{refused}");
+        assert!(
+            refused
+                .to_string()
+                .contains("`--test` needs `goalcup login` and `goalcup prep` first"),
+            "{refused}"
+        );
+        assert!(client.book().creates.is_empty(), "{out}");
+        assert!(rig.run_dirs().is_empty());
+        assert!(!rig.harness_started());
+    }
+
+    /// A harness handed a provider key never uploads, so `--test` with it is refused too.
+    #[test]
+    fn test_with_a_keyed_harness_is_refused_in_its_own_words() {
+        let rig = Rig::hermes();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.hermes_options(&goal, RESERVE);
+        opts.mode = RunMode::Test;
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("refused").to_string();
+        assert!(refused.contains("`--test` cannot be used"), "{refused}");
+        assert!(refused.contains("provider key"), "{refused}");
+        assert!(refused.contains("test run"), "{refused}");
+        assert!(server.device_requests().is_empty(), "{out}");
+        assert!(client.book().creates.is_empty());
+        assert!(rig.run_dirs().is_empty());
     }
 
     /// A start that fails after the run opened, with the server away so the run cannot be given
@@ -802,7 +895,7 @@ mod server_runs {
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let mut opts = rig.hermes_options(&goal, RESERVE);
-        opts.practice = true;
+        opts.mode = RunMode::Practice;
         let (result, out) =
             std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
         let refused = result.expect_err("refused").to_string();

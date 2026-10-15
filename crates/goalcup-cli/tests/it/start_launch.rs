@@ -266,7 +266,19 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
         .unwrap();
     let start = String::from_utf8_lossy(&start.stdout);
     assert!(start.contains("--practice"), "{start}");
+    assert!(start.contains("--test"), "{start}");
     assert!(!start.contains("--repo"), "{start}");
+    // `--test` and `--practice` are two different kinds of run: clap refuses both together.
+    let both = std::process::Command::new(goalcup)
+        .args(["start", "--harness", "codex-cli", "--test", "--practice"])
+        .output()
+        .unwrap();
+    assert!(!both.status.success(), "{both:?}");
+    let refusal = String::from_utf8_lossy(&both.stderr);
+    assert!(
+        refusal.contains("--test") && refusal.contains("--practice"),
+        "{refusal}"
+    );
     // The command still answers git, and only for the stored repository.
     let tmp = tempfile::tempdir().unwrap();
     let token = "github_pat_FAKE0123456789abcdefghijkl";

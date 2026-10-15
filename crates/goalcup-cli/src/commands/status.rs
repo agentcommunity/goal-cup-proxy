@@ -144,6 +144,9 @@ pub fn status_with(
     Ok(())
 }
 
+/// The first line of the run section of an organizer test run (`goalcup start --test`).
+const TEST_RUN_BANNER: &str = "TEST RUN: an organizer test run, not a competition entry\n";
+
 /// What this machine knows of the run the entry belongs to (its `state.json`): one `PROBLEM:`
 /// line for each thing that is wrong, first of all, and nothing when nothing is. A run with no
 /// state yet is not a problem, and is said in plain words; a machine with no run record for
@@ -156,23 +159,25 @@ fn run_report(cfg: &Path, entry: Option<&str>, record: &EntryRecord, now: &str) 
     let Ok(Some(run)) = run else {
         return String::new();
     };
+    // An organizer test run says so first, before anything else in the run section.
+    let banner = if run.test { TEST_RUN_BANNER } else { "" };
     let Some(state) = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id)) else {
-        return "run state: no run state yet\n".to_string();
+        return format!("{banner}run state: no run state yet\n");
     };
     let now = parse_z(now).unwrap_or_else(crate::run::now_unix);
     // `goalcup continue` is advised only for a run it can restart.
     let advice = crate::run::advice(cfg, &run, &state, now);
-    let problems = state
+    let problems: String = state
         .problems(now, advice)
         .iter()
         .map(|problem| format!("PROBLEM: {}\n", plain(problem)))
-        .collect::<String>();
+        .collect();
     // A normal end of a run that cannot be continued is said plainly, after any problem.
     let finished = state
         .finished(advice)
         .map(|line| format!("{}\n", plain(&line)))
         .unwrap_or_default();
-    problems + &finished
+    format!("{banner}{problems}{finished}")
 }
 
 /// One headline on stdout, and the reason on rung 1.

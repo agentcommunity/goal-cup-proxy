@@ -709,6 +709,7 @@ mod tests {
                     .as_ref()
                     .map(|_| "https://server.example".into()),
                 practice: false,
+                test: false,
                 connector_id: "c".to_string(),
                 workspace: PathBuf::from("/w"),
                 started_at_unix: 0,
