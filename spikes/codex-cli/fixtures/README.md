@@ -4,16 +4,6 @@ Redacted copies of the artifacts from spike run `ws-20260903T064347Z`
 (codex-cli **0.153.0**, isolated install `harnesses/node/bin/codex`, isolated
 `CODEX_HOME=harnesses/home/codex`, macOS 26.5.2 arm64). Tracked thread
 `01a06614-8f11-79a1-abb9-0b0f45b7f104`.
-The supporting private historical record is intentionally omitted from this public OSS cut.
-
-Every file went through `spikes/redact.py` (pattern-based) **and** a structural
-scrub (`out/ws-20260903T064347Z/analysis/make_fixtures.py`) for the things the
-regexes cannot see. Both logs are listed below. All files were then reviewed by
-eye with a residual-content grep (`Skill roots`, `.agents/skills/<private>`,
-`plan_type`, the operator's email and handle) — the only surviving hits are the
-string `plan_type` inside my own scrub placeholder and the paths of the
-**public** `superpowers` plugin skills the agent actually read, which are
-transcript evidence.
 
 ## Files
 
@@ -35,49 +25,4 @@ transcript evidence.
 
 Total 524 KB.
 
-## Redaction logs
-
-`spikes/redact.py` writes one log per file. **Every log is empty**: none of the
-key, token, JWT, private-key or email patterns matched anything in any Codex
-rollout, hook post or probe output. That is a finding in itself — the leak risk
-on this harness is structural, not pattern-shaped, which is why the scrub below
-exists.
-
-## Structural scrub (what the patterns could not catch)
-
-Recorded in `out/ws-20260903T064347Z/analysis/fixture-scrub-log.json` (git-ignored
-with the rest of `out/`); **29 edits**, 151,364 characters removed:
-
-| file | field | count | chars | removed |
-|---|---|---|---|---|
-| `rollout-main-01a06614.jsonl` | `payload.rate_limits` on every `token_count` event | 15 | 4,890 | the operator's ChatGPT account state: `plan_type: "pro"`, credit balance, quota `used_percent`, `resets_at`. Present on **every** turn |
-| `rollout-main-01a06614.jsonl` | `response_item.message[role=developer]` | 2 | 27,255 | the `<skills_instructions>` blocks: the operator's private skill catalogue with names, descriptions and absolute paths under `/Users/team/.agents/skills` |
-| `rollout-main-01a06614.jsonl` | `world_state.state.host_skills.body` | 2 | 21,012 | the same catalogue again, in a second place |
-| `rollout-main-01a06614.jsonl` | `function_call[spawn_agent].arguments.message` | 1 | 264 | the parent→subagent instruction. It is a Fernet-style ciphertext (`gAAAAA…`), not plaintext; truncated to 48 chars so the fixture carries a marker rather than a blob |
-| `rollout-subagent-01a06615.jsonl` | same three fields | 6 | 48,919 | the subagent rollout replays the parent's context, so it repeats all of the above |
-| `history-excerpt.jsonl` | `text` | 2 | 7,960 | the 4,100-char A7 filler, truncated to 120 chars. Size only; the record's existence is the evidence |
-| `wrong-cwd-01a06616-excerpt.jsonl` | `custom_tool_call_output.output` | 1 | 40,064 | kept only the first 620 chars — the file listing that names the tracker's artifacts. The rest was the repo's own documentation, which does not belong in a fixture |
-
-Absolute home paths (`/Users/team/…`) are kept deliberately: the `CODEX_HOME`
-layout and the `cwd` values in hook payloads are the thing under test.
-
-`session_meta.base_instructions.text` (the ~12 KB stock Codex system prompt) is
-kept: it is stock, and its presence in `session_meta` is a capture fact worth
-having in a fixture.
-
-## Not committed
-
-`spikes/codex-cli/out/` is git-ignored and stays local. In particular:
-
-- `out/ws-20260903T064347Z/leg1/capture.jsonl` (563 records, two hash chains) —
-  the leg-1 capture, unedited.
-- `out/ws-20260903T064347Z/baseline/files/auth.json` — the A10 baseline copied
-  the isolated home's **ChatGPT OAuth token** into the artifact root, where the
-  mis-launched session then listed it by name (see
-  `wrong-cwd-01a06616-excerpt.jsonl`). It is not a fixture and must never become
-  one; the report proposes moving A10 baselines out of the artifact root.
-- `out/ws-20260903T064347Z/store-copy/` — read-only copies of the four rollout
-  files, `history.jsonl`, `session_index.jsonl` and `state_5.sqlite`.
-- `$CODEX_HOME/shell_snapshots/01a06614-….sh` — 591 KB dump of the operator's
-  zsh functions and aliases, written by Codex per session. No secrets matched,
-  but it is not a fixture.
+## Redaction

@@ -7,12 +7,6 @@ Redacted copies of the artefacts from spike run `run-20260903T125448Z`
 `f0fb67b1-ae44-4b4f-bff7-17d0d3fc502f`, subagent chat
 `cdfaa7dd-8f5f-4f2e-9f16-b437481ca5cc`, A9 chat
 `01570840-9801-4b6a-9fc9-3f3307945a53`.
-The supporting private historical record is intentionally omitted from this public OSS cut.
-
-Every file went through a **structural scrub**
-(`out/run-20260903T125448Z/analysis/make_fixtures.py`) for the things regexes cannot see,
-then `spikes/redact.py` (pattern-based), then an eye review with a residual grep. Both logs
-are below.
 
 ## Files
 
@@ -32,37 +26,4 @@ are below.
 
 Total 988 KB. `spikes/redact.py` also wrote one `*.redactions.jsonl` per file.
 
-## Redaction log (`spikes/redact.py`)
-
-Exactly one file matched: **`hooks.jsonl`, 85 `email` redactions** — the `user_email` field
-that Cursor puts on every single hook payload, replaced with
-`<redacted:email:…>`. Every other log is empty: no key, token, JWT, bearer or private-key
-pattern matched anything in the store blobs, the transcripts, the stream, the shim source or
-the hooks config.
-
-## Structural scrub log (`_structural-scrub.json`, 12 entries)
-
-The regexes cannot see these, so `make_fixtures.py` handled them and logged each one with its
-length and a sha256 prefix:
-
-| kind | count | why |
-|---|---|---|
-| `third_party_skill_body` | 8 | whole `SKILL.md` bodies pulled into `beforeReadFile.content`, `postToolUse.tool_output` and `tool-result` blobs — 2 in `hooks.jsonl`, 6 in `leg1-store-blobs-main.jsonl`. Sources were the operator's `~/.agents/skills/superpowers/using-superpowers` and Cursor's own `~/.cursor/skills-cursor/origin`. Third-party text; the *fact* that they were read is the finding, and it is preserved in the surrounding hook fields |
-| `blob_encryption_key` | 3 | `meta.blobEncryptionKey`, a real per-chat 64-hex key present in every `store.db` `meta` row |
-| `system_prompt_tail_with_host_skill` | 1 | the 32 KB `role:"system"` blob. **Kept, truncated**: the first 1,500 chars stay (so the finding "leg 1 carries the whole system prompt" is verifiable) and the remainder is replaced with a placeholder carrying its length and full sha256, because the tail inlines the operator's `superpowers:using-superpowers` body |
-
-## Eye review / residual grep
-
-Grepped the finished directory for `nembal`, `@gmail`, `sk-`, `Bearer `, `eyJ`,
-`EXTREMELY-IMPORTANT`, `blobEncryptionKey": "<hex>` and `authInfo`. All clean except `eyJ`,
-which appears inside base64 payloads of `protobuf-b64` blob rows — verified by decoding: it is
-ordinary base64, not a JWT.
-
-Deliberately **not** included: `cli-config.json` (it holds an `authInfo` block), anything under
-`R/store-copy/`, and the `~/.cursor` snapshots. `collect.sh` never copies `auth.json`,
-`credentials*`, `token*`, `*.pem` or `*.key`.
-
-
-## Orchestrator scrub (2026-09-03, after review)
-
-The host skill listing (`<agent_skill fullPath="/Users/team/.claude/skills/...">` entries, naming private skills) survived in the store-blob fixtures; replaced with a placeholder stating the removed length. 30 replacement(s).
+## Redaction
