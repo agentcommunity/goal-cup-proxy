@@ -1,15 +1,13 @@
 # Upload API, version 1
 
-The exact wire contract between the tracer (`goalcup`) and the upload server. It implements
-[SERVER-DESIGN.md](SERVER-DESIGN.md) section 4 for the calls built so far; where it differs from
-that section, this file says so and why. Three things speak it and must agree byte for byte: the
-tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests run
-(`crates/goalcup-cli/tests/common/upload_server/`), and the Worker
-(`server/worker/`).
+The exact wire contract between the tracer (`goalcup`) and the upload server. How the server is
+built, and why, is in [SERVER-DESIGN](SERVER-DESIGN.md). Three things speak this contract and must
+agree byte for byte: the tracer (`crates/goalcup-cli/src/upload/`), the stand-in server the tests run
+(`crates/goalcup-cli/tests/common/upload_server/`), and the Worker (`server/worker/`).
 
 A rule change touches all of them: the Worker (`server/worker/src/`), its local database
-(`db-local.ts`), the SQL (the website's migration, copied to `server/worker/sql/goal-cup-tracer-upload.sql`) and the Rust
-stand-in. Then run the suite that holds the Worker to the real contract:
+(`db-local.ts`), the SQL (the website's migration, copied to `server/worker/sql/goal-cup-tracer-upload.sql`)
+and the Rust stand-in. Then run the suite that holds the Worker to the real contract:
 `cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only -E 'test(/upload_worker/)'`
 (it needs `npm ci` in `server/worker`; `sh scripts/gate.sh full` runs it too, and says so if that is
 missing). It is not in CI.
@@ -174,9 +172,9 @@ the participant runs `goalcup continue`. The credential is bound to the new run 
 step that creates the run, so a credential that cannot bind (it is unknown, or was bound to another
 run in the meantime) is the same `409` and creates nothing.
 
-**Differs from section 4:** `chain_head_at_create` is not sent here. The chain's first link hashes
-the `entry_id`, and the server issues the `entry_id` in this answer, so the head cannot exist yet.
-It is sent to the receipt call below.
+`chain_head_at_create` is not sent here. The chain's first link hashes the `entry_id`, and the
+server issues the `entry_id` in this answer, so the head cannot exist yet. It goes to the receipt
+call below.
 
 ## `POST /v1/runs/{run_id}/receipt` — the signed start receipt
 
@@ -200,10 +198,8 @@ entry sent), `chain_head` (from this request), and the run's `started_at` = `off
 `{"reason": "<text, at most 500 characters>"}`. Accepted only while no chunk has been stored:
 `200 {"status": "abandoned"}`, and `200` again for a repeat. A run with stored chunks is `409`; a
 sealed run is `410`. The tracer sends a fixed sentence, never a local path. Used when `goalcup start` fails
-after the run opened and before the harness launched, so no run is left open holding nothing.
-
-**Not in section 4.** Without it a failed start (a daemon refusal, a full disk) would leave an open
-run that holds nothing.
+after the run opened and before the harness launched (a daemon refusal, a full disk), so no run is
+left open holding nothing.
 
 ## `GET /v1/runs/{run_id}` — where the server is
 
@@ -387,7 +383,8 @@ none, keeps nothing and the next tick asks again. Runs that ended more than 48 h
 closed are not asked.
 
 **The six emails.** Each is queued at most once per run, kind and key. None is queued for a practice
-run, and none after the run's end except `ended`.
+run, and none after the run's end except `ended`. A test run mails its operator, with `[TEST]` in
+the subject.
 
 | Kind | Queued when | Once per |
 |---|---|---|
@@ -408,7 +405,3 @@ and goes quiet again gets a new `silence`; a new model request starts a new idle
 key and a small payload (times, hours, the commit, the repository). The run holds the machine facts
 from the open call, the IP address and country of the open call, and the latest pair (moved by each
 `continue` and heartbeat). None of it is in any answer, key or log, and none of it is public.
-
-## Not built yet
-
-Outage windows and live totals in the heartbeat come in later slices.

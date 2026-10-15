@@ -21,14 +21,14 @@ stops at each step that needs you.
 
 ## 1. Install
 
-With Homebrew, once the first binary release is out:
+With Homebrew, from the first release (23–24 October 2026):
 
 ```sh
 brew install agentcommunity/tap/goalcup
 ```
 
-Until then, build from source as the [README](../README.md#build) says. On Windows, install
-inside WSL2, not in Windows itself.
+Before the release, build from source as the [README](../README.md#build) says. On Windows, install
+inside WSL2, not in Windows itself. Native Windows comes later.
 
 ## 2. Log in: `goalcup login`
 
@@ -98,8 +98,8 @@ should now be ok.
 
 ## 5. Your run: `goalcup start`
 
-Start inside the 24-hour start window, which opens on 6 November 2026. The exact hours are on the
-event page.
+Start inside the 24-hour start window. It opens on 7 November 2026 at 00:00 UTC and closes at 00:00
+UTC on 8 November.
 
 ```sh
 goalcup start --harness <id>
@@ -202,6 +202,8 @@ agent is stopped in whatever state it is in. There is no grace period.
   `goalcup upload <entry>` finishes the job later. Run `goalcup entries` to see the entry ids.
 - The server records the latest commit in your GitHub repository at the deadline. That commit is
   what is judged, so your agent must push its work before then. The tracer never pushes for it.
+- After the run you hand in a demo video and answer a questionnaire. They are due either 24 hours
+  after the run ends or on a fixed date around 15 November: **[owner to confirm]**.
 - Without a network at the deadline, the tracer stops the run once 168 hours have passed on the
   machine's own clock, which keeps counting while the machine sleeps.
 - 24 hours after the end, the server closes the run. A run whose last upload has not arrived by
@@ -219,6 +221,12 @@ it by itself.
 
 An agent that stops early and stays idle until the deadline is allowed. The idle time is in the
 record.
+
+Your agent may start subagents of its own harness. It must not start a different harness (a Codex
+agent starting Claude Code, say). The tracer cannot record the second harness, and the run is
+disqualified.
+
+Your prompt becomes public at the latest at the end of the event. Until then it stays private.
 
 ## 11. What is recorded
 
@@ -245,3 +253,8 @@ Raw records stay private and are never published.
 `goalcup start --test` opens an organizer test run. It runs for the full length, like a
 competition run, but only organizer accounts can open one, and all test runs are deleted from
 the server together afterwards. It is not for participants: use `--practice` to try things out.
+
+## Help
+
+Write to goalcup@agentcommunity.org. Say which command you ran, and paste the `goalcup status`
+output and the entry id from `goalcup entries`. Never paste your GitHub token.

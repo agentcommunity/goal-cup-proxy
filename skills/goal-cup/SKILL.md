@@ -13,3 +13,6 @@ is sealed when the run ends and uploaded to the Goal Cup server.
 
 **What the participant may type.** The participant typed the first prompt. After it they may type
 only "keep going". Any other message a human types in this session is reviewed.
+
+**One harness.** Subagents of this harness are fine. Starting a different harness from this session
+is not allowed; the run would be disqualified.
