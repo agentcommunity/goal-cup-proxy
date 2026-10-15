@@ -1,4 +1,4 @@
-# M2 research report format (research-report schema 2)
+# M2 research report format (research-report schema 4)
 
 `goalcup-verify --research-json TRACE --output REPORT.ndjson` writes a private, streaming report
 of one protocol-v5 capture trace. The library function
@@ -17,7 +17,7 @@ that no one helped.
 - `--research-json` cannot be combined with a trace directory, `--capture-integrity` or `--json`.
   Every refused invocation exits 3 before anything is written.
 - `--dev-key HEX` keeps its `--capture-integrity` meaning, and the summary records it under
-  `options`. `dev_mode` stays in `options` for schema 1 and is always `false`.
+  `options`.
 
 ## Lines
 
@@ -63,20 +63,22 @@ The research-report kind vocabulary (schemas 1 and 2) is closed at these ten val
 
 | Field | Meaning |
 |---|---|
-| `type`, `schema_version` | `"summary"`, `3`. Schema 2 added `analysis.models`, `analysis.models_omitted` and `analysis.cross_leg` to schema 1. Schema 3 added `delivery.records_after_deadline`, `delivery.last_seq_at_or_before_deadline` and `delivery.last_ack_at`. Every earlier key keeps its meaning and observation lines are unchanged. |
+| `type`, `schema_version` | `"summary"`, `4`. Schema 2 added `analysis.models`, `analysis.models_omitted` and `analysis.cross_leg` to schema 1. Schema 3 added `delivery.records_after_deadline`, `delivery.last_seq_at_or_before_deadline` and `delivery.last_ack_at`. Schema 4 added `analysis.undecoded` and `analysis.undecoded_omitted`, and dropped `options.dev_mode` (always `false`; a dev or unpinned key shows in `key_source`, `options.extra_server_keys` and the `server_key_unpinned` finding). Every other key keeps its meaning and observation lines are unchanged. |
 | `exit_code` | The verifier/report exit code (below), not the harness run's exit code. |
 | `verifier_version` | The verifier build that wrote the report. |
-| `options` | The effective options: `dev_mode`, `allow_descriptor_key`, `extra_server_keys`. |
+| `options` | The effective options: `allow_descriptor_key`, `extra_server_keys`. |
 | `key_source` | Which key checked the receipt and ACK signatures: `pinned`, `supplied` or `none`. This build pins the production ingest key, so a production trace gives `pinned`. A key from `--dev-key` gives `supplied`. |
 | `input` | The validated chain prefix the report covers: `validated_head` (the link hash of its last record), `validated_records`, `validated_bytes`. |
 | `run.launch` | The first `Launch` record as retained: profile, profile digest, harness version, recorder revision, continuation and the goal stream it names, and, when the daemon wrote them (contract S1), `run_public_key` and `connector_dir_sha256`. Both are additive and absent from a trace written before S1, so a consumer treats a missing key as unknown rather than as an error. `null` when there is none. |
 | `run.connector` | Present only when `run.launch.connector_dir_sha256` is present: `Pinned` when the launch profile and digest match this build's connector-directory pins, otherwise `Dev/unpinned`. This presentation does not change capture integrity. It is absent for an old/unbound launch or when there is no launch. |
-| `run.terminal` | The reader's verified terminal: `local_finish`, `signed_finalization` or `legacy_seal`, its `seq` and `hash`, the typed `termination` outcome exactly as recorded, and `observed` (the local finish capture time; `null` for a signed or legacy terminal, which carries wall time only). `null` when no terminal was verified. |
+| `run.terminal` | The reader's verified terminal: `local_finish` or `signed_finalization`, its `seq` and `hash`, the typed `termination` outcome exactly as recorded, and `observed` (the local finish capture time; `null` for a signed finalization, which carries wall time only). `null` when no terminal was verified. |
 | `capture` | The reader's integrity result: `integrity` (`valid`, `incomplete` or `invalid`), `sealed`, `coverage_incomplete`, `torn_tail`, `gap_count`, `findings`, and `record_counts`, a count of every validated capture record by kind (`open.<source>`, `segment`, `end.<reason>`, `gap.<reason>`, `recovery.<reason>`, `connection.open`, `connection.upgraded_web_socket`, `connection.close.<outcome>`, `producer_closed`, `launch`, `assistance`, `local_finish`). |
 | `delivery` | `anchor` (`local_only` or `signed`), `verified_ack` and `receipt_clock` exactly as the reader verified them, and `state`: `local_only` (no verified receipt or ACK), `none_acknowledged` (a verified receipt, no verified ACK), `partial` (a verified ACK behind the terminal, or no terminal), `through_terminal` (a verified ACK at or past the terminal). `records_after_deadline` and `last_seq_at_or_before_deadline` are the reader's counts of validated records stamped after, and the last seq stamped at or before, the receipt's `deadline_at`, by the participant's own machine clock (a hint; `null` without a verified, head-bound receipt). `last_ack_at` is the `acked_at` of the last verified ACK, signed by the server (the trusted time; `null` without one). |
 | `assistance` | `explicit_records` (the chain's `Assistance` records), `positive_native_markers` (the `human_message` observations written) and `evidence`: `observed` or `none_observed`. |
 | `analysis.state` | `available` (decoded observations written, no decoder degraded), `partial` (decoded observations written, some decoder degraded) or `unavailable` (no decoded observation written; source-referenced `unknown` observations may still be written). `KindTally` excludes `unknown` lines from decoded state. A capture-only stream can coexist with decoded streams; only the absence of a decoded fact makes analysis unavailable, while other decoded streams can make it available or partial. |
-| `analysis.decoders` | One entry per decoder, in the order they ran: `decoder`, its own `summary` (`decoder_id`, `decoder_version`, `observations`, `unknown_records`, `incomplete`; `null` if it failed), `written`, `over_budget`, `failure` (`{"phase","error"}` or `null`; `phase` is `create`, `accepts`, `push` or `finish`, `error` a short token such as an I/O error kind, or `panicked`), `measured` and `synthetic_only`. `unknown_records` counts both emitted source-referenced `unknown` observations and spanless findings counted only in the decoder summary, so it can exceed written `unknown` lines. |
+| `analysis.decoders` | One entry per decoder, in the order they ran: `decoder`, its own `summary` (`decoder_id`, `decoder_version`, `observations`, `unknown_records`, `incomplete`; `null` if it failed), `written`, `over_budget`, `failure` (`{"phase","error"}` or `null`; `phase` is `create`, `accepts`, `push` or `finish`, `error` a short token such as an I/O error kind, or `panicked`), `measured` (the real traffic the decoder was checked against) and `synthetic_only` (the forms it decodes that only synthetic tests have seen; a judge reads a non-empty list as "never checked on real traffic", for example the whole `openai-chat-completions` decoder). `unknown_records` counts both emitted source-referenced `unknown` observations and spanless findings counted only in the decoder summary, so it can exceed written `unknown` lines. |
+| `analysis.undecoded` | The capture-only streams: the streams no decoder accepted, recorded and not read. One `{"source","hint","streams","bytes","bytes_incomplete"}` per distinct source and `protocol_hint` (`hint` is `null` when the stream had none, and at most its first 64 bytes, the hint grammar's bound; a longer hint is cut and the group adds `"hint_truncated": true`, otherwise that key is absent), in first-seen order, at most 64 groups. `bytes` counts the streams' segment source bytes; `bytes_incomplete` is `true` when too many were live at once to count them all. The goal stream is never listed. A misspelled hint in a new connector shows here. |
+| `analysis.undecoded_omitted` | Capture-only streams of groups past the bound. |
 | `analysis.models` | What the run used, as its sources state it: one `{"decoder","model","count"}` per model identity a decoder's kept `model` observations name (`fields.model`), in decoder then name order, at most 16 names of at most 128 bytes per decoder. A native decoder's names come from the harness's session file, a wire decoder's from the recorded requests and responses. |
 | `analysis.models_omitted` | Per decoder that dropped any, how many `model` observations' names were not kept (past the bound, too long or empty). `{}` when none. |
 | `analysis.cross_leg` | `native_model_activity` (kept native-stream `model` observations that are not a switch, `tool_call` and `usage`), `wire_streams` (wire streams the chain opened, decoded or not), `wire_model_requests` (kept wire-stream `model_request` observations), and `state`: `consistent` (native activity and decoded requests), `native_activity_without_wire_streams` (the session file names model work and the proxy recorded no wire stream at all: a harness that bypassed the proxy, or a fake), or `unchecked` (no native model activity to compare, or wire streams whose requests were not decoded, such as a compressed or oversized body or a degraded decoder). Each leg is summed across its decoders; only zero against non-zero is judged. A note for judges: it never changes `exit_code`. Builds are recorded, not pinned (D53), so this is the check that catches a cheap wrapper. |
@@ -112,10 +114,10 @@ requires a research-report schema bump or an explicit projection layer; Rust's
 A capture-only stream alone is not a failure. It exists when the session records no accepting
 decoder for the full `StreamOpen`; an isolated factory or `accepts` failure can also leave no
 selector. The registry supplies candidates and each decoder decides which fields matter. An
-unsupported content type may instead be accepted and emitted as `unknown`. The report does not serialize the bounded
-`DecodeOutcome::undecoded` details.
+unsupported content type may instead be accepted and emitted as `unknown`. The summary lists
+capture-only streams under `analysis.undecoded`.
 `available` says at least one decoded observation was written and no decoder degraded, not that
-every stream had a decoder: a stream no decoder accepts appears only in `record_counts`.
+every stream had a decoder.
 
 ## Bounds
 
@@ -147,7 +149,8 @@ every stream had a decoder: a stream no decoder accepts appears only in `record_
 - **Measured and synthetic-only.** `measured` names the real traffic each decoder was checked
   against. `synthetic_only` lists the forms it decodes that were seen only in synthetic tests:
   its handling of such a form follows documented shapes and has not been checked against real
-  traffic.
+  traffic. Both stay on every decoder entry of the summary, so a judge sees them next to the
+  observations they qualify. They are read from the registry entry (`DecoderRegistry::builtin()`).
 
 ## Decoders
 
@@ -202,7 +205,5 @@ record without making CLI source code name `VerifyOptions`. Library callers that
 keys or development mode use `scan_capture_trace` directly. A host that holds records instead
 composes `decode_records` (observations to an `ObservationSink`, here `JsonLinesSink`), the reader's integrity report and
 `research_summary` (given the sink's kind tally); the output equals the folder entry's for the
-same records. The decode outcome also lists the capture-only streams
-(`undecoded`: source, hint, stream count, bytes), which the summary line does not print: a stream
-no decoder accepts still appears only in `record_counts`, so a reader cannot tell "no decoder"
-from "a decoder found nothing" except through those counts.
+same records. The decode outcome's capture-only streams (`undecoded`) are the summary's
+`analysis.undecoded`, so a reader can tell "no decoder" from "a decoder found nothing".

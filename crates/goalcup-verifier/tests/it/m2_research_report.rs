@@ -811,7 +811,7 @@ fn mixed_observations_end_in_one_bound_summary() {
     assert_eq!(&result.summary, summary);
     assert_eq!(result.exit_code, 0, "{summary:#}");
     assert_eq!(summary["exit_code"], 0);
-    assert_eq!(summary["schema_version"], 3);
+    assert_eq!(summary["schema_version"], 4);
     assert_eq!(
         summary["verifier_version"],
         goalcup_verifier::VERIFIER_VERSION
@@ -858,7 +858,7 @@ fn mixed_observations_end_in_one_bound_summary() {
     assert_eq!(summary["run"]["launch"], json!(launch()));
     assert_eq!(
         summary["options"],
-        json!({"dev_mode": false, "allow_descriptor_key": false, "extra_server_keys": []})
+        json!({"allow_descriptor_key": false, "extra_server_keys": []})
     );
 
     // Each decoder: its declared identity and version, and counts that are its own lines.
@@ -891,6 +891,47 @@ fn mixed_observations_end_in_one_bound_summary() {
         assert_eq!(entry["over_budget"], 0);
     }
     assert_eq!(summary["analysis"]["state"], "available");
+    // Every stream of this trace has a decoder.
+    assert_eq!(summary["analysis"]["undecoded"], json!([]));
+    assert_eq!(summary["analysis"]["undecoded_omitted"], 0);
+}
+
+/// A stream no decoder accepts is recorded and not read, and the summary says so: its source,
+/// its hint, how many streams and how many source bytes. A decoder entry still
+/// carries its `measured` and `synthetic_only`, so a judge sees which decoders never met real
+/// traffic.
+#[test]
+fn the_summary_lists_capture_only_streams_by_source_and_hint() {
+    let hint = "x-unknown-protocol/9";
+    let body = b"{\"ask\":\"something\"}";
+    let mut records = vec![connection(WIRE, CONN, connection_open(false))];
+    records
+        .extend(wire(WIRE, 1, CaptureSource::WireRequest, hint, CONN, 1).records(body, &[6], 100));
+    records
+        .extend(wire(WIRE, 3, CaptureSource::WireRequest, hint, CONN, 2).records(body, &[], 200));
+    // A hint past the grammar's 64 bytes is shown cut to 64, so the summary stays bounded.
+    let long = "y".repeat(1000);
+    records
+        .extend(wire(WIRE, 5, CaptureSource::WireRequest, &long, CONN, 3).records(body, &[], 300));
+    records.push(connection(WIRE, CONN, connection_close()));
+    let trace = make_report_trace(GOAL_TEXT, &epoch(WIRE, records), Some(confirmed()));
+    let (_, _, lines) = report_bytes(trace.path());
+    let summary = summary_of(&lines);
+    assert_eq!(summary["capture"]["integrity"], "valid", "{summary:#}");
+    assert_eq!(
+        summary["analysis"]["undecoded"],
+        json!([
+            {"source": "wire_request", "hint": hint, "streams": 2,
+                "bytes": 2 * body.len(), "bytes_incomplete": false},
+            {"source": "wire_request", "hint": &long[..64], "hint_truncated": true,
+                "streams": 1, "bytes": body.len(), "bytes_incomplete": false},
+        ])
+    );
+    assert_eq!(summary["analysis"]["undecoded_omitted"], 0);
+    for entry in summary["analysis"]["decoders"].as_array().unwrap() {
+        assert!(entry["measured"].is_string(), "{entry}");
+        assert!(entry["synthetic_only"].is_array(), "{entry}");
+    }
 }
 
 /// Contract S1: `--research-json` echoes the two new `Launch` fields, additively. Absent, they
@@ -926,7 +967,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(unversioned(&bytes))),
-        "b1fd6c2182a9746691784b3df17ec916b52ddd11543edd4adff91f3bc470dc00"
+        "727713ee45d7c17aed2c8669339803399085078de2972b1d869bd10c46707868"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];

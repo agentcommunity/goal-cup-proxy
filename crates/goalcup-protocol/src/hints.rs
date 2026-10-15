@@ -9,9 +9,8 @@
 //!
 //! **A syntactically valid hint does not imply a decoder exists. A stream is capture-only when no
 //! registered decoder accepts its full StreamOpen.** D43, ruling 8: the bytes are recorded and no
-//! decoder reads them. The in-memory decode outcome names the hint so a
-//! misspelling is inspectable; research-report schema 1 does not yet serialize that undecoded
-//! inventory. An unsupported source or content type may instead be accepted and emitted as
+//! decoder reads them. The decode outcome names the hint, and the research report lists it under
+//! `analysis.undecoded`, so a misspelling is inspectable. An unsupported source or content type may instead be accepted and emitted as
 //! `unknown`; the session records capture-only when it finds no accepting decoder. A capture-only
 //! format needs no protocol edit.
 

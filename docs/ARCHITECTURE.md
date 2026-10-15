@@ -258,7 +258,7 @@ native Windows. Operating the binaries: [OPERATING](OPERATING.md).
 - **spawn gate**: the harness waits before `exec` until the daemon has durably registered it.
 - **anchor**: the external binding of the chain head: `LocalOnly` or `Signed`.
 - **run key**: the entry's per-run Ed25519 key. Its public half is `Launch.run_public_key`.
-- **research-report schema 1**: the private NDJSON report format. Not the same as harness-contract
+- **research-report schema** (now 4): the private NDJSON report format. Not the same as harness-contract
   schema 1 (`harness.toml`) or the decoder API version.
 
 ## 13. Where each guarantee is tested

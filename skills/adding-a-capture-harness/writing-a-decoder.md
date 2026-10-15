@@ -216,6 +216,10 @@ Source: `marker()` in `crates/goalcup-daemon/src/redact.rs`; streaming policy in
   real. Write segments as `text` for review by eye; the test loader re-encodes.
 - Run `spikes/redact.py`, review by eye, then a needle scan of the committed fixture: `sk-`,
   `Bearer`, masked key forms, e-mail addresses, home paths.
+- Give the connector a sample: `crates/goalcup-verifier/tests/fixtures/connectors/<id>/<name>.json`
+  naming a fixture of capture records or a session file and its hint. No Rust: run
+  `REGENERATE_CONNECTOR_SAMPLES=1` on `connector_samples` once, read the `expect` it writes,
+  commit both. The test header (`tests/it/connector_samples.rs`) has the two forms.
 
 ## Tests
 

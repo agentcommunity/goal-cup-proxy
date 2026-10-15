@@ -531,7 +531,7 @@ A run finished early has `records_after_deadline` 0. A run cut at its deadline u
 finalization after it, but a record in the deadline's own second counts as before it. Both fields are empty
 (`null`) without a verified receipt. The **trusted time is the server's**: `last_ack_at` (the same value as
 `verified_ack.acked_at`, signed with the server key) compared with `receipt_clock.deadline_at`, and the
-server's own chunk acknowledgements. The research summary (`--research-json`, schema 3) repeats the three
+server's own chunk acknowledgements. The research summary (`--research-json`, since schema 3) repeats the three
 fields under `delivery`, unchanged, with the same caveat.
 
 The **Exit** column is the exit a code gives alone: 2 invalid evidence, 1 incomplete (not proven, not
@@ -552,7 +552,7 @@ More than 128 distinct codes end with `findings_omitted:<n>`.
 | `link_seq_mismatch` | 2 | A line's `seq` is not the one after the line before. A line was dropped, repeated or moved. |
 | `link_prev_mismatch` | 2 | A line's `prev` is not the hash of the line before. A line came from another chain, or one was removed. |
 | `link_hash_mismatch` | 2 | A line's hash is not the hash of its content. The line was edited. |
-| `chain_phase_invalid` | 2 | A record is out of order: after the terminal, a second baseline, or a signed terminal with no cutoff. |
+| `chain_phase_invalid` | 2 | A record is out of order: after the terminal, a second baseline, a signed terminal with no cutoff, or a chain that ends in the V1 seal (no v5 writer produces one). |
 | `entry_id_mismatch` | 2 | A line names another entry than the first line. |
 | `chain_part_missing` | 2 | A part file is missing between two others, or part names do not join up. |
 | `chain_pruned_locally` | 1 | The first parts of the chain were removed on this machine. Verify the server copy. |

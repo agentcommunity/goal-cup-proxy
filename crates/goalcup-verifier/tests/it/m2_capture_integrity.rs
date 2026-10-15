@@ -2652,32 +2652,24 @@ fn native_resume_opens_with_a_gap_and_continues_past_the_durable_end() {
     );
 }
 
+/// The V1 seal terminal ends no v5 capture chain: no v5 writer produces one. The phase replay
+/// admits it, and the reader refuses it as a terminal.
 #[test]
-fn v5_legacy_seal_terminal_is_reported_as_legacy_seal() {
+fn a_v5_chain_ending_in_the_v1_seal_terminal_is_invalid() {
     let dir = tempfile::tempdir().unwrap();
     let mut export = capture_export(dir.path());
     for record in launched(complete_wire(None)) {
         append(&mut export, &record);
     }
-    let (_, link) = export
+    export
         .write_seal_for_protocol(M2_PROTOCOL_VERSION, &manifest())
         .unwrap();
     drop(export);
     let (report, _) = scan(dir.path());
-    assert_eq!(report.exit_code(), 0, "{report:#?}");
-    assert_eq!(
-        report.terminal,
-        Some(CaptureTerminalFacts {
-            seq: link.seq,
-            hash: link.hash.clone(),
-            observed: None,
-            observed_at: manifest().sealed_at,
-            kind: CaptureTerminalKind::LegacySeal,
-            reason: None,
-            termination: None,
-            seal_manifest_sha256: Some(manifest_sha256(&manifest()).unwrap()),
-        })
-    );
+    assert_eq!(report.exit_code(), 2, "{report:#?}");
+    assert!(has(&report, "chain_phase_invalid"), "{:?}", report.findings);
+    assert!(!report.sealed);
+    assert_eq!(report.terminal, None);
 }
 
 /// No key whose seed is written in this repository is trusted. A receipt and an ACK signed

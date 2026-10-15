@@ -1,0 +1,23 @@
+{
+  "expect": {
+    "decoders": {
+      "claude-code-native": {
+        "incomplete": false,
+        "kinds": {
+          "error": 1,
+          "model": 2,
+          "tool_result": 1,
+          "unknown": 2,
+          "usage": 1
+        },
+        "observations": 7,
+        "unknown_records": 2
+      }
+    },
+    "undecoded": []
+  },
+  "native": {
+    "file": "../../m2-native/claude-code-native-e01-excerpt.jsonl",
+    "hint": "claude-code-jsonl"
+  }
+}
