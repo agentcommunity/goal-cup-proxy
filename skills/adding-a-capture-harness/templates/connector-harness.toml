@@ -3,7 +3,7 @@
 # Replace every <PLACEHOLDER>. Delete the options you do not use. Comment lines are optional
 # (they are pinned bytes too); keep one first-line provenance comment like the shipped ones:
 # <Harness name> <VERSION>, capture only. Facts: docs/harnesses/<HARNESS_ID>.md.
-# Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: decision-table.md next to this file.
+# Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: docs/HARNESS-ONBOARDING.md, "Do I need a core change?".
 # No argument, goal flag, env key or value, host or auth host may name the tracker
 # (docs/CONNECTOR-SCHEMA.md, "Cross-field rules", rule 10).
 
@@ -18,6 +18,9 @@ id = "<HARNESS_ID>"                     # must equal the folder name; ^[a-z][a-z
 #   B) set goal_flag: the goal is passed as --flag=<goal>, and args must NOT end in "--".
 args = ["<SUBCOMMAND>", "<FLAG>", "--"]
 # goal_flag = "--<LONG-OPTION>"         # option B only
+# Chat mode instead (the participant types the prompt in the harness): set `interactive = true`,
+# leave out goal_flag and credential, use identity source "none". See docs/CONNECTOR-SCHEMA.md.
+# interactive = true
 # One line: how the run continues unattended (or "none: ..."), e.g. one turn, stdin /dev/null.
 continuation = "none: <HOW ONE HEADLESS TURN RUNS>"
 # Sign-in/token-refresh hosts, tunnelled opaquely and never recorded. Delete if none.

@@ -7,7 +7,7 @@ Status: <shipped connector | core ready, connector pending | facts only>
 <!-- Delete this comment when you fill the sheet. Worked example: docs/harnesses/codex-cli.md.
 Status, pick one:
 - shipped connector: connectors/<id>/ is on main, or is added by the same PR as this sheet.
-- core ready, connector pending: no decision-table row needs a core PR, but no connector yet.
+- core ready, connector pending: no row of the core-change table in docs/HARNESS-ONBOARDING.md needs a core change, but no connector yet.
 - facts only: a core change is needed first, or a key fact is unknown; the sheet is the whole
   contribution for now.
 Section 8 lives only in this sheet: the PR description links the sheet, it does not repeat it.
@@ -16,8 +16,8 @@ Rules: docs/harnesses/README.md. -->
 ## 1. Run one prompt, headless
 The exact command and flags to run one prompt with no human input, and how it exits.
 
-## 2. Install and pin a version
-How to install an exact version; where the binary lands; how to print the version.
+## 2. Install and record a version
+How to install a given version; where the binary lands; how to print the version.
 
 ## 3. Where it keeps things, per OS
 | | macOS | Linux | Windows |

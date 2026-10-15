@@ -32,8 +32,8 @@ real_dirs = ["{user_home}/.<harness>"]
 
 # A keyed connector: copy its [capture.credential] here and name the same variable as
 # credential_env in expect.toml. The kit hands the stand-in an invented key; the stand-in
-# must write the marker as synthetic-keyed-stderr/stand-in.py does (decision-table.md,
-# credential rows). Leave it out for a connector with no credential.
+# must write the marker as synthetic-keyed-stderr/stand-in.py does (docs/HARNESS-ONBOARDING.md,
+# "Do I need a core change?", credential rows). Leave it out for a connector with no credential.
 # [capture.credential]
 # env = "<CREDENTIAL_ENV>"
 
