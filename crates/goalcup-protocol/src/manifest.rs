@@ -21,12 +21,10 @@ pub enum LaunchMode {
     Tui,
     /// The harness is a headless local server the participant then talks to over a socket.
     ///
-    /// **No V1 connector launches this way.** A participant launched this way has nothing to
-    /// type into. The variant is for a harness that is genuinely headless, and for the one
+    /// **No connector manifest names this mode.** A participant launched this way has nothing
+    /// to type into. The variant is for a harness that is genuinely headless, and for the one
     /// thing it decides: such a launch may own its process group, because it has no tty to
-    /// lose. `hermes-cli` names it only because `[launch]` requires a mode and its
-    /// capture-only manifest must carry one; the capture launch never reads it, and Hermes is
-    /// not a socket server.
+    /// lose. The launcher picks it itself for a capture plan (`goalcup-cli`'s `launch.rs`).
     Server,
     /// Desktop attach mode: nothing is spawned; the folder is armed and the participant
     /// opens a session in it (D7).

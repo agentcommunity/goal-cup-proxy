@@ -304,7 +304,7 @@ const SEAL_BUSY_BACKOFFS: [Duration; SEAL_BUSY_ATTEMPTS - 1] = [
     Duration::from_millis(275),
 ];
 
-/// The capture seal's retry (CONTRACTS.md, H-10 4a ¶7): a dephased schedule against the one
+/// The capture seal's retry (CONTRACTS.md, C6 local finish budget ¶7): a dephased schedule against the one
 /// local-finish budget.
 ///
 /// Retries only [`CaptureSealError::NotAdmitted`] carrying `busy`, on [`SEAL_BUSY_BACKOFFS`],

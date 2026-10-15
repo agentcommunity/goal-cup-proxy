@@ -1,11 +1,12 @@
-//! Server acknowledgement of a chain prefix (D9 late evidence).
+//! Server acknowledgement of a chain prefix, the late evidence that the chain was not edited
+//! afterwards.
 //!
-//! This is the load-bearing type of the whole tamper argument. `VISION.md` says an edit is
-//! made visible because the two legs are hash-chained "and acknowledged by the server as
-//! they happen"; an acknowledgement whose `hash` is never compared to the chain, and whose
-//! `server_signature` is never verified, makes that sentence false. Everything else in the
-//! evidence — the chain, the buffer, the encrypted spool — is under the participant's own
-//! control on their own machine. This is not. See V12.
+//! This is the load-bearing type of the whole tamper argument. An edit to the chain is made
+//! visible because the chain is hash-chained and the server acknowledges it as it grows
+//! (docs/ARCHITECTURE.md, "Upload and the server"); an acknowledgement whose `hash` is never
+//! compared to the chain, and whose `server_signature` is never verified, makes that claim
+//! false. Everything else in the evidence — the chain, the buffer, the encrypted spool — is
+//! under the participant's own control on their own machine. This is not.
 
 use crate::ProtocolError;
 use crate::control::parse_z;

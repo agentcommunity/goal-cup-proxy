@@ -1,9 +1,12 @@
-//! Platform-specific paths for /goal Cup binaries.
+//! The operating-system layer of the tracker. It holds the configuration-directory policy
+//! below, a sleep inhibitor, free-disk checks, machine facts, process-image and terminal
+//! helpers, and the handle-rooted file access modules (`readcap`, `sourcecap`, `tracecap`).
 //!
-//! This crate's native capability layers (`filecap`, `sourcecap`, `tracecap`) are
-//! implemented for Unix only. Windows is not yet supported; it is planned (D42). A non-Unix
-//! build fails at compile time below rather than shipping a silently unsupported binary, and
-//! the workspace carries no non-Unix stub code. Linux is best-effort until it is tested.
+//! The native capability layers (`readcap`, `sourcecap`, `tracecap` and `filecap`'s error
+//! types) are implemented for Unix only. Windows is not yet supported; it is planned (D42).
+//! A non-Unix build fails at compile time below rather than shipping a silently unsupported
+//! binary, and the workspace carries no non-Unix stub code. Linux is best-effort until it is
+//! tested.
 
 #[cfg(not(unix))]
 compile_error!(

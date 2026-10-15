@@ -55,8 +55,8 @@ pub(super) struct Producer {
     wire: bool,
     /// It admitted a frame the chain records under its name: anything but a `Loss`, which
     /// chains only as a stream-less gap naming no producer. Without one the integrity reader
-    /// calls it unrecorded, and a Recovery naming it is an orphan recovery (CONTRACTS, H-16
-    /// ¶4). The receiver keeps the same flag.
+    /// calls it unrecorded, and a Recovery naming it is an orphan recovery (CONTRACTS.md, "Proxy loss in the stream
+    /// (H-16)" ¶1 and "Recovery supersession (CP-A4)"). The receiver keeps the same flag.
     named: bool,
     /// Its first frame was a Recovery, so it may re-observe surviving connections.
     recovered: bool,

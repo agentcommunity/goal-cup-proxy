@@ -2181,7 +2181,7 @@ impl GatedSpawn {
     /// Release the parked child once its registration is durable. `Ok` only after the child's
     /// acknowledgement **and** std's successful `exec`; every `Err` means no harness ran (or, if the
     /// acknowledgement arrives after `ready_within` and the child `exec`s before the gate closes,
-    /// that one that ran for milliseconds was killed here: CONTRACTS.md, gate amendment ¶5(f)), so the
+    /// that one that ran for milliseconds was killed here: CONTRACTS.md, C6 capture spawn gate ¶5(f)), so the
     /// caller records no `Launch`.
     ///
     /// Stated residual: a signal that kills the child after it writes the acknowledgement and

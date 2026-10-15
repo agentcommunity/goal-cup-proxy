@@ -20,7 +20,7 @@ pub(super) const LOCAL_FINISH_REASON: &str = "manual";
 
 /// The stages of the v5 local finish that can wait or be refused, in order. A refusal names the
 /// stage it stopped before; the token is the wire message of `finish_deadline`. The numbers are
-/// those of CONTRACTS.md, C6 local finish budget amendment, ¶4. Stage 1 (drain ingest, which
+/// those of CONTRACTS.md, C6 local finish budget ¶4. Stage 1 (drain ingest, which
 /// expires as a cut with gaps) and stage 5 (carried gaps, which are appended and not waited on)
 /// are never refused, so they have no variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,7 +181,7 @@ pub(super) fn signalled(outcome: &TerminationOutcomeV1) -> bool {
 }
 
 /// What a finish binds at the termination stage, given what an expired attempt recorded
-/// (CONTRACTS.md, H-10 4a ¶5). A recorded `Confirmed` is reused and `terminate` is not called:
+/// (CONTRACTS.md, C6 local finish budget ¶5). A recorded `Confirmed` is reused and `terminate` is not called:
 /// the harness was ended and observed gone. Any other recorded outcome (parked, refused,
 /// unresolved) may describe a harness that is running now, so the finish terminates again and
 /// binds the new outcome, except that a new `AlreadyStopped` after an attempt that signalled
@@ -245,7 +245,7 @@ pub(super) enum OwnerStop {
 impl Daemon {
     /// Finish a v5 entry locally, once. A retry answers the committed finish again.
     ///
-    /// The whole finish runs inside the one budget the request grants (CONTRACTS.md, H-10 4a):
+    /// The whole finish runs inside the one budget the request grants (CONTRACTS.md, C6 local finish budget):
     /// the drain share ends [`FINISH_COMMIT_RESERVE`] before its deadline, and a stage that
     /// waits (the blocking permit, the entry's lock, the owner) or that would begin inside
     /// [`FINISH_RESPONSE_MARGIN`] of the deadline is refused with `finish_deadline`, writing no
@@ -369,7 +369,7 @@ impl Daemon {
         capture.pause_before(FinishStage::OwnerDrain);
         // A deferred native scope rides on this request. It is installed here, under the run
         // lock and before the owner is stopped, so the owner finishes it within the native
-        // budget below (CONTRACTS.md, C6 local finish budget amendment, ¶9).
+        // budget below (CONTRACTS.md, C6 local finish budget ¶9).
         capture.install_deferred_scope(request.native_scope.as_deref(), run.launched());
         let stopped = budget.admits(Duration::ZERO)
             && matches!(
@@ -688,7 +688,7 @@ impl CaptureEntry {
     pub(super) fn pause_before(&self, _stage: FinishStage) {}
 
     /// Finish stage 5, with the writer uncontended: chain what this finish carries, in the order
-    /// the chain reads it (CONTRACTS.md, C6 local finish budget amendment, ¶4 and ¶5). First the
+    /// the chain reads it (CONTRACTS.md, C6 local finish budget ¶4 and ¶5). First the
     /// deferred-scope gap, if the entry still owes it. Then the launcher's proxy counters, this
     /// request's or an expired attempt's. Then one stream-less `ShutdownDeadline` gap if an
     /// earlier attempt expired: the harness ran between the two attempts with admission closed,

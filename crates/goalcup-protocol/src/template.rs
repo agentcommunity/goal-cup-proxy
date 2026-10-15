@@ -1,9 +1,9 @@
 //! `{name}` substitution that fails rather than leaving a placeholder on disk.
 //!
-//! One implementation for both sides: the daemon renders the connector's hook-install
-//! files and the CLI renders launch argv and environment values.
-//! Two implementations would be two ways for a per-run token to survive
-//! unrendered into a file.
+//! The CLI renders launch argv and environment values with it, and the harness checks
+//! use the same token reader (`tokens`) to validate a template before any run. One
+//! implementation for both means there is one way a per-run token can survive
+//! unrendered into a file or a command line.
 
 use crate::ProtocolError;
 use std::collections::BTreeMap;

@@ -1,5 +1,5 @@
-// PUT /v1/runs/{id}/chunks/{offset}: store bytes of the chain. docs/UPLOAD-API.md has the contract;
-// the order of steps below is SERVER-DESIGN.md section 4, "Acceptance of a chunk".
+// PUT /v1/runs/{id}/chunks/{offset}: store bytes of the chain. docs/UPLOAD-API.md has the contract
+// (section "PUT /v1/runs/{run_id}/chunks/{offset}"); the steps below follow its order.
 //
 //   1. refuse early, before the body is read (token, offset, size, headers, run state)
 //   2. a retry of a chunk already stored: answer with the stored ack, body unread (before the

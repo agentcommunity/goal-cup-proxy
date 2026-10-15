@@ -8,7 +8,7 @@
 //! It reads the chain the daemon writes and never touches it: recording never waits on the
 //! network, and a run whose server is away for a day loses nothing, because every byte is
 //! still on disk and is sent when the server is back. What it sends and when
-//! (docs/UPLOAD-API.md, docs/SERVER-DESIGN.md section 3, step 4):
+//! (docs/UPLOAD-API.md, and docs/SERVER-DESIGN.md "The run, step by step", step 5):
 //!
 //! - **What:** whole lines from where the server is (`offset`, `next_seq`, `head`), each
 //!   chunk one zstd frame of at most [`MAX_CHUNK_BYTES`] compressed, built in a spool file
@@ -58,7 +58,7 @@ pub const MAX_CHUNK_BYTES: u64 = 32 * 1024 * 1024;
 /// and the encoder's buffered block.
 const CHUNK_SOFT_BYTES: u64 = MAX_CHUNK_BYTES - 2 * 1024 * 1024;
 /// The zstd level: the library's default, fast and about 10x on a measured chain. No long
-/// window (docs/SERVER-DESIGN.md section 17).
+/// window.
 const ZSTD_LEVEL: i32 = 3;
 /// The longest line read: one chain record is at most this (`MAX_ENVELOPE_BYTES`).
 const MAX_LINE_BYTES: u64 = goalcup_protocol::capture::MAX_ENVELOPE_BYTES as u64;

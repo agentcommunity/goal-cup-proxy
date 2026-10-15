@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Every way the proxy relays something it does not capture, and the one [`GapReason`] each is
-/// written as in the stream (H-16, CONTRACTS.md "proxy loss in the stream"). The reasons are the
+/// written as in the stream (H-16; CONTRACTS.md, "Proxy loss in the stream (H-16)"). The reasons are the
 /// protocol's closed set; several losses share one, and the emitter sends each reason once per
 /// emitter, so losses that map to the same reason leave one `Loss` between them. That collapse is
 /// written here and nowhere else.

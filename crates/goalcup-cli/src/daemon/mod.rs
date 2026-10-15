@@ -108,7 +108,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// budget when the request was built, the termination allowance, and [`CONNECT_TIMEOUT`] as
 /// slack for request latency and `ps` spawn overhead beyond `termination_bound` (poll
 /// granularity is excluded from that bound, as TERMINATION.md states). All three are existing
-/// constants; no new budget is added (CONTRACTS.md, H-10 4a ¶6).
+/// constants; no new budget is added (CONTRACTS.md, C6 local finish budget ¶6).
 pub fn capture_seal_read_timeout(remaining: Duration, termination_allowance: Duration) -> Duration {
     remaining
         .saturating_add(termination_allowance)

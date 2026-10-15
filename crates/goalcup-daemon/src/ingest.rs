@@ -997,7 +997,8 @@ struct Producer {
     wire: bool,
     /// Admitted a frame the chain records under this producer's name: anything but a
     /// stream-zero `Loss`, which chains only as a stream-less gap naming no producer. A
-    /// producer without one is "unrecorded" to the integrity reader (CONTRACTS, H-16 ¶4).
+    /// producer without one is "unrecorded" to the integrity reader (CONTRACTS.md, "Proxy loss in the stream (H-16)" ¶1 and
+    /// "Recovery supersession (CP-A4)").
     named: bool,
 }
 

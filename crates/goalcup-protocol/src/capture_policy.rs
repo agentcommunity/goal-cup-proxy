@@ -87,7 +87,7 @@ pub(crate) fn ca_registry_mode(name: &str) -> Option<CaMode> {
 /// The provider-credential variables a capture profile may name. Closed on purpose (D43,
 /// ruling 3): a new provider is a reviewed edit and a DECISIONS entry. Every value is held to
 /// one grammar by the launcher (`child_secret_named`): 20 to 256 bytes of `[A-Za-z0-9_-]`.
-/// `AMP_API_KEY` is Amp's access token (m2-amp-readiness; D49).
+/// `AMP_API_KEY` is Amp's access token (D49).
 pub const CREDENTIAL_ENV: &[&str] = &["DEEPSEEK_API_KEY", "AMP_API_KEY"];
 
 /// The regex sources of the daemon's streaming recognizers (`redact/stream.rs`
@@ -469,7 +469,7 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
             return Some(why);
         }
     }
-    // Any other `*_URL` names a server (Amp reads `AMP_URL`, m2-amp-readiness). The value rule
+    // Any other `*_URL` names a server (Amp reads `AMP_URL`). The value rule
     // already refuses `://`; this refuses the name too. It comes last, so a name another rule
     // refuses (`AUTH_URL`, `GOALCUP_UPLOAD_URL`, `PIP_INDEX_URL`) keeps its more specific reason.
     if upper.ends_with("_URL") {

@@ -406,7 +406,7 @@ impl CaptureEntry {
     /// The launch's part of the native binding. An entry whose scope is due at the launch binds
     /// it from the request, or records its one gap and is [`NativeBinding::Unbound`]. A
     /// [`NativeBinding::Deferred`] entry with no scope in the request owes nothing yet: the finish
-    /// carries it (CONTRACTS.md, C6 local finish budget amendment, ¶9).
+    /// carries it (CONTRACTS.md, C6 local finish budget ¶9).
     pub(super) fn bind_launch_scope(
         &self,
         scope: Option<&str>,
