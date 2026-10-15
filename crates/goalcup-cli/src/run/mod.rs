@@ -132,6 +132,21 @@ pub struct UploadState {
     pub stopped: bool,
 }
 
+/// The run's heartbeats to the server, as far as the participant needs to know.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeartbeatState {
+    /// How many heartbeats in a row failed; `0` once one is stored.
+    #[serde(default)]
+    pub failures: u32,
+    /// Why the last one failed, in a sentence.
+    #[serde(default)]
+    pub last_failure: Option<String>,
+}
+
+/// How many heartbeats in a row must fail before `goalcup status` calls it a problem: three,
+/// which at the five-minute cadence is a quarter of an hour without the server hearing the run.
+pub const HEARTBEATS_FAILING_AFTER: u32 = 3;
+
 /// The disk, as the last tick measured it.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiskState {
@@ -153,6 +168,9 @@ pub struct RunState {
     pub harness: HarnessState,
     pub recording: Recording,
     pub upload: UploadState,
+    /// Absent from a `state.json` an older build wrote.
+    #[serde(default)]
+    pub heartbeat: HeartbeatState,
     pub disk: DiskState,
     /// `Err` says why the machine was not kept awake. The run goes on either way.
     pub sleep_lock: Result<(), String>,
@@ -175,6 +193,7 @@ impl RunState {
             harness: HarnessState::Running,
             recording: Recording::Unknown,
             upload: UploadState::default(),
+            heartbeat: HeartbeatState::default(),
             disk: DiskState::default(),
             sleep_lock,
             stopped: None,
@@ -211,6 +230,15 @@ impl RunState {
             if self.ended || self.upload.stopped || failing {
                 lines.push(format!("last upload {} ago: {why}", age_words(age)));
             }
+        }
+        if self.heartbeat.failures >= HEARTBEATS_FAILING_AFTER
+            && !self.ended
+            && let Some(why) = &self.heartbeat.last_failure
+        {
+            lines.push(format!(
+                "the last {} heartbeats to the server failed: {why}",
+                self.heartbeat.failures
+            ));
         }
         if self.disk.low && !self.ended {
             lines.push(format!(
@@ -266,6 +294,9 @@ pub struct Vitals {
 struct UploadVital {
     problem: Option<String>,
     stopped: bool,
+    /// Heartbeats in a row that failed, and why the last one did.
+    heartbeat_failures: u32,
+    heartbeat_last: Option<String>,
 }
 
 impl Default for Vitals {
@@ -319,6 +350,30 @@ impl Vitals {
         let mut upload = self.upload();
         if !upload.stopped {
             upload.problem = None;
+        }
+    }
+
+    /// A heartbeat failed: counted until one is stored. The count so far, this one included.
+    pub fn heartbeat_failed(&self, why: &str) -> u32 {
+        let mut upload = self.upload();
+        upload.heartbeat_failures = upload.heartbeat_failures.saturating_add(1);
+        upload.heartbeat_last = Some(why.to_string());
+        upload.heartbeat_failures
+    }
+
+    /// A heartbeat was stored.
+    pub fn heartbeat_ok(&self) {
+        let mut upload = self.upload();
+        upload.heartbeat_failures = 0;
+        upload.heartbeat_last = None;
+    }
+
+    /// How the heartbeats are doing: the failures in a row, and why the last one failed.
+    pub fn heartbeat_trouble(&self) -> HeartbeatState {
+        let upload = self.upload();
+        HeartbeatState {
+            failures: upload.heartbeat_failures,
+            last_failure: upload.heartbeat_last.clone(),
         }
     }
 
@@ -713,5 +768,25 @@ mod tests {
     fn no_runs_is_none_not_an_error() {
         let cfg = tempfile::tempdir().unwrap();
         assert!(newest(cfg.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn heartbeat_failures_count_in_a_row_until_one_is_stored() {
+        let vitals = Vitals::default();
+        assert_eq!(vitals.heartbeat_trouble(), HeartbeatState::default());
+        assert_eq!(vitals.heartbeat_failed("503"), 1);
+        assert_eq!(vitals.heartbeat_failed("timeout"), 2);
+        assert_eq!(
+            vitals.heartbeat_trouble(),
+            HeartbeatState {
+                failures: 2,
+                last_failure: Some("timeout".to_string())
+            }
+        );
+        // The upload's own trouble is a separate count.
+        vitals.upload_ok();
+        assert_eq!(vitals.heartbeat_trouble().failures, 2);
+        vitals.heartbeat_ok();
+        assert_eq!(vitals.heartbeat_trouble(), HeartbeatState::default());
     }
 }
