@@ -8,7 +8,8 @@ verifier checks.
 - **Wire contract (the authority):** [docs/UPLOAD-API.md](../../docs/UPLOAD-API.md). Paths, headers,
   status codes, error bodies and idempotency rules are implemented as written there.
 - **Design:** [docs/SERVER-DESIGN.md](../../docs/SERVER-DESIGN.md).
-- **Deploying, test runs, bad days:** [docs/OPERATING.md](../../docs/OPERATING.md).
+- **Deploying, test runs, bad days:** [docs/OPERATING.md](../../docs/OPERATING.md). The short steps for
+  operators are in the [Operator runbook](#operator-runbook) below.
 
 ## Run it locally
 
@@ -60,7 +61,7 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/context.ts`, `env.ts`, `errors.ts`, `util.ts` | Configuration, bindings, error types, helpers |
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects ([OPERATING](../../docs/OPERATING.md#test-runs)) |
-| `test/` | `sign.test.ts` (Rust vectors), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
+| `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
 
 ## Configuration
 
@@ -117,16 +118,144 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
   stored chunk if it was a retry, otherwise `409`.
 - **Not checked here, by design:** whether the bytes are a valid chain.
 
-## Before launch: what only real services can prove
+## Operator runbook
 
-- **R2 checksum failure.** The Worker maps a failed `sha256` put to `422 digest_mismatch` by matching
-  the error text (`10037`, "checksum", "did not match"). That wording is proven only in the local
-  simulator. On a deployed Worker, upload a chunk with a wrong `Goalcup-Sha256` against real R2 and
-  confirm `422` and nothing stored. If it comes back `502`, the Worker log has a line starting
-  `r2-put-unrecognised-error` with the real wording: add it to the pattern in `src/chunks.ts`. (A
-  recognised failure logs `r2-put-digest-mismatch`.)
-- **Create-only puts** (`onlyIf: { etagDoesNotMatch: "*" }`) must refuse to overwrite on real R2,
-  including under the bucket lock.
+Short steps for the people who run the event. Run every command in `server/worker`, in a shell where
+`CLOUDFLARE_ACCOUNT_ID` is set to the Agent Community account id (`export CLOUDFLARE_ACCOUNT_ID=<id>`).
+Production is the Worker `goalcup-ingest`. Staging is `goalcup-ingest-staging`: add `--env staging` to
+each wrangler command. Do not put a secret in this file, in a commit or in a chat message.
+
+[Deploy checks](#deploy-checks) · [Maintenance](#maintenance-on-and-off) · [Rollback](#rollback) ·
+[Logs](#logs) · [Change a start window](#change-a-start-window) · [Add a test operator](#add-a-test-operator) ·
+[Clean up test runs](#clean-up-test-runs) · [EVENT_ID switch](#event_id-switch-6-nov-2026-with-the-last-release)
+
+### Deploy checks
+
+Three rules apply to every `wrangler deploy` and every `wrangler rollback`, on production and on staging.
+Each deploy step below repeats them in short form. The details are here.
+
+1. **Deploy from `main` only.** Run `git switch main && git pull --ff-only`. `git status` must show no
+   changes. A deploy from a branch can ship a `wrangler.toml` that main does not have.
+2. **Take `npx wrangler deployments list` before and after.** Save both outputs. After the deploy there is
+   exactly one new deployment, and `npx wrangler deployments status` names it as the live one.
+3. **Check that `ingest.agentcommunity.org` still routes to `goalcup-ingest`.** Wrangler once moved the
+   domain to the staging Worker (15 Oct). Check it two ways:
+   - In the Cloudflare dashboard, open Workers & Pages, then `goalcup-ingest`, then Settings, then
+     Domains & Routes. It lists `ingest.agentcommunity.org`. `goalcup-ingest-staging` lists no custom domain.
+   - Run `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://ingest.agentcommunity.org/v1/device/approve`.
+     The answer is `404`: production has no `TEST_APPROVAL_KEY`. The answer `401` means the staging Worker
+     answered. Move the domain back at once. (While maintenance is on, every such call answers `503`, so use
+     the dashboard check only.)
+
+After a staging deploy, rule 3 is the check that matters, and `npx wrangler deployments list` for
+production (no `--env`) must show no new deployment.
+
+### Maintenance on and off
+
+Maintenance makes every call (except `GET /v1/health`) answer `503 maintenance` with `Retry-After`, before
+authentication. Tracers back off and keep recording. The cron does nothing while it is on. Run deadlines do
+not move.
+
+To switch it on:
+
+1. Go to `main` (`git switch main && git pull --ff-only`). Deploy from `main` only.
+2. Run `npx wrangler deployments list`. Save the output (before).
+3. Run `npx wrangler deploy --var MAINTENANCE:on`. To change the wait, add `--var MAINTENANCE_RETRY_AFTER:600`
+   (the default is `300` seconds).
+4. Run `npx wrangler deployments list` again (after). Check that `ingest.agentcommunity.org` still routes to
+   `goalcup-ingest` (dashboard check of [Deploy checks](#deploy-checks), rule 3).
+5. Confirm: `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://ingest.agentcommunity.org/v1/device`
+   answers `503`.
+
+To switch it off:
+
+1. Go to `main` (`git switch main && git pull --ff-only`). Deploy from `main` only.
+2. Run `npx wrangler deployments list`. Save the output (before).
+3. Run `npx wrangler deploy` with no `--var`. The value in `wrangler.toml` is `off`, so this ends
+   maintenance. (A rollback to a version that was deployed with `off` also ends it.)
+4. Run `npx wrangler deployments list` again (after). Check that `ingest.agentcommunity.org` still routes to
+   `goalcup-ingest` ([Deploy checks](#deploy-checks), rule 3).
+5. Confirm that the call from step 5 above no longer answers `503`.
+
+Never commit `MAINTENANCE = "on"` to `wrangler.toml`.
+
+### Rollback
+
+Use rollback when a deploy is bad and you know the last good version.
+
+1. Go to `main` (`git switch main && git pull --ff-only`). Deploy from `main` only.
+2. Run `npx wrangler deployments list`. Save the output (before). Each row shows its version id. Pick the
+   version that was live before the bad deploy.
+3. Run `npx wrangler rollback <version-id> --message "<reason>"`. Answer the prompt.
+4. Run `npx wrangler deployments list` again (after). Check that `ingest.agentcommunity.org` still routes to
+   `goalcup-ingest` ([Deploy checks](#deploy-checks), rule 3).
+5. Confirm: `curl -s https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`.
+
+A rollback restores the code and the variables of that version. It does not undo a database migration or
+change R2. To see which `EVENT_ID` a version carries, run `npx wrangler versions view <version-id>`. If you
+cannot find a good version, switch maintenance on and ask the owner.
+
+### Logs
+
+- Workers Logs are on in `wrangler.toml` for production and for staging. They keep the Worker's own
+  `console.error` lines: `misconfigured: ...`, `supabase <fn>: ...`, `tick <step> <run_id>: ...` and
+  `r2-put-unrecognised-error`. Read them in the Cloudflare dashboard: Workers & Pages, the Worker, Observability (Logs).
+  Search for the text you need.
+- Invocation logs are off on purpose (`invocation_logs = false`). An invocation log keeps request details,
+  such as the `Authorization` header and the client address. The data policy does not allow that. Because of
+  this, the logs show no status code per request: only the Worker's own lines. `test/config.test.ts` fails
+  if someone turns invocation logs on.
+- For a live view, run `npx wrangler tail --search "<text>"`. It keeps nothing. Do not save or share its
+  output.
+
+### Change a start window
+
+A start window is a row of `goal_cup_tracer.events` in the website's database. The Worker reads it on each
+open. A window change needs no Worker deploy. (A change of `EVENT_ID` does: see the
+[EVENT_ID switch](#event_id-switch-6-nov-2026-with-the-last-release).)
+
+1. In the website repository (`agentCommunity_PAGE`), add a migration in `supabase/migrations/` with
+   `goal_cup_tracer` in its file name. It holds one `UPDATE goal_cup_tracer.events SET start_window_opens
+   = '<UTC time>', start_window_closes = '<UTC time>' WHERE id = '<event id>' AND mode = '<mode>' AND
+   staging = false;`. The migration `20261016120000_goal_cup_tracer_event_windows.sql` is the model.
+   Keep it add-only: change rows, not tables.
+2. Merge it to the website `main`.
+3. Apply it to the production database, in one transaction:
+   `psql "$DATABASE_URL" -X -1 -v ON_ERROR_STOP=1 -f supabase/migrations/<file>.sql`.
+4. Check it: `psql "$DATABASE_URL" -X -c "select id, mode, start_window_opens, start_window_closes from
+   goal_cup_tracer.events where staging = false order by id"`.
+5. Mirror it into this repository. Run the regeneration command in the header of
+   `sql/goal-cup-tracer-upload.sql` (the lines above `REGEN-END`), from the root of the website checkout at its
+   `main`.
+   Read `git diff` of the mirror: the only new part must be your migration. Commit it and open a pull
+   request here.
+
+### Add a test operator
+
+Only a member listed in `goal_cup_tracer.test_operators` can approve or open a test run. Anyone else gets
+`403`. The owner adds the rows. The list is one for production and staging, because they share the database.
+
+1. Get the member's id: the `auth.users` id (Supabase dashboard, Authentication, Users).
+2. Run `psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "insert into goal_cup_tracer.test_operators
+   (member_id, note) values ('<member-uuid>', '<name>')"`.
+3. Check: `psql "$DATABASE_URL" -X -c "select member_id, note from goal_cup_tracer.test_operators"`.
+
+To remove an operator, delete the row with the same `member_id`.
+
+### Clean up test runs
+
+`scripts/delete-test-runs.sh` deletes all organizer test runs, in the database and in R2
+(`goalcup-traces/traces/test/` and `goalcup-traces-staging/traces/test-staging/` only). It needs `psql`,
+`curl` and `python3`, and `DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` in the
+environment.
+
+1. Run `sh scripts/delete-test-runs.sh`. This is a dry run. It prints what would go and changes nothing.
+2. Read the list. If it is right, run `sh scripts/delete-test-runs.sh --yes`.
+3. To keep recent runs, add `--older-than '7 days'`. If the script reports objects not deleted, run it
+   again without `--older-than`. That run deletes every test run. (With `--older-than`, a second run no longer
+   knows the keys, because the rows are gone.)
+
+More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 
 ## EVENT_ID switch: 6 Nov 2026, with the last release
 
@@ -139,17 +268,36 @@ the dry-run row, which closed 6 Nov 00:00 UTC.
 1. On a branch, set `EVENT_ID = "goalcup-cup-2026"` in `wrangler.toml` `[vars]` (not
    `[env.staging.vars]`). Open a PR and merge it to main.
 2. On main at that merge commit: `npm test` (in `server/worker`).
-3. From main at that merge commit: `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy` (production: top
-   level, no `--env`). Every later production deploy is from main, so it keeps the cup (a 7 Nov hotfix too).
+3. From main only, at that merge commit: run `npx wrangler deployments list` (before), then
+   `npx wrangler deploy` (production: top level, no `--env`), then `npx wrangler deployments list` (after).
+   Check that `ingest.agentcommunity.org` still routes to `goalcup-ingest`
+   ([Deploy checks](#deploy-checks), rule 3). Every later production deploy is from main, so it keeps the cup
+   (a 7 Nov hotfix too).
 4. Check the live Worker: `npx wrangler deployments status` names the live version, and
    `npx wrangler versions view <version-id>` shows `EVENT_ID` = `goalcup-cup-2026` (or the dashboard:
    goalcup-ingest, Settings, Variables).
 5. Open one practice run and one organizer test run against production; both start. Then
-   `sh scripts/delete-test-runs.sh --yes`.
+   `sh scripts/delete-test-runs.sh --yes` ([Clean up test runs](#clean-up-test-runs)).
 6. A competition start now answers "The start window has not opened yet." (before the switch it
    answered "after the start window ..."). After 7 Nov 00:00 UTC, `select distinct event_id from
    goal_cup_tracer.runs where mode = 'competition' and official_start >= '2026-11-07'` shows only
    `goalcup-cup-2026`, and the R2 prefix `traces/goalcup-cup-2026/` holds its chunks.
+
+## Before launch: what only real services can prove
+
+Status on 16 Oct 2026: **neither check has a record.** The repository shows no run of either one on staging
+or on production. Treat both as open. When you run one, write the date and the result here, in the same pull request.
+
+- **R2 checksum failure.** The Worker maps a failed `sha256` put to `422 digest_mismatch` by matching
+  the error text (`10037`, "checksum", "did not match"). That wording is proven only in the local
+  simulator. On a deployed Worker, upload a chunk with a wrong `Goalcup-Sha256` against real R2 and
+  confirm `422` and nothing stored. If it comes back `502`, the Worker log has a line starting
+  `r2-put-unrecognised-error` with the real wording: add it to the pattern in `src/chunks.ts`. (A
+  recognised failure logs `r2-put-digest-mismatch`.) Staging has a real R2 bucket, so staging can prove it.
+- **Create-only puts** (`onlyIf: { etagDoesNotMatch: "*" }`) must refuse to overwrite on real R2,
+  including under the bucket lock. Staging can prove the refusal. Staging has no bucket lock, so only
+  production can prove the lock case, and only on the locked prefix `traces/goalcup-cup-2026/`, which holds
+  data only after the EVENT_ID switch. Test runs use `traces/test/`, which is never locked.
 
 ## Decisions where the contract is silent
 
