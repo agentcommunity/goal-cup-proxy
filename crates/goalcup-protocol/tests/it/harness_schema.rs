@@ -2051,8 +2051,9 @@ fn id_and_env_shape() {
 
 #[test]
 fn a_url_named_variable_is_refused_as_an_endpoint() {
-    // Amp reads `AMP_URL` as its server (m2-amp-readiness). Only the value rule (`://`) stopped
-    // it; the name is now refused too, as is any other `*_URL` that has no earlier reason.
+    // Amp reads `AMP_URL` as its server (docs/harnesses/amp.md, section 6). Only the value rule
+    // (`://`) stopped it; the name is now refused too, as is any other `*_URL` that has no
+    // earlier reason.
     for name in ["AMP_URL", "amp_url", "SERVER_URL", "HARNESS_URL"] {
         assert_eq!(
             env_key_denied(name, EnvContext::CaptureEnv),

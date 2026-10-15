@@ -6,7 +6,11 @@ Status: shipped connector (capture-only: Goal Cup records the run, but there is 
 
 Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64, Hermes 0.19.0, CPython 3.13.13, 2026-09-03 spike and 2026-10-02 reference row); "source" means Goal Cup read the installed 0.19.0 package without running that path; "vendor docs" means a quote that Goal Cup's research file took from Nous Research's documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux and Windows were not measured for this harness, so most cells in those columns say "unknown".
 
-## 1. Run one prompt, headless
+## 1. Run one prompt, in chat mode first
+
+Chat mode: not measured. The command that opens Hermes's chat, how the participant types the prompt, how to quit and the flag that reopens the last session are all unknown (not measured by Goal Cup). The connector does not set `interactive = true`; it runs the headless form below, which is what the measurements in this sheet cover.
+
+Headless recipe (what the connector runs):
 
 ```
 hermes chat -Q --provider deepseek --query=<goal>

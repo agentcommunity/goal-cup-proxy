@@ -1456,10 +1456,9 @@ fn a_real_upstream_tls_failure_reaches_the_one_admission_summary() {
     )));
 }
 
-/// `LOCAL_CAPTURE_FINISH_BUDGET`, the one local-finish budget (CONTRACTS.md, "Amendment
-/// 2026-10-02 (C6 local finish budget, H-10 4a)"). Its drain share is 8 s and its commit
-/// reserve 2 s, so a producer that never settles is cut at the end of the drain share and the
-/// reserve still commits the seal.
+/// `LOCAL_CAPTURE_FINISH_BUDGET`, the one local-finish budget (CONTRACTS.md, "C6 local finish
+/// budget (H-10 4a)"). Its drain share is 8 s and its commit reserve 2 s, so a producer that
+/// never settles is cut at the end of the drain share and the reserve still commits the seal.
 const FINISH: Duration = Duration::from_secs(10);
 
 /// With the relay in front of the daemon's ingest paused, the sender holds more than the

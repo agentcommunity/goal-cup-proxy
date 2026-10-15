@@ -4,7 +4,7 @@
 //! Hermes prints its own session identity on stderr after the turn, so a Hermes entry's Launch
 //! carries no scope. The launcher reads the identity after the harness exits and hands it to the
 //! finish, which installs the entry's one native source before it stops the owner (CONTRACTS.md,
-//! "Amendment 2026-10-02 (C6 local finish budget, H-10 4a)" ¶9). Every other profile is scoped at
+//! "C6 local finish budget (H-10 4a)" ¶9). Every other profile is scoped at
 //! launch and ignores a scope on the finish.
 //!
 //! Every file here lives in the rig's temporary root; nothing resolves a real `HOME` or any `.hermes`.

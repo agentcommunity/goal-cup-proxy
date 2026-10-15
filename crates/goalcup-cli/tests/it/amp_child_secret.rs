@@ -1,9 +1,9 @@
 //! `AMP_API_KEY` goes through the same child-secret seam as `DEEPSEEK_API_KEY`.
 //!
-//! The token here is invented. Amp's real token grammar is UNKNOWN (m2-amp-readiness), so this
-//! test pins only what Goal Cup does with a token of the admitted grammar: 20 to 256 bytes of
-//! `[A-Za-z0-9_-]`, with no `sk-` prefix, so the key scan is shown to work for a shape the
-//! DeepSeek tests do not cover. No real token is read, and nothing reads the real `HOME`.
+//! The token here is invented. Amp's real token grammar is UNKNOWN (docs/harnesses/amp.md,
+//! section 5), so this test pins only what Goal Cup does with a token of the admitted grammar:
+//! 20 to 256 bytes of `[A-Za-z0-9_-]`, with no `sk-` prefix, so the key scan is shown to work for
+//! a shape the DeepSeek tests do not cover. No real token is read, and nothing reads the real `HOME`.
 
 use crate::common::m2_profile_support;
 
