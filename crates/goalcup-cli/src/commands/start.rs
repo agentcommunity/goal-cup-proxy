@@ -641,7 +641,12 @@ pub(crate) fn lock_home_for_continue(
     let config_home = cfg.join(CAPTURE_HOMES_DIR).join(id);
     private_dir(config_home.parent().expect("a capture-home parent"), true)?;
     match try_lock_shared_home(&config_home, id)? {
-        Ok(lock) => Ok(Some(lock)),
+        Ok(lock) => {
+            // Said at once, so a start refused by this lock before the segment's own record is
+            // written names this run.
+            note_home_holder(&lock, run_id);
+            Ok(Some(lock))
+        }
         Err(path) => {
             let holder = home_holder(&path).unwrap_or_else(|| run_id.to_string());
             Err(CliError::Refused(still_recording(&holder, id)))
@@ -1171,16 +1176,42 @@ impl Drop for DrainsOnDrop {
     fn drop(&mut self) {
         for drain in self.0.drain(..) {
             let entry = drain.entry_id().to_string();
+            let how_to_finish = drain.how_to_finish();
             let report = drain.wait(WrapUp::after(DRAIN_ON_REFUSAL));
             if !report.caught_up {
                 crate::host_log::say(&format!(
-                    "upload of entry {entry}, an earlier segment, is incomplete ({}). Run \
-                     `goalcup upload {entry}` to finish sending it.",
-                    report.why.as_deref().unwrap_or("the upload did not finish")
+                    "upload of entry {entry}, an earlier segment, is incomplete ({}). {}",
+                    report.why.as_deref().unwrap_or("the upload did not finish"),
+                    how_to_finish
                 ));
             }
         }
     }
+}
+
+/// `goalcup continue`'s refusals that need no server and change nothing, made before the
+/// shared harness home is locked and before any earlier segment is sealed or sent: the connector
+/// must be a chat-mode one, this must be the foreground of a terminal, and the harness, its pin
+/// and its executable must be usable. [`prepare`] asks them again of the segment it launches.
+pub(crate) fn continue_preflight(
+    connector: &HarnessConnector,
+    dev: bool,
+    env: &BTreeMap<String, String>,
+) -> Result<(), CliError> {
+    let id = &connector.loaded.manifest.id;
+    let profile = &connector.loaded.manifest.capture;
+    continue_fits(id, profile.interactive)?;
+    holds_the_terminal(id, "Nothing was changed.")?;
+    let pin = crate::preflight::harness_pin_gate(connector, dev);
+    if pin.level == Level::Fail {
+        return Err(CliError::Refused(format!(
+            "`goalcup continue` refuses this run:\n{}",
+            pin.render().trim_end()
+        )));
+    }
+    child_secret_for_harness(profile, env)?;
+    crate::launch::capture_executable(connector, profile, env)?;
+    Ok(())
 }
 
 /// A continued run needs a chat-mode harness: a headless one was given its one goal and has no
@@ -1684,9 +1715,10 @@ fn create_and_gate<'a>(
                 Some(continuing) => {
                     let _ = std::fs::remove_file(crate::upload::record_path(cfg, &info.entry_id));
                     let _ = std::fs::remove_file(crate::upload::receipt_path(cfg, &info.entry_id));
-                    if unmade {
-                        let _ = crate::run::write(cfg, &continuing.record);
-                    }
+                    // Whether or not the daemon agreed to the abandon: this entry never ran, and
+                    // a record that still names it would leave the next `continue` refused for
+                    // good ("has no upload record").
+                    let _ = crate::run::write(cfg, &continuing.record);
                 }
                 None => {
                     // The run is given back first, and its credential outlives the give-back
@@ -2255,15 +2287,6 @@ fn finish_and_scan(
             "the run's proxy was stopped and nothing finished the run".to_string(),
         )),
     };
-    // The entry is sealed: the shared harness home is free for the next segment or run, and the
-    // upload that follows (an hour at most) needs none of it.
-    drop(home_lock);
-    tees.finish(deadline, out);
-    // How the harness ended is the participant's to see: the exit code of a run that was recorded
-    // is not this command's own (`main.rs`), so it is said here.
-    if let Ok(status) = &status {
-        let _ = say(out, &format!("harness exited: {}.", describe_exit(status)));
-    }
     // The run is over when it was stopped for its end (its deadline, or a newer run replacing
     // it; a full disk stops the agent and leaves the run open), when its deadline has passed on
     // this machine's clock, and always for a run with no server. Otherwise the agent's exit
@@ -2276,6 +2299,24 @@ fn finish_and_scan(
         .is_some_and(|why| why != crate::run::watch::DISK_STOP_REASON);
     let on_server = record.server_url.is_some();
     let over = !on_server || ended_by_stop || deadline_passed(record.deadline_at.as_deref());
+    // The entry is sealed and the run goes on: the reserve is handed over before anything else
+    // is let go. This host's watch stops managing it and its lock is dropped, the file kept, so
+    // that a `goalcup continue` takes the same file at once instead of finding it held for as
+    // long as this host's wrap-up lasts (an hour at most). The upload that follows needs none
+    // of it, and the next segment's watch prunes this entry's acknowledged parts.
+    let mut watching = watching;
+    if !over {
+        drop(watching.take().and_then(crate::run::watch::Watching::end));
+    }
+    // The shared harness home is free for the next segment or run, and the upload that follows
+    // needs none of it.
+    drop(home_lock);
+    tees.finish(deadline, out);
+    // How the harness ended is the participant's to see: the exit code of a run that was recorded
+    // is not this command's own (`main.rs`), so it is said here.
+    if let Ok(status) = &status {
+        let _ = say(out, &format!("harness exited: {}.", describe_exit(status)));
+    }
     if let (true, true, false, Some(deadline_at)) =
         (on_server, continuable, over, record.deadline_at.as_deref())
     {
@@ -2324,14 +2365,14 @@ fn finish_and_scan(
     // each is said, and a reservation is kept while one is unsent.
     for drain in draining {
         let entry = drain.entry_id().to_string();
+        let how_to_finish = drain.how_to_finish();
         let report = drain.wait(wrap_up);
         release &= report.caught_up;
         let line = if report.caught_up {
             format!("uploaded: entry {entry}, an earlier segment of this run, acknowledged.")
         } else {
             format!(
-                "upload of entry {entry}, an earlier segment, is incomplete ({}). Run \
-                 `goalcup upload {entry}` to finish sending it.",
+                "upload of entry {entry}, an earlier segment, is incomplete ({}). {how_to_finish}",
                 report.why.as_deref().unwrap_or("the upload did not finish")
             )
         };
@@ -2342,7 +2383,8 @@ fn finish_and_scan(
     let reserve = watching.and_then(crate::run::watch::Watching::end);
     // The host's last word on the run's state, now that nothing else writes it: what became of
     // the upload is what `goalcup status` tells from here on.
-    keeper.update(|state| {
+    // Not written over a next segment's: its host may have started while this one sent.
+    keeper.update_while_current(|state| {
         state.ended = true;
         if let Some(report) = &upload_report {
             state.upload.stopped = false;

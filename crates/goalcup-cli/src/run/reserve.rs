@@ -270,6 +270,17 @@ fn names_the_file(locked: &std::fs::File, path: &Path) -> bool {
     }
 }
 
+/// Whether some process holds the reserve at `path` locked right now. A reserve that is not
+/// there, or that nobody holds, is not held. Nothing is created, changed or kept locked: a
+/// `goalcup continue` asks this before it sends anything, so that it is not refused for the
+/// reserve after the server has made the run's next segment.
+pub fn held_by_another(path: &Path) -> bool {
+    let Ok(file) = open_lockable(path, false) else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
 /// Refuse, before anything is created, a volume that cannot hold the reserve and the start
 /// margin. `dir` need not exist yet: the nearest directory above it that does is measured.
 pub fn check_room(dir: &Path, policy: &DiskPolicy) -> Result<(), CliError> {
@@ -709,6 +720,21 @@ mod tests {
         assert!(RunReserve::take(&path, &tight).is_ok());
         let other = reserve_path(dir.path(), "r2");
         assert!(RunReserve::take(&other, &tight).is_err());
+    }
+
+    #[test]
+    fn a_reserve_is_held_while_a_lock_on_it_lives_and_a_missing_one_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_path(dir.path(), "r1");
+        assert!(!held_by_another(&path), "no file, nothing held");
+        let held = RunReserve::take(&path, &small()).unwrap();
+        assert!(held_by_another(&path));
+        // Dropped without a release (the hand-over): the file stays and the lock goes.
+        drop(held);
+        assert!(path.exists());
+        assert!(!held_by_another(&path));
+        // And the probe took nothing: the reserve can be taken at once.
+        drop(RunReserve::take(&path, &small()).unwrap());
     }
 
     #[test]

@@ -429,6 +429,15 @@ impl Uploader {
         self.last_ok.store(crate::run::now_unix(), Ordering::SeqCst);
     }
 
+    /// Note that everything of this entry that will ever be sent has been: a later
+    /// `goalcup continue` does not close and send it again.
+    fn note_sent(&self) {
+        if let Some(dir) = self.spool.parent() {
+            let _ =
+                crate::config::write_secret_file(&sent_path(dir, &self.record.entry_id), b"sent\n");
+        }
+    }
+
     /// Hand the run's two shared counters to this uploader, replacing its own.
     fn share(&mut self, last_ok: &std::sync::Arc<AtomicU64>, acked: &std::sync::Arc<AtomicU64>) {
         let verified = self.acknowledged();
@@ -841,6 +850,17 @@ fn regular_file_text(path: &Path, max: u64) -> Option<String> {
     (text.len() as u64 <= max).then_some(text)
 }
 
+/// `<cfg>/uploads/<entry>.sent`: written when the entry's upload is complete (the whole chain
+/// and its seal; for a segment closed from its tail, the chain up to its committed end).
+fn sent_path(spool_dir: &Path, entry_id: &str) -> PathBuf {
+    spool_dir.join(format!("{entry_id}.sent"))
+}
+
+/// Whether the entry's upload finished: nothing of it is left to close or send.
+pub fn is_sent(spool_dir: &Path, entry_id: &str) -> bool {
+    sent_path(spool_dir, entry_id).is_file()
+}
+
 /// `<cfg>/uploads/<entry>.repo-head`: the commit noted when the run stopped.
 fn repo_head_path(spool_dir: &Path, entry_id: &str) -> PathBuf {
     spool_dir.join(format!("{entry_id}.repo-head"))
@@ -1065,6 +1085,11 @@ impl Uploader {
             offset: self.pos.offset,
         };
         let Some(documents) = documents else {
+            // A segment closed from its tail has no seal to send: it is done when its chain,
+            // up to its committed end, is.
+            if self.close_unsealed {
+                self.note_sent();
+            }
             return caught_up(false, None);
         };
         let mut failures = 0;
@@ -1076,6 +1101,7 @@ impl Uploader {
             match self.seal(&documents, timeout) {
                 Ok(()) => {
                     self.mark_ok();
+                    self.note_sent();
                     return caught_up(true, None);
                 }
                 Err(error) if !error.ends_upload() => {
@@ -1279,6 +1305,7 @@ pub enum Closing {
 /// ([`drain`]), beside the segment that came after it.
 pub struct Draining {
     entry_id: String,
+    closing: Closing,
     last_ok: std::sync::Arc<AtomicU64>,
     acked_offset: std::sync::Arc<AtomicU64>,
     report: std::sync::mpsc::Receiver<Report>,
@@ -1350,10 +1377,23 @@ pub fn drain(
         })?;
     Ok(Draining {
         entry_id,
+        closing,
         last_ok,
         acked_offset,
         report,
     })
+}
+
+/// What to do about an earlier segment's unfinished upload. One sealed by its host is finished
+/// by `goalcup upload`; one closed from its tail has an end `goalcup upload` cannot commit, and
+/// the next `goalcup continue` closes and sends it again.
+pub fn finish_advice(closing: Closing, entry_id: &str) -> String {
+    match closing {
+        Closing::Sealed => format!("Run `goalcup upload {entry_id}` to finish sending it."),
+        Closing::FromTail => {
+            "Run `goalcup continue` (it finishes the earlier segment's upload).".to_string()
+        }
+    }
 }
 
 /// What the disk watch reads of an entry that is being drained: the same two counters as of a
@@ -1369,6 +1409,17 @@ impl Draining {
     /// The entry this thread sends.
     pub fn entry_id(&self) -> &str {
         &self.entry_id
+    }
+
+    /// How the entry was closed: a segment closed from its tail cannot be finished by
+    /// `goalcup upload`, only by a `goalcup continue`.
+    pub fn closing(&self) -> Closing {
+        self.closing
+    }
+
+    /// What to tell the participant to do about this entry's upload when it did not finish.
+    pub fn how_to_finish(&self) -> String {
+        finish_advice(self.closing, &self.entry_id)
     }
 
     /// The counters the disk watch reads, for the watch to cover this entry too.
@@ -1553,5 +1604,30 @@ fn run(
                 return up.finish(Some(wrap_up), &mut say);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A segment closed from its tail cannot be finished by `goalcup upload`; the advice for
+    /// it is `goalcup continue`, which closes and sends it again.
+    #[test]
+    fn a_tail_closed_segment_is_finished_by_continue_not_upload() {
+        let sealed = finish_advice(Closing::Sealed, "e1");
+        assert!(sealed.contains("goalcup upload e1"), "{sealed}");
+        let tail = finish_advice(Closing::FromTail, "e1");
+        assert!(tail.contains("goalcup continue"), "{tail}");
+        assert!(!tail.contains("goalcup upload"), "{tail}");
+    }
+
+    #[test]
+    fn a_sent_entry_is_noted_and_only_that_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_sent(dir.path(), "e1"));
+        std::fs::write(sent_path(dir.path(), "e1"), b"sent\n").unwrap();
+        assert!(is_sent(dir.path(), "e1"));
+        assert!(!is_sent(dir.path(), "e2"));
     }
 }
