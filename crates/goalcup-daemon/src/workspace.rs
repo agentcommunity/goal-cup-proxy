@@ -160,16 +160,19 @@ pub fn list_workspace(
     .sorted())
 }
 
-/// The workspace's seal (D56). The root of its own clone ([`is_clone_root`]) is never walked:
-/// its Git state, read within `budget`, or why it could not be read, at most
-/// [`UNREADABLE_LIMIT`] characters. Any other workspace is walked, as before.
+/// The workspace's seal (D56). A `clone` is never walked: its Git state, read within `budget`, or
+/// why it could not be read, at most [`UNREADABLE_LIMIT`] characters. Whether the workspace is a
+/// clone is the baseline's answer ([`is_clone_root`] at the create), never asked again of a
+/// workspace the agent has had: a removed or swapped `.git` is unreadable, not a walk. Any other
+/// workspace is walked, as before.
 pub fn seal_workspace(
     workspace: &Path,
+    clone: bool,
     entry_id: &str,
     at: &str,
     budget: std::time::Duration,
 ) -> Result<SealManifest, DaemonError> {
-    if !is_clone_root(workspace) {
+    if !clone {
         return list_workspace(workspace, entry_id, at, &[]);
     }
     let git = match crate::workspace_git::state(workspace, budget) {

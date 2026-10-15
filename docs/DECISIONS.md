@@ -1522,13 +1522,20 @@ written, so every manifest written before them keeps its bytes and its digest.
   it has its size and the absent digest. The listing stops at 10 000 files: past that it lists the
   first 10 000 the walk meets, sorted, and marks nothing else.
 
-**A clone root is never walked, and always seals.** When its Git state cannot be read (a call
-fails, `git` is missing, `.git` is broken, an output is over 64 MiB, or the time runs out), the
+**A clone root is never walked, and always seals.** Whether the workspace is a clone is asked
+once, at the create; the seal follows the baseline (`baseline.json` says, read again when a daemon
+reopens the entry), so a `.git` the agent removed, moved or swapped for a link is "it has no .git
+directory", never a walk. When its Git state cannot be read (a call
+fails, `git` is missing, `.git` is broken, an output is over 64 MiB, `git ls-files --others` warns
+that it could not open a directory, or the time runs out), the
 baseline or the seal records `git: {"unreadable": "<why>"}` instead, with `files` empty: `<why>` is
 one sentence of at most 200 characters, with no path and no file content. The create is admitted
 and the finish seals at once. The verifier reports `baseline_git_unreadable` or
 `seal_git_unreadable`, makes the trace incomplete (exit 1, never invalid), and names the reason in
 the report's `git_unreadable` ("the workspace's Git state could not be read at the seal: <why>").
+A baseline with `git` beside a seal without it (an older daemon, or any path that walked a clone)
+is `seal_git_missing`, incomplete as well. An empty reason, or any field beside the two forms, is
+malformed.
 Walking instead would let the agent choose a different seal by breaking Git; refusing, as this
 decision first said, let an agent that broke its own `.git` block every seal while the CLI retried
 for an hour. Now the agent can only make its own trace incomplete. (Amended 2026-10-15; the first

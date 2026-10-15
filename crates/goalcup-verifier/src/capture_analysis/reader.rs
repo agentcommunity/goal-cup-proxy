@@ -455,6 +455,8 @@ struct Scan<'k> {
     sealed: bool,
     terminal_facts: Option<CaptureTerminalFacts>,
     git_unreadable: Vec<String>,
+    /// The bound baseline recorded a clone's Git state, read or not.
+    baseline_git: bool,
 }
 
 impl<'k> Scan<'k> {
@@ -485,6 +487,7 @@ impl<'k> Scan<'k> {
             sealed: false,
             terminal_facts: None,
             git_unreadable: Vec::new(),
+            baseline_git: false,
         }
     }
 
@@ -850,6 +853,7 @@ impl<'k> Scan<'k> {
         if !bound {
             self.fail("baseline_manifest_mismatch");
         } else {
+            self.baseline_git = manifest.git.is_some();
             self.git_read(&manifest, "baseline");
         }
         Ok(())
@@ -933,6 +937,11 @@ impl<'k> Scan<'k> {
             return Ok(false);
         }
         self.git_read(&manifest, "seal");
+        // A clone's seal records its Git state, or why it could not: a walk instead (an older
+        // daemon, or a removed `.git`) leaves the clone's work unproven (D56).
+        if self.baseline_git && manifest.git.is_none() {
+            self.short("seal_git_missing");
+        }
         Ok(true)
     }
 

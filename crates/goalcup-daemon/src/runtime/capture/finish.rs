@@ -267,7 +267,7 @@ impl Daemon {
                 });
         };
         // Stage 0: a zero budget is refused before anything is closed or flagged.
-        let reads_git = workspace::is_clone_root(&capture.workspace);
+        let reads_git = capture.clone;
         let budget = FinishBudget::from_request(request, reads_git)?;
         capture.finishing.store(true, Ordering::Release);
         let abandoned = AbandonGuard {
@@ -432,16 +432,21 @@ impl Daemon {
                 end.saturating_duration_since(tokio::time::Instant::now())
             });
         // A clone whose Git state could not be read seals with the reason in its place (D56).
-        let manifest =
-            match workspace::seal_workspace(&row.workspace, &entry_id, &sealed_at, git_budget) {
-                Ok(manifest) => manifest,
-                Err(error) => {
-                    // The harness was ended above; a later finish must not read that as "ended on
-                    // its own".
-                    capture.keep_termination(termination);
-                    return Err(error);
-                }
-            };
+        let manifest = match workspace::seal_workspace(
+            &row.workspace,
+            capture.clone,
+            &entry_id,
+            &sealed_at,
+            git_budget,
+        ) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                // The harness was ended above; a later finish must not read that as "ended on
+                // its own".
+                capture.keep_termination(termination);
+                return Err(error);
+            }
+        };
 
         // Stage 8: the terminal. Once it begins it completes under the existing no-retry rule;
         // only its registry half (`commit_finish`) is retried as it stands.

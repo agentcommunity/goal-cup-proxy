@@ -471,7 +471,14 @@ fn a_non_git_workspace_still_walks() {
     let ws = t.path().join("ws");
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::write(ws.join("main.py"), b"print(1)").unwrap();
-    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    let m = seal_workspace(
+        &ws,
+        is_clone_root(&ws),
+        "e1",
+        "2026-10-15T00:00:00Z",
+        BUDGET,
+    )
+    .unwrap();
     assert_eq!(m.git, None);
     assert_eq!(m.home, None);
     assert_eq!(m.files.len(), 1);
@@ -481,7 +488,14 @@ fn a_non_git_workspace_still_walks() {
     // A clone seals its Git state and walks nothing.
     let t = tempfile::tempdir().unwrap();
     let (ws, _home) = committed_clone(t.path());
-    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    let m = seal_workspace(
+        &ws,
+        is_clone_root(&ws),
+        "e1",
+        "2026-10-15T00:00:00Z",
+        BUDGET,
+    )
+    .unwrap();
     assert!(matches!(m.git, Some(GitState::Read(_))), "{:?}", m.git);
     assert!(m.files.is_empty(), "{:?}", m.files);
 }
@@ -508,7 +522,14 @@ fn a_broken_clone_seals_unreadable_never_walked() {
     let t = tempfile::tempdir().unwrap();
     let (ws, _home) = committed_clone(t.path());
     std::fs::write(ws.join(".git/HEAD"), b"not a ref\n").unwrap();
-    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    let m = seal_workspace(
+        &ws,
+        is_clone_root(&ws),
+        "e1",
+        "2026-10-15T00:00:00Z",
+        BUDGET,
+    )
+    .unwrap();
     unreadable(&m, &ws);
 }
 
@@ -517,13 +538,25 @@ fn a_broken_clone_seals_unreadable_never_walked() {
 fn a_clone_out_of_time_seals_unreadable() {
     let t = tempfile::tempdir().unwrap();
     let (ws, _home) = committed_clone(t.path());
-    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", std::time::Duration::ZERO).unwrap();
+    let m = seal_workspace(
+        &ws,
+        true,
+        "e1",
+        "2026-10-15T00:00:00Z",
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
     assert_eq!(unreadable(&m, &ws), "the time to read it ran out");
 }
 
-/// A tracked file the seal may not look at is `unreadable` in the digest, not `deleted`.
+/// A tracked file the seal may not look at (its directory can be listed but not entered) is
+/// `unreadable` in the digest, not `deleted`.
 #[test]
 fn a_tracked_file_behind_a_closed_directory_is_unreadable_not_deleted() {
+    // SAFETY: reading the effective uid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return; // root reads through any mode
+    }
     use goalcup_daemon::workspace_git::state;
     use std::os::unix::fs::PermissionsExt;
     let t = tempfile::tempdir().unwrap();
@@ -532,13 +565,53 @@ fn a_tracked_file_behind_a_closed_directory_is_unreadable_not_deleted() {
     std::fs::write(ws.join("d/f"), b"x\n").unwrap();
     git(&ws, &home, &["add", "d/f"]);
     git(&ws, &home, &["commit", "-q", "-m", "d"]);
-    std::fs::set_permissions(ws.join("d"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    std::fs::set_permissions(ws.join("d"), std::fs::Permissions::from_mode(0o600)).unwrap();
     let got = state(&ws, BUDGET);
     std::fs::set_permissions(ws.join("d"), std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(
         got.unwrap().dirty_sha256,
         sha256_hex(b"diff\0d/f\0unreadable\nuntracked\0")
     );
+}
+
+/// `git ls-files --others` skips a directory it cannot open with only a warning, and exits 0:
+/// the untracked work below it would leave the digest unseen. The state is unreadable instead.
+#[test]
+fn an_untracked_directory_git_cannot_open_makes_the_seal_unreadable() {
+    // SAFETY: reading the effective uid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return; // root reads through any mode
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
+    std::fs::create_dir_all(ws.join("hidden")).unwrap();
+    std::fs::write(ws.join("hidden/work.rs"), b"work").unwrap();
+    std::fs::set_permissions(ws.join("hidden"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let m = seal_workspace(&ws, true, "e1", "2026-10-15T00:00:00Z", BUDGET);
+    std::fs::set_permissions(ws.join("hidden"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        unreadable(&m.unwrap(), &ws),
+        "an untracked directory could not be read"
+    );
+}
+
+/// The seal follows the baseline (D56): a workspace whose baseline was a clone is never walked,
+/// whatever the agent did to `.git` since. Without it, the state says so.
+#[test]
+fn a_clone_whose_git_is_gone_or_swapped_is_never_walked() {
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
+    std::fs::remove_dir_all(ws.join(".git")).unwrap();
+    let m = seal_workspace(&ws, true, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    assert_eq!(unreadable(&m, &ws), "it has no .git directory");
+
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
+    std::fs::rename(ws.join(".git"), t.path().join("moved")).unwrap();
+    std::os::unix::fs::symlink(t.path().join("moved"), ws.join(".git")).unwrap();
+    let m = seal_workspace(&ws, true, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    assert_eq!(unreadable(&m, &ws), "it has no .git directory");
 }
 
 /// Review C1: Git before 2.44 ignores `GIT_NO_LAZY_FETCH`. A promisor remote the agent writes,

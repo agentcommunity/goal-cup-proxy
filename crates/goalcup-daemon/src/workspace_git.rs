@@ -116,7 +116,7 @@ pub fn state(workspace: &Path, budget: Duration) -> Result<WorkspaceGit, String>
         deadline: Instant::now() + budget,
     };
 
-    let (ok, head) = git.run(&["rev-parse", "--verify", "-q", "HEAD^{commit}"], None)?;
+    let (ok, head, _) = git.run(&["rev-parse", "--verify", "-q", "HEAD^{commit}"], None)?;
     // A failed `rev-parse` is an unborn `HEAD`; a broken repository fails the calls below.
     let commit = if ok {
         let id = String::from_utf8(head)
@@ -269,7 +269,9 @@ pub fn state(workspace: &Path, budget: Duration) -> Result<WorkspaceGit, String>
     // Only `.gitignore` files hide an untracked file: they are themselves in the digest, while
     // `.git/info/exclude` and `core.excludesFile` would hide work unseen.
     let mut untracked = BTreeMap::new();
-    let others = git.ok(
+    // A directory it cannot open is skipped with only a warning, and the call still succeeds:
+    // any warning makes the state unreadable rather than leave that work out of the digest.
+    let (ok, others, warned) = git.run(
         &[
             "ls-files",
             "-z",
@@ -278,6 +280,12 @@ pub fn state(workspace: &Path, budget: Duration) -> Result<WorkspaceGit, String>
         ],
         None,
     )?;
+    if !ok {
+        return Err("`git ls-files` failed".into());
+    }
+    if warned {
+        return Err("an untracked directory could not be read".into());
+    }
     let mut collapsed = 0usize;
     for path in others.split(|b| *b == 0).filter(|p| !p.is_empty()) {
         git.in_time()?;
@@ -409,7 +417,7 @@ impl Git<'_> {
 
     /// Stdout of a call that succeeded.
     fn ok(&self, args: &[&str], input: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
-        let (ok, out) = self.run(args, input)?;
+        let (ok, out, _) = self.run(args, input)?;
         if ok {
             Ok(out)
         } else {
@@ -417,13 +425,14 @@ impl Git<'_> {
         }
     }
 
-    /// Whether the call succeeded, and its stdout. An error when it could not start, printed more
-    /// than [`OUTPUT_LIMIT`], or outlived the deadline; it is then killed and reaped.
-    fn run(&self, args: &[&str], input: Option<Vec<u8>>) -> Result<(bool, Vec<u8>), String> {
+    /// Whether the call succeeded, its stdout, and whether it wrote anything to stderr (drained,
+    /// never kept). An error when it could not start, printed more than [`OUTPUT_LIMIT`], or
+    /// outlived the deadline; it is then killed and reaped.
+    fn run(&self, args: &[&str], input: Option<Vec<u8>>) -> Result<(bool, Vec<u8>, bool), String> {
         self.in_time()?;
         let mut cmd =
             command(self.workspace, self.home).ok_or("no git was found on PATH outside it")?;
-        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::null());
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
         if input.is_some() {
             cmd.stdin(Stdio::piped());
         }
@@ -433,6 +442,11 @@ impl Git<'_> {
         if let (Some(mut stdin), Some(input)) = (child.stdin.take(), input) {
             std::thread::spawn(move || stdin.write_all(&input));
         }
+        let stderr = child.stderr.take().ok_or("git has no stderr")?;
+        let (err_tx, err_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = err_tx.send(std::io::copy(&mut { stderr }, &mut std::io::sink()));
+        });
         let stdout = child.stdout.take().ok_or("git has no stdout")?;
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -461,7 +475,13 @@ impl Git<'_> {
         if out.len() as u64 > OUTPUT_LIMIT {
             return Err(format!("`git {}` printed more than 64 MiB", args[0]));
         }
-        Ok((status.success(), out))
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        let warned = err_rx
+            .recv_timeout(left)
+            .map_err(|_| "the time to read it ran out".to_string())?
+            .map_err(|e| e.to_string())?
+            > 0;
+        Ok((status.success(), out, warned))
     }
 }
 

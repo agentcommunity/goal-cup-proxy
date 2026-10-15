@@ -357,6 +357,27 @@ fn an_unreadable_clone_is_incomplete_and_says_why() {
     let (exit, report, _) = run(&manifest(), &manifest());
     assert_eq!(exit, Some(0), "{report}");
     assert!(report.get("git_unreadable").is_none(), "{report}");
+
+    // A baseline that read a clone beside a seal that walked a workspace: an older daemon, or a
+    // path that missed the clone. Incomplete, never valid.
+    let mut clone = manifest();
+    clone.git = Some(GitState::Read(goalcup_protocol::seal::WorkspaceGit {
+        commit: None,
+        dirty_sha256: "cd".repeat(32),
+    }));
+    let (exit, report, _) = run(&clone, &manifest());
+    assert_eq!(exit, Some(1), "{report}");
+    assert_eq!(report["integrity"].as_str(), Some("incomplete"), "{report}");
+    assert!(
+        report["findings"].to_string().contains("seal_git_missing"),
+        "{report}"
+    );
+    let (exit, report, _) = run(&clone, &unreadable("it has no .git directory"));
+    assert_eq!(exit, Some(1), "{report}");
+    assert!(
+        !report["findings"].to_string().contains("seal_git_missing"),
+        "{report}"
+    );
 }
 
 /// The two fields are skipped when absent, so a manifest written before them serializes to

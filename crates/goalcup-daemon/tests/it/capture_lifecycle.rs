@@ -2989,6 +2989,54 @@ async fn a_clone_git_cannot_read_still_seals_never_walked() {
     ));
 }
 
+/// The seal follows the baseline (D56 amended): an entry created over a clone is never walked at
+/// its finish, whether the agent removed `.git` or swapped it for a link. The seal records why
+/// the state could not be read instead, which the verifier reports incomplete.
+#[tokio::test]
+async fn a_clone_whose_git_was_removed_or_swapped_still_seals_unwalked() {
+    use goalcup_protocol::seal::GitState;
+    let rig = Rig::start().await;
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&home).unwrap();
+    for (name, break_git) in [
+        (
+            "removed",
+            (|ws: &Path| std::fs::remove_dir_all(ws.join(".git")).unwrap()) as fn(&Path),
+        ),
+        ("swapped", |ws: &Path| {
+            let moved = ws.with_file_name("moved-git");
+            std::fs::rename(ws.join(".git"), &moved).unwrap();
+            std::os::unix::fs::symlink(&moved, ws.join(".git")).unwrap();
+        }),
+    ] {
+        let ws = rig.workspace(name);
+        std::fs::create_dir_all(&ws).unwrap();
+        let out = goalcup_daemon::workspace_git::command(&ws, &home)
+            .expect("git on PATH")
+            .args(["init", "-q"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let created = rig.create("codex-cli", &ws, RESERVE).await;
+        assert_eq!(created.status(), 200, "{}", created.body());
+        let info: CaptureWorkspaceInfo = created.json().unwrap();
+
+        break_git(&ws);
+        std::fs::write(ws.join("work.rs"), b"work").unwrap();
+        let sealed = rig.seal(&info.entry_id, None).await;
+        assert_eq!(sealed.status(), 200, "{name}: {}", sealed.body());
+        let seal = read_manifest(&rig.trace_dir(&info.entry_id).join("seal.json"));
+        assert_eq!(seal.files, [], "{name}: the clone is not walked");
+        assert_eq!(
+            seal.git,
+            Some(GitState::Unreadable {
+                unreadable: "it has no .git directory".to_string()
+            }),
+            "{name}"
+        );
+    }
+}
+
 /// The baseline lists the connector's config home as it was before the run, without the
 /// native root the harness writes its sessions into.
 #[tokio::test]
