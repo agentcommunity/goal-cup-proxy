@@ -68,7 +68,12 @@
 //! and reports [`NativePollReport::more_work`] when the byte budget deferred bytes it saw.
 //! Discovery examines at most [`NativeCaptureLimits::max_dir_entries`] directory entries per
 //! poll, walking directory levels in descending name order so a date-partitioned store
-//! (`YYYY/MM/DD`) reaches its newest day before older history; it tracks at most
+//! (`YYYY/MM/DD`) reaches its newest day before older history. A poll that stops at the cap
+//! leaves a resume point: the next poll reads past the entries already examined (readdir
+//! only: no match, no `fstatat`, except to descend a directory level) and examines the next
+//! window, and a poll that reaches the end starts the next cycle at the front. Every entry of
+//! a store of `n` entries is examined within `ceil(n / max_dir_entries)` polls, whatever order
+//! readdir returns. It tracks at most
 //! [`NativeCaptureLimits::max_files`] files and keeps at most
 //! [`NativeCaptureLimits::max_open_streams`] streams open. Descriptors are held only inside a
 //! poll, apart from one retained root per source: one directory chain of at most
@@ -85,12 +90,18 @@
 //! tail loss. There is no wire-style recovery. A loss stays latched for the life of the
 //! adapter; nothing in this tree resumes a lost producer.
 //!
-//! Losses that have no stream to carry a `Gap` frame — discovery stopped at its entry cap,
-//! an entry refused or unavailable, a file over `max_files`, a file that never got a stream —
-//! are kept for the adapter's lifetime, every poll and finish pass included, and reported in
-//! [`NativeLossReport`] and [`NativeFinishReport`]. The entry owner records a stream-less
-//! `CaptureRecord::Gap` for them. A finish report with none of them still does not prove the
-//! expected file existed: the owner checks it saw the `Open` it expected.
+//! Losses that have no stream to carry a `Gap` frame are reported in [`NativeLossReport`] and
+//! [`NativeFinishReport`]. A matched entry kept out for good — a file over `max_files`, or an
+//! entry refused (symlink, special file, over-long label), each since the source's start —
+//! counts in [`NativeLossReport::lost_entries`], the most found in one discovery cycle, so a
+//! lasting loss counts once and a cycle with more losses than any before raises it. The entry
+//! owner records a stream-less `CaptureRecord::Gap { LimitExceeded }` when it first rises and
+//! again when it grows. The
+//! finish walks a whole discovery cycle when its budget allows; one that could not is
+//! [`NativeFinishReport::discovery_capped`], and the owner records that too. An entry
+//! unavailable in one poll is retried in the next and is not a loss. A finish report with none
+//! of them still does not prove the expected file existed: the owner checks it saw the `Open`
+//! it expected.
 //!
 //! # Integration interface
 //!
@@ -399,7 +410,8 @@ pub struct NativePollReport {
     pub bytes: u64,
     /// The byte budget deferred bytes this poll observed; poll again soon.
     pub more_work: bool,
-    /// Discovery stopped at `max_dir_entries`; some scoped entries were not examined.
+    /// Discovery stopped at `max_dir_entries`; the next poll resumes past what this one
+    /// examined.
     pub discovery_capped: bool,
     /// Matched files not tracked because `max_files` was reached (not captured).
     pub untracked_files: u64,
@@ -445,11 +457,19 @@ pub struct NativeLossReport {
     pub tracked_files: usize,
     /// Some matched file was never tracked because `max_files` was reached.
     pub file_limit_reached: bool,
-    /// Lifetime discovery facts; see [`NativeFinishReport::discovery_capped`].
+    /// Discovery stopped at `max_dir_entries` at least once, every poll and finish pass
+    /// included. With rotation this is a cost, not a loss; the finish's own loss is
+    /// [`NativeFinishReport::discovery_capped`].
     pub discovery_capped: bool,
     pub refused_entries: u64,
     pub unavailable: u64,
     pub untracked_files: u64,
+    /// Matched entries kept out for good (refused, or past `max_files`), written or changed
+    /// since the source's start: the most found in one discovery cycle, which examines each
+    /// entry once. It never falls and a lasting loss does not raise it. A high-water mark, it
+    /// rises only when a cycle finds more than any cycle before: a new loss that replaces one
+    /// gone since is not seen here.
+    pub lost_entries: u64,
 }
 
 /// The committed result of [`NativeCapture::finish`].
@@ -471,11 +491,12 @@ pub struct NativeFinishReport {
     pub bytes_drained: u64,
     /// The producer-wide loss, if latched.
     pub latched: Option<GapReason>,
-    /// Lifetime discovery facts, every poll and finish pass included. Discovery stopped at
-    /// `max_dir_entries` at least once, so some scoped entries went unexamined.
+    /// The finish's budget ended before any of its discovery cycles was whole: an entry it
+    /// never reached may hold a file no stream carries.
     pub discovery_capped: bool,
-    /// Matched entries refused (symlink, special file, directory, over-long label), summed
-    /// over passes: an entry seen in several passes counts in each.
+    /// Lifetime discovery facts, every poll and finish pass included: matched entries refused
+    /// (symlink, special file, directory, over-long label), summed over passes, so an entry
+    /// seen in several passes counts in each.
     pub refused_entries: u64,
     /// Entries that could not be observed, opened or read, summed over passes.
     pub unavailable: u64,
@@ -509,6 +530,8 @@ pub struct NativeCapture {
     interrupted_streams: u64,
     file_limit_reached: bool,
     facts: DiscoveryFacts,
+    /// Entries the current discovery cycle already examined: the next pass reads past them.
+    resume_at: u64,
     finished: Option<NativeFinishReport>,
 }
 
@@ -603,6 +626,7 @@ impl NativeCapture {
             interrupted_streams: 0,
             file_limit_reached: false,
             facts: DiscoveryFacts::default(),
+            resume_at: 0,
             finished: None,
         })
     }
@@ -640,12 +664,20 @@ impl NativeCapture {
             report.admitted = true;
             let started = self.emitter.clock.now().mono_ns;
             let mut left = budget.max_bytes;
+            // The finish walks its own cycle from the front: an entry examined by an earlier
+            // poll may hold a file written since.
+            self.resume_at = 0;
+            self.facts.cycle = 0;
+            let mut whole = false;
             loop {
                 let mut pass = NativePollReport::new(NativeAdmission::Ready);
                 self.pass(left.min(self.limits.poll_bytes), &mut pass);
                 left = left.saturating_sub(pass.bytes);
                 report.bytes_drained += pass.bytes;
-                if !self.emitter.live() || pass.bytes == 0 || left == 0 {
+                whole |= !pass.discovery_capped;
+                report.discovery_capped = !whole;
+                let settled = pass.bytes == 0 && !pass.discovery_capped;
+                if !self.emitter.live() || settled || left == 0 {
                     break;
                 }
                 let elapsed = self.emitter.clock.now().mono_ns.saturating_sub(started);
@@ -665,7 +697,6 @@ impl NativeCapture {
         }
         report.final_seq = self.emitter.last_seq;
         report.latched = self.emitter.latched();
-        report.discovery_capped = self.facts.capped;
         report.refused_entries = self.facts.refused;
         report.unavailable = self.facts.unavailable;
         report.untracked_files = self.facts.untracked;
@@ -688,6 +719,7 @@ impl NativeCapture {
             refused_entries: self.facts.refused,
             unavailable: self.facts.unavailable,
             untracked_files: self.facts.untracked,
+            lost_entries: self.facts.lost,
         }
     }
 
@@ -710,8 +742,12 @@ impl NativeCapture {
         self.facts.fold(report);
     }
 
+    /// One window of the discovery cycle: read past what the cycle already examined, then
+    /// examine up to `max_dir_entries` entries. A capped window moves the resume point on; one
+    /// that reached the end starts the next cycle at the front.
     fn discover(&mut self, report: &mut NativePollReport) {
         let mut entries_left = self.limits.max_dir_entries;
+        let mut pass_over = self.resume_at;
         for (index, source) in self.sources.iter().enumerate() {
             let mut walker = Walker {
                 index,
@@ -719,11 +755,17 @@ impl NativeCapture {
                 files: &mut self.files,
                 max_files: self.limits.max_files,
                 entries_left: &mut entries_left,
+                pass_over: &mut pass_over,
                 report: &mut *report,
                 file_limit_reached: &mut self.file_limit_reached,
             };
             walker.walk(&source.root, &mut Vec::new());
         }
+        self.resume_at = if report.discovery_capped {
+            self.resume_at + self.limits.max_dir_entries as u64
+        } else {
+            0
+        };
     }
 
     fn read(&mut self, byte_budget: u64, report: &mut NativePollReport) {
@@ -999,6 +1041,10 @@ struct DiscoveryFacts {
     refused: u64,
     unavailable: u64,
     untracked: u64,
+    /// Entries kept out so far in the current discovery cycle.
+    cycle: u64,
+    /// The most `cycle` has reached: [`NativeLossReport::lost_entries`].
+    lost: u64,
 }
 
 impl DiscoveryFacts {
@@ -1007,6 +1053,12 @@ impl DiscoveryFacts {
         self.refused = self.refused.saturating_add(pass.refused_entries);
         self.unavailable = self.unavailable.saturating_add(pass.unavailable);
         self.untracked = self.untracked.saturating_add(pass.untracked_files);
+        let kept_out = pass.refused_entries.saturating_add(pass.untracked_files);
+        self.cycle = self.cycle.saturating_add(kept_out);
+        self.lost = self.lost.max(self.cycle);
+        if !pass.discovery_capped {
+            self.cycle = 0;
+        }
     }
 }
 
@@ -1155,6 +1207,8 @@ struct Walker<'a> {
     files: &'a mut BTreeMap<FileKey, Tracked>,
     max_files: usize,
     entries_left: &'a mut usize,
+    /// Entries still to read past: the current cycle examined them in an earlier pass.
+    pass_over: &'a mut u64,
     report: &'a mut NativePollReport,
     file_limit_reached: &'a mut bool,
 }
@@ -1164,7 +1218,7 @@ impl Walker<'_> {
         let level = prefix.len();
         let last = level + 1 == self.source.pattern.len();
         let names = match &self.source.pattern[level] {
-            Component::Literal(name) => vec![name.clone()],
+            Component::Literal(name) => vec![(name.clone(), false)],
             // Directory levels newest first: a `YYYY/MM/DD` store reaches today before history.
             Component::Glob(glob) => match self.enumerate(dir, glob, !last) {
                 Ok(names) => names,
@@ -1174,7 +1228,7 @@ impl Walker<'_> {
                 }
             },
         };
-        for name in names {
+        for (name, passed) in names {
             let observed = match dir.observe(&name) {
                 Ok(SourceLookup::Present(observed)) => observed,
                 Ok(SourceLookup::Missing) => continue,
@@ -1183,6 +1237,10 @@ impl Walker<'_> {
                     continue;
                 }
             };
+            // A passed-over entry was judged earlier in this cycle; only its subtree is new.
+            if passed && observed.kind() != SourceKind::Directory {
+                continue;
+            }
             match (observed.kind(), last) {
                 (SourceKind::Regular, true) => {
                     prefix.push(name);
@@ -1199,41 +1257,65 @@ impl Walker<'_> {
                     Err(_) => self.report.unavailable += 1,
                 },
                 (SourceKind::Regular, false) => {}
+                // An entry from before the run is not this run's, refused or not (D57).
                 (SourceKind::Directory | SourceKind::SymbolicLink | SourceKind::Special, _) => {
-                    self.report.refused_entries += 1;
+                    if self.since_start(&observed) {
+                        self.report.refused_entries += 1;
+                    }
                 }
             }
         }
     }
 
+    /// The matching names of `dir`, each with whether it was passed over. At a directory
+    /// level (`descending`) a passed-over match is kept, since the cycle's position lies in its
+    /// subtree; at the file level it is dropped unread.
     fn enumerate(
         &mut self,
         dir: &SourceDir,
         glob: &str,
         descending: bool,
-    ) -> Result<Vec<SourceName>, SourceCapError> {
+    ) -> Result<Vec<(SourceName, bool)>, SourceCapError> {
         let mut names = Vec::new();
         {
             let mut entries = dir.entries()?;
             loop {
-                if *self.entries_left == 0 {
+                let passed = *self.pass_over > 0;
+                if !passed && *self.entries_left == 0 {
                     self.report.discovery_capped = true;
                     break;
                 }
                 let Some(name) = entries.next_entry()? else {
                     break;
                 };
-                *self.entries_left -= 1;
+                if passed {
+                    *self.pass_over -= 1;
+                    if !descending {
+                        continue;
+                    }
+                } else {
+                    *self.entries_left -= 1;
+                }
                 if glob_matches(&name.as_os_str().to_string_lossy(), glob) {
-                    names.push(name);
+                    names.push((name, passed));
                 }
             }
         }
-        names.sort_by(|a, b| a.as_os_str().as_bytes().cmp(b.as_os_str().as_bytes()));
+        names.sort_by(|a, b| a.0.as_os_str().as_bytes().cmp(b.0.as_os_str().as_bytes()));
         if descending {
             names.reverse();
         }
         Ok(names)
+    }
+
+    /// Written or changed since the run started, or the source has no start. Otherwise the
+    /// entry is not this run's yet and is not counted (D57). The no-follow observation's change
+    /// time cannot be set back, so a backdated entry is still seen.
+    fn since_start(&self, observed: &SourceObservation) -> bool {
+        self.source.modified_since.is_none_or(|since| {
+            let facts = observed.facts();
+            facts.modified_seconds.max(facts.changed_seconds) >= since
+        })
     }
 
     fn register(&mut self, components: &[SourceName], observed: &SourceObservation) {
@@ -1241,13 +1323,8 @@ impl Walker<'_> {
         if self.files.contains_key(&key) {
             return;
         }
-        // Not written or changed since the run started: not this run's yet, and not counted
-        // (D57). The change time cannot be set back, so a backdated file is still seen.
-        if let Some(since) = self.source.modified_since {
-            let facts = observed.facts();
-            if facts.modified_seconds.max(facts.changed_seconds) < since {
-                return;
-            }
+        if !self.since_start(observed) {
+            return;
         }
         let label_bytes = self.source.name.len() + 1 + key.1.len() + GENERATION_SUFFIX_BYTES;
         if label_bytes > MAX_METADATA_STRING_BYTES {

@@ -20,8 +20,9 @@
 //!   over it, rendered;
 //! * the allowlist [`CAPTURE_IDENTITY_ENV`] (`USER`, `LOGNAME`, `TMPDIR`), carried across
 //!   from the tracker's environment and nothing else from it;
-//! * the run's `HOME` (per run, or the connector's shared run home, D59), `PATH` ([`CAPTURE_PATH`], or for a chat-mode connector the
-//!   participant's own: [`harness_path`]) and the profile's home variable;
+//! * the run's `HOME` (per run, or the connector's shared run home, D59), `PATH`
+//!   ([`CAPTURE_PATH`], or for a chat-mode connector the participant's own: [`harness_path`])
+//!   and the profile's home variable;
 //! * for a chat-mode connector only, the participant's terminal environment
 //!   ([`CHAT_PASSTHROUGH_ENV`] and `LC_*`), under the connector's own values;
 //! * the passive **loopback** recording proxy through process-scoped `HTTPS_PROXY`/
@@ -786,7 +787,7 @@ pub fn build_capture_launch(
     workspace: &Path,
     launch: &CaptureLaunch<'_>,
 ) -> Result<LaunchPlan, CliError> {
-    build_launch(c, v, workspace, launch, false)
+    build_launch(c, v, workspace, &Inputs::recording(launch), false)
 }
 
 /// [`build_capture_launch`] for a run that is being continued (`goalcup continue`): the
@@ -798,14 +799,40 @@ pub fn build_resumed_launch(
     workspace: &Path,
     launch: &CaptureLaunch<'_>,
 ) -> Result<LaunchPlan, CliError> {
-    build_launch(c, v, workspace, launch, true)
+    build_launch(c, v, workspace, &Inputs::recording(launch), true)
+}
+
+/// What [`build_launch`] needs from the caller: a [`CaptureLaunch`], or the same without the
+/// recording proxy (`goalcup prep`'s launch, [`build_prep_launch`]).
+struct Inputs<'a> {
+    goal: Option<&'a [u8]>,
+    executable: &'a ResolvedExecutable,
+    run_home: &'a Path,
+    config_home: &'a Path,
+    /// The loopback proxy URL and the CA certificate handed to the harness; `None` for a launch
+    /// that records nothing and so has no proxy to name.
+    proxy: Option<(&'a str, &'a Path)>,
+    parent_env: &'a BTreeMap<String, String>,
+}
+
+impl<'a> Inputs<'a> {
+    fn recording(launch: &'a CaptureLaunch<'a>) -> Inputs<'a> {
+        Inputs {
+            goal: launch.goal,
+            executable: launch.executable,
+            run_home: launch.run_home,
+            config_home: launch.config_home,
+            proxy: Some((launch.proxy_url, launch.ca_certificate)),
+            parent_env: launch.parent_env,
+        }
+    }
 }
 
 fn build_launch(
     c: &HarnessConnector,
     v: &TemplateVars,
     workspace: &Path,
-    launch: &CaptureLaunch<'_>,
+    launch: &Inputs<'_>,
     resume: bool,
 ) -> Result<LaunchPlan, CliError> {
     let id = &c.loaded.manifest.id;
@@ -848,8 +875,14 @@ fn build_launch(
     }
     let run_home = absolute_utf8("per-run HOME", launch.run_home)?;
     let config_home = absolute_utf8("harness home", launch.config_home)?;
-    let ca_certificate = absolute_utf8("proxy CA certificate", launch.ca_certificate)?;
-    loopback_proxy_url(launch.proxy_url)?;
+    let proxy = match launch.proxy {
+        Some((url, ca)) => {
+            let ca_certificate = absolute_utf8("proxy CA certificate", ca)?;
+            loopback_proxy_url(url)?;
+            Some((url, ca_certificate))
+        }
+        None => None,
+    };
 
     let mut argv = Vec::with_capacity(profile.args.len() + 1);
     for template in &profile.args {
@@ -918,14 +951,16 @@ fn build_launch(
     if let Some(home_env) = &profile.home.env {
         env.insert(home_env.clone(), config_home.to_string());
     }
-    for key in ["HTTPS_PROXY", "https_proxy"] {
-        env.insert(key.into(), launch.proxy_url.to_string());
-    }
-    for key in ["NO_PROXY", "no_proxy"] {
-        env.insert(key.into(), CAPTURE_NO_PROXY.into());
-    }
-    for key in &profile.ca.env {
-        env.insert(key.clone(), ca_certificate.to_string());
+    if let Some((proxy_url, ca_certificate)) = proxy {
+        for key in ["HTTPS_PROXY", "https_proxy"] {
+            env.insert(key.into(), proxy_url.to_string());
+        }
+        for key in ["NO_PROXY", "no_proxy"] {
+            env.insert(key.into(), CAPTURE_NO_PROXY.into());
+        }
+        for key in &profile.ca.env {
+            env.insert(key.clone(), ca_certificate.to_string());
+        }
     }
 
     let termination = c.loaded.manifest.termination();
@@ -971,6 +1006,86 @@ fn build_launch(
         )));
     }
     Ok(plan)
+}
+
+/// What `goalcup prep` opens the harness with: the executable, and the two homes a run's harness
+/// has (the private `HOME`, and the harness home every run of the connector shares).
+pub struct PrepLaunch<'a> {
+    pub executable: &'a ResolvedExecutable,
+    pub run_home: &'a Path,
+    pub config_home: &'a Path,
+    /// The tracker's own environment; only [`CAPTURE_IDENTITY_ENV`] is read from it.
+    pub parent_env: &'a BTreeMap<String, String>,
+}
+
+/// The launch `goalcup prep` makes: a chat-mode connector's harness exactly as a run starts it
+/// (the same arguments, the same environment, the same two homes) but with **no recording at
+/// all**: no proxy and no CA variable, no daemon entry, no run directory beyond the throwaway
+/// one holding `run_home`. It is the participant's own session: they sign in, and add settings,
+/// MCP servers and skills to the home that their runs will then use. A headless connector has
+/// no chat to open and is refused.
+pub fn build_prep_launch(
+    c: &HarnessConnector,
+    v: &TemplateVars,
+    workspace: &Path,
+    launch: &PrepLaunch<'_>,
+) -> Result<LaunchPlan, CliError> {
+    build_launch(
+        c,
+        v,
+        workspace,
+        &Inputs {
+            goal: None,
+            executable: launch.executable,
+            run_home: launch.run_home,
+            config_home: launch.config_home,
+            proxy: None,
+            parent_env: launch.parent_env,
+        },
+        false,
+    )
+}
+
+/// Open the harness for `goalcup prep` and wait for it to exit. It keeps the participant's
+/// terminal as a run's chat-mode harness does (stdin, stdout and stderr inherited, no group of
+/// its own); this process absorbs what the terminal sends while it runs, so a Ctrl-C meant for
+/// the harness cannot end the command that is waiting for it, and puts the terminal's modes
+/// back afterwards. A harness that stops itself is continued.
+pub fn prep_launch(
+    c: &HarnessConnector,
+    launch: &PrepLaunch<'_>,
+    workspace: &Path,
+) -> Result<std::process::ExitStatus, CliError> {
+    let mut vars = TemplateVars::new();
+    vars.set("workspace", workspace.display().to_string());
+    // Only a name some profile argument may carry; the harness makes nothing of it here.
+    vars.set(
+        "session_id",
+        "00000000-0000-4000-8000-000000000000".to_string(),
+    );
+    let plan = build_prep_launch(c, &vars, workspace, launch)?;
+    let modes = goalcup_platform::terminal::Modes::save(libc::STDIN_FILENO);
+    let spawned = spawn(&plan)?;
+    // Without the shield a Ctrl-C meant for the harness also ends this command: said, not hidden.
+    let shield = match goalcup_platform::terminal::Shield::take() {
+        Ok(shield) => Some(shield),
+        Err(error) => {
+            eprintln!(
+                "goalcup: the terminal's signals could not be absorbed ({error}), so a Ctrl-C \
+                 typed to the harness may end this command too."
+            );
+            None
+        }
+    };
+    let waited = goalcup_platform::terminal::wait_resuming(spawned.child.id(), &mut |_| {});
+    drop(shield);
+    if let Some(modes) = modes {
+        let _ = modes.restore();
+    }
+    waited.map_err(|source| CliError::Io {
+        path: spawned.program.clone(),
+        source,
+    })
 }
 
 fn absolute_utf8<'a>(what: &str, path: &'a Path) -> Result<&'a str, CliError> {

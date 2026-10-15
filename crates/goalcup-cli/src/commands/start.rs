@@ -676,6 +676,67 @@ fn shared_leaf(cfg: &Path, profile: &CaptureSpec, id: &str) -> Option<(PathBuf, 
     }
 }
 
+/// The harness home `goalcup prep` opens the harness in: the one every run of the connector
+/// shares, made if there is none, and the lock that keeps it from a run that is recording (and
+/// a run from it) while the participant is signed in there. `None` for a connector whose home
+/// is made fresh for each run: there is nothing to prepare. Judged as a run judges it.
+pub(crate) fn claim_home_for_prep(
+    cfg: &Path,
+    connector: &HarnessConnector,
+) -> Result<Option<(PathBuf, std::fs::File)>, CliError> {
+    if connector.loaded.manifest.capture.home.config_home == ConfigHome::PerRun {
+        return Ok(None);
+    }
+    let id = &connector.loaded.manifest.id;
+    let config_home = cfg.join(CAPTURE_HOMES_DIR).join(id);
+    private_dir(config_home.parent().expect("a capture-home parent"), true)?;
+    let lock = match try_lock_shared_home(&config_home, id)? {
+        Ok(lock) => lock,
+        Err(path) => {
+            let holder = home_holder(&path);
+            return Err(CliError::Refused(match holder {
+                Some(run) => format!(
+                    "run {run} is recording on this machine, and runs share one {id} home. \
+                     Wait for it to end, then run `goalcup prep` again."
+                ),
+                None => format!(
+                    "a {id} run is recording on this machine, or another `goalcup prep` has \
+                     the {id} home open. Wait for it to end, then run `goalcup prep` again."
+                ),
+            }));
+        }
+    };
+    let home = ensure_shared_home(&config_home)?;
+    Ok(Some((home.recheck()?, lock)))
+}
+
+/// The shared harness home's folder (D39), made if there is none, and judged as every run
+/// judges it. The caller holds the lock: `goalcup start` and `goalcup prep` differ only in
+/// how they take it and what they say when they cannot.
+fn ensure_shared_home(config_home: &Path) -> Result<SharedCaptureHome, CliError> {
+    match std::fs::symlink_metadata(config_home) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match private_dir(config_home, false) {
+                // A concurrent `goalcup start` made it between the look and the create;
+                // `SharedCaptureHome::load` below judges that directory like any other.
+                Err(CliError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+                made => made?,
+            }
+        }
+        Err(_) => {
+            return Err(shared_home_refusal(
+                config_home,
+                "its exact leaf cannot be inspected",
+            ));
+        }
+    }
+    // SAFETY: reading the effective uid has no preconditions or memory effects.
+    let owner = unsafe { libc::geteuid() };
+    SharedCaptureHome::load(config_home, owner)
+}
+
 /// The refusal of a `goalcup continue` that a run still recording stands in the way of.
 pub(crate) fn still_recording(holder: &str, connector: &str) -> String {
     format!(
@@ -1447,8 +1508,8 @@ fn prepare(
 
 /// The harness home every run of a connector shares (D39), or its shared run `HOME` (D59), taken
 /// for this run: its folder made (0700) if there is none, and the lock that keeps a second run
-/// off it. A connector whose homes are made per run has none to take. This creates things on disk, so a run on a server takes it only
-/// after the participant has approved the run.
+/// off it. A connector whose homes are made per run has none to take. This creates things on
+/// disk, so a run on a server takes it only after the participant has approved the run.
 fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), CliError> {
     let CaptureRun {
         cfg,
@@ -1465,27 +1526,7 @@ fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), 
         Some(held) => held,
         None => lock_shared_home(&config_home, &c.loaded.manifest.id)?,
     };
-    match std::fs::symlink_metadata(&config_home) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            match private_dir(&config_home, false) {
-                // A concurrent `goalcup start` made it between the look and the create;
-                // `SharedCaptureHome::load` below judges that directory like any other.
-                Err(CliError::Io { source, .. })
-                    if source.kind() == std::io::ErrorKind::AlreadyExists => {}
-                made => made?,
-            }
-        }
-        Err(_) => {
-            return Err(shared_home_refusal(
-                &config_home,
-                "its exact leaf cannot be inspected",
-            ));
-        }
-    }
-    // SAFETY: reading the effective uid has no preconditions or memory effects.
-    let owner = unsafe { libc::geteuid() };
-    let home = SharedCaptureHome::load(&config_home, owner)?;
+    let home = ensure_shared_home(&config_home)?;
     if is_run_home {
         prep.shared_run_home = Some(home);
     } else {
@@ -2721,17 +2762,17 @@ fn beside_goal(goal_file: &Path) -> PathBuf {
 /// this directory's (the goal file's folder may be the work folder, and the two must not meet).
 /// It is named before the server has issued the run id (the server and the daemon are told the
 /// path), so the id cannot be in it.
-struct RunDir {
-    dir: PathBuf,
-    workspace: PathBuf,
+pub(crate) struct RunDir {
+    pub(crate) dir: PathBuf,
+    pub(crate) workspace: PathBuf,
     /// The workspace is outside `dir`, so [`RunDir::remove`] must remove it too.
     separate_workspace: bool,
-    home: PathBuf,
+    pub(crate) home: PathBuf,
     ca: PathBuf,
 }
 
 /// Where a run's workspace is.
-enum WorkspaceAt<'a> {
+pub(crate) enum WorkspaceAt<'a> {
     /// A folder the daemon makes inside the run directory (a run with no server).
     InRunDir,
     /// A fresh clone, under a random name of its own, in this work folder.
@@ -2743,7 +2784,7 @@ enum WorkspaceAt<'a> {
 impl RunDir {
     /// `shared_home` is the connector's shared run `HOME` (D59), claimed and checked by the
     /// caller: with `RunHome::Shared` it is the run's `HOME`, used as it is and never removed.
-    fn create(
+    pub(crate) fn create(
         beside: &Path,
         home: RunHome,
         shared_home: Option<&Path>,
@@ -2811,7 +2852,7 @@ impl RunDir {
     /// A continued run's workspace ([`WorkspaceAt::Existing`]) is the run's clone, with the
     /// participant's agent's work in it, and is never this directory's to remove: only the
     /// segment's own folder goes.
-    fn remove(&self) -> std::io::Result<()> {
+    pub(crate) fn remove(&self) -> std::io::Result<()> {
         let clone = if self.separate_workspace {
             match std::fs::remove_dir_all(&self.workspace) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
@@ -3395,6 +3436,7 @@ impl Serving {
                 cfg: self.cfg,
                 github: self.github,
                 work_root: self.work_root,
+                practice: opts.practice,
                 clone_source: self.clone_source,
             })),
         })
@@ -3428,6 +3470,8 @@ struct NewRun {
     cfg: PathBuf,
     github: crate::account::github::GithubSetup,
     work_root: PathBuf,
+    /// A practice run never pushes: its clone is given no credential helper.
+    practice: bool,
     #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     clone_source: Option<String>,
 }
@@ -3465,8 +3509,8 @@ impl Uploading {
 
     /// Clone the participant's repository into `dest`, which is this run's workspace. The
     /// clone holds no token: its remote is the plain repository address, and its git asks
-    /// `goalcup git-credential` for one when it pushes (`account::github`). A continued run has
-    /// its clone already.
+    /// `goalcup git-credential` for one when it pushes (`account::github`). A practice run's
+    /// clone has no such helper and cannot push. A continued run has its clone already.
     fn clone_workspace(&self, dest: &Path) -> Result<(), CliError> {
         let UploadHow::Fresh(new) = &self.how else {
             return Ok(());
@@ -3481,6 +3525,22 @@ impl Uploading {
         })?;
         let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
         let cfg = &new.cfg;
+        // The owner's rule: a practice run never pushes, so the competition repository stays
+        // empty until the competition run. Its clone is anonymous and can only read.
+        #[cfg(feature = "test-support")]
+        if new.practice
+            && let Some(source) = &new.clone_source
+        {
+            return crate::account::github::clone_readonly_from(
+                Path::new("git"),
+                source,
+                &new.github,
+                dest,
+            );
+        }
+        if new.practice {
+            return crate::account::github::clone_readonly_into(&new.github, dest);
+        }
         #[cfg(feature = "test-support")]
         if let Some(source) = &new.clone_source {
             return crate::account::github::clone_from(

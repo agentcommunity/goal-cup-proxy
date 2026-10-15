@@ -189,7 +189,7 @@ fn connector_reports(
 /// for a chat-mode connector). Any build passes: it is recorded, not pinned (D53). A harness
 /// that is not installed, not a regular file, or missing its interpreter is a `Fail`: `start`
 /// would refuse it.
-fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
+pub(crate) fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
     let program = &c.loaded.manifest.capture.executable.program;
     match crate::launch::capture_executable(c, &c.loaded.manifest.capture, env) {
         Ok(resolved) => Check::pass(

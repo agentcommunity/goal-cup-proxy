@@ -103,6 +103,26 @@ mod server_runs {
         }
     }
 
+    /// The clone's own `credential.https://github.com.helper` values, in order.
+    fn helper_lines(workspace: &Path) -> Vec<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args([
+                "config",
+                "--local",
+                "--get-all",
+                "credential.https://github.com.helper",
+            ])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
     /// Every file below `dir`, with its bytes.
     fn files_below(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
         let mut found = Vec::new();
@@ -211,6 +231,11 @@ mod server_runs {
         assert_eq!(record.entries[0].entry_id, ended.outcome.entry_id);
         assert_eq!(record.workspace, ended.workspace);
         assert_eq!(server.mode(run_id).as_deref(), Some("competition"));
+        // A competition run's clone keeps the helper: the reset, then goalcup's.
+        let helpers = helper_lines(&ended.workspace);
+        assert_eq!(helpers.len(), 2, "{helpers:?}");
+        assert_eq!(helpers[0], "");
+        assert!(helpers[1].ends_with("git-credential"), "{helpers:?}");
 
         // The machine's facts were sent with the open; a name or a serial number was not.
         let machine = server.machine(run_id).expect("machine facts were sent");
@@ -251,6 +276,14 @@ mod server_runs {
         );
         assert_eq!(server.mode(&run_id).as_deref(), Some("practice"));
         assert!(goalcup_cli::run::read(&rig.cfg, &run_id).unwrap().practice);
+        // A practice run never pushes: its clone has the empty reset and no goalcup helper.
+        let config = std::fs::read_to_string(ended.workspace.join(".git/config")).unwrap();
+        assert!(!config.contains("git-credential"), "{config}");
+        assert!(
+            config.contains("[credential \"https://github.com\"]"),
+            "{config}"
+        );
+        assert_eq!(helper_lines(&ended.workspace), [""], "{config}");
     }
 
     /// Nothing of the credential, the GitHub token or the device code reaches the harness: not
