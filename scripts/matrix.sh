@@ -26,10 +26,14 @@
 # connector (`codex-cli`, ...), which needs that harness installed and logged in, in a prepared
 # configuration directory (MATRIX_CONFIG_DIR, below).
 #
-# Environment (the approval key is read ONLY from here, and never printed, logged, or put in a
-# file, an argument or an environment of any child):
-#   GOALCUP_TEST_APPROVAL_KEY  the server's TEST_APPROVAL_KEY (local `npm run dev`, or staging).
-#                              Unset: the approval is yours, in a browser (see below).
+# Environment. The approval key is never in this script's environment, a variable, an argument,
+# a log or a file it writes: you give the PATH of a file that holds it, and the script reads that
+# file only at the moment it approves, straight into curl's standard input.
+#   GOALCUP_TEST_APPROVAL_KEY_FILE
+#                              a regular file holding the server's TEST_APPROVAL_KEY (a local
+#                              `npm run dev`, or staging). The path is not secret. Unset: the
+#                              approval is yours, in a browser (see below). A Docker run mounts
+#                              the file read-only (-v <file>:/run/key:ro) and never uses -e.
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
 #   MATRIX_REPO_URL            the empty public repository (default:
 #                              https://github.com/agentcommunity/goalcup-matrix-empty).
@@ -54,7 +58,7 @@
 #                        configuration directory DIR is verified locally and compared with the
 #                        server's position for it. Starts and approves nothing; read-only.
 #
-# Without GOALCUP_TEST_APPROVAL_KEY the script prints the approval address and code that goalcup
+# Without GOALCUP_TEST_APPROVAL_KEY_FILE the script prints the approval address and code that goalcup
 # printed (nothing else) and waits while you approve, in a browser, as a member. There are two
 # approvals: the login, then the run.
 #
@@ -75,7 +79,8 @@ FAKE_ID="m2-fake-tui"
 DEFAULT_REPO_URL="https://github.com/agentcommunity/goalcup-matrix-empty"
 
 usage() {
-  sed -n '2,64p' "$PROG" | sed 's/^# \{0,1\}//' >&2
+  # The whole header: every comment line after the first, up to the first line that is not one.
+  awk 'NR > 1 && !/^#/ { exit } NR > 1 { print }' "$PROG" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -134,10 +139,18 @@ else
   [ -n "$CONNECTOR" ] && [ -n "$SERVER" ] || usage
 fi
 
-# The approval key leaves the environment at once: it is a plain shell variable from here on, so
-# no child process (goalcup, the daemon, the harness) is ever given it.
-KEY=${GOALCUP_TEST_APPROVAL_KEY:-}
-unset GOALCUP_TEST_APPROVAL_KEY
+# The approval key: only ever a FILE. A key in the environment would sit in this process's
+# environment block (readable by `ps eww` and /proc/<pid>/environ) for the whole run, which no
+# `unset` scrubs, so it is refused.
+if [ -n "${GOALCUP_TEST_APPROVAL_KEY:-}" ]; then
+  echo "matrix: GOALCUP_TEST_APPROVAL_KEY in the environment is refused (any process of yours could read it): put the key in a file and set GOALCUP_TEST_APPROVAL_KEY_FILE=<path>" >&2
+  exit 2
+fi
+KEYFILE=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
+if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
+  echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
+  exit 2
+fi
 MEMBER=${GOALCUP_TEST_MEMBER_ID:-member1}
 REPO_URL=${MATRIX_REPO_URL:-$DEFAULT_REPO_URL}
 
@@ -165,7 +178,24 @@ validate_server() {
   SERVER=$(printf '%s' "$SERVER" | sed 's:/*$::')
   SERVER_LC=$(printf '%s' "$SERVER" | tr 'A-Z' 'a-z')
   case $SERVER_LC in
-    https://* | http://localhost* | http://127.0.0.1* | "http://[::1]"*) ;;
+    https://*) ;;
+    http://*)
+      # Plain http only to this machine: the host is exactly localhost, 127.0.0.1 or [::1], then
+      # an optional :port and an optional path.
+      auth=${SERVER_LC#http://}
+      auth=${auth%%/*}
+      case $auth in
+        localhost | 127.0.0.1 | "[::1]") ;;
+        localhost:* | 127.0.0.1:* | "[::1]":*)
+          case ${auth##*:} in "" | *[!0-9]*) auth="" ;; esac
+          ;;
+        *) auth="" ;;
+      esac
+      [ -n "$auth" ] || {
+        echo "matrix: plain http is allowed only to localhost, 127.0.0.1 or [::1] (with an optional :port)" >&2
+        exit 2
+      }
+      ;;
     *)
       echo "matrix: the server must be https://..., or http:// to localhost" >&2
       exit 2
@@ -326,28 +356,33 @@ codes_in() {
   tr -d '\r' 2>/dev/null <"$1" | sed -n 's/.*shows the code \([A-Z][A-Z][A-Z][A-Z]-[A-Z][A-Z][A-Z][A-Z]\)\..*/\1/p'
 }
 
-# Approve every code in $1 that has not been dealt with. With the key: through the test route
-# (the key goes to curl on its stdin as a header file, so it is in no argument list). Without:
-# say what goalcup printed, once.
+# Approve the first user code goalcup prints in the log $1, and no other: one code per phase (the
+# login, the run). seen.txt is emptied at the start of each phase. With a key file the approval
+# goes through the test route, the key piped from the file straight into curl's standard input as
+# a header file, so it is in no variable, argument, environment or temp file. Without one, say what
+# goalcup printed, once.
 scan_and_approve() {
-  for code in $(codes_in "$1"); do
-    grep -qx "$code" "$ROOT/seen.txt" 2>/dev/null && continue
-    printf '%s\n' "$code" >>"$ROOT/seen.txt"
-    if [ -n "$KEY" ]; then
-      status=$(printf 'Authorization: Bearer %s\n' "$KEY" |
-        http POST /v1/device/approve "$ROOT/approve.out" -H @- -H 'Content-Type: application/json' \
-          -d "{\"user_code\":\"$code\",\"member_id\":\"$MEMBER\",\"approve\":true}")
-      log "approval of $code as $MEMBER: HTTP $status $(cat "$ROOT/approve.out" 2>/dev/null)"
-      if [ "$status" != 200 ]; then
-        log "the test approval was refused"
-        return 1
-      fi
-    else
-      line=$(tr -d '\r' <"$1" | grep "shows the code $code" | tail -1)
-      say "no GOALCUP_TEST_APPROVAL_KEY: approve this in a browser, as a member:"
-      say "$line"
+  [ ! -s "$ROOT/seen.txt" ] || return 0
+  code=$(codes_in "$1" | head -1)
+  [ -n "$code" ] || return 0
+  printf '%s\n' "$code" >>"$ROOT/seen.txt"
+  if [ -n "$KEYFILE" ]; then
+    status=$({
+      printf 'Authorization: Bearer '
+      tr -d '\n' <"$KEYFILE"
+      printf '\n'
+    } | http POST /v1/device/approve "$ROOT/approve.out" -H @- -H 'Content-Type: application/json' \
+      -d "{\"user_code\":\"$code\",\"member_id\":\"$MEMBER\",\"approve\":true}")
+    log "approval of $code as $MEMBER: HTTP $status $(cat "$ROOT/approve.out" 2>/dev/null)"
+    if [ "$status" != 200 ]; then
+      log "the test approval was refused"
+      return 1
     fi
-  done
+  else
+    line=$(tr -d '\r' <"$1" | grep "shows the code $code" | tail -1)
+    say "no GOALCUP_TEST_APPROVAL_KEY_FILE: approve this in a browser, as a member:"
+    say "$line"
+  fi
   return 0
 }
 
@@ -371,7 +406,7 @@ write_wrapper() { # file name "goalcup arguments" [stty]
 wait_job() { # rcfile outfile limit
   waited=0
   while [ ! -f "$1" ]; do
-    scan_and_approve "$2" || return 2
+    if [ "$SCAN" = 1 ]; then scan_and_approve "$2" || return 2; fi
     after_scan "$2"
     if [ "$waited" -ge "$3" ]; then return 1; fi
     sleep 2
@@ -380,6 +415,9 @@ wait_job() { # rcfile outfile limit
   return 0
 }
 after_scan() { :; }
+# Whether the log being waited on is still scanned for an approval code. It stops once the
+# harness is up, so nothing the harness itself prints can ever be approved.
+SCAN=1
 
 # ------------------------------------------------------------------------------ the matrix
 
@@ -392,7 +430,7 @@ run_matrix() {
   GOALCUP_VERSION=$("$GOALCUP" --version 2>&1 | head -1)
   log "matrix $CONNECTOR on $PLATFORM against $SERVER, $DATE"
   log "goalcup: $GOALCUP ($GOALCUP_VERSION); verifier: $VERIFY; daemon: $DAEMON"
-  log "key supplied: $([ -n "$KEY" ] && echo yes || echo no); member: $MEMBER; repository: $REPO_URL"
+  log "key file supplied: $([ -n "$KEYFILE" ] && echo yes || echo no); member: $MEMBER; repository: $REPO_URL"
 
   code=$(http GET /v1/health "$LOG.health")
   health=$(cat "$LOG.health" 2>/dev/null)
@@ -401,7 +439,12 @@ run_matrix() {
   log "health: $health"
 
   ROOT=$(mktemp -d "${TMPDIR:-/tmp}/goalcup-matrix.XXXXXX") || fail "cannot make a temporary directory" || return 1
-  ROOT=$(cd "$ROOT" && pwd -P)
+  made=$ROOT
+  ROOT=$(cd "$made" && pwd -P) || {
+    ROOT=$made
+    fail "cannot enter the temporary directory $made" || return 1
+  }
+  [ -n "$ROOT" ] || { ROOT=$made; fail "the temporary directory has no path" || return 1; }
   case $ROOT in *\'* | *" "*) fail "the temporary directory path holds a space or quote: $ROOT" || return 1 ;; esac
   RUNS="$ROOT/runs"
   mkdir -p "$RUNS"
@@ -499,6 +542,7 @@ run_matrix() {
     }
     if [ -z "$READY_AT" ] && grep -q "$READY_MARK" "$ROOT/start.out" 2>/dev/null; then
       READY_AT=$(date +%s)
+      SCAN=0
       log "the harness is up"
     fi
   }
@@ -574,7 +618,7 @@ verify_trace() { # trace [allow_incomplete]
   VRC=$?
   KEYNOTE="the pinned server key"
   VERIFY_NOTE=""
-  if [ "$VRC" = 2 ]; then
+  if [ "$VRC" = 2 ] && grep -q receipt_key_not_accepted "$ROOT/verify.out"; then
     SKEY=${MATRIX_SERVER_KEY:-$(py_get "$1/receipt.json" public_key)}
     log "verify without a supplied key: exit $VRC; retrying with --dev-key (the server's own signing key is not pinned in this build for $SERVER)"
     "$VERIFY" --capture-integrity "$1" --dev-key "$SKEY" >"$ROOT/verify.out" 2>"$ROOT/verify.err"
@@ -678,9 +722,12 @@ run_check() {
   log "check-copy of run $RUN_ID on $SERVER, configuration $CFG"
   ok=1
   n=0
-  for pair in $(python3 -c 'import json,sys
+  # One "entry_id=trace_dir" per line, read a line at a time so a path may hold spaces. (fd 4, so
+  # nothing run inside the loop can read the list from standard input.)
+  python3 -c 'import json,sys
 for e in json.load(open(sys.argv[1]))["entries"]:
-    print(e["entry_id"] + "=" + e["trace_dir"])' "$RUN_JSON"); do
+    print(e["entry_id"] + "=" + e["trace_dir"])' "$RUN_JSON" >"$ROOT/entries.txt"
+  while IFS= read -r pair <&4; do
     entry=${pair%%=*}
     trace=${pair#*=}
     say "entry $entry (segment $n)"
@@ -694,7 +741,7 @@ for e in json.load(open(sys.argv[1]))["entries"]:
       say "entry $entry: verifier exit $VRC${VERIFY_NOTE:+ (incomplete coverage)}, server copy matches"
     fi
     n=$((n + 1))
-  done
+  done 4<"$ROOT/entries.txt"
   [ "$n" -gt 0 ] || fail "run $RUN_ID has no entries" || return 1
   [ "$ok" = 1 ] || return 1
   RESULT=PASS

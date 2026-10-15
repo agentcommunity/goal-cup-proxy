@@ -443,14 +443,22 @@ A server whose signing key this build does not pin (a local Worker, staging) fai
 `--dev-key` set to `MATRIX_SERVER_KEY`, else the public key in the run's own receipt, and logs
 that the verification borrowed its trust from this invocation (`key_source: "supplied"`).
 
-**Rules the script keeps.** The approval key comes from `GOALCUP_TEST_APPROVAL_KEY` only and the
-member from `GOALCUP_TEST_MEMBER_ID`; the script takes the key out of its environment at once, so
-no child (`goalcup`, the daemon, the harness) ever has it, and sends it to `curl` on standard input. It is not an argument, a file or
-a log line, and the script has no `set -x` or verbose `curl`. With no key set, it prints the
-approval address and code that `goalcup` printed, and waits while you approve in a browser as a
-member. It never reads or writes the real goalcup configuration directory, `~/.codex`, `~/.claude`
-or `~/.hermes`. It refuses `https://ingest.agentcommunity.org`
-unless given `--allow-production`, and nothing here ever passes it.
+**Rules the script keeps.** The approval key comes from a file, `GOALCUP_TEST_APPROVAL_KEY_FILE=<path>`
+(the path is not secret; the script checks it is a regular file it can read), and the member from
+`GOALCUP_TEST_MEMBER_ID`. The script reads that file only at the moment it approves, piping it
+straight into `curl`'s standard input as a header (`{ printf 'Authorization: Bearer '; tr -d '\n' <
+"$KEYFILE"; printf '\n'; } | curl -H @- …`). So the key is never in an environment variable, an
+argument, a log, a here-document or a temp file, and no process of the run can read it from
+`ps eww <pid>` or `/proc/<pid>/environ`. That is why the key is not accepted in the environment
+(`GOALCUP_TEST_APPROVAL_KEY` is refused): unsetting a variable does not scrub the shell's own
+environment block. The script has no `set -x` or verbose `curl`. It approves at most one device
+code per phase (the first one `goalcup` prints for the login, the first for the run), and stops
+looking for codes once the harness is up, so nothing a harness prints can be approved. With no key
+file, it prints the approval address and code that `goalcup` printed, and waits while you approve in
+a browser as a member. It never reads or writes the real goalcup configuration directory,
+`~/.codex`, `~/.claude` or `~/.hermes`. It refuses `https://ingest.agentcommunity.org` unless given
+`--allow-production`, and nothing here ever passes it. Plain `http` is accepted only to `localhost`,
+`127.0.0.1` or `[::1]` exactly, with an optional port and path.
 
 **Targets.**
 
@@ -458,15 +466,18 @@ unless given `--allow-production`, and nothing here ever passes it.
   .dev.vars`, then start `wrangler dev` with a short practice run, for example
   `node node_modules/wrangler/bin/wrangler.js dev --env-file .dev.vars --var DB_BACKEND:local --var
   PRACTICE_RUN_MINUTES:2 --port 8787` (`npm run dev` is the same without the short run), and in
-  another terminal
-  `GOALCUP_TEST_APPROVAL_KEY=dev-approval-key sh scripts/matrix.sh m2-fake-tui http://localhost:8787`.
-  Stop the Worker by its process id when done.
-- **Staging** (`https://goalcup-ingest-staging.b-9a5.workers.dev`): needs staging's test approval
-  key and a member id it may approve as. Load the key into the environment in the same command that
-  runs the script, so it is never typed, printed or stored:
-  `GOALCUP_TEST_APPROVAL_KEY="$(cat <file holding the key>)" GOALCUP_TEST_MEMBER_ID=<member id> sh
-  scripts/matrix.sh <connector> <staging url>`. Never `cat` that file on its own or `echo` the
-  variable. The run lasts the 10 practice minutes plus the clone and the upload, about 12 minutes.
+  another terminal make a key file from the dev values and run the script, then delete it:
+  `sed -n 's/^TEST_APPROVAL_KEY=//p' server/worker/.dev.vars > "$KF" && chmod 600 "$KF"` (with `KF`
+  a file in a fresh `mktemp -d` directory), then
+  `GOALCUP_TEST_APPROVAL_KEY_FILE="$KF" sh scripts/matrix.sh m2-fake-tui http://localhost:8787`, then
+  `rm -f "$KF"`. Stop the Worker by its process id when done.
+- **Staging** (`https://goalcup-ingest-staging.b-9a5.workers.dev`): needs a file holding staging's
+  test approval key and a member id it may approve as:
+  `GOALCUP_TEST_APPROVAL_KEY_FILE=<path to the key file> GOALCUP_TEST_MEMBER_ID=<member id> sh
+  scripts/matrix.sh <connector> <staging url>`. Never `cat` the file or print its value, and never
+  put the value in the environment or on a command line. A Docker run (the way to run Linux on a
+  Mac) mounts the file read-only, `-v <path to the key file>:/run/key:ro`, and sets
+  `GOALCUP_TEST_APPROVAL_KEY_FILE=/run/key` inside; it never passes the key with `-e`. The run lasts the 10 practice minutes plus the clone and the upload, about 12 minutes.
   On a Mac with a per-app firewall such as Little Snitch, the freshly built `goalcup` is held until
   someone allows that exact path (`target/<profile>/goalcup`): the row is then a FAIL whose reason
   is `goalcup login exited 1: … could not be reached … connection timed out`, while `curl` to the
@@ -481,8 +492,10 @@ id (`codex-cli`, `claude-code-cli`) runs that harness for real and needs it inst
 inside a prepared configuration directory of its own: `GOALCUP_CONFIG_DIR=<dir> goalcup prep`
 (never the default directory), then `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh codex-cli <url>`.
 The script types `MATRIX_PROMPT` once, `MATRIX_PROMPT_DELAY` seconds (30) after the tracker says the
-harness is up; a real harness's start-up differs, so the first real-harness rows are watched. Only the
-fake has been run through the script so far (below).
+harness is up; a real harness's start-up differs, so the first real-harness rows are watched. In
+real-harness mode a PASS does not prove the prompt was typed: only the fake shows what it received (the
+script requires its `tui: noted` line), so look at the session in the kept directory (`--keep`) or the
+research report. Only the fake has been run through the script so far (below).
 
 **Other environment.** `MATRIX_REPO_URL` (default the public empty repository
 `https://github.com/agentcommunity/goalcup-matrix-empty`: the practice clone needs network access to
@@ -572,7 +585,7 @@ reserve): macOS `hdiutil create -size 5g -fs APFS -volname gcsmall /tmp/gcsmall.
 attach` it; Linux `truncate -s 5G /tmp/gc.img && mkfs.ext4 -F /tmp/gc.img` and a loop mount (ext4 and
 XFS only: the reservation refuses other file systems). Put `GOALCUP_CONFIG_DIR` on it. Run: start an
 organizer test run, take the network down, and fill the volume with a junk file down to under 256 MB
-free (`dd if=/dev/zero of=<volume>/junk bs=1m`). Expect: first `PROBLEM: disk: N free beyond the
+free (`dd if=/dev/zero of=<volume>/junk bs=1m` on macOS, `bs=1M` on Linux). Expect: first `PROBLEM: disk: N free beyond the
 reservation`; after 30 minutes offline, the run stops itself with the reason "the disk is nearly full
 and uploads are failing"; the harness is ended and the segment sealed locally, and the run stays
 open (a full disk ends a segment, not the run): `goalcup status` says `run goalcup continue`. Delete the junk file, restore the network, `goalcup continue`. Server
@@ -649,5 +662,5 @@ verifier on that platform and says nothing about a harness.
 
 | Row | Server | Notes |
 |---|---|---|
-| `m2-fake-tui linux-arm64 matrix-fake-tui_1.0.0 PASS 2026-10-15` | staging | **Fake harness.** In Docker on an arm64 Mac (privileged, TMPDIR on a loop-mounted ext4 volume, the workspace built in the container). Run `rcdb57542b0748b97`, 10-minute practice run. Server copy: `sealed`, `stop`, offset 8090 = local `chain.jsonl` bytes, `next_seq` 12 = 12 records, `head` and last acknowledgement = the verifier's `validated_head`, `final` = record 11; `goalcup-verify` exit 0 under the receipt's key (`key_source: supplied`), anchor signed. |
+| `m2-fake-tui linux-arm64 matrix-fake-tui_1.0.0 PASS 2026-10-15` | staging | **Fake harness.** In Docker on an arm64 Mac (privileged, TMPDIR on a loop-mounted ext4 volume, the workspace built in the container). Key file mounted read-only (`-v <file>:/run/key:ro`, `GOALCUP_TEST_APPROVAL_KEY_FILE=/run/key`, no `-e`). Run `r4719972f99da95a4`, 10-minute practice run. Server copy: `sealed`, `stop`, offset 8090 = local `chain.jsonl` bytes, `next_seq` 12 = 12 records, `head` and last acknowledgement = the verifier's `validated_head`, `final` = record 11 (same shape as the first staging run, `rcdb57542b0748b97`, made before the key moved to a file); `goalcup-verify` exit 0 under the receipt's key (`key_source: supplied`), anchor signed. |
 | `m2-fake-tui macos-arm64 matrix-fake-tui_1.0.0 PASS 2026-10-15` | local Worker (`wrangler dev`, 2-minute practice run) | **Fake harness.** Same checks, same result shape (offset 8086, 12 records). Not run on staging from macOS yet: Little Snitch holds the new `goalcup` build's connections until its path is allowed (see Targets above). |
