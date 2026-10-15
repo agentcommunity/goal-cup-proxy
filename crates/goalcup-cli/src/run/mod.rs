@@ -253,6 +253,22 @@ pub fn is_over(record: &RunRecord, state: Option<&RunState>, now: u64) -> bool {
         )
 }
 
+/// What a run's state says once the server refused `goalcup continue` because the run is over.
+pub const SERVER_SAYS_OVER: &str = "the server says the run is over (it refused goalcup continue)";
+
+/// The server said the run is over: say so in the run's `state.json` ([`RunState::stopped`]), so
+/// that `goalcup status` and the reserve's release follow the server at once, whatever the count
+/// or the date say. A run with no state is left as it is.
+pub fn note_over(cfg: &Path, run_id: &str) {
+    let dir = run_dir(cfg, run_id);
+    if let Some(mut state) = read_state(&dir) {
+        if !state.stopped_for_its_end() {
+            state.stopped = Some(SERVER_SAYS_OVER.to_string());
+        }
+        StateKeeper::begin(&dir, state);
+    }
+}
+
 /// Whether `goalcup continue` can restart the run: it is on a server, its connector is a
 /// chat-mode one (`continuable`), it is not `over`, and this machine holds the run's credential.
 /// The one answer the host, `goalcup status` and the reserve's release all use.

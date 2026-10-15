@@ -6,12 +6,14 @@
 //! ([`goalcup_protocol::clock::continuous_ns`]), and writes that count into the run's
 //! `state.json` ([`super::RunState::time_left`]). `goalcup status`, the reserve's release and
 //! the host's own "is the run over" read it back, so none of them reads this machine's date,
-//! which the participant can change. Only a `state.json` with no count (an older build wrote it)
-//! falls back to the date ([`time_up`]).
+//! which the participant can change, while the count holds ([`time_up`]).
 //!
 //! The continuous clock starts again at each boot, so a count is kept with the boot it was
-//! taken on. On another boot only the time since this boot is known to have passed: the count
-//! then ends late, never early.
+//! taken on, and a reboot ends what it can say: the boot id changed (where the OS gives one), or
+//! the clock reads below the count's start. Then, and for a `state.json` with no count (an older
+//! build wrote it), the server's `deadline_at` is held against this machine's date, as before
+//! WP11. A date set forward then only makes the run look over early to the participant
+//! themselves; `goalcup continue` asks the server in any case.
 
 use goalcup_protocol::clock::continuous_ns;
 use serde::{Deserialize, Serialize};
@@ -38,33 +40,31 @@ impl TimeLeft {
         }
     }
 
-    /// Whether the run's time is up now.
-    pub fn up(&self) -> bool {
+    /// Whether the run's time is up now by the count; `None` when the machine has rebooted
+    /// since the count was taken, and the count can say nothing.
+    pub fn up(&self) -> Option<bool> {
         self.up_at(continuous_ns(), boot_id().as_deref())
     }
 
-    /// [`TimeLeft::up`] with the continuous clock and the boot given. On the same boot the
-    /// count is exact. On another boot, or when a boot cannot be told, the least time that can
-    /// have passed is counted: the time since this boot (a clock below the count's start is
-    /// one that started again).
-    pub fn up_at(&self, now_ns: u64, boot: Option<&str>) -> bool {
-        let same_boot = self.boot.is_some() && self.boot.as_deref() == boot;
-        let other_boot = self.boot.is_some() && boot.is_some() && !same_boot;
-        let passed_ns = if other_boot || now_ns < self.counted_from_ns {
-            now_ns
-        } else {
-            now_ns - self.counted_from_ns
-        };
-        u128::from(passed_ns) >= u128::from(self.seconds) * 1_000_000_000
+    /// [`TimeLeft::up`] with the continuous clock and the boot given. A reboot is a boot id
+    /// that changed (both known), or a clock below the count's start.
+    pub fn up_at(&self, now_ns: u64, boot: Option<&str>) -> Option<bool> {
+        let other_boot =
+            matches!((self.boot.as_deref(), boot), (Some(then), Some(now)) if then != now);
+        if other_boot || now_ns < self.counted_from_ns {
+            return None;
+        }
+        let passed_ns = now_ns - self.counted_from_ns;
+        Some(u128::from(passed_ns) >= u128::from(self.seconds) * 1_000_000_000)
     }
 }
 
-/// Whether the run's time is up: by `left`, the count the host kept, when there is one. Only
-/// without one (a `state.json` an older build wrote, or no state at all) is `deadline_at` held
-/// against this machine's date (`now`, unix seconds).
+/// Whether the run's time is up: by `left`, the count the host kept, while it holds. With no
+/// count (a `state.json` an older build wrote, or no state at all), or after a reboot, the
+/// server's `deadline_at` is held against this machine's date (`now`, unix seconds).
 pub fn time_up(left: Option<&TimeLeft>, deadline_at: Option<&str>, now: u64) -> bool {
-    match left {
-        Some(left) => left.up(),
+    match left.and_then(TimeLeft::up) {
+        Some(up) => up,
         None => deadline_at
             .and_then(goalcup_protocol::control::parse_z)
             .is_some_and(|deadline| now >= deadline),
@@ -114,28 +114,60 @@ mod tests {
     const SECOND: u64 = 1_000_000_000;
 
     #[test]
-    fn the_count_is_exact_on_its_own_boot_and_never_early_on_another() {
+    fn the_count_holds_on_its_own_boot_and_says_nothing_after_a_reboot() {
         let left = TimeLeft {
             seconds: 100,
             counted_from_ns: 1_000 * SECOND,
             boot: Some("a".to_string()),
         };
         // The same boot: exactly 100 s after the count.
-        assert!(!left.up_at(1_099 * SECOND, Some("a")));
-        assert!(left.up_at(1_100 * SECOND, Some("a")));
-        // Another boot: only the time since it is known to have passed.
-        assert!(!left.up_at(99 * SECOND, Some("b")));
-        assert!(left.up_at(100 * SECOND, Some("b")));
-        assert!(!left.up_at(1_099 * SECOND, None), "no boot here: not early");
-        // No boot on the count: a clock below the count's start started again.
+        assert_eq!(left.up_at(1_099 * SECOND, Some("a")), Some(false));
+        assert_eq!(left.up_at(1_100 * SECOND, Some("a")), Some(true));
+        // Another boot id, or a clock below the count's start: a reboot.
+        assert_eq!(left.up_at(5_000 * SECOND, Some("b")), None);
+        assert_eq!(left.up_at(99 * SECOND, Some("a")), None);
+        assert_eq!(left.up_at(99 * SECOND, None), None);
+        // No boot id on either side, and the clock past the start: the count holds.
+        assert_eq!(left.up_at(1_100 * SECOND, None), Some(true));
         let unknown = TimeLeft {
             boot: None,
             ..left.clone()
         };
-        assert!(!unknown.up_at(1_099 * SECOND, Some("a")));
-        assert!(unknown.up_at(1_100 * SECOND, Some("a")));
-        assert!(!unknown.up_at(99 * SECOND, None));
-        assert!(unknown.up_at(100 * SECOND, None));
+        assert_eq!(unknown.up_at(1_099 * SECOND, Some("b")), Some(false));
+        assert_eq!(unknown.up_at(99 * SECOND, Some("b")), None);
+    }
+
+    /// After a reboot the run ends at the server's `deadline_at` by this machine's date, as it
+    /// did before WP11: neither held open for good nor ended by the stale count.
+    #[test]
+    fn after_a_reboot_the_run_ends_at_its_deadline_by_the_date() {
+        let deadline = 1_000_000;
+        let deadline_at = goalcup_protocol::control::format_z(deadline);
+        let rebooted = |seconds| TimeLeft {
+            seconds,
+            counted_from_ns: continuous_ns() + 1_000 * SECOND,
+            boot: boot_id(),
+        };
+        for left in [rebooted(3_600), rebooted(0)] {
+            assert!(
+                !time_up(Some(&left), Some(&deadline_at), deadline - 1),
+                "{left:?}"
+            );
+            assert!(
+                time_up(Some(&left), Some(&deadline_at), deadline),
+                "{left:?}"
+            );
+        }
+        let other_boot = TimeLeft {
+            boot: Some("another boot".to_string()),
+            ..TimeLeft::counted(3_600, continuous_ns())
+        };
+        assert!(!time_up(
+            Some(&other_boot),
+            Some(&deadline_at),
+            deadline - 1
+        ));
+        assert!(time_up(Some(&other_boot), Some(&deadline_at), deadline));
     }
 
     /// The count, not the date, says whether the run's time is up: a date set a day forward (or

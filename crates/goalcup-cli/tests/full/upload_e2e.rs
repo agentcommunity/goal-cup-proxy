@@ -1391,30 +1391,7 @@ mod segments {
         assert_eq!(reserve_files(&rig).len(), 1);
 
         // The account starts another competition run (here, directly against the server).
-        let credential = goalcup_cli::account::credential::RunCredential::new(
-            server.mint_credential("member-1"),
-            "2099-01-01T00:00:00Z".to_string(),
-        )
-        .unwrap();
-        let other =
-            goalcup_cli::upload::http::ServerClient::with_credential(&server.url(), &credential);
-        let second = goalcup_cli::upload::open_run(
-            &other,
-            &goalcup_cli::upload::api::OpenRunRequest {
-                connector_id: "m2-fake".into(),
-                manifest_sha256: "a".repeat(64),
-                connector_dir_sha256: "b".repeat(64),
-                workspace: "/nowhere/workspace".into(),
-                session_id: "00000000-0000-4000-8000-000000000002".into(),
-                harness_version: "1".into(),
-                tracer_version: "0.1.0".into(),
-                repo_url: REPO.into(),
-                machine: None,
-            },
-        )
-        .unwrap();
-        assert_ne!(second.run_id, run_id);
-        assert!(server.replaced_at(&run_id).is_some());
+        replace_run(&server, &run_id);
 
         let status = first.wait();
         let shown = first.shown();
@@ -1440,6 +1417,35 @@ mod segments {
             !reserve_path(&artifact_root(&rig.cfg), &run_id).exists(),
             "a replaced run is over: its reserve goes back after the last acknowledgement"
         );
+    }
+
+    /// The account starts another competition run, directly against the server: it replaces
+    /// `run_id`.
+    fn replace_run(server: &UploadServer, run_id: &str) {
+        let credential = goalcup_cli::account::credential::RunCredential::new(
+            server.mint_credential("member-1"),
+            "2099-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+        let other =
+            goalcup_cli::upload::http::ServerClient::with_credential(&server.url(), &credential);
+        let second = goalcup_cli::upload::open_run(
+            &other,
+            &goalcup_cli::upload::api::OpenRunRequest {
+                connector_id: "m2-fake".into(),
+                manifest_sha256: "a".repeat(64),
+                connector_dir_sha256: "b".repeat(64),
+                workspace: "/nowhere/workspace".into(),
+                session_id: "00000000-0000-4000-8000-000000000002".into(),
+                harness_version: "1".into(),
+                tracer_version: "0.1.0".into(),
+                repo_url: REPO.into(),
+                machine: None,
+            },
+        )
+        .unwrap();
+        assert_ne!(second.run_id, run_id);
+        assert!(server.replaced_at(run_id).is_some());
     }
 
     /// The host and its agent die at once (the machine loses power) while the daemon, which
@@ -2183,6 +2189,52 @@ mod segments {
         )
         .unwrap();
         assert_entry_uploaded(&rig, &server, &segment);
+    }
+
+    /// Review fix round 1. A `continue` the server refuses because the run is over (a newer run
+    /// replaced it, a week before its deadline) marks the run over in its state: the advice of
+    /// `goalcup status` and the reserve's release follow the server at once, although the count
+    /// and the date both say days are left.
+    #[test]
+    fn a_continue_the_server_refuses_as_over_marks_the_run_over() {
+        let rig = Rig::chat();
+        let server = server(&rig, ServerOptions::default());
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        kill_agent(&rig);
+        assert!(first.wait().success(), "{}", first.shown());
+        let run_id = the_run(&server);
+        let reserve = reserve_path(&artifact_root(&rig.cfg), &run_id);
+        assert!(reserve.exists(), "the open run keeps its reserve");
+        replace_run(&server, &run_id);
+
+        let mut refused = rig.continue_on_pty(&[DISK, BEATING], None);
+        let status = refused.wait();
+        let said = refused.shown();
+        assert_eq!(status.code(), Some(1), "{said}");
+        assert!(said.contains("is over"), "{said}");
+        let state = last_state(&rig, &run_id);
+        assert_eq!(
+            state.stopped.as_deref(),
+            Some(goalcup_cli::run::SERVER_SAYS_OVER),
+            "{state:?}"
+        );
+        let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
+        let now = goalcup_cli::run::now_unix();
+        assert!(
+            !goalcup_cli::run::time_left::time_up(
+                state.time_left.as_ref(),
+                record.deadline_at.as_deref(),
+                now
+            ),
+            "the count says the run goes on"
+        );
+        assert_eq!(
+            goalcup_cli::run::advice(&rig.cfg, &record, &state, now),
+            goalcup_cli::run::Advice::Over
+        );
+        goalcup_cli::run::reserve::release_stale(&rig.cfg, &artifact_root(&rig.cfg), now);
+        assert!(!reserve.exists(), "the reserve went back");
     }
 
     // ------------------------------------------------------------ parts, pruned, then continued

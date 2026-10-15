@@ -3736,6 +3736,7 @@ impl Uploading {
                 known_entries,
             } => {
                 return self.open_segment(
+                    cx.cfg,
                     &request,
                     run_id,
                     previous_entry_id,
@@ -3806,6 +3807,7 @@ impl Uploading {
     /// this segment follows that one, which stays on the server with no chain, once.
     fn open_segment(
         &self,
+        cfg: &Path,
         carried: &crate::upload::api::OpenRunRequest,
         run_id: &str,
         previous_entry_id: &str,
@@ -3815,6 +3817,8 @@ impl Uploading {
         use crate::upload::Continued;
         let over = || {
             run_over.set(true);
+            // The server's word, kept: `goalcup status` and the reserve's release follow it now.
+            crate::run::note_over(cfg, run_id);
             CliError::Refused(format!(
                 "run {run_id} is over: its deadline has passed, or a newer run on your account \
                  replaced it, so there is nothing left to continue. Nothing was started."

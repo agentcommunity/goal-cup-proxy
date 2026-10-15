@@ -1475,7 +1475,7 @@ impl LocalDeadline {
     }
 
     /// Whether the count has run out.
-    pub fn passed(&self) -> bool {
+    fn passed(&self) -> bool {
         u128::from(self.from.elapsed_ns()) >= self.left.as_nanos()
     }
 

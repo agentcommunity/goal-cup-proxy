@@ -589,8 +589,8 @@ mod tests {
         before_url: &'static [&'static str],
     }
 
-    /// Each machine gets the opener it can run, and the URL is always the opener's last
-    /// argument, never handed to a shell (T2-F14).
+    /// Each machine gets the opener it can run, with the arguments that go before the URL
+    /// (`open_url` appends the URL after them) (T2-F14).
     #[test]
     fn the_browser_opener_is_chosen_by_platform_and_path() {
         let machine = |name, macos, wsl, on_path, program, before_url| Machine {
