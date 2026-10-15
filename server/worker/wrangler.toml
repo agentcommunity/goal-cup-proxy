@@ -15,17 +15,16 @@ preview_urls = false
 # Custom domain on the agentcommunity.org zone (wrangler creates its DNS record and certificate).
 routes = [{ pattern = "ingest.agentcommunity.org", custom_domain = true }]
 
-# Rate limits on the device flow (src/ratelimit.ts), per hashed client address. Namespace ids are
-# account-wide: 4001-4019 belong to the website, 4101-4102 to this Worker. Production only.
-[[ratelimits]]
-name = "RL_DEVICE_START"
-namespace_id = "4101"
-simple = { limit = 20, period = 60 }
+# Rate limits on the device flow (src/ratelimit.ts): one Durable Object per call and hashed client
+# address (an IPv6 client by its /64), counting one-minute windows. It replaced the [[ratelimits]]
+# binding (namespaces 4101-4104), whose counters never tripped across a location's machines.
+[[durable_objects.bindings]]
+name = "DEVICE_LIMITER"
+class_name = "DeviceLimiter"
 
-[[ratelimits]]
-name = "RL_DEVICE_TOKEN"
-namespace_id = "4102"
-simple = { limit = 120, period = 60 }
+[[migrations]]
+tag = "v1-device-limiter"
+new_sqlite_classes = ["DeviceLimiter"]
 
 [[r2_buckets]]
 binding = "TRACES"
@@ -60,6 +59,10 @@ MAINTENANCE = "off"
 MAINTENANCE_RETRY_AFTER = "300"
 # Sender of the run emails (src/mail.ts); mail stays off until the RESEND_API_KEY secret is set.
 NOTICE_FROM = "Agent Community <updates@member.agentcommunity.org>"
+# Device-flow calls a minute per client address. One tracer starts once and polls 12 times a
+# minute; these leave room for a room of participants behind one address.
+DEVICE_START_PER_MINUTE = "30"
+DEVICE_TOKEN_PER_MINUTE = "300"
 
 # Secrets, set with `wrangler secret put` (never in this file):
 #   RECEIPT_SIGNING_KEY  Ed25519 seed, 64 hex characters, generated offline
@@ -92,16 +95,11 @@ preview_urls = false
 [env.staging.triggers]
 crons = ["*/5 * * * *"]
 
-# Staging has its own limiter namespaces (4103-4104) with low limits, so a test sees the 429.
-[[env.staging.ratelimits]]
-name = "RL_DEVICE_START"
-namespace_id = "4103"
-simple = { limit = 5, period = 60 }
-
-[[env.staging.ratelimits]]
-name = "RL_DEVICE_TOKEN"
-namespace_id = "4104"
-simple = { limit = 10, period = 60 }
+# wrangler does not inherit durable_objects into an environment. Staging's limiter is its own
+# class instance set (a different Worker), with low limits in its vars so a test sees the 429.
+[[env.staging.durable_objects.bindings]]
+name = "DEVICE_LIMITER"
+class_name = "DeviceLimiter"
 
 [[env.staging.r2_buckets]]
 binding = "TRACES"
@@ -126,3 +124,5 @@ MAINTENANCE_RETRY_AFTER = "300"
 NOTICE_FROM = "Agent Community <updates@member.agentcommunity.org>"
 # Staging never emails a member: every notice goes to Resend's test inbox.
 NOTICE_RECIPIENT_OVERRIDE = "delivered@resend.dev"
+DEVICE_START_PER_MINUTE = "5"
+DEVICE_TOKEN_PER_MINUTE = "10"
