@@ -273,3 +273,53 @@ fn final_root_symlinks_and_multilink_streams_are_refused() {
     std::fs::create_dir(real.join("chain.jsonl")).unwrap();
     assert!(root.open_chain_for_create().is_err());
 }
+
+#[test]
+fn a_selected_root_never_follows_its_final_link_spelled_any_way() {
+    let tmp = Fixture::new();
+    let target = tmp.path().join("real");
+    std::fs::create_dir(&target).unwrap();
+    let link = tmp.path().join("link");
+    symlink(&target, &link).unwrap();
+    for spelling in [
+        link.clone(),
+        PathBuf::from(format!("{}/", link.display())),
+        PathBuf::from(format!("{}/.", link.display())),
+    ] {
+        assert!(
+            TraceDir::open_selected(&spelling).is_err(),
+            "{}",
+            spelling.display()
+        );
+    }
+    assert!(TraceDir::open_selected(&target).is_ok());
+    assert!(TraceDir::open_selected(Path::new(".")).is_ok());
+
+    let real_parent = tmp.path().join("real-parent");
+    std::fs::create_dir(&real_parent).unwrap();
+    std::fs::create_dir(real_parent.join("trace")).unwrap();
+    let ancestor_alias = tmp.path().join("ancestor-alias");
+    symlink(&real_parent, &ancestor_alias).unwrap();
+    assert!(TraceDir::open_selected(&ancestor_alias.join("trace")).is_ok());
+}
+
+#[test]
+fn a_selected_root_reads_survive_root_replacement() {
+    let tmp = Fixture::new();
+    let root = tmp.path().join("trace");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("acks.jsonl"), "trusted acks").unwrap();
+    let held = TraceDir::open_selected(&root).unwrap();
+
+    std::fs::rename(&root, tmp.path().join("moved")).unwrap();
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("acks.jsonl"), "OUTSIDE_SENTINEL").unwrap();
+
+    let mut text = String::new();
+    held.read_regular("acks.jsonl")
+        .unwrap()
+        .unwrap()
+        .read_to_string(&mut text)
+        .unwrap();
+    assert_eq!(text, "trusted acks");
+}

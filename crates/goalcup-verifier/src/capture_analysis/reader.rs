@@ -1,11 +1,12 @@
 //! The bounded, streaming protocol-v5 capture-integrity reader. It populates the verified
 //! facts used by verifier reports.
 //!
-//! [`scan_capture_trace`] reads one trace directory through the verifier's pinned,
-//! no-follow trace root. It reads the fixed names the trace writer produces: `chain.jsonl`
-//! (required), `baseline.json`, plus `receipt.json`, `acks.jsonl` and `seal.json` when they
-//! are present. There is no `trace.toml` and no connector manifest, because a v5 capture
-//! trace has neither. This reader refuses a chain whose first record is not v5.
+//! [`scan_capture_trace`] reads one trace directory through one retained, no-follow
+//! `tracecap` root, the capability the trace writer uses. It reads the fixed names the
+//! writer produces: `chain.jsonl` (required), `baseline.json`, plus `receipt.json`,
+//! `acks.jsonl` and `seal.json` when they are present. There is no `trace.toml` and no
+//! connector manifest, because a v5 capture trace has neither. This reader refuses a chain
+//! whose first record is not v5.
 //!
 //! **Bounded.** One chain line is held at a time. Each line is read into a reused buffer
 //! capped at `MAX_ENVELOPE_BYTES` (newline included) before it is decoded. Base64 is
@@ -33,11 +34,11 @@
 //! callback error ends the scan as an I/O error, and no report is produced.
 
 use super::lineage::Lineage;
+use crate::SERVER_PUBLIC_KEYS;
 use crate::VerifyOptions;
-use crate::trace_fs::{TracePath, TraceRoot};
-use crate::{SERVER_PUBLIC_KEYS, VerifierError};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use goalcup_platform::tracecap::{RefusalKind, TraceCapError, TraceDir};
 use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureRecord, CaptureSource, CaptureTime, ConnectionEvent, EndReason,
@@ -225,7 +226,7 @@ pub fn scan_capture_trace(
     options: &VerifyOptions,
     emit: &mut dyn FnMut(&CaptureRecord) -> io::Result<()>,
 ) -> io::Result<CaptureIntegrityReport> {
-    let root = TraceRoot::open(dir).map_err(io_error)?;
+    let root = TraceDir::open_selected(dir).map_err(|error| trace_error("trace root", error))?;
     let keys = AcceptedKeys::new(options);
     let mut scan = Scan::new(&keys);
     scan.load_receipt(&root)?;
@@ -283,26 +284,37 @@ pub fn capture_integrity_document(
 /// One capture-record rule a record broke. Codes are stable report vocabulary.
 type Violation = &'static str;
 
-fn io_error(error: VerifierError) -> io::Error {
+/// A trace capability failure as I/O. An I/O failure keeps its kind; a refused artifact is
+/// `InvalidData` with a `trace: ` message, worded as the verifier's own reader worded it.
+fn trace_error(name: &str, error: TraceCapError) -> io::Error {
+    let refused = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
     match error {
-        VerifierError::Io { path, source } => {
-            io::Error::new(source.kind(), format!("{path}: {source}"))
+        TraceCapError::Io { source, .. } => {
+            io::Error::new(source.kind(), format!("{name}: {source}"))
         }
-        other => io::Error::new(io::ErrorKind::InvalidData, other.to_string()),
+        TraceCapError::Refused {
+            reason: RefusalKind::NotRegularFile,
+            ..
+        } => refused(format!("trace: trace path {name:?} is not a regular file")),
+        TraceCapError::Refused {
+            reason: RefusalKind::MultipleLinks,
+            ..
+        } => refused(format!("trace: trace path {name:?} is hard linked")),
+        TraceCapError::Refused {
+            reason: RefusalKind::UnsupportedRoot,
+            ..
+        } => refused(format!(
+            "trace: selected {name} is empty or contains an interior NUL"
+        )),
+        other => refused(format!("trace: {name}: {other}")),
     }
 }
 
-/// Open one fixed trace name through the pinned root. `None` only when it does not exist;
+/// Open one fixed trace name through the retained root. `None` only when it does not exist;
 /// a replaced (symlinked, hard-linked, non-regular) artifact is an error, never followed.
-fn open_file(root: &TraceRoot, name: &str) -> io::Result<Option<std::fs::File>> {
-    let path = TracePath::parse(name).map_err(io_error)?;
-    match root.open_reader(&path) {
-        Ok(file) => Ok(Some(file)),
-        Err(VerifierError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
-            Ok(None)
-        }
-        Err(error) => Err(io_error(error)),
-    }
+fn open_file(root: &TraceDir, name: &str) -> io::Result<Option<std::fs::File>> {
+    root.read_regular(name)
+        .map_err(|error| trace_error(name, error))
 }
 
 enum Fixed {
@@ -311,8 +323,8 @@ enum Fixed {
     Bytes(Vec<u8>),
 }
 
-/// A whole fixed document, read through the pinned root and bounded before it is buffered.
-fn read_fixed(root: &TraceRoot, name: &str, limit: u64) -> io::Result<Fixed> {
+/// A whole fixed document, read through the retained root and bounded before it is buffered.
+fn read_fixed(root: &TraceDir, name: &str, limit: u64) -> io::Result<Fixed> {
     let Some(file) = open_file(root, name)? else {
         return Ok(Fixed::Absent);
     };
@@ -516,7 +528,7 @@ impl<'k> Scan<'k> {
     ///
     /// A zero-length `receipt.json` is treated as absent. An empty optional service
     /// artifact is normal local capture, not a malformed one.
-    fn load_receipt(&mut self, root: &TraceRoot) -> io::Result<()> {
+    fn load_receipt(&mut self, root: &TraceDir) -> io::Result<()> {
         let bytes = match read_fixed(root, RECEIPT_FILE, RECEIPT_MAX_BYTES)? {
             Fixed::Absent => return Ok(()),
             Fixed::Bytes(bytes) if bytes.is_empty() => return Ok(()),
@@ -824,7 +836,7 @@ impl<'k> Scan<'k> {
     /// Bind `baseline.json` to the seq-0 baseline claim: the digest of the manifest it
     /// holds, its file count and its entry. Absent or empty is a missing artifact
     /// (incomplete); anything else that does not agree is invalid.
-    fn bind_baseline(&mut self, root: &TraceRoot) -> io::Result<()> {
+    fn bind_baseline(&mut self, root: &TraceDir) -> io::Result<()> {
         let Some((digest, file_count)) = self.baseline.take() else {
             return Ok(());
         };
@@ -880,7 +892,7 @@ impl<'k> Scan<'k> {
     /// its fixed `seal.json`, with no receipt prerequisite. A signed finalization binds its
     /// verified receipt and its cutoff. The two terminal modes
     /// are never interchangeable.
-    fn bind_terminal(&mut self, root: &TraceRoot) -> io::Result<()> {
+    fn bind_terminal(&mut self, root: &TraceDir) -> io::Result<()> {
         // A pruned chain may have lost the link a receipt witnessed.
         if let Some(receipt) = &self.receipt
             && !receipt.head_bound
@@ -912,7 +924,7 @@ impl<'k> Scan<'k> {
     /// A zero-length `seal.json` is reported as missing (incomplete), like an absent one.
     /// `write_local_finish` chains the terminal before it creates and writes the fixed
     /// file, so a crash in between leaves exactly that.
-    fn bind_fixed_manifest(&mut self, root: &TraceRoot, env: &Envelope) -> io::Result<bool> {
+    fn bind_fixed_manifest(&mut self, root: &TraceDir, env: &Envelope) -> io::Result<bool> {
         let bytes = match read_fixed(root, SEAL_FILE, SEAL_MAX_BYTES)? {
             Fixed::Absent => {
                 self.short("seal_manifest_missing");

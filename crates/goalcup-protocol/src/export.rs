@@ -94,18 +94,35 @@ pub fn chain_parts(trace_dir: &Path) -> std::io::Result<Vec<ChainPart>> {
         parts.push(ChainPart { start, len, path });
     }
     for pair in parts.windows(2) {
-        if pair[0].start.checked_add(pair[0].len) != Some(pair[1].start) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "chain part {} does not follow the part before it, which ends at byte {}",
-                    pair[1].path.display(),
-                    pair[0].start.saturating_add(pair[0].len)
-                ),
-            ));
+        match check_part_follows(pair[0].start.checked_add(pair[0].len), pair[1].start) {
+            Ok(()) => {}
+            Err(ExportError::PartGap { expected, .. }) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "chain part {} does not follow the part before it, which ends at byte \
+                         {expected}",
+                        pair[1].path.display(),
+                    ),
+                ));
+            }
+            Err(other) => return Err(std::io::Error::other(other.to_string())),
         }
     }
     Ok(parts)
+}
+
+/// The one contiguity rule for chain parts (D55): a part starts exactly where the chain before
+/// it ends. `end` is `None` when that end overflows, which no part follows. A gap is
+/// `PartGap`, its `expected` saturated.
+fn check_part_follows(end: Option<u64>, start: u64) -> Result<(), ExportError> {
+    match end {
+        Some(end) if end == start => Ok(()),
+        _ => Err(ExportError::PartGap {
+            expected: end.unwrap_or(u64::MAX),
+            found: start,
+        }),
+    }
 }
 
 /// A capability failure as I/O, keeping a not-found a not-found; never `InvalidData`, which
@@ -1838,14 +1855,7 @@ struct ChainScan {
 impl ChainScan {
     /// A part must start where the validated chain ends.
     fn expect_part_at(&self, start: u64) -> Result<(), ExportError> {
-        if start == self.validated_bytes {
-            Ok(())
-        } else {
-            Err(ExportError::PartGap {
-                expected: self.validated_bytes,
-                found: start,
-            })
-        }
+        check_part_follows(Some(self.validated_bytes), start)
     }
 
     /// A part read to its end must be exactly as long as what was validated from it.

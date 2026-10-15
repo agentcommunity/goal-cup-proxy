@@ -6,7 +6,6 @@
 //! Everything it judges is a protocol-v5 capture trace, read by [`capture_analysis`].
 
 pub mod capture_analysis;
-mod trace_fs;
 
 /// `goalcup-verify --capture-integrity TRACE`: the protocol-v5 integrity route.
 pub use capture_analysis::reader::{
@@ -46,18 +45,4 @@ pub struct VerifyOptions {
     /// `key_source: supplied`, so a reader of the verdict can see that the run borrowed its
     /// trust from whoever ran it.
     pub extra_server_keys: Vec<String>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum VerifierError {
-    #[error("io {path}: {source}")]
-    Io {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("protocol: {0}")]
-    Protocol(#[from] goalcup_protocol::ProtocolError),
-    #[error("trace: {0}")]
-    Trace(String),
 }

@@ -880,6 +880,34 @@ impl FixedWriterHandle {
     }
 }
 
+/// `root` without a terminal `/` or `/.`, which the OS would resolve through a final link
+/// before `O_NOFOLLOW` applies; `/` itself stays `/`. An empty root is refused.
+pub(super) fn selected_root_name(root: &Path) -> Result<std::path::PathBuf, TraceCapError> {
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut bytes = root.as_os_str().as_bytes().to_vec();
+    while bytes.len() > 1 && bytes.last() == Some(&b'/') {
+        bytes.pop();
+    }
+    while bytes.len() >= 2 && bytes.ends_with(b"/.") {
+        if bytes == b"/." {
+            bytes.truncate(1);
+            break;
+        }
+        bytes.truncate(bytes.len() - 2);
+        while bytes.len() > 1 && bytes.last() == Some(&b'/') {
+            bytes.pop();
+        }
+    }
+    if bytes.is_empty() {
+        return Err(TraceCapError::refused(
+            ROOT_OPERATION,
+            RefusalKind::UnsupportedRoot,
+        ));
+    }
+    Ok(std::ffi::OsString::from_vec(bytes).into())
+}
+
 fn c_name(name: &str) -> CString {
     CString::new(name).expect("callers validated contained name before native traversal")
 }
@@ -1007,6 +1035,18 @@ mod tests {
         };
         assert!(flags >= 0);
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
+
+    #[test]
+    fn selected_root_name_preserves_the_filesystem_root_and_rejects_empty_input() {
+        for spelling in ["/", "/.", "/./", "/./."] {
+            assert_eq!(
+                selected_root_name(Path::new(spelling)).unwrap(),
+                Path::new("/"),
+                "{spelling:?} must keep selecting the filesystem root"
+            );
+        }
+        assert!(selected_root_name(Path::new("")).is_err());
     }
 
     #[test]

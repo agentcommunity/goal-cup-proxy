@@ -1,10 +1,14 @@
-//! No harness or vendor name in core code: a harness is connector data plus shared modules.
+//! No harness or product name in core code: a harness is connector data plus shared modules.
 //!
 //! Every source file of the protocol, daemon and verifier crates is scanned for string literals
 //! that contain a harness name. The capture paths of the CLI and platform crates are held to the
 //! narrower rule they had before: no literal that is exactly a family name. Comments and
 //! identifiers are not scanned. A literal where a name is data is listed in `ALLOWED`, by file
 //! and exact text, with its reason; any other hit in the same file still fails.
+//!
+//! `openai` and `anthropic` may appear in core when they name an API wire format or a provider
+//! (decoder family ids, secret shapes, provider prefixes); the ban is on harness and product
+//! names (codex, claude-code, hermes, …).
 
 use std::path::{Path, PathBuf};
 
