@@ -184,9 +184,8 @@ cheapest-model clause is superseded by D52.
 
 ## D41. **(M2)** Hermes reference row: model, CA trust, key-fingerprint and key-fragment rules.
 
-- **CA trust.** `HERMES_CA_BUNDLE` replaces Hermes's roots with the tracer's proxy CA. That fails
-  closed: Hermes trusts only the proxy, and the proxy verifies the real upstream. `SSL_CERT_FILE`
-  stays refused. D43 generalises this to any connector.
+- **CA trust.** `HERMES_CA_BUNDLE` replaces Hermes's roots. D43 generalises this to any connector;
+  since WP12 a replace-mode variable gets the system's roots plus the proxy CA (D43 ruling 3).
 - **Key fingerprint.** The private `auth.json` is pre-seeded so that Hermes never seeds its
   credential pool from the env key or writes `secret_fingerprint`.
 - **Key fragments.** Before any Hermes run artifact is kept, a scan with the in-memory key (never
@@ -212,10 +211,14 @@ The contract is `connectors/<id>/harness.toml`, schema 1.
 2. Credentials are a closed list (`CREDENTIAL_ENV`): `DEEPSEEK_API_KEY`, `AMP_API_KEY` (D49). A
    credential needs a per-run config home and either `stderr_line` + `deferred` or
    `stdout_json` + `at_launch` identity (D50). `preassigned` and `none` stay refused.
-3. A replace-mode CA variable is allowed for any connector, only if it is a `CA_REGISTRY` row of
-   mode Replace (today `HERMES_CA_BUNDLE`). A new CA variable is a DECISIONS entry. `SSL_CERT_FILE`,
-   `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` stay refused: they replace the roots
-   of every tool child.
+3. *(Amended by WP12.)* A CA variable's name is connector data, held to a closed shape: the
+   shared rows `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`, or a name ending `_CA_CERTIFICATE`,
+   `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or `_CA_FILE`, under the shared
+   env-name rules. The mode is closed: `extend` hands the variable the proxy CA alone; `replace`
+   hands it the system's roots plus the proxy CA, built for each run from the OS trust store, so
+   every tool child keeps its real trust. The shared rows take `replace`. `SSL_CERT_DIR`,
+   `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. A new mode or name shape is
+   a DECISIONS entry.
 4. The server keeps acceptable connector directory digests as data. The compiled pins in
    `pins/connector-dirs.txt` stay the local gate. A harness PR has no `.rs` file (D51).
 5. Stranger harness PRs are accepted once the conformance and pin tests run in CI, the
@@ -289,9 +292,10 @@ per-connector allowlist rows. A new connector, a model bump or a new variable is
   How much the harness may do (model, sandbox, permissions) is not a capture rule.
 - **Review sees** what a rule cannot: a dropped flag that capture needs, a value that re-enables
   self-update. These are on the reviewer checklist ([HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)).
-- **Closed lists stay core PRs with a DECISIONS entry:** `CREDENTIAL_ENV`, `CA_REGISTRY`, and
-  the redaction rule forms (`harness::RedactionRule`). The field name or header prefix a form
-  takes is connector data (WP12).
+- **Closed lists stay core PRs with a DECISIONS entry:** `CREDENTIAL_ENV`, the CA modes and
+  CA-name shape (`capture_policy::ca_env_problem`), the shared provider host table
+  (`providers.toml`), and the redaction rule forms (`harness::RedactionRule`). The field name or
+  header prefix a form takes, and a CA variable's name, are connector data (WP12).
 
 Reconsider if a connector PR is ever merged without code-owner review.
 

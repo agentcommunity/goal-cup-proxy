@@ -16,7 +16,8 @@ those sources disagree, the sources refuse the manifest.
 ## Parse and load
 
 `harness.toml` is UTF-8 TOML. The loader first reads `schema_version` from a generic table, then
-deserializes every table with unknown fields denied, then validates in this fixed order:
+deserializes every table with unknown fields denied, appends the `capture.providers` rows to
+`capture.hosts`, then validates in this fixed order:
 executable; arguments and goal; environment; home; credential; CA; identity; native source;
 argument guard; termination; hosts; redaction; delivery independence; cross-field rules; then each
 `capture.platform` entry, in the fixed order `linux-x86_64`, `linux-aarch64`, `macos-aarch64`,
@@ -62,12 +63,13 @@ optional field or table is absent.
 | `capture.platform` | optional, default `{}` | Per-platform env entries; see below. |
 | `capture.home` | required table | Run `HOME`, isolated harness home and any seeds. |
 | `capture.credential` | optional, default absent | One core-allowlisted child credential variable. |
-| `capture.ca` | required table | One CA mode and its core-allowlisted variables. |
+| `capture.ca` | required table | The harness's CA variables and which file they get. |
 | `capture.identity` | required table | How this run's native-session identity is obtained and bound. |
 | `capture.native` | defaults to `[]`, validation requires exactly one | One `[[capture.native]]` table. |
 | `capture.argv_guard` | optional, default absent | Harness-specific pre-parser argument refusals. |
 | `capture.termination` | optional; effective defaults below | How the owned harness is stopped. |
-| `capture.hosts` | defaults to `[]`, validation requires 1–16 | Intercepted model hosts and their recorded paths. |
+| `capture.hosts` | defaults to `[]`, validation requires 1–16 (with `providers`) | Intercepted model hosts and their recorded paths. |
+| `capture.providers` | optional, default `[]` | Unique names from the shared provider table; each adds that provider's host row. See below. |
 
 The goal has exactly one slot: either `capture.args` ends in the literal `--` and the goal is the
 next single argument, or `capture.goal_flag` is present and carries the goal as
@@ -80,8 +82,13 @@ empty, it takes no `[capture.credential]` and its `identity.source` must be `non
 rule above holds unchanged. `resume_args` may be set either way; `goalcup continue` appends it
 after `args`.
 
-Argument (`args` and `resume_args`) and `capture.env` value templates admit only `{workspace}` and `{session_id}`. `{{` and `}}` render literal braces. Any other token or unmatched brace is
-refused. `{session_id}` has the identity rules described below.
+Argument templates (`args` and `resume_args`) admit only `{workspace}` and `{session_id}`.
+`capture.env` value templates also admit `{config_home}` (the isolated harness home) and
+`{run_home}` (the run's private `HOME`), so a harness with a second state variable can point it
+inside them (`DATA_DIR = "{config_home}/data"`). The value rules still apply around a token: no
+leading `/` or `~`, no `$`, backtick or `://`, and no `..` component. `{{` and `}}` render literal
+braces. Any other token or unmatched brace is refused. `{session_id}` has the identity rules
+described below.
 
 ### Executable
 
@@ -166,7 +173,7 @@ only ASCII letters, digits or `_`. Names compare uppercase for policy. The valid
 - endpoint, proxy, credential and provider names (the one proxy name admitted is
   `NODE_USE_ENV_PROXY`, D59);
 - the launch-pinned `HOME`, `PATH`, `USER`, `LOGNAME` and `TMPDIR`;
-- CA registry names and global trust overrides;
+- CA variable names (the shared rows and the CA-name endings) and global trust overrides;
 - injection/startup variables and names ending in command suffixes such as `_COMMAND`, `_CMD`,
   `EDITOR`, `PAGER`, `ASKPASS`, `_WRAPPER` or `_RUNNER`;
 - injection and provider prefixes, including `DYLD_`, `LD_`, `OTEL_`, `CLAUDE_CODE_USE_`,
@@ -242,20 +249,37 @@ identity `none` needs `since_run_start = true`; and a credential is refused. It 
 | Field | Required/default | Contract |
 |---|---|---|
 | `capture.credential.env` | required when the optional table exists; refused with `interactive` | Closed registry: `DEEPSEEK_API_KEY`, `AMP_API_KEY`. The value: 20 to 256 bytes of `[A-Za-z0-9_-]`. |
-| `capture.ca.env` | required | 1–2 unique names from the CA registry. |
-| `capture.ca.mode` | required | Closed values: `extend`, `replace`; every name must have this mode in the registry. |
+| `capture.ca.env` | required | 1–2 unique CA variable names (below). |
+| `capture.ca.mode` | required | Closed values: `extend`, `replace`. The mode says which file every name gets. |
 
-The CA registry is exactly:
+The launch points each CA variable at a file made for the run:
 
-| Variable | Mode |
-|---|---|
-| `CODEX_CA_CERTIFICATE` | `extend` |
-| `NODE_EXTRA_CA_CERTS` | `extend` |
-| `HERMES_CA_BUNDLE` | `replace` |
+| Mode | The file | For a variable that |
+|---|---|---|
+| `extend` | the recording proxy's CA alone | adds certificates to the program's own roots (`NODE_EXTRA_CA_CERTS`) |
+| `replace` | the system's trusted roots plus the proxy's CA | replaces the program's roots (`SSL_CERT_FILE`, a `*_CA_BUNDLE`) |
 
-`SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` remain refused because
-they replace trust for every tool child. A new CA variable or credential name is a core policy and
-DECISIONS change, not a connector field value.
+The `replace` file is built when the run starts from the OS trust store (macOS: the System Roots
+keychain; Linux: the distribution bundle, such as `/etc/ssl/certs/ca-certificates.crt`). It holds
+certificates only, and is written with mode 0600 into the run's private `ca/` directory. So a tool
+child that reads the variable keeps its real trust. A start with no readable trust store is
+refused.
+
+A CA variable name is one of:
+
+- a shared row: `SSL_CERT_FILE` (OpenSSL) or `REQUESTS_CA_BUNDLE` (Python `requests`). Every tool
+  child reads these, so they take `mode = "replace"`. A harness that honours one needs no CA
+  variable of its own. Apple's `/usr/bin/python3` links LibreSSL, which ignores `SSL_CERT_FILE`;
+  a Python harness from Homebrew, python.org or uv honours it.
+- the harness's own variable: upper case, ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`,
+  `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or `_CA_FILE` (`NODE_EXTRA_CA_CERTS`,
+  `CODEX_CA_CERTIFICATE`, `HERMES_CA_BUNDLE`). The name is connector data; no core change.
+
+Each name is also held to the shared environment-name rules (no provider, git, npm, OpenSSL or
+tracker namespace, no credential or proxy word). `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
+`NODE_TLS_REJECT_UNAUTHORIZED` are refused in every field. A CA variable is refused in
+`capture.env` and `capture.home.env`: `capture.ca` is the one field that sets it. A new mode or a
+new name shape is a core policy and DECISIONS change.
 
 ## Identity
 
@@ -349,9 +373,16 @@ the grace is 10 seconds.
 | `capture.termination.native_binary` | absent | Required for `native_pid`, refused for `process_group`; 1–32 bytes of `[A-Za-z0-9._-]`. |
 | `capture.termination.grace_seconds` | `10` | Integer 1–60. |
 
-## `[[capture.hosts]]`
+## `[[capture.hosts]]` and `capture.providers`
 
-One to 16 unique host rows are required.
+One to 16 unique host rows are required, counting the rows `capture.providers` adds.
+
+A model provider's host row is written once, in the shared provider table
+`crates/goalcup-protocol/providers.toml`, which is compiled into the tracer. A connector names
+rows there with `capture.providers = ["anthropic"]`. The loader appends each named row to
+`capture.hosts`, after the connector's own rows, and every host rule below applies to it. An
+unknown or repeated name is refused, and so is a host that the connector also writes itself. A new
+provider is a reviewed row in that file, added from a measured run.
 
 | Field | Required/default | Contract |
 |---|---|---|
@@ -427,7 +458,7 @@ In addition to the local rules above, all of these apply:
    with the run home and nested below `per_run_dir`.
 6. `capture.home.env` (when present), `capture.credential.env` and all `capture.ca.env` names are pairwise
    distinct case-insensitively. No `capture.env` key may duplicate one.
-7. Every CA variable's registry mode equals the single declared `capture.ca.mode`.
+7. `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` are named only with `capture.ca.mode = "replace"`.
 8. Authentication and intercepted host sets are disjoint; every intercepted host has at least one
    scoped path.
 9. A native hint is allowed only on `append_only`; a prefix path cannot be `/`.

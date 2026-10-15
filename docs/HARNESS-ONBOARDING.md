@@ -15,8 +15,8 @@ The tracer starts one harness for a participant and records two things:
 
 - the session file the harness writes for that run (its own transcript);
 - its model traffic, through a local proxy set by `HTTPS_PROXY` for that one process only. The
-  proxy certificate is trusted by that process only, through the harness's own CA variable
-  (for example `NODE_EXTRA_CA_CERTS`).
+  proxy certificate is trusted through the harness's CA variable (for example
+  `NODE_EXTRA_CA_CERTS` or `SSL_CERT_FILE`), set for that process and its children only.
 
 At the end the tracer seals both into one hash-linked trace. `goalcup-verify --capture-integrity
 <trace>` checks it.
@@ -36,8 +36,8 @@ A harness is data. A contribution has no `.rs` file:
 
 Arguments, the goal flag, the model name and `capture.env` are data. Generic rules shared by all
 connectors check them. Four lists stay in core code, because each is a security boundary: the
-credential variable names, the CA variables, the redaction regexes, and the identity carriers and
-native forms. A new entry in one of them is a separate core change (see
+credential variable names, the CA modes and CA-name shape, the redaction forms, and the identity
+carriers and native forms. A new entry in one of them is a separate core change (see
 [Do I need a core change?](#do-i-need-a-core-change)).
 
 <a id="row-0"></a>
@@ -286,7 +286,7 @@ moves). Never spell around a rule.
 | 4 | Identity carrier | `none`, `preassigned`, `stdout_json` or `stderr_line` | core change |
 | 5 | Home variable | `home.env` is `<WORD>_HOME` or `<WORD>_CONFIG_DIR`, or is left out | core change |
 | 6 | XDG | the harness falls back to `$HOME` and needs no XDG variable | core change |
-| 7 | CA variable | the harness honours `CODEX_CA_CERTIFICATE`, `NODE_EXTRA_CA_CERTS` or `HERMES_CA_BUNDLE` | core change |
+| 7 | CA variable | the harness honours `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, or its own variable ending `_CA_CERTIFICATE`, `_CA_CERTS`, `_CA_CERT`, `_CA_BUNDLE` or `_CA_FILE` | core change |
 | 8 | Native form | the own-session file is appended JSONL or rewritten whole | core change |
 | 9 | One native row | exactly one local own-session store | core change |
 | 10 | Executable | one entry-point file (a binary, or a script with a shebang), not an interpreter | fits |
@@ -296,8 +296,9 @@ moves). Never spell around a rule.
 | 14 | Chat-mode sign-in | the harness keeps its sign-in in its own config home (a login command, or the macOS Keychain) | core change: chat mode cannot pass an env-only API key |
 
 The security lists (rows 1, 7 and the redaction regex in row 12) are closed on purpose. A
-credential name decides which secret the tracer copies from the participant's shell. A CA variable
-is a trust statement about the participant's machine. A redaction regex runs inside the signed
+credential name decides which secret the tracer copies from the participant's shell. A CA mode
+is a trust statement about the participant's machine, so the two modes and the CA-name shape are
+core; the CA variable's name is connector data. A redaction regex runs inside the signed
 daemon.
 
 1. **Credential name.** Subscription or login auth needs no `[capture.credential]` table.
@@ -328,9 +329,11 @@ daemon.
    "keychain_link"`), or uses `run_home = "shared"`.
 6. **XDG.** Every `XDG_*` name is refused in `capture.env` and as `home.env`. The launch
    environment starts empty, so the harness uses `$HOME`, the private run home.
-7. **CA variable.** `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` are
-   refused because they change trust for every child tool. A Python harness that honours only
-   those needs a core change for its own CA variable. Say so early, in section 6 of the sheet.
+7. **CA variable.** `mode = "extend"` hands the variable the proxy CA alone (it adds to the
+   harness's roots). `mode = "replace"` hands it the system's roots plus the proxy CA, built for
+   each run from the OS trust store, so every child tool keeps its real trust. `SSL_CERT_FILE` and
+   `REQUESTS_CA_BUNDLE` take `replace`. `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
+   `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. See [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#credential-and-ca).
 8. **Native form.** `append_only` or `snapshot` only. A database store is refused.
 9. **One native row.** Schema 1 refuses zero native rows and more than one.
 10. **Executable.** There is no `sha256` (D53). The CLI resolves `program` on `PATH`, follows

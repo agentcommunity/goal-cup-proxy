@@ -39,7 +39,8 @@ real_dirs = ["{user_home}/.<harness>"]
 # [capture.credential]
 # env = "<CREDENTIAL_ENV>"
 
-# Any CA registry row works; the stand-in reads the file this variable names.
+# Any CA variable works (docs/CONNECTOR-SCHEMA.md, "Credential and CA"); the stand-in reads
+# the file this variable names (CA_ENV in stand-in.py).
 [capture.ca]
 env = ["NODE_EXTRA_CA_CERTS"]
 mode = "extend"

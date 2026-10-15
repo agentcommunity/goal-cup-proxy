@@ -15,10 +15,9 @@
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
-    CA_REGISTRY, CREDENTIAL_ENV, EnvContext, INJECTION_ENV, INJECTION_PREFIXES,
-    INTERPRETER_PROGRAMS, PROVIDER_PREFIXES, SHELL_VALUES, STARTUP_BASENAMES, STARTUP_COMPONENTS,
-    arg_path_denied, env_key_denied, env_value_denied, is_interpreter_program,
-    startup_file_problem,
+    CREDENTIAL_ENV, EnvContext, INJECTION_ENV, INJECTION_PREFIXES, INTERPRETER_PROGRAMS,
+    PROVIDER_PREFIXES, SHELL_VALUES, STARTUP_BASENAMES, STARTUP_COMPONENTS, arg_path_denied,
+    env_key_denied, env_value_denied, is_interpreter_program, startup_file_problem,
 };
 use goalcup_protocol::harness::{HarnessManifest, NEWER_SENTENCE, Origin, PlatformKey};
 use std::path::{Path, PathBuf};
@@ -762,14 +761,25 @@ fn session_id_and_preassigned_imply_each_other() {
 // Refusal table: CA
 // ---------------------------------------------------------------------------------------
 
-/// A name in `CA_REGISTRY` can never be set through another field: `capture.env` or `home.env`,
-/// whatever its case. The deny list is derived from the registry, so adding a row cannot leave a
-/// way to set it; `TRUST_ONLY` holds only the trust names that are NOT registry rows.
+/// A CA variable can never be set through another field: `capture.env` or `home.env`, whatever
+/// its case. The rule is the CA-name shape itself (the shared rows and the suffixes), so a
+/// harness's own CA variable cannot be set in `capture.env` either; `TRUST_ONLY` names stay
+/// refused in every field, `capture.ca` included.
 #[test]
-fn every_ca_registry_name_is_refused_as_a_capture_env_key_and_as_home_env() {
-    use goalcup_protocol::capture_policy::{TRUST_ONLY, env_key_denied};
-    assert!(!CA_REGISTRY.is_empty());
-    for (name, _) in CA_REGISTRY {
+fn every_ca_variable_is_refused_as_a_capture_env_key_and_as_home_env() {
+    use goalcup_protocol::capture_policy::{SHARED_CA_ENV, TRUST_ONLY, is_ca_env_name};
+    let names = [
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "CODEX_CA_CERTIFICATE",
+        "HERMES_CA_BUNDLE",
+        "NEWTOOL_CA_FILE",
+        "NEWTOOL_CA_CERT",
+        "NEWTOOL_CA_CERTIFICATES",
+    ];
+    for name in names.iter().chain(SHARED_CA_ENV) {
+        assert!(is_ca_env_name(name), "{name}");
         for spelling in [name.to_string(), name.to_ascii_lowercase()] {
             for ctx in [EnvContext::CaptureEnv, EnvContext::HomeEnv] {
                 let why = env_key_denied(&spelling, ctx)
@@ -784,51 +794,102 @@ fn every_ca_registry_name_is_refused_as_a_capture_env_key_and_as_home_env() {
         set(&mut t, &["capture", "home"], "env", *name);
         refused(&t, PINNED, &["capture.home.env", name, "certificate trust"]);
     }
+    // A directory of roots, curl's own bundle and the verification switch stay refused
+    // everywhere.
+    assert_eq!(
+        TRUST_ONLY,
+        [
+            "SSL_CERT_DIR",
+            "CURL_CA_BUNDLE",
+            "NODE_TLS_REJECT_UNAUTHORIZED"
+        ]
+    );
     for name in TRUST_ONLY {
-        assert!(
-            CA_REGISTRY.iter().all(|(n, _)| n != name),
-            "`{name}` is in both TRUST_ONLY and CA_REGISTRY"
-        );
-        for ctx in [EnvContext::CaptureEnv, EnvContext::HomeEnv] {
+        assert!(!SHARED_CA_ENV.contains(name), "{name}");
+        for ctx in [
+            EnvContext::CaptureEnv,
+            EnvContext::HomeEnv,
+            EnvContext::CaEnv,
+        ] {
             assert!(env_key_denied(name, ctx).is_some(), "{name} {ctx:?}");
         }
+        for mode in ["extend", "replace"] {
+            let mut t = hermes();
+            set(&mut t, &["capture", "ca"], "env", strings(&[name]));
+            set(&mut t, &["capture", "ca"], "mode", mode);
+            refused(&t, PINNED, &["capture.ca.env", name, "certificate trust"]);
+        }
     }
-    // The four roots that replace every tool child's, and the verification switch, stay refused.
-    for name in [
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "CURL_CA_BUNDLE",
-        "REQUESTS_CA_BUNDLE",
-        "NODE_TLS_REJECT_UNAUTHORIZED",
-    ] {
-        assert!(TRUST_ONLY.contains(&name), "{name}");
-    }
-    assert_eq!(TRUST_ONLY.len(), 5);
 }
 
+/// A harness's own CA variable is connector data held to one closed shape; the shared rows
+/// (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) take `replace`, which hands them the system roots plus
+/// the proxy CA; and a CA name is still held to the shared env-name rules.
 #[test]
-fn the_ca_registry_is_closed_and_modes_must_match() {
-    for name in [
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "CURL_CA_BUNDLE",
-        "REQUESTS_CA_BUNDLE",
-        "MY_CA",
+fn a_ca_variable_is_data_held_to_the_ca_shape_and_the_shared_rules() {
+    use goalcup_protocol::capture_policy::{CaMode, ca_env_problem};
+    // Any connector, either mode, names its own CA variable: no core row needed.
+    for (name, mode) in [
+        ("NEWTOOL_CA_CERTIFICATE", "extend"),
+        ("NEWTOOL_CA_BUNDLE", "replace"),
+        ("NODE_EXTRA_CA_CERTS", "replace"),
+        ("HERMES_CA_BUNDLE", "extend"),
+        ("SSL_CERT_FILE", "replace"),
+        ("REQUESTS_CA_BUNDLE", "replace"),
     ] {
-        let mut t = hermes();
+        let mut t = claude();
         set(&mut t, &["capture", "ca"], "env", strings(&[name]));
-        refused(&t, PINNED, &["not a CA variable in the registry"]);
+        set(&mut t, &["capture", "ca"], "mode", mode);
+        admitted(&t, PINNED);
     }
-    let mut t = hermes();
-    set(&mut t, &["capture", "ca"], "mode", "extend");
-    refused(
-        &t,
-        PINNED,
-        &["HERMES_CA_BUNDLE", "`replace`-mode", "declares `extend`"],
-    );
+    // Both shared rows together, with a harness's own variable as a second name.
     let mut t = codex();
+    set(
+        &mut t,
+        &["capture", "ca"],
+        "env",
+        strings(&["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"]),
+    );
     set(&mut t, &["capture", "ca"], "mode", "replace");
-    refused(&t, PINNED, &["CODEX_CA_CERTIFICATE", "`extend`-mode"]);
+    admitted(&t, PINNED);
+    // The shared rows replace every tool child's roots: `extend` would hand them the proxy CA
+    // alone.
+    for name in ["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"] {
+        let mut t = codex();
+        set(&mut t, &["capture", "ca"], "env", strings(&[name]));
+        set(&mut t, &["capture", "ca"], "mode", "extend");
+        refused(&t, PINNED, &["capture.ca.env", name, "mode = \"replace\""]);
+        assert!(ca_env_problem(name, CaMode::Replace).is_none(), "{name}");
+    }
+    // Not a CA name, or not upper case.
+    for (name, why) in [
+        ("MY_CA", "is not a CA variable"),
+        ("NEWTOOL_HOME", "is not a CA variable"),
+        ("BASH_ENV", "is not a CA variable"),
+        ("CA_BUNDLE", "is not a CA variable"),
+        ("newtool_ca_bundle", "upper-case"),
+        ("NEWTOOL-CA-BUNDLE", "upper-case"),
+    ] {
+        let mut t = codex();
+        set(&mut t, &["capture", "ca"], "env", strings(&[name]));
+        refused(&t, PINNED, &["capture.ca.env", name, why]);
+    }
+    // A CA-shaped name is still held to the shared rules: a provider, a git, an OpenSSL or a
+    // tracker namespace, a proxy or a credential.
+    for (name, why) in [
+        ("AWS_CA_BUNDLE", "provider"),
+        ("OPENAI_CA_CERTS", "model provider"),
+        ("GIT_SSL_CA_FILE", "configures git"),
+        ("OPENSSL_CA_FILE", "OpenSSL"),
+        ("GOALCUP_CA_BUNDLE", "tracker"),
+        ("NPM_CONFIG_CA_FILE", "npm"),
+        ("AUTH_CA_CERT", "credential"),
+    ] {
+        let mut t = codex();
+        set(&mut t, &["capture", "ca"], "env", strings(&[name]));
+        refused(&t, PINNED, &["capture.ca.env", name, why]);
+    }
+    // One or two names, never repeated.
     let mut t = codex();
     set(&mut t, &["capture", "ca"], "env", strings(&[]));
     refused(&t, PINNED, &["1 or 2 CA variables"]);
@@ -837,11 +898,7 @@ fn the_ca_registry_is_closed_and_modes_must_match() {
         &mut t,
         &["capture", "ca"],
         "env",
-        strings(&[
-            "CODEX_CA_CERTIFICATE",
-            "NODE_EXTRA_CA_CERTS",
-            "HERMES_CA_BUNDLE",
-        ]),
+        strings(&["A_CA_CERT", "B_CA_CERT", "C_CA_CERT"]),
     );
     refused(&t, PINNED, &["1 or 2 CA variables"]);
     let mut t = codex();
@@ -852,30 +909,6 @@ fn the_ca_registry_is_closed_and_modes_must_match() {
         strings(&["CODEX_CA_CERTIFICATE", "CODEX_CA_CERTIFICATE"]),
     );
     refused(&t, PINNED, &["named twice"]);
-    // Two extend rows together are fine, and the registry names what the design says.
-    let mut t = codex();
-    set(
-        &mut t,
-        &["capture", "ca"],
-        "env",
-        strings(&["CODEX_CA_CERTIFICATE", "NODE_EXTRA_CA_CERTS"]),
-    );
-    admitted(&t, PINNED);
-    assert_eq!(CA_REGISTRY.len(), 3);
-}
-
-#[test]
-fn any_connector_may_use_a_replace_mode_registry_row() {
-    // D43 ruling 4: the family branch is gone. Claude's file with HERMES_CA_BUNDLE+replace.
-    let mut t = claude();
-    set(
-        &mut t,
-        &["capture", "ca"],
-        "env",
-        strings(&["HERMES_CA_BUNDLE"]),
-    );
-    set(&mut t, &["capture", "ca"], "mode", "replace");
-    admitted(&t, PINNED);
 }
 
 #[test]
@@ -884,17 +917,14 @@ fn a_ca_variable_in_capture_env_is_refused_and_says_where_it_belongs() {
         "NODE_EXTRA_CA_CERTS",
         "HERMES_CA_BUNDLE",
         "CODEX_CA_CERTIFICATE",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
     ] {
         let mut t = codex();
         set(&mut t, &["capture", "env"], name, "x");
         refused(&t, PINNED, &["belongs in `capture.ca`"]);
     }
-    for name in [
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "CURL_CA_BUNDLE",
-        "REQUESTS_CA_BUNDLE",
-    ] {
+    for name in ["SSL_CERT_DIR", "CURL_CA_BUNDLE"] {
         let mut t = codex();
         set(&mut t, &["capture", "env"], name, "x");
         refused(&t, PINNED, &["certificate trust"]);
@@ -1763,7 +1793,6 @@ fn template_tokens_are_closed_and_braces_are_literal_only_doubled() {
     for bad in [
         "{port}",
         "{home}",
-        "{config_home}",
         "{user_home}",
         "a{b",
         "a}b",
@@ -1782,6 +1811,42 @@ fn template_tokens_are_closed_and_braces_are_literal_only_doubled() {
         let mut t = codex();
         set(&mut t, &["capture"], "args", strings(&["exec", ok, "--"]));
         admitted(&t, PINNED);
+    }
+}
+
+/// An env value may name the run's two homes, so a harness with a second state variable points
+/// it inside them (C3-F9); an argument may not, and the value rules still hold around a token.
+#[test]
+fn an_env_value_may_name_the_run_homes_and_an_argument_may_not() {
+    for ok in [
+        "{config_home}",
+        "{config_home}/data",
+        "{run_home}/.cache/tool",
+        "{workspace}/.tool",
+    ] {
+        let mut t = codex();
+        set(&mut t, &["capture", "env"], "NEWTOOL_DATA_DIR", ok);
+        admitted(&t, PINNED);
+    }
+    for token in ["{config_home}", "{run_home}"] {
+        let mut t = codex();
+        set(
+            &mut t,
+            &["capture"],
+            "args",
+            strings(&["exec", token, "--"]),
+        );
+        refused(&t, PINNED, &["capture.args", "not a token here"]);
+    }
+    for (bad, why) in [
+        ("{config_home}/../x", "`..`"),
+        ("{run_home}/$HOME", "`$`"),
+        ("/{run_home}", "is a path"),
+        ("{user_home}/x", "not a token here"),
+    ] {
+        let mut t = codex();
+        set(&mut t, &["capture", "env"], "NEWTOOL_DATA_DIR", bad);
+        refused(&t, PINNED, &["capture.env", why]);
     }
 }
 
@@ -1952,6 +2017,63 @@ fn host_rules() {
         strings(&["/a"]),
     );
     refused(&t, PINNED, &["twice"]);
+}
+
+/// The shared provider table (C3-F13): a connector names a provider and gets its one reviewed
+/// host row, appended after its own rows and held to every host rule.
+#[test]
+fn a_named_provider_adds_its_shared_host_row() {
+    use goalcup_protocol::harness::provider_hosts;
+    let parsed = |t: &Table| HarnessManifest::from_toml_str(&toml::to_string(t).unwrap());
+    let table = provider_hosts().expect("the provider table parses");
+    assert!(!table.is_empty());
+    for (name, row) in table {
+        let mut t = codex();
+        set(&mut t, &["capture"], "hosts", Value::Array(vec![]));
+        set(&mut t, &["capture"], "providers", strings(&[name]));
+        admitted(&t, PINNED);
+        assert_eq!(
+            parsed(&t).unwrap().capture.hosts,
+            std::slice::from_ref(row),
+            "{name}"
+        );
+    }
+    let mut t = codex();
+    set(&mut t, &["capture"], "providers", strings(&["deepseek"]));
+    admitted(&t, PINNED);
+    let hosts = parsed(&t).unwrap().capture.hosts;
+    assert_eq!(hosts.len(), 2);
+    assert_eq!(hosts[0].host, "chatgpt.com");
+    assert_eq!(hosts[1], table["deepseek"]);
+    // An unknown or repeated name, and a row the connector also writes itself.
+    let mut t = codex();
+    set(&mut t, &["capture"], "providers", strings(&["nosuch"]));
+    refused(
+        &t,
+        PINNED,
+        &[
+            "capture.providers",
+            "`nosuch`",
+            "not in the shared provider table",
+            "deepseek",
+        ],
+    );
+    let mut t = codex();
+    set(
+        &mut t,
+        &["capture"],
+        "providers",
+        strings(&["deepseek", "deepseek"]),
+    );
+    refused(&t, PINNED, &["capture.providers", "named twice"]);
+    let mut t = codex();
+    set(&mut t, &["capture", "hosts"], "host", "api.deepseek.com");
+    set(&mut t, &["capture"], "providers", strings(&["deepseek"]));
+    refused(
+        &t,
+        PINNED,
+        &["capture.hosts", "api.deepseek.com", "two rules"],
+    );
 }
 
 #[test]

@@ -2,8 +2,8 @@
   "argv_differs_from_policy": [],
   "ca": [
     {
+      "file": "proxy_ca",
       "name": "NODE_EXTRA_CA_CERTS",
-      "registry_mode": "extend",
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }
   ],
@@ -49,6 +49,7 @@
       "source": "none"
     },
     "interactive": false,
+    "providers": [],
     "resume_args": [],
     "skills_dir": null
   },

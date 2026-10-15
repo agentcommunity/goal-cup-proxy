@@ -2,8 +2,8 @@
   "argv_differs_from_policy": [],
   "ca": [
     {
+      "file": "proxy_ca",
       "name": "CODEX_CA_CERTIFICATE",
-      "registry_mode": "extend",
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }
   ],
@@ -66,6 +66,7 @@
         }
       }
     },
+    "providers": [],
     "resume_args": [
       "resume",
       "--last"

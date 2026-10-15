@@ -704,10 +704,8 @@ fn write_hermes_connector(connectors: &Path, capture_connectors: &Path, exe: &Pa
         ),
         // `goalcup start` probes every provider host that is not loopback before it creates
         // anything; a test never reaches the network, and the fake never calls its provider.
-        (
-            "host = \"api.deepseek.com\"",
-            "host = \"api.deepseek.localhost\"".to_string(),
-        ),
+        // So the shared `deepseek` row becomes the same row on a loopback name.
+        ("providers = [\"deepseek\"]\n", String::new()),
     ] {
         assert!(
             harness.contains(from),
@@ -715,6 +713,13 @@ fn write_hermes_connector(connectors: &Path, capture_connectors: &Path, exe: &Pa
         );
         harness = harness.replacen(from, &to, 1);
     }
+    let deepseek = &goalcup_protocol::harness::provider_hosts().unwrap()["deepseek"];
+    harness.push_str(&format!(
+        "\n[[capture.hosts]]\nhost = \"api.deepseek.localhost\"\nevidence_paths = {:?}\n\
+         protocol_hint = {:?}\n",
+        deepseek.evidence_paths,
+        deepseek.protocol_hint.as_deref().unwrap(),
+    ));
     std::fs::write(capture_dir.join("harness.toml"), harness).unwrap();
 }
 

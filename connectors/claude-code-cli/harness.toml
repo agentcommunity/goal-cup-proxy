@@ -4,6 +4,8 @@ id = "claude-code-cli"
 
 [capture]
 auth_hosts = ["platform.claude.com"]
+# The model host, from the shared provider table (crates/goalcup-protocol/providers.toml).
+providers = ["anthropic"]
 # Chat mode (D57): Claude Code opens in the participant's terminal and the participant types the
 # prompt. No model, effort, permission or MCP option (owner direction, 2026-10-14; D57): the
 # harness's own defaults and the participant's own settings. A fresh workspace asks once whether
@@ -73,8 +75,3 @@ grace_seconds = 10
 extra_patterns = [
   { kind = "anthropic_billing_header", header_prefix = "x-anthropic-billing-" },
 ]
-
-[[capture.hosts]]
-host = "api.anthropic.com"
-evidence_paths = ["/v1/messages"]
-protocol_hint = "anthropic-messages"

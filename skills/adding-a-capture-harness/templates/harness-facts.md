@@ -44,10 +44,11 @@ moves its config and login (like `CODEX_HOME`)? Yes: the connector shares that c
 the connector keeps one shared private `HOME` (`run_home = "shared"`) so the sign-in lasts.
 
 ## 6. Network
-First, the CA variable the harness honours for an extra trusted certificate (for example
-`NODE_EXTRA_CA_CERTS`); only `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` means a core change. Then every
-model/provider host it can reach: if the participant may pick the provider, list every provider
-host, because an unlisted host is not recorded. Say yes or no: is the harness Node (npm package,
+First, the CA variable the harness honours, and whether it adds to the harness's roots
+(`NODE_EXTRA_CA_CERTS`: mode `extend`) or replaces them (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`,
+a `*_CA_BUNDLE`: mode `replace`). Then every model/provider host it can reach: if the participant
+may pick the provider, list every provider host, because an unlisted host is not recorded. Say
+which ones the shared provider table (`crates/goalcup-protocol/providers.toml`) already has. Say yes or no: is the harness Node (npm package,
 `node` script or Node/Bun binary)? Say yes or no: does it honour `HTTPS_PROXY` on its own, and if
 not, which variable turns that on (Node: `NODE_USE_ENV_PROXY=1`)? Without it the run records no
 model traffic. Telemetry and update hosts; SSE / WebSocket? Any base-URL override variables (Goal

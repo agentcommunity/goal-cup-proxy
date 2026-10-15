@@ -58,10 +58,10 @@ fn doctor_lists_a_harness_only_unknown_hint_as_capture_only() {
         std::fs::read_to_string(support::connectors_dir().join("claude-code-cli/harness.toml"))
             .unwrap()
             .replacen("id = \"claude-code-cli\"", "id = \"example-unknown\"", 1)
-            .replace(
-                "protocol_hint = \"anthropic-messages\"",
-                "protocol_hint = \"example-unknown\"",
-            );
+            .replacen("providers = [\"anthropic\"]\n", "", 1)
+            + "\n[[capture.hosts]]\nhost = \"api.anthropic.com\"\n\
+               evidence_paths = [\"/v1/messages\"]\nprotocol_hint = \"example-unknown\"\n";
+    assert!(!source.contains("providers = "));
     std::fs::write(only.join("harness.toml"), source).unwrap();
 
     let cfg = tempfile::tempdir().unwrap();

@@ -734,7 +734,9 @@ pub struct CaptureLaunch<'a> {
     /// `http://goalcup:<credential>@<127.0.0.1|[::1]|localhost>:<port>`, the proxy this launch
     /// records through ([`crate::proxy::connect::ProxyCredential::proxy_url`]'s shape).
     pub proxy_url: &'a str,
-    /// The proxy's per-launch CA certificate, handed to each of the profile's `ca_env`.
+    /// The file each of the profile's `ca.env` is pointed at: the proxy's per-launch CA
+    /// certificate for `mode = "extend"`, or the system roots plus it
+    /// ([`crate::ca_bundle::write_bundle`]) for `mode = "replace"`. The caller picks it.
     pub ca_certificate: &'a Path,
     /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`] is read from it, and for a
     /// chat-mode connector also [`CHAT_PASSTHROUGH_ENV`] and `LC_*`.
@@ -941,8 +943,13 @@ fn build_launch(
     // A chat-mode harness gets the participant's terminal environment first; the connector's
     // own values and the launch's pins below win over it.
     let mut env = chat_passthrough(profile, launch.parent_env);
+    // An env value may also name the run's two homes (`{config_home}`, `{run_home}`); an
+    // argument may not.
+    let mut env_vars = v.clone();
+    env_vars.set("config_home", config_home.to_string());
+    env_vars.set("run_home", run_home.to_string());
     for (key, template) in profile.resolved_env(platform) {
-        env.insert(key, render(&template, v)?);
+        env.insert(key, render(&template, &env_vars)?);
     }
     for key in CAPTURE_IDENTITY_ENV {
         if let Some(value) = launch.parent_env.get(key) {

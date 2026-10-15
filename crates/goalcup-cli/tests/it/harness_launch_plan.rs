@@ -430,6 +430,76 @@ fn the_env_follows_the_running_platform() {
     }
 }
 
+/// A connector that needs no CA variable of its own and no Rust row (WP12): `SSL_CERT_FILE` in
+/// replace mode gets the file the caller hands the launch, and env values that name the run's two
+/// homes render to them.
+#[test]
+fn a_shared_ca_row_and_the_home_tokens_are_connector_data() {
+    use goalcup_cli::launch::{CaptureLaunch, build_capture_launch, resolve_harness_executable};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let dir = write_unpinned(&root, "example", "example-cli");
+    let exe = root.join("example-cli");
+    std::fs::write(&exe, b"any build\n").unwrap();
+    let path = dir.join("harness.toml");
+    let text = without_platform(&std::fs::read_to_string(&path).unwrap())
+        .replace("program = \"claude\"", "program = \"example-cli\"")
+        .replace(
+            "env = [\"NODE_EXTRA_CA_CERTS\"]\nmode = \"extend\"",
+            "env = [\"SSL_CERT_FILE\", \"REQUESTS_CA_BUNDLE\"]\nmode = \"replace\"",
+        )
+        .replace(
+            "[capture.env]\n",
+            "[capture.env]\nEXAMPLE_DATA_DIR = \"{config_home}/data\"\n\
+             EXAMPLE_CACHE_DIR = \"{run_home}/.cache/example\"\n",
+        );
+    assert!(text.contains("SSL_CERT_FILE") && text.contains("EXAMPLE_DATA_DIR"));
+    std::fs::write(&path, &text).unwrap();
+    let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
+    let resolved = resolve_harness_executable(&exe).unwrap();
+
+    let workspace = root.join("workspace");
+    let run_home = root.join("run-home");
+    let config_home = root.join("config-home");
+    for dir in [&workspace, &run_home, &config_home] {
+        std::fs::create_dir(dir).unwrap();
+    }
+    let bundle = root.join("bundle.pem");
+    std::fs::write(&bundle, b"roots and the proxy CA\n").unwrap();
+    let mut vars = TemplateVars::new();
+    vars.set("workspace", workspace.display().to_string());
+    let parent = BTreeMap::new();
+    let plan = build_capture_launch(
+        &connector,
+        &vars,
+        &workspace,
+        &CaptureLaunch {
+            goal: None,
+            executable: &resolved,
+            run_home: &run_home,
+            config_home: &config_home,
+            proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
+            ca_certificate: &bundle,
+            parent_env: &parent,
+        },
+    )
+    .unwrap();
+    let get = |k: &str| plan.env_set.get(k).cloned();
+    let bundle = bundle.display().to_string();
+    assert_eq!(get("SSL_CERT_FILE"), Some(bundle.clone()));
+    assert_eq!(get("REQUESTS_CA_BUNDLE"), Some(bundle));
+    assert_eq!(get("NODE_EXTRA_CA_CERTS"), None);
+    assert_eq!(
+        get("EXAMPLE_DATA_DIR"),
+        Some(format!("{}/data", config_home.display()))
+    );
+    assert_eq!(
+        get("EXAMPLE_CACHE_DIR"),
+        Some(format!("{}/.cache/example", run_home.display()))
+    );
+}
+
 /// A connector without `home.env` gets no home variable: the harness keeps its state under the
 /// private run `HOME` the launch pins.
 #[test]

@@ -6,6 +6,7 @@ mod common;
 
 mod account;
 mod amp_child_secret;
+mod ca_bundle;
 #[cfg(unix)]
 mod capture_gate;
 mod capture_only_refusal;

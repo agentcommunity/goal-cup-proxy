@@ -11,6 +11,8 @@ goal_flag = "--query"
 # session snapshot; `capture.env` may set none of them.
 reserved_env_prefixes = ["HERMES_"]
 continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
+# The model host, from the shared provider table (crates/goalcup-protocol/providers.toml).
+providers = ["deepseek"]
 
 [capture.executable]
 program = "hermes"
@@ -34,6 +36,7 @@ seed = [
 [capture.credential]
 env = "DEEPSEEK_API_KEY"
 
+# HERMES_CA_BUNDLE replaces Hermes's roots, so it is handed the system's roots plus the proxy CA.
 [capture.ca]
 env = ["HERMES_CA_BUNDLE"]
 mode = "replace"
@@ -61,8 +64,3 @@ long_abbreviations = true
 [capture.termination]
 strategy = "process_group"
 grace_seconds = 10
-
-[[capture.hosts]]
-host = "api.deepseek.com"
-evidence_paths = ["/v1/chat/completions"]
-protocol_hint = "openai-chat-completions"
