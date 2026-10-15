@@ -30,7 +30,8 @@ A harness is data. A contribution has no `.rs` file:
 
 - `connectors/<id>/harness.toml` and its seed files (`files/**`);
 - one line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
-- the regenerated golden files and one harness-kit case;
+- the regenerated golden files, and one harness-kit case for a headless connector (a chat-mode
+  connector needs none);
 - the facts sheet `docs/harnesses/<id>.md`.
 
 Arguments, the goal flag, the model name and `capture.env` are data. Generic rules shared by all
@@ -68,8 +69,9 @@ Known gaps. The connector works, but the record is partial. Write each one in th
 
 ## What you need
 
-- A Mac (Apple silicon or Intel), or Linux. The harness-kit step runs on macOS only. On other
-  systems say in the PR that you did not run it.
+- A Mac (Apple silicon or Intel), or Linux. Every step runs on both. Only the daemon's live
+  goldens (`<id>.daemon.json`, `native-stream-labels.json`) are macOS-only: on Linux say in the PR
+  that you did not regenerate them, and a maintainer does it on a Mac.
 - Rust from [rustup](https://rustup.rs) (1.99 or later), the Xcode command line tools and
   `python3`. If Homebrew also installed Rust, `which cargo` must print `~/.cargo/bin/cargo`.
 - A network for the first build only, and about 3 GB of disk for `target/`.
@@ -116,14 +118,20 @@ is the harness executable. Run every command from the repository root.
 
    | Facts sheet section | Lands in `harness.toml` |
    |---|---|
-   | 1. Run one prompt | `[capture].args`, `goal_flag` or a trailing `--`, `interactive`, `continuation` |
+   | 1. Run one prompt, in chat mode first | `interactive`, `[capture].args`, `resume_args`, `continuation` (headless: `goal_flag` or a trailing `--`) |
    | 2. Install and version | `[capture.executable]` |
    | 3. Where it keeps things | `[capture.home]`, `[[capture.native]].root` |
    | 4. Session format and identity | `[[capture.native]]` `pattern` and `form`, `[capture.identity]` |
-   | 5. Auth | `[capture.credential]`, `auth_hosts`, `[capture.home]` `run_home` |
-   | 6. Network | `[[capture.hosts]]`, `[capture.ca]` |
+   | 5. Auth | `auth_hosts`, `[capture.home]` `run_home` and `config_home` (headless: `[capture.credential]`) |
+   | 6. Network | `[capture.ca]`, `[[capture.hosts]]` |
    | 7. Process model | `[capture.termination]`, `[capture.argv_guard]` |
    | 8. Things Goal Cup cannot isolate | nothing; it stays in the sheet |
+
+   Start in chat mode: section 1 describes the harness's own chat in a terminal, and headless only
+   if chat mode cannot work. Ask early for the two facts that most often need a core change: the
+   CA variable the harness honours (section 6, [row 7](#do-i-need-a-core-change)), and how a chat
+   sign-in is kept without an environment key (section 5, row 14). List every provider host the
+   harness can reach (section 6): traffic to an unlisted host is not recorded.
 
    Stop on an unknown in section 4, 5 or 6, or in the macOS column of section 3.
 3. **Do I need a core change?** Walk every row of [the table below](#do-i-need-a-core-change).
@@ -145,15 +153,17 @@ is the harness executable. Run every command from the repository root.
    mkdir -p connectors/<id>
    cp skills/adding-a-capture-harness/templates/connector-harness.toml connectors/<id>/harness.toml
    ```
-   Replace every `<PLACEHOLDER>` and delete unused options. Choose how the goal arrives:
-   - **Chat mode** (`interactive = true`): the harness opens in the participant's terminal and the
-     participant types the prompt. No goal slot, no credential, identity `none`. Claude Code and
-     Codex use it.
-   - **Headless**: the goal is the last argument after `--`, or `goal_flag` carries it as
-     `--flag=<goal>`. Hermes uses it.
+   Replace every `<PLACEHOLDER>` and delete unused options. The template is chat mode:
+   - **Chat mode** (`interactive = true`, the default): the harness opens in the participant's
+     terminal and the participant types the prompt. No goal slot, no credential, identity `none`,
+     a `shared` config home with `since_run_start = true` on the native row, and `skills_dir` if
+     the harness reads skills. Claude Code and Codex use it.
+   - **Headless** (option B in the template): the goal is the last argument after `--`, or
+     `goal_flag` carries it as `--flag=<goal>`. Hermes uses it.
 
-   The closest complete example is [connectors/hermes-cli](../connectors/hermes-cli/harness.toml)
-   (headless, with a credential) or `connectors/codex-cli` (chat mode). Seeds go in
+   The closest complete example is [connectors/codex-cli](../connectors/codex-cli/harness.toml)
+   (chat mode), or [connectors/hermes-cli](../connectors/hermes-cli/harness.toml) for headless
+   with a credential. Seeds go in
    `connectors/<id>/files/` and `capture.home.seed` must name each one; the loader refuses any other
    file in the folder. Field rules: [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md). Check that no
    placeholder is left outside comments:
@@ -173,10 +183,14 @@ is the harness executable. Run every command from the repository root.
    ```
    Expect both `test result: ok.`, a new `<id>.json` and `<id>.daemon.json`, and a changed
    `enumeration.json` (and `redaction-extra-patterns.json` if the connector declares extra
-   patterns). A changed golden that does not mention
+   patterns). On Linux the daemon command writes no `<id>.daemon.json` or
+   `native-stream-labels.json`: those are macOS-only, so say so in the PR. A changed golden that does not mention
    `<id>` did not change because of your connector: run `git checkout -- <file>` and name it in the
    PR. Set the variable per command, never `export` it.
-8. **Add the kit case.**
+8. **Add the kit case (headless only).** A chat-mode connector needs no case of its own: the kit
+   runs every pinned `interactive = true` connector through one stand-in that reads its
+   `harness.toml` (the program, `args`, the native root and pattern, `skills_dir`). Skip to step 9.
+   For a headless connector:
    ```sh
    k=crates/goalcup-cli/tests/fixtures/harness-kit/<id>
    mkdir -p $k && cp skills/adding-a-capture-harness/templates/kit-case/* $k/
@@ -197,11 +211,12 @@ is the harness executable. Run every command from the repository root.
    Expect no output from the first. Expect one line from the second: `2`, then the body. In
    `stand-in.py` only the EDIT block must be free of `<`.
 9. **Run the connector check.** `sh scripts/check-connector.sh <id>`. It runs files, pins, schema,
-   both goldens and the kit. Expect the last line `check-connector: <id>: 6 passed, 0 failed, 0
-   skipped`. A kit failure prints only `FAIL kit` in the summary. Read the Rust assertion above
-   it: `left` is what the kit captured and `right` is what `expect.toml` predicts. Fix the
-   `expect.toml` field that the `right` side came from. Off macOS the kit cannot run: say so in the
-   PR and do not claim a pass.
+   both goldens and the kit, on macOS and on Linux. Expect the last line `check-connector: <id>: 6
+   passed, 0 failed, 0 skipped` on macOS, and `6 passed, 0 failed, 1 skipped` on Linux (the
+   daemon's live goldens). A kit failure prints only `FAIL kit` in the summary. Read the Rust
+   assertion above it: `left` is what the kit captured and `right` is what `expect.toml` (or, in
+   chat mode, the connector's `harness.toml`) predicts. Fix the field that the `right` side came
+   from.
 10. **Run the gate.** `sh scripts/gate.sh fast`. Expect the last line `gate fast: PASS in <N>s`.
 11. **Review your own diff** against the [reviewer checklist](#reviewing-a-connector-pr).
     Optional, on your own account (a trial, not a judged entry): run `cargo build` (the pins are
@@ -222,7 +237,7 @@ Exactly these, which `git status --short` must confirm:
 - `connectors/<id>/` (the `harness.toml` and `files/**` seeds);
 - the one new line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
 - the golden JSON from step 7;
-- the kit case from step 8;
+- the kit case from step 8 (headless only);
 - `docs/harnesses/<id>.md`.
 
 In the description paste the last line of steps 9 and 10, name anything restored or not run, say
@@ -256,7 +271,7 @@ moves). Never spell around a rule.
 
 | # | Rule | Data-only fits when | Otherwise |
 |---|---|---|---|
-| 1 | Credential name | no key variable, `DEEPSEEK_API_KEY`, or `AMP_API_KEY` | core change |
+| 1 | Credential name | no key variable, `DEEPSEEK_API_KEY`, or `AMP_API_KEY` (headless only; see row 14) | core change |
 | 2 | Credential with identity | per-run config home, and identity `stderr_line` + `deferred` or `stdout_json` + `at_launch` | core change |
 | 3 | Credential in the kit | none, or the case names it in `credential_env` | core change |
 | 4 | Identity carrier | `none`, `preassigned`, `stdout_json` or `stderr_line` | core change |
@@ -269,6 +284,7 @@ moves). Never spell around a rule.
 | 11 | Endpoint names | you set no endpoint variable at all | issue, not blocking |
 | 12 | Other refusals | no refused env name, argv path or custom regex is needed | core change |
 | 13 | Argv and env | always, when no generic rule refuses them | refused by row 12 |
+| 14 | Chat-mode sign-in | the harness keeps its sign-in in its own config home (a login command, or the macOS Keychain) | core change: chat mode cannot pass an env-only API key |
 
 The security lists (rows 1, 7 and the redaction regex in row 12) are closed on purpose. A
 credential name decides which secret the tracer copies from the participant's shell. A CA variable
@@ -327,6 +343,12 @@ daemon.
     safety flag, or a value that turns self-update back on. Write in the sheet why each flag and
     variable is there. How much the harness may do (model, sandbox, permissions) is the
     participant's choice. A connector does not limit it.
+14. **Chat-mode sign-in.** An `interactive` profile takes no `[capture.credential]`, and the chat
+    launch passes only `PATH`, `TERM`, `COLORTERM`, `LANG` and `SHELL` from the participant's
+    shell. So a harness that reads its provider key only from an environment variable (many
+    "any model" CLIs do) cannot run in chat mode. It fits only if its own login command stores the
+    key inside its isolated config home, which `config_home = "shared"` keeps across runs. An
+    env-only key is a core decision: open an issue, do not relax the rule in the connector.
 
 <a id="reviewing-a-connector-pr"></a>
 

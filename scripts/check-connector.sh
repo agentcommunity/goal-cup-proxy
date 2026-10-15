@@ -5,10 +5,12 @@
 #     sh scripts/check-connector.sh [--allow-no-kit] <connector-id>
 #
 # Steps, in order (all run, so one report shows every problem):
-#   1. files: the kit case crates/goalcup-cli/tests/fixtures/harness-kit/<id>/ (named after the
-#      connector id) holds
-#      harness.toml, stand-in.py and expect.toml, and no template placeholder is left: no
-#      `<...>` outside comments in the three TOML files, no `<` in the stand-in's EDIT block.
+#   1. files: no template placeholder is left: no `<...>` outside comments in
+#      connectors/<id>/harness.toml. A headless connector also needs its kit case
+#      crates/goalcup-cli/tests/fixtures/harness-kit/<id>/ (named after the connector id), with
+#      harness.toml, stand-in.py and expect.toml, the same rule on its two TOML files and no `<`
+#      in the stand-in's EDIT block. A chat-mode connector (`interactive = true`) needs no kit
+#      case: the kit runs every pinned chat-mode connector through one stand-in.
 #      A missing connectors/<id>/harness.toml is a usage error (exit 2) before anything runs.
 #   2. pins: `sh scripts/pin-manifests.sh`, then the pin diff against HEAD is printed. It fails
 #      when the diff touches another connector's line; a new or changed line for <id> is
@@ -16,15 +18,16 @@
 #   3. schema: `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
 #   4. goldens: the CLI and daemon `harness_contract_golden` tests, without regeneration (an
 #      exported GOALCUP_REGEN_HARNESS_GOLDEN is unset first). On a failure the regeneration
-#      command is printed; review its diff before committing.
-#   5. kit (macOS only): `cargo build`, then `cargo test -p goalcup-cli --test full
-#      harness_contract_kit::`. Elsewhere the kit compiles to zero tests, so the step is SKIPPED
-#      and the script exits non-zero unless --allow-no-kit is given.
+#      command is printed; review its diff before committing. Off macOS the daemon's live
+#      goldens (<id>.daemon.json, native-stream-labels.json) compile to nothing, so they are
+#      SKIPPED (not a failure); a maintainer checks them on a Mac.
+#   5. kit (macOS and Linux): `cargo build`, then `cargo test -p goalcup-cli --test full
+#      harness_contract_kit::`. On any other system the kit compiles to zero tests, so the step
+#      is SKIPPED and the script exits non-zero unless --allow-no-kit is given.
 #
-# It checks a new connector, which brings its kit case. The three shipped connectors predate
-# the kit and have no case of their own, so step 1 fails for them and the script is not meant
-# for them; their regression checks are the schema and golden steps (3 and 4), which the gate
-# also runs.
+# It checks a new connector. The shipped headless connector (hermes-cli) predates the kit and
+# has no case of its own, so step 1 fails for it; its regression checks are the schema and
+# golden steps (3 and 4), which the gate also runs.
 #
 # Exit status: 0 when every step passed (or only the kit was skipped with --allow-no-kit),
 # 1 when a step failed or the kit was skipped without --allow-no-kit, 2 on a usage error.
@@ -129,29 +132,49 @@ fail() { failed=$((failed + 1)); note "check-connector: FAIL $1"; echo "== FAIL 
 step() { echo; echo "== $1"; }
 
 # 1. Files.
-step "files: the kit case for this connector"
 kit=crates/goalcup-cli/tests/fixtures/harness-kit/$id
-missing=''
-for f in "$kit/harness.toml" "$kit/stand-in.py" "$kit/expect.toml"; do
-  [ -f "$f" ] || missing="$missing $f"
-done
-if [ -z "$missing" ]; then
-  # Placeholders left from the templates, for example the stand-in's b"kit <HARNESS_ID> echo".
-  left=$(grep -nE '^[^#]*<[^>]+>' "connectors/$id/harness.toml" "$kit/harness.toml" \
-    "$kit/expect.toml"
-    awk '/^# ---- EDIT/ { e = 1 } /^# ---- end EDIT/ { e = 0 }
-      e && /^[^#]*</ { print FILENAME ":" FNR ":" $0 }' "$kit/stand-in.py")
+# Chat mode is `interactive = true` in the connector's [capture] table.
+if grep -Eq '^[[:space:]]*interactive[[:space:]]*=[[:space:]]*true' "connectors/$id/harness.toml"; then
+  chat=yes
+else
+  chat=no
+fi
+placeholders() {
+  grep -nHE '^[^#]*<[^>]+>' "$@"
+}
+if [ -d "$kit" ] || [ "$chat" = no ]; then
+  step "files: the kit case for this connector"
+  missing=''
+  for f in "$kit/harness.toml" "$kit/stand-in.py" "$kit/expect.toml"; do
+    [ -f "$f" ] || missing="$missing $f"
+  done
+  if [ -z "$missing" ]; then
+    # Placeholders left from the templates, for example the stand-in's b"kit <HARNESS_ID> echo".
+    left=$(placeholders "connectors/$id/harness.toml" "$kit/harness.toml" "$kit/expect.toml"
+      awk '/^# ---- EDIT/ { e = 1 } /^# ---- end EDIT/ { e = 0 }
+        e && /^[^#]*</ { print FILENAME ":" FNR ":" $0 }' "$kit/stand-in.py")
+    if [ -z "$left" ]; then
+      pass "files"
+    else
+      echo "template placeholders left:"
+      echo "$left"
+      fail "files (template placeholders left)"
+    fi
+  else
+    echo "missing:$missing"
+    echo "copy the templates in skills/adding-a-capture-harness/templates/ (see SKILL.md)"
+    fail "files (missing:$missing)"
+  fi
+else
+  step "files: a chat-mode connector (the kit runs it; no kit case of its own)"
+  left=$(placeholders "connectors/$id/harness.toml")
   if [ -z "$left" ]; then
-    pass "files"
+    pass "files (chat mode)"
   else
     echo "template placeholders left:"
     echo "$left"
     fail "files (template placeholders left)"
   fi
-else
-  echo "missing:$missing"
-  echo "copy the templates in skills/adding-a-capture-harness/templates/ (see SKILL.md)"
-  fail "files (missing:$missing)"
 fi
 
 # 2. Pins.
@@ -194,6 +217,7 @@ else
 fi
 
 # 4. Goldens, without regeneration. The output is kept so the failing files can be named.
+os=$(uname -s 2>/dev/null || echo unknown)
 log=$(mktemp "${TMPDIR:-/tmp}/check-connector.XXXXXX")
 trap 'rm -f "$log"' EXIT
 for crate in goalcup-cli goalcup-daemon; do
@@ -212,30 +236,38 @@ for crate in goalcup-cli goalcup-daemon; do
     fail "goldens ($crate): ${files:-see output}"
   fi
 done
-
-# 5. The harness kit, macOS only.
-os=$(uname -s 2>/dev/null || echo unknown)
-if [ "$os" = Darwin ]; then
-  step "kit: cargo build && cargo test -p goalcup-cli --test full harness_contract_kit::"
-  if cargo build && cargo test -p goalcup-cli --test full harness_contract_kit::; then
-    pass "kit"
-  else
-    fail "kit"
-  fi
-else
+if [ "$os" != Darwin ]; then
   skipped=$((skipped + 1))
   echo
-  echo "################################################################################"
-  echo "SKIPPED: harness kit is macOS-only; a maintainer runs it"
-  echo "  ($os: harness_contract_kit compiles to zero tests here, and the daemon's live"
-  echo "  goldens <id>.daemon.json and native-stream-labels.json are macOS-only too)"
-  echo "################################################################################"
-  note "check-connector: SKIPPED kit (macOS-only; a maintainer runs it)"
-  if [ "$allow_no_kit" = no ]; then
-    failed=$((failed + 1))
-    note "check-connector: FAIL kit skipped without --allow-no-kit"
-  fi
+  echo "SKIPPED: the daemon's live goldens ($id.daemon.json, native-stream-labels.json) are"
+  echo "  macOS-only ($os); a maintainer checks them on a Mac"
+  note "check-connector: SKIPPED daemon live goldens (macOS-only; a maintainer checks them)"
 fi
+
+# 5. The harness kit, on macOS and Linux.
+case $os in
+  Darwin | Linux)
+    step "kit: cargo build && cargo test -p goalcup-cli --test full harness_contract_kit::"
+    if cargo build && cargo test -p goalcup-cli --test full harness_contract_kit::; then
+      pass "kit"
+    else
+      fail "kit"
+    fi
+    ;;
+  *)
+    skipped=$((skipped + 1))
+    echo
+    echo "################################################################################"
+    echo "SKIPPED: harness kit runs on macOS and Linux only; a maintainer runs it"
+    echo "  ($os: harness_contract_kit compiles to zero tests here)"
+    echo "################################################################################"
+    note "check-connector: SKIPPED kit (macOS and Linux only; a maintainer runs it)"
+    if [ "$allow_no_kit" = no ]; then
+      failed=$((failed + 1))
+      note "check-connector: FAIL kit skipped without --allow-no-kit"
+    fi
+    ;;
+esac
 
 printf '%s\n' "$summary"
 echo "check-connector: $id: $passed passed, $failed failed, $skipped skipped"

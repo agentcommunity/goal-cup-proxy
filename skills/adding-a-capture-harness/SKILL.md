@@ -13,13 +13,17 @@ in order.
    says whether you need a core change, and the reviewer checklist.
 2. Look up every `harness.toml` field in [docs/CONNECTOR-SCHEMA.md](../../docs/CONNECTOR-SCHEMA.md).
 3. Write the facts sheet from [templates/harness-facts.md](templates/harness-facts.md). The rules
-   are in [docs/harnesses/README.md](../../docs/harnesses/README.md).
-4. Copy the other two templates:
+   are in [docs/harnesses/README.md](../../docs/harnesses/README.md). Start in chat mode, and ask
+   first for the CA variable the harness honours and every provider host it can reach.
+4. Copy the templates:
    - [templates/connector-harness.toml](templates/connector-harness.toml) to
-     `connectors/<id>/harness.toml`;
-   - [templates/kit-case/](templates/kit-case/) to
-     `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`.
-5. Run `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast`.
+     `connectors/<id>/harness.toml`. It is chat mode (D57), the product's mode. The closest
+     complete example is [connectors/codex-cli](../../connectors/codex-cli/harness.toml).
+   - Headless only: [templates/kit-case/](templates/kit-case/) to
+     `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`. A chat-mode connector needs no kit
+     case: the kit runs every pinned chat-mode connector from its `harness.toml`.
+5. Run `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast`, on macOS or Linux. Off
+   macOS only the daemon's live goldens are skipped; say so in the PR.
 
 A semantic decoder for the harness's traffic is a separate verifier change, not part of a
 connector PR: [writing-a-decoder](writing-a-decoder.md).

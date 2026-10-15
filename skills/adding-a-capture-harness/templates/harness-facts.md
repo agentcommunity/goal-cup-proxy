@@ -13,8 +13,11 @@ Status, pick one:
 Section 8 lives only in this sheet: the PR description links the sheet, it does not repeat it.
 Rules: docs/harnesses/README.md. -->
 
-## 1. Run one prompt, headless
-The exact command and flags to run one prompt with no human input, and how it exits.
+## 1. Run one prompt, in chat mode first
+Chat mode is the product (D57): the command that opens the harness's chat in a terminal (no
+argument is best), how the participant types the prompt, how to quit, and the flag that reopens
+the most recent session. Only if chat mode cannot work: the headless command and flags to run one
+prompt with no human input, and how it exits.
 
 ## 2. Install and record a version
 How to install a given version; where the binary lands; how to print the version.
@@ -34,11 +37,16 @@ where the id first appears (stdout init event, stderr line, file name, preassign
 
 ## 5. Auth
 Subscription login vs API key; env var names; where credentials are stored per OS; any file derived
-from the key (fingerprints, owner files).
+from the key (fingerprints, owner files). Chat mode passes no key: say how the sign-in is kept in
+the harness's own config home (a login command, or the macOS Keychain). A key read only from an
+environment variable does not fit chat mode.
 
 ## 6. Network
-Model/provider hosts; telemetry and update hosts; HTTPS_PROXY honoured? custom CA honoured (which env
-var)? SSE / WebSocket? Any base-URL override variables (Goal Cup never sets them).
+First, the CA variable the harness honours for an extra trusted certificate (for example
+`NODE_EXTRA_CA_CERTS`); only `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` means a core change. Then every
+model/provider host it can reach: if the participant may pick the provider, list every provider
+host, because an unlisted host is not recorded. Telemetry and update hosts; HTTPS_PROXY honoured?
+SSE / WebSocket? Any base-URL override variables (Goal Cup never sets them).
 
 ## 7. Process model
 Subprocesses, tools, subagents; what happens on SIGTERM / Ctrl-C; exit codes.

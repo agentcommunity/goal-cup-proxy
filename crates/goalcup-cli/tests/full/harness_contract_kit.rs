@@ -924,12 +924,15 @@ fn chat_case(id: &str) {
     std::fs::create_dir_all(&bin).unwrap();
     let body = std::fs::read_to_string(support::fixture("m2-fake-chat-harness.sh")).unwrap();
     let (_, body) = body.split_once('\n').unwrap();
+    let (native_file, skills_dir) = chat_stand_in_paths(&manifest.capture);
     let program = bin.join(&manifest.capture.executable.program);
     std::fs::write(
         &program,
         format!(
-            "#!/usr/bin/env node\nKIT_OUT='{}'\nexport KIT_OUT\n{body}",
-            out.display()
+            "#!/usr/bin/env node\nKIT_OUT='{}'\nKIT_NATIVE_FILE=\"{native_file}\"\n\
+             KIT_SKILLS_DIR=\"{}\"\nexport KIT_OUT KIT_NATIVE_FILE KIT_SKILLS_DIR\n{body}",
+            out.display(),
+            skills_dir.as_deref().unwrap_or("")
         ),
     )
     .unwrap();
@@ -974,7 +977,11 @@ fn chat_case(id: &str) {
     assert_eq!(report("stdin").trim(), "tty", "{id}");
     assert_eq!(
         report("skills").trim(),
-        "SKILL.md",
+        if skills_dir.is_some() {
+            "SKILL.md"
+        } else {
+            "absent"
+        },
         "{id}: the goal-cup skill"
     );
     let env: BTreeMap<String, String> = report("env")
@@ -996,23 +1003,18 @@ fn chat_case(id: &str) {
     let workspace = goalcup_cli::entries::read_entry(&world.cfg, &entry)
         .expect("the run's entry record")
         .workspace;
+    // The argv is the manifest's `args`, rendered for this run's workspace, and nothing else.
+    let mut vars = goalcup_protocol::template::TemplateVars::new();
+    vars.set("workspace", workspace.clone());
+    let want: Vec<String> = manifest
+        .capture
+        .args
+        .iter()
+        .map(|a| goalcup_protocol::template::render(a, &vars).unwrap())
+        .collect();
     let argv = report("argv");
-    match id {
-        "codex-cli" => {
-            let argv: Vec<&str> = argv.lines().collect();
-            assert_eq!(argv.len(), 6, "{argv:?}");
-            assert_eq!(argv[..3], ["-c", "check_for_update_on_startup=false", "-c"]);
-            // The trust override names the run's workspace, and so does `-C`.
-            assert_eq!(
-                argv[3],
-                format!("projects={{ \"{workspace}\" = {{ trust_level = \"trusted\" }} }}"),
-                "{argv:?}"
-            );
-            assert_eq!(argv[4], "-C", "{argv:?}");
-            assert_eq!(argv[5], workspace, "{argv:?}");
-        }
-        _ => assert_eq!(argv.trim(), "", "{id} is `claude` alone"),
-    }
+    let got: Vec<&str> = argv.lines().collect();
+    assert_eq!(got, want, "{id}: the argv is the manifest's args");
 
     let chain = world.chain(&entry);
     let launch = chain.records().find_map(|record| match record {
@@ -1054,14 +1056,49 @@ fn chat_case(id: &str) {
     assert_eq!(code, 0, "{id}: {integrity}");
 }
 
-/// The shipped connectors pass the kit in chat mode: each loads as the pinned directory, runs
-/// its stand-in on a terminal with the participant's PATH, TERM and LANG, records the typed
-/// prompt from the session file its native source reads, binds the pinned digest in `Launch`,
-/// and seals a trace the verifier reads as valid.
+/// Where the chat stand-in writes, as shell words it expands at run time, derived from the
+/// connector alone: the session file its first `[[capture.native]]` source finds (the root,
+/// then the pattern with each `*` and `{id}` as `kit`), and the goal-cup skill folder below
+/// `skills_dir`. `{config_home}` is the harness's own home variable, `{run_home}` is `HOME`.
+fn chat_stand_in_paths(c: &goalcup_protocol::harness::CaptureSpec) -> (String, Option<String>) {
+    let config_home = format!("${{{}}}", c.home.env.as_deref().unwrap_or("HOME"));
+    let native = c
+        .native
+        .first()
+        .expect("a chat-mode connector reads a native source");
+    let root = native
+        .root
+        .replace("{config_home}", &config_home)
+        .replace("{run_home}", "${HOME}");
+    let pattern = native.pattern.replace('*', "kit").replace("{id}", "kit");
+    let skills = c
+        .home
+        .skills_dir
+        .as_ref()
+        .map(|dir| format!("{config_home}/{dir}/goal-cup"));
+    (format!("{root}/{pattern}"), skills)
+}
+
+/// Every pinned chat-mode connector passes the kit, with no case of its own: each loads as the
+/// pinned directory, runs the one manifest-driven stand-in on a terminal with the participant's
+/// PATH, TERM and LANG, gets exactly its manifest's argv, records the typed prompt from the
+/// session file its native source reads, binds the pinned digest in `Launch`, and seals a trace
+/// the verifier reads as valid.
 #[test]
-fn the_shipped_connectors_run_in_chat_mode() {
+fn every_pinned_chat_mode_connector_runs_in_chat_mode() {
+    let chat: Vec<String> = goalcup_protocol::pins::shipped_connector_ids()
+        .into_iter()
+        .filter(|id| {
+            goalcup_protocol::harness::load_dir(&support::connectors_dir().join(id), Origin::Pinned)
+                .unwrap_or_else(|e| panic!("{id}: {e}"))
+                .manifest
+                .capture
+                .interactive
+        })
+        .collect();
+    assert!(!chat.is_empty(), "the product is chat mode (D57)");
     with_real_home_guard(|| {
-        for id in ["codex-cli", "claude-code-cli"] {
+        for id in &chat {
             chat_case(id);
         }
     });
