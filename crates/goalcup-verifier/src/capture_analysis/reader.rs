@@ -75,8 +75,8 @@ pub const MAX_FINDING_CODES: usize = 128;
 /// `MAX_PRODUCERS` when that bound was raised (D58), so these verdicts did not change.
 const MAX_GOAL_STREAMS: usize = 128;
 
-/// Whole-trace evidence integrity. Serialized words are frozen by capture-integrity schema 1 and
-/// reused unchanged by research-report schema 1.
+/// Whole-trace evidence integrity. Serialized words are frozen by capture-integrity schemas 1 and 2
+/// and reused unchanged by research-report schema 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -155,6 +155,14 @@ const MAX_SEGMENT_B64_BYTES: usize = MAX_SEGMENT_BYTES.div_ceil(3) * 4;
 /// absence is `None`, never a fabricated value. The report states evidence status. It
 /// does not guess delivery or live network state, and an ACK behind the terminal is
 /// progress, not complete delivery.
+///
+/// **Deadline facts** (`records_after_deadline`, `last_seq_at_or_before_deadline`). They compare
+/// each record's `recorded_at` with the receipt's `deadline_at`. `recorded_at` is the participant
+/// machine's own clock: the chain hash covers it, but nothing makes it true, and a participant who
+/// sets the clock back can make `records_after_deadline` read 0. So they are a hint for a judge,
+/// not proof, and they never change the exit. The trusted time is the server's: `last_ack_at`
+/// (equal to `verified_ack.acked_at`, signed with the server key) set against
+/// `receipt_clock.deadline_at`, and the server's own chunk acknowledgements.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaptureIntegrityReport {
     pub schema_version: u32,
@@ -187,21 +195,24 @@ pub struct CaptureIntegrityReport {
     pub verified_ack: Option<VerifiedAckPosition>,
     pub receipt_clock: Option<VerifiedReceiptClock>,
     pub terminal: Option<CaptureTerminalFacts>,
-    /// Deadline facts. The 168-hour stop is the server's `deadline_at`, and a judge needs to see
-    /// where the counted prefix ends. They are facts and never change the exit: the clock below is
-    /// the participant's machine, and the signed ACK time is the stronger evidence.
+    /// Validated chain records whose `recorded_at` is after the verified receipt's `deadline_at`.
+    /// Not a verdict: see "Deadline facts" on the struct. `None` without a verified, head-bound
+    /// receipt clock, never a guess.
     ///
-    /// Validated chain records whose `recorded_at` (the daemon's wall clock, whole seconds) is
-    /// after the verified receipt's `deadline_at`. The terminal records are among them: a run that
-    /// stopped at its deadline writes its cutoff and finalization after it. `None` without a
-    /// verified receipt clock, never a guess.
+    /// What it counts depends on the run. A run the participant finished early has 0. A run cut at
+    /// its deadline has the cutoff and the finalization here, and any drain records, unless they fall
+    /// in the deadline's own second: that second counts as before. So 0, 1, 2 or more all occur,
+    /// and the count alone says little. Read `last_seq_at_or_before_deadline`.
     #[serde(default)]
     pub records_after_deadline: Option<u64>,
-    /// The highest seq whose `recorded_at` is at or before `deadline_at`. `None` without a
-    /// verified receipt clock, or when no record is that early.
+    /// The highest seq whose `recorded_at` is at or before `deadline_at` (whole seconds, so the
+    /// deadline's own second counts). `None` without a verified, head-bound receipt clock, or when
+    /// no record is that early. A record whose `recorded_at` does not parse is in neither count, so
+    /// the two need not add up to `validated_records`.
     #[serde(default)]
     pub last_seq_at_or_before_deadline: Option<u64>,
-    /// The `acked_at` of the last verified acknowledgement: the server's time, signed.
+    /// The `acked_at` of the last verified acknowledgement: the server's signed time. The same
+    /// value as `verified_ack.acked_at`, repeated here beside the other deadline facts.
     #[serde(default)]
     pub last_ack_at: Option<String>,
 }

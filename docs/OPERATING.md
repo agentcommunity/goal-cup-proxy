@@ -17,7 +17,8 @@ names secrets only.
 - Part 2, the tracer: [Building and verifying](#building-and-verifying),
   [Installing the participant binaries](#installing-the-participant-binaries),
   [Running the daemon](#running-the-daemon), [Running a capture with the CLI](#running-a-capture-with-the-cli),
-  [Running the verifier](#running-the-verifier), [Pinning connectors](#pinning-connectors)
+  [Running the verifier](#running-the-verifier), [Pinning connectors](#pinning-connectors),
+  [Finding codes](#finding-codes)
 
 # Part 1: organizers
 
@@ -473,11 +474,20 @@ Run it in the same commit as any change under `connectors/`. `sh scripts/pin-man
 ## Finding codes
 
 `goalcup-verify --capture-integrity` lists the codes it found in `findings`, in the order it found them, and
-the stderr summary repeats them as `findings: a,b,c` (`none` when there are none). The scan stops at the
-first invalid line, so the first code is the cause. Codes after it only say what the validated prefix lacks
-(for example `launch_missing` after a dropped line). `validated_records` and `validated_head` say where the
-good prefix ends. The report adds the deadline facts `records_after_deadline` and
-`last_seq_at_or_before_deadline`, which are facts and never change the exit, and `last_ack_at`.
+the stderr summary repeats them as `findings: a,b,c` (`none` when there are none). The chain scan stops at
+the first invalid line, so the first code it adds is the cause. (`receipt_*` codes are added before the scan
+starts.) Codes after it only say what the validated prefix lacks (for example `launch_missing` after a
+dropped line). `validated_records` and `validated_head` say where the good prefix ends.
+
+**Deadline facts.** The report (schema 2) also has `records_after_deadline` and
+`last_seq_at_or_before_deadline`. They compare each record's `recorded_at` with the receipt's `deadline_at`.
+`recorded_at` is the **participant's machine clock**: the chain hash covers it, but nothing makes it true, and a
+participant can set the clock back. Treat the two fields as a hint, not proof. They never change the exit.
+A run finished early has `records_after_deadline` 0. A run cut at its deadline usually has its cutoff and
+finalization after it, but a record in the deadline's own second counts as before it. Both fields are empty
+(`null`) without a verified receipt. The **trusted time is the server's**: `last_ack_at` (the same value as
+`verified_ack.acked_at`, signed with the server key) compared with `receipt_clock.deadline_at`, and the
+server's own chunk acknowledgements.
 
 The **Exit** column is the exit a code gives alone: 2 invalid evidence, 1 incomplete (not proven, not
 forged), `-` a note that changes nothing by itself. Exit 2 beats exit 1. When a trace is invalid, compare it
@@ -512,7 +522,7 @@ More than 128 distinct codes end with `findings_omitted:<n>`.
 | `receipt_signature_invalid` | 2 | The signature does not verify under the key. |
 | `receipt_clock_invalid` | 2 | `started_at` or `deadline_at` is not a time, or the start is after the deadline. |
 | `receipt_entry_mismatch` | 2 | The receipt is for another entry. |
-| `receipt_chain_head_unbound` | 2 | The receipt's `chain_head` is not a link of this chain. |
+| `receipt_chain_head_unbound` | 2 | The receipt's `chain_head` is not a link of this chain. (Not raised on a chain pruned locally.) |
 | `signed_terminal_receipt_missing` | 1 | The chain ends with a signed finalization, but no `receipt.json` was kept. |
 | `cutoff_receipt_mismatch` | 2 | The cutoff record names another receipt than the one kept. |
 | `cutoff_deadline_mismatch` | 2 | The cutoff record names another `deadline_at` than the receipt. This binds the stop to the 168-hour deadline. |

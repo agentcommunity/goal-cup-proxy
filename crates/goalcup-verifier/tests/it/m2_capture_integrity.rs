@@ -1041,7 +1041,8 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
     let early = "2026-09-27T12:00:01Z";
     let acked = "2026-09-27T12:01:00Z";
 
-    // A deadline at the last capture record: the cutoff and the finalization are after it.
+    // The boundary: the capture records are stamped 12:00:01, exactly the deadline's second, and
+    // count as at or before it. The cutoff (12:00:08) and the finalization (12:00:09) are after it.
     let dir = signed_trace_with_cutoff(early, early, None, Some(acked));
     let lines = chain_lines(dir.path()).len() as u64;
     let (report, _) = scan_with(dir.path(), &options);
@@ -1058,6 +1059,21 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
     );
     assert_eq!(report.last_ack_at.as_deref(), Some(acked), "{report:#?}");
     assert_eq!(report.schema_version, 2);
+
+    // One second earlier is the other side of the boundary: only the baseline (12:00:00) is at or
+    // before the deadline, and every later record is after it.
+    let dir = signed_trace_with_cutoff("2026-09-27T12:00:00Z", "2026-09-27T12:00:00Z", None, None);
+    let (report, _) = scan_with(dir.path(), &options);
+    assert_eq!(
+        report.records_after_deadline,
+        Some(lines - 1),
+        "{report:#?}"
+    );
+    assert_eq!(
+        report.last_seq_at_or_before_deadline,
+        Some(0),
+        "{report:#?}"
+    );
 
     // A deadline past the whole chain: nothing is after it, the last record is the finalization.
     let dir = signed_trace_with_cutoff(DEADLINE_AT, DEADLINE_AT, None, None);

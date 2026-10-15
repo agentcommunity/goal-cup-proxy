@@ -454,6 +454,7 @@ test("every RPC the Worker calls exists in the SQL, with the same argument names
       problems.push(`${name}: no CREATE FUNCTION public.goal_cup_${name}( in the SQL`);
       continue;
     }
+    if (args.size === 0) problems.push(`${name}: no p_ argument was read from the Worker call: the scan is broken`);
     for (const a of args) if (!fn.params.has(a)) problems.push(`${name}: the Worker sends ${a}; the SQL has no such parameter`);
     for (const r of fn.required) if (!args.has(r)) problems.push(`${name}: the SQL requires ${r}; the Worker does not send it`);
   }
