@@ -280,6 +280,18 @@ impl Rig {
             .collect()
     }
 
+    /// The entry's capture records now, read while the daemon may be appending: a line still
+    /// being written is left out.
+    fn records_polled(&self, entry_id: &str) -> Vec<CaptureRecord> {
+        super::support::read_chain_whole_lines(&self.trace_dir(entry_id))
+            .into_iter()
+            .filter_map(|envelope| match envelope.body {
+                EventBody::Capture { record } => Some(record),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The entry's capture records, once `ready` holds for them (10 s at most).
     pub async fn records_when(
         &self,
@@ -288,7 +300,7 @@ impl Rig {
     ) -> Vec<CaptureRecord> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
-            let records = self.records(entry_id);
+            let records = self.records_polled(entry_id);
             if ready(&records) {
                 return records;
             }

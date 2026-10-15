@@ -1591,6 +1591,59 @@ mod segments {
         assert_entry_uploaded(&rig, &server, &entries[1]);
     }
 
+    /// WSL1 cannot run Goal Cup, and WSL2 cannot keep a run on a Windows-host filesystem: a
+    /// `continue` on such a machine is refused before the home is locked and before anything is
+    /// closed, whichever folder it is that the filesystem holds.
+    #[test]
+    fn continue_refuses_wsl1_and_a_windows_host_filesystem_before_anything_is_closed() {
+        let rig = Rig::chat();
+        let server = server(&rig, ServerOptions::default());
+        let (run_id, entry) = crashed_host(&rig, &server);
+        let kept = uploads_dir_names(&rig);
+        let calls = server.calls();
+        let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
+        let work = record.workspace.parent().unwrap().display().to_string();
+        let artifacts = format!("{}-artifacts", rig.cfg.display());
+
+        for (wsl, expected) in [
+            ("wsl=1".to_string(), "WSL1 cannot run Goal Cup".to_string()),
+            (format!("wsl=2,fs={work}=9p"), "work folder".to_string()),
+            (
+                format!("wsl=2,fs={}=drvfs", rig.cfg.display()),
+                "config folder".to_string(),
+            ),
+            (
+                format!("wsl=2,fs={artifacts}=virtiofs"),
+                "artifact root".to_string(),
+            ),
+            (
+                format!("wsl=2,fs={}=9p", rig.root.join("runs").display()),
+                "run folder".to_string(),
+            ),
+        ] {
+            let output = rig
+                .continue_command(&[DISK, BEATING], None)
+                .env(goalcup_cli::wsl_gate::Host::VAR, &wsl)
+                .output()
+                .unwrap();
+            let said = String::from_utf8_lossy(&output.stderr).into_owned();
+            assert_eq!(output.status.code(), Some(1), "{wsl}: {said}");
+            assert!(said.contains(&expected), "{wsl}: {said}");
+            assert!(said.contains("Nothing was changed."), "{wsl}: {said}");
+            assert!(
+                !rig.read_trace(&entry).0.sealed,
+                "{wsl}: a segment was sealed"
+            );
+            assert_eq!(uploads_dir_names(&rig), kept, "{wsl}");
+            assert_eq!(
+                server.calls(),
+                calls,
+                "{wsl}: the server was asked something"
+            );
+            assert_eq!(server.entry_ids(&run_id).len(), 1, "{wsl}");
+        }
+    }
+
     /// Review finding 7. The server is away when `continue` asks for the next segment: the
     /// earlier segment is closed correctly on this machine, nothing else is created, and the
     /// command is refused. When the server is back, `continue` goes on from there.
