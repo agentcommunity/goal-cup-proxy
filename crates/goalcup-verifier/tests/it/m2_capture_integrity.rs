@@ -3074,3 +3074,35 @@ fn a_chain_missing_its_first_part_says_verify_the_server_copy() {
         "{stderr}"
     );
 }
+
+/// D57: a native file the daemon's discovery bounds kept out (past `max_files`) is recorded as
+/// a daemon-clocked stream-less `LimitExceeded` gap, and the trace reads incomplete although
+/// every stream it does hold is whole.
+#[test]
+fn a_native_discovery_loss_gap_makes_a_whole_native_trace_incomplete() {
+    let native = |loss: bool| {
+        let mut records = vec![
+            open_native(NATIVE, 1),
+            segment(NATIVE, 1, 0, 0, b"line\n"),
+            end(NATIVE, 1),
+        ];
+        if loss {
+            records.push(CaptureRecord::Gap {
+                stream: None,
+                observed: at(DAEMON_CLOCK, 50),
+                reason: GapReason::LimitExceeded,
+                lost_bytes: None,
+            });
+        }
+        records.push(closed(NATIVE, Some(2)));
+        launched(records)
+    };
+    let (report, _) = scan(make_trace(&native(true), true).path());
+    assert_eq!(report.exit_code(), 1, "{report:#?}");
+    assert_eq!(report.integrity, CaptureIntegrity::Incomplete);
+    assert!(report.coverage_incomplete);
+    assert!(has(&report, "gap_recorded"), "{:?}", report.findings);
+
+    let (report, _) = scan(make_trace(&native(false), true).path());
+    assert_eq!(report.exit_code(), 0, "{report:#?}");
+}

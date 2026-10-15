@@ -320,6 +320,12 @@ impl Daemon {
         native_since: Option<u64>,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let config_home = isolated_config_home(config_home, every_loaded_real_dir)?;
+        let run_home = &isolated_run_home(
+            manifest.capture.home.run_home,
+            run_home,
+            every_loaded_real_dir,
+            &self.config().config_dir,
+        )?;
         // The run's start, or else this entry's create time, which its row keeps (D57).
         let created_at = now_rfc3339();
         let since = match native_since {
@@ -347,7 +353,7 @@ impl Daemon {
         )?;
         // After the cheap checks, so a create they refuse makes no directory; before anything
         // opens a root (D57).
-        create_config_home_roots(&manifest.capture, &config_home)?;
+        create_home_roots(&manifest.capture, run_home, &config_home)?;
         let artifact = self
             .artifact_root()
             .create_entry(&entry_id)
@@ -492,8 +498,9 @@ impl Daemon {
         );
         // Prepare the fixed isolated source root before spawn: the leaf opens it once.
         if let Some(source) = &plan.scoped {
-            // A `{config_home}` root was created above, and a failure there refused the create.
-            // For a `{run_home}` root, an unavailable root must not stop the harness: the Launch
+            // A `{config_home}` root, or a `{run_home}` root under a shared run `HOME`, was
+            // created above, and a failure there refused the create. For a per-run `{run_home}`
+            // root, an unavailable root must not stop the harness: the Launch
             // constructor reports the required-source gap if this could not make it available.
             let _ = std::fs::create_dir_all(&source.root);
         }

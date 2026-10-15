@@ -1018,8 +1018,9 @@ fn newest_day_is_reached_before_older_history_exhausts_the_cap() {
 
 #[test]
 fn finish_reports_discovery_it_could_not_complete() {
-    // The run's rollout sits past the discovery cap and finish is the only discovery: the
-    // report must not read like "no file existed".
+    // The run's rollout sits past the discovery cap and finish is the only discovery. A finish
+    // with time walks a whole discovery cycle and finds it; one without time must not read
+    // like "no file existed".
     let capped = root();
     for day in ["26", "27"] {
         for n in 0..6 {
@@ -1044,10 +1045,32 @@ fn finish_reports_discovery_it_could_not_complete() {
     );
     let finished = capture.finish(generous());
     assert!(finished.admitted && finished.closed);
+    assert_eq!(
+        finished.completed_streams, 1,
+        "the finish passes on until its discovery cycle is whole"
+    );
+    assert!(!finished.discovery_capped);
+    assert!(capture.loss_report().discovery_capped);
+    sink.assert_clean();
+
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![codex_thread(&capped.home, THREAD)],
+        NativeCaptureLimits {
+            max_dir_entries: 8,
+            ..NativeCaptureLimits::default()
+        },
+        &sink,
+    );
+    let finished = capture.finish(NativeFinishBudget {
+        max_bytes: 64 << 20,
+        max_duration_ns: 0,
+    });
+    assert!(finished.admitted && finished.closed);
     assert_eq!(finished.completed_streams + finished.interrupted_streams, 0);
     assert!(
         finished.discovery_capped,
-        "a capped finish discovery is reported"
+        "a finish that ran out of time mid-cycle is reported"
     );
     assert!(capture.loss_report().discovery_capped);
     sink.assert_clean();
@@ -2410,5 +2433,178 @@ fn a_file_a_second_before_the_start_is_skipped() {
     let report = capture.poll();
     assert_eq!(report.frames, 0);
     assert_eq!(capture.loss_report().tracked_files, 0);
+    sink.assert_clean();
+}
+
+// ---------------------------------------------------------------------------------------
+// Discovery losses and the entry cap (D57)
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn a_directory_over_the_entry_cap_is_walked_whole_across_polls() {
+    // Each poll examines at most `max_dir_entries` entries and the next resumes past them, so
+    // a file that readdir returns after the first window is still reached, whatever the order.
+    let root = root();
+    for n in 0..30 {
+        root.write(&format!("sessions/{n:02}.jsonl"), b"x\n");
+    }
+    let cap = 8;
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![rollout(&root, "sessions/*.jsonl")],
+        NativeCaptureLimits {
+            max_dir_entries: cap,
+            ..NativeCaptureLimits::default()
+        },
+        &sink,
+    );
+    let first = capture.poll();
+    assert!(first.discovery_capped);
+    assert_eq!(capture.loss_report().tracked_files, cap);
+    root.write("sessions/new.jsonl", b"new\n");
+    let cycle = 31usize.div_ceil(cap);
+    for _ in 0..2 * cycle {
+        capture.poll();
+    }
+    assert_eq!(
+        capture.loss_report().tracked_files,
+        31,
+        "every entry is reached within a cycle of ceil(n/cap) polls"
+    );
+    let views = replay(&sink.frames());
+    assert_eq!(
+        by_label(&views, "rollout:sessions/new.jsonl#g1").1.data,
+        b"new\n"
+    );
+    assert_eq!(capture.loss_report().lost_entries, 0);
+    sink.assert_clean();
+}
+
+#[test]
+fn a_file_past_max_files_is_one_loss_until_another_arrives() {
+    let root = root();
+    for name in ["a", "b", "c"] {
+        root.write(&format!("sessions/{name}.jsonl"), b"x\n");
+    }
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![rollout(&root, "sessions/*.jsonl")],
+        NativeCaptureLimits {
+            max_files: 2,
+            ..NativeCaptureLimits::default()
+        },
+        &sink,
+    );
+    for _ in 0..5 {
+        capture.poll();
+        assert_eq!(
+            capture.loss_report().lost_entries,
+            1,
+            "the same untracked file is one loss, however often it is seen"
+        );
+    }
+    root.write("sessions/d.jsonl", b"x\n");
+    capture.poll();
+    assert_eq!(capture.loss_report().lost_entries, 2);
+    capture.poll();
+    assert_eq!(capture.loss_report().lost_entries, 2);
+    sink.assert_clean();
+}
+
+#[test]
+fn a_refused_entry_is_one_loss_across_a_capped_cycle() {
+    // The symlink sits in a directory walked over several polls; passing over entries an
+    // earlier poll examined never counts them again.
+    let root = root();
+    for n in 0..10 {
+        root.write(&format!("sessions/{n:02}.jsonl"), b"x\n");
+    }
+    std::os::unix::fs::symlink(
+        root.outside.join("elsewhere.jsonl"),
+        root.path("sessions/link.jsonl"),
+    )
+    .unwrap();
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![rollout(&root, "sessions/*.jsonl")],
+        NativeCaptureLimits {
+            max_dir_entries: 3,
+            ..NativeCaptureLimits::default()
+        },
+        &sink,
+    );
+    for _ in 0..20 {
+        capture.poll();
+    }
+    let loss = capture.loss_report();
+    assert_eq!(loss.tracked_files, 10);
+    assert_eq!(loss.lost_entries, 1);
+    sink.assert_clean();
+}
+
+#[test]
+fn a_refusal_counts_only_since_the_run_start() {
+    // A shared store's old symlink is not this run's, like an old session file (D57); one
+    // made during the run is a loss.
+    let root = root();
+    fs::create_dir_all(root.path("sessions")).unwrap();
+    std::os::unix::fs::symlink(
+        root.outside.join("elsewhere.jsonl"),
+        root.path("sessions/rollout-old-link.jsonl"),
+    )
+    .unwrap();
+    let started = run_start();
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![since(&root, started)],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    assert_eq!(capture.poll().refused_entries, 0);
+    assert_eq!(capture.loss_report().lost_entries, 0);
+    std::os::unix::fs::symlink(
+        root.outside.join("elsewhere.jsonl"),
+        root.path("sessions/rollout-new-link.jsonl"),
+    )
+    .unwrap();
+    assert_eq!(capture.poll().refused_entries, 1);
+    assert_eq!(capture.loss_report().lost_entries, 1);
+    let finished = capture.finish(generous());
+    assert!(finished.closed && !finished.discovery_capped);
+    assert_eq!(capture.loss_report().lost_entries, 1);
+    sink.assert_clean();
+}
+
+#[test]
+fn a_finish_that_walked_a_whole_cycle_is_not_capped() {
+    // Four passes of three entries walk the ten files whole; the byte budget then ends the
+    // finish in the fifth, a capped pass of the next cycle, which is no loss.
+    let root = root();
+    for n in 0..10 {
+        root.write(
+            &format!("sessions/{n:02}.jsonl"),
+            &pattern_bytes(4 * MAX_SEGMENT_BYTES, n),
+        );
+    }
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![rollout(&root, "sessions/*.jsonl")],
+        NativeCaptureLimits {
+            max_dir_entries: 3,
+            poll_bytes: MAX_SEGMENT_BYTES as u64,
+            ..NativeCaptureLimits::default()
+        },
+        &sink,
+    );
+    let finished = capture.finish(NativeFinishBudget {
+        max_bytes: 5 * MAX_SEGMENT_BYTES as u64,
+        max_duration_ns: u64::MAX,
+    });
+    assert!(finished.closed);
+    assert_eq!(finished.bytes_drained, 5 * MAX_SEGMENT_BYTES as u64);
+    assert!(
+        !finished.discovery_capped,
+        "the finish walked a whole cycle before it stopped"
+    );
     sink.assert_clean();
 }

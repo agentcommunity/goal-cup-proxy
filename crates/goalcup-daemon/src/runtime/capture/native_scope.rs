@@ -1,6 +1,7 @@
 //! The entry's schema-driven native source and binding state.
 
 use super::*;
+use goalcup_protocol::harness::RunHome;
 
 /// Raw native bytes one poll may read: about an eighth of the queue once encoded.
 pub(super) const NATIVE_POLL_BYTES: u64 = 4 * MAX_SEGMENT_BYTES as u64;
@@ -111,30 +112,39 @@ pub(super) fn create_time_floor(created_at: &str) -> Result<u64, DaemonError> {
     })
 }
 
-/// Create the missing directories of every `{config_home}` native root (D57), the config home
-/// itself included: one component at a time from its parent, mode 0700, never following a link. An existing component
-/// that is a symlink or not a directory refuses the create. `{run_home}` roots are untouched.
-pub(super) fn create_config_home_roots(
+/// Create the missing directories of every `{config_home}` native root (D57), and of every
+/// `{run_home}` root when the run `HOME` is shared (D59), the home itself included: one
+/// component at a time from its parent, mode 0700, never following a link. An existing component
+/// that is a symlink or not a directory refuses the create. A per-run `{run_home}` root is
+/// untouched.
+pub(super) fn create_home_roots(
     capture: &CaptureSpec,
+    run_home: &Path,
     config_home: &Path,
 ) -> Result<(), DaemonError> {
     use goalcup_platform::tracecap::TraceDir;
+    let run_shared = capture.home.run_home == RunHome::Shared;
     for native in &capture.native {
-        let Some(rest) = native.root.strip_prefix("{config_home}") else {
-            continue;
+        let (home, rest) = match (
+            native.root.strip_prefix("{config_home}"),
+            native.root.strip_prefix("{run_home}"),
+        ) {
+            (Some(rest), _) => (config_home, rest),
+            (None, Some(rest)) if run_shared => (run_home, rest),
+            _ => continue,
         };
         let refused = |error: goalcup_platform::tracecap::TraceCapError| {
             DaemonError::Config(format!(
-                "the native root {:?} under the config home cannot be prepared: {error}",
+                "the native root {:?} under its home cannot be prepared: {error}",
                 native.root
             ))
         };
         let (Some(parent), Some(name)) = (
-            config_home.parent(),
-            config_home.file_name().and_then(|name| name.to_str()),
+            home.parent(),
+            home.file_name().and_then(|name| name.to_str()),
         ) else {
             return Err(DaemonError::Config(
-                "the config home has no parent directory to create it in".into(),
+                "the home has no parent directory to create it in".into(),
             ));
         };
         let mut dir = TraceDir::open(parent)
@@ -164,25 +174,32 @@ fn native_root(root: &str, run_home: &Path, config_home: &Path) -> Result<PathBu
     }
 }
 
-/// The baseline's listing of the config home (D56): every file but the native roots inside it.
-/// Empty when a native root is the home itself; `None` when the home cannot be read.
+/// The baseline's listing of the harness home (D56): every file but the native roots inside it.
+/// The home is the config home, or the run `HOME` when that is shared (D59): the one kept
+/// across runs. Empty when a native root is the home itself; `None` when the home cannot be
+/// read.
 pub(super) fn listed_home(
     capture: &CaptureSpec,
     run_home: &Path,
     config_home: &Path,
 ) -> Option<Vec<goalcup_protocol::seal::SealedFile>> {
+    let home = if capture.home.run_home == RunHome::Shared {
+        run_home
+    } else {
+        config_home
+    };
     let mut excluded = Vec::new();
     for native in &capture.native {
         let Ok(root) = native_root(&native.root, run_home, config_home) else {
             continue;
         };
-        match root.strip_prefix(config_home) {
+        match root.strip_prefix(home) {
             Ok(rel) if rel.as_os_str().is_empty() => return Some(Vec::new()),
             Ok(rel) => excluded.push(rel.to_string_lossy().replace('\\', "/")),
             Err(_) => {}
         }
     }
-    workspace::list_home(config_home, &excluded)
+    workspace::list_home(home, &excluded)
 }
 
 /// A native capture over `sources`, queueing into `sink`.
@@ -214,6 +231,35 @@ pub(super) fn isolated_config_home(
         DaemonError::Refused("config_home requires a participant HOME to exclude".into())
     })?;
     isolated_config_home_for(path, declared_real_dirs, &home)
+}
+
+/// A shared run `HOME` (D59) persists across runs like a shared config home, so it is resolved
+/// and held to the same isolation, and must sit under `<config_dir>/capture-homes`, where the
+/// launcher keeps every shared home. A per-run one is the launcher's, fresh inside the run
+/// directory, and is returned as given.
+pub(super) fn isolated_run_home(
+    mode: RunHome,
+    run_home: &Path,
+    declared_real_dirs: &[String],
+    config_dir: &Path,
+) -> Result<PathBuf, DaemonError> {
+    if mode != RunHome::Shared {
+        return Ok(run_home.to_path_buf());
+    }
+    let refused = |why: String| DaemonError::Refused(format!("the shared run_home: {why}"));
+    let resolved = isolated_config_home(run_home, declared_real_dirs)
+        .map_err(|error| refused(error.to_string()))?;
+    let homes = std::fs::canonicalize(config_dir)
+        .map(|dir| dir.join(goalcup_protocol::harness::CAPTURE_HOMES_DIR))
+        .map_err(|error| refused(format!("the config_dir cannot be resolved: {error}")))?;
+    if resolved.parent() != Some(homes.as_path()) {
+        return Err(refused(format!(
+            "{} is not a folder directly under {}",
+            resolved.display(),
+            homes.display()
+        )));
+    }
+    Ok(resolved)
 }
 
 pub(super) fn isolated_config_home_for(

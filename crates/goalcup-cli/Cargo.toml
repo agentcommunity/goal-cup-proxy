@@ -35,7 +35,7 @@ thiserror.workspace = true
 # daemon's `workspace::measure` does, so two walks over one tree agree and a large file is
 # never held whole. Already in this crate's graph through `goalcup-verifier`.
 sha2.workspace = true
-# The five-command tree (`src/main.rs`).
+# The nine-command tree (`src/main.rs`).
 clap.workspace = true
 # The control API client. It is loopback cleartext, which is why the workspace declares ureq
 # with `default-features = false`: no gzip decoder, and no TLS stack pulled in for a request to
