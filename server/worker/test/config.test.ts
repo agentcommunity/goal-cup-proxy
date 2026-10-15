@@ -241,3 +241,9 @@ test("production and staging both bind the device limiter; staging's limits are 
   assert.ok(Number(tables["env.staging.vars"]!.DEVICE_POLL_PER_MINUTE) <= 10);
   assert.ok(!/^[^#\n]*RATE_LIMIT_KEY\s*=/m.test(WRANGLER)); // a secret, never a var
 });
+
+test("Workers Logs are on in production and in staging", () => {
+  const tables = wranglerTables();
+  assert.equal(tables.observability!.enabled, "true");
+  assert.equal(tables["env.staging.observability"]!.enabled, "true"); // pinned here, not left to inheritance
+});

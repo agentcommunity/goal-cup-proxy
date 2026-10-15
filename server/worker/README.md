@@ -128,6 +128,21 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
 - **Create-only puts** (`onlyIf: { etagDoesNotMatch: "*" }`) must refuse to overwrite on real R2,
   including under the bucket lock.
 
+## EVENT_ID switch: 6 Nov 2026, with the last release
+
+Production `EVENT_ID` stays `goalcup-dryrun-2026` until then. The start windows are database rows
+(website migration `20261016120000_goal_cup_tracer_event_windows.sql`): the dry run closes
+6 Nov 00:00 UTC and the cup opens 7 Nov 00:00 UTC, so any time on 6 Nov is safe. If the switch is
+missed, cup runs land under `traces/goalcup-dryrun-2026/`, which the 180-day bucket lock does not cover.
+
+1. In `wrangler.toml` `[vars]`, set `EVENT_ID = "goalcup-cup-2026"`. Do not touch `[env.staging.vars]`.
+2. `npm test` (in `server/worker`).
+3. `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy` (production: top level, no `--env`).
+4. Open one practice run and one organizer test run against production; both start.
+5. A competition start now answers "The start window has not opened yet." (before the switch it
+   answered "after the start window ..."). After 7 Nov 00:00 UTC, the first cup run's chunks are under
+   the R2 prefix `traces/goalcup-cup-2026/`, never `traces/goalcup-dryrun-2026/`.
+
 ## Decisions where the contract is silent
 
 - The first record's `seq` is **0** (the baseline link of a v5 chain), so a fresh run reports

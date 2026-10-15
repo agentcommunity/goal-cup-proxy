@@ -35,8 +35,9 @@ preview_bucket_name = "goalcup-traces-staging"
 
 [vars]
 # Which event new competition runs belong to, and which one practice runs belong to (rows of
-# goal_cup_tracer.events). One deployment serves one of each: the dry run now; switch EVENT_ID to
-# "goalcup-cup-2026" and redeploy after the dry run, before the competition window opens.
+# goal_cup_tracer.events). One deployment serves one of each: the dry run now. On 6 Nov, with the
+# last release, EVENT_ID becomes "goalcup-cup-2026" (README "EVENT_ID switch"). Not before: the
+# dry-run window closes 6 Nov 00:00 UTC and the cup window opens 7 Nov 00:00 UTC.
 EVENT_ID = "goalcup-dryrun-2026"
 PRACTICE_EVENT_ID = "goalcup-practice"
 # Organizer test runs (mode "test"; allowlisted accounts only, enforced by the database). R2 prefix
@@ -81,6 +82,13 @@ DEVICE_TOKEN_PER_MINUTE = "1200"
 [triggers]
 crons = ["*/5 * * * *"]
 
+# Workers Logs: keeps every invocation and its console.error lines (misconfigured, supabase <fn>,
+# tick <step>, r2-put-...) for the dashboard, so a bad night can be read the next morning without a
+# live `wrangler tail`. The Worker's own lines carry no addresses, keys or PostgREST details. Staging
+# repeats it.
+[observability]
+enabled = true
+
 # Staging: `wrangler deploy --env staging` makes a second Worker, goalcup-ingest-staging, on its own
 # bucket and its own events. It is the only deployment that may hold TEST_APPROVAL_KEY (a secret,
 # set with `wrangler secret put TEST_APPROVAL_KEY --env staging`, never in this file). wrangler
@@ -97,6 +105,9 @@ preview_urls = false
 
 [env.staging.triggers]
 crons = ["*/5 * * * *"]
+
+[env.staging.observability]
+enabled = true
 
 # wrangler does not inherit durable_objects into an environment. Staging's limiter is its own
 # class instance set (a different Worker), with low limits in its vars so a test sees the 429.
