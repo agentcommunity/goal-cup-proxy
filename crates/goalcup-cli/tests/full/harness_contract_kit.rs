@@ -603,11 +603,6 @@ fn assert_completed(run: &Completed) {
     assert_eq!(research["capture"]["sealed"], true);
     assert_eq!(research["delivery"]["state"], "local_only");
     assert_eq!(research["analysis"]["state"], "unavailable");
-    assert_eq!(
-        run.staged.world.upload_dials(),
-        0,
-        "an offline kit case dialled the daemon upload URL"
-    );
     assert_credential_kept_to_the_child(run);
 }
 

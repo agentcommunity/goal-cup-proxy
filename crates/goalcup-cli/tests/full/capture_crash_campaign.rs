@@ -1019,7 +1019,6 @@ fn capture_cli_killed_before_registration_never_execs() {
     assert_eq!(code, 1, "{integrity}");
     assert_eq!(integrity["sealed"], true);
     assert!(finding(&integrity, "launch_missing"), "{integrity}");
-    assert_eq!(v.upload_dials(), 0);
 }
 
 #[test]

@@ -35,11 +35,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// A test-only server public key: the Ed25519 verifying key of the test seed `[0x42; 32]`.
-/// The verifier trusts no key, this one included; it only has to be a well-formed key.
-pub const TEST_SERVER_PUBLIC_KEY_HEX: &str =
-    "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12";
-
 /// One clock for every render. A test that formatted `now` would pass on the day it was
 /// written and be a different test tomorrow.
 pub const NOW: &str = "2026-09-05T00:00:00Z";

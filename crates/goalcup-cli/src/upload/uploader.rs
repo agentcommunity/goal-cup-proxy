@@ -355,16 +355,15 @@ pub fn lock_entry(spool_dir: &Path, entry_id: &str) -> Result<std::fs::File, Cli
         .write(true)
         .open(&path)
         .map_err(io_error(&path))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::io::AsRawFd;
-        // SAFETY: `flock` on a descriptor this function owns; it reads and writes no memory.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
             return Err(CliError::Refused(format!(
                 "entry {entry_id} is being uploaded by another goalcup: its `goalcup start` is \
                  still running, or another `goalcup upload` is. Run this again once it ends."
             )));
         }
+        Err(std::fs::TryLockError::Error(source)) => return Err(io_error(&path)(source)),
     }
     Ok(file)
 }

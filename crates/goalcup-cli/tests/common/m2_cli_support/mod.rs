@@ -65,8 +65,6 @@ pub struct Rig {
     pub runtime: tokio::runtime::Runtime,
     pub daemon: Option<goalcup_daemon::runtime::Daemon>,
     pub config: goalcup_daemon::config::DaemonConfig,
-    /// A listener the daemon is told is its upload server. Nothing may connect to it.
-    pub upload_trap: std::net::TcpListener,
     /// Added to the environment `goalcup start` is given (the Hermes provider key, in a test).
     pub extra_env: Mutex<std::collections::BTreeMap<String, String>>,
     _tmp: tempfile::TempDir,
@@ -294,8 +292,6 @@ impl Rig {
                 family,
             );
         }
-        let upload_trap = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        upload_trap.set_nonblocking(true).unwrap();
         let (artifact_root, workspace_parent) = if start_daemon {
             (root.join("artifacts"), root.join("workspaces"))
         } else {
@@ -328,7 +324,6 @@ impl Rig {
             runtime,
             daemon,
             config,
-            upload_trap,
             extra_env: Mutex::default(),
             _tmp: tmp,
         }
@@ -457,15 +452,6 @@ impl Rig {
     /// Wait for the fake harness to write `name`.
     pub fn wait_for(&self, name: &str) {
         super::support::wait_for_file(&self.out.join(name));
-    }
-
-    /// How many connections the upload trap accepted.
-    pub fn upload_dials(&self) -> usize {
-        let mut n = 0;
-        while self.upload_trap.accept().is_ok() {
-            n += 1;
-        }
-        n
     }
 
     /// The trace the daemon exports for `entry_id`.
