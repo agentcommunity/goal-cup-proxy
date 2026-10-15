@@ -21,14 +21,24 @@ stops at each step that needs you.
 
 ## 1. Install
 
-With Homebrew, from the first release (23–24 October 2026):
+Open a terminal (on Windows, the Ubuntu one inside WSL2) and run:
 
 ```sh
-brew install agentcommunity/tap/goalcup
+curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
 ```
 
-Before the release, build from source as the [README](../README.md#build) says. On Windows, install
-inside WSL2, not in Windows itself. Native Windows comes later.
+This installs the latest release. It picks the build for your machine, checks it against the
+release's SHA-256 list, and puts `goalcup` and its helper programs in `~/.local/bin`. It needs no
+`sudo` and changes no setting. If it says `~/.local/bin` is not on your `PATH`, run the `export`
+line it prints, and add that line to `~/.zshrc` or `~/.bashrc` to keep it. Then check:
+
+```sh
+goalcup --version
+```
+
+To upgrade, run the same command again. Before the first release (due 23–24 October 2026), build
+from source as the [README](../README.md#build) says. Install inside WSL2, not in Windows itself;
+native Windows comes later.
 
 ## 2. Log in: `goalcup login`
 

@@ -1,7 +1,7 @@
 """Render packaging/homebrew/goalcup.rb for one release and print it.
 
-    python3 scripts/render-formula.py --version 0.5.0 --sums dist/SHA256SUMS \\
-        --base-url https://github.com/agentcommunity/goal-cup-tracer/releases/download/v0.5.0
+    python3 scripts/render-formula.py --version <x.y.z> --sums dist/SHA256SUMS \\
+        --base-url https://github.com/agentcommunity/goal-cup-tracer/releases/download/v<x.y.z>
 
 --sums is the release's SHA256SUMS (`sha256sum` format). Every target the formula names must
 have a tarball in it, and every @TOKEN@ must be filled, or nothing is printed.

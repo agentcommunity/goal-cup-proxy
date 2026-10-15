@@ -32,7 +32,7 @@ Try it by hand against `npm run dev`. A credential comes from the device flow; t
 
 ```sh
 curl -s -XPOST localhost:8787/v1/device -H 'content-type: application/json' \
-  -d '{"purpose":"run","mode":"practice","connector_id":"codex-cli","tracer_version":"0.1.0"}'
+  -d '{"purpose":"run","mode":"practice","connector_id":"codex-cli","tracer_version":"x.y.z"}'
 # -> device_code, user_code. Approve the user code as a member, then pick up the credential:
 curl -s -XPOST localhost:8787/v1/device/approve -H 'authorization: Bearer dev-approval-key' \
   -H 'content-type: application/json' -d '{"user_code":"<user_code>","member_id":"member1","approve":true}'

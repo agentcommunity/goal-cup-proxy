@@ -2,13 +2,15 @@
 # The test gate. `sh scripts/gate.sh fast` before every commit; `sh scripts/gate.sh full`
 # before a release. The last line of output is `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`.
 #
-#   fast  build, fmt, clippy, then every test except the slow `full` and `m2_cli_lifecycle`
+#   fast  the version check (scripts/check-version.py: one version, written in Cargo.toml only),
+#         build, fmt, clippy, then every test except the slow `full` and `m2_cli_lifecycle`
 #         binaries.
 #   full  fast's checks, every test including `full`, the CLI's `#[ignore]`d end-to-end tests
 #         (the `m2_synthetic_vertical` and `capture_failure_campaign` modules of its `full`
 #         binary, about 4.5 minutes), the upload Worker's `upload_worker` tests (they run the
-#         real Worker under `wrangler dev` and need `npm ci` in server/worker), the scripts' unit
-#         tests and the link check. The other ignored tests need a real Hermes or a disk image
+#         real Worker under `wrangler dev` and need `npm ci` in server/worker), the Worker's own
+#         tests (`npm --prefix server/worker test`: typecheck, wrangler.toml guards, rate limits),
+#         the scripts' unit tests and the link check. The other ignored tests need a real Hermes or a disk image
 #         and are run by hand.
 #
 # Tests run under cargo-nextest (one process per test, in parallel). Without it the gate falls
@@ -42,6 +44,9 @@ if [ "$tier" = full ] && [ ! -d server/worker/node_modules ]; then
     echo "run npm ci in server/worker"
     fail
 fi
+
+# A version written anywhere but the workspace Cargo.toml fails here, before the long steps.
+step python3 scripts/check-version.py
 
 # The CLI tests spawn the sibling target/debug/goalcup-daemon, so the whole workspace is built
 # before any test runs. A stale daemon binary would otherwise be tested.
@@ -87,6 +92,7 @@ else
 fi
 
 if [ "$tier" = full ]; then
+    step npm --prefix server/worker test
     step python3 -m unittest discover -s scripts
     step python3 scripts/check-links.py --root .
 fi
