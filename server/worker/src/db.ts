@@ -370,7 +370,7 @@ export interface Db {
   /**
    * Open a run (segment 0) for the account and bind the credential to it, in one atomic step.
    * A competition run replaces the account's other open competition run (`replaced_at` = this
-   * run's `official_start`); a practice run replaces nothing.
+   * run's `official_start`), a test run the account's open test run; a practice run replaces nothing.
    */
   openRun(args: OpenRunArgs): Promise<OpenRunResult>;
   /** Add the next segment. See `ContinueRunResult`. */

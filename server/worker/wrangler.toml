@@ -83,11 +83,25 @@ crons = ["*/5 * * * *"]
 # at https://goalcup-ingest-staging.b-9a5.workers.dev (staging only; production stays off workers.dev).
 [env.staging]
 name = "goalcup-ingest-staging"
+# Never inherit the top-level custom domain: wrangler would move ingest.agentcommunity.org to
+# the staging Worker (it did once, 15 Oct 10:54-11:03Z).
+routes = []
 workers_dev = true
 preview_urls = false
 
 [env.staging.triggers]
 crons = ["*/5 * * * *"]
+
+# Staging has its own limiter namespaces (4103-4104) with low limits, so a test sees the 429.
+[[env.staging.ratelimits]]
+name = "RL_DEVICE_START"
+namespace_id = "4103"
+simple = { limit = 5, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "RL_DEVICE_TOKEN"
+namespace_id = "4104"
+simple = { limit = 10, period = 60 }
 
 [[env.staging.r2_buckets]]
 binding = "TRACES"

@@ -36,3 +36,15 @@ test("a test run never replaces the account's competition run", async () => {
   const held = (await rig.db().getRun("op-1", (comp.body as { run_id: string }).run_id, null))!.run;
   assert.equal(held.replaced_at, null);
 });
+
+test("a test run replaces the account's previous test run (the same mode replaces the same mode)", async () => {
+  rig = inProcess("2026-11-06T10:00:00Z", { TEST_EVENT_ID: "test" });
+  const t1 = await rig.api.call("POST", "/v1/runs", { token: await credentialFor(rig.api, "op-1", "test"), json: openBody({ session_id: "t1" }) });
+  assert.equal(t1.status, 201);
+  const t2 = await rig.api.call("POST", "/v1/runs", { token: await credentialFor(rig.api, "op-1", "test"), json: openBody({ session_id: "t2" }) });
+  assert.equal(t2.status, 201);
+  const first = (await rig.db().getRun("op-1", (t1.body as { run_id: string }).run_id, null))!.run;
+  const second = (await rig.db().getRun("op-1", (t2.body as { run_id: string }).run_id, null))!.run;
+  assert.notEqual(first.replaced_at, null);
+  assert.equal(second.replaced_at, null);
+});

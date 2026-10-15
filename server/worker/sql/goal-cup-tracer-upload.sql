@@ -5,6 +5,7 @@
 --   supabase/migrations/20261015140000_goal_cup_tracer_member_binding.sql (credential bound to its member; no address for staging)
 --   supabase/migrations/20261015150000_goal_cup_tracer_production.sql (production role, events, account erasure)
 --   supabase/migrations/20261015160000_goal_cup_tracer_test_mode.sql (organizer test runs; delete_test_runs)
+--   supabase/migrations/20261015170000_goal_cup_tracer_test_replaces_test.sql (a test run replaces the open test run)
 -- Applied to the Agent Community Supabase project on 2026-10-15. It replaces the earlier proposal
 -- (proposed-goalcup-functions.sql): tables in the private schema goal_cup_tracer, functions renamed
 -- public.goal_cup_upload_* (src/db-supabase.ts adds the prefix), the website approval functions,
@@ -2143,3 +2144,134 @@ REVOKE ALL ON FUNCTION goal_cup_tracer.test_marked(jsonb, text) FROM PUBLIC, ano
 REVOKE ALL ON FUNCTION goal_cup_tracer.delete_test_runs(interval) FROM PUBLIC, anon, authenticated;
 GRANT USAGE ON SCHEMA goal_cup_tracer TO service_role;
 GRANT EXECUTE ON FUNCTION goal_cup_tracer.delete_test_runs(interval) TO service_role;
+
+-- ======================== 20261015170000_goal_cup_tracer_test_replaces_test.sql ========================
+-- Goal Cup tracer: a test run replaces the operator's previous open test run (owner, 2026-10-15:
+-- "a test run never replaces a competition run; the same mode replaces the same mode").
+--
+-- 20261015160000 made test runs never replace anything. Now the rule is one rule for both modes
+-- that replace: a new competition run ends the member's open competition run (unchanged), a new
+-- test run ends the member's open test run. A test run still never touches a competition run, and
+-- practice still never replaces. The approval page's "this replaces your current run" follows.
+-- Replaces two functions (CREATE OR REPLACE keeps their grants); no table, row or grant changes.
+
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_open_run(
+  p_member_id text, p_event_id text, p_mode text, p_run_id text, p_entry_id text,
+  p_official_start text, p_deadline_at text,
+  p_connector_id text, p_manifest_sha256 text, p_connector_dir_sha256 text,
+  p_workspace text, p_session_id text, p_harness_version text, p_tracer_version text, p_repo_url text,
+  p_machine jsonb, p_client_ip text, p_client_country text,
+  p_credential_hash text, p_credential_expires_at text
+) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_member  uuid := p_member_id::uuid;
+  v_staging boolean := caller_is_staging();
+  v_event   events;
+  v_start   timestamptz := p_official_start::timestamptz;
+  v_deadline timestamptz := p_deadline_at::timestamptz;
+  v_cred_expires timestamptz := p_credential_expires_at::timestamptz;
+  v_bound   text;
+  v_try     integer;
+BEGIN
+  SELECT * INTO v_event FROM events WHERE id = p_event_id AND staging = v_staging;
+  -- The event must be of the run's kind: practice in a practice event, a test run in a test
+  -- event, a competition run in the competition or the dry run.
+  IF NOT FOUND
+     OR (p_mode = 'practice' AND v_event.mode <> 'practice')
+     OR (p_mode = 'test' AND v_event.mode <> 'test')
+     OR (p_mode = 'competition' AND v_event.mode NOT IN ('competition', 'dry_run')) THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'This event is not open for runs.');
+  END IF;
+  -- Test runs: allowlisted organizer accounts only; their length is the event's run_hours.
+  IF p_mode = 'test' THEN
+    IF NOT is_test_operator(v_member) THEN
+      RETURN jsonb_build_object('result', 'forbidden', 'message', 'Test runs are for Goal Cup organizers only.');
+    END IF;
+    v_deadline := v_start + make_interval(hours => v_event.run_hours);
+    v_cred_expires := v_deadline + interval '24 hours';
+  END IF;
+  IF NOT has_current_terms(v_member) THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'Accept the Goal Cup terms on the website first.');
+  END IF;
+  IF p_mode = 'competition' THEN
+    IF v_start < v_event.start_window_opens THEN
+      RETURN jsonb_build_object('result', 'forbidden', 'message', 'The start window has not opened yet.');
+    END IF;
+    IF v_start > v_event.start_window_closes THEN
+      RETURN jsonb_build_object('result', 'forbidden',
+                                'message', 'after the start window you can only `goalcup continue` your run');
+    END IF;
+  END IF;
+
+  -- The credential opens runs for its own member and mode only: a credential approved for one
+  -- member can never open (or replace) a run of another.
+  SELECT run_id INTO v_bound FROM run_credentials
+   WHERE credential_hash = p_credential_hash AND staging = v_staging
+     AND member_id = v_member AND mode = p_mode FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+  IF v_bound IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM runs r JOIN entries e ON e.run_id = r.id AND e.segment = 0
+                WHERE r.id = v_bound AND r.member_id = v_member AND r.staging = v_staging AND e.session_id = p_session_id) THEN
+      RETURN jsonb_build_object('result', 'existing')
+             || run_json(v_bound, (SELECT e.id FROM entries e WHERE e.run_id = v_bound AND e.segment = 0));
+    END IF;
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+
+  FOR v_try IN 1..2 LOOP
+    -- The same mode replaces the same mode: a competition run its competition run, a test run its
+    -- test run. A test run never touches a competition run, and practice never replaces.
+    IF p_mode IN ('competition', 'test') THEN
+      UPDATE runs SET replaced_at = greatest(v_start, official_start)
+       WHERE member_id = v_member AND mode = p_mode AND status = 'open' AND replaced_at IS NULL
+         AND staging = v_staging;
+    END IF;
+    BEGIN
+      INSERT INTO runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url,
+                        machine, client_ip, client_country, staging)
+      VALUES (p_run_id, p_event_id, v_member, p_mode, v_start, v_deadline, p_repo_url,
+              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country, v_staging);
+      EXIT;
+    EXCEPTION WHEN unique_violation THEN
+      IF v_try = 2 THEN RAISE; END IF;
+    END;
+  END LOOP;
+
+  INSERT INTO entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256,
+                       workspace, session_id, harness_version, tracer_version)
+  VALUES (p_entry_id, p_run_id, 0, p_connector_id, p_manifest_sha256, p_connector_dir_sha256,
+          p_workspace, p_session_id, p_harness_version, p_tracer_version);
+  UPDATE run_credentials
+     SET run_id = p_run_id, expires_at = v_cred_expires
+   WHERE credential_hash = p_credential_hash;
+  RETURN jsonb_build_object('result', 'created') || run_json(p_run_id);
+END $$;
+
+CREATE OR REPLACE FUNCTION public.goal_cup_device_request(p_actor_id uuid, p_user_code text) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_dev device_requests;
+BEGIN
+  SELECT * INTO v_dev FROM device_requests
+   WHERE user_hash = encode(sha256(convert_to(upper(replace(coalesce(p_user_code, ''), '-', '')), 'UTF8')), 'hex');
+  IF NOT FOUND THEN RETURN jsonb_build_object('result', 'not_found'); END IF;
+  RETURN jsonb_build_object(
+    'result', 'ok',
+    'status', CASE WHEN v_dev.status = 'pending' AND now() >= v_dev.expires_at THEN 'expired' ELSE v_dev.status END,
+    'purpose', v_dev.purpose,
+    'mode', v_dev.mode,
+    'connector_id', v_dev.connector_id,
+    'tracer_version', v_dev.tracer_version,
+    'expires_at', fmt_time(v_dev.expires_at),
+    'replaces_open_run', v_dev.purpose = 'run' AND v_dev.mode IN ('competition', 'test') AND EXISTS (
+      SELECT 1 FROM runs r WHERE r.member_id = p_actor_id AND r.mode = v_dev.mode AND r.status = 'open'
+         AND r.replaced_at IS NULL AND r.staging = v_dev.staging AND now() < r.deadline_at),
+    'terms_ok', has_current_terms(p_actor_id),
+    'terms_version', current_terms_version(),
+    'decided_by_you', v_dev.member_id IS NOT DISTINCT FROM p_actor_id AND v_dev.status <> 'pending');
+END $$;

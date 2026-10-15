@@ -241,7 +241,8 @@ The Worker's tests call `worker.scheduled` on a moved clock (`test/helpers/inpro
   the upload functions only, never the test approval); Resend key `goalcup-ingest-production`
   (sending access, member.agentcommunity.org); `RECEIPT_SIGNING_KEY` from a seed made offline,
   whose public key is pinned in `goalcup-verifier` (`SERVER_PUBLIC_KEYS`).
-- Rate limits `RL_DEVICE_START` (20/min) and `RL_DEVICE_TOKEN` (120/min) per hashed client address.
+- Rate limits `RL_DEVICE_START` (20/min) and `RL_DEVICE_TOKEN` (120/min) per hashed client address
+  (namespaces 4101-4102; the website owns 4001-4019).
 
 Deploy again: `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy` (top level, no `--env`).
 
@@ -252,7 +253,11 @@ bucket and its own event ids, `STAGING = "on"` and the same cron. It is the one 
 tests where `TEST_APPROVAL_KEY` may exist, as a secret (`wrangler secret put TEST_APPROVAL_KEY --env
 staging`). `wrangler.toml` repeats every `[vars]` entry for staging, because wrangler does not copy
 them into an environment. `test/config.test.ts` reads the file and fails if the top level names
-`TEST_APPROVAL_KEY` or sets `STAGING = "on"`.
+`TEST_APPROVAL_KEY` or sets `STAGING = "on"`. Unlike `vars`, wrangler *does* copy `routes` into an
+environment, so `[env.staging]` sets `routes = []`: without it a staging deploy moves
+`ingest.agentcommunity.org` to the staging Worker (this happened on 2026-10-15, 10:54-11:03 UTC, and
+was undone by pointing the custom domain back at `goalcup-ingest`). The config test checks it.
+Staging has its own rate-limit namespaces (4103-4104) with low limits.
 
 ### Staging, as deployed (2026-10-15)
 

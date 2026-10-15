@@ -5,6 +5,7 @@
 // Layout:
 //   state/runs/{run_id}.json     the run and its entries, with receipts and chunks (a few hundred bytes each)
 //   state/open/{member}.json     {"run_id": …}: the member's latest competition run, the one a new start replaces
+//   state/open/{member}.test.json  the same for the member's test runs (the same mode replaces the same mode)
 //   state/devices/{sha256}.json  a device request, by the hash of its device code
 //   state/usercodes/{sha256}.json  {"device_sha256": …}: the request a user code belongs to
 //   state/credentials/{sha256}.json  a run credential, by its own hash
@@ -34,6 +35,7 @@ import type {
   NoticeArgs,
   OpenRunArgs,
   OpenRunResult,
+  RunMode,
   RunRow,
   RunStatus,
   SealArgs,
@@ -156,7 +158,7 @@ export class LocalDb implements Db {
   // ---- plumbing --------------------------------------------------------------------------
 
   #runKey = (runId: string) => `state/runs/${runId}.json`;
-  #openKey = (member: string) => `state/open/${encodeURIComponent(member)}.json`;
+  #openKey = (member: string, mode: RunMode) => `state/open/${encodeURIComponent(member)}${mode === "test" ? ".test" : ""}.json`;
 
   async #readRun(runId: string): Promise<{ run: StoredRun; etag: string } | null> {
     const obj = await this.#bucket.get(this.#runKey(runId));
@@ -313,21 +315,22 @@ export class LocalDb implements Db {
   /**
    * Store a new run. A competition run first marks the account's latest competition run replaced,
    * then takes the account's slot with a conditional put; if someone else took it meanwhile, go
-   * round again (that run is replaced in turn).
+   * round again (that run is replaced in turn). A test run does the same with the account's test
+   * slot: the same mode replaces the same mode, and practice replaces nothing.
    */
   async #keep(run: StoredRun): Promise<void> {
     const create = { onlyIf: { etagDoesNotMatch: "*" } };
-    if (run.mode !== "competition") {
+    if (run.mode === "practice") {
       await this.#bucket.put(this.#runKey(run.run_id), JSON.stringify(run), create);
       return;
     }
-    const openKey = this.#openKey(run.member_id);
+    const openKey = this.#openKey(run.member_id, run.mode);
     for (let i = 0; i < MAX_CAS_TRIES; i++) {
       const marker = await this.#bucket.get(openKey);
       if (marker !== null) {
         const heldId = ((await marker.json()) as { run_id: string }).run_id;
         await this.#updateRun<null>(heldId, run.member_id, null, (held) =>
-          held.mode === "competition" && held.status === "open" && held.replaced_at === null
+          held.mode === run.mode && held.status === "open" && held.replaced_at === null
             ? { next: { ...held, replaced_at: held.official_start > run.official_start ? held.official_start : run.official_start }, answer: null }
             : { answer: null },
         );

@@ -84,8 +84,9 @@ minute); over the limit is `429 rate_limited` with `Retry-After: 60`. One tracer
 allowlist of test operators can approve one or open one (anyone else: the website refuses the
 approval; an open is `403`). A test run belongs to the server's test event (production `test`,
 R2 prefix `traces/test/`, never locked; staging `test-staging`), lasts that event's run hours
-(168 by default), never replaces a competition run and is never replaced, and its emails go to
-the operator with `[TEST]` before the subject. Test runs are left out of every live number and
+(168 by default), and its emails go to the operator with `[TEST]` before the subject. The same mode
+replaces the same mode: a new test run replaces the operator's open test run, never a competition
+run, and a competition run never replaces a test run. Test runs are left out of every live number and
 research report, and `server/worker/scripts/delete-test-runs.sh` deletes all of them (rows and
 R2 objects) in one go.
 

@@ -217,6 +217,9 @@ test("the 5-minute cron runs in production and in staging; staging is a Worker o
   assert.ok(!("NOTICE_RECIPIENT_OVERRIDE" in tables.vars!));
   assert.equal(tables[""]!.workers_dev, "false"); // production: custom domain only
   assert.equal(tables[""]!.routes, '[{ pattern = "ingest.agentcommunity.org", custom_domain = true }]');
+  // wrangler DOES inherit `routes`: without this, a staging deploy moves the production custom domain
+  // to the staging Worker (it happened once, 2026-10-15).
+  assert.equal(tables["env.staging"]!.routes, "[]");
   assert.notEqual(tables.r2_buckets!.preview_bucket_name, tables.r2_buckets!.bucket_name); // dev never writes production
   // wrangler does not inherit vars into an environment: staging repeats every one, and has its own events and bucket.
   for (const name of Object.keys(tables.vars!)) assert.ok(name in tables["env.staging.vars"]!, `staging needs ${name}`);
