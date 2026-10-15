@@ -10,9 +10,13 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+# The only place a version is written. Every crate inherits it (`version.workspace = true`), and
+# the binaries and report fields read it through `env!("CARGO_PKG_VERSION")`. Change it with
+# `sh scripts/release.sh <x.y.z>`; `scripts/check-version.py` (run by the gate) fails on any
+# other hard-coded copy.
+version = "0.6.0"
 license = "Apache-2.0"
-# 1.99: the latest stable release when v0.5.1 was cut (owner decision 2026-10-11). The code needs
+# 1.99: the latest stable release at the owner's decision of 2026-10-11. The code needs
 # less (atomic `try_update`); locked dependencies need 1.88. Clippy's
 # incompatible_msrv lint enforces this.
 rust-version = "1.99"
@@ -79,9 +83,9 @@ rand = "0.8"
 regex = "1"
 # Base64 for the redactor, the proxy and the verifier.
 base64 = "0.22"
-# The hook receiver, the control endpoint and the dev-only signer. One TCP listener per
-# surface, loopback only; `default-features = false` because this tree wants none of
-# axum's optional extractors and, in particular, none of its `tracing` integration.
+# The hook receiver and the control endpoint. One TCP listener per surface, loopback only;
+# `default-features = false` because this tree wants none of axum's optional extractors and, in
+# particular, none of its `tracing` integration.
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 # The runtime under those listeners. No `fs`: filesystem I/O is `std::fs` on the polling
 # thread, which is the only thread allowed to touch a participant's disk.

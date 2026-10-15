@@ -1,10 +1,10 @@
 # Release: build the three binaries for four targets, package each as a tarball, smoke-test each
-# tarball on its own architecture, and attach the tarballs, SHA256SUMS and the rendered Homebrew
-# formula to a GitHub release.
+# tarball and packaging/install.sh on its own architecture, and attach the tarballs, SHA256SUMS,
+# install.sh to a GitHub release.
 #
-# - A `v*` tag push builds and publishes the release for that tag. The tag must equal the
-#   workspace version in Cargo.toml (`v0.5.0` for `version = "0.5.0"`), because the formula's
-#   test checks `goalcup --version` against it.
+# - A `v*` tag push builds and publishes the release for that tag. The tag must equal
+#   `v` plus the workspace version in Cargo.toml, because the binaries print that version and
+#   the smoke tests check it. `sh scripts/release.sh <x.y.z>` sets the version and makes the tag.
 # - A manual start builds and packages only: the tarballs are the run's artifacts, and nothing
 #   is published. Use it to try a release before tagging.
 #
@@ -69,6 +69,17 @@ jobs:
       # Unpacks the tarball and runs both binaries and `goalcup doctor` from it; a failure here
       # fails the build, and with it the release.
       - run: sh scripts/smoke-release.sh "dist/goalcup-$VERSION-$TARGET.tar.gz" "$VERSION"
+      # The installer, piped to sh as a participant runs it, against this tarball on this
+      # machine. A SHA256SUMS written here stands in for the release's. It must install the same
+      # connectors the repository holds and a goalcup that prints the version.
+      - name: install.sh
+        run: |
+          (cd dist && shasum -a 256 "goalcup-$VERSION-$TARGET.tar.gz" > SHA256SUMS)
+          home="$(mktemp -d)"
+          GOALCUP_RELEASE_BASE="file://$PWD/dist" HOME="$home" sh < packaging/install.sh
+          rm dist/SHA256SUMS
+          test "$("$home/.local/bin/goalcup" --version)" = "goalcup $VERSION"
+          diff -r connectors "$home/.local/share/goalcup/connectors"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: goalcup-${{ matrix.target }}
@@ -91,17 +102,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: checksums and formula
+      - name: checksums and installer
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 4
           (cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
-          python3 scripts/render-formula.py --version "$version" --sums dist/SHA256SUMS \
-            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME" \
-            > dist/goalcup.rb
+          cp packaging/install.sh dist/install.sh
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag
           --title "$GITHUB_REF_NAME" --generate-notes
-          dist/*.tar.gz dist/SHA256SUMS dist/goalcup.rb
+          dist/*.tar.gz dist/SHA256SUMS dist/install.sh

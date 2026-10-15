@@ -18,7 +18,7 @@ offline. This file is the map for agents and people. Open work is in [`TODO.md`]
 | `server/worker` | The upload server: a Cloudflare Worker in TypeScript. |
 | `scripts/` | `gate.sh`, `pin-manifests.sh`, `check-connector.sh`, `check-links.py`, `matrix.sh`, release scripts. |
 | `skills/` | Agent skills: `adding-a-capture-harness` (for contributors), `goal-cup-setup` (for participants), `goal-cup` (copied into the harness home). |
-| `docs/`, `packaging/` | Docs; release and Homebrew packaging. |
+| `docs/`, `packaging/` | Docs; release packaging and `install.sh`. |
 | `spikes/`, `harnesses/` | Old measurements (read-only fixtures) and local harness installs (git-ignored). |
 
 The dependency rule: the daemon never links the verifier, and the CLI never links the daemon.

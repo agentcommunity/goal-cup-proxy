@@ -925,8 +925,8 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     );
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
-        hex::encode(Sha256::digest(&bytes)),
-        "d6a3efededdca07b46a30b0c1a088e29e46f83c39dfec3fce0d0059c49ac0dfa"
+        hex::encode(Sha256::digest(unversioned(&bytes))),
+        "b1fd6c2182a9746691784b3df17ec916b52ddd11543edd4adff91f3bc470dc00"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];
@@ -2131,6 +2131,24 @@ fn report_regeneration_requires_the_exact_value_one() {
     assert!(regenerate_report_bytes(Some(OsStr::new("1"))));
 }
 
+/// A report names the verifier build that wrote it, and that version changes at every release.
+/// Pinned bytes and digests are taken with it replaced by a marker, so a release does not
+/// invalidate them; `summary["verifier_version"]` is asserted against `VERIFIER_VERSION` alone.
+fn unversioned(bytes: &[u8]) -> Vec<u8> {
+    let own = format!(
+        "\"verifier_version\":\"{}\"",
+        goalcup_verifier::VERIFIER_VERSION
+    );
+    let text = std::str::from_utf8(bytes).expect("a report is UTF-8");
+    assert_eq!(
+        text.matches(&own).count(),
+        1,
+        "the report names its verifier once"
+    );
+    text.replace(&own, "\"verifier_version\":\"@VERSION@\"")
+        .into_bytes()
+}
+
 /// Whole-report bytes of five traces, pinned before the Decoder v1 port. A change of
 /// decoder plumbing must leave `--research-json` byte-identical; only a deliberate change of
 /// a decoder or of the report format may regenerate these (`REGENERATE_REPORT_BYTES=1`).
@@ -2301,6 +2319,7 @@ fn report_bytes_are_pinned_for_representative_traces() {
     for (name, records, finish) in scenarios {
         let trace = make_report_trace(GOAL_TEXT, &records, finish);
         let (_, bytes, _) = report_bytes(trace.path());
+        let bytes = unversioned(&bytes);
         let path = root.join(format!("{name}.ndjson"));
         if regenerate_report_bytes(std::env::var_os("REGENERATE_REPORT_BYTES").as_deref()) {
             std::fs::create_dir_all(&root).unwrap();

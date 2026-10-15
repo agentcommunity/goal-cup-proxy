@@ -16,6 +16,21 @@ or change the tracer. Agents: start with [AGENTS.md](AGENTS.md).
 
 ## Install
 
+**From a release** (macOS and Linux; on Windows, inside WSL2):
+
+```sh
+curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
+```
+
+It picks the build for your machine (macOS or Linux, arm64 or x86_64), checks its SHA-256 against
+the release's `SHA256SUMS`, and installs `goalcup`, `goalcup-daemon` and `goalcup-verify` into
+`~/.local/bin` and the connectors into `~/.local/share/goalcup`. No sudo. It edits no shell
+profile; if `~/.local/bin` is not on your `PATH` it says how to add it. Run it again to upgrade, or
+add `-s -- --version <x.y.z>` after `sh` for a particular release. The builds are unsigned, and a
+download by `curl` is not quarantined on macOS, so they run. There is no Homebrew tap; native
+Windows comes later. The release workflow and the script:
+[packaging/README.md](packaging/README.md).
+
 <a id="build"></a>**From source.** You need Rust 1.99 (`rust-toolchain.toml` selects it; install
 [rustup](https://rustup.rs)), a C compiler (macOS: the Xcode command line tools; Debian or
 Ubuntu: `build-essential`), `python3` and `shasum` or `sha256sum`. From the repository root:
@@ -27,10 +42,6 @@ export PATH="$PWD/target/release:$PATH"
 
 This builds `goalcup`, `goalcup-daemon` and `goalcup-verify`. A binary copied out of
 `target/release` cannot find the connectors: set `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`.
-
-**With Homebrew** (macOS and Linux): `brew install agentcommunity/tap/goalcup`. The first release
-and the tap are due 23 to 24 Oct 2026. Until then, build from source. Packaging:
-[packaging/README.md](packaging/README.md).
 
 ## Quickstart
 
@@ -117,13 +128,15 @@ cargo install cargo-nextest --locked
 cargo fetch --locked          # the gate runs cargo --offline
 ```
 
-- **fast:** `cargo build --workspace`, `cargo fmt --all --check`, `cargo clippy --workspace
-  --all-targets -- -D warnings`, every test except the slow tier (under cargo-nextest), then the
-  doctests. About a minute warm.
+- **fast:** the version check (`scripts/check-version.py`: the version is written in the workspace
+  `Cargo.toml` only), `cargo build --workspace`, `cargo fmt --all --check`, `cargo clippy
+  --workspace --all-targets -- -D warnings`, every test except the slow tier (under
+  cargo-nextest), then the doctests. About a minute warm.
 - **full:** fast, plus the slow tier, the CLI's `#[ignore]`d end-to-end tests
-  (`m2_synthetic_vertical`, `capture_failure_campaign`, `upload_worker`), the scripts' unit tests and
-  the link check. Run it before every tag: nothing else runs the slow tier. The `upload_worker`
-  tests need Node 22.18+ and `npm ci` in `server/worker`.
+  (`m2_synthetic_vertical`, `capture_failure_campaign`, `upload_worker`), the Worker's own tests
+  (`npm --prefix server/worker test`), the scripts' unit tests and the link check. Run it before
+  every tag: nothing else runs the slow tier. The Worker tests need Node 22.18+ and `npm ci` in
+  `server/worker`.
 - Without cargo-nextest the gate falls back to `cargo test`, which runs every tier.
 
 `cargo build` comes first on purpose: the CLI tests spawn the sibling `target/debug/goalcup-daemon`,
@@ -151,6 +164,16 @@ A test that guards one of these is never deleted. It may move tier.
 | P5 | The control API authenticates | daemon control API |
 | P6 | The proxy captures faithfully | cli TLS, HTTP and WebSocket relay; verifier decoders |
 | P7 | One end-to-end capture per harness, and termination | cli lifecycle suites and contract kit; daemon capture lifecycle and process kill |
+
+## Releasing
+
+The workspace `version` in `Cargo.toml` is the only place a version is written; the gate fails on
+any other copy. `main` is protected, so a release is two steps that never push `main`:
+`sh scripts/release.sh prepare <x.y.z>` opens a pull request that bumps the version (it does
+nothing if `origin/main` already has it), and, once that is merged, `sh scripts/release.sh tag
+<x.y.z>` tags `origin/main` and pushes only the tag. The tag starts the release workflow, which
+refuses a tag that differs from `Cargo.toml`. Details and how to try the build by hand:
+[packaging/README.md](packaging/README.md#cutting-a-release).
 
 ## Run a capture
 

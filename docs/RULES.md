@@ -28,8 +28,9 @@ evidence about the current agent ecosystem.
 
 All times are UTC.
 
-- **23–24 October:** first tracer release and Homebrew tap. The release freeze is 26 October. The
-  dry run is around 28 October.
+- **23–24 October:** first tracer release. The release freeze is 26 October. The dry run is around
+  28 October. Install the latest release on macOS, Linux or WSL2 with
+  `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh` ([guide](PARTICIPANT-GUIDE.md#1-install)).
 - **Before the window:** you prepare with `goalcup prep` and practice runs. Practice is not limited
   to the window.
 - **7 November 2026, 00:00:** the 24-hour start window opens. It closes at 00:00 on 8 November.

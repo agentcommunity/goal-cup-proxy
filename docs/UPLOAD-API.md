@@ -57,7 +57,7 @@ code is only ever in a request body, never in a URL or a log.
 
 ```json
 {"purpose": "login" | "run", "mode": "competition" | "practice" | "test",
- "connector_id": "codex-cli", "tracer_version": "0.1.0"}
+ "connector_id": "codex-cli", "tracer_version": "<tracer version>"}
 ```
 
 All four fields are required. `200`:
@@ -131,7 +131,7 @@ Called by `goalcup start` after its local checks and before anything is created 
 ```json
 {"connector_id": "codex-cli", "manifest_sha256": "<hex>", "connector_dir_sha256": "<hex>",
  "workspace": "/abs/path/run-.../workspace", "session_id": "<uuid>",
- "harness_version": "0.153.0", "tracer_version": "0.1.0",
+ "harness_version": "0.153.0", "tracer_version": "<tracer version>",
  "repo_url": "https://github.com/<owner>/<repo>",
  "machine": {"os": "macOS", "cpus": 8, "ac_power": true}}
 ```

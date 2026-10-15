@@ -34,6 +34,9 @@ exit 0
 """
 
 
+VERSION_CHECK = "python3 scripts/check-version.py"
+
+
 class GateTests(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -43,10 +46,17 @@ class GateTests(unittest.TestCase):
         self.log.touch()
         bindir = root / "bin"
         bindir.mkdir()
-        for name in ("cargo", "python3"):
+        for name in ("cargo", "python3", "npm"):
             stub = bindir / name
             stub.write_text(STUB)
             stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+        # gate.sh works in the directory above its own, so it runs from a copy in a scratch tree.
+        # The scratch tree holds the Worker's node_modules, which `full` requires, so these tests
+        # do not depend on whether `npm ci` has run in the checkout.
+        (root / "tree/scripts").mkdir(parents=True)
+        (root / "tree/server/worker/node_modules").mkdir(parents=True)
+        self.gate = root / "tree/scripts/gate.sh"
+        self.gate.write_text(GATE.read_text())
         self.env = {
             **os.environ,
             "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
@@ -57,7 +67,7 @@ class GateTests(unittest.TestCase):
 
     def run_gate(self, tier: str, **extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["sh", str(GATE), tier],
+            ["sh", str(self.gate), tier],
             env={**self.env, **extra},
             capture_output=True,
             text=True,
@@ -72,7 +82,11 @@ class GateTests(unittest.TestCase):
     def test_fast_builds_workspace_before_tests(self) -> None:
         result = self.run_gate("fast")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls()[0], "cargo build --offline --workspace")
+        calls = self.calls()
+        self.assertEqual(calls[0], VERSION_CHECK)
+        build = calls.index("cargo build --offline --workspace")
+        tests = [i for i, c in enumerate(calls) if c.startswith(("cargo nextest run", "cargo test"))]
+        self.assertTrue(tests and build < min(tests), calls)
 
     def test_fast_excludes_full(self) -> None:
         self.run_gate("fast")
@@ -95,14 +109,19 @@ class GateTests(unittest.TestCase):
         result = self.run_gate("full")
         self.assertEqual(result.returncode, 0, result.stderr)
         runs = self.nextest_runs()
-        self.assertEqual(len(runs), 2, runs)
+        self.assertEqual(len(runs), 3, runs)
         self.assertNotIn("binary(full)", runs[0])
         self.assertNotIn("-E", runs[0])
         # Review R10 I1: the `#[ignore]`d end-to-end tests, by name, and nothing else ignored.
         self.assertIn("--run-ignored ignored-only", runs[1])
         self.assertIn("m2_synthetic_vertical|capture_failure_campaign", runs[1])
+        # The real Worker under `wrangler dev`, by name.
+        self.assertIn("--run-ignored ignored-only", runs[2])
+        self.assertIn("upload_worker", runs[2])
         self.assertIn("python3 -m unittest discover -s scripts", self.calls())
         self.assertIn("python3 scripts/check-links.py --root .", self.calls())
+        # The Worker's own tests (typecheck, wrangler.toml guards, rate limits) run in `full` only.
+        self.assertIn("npm --prefix server/worker test", self.calls())
 
     def test_doctests_run_beside_nextest_but_not_twice_in_the_fallback(self) -> None:
         # nextest does not run doctests; `cargo test` (the fallback) already does.
@@ -112,9 +131,18 @@ class GateTests(unittest.TestCase):
         self.run_gate("fast", STUB_NO_NEXTEST="1")
         self.assertNotIn("cargo test --offline --workspace --doc", self.calls())
 
-    def test_fast_skips_script_checks(self) -> None:
+    def test_fast_skips_script_checks_except_the_version_check(self) -> None:
         self.run_gate("fast")
-        self.assertEqual([c for c in self.calls() if c.startswith("python3")], [])
+        self.assertEqual([c for c in self.calls() if c.startswith("python3")], [VERSION_CHECK])
+        self.assertEqual([c for c in self.calls() if c.startswith("npm")], [])
+
+    def test_full_stops_without_the_workers_dependencies(self) -> None:
+        # Said at once, before any long step, rather than after the build and the tests.
+        (self.gate.parent.parent / "server/worker/node_modules").rmdir()
+        result = self.run_gate("full")
+        self.assertEqual(result.stdout.splitlines()[-1], "gate full: FAIL")
+        self.assertIn("run npm ci in server/worker", result.stdout)
+        self.assertEqual(self.calls(), [])
 
     def test_fast_runs_fmt_and_clippy(self) -> None:
         self.run_gate("fast")
@@ -159,7 +187,8 @@ class GateTests(unittest.TestCase):
         result = self.run_gate("full", STUB_FAIL_ON="nextest run")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout.splitlines()[-1], "gate full: FAIL")
-        self.assertEqual([c for c in self.calls() if c.startswith("python3")], [])
+        self.assertEqual([c for c in self.calls() if c.startswith("python3")], [VERSION_CHECK])
+        self.assertEqual([c for c in self.calls() if c.startswith("npm")], [])
 
     def test_unknown_tier_is_a_usage_error(self) -> None:
         result = self.run_gate("slow")

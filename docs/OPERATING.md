@@ -47,7 +47,7 @@ All times UTC.
 
 | Date | What |
 |---|---|
-| 23–24 Oct | First release and Homebrew tap |
+| 23–24 Oct | First release (`scripts/release.sh prepare`, merge, `scripts/release.sh tag`) |
 | 26 Oct | Freeze |
 | about 28 Oct | Dry run (production, `goalcup-dryrun-2026`) |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. |
@@ -121,10 +121,11 @@ sh scripts/delete-test-runs.sh --older-than '7 days' --yes   # only runs older t
 
 ## Releasing the tracer
 
-A `v*` tag that equals the workspace version builds four tarballs and the Homebrew formula. Steps and
-layout are in [packaging/README.md](../packaging/README.md). The binaries are unsigned and not notarized.
-Run `sh scripts/gate.sh full` before every tag. A release tarball carries `codex-cli` and
-`claude-code-cli`; `hermes-cli` stays out because it needs a provider key.
+A `v*` tag that equals the workspace version builds four tarballs, `SHA256SUMS` and `install.sh`
+(participants install with it). Steps and layout are in [packaging/README.md](../packaging/README.md).
+The binaries are unsigned and not notarized. Run `sh scripts/gate.sh full` before every tag. A release
+tarball carries every folder under `connectors/`; a merged connector ships by being merged, but the
+pins are compiled in, so a connector merged after a release needs a point release.
 
 ## The matrix
 

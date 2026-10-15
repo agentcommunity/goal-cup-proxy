@@ -5,9 +5,8 @@
 # Why it's this small (the owner's rule is that CI stays lean; do not add heavy jobs):
 # - Runner minutes cost something on every pull request, and a Linux run proves little about a
 #   macOS-targeted recorder.
-# - It runs for pull requests into `main` or `v1/trunk` (the maintainers' V1 line, which does
-#   not exist in a fresh public repository), pushes to those branches, or a manual start. There
-#   is no path filter, so every pull request gets a completed `check` that can be required.
+# - It runs for pull requests into `main`, pushes to `main`, or a manual start. There is no path
+#   filter, so every pull request gets a completed `check` that can be required.
 # - The `scope` step decides whether the Rust smoke runs (scripts/ci-scope.py). Only a change
 #   made entirely of Markdown under docs/, root Markdown or the pull request template skips it.
 #   Anything else, an unknown or failed comparison, or a manual start runs it. The scope tests,
@@ -25,9 +24,9 @@ name: ci
 
 on:
   pull_request:
-    branches: [main, v1/trunk]
+    branches: [main]
   push:
-    branches: [main, v1/trunk]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:

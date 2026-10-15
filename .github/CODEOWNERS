@@ -46,6 +46,10 @@
 /scripts/with-*-key.sh                              @nembal
 /packaging/                                         @nembal
 /.github/                                           @nembal
+
+# The upload server: wrangler.toml holds the production route and the staging fence, and src/
+# holds authentication. The next `wrangler deploy` from main would ship a merged change.
+/server/                                            @nembal
 /SECURITY.md                                        @nembal
 
 # The v5 reader corpus: a changed expectation is a verdict change and needs a DECISIONS row
