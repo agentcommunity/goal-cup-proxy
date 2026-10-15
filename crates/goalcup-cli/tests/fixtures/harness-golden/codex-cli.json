@@ -472,20 +472,12 @@
   },
   "capture_profile": {
     "args": [
-      "exec",
-      "--json",
-      "-c",
-      "approval_policy=\"never\"",
       "-c",
       "check_for_update_on_startup=false",
       "-c",
       "projects={{ \"{workspace}\" = {{ trust_level = \"trusted\" }} }}",
-      "-s",
-      "danger-full-access",
-      "--skip-git-repo-check",
       "-C",
-      "{workspace}",
-      "--"
+      "{workspace}"
     ],
     "auth_hosts": [
       "auth.openai.com"
@@ -495,7 +487,7 @@
       "CODEX_CA_CERTIFICATE"
     ],
     "config_home": "shared",
-    "continuation": "none: codex exec one turn, approval_policy=never, full access with network, stdin /dev/null",
+    "continuation": "chat: the participant types the prompt and may type keep going",
     "env": {
       "SHELL": "/bin/zsh"
     },
@@ -924,12 +916,12 @@
     }
   ],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 15,
-    "goal_index": 14,
-    "goal_prefix": 0,
+    "argv_len": 6,
+    "goal_index": null,
+    "goal_prefix": null,
     "tail": [
-      "--",
-      "--profile evil -p x"
+      "-C",
+      "<TMP>/workspace"
     ]
   },
   "home": {
@@ -938,26 +930,14 @@
   },
   "plan": {
     "argv": [
-      "exec",
-      "--json",
-      "-c",
-      "approval_policy=\"never\"",
       "-c",
       "check_for_update_on_startup=false",
       "-c",
       "projects={ \"<TMP>/workspace\" = { trust_level = \"trusted\" } }",
-      "-s",
-      "danger-full-access",
-      "--skip-git-repo-check",
       "-C",
-      "<TMP>/workspace",
-      "--",
-      "write result.txt"
+      "<TMP>/workspace"
     ],
-    "capture": {
-      "goal_index": 14,
-      "goal_prefix": 0
-    },
+    "capture": null,
     "cwd": "<TMP>/workspace",
     "env_base_keys": [],
     "env_remove": [],
@@ -980,7 +960,7 @@
       "native_binary": "codex",
       "strategy": "native_pid"
     },
-    "mode": "Server",
+    "mode": "Tui",
     "program": "<TMP>/bin/fake-harness"
   },
   "redaction": {
@@ -1000,10 +980,10 @@
     ]
   },
   "streams": {
-    "decision": "CodexStdout",
+    "decision": "Inherit",
     "pipes": {
       "stderr": false,
-      "stdout": true
+      "stdout": false
     }
   },
   "termination": {
@@ -1014,21 +994,12 @@
     },
     "registered_handle": {
       "argv": [
-        "exec",
-        "--json",
-        "-c",
-        "approval_policy=\"never\"",
         "-c",
         "check_for_update_on_startup=false",
         "-c",
         "projects={ \"<TMP>/workspace\" = { trust_level = \"trusted\" } }",
-        "-s",
-        "danger-full-access",
-        "--skip-git-repo-check",
         "-C",
-        "<TMP>/workspace",
-        "--",
-        "<goal>"
+        "<TMP>/workspace"
       ],
       "env_keys": [
         "CODEX_CA_CERTIFICATE",

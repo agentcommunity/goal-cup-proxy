@@ -1,19 +1,19 @@
-# Claude Code 2.1.283, capture profile (T14; D38, D39). Recipe: docs/qualification/m2/launch-recipes.md §8.
+# Claude Code 2.1.283, capture profile (T14; D38, D39, D57). Recipe: docs/qualification/m2/launch-recipes.md §8.
 schema_version = 1
 id = "claude-code-cli"
 
 [capture]
 auth_hosts = ["platform.claude.com"]
-# No model, effort, permission or MCP limit (owner direction, 2026-10-14): the harness's own
-# defaults, and nothing asks for permission, because nobody is there to answer.
-continuation = "none: claude -p one turn, permissions bypassed, stdin /dev/null"
-args = [
-  "-p",
-  "--permission-mode", "bypassPermissions",
-  "--session-id", "{session_id}",
-  "--output-format", "json",
-  "--",
-]
+# Chat mode (D57): Claude Code opens in the participant's terminal and the participant types the
+# prompt. No model, effort, permission or MCP option (owner direction, 2026-10-14; D57): the
+# harness's own defaults and the participant's own settings. A fresh workspace asks once whether
+# the participant trusts the folder (measured 14 Oct 2026, docs/harnesses/claude-code-cli.md).
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
+args = []
+# `goalcup continue` (T7): reopen the workspace's most recent session; measured to append to the
+# same session file (docs/harnesses/claude-code-cli.md, section 10).
+resume_args = ["--continue"]
 
 [capture.executable]
 program = "claude"
@@ -40,21 +40,26 @@ run_home = "keychain_link"
 config_home = "shared"
 env = "CLAUDE_CONFIG_DIR"
 real_dirs = ["{user_home}/.claude"]
+# The goal-cup skill is put in the harness home's `skills/goal-cup/` before each launch.
+skills_dir = "skills"
 
 [capture.ca]
 env = ["NODE_EXTRA_CA_CERTS"]
 mode = "extend"
 
+# D57: no session id is passed at launch. The run's sessions are every transcript new or written
+# since the run started (a `claude --continue` appends to an old one), which is safe because
+# runs on the shared home are serialized (D39).
 [capture.identity]
-source = "preassigned"
-binding = "at_launch"
+source = "none"
 
 [[capture.native]]
 name = "main"
 root = "{config_home}/projects"
-pattern = "*/{id}.jsonl"
+pattern = "*/*.jsonl"
 form = "append_only"
 protocol_hint = "claude-code-jsonl"
+since_run_start = true
 
 [capture.termination]
 strategy = "process_group"

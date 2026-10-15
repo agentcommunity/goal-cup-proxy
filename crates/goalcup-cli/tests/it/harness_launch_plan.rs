@@ -27,59 +27,62 @@ fn shipped_harnesses_have_the_s0_stream_and_identity_plans() {
         LaunchScope::AtFinish
     );
 
-    let codex = load("codex-cli");
-    let plan = StreamPlan::for_spec(&codex.manifest.capture).unwrap();
-    assert!(!plan.scan_for_key);
-    assert!(matches!(plan.stdout, StdoutUse::IdentityJson(_)));
-    assert_eq!(plan.stderr, StderrUse::Inherit);
-    assert_eq!(
-        LaunchScope::for_spec(&codex.manifest.capture).unwrap(),
-        LaunchScope::FromStdout
-    );
-
-    let claude = load("claude-code-cli");
-    let plan = StreamPlan::for_spec(&claude.manifest.capture).unwrap();
-    assert!(!plan.scan_for_key);
-    assert_eq!(plan.stdout, StdoutUse::Inherit);
-    assert_eq!(plan.stderr, StderrUse::Inherit);
-    assert_eq!(
-        LaunchScope::for_spec(&claude.manifest.capture).unwrap(),
-        LaunchScope::Preassigned
-    );
-
-    let text = std::fs::read_to_string(connectors().join("claude-code-cli/harness.toml"))
-        .unwrap()
-        .replace(
-            "[capture.identity]\nsource = \"preassigned\"\nbinding = \"at_launch\"",
-            "[capture.identity]\nsource = \"none\"",
+    // Chat mode (D57): the terminal is the harness's, both streams inherited, and no identity
+    // at launch; the sessions are every file new or written since the run started.
+    for id in ["codex-cli", "claude-code-cli"] {
+        let loaded = load(id);
+        let capture = &loaded.manifest.capture;
+        assert!(capture.interactive, "{id}");
+        let plan = StreamPlan::for_spec(capture).unwrap();
+        assert!(!plan.scan_for_key, "{id}");
+        assert_eq!(plan.stdout, StdoutUse::Inherit, "{id}");
+        assert_eq!(plan.stderr, StderrUse::Inherit, "{id}");
+        assert_eq!(
+            LaunchScope::for_spec(capture).unwrap(),
+            LaunchScope::None,
+            "{id}"
         );
-    let workload = HarnessManifest::from_toml_str(&text).unwrap();
-    let plan = StreamPlan::for_spec(&workload.capture).unwrap();
-    assert!(!plan.scan_for_key);
-    assert_eq!(plan.stdout, StdoutUse::Inherit);
-    assert_eq!(plan.stderr, StderrUse::Inherit);
+        assert!(capture.native.iter().all(|n| n.since_run_start), "{id}");
+        assert_eq!(capture.home.skills_dir.as_deref(), Some("skills"), "{id}");
+    }
     assert_eq!(
-        LaunchScope::for_spec(&workload.capture).unwrap(),
-        LaunchScope::None
+        load("codex-cli").manifest.capture.resume_args,
+        ["resume", "--last"]
     );
+    assert_eq!(
+        load("claude-code-cli").manifest.capture.resume_args,
+        ["--continue"]
+    );
+}
+
+/// A shipped manifest with its identity table replaced, parsed without validating: what the
+/// launcher copies from a headless profile that names these rules.
+fn with_identity(id: &str, identity: &str) -> HarnessManifest {
+    let text = std::fs::read_to_string(connectors().join(id).join("harness.toml")).unwrap();
+    let from = "[capture.identity]\nsource = \"none\"";
+    assert!(text.contains(from), "{id}");
+    HarnessManifest::from_toml_str(&text.replace(from, &format!("[capture.identity]\n{identity}")))
+        .unwrap()
 }
 
 #[test]
 fn preassigned_scope_does_not_change_when_a_credential_is_present() {
-    let path = connectors().join("claude-code-cli/harness.toml");
-    let text = std::fs::read_to_string(path).unwrap();
-    let text = text.replace(
-        "[capture.ca]",
-        "[capture.credential]\nenv = \"DEEPSEEK_API_KEY\"\n\n[capture.ca]",
+    let manifest = with_identity(
+        "claude-code-cli",
+        "source = \"preassigned\"\nbinding = \"at_launch\"",
     );
-    // Parse without validating: this deliberately probes the launcher's decision rather than
-    // asking protocol validation whether such a shipped combination is useful.
-    let manifest = HarnessManifest::from_toml_str(&text).unwrap();
     assert_eq!(
         LaunchScope::for_spec(&manifest.capture).unwrap(),
         LaunchScope::Preassigned
     );
-    let streams = StreamPlan::for_spec(&manifest.capture).unwrap();
+    let mut capture = manifest.capture.clone();
+    capture.credential = load("hermes-cli").manifest.capture.credential.clone();
+    assert!(capture.credential.is_some());
+    assert_eq!(
+        LaunchScope::for_spec(&capture).unwrap(),
+        LaunchScope::Preassigned
+    );
+    let streams = StreamPlan::for_spec(&capture).unwrap();
     assert!(streams.scan_for_key);
     assert_eq!(streams.stdout, StdoutUse::Forward);
     assert_eq!(streams.stderr, StderrUse::Forward);
@@ -87,17 +90,25 @@ fn preassigned_scope_does_not_change_when_a_credential_is_present() {
 
 #[test]
 fn identity_rules_are_copied_from_the_manifest() {
-    let codex = load("codex-cli");
+    let codex = with_identity(
+        "codex-cli",
+        "source = \"stdout_json\"\nbinding = \"at_launch\"\nmatch_field = \"type\"\n\
+         match_value = \"thread.started\"\nid_field = \"thread_id\"",
+    );
     let StreamPlan {
         stdout: StdoutUse::IdentityJson(rule),
         ..
-    } = StreamPlan::for_spec(&codex.manifest.capture).unwrap()
+    } = StreamPlan::for_spec(&codex.capture).unwrap()
     else {
-        panic!("Codex must use its stdout JSON identity rule")
+        panic!("a stdout_json profile must use its stdout JSON identity rule")
     };
     assert_eq!(rule.match_field, "type");
     assert_eq!(rule.match_value, "thread.started");
     assert_eq!(rule.id_field, "thread_id");
+    assert_eq!(
+        LaunchScope::for_spec(&codex.capture).unwrap(),
+        LaunchScope::FromStdout
+    );
 
     let hermes = load("hermes-cli");
     let StreamPlan {
@@ -325,7 +336,7 @@ fn launch_uses_the_harness_bytes_captured_at_load_time() {
         &vars,
         &workspace,
         &CaptureLaunch {
-            goal: Some(b"one goal"),
+            goal: None,
             executable: &resolved,
             run_home: &run_home,
             config_home: &config_home,
@@ -402,7 +413,7 @@ fn the_env_follows_the_running_platform() {
         &vars,
         &workspace,
         &CaptureLaunch {
-            goal: Some(b"one goal"),
+            goal: None,
             executable: &resolved,
             run_home: &run_home,
             config_home: &config_home,
@@ -467,7 +478,7 @@ fn a_harness_without_a_home_variable_gets_only_the_private_home() {
         &vars,
         &workspace,
         &CaptureLaunch {
-            goal: Some(b"one goal"),
+            goal: None,
             executable: &resolved,
             run_home: &run_home,
             config_home: &config_home,
@@ -500,41 +511,7 @@ fn an_interactive_plan_places_no_goal_and_keeps_the_terminal() {
 
     let tmp = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(tmp.path()).unwrap();
-    // The shipped Codex recipe in chat mode: its args without `exec`, the goal's `--` or any
-    // headless option, identity `none`, and a native source read from the run's start.
-    let dir = root.join("connectors/example-chat");
-    std::fs::create_dir_all(&dir).unwrap();
-    let shipped = std::fs::read_to_string(connectors().join("codex-cli/harness.toml")).unwrap();
-    let tail = &shipped[shipped.find("[capture.executable]").unwrap()..];
-    let tail = tail
-        .replace(
-            &tail[tail.find("[capture.identity]").unwrap()..tail.find("# D22").unwrap()],
-            "[capture.identity]\nsource = \"none\"\n\n[[capture.native]]\nname = \"rollout\"\n\
-             root = \"{config_home}/sessions\"\npattern = \"*/*/*/rollout-*.jsonl\"\n\
-             form = \"append_only\"\nsince_run_start = true\n\n",
-        )
-        .replace("program = \"codex\"", "program = \"example-chat\"");
-    let head = r#"schema_version = 1
-id = "example-chat"
-
-[capture]
-auth_hosts = ["auth.openai.com"]
-interactive = true
-continuation = "chat: the participant types the prompt"
-args = [
-  "-c", "check_for_update_on_startup=false",
-  "-c", 'projects={{ "{workspace}" = {{ trust_level = "trusted" }} }}',
-  "-C", "{workspace}",
-]
-
-"#;
-    std::fs::write(dir.join("harness.toml"), format!("{head}{tail}")).unwrap();
-    let connector =
-        goalcup_cli::connector::load_harness(&root.join("connectors"), "example-chat", true)
-            .expect("a chat-mode connector loads");
-    assert!(connector.loaded.manifest.capture.interactive);
-
-    let exe = root.join("example-chat");
+    let exe = root.join("harness");
     std::fs::write(&exe, b"any build\n").unwrap();
     let resolved = resolve_harness_executable(&exe).unwrap();
     let workspace = root.join("workspace");
@@ -558,34 +535,37 @@ args = [
         ca_certificate: &ca,
         parent_env: &parent,
     };
-    let plan = build_capture_launch(&connector, &vars, &workspace, &launch(None)).unwrap();
-    assert_eq!(
-        plan.argv,
-        [
-            "-c".to_string(),
-            "check_for_update_on_startup=false".to_string(),
-            "-c".to_string(),
-            format!(
-                "projects={{ \"{}\" = {{ trust_level = \"trusted\" }} }}",
-                workspace.display()
-            ),
-            "-C".to_string(),
-            workspace.display().to_string(),
-        ]
-    );
-    assert_eq!(plan.capture, None, "no goal slot");
-    assert_eq!(
-        plan.mode,
-        LaunchMode::Tui,
-        "the terminal's foreground group"
-    );
-    let refused = build_capture_launch(&connector, &vars, &workspace, &launch(Some(b"goal")))
-        .expect_err("a goal for a chat-mode connector");
-    assert!(refused.to_string().contains("chat mode"), "{refused}");
+    let codex_argv = vec![
+        "-c".to_string(),
+        "check_for_update_on_startup=false".to_string(),
+        "-c".to_string(),
+        format!(
+            "projects={{ \"{}\" = {{ trust_level = \"trusted\" }} }}",
+            workspace.display()
+        ),
+        "-C".to_string(),
+        workspace.display().to_string(),
+    ];
+    for (id, argv) in [("codex-cli", codex_argv), ("claude-code-cli", Vec::new())] {
+        let connector =
+            goalcup_cli::connector::load_harness(&connectors(), id, false).expect("shipped");
+        let plan = build_capture_launch(&connector, &vars, &workspace, &launch(None))
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert_eq!(plan.argv, argv, "{id}");
+        assert_eq!(plan.capture, None, "{id}: no goal slot");
+        assert_eq!(
+            plan.mode,
+            LaunchMode::Tui,
+            "{id}: the terminal's foreground group"
+        );
+        let refused = build_capture_launch(&connector, &vars, &workspace, &launch(Some(b"goal")))
+            .expect_err("a goal for a chat-mode connector");
+        assert!(refused.to_string().contains("chat mode"), "{id}: {refused}");
+    }
 
     // A headless connector refuses a launch with no goal.
-    let codex = goalcup_cli::connector::load_harness(&connectors(), "codex-cli", false).unwrap();
-    let refused = build_capture_launch(&codex, &vars, &workspace, &launch(None))
+    let hermes = goalcup_cli::connector::load_harness(&connectors(), "hermes-cli", false).unwrap();
+    let refused = build_capture_launch(&hermes, &vars, &workspace, &launch(None))
         .expect_err("no goal for a headless connector");
     assert!(refused.to_string().contains("headless"), "{refused}");
 }

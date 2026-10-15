@@ -471,16 +471,7 @@
     ]
   },
   "capture_profile": {
-    "args": [
-      "-p",
-      "--permission-mode",
-      "bypassPermissions",
-      "--session-id",
-      "{session_id}",
-      "--output-format",
-      "json",
-      "--"
-    ],
+    "args": [],
     "auth_hosts": [
       "platform.claude.com"
     ],
@@ -489,7 +480,7 @@
       "NODE_EXTRA_CA_CERTS"
     ],
     "config_home": "shared",
-    "continuation": "none: claude -p one turn, permissions bypassed, stdin /dev/null",
+    "continuation": "chat: the participant types the prompt and may type keep going",
     "env": {
       "CLAUDE_CODE_RETRY_WATCHDOG": "1",
       "DISABLE_AUTOUPDATER": "1",
@@ -920,34 +911,18 @@
     }
   ],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 9,
-    "goal_index": 8,
-    "goal_prefix": 0,
-    "tail": [
-      "--",
-      "--profile evil -p x"
-    ]
+    "argv_len": 0,
+    "goal_index": null,
+    "goal_prefix": null,
+    "tail": []
   },
   "home": {
     "kind": "shared",
     "per_run_tree": null
   },
   "plan": {
-    "argv": [
-      "-p",
-      "--permission-mode",
-      "bypassPermissions",
-      "--session-id",
-      "5f0c2a8e-8a0e-4c1f-9d6b-2b7d2b0e9a11",
-      "--output-format",
-      "json",
-      "--",
-      "write result.txt"
-    ],
-    "capture": {
-      "goal_index": 8,
-      "goal_prefix": 0
-    },
+    "argv": [],
+    "capture": null,
     "cwd": "<TMP>/workspace",
     "env_base_keys": [],
     "env_remove": [],
@@ -972,7 +947,7 @@
       "native_binary": null,
       "strategy": "process_group"
     },
-    "mode": "Server",
+    "mode": "Tui",
     "program": "<TMP>/bin/fake-harness"
   },
   "redaction": {
@@ -984,7 +959,7 @@
     ]
   },
   "streams": {
-    "decision": "PreassignedSession",
+    "decision": "Inherit",
     "pipes": {
       "stderr": false,
       "stdout": false
@@ -997,17 +972,7 @@
       "strategy": "process_group"
     },
     "registered_handle": {
-      "argv": [
-        "-p",
-        "--permission-mode",
-        "bypassPermissions",
-        "--session-id",
-        "5f0c2a8e-8a0e-4c1f-9d6b-2b7d2b0e9a11",
-        "--output-format",
-        "json",
-        "--",
-        "<goal>"
-      ],
+      "argv": [],
       "env_keys": [
         "CLAUDE_CODE_RETRY_WATCHDOG",
         "CLAUDE_CONFIG_DIR",
