@@ -32,6 +32,8 @@ pub const RESERVE: u64 = 4 * 1024 * 1024;
 pub struct Rig {
     h: EmptyControlHarness,
     upload_trap: std::net::TcpListener,
+    /// The connectors directory of [`Rig::start_headless`], kept alive with the rig.
+    _headless: Option<tempfile::TempDir>,
 }
 
 impl std::ops::Deref for Rig {
@@ -56,7 +58,46 @@ impl Rig {
         let upload_url = format!("http://{}", upload_trap.local_addr().unwrap());
         // Nothing but the trap listens at the upload URL.
         let h = empty_control_harness_on(&upload_url, edit).await;
-        Rig { h, upload_trap }
+        Rig {
+            h,
+            upload_trap,
+            _headless: None,
+        }
+    }
+
+    /// [`Rig::start`] over the frozen headless Codex and Claude connectors (ids
+    /// `headless-codex-cli` and `headless-claude-code-cli`) plus the shipped Hermes one, so a
+    /// test of the `{id}`-scoped, one-turn behaviour does not follow the shipped manifests
+    /// when they change mode.
+    pub async fn start_headless() -> Rig {
+        let connectors = tempfile::tempdir().unwrap();
+        // The frozen texts differ from the build-pinned bytes, so they load as development
+        // connectors under ids of their own, as `capture-dev` does.
+        for id in ["codex-cli", "claude-code-cli"] {
+            let text = std::fs::read_to_string(
+                super::support::headless_connector_dir(id).join("harness.toml"),
+            )
+            .unwrap();
+            let dir = connectors.path().join(format!("headless-{id}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("harness.toml"),
+                text.replacen(
+                    &format!("id = \"{id}\""),
+                    &format!("id = \"headless-{id}\""),
+                    1,
+                ),
+            )
+            .unwrap();
+        }
+        super::support::copy_tree(
+            &super::support::shipped_connector_dir("hermes-cli"),
+            &connectors.path().join("hermes-cli"),
+        );
+        let dir = connectors.path().to_path_buf();
+        let mut rig = Rig::start_with(move |config| config.connectors_dir = dir).await;
+        rig._headless = Some(connectors);
+        rig
     }
 
     /// Stop this daemon and start another over the same root and configuration.
@@ -64,6 +105,7 @@ impl Rig {
         Rig {
             h: restart_empty_control(self.h).await,
             upload_trap: self.upload_trap,
+            _headless: self._headless,
         }
     }
 
@@ -77,6 +119,7 @@ impl Rig {
         Ok(Rig {
             h,
             upload_trap: self.upload_trap,
+            _headless: self._headless,
         })
     }
 
@@ -485,8 +528,8 @@ pub fn descriptors_on(path: &Path) -> usize {
         .count()
 }
 
-/// A connectors directory holding the two shipped connectors and `capture-dev`: the Codex
-/// manifest under that id, without foreign scans, with `edit` applied.
+/// A connectors directory holding the two shipped connectors and `capture-dev`: the frozen
+/// headless Codex manifest under that id, without foreign scans, with `edit` applied.
 pub fn dev_connectors(edit: impl FnOnce(&mut String)) -> tempfile::TempDir {
     let connectors = tempfile::tempdir().unwrap();
     for shipped in ["codex-cli", "claude-code-cli"] {
@@ -496,7 +539,7 @@ pub fn dev_connectors(edit: impl FnOnce(&mut String)) -> tempfile::TempDir {
         );
     }
     let text = std::fs::read_to_string(
-        super::support::shipped_connector_dir("codex-cli").join("harness.toml"),
+        super::support::headless_connector_dir("codex-cli").join("harness.toml"),
     )
     .unwrap();
     let dir = connectors.path().join("capture-dev");

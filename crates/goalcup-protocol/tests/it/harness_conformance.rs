@@ -169,6 +169,21 @@ fn the_extra_pattern_mirror_equals_the_shipped_harness_patterns() {
 
 /// Copy `connectors/<id>/` into a fresh temp directory named `folder`, and return both.
 fn copy_connector_as(id: &str, folder: &str) -> (tempfile::TempDir, PathBuf) {
+    copy_dir_as(&root().join("connectors").join(id), folder)
+}
+
+/// [`copy_connector`] of the frozen copy of `id` as it shipped while headless, for the tests
+/// of the headless recipe's text.
+fn copy_headless_connector(id: &str) -> (tempfile::TempDir, PathBuf) {
+    copy_dir_as(
+        &root()
+            .join("crates/goalcup-protocol/tests/fixtures/headless-connectors/")
+            .join(id),
+        id,
+    )
+}
+
+fn copy_dir_as(source: &Path, folder: &str) -> (tempfile::TempDir, PathBuf) {
     fn copy(from: &Path, to: &Path) {
         std::fs::create_dir_all(to).unwrap();
         for e in std::fs::read_dir(from).unwrap() {
@@ -183,7 +198,7 @@ fn copy_connector_as(id: &str, folder: &str) -> (tempfile::TempDir, PathBuf) {
     }
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join(folder);
-    copy(&root().join("connectors").join(id), &dir);
+    copy(source, &dir);
     (tmp, dir)
 }
 
@@ -260,7 +275,7 @@ fn sensitivity_load_dir_refuses_an_extra_pattern_off_the_mirror() {
 /// is documentation, never an argument, env value or host.
 #[test]
 fn sensitivity_f7_catches_a_value_validate_does_not_scan() {
-    let (_tmp, dir) = copy_connector("codex-cli");
+    let (_tmp, dir) = copy_headless_connector("codex-cli");
     mutate(
         &dir.join("harness.toml"),
         "full access with network, stdin",

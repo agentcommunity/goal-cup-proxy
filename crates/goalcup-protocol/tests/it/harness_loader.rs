@@ -467,6 +467,23 @@ fn shipped_dir(id: &str, edit: impl Fn(String) -> String) -> tempfile::TempDir {
     let from = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../connectors")
         .join(id);
+    dir_with(&from, edit)
+}
+
+/// The frozen copy of `id` as it shipped while headless (`tests/fixtures/headless-connectors`),
+/// `harness.toml` passed through `edit`. For tests of the headless recipe, which the shipped
+/// connector no longer has once it runs a chat.
+fn headless_dir(id: &str, edit: impl Fn(String) -> String) -> tempfile::TempDir {
+    dir_with(&headless_path(id), edit)
+}
+
+fn headless_path(id: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/headless-connectors")
+        .join(id)
+}
+
+fn dir_with(from: &Path, edit: impl Fn(String) -> String) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().expect("tempdir");
     let toml = std::fs::read_to_string(from.join("harness.toml")).unwrap();
     std::fs::write(tmp.path().join("harness.toml"), edit(toml)).unwrap();
@@ -514,7 +531,7 @@ fn a_pinned_connector_sets_no_env_the_rules_refuse() {
 #[test]
 fn a_pinned_connector_passes_no_args_the_rules_refuse() {
     for extra in ["--insecure", "--cafile", r#"notify=[\"sh\",\"-c\",\"id\"]"#] {
-        let tmp = shipped_dir("codex-cli", |toml| {
+        let tmp = headless_dir("codex-cli", |toml| {
             toml.replace(
                 "  \"--skip-git-repo-check\",\n",
                 &format!("  \"--skip-git-repo-check\",\n  \"{extra}\",\n"),
@@ -529,7 +546,7 @@ fn a_pinned_connector_passes_no_args_the_rules_refuse() {
     let msg = refusal(tmp.path(), Origin::Pinned);
     assert!(msg.contains("goal_flag"), "{msg}");
     load_dir(
-        shipped_dir("claude-code-cli", |toml| toml).path(),
+        headless_dir("claude-code-cli", |toml| toml).path(),
         Origin::Pinned,
     )
     .expect("the shipped argv passes the rules");
@@ -595,7 +612,8 @@ fn a_dev_seed_carrying_an_endpoint_is_refused() {
 /// `capture_policy.rs` carried a matching per-connector row.)
 #[test]
 fn a_pinned_connector_needs_no_rust_row_for_its_argv_or_env() {
-    let (_keep, dir) = shipped_copy("codex-cli");
+    let keep = headless_dir("codex-cli", |toml| toml);
+    let dir = keep.path().to_path_buf();
     let path = dir.join("harness.toml");
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("\"exec\", \"--json\","), "the fixture moved");
