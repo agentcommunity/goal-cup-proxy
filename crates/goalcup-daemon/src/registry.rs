@@ -562,6 +562,18 @@ impl Registry {
     ///   carries the *stored* receipt forward: a new entry starts with none and an
     ///   existing one keeps the one the registry verified.
     pub fn put(&self, entry: &Entry) -> Result<(), DaemonError> {
+        self.put_letting_go(entry, &|_| false)
+    }
+
+    /// [`Registry::put`], except that an entry `lets_go` says is finished with its workspace no
+    /// longer holds it. A run that is continued (`goalcup continue`) makes its next segment, a
+    /// new entry, in the workspace its last one had: the last one is sealed, or this daemon
+    /// could not reopen it, and routes nothing.
+    pub fn put_letting_go(
+        &self,
+        entry: &Entry,
+        lets_go: &dyn Fn(&Entry) -> bool,
+    ) -> Result<(), DaemonError> {
         let txn = self.db.begin_write().map_err(|e| plain(e, "put"))?;
         {
             let mut table = txn.open_table(ENTRIES).map_err(|e| plain(e, "put"))?;
@@ -589,7 +601,7 @@ impl Registry {
                     // accepted handoff.  A broad `put` must not replace it independently
                     // of the private authority fields above.
                     to_write.last_process = stored.last_process;
-                } else if stored.workspace == entry.workspace {
+                } else if stored.workspace == entry.workspace && !lets_go(&stored) {
                     return Err(DaemonError::Refused(format!(
                         "workspace {} is already bound to entry {}, and one workspace \
                          holds one entry",
