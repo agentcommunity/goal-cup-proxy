@@ -279,8 +279,9 @@ the supported list. A harness not on it has no recording path, and its runs are 
 - The MIT License must exist in the submitted repository. The result must be a fresh, usable or
   executable product.
 - **Demo video and questionnaire.** You hand in a demo video and answer a questionnaire after the run.
-  They are due either 24 hours after the run ends or on a fixed date around 15 November: **[owner to
-  confirm]**. Nothing is added to your repository for them.
+  They are due 24 hours after your own run's 168 hours end, so a later start gets a later due time.
+  You hand them in on the website, not through the tracer. Nothing is added to your repository for
+  them.
 - A local product may run for demonstration, and ordinary runtime data and caches are allowed. Source,
   history and submitted artifacts must stay unchanged through judging. Online services may not be
   rebuilt or redeployed with changed code.
@@ -333,6 +334,5 @@ the supported list. A harness not on it has no recording path, and its runs are 
 ## Still to decide
 
 - Judging and result dates.
-- The deadline for the demo video and questionnaire (see Submission).
 - Signed binary release policy and event capacity limits.
 - Final judging rubric, shortlist threshold and appeal process.

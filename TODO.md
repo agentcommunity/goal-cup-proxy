@@ -33,8 +33,15 @@ Owner decisions of 16 Oct 2026:
   release discover it. No harness name by hand anywhere else (WP5, WP12).
 - The larger clean-ups run now, by parallel agents on separate files, before the feature stop:
   the first release has not made any compatibility promise yet.
-- Undecided: the demo and questionnaire deadline, either 24 hours after the run or a fixed date
-  around 15 Nov. [owner to confirm]
+- Demo and questionnaire: due 24 hours after each run's 168 hours end (a later start gets a later
+  due time). They go through the website portal, not the tracer; the website may close it leniently.
+- Harnesses: 15+ expected, Hermes Agent among them. All shipped connectors go to participants.
+  Harnesses can still be added until the last release (6 Nov 12:00 UTC): the builder sends a
+  practice-run verifier report, and the organizers run a 1-hour test run before it ships
+  ([HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)). For testing,
+  the owner has API access for harnesses whose model provider is free to choose; for a harness whose
+  model comes only through its own subscription, ask the owner or the builder.
+- The install command goes into RULES and the participant guide (WP2).
 
 ## Work to the feature stop (4 Nov), in order
 
@@ -57,10 +64,10 @@ fast` before every commit.
 - Accept: `select id,start_window_opens,start_window_closes from goal_cup_tracer.events` shows the new values. `npm --prefix server/worker test` passes.
 
 ### WP2: Release pipeline shakedown. Start 17 Oct; four runners are untested.
-- Version, one source: workspace `Cargo.toml:13` says `0.1.0` while tag `v0.5.0` exists. Make the workspace version the only place a version is written; every crate, binary, report field (`verifier_version`, `tracer_version`, `DAEMON_VERSION`), the Worker's expected tracer version if any, the install script and the release notes read it. `scripts/release.sh <x.y.z>` sets it, updates `Cargo.lock`, commits and tags; `release.yml` refuses a tag that differs from it. Start at `0.6.0`. Also fix the stale `v0.5.1` at `:15` and "dev-only signer" at `:82`. [C5-F5, C6-05, C6-15, docs]
-- Ship every connector. `scripts/package-release.sh:38` archives only codex-cli and claude-code-cli. Archive all of `connectors/`, then remove ids named on one line, `UNSHIPPED="hermes-cli"` (H-21). Fix the comment at `:11-13`, `packaging/README.md:28,38-39`, and SKILL step 12 ("ships once merged"). [C3-F2, C6-06]
+- Version, one source: workspace `Cargo.toml:13` says `0.1.0` while tag `v0.5.0` exists. Make the workspace version the only place a version is written; every crate, binary, report field (`verifier_version`, `tracer_version`, `DAEMON_VERSION`), the Worker's expected tracer version if any, the install script and the release notes read it. `scripts/release.sh <x.y.z>` sets it, updates `Cargo.lock`, commits and tags; `release.yml` refuses a tag that differs from it. Docs never write a version number by hand (they say "the latest release"); a gate test fails on any other hard-coded version string in the repo. Start at `0.6.0`. Also fix the stale `v0.5.1` at `:15` and "dev-only signer" at `:82`. [C5-F5, C6-05, C6-15, docs]
+- Ship every connector. `scripts/package-release.sh:38` archives only codex-cli and claude-code-cli. Archive all of `connectors/`, with no list of names (Hermes ships too; H-21 is closed). Fix the comment at `:11-13`, `packaging/README.md:28,38-39`, and SKILL step 12 ("ships once merged"). [C3-F2, C6-06]
 - Run `gh workflow run release.yml` by hand now. It publishes nothing. Fix what fails (`macos-15-intel`, `ubuntu-22.04-arm`, `third-party-licenses.py`). [C6-05]
-- Install for every platform: an `install.sh` published with each release (`curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`). It picks the build for macOS arm64/x86_64 or Linux arm64/x86_64 (WSL2 is Linux), checks the SHA-256, and installs to `~/.local/bin`. A download by `curl` is not quarantined on macOS, so unsigned builds run. Drop the Homebrew tap from the plan (maybe later, Mac-only nicety). Native Windows later gets an `install.ps1`. Update README, PARTICIPANT-GUIDE and the setup skill.
+- Install for every platform: an `install.sh` published with each release (`curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`). It picks the build for macOS arm64/x86_64 or Linux arm64/x86_64 (WSL2 is Linux), checks the SHA-256, and installs to `~/.local/bin`. A download by `curl` is not quarantined on macOS, so unsigned builds run. Drop the Homebrew tap from the plan (maybe later, Mac-only nicety). Native Windows later gets an `install.ps1`. Update README, RULES, PARTICIPANT-GUIDE and the setup skill.
 - Put the Worker tests in the gate: add `step npm --prefix server/worker test` in the `full` block of `scripts/gate.sh:89`, and assert it in `scripts/test_gate.py::test_full_runs_everything`. Keep it out of ci.yml, because CI stays lean. [C6-03, T3-F2]
 - `.github/CODEOWNERS`: add `/server/ @nembal`. In `ci.yml:8-10,28-30`, drop `v1/trunk`. [C6-11, C6-15]
 - Accept: the manual release run is green on all four targets, and `install.sh` installs it on macOS and Linux. The tarball holds every non-excluded `connectors/*`. `python3 -m pytest scripts/test_gate.py` passes.
@@ -147,6 +154,10 @@ fast` before every commit.
   (After-event items 3 and 4 below; signed daemon change, fine before the first release).
 - Tests and the release find connectors by reading `connectors/` (WP5); a per-connector contract
   test runs for every folder (item 7 below).
+- Clean out every hard-coded Codex, Claude Code and Hermes special case in Rust and tests; each of
+  the three becomes an ordinary connector folder with its own contract test, like harness #15.
+- A new harness can be added between the feature stop and the last release (6 Nov 12:00 UTC); it
+  needs no core change, only its folder, its test and the 1-hour organizer run.
 - Accept: a scratch connector folder for a fifth harness passes `check-connector.sh` and the contract
   test, ships in the release tarball, with zero Rust edits.
 
@@ -214,8 +225,7 @@ These look odd but are right. Do not "fix" them.
 
 ## Open owner questions
 
-1. The demo and questionnaire deadline: 24 hours after the run, or a fixed date around 15 Nov.
-2. Is hermes-cli (Hermes Agent) shipped to participants? It is in `connectors/` but held back (H-21).
+None open (16 Oct).
 
 ## Known issues
 
