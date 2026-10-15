@@ -134,5 +134,7 @@ export async function approveDevice(ctx: Ctx, request: Request): Promise<Respons
       throw closed("That sign-in request has expired.");
     case "already_decided":
       throw new ApiError(409, "conflict", "That sign-in request was already decided.");
+    case "forbidden":
+      throw new ApiError(403, "forbidden", "The test approval works only for staging requests and staging test members.");
   }
 }

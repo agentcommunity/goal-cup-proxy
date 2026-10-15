@@ -9,8 +9,8 @@ Rust verifier already checks.
   bodies and idempotency rules are implemented exactly as written there.
 - **Design:** `docs/SERVER-DESIGN.md`, sections 2 to 7, 11, 14 and 16.
 
-Nothing in this folder has been deployed, and nothing here touches a Cloudflare or Supabase
-account. Local runs and tests use `wrangler dev`, which simulates R2 on disk.
+Production is not deployed. Staging is (2026-10-15): see "Staging, as deployed" below. Local runs and
+tests use `wrangler dev`, which simulates R2 on disk and touch no Cloudflare or Supabase account.
 
 ## Run it locally
 
@@ -57,7 +57,8 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/db.ts` | The `Db` interface: one method per step |
 | `src/db-supabase.ts` | Production: one Postgres function per step, via PostgREST RPC |
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
-| `sql/proposed-goalcup-functions.sql` | **Proposal** for the schema and functions SupabaseDb calls |
+| `src/mail.ts` | The run emails: each queued notice sent once through Resend (cron step `sendNotices`) |
+| `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that SupabaseDb calls (the website repo is the authority) |
 | `test/` | `sign.test.ts` (Rust vectors), `config.test.ts`, `github.test.ts`, `supabase.test.ts` (RPC names and arguments, stubbed fetch), `local-db.test.ts`, `integration.test.ts`, `device.test.ts` and `segments.test.ts` (HTTP against `wrangler dev`), `lifecycle.test.ts` (the Worker in this process on a clock the test moves: replace, window, continue, close), `notices.test.ts` (the same rig, running the cron), `device-unit.test.ts` |
 
 ## Configuration
@@ -76,6 +77,8 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask the GitHub API that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off so they need no network). A missing or private repository is `400`; GitHub being unreachable or rate-limiting is `502`, which the tracer retries. |
 | `MAINTENANCE` | off | `on` makes every call answer `503 maintenance` with `Retry-After`, before authentication and before any body is read. |
 | `MAINTENANCE_RETRY_AFTER` | `300` | Seconds for that header. |
+| `NOTICE_FROM` | none | Sender of the run emails, e.g. `Agent Community <updates@member.agentcommunity.org>`. Needed once `RESEND_API_KEY` is set. |
+| `NOTICE_RECIPIENT_OVERRIDE` | none | Send every run email to this one address instead of the member. A staging Worker refuses to send without it (staging: `delivered@resend.dev`, Resend's test inbox). |
 | `RUN_SECONDS` | none | **Tests only, honoured only with `DB_BACKEND=local`** (anywhere else the Worker answers `500 misconfigured`): competition run length in seconds, replacing `RUN_HOURS`, so a test can run a whole deadline in seconds. |
 | `CLOSE_AFTER_SECONDS` | `86400` | **Tests only, same rule as `RUN_SECONDS`:** how long after a run ends it is closed (`sealed`, or `incomplete`); production: 24 hours, fixed. |
 | `START_WINDOW_OPENS`, `START_WINDOW_CLOSES` | none | **Tests only, same rule as `RUN_SECONDS`:** the competition start window, RFC 3339 like `2026-11-06T09:00:00Z`; an unset edge is open, both unset means always open. In production the window is the event's row in the database. Practice has none. |
@@ -86,7 +89,8 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 |---|---|
 | `RECEIPT_SIGNING_KEY` | The Ed25519 seed, 32 bytes as 64 hex characters, generated offline. Its public key is what the tracer pins. |
 | `SUPABASE_URL` | `https://<project>.supabase.co` (supabase backend). |
-| `SUPABASE_KEY` | Key of a dedicated role limited to schema `goalcup` (see the SQL header). Not the community-wide service key. |
+| `SUPABASE_KEY` | A Supabase secret API key whose JWT role may only execute `public.goal_cup_upload_*` (staging: key `goalcup_ingest_staging`, role `goal_cup_ingest_staging`). Not the community-wide service key. |
+| `RESEND_API_KEY` | Optional: switches the run emails on (the website's Resend account). See `NOTICE_FROM` and `NOTICE_RECIPIENT_OVERRIDE`. |
 | `GITHUB_TOKEN` | Read-only token for public repositories. **Required in production and staging:** the cron asks GitHub for each run's commit at its deadline, and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses, so without a token those calls fail. Optional locally. |
 | `TEST_APPROVAL_KEY` | **Tests and staging only.** Switches on `POST /v1/device/approve`, which approves a device request as any member (`Authorization: Bearer <key>`). Honoured only with `DB_BACKEND=local` or `STAGING=on`; set anywhere else, every call answers `500 misconfigured`. Unset, the route does not exist (`404`). Never set it in production. |
 
@@ -141,16 +145,18 @@ Nothing below exists yet. Nothing was created, logged into, or deployed while wr
    - `SUPABASE_URL` and `SUPABASE_KEY`: the key of a dedicated Postgres role (`goalcup_worker` in
      the proposed SQL) that can execute the `goalcup.upload_*` functions and nothing else.
    - `GITHUB_TOKEN` (read access to public repositories), for the production Worker and for staging.
-4. **Supabase, in the website repo** (the website repo owns the schema): migrations for schema
-   `goalcup` with row-level security, and the seventeen `upload_*` functions. `sql/proposed-goalcup-functions.sql`
-   is a proposal to start from. It was run only against a throwaway local PostgreSQL, never against Supabase.
+4. **Supabase, in the website repo** (the website repo owns the schema): done for staging on
+   2026-10-15 as migration `20261015120000_goal_cup_tracer_upload.sql` (private schema
+   `goal_cup_tracer`, the `public.goal_cup_upload_*` functions; copy in `sql/goal-cup-tracer-upload.sql`).
+   Production still needs its own Worker role and key (the staging role may approve as any member).
    The owner also has to decide or provide:
    - the `events` rows (start window, `run_hours`) and the `EVENT_ID` the Worker
      is deployed with; the proposal checks that the event exists and that now is inside its start
      window, while `RUN_HOURS` comes from the Worker's variables;
    - where "accepted the current terms" lives (the proposal assumes `goalcup.consents`);
-   - the mailer: it reads the unsent rows of `goalcup.notices` (the Worker's cron queues them: `started`,
-     `silence`, `idle_3h`, `idle_6h`, `recording`, `ended`), writes each email, sends it and sets `sent_at`;
+   - the mailer: done in this Worker (`src/mail.ts`) with the email text, address and suppression
+     from the database; production needs its own send-only Resend key (staging has
+     `goalcup-ingest-staging`, send-only, domain member.agentcommunity.org);
    - the approval page for device requests (it calls `goalcup.goalcup_approve_device`; only the
      `sha256` of codes and credentials is stored), and the member's handle for `member_handle`;
    - exposing schema `goalcup` to PostgREST (RPC needs it) while revoking everything from `anon`
@@ -219,13 +225,32 @@ The Worker's tests call `worker.scheduled` on a moved clock (`test/helpers/inpro
 
 ## Staging
 
-`wrangler deploy --env staging` makes a second Worker, `goalcup-upload-staging`, with its own
+`wrangler deploy --env staging` makes a second Worker, `goalcup-ingest-staging`, with its own
 bucket and its own event ids, `STAGING = "on"` and the same cron. It is the one place besides local
 tests where `TEST_APPROVAL_KEY` may exist, as a secret (`wrangler secret put TEST_APPROVAL_KEY --env
-staging`), and it must point at a Supabase project (or role) of its own. `wrangler.toml` repeats
-every `[vars]` entry for staging, because wrangler does not copy them into an environment.
-`test/config.test.ts` reads the file and fails if the top level names `TEST_APPROVAL_KEY` or sets
-`STAGING = "on"`.
+staging`). `wrangler.toml` repeats every `[vars]` entry for staging, because wrangler does not copy
+them into an environment. `test/config.test.ts` reads the file and fails if the top level names
+`TEST_APPROVAL_KEY` or sets `STAGING = "on"`.
+
+### Staging, as deployed (2026-10-15)
+
+- Worker `goalcup-ingest-staging` at `https://goalcup-ingest-staging.b-9a5.workers.dev` (workers.dev
+  on staging only), on the Agent Community Cloudflare account; cron every 5 minutes.
+- R2 bucket `goalcup-traces-staging` (no bucket lock).
+- Database: the website's Supabase project, schema `goal_cup_tracer`, events
+  `goalcup-practice-staging` (10-minute practice runs) and `goalcup-dryrun-staging` (168-hour runs,
+  start window 15 Oct to 5 Nov 2026). The Worker's key is the secret API key `goalcup_ingest_staging`,
+  whose role `goal_cup_ingest_staging` can execute the `goal_cup_upload_*` functions and nothing
+  else in the schema; it is the only role granted `goal_cup_upload_approve_device` (the test
+  approval).
+- Secrets: `RECEIPT_SIGNING_KEY` (a fresh staging seed, generated on deploy and not kept anywhere
+  else; its public key is in every receipt), `SUPABASE_URL`, `SUPABASE_KEY`, `TEST_APPROVAL_KEY`,
+  `RESEND_API_KEY` (its own Resend key `goalcup-ingest-staging`: sending access only, domain
+  member.agentcommunity.org), `GITHUB_TOKEN` (the website's existing read token).
+- Approval page: `https://agentcommunity.org/goalcup/approve?code=XXXX-XXXX` (website).
+- Emails: every notice goes to `delivered@resend.dev`, never to a member.
+
+Deploy again from this folder with the account named: `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy --env staging`.
 
 ## The end of a run, as implemented
 

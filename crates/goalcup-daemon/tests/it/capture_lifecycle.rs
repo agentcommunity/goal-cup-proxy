@@ -6,8 +6,8 @@ use crate::common::capture_lifecycle_support;
 use crate::common::support;
 
 use capture_lifecycle_support::{
-    Child, RESERVE, Rig, Wire, chat_rig, controlled_native_rig, descriptors_on, dev_connectors,
-    fresh_id, launch_request, local_finishes, native_rig,
+    Child, RESERVE, Rig, Wire, chat_rig, chat_rig_with, controlled_native_rig, descriptors_on,
+    dev_connectors, fresh_id, launch_request, local_finishes, native_rig,
 };
 use goalcup_protocol::capture::{
     AnalysisState, AnchorState, CaptureMeta, CaptureRecord, CaptureSource, CaptureState,
@@ -3099,6 +3099,77 @@ async fn a_missing_run_start_uses_the_entry_create_time() {
     );
 }
 
+/// Stream-less `LimitExceeded` gaps: native entries the discovery bounds kept out (D57).
+fn native_losses(records: &[CaptureRecord]) -> usize {
+    records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record,
+                CaptureRecord::Gap {
+                    stream: None,
+                    reason: GapReason::LimitExceeded,
+                    ..
+                }
+            )
+        })
+        .count()
+}
+
+/// A symlink in the shared session store from before the run is no more this run's than an
+/// old session file: no gap, and the sealed chain holds no stream-less gap at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_old_symlink_in_the_session_root_is_no_loss() {
+    let (rig, config_home, _connectors) = chat_rig().await;
+    let day = config_home.join("sessions/2026/10/14");
+    std::fs::create_dir_all(&day).unwrap();
+    std::os::unix::fs::symlink(
+        rig.root.join("elsewhere.jsonl"),
+        day.join("rollout-old-link.jsonl"),
+    )
+    .unwrap();
+    into_the_next_second();
+    let info = rig.created("capture-dev").await;
+    std::fs::write(day.join("rollout-new.jsonl"), b"{\"new\":true}\n").unwrap();
+    rig.records_when(&info.entry_id, |records| !native_labels(records).is_empty())
+        .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let records = rig.records(&info.entry_id);
+    assert_eq!(
+        native_labels(&records),
+        ["rollout:2026/10/14/rollout-new.jsonl#g1"]
+    );
+    assert!(
+        !records
+            .iter()
+            .any(|record| matches!(record, CaptureRecord::Gap { stream: None, .. })),
+        "an old symlink is not a loss"
+    );
+}
+
+/// The counterpart: a symlink made during the run is a matched entry the tracer will not
+/// follow, recorded once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_symlink_in_the_session_root_is_one_loss() {
+    let (rig, config_home, _connectors) = chat_rig().await;
+    let day = config_home.join("sessions/2026/10/14");
+    std::fs::create_dir_all(&day).unwrap();
+    into_the_next_second();
+    let info = rig.created("capture-dev").await;
+    std::fs::write(day.join("rollout-new.jsonl"), b"{\"new\":true}\n").unwrap();
+    std::os::unix::fs::symlink(
+        rig.root.join("elsewhere.jsonl"),
+        day.join("rollout-link.jsonl"),
+    )
+    .unwrap();
+    rig.records_when(&info.entry_id, |records| native_losses(records) > 0)
+        .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    assert_eq!(native_losses(&rig.records(&info.entry_id)), 1);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reopened_entry_keeps_its_create_time_floor() {
     let (rig, _config_home, _connectors) = chat_rig().await;
@@ -3140,6 +3211,103 @@ async fn a_missing_native_root_under_the_config_home_is_created() {
         native_labels(&rig.records(&info.entry_id)),
         ["rollout:2026/10/15/rollout-first.jsonl#g1"]
     );
+}
+
+/// The chat rig with its sessions under a shared run `HOME` instead of a config home (D59).
+async fn shared_run_home_rig() -> (Rig, tempfile::TempDir) {
+    let (rig, _config_home, connectors) = chat_rig_with(|harness| {
+        harness
+            .replacen("run_home = \"empty\"", "run_home = \"shared\"", 1)
+            .replacen("config_home = \"shared\"", "config_home = \"per_run\"", 1)
+            .replacen("env = \"CODEX_HOME\"\n", "", 1)
+            .replacen("skills_dir = \"skills\"\n", "", 1)
+            .replacen("{config_home}/sessions", "{run_home}/sessions", 1)
+    })
+    .await;
+    std::fs::create_dir_all(shared_run_home(&rig).parent().unwrap()).unwrap();
+    (rig, connectors)
+}
+
+/// Where the launcher keeps a shared run `HOME`: under `<config_dir>/capture-homes`.
+fn shared_run_home(rig: &Rig) -> PathBuf {
+    rig.config
+        .config_dir
+        .join("capture-homes/capture-dev.run-home")
+}
+
+/// A create naming the shared run `HOME` as its run home.
+async fn created_on_shared_run_home(rig: &Rig) -> CaptureWorkspaceInfo {
+    let mut request = rig.request("capture-dev", &rig.workspace("shared-run-home"), RESERVE);
+    request.run_home = shared_run_home(rig).display().to_string();
+    let response = rig.create_request(&request).await;
+    assert_eq!(response.status(), 200, "{}", response.body());
+    response.json().unwrap()
+}
+
+/// D59: under a shared run `HOME` a `{run_home}` root is created as a `{config_home}` root is,
+/// the run home itself too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_native_root_under_a_shared_run_home_is_created() {
+    use std::os::unix::fs::PermissionsExt;
+    let (rig, _connectors) = shared_run_home_rig().await;
+    let sessions = shared_run_home(&rig).join("sessions");
+    assert!(
+        !shared_run_home(&rig).exists(),
+        "a first run has no run home yet"
+    );
+    let info = created_on_shared_run_home(&rig).await;
+    let made = std::fs::symlink_metadata(&sessions).expect("the root was created");
+    assert!(made.is_dir());
+    assert_eq!(made.permissions().mode() & 0o777, 0o700);
+    let day = sessions.join("2026/10/15");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::write(day.join("rollout-first.jsonl"), b"{\"first\":true}\n").unwrap();
+    rig.records_when(&info.entry_id, |records| !native_labels(records).is_empty())
+        .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    assert_eq!(
+        native_labels(&rig.records(&info.entry_id)),
+        ["rollout:2026/10/15/rollout-first.jsonl#g1"]
+    );
+}
+
+/// D59: what carries across runs on a shared run `HOME` is the run home, so the baseline lists
+/// it (D56), without its session folder; the per-run config home is not listed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_baseline_lists_a_shared_run_home_without_its_session_folder() {
+    let (rig, _connectors) = shared_run_home_rig().await;
+    let home = shared_run_home(&rig);
+    std::fs::create_dir_all(home.join("sessions/2026/10")).unwrap();
+    std::fs::write(home.join(".chatrc"), b"theme = dark\n").unwrap();
+    std::fs::write(home.join("sessions/2026/10/old.jsonl"), b"{}\n").unwrap();
+    std::fs::write(rig.root.join("config-home/stray.toml"), b"x\n").unwrap();
+    let info = created_on_shared_run_home(&rig).await;
+    let baseline = read_manifest(&rig.trace_dir(&info.entry_id).join("baseline.json"));
+    assert_eq!(
+        baseline.home.expect("the baseline lists the run home"),
+        [goalcup_protocol::seal::SealedFile {
+            path: ".chatrc".to_string(),
+            bytes: 13,
+            sha256: hex::encode(Sha256::digest(b"theme = dark\n")),
+        }]
+    );
+}
+
+/// D59: a shared run `HOME` is kept under `<config_dir>/capture-homes`, nowhere else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shared_run_home_outside_capture_homes_is_refused() {
+    let (rig, _connectors) = shared_run_home_rig().await;
+    let workspace = rig.workspace("outside-capture-homes");
+    // The rig's own run home, `<root>/run-home`, is not under the capture homes.
+    let response = rig.create("capture-dev", &workspace, RESERVE).await;
+    assert_ne!(response.status(), 200, "{}", response.body());
+    assert!(
+        response.body().contains("capture-homes"),
+        "{}",
+        response.body()
+    );
+    assert!(!workspace.exists(), "a refused create leaves no workspace");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

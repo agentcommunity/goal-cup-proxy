@@ -1,7 +1,7 @@
 // What the server does on its own, every 5 minutes (the `scheduled` export; wrangler.toml has the
-// cron): close runs that are over, record the GitHub commit at each deadline, and queue the run
-// emails into the outbox. The Worker never sends mail: the website's mailer reads the unsent
-// rows of `notices`, writes the email and marks the row sent. Contract: docs/UPLOAD-API.md,
+// cron): close runs that are over, record the GitHub commit at each deadline, queue the run
+// emails into the outbox, and send them (src/mail.ts: each queued row once, through Resend; the
+// database writes the email and picks the address, and gives a staging Worker none). Contract: docs/UPLOAD-API.md,
 // "What the server does on its own".
 //
 // Every notice is decided here, in `queueNotices`, never in a request handler. A notice is
@@ -10,6 +10,7 @@
 import { type Ctx, makeCtx } from "./context.ts";
 import { type NoticeKind, type TickRun, endsAt, isReplaced, statusAt } from "./db.ts";
 import type { Env } from "./env.ts";
+import { sendNotices } from "./mail.ts";
 import { githubHeaders } from "./runs.ts";
 import { REPO_URL, addSeconds, formatTime } from "./util.ts";
 
@@ -142,7 +143,7 @@ export async function runTick(env: Env): Promise<void> {
     return;
   }
   const now = ctx.now();
-  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices]] as const) {
+  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices], ["sendNotices", sendNotices]] as const) {
     try {
       await step(ctx, now);
     } catch (e) {
