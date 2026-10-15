@@ -40,3 +40,5 @@ libc.workspace = true
 [[bin]]
 name = "goalcup-verify"
 path = "src/bin/goalcup-verify.rs"
+# The file holds no test: `test = false` skips an empty test harness. Tests live in `tests/`.
+test = false

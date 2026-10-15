@@ -121,3 +121,5 @@ axum.workspace = true
 [[bin]]
 name = "goalcup"
 path = "src/main.rs"
+# The file holds no test: `test = false` skips an empty test harness. Tests live in `tests/`.
+test = false
