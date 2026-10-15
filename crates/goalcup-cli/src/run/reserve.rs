@@ -984,7 +984,10 @@ mod tests {
         FREE_READING.with(|pinned| pinned.set(None));
         assert!(reused.is_ok());
         assert!(fresh.is_err());
-        assert!(!other.exists(), "a refused new reserve leaves nothing behind");
+        assert!(
+            !other.exists(),
+            "a refused new reserve leaves nothing behind"
+        );
     }
 
     #[test]
