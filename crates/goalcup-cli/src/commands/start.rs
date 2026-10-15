@@ -1069,8 +1069,10 @@ fn prepare(
     let executable = crate::launch::capture_executable(c, profile, env)?;
     // The provider hosts answer a TCP connect before anything is created (the proxy module's
     // preflight; it names a firewall holding this binary when they do not).
-    crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
-        .map_err(|unreachable| CliError::Refused(unreachable.to_string()))?;
+    if !offline_upstreams_for_test(env) {
+        crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
+            .map_err(|unreachable| CliError::Refused(unreachable.to_string()))?;
+    }
     // A per-run home is made inside the run directory below. A run directory beside a goal file
     // inside a Git work tree is refused before anything is created: it would hold what the
     // harness wrote, which can include a fragment of the provider key (D41).
@@ -2775,6 +2777,22 @@ fn refuse_goal_folder_inside_work_root(work_root: &Path, beside: &Path) -> Resul
 fn same_repo(url: &str) -> String {
     let url = url.trim().trim_end_matches('/');
     url.strip_suffix(".git").unwrap_or(url).to_ascii_lowercase()
+}
+
+/// A test build's door past the provider-host probe, so the harness contract kit can run the
+/// shipped connectors (whose hosts are real providers) with no network and reach no provider.
+/// A shipped build compiles none of this, and always probes.
+#[cfg(feature = "test-support")]
+pub const TEST_OFFLINE_UPSTREAMS: &str = "GOALCUP_TEST_OFFLINE_UPSTREAMS";
+
+#[cfg(feature = "test-support")]
+fn offline_upstreams_for_test(env: &BTreeMap<String, String>) -> bool {
+    env.contains_key(TEST_OFFLINE_UPSTREAMS)
+}
+
+#[cfg(not(feature = "test-support"))]
+fn offline_upstreams_for_test(_env: &BTreeMap<String, String>) -> bool {
+    false
 }
 
 /// A test build's one door to the clone: a repository on this machine that stands in for the
