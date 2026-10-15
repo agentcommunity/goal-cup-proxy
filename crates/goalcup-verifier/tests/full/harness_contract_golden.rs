@@ -6,9 +6,9 @@
 //!   `analysis.decoders` rows. The hint a decoder keys on is data in the stream's metadata
 //!   (a connector's `capture.hosts[].protocol_hint`, or the daemon's native hint); the decoder
 //!   is code.
-//! * The reader's Claude-only tool allowance (`reader.rs`, `profile_id == "claude-code-cli"`):
-//!   which `Launch` records the capture reader accepts, by profile id and by the allowance
-//!   fields they carry.
+//! * The reader's tool allowance (`reader.rs`, shape only since the D52 amendment): which
+//!   `Launch` records the capture reader accepts, by profile id and by the allowance fields
+//!   they carry.
 //!
 //! Compared byte for byte with `decoder-selection.json` and `launch-allowance-reader.json` under
 //! `goalcup-cli/tests/fixtures/harness-golden/`; `GOALCUP_REGEN_HARNESS_GOLDEN=1` rewrites them
@@ -385,11 +385,11 @@ fn verifier_decoder_selection_per_protocol_hint_is_pinned() {
 }
 
 // ---------------------------------------------------------------------------------------
-// The Claude-only tool allowance in the reader.
+// The tool allowance in the reader: shape only, for every profile.
 // ---------------------------------------------------------------------------------------
 
 #[test]
-fn the_reader_admits_a_tool_allowance_only_for_the_claude_profile() {
+fn the_reader_admits_a_paired_tool_allowance_by_shape_for_every_profile() {
     let digest = DIGEST.repeat(32);
     let rules: [(&str, Option<&str>, Option<&str>); 7] = [
         ("none", None, None),
@@ -439,7 +439,7 @@ fn the_reader_admits_a_tool_allowance_only_for_the_claude_profile() {
     check_golden(
         "launch-allowance-reader.json",
         &json!({
-            "rule": "the reader admits Launch.allowed_tool_rule and process_handoff_digest together, once, for profile_id claude-code-cli only",
+            "rule": "the reader admits Launch.allowed_tool_rule and process_handoff_digest together, by shape only (bounded text and SHA-256 hex), for every profile_id",
             "rows": rows,
         }),
     );

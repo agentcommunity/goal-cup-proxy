@@ -116,6 +116,7 @@ fn load_child(path: &Path) -> Result<LoadedConnector, DaemonError> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::{replaced_once, shipped_connector};
     use super::*;
 
     fn copy_tree(from: &Path, to: &Path) {
@@ -150,15 +151,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let connectors = temp.path().join("connectors");
         std::fs::create_dir(&connectors).unwrap();
-        copy_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors/codex-cli"),
-            &connectors.join("alias"),
-        );
+        let (shipped, _, manifest) = shipped_connector();
+        copy_tree(&shipped, &connectors.join("alias"));
         let config = test_config(&temp, &connectors);
 
-        let error = capture_harness(&config, "codex-cli")
+        let error = capture_harness(&config, &manifest.id)
             .expect_err("the daemon consumes the shared folder/id/digest admission policy");
-        assert!(error.to_string().contains("codex-cli"), "{error}");
+        assert!(error.to_string().contains(&manifest.id), "{error}");
         assert!(error.to_string().contains("folder"), "{error}");
     }
 
@@ -167,11 +166,12 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let connectors = temp.path().join("connectors");
         std::fs::create_dir(&connectors).unwrap();
-        let source = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors/codex-cli/harness.toml"),
-        )
-        .unwrap()
-        .replacen("id = \"codex-cli\"", "id = \"restart-dev\"", 1);
+        let (_, shipped, manifest) = shipped_connector();
+        let source = replaced_once(
+            &shipped,
+            &format!("id = {:?}", manifest.id),
+            "id = \"restart-dev\"",
+        );
         let matching = connectors.join("matching");
         std::fs::create_dir(&matching).unwrap();
         std::fs::write(matching.join("harness.toml"), &source).unwrap();

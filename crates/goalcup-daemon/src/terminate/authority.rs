@@ -578,7 +578,7 @@ mod tests {
             strategy: KillStrategy::NativePid,
             grace_seconds: 1,
             launched_at: "2026-09-04T00:00:00Z".to_string(),
-            program: "codex".to_string(),
+            program: "agent".to_string(),
             argv: argv.iter().map(|a| a.to_string()).collect(),
             env_keys: Vec::new(),
         }
@@ -605,14 +605,14 @@ mod tests {
     /// program `argv[0]` names, wherever `ps` renders it in the line.
     #[test]
     fn a_live_process_is_matched_by_the_program_its_argv_names() {
-        let h = handle(&["/opt/homebrew/bin/codex", "--model", "o3"]);
-        assert!(argv_matches(&h, "/opt/homebrew/bin/codex --model o3"));
+        let h = handle(&["/opt/homebrew/bin/agent", "--model", "o3"]);
+        assert!(argv_matches(&h, "/opt/homebrew/bin/agent --model o3"));
         // `ps` re-renders argv: the path resolved, the flags rewritten, the line truncated.
-        assert!(argv_matches(&h, "codex --model o3 --resume 0f2c"));
+        assert!(argv_matches(&h, "agent --model o3 --resume 0f2c"));
         // The reused pid: same number, a program the launch never registered.
         assert!(!argv_matches(&h, "/usr/bin/vim notes.md"));
-        // A prefix is not the program: `codex-helper` is a different binary.
-        assert!(!argv_matches(&h, "codex-helper --serve"));
+        // A prefix is not the program: `agent-helper` is a different binary.
+        assert!(!argv_matches(&h, "agent-helper --serve"));
         // Nothing registered and nothing readable are both "no answer", not "mismatch".
         assert!(argv_matches(&handle(&[]), "/usr/bin/vim notes.md"));
         assert!(argv_matches(&h, ""));

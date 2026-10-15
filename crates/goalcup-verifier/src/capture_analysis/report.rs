@@ -453,7 +453,7 @@ mod tests {
             (
                 NATIVE,
                 CaptureSource::Native,
-                Some("codex-jsonl"),
+                Some(crate::capture_analysis::native::ROLLOUT_JSONL_HINT),
                 &rollout[..],
             ),
         ] {
@@ -503,7 +503,7 @@ mod tests {
                 producer: GOAL.to_string(),
                 stream: 1,
             },
-            profile_id: "codex-cli".to_string(),
+            profile_id: "test-cli".to_string(),
             profile_digest: "cc".repeat(32),
             harness_version: "0.153.0".to_string(),
             recorder_revision: "unit".to_string(),
@@ -735,7 +735,8 @@ mod tests {
         registry
             .register(DecoderRegistry::builtin().entries()[0].clone())
             .unwrap();
-        assert_eq!(registry.ids()[2].0, "codex-native");
+        let native_id = DecoderRegistry::builtin().ids()[0].0;
+        assert_eq!(registry.ids()[2].0, native_id);
         let mut out = Vec::new();
         let result =
             write_research_report_with(dir.path(), &VerifyOptions::default(), &registry, &mut out)
@@ -774,10 +775,7 @@ mod tests {
         assert!(out.len() < MAX_OBSERVATION_LINE_BYTES);
 
         // The other source still reports in full.
-        let native: Vec<_> = lines
-            .iter()
-            .filter(|l| l["decoder"] == "codex-native")
-            .collect();
+        let native: Vec<_> = lines.iter().filter(|l| l["decoder"] == native_id).collect();
         assert_eq!(native.len(), 1);
         assert_eq!(native[0]["observation"]["kind"], "model");
         assert_eq!(entries[2]["failure"], Value::Null);
