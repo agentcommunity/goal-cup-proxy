@@ -90,7 +90,7 @@ use goalcup_protocol::control::{
     CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest, CaptureWorkspaceInfo,
     CaptureWorkspaceRequest, DaemonClient, FINISH_COMMIT_RESERVE, ProxyCounters, SignedStatus,
 };
-use goalcup_protocol::harness::{CaptureSpec, ConfigHome, RunHome};
+use goalcup_protocol::harness::{CAPTURE_HOMES_DIR, CaptureSpec, ConfigHome, RunHome};
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration, termination_bound};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -425,10 +425,6 @@ fn panic_while_quiet_for_test() {}
 /// descriptors, and the rest is room for the runtime, the sender and this process.
 const OPEN_FILES_WANTED: u64 = 2 * MAX_CONNECTION_TASKS + 256;
 
-/// `<cfg>/capture-homes/<connector>`: the one isolated harness home every capture run of a
-/// connector shares (D39). It is created here and never seeded.
-const CAPTURE_HOMES_DIR: &str = "capture-homes";
-
 /// What every phase of one capture run is given and none changes.
 struct CaptureRun<'a> {
     client: &'a (dyn DaemonClient + Sync),
@@ -469,6 +465,10 @@ struct CapturePrep {
     /// The harness home every run of this connector shares (D39); `None` when each run makes its
     /// own inside its run directory.
     shared_home: Option<SharedCaptureHome>,
+    /// The run `HOME` every run of this connector shares (D59, `run_home = "shared"`): the
+    /// folder `<cfg>/capture-homes/<id>.run-home`, under the same lock. `None` when each run
+    /// gets a `HOME` of its own.
+    shared_run_home: Option<SharedCaptureHome>,
     /// The lock that keeps a second run off that shared home: held from the claim, moved into
     /// the [`Forked`] run at the fork and let go at its seal (the upload that follows needs no
     /// home), and released by the OS if this process dies. A `goalcup continue` takes it before
@@ -637,11 +637,10 @@ pub(crate) fn lock_home_for_continue(
     connector: &HarnessConnector,
     run_id: &str,
 ) -> Result<Option<std::fs::File>, CliError> {
-    if connector.loaded.manifest.capture.home.config_home == ConfigHome::PerRun {
-        return Ok(None);
-    }
     let id = &connector.loaded.manifest.id;
-    let config_home = cfg.join(CAPTURE_HOMES_DIR).join(id);
+    let Some((config_home, _)) = shared_leaf(cfg, &connector.loaded.manifest.capture, id) else {
+        return Ok(None);
+    };
     private_dir(config_home.parent().expect("a capture-home parent"), true)?;
     match try_lock_shared_home(&config_home, id)? {
         Ok(lock) => {
@@ -654,6 +653,26 @@ pub(crate) fn lock_home_for_continue(
             let holder = home_holder(&path).unwrap_or_else(|| run_id.to_string());
             Err(CliError::Refused(still_recording(&holder, id)))
         }
+    }
+}
+
+/// Which home of a connector is kept across runs, and so serialized under its one
+/// `<capture-homes>/<id>.lock`: its config home (D39, `config_home = "shared"`), at
+/// `<cfg>/capture-homes/<id>`, or its run `HOME` (D59, `run_home = "shared"`), at
+/// `<cfg>/capture-homes/<id>.run-home`. The schema never admits both. The `bool` is whether it
+/// is the run `HOME`. `None`: every home is made per run.
+///
+/// The run home's leaf has a `.` in it, which no connector id has, so it is never another
+/// connector's home or a lock, and a connector that moves its shared home from the one to the
+/// other does not inherit the old tree as its `HOME`.
+fn shared_leaf(cfg: &Path, profile: &CaptureSpec, id: &str) -> Option<(PathBuf, bool)> {
+    let homes = cfg.join(CAPTURE_HOMES_DIR);
+    if profile.home.config_home == ConfigHome::Shared {
+        Some((homes.join(id), false))
+    } else if profile.home.run_home == RunHome::Shared {
+        Some((homes.join(format!("{id}.run-home")), true))
+    } else {
+        None
     }
 }
 
@@ -1421,13 +1440,14 @@ fn prepare(
         matcher,
         executable,
         shared_home: None,
+        shared_run_home: None,
         shared_home_lock: None,
     })
 }
 
-/// The harness home every run of a connector shares (D39), taken for this run: its folder made
-/// if there is none, and the lock that keeps a second run off it. A connector whose home is made
-/// per run has none to take. This creates things on disk, so a run on a server takes it only
+/// The harness home every run of a connector shares (D39), or its shared run `HOME` (D59), taken
+/// for this run: its folder made (0700) if there is none, and the lock that keeps a second run
+/// off it. A connector whose homes are made per run has none to take. This creates things on disk, so a run on a server takes it only
 /// after the participant has approved the run.
 fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), CliError> {
     let CaptureRun {
@@ -1436,10 +1456,9 @@ fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), 
         profile,
         ..
     } = *cx;
-    if profile.home.config_home == ConfigHome::PerRun {
+    let Some((config_home, is_run_home)) = shared_leaf(cfg, profile, &c.loaded.manifest.id) else {
         return Ok(());
-    }
-    let config_home = cfg.join(CAPTURE_HOMES_DIR).join(&c.loaded.manifest.id);
+    };
     private_dir(config_home.parent().expect("a capture-home parent"), true)?;
     // `goalcup continue` took the lock before it closed anything, and hands it over.
     let lock = match prep.shared_home_lock.take() {
@@ -1466,7 +1485,12 @@ fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), 
     }
     // SAFETY: reading the effective uid has no preconditions or memory effects.
     let owner = unsafe { libc::geteuid() };
-    prep.shared_home = Some(SharedCaptureHome::load(&config_home, owner)?);
+    let home = SharedCaptureHome::load(&config_home, owner)?;
+    if is_run_home {
+        prep.shared_run_home = Some(home);
+    } else {
+        prep.shared_home = Some(home);
+    }
     prep.shared_home_lock = Some(lock);
     Ok(())
 }
@@ -1497,9 +1521,15 @@ fn create_and_gate<'a>(
         .as_ref()
         .map(SharedCaptureHome::recheck)
         .transpose()?;
+    let shared_run_home = prep
+        .shared_run_home
+        .as_ref()
+        .map(SharedCaptureHome::recheck)
+        .transpose()?;
     let run = RunDir::create(
         beside,
         profile.home.run_home,
+        shared_run_home.as_deref(),
         env,
         match (cx.continuing, upload.map(|u| &u.how)) {
             // A continued run goes on in the clone it has.
@@ -1542,7 +1572,7 @@ fn create_and_gate<'a>(
 
     // The last alias/target identity check is directly before the create request. Preserve the
     // exact D39 leaf spelling in the request, local entry and child environment.
-    if let Some(home) = prep.shared_home.as_ref() {
+    if let Some(home) = prep.shared_home.as_ref().or(prep.shared_run_home.as_ref()) {
         pause_at("capture-shared-home-pre-create");
         if let Err(error) = home.recheck() {
             let _ = run.remove();
@@ -2711,12 +2741,20 @@ enum WorkspaceAt<'a> {
 }
 
 impl RunDir {
+    /// `shared_home` is the connector's shared run `HOME` (D59), claimed and checked by the
+    /// caller: with `RunHome::Shared` it is the run's `HOME`, used as it is and never removed.
     fn create(
         beside: &Path,
         home: RunHome,
+        shared_home: Option<&Path>,
         env: &BTreeMap<String, String>,
         workspace_at: WorkspaceAt<'_>,
     ) -> Result<RunDir, CliError> {
+        if (home == RunHome::Shared) != shared_home.is_some() {
+            return Err(CliError::Internal(
+                "a shared run home was not claimed for the run that keeps one".into(),
+            ));
+        }
         let beside = std::fs::canonicalize(beside).map_err(|source| CliError::Io {
             path: beside.display().to_string(),
             source,
@@ -2735,26 +2773,31 @@ impl RunDir {
         let run = RunDir {
             workspace,
             separate_workspace,
-            home: dir.join("home"),
+            // Outside `dir`, so `remove` never touches it.
+            home: shared_home.map_or_else(|| dir.join("home"), Path::to_path_buf),
             ca: dir.join("ca"),
             dir,
         };
-        let made = private_dir(&run.home, false)
-            .and_then(|()| private_dir(&run.ca, false))
-            .and_then(|()| match home {
-                RunHome::Empty => Ok(()),
-                // The home's one entry: the user's keychain, so a subscription login is found
-                // and nothing else of theirs is (D38).
-                RunHome::KeychainLink => {
-                    let keychains = crate::per_run_home::home_from(env)?.join("Library/Keychains");
-                    let library = run.home.join("Library");
-                    private_dir(&library, false)?;
-                    symlink(&keychains, &library.join("Keychains"))
-                }
-                _ => Err(CliError::Refused(
-                    "the harness uses a run-home mode this goalcup does not support".into(),
-                )),
-            });
+        let made = match shared_home {
+            // Kept across runs, made by the claim: nothing is made in it here.
+            Some(_) => Ok(()),
+            None => private_dir(&run.home, false),
+        }
+        .and_then(|()| private_dir(&run.ca, false))
+        .and_then(|()| match home {
+            RunHome::Empty | RunHome::Shared => Ok(()),
+            // The home's one entry: the user's keychain, so a subscription login is found
+            // and nothing else of theirs is (D38).
+            RunHome::KeychainLink => {
+                let keychains = crate::per_run_home::home_from(env)?.join("Library/Keychains");
+                let library = run.home.join("Library");
+                private_dir(&library, false)?;
+                symlink(&keychains, &library.join("Keychains"))
+            }
+            _ => Err(CliError::Refused(
+                "the harness uses a run-home mode this goalcup does not support".into(),
+            )),
+        });
         if let Err(e) = made {
             let _ = run.remove();
             return Err(e);
@@ -3733,8 +3776,14 @@ mod tests {
         let beside = tmp.path().join("beside");
         std::fs::create_dir_all(&beside).unwrap();
         let env = BTreeMap::new();
-        let run =
-            RunDir::create(&beside, RunHome::Empty, &env, WorkspaceAt::Existing(&clone)).unwrap();
+        let run = RunDir::create(
+            &beside,
+            RunHome::Empty,
+            None,
+            &env,
+            WorkspaceAt::Existing(&clone),
+        )
+        .unwrap();
         assert_eq!(run.workspace, clone);
         run.remove().unwrap();
         assert!(!run.dir.exists(), "the segment's own folder goes");
@@ -3747,6 +3796,7 @@ mod tests {
         let fresh = RunDir::create(
             &beside,
             RunHome::Empty,
+            None,
             &env,
             WorkspaceAt::Clone(tmp.path()),
         )

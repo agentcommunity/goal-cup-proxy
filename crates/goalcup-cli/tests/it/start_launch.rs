@@ -217,7 +217,7 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
 /// and still seals and uploads when the window is closed.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod chat {
-    use crate::common::m2_cli_support::{CHAT_ID, Hooked, Launcher, OnPty, Rig};
+    use crate::common::m2_cli_support::{CHAT_HOME_ID, CHAT_ID, Hooked, Launcher, OnPty, Rig};
     use crate::common::upload_server::{ServerOptions, UploadServer};
     use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
     use std::collections::BTreeMap;
@@ -607,6 +607,64 @@ mod chat {
             !env.keys().any(|k| k.starts_with("GOALCUP_")),
             "the tracer's own variables reached the harness: {env:?}"
         );
+    }
+
+    /// A connector whose run `HOME` is kept across runs (D59, `run_home = "shared"`): the run's
+    /// `HOME` is `<cfg>/capture-homes/<id>.run-home`, a file the harness writes there is still
+    /// there for the run's next segment, and `goalcup continue` takes the same home (and its
+    /// lock) and restarts the harness in it.
+    #[test]
+    fn a_shared_run_home_is_kept_across_segments_and_continue_uses_it() {
+        let rig = Rig::chat();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        let home = rig
+            .cfg
+            .join("capture-homes")
+            .join(format!("{CHAT_HOME_ID}.run-home"));
+
+        let mut first = OnPty::spawn(
+            rig.chat_command_for(CHAT_HOME_ID, &[DISK, BEATING], Launcher::Direct),
+            None,
+        );
+        first.wait_shown("tui: ready");
+        assert_eq!(harness(&rig, "tui.home"), home.display().to_string());
+        first.type_line("hello");
+        first.wait_shown("tui: noted hello");
+        first.type_line("/exit");
+        let status = first.wait();
+        assert!(status.success(), "{status:?}\n{}", first.shown());
+        assert_eq!(
+            std::fs::read_to_string(home.join("tui-runs.txt")).unwrap(),
+            "run\n"
+        );
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&home).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let entry = newest_entry(&rig);
+        let (_, records) = rig.read_trace(&entry);
+        assert!(native_bytes(&records).contains(r#""text":"hello""#));
+
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        assert_eq!(harness(&rig, "tui.home"), home.display().to_string());
+        assert_eq!(
+            std::fs::read_to_string(home.join("tui-runs.txt")).unwrap(),
+            "run\nrun\n",
+            "what the harness wrote in its HOME survived into the next segment"
+        );
+        let argv = harness(&rig, "tui.argv");
+        assert!(argv.ends_with("resume\n--last"), "{argv}");
+        second.type_line("again");
+        second.wait_shown("tui: noted again");
+        second.type_line("/exit");
+        let status = second.wait();
+        assert!(status.success(), "{status:?}\n{}", second.shown());
+        let run_id = &server.run_ids()[0];
+        assert_eq!(server.entry_ids(run_id).len(), 2, "two segments");
+        assert!(home.is_dir(), "the shared run home is never removed");
     }
 
     /// A chat-mode run needs its terminal for input and for output: from a pipe, or with its

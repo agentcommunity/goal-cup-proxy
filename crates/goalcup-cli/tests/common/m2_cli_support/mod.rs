@@ -40,6 +40,10 @@ pub const HERMES_FAKE_ID: &str = "m2-fake-hermes";
 /// source read from the run's start, and `fixtures/m2-fake-tui.sh` as its harness ([`Rig::chat`]).
 pub const CHAT_ID: &str = "m2-fake-tui";
 
+/// [`CHAT_ID`]'s harness under a connector whose run `HOME` is kept across runs (D59:
+/// `run_home = "shared"`, no home variable, its sessions under `{run_home}/sessions`).
+pub const CHAT_HOME_ID: &str = "m2-fake-tui-home";
+
 /// The repository `prepare_for` says the participant made, and the made-up token for it.
 pub const PREP_REPO: &str = "https://github.com/goal-cup/demo";
 pub const FAKE_GITHUB_TOKEN: &str = "github_pat_FAKE0123456789abcdefghijkl";
@@ -171,13 +175,23 @@ impl Rig {
 
     /// The command [`Rig::start_on_pty`] runs, without its terminal.
     pub fn chat_command(&self, env: &[(&str, &str)], launcher: Launcher) -> std::process::Command {
+        self.chat_command_for(CHAT_ID, env, launcher)
+    }
+
+    /// [`Rig::chat_command`] for the chat-mode connector `id` ([`CHAT_ID`] or [`CHAT_HOME_ID`]).
+    pub fn chat_command_for(
+        &self,
+        id: &str,
+        env: &[(&str, &str)],
+        launcher: Launcher,
+    ) -> std::process::Command {
         let runs = self.root.join("runs");
         std::fs::create_dir_all(&runs).unwrap();
         let goalcup = env!("CARGO_BIN_EXE_goalcup");
         let mut command = match launcher {
             Launcher::Direct => {
                 let mut command = std::process::Command::new(goalcup);
-                command.args(["start", "--harness", CHAT_ID, "--dev"]);
+                command.args(["start", "--harness", id, "--dev"]);
                 command
             }
             Launcher::Continue { run } => {
@@ -194,7 +208,7 @@ impl Rig {
                 let mut command = std::process::Command::new("/bin/sh");
                 command.args([
                     "-c",
-                    &format!("set -m; \"$0\" start --harness {CHAT_ID} --dev; echo \"shell: $?\""),
+                    &format!("set -m; \"$0\" start --harness {id} --dev; echo \"shell: $?\""),
                     goalcup,
                 ]);
                 command
@@ -787,7 +801,32 @@ evidence_paths = ["{EVIDENCE_PATH}"]
 protocol_hint = "openai-responses"
 "#
     );
-    std::fs::write(dir.join("harness.toml"), harness).unwrap();
+    std::fs::write(dir.join("harness.toml"), &harness).unwrap();
+
+    // The same harness with its run `HOME` kept across runs (D59): no home variable (so its
+    // config home is per run), and its sessions under that `HOME`.
+    let dir = connectors.join(CHAT_HOME_ID);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut shared = harness.replacen(
+        &format!("id = \"{CHAT_ID}\""),
+        &format!("id = \"{CHAT_HOME_ID}\""),
+        1,
+    );
+    for (from, to) in [
+        (
+            "run_home = \"empty\"\nconfig_home = \"shared\"\nenv = \"CODEX_HOME\"\n",
+            "run_home = \"shared\"\nconfig_home = \"per_run\"\n",
+        ),
+        ("skills_dir = \"skills\"\n", ""),
+        (
+            "root = \"{config_home}/sessions\"",
+            "root = \"{run_home}/sessions\"",
+        ),
+    ] {
+        assert!(shared.contains(from), "{from}");
+        shared = shared.replacen(from, to, 1);
+    }
+    std::fs::write(dir.join("harness.toml"), shared).unwrap();
 }
 
 /// How [`Rig::chat_command`] starts `goalcup start`.

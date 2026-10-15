@@ -20,7 +20,7 @@
 //!   over it, rendered;
 //! * the allowlist [`CAPTURE_IDENTITY_ENV`] (`USER`, `LOGNAME`, `TMPDIR`), carried across
 //!   from the tracker's environment and nothing else from it;
-//! * `HOME` (the per-run home), `PATH` ([`CAPTURE_PATH`], or for a chat-mode connector the
+//! * the run's `HOME` (per run, or the connector's shared run home, D59), `PATH` ([`CAPTURE_PATH`], or for a chat-mode connector the
 //!   participant's own: [`harness_path`]) and the profile's home variable;
 //! * for a chat-mode connector only, the participant's terminal environment
 //!   ([`CHAT_PASSTHROUGH_ENV`] and `LC_*`), under the connector's own values;
@@ -31,10 +31,12 @@
 //!
 //! **D1: the tracker never sets a model base URL.** Nothing on that list can be one except
 //! the profile's `capture.env`, and `goalcup_protocol::capture_policy` refuses a profile that
-//! names a `*_BASE_URL`, `*_API_URL` or `*ENDPOINT` variable, a `*_PROXY` or bare `PROXY`, or
-//! any other `*_URL` there, before a plan is ever built. The participant's shell cannot add
-//! one either, because nothing outside the allowlist is inherited: an allowlist leaves no
-//! `*_URL` the participant exported to strip.
+//! names a `*_BASE_URL`, `*_API_URL` or `*ENDPOINT` variable, a `*_PROXY` or bare `PROXY`
+//! (other than `NODE_USE_ENV_PROXY = "1"`, which names no endpoint, D59), or any other `*_URL`
+//! there, before a plan is ever built. The participant's shell cannot add
+//! one either, because nothing outside the allowlist is inherited (a chat-mode connector's
+//! pass-through is an allowlist too): an allowlist leaves no `*_URL` the participant exported
+//! to strip.
 //!
 //! Headless as it is, the capture child stays in the launcher's process group: the daemon
 //! never confirms a group ended (D30), and there a Ctrl-C typed at the terminal reaches it.
