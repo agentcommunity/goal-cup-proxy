@@ -188,11 +188,16 @@ fn log_in(rig: &Rig, url: &str) {
 
 /// A practice run of the chat connector with `entries`, each `(entry id, sent)`.
 fn practice_run(rig: &Rig, run_id: &str, entries: &[(&str, bool)]) {
+    kept_run(rig, run_id, entries, true, false);
+}
+
+/// A kept run of the chat connector: practice, test or (neither) competition.
+fn kept_run(rig: &Rig, run_id: &str, entries: &[(&str, bool)], practice: bool, test: bool) {
     let record = RunRecord {
         run_id: run_id.to_string(),
         server_url: Some("http://127.0.0.1:1".to_string()),
-        practice: true,
-        test: false,
+        practice,
+        test,
         connector_id: CHAT_ID.to_string(),
         workspace: rig.root.join("work").join(run_id),
         started_at_unix: 1_700_000_000,
@@ -307,6 +312,13 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
     let (code, text) = prep(&rig, &[], &facts);
     assert_eq!(code, 1, "{text}");
     assert!(line(&text, "harness_home").starts_with("[ok]"), "{text}");
+    assert!(line(&text, "practice").starts_with("[todo]"), "{text}");
+
+    // A fully uploaded organizer test run (and a competition run) is not the practice run.
+    kept_run(&rig, "run-test-1", &[("entry-test", true)], false, true);
+    kept_run(&rig, "run-comp-1", &[("entry-comp", true)], false, false);
+    let (code, text) = prep(&rig, &[], &facts);
+    assert_eq!(code, 1, "{text}");
     assert!(line(&text, "practice").starts_with("[todo]"), "{text}");
 
     // A practice run that is not all uploaded does not count, and says which entry to send.

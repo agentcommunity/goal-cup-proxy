@@ -693,6 +693,53 @@ mod server_runs {
         assert!(!rig.harness_started());
     }
 
+    /// `--test` is a run on the server too: without a login it is refused before anything is
+    /// created, rather than becoming a local run that status would still call a test run.
+    #[test]
+    fn test_without_a_server_is_refused_before_anything_is_created() {
+        let rig = Rig::new();
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.options(&goal, RESERVE);
+        opts.mode = RunMode::Test;
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("refused");
+        assert_eq!(refused.exit_code(), 1, "{refused}");
+        assert!(
+            refused
+                .to_string()
+                .contains("`--test` needs `goalcup login` and `goalcup prep` first"),
+            "{refused}"
+        );
+        assert!(client.book().creates.is_empty(), "{out}");
+        assert!(rig.run_dirs().is_empty());
+        assert!(!rig.harness_started());
+    }
+
+    /// A harness handed a provider key never uploads, so `--test` with it is refused too.
+    #[test]
+    fn test_with_a_keyed_harness_is_refused_in_its_own_words() {
+        let rig = Rig::hermes();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.hermes_options(&goal, RESERVE);
+        opts.mode = RunMode::Test;
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("refused").to_string();
+        assert!(refused.contains("`--test` cannot be used"), "{refused}");
+        assert!(refused.contains("provider key"), "{refused}");
+        assert!(refused.contains("test run"), "{refused}");
+        assert!(server.device_requests().is_empty(), "{out}");
+        assert!(client.book().creates.is_empty());
+        assert!(rig.run_dirs().is_empty());
+    }
+
     /// A start that fails after the run opened, with the server away so the run cannot be given
     /// back then, keeps that run's credential: the next start gives the run back with it.
     #[test]

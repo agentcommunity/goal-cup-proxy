@@ -63,7 +63,7 @@ pub struct RunRecord {
     pub run_id: String,
     /// The upload server the run was opened on; `None` for a local run.
     pub server_url: Option<String>,
-    /// A practice run (not a competition entry). No run is a practice run yet.
+    /// A practice run (not a competition entry): `goalcup start --practice`.
     pub practice: bool,
     /// An organizer test run (`goalcup start --test`). Absent from a `run.json` written before
     /// the flag existed, which reads as `false`.

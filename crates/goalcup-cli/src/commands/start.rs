@@ -3206,28 +3206,28 @@ fn uploading(
     keyed: bool,
     out: &mut dyn std::io::Write,
 ) -> Result<Option<Serving>, CliError> {
-    let practice = mode.is_practice();
-    // A practice run is a run on the server: without one there is nothing to practise on.
-    let needs_server = || {
-        CliError::Refused(
-            "`--practice` needs `goalcup login` and `goalcup prep` first. Nothing was created."
-                .to_string(),
-        )
+    use crate::account::device::RunMode;
+    // A practice run or an organizer test run is a run on the server: without one there is
+    // nothing to practise on, and a test run that never reaches the server is no test.
+    let (flag, kind) = match mode {
+        RunMode::Practice => (Some("--practice"), "practice"),
+        RunMode::Test => (Some("--test"), "test"),
+        RunMode::Competition => (None, "competition"),
     };
     let Some(server) = crate::server::read_server_config(cfg)? else {
-        return if practice {
-            Err(needs_server())
-        } else {
-            Ok(None)
+        return match flag {
+            Some(flag) => Err(CliError::Refused(format!(
+                "`{flag}` needs `goalcup login` and `goalcup prep` first. Nothing was created."
+            ))),
+            None => Ok(None),
         };
     };
     if keyed {
-        if practice {
-            return Err(CliError::Refused(
-                "`--practice` cannot be used with this harness: a harness handed a provider key \
-                 is never uploaded, so it cannot make a practice run. Nothing was created."
-                    .to_string(),
-            ));
+        if let Some(flag) = flag {
+            return Err(CliError::Refused(format!(
+                "`{flag}` cannot be used with this harness: a harness handed a provider key \
+                 is never uploaded, so it cannot make a {kind} run. Nothing was created."
+            )));
         }
         say(
             out,

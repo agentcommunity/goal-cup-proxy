@@ -1172,3 +1172,32 @@ fn a_run_json_without_the_test_field_still_reads() {
         goalcup_cli::account::device::RunMode::Competition
     );
 }
+
+/// `continue` starts its next segment in the mode the run was started in, read from `mode()`:
+/// a test run stays a test run, a practice run a practice run.
+#[test]
+fn a_run_records_mode_is_what_continue_restarts_it_in() {
+    use goalcup_cli::account::device::RunMode;
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    run_with_state(
+        &cfg,
+        &info.entry_id,
+        goalcup_cli::run::RunState::launched(&info.entry_id, Ok(())),
+    );
+    let mut record = goalcup_cli::run::read(&cfg, &info.entry_id).unwrap();
+    for (practice, test, mode) in [
+        (false, false, RunMode::Competition),
+        (true, false, RunMode::Practice),
+        (false, true, RunMode::Test),
+    ] {
+        record.practice = practice;
+        record.test = test;
+        goalcup_cli::run::write(&cfg, &record).unwrap();
+        let kept = goalcup_cli::run::read(&cfg, &info.entry_id).unwrap();
+        assert_eq!(kept.mode(), mode);
+        assert_eq!(kept.mode().is_practice(), practice);
+    }
+}

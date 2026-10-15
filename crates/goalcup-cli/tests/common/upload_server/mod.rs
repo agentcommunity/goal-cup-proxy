@@ -254,6 +254,11 @@ impl UploadServer {
         handlers::mint_credential(&self.shared, member, "competition", state::now_secs())
     }
 
+    /// The same for a test credential.
+    pub fn mint_test_credential(&self, member: &str) -> String {
+        handlers::mint_credential(&self.shared, member, "test", state::now_secs())
+    }
+
     /// The same for a practice credential.
     pub fn mint_practice_credential(&self, member: &str) -> String {
         handlers::mint_credential(&self.shared, member, "practice", state::now_secs())
