@@ -6,10 +6,15 @@
 //! identifiers are not scanned. A literal where a name is data is listed in `ALLOWED`, by file
 //! and exact text, with its reason; any other hit in the same file still fails.
 //!
+//! The ban grows with `connectors/`: every connector id, without a trailing `-cli`, is banned
+//! too, as a whole token (bounded by anything but `[a-z0-9]`), so a short id such as `amp`
+//! does not hit `timestamp`. Harness #4 is covered the day its folder lands.
+//!
 //! `openai` and `anthropic` may appear in core when they name an API wire format or a provider
 //! (decoder family ids, secret shapes, provider prefixes); the ban is on harness and product
 //! names (codex, claude-code, hermes, …).
 
+use goalcup_protocol::pins::shipped_connector_ids;
 use std::path::{Path, PathBuf};
 
 /// Lower-case fragments no string literal may contain, compared case-insensitively. They cover
@@ -96,6 +101,22 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "evidence note: the harness build this decoder was measured against",
     ),
 ];
+
+/// The name each shipped connector adds to the ban: its id without a trailing `-cli`.
+fn connector_names() -> Vec<String> {
+    shipped_connector_ids()
+        .iter()
+        .map(|id| id.strip_suffix("-cli").unwrap_or(id).to_string())
+        .collect()
+}
+
+/// Whether `lower` holds `name` as a whole token: not preceded or followed by `[a-z0-9]`.
+fn names_token(lower: &str, name: &str) -> bool {
+    let token = |c: Option<u8>| c.is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    lower.match_indices(name).any(|(at, _)| {
+        !token(lower[..at].bytes().next_back()) && !token(lower[at + name.len()..].bytes().next())
+    })
+}
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -235,8 +256,31 @@ fn the_scanner_reads_literals_only() {
 }
 
 #[test]
+fn the_ban_holds_every_connector_name_as_a_whole_token() {
+    let names = connector_names();
+    for id in shipped_connector_ids() {
+        let name = id.strip_suffix("-cli").unwrap_or(&id);
+        assert!(names.iter().any(|n| n == name), "{id} adds `{name}`");
+        assert!(!name.ends_with("-cli"), "{name}");
+    }
+    for (text, hit) in [
+        ("amp", true),
+        ("run amp now", true),
+        ("x-amp_y", true),
+        ("amp/1.2", true),
+        ("timestamp", false),
+        ("example", false),
+        ("amp2", false),
+        ("2amp", false),
+    ] {
+        assert_eq!(names_token(text, "amp"), hit, "{text:?}");
+    }
+}
+
+#[test]
 fn core_code_names_no_harness_in_a_string_literal() {
     let root = repo_root();
+    let names = connector_names();
     let capture_paths = [
         root.join("crates/goalcup-cli/src/launch.rs"),
         root.join("crates/goalcup-cli/src/capture_tee.rs"),
@@ -276,9 +320,10 @@ fn core_code_names_no_harness_in_a_string_literal() {
         for (line, literal) in string_literals(&source) {
             let lower = literal.to_ascii_lowercase();
             let named = if narrow {
-                FAMILY_LITERALS.contains(&literal.as_str())
+                FAMILY_LITERALS.contains(&literal.as_str()) || names.contains(&lower)
             } else {
                 FORBIDDEN.iter().any(|name| lower.contains(name))
+                    || names.iter().any(|name| names_token(&lower, name))
             };
             if !named {
                 continue;

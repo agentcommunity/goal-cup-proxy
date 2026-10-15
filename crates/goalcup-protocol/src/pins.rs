@@ -377,6 +377,41 @@ pub fn pinned_connector_dir_sha256(connector_id: &str) -> Option<&'static str> {
         .map(|(_, sha)| *sha)
 }
 
+/// Tests only: the connector ids this checkout ships, sorted, found by reading the folders
+/// under the repository's `connectors/`. A test that runs a rule over "every shipped
+/// connector" loops over this, so harness #4 is covered the day its folder lands and no test
+/// names a connector by hand.
+///
+/// It panics unless the folders are exactly the ids [`CONNECTOR_DIR_SHA256S`] pins: a folder
+/// that `scripts/pin-manifests.sh` did not pin, or a pin whose folder is gone, is the mistake
+/// to fix first, before any per-connector rule runs. Only real directories count, so a stray
+/// file such as `.DS_Store` is not a connector; `tests/it/harness_conformance.rs` refuses a
+/// symlinked folder and a folder without a `harness.toml`.
+///
+/// Here, behind `test-hooks`, because both the protocol's and the CLI's tests use it and no
+/// crate is shared by the two test trees except this one. The path is this crate's own
+/// source location, which is why a shipped build never compiles it.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn shipped_connector_ids() -> Vec<String> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    let mut folders: Vec<String> = entries
+        .map(|e| e.unwrap_or_else(|e| panic!("{}: {e}", dir.display())))
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    folders.sort();
+    let pinned: Vec<&str> = CONNECTOR_DIR_SHA256S.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        folders,
+        pinned,
+        "the folders under {} are not the ids pins/connector-dirs.txt pins: run \
+         `sh scripts/pin-manifests.sh` and rebuild",
+        dir.display()
+    );
+    folders
+}
+
 /// One `(connector_id, sha256)` pin table: the shape of [`CONNECTOR_DIR_SHA256S`] and of the
 /// verifier's V1 manifest table.
 pub type PinTable = &'static [(&'static str, &'static str)];
