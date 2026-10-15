@@ -397,14 +397,15 @@ pub struct Uploader {
     /// yet, with the `seq` and head of the chunk it answers: written before anything else is
     /// sent, so the chunk it belongs to is not sent again for it.
     owed_ack: Option<(AckCheckpoint, u64, String)>,
-    /// Whether the run's final heartbeat has been stored; the lock is held while a heartbeat
-    /// goes, so that the run's ordinary heartbeats never land after the final one.
+    /// Whether the run's final heartbeat has been sent (see [`EndedGate`]).
     ended: EndedGate,
 }
 
-/// Set once the final heartbeat is stored. The run's heartbeat thread sends an ordinary
-/// heartbeat only while it is unset, holding the lock for the whole call; the final heartbeat
-/// is sent under the same lock, so an ordinary one is never in flight behind it or after it.
+/// Set as soon as the first final heartbeat has been sent, whatever came of it (a lost answer
+/// or a `5xx` is asked again after a backoff of minutes, and the run's ordinary heartbeats must
+/// not go in between). The run's heartbeat thread sends an ordinary heartbeat only while it is
+/// unset, holding the lock for the whole call; the final heartbeat is sent under the same lock,
+/// so an ordinary one is never in flight behind it or after it.
 pub type EndedGate = std::sync::Arc<Mutex<bool>>;
 
 /// `GET /v1/runs/{run}?entry_id={entry}`: where the server is for the entry this record names,
@@ -525,7 +526,14 @@ impl Uploader {
             .map(|(seq, hash)| (Some(*seq), hash.as_str()))
             == Some((position.next_seq.checked_sub(1), position.head.as_str()))
         {
-            let _ = self.keep_ack(ack, position.next_seq.checked_sub(1), &position.head);
+            let seq = position.next_seq.checked_sub(1);
+            // A rejected one is dropped (dropping is always safe); one that could not be
+            // written is held, like any other, and written before anything is sent.
+            if let (Err(AckError::Local(_)), Some(seq)) =
+                (self.keep_ack(ack, seq, &position.head), seq)
+            {
+                self.owed_ack = Some((ack.clone(), seq, position.head.clone()));
+            }
         }
     }
 
@@ -732,27 +740,32 @@ impl Uploader {
         let mut failures = 0;
         let mut last = None::<String>;
         loop {
-            let Some(timeout) = left(until, super::http::CALL_TIMEOUT) else {
-                return Err(ran_out(last.as_deref()));
-            };
             let repo_head = noted_repo_head(&self.spool, &self.record.entry_id);
             // Under the lock the run's ordinary heartbeats take, so none is in flight behind
-            // this one; once it is stored, none is sent.
+            // this one, and none is sent once this one has gone. The time left is measured
+            // after the lock is taken: an ordinary heartbeat in flight holds it for as long as
+            // it takes, and must not come out of this call's time.
             let (retry_after, why) = {
                 let mut ended = self.ended.lock().unwrap_or_else(PoisonError::into_inner);
-                match heartbeat(
+                let Some(timeout) = left(until, super::http::CALL_TIMEOUT) else {
+                    return Err(ran_out(last.as_deref()));
+                };
+                let beat = heartbeat(
                     &self.server,
                     &self.record,
                     true,
                     repo_head,
                     self.vitals.as_ref(),
                     timeout,
-                ) {
+                );
+                // Once it has been sent, whatever the answer, the run's end is the final
+                // heartbeat's to commit: no ordinary one follows it.
+                if matches!(beat, Beat::Answer(_)) {
+                    *ended = true;
+                }
+                match beat {
                     Beat::Empty => return Err("the chain holds no whole record".to_string()),
-                    Beat::Answer(Ok(_)) => {
-                        *ended = true;
-                        return Ok(());
-                    }
+                    Beat::Answer(Ok(_)) => return Ok(()),
                     Beat::Answer(Err(error)) if error.ends_upload() => {
                         return Err(error.to_string());
                     }
@@ -1131,7 +1144,7 @@ fn heartbeat_refusal(error: &ServerError) -> Option<String> {
 }
 
 /// One ordinary heartbeat, counted in `vitals` and said when it fails; `Some` is why the run
-/// must stop. Nothing is sent once the final heartbeat is stored (`ended`), and none is in
+/// must stop. Nothing is sent once the final heartbeat has been sent (`ended`), and none is in
 /// flight while it goes: the lock is held for the call.
 fn ordinary_beat(
     server: &ServerClient,
@@ -1357,10 +1370,25 @@ impl Uploader {
 /// The uploader running beside `goalcup start`, on a thread of its own.
 pub struct Running {
     entry_id: String,
-    finish: std::sync::mpsc::Sender<WrapUp>,
+    /// `None` once dropped: the upload thread then sees the run's end.
+    finish: Option<std::sync::mpsc::Sender<WrapUp>>,
+    /// The flag that keeps the background upload from starting anything more.
+    quit: std::sync::Arc<AtomicBool>,
     report: std::sync::mpsc::Receiver<Report>,
     last_ok: std::sync::Arc<AtomicU64>,
     acked_offset: std::sync::Arc<AtomicU64>,
+}
+
+impl Drop for Running {
+    /// A `Running` dropped without a finish (the run ended some other way) stops its upload
+    /// thread rather than leaving it to retry in the background: nothing more is started, and
+    /// the thread gets a moment to say it has returned.
+    fn drop(&mut self) {
+        self.quit.store(true, Ordering::SeqCst);
+        // Its sender gone, the upload thread sees the end of the run and returns.
+        drop(self.finish.take());
+        let _ = self.report.recv_timeout(Duration::from_secs(2));
+    }
 }
 
 /// The run's own deadline, for when the server cannot say it: its length
@@ -1506,6 +1534,7 @@ fn begin_spawning(
         )
         .map_err(spawn_error("heartbeat"))?;
     }
+    let quit = over.clone();
     let beside = Beside {
         finishing,
         over,
@@ -1531,7 +1560,8 @@ fn begin_spawning(
     })?;
     Ok(Running {
         entry_id,
-        finish,
+        finish: Some(finish),
+        quit,
         report,
         last_ok,
         acked_offset,
@@ -1577,7 +1607,9 @@ impl Running {
     /// The wait is counted on the continuous clock, in slices: a machine that sleeps through
     /// the wrap-up does not owe it again on waking.
     pub fn finish(self, wrap_up: WrapUp) -> Report {
-        let _ = self.finish.send(wrap_up);
+        if let Some(finish) = &self.finish {
+            let _ = finish.send(wrap_up);
+        }
         let last_word = WrapUp::after(wrap_up.remaining() + FINISH_GRACE);
         loop {
             let left = last_word.remaining();
@@ -1825,6 +1857,8 @@ fn run(
             if let Some(up) = uploader.as_ref()
                 && stopped.is_none()
                 && up.waiting() == 0
+                // An acknowledgement still to be written is trouble, not an idle upload.
+                && up.owed_ack.is_none()
             {
                 up.mark_ok();
                 vitals.upload_ok();

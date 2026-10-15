@@ -53,6 +53,8 @@ pub mod server;
 pub mod skill;
 pub mod subreaper;
 pub mod upload;
+/// The WSL version and Windows-drive checks of `prep`, `start` and `continue`.
+pub mod wsl_gate;
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::control::ControlError;

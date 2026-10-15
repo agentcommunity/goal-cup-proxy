@@ -447,6 +447,9 @@ mod retries {
         /// (`null` for none): a server that says the run is over, as W2's does for a run a
         /// newer start replaced.
         stop_reason: Arc<Mutex<Option<Option<String>>>>,
+        /// How many final heartbeats still have their answer lost: the stand-in stores them,
+        /// and the tracer is answered `503`.
+        lose_finals: Arc<Mutex<u32>>,
     }
 
     impl Front {
@@ -459,21 +462,28 @@ mod retries {
             let fault = Arc::new(Mutex::new(fault));
             let lie = Arc::new(Mutex::new(None));
             let stop_reason = Arc::new(Mutex::new(None));
-            let (seen_in, stop_in, lie_in, reason_in) =
-                (seen.clone(), stop.clone(), lie.clone(), stop_reason.clone());
+            let lose_finals = Arc::new(Mutex::new(0u32));
+            let (seen_in, stop_in, lie_in, reason_in, lose_in) = (
+                seen.clone(),
+                stop.clone(),
+                lie.clone(),
+                stop_reason.clone(),
+                lose_finals.clone(),
+            );
             std::thread::spawn(move || {
                 while !stop_in.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let (target, fault, seen, lie, reason) = (
+                            let (target, fault, seen, lie, reason, lose) = (
                                 target.clone(),
                                 fault.clone(),
                                 seen_in.clone(),
                                 lie_in.clone(),
                                 reason_in.clone(),
+                                lose_in.clone(),
                             );
                             std::thread::spawn(move || {
-                                answer(stream, &target, &fault, &seen, &lie, &reason)
+                                answer(stream, &target, &fault, &seen, &lie, &reason, &lose)
                             });
                         }
                         Err(_) => std::thread::sleep(Duration::from_millis(5)),
@@ -486,6 +496,7 @@ mod retries {
                 stop,
                 lie,
                 stop_reason,
+                lose_finals,
             }
         }
 
@@ -512,6 +523,7 @@ mod retries {
         seen: &Mutex<Vec<String>>,
         lie: &Mutex<Option<(u64, u64, String)>>,
         stop_reason: &Mutex<Option<Option<String>>>,
+        lose_finals: &Mutex<u32>,
     ) {
         stream.set_nonblocking(false).unwrap();
         stream
@@ -576,8 +588,19 @@ mod retries {
                     .header("Content-Type")
                     .unwrap_or("application/json")
                     .to_string();
-                let status = response.status();
+                let mut status = response.status();
                 let mut reply = response.into_string().unwrap().into_bytes();
+                let is_final = path.ends_with("/heartbeat")
+                    && String::from_utf8_lossy(&body).contains("\"final\":true");
+                if is_final && status == 200 && {
+                    let mut left = lose_finals.lock().unwrap();
+                    let lose = *left > 0;
+                    *left = left.saturating_sub(1);
+                    lose
+                } {
+                    status = 503;
+                    reply = br#"{"error":"lost","message":"the answer was lost"}"#.to_vec();
+                }
                 if method == "GET"
                     && path.matches('/').count() == 3
                     && let Some((offset, next_seq, head)) = lie.lock().unwrap().clone()
@@ -1245,5 +1268,146 @@ mod retries {
             behind.is_empty(),
             "heartbeats after the final one: {seen:?}"
         );
+    }
+
+    #[test]
+    fn no_ordinary_heartbeat_is_sent_while_a_lost_final_is_asked_again() {
+        // The final heartbeat is stored, but its answer is lost; it is asked again after a
+        // backoff of 400 ms, during which a heartbeat every 50 ms must not be sent.
+        let run = Run::new(Box::new(|_| None));
+        *run.front.lose_finals.lock().unwrap() = 1;
+        let client = ServerClient::with_credential(&run.front.url, &run.credential);
+        let (stop, _stopped) = std::sync::mpsc::channel();
+        let slow = Policy::from_test_spec("60000,20,400,400,5000,268435456,2000,50").unwrap();
+        let running = begin(
+            client,
+            run.record.clone(),
+            run.key.clone(),
+            slow,
+            run.spool.clone(),
+            None,
+            stop,
+            Vitals::default(),
+        )
+        .unwrap();
+        wait_for("a first heartbeat", || {
+            (run.front.count("POST /v1/runs/") >= 1).then_some(())
+        });
+        let report = running.finish(WrapUp::after(Duration::from_secs(20)));
+        assert!(report.caught_up && report.sealed, "{report:?}");
+        let seen = run.front.seen.lock().unwrap().clone();
+        let first = seen
+            .iter()
+            .position(|line| line == "FINAL")
+            .expect("a final heartbeat");
+        assert!(
+            seen.iter().filter(|line| *line == "FINAL").count() >= 2,
+            "the lost final was asked again: {seen:?}"
+        );
+        // A heartbeat the forwarder marked FINAL is followed by the marker; any other is ordinary.
+        let ordinary: Vec<_> = seen[first..]
+            .windows(2)
+            .filter(|pair| pair[0].ends_with("/heartbeat") && pair[1] != "FINAL")
+            .collect();
+        assert!(
+            ordinary.is_empty(),
+            "ordinary heartbeats after the final: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn an_acknowledgement_still_owed_is_not_an_idle_upload() {
+        // The chunk goes, and the server's acknowledgement cannot be written (a link where
+        // acks.jsonl belongs). The chain is then idle, but the upload is not well: it must not
+        // be marked as working while the acknowledgement waits.
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        let acks = trace.join("acks.jsonl");
+        std::os::unix::fs::symlink(trace.parent().unwrap().join("elsewhere.jsonl"), &acks).unwrap();
+        let vitals = Vitals::default();
+        let (running, _stopped) = start_beating(&run, vitals.clone());
+        wait_for("the acknowledgement to be refused", || {
+            vitals
+                .upload_problem()
+                .0
+                .is_some_and(|why| why.contains("acks.jsonl"))
+                .then_some(())
+        });
+        let last_ok = running.last_ok();
+        last_ok.store(0, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(
+            last_ok.load(Ordering::SeqCst),
+            0,
+            "marked as working while an ack is owed"
+        );
+        assert!(vitals.upload_problem().0.is_some());
+        // Written at last, the upload is well again.
+        std::fs::remove_file(&acks).unwrap();
+        wait_for("the upload to be well", || {
+            (last_ok.load(Ordering::SeqCst) > 0 && vitals.upload_problem().0.is_none())
+                .then_some(())
+        });
+        assert_eq!(std::fs::read_to_string(&acks).unwrap().lines().count(), 1);
+        drop(running);
+    }
+
+    #[test]
+    fn a_servers_acknowledgement_that_cannot_be_written_on_resume_is_held() {
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        let (report, said, _) = finish(&run, Duration::from_secs(20));
+        assert!(report.caught_up, "{report:?}\n{said:?}");
+        // The acknowledgement the server holds is lost here, and a link blocks its return.
+        let acks = trace.join("acks.jsonl");
+        std::fs::remove_file(&acks).unwrap();
+        std::os::unix::fs::symlink(trace.parent().unwrap().join("elsewhere.jsonl"), &acks).unwrap();
+        let mut uploader = run.uploader();
+        assert!(
+            std::fs::symlink_metadata(&acks)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |line| {
+            if std::fs::symlink_metadata(&acks).is_ok_and(|m| m.file_type().is_symlink()) {
+                assert!(line.contains("acks.jsonl"), "{line}");
+                std::fs::remove_file(&acks).unwrap();
+            }
+        });
+        assert!(report.caught_up, "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(&acks).unwrap().lines().count(),
+            1,
+            "the held acknowledgement was written once the file could be"
+        );
+    }
+
+    #[test]
+    fn a_dropped_running_ends_its_upload_thread() {
+        // An upload that retries for good (a link where acks.jsonl belongs) stops, and stays
+        // stopped, when its Running is dropped.
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        std::os::unix::fs::symlink(
+            trace.parent().unwrap().join("elsewhere.jsonl"),
+            trace.join("acks.jsonl"),
+        )
+        .unwrap();
+        let vitals = Vitals::default();
+        let (running, _stopped) = start_beating(&run, vitals.clone());
+        wait_for("a retry", || vitals.upload_problem().0.map(|_| ()));
+        let began = Instant::now();
+        drop(running);
+        assert!(
+            began.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            began.elapsed()
+        );
+        vitals.upload_ok();
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(vitals.upload_problem().0, None, "it retried after the drop");
     }
 }

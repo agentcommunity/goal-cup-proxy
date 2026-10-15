@@ -1,6 +1,7 @@
 // SupabaseDb against a stubbed fetch: every method's RPC function name, argument names and
-// result mapping. There is no Supabase here; sql/proposed-goalcup-functions.sql is the other half
-// of this contract, and these names must stay equal to its function and parameter names.
+// result mapping. There is no Supabase here; sql/goal-cup-tracer-upload.sql (the website's migration)
+// is the other half of this contract, and these names (after the goal_cup_ prefix) must stay equal
+// to its function and parameter names.
 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
@@ -25,7 +26,7 @@ function stub(...replies: unknown[]): Call[] {
   let i = 0;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
-    const prefix = "https://p.example/rest/v1/rpc/";
+    const prefix = "https://p.example/rest/v1/rpc/goal_cup_";
     assert.ok(url.startsWith(prefix), url);
     calls.push({ fn: url.slice(prefix.length), args: JSON.parse(init?.body as string) as Record<string, unknown> });
     return new Response(JSON.stringify(replies[i++]), { status: 200, headers: { "content-type": "application/json" } });
@@ -93,8 +94,8 @@ test("pollDevice -> upload_poll_device; the credential comes back once", async (
 });
 
 test("approveDevice -> upload_approve_device(p_user_code, ...)", async () => {
-  const calls = stub("ok", "not_found", "expired", "already_decided");
-  for (const want of ["ok", "not_found", "expired", "already_decided"]) {
+  const calls = stub("ok", "not_found", "expired", "already_decided", "forbidden");
+  for (const want of ["ok", "not_found", "expired", "already_decided", "forbidden"]) {
     assert.equal(await db().approveDevice("BCDFGHJK", "m", true, "t"), want);
   }
   assert.deepEqual(calls[0], { fn: "upload_approve_device", args: { p_user_code: "BCDFGHJK", p_member_id: "m", p_approve: true, p_now: "t" } });

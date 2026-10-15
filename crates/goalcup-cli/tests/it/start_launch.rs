@@ -147,6 +147,102 @@ fn a_run_that_cannot_take_its_reserve_is_refused_before_anything_is_created() {
     assert!(!reserve.exists(), "no reserve file or folder");
 }
 
+/// What `start` does on a stated WSL machine: the refusal, and that nothing was made or asked.
+fn start_on_wsl(wsl: &str, with_work_folder: Option<&str>) -> String {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("cfg");
+    std::fs::create_dir(&cfg).unwrap();
+    let beside = tmp.path().join("goal-folder");
+    std::fs::create_dir(&beside).unwrap();
+    let goal = beside.join("goal.txt");
+    std::fs::write(&goal, "write result.txt").unwrap();
+    if let Some(work) = with_work_folder {
+        goalcup_cli::server::write_server_config(
+            &cfg,
+            &goalcup_cli::server::ServerConfig {
+                url: "http://127.0.0.1:1".to_string(),
+                account: Some("member-1".to_string()),
+            },
+        )
+        .unwrap();
+        goalcup_cli::prep_file::write_prep(
+            &cfg,
+            &goalcup_cli::prep_file::PrepFile {
+                work_root: work.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    let m = support::mock_armed(&tmp, "codex-cli");
+    let mut o = support::start_options("codex-cli");
+    o.goal_file = Some(goal);
+    let mut env = support::clean_env();
+    env.insert(
+        goalcup_cli::wsl_gate::Host::VAR.to_string(),
+        wsl.replace("{cfg}", &cfg.display().to_string())
+            .replace("{beside}", &beside.display().to_string()),
+    );
+    let err = goalcup_cli::commands::start::start_with(
+        &m,
+        &support::connectors_dir(),
+        &cfg,
+        &env,
+        &o,
+        &mut Vec::new(),
+    )
+    .expect_err("a WSL machine this run cannot use");
+    assert_eq!(err.exit_code(), 1, "{err}");
+    assert!(err.to_string().ends_with("Nothing was created."), "{err}");
+    assert!(
+        m.calls().is_empty(),
+        "the daemon was asked: {:?}",
+        m.calls()
+    );
+    let made: Vec<_> = std::fs::read_dir(&beside).unwrap().flatten().collect();
+    assert_eq!(made.len(), 1, "only the goal file: {made:?}");
+    assert!(!cfg.join("runs").exists(), "no run record");
+    let reserve = goalcup_cli::run::reserve::artifact_root(&cfg).join("reserve");
+    assert!(!reserve.exists(), "no reserve file or folder");
+    err.to_string()
+}
+
+/// WSL1 cannot run Goal Cup: one sentence, and nothing created.
+#[test]
+fn start_refuses_wsl1_before_anything_is_created() {
+    let said = start_on_wsl("wsl=1", None);
+    assert!(
+        said.starts_with("WSL1 cannot run Goal Cup: convert this distribution to WSL2 with")
+            && said.contains("`wsl --set-version <distro> 2`"),
+        "{said}"
+    );
+}
+
+/// On WSL2 each folder the run writes to is judged by its filesystem type.
+#[test]
+fn start_refuses_each_run_folder_on_a_windows_host_filesystem_under_wsl2() {
+    let said = start_on_wsl("wsl=2,fs={beside}=9p", None);
+    assert!(
+        said.contains("run folder") && said.contains("(9p)"),
+        "{said}"
+    );
+    let said = start_on_wsl("wsl=2,fs={cfg}=drvfs", None);
+    assert!(
+        said.contains("config folder") && said.contains("(drvfs)"),
+        "{said}"
+    );
+    // The artifact root is beside the configuration folder, not inside it.
+    let said = start_on_wsl("wsl=2,fs={cfg}-artifacts=virtiofs", None);
+    assert!(
+        said.contains("artifact root") && said.contains("(virtiofs)"),
+        "{said}"
+    );
+    assert!(!said.contains("config folder"), "{said}");
+    // The work folder `goalcup prep` kept (a run on the server has one).
+    let said = start_on_wsl("wsl=2,fs=/odd/place=9p", Some("/odd/place/work"));
+    assert!(said.contains("work folder /odd/place/work"), "{said}");
+}
+
 /// `goalcup git-credential` is what a run's clone calls; it is not for the participant, so
 /// `--help` does not list it, and `start` has no `--repo` any more (the repository comes from
 /// `goalcup prep`) but has `--practice`.

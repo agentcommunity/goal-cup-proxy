@@ -1665,6 +1665,46 @@ fn unknown_valid_native_hint_is_copied_byte_for_byte() {
 }
 
 #[test]
+fn a_shared_run_home_is_held_to_the_config_home_isolation() {
+    use goalcup_protocol::harness::RunHome;
+    let temp = tempfile::tempdir().unwrap();
+    let config_dir = temp.path().join("config");
+    std::fs::create_dir(&config_dir).unwrap();
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("a test HOME"));
+    let real_dirs = ["{user_home}/.example".to_string()];
+    // D59: a run `HOME` kept across runs is never the participant's own, nor a real harness
+    // home, and the refusal says which.
+    for refused in [home.clone(), home.join(".example/sessions")] {
+        let error = isolated_run_home(RunHome::Shared, &refused, &real_dirs, &config_dir)
+            .expect_err("refused");
+        assert!(matches!(error, DaemonError::Refused(_)), "{error}");
+        assert!(error.to_string().contains("real_dirs"), "{error}");
+    }
+    // It lives under `<config_dir>/capture-homes`, nowhere else.
+    for refused in [
+        temp.path().join("elsewhere/example.run-home"),
+        config_dir.join("example.run-home"),
+        config_dir.join("capture-homes"),
+    ] {
+        let error = isolated_run_home(RunHome::Shared, &refused, &real_dirs, &config_dir)
+            .expect_err("outside the capture homes");
+        assert!(error.to_string().contains("capture-homes"), "{error}");
+    }
+    let kept = config_dir.join("capture-homes/example.run-home");
+    assert_eq!(
+        isolated_run_home(RunHome::Shared, &kept, &real_dirs, &config_dir).unwrap(),
+        std::fs::canonicalize(&config_dir)
+            .unwrap()
+            .join("capture-homes/example.run-home")
+    );
+    // A per-run `HOME` is the launcher's, fresh inside the run directory: not judged here.
+    assert_eq!(
+        isolated_run_home(RunHome::Empty, &home, &real_dirs, &config_dir).unwrap(),
+        home
+    );
+}
+
+#[test]
 fn a_nonshipped_real_dir_is_part_of_the_config_home_refusal() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("participant-home");
@@ -1741,4 +1781,72 @@ fn a_nonshipped_real_dir_is_part_of_the_config_home_refusal() {
         ),
         Err(DaemonError::Refused(_))
     ));
+}
+
+// ------------------------------------------- D57: native discovery losses reach the chain
+
+fn streamless(records: &[CaptureRecord], reason: GapReason) -> usize {
+    records
+        .iter()
+        .filter(|r| matches!(r, CaptureRecord::Gap { stream: None, reason: g, .. } if *g == reason))
+        .count()
+}
+
+#[test]
+fn a_native_file_past_max_files_is_one_streamless_gap_until_the_count_grows() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(home.path().join(format!("{name}.jsonl")), b"x\n").unwrap();
+    }
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let native = NativeCapture::new(
+        NativeCaptureConfig {
+            sources: vec![NativeSourceSpec {
+                name: "store".into(),
+                root: home.path().to_path_buf(),
+                pattern: "*.jsonl".into(),
+                form: NativeStoreForm::AppendOnly,
+                hint: None,
+                scope_id: None,
+                modified_since: None,
+            }],
+            limits: NativeCaptureLimits {
+                max_files: 2,
+                ..NativeCaptureLimits::default()
+            },
+        },
+        sink.clone(),
+        Box::new(SystemNativeClock::new()),
+    )
+    .unwrap();
+    let mut owner = Owner::new(sink, writer.clone(), clock(), &[], None, Some(native));
+    for _ in 0..5 {
+        owner.poll_native();
+    }
+    owner.drain_all();
+    assert_eq!(
+        streamless(&records(dir.path()), GapReason::LimitExceeded),
+        1,
+        "one loss, however many polls see it"
+    );
+
+    // A second file past the bound grows the count: recorded, at the latest by the finish.
+    std::fs::write(home.path().join("d.jsonl"), b"x\n").unwrap();
+    owner.poll_native();
+    let control = OwnerControl::default();
+    control.stop.store(true, Ordering::Release);
+    owner.run(&control);
+    assert!(control.drained.load(Ordering::Acquire));
+    let chain = records(dir.path());
+    assert_eq!(streamless(&chain, GapReason::LimitExceeded), 2);
+    assert_eq!(
+        chain
+            .iter()
+            .filter(|r| matches!(r, CaptureRecord::Open { .. }))
+            .count(),
+        2,
+        "the tracked files are captured as before"
+    );
 }

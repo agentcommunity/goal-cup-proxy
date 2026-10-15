@@ -143,17 +143,17 @@ function stubFetch(reply: (url: string, init: RequestInit) => Response) {
   return calls;
 }
 
-test("SupabaseDb calls PostgREST RPC in schema goalcup with the dedicated key", async () => {
+test("SupabaseDb calls public.goal_cup_* through PostgREST RPC with the dedicated key", async () => {
   const cred = { member_id: "member-uuid", run_id: null, mode: "practice", expires_at: "2026-11-06T10:05:00Z" };
   const calls = stubFetch(() => new Response(JSON.stringify(cred), { status: 200, headers: { "content-type": "application/json" } }));
   const db = new SupabaseDb("https://proj.supabase.example/", "service-key");
   assert.deepEqual(await db.credential("ab".repeat(32), "2026-11-06T09:06:00Z"), cred);
   const c = calls[0]!;
-  assert.equal(c.url, "https://proj.supabase.example/rest/v1/rpc/upload_credential");
+  assert.equal(c.url, "https://proj.supabase.example/rest/v1/rpc/goal_cup_upload_credential");
   assert.equal(c.init.method, "POST");
   const h = c.init.headers as Record<string, string>;
-  assert.equal(h["content-profile"], "goalcup");
-  assert.equal(h["accept-profile"], "goalcup");
+  assert.equal(h["content-profile"], undefined); // schema public: no profile header
+  assert.equal(h["accept-profile"], undefined);
   assert.equal(h.apikey, "service-key");
   assert.equal(h.authorization, "Bearer service-key");
   assert.deepEqual(JSON.parse(c.init.body as string), { p_credential_hash: "ab".repeat(32), p_now: "2026-11-06T09:06:00Z" });
@@ -211,7 +211,10 @@ test("the 5-minute cron runs in production and in staging; staging is a Worker o
   assert.equal(tables.triggers!.crons, '["*/5 * * * *"]');
   assert.equal(tables["env.staging.triggers"]!.crons, '["*/5 * * * *"]');
   assert.equal(tables[""]!.name, "goalcup-upload");
-  assert.equal(tables["env.staging"]!.name, "goalcup-upload-staging");
+  assert.equal(tables["env.staging"]!.name, "goalcup-ingest-staging");
+  assert.equal(tables["env.staging.vars"]!.NOTICE_RECIPIENT_OVERRIDE, "delivered@resend.dev"); // staging never emails a member
+  assert.ok(!("NOTICE_RECIPIENT_OVERRIDE" in tables.vars!));
+  assert.equal(tables[""]!.workers_dev, "false"); // production: custom domain only
   // wrangler does not inherit vars into an environment: staging repeats every one, and has its own events and bucket.
   for (const name of Object.keys(tables.vars!)) assert.ok(name in tables["env.staging.vars"]!, `staging needs ${name}`);
   assert.notEqual(tables["env.staging.vars"]!.EVENT_ID, tables.vars!.EVENT_ID);

@@ -16,6 +16,7 @@ import type {
   AbandonResult,
   ApproveDeviceResult,
   ChunkRecord,
+  ClaimedNotice,
   CommitChunkArgs,
   CommitChunkResult,
   ContinueRunArgs,
@@ -28,6 +29,8 @@ import type {
   HeartbeatArgs,
   HeartbeatResult,
   MachineFacts,
+  NoticeKind,
+  NoticeOutcome,
   NoticeArgs,
   OpenRunArgs,
   OpenRunResult,
@@ -107,6 +110,33 @@ const withEntry = (run: StoredRun, entry: StoredEntry): StoredRun => ({
   ...run,
   entries: run.entries.map((e) => (e.entry_id === entry.entry_id ? entry : e)),
 });
+
+/** A queued notice as stored under state/notices/, with what the mailer adds. */
+interface LocalNotice {
+  run_id: string;
+  member_id: string;
+  kind: NoticeKind;
+  dedupe_key: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+  sent_at: string | null;
+  claimed_at?: string;
+  sent_to?: string | null;
+  provider_id?: string;
+  skipped_at?: string;
+  skipped_reason?: string;
+  last_error?: string;
+}
+
+/** How long a mailer's claim on a notice lasts (the same 15 minutes as the database's). */
+const NOTICE_CLAIM_SECONDS = 15 * 60;
+
+/** A notice's id locally: a 32-bit FNV-1a hash of its key (Supabase has a real identity column). */
+function noticeId(key: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 0x01000193) >>> 0;
+  return h;
+}
 
 export class LocalDb implements Db {
   readonly #bucket: R2Bucket;
@@ -390,6 +420,46 @@ export class LocalDb implements Db {
       if ((await this.#bucket.put(key, JSON.stringify(row), { onlyIf: { etagDoesNotMatch: "*" } })) !== null) queued++;
     }
     return queued;
+  }
+
+  /** Local only: no accounts here, so `to` is always null (the mailer uses its test address or skips). */
+  async claimNotices(limit: number, now: string): Promise<ClaimedNotice[]> {
+    const claimed: ClaimedNotice[] = [];
+    const stale = formatTime(addSeconds(new Date(now), -NOTICE_CLAIM_SECONDS));
+    let cursor: string | undefined;
+    do {
+      const page = await this.#bucket.list({ prefix: "state/notices/", cursor });
+      for (const { key } of page.objects) {
+        if (claimed.length >= limit) break;
+        const obj = await this.#bucket.get(key);
+        if (obj === null) continue;
+        const row = (await obj.json()) as LocalNotice;
+        if (row.sent_at != null || row.skipped_at != null || (row.claimed_at != null && row.claimed_at >= stale)) continue;
+        const next = { ...row, claimed_at: now };
+        if ((await this.#bucket.put(key, JSON.stringify(next), { onlyIf: { etagMatches: obj.etag } })) === null) continue;
+        claimed.push({ id: noticeId(key), kind: row.kind, run_id: row.run_id, to: null, subject: `Goal Cup: ${row.kind}`, text: JSON.stringify(row.payload) });
+      }
+      cursor = page.truncated && claimed.length < limit ? page.cursor : undefined;
+    } while (cursor !== undefined);
+    return claimed;
+  }
+
+  async finishNotice(id: number, outcome: NoticeOutcome, to: string | null, detail: string, now: string): Promise<void> {
+    let cursor: string | undefined;
+    do {
+      const page = await this.#bucket.list({ prefix: "state/notices/", cursor });
+      for (const { key } of page.objects) {
+        if (noticeId(key) !== id) continue;
+        await this.#updateObject<LocalNotice, void>(key, undefined, (row) => {
+          if (row.sent_at != null || row.skipped_at != null) return { answer: undefined };
+          if (outcome === "sent") return { next: { ...row, sent_at: now, sent_to: to, provider_id: detail }, answer: undefined };
+          if (outcome === "skipped") return { next: { ...row, skipped_at: now, skipped_reason: detail }, answer: undefined };
+          return { next: { ...row, last_error: detail }, answer: undefined };
+        });
+        return;
+      }
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor !== undefined);
   }
 
   recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {

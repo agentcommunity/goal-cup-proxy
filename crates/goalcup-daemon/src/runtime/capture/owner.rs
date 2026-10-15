@@ -15,6 +15,10 @@ pub(super) const NATIVE_FINISH_BYTES: u64 = 64 << 20;
 /// How often the owner polls the native adapter when it reported no deferred work.
 pub(super) const NATIVE_EVERY: Duration = Duration::from_millis(100);
 
+/// The least time between two native discovery-loss gaps while the entry runs; the finish
+/// records any growth left over.
+pub(super) const NATIVE_LOSS_EVERY: Duration = Duration::from_secs(60);
+
 /// Items taken per drain call.
 pub(super) const DRAIN_BATCH: usize = 256;
 
@@ -34,6 +38,10 @@ pub(super) struct Owner {
     pub(super) last_flush: Instant,
     pub(super) last_sync: Instant,
     last_native: Option<Instant>,
+    /// The native adapter's `lost_entries` the chain already holds a gap for, and when it was
+    /// written.
+    native_lost: u64,
+    native_lost_at: Option<Instant>,
 }
 
 impl Owner {
@@ -58,6 +66,8 @@ impl Owner {
             last_flush: Instant::now(),
             last_sync: Instant::now(),
             last_native: None,
+            native_lost: 0,
+            native_lost_at: None,
         }
     }
 
@@ -102,6 +112,10 @@ impl Owner {
             {
                 lock(&self.writer).streamless_gap(GapReason::SourceChanged, &(self.clock)());
             }
+            if finished.discovery_capped {
+                lock(&self.writer).streamless_gap(GapReason::LimitExceeded, &(self.clock)());
+            }
+            self.record_native_losses(true);
         }
         self.apply_losses();
         self.sink.close_intake();
@@ -131,12 +145,40 @@ impl Owner {
         let native_due = self
             .last_native
             .is_none_or(|last| last.elapsed() >= NATIVE_EVERY);
-        if native_due && let Some(native) = &mut self.native {
-            let report = native.poll();
-            // Deferred work polls again on the next pass.
-            self.last_native = (!report.more_work).then(Instant::now);
+        if native_due {
+            self.poll_native();
         }
         self.tick();
+    }
+
+    pub(super) fn poll_native(&mut self) {
+        let Some(native) = &mut self.native else {
+            return;
+        };
+        let report = native.poll();
+        // Deferred work polls again on the next pass.
+        self.last_native = (!report.more_work).then(Instant::now);
+        self.record_native_losses(false);
+    }
+
+    /// A stream-less `LimitExceeded` gap when the native adapter's entries kept out for good
+    /// first appear and each time their count grows: at most one per `NATIVE_LOSS_EVERY`
+    /// while the entry runs, and whatever growth is left at the finish (D57). A gap record
+    /// carries no count; the trace reads incomplete from the first.
+    fn record_native_losses(&mut self, finishing: bool) {
+        let Some(native) = &self.native else {
+            return;
+        };
+        let lost = native.loss_report().lost_entries;
+        let recent = self
+            .native_lost_at
+            .is_some_and(|at| at.elapsed() < NATIVE_LOSS_EVERY);
+        if lost <= self.native_lost || (recent && !finishing) {
+            return;
+        }
+        self.native_lost = lost;
+        self.native_lost_at = Some(Instant::now());
+        lock(&self.writer).streamless_gap(GapReason::LimitExceeded, &(self.clock)());
     }
 
     /// The receiver's losses, each applied after every item queued before it was taken:
