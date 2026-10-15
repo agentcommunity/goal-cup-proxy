@@ -20,7 +20,7 @@
 //! silently iterates over nothing, fails here. A connector
 //! folder that is a symlink is refused too (`load_dir` and `connector_dirs` both).
 //!
-//! The kit (offline stand-ins, macOS) stays a maintainer gate.
+//! The kit (offline stand-ins, macOS and Linux) is `cli/tests/full/harness_contract_kit.rs`.
 
 use goalcup_protocol::capture_policy::{EXTRA_PATTERN_SOURCES, mentions_goalcup};
 use goalcup_protocol::harness::{Origin, load_dir};

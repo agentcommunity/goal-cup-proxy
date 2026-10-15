@@ -3,6 +3,8 @@
 # stand-in against the kit's own offline upstream. Keep every @NAME@ token exactly: the kit
 # runner replaces them before loading (stand-in path, marker path, upstream port and test
 # id). Replace every <PLACEHOLDER>.
+# Headless connectors only: a chat-mode connector (interactive = true) needs no kit case, because
+# the kit runs every pinned chat-mode connector from its own harness.toml.
 
 schema_version = 1
 # The case runs as an unpinned dev connector, which refuses a pinned id: never use the

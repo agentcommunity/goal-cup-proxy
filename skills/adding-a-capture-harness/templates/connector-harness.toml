@@ -3,6 +3,8 @@
 # Replace every <PLACEHOLDER>. Delete the options you do not use. Comment lines are optional
 # (they are pinned bytes too); keep one first-line provenance comment like the shipped ones:
 # <Harness name> <VERSION>, capture only. Facts: docs/harnesses/<HARNESS_ID>.md.
+# This template is chat mode (D57), the product's mode: the closest complete example is
+# connectors/codex-cli/harness.toml. Headless is option B below (example: connectors/hermes-cli).
 # Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: docs/HARNESS-ONBOARDING.md, "Do I need a core change?".
 # No argument, goal flag, env key or value, host or auth host may name the tracker
 # (docs/CONNECTOR-SCHEMA.md, "Cross-field rules", rule 10).
@@ -11,18 +13,24 @@ schema_version = 1                      # always 1
 id = "<HARNESS_ID>"                     # must equal the folder name; ^[a-z][a-z0-9-]{1,47}$
 
 [capture]
-# Headless argv WITHOUT the program and WITHOUT the goal. Templates allowed in values:
-# {workspace}, {session_id} (only with identity "preassigned"). No absolute paths.
-# Goal placement, pick ONE:
-#   A) end args with "--": the goal is appended as the next single argument;
-#   B) set goal_flag: the goal is passed as --flag=<goal>, and args must NOT end in "--".
-args = ["<SUBCOMMAND>", "<FLAG>", "--"]
-# goal_flag = "--<LONG-OPTION>"         # option B only
-# Chat mode instead (the participant types the prompt in the harness): set `interactive = true`,
-# leave out goal_flag and credential, use identity source "none". See docs/CONNECTOR-SCHEMA.md.
-# interactive = true
-# One line: how the run continues unattended (or "none: ..."), e.g. one turn, stdin /dev/null.
-continuation = "none: <HOW ONE HEADLESS TURN RUNS>"
+# A) Chat mode (the default): the harness opens in the participant's terminal and the participant
+# types the prompt. No goal slot, no [capture.credential], identity source "none". The sign-in
+# must live in the harness's own config home: chat mode cannot pass an env-only API key.
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
+# The argv WITHOUT the program; may be empty. Templates allowed in values: {workspace}. No
+# absolute paths. No model, effort, approval or sandbox option: those are the participant's.
+args = []
+# How `goalcup continue` reopens the most recent session, appended after args (for example
+# ["--continue"] or ["resume", "--last"]). Delete if the harness cannot reopen one.
+resume_args = ["<RESUME-FLAG>"]
+#
+# B) Headless instead (one goal, no terminal): delete the four values above and use
+#   args = ["<SUBCOMMAND>", "<FLAG>", "--"]   # argv WITHOUT the program and WITHOUT the goal
+# with ONE goal placement: end args with "--" (the goal is the next single argument), or set
+#   goal_flag = "--<LONG-OPTION>"           # the goal is --flag=<goal>; args must NOT end in "--"
+#   continuation = "none: <HOW ONE HEADLESS TURN RUNS>"
+# {session_id} is allowed in values only with identity "preassigned".
 # Sign-in/token-refresh hosts, tunnelled opaquely and never recorded. Delete if none.
 # auth_hosts = ["<AUTH_HOST>"]
 # Your harness's own variable namespace, if it has switches that would silently stop capture
@@ -38,26 +46,49 @@ version_args = ["--version"]            # how the harness prints its version; de
 # *_BASE, *_HOST, *_ADDR, *_SERVER, ...); no value with "/" "~" "$" or "://".
 # SHELL is the one path value allowed: "/bin/zsh", "/bin/bash" or "/bin/sh".
 [capture.env]
+SHELL = "/bin/zsh"                      # the shell the harness's tools run in, per platform below
+# Is the harness Node (an npm package, or a script starting `#!/usr/bin/env node`)? Then keep
+# this line: Node's built-in HTTP client ignores HTTPS_PROXY without it (D59), and the run
+# records no model traffic. The kit's stand-in cannot see that. check-connector.sh fails when
+# `program` on PATH is a node script and this line is missing; a compiled Node or Bun binary it
+# cannot tell apart, so only a real run shows it. Delete the line only if facts sheet section 6
+# says the harness honours HTTPS_PROXY on its own.
+NODE_USE_ENV_PROXY = "1"
 # <HARNESS>_DISABLE_UPDATES = "1"
 
+# Linux has no /bin/zsh by default.
+[capture.platform.linux-x86_64.env]
+SHELL = "/bin/bash"
+
+[capture.platform.linux-aarch64.env]
+SHELL = "/bin/bash"
+
+# Does the harness have a variable that moves its config (like CODEX_HOME)? Pick ONE shape.
+# C1) Yes (as below): its sign-in lives in a shared, isolated config home; run_home "empty"
+#     (or "keychain_link" when it keeps its login in the macOS Keychain).
+# C2) No: delete `env`, `skills_dir` and the C1 values, and use
+#       run_home = "shared"             # one isolated HOME kept across serialized runs: the sign-in lasts
+#       config_home = "per_run"
+#     with the native root "{run_home}/<sessions>" and since_run_start = true. Never "empty"
+#     here: a fresh HOME each run loses the participant's sign-in every run.
+# Headless: config_home "per_run" (needed for seeds, dirs and any credential).
 [capture.home]
-run_home = "empty"                      # "empty", or "keychain_link" (macOS keychain only)
-# "per_run": a fresh config home per run (needed for seeds, dirs and any credential).
-# "shared": one isolated config home reused across serialized runs; no seeds or dirs.
-config_home = "per_run"
-# Optional: delete when the harness has no variable that moves its config. It then keeps its
-# state under the private run HOME: native root "{run_home}/...", config_home "per_run", and no
-# seeds or dirs.
+run_home = "empty"                      # "empty", "keychain_link" (macOS keychain only) or "shared" (C2)
+config_home = "shared"                  # C1 chat mode; "per_run" for C2 and headless
 env = "<HARNESS>_HOME"                  # own home var: ^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$
-per_run_dir = "<harness>-home"          # per_run only; folder name below the run home
-dirs = []                               # per_run only; relative dirs created mode 0700
 real_dirs = ["{user_home}/.<harness>"]  # the participant's real state dirs (never written)
+# Where the harness reads its skills, below the config home: the goal-cup skill is put in
+# <skills_dir>/goal-cup/ before each launch. Delete if the harness has no skills folder.
+skills_dir = "skills"
+# per_run only (headless):
+# per_run_dir = "<harness>-home"        # folder name below the run home
+# dirs = []                             # relative dirs created mode 0700
 # Seeds: files copied from connectors/<HARNESS_ID>/files/<file> into the config home.
-# per_run only. No credential, URL or user data. mode is "0600" (default) or "0400".
-seed = []
+# No credential, URL or user data. mode is "0600" (default) or "0400".
 # seed = [{ file = "config.yaml" }, { file = "settings.json", mode = "0400" }]
 
-# Only if the harness needs a provider key. Closed list: DEEPSEEK_API_KEY, AMP_API_KEY (D49).
+# Headless only: chat mode takes no credential. Only if the harness needs a provider key.
+# Closed list: DEEPSEEK_API_KEY, AMP_API_KEY (D49).
 # Requires config_home = "per_run" and identity stderr_line + deferred, or
 # stdout_json + at_launch (D50). Any other name is a core PR.
 # [capture.credential]
@@ -70,9 +101,11 @@ env = ["<CA_VARIABLE>"]
 mode = "<extend|replace>"
 
 [capture.identity]
-# Uncomment exactly one block. The four admitted pairs are the whole list.
-# 1) No session id. Native root must be {run_home}/... or a per-run {config_home}/...:
-# source = "none"
+# Exactly one block. The four admitted pairs are the whole list. Chat mode takes 1).
+# 1) No session id. With a shared config home the native row sets since_run_start = true;
+# otherwise the native root must be {run_home}/... or a per-run {config_home}/...:
+source = "none"
+# Headless may instead use one of these:
 # 2) The tracker mints the id and passes it in args via {session_id}:
 # source = "preassigned"
 # binding = "at_launch"
@@ -91,10 +124,13 @@ mode = "<extend|replace>"
 # Exactly one own-session native store. Never a request dump, credential or seed file.
 [[capture.native]]
 name = "<session>"                      # label in the chain; [A-Za-z0-9._-]{1,64}
-root = "{config_home}/<sessions>"       # {config_home} or {run_home}, plus relative parts
-pattern = "<session-{id}.jsonl>"        # {id} exactly once unless identity is "none"; no **
+root = "{config_home}/<sessions>"       # {config_home} (C1) or {run_home} (C2), plus relative parts
+pattern = "<*/*.jsonl>"                 # globs below root, no **; {id} exactly once unless identity is "none"
 form = "<append_only|snapshot>"         # JSONL appended in place, or a file rewritten whole
 # protocol_hint = "<harness-jsonl>"     # append_only only; an unknown hint means capture-only
+# The run's sessions are every matching file new or written since the run started (chat mode on
+# a shared home: no id is known at launch). Delete for a per-run root or an {id} pattern.
+since_run_start = true
 
 # Only if the harness pre-scans argv for options it acts on (see the Hermes connector).
 # [capture.argv_guard]
@@ -111,7 +147,9 @@ grace_seconds = 10                      # 1-60
 # [redaction]
 # extra_patterns = [{ kind = "<harness>_plan_type", regex = '"plan_type"\s*:\s*"([^"\\]+)"' }]
 
-# One to 16 intercepted model hosts. Each needs at least one recorded path.
+# One to 16 intercepted model hosts. Each needs at least one recorded path. A harness that lets
+# the participant pick the provider lists every provider host it can reach: traffic to an
+# unlisted host passes through unrecorded.
 [[capture.hosts]]
 host = "<api.provider.example>"         # public DNS name; no scheme, port, wildcard or localhost
 evidence_paths = ["</v1/chat/completions>"]

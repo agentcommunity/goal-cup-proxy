@@ -121,6 +121,29 @@ impl Rig {
         self.root.join("run-home")
     }
 
+    /// The `HOME` a create request for `profile_id` names: [`Self::run_home`], or for a
+    /// `run_home = "shared"` connector (D59) its kept home under `<config_dir>/capture-homes`,
+    /// the one place the daemon admits a shared run home.
+    pub fn run_home_for(&self, profile_id: &str) -> PathBuf {
+        let shared = self
+            .connector_dir_and_manifest(profile_id)
+            .is_some_and(|(_, m)| {
+                m.capture.home.run_home == goalcup_protocol::harness::RunHome::Shared
+            });
+        if !shared {
+            return self.run_home();
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let homes = self
+            .config
+            .config_dir
+            .join(goalcup_protocol::harness::CAPTURE_HOMES_DIR);
+        // The parent only, as the launcher leaves it: the daemon makes the home itself.
+        std::fs::create_dir_all(&homes).unwrap();
+        std::fs::set_permissions(&homes, std::fs::Permissions::from_mode(0o700)).unwrap();
+        homes.join(format!("{profile_id}.run-home"))
+    }
+
     /// A create request with this rig's run home.
     pub fn request(
         &self,
@@ -128,7 +151,29 @@ impl Rig {
         workspace: &Path,
         reserve_bytes: u64,
     ) -> CaptureWorkspaceRequest {
-        let connector_dir_sha256 = std::fs::read_dir(&self.config.connectors_dir)
+        let connector_dir_sha256 = self
+            .connector_dir_and_manifest(profile_id)
+            .map(|(dir, _)| goalcup_protocol::connector_dir::connector_dir_sha256(&dir).unwrap())
+            .unwrap_or_else(|| "00".repeat(32));
+        CaptureWorkspaceRequest {
+            workspace: workspace.display().to_string(),
+            profile_id: profile_id.to_string(),
+            connector_dir_sha256,
+            reserve_bytes,
+            run_home: self.run_home().display().to_string(),
+            config_home: self.root.join("config-home").display().to_string(),
+            entry_id: None,
+            native_since: None,
+        }
+    }
+
+    /// The directory under the connectors dir whose manifest declares `profile_id`, and that
+    /// manifest.
+    fn connector_dir_and_manifest(
+        &self,
+        profile_id: &str,
+    ) -> Option<(PathBuf, goalcup_protocol::harness::HarnessManifest)> {
+        std::fs::read_dir(&self.config.connectors_dir)
             .unwrap()
             .flatten()
             .find_map(|child| {
@@ -142,20 +187,8 @@ impl Rig {
                 let text = std::fs::read_to_string(dir.join("harness.toml")).ok()?;
                 let manifest =
                     goalcup_protocol::harness::HarnessManifest::from_toml_str(&text).ok()?;
-                (manifest.id == profile_id)
-                    .then(|| goalcup_protocol::connector_dir::connector_dir_sha256(&dir).unwrap())
+                (manifest.id == profile_id).then_some((dir, manifest))
             })
-            .unwrap_or_else(|| "00".repeat(32));
-        CaptureWorkspaceRequest {
-            workspace: workspace.display().to_string(),
-            profile_id: profile_id.to_string(),
-            connector_dir_sha256,
-            reserve_bytes,
-            run_home: self.run_home().display().to_string(),
-            config_home: self.root.join("config-home").display().to_string(),
-            entry_id: None,
-            native_since: None,
-        }
     }
 
     pub async fn create_request(&self, request: &CaptureWorkspaceRequest) -> Response {
@@ -197,6 +230,17 @@ impl Rig {
         self.client
             .post(&entry_route(entry_id, SUFFIX_ABANDON))
             .await
+    }
+
+    /// [`Self::created`], with the run home the launcher would name ([`Self::run_home_for`]):
+    /// what a per-connector test uses, so a `run_home = "shared"` connector is created too.
+    pub async fn created_at_its_home(&self, profile_id: &str) -> CaptureWorkspaceInfo {
+        let workspace = self.workspace(&format!("{profile_id}-{}", unique()));
+        let mut request = self.request(profile_id, &workspace, RESERVE);
+        request.run_home = self.run_home_for(profile_id).display().to_string();
+        let response = self.create_request(&request).await;
+        assert_eq!(response.status(), 200, "create: {}", response.body());
+        response.json().expect("a CaptureWorkspaceInfo")
     }
 
     /// A created entry for `profile_id` with a fresh workspace and [`RESERVE`].

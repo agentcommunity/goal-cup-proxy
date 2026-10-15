@@ -18,7 +18,8 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("check-connector.sh")
-SKIP_LINE = "SKIPPED: harness kit is macOS-only; a maintainer runs it"
+SKIP_LINE = "SKIPPED: harness kit runs on macOS and Linux only; a maintainer runs it"
+DAEMON_SKIP = "SKIPPED: the daemon's live goldens (toy-cli.daemon.json, native-stream-labels.json)"
 PINS = "crates/goalcup-protocol/pins/connector-dirs.txt"
 HEX = "a" * 64
 
@@ -166,10 +167,22 @@ class CheckConnectorTest(unittest.TestCase):
                 self.assertIn("--allow-no-kit", result.stdout)
                 self.assertTrue(result.stdout.startswith("Run every local check"), result.stdout)
 
-    # The non-macOS kit skip.
+    # The kit runs on macOS and Linux; elsewhere it is skipped.
 
-    def test_linux_skips_the_kit_loudly_and_fails_without_the_flag(self) -> None:
-        result = self.run_script("toy-cli")
+    def test_linux_builds_then_runs_the_kit_and_skips_only_the_daemon_live_goldens(self) -> None:
+        result = self.run_script("toy-cli", uname="Linux")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn(SKIP_LINE, result.stdout)
+        self.assertIn(DAEMON_SKIP, result.stdout)
+        self.assertIn("toy-cli: 6 passed, 0 failed, 1 skipped", result.stdout)
+        calls = self.cargo_calls()
+        kit = "test -p goalcup-cli --test full harness_contract_kit::"
+        self.assertIn(kit, calls)
+        self.assertLess(calls.index("build"), calls.index(kit))
+        self.assertIn("test -p goalcup-daemon --test full harness_contract_golden::", calls)
+
+    def test_another_system_skips_the_kit_loudly_and_fails_without_the_flag(self) -> None:
+        result = self.run_script("toy-cli", uname="FreeBSD")
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(SKIP_LINE, result.stdout)
         self.assertIn("FAIL kit skipped without --allow-no-kit", result.stdout)
@@ -177,11 +190,11 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertFalse(any("harness_contract_kit" in c for c in calls), calls)
         self.assertNotIn("build", calls)
 
-    def test_linux_with_the_flag_passes_but_still_says_skipped(self) -> None:
-        result = self.run_script("--allow-no-kit", "toy-cli")
+    def test_another_system_with_the_flag_passes_but_still_says_skipped(self) -> None:
+        result = self.run_script("--allow-no-kit", "toy-cli", uname="FreeBSD")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn(SKIP_LINE, result.stdout)
-        self.assertIn("toy-cli: 5 passed, 0 failed, 1 skipped", result.stdout)
+        self.assertIn("toy-cli: 5 passed, 0 failed, 2 skipped", result.stdout)
         calls = self.cargo_calls()
         self.assertIn(
             "test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::", calls
@@ -193,6 +206,7 @@ class CheckConnectorTest(unittest.TestCase):
         result = self.run_script("toy-cli", uname="Darwin")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotIn("SKIPPED", result.stdout)
+        self.assertIn("toy-cli: 6 passed, 0 failed, 0 skipped", result.stdout)
         calls = self.cargo_calls()
         kit = "test -p goalcup-cli --test full harness_contract_kit::"
         self.assertIn(kit, calls)
@@ -273,6 +287,74 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("FAIL files", result.stdout)
         self.assertTrue(any("harness_conformance" in c for c in self.cargo_calls()))
+
+    # Chat mode needs no kit case of its own.
+
+    def test_a_chat_mode_connector_without_a_kit_case_passes_the_files_step(self) -> None:
+        shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")
+        write(
+            self.repo / "connectors/toy-cli/harness.toml",
+            'id = "toy-cli"\n[capture]\n# interactive = false in a comment\ninteractive = true\n',
+        )
+        result = self.run_script("toy-cli", uname="Darwin")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("PASS files (chat mode)", result.stdout)
+        self.assertIn("test -p goalcup-cli --test full harness_contract_kit::", self.cargo_calls())
+
+    def test_a_chat_mode_connector_with_a_placeholder_left_fails_the_files_step(self) -> None:
+        shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")
+        write(
+            self.repo / "connectors/toy-cli/harness.toml",
+            'id = "toy-cli"\n[capture]\ninteractive = true\nargs = ["<FLAG>"]\n',
+        )
+        result = self.run_script("toy-cli", uname="Darwin")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("FAIL files (template placeholders left)", result.stdout)
+        self.assertIn('harness.toml:4:args = ["<FLAG>"]', result.stdout)
+
+    def test_a_headless_connector_still_needs_its_kit_case(self) -> None:
+        shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")
+        write(
+            self.repo / "connectors/toy-cli/harness.toml",
+            'id = "toy-cli"\n[capture]\n# interactive = true\n',
+        )
+        result = self.run_script("toy-cli", uname="Darwin")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("FAIL files (missing:", result.stdout)
+
+    # A Node harness without NODE_USE_ENV_PROXY.
+
+    def node_harness(self, manifest_env: str) -> None:
+        write(self.bin / "toy", "#!/usr/bin/env node\nconsole.log('hi')\n", 0o755)
+        write(
+            self.repo / "connectors/toy-cli/harness.toml",
+            'id = "toy-cli"\n[capture.executable]\nprogram = "toy"\n[capture.env]\n'
+            + manifest_env,
+        )
+
+    def test_a_node_script_without_node_use_env_proxy_fails_loudly(self) -> None:
+        self.node_harness('# NODE_USE_ENV_PROXY = "1"\n')
+        result = self.run_script("toy-cli", uname="Darwin")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("is a node script", result.stdout)
+        self.assertIn("FAIL node proxy (NODE_USE_ENV_PROXY missing)", result.stdout)
+        self.assertIn("toy-cli: 6 passed, 1 failed, 0 skipped", result.stdout)
+
+    def test_a_node_script_with_node_use_env_proxy_passes(self) -> None:
+        self.node_harness('NODE_USE_ENV_PROXY = "1"\n')
+        result = self.run_script("toy-cli", uname="Darwin")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("NODE_USE_ENV_PROXY is set", result.stdout)
+        self.assertIn("toy-cli: 6 passed, 0 failed, 0 skipped", result.stdout)
+
+    def test_a_program_not_on_path_skips_the_node_check_with_a_note(self) -> None:
+        write(
+            self.repo / "connectors/toy-cli/harness.toml",
+            'id = "toy-cli"\n[capture.executable]\nprogram = "not-installed-toy"\n',
+        )
+        result = self.run_script("toy-cli", uname="Darwin")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("`not-installed-toy` is not on PATH", result.stdout)
 
     # The pin diff.
 
