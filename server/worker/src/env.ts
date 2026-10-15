@@ -44,9 +44,18 @@ export interface Env {
    * DB_BACKEND=local; every device call answers 500 misconfigured on the Supabase backend.
    */
   DEVICE_LIMITER?: DurableObjectNamespace;
-  /** Calls a minute per client address (default 30 starts, 300 polls). */
+  /**
+   * Calls a minute: starts per client address (default 120), polls per device code (default 30),
+   * and polls per client address, an abuse cap only (default 1200).
+   */
   DEVICE_START_PER_MINUTE?: string;
+  DEVICE_POLL_PER_MINUTE?: string;
   DEVICE_TOKEN_PER_MINUTE?: string;
+  /**
+   * Secret, at least 32 characters: the HMAC key of every rate-limit key. Required with
+   * DEVICE_LIMITER (500 misconfigured without it), except with DB_BACKEND=local.
+   */
+  RATE_LIMIT_KEY?: string;
 
   /** "on" answers every call 503 + Retry-After. */
   MAINTENANCE?: string;

@@ -241,10 +241,12 @@ The Worker's tests call `worker.scheduled` on a moved clock (`test/helpers/inpro
   the upload functions only, never the test approval); Resend key `goalcup-ingest-production`
   (sending access, member.agentcommunity.org); `RECEIPT_SIGNING_KEY` from a seed made offline,
   whose public key is pinned in `goalcup-verifier` (`SERVER_PUBLIC_KEYS`).
-- Rate limits on the device flow: 30 starts and 300 polls a minute per hashed client address (an
-  IPv6 client by its /64), counted by the `DeviceLimiter` Durable Object (`DEVICE_LIMITER`,
-  `DEVICE_START_PER_MINUTE`, `DEVICE_TOKEN_PER_MINUTE`). Without the binding a deployment answers
-  every device call `500 misconfigured`. It replaced the `[[ratelimits]]` binding (namespaces
+- Rate limits on the device flow, counted by the `DeviceLimiter` Durable Object (`DEVICE_LIMITER`):
+  120 starts a minute per client address (an IPv6 client by its /64; `DEVICE_START_PER_MINUTE`),
+  30 polls a minute per device code (`DEVICE_POLL_PER_MINUTE`), and 1200 polls a minute per address
+  as an abuse cap (`DEVICE_TOKEN_PER_MINUTE`). Every key is an HMAC-SHA-256 under the secret
+  `RATE_LIMIT_KEY` (random, generated at deploy, never printed), so no key reverses to an address.
+  Without the binding or the secret a deployment answers every device call `500 misconfigured`. It replaced the `[[ratelimits]]` binding (namespaces
   4101-4104, no longer used) on 2026-10-15: that binding was attached but its counters stayed per
   machine, so no burst ever got a 429.
 
@@ -262,7 +264,8 @@ environment, so `[env.staging]` sets `routes = []`: without it a staging deploy 
 `ingest.agentcommunity.org` to the staging Worker (this happened on 2026-10-15, 10:54-11:03 UTC, and
 was undone by pointing the custom domain back at `goalcup-ingest`). The config test checks it.
 Staging binds its own `DEVICE_LIMITER` (wrangler does not copy Durable Object bindings into an
-environment) with low limits (5 starts, 10 polls a minute), so a burst there shows the 429.
+environment) with low limits (5 starts per address, 5 polls per code, 10 polls per address a minute) and its own
+`RATE_LIMIT_KEY`, so a burst there shows the 429.
 
 ### Staging, as deployed (2026-10-15)
 

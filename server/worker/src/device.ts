@@ -10,7 +10,7 @@
 import type { Ctx } from "./context.ts";
 import type { DevicePurpose, RunMode } from "./db.ts";
 import { ApiError, closed, json, malformed, notFound, unauthorized } from "./errors.ts";
-import { rateLimit } from "./ratelimit.ts";
+import { limitAddress, limitDeviceCode } from "./ratelimit.ts";
 import { readJson } from "./runs.ts";
 import { addSeconds, constantTimeEqual, formatTime, hexField, sha256Hex, strField, toHex } from "./util.ts";
 
@@ -46,7 +46,7 @@ export function normalizeUserCode(input: string): string | null {
 // ---- POST /v1/device ----------------------------------------------------------------------
 
 export async function createDevice(ctx: Ctx, request: Request): Promise<Response> {
-  await rateLimit(ctx.env, request, "start");
+  await limitAddress(ctx.env, request, "start");
   const b = await readJson(request, BODY_MAX);
   const purpose = enumField<DevicePurpose>(b, "purpose", ["login", "run"]);
   const mode = enumField<RunMode>(b, "mode", ["competition", "practice", "test"]);
@@ -95,9 +95,11 @@ function enumField<T extends string>(o: Record<string, unknown>, name: string, a
 // ---- POST /v1/device/token ----------------------------------------------------------------
 
 export async function pollDevice(ctx: Ctx, request: Request): Promise<Response> {
-  await rateLimit(ctx.env, request, "token");
+  await limitAddress(ctx.env, request, "token"); // the abuse cap, before the body is read
   const b = await readJson(request, BODY_MAX);
-  const deviceSha = await sha256Hex(hexField(b, "device_code"));
+  const deviceCode = hexField(b, "device_code");
+  await limitDeviceCode(ctx.env, deviceCode); // the real limit: per code, so one NAT does not share it
+  const deviceSha = await sha256Hex(deviceCode);
   const poll = await ctx.db.pollDevice(deviceSha, formatTime(ctx.now()));
   switch (poll.kind) {
     case "pending":
