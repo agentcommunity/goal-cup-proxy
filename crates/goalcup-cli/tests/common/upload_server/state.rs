@@ -296,6 +296,10 @@ pub struct Shared {
     pub retry_after: AtomicU64,
     pub fail_chunks: AtomicU64,
     pub drop_replies: AtomicU64,
+    /// The most `seconds_left` any answer says (`u64::MAX`: no cap).
+    pub seconds_left_cap: AtomicU64,
+    /// While set, every heartbeat that is not a final one answers `503`.
+    pub fail_heartbeats: AtomicBool,
 }
 
 /// The server's clock, in whole seconds since the epoch.

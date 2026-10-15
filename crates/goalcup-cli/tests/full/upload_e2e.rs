@@ -1989,4 +1989,358 @@ mod segments {
         assert_eq!(server.entry_ids(&run_id).len(), 1, "no segment was made");
         assert_entry_sent(&rig, &server, &entry);
     }
+
+    // ------------------------------------------------------------ the deadline in chat mode
+
+    /// The run's `state.json` as its last host left it.
+    fn last_state(rig: &Rig, run_id: &str) -> goalcup_cli::run::RunState {
+        goalcup_cli::run::read_state(&goalcup_cli::run::run_dir(&rig.cfg, run_id))
+            .expect("the run's state")
+    }
+
+    fn alive(pid: &str) -> bool {
+        let pid: i32 = pid.parse().expect("a pid");
+        // SAFETY: two integers; signal 0 only asks whether the process is there.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// Whether `why` is the stop a server's heartbeat answer gives at the run's deadline.
+    fn the_servers_stop(why: Option<&str>) -> bool {
+        why.is_some_and(|why| why.starts_with("the server says the run is over"))
+    }
+
+    /// T2-F2a. A run in chat mode reaches the server's deadline while its agent holds the
+    /// terminal: the heartbeat answer says stop, the host ends the agent, `goalcup start`
+    /// returns and the shell has the terminal again, and the segment is sealed and uploaded
+    /// whole. The run is over: no `continue` is offered, and its reserve goes back.
+    #[test]
+    fn the_servers_deadline_ends_a_chat_mode_run_and_gives_the_terminal_back() {
+        let rig = Rig::chat();
+        // Long enough for the agent to start on a loaded test machine; short for a test.
+        let server = server(
+            &rig,
+            ServerOptions {
+                run_seconds: Some(8),
+                ..ServerOptions::default()
+            },
+        );
+        let mut run = rig.start_under_a_shell_on_pty(&[DISK, BEATING]);
+        run.wait_shown("tui: ready");
+        run.type_line("hello");
+        run.wait_shown("tui: noted hello");
+        let agent = harness(&rig, "tui.pid");
+        // `goalcup start` has returned: the shell that ran it says its status.
+        run.wait_shown("shell: 0");
+        assert!(run.wait().success(), "{}", run.shown());
+        let shown = run.shown();
+        assert!(!alive(&agent), "the agent was ended: {shown}");
+        assert_eq!(
+            harness(&rig, "tui.end"),
+            "",
+            "it did not end on its own: {shown}"
+        );
+        let stop = shown
+            .find("deadline: the server says the run is over")
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert!(
+            stop > shown.rfind("tui: ").unwrap(),
+            "the host speaks once the agent is gone: {shown}"
+        );
+        assert!(!shown.contains("goalcup continue"), "{shown}");
+
+        let run_id = the_run(&server);
+        let entries = server.entry_ids(&run_id);
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_entry_uploaded(&rig, &server, &entries[0]);
+        let state = last_state(&rig, &run_id);
+        assert!(the_servers_stop(state.stopped.as_deref()), "{state:?}");
+        assert!(
+            !reserve_path(&artifact_root(&rig.cfg), &run_id).exists(),
+            "the run is over: its reserve goes back"
+        );
+    }
+
+    /// T2-F2b. The first segment's agent crashes and `goalcup continue` starts the next. That
+    /// segment's agent is ended by the server's stop at the run's deadline (the run's, not a
+    /// fresh one for the segment), and both segments end up on the server.
+    #[test]
+    fn a_continued_segment_is_stopped_by_the_servers_stop_at_the_runs_deadline() {
+        let rig = Rig::chat();
+        let server = server(
+            &rig,
+            ServerOptions {
+                run_seconds: Some(20),
+                ..ServerOptions::default()
+            },
+        );
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        kill_agent(&rig);
+        assert!(first.wait().success(), "{}", first.shown());
+        let run_id = the_run(&server);
+        let deadline = goalcup_protocol::control::parse_z(
+            goalcup_cli::run::read(&rig.cfg, &run_id)
+                .unwrap()
+                .deadline_at
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        second.type_line("again");
+        second.wait_shown("tui: noted again");
+        let status = second.wait();
+        let shown = second.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert!(
+            shown.contains("deadline: the server says the run is over"),
+            "{shown}"
+        );
+        let now = goalcup_cli::run::now_unix();
+        assert!(
+            now + 1 >= deadline && now < deadline + 60,
+            "stopped at the run's deadline {deadline}, at {now}"
+        );
+        assert_eq!(harness(&rig, "tui.end"), "", "it did not end on its own");
+        assert!(!shown.contains("goalcup continue"), "{shown}");
+
+        let entries = server.entry_ids(&run_id);
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        for entry in &entries {
+            assert_entry_uploaded(&rig, &server, entry);
+        }
+        let state = last_state(&rig, &run_id);
+        assert_eq!(state.entry_id, entries[1]);
+        assert!(the_servers_stop(state.stopped.as_deref()), "{state:?}");
+        assert!(!reserve_path(&artifact_root(&rig.cfg), &run_id).exists());
+    }
+
+    /// T2-F2b and WP11. With the server away, a continued segment stops on its own count of
+    /// what the server said was left (`seconds_left`, counted on the continuous clock), and not
+    /// on this machine's date. Here the continue's answer says six seconds are left of a run
+    /// whose deadline is a week away (which a count from the date would run to), no heartbeat
+    /// of the segment is answered, so nothing else sets the count, and then the server is gone.
+    /// The rest of the segment is sent by `goalcup upload` once the server is back.
+    #[test]
+    fn a_continued_segment_with_the_server_away_stops_on_the_servers_count() {
+        let rig = Rig::chat();
+        let store = rig.root.join("server");
+        let first_server = UploadServer::start(&store, ServerOptions::default());
+        rig.prepare_for(&first_server.url());
+        let port = first_server.port();
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        kill_agent(&rig);
+        assert!(first.wait().success(), "{}", first.shown());
+        let run_id = the_run(&first_server);
+        first_server.cap_seconds_left(Some(6));
+        first_server.fail_heartbeats(true);
+
+        let asked = std::time::Instant::now();
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        let segment = first_server.entry_ids(&run_id)[1].clone();
+        // The host keeps the server's count where `goalcup status` reads it.
+        wait_until("the server's count in the run's state", || {
+            last_state(&rig, &run_id)
+                .time_left
+                .is_some_and(|left| left.seconds <= 6)
+        });
+        first_server.stop();
+        second.wait_shown("by this machine's clock");
+        assert!(
+            asked.elapsed() < std::time::Duration::from_secs(40),
+            "the segment ran on past the server's count: {}",
+            second.shown()
+        );
+        let status = second.wait();
+        let shown = second.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert_eq!(harness(&rig, "tui.end"), "", "it did not end on its own");
+        let state = last_state(&rig, &run_id);
+        assert!(
+            state
+                .stopped
+                .as_deref()
+                .is_some_and(|why| why.contains("by this machine's clock")),
+            "{state:?}"
+        );
+
+        let server = UploadServer::start(
+            &store,
+            ServerOptions {
+                port: Some(port),
+                ..ServerOptions::default()
+            },
+        );
+        goalcup_cli::commands::upload::upload_with(
+            &rig.cfg,
+            &segment,
+            super::quick_policy(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_entry_uploaded(&rig, &server, &segment);
+    }
+
+    // ------------------------------------------------------------ parts, pruned, then continued
+
+    /// A test build's disk sizes for a run whose chain parts are soon past its reservation
+    /// (8 KiB), so that every part the server acknowledged is deleted here at once.
+    const SMALL_DISK: (&str, &str) = ("GOALCUP_TEST_DISK", "8192,0,50");
+
+    /// Type lines into the agent until `done`. Each is long, so a few fill a 4 KiB part.
+    fn type_until(
+        on: &crate::common::m2_cli_support::OnPty,
+        tag: &str,
+        mut done: impl FnMut() -> bool,
+    ) {
+        let pad = "x".repeat(200);
+        for i in 0..400 {
+            if done() {
+                return;
+            }
+            on.type_line(&format!("{tag}-{i:03}-{pad}"));
+            on.wait_shown(&format!("tui: noted {tag}-{i:03}-"));
+        }
+        panic!("{tag}: 400 lines, and it never happened:\n{}", on.shown());
+    }
+
+    /// Whether a chain part of `entry_id` was deleted on this machine.
+    fn pruned(rig: &Rig, entry_id: &str) -> bool {
+        goalcup_cli::upload::prune::parts_now(&rig.trace(entry_id))
+            .ok()
+            .and_then(|parts| parts.first().map(|part| part.start > 0))
+            .unwrap_or(false)
+    }
+
+    /// Every record of the entry's chain is on the server exactly once and in order, the parts
+    /// still on this machine are the server's bytes where they lie and end where the server's
+    /// copy ends, and the server holds the entry's seal.
+    fn assert_once_on_server(rig: &Rig, server: &UploadServer, entry_id: &str) {
+        let copy = copy_of(server, entry_id);
+        let seqs: Vec<u64> = copy
+            .split(|b| *b == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                serde_json::from_slice::<serde_json::Value>(line).unwrap()["seq"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .collect();
+        assert!(!seqs.is_empty(), "{entry_id}: records");
+        assert_eq!(
+            seqs,
+            (0..seqs.len() as u64).collect::<Vec<_>>(),
+            "{entry_id}: each record once, in order"
+        );
+        let trace = rig.trace(entry_id);
+        let parts = goalcup_cli::upload::prune::parts_now(&trace).unwrap();
+        let last = parts.last().expect("a part is kept");
+        assert_eq!(
+            last.start + last.len,
+            copy.len() as u64,
+            "{entry_id}: the end"
+        );
+        for part in &parts {
+            let at = part.start as usize..(part.start + part.len) as usize;
+            assert_eq!(
+                std::fs::read(&part.path).unwrap(),
+                copy[at],
+                "{entry_id}: {}",
+                part.path.display()
+            );
+        }
+        let (seal, _) = server
+            .seal_of(entry_id)
+            .unwrap_or_else(|| panic!("{entry_id} was not sealed on the server"));
+        assert_eq!(
+            seal.as_bytes(),
+            std::fs::read(trace.join("seal.json")).unwrap()
+        );
+    }
+
+    /// The entry's trace as the server holds it: this machine's trace with its chain parts
+    /// replaced by the server's copy of the whole chain, scanned under the server's key. (The
+    /// trace here, its acknowledged parts deleted, can be checked only as far as it goes.)
+    fn scan_servers_copy(
+        rig: &Rig,
+        server: &UploadServer,
+        entry_id: &str,
+    ) -> goalcup_verifier::capture_analysis::reader::CaptureIntegrityReport {
+        fn copy_tree(from: &Path, to: &Path, top: bool) {
+            std::fs::create_dir_all(to).unwrap();
+            for entry in std::fs::read_dir(from).unwrap().flatten() {
+                let name = entry.file_name();
+                let (source, dest) = (entry.path(), to.join(&name));
+                if source.is_dir() {
+                    copy_tree(&source, &dest, false);
+                } else if !(top
+                    && name
+                        .to_str()
+                        .and_then(goalcup_protocol::export::parse_part_name)
+                        .is_some())
+                {
+                    std::fs::copy(&source, &dest).unwrap();
+                }
+            }
+        }
+        let copy = rig.root.join("servers-copy").join(entry_id);
+        copy_tree(&rig.trace(entry_id), &copy, true);
+        std::fs::write(copy.join("chain.jsonl"), copy_of(server, entry_id)).unwrap();
+        let options = goalcup_verifier::VerifyOptions {
+            extra_server_keys: vec![server.public_key_hex()],
+            ..Default::default()
+        };
+        scan_capture_trace(&copy, &options, &mut |_| Ok(())).unwrap()
+    }
+
+    /// T2-F3. The 168-hour path through the CLI: the daemon rotates the chain into 4 KiB parts,
+    /// the uploader sends them, the watch deletes the acknowledged ones under disk pressure, the
+    /// host and its agent die, `goalcup continue` seals and sends what was left of the first
+    /// segment beside the second, and the second ends. Every record of both reaches the server
+    /// exactly once.
+    #[test]
+    fn rotated_parts_deleted_here_reach_the_server_once_through_a_crash_and_a_continue() {
+        let rig = Rig::chat();
+        rig.daemon
+            .as_ref()
+            .expect("the rig's daemon")
+            .set_chain_part_limits_for_test(4096, std::time::Duration::from_secs(3600));
+        let server = server(&rig, ServerOptions::default());
+        let mut first = rig.start_on_pty(&[SMALL_DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        let run_id = the_run(&server);
+        let entry = server.entry_ids(&run_id)[0].clone();
+        type_until(&first, "one", || pruned(&rig, &entry));
+        // The machine loses power: the host and its agent at once; the daemon goes on.
+        // SAFETY: two integers; the pid is this test's own child.
+        unsafe { libc::kill(first.child.id() as i32, libc::SIGKILL) };
+        kill_agent(&rig);
+        first.close();
+        first.wait();
+
+        let mut second = rig.continue_on_pty(&[SMALL_DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        let entries = server.entry_ids(&run_id);
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        type_until(&second, "two", || pruned(&rig, &entries[1]));
+        second.type_line("/exit");
+        let status = second.wait();
+        let shown = second.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+
+        for entry in &entries {
+            assert!(pruned(&rig, entry), "{entry}: a part was deleted here");
+            assert_once_on_server(&rig, &server, entry);
+            let report = scan_servers_copy(&rig, &server, entry);
+            assert_eq!(report.anchor, AnchorState::Signed, "{entry}: {report:?}");
+            assert!(report.sealed, "{entry}: {report:?}");
+        }
+        // The segment that ended normally is whole; the first, whose host died, may have a gap.
+        let report = scan_servers_copy(&rig, &server, &entries[1]);
+        assert_eq!(report.integrity, CaptureIntegrity::Valid, "{report:?}");
+    }
 }

@@ -40,9 +40,10 @@
 //! `goalcup continue` restarts it, keeps uploading the entry until it is caught up, and exits 0.
 //! The run's disk reservation stays: the next segment takes the same file. The run is over, and
 //! its reservation goes back after the last acknowledgement, only when the host stopped the
-//! agent because the run's end had come (the deadline, or a newer run replacing it) or the
-//! deadline has passed on this machine's clock; a full disk stops the agent and leaves the run
-//! open. A run with no server has no segments: its end is its end.
+//! agent because the run's end had come (the deadline, or a newer run replacing it) or its time
+//! is up by the count of the server's last answer, which the run's `state.json` keeps for every
+//! later command ([`crate::run::TimeLeft`]; never this machine's date); a full disk stops the
+//! agent and leaves the run open. A run with no server has no segments: its end is its end.
 //!
 //! `goalcup continue` ([`super::continue_run`]) opens the next segment through the same phases
 //! ([`Opening::Continue`]): no approval, no clone, the run's credential and workspace, the
@@ -956,7 +957,7 @@ struct UploadStart {
     /// The start receipt's key, which every acknowledgement must verify under.
     key: String,
     policy: crate::upload::uploader::Policy,
-    /// The run's deadline by this machine's own clock, for when the server cannot say it.
+    /// The server's count of the run's time left, for when the server cannot say stop.
     local_deadline: Option<crate::upload::uploader::LocalDeadline>,
 }
 
@@ -994,10 +995,20 @@ impl Forked<'_> {
     /// a headless run (it has no `continue`), and a run that is over take their reserve with
     /// them.
     fn keeps_reserve(&self) -> bool {
+        // Over by the server's count, not this machine's date (WP11).
+        let left = self
+            .upload
+            .as_ref()
+            .and_then(|start| start.local_deadline)
+            .map(|count| count.time_left());
         self.give_back.is_none()
             && self.record.server_url.is_some()
             && self.chat_mode
-            && !deadline_passed(self.record.deadline_at.as_deref())
+            && !crate::run::time_left::time_up(
+                left.as_ref(),
+                self.record.deadline_at.as_deref(),
+                crate::run::now_unix(),
+            )
     }
 
     /// The root ruling under D40: the entry was sealed while its harness was being launched, so
@@ -2206,6 +2217,12 @@ fn run_harness<'a>(
     // What `goalcup status` may advise of `goalcup continue` for this run: only a run on a server
     // with a chat-mode connector can be restarted by it.
     launched.continuable = forked.record.server_url.is_some() && forked.chat_mode;
+    // What is left of the run, by the server's answer: the uploader keeps it from here (WP11).
+    launched.time_left = forked
+        .upload
+        .as_ref()
+        .and_then(|start| start.local_deadline)
+        .map(|count| count.time_left());
     let keeper = crate::run::StateKeeper::begin(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
         launched,
@@ -2463,8 +2480,9 @@ fn finish_and_scan(
         )),
     };
     // The run is over when it was stopped for its end (its deadline, or a newer run replacing
-    // it; a full disk stops the agent and leaves the run open), when its deadline has passed on
-    // this machine's clock, and always for a run with no server. Otherwise the agent's exit
+    // it; a full disk stops the agent and leaves the run open), when its time is up by the count
+    // of the server's last answer (never this machine's date), and always for a run with no
+    // server. Otherwise the agent's exit
     // ended this segment only: the run stays open on the server until its deadline and
     // `goalcup continue` restarts it.
     let snapshot = keeper.snapshot();
@@ -2675,13 +2693,6 @@ fn finish_and_scan(
         entry_id: info.entry_id.clone(),
         exit_status: Some(status?),
     })
-}
-
-/// Whether `deadline_at` (RFC 3339, `...Z`) has passed on this machine's clock.
-fn deadline_passed(deadline_at: Option<&str>) -> bool {
-    deadline_at
-        .and_then(goalcup_protocol::control::parse_z)
-        .is_some_and(|deadline| crate::run::now_unix() >= deadline)
 }
 
 /// A harness's end in words: its exit code, or the signal that ended it.

@@ -178,10 +178,10 @@ pub fn verdict_with(
     }
 }
 
-/// Whether the run's chain parts alone are past the reservation: parts that are acknowledged
-/// may then go.
-pub fn pressure(footprint: u64) -> bool {
-    footprint > RUN_RESERVE_BYTES
+/// Whether the run's chain parts alone are past the reservation (`reserve_bytes`, the
+/// [`DiskPolicy`]'s): parts that are acknowledged may then go.
+pub fn pressure(footprint: u64, reserve_bytes: u64) -> bool {
+    footprint > reserve_bytes
 }
 
 /// The bytes of one entry's chain on disk: the sum of its parts' lengths
@@ -585,8 +585,8 @@ mod tests {
     fn a_run_may_grow_past_three_gib_while_the_disk_has_room() {
         // Five GiB of parts: the reserve is gone, and nothing stops the run.
         assert_eq!(target(5 * GIB, 50 * GIB, 0), 0);
-        assert!(pressure(5 * GIB));
-        assert!(!pressure(3 * GIB));
+        assert!(pressure(5 * GIB, RUN_RESERVE_BYTES));
+        assert!(!pressure(3 * GIB, RUN_RESERVE_BYTES));
         assert_eq!(verdict(5 * GIB, 0, 50 * GIB, true), DiskVerdict::Ok);
         assert_eq!(verdict(5 * GIB, 0, 50 * GIB, false), DiskVerdict::Ok);
     }

@@ -149,7 +149,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
         .spawn(move || {
             let (done, reserve) = beside;
             let mut tick = Tick::default();
-            let mut pruner = Pruner::default();
+            let mut pruner = Pruner::within(policy.reserve_bytes);
             while !done.load(Ordering::SeqCst) {
                 let failing = uploads_failing(&uploads, super::now_unix());
                 let on_disk = pruner.sweep(
@@ -180,7 +180,11 @@ pub fn watch_beside(watch: Watch) -> Watching {
                     let last_ok_at = uploads.iter().map(|last| last.load(Ordering::SeqCst)).max();
                     let disk = tick.disk();
                     let heartbeat = beat.vitals.heartbeat_trouble();
+                    let time_left = beat.vitals.time_left();
                     beat.keeper.update(|state| {
+                        if time_left.is_some() {
+                            state.time_left = time_left;
+                        }
                         state.recording = recording;
                         state.heartbeat = heartbeat;
                         state.upload = UploadState {
@@ -220,14 +224,31 @@ const PARTS_PER_SWEEP: usize = 1;
 
 /// Deletes the chain parts the server acknowledged [`crate::upload::prune::PRUNE_AFTER`] ago,
 /// or at once while the parts alone are past the reservation.
-#[derive(Default)]
 pub struct Pruner {
     ages: AckAges,
     /// A part could not be deleted, and the participant has been told so.
     trouble_said: bool,
+    /// The run's reservation ([`DiskPolicy::reserve_bytes`]): parts past it are under pressure.
+    reserve_bytes: u64,
+}
+
+impl Default for Pruner {
+    /// A pruner for the shipped reservation ([`super::reserve::RUN_RESERVE_BYTES`]).
+    fn default() -> Self {
+        Pruner::within(super::reserve::RUN_RESERVE_BYTES)
+    }
 }
 
 impl Pruner {
+    /// A pruner whose parts are under pressure past `reserve_bytes`.
+    pub fn within(reserve_bytes: u64) -> Pruner {
+        Pruner {
+            ages: AckAges::default(),
+            trouble_said: false,
+            reserve_bytes,
+        }
+    }
+
     /// One sweep over `entries`: delete what [`deletable`] allows (at most
     /// [`PARTS_PER_SWEEP`] parts of each entry, oldest first, stopping at the first failure so
     /// that the parts left are always a contiguous suffix) and answer the chain bytes still on
@@ -249,7 +270,7 @@ impl Pruner {
             .flat_map(|(_, parts)| parts.iter().flatten())
             .map(|part| part.len)
             .sum();
-        let under_pressure = pressure(total);
+        let under_pressure = pressure(total, self.reserve_bytes);
         let mut left = total;
         let mut freed = 0u64;
         for (entry, parts) in &listed {
@@ -782,6 +803,31 @@ mod tests {
         );
         assert_eq!(part_starts(dir.path()), [big, 2 * big]);
         assert!(said.iter().any(|l| l.contains("to make room")), "{said:?}");
+    }
+
+    /// The pressure is the run's own reservation's: a smaller one (a test build's) deletes the
+    /// acknowledged parts at once as soon as the parts are past it.
+    #[test]
+    fn the_pressure_is_past_the_runs_own_reservation() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 4, 10);
+        let sweep = |pruner: &mut Pruner| {
+            pruner.sweep(
+                std::slice::from_ref(&entry),
+                &|_| 35,
+                Instant::now(),
+                &mut |_| {},
+            )
+        };
+        // 40 bytes of parts are far below the shipped reservation: nothing goes yet.
+        sweep(&mut Pruner::default());
+        assert_eq!(part_starts(dir.path()), [0, 10, 20, 30]);
+        // Past a 25-byte one, one acknowledged part goes each tick until the parts are not.
+        let mut pruner = Pruner::within(25);
+        assert_eq!(sweep(&mut pruner), 30);
+        assert_eq!(sweep(&mut pruner), 20);
+        assert_eq!(sweep(&mut pruner), 20);
+        assert_eq!(part_starts(dir.path()), [20, 30]);
     }
 
     #[cfg(unix)]
