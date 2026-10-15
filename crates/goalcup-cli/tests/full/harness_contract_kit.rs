@@ -890,3 +890,184 @@ fn nested_duplicate_and_implicit_home_paths_are_created_with_private_modes() {
         }
     });
 }
+
+// ---------------------------------------------------------------------------------------
+// The shipped connectors in chat mode (D57)
+// ---------------------------------------------------------------------------------------
+
+/// One shipped connector, its directory copied byte for byte (so it loads as the pinned one,
+/// without `--dev`), run in chat mode on a terminal of its own with the kit's chat stand-in
+/// (`fixtures/m2-fake-chat-harness.sh`) installed as its program: a `#!/usr/bin/env node`
+/// script whose `node` is only on the participant's PATH. The provider-host probe is skipped
+/// (`GOALCUP_TEST_OFFLINE_UPSTREAMS`), so no provider is reached; nothing goes over the wire.
+fn chat_case(id: &str) {
+    use crate::common::m2_cli_support::OnPty;
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = Vertical::new("plain", serde_json::json!({}));
+    // The world's development workload goes: without `--dev` every connector in the directory
+    // is held to the pinned rules, and this one is a development connector.
+    std::fs::remove_dir_all(world.connectors.join(m2_vertical_support::CONNECTOR)).unwrap();
+    let connector_dir = world.connectors.join(id);
+    copy_tree(&support::connectors_dir().join(id), &connector_dir);
+    let pinned = goalcup_protocol::pins::pinned_connector_dir_sha256(id)
+        .expect("a shipped connector is pinned");
+    assert_eq!(
+        goalcup_protocol::connector_dir::connector_dir_sha256(&connector_dir).unwrap(),
+        pinned,
+        "{id}: the copy is the pinned directory"
+    );
+    let manifest = goalcup_protocol::harness::load_dir(&connector_dir, Origin::Pinned)
+        .expect("the shipped connector loads")
+        .manifest;
+    assert!(manifest.capture.interactive, "{id} runs in chat mode");
+
+    // The stand-in, under the shipped program's name, and the `node` it needs.
+    let out = world.root.join("kit-out");
+    let bin = world.root.join("participant-bin");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    let body = std::fs::read_to_string(support::fixture("m2-fake-chat-harness.sh")).unwrap();
+    let (_, body) = body.split_once('\n').unwrap();
+    let program = bin.join(&manifest.capture.executable.program);
+    std::fs::write(
+        &program,
+        format!(
+            "#!/usr/bin/env node\nKIT_OUT='{}'\nexport KIT_OUT\n{body}",
+            out.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(bin.join("node"), "#!/bin/sh\nexec /bin/sh \"$@\"\n").unwrap();
+    for file in [program.clone(), bin.join("node")] {
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let runs = world.root.join("runs");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_goalcup"));
+    command
+        .args(["start", "--harness", id])
+        .current_dir(&runs)
+        .env_clear()
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()),
+        )
+        .env("HOME", world.root.join("home"))
+        .env(goalcup_cli::config::CONFIG_DIR_ENV, &world.cfg)
+        .env(goalcup_cli::config::CONNECTORS_DIR_ENV, &world.connectors)
+        .env(goalcup_cli::commands::start::TEST_OFFLINE_UPSTREAMS, "1")
+        .env("GOALCUP_TEST_FINISH_BUDGET_MS", "10000")
+        .env("GOALCUP_TEST_LOCAL_WRAP_UP", "2000,100")
+        .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"))
+        .env("TERM", "xterm-256color")
+        .env("LANG", "en_US.UTF-8");
+    for key in ["USER", "LOGNAME", "TMPDIR"] {
+        if let Ok(value) = std::env::var(key) {
+            command.env(key, value);
+        }
+    }
+    let mut run = OnPty::spawn(command, None);
+    run.wait_shown("kit: ready");
+    run.type_line("hello");
+    run.wait_shown("kit: noted hello");
+    run.type_line("/exit");
+    let status = run.wait();
+    assert!(status.success(), "{id}: {status:?}\n{}", run.shown());
+
+    let report = |name: &str| std::fs::read_to_string(out.join(name)).unwrap_or_default();
+    assert_eq!(report("stdin").trim(), "tty", "{id}");
+    assert_eq!(
+        report("skills").trim(),
+        "SKILL.md",
+        "{id}: the goal-cup skill"
+    );
+    let env: BTreeMap<String, String> = report("env")
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    assert_eq!(
+        env.get("TERM").map(String::as_str),
+        Some("xterm-256color"),
+        "{id}"
+    );
+    assert_eq!(
+        env.get("LANG").map(String::as_str),
+        Some("en_US.UTF-8"),
+        "{id}"
+    );
+    let entry = world.entry_id();
+    let workspace = goalcup_cli::entries::read_entry(&world.cfg, &entry)
+        .expect("the run's entry record")
+        .workspace;
+    let argv = report("argv");
+    match id {
+        "codex-cli" => {
+            let argv: Vec<&str> = argv.lines().collect();
+            assert_eq!(argv.len(), 6, "{argv:?}");
+            assert_eq!(argv[..3], ["-c", "check_for_update_on_startup=false", "-c"]);
+            // The trust override names the run's workspace, and so does `-C`.
+            assert_eq!(
+                argv[3],
+                format!("projects={{ \"{workspace}\" = {{ trust_level = \"trusted\" }} }}"),
+                "{argv:?}"
+            );
+            assert_eq!(argv[4], "-C", "{argv:?}");
+            assert_eq!(argv[5], workspace, "{argv:?}");
+        }
+        _ => assert_eq!(argv.trim(), "", "{id} is `claude` alone"),
+    }
+
+    let chain = world.chain(&entry);
+    let launch = chain.records().find_map(|record| match record {
+        CaptureRecord::Launch {
+            profile_id,
+            connector_dir_sha256,
+            ..
+        } => Some((profile_id.clone(), connector_dir_sha256.clone())),
+        _ => None,
+    });
+    assert_eq!(
+        launch,
+        Some((id.to_string(), Some(pinned.to_string()))),
+        "{id}: Launch binds the pinned connector"
+    );
+    let streams = chain.streams();
+    let goal: Vec<_> = streams
+        .values()
+        .filter(|s| s.source == CaptureSource::Goal)
+        .collect();
+    assert_eq!(goal.len(), 1, "{id}");
+    assert_eq!(
+        goal[0].data,
+        goalcup_cli::commands::start::CHAT_MODE_GOAL.as_bytes(),
+        "{id}: the chat-mode goal"
+    );
+    let native: Vec<u8> = streams
+        .values()
+        .filter(|s| s.source == CaptureSource::Native)
+        .flat_map(|s| s.data.clone())
+        .collect();
+    assert!(
+        String::from_utf8_lossy(&native).contains("hello"),
+        "{id}: the typed prompt is in the recorded session file"
+    );
+    let (code, integrity) = world.verify(&entry);
+    assert_eq!(integrity["sealed"], true, "{id}: {integrity}");
+    assert_eq!(integrity["integrity"], "valid", "{id}: {integrity}");
+    assert_eq!(code, 0, "{id}: {integrity}");
+}
+
+/// The shipped connectors pass the kit in chat mode: each loads as the pinned directory, runs
+/// its stand-in on a terminal with the participant's PATH, TERM and LANG, records the typed
+/// prompt from the session file its native source reads, binds the pinned digest in `Launch`,
+/// and seals a trace the verifier reads as valid.
+#[test]
+fn the_shipped_connectors_run_in_chat_mode() {
+    with_real_home_guard(|| {
+        for id in ["codex-cli", "claude-code-cli"] {
+            chat_case(id);
+        }
+    });
+}

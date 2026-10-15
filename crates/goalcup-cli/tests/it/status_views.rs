@@ -785,17 +785,14 @@ fn read_capture(
     .unwrap()
 }
 
-/// Codex has one required rollout source; supplemental history is excluded.
-#[cfg(target_os = "macos")]
-const CODEX_STORES: u64 = 1;
-
 /// A v5 capture of a shipped profile through the real daemon and this CLI's own client: the
 /// status view verifies against the key the create call returned, and the v5 reader finds the
-/// goal, launch and baseline bound. The absent native scope chains one required-source gap,
-/// so local finish seals a trace that reads incomplete (exit 1), never valid.
+/// goal, launch and baseline bound. The shipped Codex profile runs in chat mode (D57): it
+/// names no session at launch and reads every rollout since the run started, so no
+/// required-source gap is chained and the local finish seals a trace that reads valid.
 #[cfg(target_os = "macos")]
 #[test]
-fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
+fn a_shipped_chat_profile_capture_records_and_seals_valid() {
     use goalcup_cli::daemon::HttpDaemonClient;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -831,8 +828,7 @@ fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert!(text.contains("capture: incomplete — run running"), "{text}");
-    assert!(text.contains(&format!("gaps: {CODEX_STORES};")), "{text}");
+    assert!(text.contains("capture: recording — run running"), "{text}");
     assert!(
         text.contains("0 producer(s) consumed, 0 refused admission"),
         "{text}"
@@ -840,18 +836,17 @@ fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
 
     let report = read_capture(&config, &info.entry_id);
     assert!(!report.torn_tail);
-    assert!(report.coverage_incomplete, "{:?}", report.findings);
+    assert!(!report.coverage_incomplete, "{:?}", report.findings);
     assert!(!report.sealed);
     assert_eq!(report.anchor, AnchorState::LocalOnly);
-    assert_eq!(report.gap_count, CODEX_STORES);
+    assert_eq!(report.gap_count, 0);
     assert_eq!(
         report.findings,
-        vec!["chain_unsealed".to_string(), "gap_recorded".to_string()],
-        "every producer closed, the launch bound, the baseline bound: only the seal and the \
-         unread stores are missing"
+        vec!["chain_unsealed".to_string()],
+        "every producer closed, the launch bound, the baseline bound: only the seal is missing"
     );
 
-    // The local finish, with no server anywhere: sealed, and still incomplete.
+    // The local finish, with no server anywhere: sealed and valid.
     let finished = client
         .seal_capture(
             &info.entry_id,
@@ -867,14 +862,13 @@ fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
     let report = read_capture(&config, &info.entry_id);
     runtime.block_on(daemon.stop());
     assert!(report.sealed, "{:?}", report.findings);
-    assert_eq!(report.findings, vec!["gap_recorded".to_string()]);
-    assert_eq!(report.exit_code(), 1);
+    assert_eq!(report.findings, Vec::<String>::new());
+    assert_eq!(report.exit_code(), 0);
 }
 
 /// The daemon goes away under a launched run with no producer attached, which is what a
 /// crash leaves behind: nothing is chained as it goes. The reopened entry admits nothing, so
-/// the chain records that loss beside the launch's required-source gap, and the sealed trace
-/// never reads as complete.
+/// the chain records that loss, and the sealed trace never reads as complete.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_capture_reopened_under_its_live_run_seals_with_the_loss_chained() {
@@ -906,7 +900,7 @@ fn a_capture_reopened_under_its_live_run_seals_with_the_loss_chained() {
     let report = read_capture(&config, &info.entry_id);
     runtime.block_on(daemon.stop());
     assert!(report.sealed, "{:?}", report.findings);
-    assert_eq!(report.gap_count, CODEX_STORES + 1, "{:?}", report.findings);
+    assert_eq!(report.gap_count, 1, "{:?}", report.findings);
     assert!(report.coverage_incomplete);
     assert_eq!(report.findings, vec!["gap_recorded".to_string()]);
     assert_eq!(report.exit_code(), 1);
