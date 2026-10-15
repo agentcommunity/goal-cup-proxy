@@ -103,13 +103,31 @@ pub(crate) fn upstreams_reachable<'a>(
     probe(hosts, PREFLIGHT_PORT, PREFLIGHT_BUDGET)
 }
 
+/// [`upstreams_reachable`] for endpoints that name their own port (`goalcup prep`'s server
+/// address may): every non-loopback `(host, port)` within [`PREFLIGHT_BUDGET`].
+pub(crate) fn endpoints_reachable<'a>(
+    endpoints: impl IntoIterator<Item = (&'a str, u16)>,
+) -> Result<(), Unreachable> {
+    let endpoints: Vec<(String, u16)> = endpoints
+        .into_iter()
+        .filter(|(host, _)| !is_loopback_host(host))
+        .map(|(host, port)| (host.to_owned(), port))
+        .collect();
+    probe_endpoints(endpoints, PREFLIGHT_BUDGET)
+}
+
 /// Connects to every host on `port` at once, within `budget`; the first host (in the given
 /// order) that could not be reached is the answer.
 fn probe(hosts: Vec<String>, port: u16, budget: Duration) -> Result<(), Unreachable> {
-    if hosts.is_empty() {
+    probe_endpoints(hosts.into_iter().map(|host| (host, port)).collect(), budget)
+}
+
+/// [`probe`] with a port for each host.
+fn probe_endpoints(endpoints: Vec<(String, u16)>, budget: Duration) -> Result<(), Unreachable> {
+    if endpoints.is_empty() {
         return Ok(());
     }
-    let unreachable = |host: String, kind| Unreachable {
+    let unreachable = |(host, port): (String, u16), kind| Unreachable {
         host,
         port,
         kind,
@@ -128,7 +146,7 @@ fn probe(hosts: Vec<String>, port: u16, budget: Duration) -> Result<(), Unreacha
     let failed = runtime.block_on(async {
         let until = tokio::time::Instant::now() + budget;
         let mut probes = tokio::task::JoinSet::new();
-        for (index, host) in hosts.iter().cloned().enumerate() {
+        for (index, (host, port)) in endpoints.iter().cloned().enumerate() {
             probes.spawn(async move {
                 let reached = connect_host(&host, port, attempt, until, Retry::UntilDeadline).await;
                 (index, reached.err())
@@ -148,7 +166,7 @@ fn probe(hosts: Vec<String>, port: u16, budget: Duration) -> Result<(), Unreacha
     // A lookup still blocked in the resolver is abandoned, not waited for.
     runtime.shutdown_background();
     match failed {
-        Some((index, kind)) => Err(unreachable(hosts[index].clone(), kind)),
+        Some((index, kind)) => Err(unreachable(endpoints[index].clone(), kind)),
         None => Ok(()),
     }
 }

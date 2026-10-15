@@ -121,8 +121,8 @@ pub trait Doors {
     /// Free bytes on the volume holding the existing directory `dir`.
     fn free_bytes(&self, dir: &Path) -> std::io::Result<u64>;
     fn is_wsl(&self) -> bool;
-    /// Every host answers a TCP connect; else the first that does not, in a phrase.
-    fn hosts_reachable(&self, hosts: &[String]) -> Result<(), String>;
+    /// Every `(host, port)` answers a TCP connect; else the first that does not, in a phrase.
+    fn hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String>;
     /// Whether the machine can be kept awake (the lock is taken and let go at once).
     fn sleep_lock(&self) -> Result<(), String>;
     /// GitHub's API, as `account::github::check` takes it.
@@ -159,9 +159,11 @@ impl Doors for Here {
         goalcup_platform::machine::is_wsl()
     }
 
-    fn hosts_reachable(&self, hosts: &[String]) -> Result<(), String> {
-        crate::proxy::preflight::upstreams_reachable(hosts.iter().map(String::as_str))
-            .map_err(|unreachable| unreachable.reason())
+    fn hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String> {
+        crate::proxy::preflight::endpoints_reachable(
+            endpoints.iter().map(|(host, port)| (host.as_str(), *port)),
+        )
+        .map_err(|unreachable| unreachable.reason())
     }
 
     fn sleep_lock(&self) -> Result<(), String> {
@@ -553,7 +555,8 @@ fn home_step(
         ));
     }
     let home = cfg.join("capture-homes").join(id);
-    if file.home_ready {
+    // The person's word counts only while the home they set up is still there.
+    if file.home_ready && home.is_dir() {
         return Ok(step(
             STEP_HARNESS_HOME,
             State::Ok,
@@ -625,26 +628,33 @@ fn github_step(
     let stored = GithubSetup::load(cfg)
         .ok()
         .filter(|setup| same_repo(&setup.repo_url, &repo));
+    // What must stay true is asked on every prep (one request): the repository is public and
+    // the token can push. That it is empty is asked until it has once passed; a practice run
+    // pushes, and a repository with commits in it is then as it should be.
     let mut failed = None;
     if let Some(setup) = &stored {
-        if file.github_ok {
-            return Ok(step(
-                STEP_GITHUB,
-                State::Ok,
-                false,
-                format!("{repo} was found public and empty, and the stored token can push to it"),
-            ));
-        }
-        match github::check(&api, setup) {
-            Ok(()) => {
-                file.github_ok = true;
+        match github::check_access(&api, setup) {
+            Ok(()) if file.github_ok => {
                 return Ok(step(
                     STEP_GITHUB,
                     State::Ok,
                     false,
-                    format!("{repo} is public and empty, and the stored token can push to it"),
+                    format!("{repo} is public, and the stored token can push to it"),
                 ));
             }
+            Ok(()) => match github::check_empty(&api, setup) {
+                Ok(()) => {
+                    file.github_ok = true;
+                    return Ok(step(
+                        STEP_GITHUB,
+                        State::Ok,
+                        false,
+                        format!("{repo} is public and empty, and the stored token can push to it"),
+                    ));
+                }
+                // The token is fine; a new one would not make the repository empty.
+                Err(error) => return Ok(fail(error.to_string())),
+            },
             Err(error) => failed = Some(error.to_string()),
         }
     }
@@ -670,16 +680,21 @@ fn github_step(
         Ok(setup) => setup,
         Err(error) => return Ok(fail(error.to_string())),
     };
-    if let Err(error) = github::check(&api, &setup) {
+    if let Err(error) = github::check_access(&api, &setup) {
         return Ok(fail(error.to_string()));
     }
+    if !file.github_ok {
+        if let Err(error) = github::check_empty(&api, &setup) {
+            return Ok(fail(error.to_string()));
+        }
+        file.github_ok = true;
+    }
     setup.store(cfg)?;
-    file.github_ok = true;
     Ok(step(
         STEP_GITHUB,
         State::Ok,
         false,
-        format!("{repo} is public and empty, and the token you gave can push to it; it is stored"),
+        format!("{repo} is public, and the token you gave can push to it; it is stored"),
     ))
 }
 
@@ -775,16 +790,16 @@ fn machine_step(
         ),
     }
 
-    let mut hosts: Vec<String> = Vec::new();
+    let mut hosts: Vec<(String, u16)> = Vec::new();
     if let Ok(Some(server)) = crate::server::read_server_config(cfg) {
-        hosts.push(host_of(&server.url));
+        hosts.push(endpoint_of(&server.url));
     }
     if let Some(c) = connector {
         let profile = &c.loaded.manifest.capture;
-        hosts.extend(profile.hosts.iter().map(|h| h.host.clone()));
-        hosts.extend(profile.auth_hosts.iter().cloned());
+        hosts.extend(profile.hosts.iter().map(|h| (h.host.clone(), 443)));
+        hosts.extend(profile.auth_hosts.iter().map(|h| (h.clone(), 443)));
     }
-    hosts.retain(|host| !host.is_empty());
+    hosts.retain(|(host, _)| !host.is_empty());
     hosts.sort();
     hosts.dedup();
     match doors.hosts_reachable(&hosts) {
@@ -854,15 +869,29 @@ fn machine_step(
     }
 }
 
-/// The host of a server URL, without scheme, user info or port.
-fn host_of(url: &str) -> String {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+/// The host and port of a server URL: the port the URL names, else the scheme's (443 for
+/// https, 80 for http), without scheme or user info.
+fn endpoint_of(url: &str) -> (String, u16) {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("https", url));
+    let default = if scheme.eq_ignore_ascii_case("http") {
+        80
+    } else {
+        443
+    };
     let authority = rest.split('/').next().unwrap_or("");
     let authority = authority.rsplit('@').next().unwrap_or("");
-    if let Some(inner) = authority.strip_prefix('[') {
-        return inner.split(']').next().unwrap_or("").to_string();
-    }
-    authority.split(':').next().unwrap_or("").to_string()
+    let (host, after) = match authority.strip_prefix('[') {
+        Some(inner) => inner.split_once(']').unwrap_or((inner, "")),
+        None => match authority.split_once(':') {
+            Some((host, _)) => (host, &authority[host.len()..]),
+            None => (authority, ""),
+        },
+    };
+    let port = after
+        .strip_prefix(':')
+        .and_then(|port| port.parse().ok())
+        .unwrap_or(default);
+    (host.to_string(), port)
 }
 
 // ------------------------------------------------------------------ 6. practice
@@ -1008,10 +1037,10 @@ impl Doors for Injected {
         self.wsl.unwrap_or_else(|| Here.is_wsl())
     }
 
-    fn hosts_reachable(&self, hosts: &[String]) -> Result<(), String> {
+    fn hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String> {
         match &self.hosts {
             Some(answer) => answer.clone(),
-            None => Here.hosts_reachable(hosts),
+            None => Here.hosts_reachable(endpoints),
         }
     }
 
@@ -1037,5 +1066,30 @@ impl Doors for Injected {
         env: &BTreeMap<String, String>,
     ) -> Result<bool, CliError> {
         Here.open_harness(connector, cfg, env)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::endpoint_of;
+
+    #[test]
+    fn a_server_address_is_probed_on_its_own_port_and_on_the_schemes_when_it_names_none() {
+        for (url, want) in [
+            ("https://ingest.example.org", ("ingest.example.org", 443)),
+            (
+                "https://ingest.example.org/goal/cup",
+                ("ingest.example.org", 443),
+            ),
+            (
+                "https://ingest.example.org:8443",
+                ("ingest.example.org", 8443),
+            ),
+            ("http://127.0.0.1:8787", ("127.0.0.1", 8787)),
+            ("http://localhost", ("localhost", 80)),
+            ("http://[::1]:9000/x", ("::1", 9000)),
+        ] {
+            assert_eq!(endpoint_of(url), (want.0.to_string(), want.1), "{url}");
+        }
     }
 }

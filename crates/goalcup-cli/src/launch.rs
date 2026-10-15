@@ -962,10 +962,17 @@ pub fn prep_launch(
     let plan = build_prep_launch(c, &vars, workspace, launch)?;
     let modes = goalcup_platform::terminal::Modes::save(libc::STDIN_FILENO);
     let spawned = spawn(&plan)?;
-    let shield = goalcup_platform::terminal::Shield::take().map_err(|source| CliError::Io {
-        path: "the terminal's signals".to_string(),
-        source,
-    });
+    // Without the shield a Ctrl-C meant for the harness also ends this command: said, not hidden.
+    let shield = match goalcup_platform::terminal::Shield::take() {
+        Ok(shield) => Some(shield),
+        Err(error) => {
+            eprintln!(
+                "goalcup: the terminal's signals could not be absorbed ({error}), so a Ctrl-C \
+                 typed to the harness may end this command too."
+            );
+            None
+        }
+    };
     let waited = goalcup_platform::terminal::wait_resuming(spawned.child.id(), &mut |_| {});
     drop(shield);
     if let Some(modes) = modes {

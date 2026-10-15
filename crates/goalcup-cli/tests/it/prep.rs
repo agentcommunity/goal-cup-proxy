@@ -46,6 +46,11 @@ impl FakeGithub {
     }
 
     fn start(body: &'static str) -> FakeGithub {
+        FakeGithub::serve(move |_| (200, body))
+    }
+
+    /// Answers each request as `answer` says for the bearer token it carried.
+    fn serve(answer: impl Fn(&str) -> (u16, &'static str) + Send + 'static) -> FakeGithub {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -73,8 +78,15 @@ impl FakeGithub {
                     .unwrap_or("")
                     .to_string();
                 log.lock().unwrap().push(path);
+                let bearer = head
+                    .lines()
+                    .filter_map(|l| l.split_once(':'))
+                    .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+                    .map(|(_, v)| v.trim().trim_start_matches("Bearer ").to_string())
+                    .unwrap_or_default();
+                let (status, body) = answer(&bearer);
                 let reply = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
                      Connection: close\r\n\r\n{body}",
                     body.len()
                 );
@@ -284,6 +296,13 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
     assert_eq!(file.harness, CHAT_ID);
     assert!(file.github_ok);
     file.home_ready = true;
+    // The person's word counts only while the home they set up is there.
+    let (_, text) = {
+        goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
+        prep(&rig, &[], &facts)
+    };
+    assert!(line(&text, "harness_home").starts_with("[todo]"), "{text}");
+    std::fs::create_dir_all(rig.chat_home()).unwrap();
     goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
     let (code, text) = prep(&rig, &[], &facts);
     assert_eq!(code, 1, "{text}");
@@ -362,7 +381,8 @@ fn a_second_prep_skips_passed_steps() {
     );
     assert!(shown.contains("[ok] harness_home:"), "{shown}");
     assert!(shown.contains("[ok] github:"), "{shown}");
-    assert_eq!(github.asked(), 1);
+    // The first time: access, then that the repository is empty.
+    assert_eq!(github.asked(), 2);
     // The harness ran with no goal, on the terminal, in the home a run uses, with no proxy.
     assert_eq!(
         rig.harness_file("tui.stdin").as_deref().map(str::trim),
@@ -399,7 +419,12 @@ fn a_second_prep_skips_passed_steps() {
         !rig.out.join("tui.pid").exists(),
         "the harness started again"
     );
-    assert_eq!(github.asked(), 1, "GitHub was asked again");
+    // GitHub is asked once more, for the access that must keep holding, and no token is wanted.
+    assert_eq!(
+        github.asked(),
+        3,
+        "access is checked on every prep, emptiness only once"
+    );
 }
 
 #[test]
@@ -637,4 +662,106 @@ fn the_harness_step_names_what_it_cannot_use() {
     // And the choice is kept for the next prep.
     let (_, _) = prep(&rig, &["--harness", CHAT_ID], &facts);
     assert_eq!(prep_file(&rig.cfg).harness, CHAT_ID);
+}
+
+/// The repository answers as public, pushable and not empty (a practice run pushed to it), for
+/// the one token `good` and with a refusal for any other.
+fn github_that_only_takes(good: &'static str) -> FakeGithub {
+    FakeGithub::serve(move |bearer| {
+        if bearer == good {
+            (
+                200,
+                r#"{"private":false,"size":12,"permissions":{"admin":false,"push":true,"pull":true}}"#,
+            )
+        } else {
+            (401, r#"{"message":"Bad credentials"}"#)
+        }
+    })
+}
+
+#[test]
+fn a_revoked_token_is_found_on_the_next_prep_and_replaced_though_the_repo_is_no_longer_empty() {
+    let rig = Rig::chat();
+    let new_token = format!("github_pat_{}", "B".repeat(60));
+    let new_token: &'static str = Box::leak(new_token.into_boxed_str());
+    let github = github_that_only_takes(new_token);
+    let facts = facts(&github.base, &[]);
+    log_in(&rig, "http://127.0.0.1:1");
+    // Everything settled earlier: the repository passed, a practice run pushed to it, and the
+    // token stored since has been revoked.
+    GithubSetup::new(REPO, &token())
+        .unwrap()
+        .store(&rig.cfg)
+        .unwrap();
+    std::fs::create_dir_all(rig.chat_home()).unwrap();
+    goalcup_cli::prep_file::write_prep(
+        &rig.cfg,
+        &PrepFile {
+            harness: CHAT_ID.to_string(),
+            repo_url: REPO.to_string(),
+            work_root: rig.root.join("work").display().to_string(),
+            home_ready: true,
+            github_ok: true,
+        },
+    )
+    .unwrap();
+
+    // Without a terminal it is a failure that says what GitHub said, not an ok.
+    let (code, text) = prep(&rig, &[], &facts);
+    assert_eq!(code, 1, "{text}");
+    let github_line = line(&text, "github");
+    assert!(
+        github_line.starts_with("[fail] github:") && github_line.contains("refused the token"),
+        "{text}"
+    );
+
+    // On a terminal the person is asked for a new token, which passes though the repository
+    // is not empty, and replaces the old one.
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
+    on_pty.wait_shown("not shown):");
+    on_pty.type_line(new_token);
+    on_pty.wait();
+    let shown = on_pty.shown();
+    assert!(shown.contains("[ok] github:"), "{shown}");
+    assert!(!shown.contains(new_token), "the token was shown:\n{shown}");
+    assert_eq!(
+        GithubSetup::load(&rig.cfg).unwrap(),
+        GithubSetup::new(REPO, new_token).unwrap()
+    );
+
+    // The next prep is not asked for anything: the stored token passes.
+    let (_, text) = prep(&rig, &[], &facts);
+    assert!(line(&text, "github").starts_with("[ok] github:"), "{text}");
+    let mut again = OnPty::spawn(prep_command(&rig, &[], &facts), None);
+    again.wait();
+    assert!(!again.shown().contains("not shown):"), "{}", again.shown());
+}
+
+#[test]
+fn a_repository_that_is_not_empty_the_first_time_is_not_a_reason_to_ask_for_another_token() {
+    let rig = Rig::chat();
+    let token_in_use: &'static str = Box::leak(token().into_boxed_str());
+    let github = github_that_only_takes(token_in_use);
+    log_in(&rig, "http://127.0.0.1:1");
+    GithubSetup::new(REPO, token_in_use)
+        .unwrap()
+        .store(&rig.cfg)
+        .unwrap();
+    let facts = facts(&github.base, &[]);
+    std::fs::create_dir_all(rig.chat_home()).unwrap();
+    goalcup_cli::prep_file::write_prep(
+        &rig.cfg,
+        &PrepFile {
+            harness: CHAT_ID.to_string(),
+            home_ready: true,
+            ..PrepFile::default()
+        },
+    )
+    .unwrap();
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+    on_pty.wait_shown("[fail] github:");
+    on_pty.wait();
+    let shown = on_pty.shown();
+    assert!(shown.contains("is not empty"), "{shown}");
+    assert!(!shown.contains("not shown):"), "{shown}");
 }

@@ -687,10 +687,20 @@ pub(crate) fn claim_home_for_prep(
             }));
         }
     };
-    match std::fs::symlink_metadata(&config_home) {
+    let home = ensure_shared_home(&config_home)?;
+    Ok(Some((home.recheck()?, lock)))
+}
+
+/// The shared harness home's folder (D39), made if there is none, and judged as every run
+/// judges it. The caller holds the lock: `goalcup start` and `goalcup prep` differ only in
+/// how they take it and what they say when they cannot.
+fn ensure_shared_home(config_home: &Path) -> Result<SharedCaptureHome, CliError> {
+    match std::fs::symlink_metadata(config_home) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            match private_dir(&config_home, false) {
+            match private_dir(config_home, false) {
+                // A concurrent `goalcup start` made it between the look and the create;
+                // `SharedCaptureHome::load` below judges that directory like any other.
                 Err(CliError::Io { source, .. })
                     if source.kind() == std::io::ErrorKind::AlreadyExists => {}
                 made => made?,
@@ -698,15 +708,14 @@ pub(crate) fn claim_home_for_prep(
         }
         Err(_) => {
             return Err(shared_home_refusal(
-                &config_home,
+                config_home,
                 "its exact leaf cannot be inspected",
             ));
         }
     }
     // SAFETY: reading the effective uid has no preconditions or memory effects.
     let owner = unsafe { libc::geteuid() };
-    let home = SharedCaptureHome::load(&config_home, owner)?;
-    Ok(Some((home.recheck()?, lock)))
+    SharedCaptureHome::load(config_home, owner)
 }
 
 /// The refusal of a `goalcup continue` that a run still recording stands in the way of.
@@ -1525,27 +1534,7 @@ fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), 
         Some(held) => held,
         None => lock_shared_home(&config_home, &c.loaded.manifest.id)?,
     };
-    match std::fs::symlink_metadata(&config_home) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            match private_dir(&config_home, false) {
-                // A concurrent `goalcup start` made it between the look and the create;
-                // `SharedCaptureHome::load` below judges that directory like any other.
-                Err(CliError::Io { source, .. })
-                    if source.kind() == std::io::ErrorKind::AlreadyExists => {}
-                made => made?,
-            }
-        }
-        Err(_) => {
-            return Err(shared_home_refusal(
-                &config_home,
-                "its exact leaf cannot be inspected",
-            ));
-        }
-    }
-    // SAFETY: reading the effective uid has no preconditions or memory effects.
-    let owner = unsafe { libc::geteuid() };
-    prep.shared_home = Some(SharedCaptureHome::load(&config_home, owner)?);
+    prep.shared_home = Some(ensure_shared_home(&config_home)?);
     prep.shared_home_lock = Some(lock);
     Ok(())
 }
