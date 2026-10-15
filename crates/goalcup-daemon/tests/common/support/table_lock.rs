@@ -13,7 +13,9 @@
 //! pool, and this lock serialises that. Under cargo-nextest (`sh scripts/gate.sh`) every test
 //! is its own process and this lock serialises nothing. There, safety comes from the `serial`
 //! test group in `.config/nextest.toml`: **any new module that takes this lock must be added
-//! to that group's filters**, or its tests will run concurrently.
+//! to that group's filters**, or its tests will run concurrently. `acquire` enforces this:
+//! under nextest it panics unless `NEXTEST_TEST_GROUP` is `serial`, so a module that was
+//! missed fails loudly instead of flaking on `ps`.
 //!
 //! Never acquire this from a thread the test spawned. The depth counter is
 //! thread-local, so a guard held on the test's main thread plus an acquisition on a worker
@@ -45,8 +47,25 @@ thread_local! {
 /// under the guard had its tree killed by its own owner's drop before this was released.
 pub struct TableLock(std::marker::PhantomData<*const ()>);
 
+/// Why a test in nextest group `group` may not take the lock, or `None` when it may. nextest sets
+/// `NEXTEST_TEST_GROUP` to the test's group, or `@global` for a test in no group; plain
+/// `cargo test` leaves it unset, and a single binary's worker pool is serialised by the static.
+pub fn group_refusal(group: Option<&str>) -> Option<String> {
+    match group {
+        None | Some("serial") => None,
+        Some(other) => Some(format!(
+            "TableLock::acquire() ran in nextest test group `{other}`, not `serial`: add this \
+             module to the `serial` filters in .config/nextest.toml, or the lock holds nothing \
+             and process-table tests run concurrently"
+        )),
+    }
+}
+
 impl TableLock {
     pub fn acquire() -> TableLock {
+        if let Some(refusal) = group_refusal(std::env::var("NEXTEST_TEST_GROUP").ok().as_deref()) {
+            panic!("{refusal}");
+        }
         HELD.with(|held| {
             let mut held = held.borrow_mut();
             if held.0 == 0 {

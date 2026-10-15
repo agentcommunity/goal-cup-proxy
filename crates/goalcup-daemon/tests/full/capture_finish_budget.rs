@@ -192,8 +192,17 @@ async fn a_finish_whose_caller_disconnects_still_latches_its_counters_and_a_gap(
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     drop(socket);
-    // Let hyper notice the close and drop the handler's future.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // Wait for hyper to notice the close and drop the handler's future: its drop guard latches
+    // the carried counters, and that latch is the state the test needs before it lets go of the
+    // permits. (Releasing them earlier lets the live handler finish the attempt normally.)
+    let until = Instant::now() + Duration::from_secs(30);
+    while rig.daemon.capture_finish_latched(&info.entry_id) != Some(true) {
+        assert!(
+            Instant::now() < until,
+            "the dropped attempt never latched its counters"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     drop(hold);
 
     let (sealed, _) = seal(&rig, &info.entry_id, request(None, None)).await;
@@ -749,6 +758,43 @@ async fn remaining_finish_defaults_clamps_and_refuses_zero() {
     assert_eq!(local_finishes(&rig.records(&strict.entry_id)), 0);
 }
 
+/// A `/bin/sh` that ignores SIGTERM and then becomes `sleep 300`, in its own process group. It
+/// returns only once both are true: the shell writes a ready file after `trap`, and the process
+/// table then names the pid `sleep` (the `exec` happened). Waiting for the condition replaces a
+/// fixed sleep that a loaded machine can outrun, which kills the shell on the first SIGTERM and
+/// makes the termination tests fail for the wrong reason.
+fn spawn_sigterm_ignoring_sleep() -> std::process::Child {
+    let dir = tempfile::tempdir().unwrap();
+    let ready = dir.path().join("ready");
+    // Write-then-rename, so the file the test sees is whole.
+    let script = r#"trap '' TERM; : > "$1.tmp"; mv "$1.tmp" "$1"; exec /bin/sleep 300"#;
+    let child = std::process::Command::new("/bin/sh")
+        .args(["-c", script, "sh"])
+        .arg(&ready)
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let until = Instant::now() + Duration::from_secs(30);
+    let mut exec_done = false;
+    while !(ready.exists() && exec_done) {
+        assert!(
+            Instant::now() < until,
+            "the shell (pid {pid}) never ignored SIGTERM and became sleep"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+        if ready.exists() {
+            exec_done = goalcup_protocol::process::snapshot()
+                .map(|table| table.iter().any(|p| p.pid == pid && p.comm == "sleep"))
+                .unwrap_or(false);
+        }
+    }
+    child
+}
+
 #[tokio::test]
 async fn termination_time_is_outside_the_budget() {
     // A harness that ignores SIGTERM is ended only after the connector's whole grace. A caller
@@ -756,15 +802,7 @@ async fn termination_time_is_outside_the_budget() {
     let rig = Rig::start().await;
     let lock = TableLock::acquire();
     let info = rig.created("codex-cli").await;
-    let mut stubborn = std::process::Command::new("/bin/sh")
-        .args(["-c", "trap '' TERM; exec /bin/sleep 300"])
-        .process_group(0)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    std::thread::sleep(Duration::from_millis(300));
+    let mut stubborn = spawn_sigterm_ignoring_sleep();
     let mut handle = support::handle_for_now(stubborn.id());
     handle.argv = vec!["/bin/sleep".to_string(), "300".to_string()];
     handle.grace_seconds = 4;
@@ -799,15 +837,7 @@ async fn standalone_seal_ends_sigterm_ignoring_harness_with_full_grace() {
     let rig = Rig::start().await;
     let lock = TableLock::acquire();
     let info = rig.created("codex-cli").await;
-    let mut stubborn = std::process::Command::new("/bin/sh")
-        .args(["-c", "trap '' TERM; exec /bin/sleep 300"])
-        .process_group(0)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    std::thread::sleep(Duration::from_millis(300));
+    let mut stubborn = spawn_sigterm_ignoring_sleep();
     let pid = stubborn.id();
     let mut handle = support::handle_for_now(pid);
     handle.argv = vec!["/bin/sleep".to_string(), "300".to_string()];

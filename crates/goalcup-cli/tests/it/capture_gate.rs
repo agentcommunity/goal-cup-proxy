@@ -6,10 +6,12 @@
 //! and `capture_crash_campaign.rs` (real binaries); this file pins the two pieces that need no
 //! daemon: `spawn_gated`/`release`/`abort`, and `end_released_child`.
 //!
-//! Tests here run one at a time (a mutex): each forks, and a fork taken while another test holds
-//! a freshly written script open is how a "text file busy" is made.
+//! Tests here run one at a time (the process-table `TableLock`, and the `serial` group under
+//! nextest): each forks, and a fork taken while another test
+//! holds a freshly written script open is how a "text file busy" is made.
 
 use crate::common::secret_support;
+use crate::common::table_lock::TableLock;
 
 use goalcup_cli::CliError;
 use goalcup_cli::launch::{
@@ -22,10 +24,7 @@ use goalcup_protocol::process::{ProcessHandle, is_alive, process_start_identity}
 use secret_support::KEY;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 const NATIVE: &str = "m2native";
 
@@ -34,12 +33,12 @@ const PATIENCE: Duration = Duration::from_secs(15);
 
 struct World {
     dir: tempfile::TempDir,
-    _lock: MutexGuard<'static, ()>,
+    _lock: TableLock,
 }
 
 impl World {
     fn new() -> World {
-        let lock = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = TableLock::acquire();
         let dir = tempfile::tempdir().unwrap();
         // The "native binary": `sleep` under another name, which is what a process table calls
         // it. (A copy of a platform binary is killed by code signing; a link is not.)
