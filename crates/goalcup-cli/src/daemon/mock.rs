@@ -593,6 +593,8 @@ impl DaemonClient for MockDaemonClient {
             daemon_version: "0.0.0-mock".to_string(),
             uptime_seconds: 1,
             entries_open: state.entries.len() as u32,
+            cycles: control::CycleErrors::default(),
+            reopen_failed: Vec::new(),
         })
     }
 

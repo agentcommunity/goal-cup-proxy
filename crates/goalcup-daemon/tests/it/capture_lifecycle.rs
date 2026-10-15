@@ -3437,10 +3437,9 @@ async fn a_continued_segment_takes_the_workspace_of_its_sealed_entry() {
     );
 }
 
-/// An entry this daemon could not reopen routes nothing, so it lets go of its workspace too: a
-/// run whose chain was lost can still be continued where it ran.
-#[tokio::test]
-async fn a_continued_segment_takes_the_workspace_of_an_entry_that_failed_to_reopen() {
+/// A rig whose daemon restarted over an entry whose chain file is gone, so the reopen failed.
+/// Returns the rig, the workspace the entry ran in, and the entry's id.
+async fn restarted_over_a_lost_chain() -> (Rig, PathBuf, String) {
     let rig = Rig::start().await;
     let ws = rig.workspace("lost");
     let home = rig.root.join("git-home");
@@ -3459,6 +3458,14 @@ async fn a_continued_segment_takes_the_workspace_of_an_entry_that_failed_to_reop
     std::fs::remove_file(rig.trace_dir(&first.entry_id).join("chain.jsonl")).unwrap();
 
     let rig = rig.restart().await;
+    (rig, ws, first.entry_id)
+}
+
+/// An entry this daemon could not reopen routes nothing, so it lets go of its workspace too: a
+/// run whose chain was lost can still be continued where it ran.
+#[tokio::test]
+async fn a_continued_segment_takes_the_workspace_of_an_entry_that_failed_to_reopen() {
+    let (rig, ws, _) = restarted_over_a_lost_chain().await;
     // Relies on the chain having no rotated parts: removing `chain.jsonl` leaves nothing to resume.
     let last = rig.daemon.cycle_errors().last;
     assert!(
@@ -3468,4 +3475,21 @@ async fn a_continued_segment_takes_the_workspace_of_an_entry_that_failed_to_reop
     );
     let second = rig.create("codex-cli", &ws, RESERVE).await;
     assert_eq!(second.status(), 200, "{}", second.body());
+}
+
+/// The health answer names an entry the daemon failed to reopen and counts the cycle error, so
+/// an operator can find a run that has no status without reading `daemon.log`.
+#[tokio::test]
+async fn health_reports_an_entry_that_failed_to_reopen() {
+    let (rig, _ws, entry_id) = restarted_over_a_lost_chain().await;
+    let health: goalcup_protocol::control::DaemonHealth = rig
+        .get(goalcup_protocol::control::ROUTE_HEALTH)
+        .await
+        .json()
+        .expect("the contract's health document");
+    assert_eq!(health.reopen_failed, vec![entry_id.clone()]);
+    assert_eq!(health.cycles.tick, 1, "one failure was counted");
+    let last = health.cycles.last.unwrap_or_default();
+    assert!(last.contains("was not reopened"), "{last}");
+    assert!(last.contains(&entry_id), "{last}");
 }

@@ -605,6 +605,17 @@ pub struct DaemonHealth {
     pub daemon_version: String,
     pub uptime_seconds: u64,
     pub entries_open: u32,
+    /// What the daemon's own loop lost, as the signed status document also carries it:
+    /// counts and the last path-free message. The daemon counts here and does not judge.
+    ///
+    /// `serde(default)`, so an older daemon's answer still parses and reads as "nothing lost".
+    #[serde(default)]
+    pub cycles: CycleErrors,
+    /// Ids of the capture entries this daemon failed to reopen at start. Such an entry has
+    /// no status and routes nothing, so this is the one place an operator finds its id.
+    /// Empty when none failed. `serde(default)` for the same reason as `cycles`.
+    #[serde(default)]
+    pub reopen_failed: Vec<String>,
 }
 
 /// The durable answer to a V4 workspace finalization request.
