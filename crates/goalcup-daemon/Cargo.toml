@@ -75,3 +75,11 @@ libc.workspace = true
 # feature the shipped build does not carry.
 goalcup-daemon = { path = ".", features = ["test-hooks"] }
 tempfile.workspace = true
+
+# Declared so `test = false` can apply: the file holds no test, and an empty test harness
+# would otherwise be built. Cargo still finds the binary by its path; the integration tests
+# still spawn it.
+[[bin]]
+name = "goalcup-daemon"
+path = "src/bin/goalcup-daemon.rs"
+test = false

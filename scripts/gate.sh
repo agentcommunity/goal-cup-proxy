@@ -4,7 +4,8 @@
 #
 #   fast  the version check (scripts/check-version.py: one version, written in Cargo.toml only),
 #         build, fmt, clippy, then every test except the slow `full` and `m2_cli_lifecycle`
-#         binaries.
+#         binaries. The per-connector checks in `full` (`harness_contract_golden`,
+#         `harness_contract_kit`, `preflight_doctor`) are not slow, so the fast tier runs them.
 #   full  fast's checks, every test including `full`, the CLI's `#[ignore]`d end-to-end tests
 #         (the `m2_synthetic_vertical` and `capture_failure_campaign` modules of its `full`
 #         binary, about 4.5 minutes), the upload Worker's `upload_worker` tests (they run the
@@ -57,9 +58,12 @@ step cargo clippy --offline --workspace --all-targets -- -D warnings
 if cargo nextest --version >/dev/null 2>&1; then
     if [ "$tier" = fast ]; then
         # The slow binaries the fast tier skips: every crate's `full`, and the CLI's standalone
-        # end-to-end lifecycle (about 100 s). nextest rejects a filter that names a binary that
-        # does not exist, so the exclusion is probed first; each operator must match a binary.
-        slow='binary(full) | binary(m2_cli_lifecycle)'
+        # end-to-end lifecycle (about 100 s). The per-connector checks live in `full` but take
+        # seconds, and every new connector leans on them, so the fast tier keeps them. nextest
+        # rejects a filter that names a binary that does not exist, so the exclusion is probed
+        # first; each operator must match a binary.
+        per_connector='test(/^(harness_contract_golden|harness_contract_kit|preflight_doctor)::/)'
+        slow="(binary(full) & not $per_connector) | binary(m2_cli_lifecycle)"
         if cargo nextest list --offline --workspace --list-type binaries-only \
             -E "$slow" >/dev/null 2>&1; then
             step cargo nextest run --offline --workspace -E "not ($slow)"
