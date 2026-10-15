@@ -48,8 +48,9 @@ All times UTC.
 | Date | What |
 |---|---|
 | 23–24 Oct | First release (`scripts/release.sh prepare`, merge, `scripts/release.sh tag`) |
-| 26 Oct | Freeze |
-| about 28 Oct | Dry run (production, `goalcup-dryrun-2026`) |
+| 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
+| 4 Nov 00:00 | Feature stop: fixes only |
+| 6 Nov | `EVENT_ID` switch and last release (12:00). See [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026-with-the-last-release). |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. |
 | 8 Nov 00:00 | Start window closes |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
@@ -57,9 +58,10 @@ All times UTC.
 Before the window opens:
 
 1. The `goalcup-cup-2026` row in the website's `events` table has `start_window_opens` =
-   `2026-11-07T00:00:00Z` and `start_window_closes` = `2026-11-08T00:00:00Z`. The old placeholder is 6 Nov
-   16:00. Change it with a website migration.
-2. Set `EVENT_ID = "goalcup-cup-2026"` in `server/worker/wrangler.toml` (top-level `[vars]`) and deploy.
+   `2026-11-07T00:00:00Z` and `start_window_closes` = `2026-11-08T00:00:00Z`. This is applied in
+   production. The dry-run row closes on 6 Nov, 00:00.
+2. Do the `EVENT_ID` switch on 6 Nov. The steps are in
+   [server/worker/README.md](../server/worker/README.md#event_id-switch-6-nov-2026-with-the-last-release).
    Staging keeps its own event ids.
 3. Run the matrix on staging for each shipped connector ([The matrix](#the-matrix)).
 4. Confirm `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, then run one

@@ -28,8 +28,8 @@ evidence about the current agent ecosystem.
 
 All times are UTC.
 
-- **23–24 October:** first tracer release. The release freeze is 26 October. The dry run is around
-  28 October. Install the latest release on macOS, Linux or WSL2 with
+- **23–24 October:** first tracer release. From then until 6 November, 00:00, the dry-run window is
+  open: you can start dry runs on any day. The last release is on 6 November, 12:00. Install the latest release on macOS, Linux or WSL2 with
   `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh` ([guide](PARTICIPANT-GUIDE.md#1-install)).
 - **Before the window:** you prepare with `goalcup prep` and practice runs. Practice is not limited
   to the window.
@@ -223,7 +223,7 @@ disclosure and no-side-channel rules.
 - The record uploads to the server during the run, every 30 minutes or sooner by size. When the server
   cannot be reached, the record waits on your disk and the upload retries; the run goes on. After the
   stop, the tracker seals and uploads for at most one hour, and `goalcup upload` finishes the job
-  later.
+  later. With no entry id it sends the unsent entries of your newest run.
 - **What the tracker records, and what it never does.** It observes one process: the harness it
   launched for your entry, and any program that harness starts. It records that agent's conversation
   with the model provider, every request and every reply, by pointing that one process at a recording
@@ -330,7 +330,7 @@ the supported list. A harness not on it has no recording path, and its runs are 
   listed as an official partner.
 - Sponsors and partners must be Agent Community members.
 - Awards, their criteria and judges freeze when the window opens.
-- Judge, partner and sponsor enquiries: goalhack@agentcommunity.org.
+- Judge, partner and sponsor enquiries: goalcup@agentcommunity.org.
 
 ## Still to decide
 
