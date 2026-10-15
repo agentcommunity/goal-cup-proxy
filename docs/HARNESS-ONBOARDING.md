@@ -70,8 +70,8 @@ Known gaps. The connector works, but the record is partial. Write each one in th
 ## What you need
 
 - A Mac (Apple silicon or Intel), or Linux. Every step runs on both. Only the daemon's live
-  goldens (`<id>.daemon.json`, `native-stream-labels.json`) are macOS-only: on Linux say in the PR
-  that you did not regenerate them, and a maintainer does it on a Mac.
+  golden (`<id>.daemon.json`) is macOS-only: on Linux say in the PR that you did not regenerate
+  it, and a maintainer does it on a Mac.
 - Rust from [rustup](https://rustup.rs) (1.99 or later), the Xcode command line tools and
   `python3`. If Homebrew also installed Rust, `which cargo` must print `~/.cargo/bin/cargo`.
 - A network for the first build only, and about 3 GB of disk for `target/`.
@@ -188,16 +188,14 @@ is the harness executable. Run every command from the repository root.
    `connectors/<id>/`. Never edit a pin by hand.
 7. **Regenerate the goldens.**
    ```sh
-   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test full harness_contract_golden::
-   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test full harness_contract_golden::
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test it harness_contract_golden::
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test it harness_contract_golden::
    git status --short crates/goalcup-cli/tests/fixtures/harness-golden
    ```
-   Expect both `test result: ok.`, a new `<id>.json` and `<id>.daemon.json`, and a changed
-   `enumeration.json` (and `redaction-extra-patterns.json` if the connector declares extra
-   patterns). On Linux the daemon command writes no `<id>.daemon.json` or
-   `native-stream-labels.json`: those are macOS-only, so say so in the PR. A changed golden that does not mention
-   `<id>` did not change because of your connector: run `git checkout -- <file>` and name it in the
-   PR. Set the variable per command, never `export` it.
+   Expect both `test result: ok.`, a new `<id>.json` and `<id>.daemon.json`, and no other
+   change: the shared goldens name no connector. On Linux the daemon command writes no
+   `<id>.daemon.json`: it is macOS-only, so say so in the PR. Any other changed golden did not
+   change because of your connector: run `git checkout -- <file>` and name it in the PR. Set the variable per command, never `export` it.
 8. **Add the kit case (headless only).** A chat-mode connector needs no case of its own: the kit
    runs every pinned `interactive = true` connector through one stand-in that reads its
    `harness.toml` (the program, `args`, the native root and pattern, `skills_dir`). Skip to step 9.

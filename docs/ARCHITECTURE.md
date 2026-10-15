@@ -283,6 +283,6 @@ Paths are under `crates/`.
 | Hermes key child-only, private home, key scan | `goalcup-cli/tests/it/hermes_child_secret.rs`, `hermes_per_run_home.rs`, `key_scan.rs`, `key_scan_run.rs`, `capture_stderr_tee.rs`, `hermes_offline_key.rs` (same folder), `goalcup-cli/tests/full/m2_hermes_lifecycle.rs` |
 | Crash, torn tail, restart | `goalcup-cli/tests/full/capture_crash_campaign.rs` |
 | Whole vertical on a synthetic workload | `goalcup-cli/tests/full/m2_synthetic_vertical.rs` |
-| Six contract-kit cases | `goalcup-cli/tests/full/harness_contract_kit.rs` |
+| Six contract-kit cases | `goalcup-cli/tests/it/harness_contract_kit.rs` |
 | Research report | `goalcup-verifier/tests/it/m2_research_report.rs` |
 | Upload against the real Worker | `goalcup-cli/tests/full/upload_worker.rs`, `server/worker/test` |

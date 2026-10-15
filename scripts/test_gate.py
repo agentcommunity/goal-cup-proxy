@@ -92,13 +92,9 @@ class GateTests(unittest.TestCase):
         self.run_gate("fast")
         runs = self.nextest_runs()
         self.assertEqual(len(runs), 1, runs)
-        # `full` is excluded except the per-connector checks, which take seconds and are what
-        # every new connector leans on. The standalone lifecycle binary stays excluded.
-        self.assertIn(
-            "-E not ((binary(full) & not test(/^(harness_contract_golden|harness_contract_kit"
-            "|preflight_doctor)::/)) | binary(m2_cli_lifecycle))",
-            runs[0],
-        )
+        # Every `full` binary and the standalone lifecycle binary are excluded; the per-connector
+        # checks are in `it`, so the fast tier runs them.
+        self.assertIn("-E not (binary(full) | binary(m2_cli_lifecycle))", runs[0])
 
     def test_fast_runs_everything_while_no_full_binary_exists(self) -> None:
         # nextest refuses a `binary(...)` filter when no binary has that name. The fallback is

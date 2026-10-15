@@ -1,0 +1,752 @@
+{
+  "argv": [
+    {
+      "arg": "--remote",
+      "denied": "runs the session somewhere else"
+    },
+    {
+      "arg": "--remote=host",
+      "denied": "runs the session somewhere else"
+    },
+    {
+      "arg": "remote",
+      "denied": "runs the session somewhere else"
+    },
+    {
+      "arg": "REMOTE",
+      "denied": "runs the session somewhere else"
+    },
+    {
+      "arg": "remote-control",
+      "denied": "hands the session to a remote controller"
+    },
+    {
+      "arg": "cloud",
+      "denied": "runs the session somewhere else"
+    },
+    {
+      "arg": "--oss",
+      "denied": "switches to another model provider"
+    },
+    {
+      "arg": "--local-provider",
+      "denied": "switches to another model provider"
+    },
+    {
+      "arg": "--ephemeral",
+      "denied": "turns the native session store off"
+    },
+    {
+      "arg": "--no-session-persistence",
+      "denied": "turns the native session store off"
+    },
+    {
+      "arg": "--settings",
+      "denied": "loads settings from outside the profile, which can set any of this list"
+    },
+    {
+      "arg": "--settings=/x.json",
+      "denied": "loads settings from outside the profile, which can set any of this list"
+    },
+    {
+      "arg": "--profile",
+      "denied": "loads a configuration profile from outside the capture profile"
+    },
+    {
+      "arg": "--profile=work",
+      "denied": "loads a configuration profile from outside the capture profile"
+    },
+    {
+      "arg": "--plugin-dir",
+      "denied": "loads plugin code into the harness"
+    },
+    {
+      "arg": "--base-url=http://x",
+      "denied": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "--base_url",
+      "denied": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "openai_base_url=http://x",
+      "denied": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "ANTHROPIC_BASE_URL=http://x",
+      "denied": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "{\"baseUrl\":\"http://x\"}",
+      "denied": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "--api-url=http://x",
+      "denied": "redirects the model endpoint (D1)"
+    },
+    {
+      "arg": "--endpoint=http://x",
+      "denied": "redirects an endpoint (D1)"
+    },
+    {
+      "arg": "--model-provider=x",
+      "denied": "switches to another model provider"
+    },
+    {
+      "arg": "--bedrock",
+      "denied": "switches to another model provider"
+    },
+    {
+      "arg": "--vertex",
+      "denied": "switches to another model provider"
+    },
+    {
+      "arg": "--foundry",
+      "denied": "switches to another model provider"
+    },
+    {
+      "arg": "profile=x",
+      "denied": "selects a configuration profile from outside the capture profile"
+    },
+    {
+      "arg": "--api-key=k",
+      "denied": "carries a provider credential"
+    },
+    {
+      "arg": "--auth-token=k",
+      "denied": "carries a provider credential"
+    },
+    {
+      "arg": "Authorization: Bearer k",
+      "denied": "carries a provider credential"
+    },
+    {
+      "arg": "--credential=k",
+      "denied": "carries a provider credential"
+    },
+    {
+      "arg": "--proxy=http://x",
+      "denied": "sets a proxy the capture launch does not own"
+    },
+    {
+      "arg": "--cacert=x",
+      "denied": "changes which certificates the harness trusts"
+    },
+    {
+      "arg": "--ca-bundle=x",
+      "denied": "changes which certificates the harness trusts"
+    },
+    {
+      "arg": "--certfile=x",
+      "denied": "changes which certificates the harness trusts"
+    },
+    {
+      "arg": "--reject-unauthorized=false",
+      "denied": "turns certificate verification off"
+    },
+    {
+      "arg": "--otel-exporter=x",
+      "denied": "exports telemetry somewhere the capture does not see"
+    },
+    {
+      "arg": "DYLD_INSERT_LIBRARIES=x",
+      "denied": "injects code into the harness"
+    },
+    {
+      "arg": "LD_PRELOAD=x",
+      "denied": "injects code into the harness"
+    },
+    {
+      "arg": "--node-options=--require",
+      "denied": "injects code into the harness"
+    },
+    {
+      "arg": "--bun-options=x",
+      "denied": "injects code into the harness"
+    },
+    {
+      "arg": "-Q",
+      "denied": null
+    },
+    {
+      "arg": "-p",
+      "denied": null
+    },
+    {
+      "arg": "-pwork",
+      "denied": null
+    },
+    {
+      "arg": "-p=work",
+      "denied": null
+    },
+    {
+      "arg": "-h",
+      "denied": null
+    },
+    {
+      "arg": "-Qh",
+      "denied": null
+    },
+    {
+      "arg": "-Qp",
+      "denied": null
+    },
+    {
+      "arg": "-Qpfoo",
+      "denied": null
+    },
+    {
+      "arg": "-Qmfoo",
+      "denied": null
+    },
+    {
+      "arg": "-Qmph",
+      "denied": null
+    },
+    {
+      "arg": "-m",
+      "denied": null
+    },
+    {
+      "arg": "-z",
+      "denied": null
+    },
+    {
+      "arg": "-t",
+      "denied": null
+    },
+    {
+      "arg": "-r",
+      "denied": null
+    },
+    {
+      "arg": "-s",
+      "denied": null
+    },
+    {
+      "arg": "-q",
+      "denied": null
+    },
+    {
+      "arg": "-c",
+      "denied": null
+    },
+    {
+      "arg": "-C",
+      "denied": null
+    },
+    {
+      "arg": "-",
+      "denied": null
+    },
+    {
+      "arg": "--",
+      "denied": null
+    },
+    {
+      "arg": "chat",
+      "denied": null
+    },
+    {
+      "arg": "exec",
+      "denied": null
+    },
+    {
+      "arg": "--json",
+      "denied": null
+    },
+    {
+      "arg": "--provider",
+      "denied": null
+    },
+    {
+      "arg": "--model",
+      "denied": null
+    },
+    {
+      "arg": "--model=x",
+      "denied": null
+    },
+    {
+      "arg": "--query",
+      "denied": null
+    },
+    {
+      "arg": "--query=hello",
+      "denied": null
+    },
+    {
+      "arg": "--prof",
+      "denied": null
+    },
+    {
+      "arg": "--profil",
+      "denied": null
+    },
+    {
+      "arg": "--p",
+      "denied": null
+    },
+    {
+      "arg": "--pro",
+      "denied": null
+    },
+    {
+      "arg": "--tu",
+      "denied": null
+    },
+    {
+      "arg": "--tui",
+      "denied": null
+    },
+    {
+      "arg": "--cli",
+      "denied": null
+    },
+    {
+      "arg": "--cl",
+      "denied": null
+    },
+    {
+      "arg": "--c",
+      "denied": null
+    },
+    {
+      "arg": "--hel",
+      "denied": null
+    },
+    {
+      "arg": "--help",
+      "denied": null
+    },
+    {
+      "arg": "--he",
+      "denied": null
+    },
+    {
+      "arg": "--h",
+      "denied": null
+    },
+    {
+      "arg": "--help=x",
+      "denied": null
+    },
+    {
+      "arg": "--tui=x",
+      "denied": null
+    },
+    {
+      "arg": "--ta",
+      "denied": null
+    },
+    {
+      "arg": "--permission-mode",
+      "denied": null
+    },
+    {
+      "arg": "--session-id",
+      "denied": null
+    },
+    {
+      "arg": "--output-format",
+      "denied": null
+    },
+    {
+      "arg": "--strict-mcp-config",
+      "denied": null
+    },
+    {
+      "arg": "--skip-git-repo-check",
+      "denied": null
+    }
+  ],
+  "ca_registry": [
+    {
+      "mode": "extend",
+      "name": "CODEX_CA_CERTIFICATE"
+    },
+    {
+      "mode": "extend",
+      "name": "NODE_EXTRA_CA_CERTS"
+    },
+    {
+      "mode": "replace",
+      "name": "HERMES_CA_BUNDLE"
+    }
+  ],
+  "credential_env_names": [
+    "DEEPSEEK_API_KEY",
+    "AMP_API_KEY"
+  ],
+  "env": [
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "HOME"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "home"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "PATH"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "USER"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "LOGNAME"
+    },
+    {
+      "denied": "is pinned by the capture launch itself",
+      "name": "TMPDIR"
+    },
+    {
+      "denied": null,
+      "name": "SHELL"
+    },
+    {
+      "denied": null,
+      "name": "LANG"
+    },
+    {
+      "denied": null,
+      "name": "TERM"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "EDITOR"
+    },
+    {
+      "denied": null,
+      "name": "CI"
+    },
+    {
+      "denied": null,
+      "name": "DISABLE_AUTOUPDATER"
+    },
+    {
+      "denied": null,
+      "name": "ENABLE_CLAUDEAI_MCP_SERVERS"
+    },
+    {
+      "denied": null,
+      "name": "CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS"
+    },
+    {
+      "denied": null,
+      "name": "TERMINAL_HOME_MODE"
+    },
+    {
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
+      "name": "CODEX_HOME"
+    },
+    {
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
+      "name": "codex_home"
+    },
+    {
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
+      "name": "CLAUDE_CONFIG_DIR"
+    },
+    {
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
+      "name": "claude_config_dir"
+    },
+    {
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
+      "name": "HERMES_HOME"
+    },
+    {
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
+      "name": "hermes_home"
+    },
+    {
+      "denied": "relocates a program's home or configuration; a harness's own goes in `capture.home.env`",
+      "name": "WORKLOAD_HOME"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "OPENAI_BASE_URL"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "ANTHROPIC_BASE_URL"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "CODEX_BASE_URL"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "FOO_API_URL"
+    },
+    {
+      "denied": "redirects an endpoint (D1)",
+      "name": "MY_ENDPOINT"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "HTTPS_PROXY"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "https_proxy"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "HTTP_PROXY"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "ALL_PROXY"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "NO_PROXY"
+    },
+    {
+      "denied": "is a proxy variable, which the capture launch pins itself",
+      "name": "PROXY"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "GITHUB_TOKEN"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "MY_SECRET"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "DB_PASSWORD"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "X_CREDENTIAL"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "OPENAI_API_KEY"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "DEEPSEEK_API_KEY"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "APIKEY_X"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "SOME_KEY"
+    },
+    {
+      "denied": null,
+      "name": "KEYBOARD"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "AUTH_URL"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "SSH_AUTH_SOCK"
+    },
+    {
+      "denied": "switches to another model provider",
+      "name": "MODEL_PROVIDER"
+    },
+    {
+      "denied": "switches to another model provider",
+      "name": "LLM_PROVIDER"
+    },
+    {
+      "denied": "changes certificate trust: a CA variable belongs in `capture.ca`, not `capture.env`",
+      "name": "CODEX_CA_CERTIFICATE"
+    },
+    {
+      "denied": "changes certificate trust: a CA variable belongs in `capture.ca`, not `capture.env`",
+      "name": "NODE_EXTRA_CA_CERTS"
+    },
+    {
+      "denied": "changes certificate trust, which no capture profile sets",
+      "name": "SSL_CERT_FILE"
+    },
+    {
+      "denied": "changes certificate trust, which no capture profile sets",
+      "name": "SSL_CERT_DIR"
+    },
+    {
+      "denied": "changes certificate trust, which no capture profile sets",
+      "name": "CURL_CA_BUNDLE"
+    },
+    {
+      "denied": "changes certificate trust, which no capture profile sets",
+      "name": "REQUESTS_CA_BUNDLE"
+    },
+    {
+      "denied": "changes certificate trust: a CA variable belongs in `capture.ca`, not `capture.env`",
+      "name": "HERMES_CA_BUNDLE"
+    },
+    {
+      "denied": "would carry a credential, and a manifest never does",
+      "name": "NODE_TLS_REJECT_UNAUTHORIZED"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "NODE_OPTIONS"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "NODE_PATH"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "BUN_OPTIONS"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "BASH_ENV"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "ENV"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "ZDOTDIR"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PYTHONSTARTUP"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PYTHONPATH"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PYTHONHOME"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PYTHONUSERBASE"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PERL5OPT"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "RUBYOPT"
+    },
+    {
+      "denied": "configures the model provider",
+      "name": "ANTHROPIC_MODEL"
+    },
+    {
+      "denied": "configures the model provider",
+      "name": "OPENAI_ORG_ID"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "AZURE_X"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "AWS_REGION"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "GOOGLE_X"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "GCLOUD_X"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "VERTEX_X"
+    },
+    {
+      "denied": "configures a model or cloud provider",
+      "name": "CLOUD_ML_X"
+    },
+    {
+      "denied": "switches to another model provider",
+      "name": "CLAUDE_CODE_USE_BEDROCK"
+    },
+    {
+      "denied": "exports telemetry somewhere the capture does not see",
+      "name": "OTEL_X"
+    },
+    {
+      "denied": "injects code into the harness",
+      "name": "DYLD_X"
+    },
+    {
+      "denied": "injects code into the harness",
+      "name": "LD_X"
+    },
+    {
+      "denied": "injects code into the harness",
+      "name": "LD_LIBRARY_PATH"
+    },
+    {
+      "denied": null,
+      "name": "HERMES_X"
+    },
+    {
+      "denied": "relocates the configuration and state of every tool child (XDG_* is not part of schema 1)",
+      "name": "XDG_CONFIG_HOME"
+    },
+    {
+      "denied": "relocates the configuration and state of every tool child (XDG_* is not part of schema 1)",
+      "name": "XDG_DATA_HOME"
+    },
+    {
+      "denied": "configures git, whose environment can name a command, a pager, an editor or a config to run",
+      "name": "GIT_CONFIG_GLOBAL"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "GIT_SSH_COMMAND"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "GIT_ASKPASS"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "JAVA_TOOL_OPTIONS"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PERL5LIB"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "RUBYLIB"
+    },
+    {
+      "denied": "injects code or startup files into the harness",
+      "name": "PROMPT_COMMAND"
+    },
+    {
+      "denied": "reconfigures npm, which can redirect registries and run commands",
+      "name": "npm_config_prefix"
+    },
+    {
+      "denied": "is the tracker's own namespace, and a harness is delivery-agnostic",
+      "name": "GOALCUP_X"
+    },
+    {
+      "denied": null,
+      "name": "FOO"
+    }
+  ]
+}

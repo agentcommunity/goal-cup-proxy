@@ -1,4 +1,5 @@
-//! Characterization goldens for the harness contract (D42, slice S0): the verifier half.
+//! Characterization goldens for the harness contract (D42): the verifier half. Neither file is
+//! keyed by a connector, so adding one changes neither.
 //!
 //! * Decoder selection (`DecoderRegistry::builtin()`): which of the five registered
 //!   decoders a stream is shown to, for every combination of stream source, `protocol_hint` and
@@ -7,8 +8,9 @@
 //!   (a connector's `capture.hosts[].protocol_hint`, or the daemon's native hint); the decoder
 //!   is code.
 //! * The reader's tool allowance (`reader.rs`, shape only since the D52 amendment): which
-//!   `Launch` records the capture reader accepts, by profile id and by the allowance fields
-//!   they carry.
+//!   `Launch` records the capture reader accepts, by the allowance fields they carry. The
+//!   golden uses synthetic profile ids; every shipped connector's id is checked to get the same
+//!   verdicts.
 //!
 //! Compared byte for byte with `decoder-selection.json` and `launch-allowance-reader.json` under
 //! `goalcup-cli/tests/fixtures/harness-golden/`; `GOALCUP_REGEN_HARNESS_GOLDEN=1` rewrites them
@@ -41,6 +43,8 @@ const PROBE: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
 const CONN: &str = "5e1f0a2b3c4d5e6f708192a3b4c5d6e7";
 const DAEMON: &str = "daemon-golden-clock";
 const DIGEST: &str = "ab";
+/// A profile id no connector has: the reader keys on no profile id.
+const ANY_PROFILE: &str = "any-profile";
 
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../goalcup-cli/tests/fixtures/harness-golden")
@@ -362,7 +366,7 @@ fn verifier_decoder_selection_per_protocol_hint_is_pinned() {
         for hint in hints {
             for kind in payloads {
                 let records = probe_records(source, hint, &payload(kind));
-                let dir = trace(launch("codex-cli", None, None), records);
+                let dir = trace(launch(ANY_PROFILE, None, None), records);
                 rows.push(json!({
                     "source": source_name,
                     "protocol_hint": hint,
@@ -373,7 +377,7 @@ fn verifier_decoder_selection_per_protocol_hint_is_pinned() {
         }
     }
     // Which decoder ids a report registers at all, with no stream to show them.
-    let empty = trace(launch("codex-cli", None, None), vec![]);
+    let empty = trace(launch(ANY_PROFILE, None, None), vec![]);
     check_golden(
         "decoder-selection.json",
         &json!({
@@ -412,28 +416,34 @@ fn the_reader_admits_a_paired_tool_allowance_by_shape_for_every_profile() {
             Some(&digest),
         ),
     ];
-    let profiles = [
-        "claude-code-cli",
-        "codex-cli",
-        "hermes-cli",
-        "m2-controlled-workload",
-        "claude-code-clone",
-        "",
-    ];
+    let reader = |profile: &str, rule: Option<&str>, handoff: Option<&str>| -> Value {
+        let dir = trace(launch(profile, rule, handoff), vec![]);
+        match scan_capture_trace(dir.path(), &VerifyOptions::default(), &mut |_| Ok(())) {
+            Ok(r) => json!({
+                "exit_code": r.exit_code(),
+                "integrity": r.integrity,
+                "findings": r.findings,
+            }),
+            Err(e) => json!({"io_error": e.kind().to_string()}),
+        }
+    };
     let mut rows = Vec::new();
-    for profile in profiles {
+    for profile in [ANY_PROFILE, ""] {
         for (label, rule, handoff) in rules {
-            let dir = trace(launch(profile, rule, handoff), vec![]);
-            let report = scan_capture_trace(dir.path(), &VerifyOptions::default(), &mut |_| Ok(()));
-            let verdict = match report {
-                Ok(r) => json!({
-                    "exit_code": r.exit_code(),
-                    "integrity": r.integrity,
-                    "findings": r.findings,
-                }),
-                Err(e) => json!({"io_error": e.kind().to_string()}),
-            };
-            rows.push(json!({"profile_id": profile, "fields": label, "reader": verdict}));
+            rows.push(json!({
+                "profile_id": profile,
+                "fields": label,
+                "reader": reader(profile, rule, handoff),
+            }));
+        }
+    }
+    for id in goalcup_protocol::pins::shipped_connector_ids() {
+        for (label, rule, handoff) in rules {
+            assert_eq!(
+                reader(&id, rule, handoff),
+                reader(ANY_PROFILE, rule, handoff),
+                "{id} ({label}): the reader keys on no profile id"
+            );
         }
     }
     check_golden(

@@ -21,6 +21,7 @@ mod capture_redaction;
 mod capture_redaction_extra;
 mod config_load;
 mod control_api;
+mod harness_contract_golden;
 mod redaction;
 mod registry_roundtrip;
 #[cfg(unix)]

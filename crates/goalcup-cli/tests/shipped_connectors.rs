@@ -26,7 +26,7 @@ fn load_harness(id: &str) -> goalcup_cli::connector::HarnessConnector {
 
 /// The rules the CLI depends on, over every shipped connector, so a new folder is held to
 /// them with no edit here. Each connector's own values are its `harness.toml`'s business and
-/// its goldens' (`full/harness_contract_golden.rs`), not restated here.
+/// its goldens' (`it/harness_contract_golden.rs`), not restated here.
 #[test]
 fn every_shipped_connector_loads_with_no_model_base_url_and_its_kill_target_named() {
     for id in shipped_connector_ids() {

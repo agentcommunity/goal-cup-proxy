@@ -2,7 +2,7 @@
   "rows": [
     {
       "fields": "none",
-      "profile_id": "claude-code-cli",
+      "profile_id": "any-profile",
       "reader": {
         "exit_code": 0,
         "findings": [],
@@ -11,7 +11,7 @@
     },
     {
       "fields": "rule_and_digest",
-      "profile_id": "claude-code-cli",
+      "profile_id": "any-profile",
       "reader": {
         "exit_code": 0,
         "findings": [],
@@ -20,7 +20,7 @@
     },
     {
       "fields": "rule_without_digest",
-      "profile_id": "claude-code-cli",
+      "profile_id": "any-profile",
       "reader": {
         "exit_code": 2,
         "findings": [
@@ -32,7 +32,7 @@
     },
     {
       "fields": "digest_without_rule",
-      "profile_id": "claude-code-cli",
+      "profile_id": "any-profile",
       "reader": {
         "exit_code": 2,
         "findings": [
@@ -44,7 +44,7 @@
     },
     {
       "fields": "unbounded_rule_and_digest",
-      "profile_id": "claude-code-cli",
+      "profile_id": "any-profile",
       "reader": {
         "exit_code": 0,
         "findings": [],
@@ -53,7 +53,7 @@
     },
     {
       "fields": "rule_and_short_digest",
-      "profile_id": "claude-code-cli",
+      "profile_id": "any-profile",
       "reader": {
         "exit_code": 2,
         "findings": [
@@ -65,295 +65,7 @@
     },
     {
       "fields": "path_rule_and_digest",
-      "profile_id": "claude-code-cli",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "none",
-      "profile_id": "codex-cli",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_and_digest",
-      "profile_id": "codex-cli",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_without_digest",
-      "profile_id": "codex-cli",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "digest_without_rule",
-      "profile_id": "codex-cli",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "unbounded_rule_and_digest",
-      "profile_id": "codex-cli",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_and_short_digest",
-      "profile_id": "codex-cli",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "path_rule_and_digest",
-      "profile_id": "codex-cli",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "none",
-      "profile_id": "hermes-cli",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_and_digest",
-      "profile_id": "hermes-cli",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_without_digest",
-      "profile_id": "hermes-cli",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "digest_without_rule",
-      "profile_id": "hermes-cli",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "unbounded_rule_and_digest",
-      "profile_id": "hermes-cli",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_and_short_digest",
-      "profile_id": "hermes-cli",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "path_rule_and_digest",
-      "profile_id": "hermes-cli",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "none",
-      "profile_id": "m2-controlled-workload",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_and_digest",
-      "profile_id": "m2-controlled-workload",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_without_digest",
-      "profile_id": "m2-controlled-workload",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "digest_without_rule",
-      "profile_id": "m2-controlled-workload",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "unbounded_rule_and_digest",
-      "profile_id": "m2-controlled-workload",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_and_short_digest",
-      "profile_id": "m2-controlled-workload",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "path_rule_and_digest",
-      "profile_id": "m2-controlled-workload",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "none",
-      "profile_id": "claude-code-clone",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_and_digest",
-      "profile_id": "claude-code-clone",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_without_digest",
-      "profile_id": "claude-code-clone",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "digest_without_rule",
-      "profile_id": "claude-code-clone",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "unbounded_rule_and_digest",
-      "profile_id": "claude-code-clone",
-      "reader": {
-        "exit_code": 0,
-        "findings": [],
-        "integrity": "valid"
-      }
-    },
-    {
-      "fields": "rule_and_short_digest",
-      "profile_id": "claude-code-clone",
-      "reader": {
-        "exit_code": 2,
-        "findings": [
-          "record_field_invalid",
-          "launch_missing"
-        ],
-        "integrity": "invalid"
-      }
-    },
-    {
-      "fields": "path_rule_and_digest",
-      "profile_id": "claude-code-clone",
+      "profile_id": "any-profile",
       "reader": {
         "exit_code": 0,
         "findings": [],

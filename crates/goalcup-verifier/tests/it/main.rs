@@ -7,6 +7,8 @@
 mod common;
 
 mod connector_samples;
+#[cfg(unix)]
+mod harness_contract_golden;
 mod m2_anthropic_decoder;
 #[cfg(unix)]
 mod m2_capture_integrity;

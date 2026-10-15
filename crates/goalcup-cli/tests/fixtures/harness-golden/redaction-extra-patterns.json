@@ -1,108 +1,152 @@
 {
-  "connectors": {
-    "claude-code-cli": {
-      "extra_patterns": [
-        {
-          "alone": "ok",
-          "kind": "anthropic_billing_header",
-          "regex": "x-anthropic-billing-[a-z0-9-]+:\\s*[^\\r\\n\"]+"
-        }
-      ],
-      "family": "claude",
-      "over_the_corpus": {
-        "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":12.5,\"resets_in_seconds\":4821},\"credits\":{\"balance\":\"412\"},\"plan_type\":\"plus\"}}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"pro\",\"rate_limits\":{\"primary\":{\"used_percent\":40.0}},\"credits_remaining\":17.5}\n\n{\"credits_remaining\": \"412.00\", \"plan_type\": \"team\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\n<redacted:anthropic_billing_header>\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"<redacted:anthropic_billing_header>\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"not-a-hermes-rule\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
-        "spans": [
-          {
-            "end": 539,
-            "kind": "anthropic_billing_header",
-            "start": 470
-          },
-          {
-            "end": 713,
-            "kind": "anthropic_billing_header",
-            "start": 632
-          }
-        ]
+  "all_together": "ok",
+  "all_together_over_the_corpus": {
+    "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":\"<redacted:extra_0>\"}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"<redacted:extra_1>\",\"rate_limits\":\"<redacted:extra_0>\",\"credits_remaining\":\"<redacted:extra_2>\"}\n\n{\"credits_remaining\": \"<redacted:extra_2>\", \"plan_type\": \"<redacted:extra_1>\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\n<redacted:extra_3>\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"<redacted:extra_3>\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"<redacted:extra_1>\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
+    "spans": [
+      {
+        "end": 210,
+        "kind": "extra_0",
+        "start": 105
       },
-      "streaming_redactor_accepts_the_list": "ok"
-    },
-    "codex-cli": {
-      "extra_patterns": [
-        {
-          "alone": "ok",
-          "kind": "codex_rate_limits",
-          "regex": "\"rate_limits\"\\s*:\\s*(\\{(?:[^{}]|\\{(?:[^{}]|\\{[^{}]*\\})*\\})*\\})"
-        },
-        {
-          "alone": "ok",
-          "kind": "codex_plan_type",
-          "regex": "\"plan_type\"\\s*:\\s*\"([^\"\\\\]+)\""
-        },
-        {
-          "alone": "ok",
-          "kind": "codex_credits_remaining",
-          "regex": "\"credits_remaining\"\\s*:\\s*(\"[^\"\\\\]*\"|[^,}\\s]+)"
-        }
-      ],
-      "family": "codex",
+      {
+        "end": 288,
+        "kind": "extra_1",
+        "start": 285
+      },
+      {
+        "end": 337,
+        "kind": "extra_0",
+        "start": 304
+      },
+      {
+        "end": 362,
+        "kind": "extra_2",
+        "start": 358
+      },
+      {
+        "end": 395,
+        "kind": "extra_2",
+        "start": 387
+      },
+      {
+        "end": 415,
+        "kind": "extra_1",
+        "start": 411
+      },
+      {
+        "end": 539,
+        "kind": "extra_3",
+        "start": 470
+      },
+      {
+        "end": 713,
+        "kind": "extra_3",
+        "start": 632
+      },
+      {
+        "end": 835,
+        "kind": "extra_1",
+        "start": 818
+      }
+    ]
+  },
+  "empty_list": "ok",
+  "known_regex_under_a_bad_kind": "refused",
+  "recognizers": [
+    {
+      "alone": "ok",
+      "kind": "extra_0",
       "over_the_corpus": {
-        "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":\"<redacted:codex_rate_limits>\"}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"<redacted:codex_plan_type>\",\"rate_limits\":\"<redacted:codex_rate_limits>\",\"credits_remaining\":\"<redacted:codex_credits_remaining>\"}\n\n{\"credits_remaining\": \"<redacted:codex_credits_remaining>\", \"plan_type\": \"<redacted:codex_plan_type>\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\nx-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli; cch=00000;\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"<redacted:codex_plan_type>\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
+        "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":\"<redacted:extra_0>\"}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"pro\",\"rate_limits\":\"<redacted:extra_0>\",\"credits_remaining\":17.5}\n\n{\"credits_remaining\": \"412.00\", \"plan_type\": \"team\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\nx-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli; cch=00000;\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"not-a-hermes-rule\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
         "spans": [
           {
             "end": 210,
-            "kind": "codex_rate_limits",
+            "kind": "extra_0",
             "start": 105
           },
           {
+            "end": 337,
+            "kind": "extra_0",
+            "start": 304
+          }
+        ]
+      },
+      "regex": "\"rate_limits\"\\s*:\\s*(\\{(?:[^{}]|\\{(?:[^{}]|\\{[^{}]*\\})*\\})*\\})"
+    },
+    {
+      "alone": "ok",
+      "kind": "extra_1",
+      "over_the_corpus": {
+        "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":12.5,\"resets_in_seconds\":4821},\"credits\":{\"balance\":\"412\"},\"plan_type\":\"<redacted:extra_1>\"}}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"<redacted:extra_1>\",\"rate_limits\":{\"primary\":{\"used_percent\":40.0}},\"credits_remaining\":17.5}\n\n{\"credits_remaining\": \"412.00\", \"plan_type\": \"<redacted:extra_1>\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\nx-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli; cch=00000;\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"<redacted:extra_1>\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
+        "spans": [
+          {
+            "end": 208,
+            "kind": "extra_1",
+            "start": 204
+          },
+          {
             "end": 288,
-            "kind": "codex_plan_type",
+            "kind": "extra_1",
             "start": 285
           },
           {
-            "end": 337,
-            "kind": "codex_rate_limits",
-            "start": 304
-          },
-          {
-            "end": 362,
-            "kind": "codex_credits_remaining",
-            "start": 358
-          },
-          {
-            "end": 395,
-            "kind": "codex_credits_remaining",
-            "start": 387
-          },
-          {
             "end": 415,
-            "kind": "codex_plan_type",
+            "kind": "extra_1",
             "start": 411
           },
           {
             "end": 835,
-            "kind": "codex_plan_type",
+            "kind": "extra_1",
             "start": 818
           }
         ]
       },
-      "streaming_redactor_accepts_the_list": "ok"
+      "regex": "\"plan_type\"\\s*:\\s*\"([^\"\\\\]+)\""
     },
-    "hermes-cli": {
-      "extra_patterns": [],
-      "family": "hermes",
+    {
+      "alone": "ok",
+      "kind": "extra_2",
       "over_the_corpus": {
-        "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":12.5,\"resets_in_seconds\":4821},\"credits\":{\"balance\":\"412\"},\"plan_type\":\"plus\"}}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"pro\",\"rate_limits\":{\"primary\":{\"used_percent\":40.0}},\"credits_remaining\":17.5}\n\n{\"credits_remaining\": \"412.00\", \"plan_type\": \"team\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\nx-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli; cch=00000;\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"not-a-hermes-rule\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
-        "spans": []
+        "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":12.5,\"resets_in_seconds\":4821},\"credits\":{\"balance\":\"412\"},\"plan_type\":\"plus\"}}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"pro\",\"rate_limits\":{\"primary\":{\"used_percent\":40.0}},\"credits_remaining\":\"<redacted:extra_2>\"}\n\n{\"credits_remaining\": \"<redacted:extra_2>\", \"plan_type\": \"team\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\nx-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli; cch=00000;\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"not-a-hermes-rule\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
+        "spans": [
+          {
+            "end": 362,
+            "kind": "extra_2",
+            "start": 358
+          },
+          {
+            "end": 395,
+            "kind": "extra_2",
+            "start": 387
+          }
+        ]
       },
-      "streaming_redactor_accepts_the_list": "ok"
+      "regex": "\"credits_remaining\"\\s*:\\s*(\"[^\"\\\\]*\"|[^,}\\s]+)"
+    },
+    {
+      "alone": "ok",
+      "kind": "extra_3",
+      "over_the_corpus": {
+        "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":12.5,\"resets_in_seconds\":4821},\"credits\":{\"balance\":\"412\"},\"plan_type\":\"plus\"}}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"pro\",\"rate_limits\":{\"primary\":{\"used_percent\":40.0}},\"credits_remaining\":17.5}\n\n{\"credits_remaining\": \"412.00\", \"plan_type\": \"team\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\n<redacted:extra_3>\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"<redacted:extra_3>\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"not-a-hermes-rule\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
+        "spans": [
+          {
+            "end": 539,
+            "kind": "extra_3",
+            "start": 470
+          },
+          {
+            "end": 713,
+            "kind": "extra_3",
+            "start": 632
+          }
+        ]
+      },
+      "regex": "x-anthropic-billing-[a-z0-9-]+:\\s*[^\\r\\n\"]+"
     }
-  },
-  "empty_list": "ok",
+  ],
   "shared_policy_alone_over_the_corpus": {
     "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":12.5,\"resets_in_seconds\":4821},\"credits\":{\"balance\":\"412\"},\"plan_type\":\"plus\"}}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"pro\",\"rate_limits\":{\"primary\":{\"used_percent\":40.0}},\"credits_remaining\":17.5}\n\n{\"credits_remaining\": \"412.00\", \"plan_type\": \"team\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\nx-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli; cch=00000;\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"not-a-hermes-rule\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
     "spans": []
   },
-  "shipped_regex_under_a_bad_kind": "refused",
-  "shipped_regex_under_another_kind": "ok",
   "unknown_regex": "refused"
 }

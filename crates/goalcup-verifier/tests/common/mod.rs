@@ -1,10 +1,8 @@
-//! Shared helpers for the integration tests, declared once by each test binary (`it`,
-//! `full`) as `mod common;` and reached from a test module as `support` or
-//! `fixture_support`.
+//! Shared helpers for the integration tests, declared by the `it` binary as `mod common;` and
+//! reached from a test module as `support` or `fixture_support`.
 //!
-//! `dead_code` is allowed throughout: the `full` binary compiles the whole module and calls
-//! little of it. Without the allow, `-D warnings` turns the `never used` warnings for that
-//! code into a failure, though the code is used by the other binary.
+//! `dead_code` is allowed throughout, so a helper only some modules call does not fail
+//! `-D warnings`.
 #![allow(dead_code)]
 
 pub mod capture_records;
