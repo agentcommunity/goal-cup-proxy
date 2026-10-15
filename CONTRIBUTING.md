@@ -1,17 +1,15 @@
 # Contributing
 
-How do I send a change to Goal Cup, and what will a maintainer ask for? For outside
-contributors and their agents. Updated: 2026-10-11.
+How do I send a change to Goal Cup, and what will a maintainer ask for? For outside contributors
+and their agents.
 
-Harness connectors are data contributions. Everything else (bug fixes, docs and tests) is
-welcome too; open an issue first for anything large. Read [AGENTS.md](AGENTS.md) once: its
-rules bind people and agents alike. How `main` is protected and which checks are required is in
-[REPOSITORY-GOVERNANCE](docs/REPOSITORY-GOVERNANCE.md).
+Harness connectors are data contributions. Bug fixes, docs and tests are welcome too. Open an issue
+first for anything large. Read [AGENTS.md](AGENTS.md) once: its rules bind people and agents alike.
 
 ## From fork to pull request
 
-The upstream repository is `https://github.com/agentcommunity/goal-cup-tracer.git` and every
-pull request targets its `main` branch. Fork it on GitHub under your own account, then:
+The upstream repository is `https://github.com/agentcommunity/goal-cup-tracer.git`. Every pull
+request targets its `main` branch. Fork it under your own account, then:
 
 ```
 git clone https://github.com/<your-account>/goal-cup-tracer.git
@@ -24,126 +22,97 @@ git commit -m "<area>: <what changed>"
 git push -u origin <topic>
 ```
 
-Then open a pull request from `<your-account>:<topic>` into `agentcommunity/goal-cup-tracer:main`
-on GitHub and fill in the template. Keep a PR to one concern.
+Open a pull request from `<your-account>:<topic>` into `agentcommunity/goal-cup-tracer:main` and
+fill in the template. Keep a PR to one concern. Do not paste a credential, token or real
+transcript anywhere in a PR, issue or comment. If you did by accident, say so privately
+([SECURITY.md](SECURITY.md)) and rotate it.
 
 ## License and who answers for a PR
 
-Contributions are accepted under the [Apache License 2.0](LICENSE): a change you submit is
-offered under it (section 5). No DCO sign-off is required and no sign-off check runs
-([D47](docs/DECISIONS.md#d47-m2-no-dco-sign-off)). Coding agents are welcome, but a human opens
-the PR, states in it that they read the whole diff, and answers review questions. Say in the
-description which parts an agent wrote; a `Co-Authored-By:` trailer on the commit is enough.
+Contributions are accepted under the [Apache License 2.0](LICENSE) (section 5). No DCO sign-off is
+required (D47). Coding agents are welcome, but a human opens the PR, states in it that they read
+the whole diff, and answers review questions. Say which parts an agent wrote. A `Co-Authored-By:`
+trailer on the commit is enough.
 
 ## The gate
 
-Build prerequisites are in [README, Build](README.md#build): Rust 1.99 or later, a C compiler,
-`shasum` or `sha256sum`, and `python3` when you regenerate connector pins. macOS is the
-supported, measured platform; Linux is best-effort.
-
-Every change passes the fast gate; a release passes the full one
-([setup and what each tier runs](README.md#the-gate)):
+Build prerequisites are in [README, Build](README.md#build). Every change passes the fast gate. A
+release passes the full one ([setup and what each tier runs](README.md#the-gate)):
 
 ```
 sh scripts/gate.sh fast
 sh scripts/gate.sh full   # before a release
 ```
 
-The gate runs cargo with `--offline`, so run `cargo fetch --locked` once first, and install
-cargo-nextest once (`cargo install cargo-nextest --locked`). Report the gate's last line, the
-platform and the Rust version in the PR.
+Run `cargo fetch --locked` once first (the gate runs cargo `--offline`), and install cargo-nextest
+once. Report the gate's last line, the platform and the Rust version in the PR. If you cannot run
+the gate, run CI's form `cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli`,
+say so in the PR, and a maintainer runs the gate.
 
-On Linux, run CI's form `cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli`
-instead of `sh scripts/gate.sh fast` and say so in the PR; a maintainer runs the gate on macOS.
+## What `main` requires
 
-## Checks on your pull request
-
-One check is required on a pull request to `main`: `check` (the `ci` workflow's one Linux job), and
-a code owner must approve. The rules are in [REPOSITORY-GOVERNANCE](docs/REPOSITORY-GOVERNANCE.md).
-On your first fork PR, `check` may show pending until a maintainer approves the workflow run; that is GitHub's default
-for first-time contributors. Required checks are strict: to update your branch, merge upstream
-`main` into it (or rebase your own branch on it) and push.
-
-`check` is a Linux smoke, not the gate. It skips the `goalcup-daemon` and `goalcup-cli` test
-suites (they spawn real process trees and hang small runners), so a green `check` does not run
-the harness kit. Maintainers re-run the gate, and the kit for a connector PR, on macOS.
+- A change reaches `main` only through a pull request. No force pushes, no branch deletion.
+- One required status check: `check`, the `ci` workflow's one Linux job. It is a smoke test, not
+  the gate: it skips the `goalcup-daemon` and `goalcup-cli` suites, which spawn real process trees
+  and hang small runners. A docs-only PR skips the Rust steps. On a first-time fork PR, `check`
+  may show pending until a maintainer approves the workflow run (GitHub's default).
+- Checks are strict: update your branch by merging upstream `main` into it, or by rebasing it,
+  and push.
+- One approving review. Paths in [`.github/CODEOWNERS`](.github/CODEOWNERS) (connectors, pins, the
+  harness contract, launch, proxy, redaction, packaging, `.github/`, `SECURITY.md`,
+  `docs/DECISIONS.md`) need a code owner's approval. A new push dismisses earlier approvals. All
+  review conversations are resolved before merging.
+- While `@nembal` is the only maintainer, the repository admin role may merge its own PR without a
+  second approval (a ruleset bypass), by policy only with `check` passing. That is not independent
+  review, and such a PR says so. Direct pushes to `main` stay blocked for everyone. Outside PRs get
+  no exception.
 
 ## Adding a harness
 
-Start with the five-minute guide [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), then give
-your coding agent the step-by-step [skill](skills/adding-a-capture-harness/SKILL.md). The
-reviewer checklist is in [CONNECTOR-CONTRIBUTING](docs/CONNECTOR-CONTRIBUTING.md). The source tree currently has three
-connector directories and three pins: `codex-cli`, `claude-code-cli` and `hermes-cli`.
-Their `harness.toml` files are harness-contract schema 1; the directory pin is generated data,
-not a release or package publication record.
+Start with [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), then give your coding agent the
+step-by-step [skill](skills/adding-a-capture-harness/SKILL.md). The reviewer checklist is
+[CONNECTOR-CONTRIBUTING](docs/CONNECTOR-CONTRIBUTING.md). The source tree has three connectors:
+`codex-cli`, `claude-code-cli` and `hermes-cli`. Check first that the harness can be captured at
+all ([HARNESS-ONBOARDING, check first](docs/HARNESS-ONBOARDING.md#row-0)).
 
-A common data-only harness PR contains:
+A data-only harness PR contains:
 
-- `connectors/<id>/harness.toml` and its reviewed `files/**` seed data;
-- the pin diff produced by `sh scripts/pin-manifests.sh` (see the note below);
-- the regenerated golden JSON in `crates/goalcup-cli/tests/fixtures/harness-golden/`: the new
-  `<id>.json` and the changed `enumeration.json` and `redaction-extra-patterns.json`; on macOS
-  also `<id>.daemon.json` and `native-stream-labels.json`;
-- the harness's public facts sheet `docs/harnesses/<id>.md`, filled from
-  `skills/adding-a-capture-harness/templates/harness-facts.md` (see
-  [docs/harnesses](docs/harnesses/README.md)); no readiness record is needed;
-- a new generic harness-kit fixture case under
-  `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` (named after the connector id) containing `harness.toml`, `stand-in.py`
-  and `expect.toml` (plus only reviewed declared seeds) for this connector;
-- the last lines of `sh scripts/check-connector.sh <id>` (files, pins, schema, goldens and the
-  harness kit with the six baseline cases plus yours) and `sh scripts/gate.sh fast`, on macOS.
+- `connectors/<id>/harness.toml` and its reviewed `files/**` seeds;
+- the pin diff from `sh scripts/pin-manifests.sh`: exactly one line of
+  `crates/goalcup-protocol/pins/connector-dirs.txt` per connector you add or edit. Commit what the
+  script writes. Never hand-edit or hand-merge it; re-run it on the merged tree;
+- the regenerated golden JSON in `crates/goalcup-cli/tests/fixtures/harness-golden/` (the new
+  `<id>.json` and the changed `enumeration.json` and `redaction-extra-patterns.json`). On macOS
+  also `<id>.daemon.json` and `native-stream-labels.json`: the daemon goldens run on macOS only;
+- the facts sheet `docs/harnesses/<id>.md`, from
+  `skills/adding-a-capture-harness/templates/harness-facts.md` ([docs/harnesses](docs/harnesses/README.md));
+- a harness-kit case under `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`:
+  `harness.toml`, `stand-in.py` and `expect.toml`. The kit has six baseline cases; yours is
+  added, not a replacement;
+- the last lines of `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast`.
 
-The harness kit test (`harness_contract_kit`) is macOS-only. On Linux it compiles to zero tests,
-so a Linux "pass" proves nothing about your connector; say so if you have no Mac, and a
-maintainer runs it. A maintainer acknowledges a connector PR within 7 days; that is not a promise
-to merge it ([HARNESS-ONBOARDING, what goes in the PR](docs/HARNESS-ONBOARDING.md#what-goes-in-the-pr)).
+Your PR contains no `.rs` file. A connector's arguments, model name and environment variables are
+data, held to generic rules (D51). A new policy row (credential, CA variable, redaction regex,
+identity carrier, native-store form or interpreter) is a separate core PR with a
+`docs/DECISIONS.md` entry. A semantic decoder is a separate verifier PR.
 
-Pin note: the script changes exactly one line of
-`crates/goalcup-protocol/pins/connector-dirs.txt` per connector you add or edit. Commit what
-the script writes; never hand-edit or hand-merge it.
+The kit uses stand-ins and a test-owned proxy. A pass means "synthetic tested", not "works with
+the real harness". Record an exact version or hash only when the source or an official artifact
+proves it. If transport, native storage, auth or session identity is unknown, stop and record the
+blocker instead of guessing. A maintainer acknowledges a connector PR within 7 days. That is not
+a promise to merge it.
 
-The current baseline kit cases are `controlled-workload`, `synthetic-preassigned`,
-`synthetic-stderr-token`, `synthetic-keyed-stderr`, `synthetic-stdout-json` and
-`synthetic-keyed-stdout-json` (a keyed case names `credential_env` in `expect.toml`); the
-new connector fixture is an additional case, not a replacement. All use stand-ins, a test-owned
-proxy and private homes; they do not prove provider access, package publication, a release, or
-a qualified live harness. A passing kit is "synthetic tested"; a qualified claim needs a
-maintainer's live row and its own record.
-A new connector must use an admitted schema-1 policy row and identity pair. Its arguments,
-model name and environment variables are data, held to generic rules (D51): no Rust row. A
-new policy row (credential, CA, redaction regex, identity carrier, native-store form or
-interpreter) is a separately reviewed core PR with a `docs/DECISIONS.md` row. First check the
-harness can be captured at all
-([HARNESS-ONBOARDING, check first](docs/HARNESS-ONBOARDING.md#row-0)). A semantic decoder is a separately reviewed verifier PR. Do not
-add `.rs` files to an ordinary data-only connector PR.
-
-Record exact executable version and SHA-256 only when the source or an official artifact proves
-them. Package provenance, a published package, a release, or qualification is UNKNOWN unless its
-own evidence proves it; do not infer any of those from a connector directory, a pin, or a passing
-synthetic test. Unknown transport, native storage/scope, isolation/auth, or identity
-source/binding stops Phase 1; record the blocker instead of guessing.
-
-Connectors are trusted code (a template, environment variable, seed or host entry can run or
-leak things), so every connector PR needs code-owner review against the
-[reviewer checklist](docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr). Never commit
-real traces, keys, `target/`, `harnesses/` or `spikes/*/out/`; redact and review any committed
-fixture with `spikes/redact.py`.
+Connectors are trusted code. A template, environment variable, seed or host entry can run or leak
+things on every machine that uses the build. Pins are regenerated in the same PR, so they do not
+stop a malicious merge. Every connector PR needs code-owner review against the
+[reviewer checklist](docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr). Never commit real
+traces, keys, `target/`, `harnesses/` or `spikes/*/out/`. Redact and review any committed fixture
+with `spikes/redact.py`.
 
 ## Maintainer-owned files
 
-`TODO.md` and `docs/DECISIONS.md` are maintainer-owned. Do not edit
-them in an outside PR: they conflict on every merge. Put proposed text in the PR description and
-a maintainer lands it.
-
-Paths listed in [`.github/CODEOWNERS`](.github/CODEOWNERS) (connectors, pins, the harness
-contract, launch, proxy, redaction, packaging, `.github/` and `SECURITY.md`) may be changed in a
-PR, but each such PR needs a code owner's approval.
-
-## Pull requests
-
-Fill in the template: its universal checks apply to every PR, and the harness section only to
-connector PRs. Do not paste a credential, token or real transcript anywhere in a PR, issue or
-comment; if you did by accident, say so privately (see [SECURITY.md](SECURITY.md)) and rotate it.
+`TODO.md` and `docs/DECISIONS.md` are maintainer-owned. They conflict on every merge, so do not
+edit them in an outside PR. Put proposed text in the PR description and a maintainer lands it.
 
 ## Security and conduct
 

@@ -1,7 +1,6 @@
 <!-- What does this change, and why? One concern per PR. -->
 
-<!-- Required checks and review rules: docs/REPOSITORY-GOVERNANCE.md.
-     The fork-to-PR steps and the gate: CONTRIBUTING.md. -->
+<!-- Required checks, review rules, the fork-to-PR steps and the gate: CONTRIBUTING.md. -->
 
 ## Every PR
 
@@ -39,9 +38,8 @@ author's half of that list, so say where the reviewer can check it.
       CA or credential variable is justified in this description, with no model base URL or
       redirect (items 1 to 9).
 - [ ] Kit case under `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` (the connector id) and the output of
-      `cargo test -p goalcup-cli --test full harness_contract_kit::` after `cargo build`, run on macOS
-      (on Linux it compiles to zero tests; say so if you could not run it). Fixtures went through
-      `spikes/redact.py` (items 7 and 10).
+      `cargo test -p goalcup-cli --test full harness_contract_kit::` after `cargo build`. Fixtures
+      went through `spikes/redact.py` (items 7 and 10).
 - [ ] The diff touches only `connectors/<id>/`, the pin line above, the goldens, the kit case
       `<case>` and `docs/harnesses/<id>.md`; no `.rs` file is changed and no policy row or decoder
       is added (item 10).

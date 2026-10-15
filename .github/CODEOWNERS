@@ -3,7 +3,7 @@
 # against a malicious merge. Review is the control. See SECURITY.md.
 #
 # @nembal is the maintainer and is expected to hold admin on this repository; see
-# docs/REPOSITORY-GOVERNANCE.md, which also covers how code-owner review is enforced and the
+# CONTRIBUTING.md ("What main requires") for how code-owner review is enforced and the
 # temporary single-maintainer exception.
 
 /connectors/                                        @nembal
