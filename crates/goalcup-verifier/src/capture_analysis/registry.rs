@@ -197,8 +197,7 @@ impl DecoderRegistry {
             .collect()
     }
 
-    /// Every registered decoder with what the registry knows of it, in registration order.
-    pub fn entries(&self) -> &[Registered] {
+    pub(super) fn entries(&self) -> &[Registered] {
         &self.decoders
     }
 }

@@ -35,9 +35,8 @@ use std::path::Path;
 /// adds `analysis.models` and `analysis.cross_leg` to the summary; observation lines are as in 1.
 /// Version 3 adds `delivery.records_after_deadline`, `delivery.last_seq_at_or_before_deadline`
 /// and `delivery.last_ack_at`, copied from the integrity report. Version 4 adds
-/// `analysis.undecoded` and `analysis.undecoded_omitted`, and drops each decoder entry's
-/// `measured` and `synthetic_only` (they stay on the registry entry) and the constant
-/// `options.dev_mode`.
+/// `analysis.undecoded` (a cut hint adds `hint_truncated`) and `analysis.undecoded_omitted`, and drops the constant
+/// `options.dev_mode`. Each decoder entry keeps `measured` and `synthetic_only`.
 const RESEARCH_SCHEMA_VERSION: u32 = 4;
 /// The longest observation line written, newline included.
 const MAX_OBSERVATION_LINE_BYTES: usize = 2 * 1024 * 1024;
@@ -393,19 +392,28 @@ fn entry(decoder: &DecoderOutcome) -> Value {
         "failure": decoder.result.as_ref().err().map(|failed| {
             json!({"phase": failed.phase.as_str(), "error": failed.failure.reason})
         }),
+        "measured": decoder.measured_on,
+        "synthetic_only": decoder.synthetic_only,
     })
 }
 
 /// One group of capture-only streams: recorded, read by no decoder. A hint is shown up to the
-/// hint grammar's 64 bytes, so 64 groups stay far inside the summary bound.
+/// hint grammar's 64 bytes, so 64 groups stay far inside the summary bound. A hint that was cut
+/// carries `"hint_truncated": true`; the key is absent otherwise. The group itself is still
+/// made from the full hint.
 fn undecoded(group: &Undecoded) -> Value {
-    json!({
+    let hint = group.protocol_hint.as_deref();
+    let mut shown = json!({
         "source": group.source,
-        "hint": group.protocol_hint.as_deref().map(|hint| cut(hint, MAX_SHOWN_HINT_BYTES)),
+        "hint": hint.map(|hint| cut(hint, MAX_SHOWN_HINT_BYTES)),
         "streams": group.streams,
         "bytes": group.bytes,
         "bytes_incomplete": group.bytes_incomplete,
-    })
+    });
+    if hint.is_some_and(|hint| hint.len() > MAX_SHOWN_HINT_BYTES) {
+        shown["hint_truncated"] = json!(true);
+    }
+    shown
 }
 
 #[cfg(test)]

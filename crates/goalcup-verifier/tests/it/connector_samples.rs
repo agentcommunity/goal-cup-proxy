@@ -28,6 +28,7 @@ use base64::engine::general_purpose::STANDARD;
 use goalcup_protocol::capture::{
     CaptureMeta, CaptureRecord, CaptureSource, CaptureTime, EndReason, MAX_SEGMENT_BYTES,
 };
+use goalcup_protocol::harness::HarnessManifest;
 use goalcup_protocol::pins::shipped_connector_ids;
 use goalcup_protocol::redaction::RedactionAudit;
 use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
@@ -154,14 +155,31 @@ fn check_hints(sample: &Path, records: &[CaptureRecord]) {
         .join("../../connectors")
         .join(connector)
         .join("harness.toml");
-    let manifest = std::fs::read_to_string(&manifest)
+    let text = std::fs::read_to_string(&manifest)
         .unwrap_or_else(|e| panic!("{}: {e}", manifest.display()));
+    // The hints the manifest declares: those of its native streams and of its hosts, parsed, so a
+    // commented-out line or another table's key never counts.
+    let manifest = HarnessManifest::from_toml_str(&text)
+        .unwrap_or_else(|e| panic!("{}: {e}", manifest.display()));
+    let declared: Vec<&str> = manifest
+        .capture
+        .native
+        .iter()
+        .filter_map(|spec| spec.protocol_hint.as_deref())
+        .chain(
+            manifest
+                .capture
+                .hosts
+                .iter()
+                .filter_map(|spec| spec.protocol_hint.as_deref()),
+        )
+        .collect();
     for record in records {
         if let CaptureRecord::Open { metadata, .. } = record
             && let Some(hint) = &metadata.protocol_hint
         {
             assert!(
-                manifest.contains(&format!("protocol_hint = \"{hint}\"")),
+                declared.contains(&hint.as_str()),
                 "{}: {hint} is not a hint {connector:?} declares",
                 sample.display()
             );

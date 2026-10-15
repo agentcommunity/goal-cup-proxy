@@ -33,7 +33,6 @@ use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
 use goalcup_protocol::seal::{SealManifest, SealedFile};
 use goalcup_verifier::capture_analysis::reader::scan_capture_trace;
-use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
 use goalcup_verifier::capture_analysis::{anthropic, api::kinds, chat, openai};
 use goalcup_verifier::{ResearchResult, VerifyOptions, write_research_report};
 use serde_json::{Value, json};
@@ -898,8 +897,9 @@ fn mixed_observations_end_in_one_bound_summary() {
 }
 
 /// A stream no decoder accepts is recorded and not read, and the summary says so: its source,
-/// its hint, how many streams and how many source bytes. A decoder entry carries its counts,
-/// not its provenance prose, which stays on the registry entry.
+/// its hint, how many streams and how many source bytes. A decoder entry still
+/// carries its `measured` and `synthetic_only`, so a judge sees which decoders never met real
+/// traffic.
 #[test]
 fn the_summary_lists_capture_only_streams_by_source_and_hint() {
     let hint = "x-unknown-protocol/9";
@@ -923,14 +923,14 @@ fn the_summary_lists_capture_only_streams_by_source_and_hint() {
         json!([
             {"source": "wire_request", "hint": hint, "streams": 2,
                 "bytes": 2 * body.len(), "bytes_incomplete": false},
-            {"source": "wire_request", "hint": &long[..64], "streams": 1,
-                "bytes": body.len(), "bytes_incomplete": false},
+            {"source": "wire_request", "hint": &long[..64], "hint_truncated": true,
+                "streams": 1, "bytes": body.len(), "bytes_incomplete": false},
         ])
     );
     assert_eq!(summary["analysis"]["undecoded_omitted"], 0);
     for entry in summary["analysis"]["decoders"].as_array().unwrap() {
-        assert!(entry.get("measured").is_none(), "{entry}");
-        assert!(entry.get("synthetic_only").is_none(), "{entry}");
+        assert!(entry["measured"].is_string(), "{entry}");
+        assert!(entry["synthetic_only"].is_array(), "{entry}");
     }
 }
 
@@ -967,7 +967,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(unversioned(&bytes))),
-        "f61dd716f6c7ca034d9eb4d6cdce6dff6fe65f028246555c52fa5eb166ed224c"
+        "727713ee45d7c17aed2c8669339803399085078de2972b1d869bd10c46707868"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];
@@ -1417,6 +1417,7 @@ fn report_preserves_error_outcome_and_observation_intervals() {
     records.extend(anthropic_records(&sse, &[start.len() + 10]));
     let trace = make_report_trace(GOAL_TEXT, &records, Some(confirmed()));
     let (_, bytes, lines) = report_bytes(trace.path());
+    let summary = summary_of(&lines);
 
     // Each error: its two source parts and the exact interval of those parts, in the
     // producer's own clock; the response body's parts start at tick 300.
@@ -1463,19 +1464,15 @@ fn report_preserves_error_outcome_and_observation_intervals() {
             }
         }
     }
-    // The error forms are labelled synthetic-only on their registry entries, and nothing
-    // claims live validation.
-    let registry = DecoderRegistry::builtin();
+    // The error forms are labelled synthetic-only, and nothing claims live validation.
     for decoder in ["openai-responses", "anthropic-messages"] {
-        let entry = registry
-            .entries()
-            .iter()
-            .find(|r| r.id() == decoder)
-            .unwrap();
-        assert!(!entry.measured_on().is_empty());
-        let synthetic = entry.synthetic_only();
+        let entry = decoder_entry(summary, decoder);
+        assert!(!entry["measured"].as_str().unwrap().is_empty());
+        let synthetic = entry["synthetic_only"].as_array().unwrap();
         assert!(
-            synthetic.iter().any(|form| form.contains("error")),
+            synthetic
+                .iter()
+                .any(|form| form.as_str().unwrap().contains("error")),
             "{decoder}: {synthetic:?}"
         );
     }
