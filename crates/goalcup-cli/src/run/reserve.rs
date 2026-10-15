@@ -762,6 +762,7 @@ mod tests {
                 run_id: id.to_string(),
                 server_url: Some("https://server.example".into()),
                 practice: false,
+                test: false,
                 connector_id: "c".to_string(),
                 workspace: PathBuf::from("/w"),
                 started_at_unix: 0,
