@@ -127,9 +127,13 @@ pub fn read_chain_whole_lines(
     read_chain_with(trace_dir, true)
 }
 
-/// `text` up to and including its last newline: a trailing fragment is dropped.
-pub fn whole_lines(text: &str) -> &str {
-    text.rfind('\n').map_or("", |end| &text[..=end])
+/// `bytes` up to and including the last newline: a trailing fragment, which may end inside a
+/// multi-byte character, is dropped before any decoding.
+pub fn whole_lines(bytes: &[u8]) -> &[u8] {
+    bytes
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map_or(&[][..], |end| &bytes[..=end])
 }
 
 fn read_chain_with(
@@ -142,13 +146,15 @@ fn read_chain_with(
     parts
         .iter()
         .flat_map(|part| {
-            let text = std::fs::read_to_string(&part.path)
+            let bytes = std::fs::read(&part.path)
                 .unwrap_or_else(|e| panic!("{}: {e}", part.path.display()));
-            let text = if whole_lines_only {
-                whole_lines(&text)
+            let bytes = if whole_lines_only {
+                whole_lines(&bytes)
             } else {
-                &text
+                &bytes[..]
             };
+            let text = String::from_utf8(bytes.to_vec())
+                .unwrap_or_else(|e| panic!("{}: {e}", part.path.display()));
             text.lines()
                 .filter(|l| !l.trim().is_empty())
                 .map(|l| serde_json::from_str(l).expect("a chain line is an envelope"))
