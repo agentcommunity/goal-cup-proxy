@@ -71,7 +71,7 @@ say so in the PR, and a maintainer runs the gate.
 
 Start with [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), then give your coding agent the
 step-by-step [skill](skills/adding-a-capture-harness/SKILL.md). The reviewer checklist is
-[CONNECTOR-CONTRIBUTING](docs/CONNECTOR-CONTRIBUTING.md). The source tree has three connectors:
+[HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md). The source tree has three connectors:
 `codex-cli`, `claude-code-cli` and `hermes-cli`. Check first that the harness can be captured at
 all ([HARNESS-ONBOARDING, check first](docs/HARNESS-ONBOARDING.md#row-0)).
 
@@ -105,7 +105,7 @@ a promise to merge it.
 Connectors are trusted code. A template, environment variable, seed or host entry can run or leak
 things on every machine that uses the build. Pins are regenerated in the same PR, so they do not
 stop a malicious merge. Every connector PR needs code-owner review against the
-[reviewer checklist](docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr). Never commit real
+[reviewer checklist](docs/HARNESS-ONBOARDING.md#reviewing-a-connector-pr). Never commit real
 traces, keys, `target/`, `harnesses/` or `spikes/*/out/`. Redact and review any committed fixture
 with `spikes/redact.py`.
 

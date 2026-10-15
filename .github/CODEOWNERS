@@ -26,7 +26,7 @@
 /crates/goalcup-verifier/src/capture_analysis/        @nembal
 /skills/adding-a-capture-harness/                   @nembal
 /docs/CONNECTOR-SCHEMA.md                           @nembal
-/docs/CONNECTOR-CONTRIBUTING.md                     @nembal
+/docs/HARNESS-ONBOARDING.md                         @nembal
 /docs/DECISIONS.md                                  @nembal
 
 # Launch, environment, seed files and the recording proxy.

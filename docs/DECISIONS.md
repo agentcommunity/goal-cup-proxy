@@ -288,7 +288,7 @@ per-connector allowlist rows. A new connector, a model bump or a new variable is
   `--host`, `--server`, `--url`. A `goal_flag` may not say it runs, evaluates or loads its value.
   How much the harness may do (model, sandbox, permissions) is not a capture rule.
 - **Review sees** what a rule cannot: a dropped flag that capture needs, a value that re-enables
-  self-update. These are on the reviewer checklist ([CONNECTOR-CONTRIBUTING](CONNECTOR-CONTRIBUTING.md)).
+  self-update. These are on the reviewer checklist ([HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)).
 - **Closed lists stay core PRs with a DECISIONS entry:** `CREDENTIAL_ENV`, `CA_REGISTRY`,
   `EXTRA_PATTERN_SOURCES`.
 

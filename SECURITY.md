@@ -69,7 +69,7 @@ retained. A `statusLine` command in a settings template, a `notify` or MCP entry
 a `capture.hosts` entry or a seeded file is a code-execution or data-exfiltration surface. The
 directory pins detect tampering after a build. They do not defend against a malicious merge,
 because a connector PR regenerates them. Every connector change is reviewed by a code owner against
-the [checklist](docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr), and you must not run an
+the [checklist](docs/HARNESS-ONBOARDING.md#reviewing-a-connector-pr), and you must not run an
 unreviewed build (D51). The source tree has three connectors (`codex-cli`, `claude-code-cli`,
 `hermes-cli`). A release tarball carries the first two.
 
