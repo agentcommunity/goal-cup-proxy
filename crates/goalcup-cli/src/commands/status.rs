@@ -88,7 +88,7 @@ pub fn status_with(
     // First of everything, before the daemon is even asked: what is wrong with the run. A
     // `--json` caller gets the document alone.
     if !json {
-        put(out, &run_report(cfg, entry, &record, now))?;
+        put(out, &run_report(cfg, &record, now))?;
     }
     let document = retry_busy(|| client.status(&record.entry_id)).map_err(CliError::Control)?;
     if document.verify_with(&record.run_public_key).is_err() {
@@ -151,12 +151,11 @@ const TEST_RUN_BANNER: &str = "TEST RUN: an organizer test run, not a competitio
 /// line for each thing that is wrong, first of all, and nothing when nothing is. A run with no
 /// state yet is not a problem, and is said in plain words; a machine with no run record for
 /// the entry says nothing.
-fn run_report(cfg: &Path, entry: Option<&str>, record: &EntryRecord, now: &str) -> String {
-    let run = match entry {
-        None => crate::run::newest(cfg),
-        Some(_) => crate::run::of_entry(cfg, &record.entry_id),
-    };
-    let Ok(Some(run)) = run else {
+fn run_report(cfg: &Path, record: &EntryRecord, now: &str) -> String {
+    // The run of the entry that was pinned, never the newest run: the newest entry and the
+    // newest run can belong to different runs (a practice run continued after a competition
+    // run was started).
+    let Ok(Some(run)) = crate::run::of_entry(cfg, &record.entry_id) else {
         return String::new();
     };
     // An organizer test run says so first, before anything else in the run section.
@@ -224,7 +223,7 @@ pub fn pinned(cfg: &Path, entry: Option<&str>) -> Result<EntryRecord, CliError> 
         None => entries::latest_entry(cfg)?.ok_or_else(|| {
             CliError::Refused(format!(
                 "no run has been started from this machine: there is no record under {}. \
-                 Run `goalcup start --harness <id> --goal-file <file>`, or name an entry \
+                 Run `goalcup prep`, then `goalcup start --harness <id>`, or name an entry \
                  that was started here.",
                 entries::entries_dir(cfg).display()
             ))

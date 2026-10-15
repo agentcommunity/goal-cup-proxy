@@ -14,7 +14,9 @@
 //!
 //! # `--harness <id>` narrows the report and the number
 //!
-//! Unscoped, this command reports every shipped connector and exits 1 if any of them failed.
+//! Unscoped (`--harness all`, or no `prep.json` yet), this command reports every shipped
+//! connector and exits 1 if any of them failed. With no flag it is scoped to the harness
+//! `goalcup prep` settled.
 //! "Is this machine healthy" and "can I start this harness" are two questions with two right
 //! answers, and a participant about to run one harness is asking the second. The flag scopes
 //! the report and the number. The daemon check is in both, because no harness starts
@@ -30,6 +32,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// `--harness all`: check every shipped connector, whatever `goalcup prep` settled.
+pub const ALL_HARNESSES: &str = "all";
+
 /// What the flags asked for. Built by `main.rs` and by tests, never assembled from the
 /// environment.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -42,6 +47,9 @@ pub struct DoctorOptions {
     /// questions; the flag picks the second, and the number follows the report.
     ///
     /// The daemon check is in both readings: a harness cannot be started without one.
+    ///
+    /// Without the flag the harness in `prep.json` is checked. `all` (or no `prep.json`) checks
+    /// every shipped connector.
     pub harness: Option<String>,
 }
 
@@ -63,7 +71,7 @@ struct DoctorReport<'a> {
 /// harness executable is looked for.
 ///
 /// Returns the exit code rather than taking it, so the caller builds the one `ExitCode`.
-/// `_err` is unused: nothing this command prints goes to standard error.
+/// Nothing this command prints goes to standard error, so it takes no stream for it.
 pub fn run_with(
     client: Option<&dyn DaemonClient>,
     connectors: &Path,
@@ -71,7 +79,6 @@ pub fn run_with(
     env: &BTreeMap<String, String>,
     opts: &DoctorOptions,
     out: &mut dyn Write,
-    _err: &mut dyn Write,
 ) -> Result<u8, CliError> {
     // Before anything is checked: a `.goalcup-preflight-<pid>` in the participant's
     // configuration directory is litter from an older doctor killed mid-check, and the
@@ -83,7 +90,15 @@ pub fn run_with(
     // loaded first — `connector_reports` is what refuses two directories declaring one id,
     // and that refusal is about the installation rather than about the harness asked after —
     // and then the list is narrowed to the one connector.
-    if let Some(id) = &opts.harness {
+    // No flag: the harness `goalcup prep` settled, so a harness never installed cannot fail
+    // the run of one that is. `--harness all`, or no `prep.json` yet, checks every connector.
+    let from_prep = opts.harness.is_none();
+    let scope: Option<String> = match opts.harness.as_deref() {
+        Some(ALL_HARNESSES) => None,
+        Some(id) => Some(id.to_string()),
+        None => Some(crate::prep_file::read_prep_lenient(cfg).harness).filter(|id| !id.is_empty()),
+    };
+    if let Some(id) = &scope {
         let all: Vec<String> = reports.iter().map(|r| r.connector_id.clone()).collect();
         reports.retain(|r| &r.connector_id == id);
         if reports.is_empty() {
@@ -103,7 +118,11 @@ pub fn run_with(
             &format!("{}\n", serde_json::to_string_pretty(&document)?),
         )?;
     } else {
-        match &opts.harness {
+        match &scope {
+            Some(id) if from_prep => put(
+                out,
+                &format!("goalcup doctor — {id} (from goalcup prep)\n\n"),
+            )?,
             Some(id) => put(out, &format!("goalcup doctor — {id} only\n\n"))?,
             None => put(out, "goalcup doctor\n\n")?,
         }

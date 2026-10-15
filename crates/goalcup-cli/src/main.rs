@@ -49,9 +49,9 @@ struct Args {
 /// Every `goalcup --help` footer: where verification lives, and the rungs a capture run can
 /// leave under.
 const AFTER_HELP: &str = "\
-Start a run with `goalcup start --harness <id> --goal-file <file>`, or for a harness in chat mode \
-`goalcup start --harness <id>`, which opens it in your terminal for you to type the prompt. It \
-starts the recording daemon (`goalcup-daemon`, beside this binary) for the run, and the daemon exits once every run \
+Start a run with `goalcup start --harness <id>`, which opens the harness in your terminal for you \
+to type the prompt. A headless harness takes `--goal-file <file>` as well. It starts the recording daemon \
+(`goalcup-daemon`, beside this binary) for the run, and the daemon exits once every run \
 is sealed. `status` and `entries` start it again to answer, sealed runs included; it stays up \
 while a run whose daemon died is unsealed, until `goalcup seal`.
 
@@ -66,15 +66,16 @@ could not read, an answer it could not parse). This command never exits with 2 o
 /// What `goalcup doctor --help` says under its flags. There is no verify
 /// mode here: a sealed capture is checked by `goalcup-verify --capture-integrity`.
 const DOCTOR_AFTER_HELP: &str = "\
-For each harness it checks that the connector files are the pinned ones and finds the harness \
-executable on PATH that `goalcup start` runs (hashed, not started). Any build is accepted: the \
+For each harness it checks (see below) it checks that the connector files are the pinned ones and \
+finds the harness executable on PATH that `goalcup start` runs (hashed, not started). Any build is accepted: the \
 run records which one ran.
 
 Exit codes: 0 every check passed; 1 something failed, including a harness that is not \
 installed. No daemon running is not a failure: `goalcup start` starts one.
 
-Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
-are not using can make this command exit 1.";
+Without `--harness` it checks the harness you chose in `goalcup prep`; pass `--harness <id>` to \
+check another one, or `--harness all` to check every shipped harness (one you have not \
+installed then makes this command exit 1).";
 
 /// The sub-commands: nine, and the hidden `git-credential` that a run's clone calls. `verify`
 /// is deliberately absent: see `AFTER_HELP`.
@@ -156,8 +157,9 @@ enum Command {
         /// Print the report as one JSON document instead of text.
         #[arg(long)]
         json: bool,
-        /// Check this harness only, and set the exit code from it alone. Without it every
-        /// shipped harness is checked and any failure makes the exit code 1.
+        /// Check this harness only, and set the exit code from it alone. Without it the harness
+        /// you chose in `goalcup prep` is checked. `--harness all` checks every shipped harness,
+        /// and any failure makes the exit code 1.
         #[arg(long, value_name = "ID")]
         harness: Option<String>,
     },
@@ -206,9 +208,10 @@ enum Command {
     /// Finish uploading a run to the Goal Cup server, after `goalcup start` could not: the
     /// server was away, the laptop slept, or the process was killed. Safe to run again.
     Upload {
-        /// The entry id (`goalcup entries` lists them).
+        /// The entry id (`goalcup entries` lists them). Defaults to every entry of the newest run
+        /// started on this machine that is not yet sent.
         #[arg(value_name = "ENTRY")]
-        entry: String,
+        entry: Option<String>,
     },
     /// The command git runs to ask for the GitHub token of your run's repository. It is set
     /// in each run's clone by `goalcup start`; you never run it yourself.
@@ -314,10 +317,51 @@ fn run(command: Command) -> Result<u8, CliError> {
         }
         Command::Upload { entry } => {
             let cfg = goalcup_cli::config::config_dir()?;
-            commands::upload::upload_with(&cfg, &entry, upload_policy()?, &mut std::io::stdout())
-                .map(|()| 0)
+            upload(
+                &cfg,
+                entry.as_deref(),
+                upload_policy()?,
+                &mut std::io::stdout(),
+            )
+            .map(|()| 0)
         }
     }
+}
+
+/// `goalcup upload [<entry>]`. With an entry id, that entry. Without one, each entry of the newest
+/// run started on this machine whose upload has not finished (a run continued after a crash has
+/// one entry per segment), oldest first.
+fn upload(
+    cfg: &std::path::Path,
+    entry: Option<&str>,
+    policy: goalcup_cli::upload::uploader::Policy,
+    out: &mut dyn std::io::Write,
+) -> Result<(), CliError> {
+    if let Some(entry_id) = entry {
+        return commands::upload::upload_with(cfg, entry_id, policy, out);
+    }
+    let run = goalcup_cli::run::newest(cfg)?.ok_or_else(|| {
+        CliError::Refused(
+            "no run has been started from this machine, so there is nothing to upload. \
+             Name an entry with `goalcup upload <entry>`."
+                .to_string(),
+        )
+    })?;
+    let spool = cfg.join(goalcup_cli::upload::UPLOADS_DIR_NAME);
+    let unsent: Vec<&str> = run
+        .entries
+        .iter()
+        .map(|e| e.entry_id.as_str())
+        .filter(|id| !goalcup_cli::upload::uploader::is_sent(&spool, id))
+        .collect();
+    if unsent.is_empty() {
+        let _ = writeln!(out, "everything of run {} is already sent.", run.run_id);
+        return Ok(());
+    }
+    for entry_id in unsent {
+        commands::upload::upload_with(cfg, entry_id, policy, out)?;
+    }
+    Ok(())
 }
 
 /// When chunks go and how failures wait: the shipped policy, or in a test build one named by
@@ -679,18 +723,15 @@ fn now_z() -> String {
 /// would have made the one command a participant runs when nothing works the one command
 /// that refuses to run when nothing works.
 ///
-/// Both streams are handed in, because under `--json` the development banner goes to stderr
-/// so that stdout is one parseable document. A test that could only capture one of the two
-/// could not tell those apart.
+/// Only stdout is handed in: nothing this command prints goes to stderr.
 fn doctor(opts: commands::doctor::DoctorOptions) -> Result<u8, CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
     let mut out = std::io::stdout();
-    let mut err = std::io::stderr();
     let client = goalcup_cli::daemon::HttpDaemonClient::from_config_dir(&cfg).ok();
     let client = client
         .as_ref()
         .map(|c| c as &dyn goalcup_protocol::control::DaemonClient);
     let env = goalcup_cli::launch::process_env();
-    commands::doctor::run_with(client, &connectors, &cfg, &env, &opts, &mut out, &mut err)
+    commands::doctor::run_with(client, &connectors, &cfg, &env, &opts, &mut out)
 }

@@ -2469,13 +2469,10 @@ fn finish_and_scan(
     // this machine's clock, and always for a run with no server. Otherwise the agent's exit
     // ended this segment only: the run stays open on the server until its deadline and
     // `goalcup continue` restarts it.
-    let ended_by_stop = keeper
-        .snapshot()
-        .stopped
-        .as_deref()
-        .is_some_and(|why| why != crate::run::watch::DISK_STOP_REASON);
+    let snapshot = keeper.snapshot();
+    let ended_by_stop = snapshot.stopped_for_its_end();
     let on_server = record.server_url.is_some();
-    let over = !on_server || ended_by_stop || deadline_passed(record.deadline_at.as_deref());
+    let over = !on_server || crate::run::is_over(&record, Some(&snapshot), crate::run::now_unix());
     // `goalcup continue` can restart the run: a run on a server with a chat-mode connector that
     // is not over. Only such a run keeps its reserve past this host.
     let run_goes_on = crate::run::can_continue(cfg, &record, continuable, over);

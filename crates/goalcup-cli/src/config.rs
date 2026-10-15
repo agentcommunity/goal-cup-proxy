@@ -14,12 +14,19 @@
 //!
 //! | Path | Written by | Held here |
 //! |---|---|---|
+//! | `server.json` | `goalcup login` | the upload server's URL and the account's handle, mode 0600; no secret (`crate::server`) |
+//! | `prep.json` | `goalcup prep` | the harness, the repository and the work folder it settled (`crate::prep_file`) |
+//! | `github.json` | `goalcup prep` | the run's repository URL and the GitHub token for it, mode 0600 (`crate::account::github`) |
+//! | `entries/<id>.json` | `goalcup start` | one record per entry, the pin a status is checked against (`crate::entries`) |
+//! | `runs/<run_id>/` | `goalcup start` | `run.json` (the run and its entries), `state.json` (what `goalcup status` reports first), `credential` (the run's server credential, mode 0600) and `host.log` (`crate::run`, `crate::host_log`) |
+//! | `uploads/` | the host and `goalcup upload` | per entry: the start record, the receipt, a lock, the `sent` and repo-head markers, and `pending-open.json` (`crate::upload`) |
+//! | `capture-homes/` | `goalcup start`, `goalcup prep` | the tracker's isolated harness homes and their locks, one per connector (`config_home = "shared"`) |
 //! | `control.json` | the daemon | [`read_control_file`] reads it; the CLI never writes it |
 //! | `daemon.toml` | `goalcup start`, once, if missing | the configuration the CLI starts the daemon from (`daemon::spawn`) |
 //! | `daemon.log` | a daemon the CLI started | its startup lines and any refusal |
-//! | `grant.json` | the V1 `goalcup auth` (removed by D48) | nothing: a leftover one is ignored |
-//! | `entries/` | the CLI | one record per entry `goalcup start` created |
-//! | `server.json` | `goalcup login` | the upload server and the participant's token, mode 0600 (`crate::server`) |
+//! | `reserve/<run_id>` | `goalcup start` | the run's disk reservation, under the artifact root (`crate::run::reserve`) |
+//!
+//! `grant.json` was the V1 `goalcup auth` file (removed by D48). A leftover one is ignored.
 
 use crate::CliError;
 use goalcup_platform::Platform;
