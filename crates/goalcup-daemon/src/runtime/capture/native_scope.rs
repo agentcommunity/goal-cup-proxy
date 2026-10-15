@@ -352,12 +352,16 @@ impl Daemon {
 }
 
 impl CaptureEntry {
-    /// The entry's one native source over `source`, scoped to `id`; `None` when `id` is not a
+    /// The entry's one native source over `source`, scoped to `id`; an error when `id` is not a
     /// scope identity the collector accepts.
-    pub(super) fn native_for(&self, source: &NativeSourceSpec, id: &str) -> Option<NativeCapture> {
+    pub(super) fn native_for(
+        &self,
+        source: &NativeSourceSpec,
+        id: &str,
+    ) -> Result<NativeCapture, NativeCaptureError> {
         let mut source = source.clone();
         source.scope_id = Some(id.to_string());
-        native_capture(vec![source], self.sink.clone()).ok()
+        native_capture(vec![source], self.sink.clone())
     }
 
     /// Finish stage 4, under the run lock and before the owner stops: a deferred entry given a
@@ -386,12 +390,18 @@ impl CaptureEntry {
     /// no scoped source or `id` is not a scope identity the collector accepts. The one place a
     /// source is bound, at the launch or at finish stage 4.
     pub(super) fn bind_scope(&self, binding: &mut NativeBinding, id: &str) -> bool {
-        let Some(native) = self
-            .scoped_native
-            .as_ref()
-            .and_then(|source| self.native_for(source, id))
-        else {
+        let Some(source) = self.scoped_native.as_ref() else {
             return false;
+        };
+        let native = match self.native_for(source, id) {
+            Ok(native) => native,
+            Err(error) => {
+                // The caller records the gap, which carries no cause.
+                self.cycles.note(&DaemonError::Refused(format!(
+                    "the native scope was not bound: {error}"
+                )));
+                return false;
+            }
         };
         *lock(&self.owner.pending_native) = Some(native);
         *binding = NativeBinding::Bound;

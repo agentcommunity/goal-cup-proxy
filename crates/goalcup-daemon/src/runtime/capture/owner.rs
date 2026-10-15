@@ -42,6 +42,8 @@ pub(super) struct Owner {
     /// written.
     native_lost: u64,
     native_lost_at: Option<Instant>,
+    /// Where a producer's loss notes its cause; the gap records only that it was lost.
+    cycles: Arc<CycleCounters>,
 }
 
 impl Owner {
@@ -68,7 +70,14 @@ impl Owner {
             last_native: None,
             native_lost: 0,
             native_lost_at: None,
+            cycles: Arc::new(CycleCounters::default()),
         }
+    }
+
+    /// Note the causes of producer losses on `cycles`, the daemon's own.
+    pub(super) fn noting_to(mut self, cycles: Arc<CycleCounters>) -> Owner {
+        self.cycles = cycles;
+        self
     }
 
     pub(super) fn spawn(self, control: Arc<OwnerControl>) -> std::io::Result<JoinHandle<()>> {
@@ -267,7 +276,7 @@ impl Owner {
                 Ok(redactor) => {
                     self.redactors.insert(producer.clone(), redactor);
                 }
-                Err(_) => return self.lose(&producer, GapReason::ProducerLost),
+                Err(error) => return self.lose_because(&producer, error),
             }
         }
         let pushed = self
@@ -276,8 +285,17 @@ impl Owner {
             .map(|redactor| redactor.push(frame));
         match pushed {
             Some(Ok(records)) => self.append_all(records),
-            _ => self.lose(&producer, GapReason::ProducerLost),
+            Some(Err(error)) => self.lose_because(&producer, error),
+            None => self.lose(&producer, GapReason::ProducerLost),
         }
+    }
+
+    /// [`Self::lose`] a producer as `ProducerLost`, noting `cause`, which the gap cannot carry.
+    fn lose_because(&mut self, producer: &str, cause: impl std::fmt::Display) {
+        self.cycles.note(&DaemonError::Refused(format!(
+            "a capture producer was lost: {cause}"
+        )));
+        self.lose(producer, GapReason::ProducerLost);
     }
 
     /// Interrupt `producer`'s redactor (if live) and chain its loss, as a gap on each stream
@@ -307,9 +325,9 @@ impl Owner {
         if let Some(mut redactor) = self.redactors.remove(&producer) {
             match redactor.flush((self.clock)()) {
                 Ok(records) => self.append_all(records),
-                Err(_) => {
+                Err(error) => {
                     self.redactors.insert(producer.clone(), redactor);
-                    return self.lose(&producer, GapReason::ProducerLost);
+                    return self.lose_because(&producer, error);
                 }
             }
         }
@@ -333,7 +351,8 @@ impl Owner {
                 .map(|redactor| redactor.flush(now));
             match flushed {
                 Some(Ok(records)) => self.append_all(records),
-                _ => self.lose(&producer, GapReason::ProducerLost),
+                Some(Err(error)) => self.lose_because(&producer, error),
+                None => self.lose(&producer, GapReason::ProducerLost),
             }
         }
     }

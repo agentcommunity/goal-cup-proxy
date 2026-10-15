@@ -73,7 +73,7 @@
 //! lost. A chain that already ends in its local finish takes nothing: the next finish only
 //! commits that terminal to the registry.
 
-use super::Daemon;
+use super::{CycleCounters, Daemon};
 
 use crate::config::{EventConfig, ReceiptBindingPolicy};
 
@@ -184,6 +184,8 @@ pub(crate) struct CaptureEntry {
     native_binding: Mutex<NativeBinding>,
     /// The daemon's observation clock.
     clock: IngestClock,
+    /// Where the entry notes a cause its chain has no room for; the daemon's own, once created.
+    cycles: Arc<CycleCounters>,
     /// `None` for an entry reopened after a restart: it admits no producer again.
     ingest: Option<Arc<IngestEntry>>,
     sink: Arc<OwnerSink>,
@@ -504,6 +506,7 @@ impl Daemon {
             // constructor reports the required-source gap if this could not make it available.
             let _ = std::fs::create_dir_all(&source.root);
         }
+        capture.cycles = self.inner.cycles.clone();
         capture.scoped_native = plan.scoped;
         *lock(&capture.native_binding) = plan.initial_binding;
         capture.unread_stores = plan.unread_stores;
@@ -529,7 +532,8 @@ impl Daemon {
             &extra_patterns,
             Some(ingest.clone()),
             native,
-        );
+        )
+        .noting_to(self.inner.cycles.clone());
         let thread = owner
             .spawn(capture.owner.clone())
             .map_err(|source| DaemonError::Io {
@@ -1100,6 +1104,7 @@ impl CaptureEntry {
             scoped_native: None,
             native_binding: Mutex::new(NativeBinding::NotRequired),
             clock,
+            cycles: Arc::new(CycleCounters::default()),
             ingest: None,
             sink: Arc::new(OwnerSink::default()),
             clone: read_manifest(&writer.export, FixedTraceDocument::Baseline).map_or_else(
