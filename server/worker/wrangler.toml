@@ -55,7 +55,7 @@ GITHUB_CHECK = "on"
 # The website's page where a member approves a device request (no query string).
 # The tracer opens it with `?code=<user code>`.
 APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
-# Set to "on" and redeploy to make every call answer 503 + Retry-After.
+# Never commit "on". Switch it on with `wrangler deploy --var MAINTENANCE:on`: see README "Maintenance on and off".
 MAINTENANCE = "off"
 MAINTENANCE_RETRY_AFTER = "300"
 # Sender of the run emails (src/mail.ts); mail stays off until the RESEND_API_KEY secret is set.
