@@ -35,7 +35,7 @@ use std::process::ExitCode;
     after_help = AFTER_HELP,
     subcommand_required = true,
     arg_required_else_help = true,
-    // So the list under `Commands:` is exactly the seven sub-commands below. clap's built-in
+    // So the list under `Commands:` is exactly the eight sub-commands below. clap's built-in
     // `help` sub-command would be an eighth line in it, indistinguishable to a reader — and to a
     // test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
     // the same help by the route the other seven already take.
@@ -76,7 +76,7 @@ installed. No daemon running is not a failure: `goalcup start` starts one.
 Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
 are not using can make this command exit 1.";
 
-/// The sub-commands: seven, and the hidden `git-credential` that a run's clone calls. `verify`
+/// The sub-commands: eight, and the hidden `git-credential` that a run's clone calls. `verify`
 /// is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
