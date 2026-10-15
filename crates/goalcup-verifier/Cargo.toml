@@ -8,18 +8,16 @@ publish = false
 
 [dependencies]
 goalcup-protocol = { path = "../goalcup-protocol" }
+# Trace files are read through `tracecap`, the no-follow capability the writer uses.
+goalcup-platform = { path = "../goalcup-platform" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 hex.workspace = true
 clap.workspace = true
-thiserror.workspace = true
 # M2 capture analysis (`src/capture_analysis/`): v5 `Segment` records carry sanitized bytes
 # as base64, which the bounded reader and decoders decode.
 base64.workspace = true
-
-[target.'cfg(unix)'.dependencies]
-libc.workspace = true
 
 # Tests only.
 #   tempfile — tests build capture traces in temporary directories.
@@ -31,6 +29,10 @@ libc.workspace = true
 tempfile.workspace = true
 toml.workspace = true
 ed25519-dalek.workspace = true
+
+# Tests only: `libc` makes a FIFO in a chain's place.
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true
 
 [[bin]]
 name = "goalcup-verify"

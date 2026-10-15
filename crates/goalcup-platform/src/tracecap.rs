@@ -130,6 +130,14 @@ impl TraceDir {
         imp::TraceDirHandle::open(root).map(|inner| Self { inner })
     }
 
+    /// Acquire an existing trace directory a reader selected by path: [`Self::open`] after a
+    /// terminal `/` or `/.` is removed. The OS resolves `link/` and `link/.` through the link
+    /// before `O_NOFOLLOW` sees it, so without this the selected directory could be a symbolic
+    /// link. Ancestors stay ordinary OS paths, so `/var` aliases still resolve.
+    pub fn open_selected(root: &Path) -> Result<Self, TraceCapError> {
+        Self::open(&imp::selected_root_name(root)?)
+    }
+
     /// Descend one already-existing, validated directory component through this retained
     /// directory capability.  This is intentionally not a pathname join: callers that
     /// own an artifact tree must keep the root they acquired while crossing `artifacts`,
