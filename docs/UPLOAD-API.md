@@ -143,8 +143,8 @@ segment 0.
 `seconds_left` is the time left, on the server's clock: whole seconds from the server's now to
 `deadline_at`, rounded up, and `0` once `deadline_at` has come (never negative). The open, the
 continue and every heartbeat answer carry it. **The server is the clock:** the tracer counts the
-run down from the last `seconds_left` it was given and never reads the machine's own date for the
-deadline (see "When a run ends"). It counts to `deadline_at`, not `ends_at`: a run that a later start
+run down from the last `seconds_left` it was given. It never reads the machine's own date to decide
+when to stop the agent (see "When a run ends"). It counts to `deadline_at`, not `ends_at`: a run that a later start
 replaced learns it from `stop`.
 
 `deadline_at` = `official_start` + the run length: the event's run hours for a competition run,
@@ -332,8 +332,9 @@ in. There is no grace period and no late window.
   early by the call's round trip, and never more than a second late: the server counts its clock in
   whole seconds). Each answer
   sets the count again, and the server's answer wins. The machine's date is never read for it, so
-  changing the date does not move the deadline. (A replaced run learns of it from its next
-  heartbeat.) An answer from an older server has no `seconds_left`; the tracer then counts
+  changing the date does not move the stop. (A replaced run learns of it from its next
+  heartbeat.) The count decides only the stop. For now, `goalcup status`, `goalcup continue` and the
+  disk reserve still read the machine's date to decide that a run is over. An answer from an older server has no `seconds_left`; the tracer then counts
   `deadline_at − official_start` from when the run opened, and for a continued segment
   `deadline_at` less the machine's date.
 - **The wrap-up upload has no time limit, but it can only complete each entry's chain up to its

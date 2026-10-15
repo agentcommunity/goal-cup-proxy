@@ -174,7 +174,7 @@ line each, then the recording's state, health and storage. A run with nothing wr
 |---|---|---|
 | `run state not updated for …: the tracer may have stopped` | The `goalcup start` process is not running: the machine rebooted or slept, or the process was killed. | If the line ends `run goalcup continue`, do that. |
 | `recording has gaps` or `recording failed` | Part of the record is missing. The server is told and the run is flagged for review. | Leave the run going. |
-| `last upload … ago: …` | Uploads have been failing for half an hour or more. Nothing recorded is lost: it waits on the disk. | Check the network. After the run, `goalcup upload <entry>` sends what is left. |
+| `last upload … ago: …` | Uploads have been failing for half an hour or more. Nothing recorded is lost: it waits on the disk. | Check the network. After the run, `goalcup upload` sends what is left of your newest run. `goalcup upload <entry>` sends one entry. |
 | `the last … heartbeats to the server failed: …` | The server has not heard from the run for about a quarter of an hour. | Check the network. |
 | `disk: … free beyond the reservation` | Less than 5 GiB is free beyond the run's reservation. | Free some disk. If the disk fills while uploads are failing, the tracer stops the agent and the run stays open: free space, then `goalcup continue`. |
 | `the machine may sleep: …` | The tracer could not keep the machine awake. Under WSL2 this line is always there, because Windows decides. | Plug the machine in, or turn sleep off yourself (WSL2: the Windows power setting above). |
@@ -209,7 +209,8 @@ agent is stopped in whatever state it is in. There is no grace period.
 - At the deadline the server tells the tracer to stop. The tracer stops the agent and the
   recording, seals the record, tells the server which commit your clone had, and uploads what is
   left. It keeps trying for up to one hour. If that is not enough it says so, and
-  `goalcup upload <entry>` finishes the job later. Run `goalcup entries` to see the entry ids.
+  `goalcup upload` finishes the job later. With no entry id it sends the unsent entries of your newest
+  run. To send one entry, run `goalcup upload <entry>`. `goalcup entries` shows the entry ids.
 - The server records the latest commit in your GitHub repository at the deadline. That commit is
   what is judged, so your agent must push its work before then. The tracer never pushes for it.
 - After the run you hand in a demo video and answer a questionnaire. They are due 24 hours

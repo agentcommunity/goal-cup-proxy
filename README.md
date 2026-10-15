@@ -197,7 +197,7 @@ in [OPERATING](docs/OPERATING.md#running-the-daemon).
   approval of each run, clones the participant's repository, opens the run on the server and keeps
   the server's start receipt as `receipt.json`. While the run records, the CLI uploads the chain in
   chunks and sends heartbeats. Recording never waits on the network. After the stop it seals and
-  uploads the rest for a bounded wrap-up; `goalcup upload <entry>` finishes the job later. The
+  uploads the rest for a bounded wrap-up; `goalcup upload` finishes the job later. With no entry id it sends the unsent entries of the newest run; `goalcup upload <entry>` sends one entry. The
   deadline is 168 hours after the server's official start, on the server's clock: at the deadline
   the CLI stops the agent and seals. Wire contract: [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
   Server code: [server/worker](server/worker/README.md).
