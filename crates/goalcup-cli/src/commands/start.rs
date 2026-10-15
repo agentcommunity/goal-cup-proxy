@@ -1310,35 +1310,6 @@ fn goal_file_fits(id: &str, interactive: bool, has_goal_file: bool) -> Result<()
     }
 }
 
-/// Make the folder each native source that reads from the run's start (D57) is rooted at, if it
-/// is not there yet (`<config_home>/sessions` before a fresh home's first session): empty, mode
-/// 0700, inside the harness's isolated home. The daemon opens such a root when it creates the
-/// entry and refuses one that does not exist; a source scoped by an `{id}` is made by the
-/// daemon itself, and nothing else is made here.
-fn make_native_roots(
-    profile: &CaptureSpec,
-    run_home: &Path,
-    config_home: &Path,
-) -> Result<(), CliError> {
-    for native in profile.native.iter().filter(|n| n.since_run_start) {
-        let root = &native.root;
-        let dir = if root == "{config_home}" {
-            config_home.to_path_buf()
-        } else if let Some(rest) = root.strip_prefix("{config_home}/") {
-            config_home.join(rest)
-        } else if root == "{run_home}" {
-            run_home.to_path_buf()
-        } else if let Some(rest) = root.strip_prefix("{run_home}/") {
-            run_home.join(rest)
-        } else {
-            // The daemon refuses any other root, and says so.
-            continue;
-        };
-        private_dir(&dir, true)?;
-    }
-    Ok(())
-}
-
 /// A chat-mode harness reads and draws on this terminal: `goalcup start`'s input must be a
 /// terminal it holds in the foreground (or the harness's first read stops it with `SIGTTIN` and
 /// the run records a frozen harness), and its output must be a terminal too (a harness drawing
@@ -1615,13 +1586,6 @@ fn create_and_gate<'a>(
         entry_id: opened.as_ref().map(|o| o.run.entry_id.clone()),
         native_since: Some(started_at_unix),
     };
-    // A source read from the run's start (D57) is opened by the daemon at the entry's creation,
-    // and a harness in chat mode makes its sessions folder only when the first prompt is sent.
-    if let Err(error) = make_native_roots(profile, &run.home, &config_home) {
-        let _ = run.remove();
-        give_back(&error);
-        return Err(error);
-    }
     let info = match retry_busy(|| client.create_capture_workspace(&request)) {
         Ok(info) => info,
         Err(e) => {

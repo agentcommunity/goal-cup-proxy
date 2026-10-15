@@ -208,6 +208,9 @@ pub(crate) struct CaptureEntry {
     /// Test seam: a pause taken just before the named finish stage's admission check.
     #[cfg(any(test, feature = "test-hooks"))]
     stage_delay: Mutex<Option<(FinishStage, Duration)>>,
+    /// Test seam: the launch parks before it reads the harness build, until cleared.
+    #[cfg(any(test, feature = "test-hooks"))]
+    hold_build: AtomicBool,
 }
 
 /// The authority retained by an in-memory capture runtime.
@@ -455,7 +458,17 @@ impl Daemon {
         });
         // No arming gate: the entry is created ready for its one daemon-launched process.
         entry.state = EntryState::Armed;
-        self.registry().put(&entry)?;
+        // One entry holds a workspace (D4), except that a capture entry that routes nothing
+        // lets it go: a sealed one, and one this daemon failed to reopen at start. An entry
+        // merely absent from the captures map is not that: a create in flight is stored before
+        // it is inserted. That is how a continued run makes its next segment in the workspace
+        // its last one had.
+        let reopen_failed = lock(&self.inner.reopen_failed).clone();
+        self.registry().put_letting_go(&entry, &|stored| {
+            stored.capture.as_ref().is_some_and(|row| {
+                row.sealed_status.is_some() || reopen_failed.contains(&stored.entry_id)
+            })
+        })?;
         let entry = self.registry().open_initial_process_handoff(entry_id)?;
         let process_generation = entry.process_handoff_generation();
 
@@ -712,7 +725,13 @@ impl Daemon {
             self.registry()
                 .get(entry_id)?
                 .and_then(|row| row.last_process)
-                .map(|handle| Box::new(harness_build::observe(&handle)))
+                .map(|handle| {
+                    #[cfg(any(test, feature = "test-hooks"))]
+                    while capture.hold_build.load(Ordering::Acquire) {
+                        std::thread::sleep(IDLE_WAIT);
+                    }
+                    Box::new(harness_build::observe(&handle))
+                })
         };
         let mut run = capture.lock();
         capture.record_launch(&mut run, request, harness_build)?;
@@ -721,6 +740,15 @@ impl Daemon {
             entry.harness_version = request.harness_version.clone();
         })?;
         Ok(())
+    }
+
+    /// Test seam: park (or release) the entry's next launch just before it reads the harness
+    /// build, as a slow read of a large binary would hold it.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn hold_capture_harness_build(&self, entry_id: &str, hold: bool) {
+        if let Some(capture) = self.captures().get(entry_id) {
+            capture.hold_build.store(hold, Ordering::Release);
+        }
     }
 
     /// Reopen every v5 row but the sealed ones for status and seal after a restart. A row that
@@ -738,6 +766,7 @@ impl Daemon {
         for row in rows.into_iter().filter(unsealed) {
             let entry_id = row.entry_id.clone();
             if let Err(error) = self.reopen_capture(row) {
+                lock(&self.inner.reopen_failed).insert(entry_id.clone());
                 self.inner.cycles.note(&DaemonError::Refused(format!(
                     "capture entry {entry_id} was not reopened: {}",
                     super::path_free(&error)
@@ -1071,6 +1100,8 @@ impl CaptureEntry {
             chained_finish: Mutex::new(None),
             #[cfg(any(test, feature = "test-hooks"))]
             stage_delay: Mutex::new(None),
+            #[cfg(any(test, feature = "test-hooks"))]
+            hold_build: AtomicBool::new(false),
         }
     }
 
