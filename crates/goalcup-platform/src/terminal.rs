@@ -153,6 +153,31 @@ impl Modes {
     }
 }
 
+/// A terminal with its echo switched off, for reading a secret the participant pastes or
+/// types: what they enter is not shown. The echo is switched back on when this drops.
+pub struct EchoOff {
+    modes: Modes,
+}
+
+impl EchoOff {
+    /// Switch the echo of the terminal on `fd` off; `None` when `fd` is not a terminal (a pipe
+    /// shows nothing, so there is nothing to hide).
+    pub fn take(fd: libc::c_int) -> Option<EchoOff> {
+        let modes = Modes::save(fd)?;
+        let mut quiet = modes.saved;
+        quiet.c_lflag &= !libc::ECHO;
+        // SAFETY: the struct `tcgetattr` filled, with one flag cleared, on the descriptor it was
+        // read from.
+        (unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, &quiet) } == 0).then_some(EchoOff { modes })
+    }
+}
+
+impl Drop for EchoOff {
+    fn drop(&mut self) {
+        let _ = self.modes.restore();
+    }
+}
+
 /// Wait for the child `pid` to exit, and continue it each time it stops (`WUNTRACED`).
 ///
 /// A harness that suspends itself (Ctrl-Z in its own key handling, `kill(0, SIGTSTP)`) would
@@ -235,6 +260,14 @@ mod tests {
         drop(shield);
         assert_eq!(current(libc::SIGHUP), libc::SIG_DFL);
         assert_eq!(current(libc::SIGTTOU), libc::SIG_DFL);
+    }
+
+    /// A descriptor that is not a terminal has no echo to switch off.
+    #[test]
+    fn echo_is_left_alone_on_a_descriptor_that_is_not_a_terminal() {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        use std::os::fd::AsRawFd;
+        assert!(EchoOff::take(file.as_raw_fd()).is_none());
     }
 
     /// A child that stops itself is continued, and its exit is still the status waited for.

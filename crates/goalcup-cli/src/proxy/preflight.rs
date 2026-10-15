@@ -54,6 +54,20 @@ impl std::fmt::Display for Unreachable {
     }
 }
 
+impl Unreachable {
+    /// The host and what went wrong, without `goalcup start`'s refusal around it: for
+    /// `goalcup prep`, which says the same thing in its own sentence.
+    pub(crate) fn reason(&self) -> String {
+        format!(
+            "{}:{} could not be reached within {}s ({})",
+            self.host,
+            self.port,
+            self.budget.as_secs(),
+            describe(self.kind)
+        )
+    }
+}
+
 /// The failure subtype in words.
 fn describe(kind: ConnectFailureKind) -> &'static str {
     match kind {

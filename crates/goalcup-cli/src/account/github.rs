@@ -182,6 +182,14 @@ impl GithubSetup {
     }
 }
 
+/// `url` as `https://github.com/<owner>/<repo>` (no `.git`, no trailing slash), or the refusal
+/// that names the form. `goalcup prep` checks the address it was given before it asks for a
+/// token, so a mistyped address costs no paste.
+pub fn checked_repo_url(url: &str) -> Result<String, CliError> {
+    let (owner, repo) = parse_repo_url(url)?;
+    Ok(format!("{URL_PREFIX}{owner}/{repo}"))
+}
+
 /// `<cfg>/github.json`.
 pub fn github_path(cfg: &Path) -> PathBuf {
     cfg.join(GITHUB_FILE_NAME)

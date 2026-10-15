@@ -34,6 +34,17 @@ pub struct PrepFile {
     /// The folder each run's clone is made in, an absolute path.
     #[serde(default)]
     pub work_root: String,
+    /// The participant has opened the harness once in its tracker home, signed in and added
+    /// what they want there (`goalcup prep`, step 3). The tracker cannot see a vendor sign-in,
+    /// so this is the person's word, recorded when the harness they were given exited 0. It is
+    /// for `harness` alone: another harness starts again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub home_ready: bool,
+    /// The repository at `repo_url` was found public, empty and pushable with the stored
+    /// token. Kept because a practice run pushes to it, and a repository that is no longer
+    /// empty would fail the same check on the next `goalcup prep`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub github_ok: bool,
 }
 
 /// `<cfg>/prep.json`.
@@ -59,4 +70,30 @@ pub fn read_prep(cfg: &Path) -> Result<PrepFile, CliError> {
         return Err(refused());
     }
     Ok(prep)
+}
+
+/// The prep file as it is, or the empty one when there is none or it cannot be read as one:
+/// `goalcup prep` starts from whatever the last prep settled, and a damaged file settles nothing.
+pub fn read_prep_lenient(cfg: &Path) -> PrepFile {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(prep_path(cfg)) else {
+        return PrepFile::default();
+    };
+    let mut text = Vec::new();
+    if file
+        .take(PREP_FILE_MAX_BYTES + 1)
+        .read_to_end(&mut text)
+        .is_err()
+        || text.len() as u64 > PREP_FILE_MAX_BYTES
+    {
+        return PrepFile::default();
+    }
+    serde_json::from_slice(&text).unwrap_or_default()
+}
+
+/// Write `prep` to `<cfg>/prep.json` (mode 0600, replacing the earlier file whole).
+pub fn write_prep(cfg: &Path, prep: &PrepFile) -> Result<(), CliError> {
+    let mut text = serde_json::to_vec_pretty(prep)?;
+    text.push(b'\n');
+    crate::config::write_secret_file(&prep_path(cfg), &text)
 }
