@@ -124,6 +124,10 @@ macro_rules! closed_enum {
     };
 }
 
+/// The folder under the tracker's configuration directory that holds every home kept across
+/// runs: a shared config home (D39) and a shared run `HOME` (D59).
+pub const CAPTURE_HOMES_DIR: &str = "capture-homes";
+
 closed_enum! {
     /// What `HOME` holds for a run.
     RunHome, "capture.home.run_home", special: &[];
@@ -132,6 +136,11 @@ closed_enum! {
     /// A directory whose only entry is `Library/Keychains`, linked to the user's own (Claude
     /// Code: subscription login, no dotfiles).
     KeychainLink = "keychain_link",
+    /// One empty directory per connector kept across runs, so a harness with no `home.env`
+    /// keeps its login (D59). Held to the rules of a shared config home: runs on it are
+    /// serialized, and the daemon refuses it outside `<config_dir>/`[`CAPTURE_HOMES_DIR`], at
+    /// the participant's `HOME` or at a `real_dirs` path.
+    Shared = "shared",
 }
 
 closed_enum! {
@@ -1923,6 +1932,7 @@ impl HarnessManifest {
         let c = &self.capture;
         let i = &c.identity;
         let per_run = c.home.config_home == ConfigHome::PerRun;
+        let run_shared = c.home.run_home == RunHome::Shared;
 
         // Credential: two identity sources are exercised in schema 1, and both need a per-run
         // home. A `stdout_json` identity is read by the same stdout reader that scans for key
@@ -1947,6 +1957,13 @@ impl HarnessManifest {
                     "capture.credential",
                     "requires `capture.home.config_home = \"per_run\"`: the key-fragment scan \
                      covers the run directory only (D41)",
+                ));
+            }
+            if run_shared {
+                return Err(refuse(
+                    "capture.credential",
+                    "requires a per-run `HOME`, not `capture.home.run_home = \"shared\"`: the \
+                     key-fragment scan covers the run directory only (D41)",
                 ));
             }
         }
@@ -1999,17 +2016,28 @@ impl HarnessManifest {
         // another run's sessions are not this run's, and runs on a shared home are serialized.
         let native = &c.native[0];
         let (root_home, root_rel) = split_native_root(&native.root).expect("checked by native");
-        if i.source == IdentitySource::None
-            && root_home == RootHome::Config
-            && !per_run
-            && !native.since_run_start
-        {
+        let root_shared = match root_home {
+            RootHome::Config => !per_run,
+            RootHome::Run => run_shared,
+        };
+        if i.source == IdentitySource::None && root_shared && !native.since_run_start {
             return Err(refuse(
                 "capture.native.root",
-                "with `identity.source = \"none\"` the root must be per run: `{run_home}/...`, \
-                 or `{config_home}/...` with `config_home = \"per_run\"`, unless the native \
-                 source declares `since_run_start = true`; an unscoped source in a shared home \
-                 would read other runs' sessions",
+                "with `identity.source = \"none\"` the root must be per run: `{run_home}/...` \
+                 with a per-run `run_home`, or `{config_home}/...` with `config_home = \
+                 \"per_run\"`, unless the native source declares `since_run_start = true`; an \
+                 unscoped source in a shared home would read other runs' sessions",
+            ));
+        }
+
+        // A shared run `HOME` is for a harness with no home variable (D59). With one, the
+        // harness's state is the config home's to share, and two persistent homes would leave
+        // which one holds the login unclear.
+        if run_shared && h.env.is_some() {
+            return Err(refuse(
+                "capture.home.run_home",
+                "`shared` is for a harness without `capture.home.env`: one with a home variable \
+                 shares its config home (`config_home = \"shared\"`) instead",
             ));
         }
 
