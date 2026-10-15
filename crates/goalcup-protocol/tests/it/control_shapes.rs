@@ -501,6 +501,8 @@ fn the_remaining_types_round_trip() {
         daemon_version: "0.1.0".into(),
         uptime_seconds: 90,
         entries_open: 1,
+        cycles: CycleErrors::default(),
+        reopen_failed: Vec::new(),
     };
     assert_eq!(
         h,
@@ -834,4 +836,19 @@ fn the_termination_bound_is_the_documented_one() {
     assert_eq!(termination_bound(10), Duration::from_millis(24_250));
     // Saturating, never a panic, for a manifest value no connector ships.
     let _ = termination_bound(u64::MAX);
+}
+
+/// Additive on the control API: a health answer from a daemon that predates `cycles` and
+/// `reopen_failed` still parses, and reads as "nothing lost".
+#[test]
+fn a_health_answer_without_the_counters_still_parses() {
+    let older = serde_json::json!({
+        "control_api_version": CONTROL_API_VERSION,
+        "daemon_version": "0.1.0",
+        "uptime_seconds": 5,
+        "entries_open": 2,
+    });
+    let h: DaemonHealth = serde_json::from_value(older).expect("an older daemon's health");
+    assert_eq!(h.cycles, CycleErrors::default());
+    assert!(h.reopen_failed.is_empty());
 }

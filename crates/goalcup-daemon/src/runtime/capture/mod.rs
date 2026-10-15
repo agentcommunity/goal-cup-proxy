@@ -787,6 +787,11 @@ impl Daemon {
         }
     }
 
+    /// Ids of the entries [`Self::reopen_captures`] failed to reopen, in id order.
+    pub fn reopen_failed_ids(&self) -> Vec<String> {
+        lock(&self.inner.reopen_failed).iter().cloned().collect()
+    }
+
     fn reopen_capture(&self, row: Entry) -> Result<(), DaemonError> {
         let reserve_bytes = row
             .capture
