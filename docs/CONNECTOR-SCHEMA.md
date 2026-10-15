@@ -162,7 +162,8 @@ argument-path check so an offline stand-in can receive an absolute fixture path.
 Each `capture.env` key is 1–128 bytes, begins with an ASCII letter or `_`, and otherwise contains
 only ASCII letters, digits or `_`. Names compare uppercase for policy. The validator refuses:
 
-- endpoint, proxy, credential and provider names;
+- endpoint, proxy, credential and provider names (the one proxy name admitted is
+  `NODE_USE_ENV_PROXY`, D59);
 - the launch-pinned `HOME`, `PATH`, `USER`, `LOGNAME` and `TMPDIR`;
 - CA registry names and global trust overrides;
 - injection/startup variables and names ending in command suffixes such as `_COMMAND`, `_CMD`,
@@ -182,7 +183,9 @@ the harness treats it as a boolean. A harness that needs that name requires a re
 change; spelling around the rule in a connector is not allowed.
 
 Each environment value is at most 1024 bytes and contains no control character. `SHELL` is the
-only path-valued exception and must be exactly `/bin/zsh`, `/bin/bash` or `/bin/sh`. Every other
+only path-valued exception and must be exactly `/bin/zsh`, `/bin/bash` or `/bin/sh`.
+`NODE_USE_ENV_PROXY` must be exactly `1`: it names no endpoint, it makes a Node harness honour the
+`HTTPS_PROXY` the launch pins (D59). Every other
 value is refused if it starts with `/` or `~`, contains `$`, a backtick or `://`, or has a `..`
 path component. `Origin::Dev` does not relax environment values.
 
@@ -190,7 +193,7 @@ path component. `Origin::Dev` does not relax environment values.
 
 | Field | Required/default | Contract |
 |---|---|---|
-| `capture.home.run_home` | required | Closed values: `empty`, `keychain_link`. |
+| `capture.home.run_home` | required | Closed values: `empty`, `keychain_link`, `shared`. `shared` only without `capture.home.env` (D59). |
 | `capture.home.config_home` | required | Closed values: `shared`, `per_run`. |
 | `capture.home.env` | optional, default absent | 1–64 bytes; `^[A-Z][A-Z0-9_]{0,63}$`, then the home-variable policy below. |
 | `capture.home.per_run_dir` | optional; effective default `harness-home` | `per_run` only; 1–32 bytes; `^[a-z0-9][a-z0-9-]{0,31}$`. |
@@ -223,6 +226,15 @@ Without `capture.home.env` the launch points no variable at the config home, so 
 its state under the private run `HOME`. Then `config_home` must be `per_run`, `seed` and `dirs`
 must be empty, and the native `root` must be `{run_home}/...`: anything else would be a home the
 harness never reads, admitted to record nothing.
+
+That run `HOME` is fresh each run, so a login made before the run is lost. `run_home = "shared"`
+keeps it instead (D59): one empty directory per connector, made by the tracker and kept across
+runs, held to the rules of a shared config home. Runs on it are serialized; the daemon refuses it
+at the participant's `HOME`, at a `real_dirs` path or anywhere but directly under
+`<config_dir>/capture-homes`; the baseline lists it in place of the config home; a missing
+`{run_home}` native root is created as a `{config_home}` root is; a `{run_home}` native root with
+identity `none` needs `since_run_start = true`; and a credential is refused. It is refused with
+`capture.home.env`: such a harness shares its config home instead.
 
 ## Credential and CA
 
@@ -302,7 +314,8 @@ against it are serialized.
 A native root under the config home (`{config_home}/...`) that does not exist yet is created when
 the capture is created, the config home itself too if it is missing: one directory at a time,
 mode `0700`, never through a link. A component that exists as a symlink or as anything but a
-directory refuses the creation. A `{run_home}` root is not created this way.
+directory refuses the creation. A `{run_home}` root is created this way only under a shared run
+home (`run_home = "shared"`, D59).
 
 An unknown but syntactically valid `protocol_hint` is admitted and means capture-only unless a
 registered decoder accepts the complete `StreamOpen`. A snapshot cannot carry a hint. The same
@@ -383,11 +396,12 @@ In addition to the local rules above, all of these apply:
 1. `preassigned` requires `{session_id}` in `capture.args`. `{session_id}` anywhere in `args`,
    `resume_args` or an environment value requires `preassigned`.
 2. A credential requires `stderr_line` plus `deferred`, or `stdout_json` plus `at_launch`,
-   identity and a `per_run` config home. One stdout reader feeds the key-fragment scan and the
-   `stdout_json` identity matcher.
+   identity, a `per_run` config home and a run home that is not `shared`. One stdout reader
+   feeds the key-fragment scan and the `stdout_json` identity matcher.
 3. `capture.home.seed`, `dirs` and an explicit `per_run_dir` require `config_home = "per_run"`.
-4. With `identity.source = "none"`, the native root must be `{run_home}/...`, or
-   `{config_home}/...` with a per-run config home, or the native source must declare
+4. With `identity.source = "none"`, the native root must be `{run_home}/...` with a run home
+   that is not `shared`, or `{config_home}/...` with a per-run config home, or the native
+   source must declare
    `since_run_start = true`. A shared unscoped source read from before the run could read another
    run's session and is refused.
 5. The native root plus pattern, compared case-insensitively with `{id}` treated as `*`, cannot
@@ -402,6 +416,7 @@ In addition to the local rules above, all of these apply:
 10. A manifest is delivery-agnostic: no argument, resume argument, goal flag, environment key/value, host or auth
     host may name Goal Cup, its reserved environment namespace or a tracker host. There is no
     schema field for a server, upload or delivery credential.
+11. `run_home = "shared"` is refused with `capture.home.env` (D59).
 
 ## Folder/id/digest admission
 

@@ -406,7 +406,10 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
     if upper.ends_with("_BASE_URL") || upper.ends_with("_API_URL") || upper.contains("ENDPOINT") {
         return Some("redirects an endpoint (D1)");
     }
-    if upper.ends_with("_PROXY") || upper == "PROXY" {
+    // The one proxy name admitted (D59), in `capture.env` only, its value held to `1` by
+    // [`env_value_denied`]: it names no endpoint, it makes Node honour the proxy the launch pins.
+    let node_env_proxy = ctx == EnvContext::CaptureEnv && upper == NODE_USE_ENV_PROXY;
+    if (upper.ends_with("_PROXY") || upper == "PROXY") && !node_env_proxy {
         return Some("is a proxy variable, which the capture launch pins itself");
     }
     if [
@@ -503,10 +506,14 @@ pub fn env_key_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
 /// The shells a `SHELL` value may name.
 pub const SHELL_VALUES: &[&str] = &["/bin/zsh", "/bin/bash", "/bin/sh"];
 
+/// The one `*_PROXY` name `capture.env` admits, and only as `1` (D59).
+pub const NODE_USE_ENV_PROXY: &str = "NODE_USE_ENV_PROXY";
+
 /// Why an environment VALUE is refused, or `None` (I5b). `SHELL` is admitted only as one of
-/// [`SHELL_VALUES`]. Any other key's value is refused when it starts with `/` or `~`, contains
-/// `$`, a backtick or `://`, or holds a `..` path component: a value that is a path, a URL or
-/// an expansion can point the harness at the participant's real files or at another endpoint.
+/// [`SHELL_VALUES`], and [`NODE_USE_ENV_PROXY`] only as `1` (D59). Any other key's value is
+/// refused when it starts with `/` or `~`, contains `$`, a backtick or `://`, or holds a `..`
+/// path component: a value that is a path, a URL or an expansion can point the harness at the
+/// participant's real files or at another endpoint.
 ///
 /// Template tokens are checked before rendering, so `{workspace}` passes. Not relaxed for
 /// `Origin::Dev`: the controlled workload and the kit need no absolute env value.
@@ -517,6 +524,9 @@ pub fn env_value_denied(key: &str, value: &str) -> Option<&'static str> {
         } else {
             Some("SHELL is admitted only as /bin/zsh, /bin/bash or /bin/sh")
         };
+    }
+    if key.eq_ignore_ascii_case(NODE_USE_ENV_PROXY) {
+        return (value != "1").then_some("`NODE_USE_ENV_PROXY` must be exactly `1` (D59)");
     }
     if value.starts_with('/') || value.starts_with('~') {
         return Some(
