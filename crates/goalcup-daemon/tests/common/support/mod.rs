@@ -113,8 +113,29 @@ pub fn write_config_with(
 }
 
 /// Everything in the chain, in order: every part file that is on disk (D55), from
-/// `chain.jsonl` or the first part that survived pruning.
+/// `chain.jsonl` or the first part that survived pruning. Strict: a torn last line fails, so
+/// use it on a chain the daemon has sealed or is not writing.
 pub fn read_chain(trace_dir: &std::path::Path) -> Vec<goalcup_protocol::envelope::Envelope> {
+    read_chain_with(trace_dir, false)
+}
+
+/// [`read_chain`] for a chain the daemon may be appending to: a final line without its newline
+/// is a write in flight and is left out, so a poll sees only whole lines.
+pub fn read_chain_whole_lines(
+    trace_dir: &std::path::Path,
+) -> Vec<goalcup_protocol::envelope::Envelope> {
+    read_chain_with(trace_dir, true)
+}
+
+/// `text` up to and including its last newline: a trailing fragment is dropped.
+pub fn whole_lines(text: &str) -> &str {
+    text.rfind('\n').map_or("", |end| &text[..=end])
+}
+
+fn read_chain_with(
+    trace_dir: &std::path::Path,
+    whole_lines_only: bool,
+) -> Vec<goalcup_protocol::envelope::Envelope> {
     let parts = goalcup_protocol::export::chain_parts(trace_dir)
         .unwrap_or_else(|e| panic!("{}: {e}", trace_dir.display()));
     assert!(!parts.is_empty(), "{}: no chain part", trace_dir.display());
@@ -123,6 +144,11 @@ pub fn read_chain(trace_dir: &std::path::Path) -> Vec<goalcup_protocol::envelope
         .flat_map(|part| {
             let text = std::fs::read_to_string(&part.path)
                 .unwrap_or_else(|e| panic!("{}: {e}", part.path.display()));
+            let text = if whole_lines_only {
+                whole_lines(&text)
+            } else {
+                &text
+            };
             text.lines()
                 .filter(|l| !l.trim().is_empty())
                 .map(|l| serde_json::from_str(l).expect("a chain line is an envelope"))

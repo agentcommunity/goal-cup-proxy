@@ -2733,6 +2733,19 @@ async fn a_workspace_inside_the_tracker_roots_is_refused() {
     assert_eq!(fine.status(), 200, "{}", fine.body());
 }
 
+/// A chain polled mid-write reads only its whole lines; a fragment after the last newline is
+/// a write in flight.
+#[test]
+fn a_trailing_partial_line_is_not_a_whole_line() {
+    assert_eq!(
+        support::whole_lines("{\"a\":1}\n{\"b\":2}\n{\"c\""),
+        "{\"a\":1}\n{\"b\":2}\n"
+    );
+    assert_eq!(support::whole_lines("{\"a\":1}\n"), "{\"a\":1}\n");
+    assert_eq!(support::whole_lines("{\"a\""), "");
+    assert_eq!(support::whole_lines(""), "");
+}
+
 /// The chain's parts, once there are at least `count` of them (10 s at most).
 async fn parts_when(trace: &Path, count: usize) -> Vec<goalcup_protocol::export::ChainPart> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
