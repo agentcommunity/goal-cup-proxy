@@ -1399,10 +1399,10 @@ fn a_run_records_mode_is_what_continue_restarts_it_in() {
 }
 
 /// The binary's text for a machine that has started nothing: `status` says to run `prep` then
-/// `start --harness <id>` (a chat-mode harness refuses `--goal-file`), the help leads with that
-/// same command, and `upload` with no id has no run to send.
+/// `start --harness <id>` (a chat-mode harness refuses `--goal-file`), and the help leads with
+/// that same command before it mentions `--goal-file`.
 #[test]
-fn the_binary_leads_with_chat_mode_start_and_upload_needs_no_id() {
+fn the_binary_leads_with_chat_mode_start() {
     let goalcup = env!("CARGO_BIN_EXE_goalcup");
     let cfg = tempfile::tempdir().unwrap();
     let run = |args: &[&str]| {
@@ -1424,13 +1424,79 @@ fn the_binary_leads_with_chat_mode_start_and_upload_needs_no_id() {
 
     let out = run(&["--help"]);
     let help = String::from_utf8_lossy(&out.stdout);
+    let chat = help
+        .find("goalcup start --harness <id>")
+        .expect("the start line");
+    let headless = help.find("--goal-file").expect("the headless note");
+    assert!(chat < headless, "chat-mode start leads: {help}");
+}
+
+/// `goalcup upload` with no id works on the newest run only, skips entries already sent, says
+/// so when nothing is left, and says plainly that a local run has nothing to send.
+#[test]
+fn upload_with_no_id_picks_the_newest_runs_unsent_entries() {
+    use goalcup_cli::commands::upload::{unsent_of_newest_run, upload_newest_with};
+    use goalcup_cli::run::{EntryRef, RunRecord, write};
+    let cfg = tempfile::tempdir().unwrap();
+    let cfg = cfg.path();
+
+    // Nothing started yet.
+    let error = unsent_of_newest_run(cfg).unwrap_err();
+    assert!(error.to_string().contains("nothing to upload"), "{error}");
+
+    let run = |run_id: &str, server: Option<&str>, started: u64, entries: &[&str]| RunRecord {
+        run_id: run_id.to_string(),
+        server_url: server.map(str::to_string),
+        practice: false,
+        test: false,
+        connector_id: "claude-code-cli".to_string(),
+        workspace: PathBuf::from("/w"),
+        started_at_unix: started,
+        deadline_at: None,
+        entries: entries
+            .iter()
+            .map(|id| EntryRef {
+                entry_id: (*id).to_string(),
+                trace_dir: PathBuf::from("/t"),
+            })
+            .collect(),
+    };
+    let mark_sent = |entry_id: &str| {
+        let spool = cfg.join(goalcup_cli::upload::UPLOADS_DIR_NAME);
+        std::fs::create_dir_all(&spool).unwrap();
+        std::fs::write(spool.join(format!("{entry_id}.sent")), b"sent\n").unwrap();
+    };
+    // An older run with an unsent entry, and the newest run with three segments, the middle one
+    // already sent.
+    write(cfg, &run("old", Some("https://s.example"), 100, &["o-1"])).unwrap();
+    write(
+        cfg,
+        &run(
+            "new",
+            Some("https://s.example"),
+            200,
+            &["n-1", "n-2", "n-3"],
+        ),
+    )
+    .unwrap();
+    mark_sent("n-2");
+    let (run_id, unsent) = unsent_of_newest_run(cfg).unwrap();
+    assert_eq!(run_id, "new");
+    assert_eq!(unsent, ["n-1", "n-3"], "oldest first, the sent one skipped");
+
+    // Everything of the newest run sent: said so, and the older run is left alone.
+    mark_sent("n-1");
+    mark_sent("n-3");
+    let mut out = Vec::new();
+    upload_newest_with(cfg, Default::default(), &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
     assert!(
-        help.contains("Start a run with `goalcup start --harness <id>`, which opens"),
-        "{help}"
+        said.contains("everything of run new is already sent"),
+        "{said}"
     );
 
-    let out = run(&["upload"]);
-    let said = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{said}");
-    assert!(said.contains("nothing to upload"), "{said}");
+    // A newest run that was never opened on a server has nothing to send.
+    write(cfg, &run("local", None, 300, &["l-1"])).unwrap();
+    let error = unsent_of_newest_run(cfg).unwrap_err();
+    assert!(error.to_string().contains("is local"), "{error}");
 }

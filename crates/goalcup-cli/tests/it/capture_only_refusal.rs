@@ -151,3 +151,39 @@ fn doctor_defaults_to_the_harness_in_prep_json_and_all_checks_every_one() {
     );
     assert!(!said.contains("hermes-cli"), "{said}");
 }
+
+/// A `prep.json` that names a harness no connector here declares (stale after an upgrade) does
+/// not make bare `goalcup doctor` refuse: it checks every connector, as before prep existed.
+/// An explicit `--harness <id>` that nothing declares is still a refusal.
+#[test]
+fn doctor_falls_back_to_every_connector_when_prep_names_an_unknown_harness() {
+    let cfg = tempfile::tempdir().unwrap();
+    goalcup_cli::prep_file::write_prep(
+        cfg.path(),
+        &goalcup_cli::prep_file::PrepFile {
+            harness: "no-such-harness".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let run = |harness: Option<&str>, out: &mut Vec<u8>| {
+        run_with(
+            None,
+            &support::connectors_dir(),
+            cfg.path(),
+            &std::collections::BTreeMap::new(),
+            &opts(harness),
+            out,
+        )
+    };
+    let mut out = Vec::new();
+    run(None, &mut out).expect("bare doctor still reports");
+    let said = String::from_utf8(out).unwrap();
+    assert!(said.starts_with("goalcup doctor\n"), "{said}");
+    assert!(!said.contains("from goalcup prep"), "{said}");
+    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
+        assert!(said.contains(id), "every connector is reported: {said}");
+    }
+    let refused = run(Some("no-such-harness"), &mut Vec::new());
+    assert!(refused.is_err(), "an explicit unknown id is refused");
+}

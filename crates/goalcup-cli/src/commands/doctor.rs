@@ -92,12 +92,16 @@ pub fn run_with(
     // and then the list is narrowed to the one connector.
     // No flag: the harness `goalcup prep` settled, so a harness never installed cannot fail
     // the run of one that is. `--harness all`, or no `prep.json` yet, checks every connector.
-    let from_prep = opts.harness.is_none();
+    let mut from_prep = opts.harness.is_none();
     let scope: Option<String> = match opts.harness.as_deref() {
         Some(ALL_HARNESSES) => None,
         Some(id) => Some(id.to_string()),
-        None => Some(crate::prep_file::read_prep_lenient(cfg).harness).filter(|id| !id.is_empty()),
+        // A prep that names an id no connector here declares (a stale prep after an upgrade)
+        // must not make the command that runs when nothing works refuse: check everything.
+        None => Some(crate::prep_file::read_prep_lenient(cfg).harness)
+            .filter(|id| reports.iter().any(|r| &r.connector_id == id)),
     };
+    from_prep &= scope.is_some();
     if let Some(id) = &scope {
         let all: Vec<String> = reports.iter().map(|r| r.connector_id.clone()).collect();
         reports.retain(|r| &r.connector_id == id);

@@ -50,7 +50,7 @@ struct Args {
 /// leave under.
 const AFTER_HELP: &str = "\
 Start a run with `goalcup start --harness <id>`, which opens the harness in your terminal for you \
-to type the prompt. A headless harness takes `--goal-file <file>` as well. It starts the recording daemon \
+to type the prompt. A headless harness needs `--goal-file <file>` instead. It starts the recording daemon \
 (`goalcup-daemon`, beside this binary) for the run, and the daemon exits once every run \
 is sealed. `status` and `entries` start it again to answer, sealed runs included; it stays up \
 while a run whose daemon died is unsealed, until `goalcup seal`.
@@ -66,7 +66,7 @@ could not read, an answer it could not parse). This command never exits with 2 o
 /// What `goalcup doctor --help` says under its flags. There is no verify
 /// mode here: a sealed capture is checked by `goalcup-verify --capture-integrity`.
 const DOCTOR_AFTER_HELP: &str = "\
-For each harness it checks (see below) it checks that the connector files are the pinned ones and \
+For each harness it checks, it verifies that the connector files are the pinned ones and \
 finds the harness executable on PATH that `goalcup start` runs (hashed, not started). Any build is accepted: the \
 run records which one ran.
 
@@ -317,51 +317,15 @@ fn run(command: Command) -> Result<u8, CliError> {
         }
         Command::Upload { entry } => {
             let cfg = goalcup_cli::config::config_dir()?;
-            upload(
-                &cfg,
-                entry.as_deref(),
-                upload_policy()?,
-                &mut std::io::stdout(),
-            )
+            let policy = upload_policy()?;
+            let out = &mut std::io::stdout();
+            match entry.as_deref() {
+                Some(entry_id) => commands::upload::upload_with(&cfg, entry_id, policy, out),
+                None => commands::upload::upload_newest_with(&cfg, policy, out),
+            }
             .map(|()| 0)
         }
     }
-}
-
-/// `goalcup upload [<entry>]`. With an entry id, that entry. Without one, each entry of the newest
-/// run started on this machine whose upload has not finished (a run continued after a crash has
-/// one entry per segment), oldest first.
-fn upload(
-    cfg: &std::path::Path,
-    entry: Option<&str>,
-    policy: goalcup_cli::upload::uploader::Policy,
-    out: &mut dyn std::io::Write,
-) -> Result<(), CliError> {
-    if let Some(entry_id) = entry {
-        return commands::upload::upload_with(cfg, entry_id, policy, out);
-    }
-    let run = goalcup_cli::run::newest(cfg)?.ok_or_else(|| {
-        CliError::Refused(
-            "no run has been started from this machine, so there is nothing to upload. \
-             Name an entry with `goalcup upload <entry>`."
-                .to_string(),
-        )
-    })?;
-    let spool = cfg.join(goalcup_cli::upload::UPLOADS_DIR_NAME);
-    let unsent: Vec<&str> = run
-        .entries
-        .iter()
-        .map(|e| e.entry_id.as_str())
-        .filter(|id| !goalcup_cli::upload::uploader::is_sent(&spool, id))
-        .collect();
-    if unsent.is_empty() {
-        let _ = writeln!(out, "everything of run {} is already sent.", run.run_id);
-        return Ok(());
-    }
-    for entry_id in unsent {
-        commands::upload::upload_with(cfg, entry_id, policy, out)?;
-    }
-    Ok(())
 }
 
 /// When chunks go and how failures wait: the shipped policy, or in a test build one named by
