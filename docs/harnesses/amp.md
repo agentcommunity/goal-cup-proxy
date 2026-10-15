@@ -2,9 +2,9 @@
 
 Connector id: `amp-cli` (proposed; no connector exists) · Facts for version: `0.0.1791676897-g77c125` · Written by: Goal Cup team, draft for the Amp team · Last checked: 2026-10-15
 Public disclosure: yes. The facts come from Amp's public documentation, string literals and help text in the shipped npm package, a key-free, network-less probe on one Linux host (2026-10-12), and one live, logged-in probe on macOS arm64 (2026-10-15). The live probe used the Goal Cup maintainer's own Amp account, a private `HOME` and `TMPDIR`, a workspace outside any Git tree, and a capturing loopback proxy. No Amp source code was read. Raw probe output is not published, because it holds tokens.
-Status: facts, draft for the Amp team to confirm
+Status: facts only (draft for the Amp team to confirm)
 
-How to read this sheet. "(live)" marks a fact measured in the logged-in macOS probe: two execute-mode runs, a one-word decoy goal on the default mode and a file-plus-shell goal on `--mode low`, both through the proxy with `AMP_SKIP_UPDATE_CHECK=1`. A fact with no marker was measured by the key-free Linux probe (x86_64, glibc, no route out). Every other fact is marked "(please confirm)" and is one of: Amp public docs fetched 2026-10-11, a string or help text read from the package without running that path, or "unknown". We would rather be told we are wrong than guess. The key-free evidence is in the [Amp readiness record](../qualification/m2-amp-readiness.md); the Goal Cup changes made before the live probe are in [amp-core-prep](../research/amp-core-prep.md).
+How to read this sheet. "(live)" marks a fact measured in the logged-in macOS probe: two execute-mode runs, a one-word decoy goal on the default mode and a file-plus-shell goal on `--mode low`, both through the proxy with `AMP_SKIP_UPDATE_CHECK=1`. A fact with no marker was measured by the key-free Linux probe (x86_64, glibc, no route out). Every other fact is marked "(please confirm)" and is one of: Amp public docs fetched 2026-10-11, a string or help text read from the package without running that path, or "unknown". We would rather be told we are wrong than guess.
 
 ## Summary of the live probe
 
@@ -28,12 +28,12 @@ amp --stream-json --execute=<goal>
 - Offline outcomes: with no key, stdout prints `No API key found. Starting login flow...` and a login URL, then waits for a pasted code; with stdin `/dev/null` it did not exit in 40 s. With an invented `AMP_API_KEY` and no route out, exit 1, empty stdout, stderr `Couldn't connect to the Amp server at https://ampcode.com/.`
 - After an execute run, the CLI calls `/api/internal?archiveThread` (live).
 
-## 2. Install and pin a version
+## 2. Install and record a version
 
 - `npm install @sourcegraph/amp@0.0.1791676897-g77c125`. This is an alias published under the dist-tag `latest` on 2026-10-11 with the description "Renamed to @ampcode/cli"; its only dependency is `@ampcode/cli` at the same version (npm metadata; please confirm that the alias will keep resolving).
 - `@ampcode/cli` has `postinstall: node install.cjs`, which hard-links (or copies) the platform package's `amp` to `bin/amp`, makes `bin/amp.exe` a symlink to it, and makes no network call. Optional dependencies: `@ampcode/cli-{darwin-arm64,darwin-x64,linux-arm64,linux-x64,win32-x64}` at the same version (npm metadata; please confirm).
 - The executable is a native single-file Bun 1.4.1 executable: ELF on Linux, Mach-O on macOS. No `node` at run time. Without the postinstall, `cli-wrapper.cjs` runs the native binary under `node` (package contents; please confirm).
-- Where it lands (measured, Linux): `<prefix>/node_modules/@ampcode/cli/bin/amp`, a regular file with link count 2 (same inode as the platform package's `amp`); `<prefix>/node_modules/.bin/amp` links to `bin/amp.exe`, which links to `amp`. Goal Cup pins the regular file.
+- Where it lands (measured, Linux): `<prefix>/node_modules/@ampcode/cli/bin/amp`, a regular file with link count 2 (same inode as the platform package's `amp`); `<prefix>/node_modules/.bin/amp` links to `bin/amp.exe`, which links to `amp`. The daemon records the digest of the regular file.
 - Print the version: `amp --version` prints `0.0.1791676897-g77c125 (released 2026-10-11T00:01:37.000Z, ...)`; `amp version` adds `npm package: @ampcode/cli`.
 - Linux x64 payload: 134,157,792 bytes, SHA-256 `6c1b791d8e2c4661460b96276860c289d50ff0cacadaf1061ccb401295792036`, identical in the tarball, the platform package and `bin/amp` (measured).
 - macOS arm64: the installed `bin/amp` is a Mach-O arm64 executable with SHA-256 `107c8b2c312e97447bd20d9f7d678d477195bd330753de81749b547bc7477f44`, the same as the bytes extracted from the tarball, and it was unchanged after both runs (live). macOS x64 and Windows installed bytes: unknown (please confirm).
@@ -113,10 +113,6 @@ Skills are scanned from the cwd and every ancestor up to `/`; Amp also loads ski
 - Execute mode opens an interactive login on a missing key, with the login text on stdout before any JSON.
 - Execute mode also starts when stdout is not a terminal, so `amp <command> --help` piped to a file fails instead of printing help (live).
 - The `latest` dist-tag is the native-binary line; an older dist-tag, `next`, was published 2026-05-14 (npm metadata).
-
-### Answered by the live probe
-
-Questions 1 (local thread record: none), 2 (identity carrier: `T-<uuid>`, bound before the first model turn), 3 (WebSocket over HTTP/1.1, JSON text frames, honours `HTTPS_PROXY`), 7 (macOS credentials in `accounts.json` and `secrets.json`, no Keychain) and the macOS arm64 half of 15 from the 2026-10-12 list.
 
 ### Open questions for Amp
 

@@ -1,7 +1,7 @@
 # Hermes Agent harness facts
 
 Connector id: `hermes-cli` · Facts for version: `0.19.0` · Written by: Goal Cup team · Last checked: 2026-10-12
-Public disclosure: yes. Everything here comes from the public connector, the public decision log, Goal Cup's source reading of the installed package and one live reference row on macOS; no keys, tokens or personal paths are included.
+Public disclosure: yes. Everything here comes from the public connector, Goal Cup's source reading of the installed package and one live reference row on macOS; no keys, tokens or personal paths are included.
 Status: shipped connector (capture-only: Goal Cup records the run, but there is no native decoder for the session snapshot, so no own-session claim is made yet)
 
 Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64, Hermes 0.19.0, CPython 3.13.13, 2026-09-03 spike and 2026-10-02 reference row); "source" means Goal Cup read the installed 0.19.0 package without running that path; "vendor docs" means a quote that Goal Cup's research file took from Nous Research's documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux and Windows were not measured for this harness, so most cells in those columns say "unknown".
@@ -21,11 +21,11 @@ hermes chat -Q --provider deepseek --query=<goal>
 - `--provider` is the literal `deepseek`; `auto` is refused because it picks a provider from the environment (source). `--safe-mode` and `--ignore-user-config` must not be added; both skip the private config that enables the JSON snapshot (source).
 - The capture environment: `HOME` and `HERMES_HOME` are fresh private directories, `TERMINAL_HOME_MODE=profile`, `DEEPSEEK_API_KEY` for the child only, `HTTPS_PROXY`, `HERMES_CA_BUNDLE`, a fixed `PATH` (code and source).
 
-## 2. Install and pin a version
+## 2. Install and record a version
 
-- Distribution: the Python package `hermes-agent`, installed with `uv tool install hermes-agent` (code: `harnesses/install.sh`, which installs unpinned). `hermes-agent==0.19.0` is the measured version (no build is pinned since D53, and the connector has no `version_args`: the version command is not known); the `==` spelling is standard uv/pip syntax, not run for this sheet.
+- Distribution: the Python package `hermes-agent`, installed with `uv tool install hermes-agent` (code: `harnesses/install.sh`, which installs the latest version). `hermes-agent==0.19.0` is the measured version. The `==` spelling is standard uv/pip syntax, not run for this sheet. No build is pinned (D53), and the connector has no `version_args` because the version command is not known.
 - Requires Python `>=3.11,<3.14`; measured with CPython 3.13.13 (source; metadata).
-- Binary: `$UV_TOOL_BIN_DIR/hermes` is a 372-byte console script whose entry point is `hermes_cli.main:main`; Goal Cup pins its SHA-256 (code). Whether those bytes are the same on every install, OS and interpreter path: unknown.
+- Binary: `$UV_TOOL_BIN_DIR/hermes` is a 372-byte console script whose entry point is `hermes_cli.main:main`. The daemon records its SHA-256 (D53). Whether those bytes are the same on every install, OS and interpreter path: unknown.
 - Print the version: unknown (the connector does not use a version command; the installed distribution name and version are read from the package metadata).
 - Linux and Windows install locations: unknown. A Docker image `nousresearch/hermes-agent` and a desktop app for macOS, Windows and Linux exist (vendor docs); neither was measured.
 
@@ -34,7 +34,7 @@ hermes chat -Q --provider deepseek --query=<goal>
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Config dir | `$HERMES_HOME`, default `~/.hermes` (vendor docs; measured with an isolated dir). Holds `config.yaml`, `auth.json` (mode 0600), `.env`, `.update_check`, `SOUL.md`, `plugins/`, `hooks/`, `skills/` | unknown (vendor docs name `~/.hermes`; Docker uses `HERMES_HOME=/opt/data`; not measured on Linux) | unknown |
-| Session / transcript store | `$HERMES_HOME/state.db`, SQLite in WAL mode, schema version 22 on 0.19.0 (measured; the pre-spike research said 27). Per-run snapshot `$HERMES_HOME/sessions/session_<id>.json`, written only when `sessions.write_json_snapshots: true` (default false; source and measured). `request_dump_<sid>_<ts>.json` also lands in `sessions/` after a non-retryable 4xx (source) | unknown | unknown |
+| Session / transcript store | `$HERMES_HOME/state.db`, SQLite in WAL mode, schema version 22 on 0.19.0 (measured). Per-run snapshot `$HERMES_HOME/sessions/session_<id>.json`, written only when `sessions.write_json_snapshots: true` (default false; source and measured). `request_dump_<sid>_<ts>.json` also lands in `sessions/` after a non-retryable 4xx (source) | unknown | unknown |
 | Logs / cache | `$HERMES_HOME/logs/` (`agent.log`, redacted, rotates at 5 MiB times 3: vendor docs); `$HERMES_HOME/cache/delegation/live/<id>/task-<n>.log` and `manifest.json`, pruned after 7 days (measured file layout; docs for pruning); `session-exports/` for `hermes sessions export` (vendor docs) | unknown | unknown |
 | Env vars that move these | `HERMES_HOME` moves all of the above (measured). `TERMINAL_HOME_MODE=profile` makes tool children use `$HERMES_HOME/home` as their home (source). `HOME` still matters: Hermes reads host-level credential files in the home directory (measured, 2026-09-03). `-p`/`--profile` switches `HERMES_HOME` (source) | same variable names expected; behaviour not measured on Linux | unknown |
 
@@ -80,13 +80,11 @@ hermes chat -Q --provider deepseek --query=<goal>
 - **Host credentials.** Isolation depends on the empty private `HOME` and `HERMES_HOME`; Hermes's own code reads host credential files from the home directory (measured).
 - **Orphaned tool processes.** See section 7.
 - **Machine-wide or managed settings.** unknown.
-- **Another Hermes.** A second `HERMES_HOME`, `--profile`, a Docker container or a desktop app pointed at a remote `hermes serve` is invisible to a local tracker (vendor docs via research file).
+- **Another Hermes.** A second `HERMES_HOME`, `--profile`, a Docker container or a desktop app pointed at a remote `hermes serve` is invisible to a local tracker (vendor docs).
 
 ## 9. Quirks and open questions
 
-- The pre-spike research file was wrong on this version: schema 22 not 27, 23 hook names not 26 or more, no separate system-prompts table (measured, spike 7).
 - No model or reasoning effort is set since 2026-10-14 (owner direction); the provider stays `deepseek` because `DEEPSEEK_API_KEY` is the one admitted credential. The reference row used `--model deepseek-v4-flash` and `agent.reasoning_effort: "none"` (which must be quoted so YAML does not read it as a boolean). Without `--model`, Hermes 0.19.0 falls back to the first entry of its DeepSeek model list, `deepseek-v4-pro`, with the provider's default thinking (source: `cli_agent_setup_mixin.py`, `models.py`; not measured).
 - Title generation and compression stay off so there is one session id and no auxiliary model call (code); compression off is a real limit on very long runs. The `tirith` scanner stays off (secret review I-2), and the remote model catalogue stays off.
 - The first reference row passed capture integrity but its trace has not been re-decoded; the claim stays capture-only ([reference row, D41](../DECISIONS.md#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules)).
 - Open: every "unknown" above; the Linux and Windows `HERMES_HOME`; the version command; the update-check host; failure exit codes; whether the console script bytes are portable.
-- Compiled from records dated 2026-09-03 to 2026-10-05 and the public connector; none of the runs were repeated for this sheet.
