@@ -40,11 +40,6 @@ pub struct PrepFile {
     /// for `harness` alone: another harness starts again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub home_ready: bool,
-    /// The repository at `repo_url` was found public, empty and pushable with the stored
-    /// token. Kept because a practice run pushes to it, and a repository that is no longer
-    /// empty would fail the same check on the next `goalcup prep`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub github_ok: bool,
 }
 
 /// `<cfg>/prep.json`.

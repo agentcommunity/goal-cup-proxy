@@ -3411,6 +3411,7 @@ impl Serving {
                 cfg: self.cfg,
                 github: self.github,
                 work_root: self.work_root,
+                practice: opts.practice,
                 clone_source: self.clone_source,
             })),
         })
@@ -3444,6 +3445,8 @@ struct NewRun {
     cfg: PathBuf,
     github: crate::account::github::GithubSetup,
     work_root: PathBuf,
+    /// A practice run never pushes: its clone is given no credential helper.
+    practice: bool,
     #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     clone_source: Option<String>,
 }
@@ -3481,8 +3484,8 @@ impl Uploading {
 
     /// Clone the participant's repository into `dest`, which is this run's workspace. The
     /// clone holds no token: its remote is the plain repository address, and its git asks
-    /// `goalcup git-credential` for one when it pushes (`account::github`). A continued run has
-    /// its clone already.
+    /// `goalcup git-credential` for one when it pushes (`account::github`). A practice run's
+    /// clone has no such helper and cannot push. A continued run has its clone already.
     fn clone_workspace(&self, dest: &Path) -> Result<(), CliError> {
         let UploadHow::Fresh(new) = &self.how else {
             return Ok(());
@@ -3497,6 +3500,22 @@ impl Uploading {
         })?;
         let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
         let cfg = &new.cfg;
+        // The owner's rule: a practice run never pushes, so the competition repository stays
+        // empty until the competition run. Its clone is anonymous and can only read.
+        #[cfg(feature = "test-support")]
+        if new.practice
+            && let Some(source) = &new.clone_source
+        {
+            return crate::account::github::clone_readonly_from(
+                Path::new("git"),
+                source,
+                &new.github,
+                dest,
+            );
+        }
+        if new.practice {
+            return crate::account::github::clone_readonly_into(&new.github, dest);
+        }
         #[cfg(feature = "test-support")]
         if let Some(source) = &new.clone_source {
             return crate::account::github::clone_from(

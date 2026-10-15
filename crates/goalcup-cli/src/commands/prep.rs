@@ -29,9 +29,10 @@
 //! # Re-running
 //!
 //! `<cfg>/prep.json` keeps what is settled: the harness, the repository, the work folder, and
-//! the two facts that cannot be re-observed cheaply (`home_ready`, `github_ok`). A second prep
+//! the one fact that cannot be re-observed (`home_ready`). A second prep
 //! skips the steps it has settled and keeps every value a flag does not change; changing the
-//! harness starts its home again, and changing the repository checks the new one.
+//! harness starts its home again. The GitHub step is asked on every prep: the repository is
+//! public, empty and pushable with the stored token, because a practice run never pushes.
 
 use crate::CliError;
 use crate::account::github::{self, GithubSetup};
@@ -315,9 +316,6 @@ pub fn prep_with(
 
     // 4. GitHub
     if let Some(url) = &repo_flag {
-        if file.repo_url != *url {
-            file.github_ok = false;
-        }
         file.repo_url = url.clone();
     }
     let github_step = github_step(doors, cfg, &mut file, acting, &mut report)?;
@@ -628,33 +626,24 @@ fn github_step(
     let stored = GithubSetup::load(cfg)
         .ok()
         .filter(|setup| same_repo(&setup.repo_url, &repo));
-    // What must stay true is asked on every prep (one request): the repository is public and
-    // the token can push. That it is empty is asked until it has once passed; a practice run
-    // pushes, and a repository with commits in it is then as it should be.
+    // Public, empty and pushable, asked on every prep: a practice run never pushes, so the
+    // repository is still empty until the competition run, and a token that expired or was
+    // revoked, or a repository made private, is found now and not on the day.
     let mut failed = None;
     if let Some(setup) = &stored {
         match github::check_access(&api, setup) {
-            Ok(()) if file.github_ok => {
-                return Ok(step(
-                    STEP_GITHUB,
-                    State::Ok,
-                    false,
-                    format!("{repo} is public, and the stored token can push to it"),
-                ));
-            }
-            Ok(()) => match github::check_empty(&api, setup) {
-                Ok(()) => {
-                    file.github_ok = true;
-                    return Ok(step(
+            Ok(()) => {
+                return Ok(match github::check_empty(&api, setup) {
+                    Ok(()) => step(
                         STEP_GITHUB,
                         State::Ok,
                         false,
                         format!("{repo} is public and empty, and the stored token can push to it"),
-                    ));
-                }
-                // The token is fine; a new one would not make the repository empty.
-                Err(error) => return Ok(fail(error.to_string())),
-            },
+                    ),
+                    // The token is fine; a new one would not empty the repository.
+                    Err(error) => fail(error.to_string()),
+                });
+            }
             Err(error) => failed = Some(error.to_string()),
         }
     }
@@ -680,21 +669,16 @@ fn github_step(
         Ok(setup) => setup,
         Err(error) => return Ok(fail(error.to_string())),
     };
-    if let Err(error) = github::check_access(&api, &setup) {
+    // Stored only once it has passed the whole check.
+    if let Err(error) = github::check(&api, &setup) {
         return Ok(fail(error.to_string()));
-    }
-    if !file.github_ok {
-        if let Err(error) = github::check_empty(&api, &setup) {
-            return Ok(fail(error.to_string()));
-        }
-        file.github_ok = true;
     }
     setup.store(cfg)?;
     Ok(step(
         STEP_GITHUB,
         State::Ok,
         false,
-        format!("{repo} is public, and the token you gave can push to it; it is stored"),
+        format!("{repo} is public and empty, and the token you gave can push to it; it is stored"),
     ))
 }
 

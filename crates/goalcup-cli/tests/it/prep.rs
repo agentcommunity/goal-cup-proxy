@@ -294,7 +294,6 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
     let mut file = prep_file(&rig.cfg);
     assert_eq!(file.repo_url, REPO);
     assert_eq!(file.harness, CHAT_ID);
-    assert!(file.github_ok);
     file.home_ready = true;
     // The person's word counts only while the home they set up is there.
     let (_, text) = {
@@ -381,8 +380,8 @@ fn a_second_prep_skips_passed_steps() {
     );
     assert!(shown.contains("[ok] harness_home:"), "{shown}");
     assert!(shown.contains("[ok] github:"), "{shown}");
-    // The first time: access, then that the repository is empty.
-    assert_eq!(github.asked(), 2);
+    // The token the person gave passed the whole check in one request.
+    assert_eq!(github.asked(), 1);
     // The harness ran with no goal, on the terminal, in the home a run uses, with no proxy.
     assert_eq!(
         rig.harness_file("tui.stdin").as_deref().map(str::trim),
@@ -395,7 +394,7 @@ fn a_second_prep_skips_passed_steps() {
     );
     assert!(rig.chat_home().is_dir(), "the harness home was made");
     let file = prep_file(&rig.cfg);
-    assert!(file.home_ready && file.github_ok, "{file:?}");
+    assert!(file.home_ready, "{file:?}");
     assert_eq!(file.repo_url, REPO);
     // The token is stored where git's helper reads it, and nowhere the report shows.
     assert!(GithubSetup::load(&rig.cfg).is_ok());
@@ -419,12 +418,9 @@ fn a_second_prep_skips_passed_steps() {
         !rig.out.join("tui.pid").exists(),
         "the harness started again"
     );
-    // GitHub is asked once more, for the access that must keep holding, and no token is wanted.
-    assert_eq!(
-        github.asked(),
-        3,
-        "access is checked on every prep, emptiness only once"
-    );
+    // GitHub is asked again, for all three (public and pushable, then empty), and no token is
+    // wanted because the stored one passes.
+    assert_eq!(github.asked(), 3, "the repository is checked on every prep");
 }
 
 #[test]
@@ -664,14 +660,19 @@ fn the_harness_step_names_what_it_cannot_use() {
     assert_eq!(prep_file(&rig.cfg).harness, CHAT_ID);
 }
 
-/// The repository answers as public, pushable and not empty (a practice run pushed to it), for
-/// the one token `good` and with a refusal for any other.
-fn github_that_only_takes(good: &'static str) -> FakeGithub {
+/// The repository answers as public, pushable and empty (`size` 0) or not, for the one token
+/// `good` and with a refusal for any other.
+fn github_that_only_takes(good: &'static str, size: u32) -> FakeGithub {
     FakeGithub::serve(move |bearer| {
         if bearer == good {
             (
                 200,
-                r#"{"private":false,"size":12,"permissions":{"admin":false,"push":true,"pull":true}}"#,
+                Box::leak(
+                    format!(
+                        r#"{{"private":false,"size":{size},"permissions":{{"admin":false,"push":true,"pull":true}}}}"#
+                    )
+                    .into_boxed_str(),
+                ),
             )
         } else {
             (401, r#"{"message":"Bad credentials"}"#)
@@ -680,15 +681,14 @@ fn github_that_only_takes(good: &'static str) -> FakeGithub {
 }
 
 #[test]
-fn a_revoked_token_is_found_on_the_next_prep_and_replaced_though_the_repo_is_no_longer_empty() {
+fn a_revoked_token_is_found_on_the_next_prep_and_replaced_and_replaced() {
     let rig = Rig::chat();
     let new_token = format!("github_pat_{}", "B".repeat(60));
     let new_token: &'static str = Box::leak(new_token.into_boxed_str());
-    let github = github_that_only_takes(new_token);
+    let github = github_that_only_takes(new_token, 0);
     let facts = facts(&github.base, &[]);
     log_in(&rig, "http://127.0.0.1:1");
-    // Everything settled earlier: the repository passed, a practice run pushed to it, and the
-    // token stored since has been revoked.
+    // Everything settled earlier, and the token stored since has been revoked.
     GithubSetup::new(REPO, &token())
         .unwrap()
         .store(&rig.cfg)
@@ -701,7 +701,6 @@ fn a_revoked_token_is_found_on_the_next_prep_and_replaced_though_the_repo_is_no_
             repo_url: REPO.to_string(),
             work_root: rig.root.join("work").display().to_string(),
             home_ready: true,
-            github_ok: true,
         },
     )
     .unwrap();
@@ -715,8 +714,8 @@ fn a_revoked_token_is_found_on_the_next_prep_and_replaced_though_the_repo_is_no_
         "{text}"
     );
 
-    // On a terminal the person is asked for a new token, which passes though the repository
-    // is not empty, and replaces the old one.
+    // On a terminal the person is asked for a new token, which passes the whole check and
+    // replaces the old one.
     let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
     on_pty.wait_shown("not shown):");
     on_pty.type_line(new_token);
@@ -738,10 +737,10 @@ fn a_revoked_token_is_found_on_the_next_prep_and_replaced_though_the_repo_is_no_
 }
 
 #[test]
-fn a_repository_that_is_not_empty_the_first_time_is_not_a_reason_to_ask_for_another_token() {
+fn a_repository_that_is_not_empty_is_a_failure_on_every_prep_and_no_reason_for_a_new_token() {
     let rig = Rig::chat();
     let token_in_use: &'static str = Box::leak(token().into_boxed_str());
-    let github = github_that_only_takes(token_in_use);
+    let github = github_that_only_takes(token_in_use, 12);
     log_in(&rig, "http://127.0.0.1:1");
     GithubSetup::new(REPO, token_in_use)
         .unwrap()
@@ -758,7 +757,20 @@ fn a_repository_that_is_not_empty_the_first_time_is_not_a_reason_to_ask_for_anot
         },
     )
     .unwrap();
-    let mut on_pty = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+    // Every prep says so, with the sentence of the repository check, however often it is run.
+    for _ in 0..2 {
+        let (code, text) = prep(&rig, &["--repo", REPO], &facts);
+        assert_eq!(code, 1, "{text}");
+        let github_line = line(&text, "github");
+        assert!(
+            github_line.starts_with("[fail] github:")
+                && github_line.contains("is not empty (12 KB)")
+                && github_line.contains("no README, license or .gitignore"),
+            "{text}"
+        );
+    }
+    // On a terminal too: the token is fine, so none is asked for.
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
     on_pty.wait_shown("[fail] github:");
     on_pty.wait();
     let shown = on_pty.shown();

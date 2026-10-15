@@ -292,15 +292,16 @@ pub fn check(api_base: &str, s: &GithubSetup) -> Result<(), CliError> {
     judge(api_base, s, true, true)
 }
 
-/// [`check`]'s access half: the repository is public and the token can push to it. This is
-/// what must keep being true for the week of a run, and what `goalcup prep` asks on every run:
-/// a token that expired or was revoked, or a repository made private, fails it.
+/// [`check`]'s access half: the repository is public and the token can push to it. A token that
+/// expired or was revoked, or a repository made private, fails it; it is what tells `goalcup
+/// prep` that the participant must give a new token.
 pub fn check_access(api_base: &str, s: &GithubSetup) -> Result<(), CliError> {
     judge(api_base, s, true, false)
 }
 
-/// [`check`]'s other half: the repository has no commits. It is true only until the first push,
-/// so it is asked until a repository has once passed, and never again for that repository.
+/// [`check`]'s other half: the repository has no commits. A practice run never pushes, so the
+/// repository stays empty until the competition run, and `goalcup prep` asks this every time.
+/// A new token would not change the answer, which is why it is asked apart from the access.
 pub fn check_empty(api_base: &str, s: &GithubSetup) -> Result<(), CliError> {
     judge(api_base, s, false, true)
 }
@@ -383,7 +384,23 @@ pub fn clone_into(
     goalcup_exe: &Path,
     cfg: &Path,
 ) -> Result<(), CliError> {
-    clone_with(OsStr::new("git"), &s.repo_url, s, dest, goalcup_exe, cfg)
+    clone_with(
+        OsStr::new("git"),
+        &s.repo_url,
+        s,
+        dest,
+        Some((goalcup_exe, cfg)),
+    )
+}
+
+/// The clone of a **practice** run: the same anonymous clone, and **no way to push**. A practice
+/// run never pushes: the competition repository stays empty until the competition run. So no
+/// `goalcup git-credential` helper is installed; only the empty `credential.https://github.com
+/// .helper`, git's documented reset, so that no helper the participant has (a keychain, `gh auth
+/// git-credential`) can supply a login for the repository either. A `git push` from it asks for
+/// a password and, with no terminal, fails.
+pub fn clone_readonly_into(s: &GithubSetup, dest: &Path) -> Result<(), CliError> {
+    clone_with(OsStr::new("git"), &s.repo_url, s, dest, None)
 }
 
 /// [`clone_into`] with this `git` program and a clone `source` that is not the repository: a
@@ -398,7 +415,18 @@ pub fn clone_from(
     goalcup_exe: &Path,
     cfg: &Path,
 ) -> Result<(), CliError> {
-    clone_with(git.as_os_str(), source, s, dest, goalcup_exe, cfg)
+    clone_with(git.as_os_str(), source, s, dest, Some((goalcup_exe, cfg)))
+}
+
+/// [`clone_readonly_into`] with this `git` program and clone `source`, as [`clone_from`].
+#[cfg(feature = "test-support")]
+pub fn clone_readonly_from(
+    git: &Path,
+    source: &str,
+    s: &GithubSetup,
+    dest: &Path,
+) -> Result<(), CliError> {
+    clone_with(git.as_os_str(), source, s, dest, None)
 }
 
 fn clone_with(
@@ -406,31 +434,37 @@ fn clone_with(
     source: &str,
     s: &GithubSetup,
     dest: &Path,
-    goalcup_exe: &Path,
-    cfg: &Path,
+    helper_paths: Option<(&Path, &Path)>,
 ) -> Result<(), CliError> {
     s.parts()?;
-    for (what, path) in [("goalcup", goalcup_exe), ("configuration directory", cfg)] {
-        if !path.is_absolute() {
-            return Err(CliError::Refused(format!(
-                "the {what} path {} is not absolute. The agent's git runs the credential \
-                 helper from wherever it is, so the helper's paths must not depend on that.",
-                path.display()
-            )));
+    // `None`: the clone of a practice run, which is given no helper at all.
+    let helper = match helper_paths {
+        None => None,
+        Some((goalcup_exe, cfg)) => {
+            for (what, path) in [("goalcup", goalcup_exe), ("configuration directory", cfg)] {
+                if !path.is_absolute() {
+                    return Err(CliError::Refused(format!(
+                        "the {what} path {} is not absolute. The agent's git runs the \
+                         credential helper from wherever it is, so the helper's paths must \
+                         not depend on that.",
+                        path.display()
+                    )));
+                }
+            }
+            let (Some(exe), Some(cfg)) = (goalcup_exe.to_str(), cfg.to_str()) else {
+                return Err(CliError::Refused(
+                    "the goalcup path and the configuration directory must be valid UTF-8 to \
+                     be put in a git configuration."
+                        .into(),
+                ));
+            };
+            Some(format!(
+                "!GOALCUP_CONFIG_DIR={} {} git-credential",
+                shell_quote(cfg),
+                shell_quote(exe)
+            ))
         }
-    }
-    let (Some(exe), Some(cfg)) = (goalcup_exe.to_str(), cfg.to_str()) else {
-        return Err(CliError::Refused(
-            "the goalcup path and the configuration directory must be valid UTF-8 to be put \
-             in a git configuration."
-                .into(),
-        ));
     };
-    let helper = format!(
-        "!GOALCUP_CONFIG_DIR={} {} git-credential",
-        shell_quote(cfg),
-        shell_quote(exe)
-    );
 
     run_git(
         git,
@@ -471,7 +505,9 @@ fn clone_with(
         )?;
     }
     in_clone(&["--add", HELPER_KEY, ""])?;
-    in_clone(&["--add", HELPER_KEY, &helper])?;
+    if let Some(helper) = &helper {
+        in_clone(&["--add", HELPER_KEY, helper])?;
+    }
     in_clone(&["credential.useHttpPath", "true"])
 }
 
