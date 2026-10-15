@@ -1310,21 +1310,32 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
     };
     // Zero is refused before anything starts.
     assert!(matches!(
-        FinishBudget::from_request(&request(Some(0))),
+        FinishBudget::from_request(&request(Some(0)), false),
         Err(DaemonError::FinishDeadline {
             stage: "not_started"
         })
     ));
 
-    // The full budget (D56): a 148 s drain share, 30 s left for a clone's Git read, a 2 s
-    // commit reserve, 1 s of it the margin.
-    let full = FinishBudget::from_request(&request(None)).unwrap();
+    // The full budget of a workspace that is not a clone: a 178 s drain share and a 2 s commit
+    // reserve, 1 s of it the margin. No Git read, so no floor.
+    let full = FinishBudget::from_request(&request(None), false).unwrap();
+    assert_eq!(full.deadline - full.drain_end, FINISH_COMMIT_RESERVE);
+    let native = full.native_budget();
+    assert!(native <= Duration::from_secs(178) && native > Duration::from_millis(177_500));
+
+    // A clone (D56): the drain share ends 30 s earlier, left for the Git read: 148 s.
+    let clone = FinishBudget::from_request(&request(None), true).unwrap();
     assert_eq!(
-        full.deadline - full.drain_end,
+        clone.deadline - clone.drain_end,
         FINISH_COMMIT_RESERVE + GIT_READ_FLOOR
     );
-    let native = full.native_budget();
+    let native = clone.native_budget();
     assert!(native <= Duration::from_secs(148) && native > Duration::from_millis(147_500));
+    // Less than the floor and the reserve: no drain share, the Git read gets it all.
+    let small = FinishBudget::from_request(&request(Some(4_000)), true).unwrap();
+    assert_eq!(small.native_budget(), Duration::ZERO);
+    let small = FinishBudget::from_request(&request(Some(4_000)), false).unwrap();
+    assert!(small.native_budget() > Duration::from_millis(1_500));
     assert!(full.admits(Duration::ZERO));
     assert_eq!(
         full.last_start(Duration::ZERO) + FINISH_RESPONSE_MARGIN,
@@ -1333,7 +1344,7 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
 
     // Less than the reserve left: no drain share at all, and no stage is admitted inside the
     // margin.
-    let tight = FinishBudget::from_request(&request(Some(900))).unwrap();
+    let tight = FinishBudget::from_request(&request(Some(900)), false).unwrap();
     assert_eq!(tight.native_budget(), Duration::ZERO);
     assert!(
         !tight.admits(Duration::ZERO),
@@ -1345,7 +1356,7 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
     );
 
     // Larger than the budget is clamped to it.
-    let large = FinishBudget::from_request(&request(Some(u64::MAX))).unwrap();
+    let large = FinishBudget::from_request(&request(Some(u64::MAX)), false).unwrap();
     assert!(
         large.deadline - tokio::time::Instant::now()
             <= goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET

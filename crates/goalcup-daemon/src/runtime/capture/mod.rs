@@ -187,6 +187,9 @@ pub(crate) struct CaptureEntry {
     ingest: Option<Arc<IngestEntry>>,
     sink: Arc<OwnerSink>,
     writer: Arc<Mutex<ChainWriter>>,
+    /// The entry's workspace, fixed at creation: a finish reads it without the run lock, which
+    /// another finish may hold.
+    workspace: PathBuf,
     /// Taken before `writer` whenever both are held.
     run: Mutex<CaptureRun>,
     owner: Arc<OwnerControl>,
@@ -1044,6 +1047,7 @@ impl CaptureEntry {
             ingest: None,
             sink: Arc::new(OwnerSink::default()),
             writer: Arc::new(Mutex::new(writer)),
+            workspace: entry.workspace.clone(),
             run: Mutex::new(CaptureRun { entry, goal }),
             owner: Arc::new(OwnerControl::default()),
             thread: Mutex::new(None),
