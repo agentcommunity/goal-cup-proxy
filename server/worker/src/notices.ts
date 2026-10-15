@@ -10,6 +10,7 @@
 import { type Ctx, makeCtx } from "./context.ts";
 import { type NoticeKind, type TickRun, endsAt, isReplaced, statusAt } from "./db.ts";
 import type { Env } from "./env.ts";
+import { sendNotices } from "./mail.ts";
 import { githubHeaders } from "./runs.ts";
 import { REPO_URL, addSeconds, formatTime } from "./util.ts";
 
@@ -142,7 +143,7 @@ export async function runTick(env: Env): Promise<void> {
     return;
   }
   const now = ctx.now();
-  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices]] as const) {
+  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices], ["sendNotices", sendNotices]] as const) {
     try {
       await step(ctx, now);
     } catch (e) {

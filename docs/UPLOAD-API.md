@@ -8,7 +8,7 @@ tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests r
 (`server/worker/`).
 
 A rule change touches all of them: the Worker (`server/worker/src/`), its local database
-(`db-local.ts`), the SQL proposal (`server/worker/sql/proposed-goalcup-functions.sql`) and the Rust
+(`db-local.ts`), the SQL (the website's migration, copied to `server/worker/sql/goal-cup-tracer-upload.sql`) and the Rust
 stand-in. Then run the suite that holds the Worker to the real contract:
 `cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only -E 'test(/upload_worker/)'`
 (it needs `npm ci` in `server/worker`; `sh scripts/gate.sh full` runs it too, and says so if that is
