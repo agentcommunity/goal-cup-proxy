@@ -22,14 +22,104 @@ Owner decisions of 16 Oct 2026:
 - Undecided: the demo and questionnaire deadline, either 24 hours after the run or a fixed date
   around 15 Nov. [owner to confirm]
 
-## Before the freeze
+## Before the release (by 23 Oct), in order
 
-1. **Measure.** The 10-minute matrix (`scripts/matrix.sh`) and the 8-hour runs against the test
-   server, on macOS and Linux ([OPERATING](docs/OPERATING.md)).
-2. **Docs.** The [participant's guide](docs/PARTICIPANT-GUIDE.md), the
-   [setup skill](skills/goal-cup-setup/SKILL.md), RULES and README as the code runs them.
-3. **Release.** `sh scripts/gate.sh full`, the first tag, the tap. Neither the tag nor the tap
-   exists yet.
+Review 12 (16 Oct) produced this list from six code reviews and three test reviews. Each item names
+its source report, e.g. [C4-F4]; the reports are kept outside the repo (maintainer's machine,
+`goal-cup-review12/`). Line numbers are at `3722360`, so re-grep before you edit. `cli/` means
+`crates/goalcup-cli/`, and the same for the other crates. One PR per package; `sh scripts/gate.sh
+fast` before every commit.
+
+### WP0: Measure (needs the owner's harness logins and Little Snitch rule first)
+- The 10-minute matrix (`scripts/matrix.sh`) per connector against staging, then the 8-hour runs on
+  macOS and Linux, then Intel Mac, x86_64 Linux and WSL2, then the edge cases in
+  [OPERATING](docs/OPERATING.md).
+
+### WP1: Event window, mail throughput, event switch (server). Land first.
+- The events row is 16 h early. `goalcup-cup-2026` opens 6 Nov 16:00 UTC. Add a new website migration (agentCommunity_PAGE `supabase/migrations/`) that sets opens `2026-11-07T00:00:00Z` and closes `2026-11-08T00:00:00Z` (staging=false), and sets the confirmed dry-run row too. Copy it into `server/worker/sql/goal-cup-tracer-upload.sql`. Fix the stale comment at `:1788-1789`. Drop `[CONFIRM]` at `server/worker/README.md:236-239`. [C6-01, docs]
+- Mail is too slow. `server/worker/src/mail.ts:18` `NOTICES_PER_TICK = 20` gives 240/h, so a burst of ~1,500 "started" mails takes ~6 h. Raise it so 1,500 clear in ≤90 min (≥85 per tick). Each notice costs 3 subrequests, so stay under the plan's per-invocation limit. Read `runsForTick` once in `runTick`, not three times (`src/notices.ts:43,79,128`). Cap `closeRuns` (`:42-48`) at ~200 per tick. Update `README.md:215-223`. [docs, C6-13]
+- The `EVENT_ID` switch: `wrangler.toml:37-40` still says `goalcup-dryrun-2026`. Write a dated runbook step: "~30 Oct: set `goalcup-cup-2026`, `npm test`, `npx wrangler deploy`, open one practice and one test run, check the R2 prefix `traces/goalcup-cup-2026/`." Mark it as a pre-approved freeze exception. [C6-02]
+- Turn on Workers Logs: `[observability] enabled = true` at top level and in `[env.staging]`, pinned in `test/config.test.ts`. [C6-04]
+- Why: the wrong window refuses real starts after 7 Nov 16:00 UTC. A missed switch writes cup runs outside the 180-day bucket lock.
+- Accept: `select id,start_window_opens,start_window_closes from goal_cup_tracer.events` shows the new values. `npm --prefix server/worker test` passes, with a test for the per-tick cap.
+
+### WP2: Release pipeline shakedown. Start 17 Oct; four runners are untested.
+- Version: workspace `Cargo.toml:13` says `0.1.0` while tag `v0.5.0` exists. Set `0.6.0`. It feeds `verifier_version`, `tracer_version` and `DAEMON_VERSION`. Also fix the stale `v0.5.1` at `:15` and "dev-only signer" at `:82`. [C5-F5, C6-05, C6-15, docs]
+- Ship every connector. `scripts/package-release.sh:38` archives only codex-cli and claude-code-cli. Archive all of `connectors/`, then remove ids named on one line, `UNSHIPPED="hermes-cli"` (H-21). Fix the comment at `:11-13`, `packaging/README.md:28,38-39`, and SKILL step 12 ("ships once merged"). [C3-F2, C6-06]
+- Run `gh workflow run release.yml` by hand now. It publishes nothing. Fix what fails (`macos-15-intel`, `ubuntu-22.04-arm`, `third-party-licenses.py`). Create `agentcommunity/homebrew-tap` (`packaging/README.md:71-76`). [C6-05]
+- Put the Worker tests in the gate: add `step npm --prefix server/worker test` in the `full` block of `scripts/gate.sh:89`, and assert it in `scripts/test_gate.py::test_full_runs_everything`. Keep it out of ci.yml, because CI stays lean. [C6-03, T3-F2]
+- `.github/CODEOWNERS`: add `/server/ @nembal`. In `ci.yml:8-10,28-30`, drop `v1/trunk`. [C6-11, C6-15]
+- Accept: the manual release run is green on all four targets. The tarball holds every non-excluded `connectors/*`. `python3 -m pytest scripts/test_gate.py` passes.
+
+### WP3: Participant-facing CLI and daemon fixes
+- `goalcup status` with no id can mix two runs. `cli/src/commands/status.rs:154-158` takes the newest run, while `:221-224` pins the newest entry. Use `crate::run::of_entry(cfg, &record.entry_id)`. [C4-F4]
+- Keep one definition of "run over". Replace `commands/start.rs:2472-2478` with `!on_server || crate::run::is_over(&record, Some(&keeper.snapshot()), now_unix())`. [C4-F1]
+- `goalcup status` tells participants "nothing is uploaded" during an uploaded run. Reword `daemon/src/status.rs:118-121`. [C2-F6]
+- Help text leads with `--goal-file`, which both chat connectors refuse (`main.rs:52`, `status.rs:227`). Also fix the config-dir table at `config.rs:13-22` (`grant.json`, "participant's token"). [C4-F5, C4-F13]
+- `goalcup doctor` exits 1 for harnesses the participant never installed. Default to the harness in `prep.json` (`commands/doctor.rs:84-95`), and keep `--harness all`. Drop the unused `_err` (`:66,74`). [C4-F6]
+- Operator errors: name the connector folder in `load_child` errors (`daemon/src/runtime/capture/harness.rs:28-29,103-116`). `eprintln!` reopen failures (`runtime/capture/mod.rs:771-790`, `CycleCounters::note`). Fix "three unauthenticated routes" (`config.rs:324,339-340`, `runtime/daemon.rs:94`). [C2-F4, C2-F5, C2-F10]
+- Optional: `goalcup upload` with no id sends the newest run's unsent entries (`main.rs:208-212`). [C4-F7]
+- Accept: a new `it/status_views.rs` case (practice, then competition, then continue the practice run). `gate.sh fast`.
+
+### WP4: Deadline and long-run tests in chat mode
+- Server deadline in chat mode: `Rig::chat()` with `short_server(…, 8, …)` in `cli/tests/full/upload_e2e.rs`. The TUI stops, the terminal comes back, and the run seals and uploads. [T2-F2a]
+- A continued segment: crash segment 0, then `continue`. Segment 1 must stop on the server's `stop`, and with the server away it must stop on `LocalDeadline::until` (`upload/uploader.rs:1420`, which has zero tests). Add a skewed-clock unit test. [T2-F2b, T2-§5]
+- Real part rotation through the CLI: `set_chain_part_limits_for_test(4096, 1h)` plus `GOALCUP_TEST_DISK`, then prune, kill, continue and finish. Every record reaches the server exactly once. [T2-F3]
+- A table test for the WSL browser opener (`platform/src/machine.rs:380-400`). [T2-F14]
+- Accept: `cargo nextest run --offline -p goalcup-cli --test full upload_e2e` passes, and `scripts/linux-check.sh` passes.
+
+### WP5: Harness onboarding for #4..#15. Land before the connector cut-off.
+- The template and skill build headless (Hermes) connectors, but the product is chat mode (D57). Add a chat-mode block, on by default, to `skills/adding-a-capture-harness/templates/connector-harness.toml:14-22,41`. In SKILL `:71,:102`, point at codex-cli. The facts sheet starts in chat mode and asks for the CA variable and every provider host. [C3-F1, C3-F7, C3-F13]
+- Chat-mode kit: replace the id list at `cli/tests/full/harness_contract_kit.rs:1069` (and the match at `:1005`) with every pinned `interactive = true` connector. Pass `KIT_NATIVE_FILE`, derived from `[[capture.native]]`. Drop the per-harness branches in `tests/fixtures/m2-fake-chat-harness.sh:18-33`. [C3-F1, T2-F1]
+- Find connectors by discovery, not hard-coded ids. One `shipped_connector_ids()` helper replaces the lists at `cli/tests/shipped_connectors.rs:95,143,220,258,544` (compare `:258` to the pins file), `protocol/tests/it/harness_conformance.rs:35`, `full/preflight_doctor.rs:44,138,206,252` and `it/harness_launch_plan.rs:287`. Delete the per-harness recipe asserts (`shipped_connectors.rs:26-82`, `harness_launch_plan.rs:19-56`). Loop the generic rules over every connector. [T1-F4, T2-F1, T2-F12]
+- The name ban must grow with `connectors/`. In `protocol/tests/it/no_family_literals.rs:19`, add the connector ids (strip `-cli`, match whole tokens). [T3-F9]
+- `scripts/check-connector.sh:216-238` and SKILL `:159-160`: run the kit on Linux too, and skip only the daemon golden off macOS. Fix the header that says macOS only. [C3-F4, docs]
+- `decision-table.md:25-27`: chat mode cannot pass an env-only API key. [C3-F6]
+- Process: set a connector cut-off (~21 Oct). Pins are compiled in (`protocol/src/pins.rs:33`), so a later connector needs a point release. [C3-F3]
+- Accept: a scratch chat connector under `connectors/` passes `sh scripts/check-connector.sh <id>` on macOS and Linux with no Rust edit. Remove it afterwards.
+
+### WP6: Test infrastructure and flakes
+- Serial drift: add `launcher_sweep` to the cli serial regex (`.config/nextest.toml:41`). `TableLock::acquire()` panics when `NEXTEST_TEST_GROUP` is set and is not `serial` (`daemon/tests/common/support/table_lock.rs`). `capture_gate.rs:28` `ONE_AT_A_TIME` becomes `TableLock`. [T1-F2]
+- Sleep races: use a ready-file handshake in `daemon/tests/full/capture_finish_budget.rs:767,810`, and poll the handler state at `:196`. [T1-F3]
+- x86_64: the README says `gate fast` fails there because two timing tests time out. Fix both the same way (wait for the condition, not a fixed budget), then delete the README caveat. [docs, T1-F3]
+- The fast tier runs the per-connector checks: the `scripts/gate.sh:57` filter admits `harness_contract_golden|harness_contract_kit|preflight_doctor`, and `scripts/test_gate.py:81` is updated. [T1-F1, T3-F6]
+- Set `test = false` on the `goalcup` bin (`cli/Cargo.toml:118`) and the `goalcup-verify` bin (`verifier/Cargo.toml:40`), and add a daemon `[[bin]]` stanza with the same. [T1-F5]
+- Accept: `gate.sh fast` passes on macOS and in `linux-x86_64.yml`. `scripts/linux-check.sh` passes.
+
+### WP7: Safe deletes (pure deletion, before any of it becomes a compatibility promise)
+- Dead tests and fixtures: `daemon/tests/it/terminate_sim.rs:1307,1497`, `daemon/tests/fixtures/wrapper-exit-after-term.sh`, `protocol/tests/it/harness_schema.rs:3206-3219` with `tests/fixtures/harness/*.chat-mode.toml`, and the dead `harness_legacy_equal.rs` mention at `:13`. [T1-F7, T3-F8]
+- The cross-family golden: the test at `cli/tests/full/harness_contract_golden.rs:942`, `cross-family.json`, `FAMILIES` (`:68-74`), `legacy_*` (`:685-706,905-940`), `streams_json` (`:512`), and the orphan `*.native.json` and `native-families.json`. Regenerate once with `GOALCUP_REGEN_HARNESS_GOLDEN=1` and review the diff. [C3, T2-F4, T3-F7]
+- Daemon config: delete the 14 dead keys, `ReceiptBindingPolicy` and `submission_types.rs` (`config.rs:39-53,81-104,154-274`, `lib.rs:37`). Keep `deny_unknown_fields`. Update `tests/it/config_load.rs` and `docs/OPERATING.md:238-240`. [C2-F2]
+- Daemon: `unread_stores` (`native_scope.rs:19,92,99`, `capture/mod.rs:1278-1280`) and `DAEMON_VERSION_TEXT` (`lib.rs:49-52`). [C2-F8, C2-F13]
+- CLI: `CliError::Gate` and exit 4 (`lib.rs:117-121,141`) with the test at `contract_gate.rs:207`, `GateOutcome` (`arming.rs:34`, `start.rs:146,2681`), `run::state_path` (`run/mod.rs:600`), and the dangling link at `lib.rs:7`. [C4, T2-F8]
+- Protocol: `ForeignScanRoot` (`manifest.rs:36-42`). Move the CLI ack writer into `export::append_ack_to`, then delete `export.rs:1349,1366,1375`. Swap the two `libc::flock` calls for `File::try_lock` (`start.rs:594`, `uploader.rs:362`). Platform uses `libc.workspace = true`. [C1-F11, C1-F5, C1-F3, C1-F15]
+- Tests: delete `cli/tests/it/hermes_offline_key.rs` (nothing runs it) and the `upload_open.rs:1141` twin. Merge the two stale control-file tests (`contract_gate.rs:136`, `daemon_client.rs:412-433`) into one cross-crate test. Move `daemon/tests/it/contract_present.rs` into protocol `m2_contract.rs` so CI runs it. [T2-F10, T2-F9, T2-F7, T3-F10]
+- Accept: `gate.sh fast` and `cargo build --offline` pass with no new warnings.
+
+### WP8: Stale references in code comments and docs
+- `grep -rn CONTRACTS.md crates server` finds ~35 comments citing old section titles; update them. `uploader.rs:11,61` and `server/worker/src/chunks.ts:2` cite SERVER-DESIGN sections that no longer exist. `capture_policy.rs:90` cites a deleted Amp record, and `ack.rs:3` cites the deleted VISION.md. [docs]
+- Comments in `connectors/*/harness.toml` cite missing docs. Fix them and run `sh scripts/pin-manifests.sh` in the same commit. This must land before the release cut, because pins are compiled in. [docs]
+- Generic modules: `platform/src/lib.rs:1`, `filecap.rs:1`, `protocol/src/template.rs:3`, `manifest.rs:24-29`, `released_child.rs:9`, `handle_budget.rs:1,10`. [C1-F12]
+- Worker README: delete `server/worker/README.md:117-168`, and fix `:12`, `:46-62` and `:206-208` (the cron has four steps). Add an operator runbook: maintenance, rollback, logs, the EVENT_ID switch, window changes, adding a test operator, test cleanup. [C6-07]
+- Regenerate the SQL mirror with a one-line command written in its header. It is missing the staging-events migration, and `:10,17` cite a dead file. The retry advice at `delete-test-runs.sh:92` should say "run again without --older-than". [C6-10, C6-08]
+- In `docs/OPERATING.md:362`, the verifier does pin the production key; drop `chain_broken` at `:338`. In `SECURITY.md`, replace goalhack@agentcommunity.org. [C5-F6, docs]
+- Accept: `python3 scripts/check-links.py` passes. `grep -rn 'goalhack@\|VISION.md\|proposed-goalcup'` finds nothing. The pins test passes.
+
+### WP9: Upload contract and verifier guards (organiser side)
+- SQL↔Worker parity test in `server/worker/test/supabase.test.ts`: every `#rpc` name and `p_` argument in `db-supabase.ts` exists in the SQL. [T3-F1]
+- Shared signing vectors: commit `server/worker/test/vectors/signing.json`. `protocol/tests/it/signing_vectors.rs` asserts the same hex, and `sign.test.ts` reads that file. [T3-F3]
+- In `verifier/tests/it/m2_capture_integrity.rs`, add the tamper-table test `line_level_tampering_names_its_finding`. Add a rotated-corpus test to `v5_corpus.rs`. [T3-F4, T3-F5]
+- Deadline facts: in `verifier/src/capture_analysis/reader.rs` `Scan`, record `records_after_deadline`, `last_seq_at_or_before_deadline` and `last_ack_at`, with a schema bump. This is a fact, not an exit change. It may slip past the freeze (the verifier is not on the participant path), but it must land before judging. [C5-F1]
+- Add `findings: …` to the stderr summary (`bin/goalcup-verify.rs:109-113`; its pin is at `m2_capture_integrity.rs:2885`). Add a table of finding codes to OPERATING. [C5-F4, C5-F3b]
+- Accept: `npm --prefix server/worker test` passes, and so does `cargo nextest run --offline -p goalcup-verifier -p goalcup-protocol`.
+
+### WP10: Release cut (23–24 Oct)
+- Run `gate.sh full` once (including `upload_worker` and `npm test`), then `scripts/linux-check.sh`. Tag `v0.6.0` and run the release. Copy `goalcup.rb` into the tap.
+- Accept: `brew install agentcommunity/tap/goalcup && brew test goalcup` works on clean Apple Silicon and Intel Macs. `goalcup doctor --harness all` lists every shipped connector. The release notes list the pinned ids.
+
+## Freeze rule
+
+After 26 Oct, only fixes go in: dry-run bugs, flakes and docs. No refactors, features, or schema or connector-shape changes. Pre-approved exceptions: the events-row migration, the EVENT_ID switch with a Worker redeploy (~30 Oct), and a point release for a connector bug. Every change still passes `gate.sh fast`. Worker changes also pass `npm test`.
 
 ## Parked
 
@@ -39,28 +129,53 @@ Owner decisions of 16 Oct 2026:
   brew path runs without them.
 - Full registration and team system.
 - New harnesses: builders bring them ([HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md)).
-- Dead code to delete (each is unused outside tests; check before deleting):
-  - the daemon's `ReceiptBindingPolicy` / `[receipt_binding]`, `server_public_key` and
-    `upload_url` config fields (they drive nothing, D48);
-  - `DaemonClient::current_entry` and `GET /v0/entries/current` (no `goalcup` command calls them);
-  - `export::DESCRIPTOR_FILE` and the resume sweep of `trace.toml` temporaries, once the CLI test
-    fixture `mock_sealable` (`crates/goalcup-cli/tests/common/support/mod.rs`) stops naming it.
 - Speed up the two P1 redaction tests that each run over 30 s
   (`capture_redaction::a_masked_key_around_the_hold_bound_is_never_retained`,
   `capture_redaction_extra::seeded_random_chunking_matches_the_oracle_with_extra_patterns`). They
   floor the fast gate.
 
-## After the event
+## After the event (ordered)
 
-Each of these changes a wire or touches several lanes, for little gain now.
+1. **Run lifecycle module.** Add a persisted `enum StopReason` that falls back to the old strings, and `run/lifecycle.rs` `phase()`, read by status, reserve and finish. Add `HarnessState::Exited.code`. Move `RunMode` to `run/`. Rename the wire field `reserve_bytes` to `chain_quota_bytes` with an alias. [C4-F1, F10, F11]
+2. **Split `start.rs` and `uploader.rs`.** `commands/start/` plus `crate::shared_home`, and `uploader.rs` in five parts, keeping `pub use`. After the move: an Undo guard, `StartCx`, `SealArgs`, `TestDoors` and shared helpers. [C4-F2, F3, F8, F9, F12]
+3. **Redaction rules from manifest data.** Typed `{json_field, value}` and `{header_prefix}` forms. Delete `EXTRA_PATTERN_SOURCES`, `EXTRA_SHAPES` and `BILLING_PREFIX`. Merge `RedactionPattern` into `ExtraPattern`. Re-pin. [C2-F1, C3-F8, C1-F6]
+4. **CA env registry from data.** A generic `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` row backed by a file of system roots plus the proxy CA. `{config_home}` and `{run_home}` env tokens. A shared table of provider hosts. [C3-F7, F9, F13]
+5. **libc → `goalcup-platform` (prep for native Windows).** Move process and clock out of protocol. Send signals from one place, with the `ProcessOs` seam kept. Adopt or delete `readcap`. Add `create_private_file`, the `machine::*` limits, SIGINT in `terminal`, and the `AsFd` API. Move `terminate/*`. Drop the BSD arms. [C1-F1, F2, F4, F7–F10, F14; C2-F12, F14]
+6. **`crates/goalcup-testkit`.** It holds the wait, copy_tree, paths, TableLock and proc helpers and the shared and spike fixtures. Add a `protocol::testkit` for record builders. Merge the standalone binaries into `it`. Tier by binary and require nextest. Give the stand-in a clock `advance`. Keep one `FakeGithub`. [T1-F6, F8–F14; T3-F11; T2-F13]
+7. **A contract test per connector.** A static half in `it/connector_contract.rs` and a dynamic half in `full/` with one manifest-driven stand-in. Then give Hermes- and Amp-named tests shape names, move engine tests to fixture connectors, and delete the test-only identity wrappers (`launch.rs:1498,1533,1572`, `capture_tee.rs:174,223,317`). [T2-§6, F11; T1-F4; T3-F13; C3-F5]
+8. **Shared CLI↔Worker contract.** A `test/contract/cases.json` table run against both the stand-in and the Worker. Run the rule cases against Postgres loaded with the production SQL. Then drop one copy of the rules. Use one source for the run length. The DB picks the event by its window, and `EVENT_ID` goes. Add the Worker module seams. [T3-F1, F2; T2-F6; C6-09, 12, 14, 02]
+9. **Restructure the goldens.** One shared deny-probe or policy table, with only per-connector differences in each file. The digest literal becomes a bool that says it matches the pin. Move the golden, kit and doctor tests into `it` and delete verifier `full`. [C3-F10, T3-F6, T1-F1]
+10. **One file per verifier decoder format.** `native/{mod,codex,claude_code}.rs` with a `NativeFormat` trait. Put Anthropic on the shared tracker. Split `apply` per record kind. Remove the signed-finalization and legacy-seal paths. Report the undecoded inventory, trim the decoder prose, and add a real chat-completions fixture and per-connector sample replay. [C5-F7–F13, T3-F12]
+11. **Observability and judging.** `scripts/fetch-run.sh` rebuilds a trace from the DB chunk index; needed before judging. Add `first_failure`, `entry_id` and `profile_id` to the report. Add `cycles` and `reopen_failed` to `DaemonHealth`. [C5-F2, F3a, F4; C2-F5]
+12. **Control vocabulary at the next `CONTROL_API_VERSION`.** Drop `WorkspaceInfo`, `status_cache_path`, `[event]`, `/v0/entries/current`, the V1 registry fields, the unproduced `HealthState` variants (add `serde(other)`), `status_url` and the mock arming. The mock defaults to a capture status, and the legacy branch at `status.rs:266-370` goes with its six tests. [C1-F11, F13; C2-F3, F7, F9; C4; T2-F5]
+13. **Product decisions.** Should the server hold the admitted connector digests (no release per harness)? Does headless capture stay or freeze? [C3-F3, F12]
 
-- Delete `goalcup_protocol::control::WorkspaceInfo`. It is test-only; the code uses
-  `CaptureWorkspaceInfo`.
-- Rename the capture-create request's `reserve_bytes` to a quota name and drop the always-0
-  `reserved_bytes` from the capture status (D40). Both are control and status wire changes.
-- Move the remaining libc process, clock and termination code from `goalcup-protocol`
-  (`process.rs`, `clock.rs`) and `goalcup-daemon` (`terminate/*`) into `goalcup-platform`, as a pure
-  move, before the native Windows port.
+## Keep as is
+
+These look odd but are right. Do not "fix" them.
+
+- The closed trust tables in `capture_policy.rs` (D43). Change their form later, not their closedness. The deny rows naming `CLAUDE_CODE_*`, `ANTHROPIC_` and `OPENAI_`. [C1, C3]
+- Pins compiled in through `include_str!` with the const-eval parser, the folder/id/digest triple check, and `--dev` refusing pinned ids. [C1, C3]
+- Loading every connector folder on create (fix the message, not the loop), and the best-effort restart lookup. [C2, C3]
+- The stream redactor's hold-and-fail-closed design. The whole-record `Redactor` as its oracle. `spikes/redact.py` as an oracle. [C2, T3]
+- Decoders keyed by `protocol_hint`, capture-only for an unknown hint, and no TOML native mapping. HTTP/1.1-only ALPN. [C3, C5]
+- The `ProcessOs` seam, the strict `ProcessRegistration` Deserialize, and `KillStrategy::WrapperUnsafe` (wire). [C1]
+- The exit ladders: cli `try_parse` exits 1, verifier exits 3, and `CliError::exit_code` is the single place a number is chosen. [C4, C5]
+- The refusal order in `continue_run.rs`, seal never signalling, doctor tolerating a missing daemon, the `practice`/`test` bools, `GiveBack` with `pending-open.json`, and `LONGEST_RUN`. [C4]
+- The v5 corpus (add cases, never regenerate to pass), `chain_golden` reading the spike fixtures, the envelope-bytes pin, and the serde-wording pin. [T3]
+- The test layout: `it`/`full` binaries, nextest one-process-per-test, the self dev-dependency with a feature, the three process-global binaries, the child-half pattern, the kit cases, and independent m2 oracles. [T1, T2]
+- Lean `ci.yml`, the manual `linux-x86_64.yml`, the manual release run, the hand-updated tap, and `with-deepseek-key.sh`. [T1, C6]
+- Worker: the staging block repeats every var and sets `routes = []`, prod `TEST_EVENT_ID`, the two-layer test fence, `/v1/health` before maintenance, a retried chunk answered first, and `db-local.ts`. [C6]
+- The Rust upload stand-in until After-event step 8 decides. Negative-window sleeps (give them a helper, do not remove them). The 25 s SIGSTOP scenario. [T1, C6]
+- `--dev-key` alongside the one pinned key, and the report-file rules. Harness names in comments are examples only. [C5, C2, C4]
+
+## Open owner questions
+
+1. What is the dry-run window? The row says 28 Oct 16:00 UTC + 24 h and is unconfirmed. It blocks the WP1 migration.
+2. Who applies the production DB migrations and Worker deploys during the freeze? Is the ~30 Oct EVENT_ID switch pre-approved?
+3. Which address is the security contact in `SECURITY.md`: goalcup@ or another? (WP8)
+4. What are the connector cut-off date and the shipped list for 0.6.0? Does hermes-cli stay unshipped (H-21)? (WP2, WP5)
+5. Who creates `agentcommunity/homebrew-tap`? It needs org rights. Is `0.6.0` the version? That is the default if there is no answer.
 
 ## Known issues
 
