@@ -993,7 +993,11 @@ fn line_level_tampering_names_its_finding() {
         let (report, _) = scan(dir.path());
         assert_eq!(report.exit_code(), 2, "{name}: {report:#?}");
         // The scan stops at the bad line; whatever follows is only what the prefix lacks.
-        assert_eq!(report.findings.first().map(String::as_str), Some(code), "{name}: {report:#?}");
+        assert_eq!(
+            report.findings.first().map(String::as_str),
+            Some(code),
+            "{name}: {report:#?}"
+        );
         assert_eq!(report.validated_records, keep as u64, "{name}: {report:#?}");
     }
 }
@@ -1041,9 +1045,17 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
     let dir = signed_trace_with_cutoff(early, early, None, Some(acked));
     let lines = chain_lines(dir.path()).len() as u64;
     let (report, _) = scan_with(dir.path(), &options);
-    assert_eq!(report.exit_code(), 0, "facts do not change the exit: {report:#?}");
+    assert_eq!(
+        report.exit_code(),
+        0,
+        "facts do not change the exit: {report:#?}"
+    );
     assert_eq!(report.records_after_deadline, Some(2), "{report:#?}");
-    assert_eq!(report.last_seq_at_or_before_deadline, Some(lines - 3), "{report:#?}");
+    assert_eq!(
+        report.last_seq_at_or_before_deadline,
+        Some(lines - 3),
+        "{report:#?}"
+    );
     assert_eq!(report.last_ack_at.as_deref(), Some(acked), "{report:#?}");
     assert_eq!(report.schema_version, 2);
 
@@ -1051,7 +1063,11 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
     let dir = signed_trace_with_cutoff(DEADLINE_AT, DEADLINE_AT, None, None);
     let (report, _) = scan_with(dir.path(), &options);
     assert_eq!(report.records_after_deadline, Some(0), "{report:#?}");
-    assert_eq!(report.last_seq_at_or_before_deadline, Some(lines - 1), "{report:#?}");
+    assert_eq!(
+        report.last_seq_at_or_before_deadline,
+        Some(lines - 1),
+        "{report:#?}"
+    );
     assert_eq!(report.last_ack_at, None);
 
     // A deadline before the first record: nothing is at or before it.

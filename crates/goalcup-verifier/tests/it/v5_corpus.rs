@@ -263,10 +263,7 @@ fn every_corpus_trace_reads_the_same_when_rotated() {
         assert_eq!(made.len(), cuts.len() + 1, "{name}: parts written");
 
         let run = |root: &Path| {
-            let output = verify(
-                case,
-                &["--capture-integrity".as_ref(), root.as_os_str()],
-            );
+            let output = verify(case, &["--capture-integrity".as_ref(), root.as_os_str()]);
             let report: Value = serde_json::from_slice(&output.stdout)
                 .unwrap_or_else(|e| panic!("{name}: stdout is not a report: {e}"));
             (output.status.code(), report)
@@ -275,7 +272,10 @@ fn every_corpus_trace_reads_the_same_when_rotated() {
         let (exit, report) = run(parts.path());
         assert_eq!(exit, Some(case.exit), "{name}: rotated exit\n{report}");
         assert_eq!(exit, whole_exit, "{name}: exit differs from one file");
-        assert_eq!(report, whole_report, "{name}: the report differs from one file");
+        assert_eq!(
+            report, whole_report,
+            "{name}: the report differs from one file"
+        );
         let findings: Vec<&str> = report["findings"]
             .as_array()
             .unwrap()
