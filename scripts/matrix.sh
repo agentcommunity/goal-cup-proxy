@@ -32,7 +32,9 @@
 #   GOALCUP_TEST_APPROVAL_KEY_FILE
 #                              a regular file holding the server's TEST_APPROVAL_KEY (a local
 #                              `npm run dev`, or staging). The path is not secret. Unset: the
-#                              approval is yours, in a browser (see below). A Docker run mounts
+#                              approval is yours, in a browser (see below). The script takes the
+#                              variable out of its environment at once, so no child inherits the
+#                              path. A Docker run mounts
 #                              the file read-only (-v <file>:/run/key:ro) and never uses -e.
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
 #   MATRIX_REPO_URL            the empty public repository (default:
@@ -147,6 +149,9 @@ if [ -n "${GOALCUP_TEST_APPROVAL_KEY:-}" ]; then
   exit 2
 fi
 KEYFILE=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
+# The path leaves the environment too, so goalcup, the daemon and the harness never inherit where
+# the key file is.
+unset GOALCUP_TEST_APPROVAL_KEY_FILE
 if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
