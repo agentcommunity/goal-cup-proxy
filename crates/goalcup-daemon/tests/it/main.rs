@@ -27,5 +27,7 @@ mod registry_roundtrip;
 #[cfg(unix)]
 mod start_race;
 #[cfg(unix)]
+mod table_lock_group;
+#[cfg(unix)]
 mod terminate_sim;
 mod workspace_layout;

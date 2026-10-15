@@ -576,6 +576,16 @@ impl Daemon {
             .get(entry_id)
             .map(|capture| capture.finishing.load(Ordering::Acquire))
     }
+
+    /// Test seam: whether an expired or abandoned finish attempt has latched on this open entry
+    /// (the sticky [`ExpiredFinish`] is set), so a test can wait for a dropped handler's guard
+    /// instead of sleeping.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn capture_finish_latched(&self, entry_id: &str) -> Option<bool> {
+        self.captures()
+            .get(entry_id)
+            .map(|capture| lock(&capture.expired).is_some())
+    }
 }
 
 impl CaptureEntry {
