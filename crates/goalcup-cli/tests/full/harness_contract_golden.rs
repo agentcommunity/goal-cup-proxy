@@ -728,26 +728,25 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
     let resolved = s::resolved(&exe);
     let proxy = s::proxy_url();
     let parent = s::parent_env();
-    let goal = b"write result.txt";
-    let plan = build_capture_launch(
-        c,
-        &s::vars(&l),
-        &l.workspace,
-        &s::launch(&l, goal, &resolved, &proxy, &parent),
-    )
-    .unwrap_or_else(|e| panic!("{id}: {e}"));
+    // A chat-mode profile (D57) is given no goal: its plan is the same whatever the goal.
+    let interactive = profile(c).interactive;
+    let plan_for = |goal: &[u8]| {
+        let launch = if interactive {
+            s::chat_launch(&l, &resolved, &proxy, &parent)
+        } else {
+            s::launch(&l, goal, &resolved, &proxy, &parent)
+        };
+        build_capture_launch(c, &s::vars(&l), &l.workspace, &launch)
+    };
+    let plan = plan_for(b"write result.txt").unwrap_or_else(|e| panic!("{id}: {e}"));
 
     // Goal placement for a goal that is nothing but an option.
-    let hostile = b"--profile evil -p x";
-    let hostile_plan = build_capture_launch(
-        c,
-        &s::vars(&l),
-        &l.workspace,
-        &s::launch(&l, hostile, &resolved, &proxy, &parent),
-    )
-    .unwrap();
+    let hostile_plan = plan_for(b"--profile evil -p x").unwrap();
     let placement = json!({
-        "tail": hostile_plan.argv[hostile_plan.argv.len().saturating_sub(2)..].to_vec(),
+        "tail": hostile_plan.argv[hostile_plan.argv.len().saturating_sub(2)..]
+            .iter()
+            .map(|a| norm(&l, a))
+            .collect::<Vec<_>>(),
         "goal_index": hostile_plan.capture.map(|h| h.goal_index),
         "goal_prefix": hostile_plan.capture.map(|h| h.goal_prefix),
         "argv_len": hostile_plan.argv.len(),
@@ -1329,7 +1328,8 @@ fn the_identity_grammars_are_pinned() {
         ),
     ];
 
-    // Claude Code is told its identity rather than reading it: the plan carries the id.
+    // Claude Code in chat mode (D57) is told no identity and names none: its sessions are every
+    // transcript new or written since the run started.
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
     let claude = base_subject("claude-code-cli");
@@ -1340,19 +1340,19 @@ fn the_identity_grammars_are_pinned() {
         &claude.connector,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, b"g", &resolved, &proxy, &parent),
+        &s::chat_launch(&l, &resolved, &proxy, &parent),
     )
     .unwrap();
-    let at = plan.argv.iter().position(|a| a == "--session-id").unwrap();
 
     check_golden(
         "identity-grammar.json",
         &json!({
             "codex_stdout_tee": codex_cases.into_iter().collect::<BTreeMap<_, _>>(),
             "hermes_stderr_marker": hermes_cases.into_iter().collect::<BTreeMap<_, _>>(),
-            "claude_preassigned": {
-                "flag": plan.argv[at],
-                "value_is_the_launch_session_id": plan.argv[at + 1] == s::SESSION,
+            "claude_chat": {
+                "argv": plan.argv,
+                "names_the_launch_session_id": plan.argv.iter().any(|a| a.contains(s::SESSION)),
+                "identity": claude.connector.loaded.manifest.capture.identity.source.as_str(),
             },
             "stdout_line_limit_bytes": limit,
             "stderr_line_limit_bytes": goalcup_cli::capture_tee::LINE_LIMIT,

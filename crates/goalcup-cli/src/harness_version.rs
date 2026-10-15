@@ -8,10 +8,12 @@
 //! stops a run.
 //!
 //! The probe is not a capture child: it carries no goal, no proxy and no credential. Its
-//! environment is built from nothing, as the capture launch's is: `PATH`
-//! ([`crate::launch::CAPTURE_PATH`]) and `HOME` (the run's private home), and nothing from the
-//! participant's environment. Its stdin is `/dev/null`, its stderr is discarded, and it leads a
-//! process group of its own so a timeout ends whatever it started.
+//! environment is built from nothing, as the capture launch's is: `PATH` (the one the harness is
+//! given, [`ResolvedExecutable::search_path`]: [`crate::launch::CAPTURE_PATH`], or for a
+//! chat-mode connector the participant's own, so an npm harness finds `node`) and `HOME` (the
+//! run's private home), and nothing else from the participant's environment. Its stdin is
+//! `/dev/null`, its stderr is discarded, and it leads a process group of its own so a timeout
+//! ends whatever it started.
 
 use crate::launch::{CAPTURE_PATH, ResolvedExecutable};
 use std::io::Read;
@@ -43,11 +45,12 @@ pub fn reported_version(
     version_args: &[String],
     home: &Path,
 ) -> String {
-    reported_version_within(
+    probe(
         Path::new(executable.path()),
         version_args,
         home,
         VERSION_PROBE_TIMEOUT,
+        executable.search_path(),
     )
 }
 
@@ -84,6 +87,16 @@ pub fn reported_version_within(
     home: &Path,
     timeout: Duration,
 ) -> String {
+    probe(program, version_args, home, timeout, CAPTURE_PATH)
+}
+
+fn probe(
+    program: &Path,
+    version_args: &[String],
+    home: &Path,
+    timeout: Duration,
+    path: &str,
+) -> String {
     if version_args.is_empty() {
         return UNREPORTED.to_string();
     }
@@ -92,7 +105,7 @@ pub fn reported_version_within(
         .args(version_args)
         .current_dir(home)
         .env_clear()
-        .env("PATH", CAPTURE_PATH)
+        .env("PATH", path)
         .env("HOME", home)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
