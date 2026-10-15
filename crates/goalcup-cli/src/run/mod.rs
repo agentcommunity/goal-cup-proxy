@@ -9,6 +9,7 @@
 //! the 30-second tick that applies them.
 
 pub mod reserve;
+pub mod time_left;
 pub mod watch;
 
 use crate::CliError;
@@ -17,6 +18,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+pub use time_left::TimeLeft;
 
 /// `<cfg>/runs`: one directory per run.
 pub const RUNS_DIR_NAME: &str = "runs";
@@ -205,6 +207,11 @@ pub struct RunState {
     /// wrote, which had no `continue`.
     #[serde(default)]
     pub continuable: bool,
+    /// What the server last said was left of the run, counted on the continuous clock: what
+    /// says whether the run is over ([`is_over`]). Absent for a run with no server, and from a
+    /// `state.json` an older build wrote.
+    #[serde(default)]
+    pub time_left: Option<TimeLeft>,
 }
 
 /// What `goalcup status` may tell the participant about `goalcup continue` for a run: the advice
@@ -232,16 +239,34 @@ impl Advice {
     }
 }
 
-/// Whether the run is over at `now` (unix seconds): its deadline has passed on this machine's
-/// clock, or its host stopped it for its end (the server's stop, a newer run replacing it). A
-/// full disk stops the agent and leaves the run open.
+/// Whether the run is over: its host stopped it for its end (the server's stop, a newer run
+/// replacing it), or its time is up by the count of the server's last answer
+/// ([`RunState::time_left`]). This machine's date is never read for it, except for a state with
+/// no count, against `now` (unix seconds; [`time_left::time_up`]). A full disk stops the agent
+/// and leaves the run open.
 pub fn is_over(record: &RunRecord, state: Option<&RunState>, now: u64) -> bool {
-    let deadline_passed = record
-        .deadline_at
-        .as_deref()
-        .and_then(goalcup_protocol::control::parse_z)
-        .is_some_and(|deadline| now >= deadline);
-    deadline_passed || state.is_some_and(RunState::stopped_for_its_end)
+    state.is_some_and(RunState::stopped_for_its_end)
+        || time_left::time_up(
+            state.and_then(|state| state.time_left.as_ref()),
+            record.deadline_at.as_deref(),
+            now,
+        )
+}
+
+/// What a run's state says once the server refused `goalcup continue` because the run is over.
+pub const SERVER_SAYS_OVER: &str = "the server says the run is over (it refused goalcup continue)";
+
+/// The server said the run is over: say so in the run's `state.json` ([`RunState::stopped`]), so
+/// that `goalcup status` and the reserve's release follow the server at once, whatever the count
+/// or the date say. A run with no state is left as it is.
+pub fn note_over(cfg: &Path, run_id: &str) {
+    let dir = run_dir(cfg, run_id);
+    if let Some(mut state) = read_state(&dir) {
+        if !state.stopped_for_its_end() {
+            state.stopped = Some(SERVER_SAYS_OVER.to_string());
+        }
+        StateKeeper::begin(&dir, state);
+    }
 }
 
 /// Whether `goalcup continue` can restart the run: it is on a server, its connector is a
@@ -281,6 +306,7 @@ impl RunState {
             stopped: None,
             ended: false,
             continuable: false,
+            time_left: None,
         }
     }
 
@@ -396,6 +422,8 @@ pub struct Vitals {
     recording: Arc<AtomicU8>,
     model_requests: Arc<AtomicU64>,
     upload: Arc<Mutex<UploadVital>>,
+    /// The uploader's count of what is left of the run, each time it is set.
+    time_left: Arc<Mutex<Option<TimeLeft>>>,
 }
 
 #[derive(Debug, Default)]
@@ -421,6 +449,7 @@ impl Vitals {
             recording: Arc::new(AtomicU8::new(Recording::Unknown as u8)),
             model_requests: counter,
             upload: Arc::default(),
+            time_left: Arc::default(),
         }
     }
 
@@ -435,6 +464,22 @@ impl Vitals {
     /// Model requests so far, cumulative.
     pub fn model_requests(&self) -> u64 {
         self.model_requests.load(Ordering::SeqCst)
+    }
+
+    /// The uploader set its count of what is left of the run.
+    pub fn set_time_left(&self, left: TimeLeft) {
+        *self
+            .time_left
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(left);
+    }
+
+    /// The uploader's count as last set; `None` before it is set.
+    pub fn time_left(&self) -> Option<TimeLeft> {
+        self.time_left
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     fn upload(&self) -> MutexGuard<'_, UploadVital> {
@@ -872,6 +917,45 @@ mod tests {
         // A full disk ended it, the run is still open: it can be continued.
         state.stopped = Some(watch::DISK_STOP_REASON.to_string());
         assert_eq!(state.problems(now, Advice::Continue), [line]);
+    }
+
+    /// WP11: the run is over by the count of the server's last answer, never by this machine's
+    /// date. A date set a day past the deadline neither stops the advice to `continue` nor gives
+    /// the run's reserve back; a count that has run out is over whatever the date says.
+    #[test]
+    fn a_date_set_forward_neither_ends_the_run_nor_the_advice_to_continue() {
+        use goalcup_protocol::clock::continuous_ns;
+        let cfg = tempfile::tempdir().unwrap();
+        let mut run = record("r0123456789abcdef", 1, "e1");
+        run.server_url = Some("https://server.example".to_string());
+        run.deadline_at = Some(goalcup_protocol::control::format_z(10_000));
+        write(cfg.path(), &run).unwrap();
+        let credential = crate::account::credential::RunCredential::new(
+            format!("gcr_{}", "ab".repeat(32)),
+            "2099-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+        let dir = run_dir(cfg.path(), &run.run_id);
+        crate::account::credential::store(&dir, &credential).unwrap();
+        let mut state = RunState::launched("e1", Ok(()));
+        state.continuable = true;
+        state.harness = HarnessState::Exited {
+            status: "exit code 1".to_string(),
+        };
+        // The server said an hour is left; the date says the deadline was a day ago.
+        state.time_left = Some(TimeLeft::counted(3_600, continuous_ns()));
+        let a_day_on = 10_000 + 86_400;
+        assert!(!is_over(&run, Some(&state), a_day_on));
+        assert_eq!(advice(cfg.path(), &run, &state, a_day_on), Advice::Continue);
+        StateKeeper::begin(&dir, state.clone());
+        assert!(!reserve::run_is_done(cfg.path(), &run, false, a_day_on));
+
+        // The count has run out: over, though the date says the deadline is far off.
+        state.time_left = Some(TimeLeft::counted(0, continuous_ns()));
+        assert!(is_over(&run, Some(&state), 5_000));
+        assert_eq!(advice(cfg.path(), &run, &state, 5_000), Advice::Over);
+        StateKeeper::begin(&dir, state);
+        assert!(reserve::run_is_done(cfg.path(), &run, false, 5_000));
     }
 
     /// `goalcup continue` is advised only when it can restart the run.

@@ -35,8 +35,9 @@
 //! written by a cron.
 //!
 //! Test hooks (not part of the contract): `set_maintenance`, `set_maintenance_retry_after`,
-//! `fail_next_chunks`, `drop_next_chunk_reply`, `set_approval`, `mint_credential`,
-//! `expire_credential`, `bind_credential`, `credential_expires_at` and `device_requests`.
+//! `fail_next_chunks`, `drop_next_chunk_reply`, `cap_seconds_left`, `fail_heartbeats`,
+//! `set_approval`, `mint_credential`, `expire_credential`, `bind_credential`,
+//! `credential_expires_at` and `device_requests`.
 
 mod handlers;
 mod state;
@@ -136,6 +137,8 @@ impl UploadServer {
             retry_after: AtomicU64::new(5),
             fail_chunks: AtomicU64::new(0),
             drop_replies: AtomicU64::new(0),
+            seconds_left_cap: AtomicU64::new(u64::MAX),
+            fail_heartbeats: AtomicBool::new(false),
         });
         let app = handlers::router(shared.clone());
         let bind_port = config.port.unwrap_or(0);
@@ -237,6 +240,21 @@ impl UploadServer {
     /// answered from the stored acknowledgement.
     pub fn drop_next_chunk_reply(&self) {
         self.shared.drop_replies.store(1, Ordering::SeqCst);
+    }
+
+    /// From now on no open, continue or heartbeat answer says more than `seconds` as its
+    /// `seconds_left` (`None`: the run's own). `deadline_at` and `stop` stay the run's: a test
+    /// can tell a count taken from `seconds_left` from one taken from the date.
+    pub fn cap_seconds_left(&self, seconds: Option<u64>) {
+        self.shared
+            .seconds_left_cap
+            .store(seconds.unwrap_or(u64::MAX), Ordering::SeqCst);
+    }
+
+    /// While `on`, every heartbeat that is not a final one answers `503` and stores nothing:
+    /// a run's count then has no answer to set it but its open's or continue's.
+    pub fn fail_heartbeats(&self, on: bool) {
+        self.shared.fail_heartbeats.store(on, Ordering::SeqCst);
     }
 
     /// What happens to each device request from now on (default `Auto`).

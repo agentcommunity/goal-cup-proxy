@@ -381,24 +381,9 @@ pub fn open_url(url: &str) -> bool {
     if !url_allowed(url) {
         return false;
     }
-    let mut command = if cfg!(target_os = "macos") {
-        let mut c = Command::new("/usr/bin/open");
-        c.arg(url);
-        c
-    } else if let Some(wslview) = find_on_path("wslview") {
-        let mut c = Command::new(wslview);
-        c.arg(url);
-        c
-    } else if is_wsl() && find_on_path("rundll32.exe").is_some() {
-        // Not `cmd.exe /c start`: cmd would interpret `&`, `|`, `^` and `%` inside the URL.
-        let mut c = Command::new("rundll32.exe");
-        c.args(["url.dll,FileProtocolHandler", url]);
-        c
-    } else {
-        let mut c = Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
+    let (program, args) = opener(cfg!(target_os = "macos"), is_wsl(), &find_on_path);
+    let mut command = Command::new(program);
+    command.args(args).arg(url);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -412,6 +397,30 @@ pub fn open_url(url: &str) -> bool {
             true
         }
         Err(_) => false,
+    }
+}
+
+/// The program that opens a URL on this machine, and the arguments that go before the URL:
+/// `/usr/bin/open` on macOS; else `wslview` when it is on `PATH`; else, on WSL, Windows's
+/// `rundll32.exe url.dll,FileProtocolHandler` when it is on `PATH` (not `cmd.exe /c start`:
+/// cmd would interpret `&`, `|`, `^` and `%` inside the URL); else `xdg-open`. `on_path`
+/// finds a program on `PATH`.
+fn opener(
+    macos: bool,
+    wsl: bool,
+    on_path: &dyn Fn(&str) -> Option<PathBuf>,
+) -> (PathBuf, &'static [&'static str]) {
+    if macos {
+        (PathBuf::from("/usr/bin/open"), &[])
+    } else if let Some(wslview) = on_path("wslview") {
+        (wslview, &[])
+    } else if wsl && on_path("rundll32.exe").is_some() {
+        (
+            PathBuf::from("rundll32.exe"),
+            &["url.dll,FileProtocolHandler"],
+        )
+    } else {
+        (PathBuf::from("xdg-open"), &[])
     }
 }
 
@@ -563,4 +572,89 @@ pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
 pub(crate) fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One machine in the opener table: what it is, what is on its `PATH`, and the opener it
+    /// must get, with the arguments before the URL.
+    struct Machine {
+        name: &'static str,
+        macos: bool,
+        wsl: bool,
+        on_path: &'static [&'static str],
+        program: &'static str,
+        before_url: &'static [&'static str],
+    }
+
+    /// Each machine gets the opener it can run, with the arguments that go before the URL
+    /// (`open_url` appends the URL after them) (T2-F14).
+    #[test]
+    fn the_browser_opener_is_chosen_by_platform_and_path() {
+        let machine = |name, macos, wsl, on_path, program, before_url| Machine {
+            name,
+            macos,
+            wsl,
+            on_path,
+            program,
+            before_url,
+        };
+        let nothing: &[&str] = &[];
+        let rows = [
+            machine(
+                "macOS",
+                true,
+                false,
+                &["wslview", "xdg-open"],
+                "/usr/bin/open",
+                nothing,
+            ),
+            machine(
+                "WSL, wslview",
+                false,
+                true,
+                &["wslview", "rundll32.exe"],
+                "/bin/wslview",
+                nothing,
+            ),
+            machine(
+                "WSL, rundll32.exe only",
+                false,
+                true,
+                &["rundll32.exe"],
+                "rundll32.exe",
+                &["url.dll,FileProtocolHandler"],
+            ),
+            machine("WSL, neither", false, true, &[], "xdg-open", nothing),
+            machine("Linux", false, false, &[], "xdg-open", nothing),
+            machine(
+                "Linux, rundll32.exe",
+                false,
+                false,
+                &["rundll32.exe"],
+                "xdg-open",
+                nothing,
+            ),
+            machine(
+                "Linux, wslview",
+                false,
+                false,
+                &["wslview"],
+                "/bin/wslview",
+                nothing,
+            ),
+        ];
+        for row in rows {
+            let on_path = |wanted: &str| {
+                row.on_path
+                    .contains(&wanted)
+                    .then(|| PathBuf::from("/bin").join(wanted))
+            };
+            let (program, before_url) = opener(row.macos, row.wsl, &on_path);
+            assert_eq!(program, PathBuf::from(row.program), "{}", row.name);
+            assert_eq!(before_url, row.before_url, "{}", row.name);
+        }
+    }
 }

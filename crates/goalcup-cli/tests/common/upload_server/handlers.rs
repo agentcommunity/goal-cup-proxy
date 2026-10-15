@@ -307,14 +307,21 @@ fn is_entry_id(text: &str) -> bool {
             .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-fn run_view(run: &RunRecord, entry: &EntryRecord) -> Value {
+fn run_view(s: &Shared, run: &RunRecord, entry: &EntryRecord) -> Value {
     json!({
         "run_id": run.run_id,
         "entry_id": entry.entry_id,
         "official_start": run.official_start,
         "deadline_at": run.deadline_at,
-        "seconds_left": run.seconds_left(),
+        "seconds_left": seconds_left(s, run),
     })
+}
+
+/// The `seconds_left` an answer says: the run's, or less when a test capped it
+/// (`UploadServer::cap_seconds_left`).
+fn seconds_left(s: &Shared, run: &RunRecord) -> u64 {
+    run.seconds_left()
+        .min(s.seconds_left_cap.load(Ordering::SeqCst))
 }
 
 /// What a connector and a session are, as an open or a continue call sends them.
@@ -442,7 +449,7 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
         return match runs.get(opened) {
             // The open call's session is segment 0's, whatever `continue` has added since.
             Some(run) if run.entries[0].session_id == req.fields.session_id => {
-                Ok(json_response(200, run_view(run, &run.entries[0])))
+                Ok(json_response(200, run_view(&s, run, &run.entries[0])))
             }
             _ => Err(opened_already()),
         };
@@ -470,7 +477,7 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
         && open.current().session_id == req.fields.session_id
         && open.current().receipt.is_none()
     {
-        return Ok(json_response(200, run_view(open, open.current())));
+        return Ok(json_response(200, run_view(&s, open, open.current())));
     }
 
     let run_id = random_id('r', |id| runs.contains_key(id));
@@ -518,7 +525,7 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
         }
     }
     s.persist(&run);
-    let view = run_view(&run, run.current());
+    let view = run_view(&s, &run, run.current());
     runs.insert(run_id, run);
     Ok(json_response(201, view))
 }
@@ -575,7 +582,7 @@ async fn continue_run(
     let view = |run: &RunRecord, entry: &EntryRecord| {
         json!({"entry_id": entry.entry_id, "segment": entry.segment,
                "official_start": run.official_start, "deadline_at": run.deadline_at,
-               "seconds_left": run.seconds_left()})
+               "seconds_left": seconds_left(&s, run)})
     };
     // The same call again: the current entry came from this session, after that entry.
     let current = run.current();
@@ -1172,6 +1179,9 @@ async fn heartbeat(
 ) -> Result<Response, ApiError> {
     let who = auth(&s, &headers)?;
     let req: HeartbeatRequest = parse_json(&body)?;
+    if !req.final_ && s.fail_heartbeats.load(Ordering::SeqCst) {
+        return Err(ApiError::new(503, "unavailable", "Refused by the test."));
+    }
     if !is_entry_id(&req.entry_id) {
         return Err(ApiError::malformed(
             "entry_id must be e and 16 lowercase hex digits.",
@@ -1213,7 +1223,7 @@ async fn heartbeat(
         (true, _) => json!("deadline"),
     };
     let answer = json!({"stop": stop, "deadline_at": run.deadline_at,
-                        "seconds_left": run.seconds_left(), "reason": reason});
+                        "seconds_left": seconds_left(&s, run), "reason": reason});
     let entry = run.entry_mut(&req.entry_id).expect("just found");
     if !req.final_ {
         // A sealed entry has nothing left to record.

@@ -1172,6 +1172,9 @@ fn ordinary_beat(
         Beat::Answer(Ok(answer)) => {
             vitals.heartbeat_ok();
             LocalDeadline::heard(count, &answer, asked);
+            if let Some(count) = count {
+                vitals.set_time_left(count.time_left());
+            }
             stop_reason(&answer)
         }
         Beat::Answer(Err(error)) => {
@@ -1206,6 +1209,9 @@ fn watch_deadline(
     ended: &EndedGate,
 ) {
     let mut local_deadline = local_deadline;
+    if let Some(count) = &local_deadline {
+        vitals.set_time_left(count.time_left());
+    }
     let mut next_beat = Instant::now();
     let tick = policy.poll.min(Duration::from_secs(1));
     while !done.load(Ordering::SeqCst) {
@@ -1468,8 +1474,20 @@ impl LocalDeadline {
         }
     }
 
+    /// Whether the count has run out.
     fn passed(&self) -> bool {
         u128::from(self.from.elapsed_ns()) >= self.left.as_nanos()
+    }
+
+    /// The count as the run's `state.json` keeps it ([`crate::run::TimeLeft`]), for the commands
+    /// that ask whether the run is over. Its start is read a moment after the clock, so it can
+    /// only end earlier than this count, by that moment.
+    pub fn time_left(&self) -> crate::run::TimeLeft {
+        let now = goalcup_protocol::clock::continuous_ns();
+        crate::run::TimeLeft::counted(
+            self.left.as_secs(),
+            now.saturating_sub(self.from.elapsed_ns()),
+        )
     }
 }
 
