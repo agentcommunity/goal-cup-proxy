@@ -128,6 +128,29 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
 - **Create-only puts** (`onlyIf: { etagDoesNotMatch: "*" }`) must refuse to overwrite on real R2,
   including under the bucket lock.
 
+## EVENT_ID switch: 6 Nov 2026, with the last release
+
+Production `EVENT_ID` stays `goalcup-dryrun-2026` until then. The start windows are database rows
+(website migration `20261016120000_goal_cup_tracer_event_windows.sql`): the dry run closes
+6 Nov 00:00 UTC and the cup opens 7 Nov 00:00 UTC, so any time on 6 Nov is safe. If the switch is
+missed, every cup start on 7 Nov is refused ("after the start window ..."): competition starts read
+the dry-run row, which closed 6 Nov 00:00 UTC.
+
+1. On a branch, set `EVENT_ID = "goalcup-cup-2026"` in `wrangler.toml` `[vars]` (not
+   `[env.staging.vars]`). Open a PR and merge it to main.
+2. On main at that merge commit: `npm test` (in `server/worker`).
+3. From main at that merge commit: `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy` (production: top
+   level, no `--env`). Every later production deploy is from main, so it keeps the cup (a 7 Nov hotfix too).
+4. Check the live Worker: `npx wrangler deployments status` names the live version, and
+   `npx wrangler versions view <version-id>` shows `EVENT_ID` = `goalcup-cup-2026` (or the dashboard:
+   goalcup-ingest, Settings, Variables).
+5. Open one practice run and one organizer test run against production; both start. Then
+   `sh scripts/delete-test-runs.sh --yes`.
+6. A competition start now answers "The start window has not opened yet." (before the switch it
+   answered "after the start window ..."). After 7 Nov 00:00 UTC, `select distinct event_id from
+   goal_cup_tracer.runs where mode = 'competition' and official_start >= '2026-11-07'` shows only
+   `goalcup-cup-2026`, and the R2 prefix `traces/goalcup-cup-2026/` holds its chunks.
+
 ## Decisions where the contract is silent
 
 - The first record's `seq` is **0** (the baseline link of a v5 chain), so a fresh run reports

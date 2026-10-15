@@ -6,7 +6,9 @@
 --   supabase/migrations/20261015150000_goal_cup_tracer_production.sql (production role, events, account erasure)
 --   supabase/migrations/20261015160000_goal_cup_tracer_test_mode.sql (organizer test runs; delete_test_runs)
 --   supabase/migrations/20261015170000_goal_cup_tracer_test_replaces_test.sql (a test run replaces the open test run)
--- Applied to the Agent Community Supabase project on 2026-10-15. It replaces the earlier proposal
+--   supabase/migrations/20261016120000_goal_cup_tracer_event_windows.sql (the confirmed dry-run and cup start windows)
+-- Applied to the Agent Community Supabase project on 2026-10-15 (20261016120000: applied before this
+-- copy of it merged). It replaces the earlier proposal
 -- (proposed-goalcup-functions.sql): tables in the private schema goal_cup_tracer, functions renamed
 -- public.goal_cup_upload_* (src/db-supabase.ts adds the prefix), the website approval functions,
 -- and the mailer pair goal_cup_upload_claim_notices / goal_cup_upload_finish_notice (src/mail.ts).
@@ -1783,10 +1785,11 @@ END $$;
 --     goal_cup_ingest_staging, so this role is production behind the deployment fence. It may
 --     execute the Worker's goal_cup_upload_* functions and nothing else in the schema; it is never
 --     granted goal_cup_upload_approve_device (the staging test approval).
---   * Production events (staging = false). The times are placeholders until the owner confirms them:
+--   * Production events (staging = false). The dry-run and cup times below were placeholders;
+--     20261016120000_goal_cup_tracer_event_windows.sql (end of this file) sets the confirmed ones:
 --       goalcup-practice     practice, always open (10-minute runs; Worker PRACTICE_RUN_MINUTES)
---       goalcup-dryrun-2026  dry run, start window 2026-10-28 16:00 UTC + 24 h   [CONFIRM]
---       goalcup-cup-2026     competition, start window 2026-11-06 16:00 UTC + 24 h, 168-hour runs [CONFIRM]
+--       goalcup-dryrun-2026  dry run, now 2026-10-23 00:00 UTC to 2026-11-06 00:00 UTC
+--       goalcup-cup-2026     competition, now 2026-11-07 00:00 UTC to 2026-11-08 00:00 UTC, 168-hour runs
 --     Changing a time later is an UPDATE of these rows only (a new migration).
 --   * goal_cup_erase_member(p_actor_id): called by the account deletion (DELETE /api/my-data). Deletes
 --     the member's contact data and keeps run evidence until the raw traces are deleted after appeals:
@@ -2275,3 +2278,27 @@ BEGIN
     'terms_version', current_terms_version(),
     'decided_by_you', v_dev.member_id IS NOT DISTINCT FROM p_actor_id AND v_dev.status <> 'pending');
 END $$;
+
+-- ======================== 20261016120000_goal_cup_tracer_event_windows.sql ========================
+-- Goal Cup tracer: the confirmed start windows of the dry run and the cup (owner, 2026-10-16).
+--
+-- 20261015150000_goal_cup_tracer_production.sql inserted both rows with placeholder times
+-- ([CONFIRM]): the cup opened 2026-11-06 16:00 UTC and closed 2026-11-07 16:00 UTC, 16 hours early,
+-- so goal_cup_upload_open_run would have refused every real start after 2026-11-07 16:00 UTC.
+--
+--   * goalcup-cup-2026     competition, start window 2026-11-07 00:00 UTC to 2026-11-08 00:00 UTC (24 h)
+--   * goalcup-dryrun-2026  dry run, open from the first release (2026-10-23 00:00 UTC) to
+--                          2026-11-06 00:00 UTC, so a participant can start a dry run any day before
+--                          the Worker's EVENT_ID moves to the cup with the last release (6 Nov)
+--
+-- Additive: two UPDATEs of the production rows only. No staging row, no other column, no other row.
+
+UPDATE goal_cup_tracer.events
+   SET start_window_opens  = '2026-11-07T00:00:00Z',
+       start_window_closes = '2026-11-08T00:00:00Z'
+ WHERE id = 'goalcup-cup-2026' AND mode = 'competition' AND staging = false;
+
+UPDATE goal_cup_tracer.events
+   SET start_window_opens  = '2026-10-23T00:00:00Z',
+       start_window_closes = '2026-11-06T00:00:00Z'
+ WHERE id = 'goalcup-dryrun-2026' AND mode = 'dry_run' AND staging = false;
