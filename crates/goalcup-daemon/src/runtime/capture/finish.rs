@@ -431,18 +431,10 @@ impl Daemon {
             .map_or(Duration::ZERO, |end| {
                 end.saturating_duration_since(tokio::time::Instant::now())
             });
+        // A clone whose Git state could not be read seals with the reason in its place (D56).
         let manifest =
             match workspace::seal_workspace(&row.workspace, &entry_id, &sealed_at, git_budget) {
-                Ok(Ok(manifest)) => manifest,
-                // A clone whose Git state could not be read is never walked instead: the finish
-                // is refused as out of time, which the CLI asks again with growing waits (D56).
-                Ok(Err(_)) => {
-                    return Err(capture.expire(
-                        FinishStage::WorkspaceWalk,
-                        None,
-                        Some(termination),
-                    ));
-                }
+                Ok(manifest) => manifest,
                 Err(error) => {
                     // The harness was ended above; a later finish must not read that as "ended on
                     // its own".

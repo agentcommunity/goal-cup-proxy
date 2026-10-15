@@ -238,22 +238,22 @@ fn the_corpus_directory_and_the_table_agree() {
 /// `seal.json` whose uncommitted digest was edited afterwards no longer is.
 #[test]
 fn a_seal_with_git_verifies() {
-    use goalcup_protocol::seal::{SealedFile, WorkspaceGit};
+    use goalcup_protocol::seal::{GitState, SealedFile, WorkspaceGit};
     let mut baseline = manifest();
-    baseline.git = Some(WorkspaceGit {
+    baseline.git = Some(GitState::Read(WorkspaceGit {
         commit: Some("ab".repeat(20)),
         dirty_sha256: "cd".repeat(32),
-    });
+    }));
     baseline.home = Some(vec![SealedFile {
         path: "config.toml".to_string(),
         bytes: 3,
         sha256: "ef".repeat(32),
     }]);
     let mut seal = manifest();
-    seal.git = Some(WorkspaceGit {
+    seal.git = Some(GitState::Read(WorkspaceGit {
         commit: None,
         dirty_sha256: "12".repeat(32),
-    });
+    }));
     let dir = tempfile::tempdir().unwrap();
     let mut records = goal();
     records.push(launch("codex-cli", None, None));
@@ -283,6 +283,80 @@ fn a_seal_with_git_verifies() {
         Some(0),
         "an edited Git digest must not verify: {report}"
     );
+}
+
+/// D56 amended: a clone whose Git state could not be read still seals, with the reason in place
+/// of the state. The trace is incomplete (exit 1), never invalid, and the report names why, once
+/// for the baseline and once for the seal.
+#[test]
+fn an_unreadable_clone_is_incomplete_and_says_why() {
+    use goalcup_protocol::seal::GitState;
+    let unreadable = |why: &str| {
+        let mut manifest = manifest();
+        manifest.git = Some(GitState::Unreadable {
+            unreadable: why.to_string(),
+        });
+        manifest
+    };
+    let run = |baseline: &goalcup_protocol::seal::SealManifest,
+               seal: &goalcup_protocol::seal::SealManifest| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut records = goal();
+        records.push(launch("codex-cli", None, None));
+        build_trace(dir.path(), baseline, &records, |export| {
+            local_finish(export, seal, confirmed());
+        });
+        let output = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
+            .arg("--capture-integrity")
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        (output.status.code(), report, stderr)
+    };
+
+    let (exit, report, stderr) = run(&manifest(), &unreadable("`git ls-files` failed"));
+    assert_eq!(exit, Some(1), "{report}");
+    assert_eq!(report["integrity"].as_str(), Some("incomplete"), "{report}");
+    assert_eq!(report["sealed"].as_bool(), Some(true), "{report}");
+    let findings = report["findings"].to_string();
+    assert!(findings.contains("seal_git_unreadable"), "{report}");
+    assert!(!findings.contains("baseline_git_unreadable"), "{report}");
+    assert_eq!(
+        report["git_unreadable"],
+        serde_json::json!([
+            "the workspace's Git state could not be read at the seal: `git ls-files` failed"
+        ]),
+        "{report}"
+    );
+    assert!(
+        stderr.contains("the workspace's Git state could not be read at the seal"),
+        "{stderr}"
+    );
+
+    // At the baseline too; a reason with a control character is printed without it.
+    let (exit, report, _) = run(
+        &unreadable("the time to read it ran out"),
+        &unreadable("bad\u{1b}[2Jname"),
+    );
+    assert_eq!(exit, Some(1), "{report}");
+    let findings = report["findings"].to_string();
+    assert!(findings.contains("baseline_git_unreadable"), "{report}");
+    assert!(findings.contains("seal_git_unreadable"), "{report}");
+    assert_eq!(
+        report["git_unreadable"],
+        serde_json::json!([
+            "the workspace's Git state could not be read at the baseline: the time to read it ran out",
+            "the workspace's Git state could not be read at the seal: bad?[2Jname"
+        ]),
+        "{report}"
+    );
+
+    // A readable clone has no such field.
+    let (exit, report, _) = run(&manifest(), &manifest());
+    assert_eq!(exit, Some(0), "{report}");
+    assert!(report.get("git_unreadable").is_none(), "{report}");
 }
 
 /// The two fields are skipped when absent, so a manifest written before them serializes to

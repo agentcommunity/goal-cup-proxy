@@ -8,7 +8,7 @@
 //! carries or a hash of bytes on disk; what a mismatch *means* is `goalcup-verifier`'s.
 
 use crate::DaemonError;
-use goalcup_protocol::seal::{SealManifest, SealedFile, is_excluded};
+use goalcup_protocol::seal::{GitState, SealManifest, SealedFile, is_excluded};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -161,22 +161,24 @@ pub fn list_workspace(
 }
 
 /// The workspace's seal (D56). The root of its own clone ([`is_clone_root`]) is never walked:
-/// its Git state, read within `budget`, or `Ok(Err(why))` when it could not be read, which the
-/// caller refuses rather than walk. Any other workspace is walked, as before.
+/// its Git state, read within `budget`, or why it could not be read, at most
+/// [`UNREADABLE_LIMIT`] characters. Any other workspace is walked, as before.
 pub fn seal_workspace(
     workspace: &Path,
     entry_id: &str,
     at: &str,
     budget: std::time::Duration,
-) -> Result<Result<SealManifest, String>, DaemonError> {
+) -> Result<SealManifest, DaemonError> {
     if !is_clone_root(workspace) {
-        return list_workspace(workspace, entry_id, at, &[]).map(Ok);
+        return list_workspace(workspace, entry_id, at, &[]);
     }
     let git = match crate::workspace_git::state(workspace, budget) {
-        Ok(git) => git,
-        Err(why) => return Ok(Err(why)),
+        Ok(git) => GitState::Read(git),
+        Err(why) => GitState::Unreadable {
+            unreadable: why.chars().take(UNREADABLE_LIMIT).collect(),
+        },
     };
-    Ok(Ok(SealManifest {
+    Ok(SealManifest {
         entry_id: entry_id.to_string(),
         sealed_at: at.to_string(),
         workspace: workspace.to_string_lossy().to_string(),
@@ -184,8 +186,11 @@ pub fn seal_workspace(
         excluded: Vec::new(),
         git: Some(git),
         home: None,
-    }))
+    })
 }
+
+/// The most characters of the reason an unreadable clone's manifest records.
+const UNREADABLE_LIMIT: usize = 200;
 
 /// The most files the baseline lists of the harness home (D56).
 pub const HOME_FILE_LIMIT: usize = 10_000;

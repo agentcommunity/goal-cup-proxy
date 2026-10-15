@@ -17,7 +17,7 @@ use goalcup_protocol::seal::WorkspaceGit;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -87,15 +87,16 @@ pub fn command(workspace: &Path, home: &Path) -> Option<Command> {
 }
 
 /// The commit `workspace` is at and the digest of what differs from it, or why it could not be
-/// read: `<workspace>/.git` is not a directory, `git` is missing, a call failed or printed
-/// more than 64 MiB, or `budget` ran out. The digest is SHA-256 over
+/// read, in a sentence that names no path: `<workspace>/.git` is not a directory, `git` is
+/// missing, a call failed or printed more than 64 MiB, or `budget` ran out. The digest is SHA-256 over
 ///
 /// `b"diff\0"` ‖ for each path, sorted bytewise, in the commit's tree or in the index whose
 /// work-tree content differs from the commit: `path ‖ 0x00 ‖ value ‖ b"\n"` ‖ `b"untracked\0"`
 /// ‖ for each untracked path no `.gitignore` excludes, sorted bytewise:
 /// `path ‖ 0x00 ‖ value ‖ b"\n"`,
 ///
-/// where `value` is the hex SHA-256 of the content, `deleted`, `size:<n>` above 64 MiB, for
+/// where `value` is the hex SHA-256 of the content, `deleted`, `unreadable` (it is there but its
+/// metadata cannot be read), `size:<n>` above 64 MiB, for
 /// anything but a readable regular file (a link, a directory, a FIFO) the walk's absent digest
 /// (64 zeros), or for an index gitlink that is not the commit's, `gitlink:<id>`. A directory `ls-files` collapses
 /// (a nested repository) is listed file by file. A clean clone digests to
@@ -181,10 +182,14 @@ pub fn state(workspace: &Path, budget: Duration) -> Result<WorkspaceGit, String>
         let full = workspace.join(OsStr::from_bytes(&path));
         let in_commit = committed.get(&path);
         match full.symlink_metadata() {
-            Err(_) => {
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
                 if in_commit.is_some() {
                     diff.insert(path, b"deleted".to_vec());
                 }
+            }
+            // There, but closed to the seal (a directory above it the agent made unreadable).
+            Err(_) => {
+                diff.insert(path, b"unreadable".to_vec());
             }
             Ok(meta) => match in_commit {
                 Some((mode, id)) if meta.is_file() && mode.as_slice() != b"120000" => {
@@ -323,7 +328,13 @@ fn collapsed_files(
     left: usize,
     deadline: Instant,
 ) -> Result<Vec<Line>, String> {
-    let files = walk(full, &[], left + 1, HASH_LIMIT, Some(deadline)).map_err(|e| e.to_string())?;
+    // The walk's own error names the directory; the reason recorded must not.
+    let files = walk(full, &[], left + 1, HASH_LIMIT, Some(deadline)).map_err(|e| match e {
+        crate::DaemonError::Io { source, .. } => {
+            format!("an untracked nested repository could not be read: {source}")
+        }
+        _ => "the time to read it ran out".to_string(),
+    })?;
     if files.len() > left {
         return Err(format!(
             "more than {COLLAPSED_FILE_LIMIT} files below untracked directories"

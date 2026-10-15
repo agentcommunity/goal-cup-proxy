@@ -3,6 +3,7 @@
 //! exclusions the way the seal reads them.
 
 use goalcup_daemon::workspace::*;
+use goalcup_protocol::seal::GitState;
 use std::path::Path;
 
 // ---------------------------------------------------------------- the workspace
@@ -470,9 +471,7 @@ fn a_non_git_workspace_still_walks() {
     let ws = t.path().join("ws");
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::write(ws.join("main.py"), b"print(1)").unwrap();
-    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET)
-        .unwrap()
-        .unwrap();
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
     assert_eq!(m.git, None);
     assert_eq!(m.home, None);
     assert_eq!(m.files.len(), 1);
@@ -482,18 +481,64 @@ fn a_non_git_workspace_still_walks() {
     // A clone seals its Git state and walks nothing.
     let t = tempfile::tempdir().unwrap();
     let (ws, _home) = committed_clone(t.path());
-    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET)
-        .unwrap()
-        .unwrap();
-    assert!(m.git.is_some());
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    assert!(matches!(m.git, Some(GitState::Read(_))), "{:?}", m.git);
     assert!(m.files.is_empty(), "{:?}", m.files);
+}
 
-    // A clone whose Git state cannot be read is never walked instead (D56).
+/// The reason an unreadable clone's manifest records, which must not name where it is.
+fn unreadable(m: &goalcup_protocol::seal::SealManifest, ws: &Path) -> String {
+    assert!(
+        m.files.is_empty(),
+        "an unreadable clone is not walked: {:?}",
+        m.files
+    );
+    let Some(GitState::Unreadable { unreadable }) = &m.git else {
+        panic!("not marked unreadable: {:?}", m.git);
+    };
+    assert!(!unreadable.is_empty());
+    assert!(!unreadable.contains(&*ws.to_string_lossy()), "{unreadable}");
+    unreadable.clone()
+}
+
+/// D56 amended: a clone whose Git state cannot be read still seals, never walked, with the reason
+/// in place of the state; the verifier marks it incomplete. A broken `.git` is one way.
+#[test]
+fn a_broken_clone_seals_unreadable_never_walked() {
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
     std::fs::write(ws.join(".git/HEAD"), b"not a ref\n").unwrap();
-    let why = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET)
-        .unwrap()
-        .expect_err("a broken clone is refused, not walked");
-    assert!(!why.is_empty());
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
+    unreadable(&m, &ws);
+}
+
+/// Running out of time is another: a clone Git is given no time to read seals unreadable.
+#[test]
+fn a_clone_out_of_time_seals_unreadable() {
+    let t = tempfile::tempdir().unwrap();
+    let (ws, _home) = committed_clone(t.path());
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", std::time::Duration::ZERO).unwrap();
+    assert_eq!(unreadable(&m, &ws), "the time to read it ran out");
+}
+
+/// A tracked file the seal may not look at is `unreadable` in the digest, not `deleted`.
+#[test]
+fn a_tracked_file_behind_a_closed_directory_is_unreadable_not_deleted() {
+    use goalcup_daemon::workspace_git::state;
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let (ws, home) = committed_clone(t.path());
+    std::fs::create_dir_all(ws.join("d")).unwrap();
+    std::fs::write(ws.join("d/f"), b"x\n").unwrap();
+    git(&ws, &home, &["add", "d/f"]);
+    git(&ws, &home, &["commit", "-q", "-m", "d"]);
+    std::fs::set_permissions(ws.join("d"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let got = state(&ws, BUDGET);
+    std::fs::set_permissions(ws.join("d"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        got.unwrap().dirty_sha256,
+        sha256_hex(b"diff\0d/f\0unreadable\nuntracked\0")
+    );
 }
 
 /// Review C1: Git before 2.44 ignores `GIT_NO_LAZY_FETCH`. A promisor remote the agent writes,

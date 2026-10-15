@@ -2910,10 +2910,12 @@ async fn a_clone_is_admitted_non_empty_and_not_walked() {
     let empty = hex::encode(Sha256::digest(b"diff\0untracked\0"));
     assert_eq!(
         baseline.git,
-        Some(goalcup_protocol::seal::WorkspaceGit {
-            commit: Some(commit.clone()),
-            dirty_sha256: empty.clone(),
-        })
+        Some(goalcup_protocol::seal::GitState::Read(
+            goalcup_protocol::seal::WorkspaceGit {
+                commit: Some(commit.clone()),
+                dirty_sha256: empty.clone(),
+            }
+        ))
     );
 
     std::fs::write(ws.join("hello.txt"), b"hello\n").unwrap();
@@ -2925,7 +2927,9 @@ async fn a_clone_is_admitted_non_empty_and_not_walked() {
         seal.home, None,
         "the harness home is listed on the baseline only"
     );
-    let git_state = seal.git.expect("the seal records the Git state");
+    let Some(goalcup_protocol::seal::GitState::Read(git_state)) = seal.git else {
+        panic!("the seal records the Git state: {:?}", seal.git);
+    };
     assert_eq!(git_state.commit, Some(commit));
     assert_ne!(
         git_state.dirty_sha256, empty,
@@ -2933,11 +2937,13 @@ async fn a_clone_is_admitted_non_empty_and_not_walked() {
     );
 }
 
-/// A clone whose Git state cannot be read is never walked instead (D56): the create is refused
-/// with a sentence, and a finish is refused as out of time, which the CLI asks again; once Git
-/// reads, the next finish seals.
+/// A clone whose Git state cannot be read is never walked instead, and is never refused either
+/// (D56 amended): the create is admitted and the finish seals at once, each manifest recording
+/// why in place of the state, so an agent that breaks its own `.git` makes only its own trace
+/// incomplete.
 #[tokio::test]
-async fn a_clone_git_cannot_read_is_refused_never_walked() {
+async fn a_clone_git_cannot_read_still_seals_never_walked() {
+    use goalcup_protocol::seal::GitState;
     let rig = Rig::start().await;
     let home = rig.root.join("git-home");
     std::fs::create_dir_all(&home).unwrap();
@@ -2953,44 +2959,34 @@ async fn a_clone_git_cannot_read_is_refused_never_walked() {
         std::fs::write(ws.join("README.md"), b"# entry\n").unwrap();
         ws
     };
+    let unreadable = |manifest: &goalcup_protocol::seal::SealManifest| {
+        assert_eq!(manifest.files, [], "an unreadable clone is not walked");
+        assert!(
+            matches!(&manifest.git, Some(GitState::Unreadable { unreadable }) if !unreadable.is_empty()),
+            "{:?}",
+            manifest.git
+        );
+    };
 
     let broken = clone("broken");
     std::fs::write(broken.join(".git/HEAD"), b"not a ref\n").unwrap();
-    let refused = rig.create("codex-cli", &broken, RESERVE).await;
-    assert_ne!(refused.status(), 200, "{}", refused.body());
-    assert!(
-        refused
-            .body()
-            .contains("the Git work folder could not be read"),
-        "{}",
-        refused.body()
-    );
+    let created = rig.create("codex-cli", &broken, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    unreadable(&read_manifest(
+        &rig.trace_dir(&info.entry_id).join("baseline.json"),
+    ));
 
     let ws = clone("later-broken");
     let created = rig.create("codex-cli", &ws, RESERVE).await;
     assert_eq!(created.status(), 200, "{}", created.body());
     let info: CaptureWorkspaceInfo = created.json().unwrap();
-    let head = std::fs::read(ws.join(".git/HEAD")).unwrap();
     std::fs::write(ws.join(".git/HEAD"), b"not a ref\n").unwrap();
     let sealed = rig.seal(&info.entry_id, None).await;
-    assert_eq!(sealed.status(), 409, "{}", sealed.body());
-    assert!(
-        sealed.body().contains("finish_deadline"),
-        "{}",
-        sealed.body()
-    );
-    let trace = rig.trace_dir(&info.entry_id);
-    assert!(
-        !trace.join("seal.json").exists(),
-        "nothing was walked or sealed"
-    );
-
-    std::fs::write(ws.join(".git/HEAD"), head).unwrap();
-    let sealed = rig.seal(&info.entry_id, None).await;
     assert_eq!(sealed.status(), 200, "{}", sealed.body());
-    let seal = read_manifest(&trace.join("seal.json"));
-    assert!(seal.git.is_some());
-    assert_eq!(seal.files, []);
+    unreadable(&read_manifest(
+        &rig.trace_dir(&info.entry_id).join("seal.json"),
+    ));
 }
 
 /// The baseline lists the connector's config home as it was before the run, without the

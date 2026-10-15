@@ -35,7 +35,7 @@
 //! drain until the end of the drain share, stops the owner (native finish, remaining producers
 //! cut as losses, flush, sync), chains the proxy's counters as gaps, ends the registered process
 //! tree and records its actual outcome (termination time is outside the budget), seals the
-//! workspace (a clone's Git state, else the walk; D56), and calls `write_local_finish` once. The
+//! workspace (a clone's Git state or why it could not be read, else the walk; D56), and calls `write_local_finish` once. The
 //! drain share expiring is the existing cut-with-a-gap, never a refusal. A stage that waits on a permit, the
 //! entry's lock or the owner, or that is about to begin with less than [`FINISH_RESPONSE_MARGIN`]
 //! left, is refused with [`DaemonError::FinishDeadline`]: no terminal is written, the entry stays
@@ -163,7 +163,8 @@ use self::writer::*;
 const IDLE_WAIT: Duration = Duration::from_millis(25);
 
 /// What reading a clone's Git state may take at the baseline (D56): inside the CLI's 30 s
-/// create call. A clone not read in it is refused, never walked.
+/// create call. A clone not read in it is admitted with the reason in place of the state, never
+/// walked.
 const BASELINE_GIT_BUDGET: Duration = Duration::from_secs(20);
 
 /// One v5 capture entry of this daemon.
@@ -422,10 +423,7 @@ impl Daemon {
             source,
         })?;
         let mut baseline =
-            workspace::seal_workspace(&workspace, entry_id, &now_rfc3339(), BASELINE_GIT_BUDGET)?
-                .map_err(|why| {
-                DaemonError::Refused(format!("the Git work folder could not be read: {why}"))
-            })?;
+            workspace::seal_workspace(&workspace, entry_id, &now_rfc3339(), BASELINE_GIT_BUDGET)?;
         baseline.home = listed_home(&manifest.capture, run_home, config_home);
         export.write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)?;
         export.sync_capture()?;
