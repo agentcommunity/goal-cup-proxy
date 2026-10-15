@@ -918,7 +918,16 @@ fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environ
         .env("TERM", "xterm-256color")
         .env("COLORTERM", "truecolor")
         .env("LANG", "C.UTF-8")
-        .env("LC_ALL", "C.UTF-8");
+        .env("LC_ALL", "C.UTF-8")
+        // Things a participant's shell may hold that the harness must not be handed: a proxy, a
+        // model base URL, a token. A prep launch records nothing and sets none of them.
+        .env("HTTPS_PROXY", "http://goalcup:secret@127.0.0.1:1")
+        .env("https_proxy", "http://goalcup:secret@127.0.0.1:1")
+        .env("NO_PROXY", "example.org")
+        .env("OPENAI_BASE_URL", "https://llm.example.org/v1")
+        .env("ANTHROPIC_BASE_URL", "https://llm.example.org")
+        .env("GITHUB_TOKEN", "ghp_participantsownshelltoken")
+        .env("LC_API_TOKEN", "lc-token-value");
     let mut on_pty = OnPty::spawn(command, None);
     // With the old fixed PATH the script's interpreter is not found and the harness never draws.
     on_pty.wait_shown("tui: ready");
@@ -938,13 +947,36 @@ fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environ
     ] {
         assert!(env.lines().any(|l| l == want), "{want} is not in:\n{env}");
     }
-    // Still not a recorded launch: no proxy, no CA, nothing of the tracer's own.
-    for key in ["HTTPS_PROXY", "https_proxy", "CODEX_CA_CERTIFICATE"] {
+    // Not a recorded launch, and not a leak: none of what the shell held reaches the harness,
+    // by name or by value.
+    for key in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "NO_PROXY",
+        "no_proxy",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "GITHUB_TOKEN",
+        "LC_API_TOKEN",
+        "CODEX_CA_CERTIFICATE",
+    ] {
         assert!(
             !env.lines().any(|l| l.starts_with(&format!("{key}="))),
-            "{env}"
+            "{key} reached the harness:\n{env}"
         );
     }
+    for value in [
+        "goalcup:secret",
+        "llm.example.org",
+        "ghp_participantsownshelltoken",
+        "lc-token-value",
+    ] {
+        assert!(!env.contains(value), "{value} reached the harness:\n{env}");
+    }
+    assert!(
+        !env.lines().any(|l| l.starts_with("GOALCUP_")),
+        "the tracer's own variables reached the harness:\n{env}"
+    );
 }
 
 #[test]
@@ -1009,10 +1041,6 @@ fn prep_logs_in_to_the_run_home_a_later_start_uses() {
         None,
     );
     on_pty.wait_shown("tui: ready");
-    assert_eq!(
-        rig.harness_file("tui.home").unwrap().trim(),
-        home.display().to_string()
-    );
     on_pty.type_line("/exit");
     on_pty.wait();
     let shown = on_pty.shown();
@@ -1061,4 +1089,79 @@ fn prep_logs_in_to_the_run_home_a_later_start_uses() {
     start.type_line("/exit");
     let status = start.wait();
     assert!(status.success(), "{status:?}\n{}", start.shown());
+}
+
+// ------------------------------------------------------------------ a home someone else holds
+
+/// Take the flock `goalcup start` and `goalcup prep` take on `<cfg>/capture-homes/<id>.lock`,
+/// as another process: the lock is on this open file, so the prep (a process of its own) is
+/// refused. `holder`, when given, is the run id a recording run writes into the file.
+fn hold_home_lock(rig: &Rig, id: &str, holder: Option<&str>) -> std::fs::File {
+    use std::os::fd::AsRawFd;
+    let homes = rig.cfg.join("capture-homes");
+    std::fs::create_dir_all(&homes).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(homes.join(format!("{id}.lock")))
+        .unwrap();
+    if let Some(run) = holder {
+        std::fs::write(homes.join(format!("{id}.lock")), run).unwrap();
+    }
+    // SAFETY: `lock` owns a live descriptor; `flock` reads nothing else.
+    let taken = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(taken, 0, "{}", std::io::Error::last_os_error());
+    lock
+}
+
+#[test]
+fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    // The config home kept across runs (D39) and the run HOME kept across runs (D59), each
+    // held by a recording run that has said who it is, and by a holder that has not.
+    for (id, kind, holder) in [
+        (CHAT_ID, "config home", Some("r0123456789abcdef")),
+        (CHAT_ID, "config home", None),
+        (CHAT_HOME_ID, "run HOME", Some("r0123456789abcdef")),
+        (CHAT_HOME_ID, "run HOME", None),
+    ] {
+        let rig = Rig::chat_with_shared_run_home();
+        all_but_the_harness(&rig);
+        let _held = hold_home_lock(&rig, id, holder);
+
+        let mut on_pty = OnPty::spawn(
+            prep_command(&rig, &["--harness", id, "--repo", REPO], &facts),
+            None,
+        );
+        let status = on_pty.wait();
+        let shown = on_pty.shown();
+        let what = format!("{kind}, holder {holder:?}:\n{shown}");
+        assert_eq!(status.code(), Some(1), "{what}");
+        let home = line(&shown, "harness_home");
+        assert!(home.starts_with("[fail] harness_home:"), "{what}");
+        match holder {
+            Some(run) => assert!(home.contains(run), "the holder is named: {what}"),
+            None => assert!(home.contains("another `goalcup prep`"), "{what}"),
+        }
+        assert!(
+            home.contains(&format!("share one {id} home")) || home.contains(&format!("{id} run")),
+            "{what}"
+        );
+        // Nothing was opened, nothing was made in the held home, and nothing is recorded as
+        // set up.
+        assert!(
+            !rig.out.join("tui.pid").exists(),
+            "the harness started: {what}"
+        );
+        assert!(!prep_file(&rig.cfg).home_ready, "{what}");
+        let leaf = if id == CHAT_ID {
+            id.to_string()
+        } else {
+            format!("{id}.run-home")
+        };
+        assert!(!rig.cfg.join("capture-homes").join(leaf).exists(), "{what}");
+    }
 }
