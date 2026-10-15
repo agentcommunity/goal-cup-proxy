@@ -64,7 +64,7 @@ grace_seconds = 10
 
 [redaction]
 extra_patterns = [
-  { kind = "anthropic_billing_header", regex = 'x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+' },
+  { kind = "anthropic_billing_header", header_prefix = "x-anthropic-billing-" },
 ]
 
 [[capture.hosts]]

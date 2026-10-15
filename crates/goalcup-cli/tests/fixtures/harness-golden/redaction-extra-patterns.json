@@ -51,7 +51,6 @@
     ]
   },
   "empty_list": "ok",
-  "known_regex_under_a_bad_kind": "refused",
   "recognizers": [
     {
       "alone": "ok",
@@ -147,6 +146,5 @@
   "shared_policy_alone_over_the_corpus": {
     "retained": "{\"timestamp\":\"2026-09-28T10:00:00.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":12.5,\"resets_in_seconds\":4821},\"credits\":{\"balance\":\"412\"},\"plan_type\":\"plus\"}}}\nevent: codex.rate_limits\ndata: {\"type\":\"codex.rate_limits\",\"plan_type\":\"pro\",\"rate_limits\":{\"primary\":{\"used_percent\":40.0}},\"credits_remaining\":17.5}\n\n{\"credits_remaining\": \"412.00\", \"plan_type\": \"team\"}\nPOST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\nx-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli\r\ncontent-type: application/json\r\n\r\n{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli; cch=00000;\"}],\"messages\":[]}\n{\"model\":\"deepseek-v4-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"plan_type\":\"not-a-hermes-rule\"}\n{\"rate_limits\": null, \"plan_type\": \"\", \"credits_remaining\": ,}\n",
     "spans": []
-  },
-  "unknown_regex": "refused"
+  }
 }

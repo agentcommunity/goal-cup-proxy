@@ -32,15 +32,16 @@
 //! [`StreamRedactor::with_extra_patterns`] adds a connector's `[redaction].extra_patterns`
 //! after the shared literals, in declaration order — the rule set and priorities
 //! `Redactor::for_patterns` applies to a whole record — compiled by the same compiler
-//! (`super::compile_extra`). A connector regex is a participant-authored rule, and a hold
-//! can only be as sound as the recognizer that decides it, so each one needs its own
-//! bounded recognizer, derived by hand and reviewed at the hold bound like the shared ones.
-//! `EXTRA_SHAPES` pins every recognizer to the exact regex source it models (the four
-//! shipped patterns: Codex `rate_limits`, `plan_type` and `credits_remaining`, and Claude's
-//! billing header). A pattern with no pinned recognizer — a new rule, or a one-character
-//! edit of a shipped one — is refused at construction rather than streamed with a guessed
-//! hold. From there an extra rule is one more literal: held, released, followed through a
-//! fail-closed redaction and replaced at a discontinuity exactly as a shared one is.
+//! (`super::compile_extra`). A connector rule is a typed form, not a regex
+//! (`goalcup_protocol::harness::RedactionRule`): a JSON field with an object, string or scalar
+//! value, or a header prefix. The protocol crate derives each form's regex, and this module
+//! has one bounded recognizer per form, derived by hand and reviewed at the hold bound like
+//! the shared ones, parameterised only by the field name or prefix bytes. Those names are
+//! plain ASCII without a quote, a backslash or a line end (the protocol's grammar), which is
+//! what lets a recognizer compare them byte for byte. A form with no recognizer here is
+//! refused at construction rather than streamed with a guessed hold. From there an extra rule
+//! is one more literal: held, released, followed through a fail-closed redaction and replaced
+//! at a discontinuity exactly as a shared one is.
 //!
 //! Consequences, each pinned by `tests/it/capture_redaction.rs`,
 //! `tests/it/capture_redaction_extra.rs` and the unit tests below:
@@ -81,8 +82,8 @@
 //! every held byte, and any redaction in progress, and reports a gap, for a producer the
 //! entry owner has lost.
 //!
-//! This is best-effort body redaction for the built-in rules and the pinned connector
-//! rules, not a guarantee that no secret-like content survives.
+//! This is best-effort body redaction for the built-in rules and the connector rules, not a
+//! guarantee that no secret-like content survives.
 //!
 //! # Ownership
 //!
@@ -100,7 +101,7 @@ use goalcup_protocol::capture::{
     CaptureFrame, CaptureMeta, CaptureRecord, CaptureTime, EndReason, FrameEvent, GapReason,
     MAX_ENVELOPE_BYTES, MAX_METADATA_STRING_BYTES, MAX_OPEN_STREAMS, MAX_SEGMENT_BYTES, StreamKey,
 };
-use goalcup_protocol::manifest::RedactionPattern;
+use goalcup_protocol::harness::{self, ExtraPattern, RedactionRule};
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
@@ -320,13 +321,17 @@ enum Form {
     JsonAssignment,
     ShellAssignment,
     Email,
-    /// A connector rule on one JSON field: `KEY\s*:\s*VALUE`, `KEY` a quoted literal.
+    /// A connector rule on one JSON field: `KEY\s*:\s*VALUE`, `KEY` the quoted field name
+    /// (`harness::RedactionRule::JsonField`).
     Field {
-        key: &'static [u8],
+        key: Box<[u8]>,
         value: FieldValue,
     },
-    /// `x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+`
-    BillingHeader,
+    /// A connector rule on one header: `PREFIX[a-z0-9-]+:\s*[^\r\n"]+`
+    /// (`harness::RedactionRule::HeaderPrefix`).
+    HeaderPrefix {
+        prefix: Box<[u8]>,
+    },
 }
 
 /// The value half of a [`Form::Field`] rule; group 1 of its regex is the value.
@@ -337,7 +342,7 @@ enum FieldValue {
     /// `"([^"\\]+)"`: a non-empty string without escapes; the group is its interior.
     String,
     /// `("[^"\\]*"|[^,}\s]+)`: a string without escapes, else a bare token.
-    Credits,
+    Scalar,
 }
 
 struct Shape {
@@ -526,71 +531,20 @@ static SHAPES: [Shape; 20] = [
     ),
 ];
 
-/// A connector regex the stream can hold soundly: the exact source it was derived from, the
-/// span group the V1 compiler gives that source, and its recognizer.
-struct ExtraShape {
-    source: &'static str,
-    span_group: usize,
-    form: Form,
-}
-
-/// The streaming recognizer of every connector `extra_patterns` regex this module accepts,
-/// each pinned to its exact source (the regex string the `harness.toml` literal carries).
-/// [`StreamRedactor::with_extra_patterns`] refuses any other regex; the unit test
-/// `extra_shapes_follow_the_shipped_harnesses` fails when a shipped `harness.toml` pattern and
-/// this list disagree, in either direction.
+/// One connector rule: compiled by the V1 compiler, streamed by the recognizer of its form.
 ///
-/// Each recognizer's character predicates are checked against their regex classes over
-/// every scalar value by `extra_predicates_equal_their_regex_classes`. What each
-/// recognizer relies on, each checked against the regex by
-/// `extra_recognizers_hold_every_prefix_of_a_match`:
+/// Each form's character predicates are checked against their regex classes over every
+/// scalar value by `extra_predicates_equal_their_regex_classes`. What each recognizer relies
+/// on, whatever field name or prefix it is given, each checked against the regex by
+/// `extra_recognizers_hold_every_prefix_of_a_match` over the shipped rules and other names:
 /// * no rule can match the empty string or start a match with `\n`;
 /// * a span group's replacement quoting (`super::span_is_a_json_string_interior`) reads only
-///   bytes inside the whole match: group 1 of the three Codex rules starts after `:` or a
-///   space (never a `"`), or is a string interior whose quotes the match contains;
+///   bytes inside the whole match: group 1 of a JSON-field rule starts after `:` or a space
+///   (never a `"`), or is a string interior whose quotes the match contains;
 /// * no rule has an assertion, so a match does not depend on bytes outside it.
-static EXTRA_SHAPES: [ExtraShape; 4] = [
-    // Codex `connectors/codex-cli/harness.toml` [redaction], in its order.
-    ExtraShape {
-        source: r#""rate_limits"\s*:\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})"#,
-        span_group: 1,
-        form: Form::Field {
-            key: br#""rate_limits""#,
-            value: FieldValue::Object,
-        },
-    },
-    ExtraShape {
-        source: r#""plan_type"\s*:\s*"([^"\\]+)""#,
-        span_group: 1,
-        form: Form::Field {
-            key: br#""plan_type""#,
-            value: FieldValue::String,
-        },
-    },
-    ExtraShape {
-        source: r#""credits_remaining"\s*:\s*("[^"\\]*"|[^,}\s]+)"#,
-        span_group: 1,
-        form: Form::Field {
-            key: br#""credits_remaining""#,
-            value: FieldValue::Credits,
-        },
-    },
-    // Claude `connectors/claude-code-cli/harness.toml` [redaction].
-    ExtraShape {
-        source: r#"x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+"#,
-        span_group: 0,
-        form: Form::BillingHeader,
-    },
-];
-
-/// The longest audit kind a connector rule may name. The kind is copied into every marker
-/// and audit span the rule produces.
-const MAX_EXTRA_KIND_BYTES: usize = 64;
-
-/// One connector rule: compiled by the V1 compiler, streamed by its pinned recognizer.
 struct Extra {
     pattern: Pattern,
-    form: &'static Form,
+    form: Form,
 }
 
 /// The rule set one redactor streams: the shared literals (`lit` below [`SHAPES`]'s length,
@@ -613,10 +567,10 @@ impl Policy {
             .chain(self.extra.iter().map(|e| &e.pattern))
     }
 
-    fn form(&self, lit: usize) -> Option<&'static Form> {
+    fn form(&self, lit: usize) -> Option<&Form> {
         match SHAPES.get(lit) {
             Some(shape) => Some(&shape.form),
-            None => self.extra.get(lit - SHAPES.len()).map(|e| e.form),
+            None => self.extra.get(lit - SHAPES.len()).map(|e| &e.form),
         }
     }
 
@@ -633,43 +587,43 @@ impl Policy {
     }
 
     /// Compile a connector's `extra_patterns` for streaming, or say why one cannot be.
-    fn with_extra(extra: &[RedactionPattern]) -> Result<Policy, DaemonError> {
-        let refuse = |p: &RedactionPattern, why: &str| {
+    ///
+    /// Each rule's form maps onto its recognizer, and the regex the form derives must have
+    /// the span group that recognizer models. A form this module has no recognizer for (one
+    /// the protocol crate added later) is refused, never streamed with a guessed hold.
+    fn with_extra(extra: &[ExtraPattern]) -> Result<Policy, DaemonError> {
+        let refuse = |p: &ExtraPattern, why: &str| {
             DaemonError::Config(format!("capture redaction pattern {:?}: {why}", p.kind))
         };
         let mut rules = Vec::with_capacity(extra.len());
         for p in extra {
             let pattern = compile_extra(p).map_err(|reason| refuse(p, &reason))?;
-            if p.kind.is_empty()
-                || p.kind.len() > MAX_EXTRA_KIND_BYTES
-                || !p
-                    .kind
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            {
+            let (form, span_group) = match &p.rule {
+                RedactionRule::JsonField { field, value } => {
+                    let value = match value {
+                        harness::FieldValue::Object => FieldValue::Object,
+                        harness::FieldValue::String => FieldValue::String,
+                        harness::FieldValue::Scalar => FieldValue::Scalar,
+                        _ => return Err(refuse(p, "no streaming recognizer for this value form")),
+                    };
+                    let key = format!("\"{field}\"").into_bytes().into_boxed_slice();
+                    (Form::Field { key, value }, 1)
+                }
+                RedactionRule::HeaderPrefix(prefix) => (
+                    Form::HeaderPrefix {
+                        prefix: prefix.as_bytes().into(),
+                    },
+                    0,
+                ),
+                _ => return Err(refuse(p, "no streaming recognizer for this rule form")),
+            };
+            if pattern.span_group != span_group {
                 return Err(refuse(
                     p,
-                    "the kind names the rule in every marker and audit span, so it must be 1 \
-                     to 64 ASCII letters, digits, `_` or `-`",
+                    "the form's regex and its streaming recognizer disagree on the span",
                 ));
             }
-            let Some(shape) = EXTRA_SHAPES
-                .iter()
-                .find(|s| s.source == pattern.re.as_str() && s.span_group == pattern.span_group)
-            else {
-                return Err(refuse(
-                    p,
-                    "no bounded streaming recognizer is pinned for this regex, so M2 capture \
-                     refuses it rather than hold or release its matches on a guess; a \
-                     connector regex streams only once its recognizer is derived, pinned to \
-                     its exact source and reviewed at the hold bound (redact/stream.rs \
-                     EXTRA_SHAPES)",
-                ));
-            };
-            rules.push(Extra {
-                pattern,
-                form: &shape.form,
-            });
+            rules.push(Extra { pattern, form });
         }
         Ok(Policy { extra: rules })
     }
@@ -1000,7 +954,7 @@ enum Walk {
     Shell(Shell),
     Email(Email),
     Field(Field),
-    Billing(Billing),
+    Header(Header),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1017,7 +971,7 @@ enum FieldPhase {
     String(bool),
     /// `"[^"\\]*"` still open, and `[^,}\s]+` still running: the regex's two alternatives,
     /// followed together until the first one completes (leftmost-first then takes it).
-    Credits { quoted: bool, bare: bool },
+    Scalar { quoted: bool, bare: bool },
 }
 
 /// A [`Form::Field`] candidate.
@@ -1056,9 +1010,9 @@ impl Field {
                     FieldPhase::String(false)
                 }
                 // `"` opens the first alternative and is also a character of the second.
-                FieldValue::Credits if credit_char(u) => {
+                FieldValue::Scalar if credit_char(u) => {
                     self.value_start = off;
-                    FieldPhase::Credits {
+                    FieldPhase::Scalar {
                         quoted: is(u, b'"'),
                         bare: true,
                     }
@@ -1079,7 +1033,7 @@ impl Field {
                 _ if string_char(u) => FieldPhase::String(true),
                 _ => return Step::Dead,
             },
-            FieldPhase::Credits { quoted, bare } => {
+            FieldPhase::Scalar { quoted, bare } => {
                 // The first alternative completes: leftmost-first takes it, whatever the
                 // second could still have matched.
                 if quoted && is(u, b'"') {
@@ -1090,7 +1044,7 @@ impl Field {
                 if !quoted && !bare {
                     return Step::Dead;
                 }
-                FieldPhase::Credits { quoted, bare }
+                FieldPhase::Scalar { quoted, bare }
             }
         };
         self.phase = next;
@@ -1098,12 +1052,10 @@ impl Field {
     }
 }
 
-const BILLING_PREFIX: &[u8] = b"x-anthropic-billing-";
-
-/// A [`Form::BillingHeader`] candidate.
+/// A [`Form::HeaderPrefix`] candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Billing {
-    /// This many bytes of [`BILLING_PREFIX`] matched.
+enum Header {
+    /// This many bytes of the prefix matched.
     Lit(u8),
     /// In `[a-z0-9-]+`; whether it has a character yet.
     Name(bool),
@@ -1112,33 +1064,33 @@ enum Billing {
     Value { spaces: bool, value: bool },
 }
 
-impl Billing {
-    /// `x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+`
-    fn step(&mut self, u: Unit) -> Step {
+impl Header {
+    /// `PREFIX[a-z0-9-]+:\s*[^\r\n"]+`
+    fn step(&mut self, prefix: &[u8], u: Unit) -> Step {
         let next = match *self {
-            Billing::Lit(p) => {
-                if !BILLING_PREFIX.get(p as usize).is_some_and(|&b| is(u, b)) {
+            Header::Lit(p) => {
+                if !prefix.get(p as usize).is_some_and(|&b| is(u, b)) {
                     return Step::Dead;
                 }
-                if p as usize + 1 == BILLING_PREFIX.len() {
-                    Billing::Name(false)
+                if p as usize + 1 == prefix.len() {
+                    Header::Name(false)
                 } else {
-                    Billing::Lit(p + 1)
+                    Header::Lit(p + 1)
                 }
             }
-            Billing::Name(_) if header_name(u) => Billing::Name(true),
-            Billing::Name(true) if is(u, b':') => Billing::Value {
+            Header::Name(_) if header_name(u) => Header::Name(true),
+            Header::Name(true) if is(u, b':') => Header::Value {
                 spaces: true,
                 value: false,
             },
-            Billing::Name(_) => return Step::Dead,
-            Billing::Value { spaces, value } => {
+            Header::Name(_) => return Step::Dead,
+            Header::Value { spaces, value } => {
                 let value = (spaces || value) && header_value(u);
                 let spaces = spaces && space(u);
                 if !spaces && !value {
                     return Step::Dead;
                 }
-                Billing::Value { spaces, value }
+                Header::Value { spaces, value }
             }
         };
         *self = next;
@@ -1492,7 +1444,7 @@ impl Candidate {
             // start slides with the run (see `Candidate::step`).
             Form::Email => local_part(u) && !prev_local,
             Form::Field { key, .. } => key.first().is_some_and(|&b| is(u, b)),
-            Form::BillingHeader => is(u, BILLING_PREFIX[0]),
+            Form::HeaderPrefix { prefix } => prefix.first().is_some_and(|&b| is(u, b)),
         };
         if !starts {
             return None;
@@ -1524,7 +1476,7 @@ impl Candidate {
                 phase: FieldPhase::Key(0),
                 value_start: 0,
             }),
-            Form::BillingHeader => Walk::Billing(Billing::Lit(0)),
+            Form::HeaderPrefix { .. } => Walk::Header(Header::Lit(0)),
         })
     }
 
@@ -1568,7 +1520,9 @@ impl Candidate {
             (Walk::Field(field), Form::Field { key, value }) => {
                 return field.step(key, *value, u, off, len);
             }
-            (Walk::Billing(billing), _) => return billing.step(u),
+            (Walk::Header(header), Form::HeaderPrefix { prefix }) => {
+                return header.step(prefix, u);
+            }
             _ => false,
         })
     }
@@ -1593,17 +1547,17 @@ impl Candidate {
             (Walk::Shell(Shell::Value(_)), _) => Some(self.start),
             // A connector field's value has begun: from there it is the rule's span.
             (Walk::Field(field), Form::Field { value, .. }) => match field.phase {
-                FieldPhase::Object(_) | FieldPhase::String(_) | FieldPhase::Credits { .. } => {
+                FieldPhase::Object(_) | FieldPhase::String(_) | FieldPhase::Scalar { .. } => {
                     Some(field.value_start)
                 }
-                // A bare credits value can begin with a multi-byte character. Cut inside its
+                // A bare scalar value can begin with a multi-byte character. Cut inside its
                 // encoding, the undecoded bytes are the value's first bytes: V1 on the same
                 // prefix keeps them, but they are part of a value that has begun.
-                FieldPhase::AfterColon if *value == FieldValue::Credits => tail,
+                FieldPhase::AfterColon if *value == FieldValue::Scalar => tail,
                 FieldPhase::Key(_) | FieldPhase::BeforeColon | FieldPhase::AfterColon => None,
             },
-            // A billing header's name and colon are complete: the whole match is the span.
-            (Walk::Billing(Billing::Value { .. }), _) => Some(self.start),
+            // A header's name and colon are complete: the whole match is the span.
+            (Walk::Header(Header::Value { .. }), _) => Some(self.start),
             _ => None,
         }
     }
@@ -2351,13 +2305,12 @@ impl StreamRedactor {
     /// are exactly `Redactor::for_patterns(id, extra).apply(whole stream)`, and past it the
     /// connector's rules fail closed like the shared ones (see the module documentation).
     ///
-    /// Each pattern goes through the V1 compiler — a pattern `Redactor::for_patterns`
-    /// refuses is refused here for the same reason — and then must be one this module can
-    /// stream soundly: its regex must equal a pinned recognizer's source exactly, and its
-    /// kind (copied into every marker and audit span) must be 1 to 64 ASCII letters, digits,
-    /// `_` or `-`. Anything else is a `DaemonError::Config` naming the kind, never a pattern
-    /// silently dropped or streamed with a guessed hold. An empty list is [`Self::new`].
-    pub fn with_extra_patterns(extra: &[RedactionPattern]) -> Result<Self, DaemonError> {
+    /// Each rule goes through the V1 compiler — a rule `Redactor::for_patterns` refuses is
+    /// refused here for the same reason — and then its form must be one this module has a
+    /// recognizer for. Anything else is a `DaemonError::Config` naming the kind, never a rule
+    /// silently dropped or streamed with a guessed hold. The kind, field and prefix grammar is
+    /// held by `ExtraPattern` itself. An empty list is [`Self::new`].
+    pub fn with_extra_patterns(extra: &[ExtraPattern]) -> Result<Self, DaemonError> {
         Ok(StreamRedactor::with_policy(Policy::with_extra(extra)?))
     }
 
@@ -3139,7 +3092,7 @@ mod tests {
 
     /// Every connector `extra_patterns` entry the repository ships, in connector order, read
     /// from each `connectors/<id>/harness.toml`.
-    fn shipped_extra_patterns() -> Vec<RedactionPattern> {
+    fn shipped_extra_patterns() -> Vec<ExtraPattern> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
         let mut dirs: Vec<_> = std::fs::read_dir(&root)
             .expect("connectors directory")
@@ -3157,50 +3110,67 @@ mod tests {
         out
     }
 
-    /// The pinned recognizers and the shipped `harness.toml` files agree in both directions:
-    /// every shipped connector regex has a recognizer pinned to its exact source and span
-    /// group, and no recognizer is pinned to a regex nothing ships. Editing a shipped pattern
-    /// fails here, and refuses streaming at construction, until its recognizer is
-    /// re-derived and its oracles re-run.
-    #[test]
-    fn extra_shapes_follow_the_shipped_harnesses() {
-        let shipped = shipped_extra_patterns();
-        assert_eq!(shipped.len(), EXTRA_SHAPES.len(), "{shipped:?}");
-        for p in &shipped {
-            let compiled = compile_extra(p).expect("a shipped pattern compiles");
-            assert!(
-                EXTRA_SHAPES
-                    .iter()
-                    .any(|s| s.source == p.regex && s.span_group == compiled.span_group),
-                "no recognizer pinned for shipped {} {:?}",
-                p.kind,
-                p.regex
-            );
-        }
-        for s in &EXTRA_SHAPES {
-            assert!(
-                shipped.iter().any(|p| p.regex == s.source),
-                "a recognizer is pinned to a regex no harness.toml ships: {:?}",
-                s.source
-            );
-        }
-        let policy = Policy::with_extra(&shipped).expect("the shipped patterns stream");
-        assert_eq!(policy.len(), SHAPES.len() + shipped.len());
+    /// One rule of every form under names no shipped connector uses: a one-byte field, a
+    /// field with upper case, a digit and a hyphen, and a prefix that ends inside the header
+    /// name. The recognizers are parameterised by these bytes, so the soundness tests run
+    /// over these as well as over the shipped rules.
+    fn synthetic_extra_patterns() -> Vec<ExtraPattern> {
+        let field = |kind: &str, field: &str, value| {
+            ExtraPattern::new(
+                kind,
+                RedactionRule::JsonField {
+                    field: field.into(),
+                    value,
+                },
+            )
+            .expect("a valid rule")
+        };
+        vec![
+            field("t_object", "k", harness::FieldValue::Object),
+            field("t_string", "Tier-2", harness::FieldValue::String),
+            field("t_scalar", "k", harness::FieldValue::Scalar),
+            ExtraPattern::new("t_header", RedactionRule::HeaderPrefix("x-a".into()))
+                .expect("a valid rule"),
+        ]
     }
 
-    /// The protocol crate's mirror of these sources (`capture_policy::EXTRA_PATTERN_SOURCES`)
-    /// is what a schema-1 `harness.toml` is validated against, in CI, without the daemon. It
-    /// must equal this list, in order: a recognizer added here without its mirror row would
-    /// be refused for every harness, and one added there without a recognizer here would be
-    /// admitted by the protocol and refused by the redactor at the first run.
+    fn every_extra_pattern() -> Vec<ExtraPattern> {
+        let mut all = shipped_extra_patterns();
+        all.extend(synthetic_extra_patterns());
+        all
+    }
+
+    /// Every form maps onto its recognizer with the span its regex declares: a JSON field's
+    /// value is group 1, a header line is the whole match. The shipped rules use every form.
     #[test]
-    fn extra_shapes_equal_the_policy_sources() {
-        let ours: Vec<&str> = EXTRA_SHAPES.iter().map(|s| s.source).collect();
-        assert_eq!(
-            ours,
-            goalcup_protocol::capture_policy::EXTRA_PATTERN_SOURCES,
-            "EXTRA_SHAPES and capture_policy::EXTRA_PATTERN_SOURCES must list the same regex \
-             sources in the same order"
+    fn every_rule_form_streams_with_its_span() {
+        let all = every_extra_pattern();
+        let policy = Policy::with_extra(&all).expect("every form streams");
+        assert_eq!(policy.len(), SHAPES.len() + all.len());
+        for (lit, p) in (SHAPES.len()..).zip(&all) {
+            let (form, group) = match policy.form(lit) {
+                Some(Form::Field { key, .. }) => (String::from_utf8_lossy(key).into_owned(), 1),
+                Some(Form::HeaderPrefix { prefix }) => {
+                    (String::from_utf8_lossy(prefix).into_owned(), 0)
+                }
+                _ => panic!("{} has no connector recognizer", p.kind),
+            };
+            assert!(p.regex().starts_with(&form), "{form} leads {}", p.regex());
+            assert_eq!(policy.extra[lit - SHAPES.len()].pattern.span_group, group);
+        }
+        let shipped = shipped_extra_patterns();
+        for value in ["object", "string", "scalar"] {
+            assert!(
+                shipped.iter().any(|p| matches!(&p.rule,
+                    RedactionRule::JsonField { value: v, .. } if v.as_str() == value)),
+                "no shipped rule uses the {value} form"
+            );
+        }
+        assert!(
+            shipped
+                .iter()
+                .any(|p| matches!(p.rule, RedactionRule::HeaderPrefix(_))),
+            "no shipped rule uses the header form"
         );
     }
 
@@ -3208,6 +3178,12 @@ mod tests {
         b"\"rate_limits\"",
         b"\"plan_type\"",
         b"\"credits_remaining\"",
+        b"\"k\"",
+        b"\"k\": ",
+        b"\"k\":{",
+        b"\"Tier-2\"",
+        b"\"Tier-2\": \"",
+        b"x-a",
         b"x-anthropic-billing-",
         b"x-anthropic-billing-header",
         b"x-anthropic-billing",
@@ -3284,10 +3260,11 @@ mod tests {
     /// its regex class, over every Unicode scalar value and every byte that cannot start
     /// one: a predicate that drops or adds a character (VT or FF read as a line end, say)
     /// fails here even when no generator happens to produce that character. Each class is
-    /// taken from a pinned source, and compiled as the V1 compiler does (Unicode mode).
+    /// taken from a form's regex, and compiled as the V1 compiler does (Unicode mode).
     #[test]
     fn extra_predicates_equal_their_regex_classes() {
         type Predicate = fn(Unit) -> bool;
+        let sources: Vec<String> = every_extra_pattern().iter().map(|p| p.regex()).collect();
         let classes: [(&str, Predicate); 6] = [
             (r"\s", space),
             (r"[^{}]", object_char),
@@ -3299,8 +3276,8 @@ mod tests {
         let mut buf = [0u8; 4];
         for (class, predicate) in classes {
             assert!(
-                EXTRA_SHAPES.iter().any(|s| s.source.contains(class)),
-                "{class} is a class of a pinned source"
+                sources.iter().any(|s| s.contains(class)),
+                "{class} is a class of a form's regex"
             );
             let re = regex::bytes::Regex::new(&format!("^{class}$")).expect("class compiles");
             for c in (0..=0x10_FFFF_u32).filter_map(char::from_u32) {
@@ -3361,11 +3338,12 @@ mod tests {
     /// Soundness of each connector recognizer against its own regex, as for the shared
     /// literals: for every match of an extra rule, every proper prefix keeps a candidate
     /// of that rule starting at or before the match (or is still undecoded), and no byte
-    /// of it has been released. Precision for the two rules whose match cannot extend
-    /// (`rate_limits` closes its object, `plan_type` its string): once the unit after the
-    /// match is decoded, its candidate is gone. The credits and billing recognizers
+    /// of it has been released. Precision for the two forms whose match cannot extend (an
+    /// object value closes its object, a string value its string): once the unit after the
+    /// match is decoded, its candidate is gone. The scalar and header recognizers
     /// deliberately over-hold (an open quote, or a whitespace run that a later value
-    /// character could still claim).
+    /// character could still claim). The rules are the shipped ones and one more of every
+    /// form under other names ([`synthetic_extra_patterns`]).
     #[test]
     fn extra_recognizers_hold_every_prefix_of_a_match() {
         let now = CaptureTime {
@@ -3373,7 +3351,7 @@ mod tests {
             mono_ns: 0,
             clock_id: "t".into(),
         };
-        let policy = Arc::new(Policy::with_extra(&shipped_extra_patterns()).expect("policy"));
+        let policy = Arc::new(Policy::with_extra(&every_extra_pattern()).expect("policy"));
         let mut checked = 0usize;
         let mut per_rule = vec![0usize; policy.len()];
         for seed in 1..=6000u64 {

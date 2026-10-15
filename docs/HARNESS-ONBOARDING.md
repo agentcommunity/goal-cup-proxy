@@ -344,7 +344,7 @@ daemon.
     (`PYTHONBREAKPOINT`), an absolute path in `args`, an argument that turns certificate
     verification off or names a command, hook or server, a `goal_flag` with the word `exec`,
     `file`, `run` or `config` (`--execute` is fine), a host that is `localhost`, `*.localhost`,
-    single-label or numeric, and a redaction regex that is not one of the four core recognizers. In
+    single-label or numeric, and a redaction row that is a regex rather than a typed form. In
     `capture.env`: any `*_HOME`, `*_CONFIG_DIR` or `*_CONFIG_HOME` name (the harness's own goes in
     `capture.home.env`) and any name under the connector's `reserved_env_prefixes`.
 13. **Argv and env.** No list of reviewed arguments or variables exists. A refused value is

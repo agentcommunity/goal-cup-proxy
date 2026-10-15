@@ -27,7 +27,7 @@ pub(super) struct Owner {
     sink: Arc<OwnerSink>,
     writer: Arc<Mutex<ChainWriter>>,
     clock: IngestClock,
-    extra_patterns: Vec<RedactionPattern>,
+    extra_patterns: Vec<ExtraPattern>,
     ingest: Option<Arc<IngestEntry>>,
     native: Option<NativeCapture>,
     required_native: bool,
@@ -51,7 +51,7 @@ impl Owner {
         sink: Arc<OwnerSink>,
         writer: Arc<Mutex<ChainWriter>>,
         clock: IngestClock,
-        extra_patterns: &[RedactionPattern],
+        extra_patterns: &[ExtraPattern],
         ingest: Option<Arc<IngestEntry>>,
         native: Option<NativeCapture>,
     ) -> Owner {

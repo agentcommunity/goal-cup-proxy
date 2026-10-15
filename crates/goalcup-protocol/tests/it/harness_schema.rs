@@ -15,9 +15,9 @@
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
-    CA_REGISTRY, CREDENTIAL_ENV, EXTRA_PATTERN_SOURCES, EnvContext, INJECTION_ENV,
-    INJECTION_PREFIXES, INTERPRETER_PROGRAMS, PROVIDER_PREFIXES, SHELL_VALUES, STARTUP_BASENAMES,
-    STARTUP_COMPONENTS, arg_path_denied, env_key_denied, env_value_denied, is_interpreter_program,
+    CA_REGISTRY, CREDENTIAL_ENV, EnvContext, INJECTION_ENV, INJECTION_PREFIXES,
+    INTERPRETER_PROGRAMS, PROVIDER_PREFIXES, SHELL_VALUES, STARTUP_BASENAMES, STARTUP_COMPONENTS,
+    arg_path_denied, env_key_denied, env_value_denied, is_interpreter_program,
     startup_file_problem,
 };
 use goalcup_protocol::harness::{HarnessManifest, NEWER_SENTENCE, Origin, PlatformKey};
@@ -1975,42 +1975,142 @@ fn an_unknown_protocol_hint_is_capture_only_not_refused() {
     }
 }
 
-#[test]
-fn extra_redaction_patterns_must_be_a_recorder_recognizer() {
-    // The shipped ones are on the mirror (the fixtures validate); an invented one is not.
+/// One `extra_patterns` row from `(key, value)` pairs.
+fn rule_row(fields: &[(&str, &str)]) -> Value {
+    Value::Table(
+        fields
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), Value::String((*v).to_string())))
+            .collect(),
+    )
+}
+
+fn with_rules(rows: Vec<Value>) -> Table {
     let mut t = codex();
-    let patterns = Value::Array(vec![Value::Table(
+    tbl(&mut t, &["redaction"]).insert("extra_patterns".into(), Value::Array(rows));
+    t
+}
+
+#[test]
+fn extra_redaction_rules_are_typed_forms() {
+    // A connector names its own field or header, with no core change.
+    let t = with_rules(vec![
+        rule_row(&[
+            ("kind", "my_plan"),
+            ("json_field", "tier-Name_2"),
+            ("value", "string"),
+        ]),
+        rule_row(&[
+            ("kind", "my_usage"),
+            ("json_field", "u"),
+            ("value", "object"),
+        ]),
+        rule_row(&[
+            ("kind", "my_balance"),
+            ("json_field", "balance"),
+            ("value", "scalar"),
+        ]),
+        rule_row(&[("kind", "my_header"), ("header_prefix", "x-acme-quota-")]),
+    ]);
+    admitted(&t, PINNED);
+    let parsed = HarnessManifest::from_toml_str(&toml::to_string(&t).unwrap()).unwrap();
+    let regexes: Vec<String> = parsed
+        .redaction
+        .unwrap()
+        .extra_patterns
+        .iter()
+        .map(|p| p.regex())
+        .collect();
+    assert_eq!(
+        regexes,
         [
-            ("kind".to_string(), Value::String("my_secret".into())),
-            (
-                "regex".to_string(),
-                Value::String(r#""secret"\s*:\s*"([^"]+)""#.into()),
-            ),
+            r#""tier-Name_2"\s*:\s*"([^"\\]+)""#,
+            r#""u"\s*:\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})"#,
+            r#""balance"\s*:\s*("[^"\\]*"|[^,}\s]+)"#,
+            r#"x-acme-quota-[a-z0-9-]+:\s*[^\r\n"]+"#,
         ]
-        .into_iter()
-        .collect(),
-    )]);
-    tbl(&mut t, &["redaction"]).insert("extra_patterns".into(), patterns);
+    );
+    // The retired regex spelling is named, not called a newer schema's field.
+    let t = with_rules(vec![rule_row(&[
+        ("kind", "my_secret"),
+        ("regex", r#""secret"\s*:\s*"([^"]+)""#),
+    ])]);
     refused(
         &t,
         PINNED,
-        &["my_secret", "core PR", "EXTRA_PATTERN_SOURCES"],
+        &["my_secret", "`regex`", "json_field", "header_prefix"],
     );
-    // A known regex under a malformed kind.
-    let mut t = codex();
-    let patterns = Value::Array(vec![Value::Table(
-        [
-            ("kind".to_string(), Value::String("Bad Kind".into())),
-            (
-                "regex".to_string(),
-                Value::String(EXTRA_PATTERN_SOURCES[1].into()),
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    )]);
-    tbl(&mut t, &["redaction"]).insert("extra_patterns".into(), patterns);
-    refused(&t, PINNED, &["kind `Bad Kind`"]);
+    // Exactly one form per row.
+    for row in [
+        rule_row(&[("kind", "half")]),
+        rule_row(&[("kind", "half"), ("json_field", "plan_type")]),
+        rule_row(&[("kind", "half"), ("value", "string")]),
+        rule_row(&[
+            ("kind", "half"),
+            ("header_prefix", "x-a"),
+            ("value", "string"),
+        ]),
+        rule_row(&[
+            ("kind", "half"),
+            ("json_field", "a"),
+            ("value", "string"),
+            ("header_prefix", "x-a"),
+        ]),
+    ] {
+        refused(&with_rules(vec![row]), PINNED, &["`half` must be one form"]);
+    }
+    // A value form outside the closed set.
+    let t = with_rules(vec![rule_row(&[
+        ("kind", "k"),
+        ("json_field", "a"),
+        ("value", "number"),
+    ])]);
+    refused(
+        &t,
+        PINNED,
+        &["`number`", "redaction.extra_patterns.value", "`scalar`"],
+    );
+    // A field the recognizer cannot compare byte for byte: a quote, a backslash, a line end,
+    // a regex metacharacter, a non-ASCII letter, empty or too long.
+    let long = "a".repeat(65);
+    for field in [
+        "plan\"type",
+        "plan\\type",
+        "plan\ntype",
+        "plan.type",
+        "plän",
+        "",
+        long.as_str(),
+    ] {
+        let t = with_rules(vec![rule_row(&[
+            ("kind", "k"),
+            ("json_field", field),
+            ("value", "string"),
+        ])]);
+        refused(&t, PINNED, &["json_field", "^[A-Za-z0-9_-]{1,64}$"]);
+    }
+    for prefix in [
+        "X-Acme-",
+        "-x",
+        "1x",
+        "x_acme",
+        "x-acme:",
+        "x-é",
+        "",
+        long.as_str(),
+    ] {
+        let t = with_rules(vec![rule_row(&[("kind", "k"), ("header_prefix", prefix)])]);
+        refused(&t, PINNED, &["header_prefix", "^[a-z][a-z0-9-]{0,63}$"]);
+    }
+    // A valid form under a malformed kind.
+    for kind in ["Bad Kind", "", "plan-type", "1plan", &"k".repeat(49)] {
+        let t = with_rules(vec![rule_row(&[
+            ("kind", kind),
+            ("json_field", "plan_type"),
+            ("value", "string"),
+        ])]);
+        refused(&t, PINNED, &[&format!("kind `{kind}`")]);
+    }
     // No `[redaction]` at all is the default.
     let mut t = codex();
     t.remove("redaction");

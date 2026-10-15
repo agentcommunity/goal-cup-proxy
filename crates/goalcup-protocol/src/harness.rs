@@ -23,7 +23,7 @@
 //!    serde's own "unknown variant" text never reaches the user.
 //! 3. [`HarnessManifest::validate`] runs the checks in a fixed order, so the first refusal
 //!    is deterministic: executable, args and goal, env, home, credential, CA, identity,
-//!    native, argv guard, termination, hosts, redaction, the delivery-agnostic rule (F7), the
+//!    native, argv guard, termination, hosts, the delivery-agnostic rule (F7), the
 //!    cross-field rules, and then every rule again on the recipe each `[capture.platform.<key>]`
 //!    resolves to (an override may replace only env entries).
 //!
@@ -35,13 +35,12 @@
 
 use crate::ProtocolError;
 use crate::capture_policy::{
-    CREDENTIAL_ENV, CaMode, EXTRA_PATTERN_SOURCES, EnvContext, MAX_CAPTURE_ARG_BYTES,
-    MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV, MAX_CAPTURE_ENV_KEY_BYTES, MAX_CAPTURE_ENV_VALUE_BYTES,
-    MAX_CAPTURE_HOSTS, MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, MAX_GOAL_FLAG_BYTES,
-    arg_path_denied, ca_registry_mode, capture_arg_denied, capture_path_problem, env_key_denied,
-    env_value_denied, goal_flag_denied, has_duplicate, is_capture_host, is_interpreter_program,
-    is_tracker_host, local_host_problem, mentions_goalcup, seed_content_problem,
-    startup_file_problem,
+    CREDENTIAL_ENV, CaMode, EnvContext, MAX_CAPTURE_ARG_BYTES, MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV,
+    MAX_CAPTURE_ENV_KEY_BYTES, MAX_CAPTURE_ENV_VALUE_BYTES, MAX_CAPTURE_HOSTS,
+    MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, MAX_GOAL_FLAG_BYTES, arg_path_denied,
+    ca_registry_mode, capture_arg_denied, capture_path_problem, env_key_denied, env_value_denied,
+    goal_flag_denied, has_duplicate, is_capture_host, is_interpreter_program, is_tracker_host,
+    local_host_problem, mentions_goalcup, seed_content_problem, startup_file_problem,
 };
 use crate::connector_dir::hash_connector_dir_listing;
 use crate::hints::valid_hint;
@@ -632,21 +631,173 @@ pub struct RedactionSpec {
     pub extra_patterns: Vec<ExtraPattern>,
 }
 
-/// One connector redaction rule. The regex must be one of
-/// [`EXTRA_PATTERN_SOURCES`]: a new recognizer is a core PR.
+/// The longest JSON field name or header prefix a rule may name.
+pub const MAX_REDACTION_NAME_BYTES: usize = 64;
+
+/// One connector redaction rule: a typed form, never a regex. The recorder derives the regex
+/// ([`Self::regex`]) and its bounded streaming recognizer from the form, so each form is
+/// reviewed once in core and a connector only names its own field or header. One row is one
+/// of:
 ///
-/// The schema types are `#[non_exhaustive]` (design 4.1: a new optional field stays schema 1),
-/// so a downstream crate parses them and never builds one from a literal:
+/// * `{ kind, json_field = "plan_type", value = "string" }`: the value of one JSON field,
+///   [`RedactionRule::JsonField`];
+/// * `{ kind, header_prefix = "x-anthropic-billing-" }`: a header line whose name starts with
+///   the prefix, [`RedactionRule::HeaderPrefix`].
+///
+/// A rule is checked when it is built (parse or [`Self::new`]), so an `ExtraPattern` that
+/// exists is valid: its kind, field and prefix keep the grammar the recognizers rely on. The
+/// schema types are `#[non_exhaustive]` (design 4.1: a new optional field stays schema 1), so a
+/// downstream crate parses them or calls [`Self::new`], and never builds one from a literal:
 ///
 /// ```compile_fail
-/// let _ = goalcup_protocol::harness::ExtraPattern { kind: "k".into(), regex: "r".into() };
+/// use goalcup_protocol::harness::{ExtraPattern, RedactionRule};
+/// let _ = ExtraPattern { kind: "k".into(), rule: RedactionRule::HeaderPrefix("x-".into()) };
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "ExtraPatternRow")]
 #[non_exhaustive]
 pub struct ExtraPattern {
+    /// The audit kind: what every marker and audit span of this rule names.
     pub kind: String,
-    pub regex: String,
+    pub rule: RedactionRule,
+}
+
+/// The form of one [`ExtraPattern`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RedactionRule {
+    /// `"FIELD"\s*:\s*VALUE`. The span is the value alone, so the record stays JSON.
+    JsonField { field: String, value: FieldValue },
+    /// `PREFIX[a-z0-9-]+:\s*[^\r\n"]+`. The span is the whole header line, CR and LF
+    /// excluded.
+    HeaderPrefix(String),
+}
+
+closed_enum! {
+    /// The value half of a [`RedactionRule::JsonField`]. The regex group is the value.
+    FieldValue, "redaction.extra_patterns.value", special: &[];
+    /// `(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})`: an object nested at most three deep.
+    Object = "object",
+    /// `"([^"\\]+)"`: a non-empty string without escapes; the span is its interior.
+    String = "string",
+    /// `("[^"\\]*"|[^,}\s]+)`: a string without escapes, else a bare token (a number).
+    Scalar = "scalar",
+}
+
+impl FieldValue {
+    /// The regex of the value, with the span as group 1.
+    fn regex(self) -> &'static str {
+        match self {
+            FieldValue::Object => r#"(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})"#,
+            FieldValue::String => r#""([^"\\]+)""#,
+            FieldValue::Scalar => r#"("[^"\\]*"|[^,}\s]+)"#,
+        }
+    }
+}
+
+impl ExtraPattern {
+    /// A rule, or why it is refused. `kind` matches `^[a-z][a-z0-9_]{0,47}$`. A JSON field is 1
+    /// to 64 bytes of `[A-Za-z0-9_-]`, and a header prefix is 1 to 64 bytes of `[a-z0-9-]`
+    /// that start with a letter: plain ASCII with no regex metacharacter, no quote, backslash
+    /// or line end, which is what lets the recognizer compare it byte for byte.
+    pub fn new(kind: impl Into<String>, rule: RedactionRule) -> Result<ExtraPattern, String> {
+        let kind = kind.into();
+        let mut b = kind.bytes();
+        let kind_ok = kind.len() <= 48
+            && b.next().is_some_and(|x| x.is_ascii_lowercase())
+            && b.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == b'_');
+        if !kind_ok {
+            return Err(format!(
+                "redaction.extra_patterns: kind `{kind}` must match `^[a-z][a-z0-9_]{{0,47}}$`"
+            ));
+        }
+        let (what, name, ok) = match &rule {
+            RedactionRule::JsonField { field, .. } => (
+                "json_field",
+                field,
+                field
+                    .bytes()
+                    .all(|x| x.is_ascii_alphanumeric() || x == b'_' || x == b'-'),
+            ),
+            RedactionRule::HeaderPrefix(prefix) => (
+                "header_prefix",
+                prefix,
+                prefix
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_lowercase)
+                    && prefix
+                        .bytes()
+                        .all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == b'-'),
+            ),
+        };
+        if !ok || name.is_empty() || name.len() > MAX_REDACTION_NAME_BYTES {
+            let grammar = if what == "json_field" {
+                "[A-Za-z0-9_-]{1,64}"
+            } else {
+                "[a-z][a-z0-9-]{0,63}"
+            };
+            return Err(format!(
+                "redaction.extra_patterns: `{kind}`'s {what} `{name}` must match `^{grammar}$`"
+            ));
+        }
+        Ok(ExtraPattern { kind, rule })
+    }
+
+    /// The regex the form stands for, in `regex` crate syntax (Unicode mode). Both of the
+    /// recorder's redactors compile it; its streaming recognizer models it exactly.
+    pub fn regex(&self) -> String {
+        match &self.rule {
+            RedactionRule::JsonField { field, value } => {
+                format!(r#""{field}"\s*:\s*{}"#, value.regex())
+            }
+            RedactionRule::HeaderPrefix(prefix) => {
+                format!(r#"{prefix}[a-z0-9-]+:\s*[^\r\n"]+"#)
+            }
+        }
+    }
+}
+
+/// One `extra_patterns` row as written in TOML, before it is checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtraPatternRow {
+    kind: String,
+    #[serde(default)]
+    json_field: Option<String>,
+    #[serde(default)]
+    value: Option<FieldValue>,
+    #[serde(default)]
+    header_prefix: Option<String>,
+    /// The retired spelling, read only to name it in the refusal.
+    #[serde(default)]
+    regex: Option<String>,
+}
+
+impl TryFrom<ExtraPatternRow> for ExtraPattern {
+    type Error = String;
+
+    fn try_from(row: ExtraPatternRow) -> Result<ExtraPattern, String> {
+        let kind = row.kind;
+        if row.regex.is_some() {
+            return Err(format!(
+                "redaction.extra_patterns: `{kind}` has a `regex`, which schema 1 no longer \
+                 reads: name the form instead, `json_field` with `value`, or `header_prefix` \
+                 (docs/CONNECTOR-SCHEMA.md#redaction)"
+            ));
+        }
+        let rule = match (row.json_field, row.value, row.header_prefix) {
+            (Some(field), Some(value), None) => RedactionRule::JsonField { field, value },
+            (None, None, Some(prefix)) => RedactionRule::HeaderPrefix(prefix),
+            _ => {
+                return Err(format!(
+                    "redaction.extra_patterns: `{kind}` must be one form: `json_field` with \
+                     `value`, or `header_prefix` alone"
+                ));
+            }
+        };
+        ExtraPattern::new(kind, rule)
+    }
 }
 
 impl HarnessManifest {
@@ -1030,7 +1181,7 @@ fn platform_refusal(key: PlatformKey, e: ProtocolError) -> ProtocolError {
 impl HarnessManifest {
     /// Refuse every manifest the refusal table names. The order is fixed, so the first
     /// refusal is deterministic: executable, args and goal, env, home, credential, CA,
-    /// identity, native, argv guard, termination, hosts, redaction, the delivery-agnostic
+    /// identity, native, argv guard, termination, hosts, the delivery-agnostic
     /// rule, the cross-field rules, and then each `[capture.platform.<key>]` in [`PlatformKey`]'s
     /// declaration order (`linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`),
     /// whatever order the file uses.
@@ -1089,7 +1240,6 @@ impl HarnessManifest {
         self.check_argv_guard()?;
         self.check_termination()?;
         self.check_hosts(origin)?;
-        self.check_redaction()?;
         self.check_delivery_agnostic()?;
         self.check_cross_field()?;
         Ok(())
@@ -1844,36 +1994,6 @@ impl HarnessManifest {
                 return Err(refuse(
                     "capture.hosts.protocol_hint",
                     format!("`{hint}` must match `^[a-z][a-z0-9.-]{{0,63}}$`"),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn check_redaction(&self) -> Result<(), ProtocolError> {
-        let Some(r) = &self.redaction else {
-            return Ok(());
-        };
-        for p in &r.extra_patterns {
-            let mut b = p.kind.bytes();
-            let kind_ok = p.kind.len() <= 48
-                && b.next().is_some_and(|x| x.is_ascii_lowercase())
-                && b.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == b'_');
-            if !kind_ok {
-                return Err(refuse(
-                    "redaction.extra_patterns",
-                    format!("kind `{}` must match `^[a-z][a-z0-9_]{{0,47}}$`", p.kind),
-                ));
-            }
-            if !EXTRA_PATTERN_SOURCES.contains(&p.regex.as_str()) {
-                return Err(refuse(
-                    "redaction.extra_patterns",
-                    format!(
-                        "`{}`'s regex is not one the recorder's streaming redactor can hold: a \
-                         new recognizer is a core PR (daemon `EXTRA_SHAPES` and its mirror \
-                         `capture_policy::EXTRA_PATTERN_SOURCES`)",
-                        p.kind
-                    ),
                 ));
             }
         }

@@ -9,11 +9,12 @@
 //!   (`capture.termination.native_binary`); the gaps a launch with and without a native scope
 //!   leaves in the chain; and the label and protocol hint of each native stream the entry opens
 //!   (`<source>:<path relative to the source root>#g<n>`).
-//! * `redaction-extra-patterns.json`, shared: each streaming recognizer the daemon pins
-//!   (`EXTRA_PATTERN_SOURCES`, the regexes of the private `EXTRA_SHAPES`), what it does alone
-//!   and all together over a fixed corpus, and the refusals for a pattern with no recognizer
-//!   or a bad kind. It is keyed by recognizer, not by connector. Every shipped connector's own
-//!   list is checked to stream, and the list itself is in its `<id>.json`.
+//! * `redaction-extra-patterns.json`, shared: one rule of each form the daemon streams (a JSON
+//!   field with an object, string or scalar value, and a header prefix), each with the regex
+//!   its form derives and what it does alone and all together over a fixed corpus. The names
+//!   are the shipped ones, so the file also pins what those rules strip. It is keyed by form,
+//!   not by connector. Every shipped connector's own list is checked to stream, and the list
+//!   itself is in its `<id>.json`.
 //!
 //! The connector list is `shipped_connector_ids()` and the per-connector fields come from each
 //! connector's files, so a new connector folder needs no edit here, only its regenerated
@@ -30,9 +31,7 @@ use crate::common::redaction;
 use base64::Engine as _;
 use goalcup_daemon::redact::stream::StreamRedactor;
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource, EndReason};
-use goalcup_protocol::capture_policy::EXTRA_PATTERN_SOURCES;
-use goalcup_protocol::harness::HarnessManifest;
-use goalcup_protocol::manifest::RedactionPattern;
+use goalcup_protocol::harness::{ExtraPattern, FieldValue, HarnessManifest, RedactionRule};
 use goalcup_protocol::pins::shipped_connector_ids;
 use redaction::{P1, Producer, daemon_time};
 use serde_json::{Value, json};
@@ -100,12 +99,29 @@ fn shipped_harness(id: &str) -> HarnessManifest {
     HarnessManifest::from_toml_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-/// The recognizer for `EXTRA_PATTERN_SOURCES[i]`, under a kind of the test's own.
-fn recognizer(i: usize) -> RedactionPattern {
-    RedactionPattern {
-        kind: format!("extra_{i}"),
-        regex: EXTRA_PATTERN_SOURCES[i].to_string(),
-    }
+/// One rule of each form, under a kind of the test's own: the three JSON value forms on the
+/// fields Codex writes, then the header form on Claude's billing prefix.
+fn one_of_each_form() -> Vec<ExtraPattern> {
+    let field = |i: usize, field: &str, value| {
+        ExtraPattern::new(
+            format!("extra_{i}"),
+            RedactionRule::JsonField {
+                field: field.into(),
+                value,
+            },
+        )
+        .unwrap()
+    };
+    vec![
+        field(0, "rate_limits", FieldValue::Object),
+        field(1, "plan_type", FieldValue::String),
+        field(2, "credits_remaining", FieldValue::Scalar),
+        ExtraPattern::new(
+            "extra_3",
+            RedactionRule::HeaderPrefix("x-anthropic-billing-".into()),
+        )
+        .unwrap(),
+    ]
 }
 
 // ---------------------------------------------------------------------------------------
@@ -158,7 +174,7 @@ fn through(redactor: StreamRedactor, corpus: &[&[u8]]) -> Value {
     })
 }
 
-fn verdict(patterns: &[RedactionPattern]) -> &'static str {
+fn verdict(patterns: &[ExtraPattern]) -> &'static str {
     match StreamRedactor::with_extra_patterns(patterns) {
         Ok(_) => "ok",
         Err(_) => "refused",
@@ -176,13 +192,13 @@ fn the_extra_redaction_recognizers_are_pinned() {
         HERMES_LINE,
         NEAR_MISS,
     ];
-    let all: Vec<RedactionPattern> = (0..EXTRA_PATTERN_SOURCES.len()).map(recognizer).collect();
+    let all = one_of_each_form();
     let each: Vec<Value> = all
         .iter()
         .map(|p| {
             json!({
                 "kind": p.kind,
-                "regex": p.regex,
+                "regex": p.regex(),
                 "alone": verdict(std::slice::from_ref(p)),
                 "over_the_corpus": StreamRedactor::with_extra_patterns(std::slice::from_ref(p))
                     .map(|r| through(r, &corpus))
@@ -190,43 +206,25 @@ fn the_extra_redaction_recognizers_are_pinned() {
             })
         })
         .collect();
-    // A pattern with no recognizer is refused whatever its kind or regex; the empty list is the
-    // shared policy alone.
-    let stranger = RedactionPattern {
-        kind: "stranger".to_string(),
-        regex: "foo[0-9]+".to_string(),
-    };
-    let bad_kind = RedactionPattern {
-        kind: "has space".to_string(),
-        regex: EXTRA_PATTERN_SOURCES[1].to_string(),
-    };
+    // The empty list is the shared policy alone. A rule that cannot be built never reaches the
+    // redactor; `ExtraPattern::new` refuses it (protocol `harness_schema.rs`).
     check_golden(
         "redaction-extra-patterns.json",
         &json!({
             "recognizers": each,
             "all_together": verdict(&all),
             "all_together_over_the_corpus": through(StreamRedactor::with_extra_patterns(&all).unwrap(), &corpus),
-            "unknown_regex": verdict(std::slice::from_ref(&stranger)),
-            "known_regex_under_a_bad_kind": verdict(std::slice::from_ref(&bad_kind)),
             "empty_list": verdict(&[]),
             "shared_policy_alone_over_the_corpus": through(StreamRedactor::new(), &corpus),
         }),
     );
 }
 
-/// Every shipped connector's `[redaction].extra_patterns` streams: each regex is one the daemon
-/// pins a recognizer for, and the list as a whole is accepted.
+/// Every shipped connector's `[redaction].extra_patterns` streams as a whole list.
 #[test]
 fn every_shipped_connector_redaction_list_streams() {
     for id in shipped_connector_ids() {
         let patterns = goalcup_daemon::redact::extra_patterns_of(&shipped_harness(&id));
-        for p in &patterns {
-            assert!(
-                EXTRA_PATTERN_SOURCES.contains(&p.regex.as_str()),
-                "{id}: {:?} has no pinned streaming recognizer",
-                p.kind
-            );
-        }
         assert_eq!(verdict(&patterns), "ok", "{id}: its list does not stream");
     }
 }

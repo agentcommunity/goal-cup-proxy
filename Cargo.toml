@@ -76,8 +76,8 @@ libc = "0.2"
 rand = "0.8"
 # The redaction pattern set (`goalcup-daemon/src/redact.rs`). R10's set is regular
 # expressions and nothing else; `regex` is the only crate in this tree that compiles one,
-# and the connector manifests carry participant-visible `extra_patterns[]` written in its
-# syntax.
+# and the regexes of the connector manifests' typed `extra_patterns[]` forms are written in
+# its syntax.
 regex = "1"
 # Base64 for the redactor, the proxy and the verifier.
 base64 = "0.22"

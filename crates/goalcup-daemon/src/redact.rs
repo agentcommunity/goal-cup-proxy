@@ -12,7 +12,7 @@
 //! would publish a digest of the secret; persisting before redacting would store it.
 //!
 //! **No interpretation.** A pattern match is a byte comparison against a regular
-//! expression this file or the connector's `harness.toml` carries, never a judgement about what
+//! expression this file carries or a connector rule's form derives, never a judgement about what
 //! the matched text means. Whether a removed span was in fact a live credential is not a
 //! question this module asks or answers.
 //!
@@ -28,8 +28,7 @@
 //! could serve as a confirmation oracle for a low-entropy credential.
 
 use crate::DaemonError;
-use goalcup_protocol::harness::HarnessManifest;
-use goalcup_protocol::manifest::RedactionPattern;
+use goalcup_protocol::harness::{ExtraPattern, HarnessManifest};
 use goalcup_protocol::redaction::RedactionAuditSpan;
 use std::sync::OnceLock;
 
@@ -226,39 +225,6 @@ pub fn patterns() -> &'static [Pattern] {
     COMPILED.get_or_init(|| SHARED.iter().filter_map(|(k, r)| compile(k, r)).collect())
 }
 
-/// True when `re` carries an inline flag group that turns Unicode mode off — `(?-u)`,
-/// `(?i-u)`, `(?-ui:…)`.
-///
-/// [`Pattern::re`] is a `regex::bytes::Regex` so that a record a harness wrote can be
-/// redacted as the bytes it is. Under the crate's default Unicode mode every match is
-/// still guaranteed to be valid UTF-8. `(?-u)` withdraws that text-rule boundary and lets
-/// a connector claim arbitrary binary bytes. Existing manifests may not ask for that, so
-/// this remains a `Config` error rather than silently changing the accepted pattern set.
-///
-/// The scan is deliberately blunt: anything that looks like a flag group with a `u` after
-/// its `-` is refused. A false positive is a manifest the participant must reword, with a
-/// message that says why; the failure this guards against is the other direction.
-fn disables_unicode(re: &str) -> bool {
-    let b = re.as_bytes();
-    for i in 0..b.len().saturating_sub(1) {
-        if b[i] != b'(' || b[i + 1] != b'?' {
-            continue;
-        }
-        let mut negated = false;
-        for &c in &b[i + 2..] {
-            match c {
-                b'-' => negated = true,
-                b'u' if negated => return true,
-                b'i' | b'm' | b's' | b'U' | b'x' | b'u' => {}
-                // `)` and `:` close a flag group; anything else (`P`, `<`, a literal) means
-                // this `(?` was never one.
-                _ => break,
-            }
-        }
-    }
-    false
-}
-
 /// True when `start..end` is the interior of a JSON string — a `"` immediately before it
 /// and a `"` (or one escaped by up to seven backslashes) immediately after — so a bare marker dropped in its place is
 /// still a JSON string and the record still parses. The escaped close is a string escaped
@@ -305,37 +271,22 @@ fn compile(kind: &str, re: &str) -> Option<Pattern> {
     }
 }
 
-/// A connector's `[redaction].extra_patterns`, in declaration order, as the patterns both
+/// A connector's `[redaction].extra_patterns`, in declaration order, as the rules both
 /// redactors compile. Empty when `harness.toml` has no `[redaction]` table.
-pub fn extra_patterns_of(manifest: &HarnessManifest) -> Vec<RedactionPattern> {
+pub fn extra_patterns_of(manifest: &HarnessManifest) -> Vec<ExtraPattern> {
     manifest
         .redaction
         .as_ref()
-        .map(|redaction| {
-            redaction
-                .extra_patterns
-                .iter()
-                .map(|pattern| RedactionPattern {
-                    kind: pattern.kind.clone(),
-                    regex: pattern.regex.clone(),
-                })
-                .collect()
-        })
+        .map(|redaction| redaction.extra_patterns.clone())
         .unwrap_or_default()
 }
 
-/// The one compiler for a connector's `redaction.extra_patterns[]` entry, shared by
-/// [`Redactor::for_patterns`] and [`stream::StreamRedactor::with_extra_patterns`]: a
-/// pattern one path refuses, the other refuses for the same reason. The error is that
-/// reason, without the connector's name.
-pub(crate) fn compile_extra(p: &RedactionPattern) -> Result<Pattern, String> {
-    const UNICODE_OFF: &str = "Unicode mode is turned off, and a non-Unicode bytes pattern \
-                               can match text that is not valid UTF-8 — a text redaction \
-                               rule must not silently claim arbitrary binary bytes";
-    if disables_unicode(&p.regex) {
-        return Err(UNICODE_OFF.to_string());
-    }
-    let re = regex::bytes::Regex::new(&p.regex).map_err(|source| source.to_string())?;
+/// The one compiler for a connector's `redaction.extra_patterns[]` rule, shared by
+/// [`Redactor::for_patterns`] and [`stream::StreamRedactor::with_extra_patterns`]: it compiles
+/// the regex the rule's form stands for ([`ExtraPattern::regex`]), so both redactors run the
+/// same rule. The error is the reason, without the connector's name.
+pub(crate) fn compile_extra(p: &ExtraPattern) -> Result<Pattern, String> {
+    let re = regex::bytes::Regex::new(&p.regex()).map_err(|source| source.to_string())?;
     Ok(Pattern {
         kind: p.kind.clone(),
         span_group: span_group_of(&re),
@@ -391,7 +342,7 @@ impl Redactor {
     /// A pattern that will not compile is an error and not a skip. A rule a participant
     /// can read in `harness.toml` but that never fires is a privacy hole with a paper trail
     /// claiming otherwise.
-    pub fn for_patterns(id: &str, patterns: &[RedactionPattern]) -> Result<Redactor, DaemonError> {
+    pub fn for_patterns(id: &str, patterns: &[ExtraPattern]) -> Result<Redactor, DaemonError> {
         let mut extra = Vec::with_capacity(patterns.len());
         for p in patterns {
             extra.push(compile_extra(p).map_err(|reason| {

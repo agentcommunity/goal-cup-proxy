@@ -67,9 +67,11 @@ since_run_start = true
 strategy = "process_group"
 grace_seconds = 10
 
+# Claude Code sends a billing header, also inside the system prompt; strip it at capture
+# (D26, D39). The row names the header prefix, never a regex.
 [redaction]
 extra_patterns = [
-  { kind = "anthropic_billing_header", regex = 'x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+' },
+  { kind = "anthropic_billing_header", header_prefix = "x-anthropic-billing-" },
 ]
 
 [[capture.hosts]]
