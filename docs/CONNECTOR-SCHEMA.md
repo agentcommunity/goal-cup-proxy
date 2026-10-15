@@ -50,7 +50,7 @@ optional field or table is absent.
 | `id` | required | 2–48 bytes; `^[a-z][a-z0-9-]{1,47}$`. |
 | `capture` | required table | The complete launch-and-capture profile below. |
 | `redaction` | optional, default absent | Connector-selected rows from the core redaction mirror. |
-| `capture.args` | required | 1–64 strings; each at most 4096 bytes and without control characters. |
+| `capture.args` | required | 1–64 strings (0–64 with `interactive`); each at most 4096 bytes and without control characters. |
 | `capture.goal_flag` | optional, default absent | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. Refused with `interactive`. |
 | `capture.interactive` | optional, default `false` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57); see below. |
 | `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued; each held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
@@ -74,7 +74,8 @@ next single argument, or `capture.goal_flag` is present and carries the goal as
 core deny policy and the optional argument guard.
 
 With `interactive = true` (D57) there is no goal slot: the participant types the prompt in the
-harness. The profile then takes no `goal_flag`, its `args` need not end in `--`, it takes no
+harness. The profile then takes no `goal_flag`, its `args` need not end in `--` and may be
+empty, it takes no
 `[capture.credential]` and its `identity.source` must be `none`. With `false`, the default, every
 rule above holds unchanged. `resume_args` may be set either way; `goalcup continue` appends it
 after `args`.
@@ -289,14 +290,20 @@ Pattern components admit `[A-Za-z0-9._-]`, `*`, `?` and the special `{id}` token
 exactly once when the identity source names a session, and not at all when the source is `none`.
 Globs do not cross `/`.
 
-With `since_run_start = true`, the launcher sends the run's start time (`native_since`, Unix
-seconds) when it creates the capture, and the daemon refuses the creation without it. A file the
+With `since_run_start = true`, the launcher may send the run's start time (`native_since`, Unix
+seconds) when it creates the capture; without it the daemon reads from the entry's own create
+time, which the entry's registry row keeps. A file the
 pattern matches is admitted once the later of its modification and change times, in whole
 seconds, is at or after that start (the change time catches a file whose modification time was
 set back); an older file is not tracked and does not count against the file bound until it is
 written. A start more than 300 seconds ahead of the daemon's clock is refused. Once admitted a file stays, and it is recorded whole from offset 0. Every admitted file is
 recorded: none is refused and none is preferred. This is safe on a shared config home because runs
 against it are serialized.
+
+A native root under the config home (`{config_home}/...`) that does not exist yet is created when
+the capture is created: one directory at a time, mode `0700`, never through a link. A component
+that exists as a symlink or as anything but a directory refuses the creation. A `{run_home}` root
+is not created this way.
 
 An unknown but syntactically valid `protocol_hint` is admitted and means capture-only unless a
 registered decoder accepts the complete `StreamOpen`. A snapshot cannot carry a hint. The same

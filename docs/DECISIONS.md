@@ -1577,8 +1577,9 @@ serialized.
 
 **The schema (connector schema 1, additive: every field defaults to today's behaviour).**
 - `[capture] interactive = true` (default `false`). The profile takes no `goal_flag`, its `args`
-  need not end in `--`, it takes no `[capture.credential]`, and its identity is `none`. With
-  `false` every headless rule is unchanged.
+  need not end in `--` and may be empty (0 to 64; a headless profile keeps 1 to 64), it takes no
+  `[capture.credential]`, and its identity is `none`. With `false` every headless rule is
+  unchanged.
 - `[capture] resume_args = [...]` (default `[]`): appended after `args` when a run is continued.
   Each argument passes the same D51 checks as `args` (one function serves both), and the two lists
   together hold at most 64 arguments. It may be set with or without `interactive`.
@@ -1596,12 +1597,29 @@ counts against `max_files`. The change time is there because an agent or harness
 modification time back (`touch -d`, `cp -p`, `tar x`) but cannot set the change time back: the
 rule errs toward recording more. Once admitted a file stays, and is read whole from offset 0, its
 lines from before the run included. Every admitted file is recorded; none is refused and none is
-preferred. A `since_run_start` source with no `native_since` in the request is refused at
-creation, before anything is allocated, rather than reading every old file. A `native_since` more
+preferred. A request with no `native_since` reads from the entry's own create time: whole Unix
+seconds, rounded down, taken once at create and kept as the registry row's `created_at`, so a
+reopened entry has the same floor as its create, not its reopen time (a reopened entry reads no
+native source today; the row is where any reader takes the floor from). This replaces the
+earlier refusal of such a request. When `native_since` is present it wins. A `native_since` more
 than 300 seconds ahead of the daemon's clock is refused as malformed (a start sent in
 milliseconds would otherwise admit nothing), and one no clock can represent is refused rather
 than overflowing. `native_since` is ignored for a source that does not declare
 `since_run_start`.
+
+**Roots under the config home are created.** A `{config_home}` native root that does not exist yet
+(`sessions` or `projects` on a fresh home) is created at entry create, before the native source
+opens it: one component at a time beneath the config home, mode 0700, through the same no-follow
+directory capability the trace uses (`TraceDir::open_or_create_child_dir`). A component that
+exists as a symlink or as anything but a directory refuses the create; nothing is made outside the
+config home. A `{run_home}` root is not created this way.
+
+**The goal stream in chat mode.** The v5 `Launch` keeps its goal stream. In chat mode the goal
+stream holds a fixed marker; the participant's prompt is the first user message in the session
+file. When the connector is interactive, the launcher records this marker (`CHAT_MODE_GOAL`) as
+the goal stream's bytes:
+
+> chat mode (D57): the harness was given no goal; the participant typed the prompt in the harness's own terminal, and it is recorded in the harness's session files.
 
 **The walker's bound.** `NativeCaptureLimits::max_dir_entries` defaults to 8192 (it was 4096), so
 one directory of 5 000 old sessions is enumerated whole on every poll and the new one is found.

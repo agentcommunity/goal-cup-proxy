@@ -434,6 +434,28 @@ pub async fn controlled_native_rig() -> (Rig, PathBuf, tempfile::TempDir) {
     (rig, native_dir, connectors)
 }
 
+/// A rig whose `capture-dev` connector is the chat-mode Codex draft (D57): interactive,
+/// identity `none`, and a `{config_home}/sessions` source read from the run's start. The config
+/// home exists and is empty; the returned path is it.
+pub async fn chat_rig() -> (Rig, PathBuf, tempfile::TempDir) {
+    let connectors = tempfile::tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../goalcup-protocol/tests/fixtures/harness/codex-cli.chat-mode.toml");
+    let harness = std::fs::read_to_string(source).unwrap().replacen(
+        "id = \"codex-cli\"",
+        "id = \"capture-dev\"",
+        1,
+    );
+    let connector = connectors.path().join("capture-dev");
+    std::fs::create_dir_all(&connector).unwrap();
+    std::fs::write(connector.join("harness.toml"), harness).unwrap();
+    let dir = connectors.path().to_path_buf();
+    let rig = Rig::start_with(move |config| config.connectors_dir = dir).await;
+    let config_home = rig.root.join("config-home");
+    std::fs::create_dir_all(&config_home).unwrap();
+    (rig, config_home, connectors)
+}
+
 /// How many descriptors this process, which runs the rig's daemon, holds open on `path`'s file.
 /// Each is measured with `fstat`: a `stat` through `/dev/fd` names the descriptor filesystem's
 /// device, not the file's.

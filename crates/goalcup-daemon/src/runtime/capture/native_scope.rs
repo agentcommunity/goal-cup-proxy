@@ -18,36 +18,31 @@ pub(super) struct NativePlan {
     pub(super) unread_stores: usize,
 }
 
-/// `native_since` is the run's start in Unix seconds, which a `since_run_start` source needs
-/// (D57) and any other ignores.
+/// `since` is the run's start in Unix seconds, from which a `since_run_start` source reads
+/// (D57) and which any other ignores: the request's `native_since`, or else the entry's own
+/// create time ([`create_time_floor`]).
 pub(super) fn native_plan(
     capture: &CaptureSpec,
     run_home: &Path,
     config_home: &Path,
-    native_since: Option<u64>,
+    since: u64,
 ) -> Result<NativePlan, DaemonError> {
     let native = capture
         .native
         .first()
         .ok_or_else(|| DaemonError::Config("a schema-1 capture has no native source".into()))?;
-    let modified_since = match (native.since_run_start, native_since) {
-        (false, _) => None,
-        (true, Some(secs)) => Some(
+    let modified_since = if native.since_run_start {
+        Some(
             std::time::UNIX_EPOCH
-                .checked_add(Duration::from_secs(secs))
+                .checked_add(Duration::from_secs(since))
                 .ok_or_else(|| {
                     DaemonError::Config(format!(
-                        "`native_since` {secs} is not a time this machine can represent"
+                        "`native_since` {since} is not a time this machine can represent"
                     ))
                 })?,
-        ),
-        (true, None) => {
-            return Err(DaemonError::Config(
-                "the profile reads the session files written since the run started, and the \
-                 request names no `native_since`: the launcher must send the run's start time"
-                    .into(),
-            ));
-        }
+        )
+    } else {
+        None
     };
     let root = native_root(&native.root, run_home, config_home)?;
     let form = match native.form {
@@ -103,6 +98,53 @@ pub(super) fn native_plan(
             unread_stores: 0,
         })
     }
+}
+
+/// The floor a `since_run_start` source reads from when the request names no run start: the
+/// entry's create time as its registry row records it (`created_at`, whole seconds), so the
+/// row a reopen reads holds the same floor the create used (D57).
+pub(super) fn create_time_floor(created_at: &str) -> Result<u64, DaemonError> {
+    goalcup_protocol::control::parse_z(created_at).ok_or_else(|| {
+        DaemonError::Config(format!(
+            "the entry's create time {created_at:?} is not RFC 3339"
+        ))
+    })
+}
+
+/// Create the missing directories of every `{config_home}` native root (D57): one component
+/// at a time beneath the config home, mode 0700, never following a link. An existing component
+/// that is a symlink or not a directory refuses the create. `{run_home}` roots are untouched.
+pub(super) fn create_config_home_roots(
+    capture: &CaptureSpec,
+    config_home: &Path,
+) -> Result<(), DaemonError> {
+    use goalcup_platform::tracecap::TraceDir;
+    for native in &capture.native {
+        let Some(rest) = native.root.strip_prefix("{config_home}") else {
+            continue;
+        };
+        let refused = |error: goalcup_platform::tracecap::TraceCapError| {
+            DaemonError::Config(format!(
+                "the native root {:?} under the config home cannot be prepared: {error}",
+                native.root
+            ))
+        };
+        let (Some(parent), Some(name)) = (
+            config_home.parent(),
+            config_home.file_name().and_then(|name| name.to_str()),
+        ) else {
+            return Err(DaemonError::Config(
+                "the config home has no parent directory to create it in".into(),
+            ));
+        };
+        let mut dir = TraceDir::open(parent)
+            .and_then(|parent| parent.open_or_create_child_dir(name))
+            .map_err(refused)?;
+        for component in rest.split('/').filter(|component| !component.is_empty()) {
+            dir = dir.open_or_create_child_dir(component).map_err(refused)?;
+        }
+    }
+    Ok(())
 }
 
 /// A native source's `root` template, resolved.
