@@ -27,7 +27,10 @@ pub mod uploader;
 
 use crate::CliError;
 use crate::config::write_secret_file;
-use api::{AbandonRequest, OpenRun, OpenRunRequest, ReceiptAnswer, ReceiptRequest, StatusAnswer};
+use api::{
+    AbandonRequest, ContinueRequest, ContinueRun, OpenRun, OpenRunRequest, ReceiptAnswer,
+    ReceiptRequest, StatusAnswer,
+};
 use goalcup_protocol::receipt::StartReceipt;
 use http::{ServerClient, ServerError};
 use serde::{Deserialize, Serialize};
@@ -139,6 +142,72 @@ pub fn open_run(server: &ServerClient, request: &OpenRunRequest) -> Result<OpenR
         )));
     }
     Ok(run)
+}
+
+/// What the server made of a continue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Continued {
+    /// The new segment (`201`, or `200` for a repeat of the same session).
+    Segment(ContinueRun),
+    /// `410`: the run's end has come (its deadline, or a newer run replaced it).
+    Over,
+    /// `409`: the run has moved on from the entry this machine named as the latest.
+    Stale,
+}
+
+/// `POST /v1/runs/{run_id}/continue`. Repeats are safe: the server answers a repeat of the same
+/// `session_id` with the same entry. `410` and `409` are answers, not failures
+/// ([`Continued`]); everything else that is not a segment is a refusal.
+pub fn continue_run(
+    server: &ServerClient,
+    run_id: &str,
+    request: &ContinueRequest,
+) -> Result<Continued, CliError> {
+    let answer: Result<ContinueRun, ServerError> = with_retries(|| {
+        server.json(
+            "POST",
+            &format!("/v1/runs/{run_id}/continue"),
+            Some(request),
+        )
+    });
+    let segment = match answer {
+        Ok(segment) => segment,
+        Err(ServerError::Status { status: 410, .. }) => return Ok(Continued::Over),
+        Err(ServerError::Status { status: 409, .. }) => return Ok(Continued::Stale),
+        Err(error) => {
+            let hint = match &error {
+                ServerError::Status { status: 401, .. } => {
+                    " This run's saved credential was not accepted: it ends 24 hours after the \
+                     run's deadline, and a run cannot be approved again."
+                }
+                ServerError::Transport(_) => " Check your network, or try again in a few minutes.",
+                _ => "",
+            };
+            return Err(CliError::Refused(format!(
+                "the Goal Cup server did not continue run {run_id}: {} ({}).{hint} Nothing was \
+                 started.",
+                error,
+                server.base()
+            )));
+        }
+    };
+    let well_formed = goalcup_protocol::control::is_entry_id(&segment.entry_id)
+        && segment.segment >= 1
+        && matches!(
+            (
+                goalcup_protocol::control::parse_z(&segment.official_start),
+                goalcup_protocol::control::parse_z(&segment.deadline_at),
+            ),
+            (Some(start), Some(deadline)) if start < deadline
+        );
+    if !well_formed {
+        return Err(CliError::Refused(format!(
+            "the Goal Cup server at {} answered a segment this tracker cannot use: {segment:?}. \
+             Nothing was started.",
+            server.base()
+        )));
+    }
+    Ok(Continued::Segment(segment))
 }
 
 /// Whether `id` is a run id: `r` and 16 lowercase hex digits.

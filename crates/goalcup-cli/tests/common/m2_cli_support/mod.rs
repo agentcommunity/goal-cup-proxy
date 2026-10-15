@@ -149,6 +149,26 @@ impl Rig {
         OnPty::spawn(self.chat_command(env, Launcher::Direct), Some(stdout))
     }
 
+    /// `goalcup continue [run]` (the binary) on a terminal of its own, as a participant's shell
+    /// would run it, in `<root>/runs`.
+    pub fn continue_on_pty(&self, env: &[(&str, &str)], run: Option<&str>) -> OnPty {
+        OnPty::spawn(self.continue_command(env, run), None)
+    }
+
+    /// The command [`Rig::continue_on_pty`] runs, without its terminal.
+    pub fn continue_command(
+        &self,
+        env: &[(&str, &str)],
+        run: Option<&str>,
+    ) -> std::process::Command {
+        self.chat_command(
+            env,
+            Launcher::Continue {
+                run: run.map(str::to_string),
+            },
+        )
+    }
+
     /// The command [`Rig::start_on_pty`] runs, without its terminal.
     pub fn chat_command(&self, env: &[(&str, &str)], launcher: Launcher) -> std::process::Command {
         let runs = self.root.join("runs");
@@ -158,6 +178,12 @@ impl Rig {
             Launcher::Direct => {
                 let mut command = std::process::Command::new(goalcup);
                 command.args(["start", "--harness", CHAT_ID, "--dev"]);
+                command
+            }
+            Launcher::Continue { run } => {
+                let mut command = std::process::Command::new(goalcup);
+                command.arg("continue");
+                command.args(run);
                 command
             }
             Launcher::Shell => {
@@ -722,6 +748,7 @@ interactive = true
 auth_hosts = ["auth.openai.com"]
 continuation = "chat: the participant types the prompt and may type keep going"
 args = ["chat", "-C", "{{workspace}}"]
+resume_args = ["resume", "--last"]
 
 [capture.executable]
 program = "{CHAT_ID}"
@@ -767,6 +794,8 @@ protocol_hint = "openai-responses"
 pub enum Launcher {
     /// `goalcup` is the session's leader.
     Direct,
+    /// `goalcup continue [run]` is, instead of `goalcup start`.
+    Continue { run: Option<String> },
     /// A shell is, as in a participant's window.
     Shell,
 }

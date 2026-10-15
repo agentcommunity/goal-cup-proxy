@@ -371,6 +371,32 @@ impl StateKeeper {
         }
     }
 
+    /// [`StateKeeper::update`], except that the file is not written once it names another entry:
+    /// a later segment of the run has taken `state.json` over (its host started while this
+    /// one was still sending), and this host's last word must not replace the live segment's.
+    pub fn update_while_current(&self, change: impl FnOnce(&mut RunState)) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        change(&mut state);
+        state.updated_at = now_unix();
+        let superseded = self
+            .inner
+            .path
+            .parent()
+            .and_then(read_state)
+            .is_some_and(|written| written.entry_id != state.entry_id);
+        if superseded {
+            return;
+        }
+        if let Ok(mut text) = serde_json::to_vec_pretty(&*state) {
+            text.push(b'\n');
+            let _ = crate::config::write_secret_file(&self.inner.path, &text);
+        }
+    }
+
     /// The state as last written.
     pub fn snapshot(&self) -> RunState {
         self.inner
@@ -603,6 +629,20 @@ mod tests {
         // Something that is not a state is none.
         std::fs::write(dir.path().join(STATE_FILE_NAME), b"{ not json").unwrap();
         assert!(read_state(dir.path()).is_none());
+    }
+
+    #[test]
+    fn a_host_that_was_superseded_does_not_overwrite_the_live_segments_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = StateKeeper::begin(dir.path(), RunState::launched("e1", Ok(())));
+        first.update_while_current(|state| state.ended = true);
+        assert!(read_state(dir.path()).unwrap().ended, "still its own file");
+        // The next segment's host takes the file over while the first is still sending.
+        let _second = StateKeeper::begin(dir.path(), RunState::launched("e2", Ok(())));
+        first.update_while_current(|state| state.ended = true);
+        let written = read_state(dir.path()).unwrap();
+        assert_eq!(written.entry_id, "e2");
+        assert!(!written.ended, "the live segment's state is not replaced");
     }
 
     #[test]
