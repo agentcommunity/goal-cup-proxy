@@ -462,7 +462,7 @@ pub fn process_handle() -> ProcessHandle {
 }
 
 /// A test-only spelling of the typed wire document.  Production callers never infer this
-/// number: it comes from `WorkspaceInfo` or the successful resume response.
+/// number: it comes from `CaptureWorkspaceInfo` or the successful resume response.
 pub fn process_registration(
     generation: u64,
     handle: ProcessHandle,

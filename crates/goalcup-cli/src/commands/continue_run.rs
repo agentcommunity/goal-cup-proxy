@@ -421,8 +421,8 @@ mod tests {
         }
     }
 
-    /// Only "the daemon has no such entry" and "the entry is not open" let go of an earlier
-    /// segment; a daemon that failed to answer, or answered what does not verify, is not a
+    /// Only "the daemon has no such entry" lets go of an earlier segment; an open one is
+    /// sealed, and a daemon that failed to answer, or answered what does not verify, is not a
     /// daemon that does not hold it.
     #[test]
     fn only_a_daemon_that_does_not_hold_the_segment_lets_it_close_from_its_tail() {

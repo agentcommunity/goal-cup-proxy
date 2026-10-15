@@ -22,10 +22,11 @@
 //! # It holds no secret, and is written like one
 //!
 //! There is no token and no grant in an [`EntryRecord`] — a public key is not a secret, and
-//! `tests/it/start_launch.rs` greps the written bytes for the grant token to keep it that way. It still goes through [`crate::config::write_secret_file`] at
-//! `0600`, under a directory at `0700`: it names this participant's runs and where on their
-//! disk the work is, and the rule for a file this CLI writes into the tracker's own
-//! configuration directory is one rule, not one per sensitivity judgement.
+//! `tests/it/start_launch.rs` greps the written bytes for the grant token to keep it that way.
+//! It still goes through [`crate::config::write_secret_file`] at `0600`, under a directory at
+//! `0700`: it names this participant's runs and where on their disk the work is, and the rule
+//! for a file this CLI writes into the tracker's own configuration directory is one rule, not
+//! one per sensitivity judgement.
 
 use crate::CliError;
 use crate::config::write_secret_file;

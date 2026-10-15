@@ -363,7 +363,7 @@ fn a_closed_loopback_port() -> u16 {
 
 /// The version arm of `daemon_check`. A `control.json` this build
 /// cannot make a client from is a daemon speaking another API version, and the fix names
-/// both numbers because it is "upgrade whichever of the two is older".
+/// both numbers because the fix is "install one release of both".
 #[test]
 fn doctor_fails_naming_both_versions_when_the_control_file_speaks_another_api() {
     let cfg = support::tmp_cfg();
@@ -394,7 +394,7 @@ fn doctor_fails_naming_both_versions_when_the_control_file_speaks_another_api() 
         "and this build's: {line}"
     );
     assert!(
-        text.contains("upgrade whichever"),
+        text.contains("install one release of both"),
         "with the fix that ends it: {text}"
     );
     assert_eq!(code, 1, "and the command cannot leave under 0");

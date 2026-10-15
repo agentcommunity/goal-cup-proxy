@@ -214,9 +214,9 @@ impl HttpDaemonClient {
             return Err(CliError::Refused(format!(
                 "the daemon at {}/control.json speaks control API version {} and this \
                  goalcup speaks {CONTROL_API_VERSION}: the two come from different releases. \
-                 goalcup and goalcup-daemon ship together in one release: install both from \
-                 one release. A run the old daemon still holds is finished with the release \
-                 that started it.",
+                 goalcup and goalcup-daemon ship together in one release: install one release \
+                 of both. A run that daemon still holds is finished with the release that \
+                 started it.",
                 cfg.display(),
                 file.control_api_version
             )));

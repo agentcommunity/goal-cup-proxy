@@ -3,9 +3,8 @@
 //! **Every connector arms on its own transcript**. The daemon arms
 //! an entry on the first chained transcript record, so there is no start signal for this CLI
 //! to wait for: the launch plus that first record is the start. The V1 gate
-//! reads (`wait_foreground` and `watch_beside`), which read a settled refusal
-//! (`control::ArmingState::Refused`) off the signed status, were removed by D48, and the
-//! start-signal long poll with them.
+//! reads (`wait_foreground` and `watch_beside`), which read a settled refusal off the
+//! signed status, were removed by D48, and the start-signal long poll with them.
 //!
 //! # The Ctrl-C handler is here too
 //!
