@@ -157,10 +157,13 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
 
   const now = ctx.now();
   const practice = auth.mode === "practice";
+  // A test run belongs to the test event; the database sets its length from that event's run_hours.
+  if (auth.mode === "test" && ctx.cfg.testEventId === undefined) throw new ApiError(403, "forbidden", "This server opens no test runs.");
+  const event_id = auth.mode === "test" ? ctx.cfg.testEventId! : practice ? ctx.cfg.practiceEventId : ctx.cfg.eventId;
   const deadline_at = formatTime(addSeconds(now, practice ? ctx.cfg.practiceRunSeconds : ctx.cfg.runSeconds));
   const result = await ctx.db.openRun({
     member_id: auth.member,
-    event_id: practice ? ctx.cfg.practiceEventId : ctx.cfg.eventId,
+    event_id,
     mode: auth.mode,
     run_id: newId("r"),
     entry_id: newId("e"),

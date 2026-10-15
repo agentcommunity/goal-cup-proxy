@@ -3,6 +3,9 @@
 --   supabase/migrations/20261015120100_goal_cup_tracer_staging_events.sql (the two staging events)
 --   supabase/migrations/20261015130000_goal_cup_tracer_deployment_fence.sql (staging fenced from production)
 --   supabase/migrations/20261015140000_goal_cup_tracer_member_binding.sql (credential bound to its member; no address for staging)
+--   supabase/migrations/20261015150000_goal_cup_tracer_production.sql (production role, events, account erasure)
+--   supabase/migrations/20261015160000_goal_cup_tracer_test_mode.sql (organizer test runs; delete_test_runs)
+--   supabase/migrations/20261015170000_goal_cup_tracer_test_replaces_test.sql (a test run replaces the open test run)
 -- Applied to the Agent Community Supabase project on 2026-10-15. It replaces the earlier proposal
 -- (proposed-goalcup-functions.sql): tables in the private schema goal_cup_tracer, functions renamed
 -- public.goal_cup_upload_* (src/db-supabase.ts adds the prefix), the website approval functions,
@@ -1766,4 +1769,509 @@ BEGIN
     v_has_user := NULL;
   END LOOP;
   RETURN v_out;
+END $$;
+
+-- ======================== 20261015150000_goal_cup_tracer_production.sql ========================
+
+-- Goal Cup tracer: production upload Worker role, production events, account erasure.
+--
+-- Additive. A new role, new grants, three new event rows, one new function. Nothing existing is
+-- altered; no existing row is changed.
+--
+--   * Role goal_cup_ingest_production: the production Worker's Supabase secret API key
+--     (goalcup_ingest_production) carries it. goal_cup_tracer.caller_is_staging() is true only for
+--     goal_cup_ingest_staging, so this role is production behind the deployment fence. It may
+--     execute the Worker's goal_cup_upload_* functions and nothing else in the schema; it is never
+--     granted goal_cup_upload_approve_device (the staging test approval).
+--   * Production events (staging = false). The times are placeholders until the owner confirms them:
+--       goalcup-practice     practice, always open (10-minute runs; Worker PRACTICE_RUN_MINUTES)
+--       goalcup-dryrun-2026  dry run, start window 2026-10-28 16:00 UTC + 24 h   [CONFIRM]
+--       goalcup-cup-2026     competition, start window 2026-11-06 16:00 UTC + 24 h, 168-hour runs [CONFIRM]
+--     Changing a time later is an UPDATE of these rows only (a new migration).
+--   * goal_cup_erase_member(p_actor_id): called by the account deletion (DELETE /api/my-data). Deletes
+--     the member's contact data and keeps run evidence until the raw traces are deleted after appeals:
+--     terms acceptances deleted, unsent run emails deleted, sent ones lose the address, client IP and
+--     country removed from runs and heartbeats, run credentials expired. Runs, entries, chunks,
+--     heartbeats (seq, head, times) and the R2 objects stay. Idempotent; service_role only.
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'goal_cup_ingest_production') THEN
+    CREATE ROLE goal_cup_ingest_production NOLOGIN NOINHERIT;
+  END IF;
+END $$;
+ALTER ROLE goal_cup_ingest_production SET statement_timeout = '8s';
+GRANT goal_cup_ingest_production TO authenticator;
+
+GRANT EXECUTE ON FUNCTION
+  public.goal_cup_upload_credential(text, text),
+  public.goal_cup_upload_create_device(text, text, text, text, text, text, text, text),
+  public.goal_cup_upload_poll_device(text, text),
+  public.goal_cup_upload_open_run(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, jsonb, text, text, text, text),
+  public.goal_cup_upload_continue_run(text, text, text, text, text, text, text, text, text, text, text, text, text, text),
+  public.goal_cup_upload_run_position(text, text, text),
+  public.goal_cup_upload_get_chunk(text, text, text, bigint),
+  public.goal_cup_upload_issue_receipt(text, text, text, text, jsonb),
+  public.goal_cup_upload_abandon_run(text, text, text, text),
+  public.goal_cup_upload_commit_chunk(text, text, jsonb),
+  public.goal_cup_upload_seal_run(text, text, text, text, text, text, text, text),
+  public.goal_cup_upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text, bigint, text, text, text),
+  public.goal_cup_upload_close_run(text, text, text),
+  public.goal_cup_upload_runs_for_tick(text),
+  public.goal_cup_upload_queue_notices(jsonb),
+  public.goal_cup_upload_record_final_commit(text, text, text, text),
+  public.goal_cup_upload_claim_notices(integer, text),
+  public.goal_cup_upload_finish_notice(bigint, text, text, text, text)
+TO goal_cup_ingest_production;
+
+INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, run_hours, staging)
+VALUES
+  ('goalcup-practice',    'practice',    '2026-10-15T00:00:00Z', '2027-06-30T00:00:00Z', 168, false),
+  ('goalcup-dryrun-2026', 'dry_run',     '2026-10-28T16:00:00Z', '2026-10-29T16:00:00Z', 168, false),  -- [CONFIRM]
+  ('goalcup-cup-2026',    'competition', '2026-11-06T16:00:00Z', '2026-11-07T16:00:00Z', 168, false)   -- [CONFIRM]
+ON CONFLICT (id) DO NOTHING;
+
+CREATE FUNCTION public.goal_cup_erase_member(p_actor_id uuid) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_consents   integer;
+  v_unsent     integer;
+  v_sent       integer;
+  v_runs       integer;
+  v_heartbeats integer;
+  v_creds      integer;
+BEGIN
+  IF p_actor_id IS NULL THEN RAISE EXCEPTION 'goal_cup_erase_member: no member' USING ERRCODE = '22023'; END IF;
+  DELETE FROM consents WHERE member_id = p_actor_id;
+  GET DIAGNOSTICS v_consents = ROW_COUNT;
+  DELETE FROM notices WHERE member_id = p_actor_id AND sent_at IS NULL;
+  GET DIAGNOSTICS v_unsent = ROW_COUNT;
+  UPDATE notices SET sent_to = NULL WHERE member_id = p_actor_id AND sent_to IS NOT NULL;
+  GET DIAGNOSTICS v_sent = ROW_COUNT;
+  UPDATE runs SET client_ip = NULL, client_country = NULL, last_client_ip = NULL, last_client_country = NULL
+   WHERE member_id = p_actor_id
+     AND (client_ip IS NOT NULL OR client_country IS NOT NULL OR last_client_ip IS NOT NULL OR last_client_country IS NOT NULL);
+  GET DIAGNOSTICS v_runs = ROW_COUNT;
+  UPDATE heartbeats h SET client_ip = NULL, client_country = NULL
+    FROM runs r
+   WHERE h.run_id = r.id AND r.member_id = p_actor_id AND (h.client_ip IS NOT NULL OR h.client_country IS NOT NULL);
+  GET DIAGNOSTICS v_heartbeats = ROW_COUNT;
+  UPDATE run_credentials SET expires_at = now() WHERE member_id = p_actor_id AND expires_at > now();
+  GET DIAGNOSTICS v_creds = ROW_COUNT;
+  RETURN jsonb_build_object('consents', v_consents, 'unsent_notices', v_unsent, 'sent_notices', v_sent,
+                            'runs', v_runs, 'heartbeats', v_heartbeats, 'credentials', v_creds);
+END $$;
+REVOKE ALL ON FUNCTION public.goal_cup_erase_member(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.goal_cup_erase_member(uuid) TO service_role;
+
+-- ======================== 20261015160000_goal_cup_tracer_test_mode.sql ========================
+
+-- Goal Cup tracer: the TEST run mode (owner request, 2026-10-15).
+--
+-- Organizers' own test runs, easy to tell apart and to delete in one go.
+--   * mode 'test' for events, device requests, credentials and runs (wire value: "mode":"test" in
+--     POST /v1/device). Events 'test' (production, R2 prefix traces/test/, no bucket lock) and
+--     'test-staging'; both always open, run_hours 168 (a test run lasts its event's run_hours).
+--   * Only members in goal_cup_tracer.test_operators may approve or open a test run (enforced here:
+--     goal_cup_approve_device answers 'not_test_operator', the staging test approval 'forbidden',
+--     open_run 'forbidden'). The table starts empty; the owner adds organizers.
+--   * Test runs never replace and are never replaced (only competition runs replace), and their
+--     emails go to the operator's own address with "[TEST] " before the subject.
+--   * goal_cup_tracer.delete_test_runs(older_than) deletes every test-mode row (runs, entries, chunks,
+--     heartbeats, notices, credentials, device requests) and returns the R2 keys to delete;
+--     service_role only. goal-cup-tracer server/worker/scripts/delete-test-runs.sh wraps it.
+--   * Aggregates (live numbers, research, reports) must leave out runs with mode = 'test'.
+--
+-- Widens four mode CHECK constraints on goal_cup_tracer tables created today (20261015120000);
+-- nothing outside goal_cup_tracer changes and no row is changed.
+
+ALTER TABLE goal_cup_tracer.events DROP CONSTRAINT events_mode_check;
+ALTER TABLE goal_cup_tracer.events ADD CONSTRAINT events_mode_check CHECK (mode IN ('competition', 'dry_run', 'practice', 'test'));
+ALTER TABLE goal_cup_tracer.device_requests DROP CONSTRAINT device_requests_mode_check;
+ALTER TABLE goal_cup_tracer.device_requests ADD CONSTRAINT device_requests_mode_check CHECK (mode IN ('competition', 'practice', 'test'));
+ALTER TABLE goal_cup_tracer.run_credentials DROP CONSTRAINT run_credentials_mode_check;
+ALTER TABLE goal_cup_tracer.run_credentials ADD CONSTRAINT run_credentials_mode_check CHECK (mode IN ('competition', 'practice', 'test'));
+ALTER TABLE goal_cup_tracer.runs DROP CONSTRAINT runs_mode_check;
+ALTER TABLE goal_cup_tracer.runs ADD CONSTRAINT runs_mode_check CHECK (mode IN ('competition', 'practice', 'test'));
+
+CREATE TABLE goal_cup_tracer.test_operators (
+  member_id  uuid PRIMARY KEY,
+  note       text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE goal_cup_tracer.test_operators ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON goal_cup_tracer.test_operators FROM PUBLIC, anon, authenticated;
+
+INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, run_hours, staging)
+VALUES
+  ('test',         'test', '2026-10-15T00:00:00Z', '2027-06-30T00:00:00Z', 168, false),
+  ('test-staging', 'test', '2026-10-15T00:00:00Z', '2027-06-30T00:00:00Z', 168, true)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE FUNCTION goal_cup_tracer.is_test_operator(p_member uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$ SELECT EXISTS (SELECT 1 FROM goal_cup_tracer.test_operators WHERE member_id = p_member) $$;
+
+-- {subject, text} with "[TEST] " before the subject when the run is a test run.
+CREATE FUNCTION goal_cup_tracer.test_marked(p_email jsonb, p_run_id text) RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+  SELECT CASE WHEN EXISTS (SELECT 1 FROM goal_cup_tracer.runs WHERE id = p_run_id AND mode = 'test')
+              THEN jsonb_set(p_email, '{subject}', to_jsonb('[TEST] ' || (p_email ->> 'subject')))
+              ELSE p_email END
+$$;
+
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_open_run(
+  p_member_id text, p_event_id text, p_mode text, p_run_id text, p_entry_id text,
+  p_official_start text, p_deadline_at text,
+  p_connector_id text, p_manifest_sha256 text, p_connector_dir_sha256 text,
+  p_workspace text, p_session_id text, p_harness_version text, p_tracer_version text, p_repo_url text,
+  p_machine jsonb, p_client_ip text, p_client_country text,
+  p_credential_hash text, p_credential_expires_at text
+) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_member  uuid := p_member_id::uuid;
+  v_staging boolean := caller_is_staging();
+  v_event   events;
+  v_start   timestamptz := p_official_start::timestamptz;
+  v_deadline timestamptz := p_deadline_at::timestamptz;
+  v_cred_expires timestamptz := p_credential_expires_at::timestamptz;
+  v_bound   text;
+  v_try     integer;
+BEGIN
+  SELECT * INTO v_event FROM events WHERE id = p_event_id AND staging = v_staging;
+  -- The event must be of the run's kind: practice in a practice event, a test run in a test
+  -- event, a competition run in the competition or the dry run.
+  IF NOT FOUND
+     OR (p_mode = 'practice' AND v_event.mode <> 'practice')
+     OR (p_mode = 'test' AND v_event.mode <> 'test')
+     OR (p_mode = 'competition' AND v_event.mode NOT IN ('competition', 'dry_run')) THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'This event is not open for runs.');
+  END IF;
+  -- Test runs: allowlisted organizer accounts only; their length is the event's run_hours.
+  IF p_mode = 'test' THEN
+    IF NOT is_test_operator(v_member) THEN
+      RETURN jsonb_build_object('result', 'forbidden', 'message', 'Test runs are for Goal Cup organizers only.');
+    END IF;
+    v_deadline := v_start + make_interval(hours => v_event.run_hours);
+    v_cred_expires := v_deadline + interval '24 hours';
+  END IF;
+  IF NOT has_current_terms(v_member) THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'Accept the Goal Cup terms on the website first.');
+  END IF;
+  IF p_mode = 'competition' THEN
+    IF v_start < v_event.start_window_opens THEN
+      RETURN jsonb_build_object('result', 'forbidden', 'message', 'The start window has not opened yet.');
+    END IF;
+    IF v_start > v_event.start_window_closes THEN
+      RETURN jsonb_build_object('result', 'forbidden',
+                                'message', 'after the start window you can only `goalcup continue` your run');
+    END IF;
+  END IF;
+
+  -- The credential opens runs for its own member and mode only: a credential approved for one
+  -- member can never open (or replace) a run of another.
+  SELECT run_id INTO v_bound FROM run_credentials
+   WHERE credential_hash = p_credential_hash AND staging = v_staging
+     AND member_id = v_member AND mode = p_mode FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+  IF v_bound IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM runs r JOIN entries e ON e.run_id = r.id AND e.segment = 0
+                WHERE r.id = v_bound AND r.member_id = v_member AND r.staging = v_staging AND e.session_id = p_session_id) THEN
+      RETURN jsonb_build_object('result', 'existing')
+             || run_json(v_bound, (SELECT e.id FROM entries e WHERE e.run_id = v_bound AND e.segment = 0));
+    END IF;
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+
+  FOR v_try IN 1..2 LOOP
+    IF p_mode = 'competition' THEN
+      UPDATE runs SET replaced_at = greatest(v_start, official_start)
+       WHERE member_id = v_member AND mode = 'competition' AND status = 'open' AND replaced_at IS NULL
+         AND staging = v_staging;
+    END IF;
+    BEGIN
+      INSERT INTO runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url,
+                        machine, client_ip, client_country, staging)
+      VALUES (p_run_id, p_event_id, v_member, p_mode, v_start, v_deadline, p_repo_url,
+              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country, v_staging);
+      EXIT;
+    EXCEPTION WHEN unique_violation THEN
+      IF v_try = 2 THEN RAISE; END IF;
+    END;
+  END LOOP;
+
+  INSERT INTO entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256,
+                       workspace, session_id, harness_version, tracer_version)
+  VALUES (p_entry_id, p_run_id, 0, p_connector_id, p_manifest_sha256, p_connector_dir_sha256,
+          p_workspace, p_session_id, p_harness_version, p_tracer_version);
+  UPDATE run_credentials
+     SET run_id = p_run_id, expires_at = v_cred_expires
+   WHERE credential_hash = p_credential_hash;
+  RETURN jsonb_build_object('result', 'created') || run_json(p_run_id);
+END $$;
+
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_claim_notices(p_limit integer, p_now text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_now timestamptz := p_now::timestamptz;
+  v_out jsonb := '[]'::jsonb;
+  v_n   record;
+  v_to  text;
+  v_has_user boolean;
+BEGIN
+  FOR v_n IN
+    SELECT n.* FROM notices n JOIN runs r ON r.id = n.run_id AND r.staging = caller_is_staging()
+     WHERE n.sent_at IS NULL AND n.skipped_at IS NULL
+       AND (n.claimed_at IS NULL OR n.claimed_at < v_now - interval '15 minutes')
+       AND n.attempts < 5
+     ORDER BY n.created_at, n.id
+     LIMIT greatest(least(coalesce(p_limit, 20), 50), 0)
+     FOR UPDATE OF n SKIP LOCKED
+  LOOP
+    -- A staging caller never learns a member's address: "to" is always null there, and the
+    -- staging Worker sends to its test address (or skips).
+    IF caller_is_staging() THEN
+      v_to := NULL; v_has_user := NULL;
+    ELSE
+      SELECT u.email, true INTO v_to, v_has_user FROM auth.users u WHERE u.id = v_n.member_id;
+    END IF;
+    IF v_has_user IS NULL THEN
+      v_to := NULL;
+    ELSIF v_to IS NULL OR btrim(v_to) = '' THEN
+      UPDATE notices SET skipped_at = v_now, skipped_reason = 'no_address' WHERE id = v_n.id;
+      CONTINUE;
+    ELSIF EXISTS (SELECT 1 FROM public.email_suppression_list s
+                   WHERE lower(s.email) = lower(v_to) AND (s.expires_at IS NULL OR s.expires_at > v_now)) THEN
+      UPDATE notices SET skipped_at = v_now, skipped_reason = 'suppressed' WHERE id = v_n.id;
+      CONTINUE;
+    END IF;
+    UPDATE notices SET claimed_at = v_now, attempts = attempts + 1 WHERE id = v_n.id;
+    v_out := v_out || jsonb_build_array(
+      jsonb_build_object('id', v_n.id, 'kind', v_n.kind, 'run_id', v_n.run_id, 'to', v_to)
+      || test_marked(notice_text(v_n.kind, v_n.payload, v_n.run_id), v_n.run_id));
+    v_has_user := NULL;
+  END LOOP;
+  RETURN v_out;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.goal_cup_approve_device(p_actor_id uuid, p_user_code text, p_approve boolean) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+BEGIN
+  IF p_approve THEN
+    IF NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.id = p_actor_id AND u.email_confirmed_at IS NOT NULL) THEN
+      RETURN 'not_a_member';
+    END IF;
+    IF NOT has_current_terms(p_actor_id) THEN RETURN 'terms_required'; END IF;
+    IF EXISTS (SELECT 1 FROM device_requests
+                WHERE user_hash = encode(sha256(convert_to(upper(replace(coalesce(p_user_code, ''), '-', '')), 'UTF8')), 'hex')
+                  AND mode = 'test')
+       AND NOT is_test_operator(p_actor_id) THEN
+      RETURN 'not_test_operator';
+    END IF;
+  END IF;
+  RETURN decide_device(p_user_code, p_actor_id, coalesce(p_approve, false), now());
+END $$;
+
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_approve_device(p_user_code text, p_member_id text, p_approve boolean, p_now text) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+BEGIN
+  IF NOT caller_is_staging() THEN RETURN 'forbidden'; END IF;
+  IF p_member_id IS NULL OR p_member_id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     OR NOT EXISTS (SELECT 1 FROM test_members WHERE member_id = p_member_id::uuid) THEN
+    RETURN 'forbidden';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM device_requests
+                  WHERE user_hash = encode(sha256(convert_to(upper(replace(p_user_code, '-', '')), 'UTF8')), 'hex')
+                    AND staging) THEN
+    RETURN 'not_found';
+  END IF;
+  IF EXISTS (SELECT 1 FROM device_requests
+              WHERE user_hash = encode(sha256(convert_to(upper(replace(p_user_code, '-', '')), 'UTF8')), 'hex')
+                AND mode = 'test')
+     AND NOT is_test_operator(p_member_id::uuid) THEN
+    RETURN 'forbidden';
+  END IF;
+  RETURN decide_device(p_user_code, p_member_id::uuid, p_approve, p_now::timestamptz);
+END $$;
+
+-- One-step cleanup of every test-mode row older than older_than (default: all of them). Returns
+-- {"runs": [...], "r2_keys": [...], "counts": {...}}: the R2 objects of the deleted runs, all under
+-- traces/<test event>/, for the caller to delete. A dry run is the same call inside a transaction
+-- that is rolled back. service_role (and the owner) only.
+CREATE FUNCTION goal_cup_tracer.delete_test_runs(older_than interval DEFAULT '0') RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_cut   timestamptz := now() - coalesce(older_than, interval '0');
+  v_runs  text[];
+  v_keys  jsonb;
+  v_n     jsonb := '{}'::jsonb;
+  v_rows  integer;
+BEGIN
+  SELECT coalesce(array_agg(id ORDER BY id), '{}') INTO v_runs FROM runs WHERE mode = 'test' AND created_at <= v_cut;
+  SELECT coalesce(jsonb_agg(k ORDER BY k), '[]'::jsonb) INTO v_keys FROM (
+    SELECT c.r2_key AS k FROM chunks c JOIN entries e ON e.id = c.entry_id WHERE e.run_id = ANY (v_runs)
+    UNION SELECT e.seal_key FROM entries e WHERE e.run_id = ANY (v_runs) AND e.seal_key IS NOT NULL
+    UNION SELECT e.baseline_key FROM entries e WHERE e.run_id = ANY (v_runs) AND e.baseline_key IS NOT NULL) keys;
+  DELETE FROM chunks c USING entries e WHERE e.id = c.entry_id AND e.run_id = ANY (v_runs);
+  GET DIAGNOSTICS v_rows = ROW_COUNT; v_n := v_n || jsonb_build_object('chunks', v_rows);
+  DELETE FROM heartbeats WHERE run_id = ANY (v_runs);
+  GET DIAGNOSTICS v_rows = ROW_COUNT; v_n := v_n || jsonb_build_object('heartbeats', v_rows);
+  DELETE FROM notices WHERE run_id = ANY (v_runs);
+  GET DIAGNOSTICS v_rows = ROW_COUNT; v_n := v_n || jsonb_build_object('notices', v_rows);
+  DELETE FROM entries WHERE run_id = ANY (v_runs);
+  GET DIAGNOSTICS v_rows = ROW_COUNT; v_n := v_n || jsonb_build_object('entries', v_rows);
+  DELETE FROM run_credentials WHERE mode = 'test' AND (run_id = ANY (v_runs) OR (run_id IS NULL AND created_at <= v_cut));
+  GET DIAGNOSTICS v_rows = ROW_COUNT; v_n := v_n || jsonb_build_object('credentials', v_rows);
+  DELETE FROM runs WHERE id = ANY (v_runs);
+  GET DIAGNOSTICS v_rows = ROW_COUNT; v_n := v_n || jsonb_build_object('runs', v_rows);
+  DELETE FROM device_requests WHERE mode = 'test' AND created_at <= v_cut;
+  GET DIAGNOSTICS v_rows = ROW_COUNT; v_n := v_n || jsonb_build_object('device_requests', v_rows);
+  RETURN jsonb_build_object('runs', to_jsonb(v_runs), 'r2_keys', v_keys, 'counts', v_n);
+END $$;
+
+REVOKE ALL ON FUNCTION goal_cup_tracer.is_test_operator(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION goal_cup_tracer.test_marked(jsonb, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION goal_cup_tracer.delete_test_runs(interval) FROM PUBLIC, anon, authenticated;
+GRANT USAGE ON SCHEMA goal_cup_tracer TO service_role;
+GRANT EXECUTE ON FUNCTION goal_cup_tracer.delete_test_runs(interval) TO service_role;
+
+-- ======================== 20261015170000_goal_cup_tracer_test_replaces_test.sql ========================
+-- Goal Cup tracer: a test run replaces the operator's previous open test run (owner, 2026-10-15:
+-- "a test run never replaces a competition run; the same mode replaces the same mode").
+--
+-- 20261015160000 made test runs never replace anything. Now the rule is one rule for both modes
+-- that replace: a new competition run ends the member's open competition run (unchanged), a new
+-- test run ends the member's open test run. A test run still never touches a competition run, and
+-- practice still never replaces. The approval page's "this replaces your current run" follows.
+-- Replaces two functions (CREATE OR REPLACE keeps their grants); no table, row or grant changes.
+
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_open_run(
+  p_member_id text, p_event_id text, p_mode text, p_run_id text, p_entry_id text,
+  p_official_start text, p_deadline_at text,
+  p_connector_id text, p_manifest_sha256 text, p_connector_dir_sha256 text,
+  p_workspace text, p_session_id text, p_harness_version text, p_tracer_version text, p_repo_url text,
+  p_machine jsonb, p_client_ip text, p_client_country text,
+  p_credential_hash text, p_credential_expires_at text
+) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_member  uuid := p_member_id::uuid;
+  v_staging boolean := caller_is_staging();
+  v_event   events;
+  v_start   timestamptz := p_official_start::timestamptz;
+  v_deadline timestamptz := p_deadline_at::timestamptz;
+  v_cred_expires timestamptz := p_credential_expires_at::timestamptz;
+  v_bound   text;
+  v_try     integer;
+BEGIN
+  SELECT * INTO v_event FROM events WHERE id = p_event_id AND staging = v_staging;
+  -- The event must be of the run's kind: practice in a practice event, a test run in a test
+  -- event, a competition run in the competition or the dry run.
+  IF NOT FOUND
+     OR (p_mode = 'practice' AND v_event.mode <> 'practice')
+     OR (p_mode = 'test' AND v_event.mode <> 'test')
+     OR (p_mode = 'competition' AND v_event.mode NOT IN ('competition', 'dry_run')) THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'This event is not open for runs.');
+  END IF;
+  -- Test runs: allowlisted organizer accounts only; their length is the event's run_hours.
+  IF p_mode = 'test' THEN
+    IF NOT is_test_operator(v_member) THEN
+      RETURN jsonb_build_object('result', 'forbidden', 'message', 'Test runs are for Goal Cup organizers only.');
+    END IF;
+    v_deadline := v_start + make_interval(hours => v_event.run_hours);
+    v_cred_expires := v_deadline + interval '24 hours';
+  END IF;
+  IF NOT has_current_terms(v_member) THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'Accept the Goal Cup terms on the website first.');
+  END IF;
+  IF p_mode = 'competition' THEN
+    IF v_start < v_event.start_window_opens THEN
+      RETURN jsonb_build_object('result', 'forbidden', 'message', 'The start window has not opened yet.');
+    END IF;
+    IF v_start > v_event.start_window_closes THEN
+      RETURN jsonb_build_object('result', 'forbidden',
+                                'message', 'after the start window you can only `goalcup continue` your run');
+    END IF;
+  END IF;
+
+  -- The credential opens runs for its own member and mode only: a credential approved for one
+  -- member can never open (or replace) a run of another.
+  SELECT run_id INTO v_bound FROM run_credentials
+   WHERE credential_hash = p_credential_hash AND staging = v_staging
+     AND member_id = v_member AND mode = p_mode FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+  IF v_bound IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM runs r JOIN entries e ON e.run_id = r.id AND e.segment = 0
+                WHERE r.id = v_bound AND r.member_id = v_member AND r.staging = v_staging AND e.session_id = p_session_id) THEN
+      RETURN jsonb_build_object('result', 'existing')
+             || run_json(v_bound, (SELECT e.id FROM entries e WHERE e.run_id = v_bound AND e.segment = 0));
+    END IF;
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+
+  FOR v_try IN 1..2 LOOP
+    -- The same mode replaces the same mode: a competition run its competition run, a test run its
+    -- test run. A test run never touches a competition run, and practice never replaces.
+    IF p_mode IN ('competition', 'test') THEN
+      UPDATE runs SET replaced_at = greatest(v_start, official_start)
+       WHERE member_id = v_member AND mode = p_mode AND status = 'open' AND replaced_at IS NULL
+         AND staging = v_staging;
+    END IF;
+    BEGIN
+      INSERT INTO runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url,
+                        machine, client_ip, client_country, staging)
+      VALUES (p_run_id, p_event_id, v_member, p_mode, v_start, v_deadline, p_repo_url,
+              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country, v_staging);
+      EXIT;
+    EXCEPTION WHEN unique_violation THEN
+      IF v_try = 2 THEN RAISE; END IF;
+    END;
+  END LOOP;
+
+  INSERT INTO entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256,
+                       workspace, session_id, harness_version, tracer_version)
+  VALUES (p_entry_id, p_run_id, 0, p_connector_id, p_manifest_sha256, p_connector_dir_sha256,
+          p_workspace, p_session_id, p_harness_version, p_tracer_version);
+  UPDATE run_credentials
+     SET run_id = p_run_id, expires_at = v_cred_expires
+   WHERE credential_hash = p_credential_hash;
+  RETURN jsonb_build_object('result', 'created') || run_json(p_run_id);
+END $$;
+
+CREATE OR REPLACE FUNCTION public.goal_cup_device_request(p_actor_id uuid, p_user_code text) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_dev device_requests;
+BEGIN
+  SELECT * INTO v_dev FROM device_requests
+   WHERE user_hash = encode(sha256(convert_to(upper(replace(coalesce(p_user_code, ''), '-', '')), 'UTF8')), 'hex');
+  IF NOT FOUND THEN RETURN jsonb_build_object('result', 'not_found'); END IF;
+  RETURN jsonb_build_object(
+    'result', 'ok',
+    'status', CASE WHEN v_dev.status = 'pending' AND now() >= v_dev.expires_at THEN 'expired' ELSE v_dev.status END,
+    'purpose', v_dev.purpose,
+    'mode', v_dev.mode,
+    'connector_id', v_dev.connector_id,
+    'tracer_version', v_dev.tracer_version,
+    'expires_at', fmt_time(v_dev.expires_at),
+    'replaces_open_run', v_dev.purpose = 'run' AND v_dev.mode IN ('competition', 'test') AND EXISTS (
+      SELECT 1 FROM runs r WHERE r.member_id = p_actor_id AND r.mode = v_dev.mode AND r.status = 'open'
+         AND r.replaced_at IS NULL AND r.staging = v_dev.staging AND now() < r.deadline_at),
+    'terms_ok', has_current_terms(p_actor_id),
+    'terms_version', current_terms_version(),
+    'decided_by_you', v_dev.member_id IS NOT DISTINCT FROM p_actor_id AND v_dev.status <> 'pending');
 END $$;

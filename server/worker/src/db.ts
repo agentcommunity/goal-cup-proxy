@@ -17,7 +17,8 @@ import { addSeconds, formatTime } from "./util.ts";
 export const CLOSE_AFTER_SECONDS = 24 * 3600;
 
 export type RunStatus = "open" | "sealed" | "incomplete" | "abandoned";
-export type RunMode = "competition" | "practice";
+/** `test`: an organizer's test run (allowlisted accounts only, its own event and R2 prefix, deleted in one go). */
+export type RunMode = "competition" | "practice" | "test";
 
 /** The instant a run is over: `deadline_at`, or earlier if a later start replaced it. (Times compare as text.) */
 export function endsAt(run: { deadline_at: string; replaced_at: string | null }): string {
@@ -369,7 +370,7 @@ export interface Db {
   /**
    * Open a run (segment 0) for the account and bind the credential to it, in one atomic step.
    * A competition run replaces the account's other open competition run (`replaced_at` = this
-   * run's `official_start`); a practice run replaces nothing.
+   * run's `official_start`), a test run the account's open test run; a practice run replaces nothing.
    */
   openRun(args: OpenRunArgs): Promise<OpenRunResult>;
   /** Add the next segment. See `ContinueRunResult`. */

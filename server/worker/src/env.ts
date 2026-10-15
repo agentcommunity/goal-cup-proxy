@@ -8,6 +8,8 @@ export interface Env {
   EVENT_ID: string;
   /** Event that practice runs belong to, e.g. "practice". */
   PRACTICE_EVENT_ID: string;
+  /** Event that organizer test runs belong to (mode `test`); unset: this server opens no test run. */
+  TEST_EVENT_ID?: string;
   /** Run length in hours (default 168). */
   RUN_HOURS?: string;
   /** Practice run length in minutes (default 10). */
@@ -35,6 +37,10 @@ export interface Env {
   TEST_APPROVAL_KEY?: string;
   /** "on" marks a staging deployment (the only non-local place TEST_APPROVAL_KEY may be set). */
   STAGING?: string;
+
+  /** Rate Limiting bindings for POST /v1/device and /v1/device/token (src/ratelimit.ts); unbound: no limit. */
+  RL_DEVICE_START?: RateLimit;
+  RL_DEVICE_TOKEN?: RateLimit;
 
   /** "on" answers every call 503 + Retry-After. */
   MAINTENANCE?: string;

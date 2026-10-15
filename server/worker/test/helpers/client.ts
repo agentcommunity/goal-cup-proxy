@@ -91,7 +91,7 @@ export const approve = (api: Client, user_code: string, member_id: string, appro
   api.call("POST", "/v1/device/approve", { token: key, json: { user_code, member_id, approve } });
 
 /** The whole device flow in one go: a run credential (`gcr_` + 64 hex) for `member`, still unbound. */
-export async function credentialFor(api: Client, member: string, mode: "competition" | "practice" = "competition"): Promise<string> {
+export async function credentialFor(api: Client, member: string, mode: "competition" | "practice" | "test" = "competition"): Promise<string> {
   const d = await api.call("POST", "/v1/device", { json: deviceBody({ mode }) });
   if (d.status !== 200) throw new Error(`device: ${d.status} ${JSON.stringify(d.body)}`);
   const a = await approve(api, d.body.user_code, member);

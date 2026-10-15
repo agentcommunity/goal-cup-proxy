@@ -12,6 +12,8 @@ export interface Config {
   /** The event of competition runs, and of practice runs. */
   eventId: string;
   practiceEventId: string;
+  /** The event of organizer test runs (TEST_EVENT_ID); undefined: no test runs here. */
+  testEventId: string | undefined;
   /** deadline_at = official_start + this. RUN_HOURS * 3600, or RUN_SECONDS (local backend only). */
   runSeconds: number;
   /** The same for a practice run: PRACTICE_RUN_MINUTES * 60. */
@@ -85,11 +87,15 @@ export function readConfig(env: Env): Config {
   if (typeof env.PRACTICE_EVENT_ID !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(env.PRACTICE_EVENT_ID)) {
     throw misconfigured("PRACTICE_EVENT_ID must be lowercase letters, digits and dashes.");
   }
+  if (env.TEST_EVENT_ID !== undefined && !/^[a-z0-9][a-z0-9-]{0,63}$/.test(env.TEST_EVENT_ID)) {
+    throw misconfigured("TEST_EVENT_ID must be lowercase letters, digits and dashes.");
+  }
   const opens = testOnlyTime(env, "START_WINDOW_OPENS");
   const closes = testOnlyTime(env, "START_WINDOW_CLOSES");
   return {
     eventId: env.EVENT_ID,
     practiceEventId: env.PRACTICE_EVENT_ID,
+    testEventId: env.TEST_EVENT_ID === "" ? undefined : env.TEST_EVENT_ID,
     runSeconds: testOnlySeconds(env, "RUN_SECONDS") ?? positiveNumber("RUN_HOURS", env.RUN_HOURS, 168, "hours", 24 * 365) * 3600,
     practiceRunSeconds: positiveNumber("PRACTICE_RUN_MINUTES", env.PRACTICE_RUN_MINUTES, 10, "minutes", 24 * 60) * 60,
     closeAfterSeconds: testOnlySeconds(env, "CLOSE_AFTER_SECONDS") ?? CLOSE_AFTER_SECONDS,

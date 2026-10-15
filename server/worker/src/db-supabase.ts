@@ -66,7 +66,7 @@ const RUN_SHAPE: Record<string, Check> = {
   run_id: (v) => typeof v === "string" && RUN_ID.test(v),
   event_id: text,
   member_id: text,
-  mode: oneOf("competition", "practice"),
+  mode: oneOf("competition", "practice", "test"),
   status: oneOf(...STATUS_WORDS),
   official_start: isTime,
   deadline_at: isTime,
