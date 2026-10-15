@@ -541,6 +541,74 @@ mod chat {
         );
     }
 
+    /// A chat-mode harness gets the participant's terminal and tools: their PATH (the fake
+    /// harness is a `#!/usr/bin/env node` script, and the `node` it finds is only on that PATH),
+    /// their TERM, COLORTERM, LANG and LC_*; the connector's own SHELL wins over theirs. It gets
+    /// none of their proxy, base-URL or credential variables, and none of the tracer's own: its
+    /// proxy is the run's loopback recorder.
+    #[test]
+    fn the_harness_gets_the_participants_terminal_and_tools_and_nothing_else() {
+        let rig = Rig::chat();
+        let mut run = rig.start_on_pty(&[
+            DISK,
+            LOCAL_WRAP_UP,
+            ("TERM", "xterm-256color"),
+            ("COLORTERM", "truecolor"),
+            ("LANG", "en_US.UTF-8"),
+            ("LC_CTYPE", "en_US.UTF-8"),
+            ("SHELL", "/bin/bash"),
+            ("HTTPS_PROXY", "http://proxy.example:3128"),
+            ("https_proxy", "http://proxy.example:3128"),
+            ("ALL_PROXY", "socks5://proxy.example:1080"),
+            ("OPENAI_API_KEY", "sk-not-a-real-key-0123456789"),
+            ("ANTHROPIC_BASE_URL", "https://elsewhere.example"),
+            ("GITHUB_TOKEN", "ghp_not_a_real_token_0123456789"),
+        ]);
+        run.wait_shown("tui: ready");
+        run.type_line("/exit");
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+
+        let env: BTreeMap<String, String> = harness(&rig, "tui.env")
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        assert_eq!(env.get("PATH"), Some(&rig.path()), "{env:?}");
+        for (key, value) in [
+            ("TERM", "xterm-256color"),
+            ("COLORTERM", "truecolor"),
+            ("LANG", "en_US.UTF-8"),
+            ("LC_CTYPE", "en_US.UTF-8"),
+            ("SHELL", "/bin/zsh"),
+        ] {
+            assert_eq!(
+                env.get(key).map(String::as_str),
+                Some(value),
+                "{key}: {env:?}"
+            );
+        }
+        for key in ["HTTPS_PROXY", "https_proxy"] {
+            let proxy = env.get(key).expect("the run's own proxy");
+            assert!(
+                proxy.starts_with("http://goalcup:") && proxy.contains("@127.0.0.1:"),
+                "{key} is the loopback recorder, not the participant's: {proxy}"
+            );
+        }
+        for key in [
+            "ALL_PROXY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "GITHUB_TOKEN",
+        ] {
+            assert!(!env.contains_key(key), "{key} reached the harness: {env:?}");
+        }
+        assert!(
+            !env.keys().any(|k| k.starts_with("GOALCUP_")),
+            "the tracer's own variables reached the harness: {env:?}"
+        );
+    }
+
     /// A chat-mode run needs its terminal for input and for output: from a pipe, or with its
     /// output in a file, it is refused before anything is created.
     #[test]

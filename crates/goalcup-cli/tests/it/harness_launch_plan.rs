@@ -569,3 +569,45 @@ fn an_interactive_plan_places_no_goal_and_keeps_the_terminal() {
         .expect_err("no goal for a headless connector");
     assert!(refused.to_string().contains("headless"), "{refused}");
 }
+
+/// The one check `goalcup start`, `goalcup doctor` and `goalcup prep` share: a chat-mode
+/// harness that is a `#!/usr/bin/env node` script (the npm harnesses) resolves only when `node`
+/// is on the PATH the harness is given, which is the participant's own; the resolution says so,
+/// and the version probe and the launch use that same PATH.
+#[test]
+fn a_node_script_harness_resolves_only_with_node_on_the_path_it_is_given() {
+    use goalcup_cli::launch::{capture_executable, harness_path};
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let dir = write_unpinned(&root, "example", "example-cli");
+    let path = dir.join("harness.toml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("program = \"claude\"", "program = \"example-cli\"");
+    std::fs::write(&path, text).unwrap();
+    let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
+    let profile = &connector.loaded.manifest.capture;
+    assert!(
+        profile.interactive,
+        "the shipped Claude Code recipe is chat mode"
+    );
+
+    let bin = root.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let exe = bin.join("example-cli");
+    std::fs::write(&exe, "#!/usr/bin/env node\nconsole.log('hi')\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let env = BTreeMap::from([("PATH".to_string(), bin.display().to_string())]);
+    assert_eq!(harness_path(profile, &env), bin.display().to_string());
+
+    let refused = capture_executable(&connector, profile, &env).expect_err("no node on that PATH");
+    assert!(refused.to_string().contains("`node` script"), "{refused}");
+
+    let node = bin.join("node");
+    std::fs::write(&node, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let resolved = capture_executable(&connector, profile, &env).expect("node is there now");
+    assert_eq!(resolved.search_path(), bin.display().to_string());
+}

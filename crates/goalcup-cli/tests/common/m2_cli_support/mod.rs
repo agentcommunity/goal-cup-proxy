@@ -695,15 +695,22 @@ fn write_chat_connector(connectors: &Path, bin: &Path, out: &Path) {
     let out = out.display().to_string();
     assert!(!out.contains('\''), "the test path must be shell-quotable");
     let fake = std::fs::read_to_string(super::support::fixture("m2-fake-tui.sh")).unwrap();
-    let (shebang, body) = fake.split_once('\n').expect("the fake has a shebang");
+    let (_, body) = fake.split_once('\n').expect("the fake has a shebang");
+    // Started the way an npm harness is (Codex CLI, Claude Code): `#!/usr/bin/env node`. The
+    // `node` it finds is a stand-in in the rig's own `bin`, which is on the participant's PATH
+    // and on no system PATH, so the harness starts only when it is given that PATH.
     let exe = bin.join(CHAT_ID);
     std::fs::write(
         &exe,
-        format!("{shebang}\nM2_FAKE_OUT='{out}'\nexport M2_FAKE_OUT\n{body}"),
+        format!("#!/usr/bin/env node\nM2_FAKE_OUT='{out}'\nexport M2_FAKE_OUT\n{body}"),
     )
     .unwrap();
+    let node = bin.join("node");
+    std::fs::write(&node, "#!/bin/sh\nexec /bin/sh \"$@\"\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for file in [&exe, &node] {
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let dir = connectors.join(CHAT_ID);
     std::fs::create_dir_all(&dir).unwrap();
     let harness = format!(
@@ -718,6 +725,9 @@ args = ["chat", "-C", "{{workspace}}"]
 
 [capture.executable]
 program = "{CHAT_ID}"
+
+[capture.env]
+SHELL = "/bin/zsh"
 
 [capture.home]
 run_home = "empty"
