@@ -79,6 +79,12 @@ pub fn status_with(
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
     let record = pinned(cfg, entry)?;
+    // A reserve nothing will use again goes back to the disk, whatever the daemon answers below.
+    crate::run::reserve::release_stale(
+        cfg,
+        &crate::run::reserve::artifact_root(cfg),
+        crate::run::now_unix(),
+    );
     // First of everything, before the daemon is even asked: what is wrong with the run. A
     // `--json` caller gets the document alone.
     if !json {
@@ -154,8 +160,10 @@ fn run_report(cfg: &Path, entry: Option<&str>, record: &EntryRecord, now: &str) 
         return "run state: no run state yet\n".to_string();
     };
     let now = parse_z(now).unwrap_or_else(crate::run::now_unix);
+    // `goalcup continue` is advised only for a run it can restart.
+    let advice = crate::run::advice(cfg, &run, &state, now);
     state
-        .problems(now)
+        .problems(now, advice)
         .iter()
         .map(|problem| format!("PROBLEM: {}\n", plain(problem)))
         .collect()

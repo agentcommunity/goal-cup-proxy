@@ -914,19 +914,32 @@ fn a_capture_reopened_under_its_live_run_seals_with_the_loss_chained() {
 
 // ------------------------------------------------------------------ the run's own problems
 
-/// The run record and state file `goalcup start` leaves under `cfg` for `entry_id`.
+/// The run record and state file `goalcup start` leaves under `cfg` for `entry_id`: a run with
+/// no server.
 fn run_with_state(cfg: &std::path::Path, entry_id: &str, state: goalcup_cli::run::RunState) {
+    run_with_state_on(cfg, entry_id, state, None, None);
+}
+
+/// [`run_with_state`] for a run that may be on a server (`server`), with a deadline
+/// (`deadline_at`); a run on a server has the credential `goalcup continue` needs.
+fn run_with_state_on(
+    cfg: &std::path::Path,
+    entry_id: &str,
+    state: goalcup_cli::run::RunState,
+    server: Option<&str>,
+    deadline_at: Option<&str>,
+) {
     use goalcup_cli::run::{EntryRef, RunRecord, StateKeeper, run_dir, write};
     write(
         cfg,
         &RunRecord {
             run_id: entry_id.to_string(),
-            server_url: None,
+            server_url: server.map(str::to_string),
             practice: false,
             connector_id: "claude-code-cli".to_string(),
             workspace: PathBuf::from("/w"),
             started_at_unix: 1,
-            deadline_at: None,
+            deadline_at: deadline_at.map(str::to_string),
             entries: vec![EntryRef {
                 entry_id: entry_id.to_string(),
                 trace_dir: PathBuf::from("/t"),
@@ -934,6 +947,14 @@ fn run_with_state(cfg: &std::path::Path, entry_id: &str, state: goalcup_cli::run
         },
     )
     .unwrap();
+    if server.is_some() {
+        let credential = goalcup_cli::account::credential::RunCredential::new(
+            format!("gcr_{}", "ab".repeat(32)),
+            "2099-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+        goalcup_cli::account::credential::store(&run_dir(cfg, entry_id), &credential).unwrap();
+    }
     StateKeeper::begin(&run_dir(cfg, entry_id), state);
 }
 
@@ -974,6 +995,17 @@ fn status_puts_every_problem_first() {
     };
     state.harness = HarnessState::Exited {
         status: "exit code 1".to_string(),
+    };
+    // A run on a server with a chat-mode connector, its deadline ahead: `continue` can restart it.
+    state.continuable = true;
+    let run_with_state = |cfg: &std::path::Path, entry: &str, state: RunState| {
+        run_with_state_on(
+            cfg,
+            entry,
+            state,
+            Some("https://server.example"),
+            Some("2099-01-01T00:00:00Z"),
+        );
     };
     run_with_state(&cfg, &info.entry_id, state.clone());
 
@@ -1021,6 +1053,63 @@ fn status_puts_every_problem_first() {
     // `--json` stays one document.
     let json = status_text(&m, &cfg, &info.entry_id, true);
     serde_json::from_str::<control::SignedStatus>(&json).expect("one document and nothing else");
+}
+
+/// `goalcup continue` is advised only for a run it can restart: otherwise status says what is
+/// true.
+#[test]
+fn status_advises_continue_only_when_continue_can_restart_the_run() {
+    use goalcup_cli::run::{HarnessState, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.harness = HarnessState::Exited {
+        status: "exit code 1".to_string(),
+    };
+    let server = Some("https://server.example");
+    let ahead = Some("2099-01-01T00:00:00Z");
+    let exited = |why: &str| format!("PROBLEM: the agent's process exited (exit code 1){why}\n");
+    let said = |cfg: &std::path::Path| status_text(&m, cfg, &info.entry_id, false);
+
+    // A headless connector, run open on the server: not continuable.
+    state.continuable = false;
+    run_with_state_on(&cfg, &info.entry_id, state.clone(), server, ahead);
+    let text = said(&cfg);
+    assert!(
+        text.starts_with(&exited("; this run cannot be continued")),
+        "{text}"
+    );
+    assert!(!text.contains("run goalcup continue"), "{text}");
+
+    // A chat-mode run on the server whose deadline has passed: the run is over.
+    state.continuable = true;
+    run_with_state_on(
+        &cfg,
+        &info.entry_id,
+        state.clone(),
+        server,
+        Some("2020-01-01T00:00:00Z"),
+    );
+    let text = said(&cfg);
+    assert!(text.starts_with(&exited("; the run is over")), "{text}");
+
+    // A local run (no server) is not continuable either.
+    run_with_state_on(&cfg, &info.entry_id, state.clone(), None, None);
+    let text = said(&cfg);
+    assert!(
+        text.starts_with(&exited("; this run cannot be continued")),
+        "{text}"
+    );
+
+    // And one `continue` can restart still says to run it.
+    run_with_state_on(&cfg, &info.entry_id, state, server, ahead);
+    let text = said(&cfg);
+    assert!(
+        text.starts_with(&exited(": run goalcup continue")),
+        "{text}"
+    );
 }
 
 #[test]

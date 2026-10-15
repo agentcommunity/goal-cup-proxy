@@ -790,7 +790,8 @@ impl Uploader {
     }
 
     /// `POST /v1/runs/{id}/seal` with the two documents: the run is over.
-    fn seal(&self, documents: &(String, String), timeout: Duration) -> Result<(), ServerError> {
+    /// Answers whether the server says the run itself is over.
+    fn seal(&self, documents: &(String, String), timeout: Duration) -> Result<bool, ServerError> {
         let request = SealRequest {
             entry_id: self.record.entry_id.clone(),
             seal_json: documents.0.clone(),
@@ -803,7 +804,7 @@ impl Uploader {
                 Some(&request),
                 timeout,
             )
-            .map(|_| ())
+            .map(|answer| answer.run_ended())
     }
 }
 
@@ -1245,6 +1246,8 @@ pub struct Report {
     pub why: Option<String>,
     /// Bytes of the chain the server holds.
     pub offset: u64,
+    /// The server's answer to the seal says the run itself is over (sealed or incomplete).
+    pub run_ended: bool,
 }
 
 impl Report {
@@ -1254,6 +1257,7 @@ impl Report {
             sealed: false,
             why: Some(why.into()),
             offset,
+            run_ended: false,
         }
     }
 }
@@ -1300,11 +1304,12 @@ impl Uploader {
                 }
             }
         }
-        let caught_up = |sealed, why| Report {
+        let caught_up = |sealed, why, run_ended| Report {
             caught_up: true,
             sealed,
             why,
             offset: self.pos.offset,
+            run_ended,
         };
         let Some(documents) = documents else {
             // A segment closed from its tail has no seal to send: it is done when its chain,
@@ -1312,19 +1317,19 @@ impl Uploader {
             if self.close_unsealed {
                 self.note_sent();
             }
-            return caught_up(false, None);
+            return caught_up(false, None, false);
         };
         let mut failures = 0;
         let mut last = None::<String>;
         loop {
             let Some(timeout) = left(until, super::http::CALL_TIMEOUT) else {
-                return caught_up(false, Some(ran_out(last.as_deref())));
+                return caught_up(false, Some(ran_out(last.as_deref())), false);
             };
             match self.seal(&documents, timeout) {
-                Ok(()) => {
+                Ok(run_ended) => {
                     self.mark_ok();
                     self.note_sent();
-                    return caught_up(true, None);
+                    return caught_up(true, None, run_ended);
                 }
                 Err(error) if !error.ends_upload() => {
                     failures += 1;
@@ -1334,7 +1339,7 @@ impl Uploader {
                         error.retry_after().map(Duration::from_secs),
                     );
                     if past(until, wait) {
-                        return caught_up(false, Some(ran_out(Some(&error.to_string()))));
+                        return caught_up(false, Some(ran_out(Some(&error.to_string()))), false);
                     }
                     say(&format!(
                         "upload: the seal was not stored ({error}); trying again in {}s",
@@ -1343,7 +1348,7 @@ impl Uploader {
                     last = Some(error.to_string());
                     std::thread::sleep(wait);
                 }
-                Err(error) => return caught_up(false, Some(error.to_string())),
+                Err(error) => return caught_up(false, Some(error.to_string()), false),
             }
         }
     }

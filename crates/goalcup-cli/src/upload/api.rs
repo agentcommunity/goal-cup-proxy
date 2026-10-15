@@ -168,4 +168,15 @@ pub struct SealRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusAnswer {
     pub status: String,
+    /// The run's own status, when the answer names it (a seal's does): `open`, `sealed`,
+    /// `incomplete`.
+    #[serde(default)]
+    pub run_status: Option<String>,
+}
+
+impl StatusAnswer {
+    /// The server says the run itself is over: sealed or incomplete.
+    pub fn run_ended(&self) -> bool {
+        matches!(self.run_status.as_deref(), Some("sealed" | "incomplete"))
+    }
 }

@@ -79,8 +79,19 @@ pub fn seal_with(
             };
         // A standalone seal sends no counters and no native scope: whatever identity the
         // harness printed after it was asked to stop is a later fact (seams design v2, 3).
-        return finish_locally(client, entry_id, None, None, deadline, allowance, None, out)
-            .map(|_| ());
+        finish_locally(client, entry_id, None, None, deadline, allowance, None, out)?;
+        // The entry is sealed: the run's reserve is released if nothing will use it again (a run
+        // with no server and no host holding it; a run all of whose entries are sent).
+        if let Ok(Some(run)) = crate::run::of_entry(cfg, entry_id) {
+            crate::run::reserve::release_if_done(
+                cfg,
+                &crate::run::reserve::artifact_root(cfg),
+                &run.run_id,
+                false,
+                crate::run::now_unix(),
+            );
+        }
+        return Ok(());
     }
 
     // No capture status: the bare seal is the only one this command can send. The daemon

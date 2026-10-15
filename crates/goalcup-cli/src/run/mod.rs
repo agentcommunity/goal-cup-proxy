@@ -182,6 +182,61 @@ pub struct RunState {
     /// The host has finished its wrap-up and written its last word.
     #[serde(default)]
     pub ended: bool,
+    /// `goalcup continue` could restart this run once its agent is gone: it is a run on a
+    /// server and its connector is a chat-mode one. Absent from a `state.json` an older build
+    /// wrote, which had no `continue`.
+    #[serde(default)]
+    pub continuable: bool,
+}
+
+/// What `goalcup status` may tell the participant about `goalcup continue` for a run: the advice
+/// is given only when the command can actually restart the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Advice {
+    /// A run on a server, chat-mode, not over, started here: `goalcup continue` restarts it.
+    Continue,
+    /// The run is over (its deadline passed, a newer run replaced it, or it was stopped for its
+    /// end): there is nothing left to continue.
+    Over,
+    /// The run is not over, but it cannot be continued: it has no server, its connector runs
+    /// headless, or this machine holds no credential for it.
+    Cannot,
+}
+
+impl Advice {
+    /// The clause that ends a problem line: what to do, or what is true.
+    fn clause(self) -> &'static str {
+        match self {
+            Advice::Continue => "run goalcup continue",
+            Advice::Over => "the run is over",
+            Advice::Cannot => "this run cannot be continued",
+        }
+    }
+}
+
+/// Whether the run is over at `now` (unix seconds): its deadline has passed on this machine's
+/// clock, or its host stopped it for its end (the server's stop, a newer run replacing it). A
+/// full disk stops the agent and leaves the run open.
+pub fn is_over(record: &RunRecord, state: Option<&RunState>, now: u64) -> bool {
+    let deadline_passed = record
+        .deadline_at
+        .as_deref()
+        .and_then(goalcup_protocol::control::parse_z)
+        .is_some_and(|deadline| now >= deadline);
+    deadline_passed || state.is_some_and(RunState::stopped_for_its_end)
+}
+
+/// What `goalcup status` may say about `goalcup continue` for `record`, whose state is `state`.
+pub fn advice(cfg: &Path, record: &RunRecord, state: &RunState, now: u64) -> Advice {
+    if is_over(record, Some(state), now) {
+        return Advice::Over;
+    }
+    let credential = crate::account::credential::credential_path(&run_dir(cfg, &record.run_id));
+    if record.server_url.is_some() && state.continuable && credential.exists() {
+        Advice::Continue
+    } else {
+        Advice::Cannot
+    }
 }
 
 impl RunState {
@@ -198,20 +253,31 @@ impl RunState {
             sleep_lock,
             stopped: None,
             ended: false,
+            continuable: false,
         }
     }
 
+    /// The host ended the agent on purpose because the run is over (the deadline, a newer run);
+    /// a full disk is not an end.
+    fn stopped_for_its_end(&self) -> bool {
+        self.stopped
+            .as_deref()
+            .is_some_and(|why| why != watch::DISK_STOP_REASON)
+    }
+
     /// Everything wrong with the run at `now` (unix seconds), one sentence each, worst first.
-    /// Nothing wrong is an empty list.
-    pub fn problems(&self, now: u64) -> Vec<String> {
+    /// Nothing wrong is an empty list. `advice` says whether `goalcup continue` can restart the
+    /// run: the lines say to run it only when it can.
+    pub fn problems(&self, now: u64, advice: Advice) -> Vec<String> {
         let mut lines = Vec::new();
         // The tick writes the state every watch period; a run not over whose state has not
         // moved for a few of them has no tracker writing it.
         let silent = now.saturating_sub(self.updated_at);
         if !self.ended && silent > STATE_STALE_AFTER_TICKS * reserve::WATCH_PERIOD.as_secs() {
             lines.push(format!(
-                "run state not updated for {}: the tracer may have stopped; run goalcup continue",
-                age_words(silent)
+                "run state not updated for {}: the tracer may have stopped; {}",
+                age_words(silent),
+                advice.clause()
             ));
         }
         match self.recording {
@@ -253,15 +319,16 @@ impl RunState {
         }
         // An agent the host ended because the run is over (its deadline, a newer run) is not a
         // problem; one that left while the run is open, or that a full disk stopped, is.
-        let over = self
-            .stopped
-            .as_deref()
-            .is_some_and(|why| why != watch::DISK_STOP_REASON);
         if let HarnessState::Exited { status } = &self.harness
-            && !over
+            && !self.stopped_for_its_end()
         {
+            let then = match advice {
+                Advice::Continue => ": ",
+                Advice::Over | Advice::Cannot => "; ",
+            };
             lines.push(format!(
-                "the agent's process exited ({status}): run goalcup continue"
+                "the agent's process exited ({status}){then}{}",
+                advice.clause()
             ));
         }
         lines
@@ -704,23 +771,29 @@ mod tests {
     fn problems_come_in_the_order_the_participant_should_act() {
         let now = 1_000_000;
         let mut state = RunState::launched("e1", Ok(()));
-        assert!(state.problems(now).is_empty());
+        assert!(state.problems(now, Advice::Continue).is_empty());
         state.recording = Recording::Unknown;
         state.upload.problem = Some("busy".to_string());
         state.upload.last_ok_at = Some(now - 29 * 60);
         assert!(
-            state.problems(now).is_empty(),
+            state.problems(now, Advice::Continue).is_empty(),
             "29 minutes is not yet a problem"
         );
         state.upload.last_ok_at = Some(now - 3 * 3600 - 5 * 60);
-        assert_eq!(state.problems(now), ["last upload 3 h 5 min ago: busy"]);
+        assert_eq!(
+            state.problems(now, Advice::Continue),
+            ["last upload 3 h 5 min ago: busy"]
+        );
         // A run that is over is told how its upload ended, whatever the age, and nothing about
         // what only matters while it records.
         state.upload.last_ok_at = Some(now - 10);
         state.ended = true;
         state.disk.low = true;
         state.sleep_lock = Err("x".into());
-        assert_eq!(state.problems(now), ["last upload 10 s ago: busy"]);
+        assert_eq!(
+            state.problems(now, Advice::Continue),
+            ["last upload 10 s ago: busy"]
+        );
     }
 
     #[test]
@@ -730,15 +803,15 @@ mod tests {
         let period = reserve::WATCH_PERIOD.as_secs();
         let fresh = 1_000 + STATE_STALE_AFTER_TICKS * period;
         assert!(
-            state.problems(fresh).is_empty(),
+            state.problems(fresh, Advice::Continue).is_empty(),
             "three ticks late is not yet stale"
         );
         assert_eq!(
-            state.problems(fresh + 1),
+            state.problems(fresh + 1, Advice::Continue),
             ["run state not updated for 1 min: the tracer may have stopped; run goalcup continue"]
         );
         state.ended = true;
-        assert!(state.problems(fresh + 10_000).is_empty());
+        assert!(state.problems(fresh + 10_000, Advice::Continue).is_empty());
     }
 
     #[test]
@@ -750,18 +823,95 @@ mod tests {
         let now = state.updated_at;
         let line = "the agent's process exited (exit code 1): run goalcup continue";
         // It left while the run is open.
-        assert_eq!(state.problems(now), [line]);
+        assert_eq!(state.problems(now, Advice::Continue), [line]);
         // The host ended it because the run is over: the deadline, or a newer run.
         for why in [
             "the server says the run is over (its deadline was 2026-10-21T00:00:00Z)",
             "a newer run on your account replaced this one",
         ] {
             state.stopped = Some(why.to_string());
-            assert!(state.problems(now).is_empty(), "{why}");
+            assert!(state.problems(now, Advice::Continue).is_empty(), "{why}");
         }
         // A full disk ended it, the run is still open: it can be continued.
         state.stopped = Some(watch::DISK_STOP_REASON.to_string());
-        assert_eq!(state.problems(now), [line]);
+        assert_eq!(state.problems(now, Advice::Continue), [line]);
+    }
+
+    /// `goalcup continue` is advised only when it can restart the run.
+    #[test]
+    fn the_advice_to_continue_is_given_only_when_continue_can_restart_the_run() {
+        let cfg = tempfile::tempdir().unwrap();
+        let mut run = record("r0123456789abcdef", 1, "e1");
+        run.server_url = Some("https://server.example".to_string());
+        run.deadline_at = Some(goalcup_protocol::control::format_z(10_000));
+        write(cfg.path(), &run).unwrap();
+        let credential = crate::account::credential::RunCredential::new(
+            format!("gcr_{}", "ab".repeat(32)),
+            "2099-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+        crate::account::credential::store(&run_dir(cfg.path(), &run.run_id), &credential).unwrap();
+        let mut state = RunState::launched("e1", Ok(()));
+        state.continuable = true;
+        state.harness = HarnessState::Exited {
+            status: "exit code 1".to_string(),
+        };
+        let now = 5_000;
+        let exited = "the agent's process exited (exit code 1)";
+
+        // A server run, a chat-mode connector, a credential here, the deadline ahead.
+        assert_eq!(advice(cfg.path(), &run, &state, now), Advice::Continue);
+        assert_eq!(
+            state.problems(now, Advice::Continue),
+            [format!("{exited}: run goalcup continue")]
+        );
+
+        // The deadline has passed: the run is over, and the line says so.
+        let over = advice(cfg.path(), &run, &state, 10_000);
+        assert_eq!(over, Advice::Over);
+        assert_eq!(
+            state.problems(10_000, over),
+            [format!("{exited}; the run is over")]
+        );
+
+        // A newer run replaced it.
+        let mut replaced = state.clone();
+        replaced.stopped = Some("a newer run on your account replaced this one".to_string());
+        assert_eq!(advice(cfg.path(), &run, &replaced, now), Advice::Over);
+
+        // A headless connector: not over, and not continuable.
+        let mut headless = state.clone();
+        headless.continuable = false;
+        let cannot = advice(cfg.path(), &run, &headless, now);
+        assert_eq!(cannot, Advice::Cannot);
+        let lines = headless.problems(now, cannot);
+        assert_eq!(lines, [format!("{exited}; this run cannot be continued")]);
+
+        // A run with no server.
+        let mut local = run.clone();
+        local.server_url = None;
+        assert_eq!(advice(cfg.path(), &local, &state, now), Advice::Cannot);
+
+        // No credential on this machine.
+        std::fs::remove_file(crate::account::credential::credential_path(&run_dir(
+            cfg.path(),
+            &run.run_id,
+        )))
+        .unwrap();
+        assert_eq!(advice(cfg.path(), &run, &state, now), Advice::Cannot);
+
+        // No line ever tells a run that cannot be continued to continue it.
+        for advice in [Advice::Over, Advice::Cannot] {
+            let mut stale = RunState::launched("e1", Ok(()));
+            stale.updated_at = 0;
+            let lines = stale.problems(10_000, advice);
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| !line.contains("run goalcup continue")),
+                "{lines:?}"
+            );
+        }
     }
 
     #[test]
