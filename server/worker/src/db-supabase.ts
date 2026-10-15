@@ -1,10 +1,13 @@
-// SupabaseDb: the production database. Each method is one call to a Postgres function in schema
-// `goalcup`, through Supabase's PostgREST RPC endpoint:
+// SupabaseDb: the production database. Each method is one call to a Postgres function through
+// Supabase's PostgREST RPC endpoint:
 //
-//   POST {SUPABASE_URL}/rest/v1/rpc/<function>     Content-Profile: goalcup
+//   POST {SUPABASE_URL}/rest/v1/rpc/goal_cup_<function>
 //
-// The functions are proposed in sql/proposed-goalcup-functions.sql (the website repo owns the
-// schema). The Worker's key belongs to a dedicated role that may execute only those functions.
+// The functions are public.goal_cup_upload_* in the website repo's migration
+// supabase/migrations/20261015120000_goal_cup_tracer_upload.sql (copied, for reference, to
+// sql/goal-cup-tracer-upload.sql); their tables live in the private schema goal_cup_tracer, which
+// PostgREST does not expose. The Worker's key is a Supabase secret API key whose role may execute
+// only those functions.
 // Credentials and device codes: Supabase stores only their sha256, so the Worker hashes the
 // bearer credential (or the device code) and sends the hash. The one plain value that comes
 // back is a freshly minted credential, once, from upload_poll_device.
@@ -13,6 +16,7 @@ import type {
   AbandonResult,
   ApproveDeviceResult,
   ChunkRecord,
+  ClaimedNotice,
   CommitChunkArgs,
   CommitChunkResult,
   ContinueRunArgs,
@@ -25,6 +29,7 @@ import type {
   HeartbeatArgs,
   HeartbeatResult,
   NoticeArgs,
+  NoticeOutcome,
   OpenRunArgs,
   OpenRunResult,
   RunRow,
@@ -98,6 +103,14 @@ const ENTRY_SHAPE: Record<string, Check> = {
   baseline_sha256: nullable(hex64),
   sealed_at: nullable(isTime),
 };
+const NOTICE_SHAPE: Record<string, Check> = {
+  id: uint,
+  kind: oneOf("started", "silence", "idle_3h", "idle_6h", "recording", "ended"),
+  run_id: RUN_SHAPE.run_id!,
+  to: nullable(text),
+  subject: text,
+  text: text,
+};
 const CHUNK_SHAPE: Record<string, Check> = {
   entry_id: isEntryId,
   offset: uint,
@@ -112,7 +125,8 @@ const CHUNK_SHAPE: Record<string, Check> = {
   ack: isObject,
 };
 
-const SCHEMA = "goalcup";
+/** Every function the Worker calls is `public.goal_cup_<name>`, the website's naming convention. */
+const PREFIX = "goal_cup_";
 const TIMEOUT_MS = 10_000;
 
 /** PostgREST's `code` and `message` out of an error reply, shortened; nothing else it said. */
@@ -140,15 +154,13 @@ export class SupabaseDb implements Db {
   async #rpc(fn: string, args: Record<string, unknown>): Promise<unknown> {
     let res: Response;
     try {
-      res = await fetch(`${this.#base}/rest/v1/rpc/${fn}`, {
+      res = await fetch(`${this.#base}/rest/v1/rpc/${PREFIX}${fn}`, {
         method: "POST",
         headers: {
           apikey: this.#key,
           authorization: `Bearer ${this.#key}`,
           "content-type": "application/json",
           accept: "application/json",
-          "content-profile": SCHEMA,
-          "accept-profile": SCHEMA,
         },
         body: JSON.stringify(args),
         signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -231,7 +243,7 @@ export class SupabaseDb implements Db {
 
   async approveDevice(userCode: string, memberId: string, approve: boolean, now: string): Promise<ApproveDeviceResult> {
     const v = await this.#rpc("upload_approve_device", { p_user_code: userCode, p_member_id: memberId, p_approve: approve, p_now: now });
-    return this.#word("upload_approve_device", v, ["ok", "not_found", "expired", "already_decided"] as const);
+    return this.#word("upload_approve_device", v, ["ok", "not_found", "expired", "already_decided", "forbidden"] as const);
   }
 
   async openRun(a: OpenRunArgs): Promise<OpenRunResult> {
@@ -360,6 +372,20 @@ export class SupabaseDb implements Db {
     if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= notices.length) return v;
     console.error(`supabase upload_queue_notices: unexpected result ${JSON.stringify(v)?.slice(0, 200)}`);
     throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+  }
+
+  async claimNotices(limit: number, now: string): Promise<ClaimedNotice[]> {
+    const v = await this.#rpc("upload_claim_notices", { p_limit: limit, p_now: now });
+    if (!Array.isArray(v)) {
+      console.error(`supabase upload_claim_notices: expected a list of notices`);
+      throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+    }
+    return v.map((row) => this.#row<ClaimedNotice>("upload_claim_notices", row, "notice", NOTICE_SHAPE));
+  }
+
+  async finishNotice(id: number, outcome: NoticeOutcome, to: string | null, detail: string, now: string): Promise<void> {
+    const v = await this.#rpc("upload_finish_notice", { p_id: id, p_outcome: outcome, p_to: to, p_detail: detail, p_now: now });
+    this.#word("upload_finish_notice", v, ["ok", "not_found"] as const);
   }
 
   async recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {

@@ -42,11 +42,14 @@ APPROVAL_URL = "https://example.org/goalcup/approve"
 # Set to "on" and redeploy to make every call answer 503 + Retry-After.
 MAINTENANCE = "off"
 MAINTENANCE_RETRY_AFTER = "300"
+# Sender of the run emails (src/mail.ts); mail stays off until the RESEND_API_KEY secret is set.
+NOTICE_FROM = "Agent Community <updates@member.agentcommunity.org>"
 
 # Secrets, set with `wrangler secret put` (never in this file):
 #   RECEIPT_SIGNING_KEY  Ed25519 seed, 64 hex characters, generated offline
 #   SUPABASE_URL         https://<project>.supabase.co
-#   SUPABASE_KEY         key of the dedicated role limited to schema goalcup
+#   SUPABASE_KEY         a Supabase secret API key whose role may only execute public.goal_cup_upload_*
+#   RESEND_API_KEY       optional: switches the run emails on (the website's Resend account)
 #   GITHUB_TOKEN         read-only; required in production and staging (the cron's commit fetch fails without it)
 #   TEST_APPROVAL_KEY    never in production. Staging only (with STAGING = "on"): switches on
 #                        POST /v1/device/approve, which approves a device request as any member.
@@ -56,32 +59,39 @@ MAINTENANCE_RETRY_AFTER = "300"
 [triggers]
 crons = ["*/5 * * * *"]
 
-# Staging: `wrangler deploy --env staging` makes a second Worker, goalcup-upload-staging, on its own
+# Staging: `wrangler deploy --env staging` makes a second Worker, goalcup-ingest-staging, on its own
 # bucket and its own events. It is the only deployment that may hold TEST_APPROVAL_KEY (a secret,
 # set with `wrangler secret put TEST_APPROVAL_KEY --env staging`, never in this file). wrangler
 # copies neither `vars` nor `r2_buckets` into an environment, so staging repeats every one.
+# Deployed 2026-10-15 on the Agent Community Cloudflare account (pass CLOUDFLARE_ACCOUNT_ID), served
+# at https://goalcup-ingest-staging.b-9a5.workers.dev (staging only; production stays off workers.dev).
 [env.staging]
-name = "goalcup-upload-staging"
-# routes = [{ pattern = "ingest-staging.example.org", custom_domain = true }]
+name = "goalcup-ingest-staging"
+workers_dev = true
+preview_urls = false
 
 [env.staging.triggers]
 crons = ["*/5 * * * *"]
 
 [[env.staging.r2_buckets]]
 binding = "TRACES"
-# PLACEHOLDER: a private bucket of its own, never the production one.
-bucket_name = "replace-me-goalcup-traces-staging"
-preview_bucket_name = "replace-me-goalcup-traces-staging-preview"
+# A private bucket of its own, never the production one. No bucket lock on staging.
+bucket_name = "goalcup-traces-staging"
+preview_bucket_name = "goalcup-traces-staging"
 
 [env.staging.vars]
 STAGING = "on"
-EVENT_ID = "competition-staging"
-PRACTICE_EVENT_ID = "practice-staging"
+# Rows of goal_cup_tracer.events (website migration 20261015120100_goal_cup_tracer_staging_events.sql).
+EVENT_ID = "goalcup-dryrun-staging"
+PRACTICE_EVENT_ID = "goalcup-practice-staging"
 RUN_HOURS = "168"
 PRACTICE_RUN_MINUTES = "10"
 DB_BACKEND = "supabase"
 GITHUB_CHECK = "on"
-# PLACEHOLDER: the staging website's approval page.
-APPROVAL_URL = "https://staging.example.org/goalcup/approve"
+# The website's approval page (agentcommunity.org; it signs the member in with the site's session).
+APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
 MAINTENANCE = "off"
 MAINTENANCE_RETRY_AFTER = "300"
+NOTICE_FROM = "Agent Community <updates@member.agentcommunity.org>"
+# Staging never emails a member: every notice goes to Resend's test inbox.
+NOTICE_RECIPIENT_OVERRIDE = "delivered@resend.dev"
