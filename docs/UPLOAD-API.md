@@ -337,8 +337,9 @@ in. There is no grace period and no late window.
   `goalcup continue` advice and the disk reserve's release: the host keeps it in the run's
   `state.json` with the machine's boot id, so those commands follow the server's count on the
   continuous clock, and a refused `continue` marks the run over at once. After a reboot the
-  clock restarts and the count says nothing (also when it was stored with no boot id), so then
-  they hold the server's `deadline_at` against the machine's date. `goalcup continue` itself
+  clock restarts, and on a machine that gives a boot id the count says nothing then (it also
+  says nothing when it was stored with no boot id, as on any machine that gives none), so those
+  commands hold the server's `deadline_at` against the machine's date. `goalcup continue` itself
   always asks the server. An answer from an older server has no `seconds_left`; the tracer then counts
   `deadline_at − official_start` from when the run opened, and for a continued segment
   `deadline_at` less the machine's date.

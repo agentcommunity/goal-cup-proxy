@@ -376,35 +376,35 @@ fn daemon_check(client: Option<&dyn DaemonClient>, cfg: &Path) -> Check {
                 h.entries_open,
                 if h.entries_open == 1 { "y" } else { "ies" }
             );
-            if h.reopen_failed.is_empty() {
-                Check::pass("daemon", up)
-            } else {
-                reopen_failed_warning(&up, &h.reopen_failed)
-            }
+            reopen_failed_check(up, &h.reopen_failed, cfg)
         }
         Err(e) => unreachable(e.to_string()),
     }
 }
 
 /// The daemon is up but could not reopen some entries at start: a `Warn`, since the daemon
-/// itself works and the run can go on. Such an entry has no status and routes nothing, and
-/// `goalcup seal` refuses it. `goalcup continue` closes it from the tail of its chain as an
-/// incomplete segment (nothing repaired) and opens the next one.
-fn reopen_failed_warning(up: &str, ids: &[String]) -> Check {
-    let one = ids.len() == 1;
+/// itself works. Only an entry of a run that `goalcup continue` can still restart is named
+/// ([`crate::run::reopen_failed_actions`]); the others are history. The words are the ones
+/// `goalcup seal` uses for the same entry.
+fn reopen_failed_check(up: String, ids: &[String], cfg: &Path) -> Check {
+    let actions = crate::run::reopen_failed_actions(cfg, ids, crate::run::now_unix());
+    if actions.is_empty() {
+        return Check::pass("daemon", up);
+    }
+    let said: Vec<String> = actions
+        .iter()
+        .map(|(entry_id, _)| crate::run::reopen_failed_sentence(entry_id))
+        .collect();
+    let runs: BTreeSet<&str> = actions.iter().map(|(_, run_id)| run_id.as_str()).collect();
+    let next: Vec<String> = runs
+        .into_iter()
+        .map(crate::run::reopen_failed_next)
+        .collect();
     Check::new(
         "daemon",
         Level::Warn,
-        format!(
-            "{up} It could not reopen {}: {}. {} no status and route{} nothing.",
-            if one { "this entry" } else { "these entries" },
-            ids.join(", "),
-            if one { "It has" } else { "They have" },
-            if one { "s" } else { "" },
-        ),
-        "run `goalcup continue` to close the entry from the tail of its chain as an incomplete \
-         segment and go on; `goalcup seal` cannot finish it. Its trace bytes stay as they are, \
-         for `goalcup-verify --capture-integrity`.",
+        format!("{up} {}", said.join(" ")),
+        &next.join(" "),
     )
 }
 
@@ -469,33 +469,47 @@ mod tests {
         }
     }
 
-    /// A daemon that could not reopen an entry is a warning that names the entry ids and the
-    /// command to run, and it is not a failure: the daemon works and the run can go on. With
-    /// none failed, the check is the plain pass it was.
+    fn check_for(ids: &[&str], cfg: &Path) -> Check {
+        daemon_check(Some(&HealthOnly(health(ids))), cfg)
+    }
+
+    /// A daemon that could not reopen an entry of a run that is still going is a warning, not a
+    /// failure. It keeps the "up" text, and it names the run to continue.
     #[test]
-    fn a_daemon_that_could_not_reopen_entries_is_a_warning_naming_their_ids() {
-        let cfg = Path::new("/nonexistent-goalcup-cfg");
+    fn an_entry_that_could_not_be_reopened_names_the_run_to_continue() {
+        let cfg = tempfile::tempdir().unwrap();
+        let far = crate::run::now_unix() + 3_600;
+        crate::run::tests_support::continuable_run(cfg.path(), "run-open", "entry-aaa", far);
 
-        let clean = HealthOnly(health(&[]));
-        let check = daemon_check(Some(&clean), cfg);
-        assert_eq!(check.level, Level::Pass, "{check:?}");
+        let clean = check_for(&[], cfg.path());
+        assert_eq!(clean.level, Level::Pass, "{clean:?}");
 
-        let lost = HealthOnly(health(&["entry-aaa", "entry-bbb"]));
-        let check = daemon_check(Some(&lost), cfg);
-        assert_eq!(check.level, Level::Warn, "{check:?}");
-        assert!(check.detail.contains("entry-aaa, entry-bbb"), "{check:?}");
-        assert!(
-            check.detail.contains("daemon va-test-daemon is up"),
-            "{check:?}"
+        let lost = check_for(&["entry-aaa"], cfg.path());
+        assert_eq!(lost.level, Level::Warn, "{lost:?}");
+        assert!(lost.detail.contains("entry-aaa"), "{lost:?}");
+        assert!(lost.detail.contains("is up"), "{lost:?}");
+        assert!(lost.fix.contains("goalcup continue run-open"), "{lost:?}");
+    }
+
+    /// An entry of a run that is over, or whose upload is finished, or that no run here holds,
+    /// is history and gives no warning.
+    #[test]
+    fn an_entry_of_a_finished_run_gives_no_warning() {
+        let cfg = tempfile::tempdir().unwrap();
+        let now = crate::run::now_unix();
+        crate::run::tests_support::continuable_run(cfg.path(), "run-over", "entry-over", now - 10);
+        crate::run::tests_support::continuable_run(
+            cfg.path(),
+            "run-sent",
+            "entry-sent",
+            now + 3_600,
         );
-        assert!(check.fix.contains("goalcup continue"), "{check:?}");
-        let text = check.render();
-        assert!(text.contains("WARN"), "{text}");
-        assert!(text.contains("entry-aaa"), "{text}");
+        let spool = cfg.path().join(crate::upload::UPLOADS_DIR_NAME);
+        std::fs::create_dir_all(&spool).unwrap();
+        std::fs::write(spool.join("entry-sent.sent"), "").unwrap();
 
-        let one = HealthOnly(health(&["entry-aaa"]));
-        let check = daemon_check(Some(&one), cfg);
-        assert!(check.detail.contains("this entry: entry-aaa"), "{check:?}");
-        assert!(check.detail.contains("It has no status"), "{check:?}");
+        let check = check_for(&["entry-over", "entry-sent", "entry-unknown"], cfg.path());
+        assert_eq!(check.level, Level::Pass, "{check:?}");
+        assert!(check.fix.is_empty(), "{check:?}");
     }
 }

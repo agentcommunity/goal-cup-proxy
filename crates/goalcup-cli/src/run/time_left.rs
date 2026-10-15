@@ -10,8 +10,9 @@
 //!
 //! The continuous clock starts again at each boot, so a count is kept with the boot it was
 //! taken on, and a reboot ends what it can say: the boot id changed (where the OS gives one), or
-//! the clock reads below the count's start. Then, and for a `state.json` with no count (an older
-//! build wrote it), the server's `deadline_at` is held against this machine's date, as before
+//! the clock reads below the count's start. A count stored with no boot id says nothing either,
+//! because the clock alone cannot show a reboot once the new uptime passes the count's start.
+//! Then, and for a `state.json` with no count (an older build wrote it), the server's `deadline_at` is held against this machine's date, as before
 //! WP11. A date set forward then only makes the run look over early to the participant
 //! themselves; `goalcup continue` asks the server in any case.
 
