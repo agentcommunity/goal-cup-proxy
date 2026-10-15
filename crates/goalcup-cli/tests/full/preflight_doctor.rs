@@ -5,6 +5,7 @@
 use crate::common::support;
 
 use goalcup_cli::commands::doctor::{DoctorOptions, run_with};
+use goalcup_protocol::pins::shipped_connector_ids;
 
 /// An environment with no `PATH`: no harness executable is found, so every connector's
 /// `harness_executable` check fails and the other checks are read on their own.
@@ -39,8 +40,8 @@ fn doctor_reports_on_a_machine_with_no_daemon_and_fails_only_without_a_daemon_bi
         .lines()
         .find(|line| line.contains(" daemon "))
         .unwrap_or_else(|| panic!("a daemon line: {text}"));
-    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
-        assert!(text.contains(id), "every shipped connector is reported on");
+    for id in shipped_connector_ids() {
+        assert!(text.contains(&id), "every shipped connector is reported on");
     }
     // The same lookup `goalcup start` makes, from this same executable.
     if goalcup_cli::daemon::spawn::daemon_binary().is_ok() {
@@ -130,9 +131,9 @@ fn harness_scopes_the_doctor_report_and_its_exit_code_to_one_connector() {
         code, 1,
         "unscoped, one connector's failure fails the lot: {text}"
     );
-    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
+    for id in shipped_connector_ids() {
         assert!(
-            text.contains(id) || text.contains(&dir.join(id).display().to_string()),
+            text.contains(&id) || text.contains(&dir.join(&id).display().to_string()),
             "and every connector is reported: {text}"
         );
     }
@@ -198,8 +199,8 @@ fn a_connector_whose_harness_toml_does_not_parse_is_a_named_failure_rather_than_
         "and it is a failure, not a gap: {text:?}"
     );
     assert_eq!(code, 1, "so the command cannot leave under 0");
-    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
-        assert!(text.contains(id), "and the others are still reported on");
+    for id in shipped_connector_ids() {
+        assert!(text.contains(&id), "and the others are still reported on");
     }
 }
 
@@ -244,8 +245,8 @@ fn an_unpinned_rulebook_is_a_doctor_failure_whose_fix_names_the_one_door() {
         unpinned["fix"].as_str().unwrap().contains("--dev"),
         "the fix names the one door: {unpinned:#}"
     );
-    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
-        let shipped = gate(id);
+    for id in shipped_connector_ids() {
+        let shipped = gate(&id);
         assert_eq!(
             shipped["level"], "pass",
             "{id} is the rulebook this build pins"

@@ -98,6 +98,9 @@ libc.workspace = true
 # as an ordinary dependency, so this is the only way to hand the integration tests a
 # feature the shipped build does not carry.
 goalcup-cli = { path = ".", features = ["test-support"] }
+# Tests only: `goalcup_protocol::pins::shipped_connector_ids`, the one list of shipped
+# connectors every per-connector test loops over.
+goalcup-protocol = { path = "../goalcup-protocol", features = ["test-hooks"] }
 tempfile.workspace = true
 # M2 proxy tests only: parse minted certificates.
 x509-parser.workspace = true

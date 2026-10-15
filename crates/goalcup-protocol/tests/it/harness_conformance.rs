@@ -14,25 +14,22 @@
 //!   `validate`'s (which scans args, goal flag, env and hosts, not `continuation` or
 //!   `evidence_paths`).
 //!
-//! The set the loop runs over is itself asserted (M-2): at least the three shipped connectors,
-//! and exactly as many `harness.toml` files as connector folders, so a folder without one, or a
-//! loop that silently iterates over nothing, fails here. A connector
+//! The set the loop runs over is itself asserted (M-2): every id the pins file pins
+//! ([`shipped_connector_ids`], which also refuses a folder the pins file lacks), and exactly as
+//! many `harness.toml` files as connector folders, so a folder without one, or a loop that
+//! silently iterates over nothing, fails here. A connector
 //! folder that is a symlink is refused too (`load_dir` and `connector_dirs` both).
 //!
 //! The kit (offline stand-ins, macOS) stays a maintainer gate.
 
 use goalcup_protocol::capture_policy::{EXTRA_PATTERN_SOURCES, mentions_goalcup};
 use goalcup_protocol::harness::{Origin, load_dir};
+use goalcup_protocol::pins::shipped_connector_ids;
 use std::path::{Path, PathBuf};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
-
-/// The connectors the build ships: a floor, so one cannot vanish unnoticed. Not a ceiling: a
-/// harness PR adds a folder and every loop and count below follows the directory, not this
-/// list, so a new folder is checked with no edit here.
-const SHIPPED: [&str; 3] = ["claude-code-cli", "codex-cli", "hermes-cli"];
 
 /// Every entry under `connectors/`, sorted, judged by `symlink_metadata` so a link is not
 /// followed into a directory it only points at. No filter: a folder without a `harness.toml`
@@ -87,14 +84,16 @@ fn check_dir(dir: &Path) -> Result<(), String> {
 #[test]
 fn the_loop_is_not_vacuous_and_every_connector_folder_ships_a_harness_toml() {
     let dirs = connector_dirs();
+    let shipped = shipped_connector_ids();
+    assert!(!shipped.is_empty(), "the pins file pins no connector");
     let with_harness = dirs
         .iter()
         .filter(|d| d.join("harness.toml").is_file())
         .count();
     assert!(
-        with_harness >= SHIPPED.len(),
-        "found {with_harness} connectors/*/harness.toml; the build ships at least {}",
-        SHIPPED.len()
+        with_harness >= shipped.len(),
+        "found {with_harness} connectors/*/harness.toml; the build pins {}",
+        shipped.len()
     );
     assert_eq!(
         with_harness,
@@ -102,7 +101,7 @@ fn the_loop_is_not_vacuous_and_every_connector_folder_ships_a_harness_toml() {
         "{} connector folders but {with_harness} harness.toml files: every folder must ship one",
         dirs.len()
     );
-    for id in SHIPPED {
+    for id in &shipped {
         assert!(
             root()
                 .join("connectors")
@@ -133,15 +132,17 @@ fn every_connector_passes_every_static_check() {
     }
 }
 
-/// The mirror equals the patterns the shipped `harness.toml` files carry, in connector order,
-/// which the daemon's own test `extra_shapes_follow_the_shipped_harnesses` equates with
-/// `EXTRA_SHAPES`: so the mirror equals the recorder's recognizers by transitivity, without a
-/// daemon edit.
+/// The mirror is the set of patterns the shipped `harness.toml` files carry, over every
+/// connector: `validate` refuses a pattern off the mirror, and this refuses a mirror row no
+/// connector uses. The daemon's own test `extra_shapes_follow_the_shipped_harnesses` equates
+/// the same patterns with `EXTRA_SHAPES`, so the mirror equals the recorder's recognizers by
+/// transitivity, without a daemon edit. The mirror's ORDER is the daemon's to pin, against
+/// `EXTRA_SHAPES`, not any connector's.
 #[test]
 fn the_extra_pattern_mirror_equals_the_shipped_harness_patterns() {
-    let mut shipped: Vec<String> = Vec::new();
-    for id in ["codex-cli", "claude-code-cli"] {
-        let dir = root().join("connectors").join(id);
+    let mut shipped: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for id in shipped_connector_ids() {
+        let dir = root().join("connectors").join(&id);
         let loaded = load_dir(&dir, Origin::Pinned).unwrap_or_else(|e| panic!("{id}: {e}"));
         shipped.extend(
             loaded
@@ -152,14 +153,14 @@ fn the_extra_pattern_mirror_equals_the_shipped_harness_patterns() {
                 .map(|p| p.regex.clone()),
         );
     }
-    let mirror: Vec<String> = EXTRA_PATTERN_SOURCES
+    let mirror: std::collections::BTreeSet<String> = EXTRA_PATTERN_SOURCES
         .iter()
         .map(|s| s.to_string())
         .collect();
     assert_eq!(
         shipped, mirror,
-        "capture_policy::EXTRA_PATTERN_SOURCES must list the recognizers in order: codex's \
-         three, then claude's one"
+        "capture_policy::EXTRA_PATTERN_SOURCES must be exactly the patterns the shipped \
+         connectors declare"
     );
 }
 

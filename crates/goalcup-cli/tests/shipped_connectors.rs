@@ -1,10 +1,10 @@
 //! The shipped connectors, as this CLI depends on them: each loads from its `harness.toml`
 //! alone, is the directory this build pins, and is found by the id it declares.
 //!
-//! The recipe assertions below duplicate the protocol crate's own schema tests deliberately.
-//! It is the CLI that breaks when a capture recipe changes — a renamed program, a termination
-//! strategy that moved, a base URL that crept into the environment — so the CLI asserts the
-//! values it depends on rather than trusting that somebody else's test still covers them.
+//! Every rule here runs over [`shipped_connector_ids`], the folders under `connectors/` checked
+//! against the pins file, so a new connector is held to them with no edit to this file. No test
+//! here restates one connector's recipe values: those are its `harness.toml`, pinned by digest,
+//! and its goldens.
 //!
 //! The V1 `manifest.toml` recipe, version-range and hook-template tests went with the V1 files
 //! (OS-29); the pin, discovery and duplicate-id promises they carried are asserted here over
@@ -16,6 +16,7 @@ mod support;
 use goalcup_cli::connector;
 use goalcup_cli::preflight::{Level, harness_pin_gate};
 use goalcup_protocol::harness::Strategy;
+use goalcup_protocol::pins::shipped_connector_ids;
 use std::path::PathBuf;
 
 fn load_harness(id: &str) -> goalcup_cli::connector::HarnessConnector {
@@ -23,66 +24,26 @@ fn load_harness(id: &str) -> goalcup_cli::connector::HarnessConnector {
         .expect("the shipped schema-1 harness loads")
 }
 
+/// The rules the CLI depends on, over every shipped connector, so a new folder is held to
+/// them with no edit here. Each connector's own values are its `harness.toml`'s business and
+/// its goldens' (`full/harness_contract_golden.rs`), not restated here.
 #[test]
-fn claude_capture_recipe_is_its_chat_mode() {
-    let m = load_harness("claude-code-cli").loaded.manifest;
-    let c = &m.capture;
-    assert_eq!(c.executable.program, "claude");
-    assert_eq!(
-        c.executable.version_args,
-        ["--version"],
-        "docs/harnesses/claude-code-cli.md"
-    );
-    // D57: `claude` alone in the participant's terminal; `goalcup continue` appends
-    // `--continue`, measured to reopen and append to the workspace's most recent session.
-    assert!(c.interactive);
-    assert!(c.args.is_empty(), "{:?}", c.args);
-    assert_eq!(c.resume_args, ["--continue"]);
-    assert!(c.native.iter().all(|n| n.since_run_start));
-    assert!(
-        !c.args.iter().any(|a| a == "--no-session-persistence"),
-        "the native transcript is what the capture reads: {:?}",
-        c.args
-    );
-    assert!(
-        !c.env.keys().any(|k| k.ends_with("_BASE_URL")),
-        "D1: the tracker never sets a model base URL"
-    );
-    assert_eq!(c.home.env.as_deref(), Some("CLAUDE_CONFIG_DIR"));
-    let t = m.termination();
-    assert_eq!(
-        (t.strategy(), t.grace_seconds()),
-        (Strategy::ProcessGroup, 10)
-    );
-}
-
-#[test]
-fn the_codex_capture_recipe_kills_the_native_binary_not_the_wrapper() {
-    let m = load_harness("codex-cli").loaded.manifest;
-    let c = &m.capture;
-    assert_eq!(c.executable.program, "codex");
-    assert_eq!(
-        c.executable.version_args,
-        ["--version"],
-        "docs/harnesses/codex-cli.md"
-    );
-    assert!(
-        !c.args.iter().any(|a| a == "--ephemeral"),
-        "the rollout is what the capture reads: {:?}",
-        c.args
-    );
-    assert!(
-        !c.env.keys().any(|k| k.ends_with("_BASE_URL")),
-        "D1: the tracker never sets a model base URL"
-    );
-    assert_eq!(c.home.env.as_deref(), Some("CODEX_HOME"));
-    let t = m.termination();
-    assert_eq!(t.strategy(), Strategy::NativePid);
-    assert_eq!(
-        t.native_binary.as_deref(),
-        Some("codex"),
-        "D22: the npm wrapper is not the session"
-    );
+fn every_shipped_connector_loads_with_no_model_base_url_and_its_kill_target_named() {
+    for id in shipped_connector_ids() {
+        let m = load_harness(&id).loaded.manifest;
+        let c = &m.capture;
+        assert!(
+            !c.env.keys().any(|k| k.ends_with("_BASE_URL")),
+            "{id}: D1, the tracker never sets a model base URL"
+        );
+        let t = m.termination();
+        if t.strategy() == Strategy::NativePid {
+            assert!(
+                t.native_binary.is_some(),
+                "{id}: D22, a native_pid kill names the binary that is the session"
+            );
+        }
+    }
 }
 
 /// Every host a shipped schema-1 harness names is one the recording proxy accepts — its
@@ -92,8 +53,8 @@ fn the_codex_capture_recipe_kills_the_native_binary_not_the_wrapper() {
 fn every_capture_host_is_one_the_proxy_accepts_and_the_two_host_rules_agree() {
     use goalcup_cli::proxy::tls::{ProxyCa, is_config_host};
     use goalcup_protocol::capture_policy::is_capture_host;
-    for id in ["claude-code-cli", "codex-cli"] {
-        let c = load_harness(id).loaded.manifest.capture;
+    for id in shipped_connector_ids() {
+        let c = load_harness(&id).loaded.manifest.capture;
         let approved: Vec<String> = c.hosts.iter().map(|h| h.host.clone()).collect();
         for h in approved.iter().chain(c.auth_hosts.iter()) {
             assert!(is_config_host(h), "{id}: `{h}`");
@@ -140,8 +101,8 @@ fn a_shipped_connector_is_pinned_by_the_verifier_this_build_links() {
     // PRD 5.4: the digest the release-hash allowlist compares against is the one this build
     // pins. Over the whole DIRECTORY, so a seed under `files/` is covered as well as the
     // `harness.toml` beside it.
-    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
-        let c = load_harness(id);
+    for id in shipped_connector_ids() {
+        let c = load_harness(&id);
         let digest = &c.loaded.connector_dir_sha256;
         // Lowercase hex, and the length alone does not say that: the pins are compared
         // case-insensitively, so a digest that started arriving uppercase from here would
@@ -155,7 +116,7 @@ fn a_shipped_connector_is_pinned_by_the_verifier_this_build_links() {
         );
         assert_eq!(
             Some(digest.as_str()),
-            goalcup_protocol::pins::pinned_connector_dir_sha256(id),
+            goalcup_protocol::pins::pinned_connector_dir_sha256(&id),
             "{id} must match goalcup_protocol::pins::pinned_connector_dir_sha256"
         );
         let gate = harness_pin_gate(&c, false);
@@ -163,8 +124,10 @@ fn a_shipped_connector_is_pinned_by_the_verifier_this_build_links() {
     }
     // An edited harness.toml under a pinned id is refused at load, with or without --dev, and
     // the refusal names the digest it found.
-    let dir = support::connectors_dir_with_edited_harness("codex-cli");
-    assert_altered_is_refused(&dir, "codex-cli");
+    for id in shipped_connector_ids() {
+        let dir = support::connectors_dir_with_edited_harness(&id);
+        assert_altered_is_refused(&dir, &id);
+    }
 }
 
 /// `dir/<id>` is a pinned id holding bytes that are not its pin: `load_harness` refuses it as
@@ -217,9 +180,7 @@ fn an_edited_seed_is_altered_even_though_the_harness_toml_is_untouched() {
 #[test]
 fn a_connector_this_build_does_not_pin_is_refused_without_dev_and_warned_with_it() {
     let tmp = tempfile::tempdir().unwrap();
-    for id in ["claude-code-cli", "codex-cli"] {
-        support::copy_connector(&tmp, id);
-    }
+    support::copy_connectors_into(tmp.path());
     let forked = tmp.path().join("claude-code-synthetic");
     std::fs::create_dir(&forked).unwrap();
     let text = std::fs::read_to_string(tmp.path().join("claude-code-cli/harness.toml"))
@@ -255,7 +216,11 @@ fn discovery_lists_what_ships_and_refuses_a_connector_that_does_not() {
         .iter()
         .map(|d| d.file_name().unwrap().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(ids, ["claude-code-cli", "codex-cli", "hermes-cli"]);
+    assert_eq!(
+        ids,
+        shipped_connector_ids(),
+        "discovery lists every folder this build pins, and nothing else"
+    );
     for id in &ids {
         let c = load_harness(id);
         assert_eq!(&c.loaded.manifest.id, id);
@@ -269,7 +234,7 @@ fn discovery_lists_what_ships_and_refuses_a_connector_that_does_not() {
         );
     }
     // "pick a connector this build ships" is rung 1, the rung `PreflightFailed` gets.
-    let (code, said) = match connector::load_harness(&dir, "cursor-cli", false) {
+    let (code, said) = match connector::load_harness(&dir, "no-such-connector", false) {
         Ok(c) => (0, c.loaded.manifest.id),
         Err(e) => (e.exit_code(), e.to_string()),
     };
@@ -278,9 +243,12 @@ fn discovery_lists_what_ships_and_refuses_a_connector_that_does_not() {
         "a connector that does not ship is a refusal: {said}"
     );
     assert!(
-        said.contains("cursor-cli") && said.contains("claude-code-cli"),
-        "and it names what was asked for and what ships: {said}"
+        said.contains("no-such-connector"),
+        "it names what was asked for: {said}"
     );
+    for id in &ids {
+        assert!(said.contains(id.as_str()), "and what ships, {id}: {said}");
+    }
     // A traversal is not a connector id: nothing joins the caller's string onto the path.
     let traversal = "../connectors/codex-cli";
     let (code, said) = match connector::load_harness(&dir, traversal, false) {
@@ -541,8 +509,8 @@ fn the_child_half_of_the_connectors_dir_fallback() {
         "connectors_dir() resolved {} and the layout put them in {expected}",
         resolved.display()
     );
-    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
-        goalcup_cli::connector::load_harness(&resolved, id, false)
+    for id in shipped_connector_ids() {
+        goalcup_cli::connector::load_harness(&resolved, &id, false)
             .unwrap_or_else(|e| panic!("and what it found is the shipped rulebook: {id}: {e}"));
     }
     println!("{CHILD_AGREED}");

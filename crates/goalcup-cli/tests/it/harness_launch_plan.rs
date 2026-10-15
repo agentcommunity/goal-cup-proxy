@@ -3,6 +3,7 @@
 use goalcup_cli::launch::{LaunchScope, StderrUse, StdoutUse, StreamPlan, harness_arg_refusal};
 use goalcup_cli::preflight::{Level, harness_pin_gate};
 use goalcup_protocol::harness::{HarnessManifest, Origin, load_dir};
+use goalcup_protocol::pins::shipped_connector_ids;
 use goalcup_protocol::template::TemplateVars;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,43 +16,34 @@ fn load(id: &str) -> goalcup_protocol::harness::LoadedConnector {
     load_dir(&connectors().join(id), Origin::Pinned).expect("the shipped harness loads")
 }
 
+/// Every shipped connector's stream and identity plans follow from its manifest by one rule.
+/// A key scan runs exactly when a credential is passed, and reads both streams. A chat-mode connector (D57) leaves the
+/// terminal to the harness: both streams inherited, and no identity at launch, because its
+/// sessions are the files its native source finds.
 #[test]
-fn shipped_harnesses_have_the_s0_stream_and_identity_plans() {
-    let hermes = load("hermes-cli");
-    let plan = StreamPlan::for_spec(&hermes.manifest.capture).unwrap();
-    assert!(plan.scan_for_key);
-    assert_eq!(plan.stdout, StdoutUse::Forward);
-    assert!(matches!(plan.stderr, StderrUse::IdentityLine(_)));
-    assert_eq!(
-        LaunchScope::for_spec(&hermes.manifest.capture).unwrap(),
-        LaunchScope::AtFinish
-    );
-
-    // Chat mode (D57): the terminal is the harness's, both streams inherited, and no identity
-    // at launch; the sessions are every file new or written since the run started.
-    for id in ["codex-cli", "claude-code-cli"] {
-        let loaded = load(id);
+fn every_shipped_connector_has_the_stream_and_identity_plan_its_manifest_asks_for() {
+    let mut chat = 0;
+    for id in shipped_connector_ids() {
+        let loaded = load(&id);
         let capture = &loaded.manifest.capture;
-        assert!(capture.interactive, "{id}");
-        let plan = StreamPlan::for_spec(capture).unwrap();
-        assert!(!plan.scan_for_key, "{id}");
-        assert_eq!(plan.stdout, StdoutUse::Inherit, "{id}");
-        assert_eq!(plan.stderr, StderrUse::Inherit, "{id}");
-        assert_eq!(
-            LaunchScope::for_spec(capture).unwrap(),
-            LaunchScope::None,
-            "{id}"
-        );
-        assert!(capture.native.iter().all(|n| n.since_run_start), "{id}");
-        assert_eq!(capture.home.skills_dir.as_deref(), Some("skills"), "{id}");
+        let plan = StreamPlan::for_spec(capture).unwrap_or_else(|e| panic!("{id}: {e}"));
+        let scope = LaunchScope::for_spec(capture).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert_eq!(plan.scan_for_key, capture.credential.is_some(), "{id}");
+        if plan.scan_for_key {
+            // The scan reads both streams, so neither may go straight to the terminal.
+            assert_ne!(plan.stdout, StdoutUse::Inherit, "{id}");
+            assert_ne!(plan.stderr, StderrUse::Inherit, "{id}");
+        }
+        if capture.interactive {
+            chat += 1;
+            assert_eq!(plan.stdout, StdoutUse::Inherit, "{id}");
+            assert_eq!(plan.stderr, StderrUse::Inherit, "{id}");
+            assert_eq!(scope, LaunchScope::None, "{id}");
+        }
     }
-    assert_eq!(
-        load("codex-cli").manifest.capture.resume_args,
-        ["resume", "--last"]
-    );
-    assert_eq!(
-        load("claude-code-cli").manifest.capture.resume_args,
-        ["--continue"]
+    assert!(
+        chat > 0,
+        "the product is chat mode: at least one shipped connector is"
     );
 }
 
@@ -146,14 +138,15 @@ fn argv_guard_comes_from_the_harness_manifest() {
         );
     }
 
-    for id in ["codex-cli", "claude-code-cli"] {
-        let loaded = load(id);
-        assert!(loaded.manifest.capture.argv_guard.is_none(), "{id}");
-        assert_eq!(
-            harness_arg_refusal(&loaded.manifest.capture, "--provider"),
-            None,
-            "{id} has no argv guard"
-        );
+    for id in shipped_connector_ids() {
+        let loaded = load(&id);
+        if loaded.manifest.capture.argv_guard.is_none() {
+            assert_eq!(
+                harness_arg_refusal(&loaded.manifest.capture, "--provider"),
+                None,
+                "{id} has no argv guard, so it refuses nothing"
+            );
+        }
     }
 }
 
@@ -284,7 +277,8 @@ fn a_malformed_duplicate_before_or_after_the_valid_target_is_fatal() {
 #[test]
 fn a_missing_unpinned_dev_request_inventory_keeps_the_shipped_ids() {
     let tmp = tempfile::tempdir().unwrap();
-    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
+    let shipped = shipped_connector_ids();
+    for id in &shipped {
         copy_tree(&connectors().join(id), &tmp.path().join(id));
     }
 
@@ -294,7 +288,7 @@ fn a_missing_unpinned_dev_request_inventory_keeps_the_shipped_ids() {
     assert!(
         error
             .to_string()
-            .contains("It ships: claude-code-cli, codex-cli, hermes-cli."),
+            .contains(&format!("It ships: {}.", shipped.join(", "))),
         "{error}"
     );
 }
