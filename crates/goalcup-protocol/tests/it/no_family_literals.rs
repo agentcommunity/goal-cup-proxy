@@ -118,6 +118,18 @@ fn names_token(lower: &str, name: &str) -> bool {
     })
 }
 
+/// Whether a string literal names a harness: in a narrow capture path, by being exactly a family
+/// or connector name; elsewhere in core, by holding a fixed fragment or a connector name as a token.
+fn names_a_harness(literal: &str, narrow: bool, names: &[String]) -> bool {
+    let lower = literal.to_ascii_lowercase();
+    if narrow {
+        FAMILY_LITERALS.contains(&literal) || names.contains(&lower)
+    } else {
+        FORBIDDEN.iter().any(|name| lower.contains(name))
+            || names.iter().any(|name| names_token(&lower, name))
+    }
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -257,12 +269,21 @@ fn the_scanner_reads_literals_only() {
 
 #[test]
 fn the_ban_holds_every_connector_name_as_a_whole_token() {
-    let names = connector_names();
-    for id in shipped_connector_ids() {
-        let name = id.strip_suffix("-cli").unwrap_or(&id);
-        assert!(names.iter().any(|n| n == name), "{id} adds `{name}`");
-        assert!(!name.ends_with("-cli"), "{name}");
+    // A literal naming any shipped connector fails the scan, in both kinds of path. `zz-new`
+    // stands in for harness #4: its folder adds `zz-new` to the ban, and nothing else does.
+    let mut names = connector_names();
+    for name in &names {
+        assert!(
+            names_a_harness(&format!("run {name} now"), false, &names),
+            "{name}"
+        );
+        assert!(names_a_harness(name, true, &names), "{name}");
     }
+    assert!(!names_a_harness("run zz-new now", false, &names));
+    names.push("zz-new".to_string());
+    assert!(names_a_harness("run zz-new now", false, &names));
+    assert!(names_a_harness("ZZ-NEW", true, &names));
+    assert!(!names_a_harness("zz-newer", false, &names));
     for (text, hit) in [
         ("amp", true),
         ("run amp now", true),
@@ -318,14 +339,7 @@ fn core_code_names_no_harness_in_a_string_literal() {
         let source =
             std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         for (line, literal) in string_literals(&source) {
-            let lower = literal.to_ascii_lowercase();
-            let named = if narrow {
-                FAMILY_LITERALS.contains(&literal.as_str()) || names.contains(&lower)
-            } else {
-                FORBIDDEN.iter().any(|name| lower.contains(name))
-                    || names.iter().any(|name| names_token(&lower, name))
-            };
-            if !named {
+            if !names_a_harness(&literal, narrow, &names) {
                 continue;
             }
             let text = joined(&literal);

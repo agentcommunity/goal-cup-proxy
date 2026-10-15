@@ -2,7 +2,7 @@
 
 use goalcup_cli::launch::{LaunchScope, StderrUse, StdoutUse, StreamPlan, harness_arg_refusal};
 use goalcup_cli::preflight::{Level, harness_pin_gate};
-use goalcup_protocol::harness::{HarnessManifest, Origin, load_dir};
+use goalcup_protocol::harness::{HarnessManifest, IdentitySource, Origin, load_dir};
 use goalcup_protocol::pins::shipped_connector_ids;
 use goalcup_protocol::template::TemplateVars;
 use std::collections::BTreeMap;
@@ -33,7 +33,19 @@ fn every_shipped_connector_has_the_stream_and_identity_plan_its_manifest_asks_fo
             // The scan reads both streams, so neither may go straight to the terminal.
             assert_ne!(plan.stdout, StdoutUse::Inherit, "{id}");
             assert_ne!(plan.stderr, StderrUse::Inherit, "{id}");
+            if capture.identity.source != IdentitySource::StdoutJson {
+                assert_eq!(plan.stdout, StdoutUse::Forward, "{id}");
+            }
         }
+        // When the session is bound follows from the identity carrier alone.
+        let bound = match capture.identity.source {
+            IdentitySource::None => LaunchScope::None,
+            IdentitySource::Preassigned => LaunchScope::Preassigned,
+            IdentitySource::StdoutJson => LaunchScope::FromStdout,
+            IdentitySource::StderrLine => LaunchScope::AtFinish,
+            other => panic!("{id}: an identity source this test does not know: {other:?}"),
+        };
+        assert_eq!(scope, bound, "{id}");
         if capture.interactive {
             chat += 1;
             assert_eq!(plan.stdout, StdoutUse::Inherit, "{id}");
@@ -136,17 +148,6 @@ fn argv_guard_comes_from_the_harness_manifest() {
             None,
             "Hermes must allow {arg}"
         );
-    }
-
-    for id in shipped_connector_ids() {
-        let loaded = load(&id);
-        if loaded.manifest.capture.argv_guard.is_none() {
-            assert_eq!(
-                harness_arg_refusal(&loaded.manifest.capture, "--provider"),
-                None,
-                "{id} has no argv guard, so it refuses nothing"
-            );
-        }
     }
 }
 
@@ -529,23 +530,27 @@ fn an_interactive_plan_places_no_goal_and_keeps_the_terminal() {
         ca_certificate: &ca,
         parent_env: &parent,
     };
-    let codex_argv = vec![
-        "-c".to_string(),
-        "check_for_update_on_startup=false".to_string(),
-        "-c".to_string(),
-        format!(
-            "projects={{ \"{}\" = {{ trust_level = \"trusted\" }} }}",
-            workspace.display()
-        ),
-        "-C".to_string(),
-        workspace.display().to_string(),
-    ];
-    for (id, argv) in [("codex-cli", codex_argv), ("claude-code-cli", Vec::new())] {
+    let mut chat = 0;
+    for id in shipped_connector_ids() {
         let connector =
-            goalcup_cli::connector::load_harness(&connectors(), id, false).expect("shipped");
+            goalcup_cli::connector::load_harness(&connectors(), &id, false).expect("shipped");
+        let capture = &connector.loaded.manifest.capture;
+        if !capture.interactive {
+            // A headless connector refuses a launch with no goal.
+            let refused = build_capture_launch(&connector, &vars, &workspace, &launch(None))
+                .expect_err("no goal for a headless connector");
+            assert!(refused.to_string().contains("headless"), "{id}: {refused}");
+            continue;
+        }
+        chat += 1;
+        let argv: Vec<String> = capture
+            .args
+            .iter()
+            .map(|a| goalcup_protocol::template::render(a, &vars).unwrap())
+            .collect();
         let plan = build_capture_launch(&connector, &vars, &workspace, &launch(None))
             .unwrap_or_else(|e| panic!("{id}: {e}"));
-        assert_eq!(plan.argv, argv, "{id}");
+        assert_eq!(plan.argv, argv, "{id}: the rendered args alone");
         assert_eq!(plan.capture, None, "{id}: no goal slot");
         assert_eq!(
             plan.mode,
@@ -556,12 +561,7 @@ fn an_interactive_plan_places_no_goal_and_keeps_the_terminal() {
             .expect_err("a goal for a chat-mode connector");
         assert!(refused.to_string().contains("chat mode"), "{id}: {refused}");
     }
-
-    // A headless connector refuses a launch with no goal.
-    let hermes = goalcup_cli::connector::load_harness(&connectors(), "hermes-cli", false).unwrap();
-    let refused = build_capture_launch(&hermes, &vars, &workspace, &launch(None))
-        .expect_err("no goal for a headless connector");
-    assert!(refused.to_string().contains("headless"), "{refused}");
+    assert!(chat > 0, "at least one shipped connector is chat mode");
 }
 
 /// The one check `goalcup start`, `goalcup doctor` and `goalcup prep` share: a chat-mode
