@@ -7,7 +7,7 @@ use crate::registry::Registry;
 use goalcup_platform::tracecap::ArtifactRoot;
 use goalcup_protocol::control::{CycleErrors, EntrySummary, SignedStatus};
 use goalcup_protocol::process::ProcessRegistration;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -41,6 +41,8 @@ pub(super) struct DaemonInner {
     pub(super) artifact_root: ArtifactRoot,
     /// entry id → its v5 local capture. Never an entry of `entries`.
     pub(super) captures: Mutex<BTreeMap<String, Arc<CaptureEntry>>>,
+    /// Ids of the unsealed capture rows this daemon failed to reopen at start; they route nothing.
+    pub(super) reopen_failed: Mutex<BTreeSet<String>>,
     /// The loopback capture ingest listener, bound once at start; [`Daemon::stop`] takes it
     /// and shuts it down.
     pub(super) ingest: Mutex<Option<IngestListener>>,
@@ -170,6 +172,7 @@ impl Daemon {
             registry: registry.clone(),
             artifact_root,
             captures: Mutex::new(BTreeMap::new()),
+            reopen_failed: Mutex::new(BTreeSet::new()),
             ingest: Mutex::new(Some(ingest)),
             ingest_addr,
             capture_clock,

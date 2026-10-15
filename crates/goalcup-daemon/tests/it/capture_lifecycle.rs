@@ -449,8 +449,8 @@ fn gaps_after_launch(records: &[CaptureRecord]) -> Vec<GapReason> {
 /// V1 supplemental stores add no gaps. A controlled family retains run-HOME capture.
 #[tokio::test]
 async fn a_launch_marks_each_store_it_does_not_read() {
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
     let mut request = launch_request(&goal);
     request.native_scope = None;
@@ -481,19 +481,19 @@ async fn native_scope_excludes_other_runs_files() {
     use base64::Engine as _;
     for (profile, directory, own_name, other_name) in [
         (
-            "codex-cli",
+            "headless-codex-cli",
             "sessions/2026/09/30",
             "rollout-now-test-session.jsonl",
             "rollout-now-foreign.jsonl",
         ),
         (
-            "claude-code-cli",
+            "headless-claude-code-cli",
             "projects/workspace",
             "test-session.jsonl",
             "foreign.jsonl",
         ),
     ] {
-        let rig = Rig::start().await;
+        let rig = Rig::start_headless().await;
         let native = rig.root.join("config-home").join(directory);
         std::fs::create_dir_all(&native).unwrap();
         std::fs::write(native.join(own_name), b"own session\n").unwrap();
@@ -686,8 +686,8 @@ async fn refused_native_roots_child_half() {
 #[tokio::test]
 async fn native_scope_unavailable_records_named_gap() {
     for scope in [None, Some("../foreign"), Some(""), Some("bad.scope")] {
-        for profile in ["codex-cli", "claude-code-cli"] {
-            let rig = Rig::start().await;
+        for profile in ["headless-codex-cli", "headless-claude-code-cli"] {
+            let rig = Rig::start_headless().await;
             let info = rig.created(profile).await;
             let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
             let mut request = launch_request(&goal);
@@ -705,11 +705,11 @@ async fn native_scope_unavailable_records_named_gap() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scoped_native_source_never_opened_is_a_gap() {
     for vanished in [false, true] {
-        let rig = Rig::start().await;
+        let rig = Rig::start_headless().await;
         let source = rig
             .root
             .join("config-home/sessions/2026/09/30/rollout-now-test-session.jsonl");
-        let info = rig.created("codex-cli").await;
+        let info = rig.created("headless-codex-cli").await;
         let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
         assert_eq!(
             rig.launch(&info.entry_id, &launch_request(&goal))
@@ -730,8 +730,8 @@ async fn scoped_native_source_never_opened_is_a_gap() {
         assert_eq!(local_finishes(&records), 1);
     }
     // A fixed source root that disappears after create cannot be constructed at Launch.
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     std::fs::remove_dir(rig.root.join("config-home/sessions")).unwrap();
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
     rig.launch(&info.entry_id, &launch_request(&goal)).await;
@@ -864,8 +864,8 @@ async fn both_shipped_manifests_compile_at_preflight() {
 
 #[tokio::test]
 async fn a_restart_never_rebuilds_a_capture_row_as_a_legacy_runtime() {
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
     let mut launch = launch_request(&goal);
     // This fixture isolates reopen behavior: no native producer is bound.
@@ -1517,6 +1517,218 @@ async fn wire_native_and_goal_share_one_chain() {
         (status.producers_consumed, status.admissions_refused),
         (Some(1), Some(0))
     );
+}
+
+/// D53 follow-up: the launch reads the harness build (two files of up to 512 MiB) before it
+/// chains `Launch`, and the harness is already running. Its traffic is drained into the chain
+/// under its own producer while the read is held: more than the sink's whole queue
+/// (`MAX_CAPTURE_QUEUE_BYTES`) goes through, which traffic held until `Launch` could not do
+/// without a `QueueFull` loss. Only the status lags: it reads `Starting` until the launch is
+/// chained.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_harness_hash_loses_and_delays_no_traffic() {
+    use goalcup_protocol::capture::{MAX_CAPTURE_QUEUE_BYTES, MAX_SEGMENT_BYTES};
+    const FRAME: usize = MAX_SEGMENT_BYTES;
+    const BATCH: usize = 32;
+    let (rig, _native, _connectors) = native_rig().await;
+    let workspace = rig.workspace(&format!("slow-hash-{}", &fresh_id()[..12]));
+    let created = rig.create("capture-dev", &workspace, 64 << 20).await;
+    assert_eq!(created.status(), 200, "create: {}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let harness = Child::sleeping();
+    let registration = harness.registration(info.process_generation);
+    assert_eq!(
+        rig.register(&info.entry_id, &registration).await.status(),
+        204
+    );
+    rig.daemon.hold_capture_harness_build(&info.entry_id, true);
+    // A failed assertion below must not leave the launch parked.
+    struct Release<'a>(&'a goalcup_daemon::runtime::Daemon, String);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.hold_capture_harness_build(&self.1, false);
+        }
+    }
+    let release = Release(&rig.daemon, info.entry_id.clone());
+
+    let launch_request = launch_request(&goal);
+    let launch = rig.launch(&info.entry_id, &launch_request);
+    tokio::pin!(launch);
+    let producer = info.producer_id.clone();
+    let chained = |records: &[CaptureRecord]| -> u64 {
+        records
+            .iter()
+            .filter_map(|record| match record {
+                CaptureRecord::Segment {
+                    stream, source_len, ..
+                } if stream.producer == producer => Some(*source_len),
+                _ => None,
+            })
+            .sum()
+    };
+    let line = b"the quick brown fox jumps over the lazy dog\n";
+    let payload: Vec<u8> = line.iter().copied().cycle().take(FRAME).collect();
+    let connection_id = fresh_id();
+    let traffic = async {
+        let wired = info.clone();
+        let id = connection_id.clone();
+        let mut wire = tokio::task::spawn_blocking(move || {
+            let mut wire = Wire::connect(&wired, &wired.producer_id);
+            wire.send(0, connection(&id, opened(false)));
+            wire.send(1, request_open(&id));
+            wire
+        })
+        .await
+        .unwrap();
+        let mut sent = 0u64;
+        // Each batch is chained before the next is sent, all while the launch is held.
+        while sent <= MAX_CAPTURE_QUEUE_BYTES as u64 + (FRAME * BATCH) as u64 {
+            let data = payload.clone();
+            let from = sent;
+            wire = tokio::task::spawn_blocking(move || {
+                for n in 0..BATCH as u64 {
+                    let offset = from + n * FRAME as u64;
+                    wire.send(
+                        1,
+                        FrameEvent::Bytes {
+                            offset,
+                            data: data.clone(),
+                        },
+                    );
+                }
+                wire
+            })
+            .await
+            .unwrap();
+            sent += (FRAME * BATCH) as u64;
+            rig.records_when(&info.entry_id, |records| chained(records) >= sent)
+                .await;
+        }
+        (wire, sent)
+    };
+    let (wire, sent) = tokio::select! {
+        answered = &mut launch => panic!("the launch answered while held: {}", answered.status()),
+        done = traffic => done,
+    };
+    assert!(sent > MAX_CAPTURE_QUEUE_BYTES as u64);
+
+    // Still held: the launch is not chained, and only the status says so.
+    let held = rig.records(&info.entry_id);
+    assert!(
+        !held
+            .iter()
+            .any(|r| matches!(r, CaptureRecord::Launch { .. }))
+    );
+    assert_eq!(chained(&held), sent);
+    let status = rig.status(&info.entry_id).await.payload;
+    let capture = status.capture.unwrap();
+    assert_eq!(
+        (capture.run, capture.capture, capture.gap_count),
+        (RunState::Starting, CaptureState::Starting, 0)
+    );
+    assert_eq!(status.admissions_refused, Some(0));
+    tokio::select! {
+        answered = &mut launch => panic!("the launch answered while held: {}", answered.status()),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {}
+    }
+
+    drop(release);
+    let launched = launch.await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(
+        (capture.run, capture.capture, capture.gap_count),
+        (RunState::Running, CaptureState::Recording, 0)
+    );
+
+    tokio::task::spawn_blocking(move || {
+        let mut wire = wire;
+        wire.send(
+            1,
+            FrameEvent::End {
+                reason: EndReason::Complete,
+            },
+        );
+        let close = ConnectionEvent::Close {
+            outcome: ConnectionOutcome::Complete,
+        };
+        wire.send(0, connection(&connection_id, close));
+        wire.close();
+    })
+    .await
+    .unwrap();
+    rig.records_when(&info.entry_id, |records| {
+        closed_by(records, &producer).is_some()
+    })
+    .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+
+    let records = rig.records(&info.entry_id);
+    assert!(
+        !records
+            .iter()
+            .any(|r| matches!(r, CaptureRecord::Gap { .. })),
+        "nothing was lost: {:#?}",
+        records
+            .iter()
+            .filter(|r| matches!(r, CaptureRecord::Gap { .. }))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(chained(&records), sent);
+    let launch_at = position(&records, |r| matches!(r, CaptureRecord::Launch { .. }));
+    let last_held = records
+        .iter()
+        .rposition(|r| {
+            matches!(r, CaptureRecord::Segment { stream, source_offset, .. }
+            if stream.producer == producer && *source_offset < sent)
+        })
+        .unwrap();
+    assert!(
+        last_held < launch_at,
+        "the held traffic is chained before the launch"
+    );
+    // Every wire record names the one producer that sent it.
+    let wire_records = records.iter().filter(|r| {
+        matches!(
+            r,
+            CaptureRecord::Connection { .. }
+                | CaptureRecord::Open {
+                    source: CaptureSource::WireRequest,
+                    ..
+                }
+        )
+    });
+    assert!(
+        wire_records
+            .into_iter()
+            .all(|r| names_producer(r, &producer))
+    );
+    let Some(CaptureRecord::Launch { harness_build, .. }) = records.get(launch_at) else {
+        unreachable!()
+    };
+    assert!(harness_build.is_some(), "the build is still recorded");
+
+    // End to end with the built `goalcup-verify` beside the test binaries, or the one
+    // `GOALCUP_VERIFY_BIN` names: the trace verifies.
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("goalcup-verify")))
+        .filter(|path| path.exists());
+    if let Some(bin) = std::env::var_os("GOALCUP_VERIFY_BIN").or(sibling.map(Into::into)) {
+        let out = std::process::Command::new(bin)
+            .arg("--capture-integrity")
+            .arg(rig.trace_dir(&info.entry_id))
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2950,4 +3162,85 @@ async fn a_symlinked_native_root_component_is_refused() {
         "nothing was created through the link"
     );
     assert!(!workspace.exists(), "a refused create leaves no workspace");
+}
+
+/// A continued run makes its next segment in the workspace its last entry had (D4): the last
+/// entry is sealed, so it no longer holds the workspace. An entry still open does.
+#[tokio::test]
+async fn a_continued_segment_takes_the_workspace_of_its_sealed_entry() {
+    let rig = Rig::start().await;
+    // A clone root, so the next create is admitted whatever the last entry left in it (R3).
+    let ws = rig.workspace("continued");
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let init = goalcup_daemon::workspace_git::command(&ws, &home)
+        .expect("git on PATH")
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init");
+
+    let first: CaptureWorkspaceInfo = {
+        let created = rig.create("codex-cli", &ws, RESERVE).await;
+        assert_eq!(created.status(), 200, "{}", created.body());
+        created.json().unwrap()
+    };
+    // Open and unsealed, it holds the workspace.
+    let held = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(held.status(), 409, "{}", held.body());
+    assert!(
+        held.body().contains("one workspace holds one entry"),
+        "{}",
+        held.body()
+    );
+
+    let sealed = rig.seal(&first.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let second = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(second.status(), 200, "{}", second.body());
+    let second: CaptureWorkspaceInfo = second.json().unwrap();
+    assert_ne!(second.entry_id, first.entry_id);
+
+    // The new segment holds it in turn.
+    let held = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(held.status(), 409, "{}", held.body());
+    assert!(
+        held.body().contains("one workspace holds one entry"),
+        "{}",
+        held.body()
+    );
+}
+
+/// An entry this daemon could not reopen routes nothing, so it lets go of its workspace too: a
+/// run whose chain was lost can still be continued where it ran.
+#[tokio::test]
+async fn a_continued_segment_takes_the_workspace_of_an_entry_that_failed_to_reopen() {
+    let rig = Rig::start().await;
+    let ws = rig.workspace("lost");
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let init = goalcup_daemon::workspace_git::command(&ws, &home)
+        .expect("git on PATH")
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init");
+
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let first: CaptureWorkspaceInfo = created.json().unwrap();
+    std::fs::remove_file(rig.trace_dir(&first.entry_id).join("chain.jsonl")).unwrap();
+
+    let rig = rig.restart().await;
+    // Relies on the chain having no rotated parts: removing `chain.jsonl` leaves nothing to resume.
+    let last = rig.daemon.cycle_errors().last;
+    assert!(
+        last.as_deref()
+            .is_some_and(|e| e.contains("was not reopened")),
+        "the lost chain was not reopened: {last:?}"
+    );
+    let second = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(second.status(), 200, "{}", second.body());
 }

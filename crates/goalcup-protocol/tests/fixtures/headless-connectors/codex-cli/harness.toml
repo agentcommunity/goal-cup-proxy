@@ -1,0 +1,75 @@
+# Codex CLI 0.153.0, capture profile (T14; D38, D39). Recipe: docs/qualification/m2/launch-recipes.md §8.
+schema_version = 1
+id = "codex-cli"
+
+[capture]
+auth_hosts = ["auth.openai.com"]
+# No model, effort or sandbox limit (owner direction, 2026-10-14): the harness's own defaults,
+# full access with network. `danger-full-access` because `codex exec` alone is read-only.
+continuation = "none: codex exec one turn, approval_policy=never, full access with network, stdin /dev/null"
+args = [
+  "exec", "--json",
+  "-c", 'approval_policy="never"',
+  "-c", "check_for_update_on_startup=false",
+  "-c", 'projects={{ "{workspace}" = {{ trust_level = "trusted" }} }}',
+  "-s", "danger-full-access",
+  "--skip-git-repo-check",
+  "-C", "{workspace}",
+  "--",
+]
+
+[capture.executable]
+program = "codex"
+version_args = ["--version"]
+
+[capture.env]
+SHELL = "/bin/zsh"
+
+[capture.platform.linux-x86_64.env]
+SHELL = "/bin/bash"
+
+[capture.platform.linux-aarch64.env]
+SHELL = "/bin/bash"
+
+# D39 R10: one shared isolated CODEX_HOME; never seeded; runs serialized.
+[capture.home]
+run_home = "empty"
+config_home = "shared"
+env = "CODEX_HOME"
+real_dirs = ["{user_home}/.codex"]
+
+[capture.ca]
+env = ["CODEX_CA_CERTIFICATE"]
+mode = "extend"
+
+[capture.identity]
+source = "stdout_json"
+binding = "at_launch"
+match_field = "type"
+match_value = "thread.started"
+id_field = "thread_id"
+
+[[capture.native]]
+name = "rollout"
+root = "{config_home}/sessions"
+pattern = "*/*/*/rollout-*-{id}.jsonl"
+form = "append_only"
+protocol_hint = "codex-jsonl"
+
+# D22: the npm wrapper hides the native binary.
+[capture.termination]
+strategy = "native_pid"
+native_binary = "codex"
+grace_seconds = 10
+
+[redaction]
+extra_patterns = [
+  { kind = "codex_rate_limits", regex = '"rate_limits"\s*:\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})' },
+  { kind = "codex_plan_type", regex = '"plan_type"\s*:\s*"([^"\\]+)"' },
+  { kind = "codex_credits_remaining", regex = '"credits_remaining"\s*:\s*("[^"\\]*"|[^,}\s]+)' },
+]
+
+[[capture.hosts]]
+host = "chatgpt.com"
+evidence_paths = ["/backend-api/codex/responses"]
+protocol_hint = "openai-responses"

@@ -462,6 +462,14 @@ pub fn shipped_connector_dir(connector_id: &str) -> PathBuf {
         .join(connector_id)
 }
 
+/// A frozen copy of a connector as it shipped while it was headless (`{id}`-scoped native
+/// source, one-turn argv). Fixtures for tests of that behaviour; not the shipped connector.
+pub fn headless_connector_dir(connector_id: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../goalcup-protocol/tests/fixtures/headless-connectors")
+        .join(connector_id)
+}
+
 /// The handle the CLI registers after a launch it did not put in its own process group: a
 /// TUI inherits the participant's terminal, so `pgid` is `None` and the guard is the age
 /// plus the argv.

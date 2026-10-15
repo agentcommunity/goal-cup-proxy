@@ -97,11 +97,31 @@ fn local_finish_without_service_is_complete() {
         !live.is_empty(),
         "no status was read while the SSE response streamed"
     );
-    for capture in &live {
-        assert_eq!(capture.run, RunState::Running);
-        assert_eq!(capture.capture, CaptureState::Recording);
+    // The launch post arrives after the child has exec'ed and the daemon hashes the build
+    // before it writes `Launch`, so a slow disk can leave the run `Starting` while the
+    // workload's traffic is already captured. Wait, bounded, for `Running` before asking for it.
+    let until = Instant::now() + Duration::from_secs(30);
+    let mut now_running = v.status(&entry).payload.capture.expect("a capture status");
+    while now_running.run != RunState::Running {
+        assert!(
+            Instant::now() < until,
+            "the run never became Running within 30 s; last state {:?}",
+            now_running.run
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        now_running = v.status(&entry).payload.capture.expect("a capture status");
+    }
+    for capture in live.iter().chain(std::iter::once(&now_running)) {
+        // Before the `Launch` record the run and its capture are both still `Starting`.
+        let (run, state) = match capture.run {
+            RunState::Starting => (RunState::Starting, CaptureState::Starting),
+            _ => (RunState::Running, CaptureState::Recording),
+        };
+        assert_eq!((capture.run, capture.capture), (run, state), "{capture:?}");
         assert_eq!(capture.delivery, DeliveryState::LocalOnly);
-        assert!(capture.storage.durable.is_some(), "{capture:?}");
+        if run == RunState::Running {
+            assert!(capture.storage.durable.is_some(), "{capture:?}");
+        }
     }
 
     v.release();
