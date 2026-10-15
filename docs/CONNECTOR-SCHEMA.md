@@ -75,8 +75,7 @@ core deny policy and the optional argument guard.
 
 With `interactive = true` (D57) there is no goal slot: the participant types the prompt in the
 harness. The profile then takes no `goal_flag`, its `args` need not end in `--` and may be
-empty, it takes no
-`[capture.credential]` and its `identity.source` must be `none`. With `false`, the default, every
+empty, it takes no `[capture.credential]` and its `identity.source` must be `none`. With `false`, the default, every
 rule above holds unchanged. `resume_args` may be set either way; `goalcup continue` appends it
 after `args`.
 
@@ -301,9 +300,9 @@ recorded: none is refused and none is preferred. This is safe on a shared config
 against it are serialized.
 
 A native root under the config home (`{config_home}/...`) that does not exist yet is created when
-the capture is created: one directory at a time, mode `0700`, never through a link. A component
-that exists as a symlink or as anything but a directory refuses the creation. A `{run_home}` root
-is not created this way.
+the capture is created, the config home itself too if it is missing: one directory at a time,
+mode `0700`, never through a link. A component that exists as a symlink or as anything but a
+directory refuses the creation. A `{run_home}` root is not created this way.
 
 An unknown but syntactically valid `protocol_hint` is admitted and means capture-only unless a
 registered decoder accepts the complete `StreamOpen`. A snapshot cannot carry a hint. The same

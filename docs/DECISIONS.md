@@ -1600,8 +1600,9 @@ lines from before the run included. Every admitted file is recorded; none is ref
 preferred. A request with no `native_since` reads from the entry's own create time: whole Unix
 seconds, rounded down, taken once at create and kept as the registry row's `created_at`, so a
 reopened entry has the same floor as its create, not its reopen time (a reopened entry reads no
-native source today; the row is where any reader takes the floor from). This replaces the
-earlier refusal of such a request. When `native_since` is present it wins. A `native_since` more
+native source today; for a create that named no `native_since`, the row is where any reader takes
+the floor from). This replaces the earlier refusal of such a request. When `native_since` is
+present it wins, and it is not kept: the row holds only the create time. A `native_since` more
 than 300 seconds ahead of the daemon's clock is refused as malformed (a start sent in
 milliseconds would otherwise admit nothing), and one no clock can represent is refused rather
 than overflowing. `native_since` is ignored for a source that does not declare
@@ -1609,10 +1610,12 @@ than overflowing. `native_since` is ignored for a source that does not declare
 
 **Roots under the config home are created.** A `{config_home}` native root that does not exist yet
 (`sessions` or `projects` on a fresh home) is created at entry create, before the native source
-opens it: one component at a time beneath the config home, mode 0700, through the same no-follow
-directory capability the trace uses (`TraceDir::open_or_create_child_dir`). A component that
-exists as a symlink or as anything but a directory refuses the create; nothing is made outside the
-config home. A `{run_home}` root is not created this way.
+opens it: the config home itself if it is missing too, then one component at a time beneath it,
+mode 0700, through the same no-follow directory capability the trace uses
+(`TraceDir::open_or_create_child_dir`). It runs after the workspace and machine-root checks and
+before any artifact is created, so a create those checks refuse makes no directory. A component
+that exists as a symlink or as anything but a directory refuses the create; nothing is made
+outside the config home (its parent must exist). A `{run_home}` root is not created this way.
 
 **The goal stream in chat mode.** The v5 `Launch` keeps its goal stream. In chat mode the goal
 stream holds a fixed marker; the participant's prompt is the first user message in the session

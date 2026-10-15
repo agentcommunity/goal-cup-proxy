@@ -111,8 +111,8 @@ pub(super) fn create_time_floor(created_at: &str) -> Result<u64, DaemonError> {
     })
 }
 
-/// Create the missing directories of every `{config_home}` native root (D57): one component
-/// at a time beneath the config home, mode 0700, never following a link. An existing component
+/// Create the missing directories of every `{config_home}` native root (D57), the config home
+/// itself included: one component at a time from its parent, mode 0700, never following a link. An existing component
 /// that is a symlink or not a directory refuses the create. `{run_home}` roots are untouched.
 pub(super) fn create_config_home_roots(
     capture: &CaptureSpec,

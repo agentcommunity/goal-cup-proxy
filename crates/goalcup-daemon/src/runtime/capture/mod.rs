@@ -318,7 +318,6 @@ impl Daemon {
             None => create_time_floor(&created_at)?,
         };
         let plan = native_plan(&manifest.capture, run_home, &config_home, since)?;
-        create_config_home_roots(&manifest.capture, &config_home)?;
         let extra_patterns = crate::redact::extra_patterns_of(manifest);
         StreamRedactor::with_extra_patterns(&extra_patterns)?;
         let artifact_dir = self
@@ -337,6 +336,9 @@ impl Daemon {
                 ("config_dir", &self.config().config_dir),
             ],
         )?;
+        // After the cheap checks, so a create they refuse makes no directory; before anything
+        // opens a root (D57).
+        create_config_home_roots(&manifest.capture, &config_home)?;
         let artifact = self
             .artifact_root()
             .create_entry(&entry_id)
@@ -469,8 +471,9 @@ impl Daemon {
         );
         // Prepare the fixed isolated source root before spawn: the leaf opens it once.
         if let Some(source) = &plan.scoped {
-            // An unavailable native root must not stop the harness. The Launch constructor
-            // reports the required-source gap if preparation could not make it available.
+            // A `{config_home}` root was created above, and a failure there refused the create.
+            // For a `{run_home}` root, an unavailable root must not stop the harness: the Launch
+            // constructor reports the required-source gap if this could not make it available.
             let _ = std::fs::create_dir_all(&source.root);
         }
         capture.scoped_native = plan.scoped;
