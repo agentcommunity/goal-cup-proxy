@@ -1,7 +1,6 @@
 use super::handlers::{
-    abandon_entry, create_capture_workspace, current_entry, entry_status, health, list_entries,
-    no_such_route, record_capture_goal, record_capture_launch, register_process, seal_entry,
-    wrong_method,
+    abandon_entry, create_capture_workspace, entry_status, health, list_entries, no_such_route,
+    record_capture_goal, record_capture_launch, register_process, seal_entry, wrong_method,
 };
 use super::{ControlErrorResponse, ControlState, http_status_for};
 use crate::DaemonError;
@@ -14,7 +13,7 @@ use axum::routing::{get, post};
 use goalcup_protocol::constant_time::constant_time_eq;
 use goalcup_protocol::control::{
     CONTROL_API_VERSION, ControlError, ErrorBody, ErrorDetail, ROUTE_CAPTURE_WORKSPACES,
-    ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, is_public_route,
+    ROUTE_ENTRIES, ROUTE_HEALTH, is_public_route,
 };
 use std::net::SocketAddr;
 use std::sync::OnceLock;
@@ -50,12 +49,7 @@ pub const ENTRY_SUFFIXES: [&str; 6] = [
 /// Every route that is not under `/v0/entries/{id}/`.
 ///
 /// This daemon serves nothing under `/v0/assets/` (and the contract does not call it public).
-pub const TOP_LEVEL_ROUTES: [&str; 4] = [
-    ROUTE_CAPTURE_WORKSPACES,
-    ROUTE_ENTRIES,
-    ROUTE_ENTRIES_CURRENT,
-    ROUTE_HEALTH,
-];
+pub const TOP_LEVEL_ROUTES: [&str; 3] = [ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES, ROUTE_HEALTH];
 
 /// `/v0/entries/{id}/{suffix}` as axum spells a route pattern, where
 /// `control::entry_route` spells one concrete path. The two are different strings for the
@@ -366,7 +360,6 @@ pub fn control_router(state: ControlState) -> Router {
     let authed = Router::new()
         .route(ROUTE_HEALTH, get(health))
         .route(ROUTE_ENTRIES, get(list_entries))
-        .route(ROUTE_ENTRIES_CURRENT, get(current_entry))
         .route(&entry_pattern(SUFFIX_PROCESS), post(register_process))
         .route(&entry_pattern(SUFFIX_ABANDON), post(abandon_entry))
         .route(&entry_pattern(SUFFIX_SEAL), post(seal_entry))

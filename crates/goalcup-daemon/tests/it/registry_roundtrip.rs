@@ -444,7 +444,7 @@ fn a_fresh_registry_is_empty() {
 
 /// `RunKeys` holds the run's signing seed, which may not reach a log, and `Debug` is how it
 /// would: `Entry` derives it, and a `DaemonError` message interpolates whatever it is handed.
-/// This is the same redaction `WorkspaceInfo` already applies.
+/// This is the same redaction `CaptureWorkspaceInfo` applies to its ingest secret.
 #[test]
 fn run_keys_never_print_their_secrets() {
     let keys = RunKeys::from_seed([2u8; 32]);
@@ -463,9 +463,9 @@ fn run_keys_never_print_their_secrets() {
     );
 }
 
-/// The signing seed is the run key. `public_key_hex` is what `WorkspaceInfo.run_public_key`
-/// carries and what `SignedStatus::verify_with` is pinned against, so
-/// it must be the verifying key of the seed and nothing else.
+/// The signing seed is the run key. `public_key_hex` is what
+/// `CaptureWorkspaceInfo.run_public_key` carries and what `SignedStatus::verify_with` is pinned
+/// against, so it must be the verifying key of the seed and nothing else.
 #[test]
 fn the_run_key_is_the_signing_seed() {
     let keys = RunKeys::from_seed([2u8; 32]);
@@ -524,9 +524,10 @@ fn the_registry_file_is_readable_only_by_its_owner() {
 
 /// A row written by an older daemon still loads: it carries the V1-era keys this build no
 /// longer reads (session and deadline stamps, the hook config digests, a sealing intent,
-/// pending foreign sightings, a seal outcome, the buffer key and receiver token), and serde
-/// ignores them rather than refusing the row. A registry a daemon cannot open is a run it
-/// cannot finish.
+/// pending foreign sightings, a seal outcome, the receipt, the round dates, the buffer key and
+/// receiver token) and a health word of the retired V1 ladder, and serde ignores the keys and
+/// reads the word as `unknown` rather than refusing the row. A registry a daemon cannot open
+/// is a run it cannot finish.
 #[test]
 fn a_row_carrying_keys_this_build_no_longer_reads_still_loads() {
     let json = r#"{
@@ -538,7 +539,7 @@ fn a_row_carrying_keys_this_build_no_longer_reads_still_loads() {
         "manifest_sha256": "ab",
         "harness_version": "2.1.259",
         "state": "sealed",
-        "health": "online",
+        "health": "hooks_silent",
         "session_id": "95addb64",
         "armed_at": 1.0,
         "start_signal_at": 2.0,
@@ -569,6 +570,8 @@ fn a_row_carrying_keys_this_build_no_longer_reads_still_loads() {
         "arming_timeout_seconds": 60,
         "cleanup_termination_complete": true,
         "last_process": null,
+        "event": {"t0": "2026-09-01T00:00:00Z", "start_window_closes_at": "2026-09-02T00:00:00Z",
+                  "publication_closes_at": "2026-09-08T00:00:00Z", "rules_version": "r1"},
         "seal_outcome": {"lock_paths": [], "lock_paths_error": null, "guard_degraded": false,
                          "termination": null, "termination_error": null},
         "created_at": "2026-09-01T00:00:00Z",
@@ -583,6 +586,7 @@ fn a_row_carrying_keys_this_build_no_longer_reads_still_loads() {
         .expect("a row carrying keys this build no longer reads must still deserialise");
     assert_eq!(row.entry_id, "e1");
     assert_eq!(row.state, EntryState::Sealed);
+    assert_eq!(row.health, goalcup_protocol::events::HealthState::Unknown);
     assert_eq!(row.sealed_at.as_deref(), Some("2026-09-02T00:00:00Z"));
     assert_eq!(row.last_ack_seq, Some(3));
     assert_eq!(row.keys.signing_seed_hex, "02");
@@ -596,20 +600,25 @@ fn a_row_carrying_keys_this_build_no_longer_reads_still_loads() {
     assert_eq!(registry.all().unwrap(), vec![row]);
 }
 
-/// A v0.5.0 daemon is the documented way to finish a V1 entry on the same artifact root
-/// (`Daemon::start`'s refusal names it), and its `Entry` requires five keys this build no longer
-/// reads. A row this build writes keeps them, so that daemon can still read the registry.
+/// A row this build writes carries none of the V1 keys: no receipt, no round dates, no upload
+/// counter, hook digests or status-line path, and no buffer key or receiver token.
 #[test]
-fn a_new_row_keeps_the_keys_a_v0_5_0_daemon_requires() {
+fn a_new_row_carries_no_v1_keys() {
     let tmp = tempfile::tempdir().unwrap();
     let row = serde_json::to_value(entry(tmp.path(), "e1")).unwrap();
-    for key in ["events_uploaded", "expected_config", "status_line_path"] {
-        assert!(row.get(key).is_some(), "{key} missing from {row}");
+    for key in [
+        "receipt",
+        "event",
+        "events_uploaded",
+        "expected_config",
+        "status_line_path",
+    ] {
+        assert!(row.get(key).is_none(), "{key} is still written: {row}");
     }
     for key in ["buffer_key_hex", "receiver_token"] {
-        assert_eq!(
-            row["keys"][key], "",
-            "{key}: present, and no secret is minted for it"
+        assert!(
+            row["keys"].get(key).is_none(),
+            "keys.{key} is still written"
         );
     }
 }

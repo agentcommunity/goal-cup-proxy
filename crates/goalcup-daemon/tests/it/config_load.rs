@@ -24,7 +24,8 @@ fn the_cut_fields_are_gone() {
     // and the refusal must name the field: "invalid config" sends a participant looking
     // at the wrong line of a file whose every other line is fine.
     // The first two were cut with the V1 transports; the rest are the V1 service, receipt and
-    // cadence keys the daemon used to accept and ignore.
+    // cadence keys the daemon used to accept and ignore, and the `[event]` round dates, which
+    // the upload server owns (control API version 8).
     for cut in [
         "unix_socket = \"/tmp/gc.sock\"",
         "foreign_scan_interval_ms = 30000",
@@ -33,6 +34,7 @@ fn the_cut_fields_are_gone() {
         "receipt_binding = { mode = \"legacy\" }",
         "poll_interval_ms = 0",
         "disk_reserve_bytes = 0",
+        "event = { t0 = \"2026-10-01T00:00:00Z\" }",
     ] {
         let field = cut.split(' ').next().unwrap();
         let e = DaemonConfig::from_toml_str(&base(cut))
@@ -155,70 +157,4 @@ fn a_relative_root_is_refused_by_name() {
         assert!(e.contains(field), "the refusal must name {field}: {e}");
         assert!(e.contains("absolute"), "{e}");
     }
-}
-
-/// The `[event]` section is optional, complete, readable, and in order.
-///
-/// The daemon signs these three fields with the run key, and an agent is told
-/// that it may act on them. So the file is where they are checked: a date this build cannot
-/// read would be signed and handed to a reader that cannot read it either, and a start
-/// window that closed before the round opened is a window no entry could start in — both of
-/// which a participant should learn from `goalcup-daemon --config` refusing at startup
-/// rather than from a status page days later.
-#[test]
-fn the_optional_event_section_is_absent_complete_and_in_order() {
-    // Absent is the normal case: no round configured, and the status document falls back to
-    // the entry's own timeline while saying that it has.
-    let none = DaemonConfig::from_toml_str(&base("")).unwrap();
-    assert!(none.event.is_none());
-
-    let round = "[event]\n\
-                 t0 = \"2026-10-01T00:00:00Z\"\n\
-                 start_window_closes_at = \"2026-10-08T00:00:00Z\"\n\
-                 rules_version = \"rules-2026-10-01\"\n";
-    let c = DaemonConfig::from_toml_str(&base(round)).unwrap();
-    c.validate().unwrap();
-    let event = c.event.expect("the section loaded");
-    assert_eq!(event.t0, "2026-10-01T00:00:00Z");
-    assert_eq!(event.start_window_closes_at, "2026-10-08T00:00:00Z");
-    assert_eq!(event.rules_version, "rules-2026-10-01");
-
-    // All three together, or none: two of the three would mix a configured date with an
-    // invented one under one `event_status_source`, which is a document nobody can act on.
-    for missing in ["t0", "start_window_closes_at", "rules_version"] {
-        let partial: String = round
-            .lines()
-            .filter(|l| !l.starts_with(missing))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let e = DaemonConfig::from_toml_str(&base(&partial))
-            .expect_err("a half-configured round must not load")
-            .to_string();
-        assert!(e.contains(missing), "the refusal must name {missing}: {e}");
-    }
-
-    // A date this build cannot read. `parse_z` is the reader every comparison of these
-    // strings goes through, so what it refuses is exactly what a reader of the document
-    // could not have used.
-    let e = DaemonConfig::from_toml_str(&base(
-        &round.replace("2026-10-01T00:00:00Z", "1 October 2026"),
-    ))
-    .unwrap()
-    .validate()
-    .expect_err("an unreadable instant is refused")
-    .to_string();
-    assert!(e.contains("t0") && e.contains("1 October 2026"), "{e}");
-
-    // And the order. A window that closes before it opens.
-    let e = DaemonConfig::from_toml_str(&base(
-        &round.replace("2026-10-08T00:00:00Z", "2026-09-01T00:00:00Z"),
-    ))
-    .unwrap()
-    .validate()
-    .expect_err("a start window that closed before t0 is refused")
-    .to_string();
-    assert!(
-        e.contains("t0") && e.contains("start_window_closes_at"),
-        "{e}"
-    );
 }

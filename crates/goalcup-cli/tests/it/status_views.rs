@@ -7,22 +7,14 @@
 
 use crate::common::support;
 
-use goalcup_cli::commands::{
-    entries::entries_with,
-    status::{render_status, status_with},
-};
+use goalcup_cli::commands::{entries::entries_with, status::status_with};
 #[cfg(target_os = "macos")]
 use goalcup_protocol::capture_status::AnchorState;
 use goalcup_protocol::control::{self, DaemonClient, STALE_AFTER_SECONDS};
-use goalcup_protocol::events::HealthState;
-use goalcup_protocol::provenance::{
-    PreCutoffDrainOutcomeV1, Rfc3339Utc, Sha256Digest, TerminationFailureV1, TerminationOutcomeV1,
-};
-use goalcup_protocol::submission::{SubmissionCapturedV1, SubmissionOutcomeV1};
 use std::path::PathBuf;
 
-/// A configuration directory holding one record for `info`'s run, with `entry_id` and
-/// `status_url` written as given.
+/// A configuration directory holding one record for `info`'s run, with `entry_id` written as
+/// given.
 ///
 /// `support::cfg_with_entry` writes the record the daemon actually handed over, which is the
 /// fixture almost every test here wants. This is the other one: a record that has been
@@ -32,23 +24,12 @@ use std::path::PathBuf;
 /// shape and only its contents are the test's.
 fn cfg_with_edited_record(
     tmp: &tempfile::TempDir,
-    info: &control::WorkspaceInfo,
+    info: &goalcup_cli::entries::EntryRecord,
     entry_id: &str,
-    status_url: &str,
 ) -> PathBuf {
     let record = goalcup_cli::entries::EntryRecord {
         entry_id: entry_id.to_string(),
-        process_generation: info.process_generation,
-        connector_id: "claude-code-cli".to_string(),
-        run_public_key: info.run_public_key.clone(),
-        workspace: info.workspace.clone(),
-        artifact_root: info.artifact_root.clone(),
-        harness_home: info.harness_home.clone(),
-        session_id: info.session_id.clone(),
-        last_pid: None,
-        status_url: status_url.to_string(),
-        created_at: info.created_at.clone(),
-        dev: false,
+        ..info.clone()
     };
     goalcup_cli::entries::write_entry(tmp.path(), &record).unwrap();
     tmp.path().to_path_buf()
@@ -71,7 +52,7 @@ fn status_prints_what_the_signed_payload_says_and_json_still_verifies() {
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert!(text.contains("armed") || text.contains("started"));
+    assert!(text.contains("capture: recording"), "{text}");
     assert!(
         text.contains(&m.status_detail()),
         "the health state in plain words (D25)"
@@ -101,73 +82,6 @@ fn status_prints_what_the_signed_payload_says_and_json_still_verifies() {
         format!("{err}").contains(&info.entry_id),
         "name the entry it cannot check"
     );
-}
-
-/// The daemon has the field but not the number: `harness_version: Some("")`. It would render
-/// as `  harness: ` with a dangling colon; the word `unknown` is an answer, a dangling colon
-/// is a rendering fault a reader has to guess at.
-#[test]
-fn an_empty_harness_version_is_reported_as_unknown_rather_than_as_a_dangling_colon() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    let cfg = support::cfg_with_entry(tmp.path(), &info);
-
-    m.set_harness_version(Some(""));
-    let mut out = Vec::new();
-    status_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        support::NOW,
-        &mut out,
-    )
-    .unwrap();
-    let text = String::from_utf8(out).unwrap();
-    assert!(
-        text.contains("harness: unknown"),
-        "an empty version is a version nobody measured: {text}"
-    );
-    assert!(
-        !text.contains("harness: \n"),
-        "and never a line that just stops: {text}"
-    );
-
-    // A version the daemon DOES carry is still printed as itself, so the word above is the
-    // empty case and not a render that lost the number.
-    m.set_harness_version(Some("2.1.259"));
-    let mut out = Vec::new();
-    status_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        support::NOW,
-        &mut out,
-    )
-    .unwrap();
-    let text = String::from_utf8(out).unwrap();
-    assert!(
-        text.contains("harness: 2.1.259"),
-        "the number the daemon answered: {text}"
-    );
-
-    // And a daemon that carries no field at all prints no line, which is the third answer
-    // and not the same as either of the two above.
-    m.set_harness_version(None);
-    let mut out = Vec::new();
-    status_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        support::NOW,
-        &mut out,
-    )
-    .unwrap();
-    let text = String::from_utf8(out).unwrap();
-    assert!(!text.contains("harness:"), "no field, no line: {text}");
 }
 
 /// An unverifiable document is REFUSED OUTRIGHT. Printing it with a warning on it would put
@@ -259,7 +173,7 @@ fn a_document_about_another_entry_is_refused_naming_both_even_though_it_verifies
     // shape of the bug: the record is this machine's, the payload is the other entry's, and
     // the run key checks out on both.
     let asked = "entry-mock-0002";
-    let cfg = cfg_with_edited_record(&tmp, &info, asked, &info.status_url);
+    let cfg = cfg_with_edited_record(&tmp, &info, asked);
 
     let mut out = Vec::new();
     let err = status_with(&m, &cfg, Some(asked), false, support::NOW, &mut out).unwrap_err();
@@ -292,137 +206,6 @@ fn a_document_stamped_ahead_of_this_machine_is_reported_as_clock_skew_and_not_as
     assert!(text.contains("published in the future by 30s"), "{text:?}");
     assert!(text.contains("clock skew"), "{text:?}");
     assert!(!text.contains("published 0s ago"), "never that: {text:?}");
-}
-
-/// The fourth arming state. "will never arm" must not read as "still waiting to arm", and the
-/// reason is the daemon's own words.
-#[test]
-fn arming_refused_is_printed_as_refused_with_the_daemons_own_reason() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    let why = "this harness never asked to start";
-    m.set_arming_refused(why);
-    let cfg = support::cfg_with_entry(tmp.path(), &info);
-
-    let mut out = Vec::new();
-    status_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        support::NOW,
-        &mut out,
-    )
-    .unwrap();
-    let text = String::from_utf8(out).unwrap();
-    assert!(
-        text.contains(&format!("arming: refused — {why}")),
-        "{text:?}"
-    );
-}
-
-/// Two `#[serde(default)]` fields the page shows only in its JSON. This is the
-/// only human surface for the daemon's own lost work, and for whether the round's dates were
-/// configured or invented.
-#[test]
-fn status_prints_the_cycle_errors_and_a_fallback_event_source() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    m.set_cycle_error("upload", "connection refused");
-    let cfg = support::cfg_with_entry(tmp.path(), &info);
-    let mut out = Vec::new();
-    status_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        support::NOW,
-        &mut out,
-    )
-    .unwrap();
-    let text = String::from_utf8(out).unwrap();
-    assert!(
-        text.contains("connection refused"),
-        "cycles.last is JSON-only on the page"
-    );
-    assert!(
-        text.to_lowercase().contains("fallback") || text.contains("not configured"),
-        "EventStatusSource::Fallback is the default: say the dates are the entry's own"
-    );
-}
-
-/// An unverified ending can mean no signal was safe, or that best-effort numeric signals
-/// were sent without an instance-bound proof. The participant-facing text must not turn
-/// that union into the false assertion that nothing was signalled.
-#[test]
-fn status_describes_unverified_termination_without_inventing_a_no_signal_outcome() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    m.set_harness_unverified(true);
-    let cfg = support::cfg_with_entry(tmp.path(), &info);
-    let mut out = Vec::new();
-
-    status_with(
-        &m,
-        &cfg,
-        Some(&info.entry_id),
-        false,
-        support::NOW,
-        &mut out,
-    )
-    .unwrap();
-    let text = String::from_utf8(out).unwrap();
-
-    assert!(
-        text.contains("could not prove the managed process tree was fully and safely stopped"),
-        "{text:?}"
-    );
-    assert!(
-        !text.contains("nothing in the process tree was signalled"),
-        "{text:?}"
-    );
-}
-
-#[test]
-fn cli_warns_on_v4_nonconfirmed_termination_even_without_the_legacy_harness_flag() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    let mut payload = m.status(&info.entry_id).unwrap().payload;
-    payload.health = HealthState::Sealed;
-    payload.sealed_at = Some("2026-09-14T00:00:03Z".to_string());
-    payload.harness_unverified = false;
-    payload.finalization = Some(control::WorkspaceFinalizationStatusV1::Terminal {
-        pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-        termination: TerminationOutcomeV1::Unresolved {
-            requested_at: Rfc3339Utc::try_from("2026-09-14T00:00:02Z".to_string()).unwrap(),
-            stopped_waiting_at: Rfc3339Utc::try_from("2026-09-14T00:00:03Z".to_string()).unwrap(),
-            reason: TerminationFailureV1::ProcessAuthorityUnavailable,
-        },
-        submission: SubmissionOutcomeV1::Captured(SubmissionCapturedV1 {
-            manifest_sha256: Sha256Digest::from_bytes([0xcd; 32]),
-        }),
-    });
-    let signed = goalcup_protocol::control::SignedStatus::sign(
-        payload,
-        support::NOW.to_string(),
-        &goalcup_cli::daemon::MockDaemonClient::signing_key(),
-    )
-    .unwrap();
-
-    let text = render_status(&signed, support::NOW);
-    assert!(
-        text.contains("the seal could not vouch for the harness"),
-        "a V4 non-confirmed termination is visibly warned about: {text:?}"
-    );
-    assert!(
-        text.contains("health: sealing_recovery_needed"),
-        "it is not rendered as an ordinary sealed run: {text:?}"
-    );
-    assert!(!text.contains("health: sealed"), "{text:?}");
 }
 
 /// A status document older than the protocol's staleness window renders as offline.
@@ -489,7 +272,12 @@ fn a_control_character_in_a_daemon_string_is_not_handed_to_the_terminal() {
     let cfg = support::cfg_with_entry(tmp.path(), &info);
     // An escape that clears the line, a bare carriage return that puts the cursor back at
     // its start, and a newline that would draw a line this command did not write.
-    m.set_arming_refused("\u{1b}[2K\rthe tracker says\nRecording. Leave this running.");
+    m.set_capture_status(
+        local_capture(),
+        "\u{1b}[2K\rthe tracker says\nRecording. Leave this running.",
+        1,
+        0,
+    );
 
     let mut out = Vec::new();
     status_with(
@@ -674,23 +462,6 @@ fn a_capture_status_in_json_is_the_signed_document_with_its_capture_block() {
     assert_eq!(raw["payload"]["producers_consumed"], 1);
 }
 
-#[test]
-fn a_legacy_status_carries_no_capture_fields() {
-    let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "claude-code-cli");
-    let info = m.info();
-    let cfg = support::cfg_with_entry(tmp.path(), &info);
-    let mut out = Vec::new();
-    status_with(&m, &cfg, Some(&info.entry_id), true, support::NOW, &mut out).unwrap();
-    let raw: serde_json::Value = serde_json::from_slice(&out).unwrap();
-    for field in ["capture", "producers_consumed", "admissions_refused"] {
-        assert!(
-            raw["payload"].get(field).is_none(),
-            "a legacy document omits {field} byte-for-byte"
-        );
-    }
-}
-
 /// A real daemon over `root` with no server anywhere, on a runtime of its own.
 #[cfg(target_os = "macos")]
 fn local_daemon(
@@ -706,7 +477,6 @@ fn local_daemon(
         config_dir: root.join("daemon-config"),
         workspace_parent: root.join("workspaces"),
         control_addr: "127.0.0.1:0".parse().unwrap(),
-        event: None,
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -808,7 +578,6 @@ fn a_shipped_chat_profile_capture_records_and_seals_valid() {
         harness_home: root.join("config-home").display().to_string(),
         session_id: String::new(),
         last_pid: None,
-        status_url: String::new(),
         created_at: support::NOW.to_string(),
         dev: false,
     };
@@ -1197,7 +966,6 @@ fn status_with_no_id_never_mixes_the_newest_entry_with_the_newest_run() {
         harness_home: info.harness_home.clone(),
         session_id: info.session_id.clone(),
         last_pid: None,
-        status_url: info.status_url.clone(),
         created_at: created_at.to_string(),
         dev: false,
     };

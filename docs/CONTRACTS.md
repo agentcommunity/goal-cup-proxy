@@ -240,7 +240,11 @@ leaves its mark.
   `capture` (`Starting`, `Recording`, `Incomplete`, `Failed`), `delivery`, `analysis`, `anchor`,
   `storage`, `gap_count`, `assistance_observed`. Definitions are in `capture_status.rs`. The
   projection is built before signing in every live, closed and restart path. A signed document is
-  never mutated.
+  never mutated. Every document the daemon signs carries `capture`.
+- The rest of the status document is small. `health` is `online`, `sealed` or
+  `sealing_recovery_needed`; a registry row an older build wrote with another word reads as
+  `unknown`. `arming` is `armed` (not launched yet) or `started`. There is no `event` block: the
+  round's dates are the upload server's, which owns the clock.
 - Gap history is sticky across finish and upload. `assistance_observed = false` means no explicit
   intervention was recorded. It is never a finding of zero assistance.
 - `goalcup-verify --capture-integrity TRACE` reads protocol v5 only. Exit codes: 0 complete and
@@ -299,6 +303,10 @@ leaves its mark.
   entry's ingest grant, reservation, row, artifacts and empty workspace. Afterwards it is refused
   ("seal it").
 - `GET /v0/entries/{id}/status`: the signed status document.
+
+Two read routes complete the set: `GET /v0/entries` (`goalcup entries`) and `GET /v0/health`
+(`goalcup doctor`, and the CLI's check that a daemon answers). There is no "current entry" route:
+`goalcup status` with no id reads this machine's newest entry record.
 
 Once an entry is finished locally, goal, launch, process registration and abandon are refused. A
 finish that wrote `seal.json` records the entry's final `M2Status` on its row and releases the
@@ -540,8 +548,8 @@ wins over this text.
 
 - **One public route:** `GET /v0/entries/{id}/status`, the signed status document, for an id the
   caller already holds. Everything else needs `Authorization: Bearer <token from control.json>`.
-  `/v0/entries/current` and `/v0/entries` are not public: enumeration is not accepted. `/v0/assets/*`
-  and `/v0/ui` are not public either; a request under them is an unauthenticated `401`.
+  `/v0/entries` is not public: enumeration is not accepted. `/v0/assets/*`, `/v0/ui` and the removed
+  `/v0/entries/current` are not public either; a request to them is an unauthenticated `401`.
 - **A path with a `.` or `..` segment, or a malformed `%` escape, is never public.** The auth layer
   asks about the raw `request.uri().path()`, never a decoded one.
 - **The `Host` is checked before any of this.** Exactly one `Host` line, naming the listener's own
@@ -550,10 +558,16 @@ wins over this text.
   `Host` is refused `401` with code `unauthorized` and a fixed body that quotes nothing it was sent,
   on a public route and on a bearer route alike. This closes DNS rebinding. A client that builds its
   URL from `control.json` sends a matching `Host`.
-- **Control API version.** `CONTROL_API_VERSION` is 7. A new CLI against an older daemon is refused
-  rather than mis-read. Version 5 added the required `connector_dir_sha256` to workspace creation: the
-  daemon compares it with the connector it just loaded, before any allocation, and a mismatch is a
-  path-free `422 preflight_failed`. Version 6 removed the retired V1 hook-path shapes, and an unknown
-  connector is `422 preflight_failed`. Version 7 added the optional `entry_id` to workspace creation
-  (`e` and 16 lowercase hex digits; any other shape is `400 malformed`), and `chain_head` and
-  `trace_dir` to its answer. None of these changes the frozen v5 chain.
+- **Control API version.** `CONTROL_API_VERSION` is 8. `goalcup` and `goalcup-daemon` ship
+  together in one release, so a pair from two releases is refused, never bridged: the CLI refuses a
+  `control.json` of another version and an answer whose `x-goalcup-control-version` header differs,
+  and the daemon answers a request that names another version `426 unsupported`. Version 5 added the
+  required `connector_dir_sha256` to workspace creation: the daemon compares it with the connector
+  it just loaded, before any allocation, and a mismatch is a path-free `422 preflight_failed`.
+  Version 6 removed the retired V1 hook-path shapes, and an unknown connector is `422
+  preflight_failed`. Version 7 added the optional `entry_id` to workspace creation (`e` and 16
+  lowercase hex digits; any other shape is `400 malformed`), and `chain_head` and `trace_dir` to
+  its answer. Version 8 removed the V1 vocabulary nothing produced: the
+  `WorkspaceInfo` shape, `GET /v0/entries/current`, the status document's `event` and
+  `event_status_source`, the `arming` values `start_signal_seen` and `refused`, and every `health`
+  value but the three above. None of these changes the frozen v5 chain.

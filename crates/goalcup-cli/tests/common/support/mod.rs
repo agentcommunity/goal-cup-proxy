@@ -7,7 +7,7 @@
 //! Rules the items follow:
 //!
 //! * A helper does what its signature says. There is no `mock(info)` here: `MockDaemonClient`
-//!   builds its own `WorkspaceInfo`, and one that took an `info` and ignored it would lie
+//!   builds its own entry record, and one that took an `info` and ignored it would lie
 //!   about what the mock hands back.
 //! * A fixture never runs a real harness. The shipped recipes launch `claude` and `codex`,
 //!   which hang on a machine that has one installed and fail on one that has not, so a
@@ -262,28 +262,9 @@ pub fn mock_armed(tmp: &tempfile::TempDir, id: &str) -> goalcup_cli::daemon::Moc
 /// The pinned run key is what matters: `goalcup status` and `goalcup seal` are fresh processes,
 /// the key they check a signed document against is the one `start` wrote down here, and a
 /// test that handed them a configuration directory without this file would be testing the
-/// refusal rather than the render.
-///
-/// `connector_id` is the one field of [`goalcup_cli::entries::EntryRecord`] that
-/// `WorkspaceInfo` cannot answer for — the daemon does not echo it back on the workspace —
-/// so it is written as the shipped id `mock_armed` is called with in every caller of this
-/// helper.
-pub fn cfg_with_entry(tmp: &Path, info: &control::WorkspaceInfo) -> PathBuf {
-    let record = goalcup_cli::entries::EntryRecord {
-        entry_id: info.entry_id.clone(),
-        process_generation: info.process_generation,
-        connector_id: "claude-code-cli".to_string(),
-        run_public_key: info.run_public_key.clone(),
-        workspace: info.workspace.clone(),
-        artifact_root: info.artifact_root.clone(),
-        harness_home: info.harness_home.clone(),
-        session_id: info.session_id.clone(),
-        last_pid: None,
-        status_url: info.status_url.clone(),
-        created_at: info.created_at.clone(),
-        dev: false,
-    };
-    if let Err(e) = goalcup_cli::entries::write_entry(tmp, &record) {
+/// refusal rather than the render. `MockDaemonClient::info` is that record.
+pub fn cfg_with_entry(tmp: &Path, info: &goalcup_cli::entries::EntryRecord) -> PathBuf {
+    if let Err(e) = goalcup_cli::entries::write_entry(tmp, info) {
         panic!("the cached entry record under {}: {e}", tmp.display());
     }
     tmp.to_path_buf()

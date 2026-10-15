@@ -2499,9 +2499,7 @@ async fn a_v1_row_that_owes_work_is_refused_by_a_default_daemon_with_a_remedy_th
             "{what}: names the row: {message}"
         );
         assert!(
-            message.contains("sealed and fully acknowledged")
-                && message.contains("v0.5.0")
-                && message.contains("artifact_root"),
+            message.contains("fresh `artifact_root`"),
             "{what}: says what clears it: {message}"
         );
     }

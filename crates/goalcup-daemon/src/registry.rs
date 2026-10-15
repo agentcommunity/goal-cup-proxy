@@ -1,34 +1,28 @@
 //! The entry registry: every run this daemon knows about, and what it knows about it.
 //!
-//! An entry holds a workspace path, harness, manifest hash, signed receipt,
-//! per-run keys and health. The receipt is here as an `Option<StartReceipt>` that is written
-//! only after the document verified against the key this build pins, so a stored receipt is
-//! a verified one by construction.
+//! An entry holds a workspace path, harness, manifest hash, per-run keys and health.
 //!
 //! D4 makes entries records inside one daemon, routed by working directory.
 //!
 //! **This is not the capture buffer.** Two redb databases, not one: a buffer corrupted
-//! mid-run must still leave the daemon able to say what it was running, whose keys it
-//! held and which receipt it had.
+//! mid-run must still leave the daemon able to say what it was running and whose keys it
+//! held.
 //!
 //! **The file is a secret store.** It holds [`RunKeys`] in plaintext — the signing seed that
 //! is the run key itself. On unix the file is created `0o600` and a file found looser than
 //! that is tightened on open; the directory [`Registry::default_path`] gives it is
 //! `0o700`, and a directory the registry merely happens to sit in is left alone.
-//! `RunKeys` redacts its own `Debug`, the way `control::WorkspaceInfo` already does, so
-//! the same secret cannot reach a log through an error message either.
+//! `RunKeys` redacts its own `Debug`, the way `control::CaptureWorkspaceInfo` does for its
+//! ingest secret, so the same secret cannot reach a log through an error message either.
 
 use crate::{DaemonError, now_rfc3339};
 use goalcup_platform::tracecap::ArtifactRoot;
 use goalcup_protocol::chain::GENESIS;
-use goalcup_protocol::control::EventStatus;
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
 use goalcup_protocol::provenance::Sha256Digest;
-use goalcup_protocol::receipt::StartReceipt;
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// One JSON document per entry, keyed by `entry_id`. JSON rather than a hand-rolled
@@ -128,19 +122,11 @@ pub enum ProcessHandoffPhase {
 pub struct RunKeys {
     /// 32 random bytes, hex: the Ed25519 seed, not the expanded key.
     pub signing_seed_hex: String,
-    /// The V1 buffer key and receiver token. Nothing in this build reads them, and a new
-    /// entry writes them empty: no secret is minted for them. They stay on the row because
-    /// a v0.5.0 daemon, which `Daemon::start` names as the way to finish a V1 entry on the
-    /// same artifact root, requires both keys to read any row.
-    #[serde(default)]
-    buffer_key_hex: String,
-    #[serde(default)]
-    receiver_token: String,
 }
 
 /// Nothing but the shape. The seed is a secret, and a derived `Debug` would put it in every
 /// log line and every interpolated error that carries an `Entry` — the same leak
-/// `control::WorkspaceInfo` hand-writes its `Debug` to close.
+/// `control::CaptureWorkspaceInfo` hand-writes its `Debug` to close.
 impl std::fmt::Debug for RunKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunKeys")
@@ -168,8 +154,6 @@ impl RunKeys {
     pub fn from_seed(signing: [u8; 32]) -> RunKeys {
         RunKeys {
             signing_seed_hex: hex::encode(signing),
-            buffer_key_hex: String::new(),
-            receiver_token: String::new(),
         }
     }
 
@@ -181,8 +165,8 @@ impl RunKeys {
         Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
     }
 
-    /// Hex verifying key. `WorkspaceInfo.run_public_key`, the key `SignedStatus::verify_with`
-    /// is pinned against, and the key the receipt request carries.
+    /// Hex verifying key. `CaptureWorkspaceInfo.run_public_key`, the key
+    /// `SignedStatus::verify_with` is pinned against.
     pub fn public_key_hex(&self) -> Result<String, DaemonError> {
         Ok(hex::encode(self.signing_key()?.verifying_key().to_bytes()))
     }
@@ -233,16 +217,6 @@ pub struct Entry {
     pub harness_version: String,
     pub state: EntryState,
     pub health: HealthState,
-    /// The signed start receipt.
-    ///
-    /// **Private on purpose.** The registry's checked receipt writers are the only code
-    /// that can change it, and both verify against the key this build pins. There is no
-    /// setter; [`Entry::new`] leaves it `None`; a struct literal outside this module does
-    /// not compile; [`Registry::put`] carries the stored receipt forward rather than
-    /// taking the caller's; and [`Registry::update`] restores it after the closure has
-    /// run. So "a stored receipt is a verified receipt" is a property of the type, not a
-    /// convention each caller has to remember.
-    receipt: Option<StartReceipt>,
     /// `None` until the first envelope is appended.
     pub chain_seq: Option<u64>,
     /// The genesis link until the first append.
@@ -254,15 +228,6 @@ pub struct Entry {
     #[serde(default)]
     pub terminal_drain_validation_failed: bool,
     pub sealed_at: Option<String>,
-    /// Three V1 fields nothing in this build reads. They stay on the row, at the values a new
-    /// entry always had, because a v0.5.0 daemon (which `Daemon::start` names as the way to
-    /// finish a V1 entry on the same artifact root) requires them to read any row.
-    #[serde(default)]
-    events_uploaded: u64,
-    #[serde(default)]
-    expected_config: BTreeMap<String, String>,
-    #[serde(default)]
-    status_line_path: PathBuf,
     /// The actual workspace-creation invocation determines this, not the connector's
     /// launch mode: `--attach` is possible on a normal `tui` connector.
     #[serde(default)]
@@ -287,22 +252,6 @@ pub struct Entry {
     #[serde(default)]
     cancelled_process_handoff_digest: Option<String>,
     pub last_process: Option<ProcessHandle>,
-    /// The round this run was told about, resolved once at creation from `[event]`.
-    ///
-    /// Held on the row because the terminal composers have no config and no runtime: the
-    /// runtime that knew the round is evicted at seal, and `Daemon::start`'s republication
-    /// sweep runs before any runtime exists. Without this a sealed document silently reverts
-    /// to the entry's own timeline and is re-signed that way on every restart.
-    ///
-    /// `#[serde(default)]` so a row written before this field existed still reads: the
-    /// registry is a file that outlives an upgrade, and an entry a daemon cannot open is a
-    /// run it cannot finish. `None` reproduces the fallback exactly.
-    ///
-    /// Only the three configurable fields are honoured from here. `publication_closes_at` is
-    /// always recomputed, because the deadline is fixed by the receipt after this is written
-    /// — see `crate::status::event_status_from`.
-    #[serde(default)]
-    pub event: Option<EventStatus>,
     /// `Some` for a protocol-v5 local capture entry, which is never armed, tailed, uploaded
     /// or rebuilt as a legacy runtime. Absent from every legacy row byte-for-byte.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -333,11 +282,7 @@ impl Entry {
     /// carrying nothing that only a later stage can know.
     ///
     /// `health` starts [`HealthState::Online`] — the daemon is up and has observed
-    /// nothing yet. Arming is what turns it into `ArmingPending`, and arming has not
-    /// happened: `state` is [`EntryState::Created`].
-    ///
-    /// `receipt` cannot be given a value here: it is `None` and only the registry's checked
-    /// receipt writers can change that.
+    /// nothing yet — and `state` is [`EntryState::Created`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         entry_id: &str,
@@ -354,7 +299,6 @@ impl Entry {
             connector_id: connector_id.to_string(),
             workspace,
             trace_dir: artifact_dir.join("trace"),
-            status_line_path: artifact_dir.join("status-line.txt"),
             artifact_dir,
             manifest_sha256: manifest_sha256.to_string(),
             // Not a constructor argument: the directory digest is taken by the control
@@ -364,14 +308,11 @@ impl Entry {
             harness_version: harness_version.to_string(),
             state: EntryState::Created,
             health: HealthState::Online,
-            receipt: None,
             chain_seq: None,
             chain_head: GENESIS.to_string(),
             last_ack_seq: None,
             terminal_drain_validation_failed: false,
             sealed_at: None,
-            events_uploaded: 0,
-            expected_config: BTreeMap::new(),
             expected_process_handoff,
             process_handoff_generation: 0,
             process_handoff_phase: ProcessHandoffPhase::InitialClosed,
@@ -379,7 +320,6 @@ impl Entry {
             prepared_process_handle: None,
             cancelled_process_handoff_digest: None,
             last_process: None,
-            event: None,
             capture: None,
             created_at: now_rfc3339(),
             keys,
@@ -542,9 +482,8 @@ impl Registry {
     /// - **One entry per workspace (D4).** Entries are routed by working directory, so a
     ///   second entry bound to a directory another entry already holds would make the
     ///   route a coin toss. It is refused, and nothing is written.
-    /// - **The receipt is not the caller's.** Whatever the value handed in says, the put
-    ///   carries the *stored* receipt forward: a new entry starts with none and an
-    ///   existing one keeps the one the registry verified.
+    /// - **The process-handoff authority is not the caller's.** Whatever the value handed in
+    ///   says, the put carries the *stored* handoff fields forward.
     pub fn put(&self, entry: &Entry) -> Result<(), DaemonError> {
         self.put_letting_go(entry, &|_| false)
     }
@@ -562,12 +501,10 @@ impl Registry {
         {
             let mut table = txn.open_table(ENTRIES).map_err(|e| plain(e, "put"))?;
             let mut to_write = entry.clone();
-            to_write.receipt = None;
             for row in table.iter().map_err(|e| plain(e, "put"))? {
                 let (id, bytes) = row.map_err(|e| plain(e, "put"))?;
                 let stored: Entry = serde_json::from_slice(bytes.value())?;
                 if id.value() == entry.entry_id {
-                    to_write.receipt = stored.receipt;
                     to_write.expected_process_handoff = stored.expected_process_handoff;
                     to_write.process_handoff_generation = stored.process_handoff_generation;
                     to_write.process_handoff_phase = stored.process_handoff_phase;
@@ -682,16 +619,15 @@ impl Registry {
     /// Read, modify, write, in one transaction, returning what was stored.
     ///
     /// The closure may not rename the entry: the id is the key, and an id changed under
-    /// it would leave the old key holding the new document. It cannot touch the receipt or
+    /// it would leave the old key holding the new document. It cannot touch the
     /// process-handoff contract either — there is no setter to reach the private fields
     /// with, and the values the entry arrived with are restored afterwards regardless.
-    /// `update` therefore cannot bypass receipt verification or launch authority.
+    /// `update` therefore cannot bypass launch authority.
     pub fn update<F>(&self, entry_id: &str, f: F) -> Result<Entry, DaemonError>
     where
         F: FnOnce(&mut Entry),
     {
         self.modify(entry_id, |e| {
-            let verified = e.receipt.clone();
             let expected_process_handoff = e.expected_process_handoff;
             let process_handoff_generation = e.process_handoff_generation;
             let process_handoff_phase = e.process_handoff_phase;
@@ -701,7 +637,6 @@ impl Registry {
             let terminal_drain_validation_failed = e.terminal_drain_validation_failed;
             let last_process = e.last_process.clone();
             f(e);
-            e.receipt = verified;
             e.expected_process_handoff = expected_process_handoff;
             e.process_handoff_generation = process_handoff_generation;
             e.process_handoff_phase = process_handoff_phase;
@@ -974,8 +909,7 @@ impl Registry {
         Ok(stored)
     }
 
-    /// `update` without the receipt guard. Receipt writers perform their own validation
-    /// before reaching this helper.
+    /// The read-modify-write transaction under [`Registry::update`], without its guard.
     fn modify<F>(&self, entry_id: &str, f: F) -> Result<Entry, DaemonError>
     where
         F: FnOnce(&mut Entry),

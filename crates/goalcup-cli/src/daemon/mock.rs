@@ -9,9 +9,12 @@
 //! # It is not a stub
 //!
 //! It records the order calls arrived in, it signs its `SignedStatus` with a fixed seed so a
-//! test can pin `WorkspaceInfo.run_public_key` and mean it, and it can
+//! test can pin `CaptureWorkspaceInfo.run_public_key` and mean it, and it can
 //! answer one `busy` on a named method — the transient the daemon raises on every mutating
 //! route while an entry is mid-pump.
+//!
+//! Its status is a v5 local capture's, as every document the daemon signs is: a `capture`
+//! block, `health` `online`, and the capture's own sentence.
 //!
 //! # What it does not model: headers
 //!
@@ -26,13 +29,17 @@
 //! invented at a call site is a method the next test spells differently, so anything a test
 //! needs that is not here is added here, in this file.
 
+use crate::entries::EntryRecord;
 use ed25519_dalek::SigningKey;
-use goalcup_protocol::capture::{M2Status, StreamKey};
+use goalcup_protocol::capture::StreamKey;
+use goalcup_protocol::capture_status::{
+    AnalysisState, AnchorState, CaptureState, CaptureStorage, DeliveryState, M2Status, RunState,
+};
 use goalcup_protocol::control::{
     self, ArmingState, CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest,
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
-    ControlError, DaemonClient, DaemonHealth, EntrySummary, EventStatus, LocalSealOutcome,
-    SealResponse, SignedStatus, StatusPayload, WorkspaceInfo,
+    ControlError, DaemonClient, DaemonHealth, EntrySummary, LocalSealOutcome, SealResponse,
+    SignedStatus, StatusPayload,
 };
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
@@ -71,7 +78,8 @@ pub struct MockCapture {
 /// Every field is public because the hooks below are the only writers a test uses and this
 /// is what they write to.
 pub struct MockState {
-    pub info: WorkspaceInfo,
+    /// The record `goalcup start` writes for this mock's entry.
+    pub info: EntryRecord,
     pub status: SignedStatus,
     pub entries: Vec<EntrySummary>,
     pub seal: SealManifest,
@@ -97,7 +105,7 @@ pub struct MockDaemonClient {
 
 /// Lowercase hex, written out rather than pulling `hex` into this crate for one call. The
 /// protocol's own `SignedStatus::sign` produces the same alphabet, which is what makes the
-/// key the mock puts on `WorkspaceInfo.run_public_key` the one its documents verify with.
+/// key the mock puts on `CaptureWorkspaceInfo.run_public_key` the one its documents verify with.
 fn hex_of(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -119,53 +127,38 @@ impl MockDaemonClient {
         let entry_id = "entry-mock-0001".to_string();
         let key = MockDaemonClient::signing_key();
         let run_public_key = hex_of(&key.verifying_key().to_bytes());
-        let info = WorkspaceInfo {
+        let info = EntryRecord {
             entry_id: entry_id.clone(),
             process_generation: 1,
+            connector_id: connector_id.to_string(),
+            run_public_key,
             workspace: workspace.display().to_string(),
-            // The mock hands back the same string for both spellings: it names a directory
-            // it created itself, under a `tmp` the caller chose, so there is no requested
-            // form for a canonicalisation to change. A test that needs the two to differ
-            // builds that difference itself.
-            workspace_requested: workspace.display().to_string(),
             artifact_root: artifact_root.display().to_string(),
             harness_home: harness_home.display().to_string(),
-            run_public_key,
-            // Empty, as `goalcup start` writes it for a capture entry: the V1 page is gone.
-            status_url: String::new(),
-            status_cache_path: artifact_root.join("status.json").display().to_string(),
-            status_line_path: artifact_root.join("status-line.txt").display().to_string(),
             session_id: "session-mock-0001".to_string(),
+            last_pid: None,
             created_at: NOW.to_string(),
+            dev: false,
         };
         let payload = StatusPayload {
             entry_id: entry_id.clone(),
             connector_id: connector_id.to_string(),
             workspace: info.workspace.clone(),
-            session_id: Some(info.session_id.clone()),
+            session_id: None,
             harness_version: Some("0.0.0-mock".to_string()),
-            arming: ArmingState::Armed,
+            arming: ArmingState::Started,
             health: HealthState::Online,
-            started_at: Some(NOW.to_string()),
+            started_at: None,
             deadline_at: None,
             sealed_at: None,
             seconds_remaining: None,
-            last_sync_at: Some(NOW.to_string()),
+            last_sync_at: None,
             events_uploaded: 0,
             events_pending: 0,
-            // The daemon's own plain words for `Online` (`goalcup_daemon::status::
-            // plain_words`), so a command test asserts the CLI prints the daemon's
+            // The daemon's own words for a recording capture (`goalcup_daemon::status::
+            // capture_words`), so a command test asserts the CLI prints the daemon's
             // vocabulary rather than a second one of its own.
-            detail: "Recording. Everything is being captured and synced.".to_string(),
-            // The entry's own timeline standing in for a configured round, which is
-            // exactly what `EventStatusSource::Fallback` below declares it to be.
-            event: EventStatus {
-                t0: NOW.to_string(),
-                start_window_closes_at: NOW.to_string(),
-                publication_closes_at: NOW.to_string(),
-                rules_version: "mock".to_string(),
-            },
-            event_status_source: control::EventStatusSource::Fallback,
+            detail: "Local capture is recording: the chain is written on this machine.".to_string(),
             cycles: control::CycleErrors::default(),
             polls_capped: 0,
             cursor_restore_failures: 0,
@@ -174,9 +167,9 @@ impl MockDaemonClient {
             files_capped: 0,
             harness_unverified: false,
             finalization: None,
-            capture: None,
-            producers_consumed: None,
-            admissions_refused: None,
+            capture: Some(recording()),
+            producers_consumed: Some(1),
+            admissions_refused: Some(0),
         };
         let state = MockState {
             status: signed(payload, &key),
@@ -184,9 +177,9 @@ impl MockDaemonClient {
                 entry_id: entry_id.clone(),
                 connector_id: connector_id.to_string(),
                 workspace: info.workspace.clone(),
-                arming: ArmingState::Armed,
+                arming: ArmingState::Started,
                 health: HealthState::Online,
-                started_at: Some(NOW.to_string()),
+                started_at: None,
                 deadline_at: None,
                 sealed_at: None,
             }],
@@ -246,6 +239,26 @@ impl MockDaemonClient {
     }
 }
 
+/// The capture block of a v5 entry that is recording, with nothing durable yet.
+fn recording() -> M2Status {
+    M2Status {
+        run: RunState::Running,
+        capture: CaptureState::Recording,
+        delivery: DeliveryState::LocalOnly,
+        analysis: AnalysisState::NotRun,
+        anchor: AnchorState::LocalOnly,
+        storage: CaptureStorage {
+            quota_bytes: goalcup_protocol::capture::CHAIN_QUOTA_BYTES,
+            reserved_bytes: 0,
+            used_bytes: 0,
+            accounting_available: true,
+            durable: None,
+        },
+        gap_count: 0,
+        assistance_observed: false,
+    }
+}
+
 /// The payload signed with `key`, or an unsigned document whose signature will not check.
 ///
 /// A signing failure cannot happen for a payload this file built — the serialisation is
@@ -277,9 +290,9 @@ impl MockDaemonClient {
         self.state.lock().ok().map(|mut state| f(&mut state))
     }
 
-    /// The `WorkspaceInfo` this mock will hand back, readable before the call is made so a
-    /// test can assert against the same struct the command under test received.
-    pub fn info(&self) -> WorkspaceInfo {
+    /// The record `goalcup start` writes for this mock's entry, readable before the call is
+    /// made so a test can pin the same run key the command under test checks against.
+    pub fn info(&self) -> EntryRecord {
         match self.read(|state| state.info.clone()) {
             Some(info) => info,
             None => unreachable_info(),
@@ -335,82 +348,28 @@ impl MockDaemonClient {
     }
 }
 
-/// The `WorkspaceInfo` a poisoned lock yields: every string says what happened, so an
-/// assertion against it fails naming the cause instead of comparing empty strings.
-fn unreachable_info() -> WorkspaceInfo {
+/// The record a poisoned lock yields: every string says what happened, so an assertion
+/// against it fails naming the cause instead of comparing empty strings.
+fn unreachable_info() -> EntryRecord {
     let said = "the mock's state was poisoned by a panic in another test thread".to_string();
-    WorkspaceInfo {
+    EntryRecord {
         entry_id: said.clone(),
         process_generation: 0,
+        connector_id: said.clone(),
+        run_public_key: said.clone(),
         workspace: said.clone(),
-        workspace_requested: said.clone(),
         artifact_root: said.clone(),
         harness_home: said.clone(),
-        run_public_key: said.clone(),
-        status_url: said.clone(),
-        status_cache_path: said.clone(),
-        status_line_path: said.clone(),
         session_id: said.clone(),
+        last_pid: None,
         created_at: said,
+        dev: false,
     }
 }
 
 // ------------------------------------------------------------------ the hooks
 
 impl MockDaemonClient {
-    /// Put the status payload into `ArmingState::Refused` with this `detail` — the fourth
-    /// arming state, which is a refusal and not a timeout.
-    pub fn set_arming_refused(&self, detail: &str) {
-        let detail = detail.to_string();
-        self.write(|state| {
-            state.status.payload.arming = ArmingState::Refused;
-            state.status.payload.health = HealthState::ArmingPending;
-            state.status.payload.detail = detail;
-            resign(state);
-        });
-    }
-
-    /// One of the four cadences the daemon's own loop runs, and the words its last failure
-    /// left. `cycle` is `tick`, `upload`, `status` or `deadline`; anything else counts
-    /// nothing and still records the message, which is what makes a mistyped cadence visible
-    /// in the assertion rather than silent.
-    pub fn set_cycle_error(&self, cycle: &str, message: &str) {
-        let (cycle, message) = (cycle.to_string(), message.to_string());
-        self.write(|state| {
-            let cycles = &mut state.status.payload.cycles;
-            match cycle.as_str() {
-                "tick" => cycles.tick += 1,
-                "upload" => cycles.upload += 1,
-                "status" => cycles.status += 1,
-                "deadline" => cycles.deadline += 1,
-                _ => {}
-            }
-            cycles.last = Some(message);
-            resign(state);
-        });
-    }
-
-    /// What the daemon says the harness's version is, including the empty string.
-    ///
-    /// `armed_ok` answers `"0.0.0-mock"`; a harness that answered the probe with nothing is
-    /// `Some("")`, which only this hook reaches, and `goalcup status` must not print a line
-    /// with a dangling colon for it.
-    pub fn set_harness_version(&self, version: Option<&str>) {
-        let version = version.map(str::to_string);
-        self.write(|state| {
-            state.status.payload.harness_version = version.clone();
-            resign(state);
-        });
-    }
-
-    /// Mark the signed ending as unable to prove complete harness termination.
-    pub fn set_harness_unverified(&self, unverified: bool) {
-        self.write(|state| {
-            state.status.payload.harness_unverified = unverified;
-            resign(state);
-        });
-    }
-
     /// Re-arm the seal: the next one succeeds and every one after it is a `conflict`, which
     /// is what this mock does from the moment it is built.
     pub fn seal_once_then_conflict(&self) {
@@ -596,14 +555,6 @@ impl DaemonClient for MockDaemonClient {
             cycles: control::CycleErrors::default(),
             reopen_failed: Vec::new(),
         })
-    }
-
-    fn current_entry(&self) -> Result<Option<String>, ControlError> {
-        let Ok(mut state) = self.state.lock() else {
-            return Err(poisoned());
-        };
-        record(&mut state, "current_entry")?;
-        Ok(Some(state.info.entry_id.clone()))
     }
 
     fn abandon(&self, entry_id: &str, reason: &str) -> Result<(), ControlError> {

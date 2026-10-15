@@ -54,7 +54,7 @@ TypeScript).
 | Verifier | Integrity reader and research report. Five built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | Upload server | Checks the run credential, stores chunks in R2, signs receipts and acknowledgements, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md) |
 
-The control API (version `CONTROL_API_VERSION`, now 7) requires its version on mutating requests.
+The control API (version `CONTROL_API_VERSION`, now 8) requires its version on mutating requests.
 Create binds the connector-directory digest and may carry the server's entry id.
 
 ## 4. A harness is data

@@ -404,34 +404,32 @@ fn ack_and_seal_round_trip() {
     );
 }
 
+/// The three states the daemon produces keep their wire words, and a word of the retired V1
+/// ladder that an older registry row still holds reads as `unknown` instead of refusing the row.
 #[test]
-fn health_state_carries_the_fifteen_r14_states_including_the_two_new_ones() {
-    let all = [
-        HealthState::Online,
-        HealthState::UploadLagging,
-        HealthState::ConnectionLost,
-        HealthState::AgentExited,
-        HealthState::TrackerInterrupted,
-        HealthState::CaptureStalled,
-        HealthState::HooksSilent,
-        HealthState::ConfigRestored,
-        HealthState::DeadlineReached,
-        HealthState::ArmingPending,
-        HealthState::ArmingLost,
-        HealthState::VersionChanged,
-        HealthState::ConfigMismatch,
-        HealthState::StoreReplaced,
-        HealthState::DiskPressure,
-    ];
-    assert_eq!(all.len(), 15);
-    assert_eq!(
-        serde_json::to_string(&HealthState::StoreReplaced).unwrap(),
-        "\"store_replaced\""
-    );
-    assert_eq!(
-        serde_json::to_string(&HealthState::DiskPressure).unwrap(),
-        "\"disk_pressure\""
-    );
+fn health_state_names_the_three_produced_states_and_reads_any_other_word_as_unknown() {
+    for (state, word) in [
+        (HealthState::Online, "\"online\""),
+        (HealthState::Sealed, "\"sealed\""),
+        (
+            HealthState::SealingRecoveryNeeded,
+            "\"sealing_recovery_needed\"",
+        ),
+    ] {
+        assert_eq!(serde_json::to_string(&state).unwrap(), word);
+        assert_eq!(serde_json::from_str::<HealthState>(word).unwrap(), state);
+    }
+    for retired in [
+        "\"arming_pending\"",
+        "\"hooks_silent\"",
+        "\"disk_pressure\"",
+    ] {
+        assert_eq!(
+            serde_json::from_str::<HealthState>(retired).unwrap(),
+            HealthState::Unknown,
+            "{retired}"
+        );
+    }
 }
 
 #[test]

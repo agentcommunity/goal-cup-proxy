@@ -121,7 +121,8 @@ async fn exactly_the_public_routes_answer_without_a_token_and_nothing_else_does(
         // The removed V1 page is not public: nothing is served there.
         "/v0/ui".to_string(),
         protocol::ROUTE_ENTRIES.to_string(),
-        protocol::ROUTE_ENTRIES_CURRENT.to_string(),
+        // Removed at control API version 8, and still not public.
+        "/v0/entries/current".to_string(),
         protocol::ROUTE_HEALTH.to_string(),
         protocol::entry_route(&h.entry_id, control::SUFFIX_SEAL),
     ] {
@@ -156,7 +157,7 @@ async fn every_route_the_table_names_is_public_or_answers_401() {
             .iter()
             .map(|s| protocol::entry_route(&h.entry_id, s)),
     );
-    assert!(paths.len() >= 10, "the table is the whole surface");
+    assert!(paths.len() >= 9, "the table is the whole surface");
 
     for path in paths {
         let status = h.get_no_token(&path).await.status();

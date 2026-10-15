@@ -1,8 +1,9 @@
 //! The daemon's per-machine configuration file.
 //!
 //! This is the only thing the daemon invents that is not already in `goalcup-protocol`.
-//! Everything below is a path root, the control address, or the round's dates; nothing here
-//! is a rule, and nothing here is read by the verifier.
+//! Everything below is a path root or the control address; nothing here is a rule, and
+//! nothing here is read by the verifier. The round's dates are the upload server's: it owns
+//! the clock.
 
 use crate::DaemonError;
 use serde::Deserialize;
@@ -29,14 +30,6 @@ pub struct DaemonConfig {
     pub workspace_parent: PathBuf,
     /// The control API's listen address. `validate()` refuses anything but loopback.
     pub control_addr: SocketAddr,
-    /// The round's own dates, when this machine has been told them.
-    ///
-    /// Absent is the normal case and the default. What it costs is on [`EventConfig`]: with
-    /// no `[event]` section every signed status document reports the entry's own timeline in
-    /// the competition's fields, and `StatusPayload::event_status_source` says `fallback` so
-    /// a reader can tell the two apart.
-    #[serde(default)]
-    pub event: Option<EventConfig>,
 }
 
 /// The file's own keys, each one named so that no other key loads.
@@ -48,8 +41,6 @@ struct DaemonConfigFile {
     config_dir: PathBuf,
     workspace_parent: PathBuf,
     control_addr: SocketAddr,
-    #[serde(default)]
-    event: Option<EventConfig>,
 }
 
 impl From<DaemonConfigFile> for DaemonConfig {
@@ -60,60 +51,7 @@ impl From<DaemonConfigFile> for DaemonConfig {
             config_dir: f.config_dir,
             workspace_parent: f.workspace_parent,
             control_addr: f.control_addr,
-            event: f.event,
         }
-    }
-}
-
-/// `[event]` — the competition-wide dates the signed status document carries.
-///
-/// # Why this is configuration and not something the daemon can work out
-///
-/// `EventStatus` is the one part of the status document a reader may trust about the round:
-/// when the start window closes, as a number signed by the run key.
-/// The daemon has no way to know that number, so these three fields are how a machine is
-/// told, and `event_status_source` on the status document is how a reader learns whether it
-/// was. Without them the document would assert three numbers nobody had supplied.
-///
-/// `publication_closes_at` is deliberately not here. It is the entry's own `deadline_at`,
-/// which the start receipt fixes and which is immutable; a per-machine file that could
-/// name a later one would be a participant choosing their own deadline.
-///
-/// All three are required together. Two of the three would leave the document mixing a
-/// configured date with an invented one under one `event_status_source`, and there is no
-/// reading of that a participant could act on.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EventConfig {
-    /// When the round opens, RFC 3339 with a `Z`: `2026-10-01T00:00:00Z`.
-    pub t0: String,
-    /// The last moment an entry may start. `validate()` refuses a value below `t0`.
-    pub start_window_closes_at: String,
-    /// The rulebook this round is judged under — the organiser's string, not this build's
-    /// version, which says which binary wrote the document and nothing about which rules apply.
-    pub rules_version: String,
-}
-
-impl EventConfig {
-    /// The two dates, in seconds, or the reason they cannot be read.
-    ///
-    /// `parse_z` is the protocol's own reader, the same one every comparison of two of these
-    /// strings goes through, so a date this daemon accepts is a date the status document's
-    /// readers can parse.
-    fn window(&self) -> Result<(u64, u64), DaemonError> {
-        let read = |name: &str, value: &str| {
-            goalcup_protocol::control::parse_z(value).ok_or_else(|| {
-                DaemonError::Config(format!(
-                    "[event] {name} = {value:?} is not an RFC 3339 instant this build can \
-                     read ({{YYYY-MM-DDTHH:MM:SSZ}}): the status document is SIGNED, and a \
-                     date its readers cannot parse is a signature over nothing they can use"
-                ))
-            })
-        };
-        Ok((
-            read("t0", &self.t0)?,
-            read("start_window_closes_at", &self.start_window_closes_at)?,
-        ))
     }
 }
 
@@ -178,21 +116,6 @@ impl DaemonConfig {
                 self.workspace_parent.display(),
                 self.artifact_root.display()
             )));
-        }
-
-        // The round's dates, when this machine has been told them. Both readable, and in
-        // the one order that means anything: a start window that closed before the round
-        // opened is a window no entry could have started in, and the daemon would sign that
-        // statement for every participant who asked.
-        if let Some(event) = &self.event {
-            let (t0, closes) = event.window()?;
-            if t0 > closes {
-                return Err(DaemonError::Config(format!(
-                    "[event] t0 {} is after start_window_closes_at {}: no entry could start \
-                     in that window, and this daemon signs the numbers it is given",
-                    event.t0, event.start_window_closes_at
-                )));
-            }
         }
 
         Ok(())

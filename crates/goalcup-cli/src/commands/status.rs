@@ -40,27 +40,20 @@
 //! parsing stdout gets one shape for "here is a status" and another for "there is none",
 //! rather than a document it would have to know not to trust.
 //!
-//! # What only this surface prints
+//! # What it prints
 //!
-//! The bundled page carries `cycles` and `event_status_source` in its JSON
-//! and shows neither, so `goalcup status` is the only human surface for the
-//! daemon's own lost work — and for whether the round's dates were configured by an
-//! organiser or are the entry's own timeline standing in for them
-//! ([`EventStatusSource::Fallback`]). Staleness is
+//! Every document the daemon signs is a v5 local capture's, so the render is the capture
+//! block: its states, the daemon's sentence, storage, gaps and admissions. Staleness is
 //! [`goalcup_protocol::control::STALE_AFTER_SECONDS`], the one threshold every reader of the
-//! status document uses, and `now` is a parameter so the rendering is
-//! deterministic.
+//! status document uses, and `now` is a parameter so the rendering is deterministic.
 
 use crate::CliError;
 use crate::entries::{self, EntryRecord};
 use crate::retry::retry_busy;
 use goalcup_protocol::capture::M2Status;
 use goalcup_protocol::control::{
-    ArmingState, DaemonClient, EventStatusSource, STALE_AFTER_SECONDS, SignedStatus, StatusPayload,
-    WorkspaceFinalizationStatusV1, parse_z,
+    DaemonClient, STALE_AFTER_SECONDS, SignedStatus, StatusPayload, parse_z,
 };
-use goalcup_protocol::events::HealthState;
-use goalcup_protocol::provenance::TerminationOutcomeV1;
 use std::io::Write;
 use std::path::Path;
 
@@ -248,12 +241,6 @@ pub fn render_status(s: &SignedStatus, now: &str) -> String {
     // is the last inch of a chain that is otherwise sound — which is exactly why it is one
     // function and not a judgement call at every call site.
     let detail = plain(&p.detail);
-    let finalization_needs_review = finalization_needs_harness_review(p.finalization.as_ref());
-    let displayed_health = if finalization_needs_review {
-        HealthState::SealingRecoveryNeeded
-    } else {
-        p.health
-    };
     let workspace = plain(&p.workspace);
     let mut lines: Vec<String> = Vec::new();
     lines.push(format!("entry {} ({})", p.entry_id, p.connector_id));
@@ -262,108 +249,14 @@ pub fn render_status(s: &SignedStatus, now: &str) -> String {
     // document for this entry lately.
     lines.push(freshness(s, now));
 
-    // A v5 local capture has no arming gate, upload or deadline: its capture block is the
-    // whole story, and the legacy lines below would describe a run it is not.
-    if let Some(capture) = &p.capture {
-        lines.extend(capture_lines(p, capture, &detail, &workspace));
-        return lines.join("\n") + "\n";
-    }
-
-    match p.arming {
-        // The fourth arming state, and the reason it exists: "will never arm" must not read as
-        // "still waiting to arm". The reason is the daemon's own words.
-        ArmingState::Refused => lines.push(format!("  arming: refused — {detail}")),
-        other => lines.push(format!("  arming: {}", wire_word(&other))),
-    }
-    // D25: the health state in the daemon's own plain words, which is the same sentence the
-    // page shows. A second vocabulary here would be a second story about one daemon.
-    lines.push(format!(
-        "  health: {} — {detail}",
-        wire_word(&displayed_health)
-    ));
-    lines.push(format!("  workspace: {workspace}"));
-    if let Some(session) = &p.session_id {
-        lines.push(format!("  session: {}", plain(session)));
-    }
-    if let Some(version) = &p.harness_version {
-        // A daemon that has the field but not the number answers `Some("")` — a harness
-        // whose version probe printed nothing — and that would render as `  harness: ` with
-        // a dangling colon, which reads as a rendering fault rather than as an answer. The
-        // word is the answer.
-        let version = plain(version);
-        let version = if version.trim().is_empty() {
-            "unknown".to_string()
-        } else {
-            version
-        };
-        lines.push(format!("  harness: {version}"));
-    }
-    if let Some(started) = &p.started_at {
-        lines.push(format!("  started: {}", plain(started)));
-    }
-    // A sealed run has no time remaining, it has an ending. The countdown line
-    // is the one a participant acts on, and printing `time remaining: 167h 51m` under a run
-    // whose chain closed an hour ago is the surface telling them to hurry over something
-    // that is over.
-    lines.push(match &p.sealed_at {
-        Some(at) => format!("  sealed: {} — the chain is closed.", plain(at)),
-        None => match (p.seconds_remaining, &p.deadline_at) {
-            (Some(left), Some(at)) => format!("  time remaining: {} (deadline {at})", spell(left)),
-            (Some(left), None) => format!("  time remaining: {}", spell(left)),
-            (None, Some(at)) => format!("  deadline {at}, and the daemon reported no time left"),
-            (None, None) => "  time remaining: this run has no deadline on it".to_string(),
-        },
-    });
-    lines.push(format!(
-        "  events: {} uploaded, {} pending",
-        p.events_uploaded, p.events_pending
-    ));
-    if let Some(sync) = &p.last_sync_at {
-        lines.push(format!("  last sync: {}", plain(sync)));
-    }
-
-    // The two facts the page carries in JSON alone, and the two beside them that nothing
-    // else says either. Each is printed only when it has something to report: a run with
-    // none of them is a run whose participant should not have to read four zeroes.
-    if p.event_status_source == EventStatusSource::Fallback {
-        lines.push(format!(
-            "  round dates: not configured (fallback) — t0 {} and the close at {} are this \
-             entry's own timeline standing in for an organiser's.",
-            p.event.t0, p.event.publication_closes_at
-        ));
-    }
-    let c = &p.cycles;
-    // When the daemon's loops last turned,
-    // beside what they have lost. Four zeroes under `cycle errors` is what a healthy daemon
-    // looks like and reads like a daemon that has stopped; this line is the difference.
-    // Printed only when the document carries the stamp — one written before it, or by a
-    // daemon whose loops have not run yet, says nothing here rather than inventing a time.
-    if let Some(at) = &c.last_pass_at {
-        lines.push(format!("  cycles last ran: {}", plain(at)));
-    }
-    if c.tick + c.upload + c.status + c.deadline > 0 {
-        lines.push(format!(
-            "  cycle errors: tick {}, upload {}, status {}, deadline {}",
-            c.tick, c.upload, c.status, c.deadline
-        ));
-    }
-    if let Some(last) = &c.last {
-        lines.push(format!("  last cycle error: {}", plain(last)));
-    }
-    if p.files_capped > 0 {
-        lines.push(format!(
-            "  files not captured: {} — a whole-file store went past the daemon's seen-set \
-             bound, and every file past it is evidence that will not exist.",
-            p.files_capped
-        ));
-    }
-    if p.harness_unverified || finalization_needs_review {
-        lines.push(
-            "  the seal could not vouch for the harness: this daemon could not prove the \
-             managed process tree was fully and safely stopped when the chain ended. \
-             Review the recorded termination outcome."
-                .to_string(),
-        );
+    match &p.capture {
+        Some(capture) => lines.extend(capture_lines(p, capture, &detail, &workspace)),
+        // The daemon always sends a capture block. A document without one is still signed by
+        // the pinned key, so its sentence is shown, and nothing is guessed for the rest.
+        None => {
+            lines.push(format!("  {detail}"));
+            lines.push(format!("  workspace: {workspace}"));
+        }
     }
     lines.join("\n") + "\n"
 }
@@ -407,18 +300,6 @@ fn capture_lines(p: &StatusPayload, c: &M2Status, detail: &str, workspace: &str)
         ));
     }
     lines
-}
-
-fn finalization_needs_harness_review(finalization: Option<&WorkspaceFinalizationStatusV1>) -> bool {
-    match finalization {
-        None | Some(WorkspaceFinalizationStatusV1::Finishing {}) => false,
-        Some(WorkspaceFinalizationStatusV1::Incomplete { termination, .. }) => termination
-            .as_ref()
-            .is_some_and(|outcome| !matches!(outcome, TerminationOutcomeV1::Confirmed { .. })),
-        Some(WorkspaceFinalizationStatusV1::Terminal { termination, .. }) => {
-            !matches!(termination, TerminationOutcomeV1::Confirmed { .. })
-        }
-    }
 }
 
 /// How old this document is, in the words a reader acts on.
@@ -494,12 +375,6 @@ pub(crate) fn wire_word<T: serde::Serialize>(value: &T) -> String {
         Ok(serde_json::Value::String(word)) => word,
         _ => "unknown".to_string(),
     }
-}
-
-/// Seconds as hours, minutes and seconds. Nothing here is a threshold; it is arithmetic.
-fn spell(seconds: u64) -> String {
-    let (h, m, s) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
-    format!("{h}h {m:02}m {s:02}s")
 }
 
 /// One write, and the error naming the stream it could not be made on.

@@ -10,20 +10,18 @@
 //! There is no copy on disk: `goalcup status` starts the run-scoped daemon when none answers
 //! and asks it, so the registry is the one source of truth, sealed runs included.
 //! `SignedStatus::verify_with` takes the key the **caller** pinned from
-//! `WorkspaceInfo.run_public_key`; the `public_key` field on the document is a label, not
+//! `CaptureWorkspaceInfo.run_public_key`; the `public_key` field on the document is a label, not
 //! a credential, and nothing in this crate verifies against it.
 //!
 //! Every document is a v5 local capture's: the upload, deadline and hook fields the wire
 //! shape still carries are reported empty or zero, and `detail` is the capture's sentence.
 
 use crate::DaemonError;
-use crate::config::EventConfig;
 use crate::registry::{Entry, EntryState};
 use ed25519_dalek::SigningKey;
 use goalcup_protocol::capture::{CaptureState, M2Status, RunState};
 use goalcup_protocol::control::{
-    ArmingState, CycleErrors, EntrySummary, EventStatus, EventStatusSource, SignedStatus,
-    StatusPayload,
+    ArmingState, CycleErrors, EntrySummary, SignedStatus, StatusPayload,
 };
 use goalcup_protocol::events::HealthState;
 
@@ -32,7 +30,6 @@ use goalcup_protocol::events::HealthState;
 pub struct StatusInputs<'a> {
     pub entry: &'a Entry,
     pub arming: ArmingState,
-    pub event: EventStatus,
     /// What the daemon's own cadences lost. Gathered here rather than computed from
     /// the entry, because the failures belong to the loop around the entry and not to the
     /// run: the runtime is handed the daemon's counters at registration.
@@ -85,8 +82,6 @@ pub fn build_payload(inputs: &StatusInputs) -> StatusPayload {
         // published as a completed all-clear.
         events_pending: u64::from(entry.terminal_drain_needs_review()),
         detail: capture_words(&inputs.capture).to_string(),
-        event_status_source: source_of(entry, &inputs.event),
-        event: inputs.event.clone(),
         cycles: inputs.cycles.clone(),
         polls_capped: 0,
         cursor_restore_failures: 0,
@@ -122,77 +117,6 @@ fn capture_words(snapshot: &M2Status) -> &'static str {
             "Local capture is recording with losses: some observations were not retained, and \
              each loss is chained as a gap."
         }
-    }
-}
-
-/// The event timeline an entry falls back to when no round was configured.
-///
-/// **What each field means here, and why none of it is a claim about a round.** `t0`,
-/// `start_window_closes_at` and `publication_closes_at` are the moment the entry's row was
-/// created: the entry could not have started before it existed, and a local capture has no
-/// signed deadline, so its own creation is the only window this daemon can measure without
-/// being told one. `rules_version` is this build's version, which says which binary wrote the
-/// document and nothing about which rulebook the run is judged under.
-///
-/// A reader is not asked to work any of that out: [`StatusPayload::event_status_source`] is
-/// `fallback` on exactly the documents this built.
-pub(crate) fn fallback_event_status(entry: &Entry) -> EventStatus {
-    EventStatus {
-        t0: entry.created_at.clone(),
-        start_window_closes_at: entry.created_at.clone(),
-        publication_closes_at: entry.created_at.clone(),
-        rules_version: crate::DAEMON_VERSION.to_string(),
-    }
-}
-
-/// The event status one entry should carry, given three configured fields from anywhere.
-///
-/// `publication_closes_at` is the fallback's in every case: no configured value replaces it.
-pub(crate) fn event_status_from(entry: &Entry, configured: Option<&EventStatus>) -> EventStatus {
-    let fallback = fallback_event_status(entry);
-    match configured {
-        None => fallback,
-        Some(event) => EventStatus {
-            t0: event.t0.clone(),
-            start_window_closes_at: event.start_window_closes_at.clone(),
-            publication_closes_at: fallback.publication_closes_at,
-            rules_version: event.rules_version.clone(),
-        },
-    }
-}
-
-/// The same, from a `[event]` config section. The two callers that hold a `DaemonConfig`
-/// use this; the terminal composers use [`event_status_from`] with the entry's own field.
-pub(crate) fn event_status_for(entry: &Entry, configured: Option<&EventConfig>) -> EventStatus {
-    let as_status = configured.map(|event| EventStatus {
-        t0: event.t0.clone(),
-        start_window_closes_at: event.start_window_closes_at.clone(),
-        publication_closes_at: String::new(),
-        rules_version: event.rules_version.clone(),
-    });
-    event_status_from(entry, as_status.as_ref())
-}
-
-/// Whether the three configurable fields of `event` are the entry's own timeline.
-///
-/// Derived rather than carried. `EventStatus` is the only channel between the construction
-/// site that knows the answer and the document, and it is a `goalcup-protocol` struct built
-/// by the literals in this module; a fifth field on it would be a field those literals do not
-/// set. So the three fields `[event]` supplies are compared against what the fallback would
-/// have put there, on `created_at` and `DAEMON_VERSION`, both of which are fixed for the life
-/// of the entry — `publication_closes_at` is not compared, because `[event]` does not set it.
-///
-/// The one inaccuracy is benign and worth naming: a `[event]` section that declares exactly
-/// the entry's creation instant and this build's version reads as `fallback`. The numbers in
-/// the document are then identical either way, so nothing a reader does with it changes.
-fn source_of(entry: &Entry, event: &EventStatus) -> EventStatusSource {
-    let fallback = fallback_event_status(entry);
-    let same = event.t0 == fallback.t0
-        && event.start_window_closes_at == fallback.start_window_closes_at
-        && event.rules_version == fallback.rules_version;
-    match same {
-        true => EventStatusSource::Fallback,
-        false => EventStatusSource::Config,
     }
 }
 

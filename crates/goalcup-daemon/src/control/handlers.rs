@@ -113,20 +113,6 @@ pub(super) async fn list_entries(State(state): State<ControlState>) -> Response 
     }
 }
 
-/// `GET /v0/entries/current` — the entry a bare `goalcup status` means.
-///
-/// `null` when there is none and `null` when there is more than one: a daemon holding two
-/// live runs must not guess which one a caller with no id was asking about. That is
-/// `Daemon::current_entry`'s rule and this handler adds nothing to it — `200` with a
-/// `null` body rather than a `404`, because "no entry is current" is an answer and not a
-/// missing route.
-pub(super) async fn current_entry(State(state): State<ControlState>) -> Response {
-    match state.daemon.current_entry() {
-        Ok(id) => axum::Json(id).into_response(),
-        Err(e) => ControlErrorResponse::from(e).into_response(),
-    }
-}
-
 // --------------------------------------------------------------- the terminal handlers
 
 /// `POST /v0/entries/{id}/seal` — the participant's early finish of a local capture.

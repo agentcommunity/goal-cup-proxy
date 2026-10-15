@@ -151,11 +151,9 @@ impl Daemon {
             .find(|entry| entry.capture.is_none() && v1_row_owes_work(entry))
         {
             return Err(DaemonError::Refused(format!(
-                "the registry holds a V1 (transcript-path) entry, {}, that is not finished: it is \
-                 {:?} and this build does not include the V1 runtime that would drain and seal it. \
-                 Finish it with a v0.5.0 daemon built with `--features v1-compat` on this \
-                 artifact root (once it is sealed and fully acknowledged it no longer blocks this \
-                 daemon), or give the capture product its own `artifact_root` and `config_dir`",
+                "this artifact_root holds a V1 entry, {}, that is not finished (it is {:?}), and \
+                 this build has no V1 runtime to finish it. Use a fresh `artifact_root` and \
+                 `config_dir`",
                 owing.entry_id, owing.state
             )));
         }
@@ -444,22 +442,6 @@ impl Daemon {
         out.extend(self.capture_summaries()?);
         out.sort_by(|left, right| left.entry_id.cmp(&right.entry_id));
         Ok(out)
-    }
-
-    /// The single entry a caller with no id means: the one open run that is not sealed.
-    /// `None` when there is none, and `None` when there is more than one — a daemon holding
-    /// two live runs must not guess which one a bare `goalcup status` is about.
-    pub(crate) fn current_entry(&self) -> Result<Option<String>, DaemonError> {
-        let mut live: Vec<String> = self
-            .capture_summaries()?
-            .into_iter()
-            .filter(|summary| summary.sealed_at.is_none())
-            .map(|summary| summary.entry_id)
-            .collect();
-        Ok(match live.len() {
-            1 => live.pop(),
-            _ => None,
-        })
     }
 
     /// Record the process the CLI launched, so the seal has something to end (D22, D9).

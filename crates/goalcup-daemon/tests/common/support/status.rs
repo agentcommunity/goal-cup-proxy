@@ -1,4 +1,4 @@
-//! One `StatusInputs`, one `EventStatus` and one started `Entry`.
+//! One `StatusInputs` and one started `Entry`.
 //!
 //! The status document is `goalcup_protocol::control::StatusPayload` — the daemon defines
 //! no second shape — so the fixture builds that type and nothing else. `health_status.rs`
@@ -10,7 +10,7 @@ use goalcup_daemon::status::StatusInputs;
 use goalcup_protocol::capture_status::{
     AnalysisState, AnchorState, CaptureState, CaptureStorage, DeliveryState, M2Status, RunState,
 };
-use goalcup_protocol::control::{ArmingState, EventStatus};
+use goalcup_protocol::control::ArmingState;
 use goalcup_protocol::events::HealthState;
 
 /// A started entry.
@@ -31,15 +31,6 @@ pub fn started_entry() -> Entry {
     entry.state = goalcup_daemon::registry::EntryState::Started;
     entry.health = HealthState::Online;
     entry
-}
-
-pub fn event_status() -> EventStatus {
-    EventStatus {
-        t0: "2026-09-04T00:00:00Z".to_string(),
-        start_window_closes_at: "2026-09-05T00:00:00Z".to_string(),
-        publication_closes_at: "2026-09-12T00:00:00Z".to_string(),
-        rules_version: "2026-09-03".to_string(),
-    }
 }
 
 /// A recording capture's status projection.
@@ -67,7 +58,6 @@ pub fn status_inputs(entry: &Entry) -> StatusInputs<'_> {
     StatusInputs {
         entry,
         arming: ArmingState::Started,
-        event: event_status(),
         cycles: goalcup_protocol::control::CycleErrors::default(),
         capture: recording_capture(),
     }

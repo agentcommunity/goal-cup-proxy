@@ -3,10 +3,10 @@
 //! the daemon, never here.
 
 use goalcup_protocol::control::{
-    ArmingState, CONTROL_API_VERSION, ControlError, DaemonClient, DaemonHealth, EntrySummary,
-    ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, STALE_AFTER_SECONDS, SUFFIX_ABANDON,
-    SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS, SealResponse, SignedStatus, WorkspaceInfo,
-    entry_route, is_public_route,
+    ArmingState, CONTROL_API_VERSION, CaptureWorkspaceInfo, ControlError, DaemonClient,
+    DaemonHealth, EntrySummary, ROUTE_ENTRIES, ROUTE_HEALTH, STALE_AFTER_SECONDS, SUFFIX_ABANDON,
+    SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS, SealResponse, SignedStatus, entry_route,
+    is_public_route,
 };
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
 
@@ -22,28 +22,20 @@ fn the_trait_methods(c: &dyn DaemonClient, h: &ProcessHandle) {
     };
     let _: Result<(), ControlError> = c.register_process("e1", &registration);
     let _: Result<DaemonHealth, ControlError> = c.health();
-    let _: Result<Option<String>, ControlError> = c.current_entry();
     let _: Result<(), ControlError> = c.abandon("e1", "arming timed out");
 }
 
 /// Every field the CLI reads, in one place that must compile.
 #[allow(dead_code)]
-fn the_cli_reads_but_never_writes(info: &WorkspaceInfo) {
-    let (_, _, _) = (&info.workspace, &info.artifact_root, &info.harness_home);
-    let _ = &info.run_public_key;
-    let (_, _, _) = (
-        &info.status_url,
-        &info.status_cache_path,
-        &info.status_line_path,
-    );
-    let _: &String = &info.session_id;
+fn the_cli_reads_but_never_writes(info: &CaptureWorkspaceInfo) {
+    let (_, _, _) = (&info.entry_id, &info.run_public_key, &info.trace_dir);
+    let _: u64 = info.process_generation;
 }
 
 #[test]
 fn the_routes_and_the_suffixes_are_the_ones_this_plan_calls() {
-    assert_eq!(CONTROL_API_VERSION, 7);
+    assert_eq!(CONTROL_API_VERSION, 8);
     assert_eq!(ROUTE_ENTRIES, "/v0/entries");
-    assert_eq!(ROUTE_ENTRIES_CURRENT, "/v0/entries/current");
     assert_eq!(ROUTE_HEALTH, "/v0/health");
     assert_eq!(STALE_AFTER_SECONDS, 120);
     // The suffixes are constants, not literals typed on both sides.
@@ -68,7 +60,7 @@ fn exactly_one_route_is_public_and_it_is_status() {
     );
     assert!(!is_public_route("/v0/assets/anything-else.png"));
     assert!(is_public_route(&entry_route("e1", SUFFIX_STATUS)));
-    for authed in [ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH] {
+    for authed in [ROUTE_ENTRIES, ROUTE_HEALTH] {
         assert!(
             !is_public_route(authed),
             "{authed} must carry the bearer token"
