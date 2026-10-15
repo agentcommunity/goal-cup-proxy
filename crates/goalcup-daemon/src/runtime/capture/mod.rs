@@ -208,6 +208,9 @@ pub(crate) struct CaptureEntry {
     /// Test seam: a pause taken just before the named finish stage's admission check.
     #[cfg(any(test, feature = "test-hooks"))]
     stage_delay: Mutex<Option<(FinishStage, Duration)>>,
+    /// Test seam: the launch parks before it reads the harness build, until cleared.
+    #[cfg(any(test, feature = "test-hooks"))]
+    hold_build: AtomicBool,
 }
 
 /// The authority retained by an in-memory capture runtime.
@@ -712,7 +715,13 @@ impl Daemon {
             self.registry()
                 .get(entry_id)?
                 .and_then(|row| row.last_process)
-                .map(|handle| Box::new(harness_build::observe(&handle)))
+                .map(|handle| {
+                    #[cfg(any(test, feature = "test-hooks"))]
+                    while capture.hold_build.load(Ordering::Acquire) {
+                        std::thread::sleep(IDLE_WAIT);
+                    }
+                    Box::new(harness_build::observe(&handle))
+                })
         };
         let mut run = capture.lock();
         capture.record_launch(&mut run, request, harness_build)?;
@@ -721,6 +730,15 @@ impl Daemon {
             entry.harness_version = request.harness_version.clone();
         })?;
         Ok(())
+    }
+
+    /// Test seam: park (or release) the entry's next launch just before it reads the harness
+    /// build, as a slow read of a large binary would hold it.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn hold_capture_harness_build(&self, entry_id: &str, hold: bool) {
+        if let Some(capture) = self.captures().get(entry_id) {
+            capture.hold_build.store(hold, Ordering::Release);
+        }
     }
 
     /// Reopen every v5 row but the sealed ones for status and seal after a restart. A row that
@@ -1071,6 +1089,8 @@ impl CaptureEntry {
             chained_finish: Mutex::new(None),
             #[cfg(any(test, feature = "test-hooks"))]
             stage_delay: Mutex::new(None),
+            #[cfg(any(test, feature = "test-hooks"))]
+            hold_build: AtomicBool::new(false),
         }
     }
 
