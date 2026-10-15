@@ -267,7 +267,7 @@ fn declared_version(headers: &HeaderMap) -> ClientVersion {
 ///
 /// Order: the `Host`, then the bearer, then the version. A request addressed to some other
 /// name is refused before anything else is asked of it (DNS rebinding: a page the browser
-/// believes is same-origin with `evil.example` can otherwise read the two public routes).
+/// believes is same-origin with `evil.example` can otherwise read the one public route).
 /// A stranger who cannot authenticate learns one thing and one thing only, and a version
 /// refusal is a conversation between two programs that have already agreed who they are.
 ///
@@ -447,7 +447,7 @@ impl ControlListener {
 /// TCP only: this binds no Unix domain socket
 /// and `control.json` names none. `DaemonConfig::validate` has already refused a
 /// non-loopback address by the time this is called, which — with the `Host` check in
-/// [`authenticate`] — is what makes the two unauthenticated routes safe.
+/// [`authenticate`] — is what makes the one unauthenticated route safe.
 pub async fn serve_control(
     router: Router,
     addr: SocketAddr,

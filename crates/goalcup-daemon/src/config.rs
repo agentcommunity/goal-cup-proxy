@@ -321,8 +321,8 @@ impl DaemonConfig {
 
     /// What `validate` refuses.
     ///
-    /// - **Loopback only.** Three control routes are unauthenticated by design
-    ///   (`is_public_route`), and what makes that safe is that the socket is not
+    /// - **Loopback only.** One control route, the per-entry status, is unauthenticated by
+    ///   design (`is_public_route`), and what makes that safe is that the socket is not
     ///   reachable off the machine. Stated here as a refusal so it is an enforced
     ///   property rather than a hope.
     /// - **The two V1 service fields together or not at all**, the key as 64 hex characters
@@ -336,8 +336,8 @@ impl DaemonConfig {
         self.receipt_binding.validate_config()?;
         if !self.control_addr.ip().is_loopback() {
             return Err(DaemonError::Config(format!(
-                "control_addr {} is not loopback: the control API's three unauthenticated \
-                 read routes are safe only because the socket is not reachable off this machine",
+                "control_addr {} is not loopback: the control API's unauthenticated \
+                 status route is safe only because the socket is not reachable off this machine",
                 self.control_addr
             )));
         }

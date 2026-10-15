@@ -133,7 +133,7 @@ fn a_non_loopback_control_address_is_refused() {
         DaemonConfig::from_toml_str(&base("").replace("127.0.0.1:7788", "0.0.0.0:7788")).unwrap();
     let e = c.validate().unwrap_err().to_string();
     assert!(e.contains("loopback"), "{e}");
-    // This refusal is what makes the three unauthenticated read routes safe.
+    // This refusal is what makes the unauthenticated status route safe.
 }
 
 #[test]
