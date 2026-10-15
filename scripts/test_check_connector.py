@@ -322,6 +322,40 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("FAIL files (missing:", result.stdout)
 
+    # A Node harness without NODE_USE_ENV_PROXY.
+
+    def node_harness(self, manifest_env: str) -> None:
+        write(self.bin / "toy", "#!/usr/bin/env node\nconsole.log('hi')\n", 0o755)
+        write(
+            self.repo / "connectors/toy-cli/harness.toml",
+            'id = "toy-cli"\n[capture.executable]\nprogram = "toy"\n[capture.env]\n'
+            + manifest_env,
+        )
+
+    def test_a_node_script_without_node_use_env_proxy_fails_loudly(self) -> None:
+        self.node_harness('# NODE_USE_ENV_PROXY = "1"\n')
+        result = self.run_script("toy-cli", uname="Darwin")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("is a node script", result.stdout)
+        self.assertIn("FAIL node proxy (NODE_USE_ENV_PROXY missing)", result.stdout)
+        self.assertIn("toy-cli: 6 passed, 1 failed, 0 skipped", result.stdout)
+
+    def test_a_node_script_with_node_use_env_proxy_passes(self) -> None:
+        self.node_harness('NODE_USE_ENV_PROXY = "1"\n')
+        result = self.run_script("toy-cli", uname="Darwin")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("NODE_USE_ENV_PROXY is set", result.stdout)
+        self.assertIn("toy-cli: 6 passed, 0 failed, 0 skipped", result.stdout)
+
+    def test_a_program_not_on_path_skips_the_node_check_with_a_note(self) -> None:
+        write(
+            self.repo / "connectors/toy-cli/harness.toml",
+            'id = "toy-cli"\n[capture.executable]\nprogram = "not-installed-toy"\n',
+        )
+        result = self.run_script("toy-cli", uname="Darwin")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("`not-installed-toy` is not on PATH", result.stdout)
+
     # The pin diff.
 
     def test_a_pin_change_for_this_connector_passes_and_is_shown(self) -> None:

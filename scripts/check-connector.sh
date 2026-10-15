@@ -12,6 +12,10 @@
 #      in the stand-in's EDIT block. A chat-mode connector (`interactive = true`) needs no kit
 #      case: the kit runs every pinned chat-mode connector through one stand-in.
 #      A missing connectors/<id>/harness.toml is a usage error (exit 2) before anything runs.
+#      Also: when the connector's `program` is on PATH and is a `node` script, the manifest must
+#      set NODE_USE_ENV_PROXY = "1" (D59), or the run records no model traffic. The kit's
+#      stand-in sends no traffic, so this is the only local sign of that; a compiled Node or
+#      Bun binary is not detected, and only a real run (the practice run) shows it.
 #   2. pins: `sh scripts/pin-manifests.sh`, then the pin diff against HEAD is printed. It fails
 #      when the diff touches another connector's line; a new or changed line for <id> is
 #      expected and must be committed with the connector.
@@ -175,6 +179,32 @@ else
     echo "$left"
     fail "files (template placeholders left)"
   fi
+fi
+
+# 1b. A Node harness needs NODE_USE_ENV_PROXY. Counted only when it fails.
+program=$(sed -n 's/^[[:space:]]*program[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+  "connectors/$id/harness.toml" | head -n 1)
+exe=''
+[ -z "$program" ] || exe=$(command -v -- "$program" 2>/dev/null || true)
+if [ -n "$exe" ] && [ -f "$exe" ]; then
+  case $(head -c 128 "$exe" 2>/dev/null | head -n 1) in
+    '#!'*node*)
+      if grep -Eq '^[[:space:]]*NODE_USE_ENV_PROXY[[:space:]]*=[[:space:]]*"1"' \
+        "connectors/$id/harness.toml"; then
+        echo "node harness: $exe is a node script and NODE_USE_ENV_PROXY is set"
+      else
+        echo
+        echo "################################################################################"
+        echo "$exe is a node script, and connectors/$id/harness.toml does not set"
+        echo "NODE_USE_ENV_PROXY = \"1\" in [capture.env]: Node ignores HTTPS_PROXY without it"
+        echo "(D59), so a real run would record no model traffic"
+        echo "################################################################################"
+        fail "node proxy (NODE_USE_ENV_PROXY missing)"
+      fi
+      ;;
+  esac
+else
+  echo "note: \`${program:-?}\` is not on PATH, so the node-proxy check did not run"
 fi
 
 # 2. Pins.

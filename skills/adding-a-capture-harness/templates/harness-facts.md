@@ -39,14 +39,19 @@ where the id first appears (stdout init event, stderr line, file name, preassign
 Subscription login vs API key; env var names; where credentials are stored per OS; any file derived
 from the key (fingerprints, owner files). Chat mode passes no key: say how the sign-in is kept in
 the harness's own config home (a login command, or the macOS Keychain). A key read only from an
-environment variable does not fit chat mode.
+environment variable does not fit chat mode. Say yes or no: does the harness have a variable that
+moves its config and login (like `CODEX_HOME`)? Yes: the connector shares that config home. No:
+the connector keeps one shared private `HOME` (`run_home = "shared"`) so the sign-in lasts.
 
 ## 6. Network
 First, the CA variable the harness honours for an extra trusted certificate (for example
 `NODE_EXTRA_CA_CERTS`); only `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` means a core change. Then every
 model/provider host it can reach: if the participant may pick the provider, list every provider
-host, because an unlisted host is not recorded. Telemetry and update hosts; HTTPS_PROXY honoured?
-SSE / WebSocket? Any base-URL override variables (Goal Cup never sets them).
+host, because an unlisted host is not recorded. Say yes or no: is the harness Node (npm package,
+`node` script or Node/Bun binary)? Say yes or no: does it honour `HTTPS_PROXY` on its own, and if
+not, which variable turns that on (Node: `NODE_USE_ENV_PROXY=1`)? Without it the run records no
+model traffic. Telemetry and update hosts; SSE / WebSocket? Any base-URL override variables (Goal
+Cup never sets them).
 
 ## 7. Process model
 Subprocesses, tools, subagents; what happens on SIGTERM / Ctrl-C; exit codes.

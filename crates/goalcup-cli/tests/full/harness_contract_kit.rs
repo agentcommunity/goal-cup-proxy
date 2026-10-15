@@ -1058,7 +1058,8 @@ fn chat_case(id: &str) {
 
 /// Where the chat stand-in writes, as shell words it expands at run time, derived from the
 /// connector alone: the session file its first `[[capture.native]]` source finds (the root,
-/// then the pattern with each `*` and `{id}` as `kit`), and the goal-cup skill folder below
+/// then the pattern with each `*` and `{id}` as `kit` and each `?` as `k`), and the goal-cup
+/// skill folder below
 /// `skills_dir`. `{config_home}` is the harness's own home variable, `{run_home}` is `HOME`.
 fn chat_stand_in_paths(c: &goalcup_protocol::harness::CaptureSpec) -> (String, Option<String>) {
     let config_home = format!("${{{}}}", c.home.env.as_deref().unwrap_or("HOME"));
@@ -1070,7 +1071,11 @@ fn chat_stand_in_paths(c: &goalcup_protocol::harness::CaptureSpec) -> (String, O
         .root
         .replace("{config_home}", &config_home)
         .replace("{run_home}", "${HOME}");
-    let pattern = native.pattern.replace('*', "kit").replace("{id}", "kit");
+    let pattern = native
+        .pattern
+        .replace('*', "kit")
+        .replace('?', "k")
+        .replace("{id}", "kit");
     let skills = c
         .home
         .skills_dir

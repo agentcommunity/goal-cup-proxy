@@ -2,9 +2,9 @@
 # Copy: mkdir -p connectors/<HARNESS_ID> && cp <this file> connectors/<HARNESS_ID>/harness.toml
 # Replace every <PLACEHOLDER>. Delete the options you do not use. Comment lines are optional
 # (they are pinned bytes too); keep one first-line provenance comment like the shipped ones:
+# <Harness name> <VERSION>, capture only. Facts: docs/harnesses/<HARNESS_ID>.md.
 # This template is chat mode (D57), the product's mode: the closest complete example is
 # connectors/codex-cli/harness.toml. Headless is option B below (example: connectors/hermes-cli).
-# <Harness name> <VERSION>, capture only. Facts: docs/harnesses/<HARNESS_ID>.md.
 # Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: docs/HARNESS-ONBOARDING.md, "Do I need a core change?".
 # No argument, goal flag, env key or value, host or auth host may name the tracker
 # (docs/CONNECTOR-SCHEMA.md, "Cross-field rules", rule 10).
@@ -47,7 +47,13 @@ version_args = ["--version"]            # how the harness prints its version; de
 # SHELL is the one path value allowed: "/bin/zsh", "/bin/bash" or "/bin/sh".
 [capture.env]
 SHELL = "/bin/zsh"                      # the shell the harness's tools run in, per platform below
-# NODE_USE_ENV_PROXY = "1"              # a Node harness: its HTTP client honours HTTPS_PROXY only with this
+# Is the harness Node (an npm package, or a script starting `#!/usr/bin/env node`)? Then keep
+# this line: Node's built-in HTTP client ignores HTTPS_PROXY without it (D59), and the run
+# records no model traffic. The kit's stand-in cannot see that. check-connector.sh fails when
+# `program` on PATH is a node script and this line is missing; a compiled Node or Bun binary it
+# cannot tell apart, so only a real run shows it. Delete the line only if facts sheet section 6
+# says the harness honours HTTPS_PROXY on its own.
+NODE_USE_ENV_PROXY = "1"
 # <HARNESS>_DISABLE_UPDATES = "1"
 
 # Linux has no /bin/zsh by default.
@@ -57,15 +63,18 @@ SHELL = "/bin/bash"
 [capture.platform.linux-aarch64.env]
 SHELL = "/bin/bash"
 
+# Does the harness have a variable that moves its config (like CODEX_HOME)? Pick ONE shape.
+# C1) Yes (as below): its sign-in lives in a shared, isolated config home; run_home "empty"
+#     (or "keychain_link" when it keeps its login in the macOS Keychain).
+# C2) No: delete `env`, `skills_dir` and the C1 values, and use
+#       run_home = "shared"             # one isolated HOME kept across serialized runs: the sign-in lasts
+#       config_home = "per_run"
+#     with the native root "{run_home}/<sessions>" and since_run_start = true. Never "empty"
+#     here: a fresh HOME each run loses the participant's sign-in every run.
+# Headless: config_home "per_run" (needed for seeds, dirs and any credential).
 [capture.home]
-run_home = "empty"                      # "empty", or "keychain_link" (macOS keychain only)
-# "shared" (chat mode): one isolated config home reused across serialized runs, so the
-# participant's sign-in there lasts; no seeds or dirs.
-# "per_run" (headless): a fresh config home per run (needed for seeds, dirs and any credential).
-config_home = "shared"
-# Optional: delete when the harness has no variable that moves its config. It then keeps its
-# state under the private run HOME: native root "{run_home}/...", config_home "per_run", and no
-# seeds or dirs.
+run_home = "empty"                      # "empty", "keychain_link" (macOS keychain only) or "shared" (C2)
+config_home = "shared"                  # C1 chat mode; "per_run" for C2 and headless
 env = "<HARNESS>_HOME"                  # own home var: ^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$
 real_dirs = ["{user_home}/.<harness>"]  # the participant's real state dirs (never written)
 # Where the harness reads its skills, below the config home: the goal-cup skill is put in
@@ -115,7 +124,7 @@ source = "none"
 # Exactly one own-session native store. Never a request dump, credential or seed file.
 [[capture.native]]
 name = "<session>"                      # label in the chain; [A-Za-z0-9._-]{1,64}
-root = "{config_home}/<sessions>"       # {config_home} or {run_home}, plus relative parts
+root = "{config_home}/<sessions>"       # {config_home} (C1) or {run_home} (C2), plus relative parts
 pattern = "<*/*.jsonl>"                 # globs below root, no **; {id} exactly once unless identity is "none"
 form = "<append_only|snapshot>"         # JSONL appended in place, or a file rewritten whole
 # protocol_hint = "<harness-jsonl>"     # append_only only; an unknown hint means capture-only

@@ -156,8 +156,19 @@ is the harness executable. Run every command from the repository root.
    Replace every `<PLACEHOLDER>` and delete unused options. The template is chat mode:
    - **Chat mode** (`interactive = true`, the default): the harness opens in the participant's
      terminal and the participant types the prompt. No goal slot, no credential, identity `none`,
-     a `shared` config home with `since_run_start = true` on the native row, and `skills_dir` if
-     the harness reads skills. Claude Code and Codex use it.
+     and `since_run_start = true` on the native row. Claude Code and Codex use it. The sign-in
+     must last across runs, so pick the home by one question, "does the harness have a variable
+     that moves its config?":
+     - **Yes** (like `CODEX_HOME`): set `home.env`, `config_home = "shared"`, `run_home = "empty"`
+       (or `"keychain_link"`), a `{config_home}/...` native root, and `skills_dir` if the harness
+       reads skills.
+     - **No**: leave out `home.env` and `skills_dir`, set `run_home = "shared"` and
+       `config_home = "per_run"`, and use a `{run_home}/...` native root. With `run_home =
+       "empty"` the private `HOME` is fresh each run and the sign-in is lost every run.
+
+     A Node harness keeps `NODE_USE_ENV_PROXY = "1"` in `capture.env` (D59): without it Node's
+     HTTP client ignores `HTTPS_PROXY` and the run records no model traffic. The kit cannot see
+     that, and step 9 catches it only for a `node` script on `PATH`.
    - **Headless** (option B in the template): the goal is the last argument after `--`, or
      `goal_flag` carries it as `--flag=<goal>`. Hermes uses it.
 

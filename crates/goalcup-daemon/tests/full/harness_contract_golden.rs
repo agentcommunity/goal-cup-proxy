@@ -272,7 +272,7 @@ mod live {
     async fn entry(rig: &Rig, id: &str, scope: Option<&str>) -> Value {
         // The controlled workload's native store lives under the run's own HOME.
         std::fs::create_dir_all(rig.run_home().join("native")).unwrap();
-        let info = rig.created(id).await;
+        let info = rig.created_at_its_home(id).await;
         let native_binary = rig
             .daemon
             .native_binary_for_process(&info.entry_id)
@@ -379,7 +379,7 @@ mod live {
                 native
                     .root
                     .replace("{config_home}", config_home.to_str().unwrap())
-                    .replace("{run_home}", rig.run_home().to_str().unwrap()),
+                    .replace("{run_home}", rig.run_home_for(id).to_str().unwrap()),
             )
             .join(
                 native
@@ -390,7 +390,7 @@ mod live {
         };
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, b"{\"type\":\"native\"}\n").unwrap();
-        let info = rig.created(id).await;
+        let info = rig.created_at_its_home(id).await;
         let goal = rig.goal_accepted(&info.entry_id, b"say hi").await;
         let mut request = launch_request(&goal);
         request.native_scope = launch_scope.map(str::to_string);
