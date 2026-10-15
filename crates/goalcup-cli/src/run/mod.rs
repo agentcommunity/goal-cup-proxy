@@ -739,6 +739,40 @@ pub fn of_entry(cfg: &Path, entry_id: &str) -> Result<Option<RunRecord>, CliErro
         .find(|record| record.entries.iter().any(|e| e.entry_id == entry_id)))
 }
 
+/// Where a participant writes when the tracker cannot help.
+const SUPPORT_ADDRESS: &str = "goalcup@agentcommunity.org";
+
+/// What the tracker says of a capture entry its daemon could not reopen. `goalcup doctor` and
+/// `goalcup seal` both say it, so the two cannot give different advice for the one condition.
+pub fn reopen_failed_sentence(entry_id: &str) -> String {
+    format!("Recording {entry_id} could not be reopened.")
+}
+
+/// What to do about it: `goalcup continue` once, for the run the entry belongs to.
+pub fn reopen_failed_next(run_id: &str) -> String {
+    format!(
+        "Run `goalcup continue {run_id}` once. If this stays after that, write to \
+         {SUPPORT_ADDRESS}."
+    )
+}
+
+/// The entries of `reopen_failed` (a daemon's health answer) that need that advice, each with
+/// its run id. An entry of a run that is over, whose upload is finished, that `goalcup continue`
+/// cannot restart, or that no run here holds, is history and not an action, so it is left out.
+pub fn reopen_failed_actions(cfg: &Path, entry_ids: &[String], now: u64) -> Vec<(String, String)> {
+    let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
+    entry_ids
+        .iter()
+        .filter_map(|entry_id| {
+            let record = of_entry(cfg, entry_id).ok().flatten()?;
+            let state = read_state(&run_dir(cfg, &record.run_id))?;
+            let open = advice(cfg, &record, &state, now) == Advice::Continue;
+            let sent = crate::upload::uploader::is_sent(&spool, entry_id);
+            (open && !sent).then(|| (entry_id.clone(), record.run_id))
+        })
+        .collect()
+}
+
 /// Remove a run's directory (its record and anything beside it). Missing is fine.
 pub fn remove(cfg: &Path, run_id: &str) {
     if is_safe_name(run_id) {
@@ -752,6 +786,41 @@ pub fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+
+    /// A run on a server, with one entry, that `goalcup continue` can restart: the run has a
+    /// credential and a state that says it is continuable. `deadline` is its `deadline_at`.
+    pub(crate) fn continuable_run(cfg: &Path, run_id: &str, entry_id: &str, deadline: u64) {
+        let record = crate::run::RunRecord {
+            run_id: run_id.to_string(),
+            server_url: Some("https://server.example".to_string()),
+            practice: false,
+            test: false,
+            connector_id: "c".to_string(),
+            workspace: PathBuf::from("/w"),
+            started_at_unix: 1,
+            deadline_at: Some(goalcup_protocol::control::format_z(deadline)),
+            entries: vec![crate::run::EntryRef {
+                entry_id: entry_id.to_string(),
+                trace_dir: PathBuf::from("/t"),
+            }],
+        };
+        crate::run::write(cfg, &record).unwrap();
+        let dir = crate::run::run_dir(cfg, run_id);
+        let credential = crate::account::credential::RunCredential::new(
+            format!("gcr_{}", "ab".repeat(32)),
+            "2099-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+        crate::account::credential::store(&dir, &credential).unwrap();
+        let mut state = crate::run::RunState::launched(entry_id, Ok(()));
+        state.continuable = true;
+        crate::run::StateKeeper::begin(&dir, state);
+    }
 }
 
 #[cfg(test)]

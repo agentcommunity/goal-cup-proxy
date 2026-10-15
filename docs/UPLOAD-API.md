@@ -333,8 +333,14 @@ in. There is no grace period and no late window.
   whole seconds). Each answer
   sets the count again, and the server's answer wins. The machine's date is never read for it, so
   changing the date does not move the stop. (A replaced run learns of it from its next
-  heartbeat.) The count decides only the stop. For now, `goalcup status`, `goalcup continue` and the
-  disk reserve still read the machine's date to decide that a run is over. An answer from an older server has no `seconds_left`; the tracer then counts
+  heartbeat.) The same count decides whether the run is over for `goalcup status`, the
+  `goalcup continue` advice and the disk reserve's release: the host keeps it in the run's
+  `state.json` with the machine's boot id, so those commands follow the server's count on the
+  continuous clock, and a refused `continue` marks the run over at once. After a reboot the
+  clock restarts, and on a machine that gives a boot id the count says nothing then (it also
+  says nothing when it was stored with no boot id, as on any machine that gives none), so those
+  commands hold the server's `deadline_at` against the machine's date. `goalcup continue` itself
+  always asks the server. An answer from an older server has no `seconds_left`; the tracer then counts
   `deadline_at − official_start` from when the run opened, and for a continued segment
   `deadline_at` less the machine's date.
 - **The wrap-up upload has no time limit, but it can only complete each entry's chain up to its

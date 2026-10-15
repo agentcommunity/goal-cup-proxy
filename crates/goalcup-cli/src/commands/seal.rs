@@ -115,7 +115,7 @@ pub fn seal_with(
         // capture seal could finish. The CLI sent the only seal its status let it choose, and the
         // daemon's `malformed` is about that choice, not about a response this CLI cannot read.
         Err(ControlError::Malformed(said)) if status_unknown => {
-            Err(torn_entry_refusal(entry_id, &said))
+            Err(torn_entry_refusal(cfg, entry_id, &said))
         }
         Err(other) => Err(CliError::Control(other)),
     }
@@ -298,15 +298,32 @@ pub(crate) fn report_local_finish(
 /// What `goalcup seal` says of an entry the tracker holds but cannot read the trace of. A safe
 /// refusal at rung 1: nothing was sealed, nothing was written, nothing was repaired. A local
 /// capture's record names no artifact root, so the trace directory is described and not printed.
-fn torn_entry_refusal(entry_id: &str, daemon_said: &str) -> CliError {
+fn torn_entry_refusal(cfg: &Path, entry_id: &str, daemon_said: &str) -> CliError {
+    // What to do is what `goalcup doctor` says for the same entry (same words, same test of
+    // whether `goalcup continue` can still restart its run). An entry of a run that is over,
+    // sent, or not held here is history: then there is only the plain fact.
+    let todo = match crate::run::reopen_failed_actions(
+        cfg,
+        &[entry_id.to_string()],
+        crate::run::now_unix(),
+    )
+    .pop()
+    {
+        Some((entry_id, run_id)) => format!(
+            "{} {}",
+            crate::run::reopen_failed_sentence(&entry_id),
+            crate::run::reopen_failed_next(&run_id)
+        ),
+        None => "This entry can be neither sealed nor resumed, so start a new run for new work."
+            .to_string(),
+    };
     CliError::Refused(format!(
         "Entry {entry_id} cannot be sealed: the tracker holds its record but could not reopen its \
          trace (it is torn or unreadable, for example a write cut short), so there is no open \
          capture to finish. Nothing was sealed, written or repaired: the trace bytes are preserved \
          exactly as the crash left them. Read what survives with `{VERIFIER_BIN} \
          --capture-integrity <the entry's trace directory>` (the tracker keeps it under its \
-         artifact root, in a folder named {entry_id}); this entry can be neither sealed nor \
-         resumed, so start a new run for new work. (The tracker said: {daemon_said})"
+         artifact root, in a folder named {entry_id}). {todo} (The tracker said: {daemon_said})"
     ))
 }
 
@@ -461,5 +478,20 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    /// `goalcup seal` on an entry the tracker could not reopen says what `goalcup doctor` says:
+    /// the run to continue. For an entry of no run here it gives only the plain fact.
+    #[test]
+    fn a_torn_entry_of_a_live_run_names_the_run_to_continue() {
+        let cfg = tempfile::tempdir().unwrap();
+        let far = crate::run::now_unix() + 3_600;
+        crate::run::tests_support::continuable_run(cfg.path(), "run-open", "entry-aaa", far);
+
+        let said = super::torn_entry_refusal(cfg.path(), "entry-aaa", "malformed").to_string();
+        assert!(said.contains("goalcup continue run-open"), "{said}");
+
+        let said = super::torn_entry_refusal(cfg.path(), "entry-zzz", "malformed").to_string();
+        assert!(!said.contains("goalcup continue"), "{said}");
     }
 }
