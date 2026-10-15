@@ -280,7 +280,7 @@ Paths are under `crates/`.
 | Frozen wire contracts; connector pins | `goalcup-protocol/tests/it/m2_contract.rs`, `harness_schema.rs`, `harness_loader.rs`, `harness_conformance.rs`, `connector_pins.rs` (same folder) |
 | v5 create, goal, launch, status through the daemon | `goalcup-daemon/tests/it/capture_lifecycle.rs` |
 | Profile launch, executable resolution, env refusals | `goalcup-cli/tests/it/harness_launch_plan.rs`, `goalcup-cli/tests/it/start_launch.rs` |
-| Hermes key child-only, private home, key scan | `goalcup-cli/tests/it/hermes_child_secret.rs`, `hermes_per_run_home.rs`, `key_scan.rs`, `key_scan_run.rs`, `capture_stderr_tee.rs`, `goalcup-cli/tests/full/m2_hermes_lifecycle.rs` |
+| Hermes key child-only, private home, key scan | `goalcup-cli/tests/it/hermes_child_secret.rs`, `hermes_per_run_home.rs`, `key_scan.rs`, `key_scan_run.rs`, `capture_stderr_tee.rs`, `hermes_offline_key.rs` (same folder), `goalcup-cli/tests/full/m2_hermes_lifecycle.rs` |
 | Crash, torn tail, restart | `goalcup-cli/tests/full/capture_crash_campaign.rs` |
 | Whole vertical on a synthetic workload | `goalcup-cli/tests/full/m2_synthetic_vertical.rs` |
 | Six contract-kit cases | `goalcup-cli/tests/full/harness_contract_kit.rs` |

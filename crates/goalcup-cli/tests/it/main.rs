@@ -21,6 +21,8 @@ mod harness_launch_plan;
 mod harness_version_probe;
 mod hermes_child_secret;
 #[cfg(unix)]
+mod hermes_offline_key;
+#[cfg(unix)]
 mod hermes_per_run_home;
 mod key_scan;
 mod key_scan_run;
