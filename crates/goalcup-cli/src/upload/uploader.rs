@@ -44,7 +44,7 @@ pub use super::policy::{Policy, WrapUp, backoff};
 use crate::CliError;
 use crate::run::Vitals;
 use goalcup_protocol::ack::AckCheckpoint;
-use goalcup_protocol::export::{ACKS_FILE, BASELINE_FILE, ChainPart, SEAL_FILE};
+use goalcup_protocol::export::{ACKS_FILE, BASELINE_FILE, ChainPart, SEAL_FILE, append_ack_to};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -706,7 +706,7 @@ impl Uploader {
         {
             return Ok(());
         }
-        append_ack(Path::new(&self.record.trace_dir), ack)
+        append_ack_to(Path::new(&self.record.trace_dir), ack)
             .map_err(|e| AckError::Local(e.to_string()))?;
         self.acked = Some((ack.seq, at));
         Ok(())
@@ -1231,27 +1231,6 @@ fn watch_deadline(
         }
         std::thread::sleep(tick);
     }
-}
-
-/// Append one acknowledgement as one line, in one write, and make it durable. The file is opened
-/// through the trace directory's capability ([`goalcup_platform::tracecap`]): `acks.jsonl` is
-/// reached by its own name from a retained directory handle, never through a link, and must be
-/// a regular file with one name, so an agent that left a link in its place cannot have the
-/// acknowledgement written elsewhere. The handle is fresh for each acknowledgement: a refused
-/// or failed write poisons a capability writer for good, and the next try must be able to start
-/// again.
-fn append_ack(trace_dir: &Path, ack: &AckCheckpoint) -> Result<(), CliError> {
-    let acks = trace_dir.join(ACKS_FILE);
-    let refused = |error: goalcup_platform::tracecap::TraceCapError| CliError::Io {
-        path: acks.display().to_string(),
-        source: std::io::Error::other(error.to_string()),
-    };
-    let mut line = serde_json::to_vec(ack)?;
-    line.push(b'\n');
-    let dir = goalcup_platform::tracecap::TraceDir::open(trace_dir).map_err(refused)?;
-    let mut file = dir.open_acks_for_resume().map_err(refused)?;
-    file.append_checked(&line).map_err(refused)?;
-    dir.sync_append(&mut file).map_err(refused)
 }
 
 /// How an upload ended, for the participant.

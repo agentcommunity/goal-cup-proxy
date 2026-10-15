@@ -3,13 +3,15 @@
 //! The JSON layouts below are the goldens every M2 leaf builds against: a change to one is a
 //! change to a shared interface and needs an amendment to the shared contract, never a quiet edit.
 
+use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::capture::*;
 use goalcup_protocol::chain::Link;
 use goalcup_protocol::control::StatusPayload;
 use goalcup_protocol::envelope::{Envelope, EventBody};
-use goalcup_protocol::export::{ChainPhaseReplay, ExportError, TraceExport};
+use goalcup_protocol::export::{ChainPhaseReplay, ExportError, TraceExport, append_ack_to};
 use goalcup_protocol::provenance::{Rfc3339Utc, TerminationMethodV1, TerminationOutcomeV1};
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
+use goalcup_protocol::seal::SealManifest;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
@@ -1600,4 +1602,113 @@ fn v5_field_and_variant_lists_are_pinned_from_serdes_own_errors() {
             "`queue_full`, `ingest_lost`, `producer_lost`, `storage_full`, `storage_io`, `unsupported_encoding`, `decode_failed`, `source_changed`, `limit_exceeded`, `shutdown_deadline`"
         )
     );
+}
+
+// Behaviours the daemon relies on that no other protocol test pins (moved from the daemon
+// crate, whose tests CI does not run): the export refusing a stamped seq that is not the next
+// one, and the wire tags of the two bodies only `TraceExport` writes.
+
+#[test]
+fn a_stamped_seq_that_is_not_the_next_is_refused_with_nothing_chained() {
+    let c = tempfile::tempdir().unwrap();
+    let mut w = TraceExport::create(c.path()).unwrap();
+    w.configure_capture_quota(TERMINAL_RESERVE_BYTES * 4)
+        .unwrap();
+    w.write_baseline_for_protocol(
+        M2_PROTOCOL_VERSION,
+        &SealManifest {
+            entry_id: "e1".to_string(),
+            sealed_at: "2026-09-04T00:00:00Z".to_string(),
+            workspace: "/ws".to_string(),
+            files: Vec::new(),
+            excluded: Vec::new(),
+            git: None,
+            home: None,
+        },
+    )
+    .unwrap();
+    let before = std::fs::read(c.path().join("chain.jsonl")).unwrap();
+    let mut wrong = Envelope {
+        protocol_version: M2_PROTOCOL_VERSION,
+        entry_id: "e1".to_string(),
+        source: "daemon".to_string(),
+        recorded_at: "2026-09-04T00:00:00Z".to_string(),
+        link: goalcup_protocol::chain::Link {
+            seq: 7,
+            prev: "aa".repeat(32),
+            hash: "bb".repeat(32),
+        },
+        body: EventBody::Capture {
+            record: CaptureRecord::Gap {
+                stream: None,
+                observed: CaptureTime {
+                    wall: "2026-09-04T00:00:00Z".to_string(),
+                    mono_ns: 1,
+                    clock_id: "daemon-5b0c3a1e".to_string(),
+                },
+                reason: GapReason::StorageIo,
+                lost_bytes: None,
+            },
+        },
+        redaction: None,
+    };
+    assert!(matches!(
+        w.append_chain(&mut wrong),
+        Err(ExportError::OutOfOrder {
+            found: 7,
+            expected_after: Some(0)
+        })
+    ));
+    assert_eq!(std::fs::read(c.path().join("chain.jsonl")).unwrap(), before);
+}
+
+#[test]
+fn baseline_and_seal_carry_their_own_kind_tags() {
+    assert!(
+        serde_json::to_string(&EventBody::Baseline {
+            manifest_sha256: "00".repeat(32),
+            file_count: 0,
+        })
+        .unwrap()
+        .contains(r#""kind":"baseline""#)
+    );
+    assert!(
+        serde_json::to_string(&EventBody::Seal {
+            manifest_sha256: "00".repeat(32),
+            sealed_at: "2026-09-08T00:00:00Z".to_string(),
+            file_count: 0,
+        })
+        .unwrap()
+        .contains(r#""kind":"seal""#)
+    );
+}
+
+#[test]
+fn append_ack_to_writes_one_json_line_per_ack_and_refuses_a_link() {
+    let ack = |seq: u64| AckCheckpoint {
+        entry_id: "e1".to_string(),
+        seq,
+        hash: "ab".repeat(32),
+        acked_at: "2026-09-04T00:00:00Z".to_string(),
+        server_signature: "cd".repeat(64),
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let acks = tmp.path().join("acks.jsonl");
+    // No `TraceExport` is open: the uploader writes acks on its own handle.
+    append_ack_to(tmp.path(), &ack(1)).unwrap();
+    append_ack_to(tmp.path(), &ack(2)).unwrap();
+    let mut expected = Vec::new();
+    for seq in [1, 2] {
+        expected.extend(serde_json::to_vec(&ack(seq)).unwrap());
+        expected.push(b'\n');
+    }
+    assert_eq!(std::fs::read(&acks).unwrap(), expected);
+
+    // A link left in the file's place is refused, and what it names is not written through.
+    let elsewhere = tmp.path().join("elsewhere.txt");
+    std::fs::write(&elsewhere, b"").unwrap();
+    let linked = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(&elsewhere, linked.path().join("acks.jsonl")).unwrap();
+    assert!(append_ack_to(linked.path(), &ack(3)).is_err());
+    assert!(std::fs::read(&elsewhere).unwrap().is_empty());
 }

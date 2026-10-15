@@ -761,6 +761,9 @@ pub struct TraceExport {
     root: TraceRoot,
     /// The current (last) chain part: every append goes here.
     chain: TraceAppendFile,
+    /// Held open so `acks.jsonl` exists and was checked at open. The production writer is
+    /// [`append_ack_to`], which opens its own handle; only the test-only methods use this one.
+    #[cfg_attr(not(any(test, feature = "test-hooks")), allow(dead_code))]
     acks: TraceAppendFile,
     /// Logical chain bytes this writer validated or appended, summed over every part (pruned
     /// ones included): the used-bytes figure quota admission is measured against.
@@ -1346,6 +1349,7 @@ impl TraceExport {
         Ok(link)
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn append_ack(&mut self, ack: &AckCheckpoint) -> Result<(), ExportError> {
         let mut line = serde_json::to_vec(ack).map_err(|source| ExportError::Serialise {
             what: "acknowledgement",
@@ -1363,6 +1367,7 @@ impl TraceExport {
     /// this writer (see `TraceDir::sync_append`), so a caller never treats an unflushed or
     /// misplaced acknowledgement as delivered. The acknowledgement's own signature, entry,
     /// head and monotonicity are the delivery adapter's to validate, not this writer's.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn append_ack_synced(&mut self, ack: &AckCheckpoint) -> Result<(), ExportError> {
         self.append_ack(ack)?;
         self.root.dir.sync_append(&mut self.acks)?;
@@ -1372,6 +1377,7 @@ impl TraceExport {
     /// Open an independent reader of `acks.jsonl` at offset zero, requiring the name to be
     /// the retained acknowledgement writer's exact file. Acquisition failure poisons that
     /// writer, as for [`Self::independent_chain_reader`].
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn independent_acks_reader(&mut self) -> Result<TraceReadFile, ExportError> {
         Ok(self.root.dir.open_matching_reader(&mut self.acks)?)
     }
@@ -1737,6 +1743,36 @@ impl TraceExport {
             .write_all_sync_checked(bytes)?;
         Ok(self.root.display.join(document.name()))
     }
+}
+
+/// Append one acknowledgement to `trace_dir`'s `acks.jsonl` as one line, in one write, and make
+/// it durable. This is the one production writer of that file.
+///
+/// The file is opened through the trace directory's capability
+/// ([`goalcup_platform::tracecap`]): `acks.jsonl` is reached by its own name from a retained
+/// directory handle, never through a link, and must be a regular file with one name, so an
+/// agent that left a link in its place cannot have the acknowledgement written elsewhere. The
+/// handle is fresh for each acknowledgement: a refused or failed write poisons a capability
+/// writer for good, and the next try must be able to start again. Only `Ok` means the line is
+/// retained where a restarted reader finds it.
+///
+/// The acknowledgement's own signature, entry, head and monotonicity are the delivery
+/// adapter's to validate, not this writer's.
+pub fn append_ack_to(trace_dir: &Path, ack: &AckCheckpoint) -> Result<(), ExportError> {
+    let acks = trace_dir.join(ACKS_FILE);
+    let refused = |error: TraceCapError| ExportError::Io {
+        path: acks.display().to_string(),
+        source: std::io::Error::other(error.to_string()),
+    };
+    let mut line = serde_json::to_vec(ack).map_err(|source| ExportError::Serialise {
+        what: "acknowledgement",
+        source,
+    })?;
+    line.push(b'\n');
+    let dir = TraceDir::open(trace_dir).map_err(refused)?;
+    let mut file = dir.open_acks_for_resume().map_err(refused)?;
+    file.append_checked(&line).map_err(refused)?;
+    dir.sync_append(&mut file).map_err(refused)
 }
 
 /// The sha256, hex, of the exact bytes `write_seal_for_protocol` puts in `seal.json` — and of
