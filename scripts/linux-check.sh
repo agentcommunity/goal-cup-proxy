@@ -34,10 +34,19 @@ registry=$cargo_home/registry
 # repository, which the container does not see; `git ls-files` (scripts/check-version.py) then
 # fails. Mount that common git directory read-only at the same absolute path. A plain checkout has
 # its .git inside the mount already. If git cannot say, nothing is mounted and the fast gate fails.
+# Docker Desktop reports the owner of bind-mounted host files as root at some times and as uid
+# 1000 at others, so git in the container (user `dev`, uid 1000) can refuse the checkout with
+# "detected dubious ownership". Name the checkout, and the mounted git directory, as safe through
+# git's environment config (GIT_CONFIG_COUNT): it lives in this container only, it is read as
+# protected config, and it writes no ~/.gitconfig anywhere.
 set --
 common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
 if [ -d "$common" ] && [ "$common" != "$(pwd -P)/.git" ]; then
-    set -- -v "$common:$common:ro"
+    set -- -v "$common:$common:ro" -e GIT_CONFIG_COUNT=2 \
+        -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
+        -e GIT_CONFIG_KEY_1=safe.directory -e "GIT_CONFIG_VALUE_1=$common"
+else
+    set -- -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src
 fi
 
 [ -d "$registry" ] || { echo "linux-check: FAIL registry (run cargo fetch --locked first)"; exit 1; }

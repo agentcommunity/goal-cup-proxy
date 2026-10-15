@@ -72,6 +72,14 @@ class LinuxCheckTests(unittest.TestCase):
         self.assertIn(f"-v {root}:/src", docker_run)
         self.assertNotIn(":ro", docker_run)
 
+    def test_a_plain_checkout_is_named_safe_for_git_in_the_container(self) -> None:
+        # Docker Desktop may show the mounted files owned by root; git as `dev` then refuses them.
+        root = self.checkout("plain-safe")
+        _, docker_run = self.run_check(root)
+        self.assertIn("-e GIT_CONFIG_COUNT=1 ", docker_run)
+        self.assertIn("-e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src ", docker_run)
+        self.assertNotIn("GIT_CONFIG_KEY_1", docker_run)
+
     def test_a_linked_worktree_mounts_the_main_git_directory_read_only(self) -> None:
         main = self.checkout("main")
         linked = self.base / "linked"
@@ -82,6 +90,17 @@ class LinuxCheckTests(unittest.TestCase):
         common = main / ".git"
         self.assertIn(f"-v {common}:{common}:ro", docker_run)
         self.assertIn(f"-v {linked}:/src", docker_run)
+
+    def test_a_linked_worktree_and_its_mounted_git_directory_are_named_safe(self) -> None:
+        main = self.checkout("main-safe")
+        linked = self.base / "linked-safe"
+        self.git(main, "worktree", "add", "-q", str(linked))
+        _, docker_run = self.run_check(linked)
+        self.assertIn("-e GIT_CONFIG_COUNT=2 ", docker_run)
+        self.assertIn("-e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src ", docker_run)
+        self.assertIn(
+            f"-e GIT_CONFIG_KEY_1=safe.directory -e GIT_CONFIG_VALUE_1={main / '.git'} ", docker_run
+        )
 
 
 if __name__ == "__main__":
