@@ -1814,13 +1814,11 @@ fn create_and_gate<'a>(
         say(out, &format!("run directory: {}", run.dir.display()))?;
         raise_open_file_limit(out)?;
         let proxied = Proxied::start(&info, profile, &run, roots)?;
-        // A replace-mode CA variable gets the system's roots plus the proxy's CA, so whatever
-        // reads it keeps its real trust; an extend-mode one gets the proxy's CA alone.
-        let ca_file = if profile.ca.mode == goalcup_protocol::capture_policy::CaMode::Replace {
-            crate::ca_bundle::write_bundle(&run.ca, proxied.proxy.ca_certificate_der())?
-        } else {
-            proxied.proxy.ca_certificate().to_path_buf()
-        };
+        // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
+        // plus the proxy's CA, so tool children keep their real trust; a harness's own variable
+        // gets the proxy's CA alone (the launch picks per name).
+        let ca_bundle =
+            crate::ca_bundle::bundle_for(profile, &run.ca, proxied.proxy.ca_certificate_der())?;
         admitted(client, &info)?;
         // The goal-cup skill, in the harness's own skills folder (D57), replacing only its own.
         if let Some(skills_dir) = &profile.home.skills_dir {
@@ -1844,7 +1842,8 @@ fn create_and_gate<'a>(
                 run_home: &run.home,
                 config_home: &config_home,
                 proxy_url: &proxied.proxy_url,
-                ca_certificate: &ca_file,
+                ca_certificate: proxied.proxy.ca_certificate(),
+                ca_bundle: ca_bundle.as_deref(),
                 parent_env: env,
             },
         )?;

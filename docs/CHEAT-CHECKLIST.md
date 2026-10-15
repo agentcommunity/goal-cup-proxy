@@ -34,6 +34,17 @@ consistent, not that the participant followed the rules.
   recorded. Bounded by: the wire leg records every model call that goes through the proxy, the
   chain and seal are the daemon's, and a tampered session file or home shows as a disagreement
   between the legs.
+- **A shared CA row does not fail closed (WP12).** A connector that trusts the proxy through
+  `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` (`mode = "extend"`) hands that variable the system's
+  roots plus the proxy CA, because every tool child reads it too. So if the harness itself skips
+  `HTTPS_PROXY` for a connection, that connection verifies against the real roots and nothing
+  records it. A harness's own variable gets the proxy CA alone, and a replace-mode one (Hermes,
+  D41) makes such a connection fail. No shipped connector names a shared row. Bounded by: a
+  connector names a shared row only when the harness has no CA variable of its own
+  (CONNECTOR-SCHEMA, reviewer checklist); the wire leg records every model call that goes
+  through the proxy; and the research report's `analysis.cross_leg` notes
+  `native_activity_without_wire_streams` when the session file shows model work the proxy did not
+  record.
 - **An unpinned build may be anything on `PATH`** (a wrapper that unsets `HTTPS_PROXY`, a fake that
   writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the
   judges comparing the native session's model turns with the wire leg's model calls. The research

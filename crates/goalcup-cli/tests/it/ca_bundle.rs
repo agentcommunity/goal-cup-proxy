@@ -1,4 +1,4 @@
-//! The file a replace-mode CA variable is handed: the proxy CA plus the system's roots, read
+//! The file a shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) is handed: the proxy CA
 //! from the OS trust store, certificates only, written privately (WP12).
 
 use goalcup_cli::ca_bundle::{BUNDLE_FILE_NAME, bundle_pem, certificates, system_roots_source};

@@ -3,6 +3,7 @@
   "ca": [
     {
       "file": "proxy_ca",
+      "mode": "extend",
       "name": "CODEX_CA_CERTIFICATE",
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }

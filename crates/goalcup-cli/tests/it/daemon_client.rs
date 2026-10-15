@@ -1091,7 +1091,7 @@ fn pause_points_exist_only_under_test_support() {
 /// (which the ordinary spawn and the gate both run), the run-scoped daemon's start
 /// (`daemon/spawn.rs`), the D53 version probe (`harness_version.rs`), the `git` that clones
 /// the participant's GitHub repository (`account/github.rs`) and macOS's `/usr/bin/security`,
-/// which exports the system's trusted roots for a replace-mode CA file (`ca_bundle.rs`, with a
+/// which exports the system's trusted roots for a shared CA row's file (`ca_bundle.rs`, with a
 /// cleared environment and no input); the V1 version probe
 /// went with the V1 manifest (OS-29). The child-only credential is set on the one launch
 /// builder, so another site would be another place a key could be forgotten or leaked. The

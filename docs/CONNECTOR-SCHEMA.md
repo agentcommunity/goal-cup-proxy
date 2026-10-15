@@ -250,30 +250,39 @@ identity `none` needs `since_run_start = true`; and a credential is refused. It 
 |---|---|---|
 | `capture.credential.env` | required when the optional table exists; refused with `interactive` | Closed registry: `DEEPSEEK_API_KEY`, `AMP_API_KEY`. The value: 20 to 256 bytes of `[A-Za-z0-9_-]`. |
 | `capture.ca.env` | required | 1–2 unique CA variable names (below). |
-| `capture.ca.mode` | required | Closed values: `extend`, `replace`. The mode says which file every name gets. |
-
-The launch points each CA variable at a file made for the run:
-
-| Mode | The file | For a variable that |
-|---|---|---|
-| `extend` | the recording proxy's CA alone | adds certificates to the program's own roots (`NODE_EXTRA_CA_CERTS`) |
-| `replace` | the system's trusted roots plus the proxy's CA | replaces the program's roots (`SSL_CERT_FILE`, a `*_CA_BUNDLE`) |
-
-The `replace` file is built when the run starts from the OS trust store (macOS: the System Roots
-keychain; Linux: the distribution bundle, such as `/etc/ssl/certs/ca-certificates.crt`). It holds
-certificates only, and is written with mode 0600 into the run's private `ca/` directory. So a tool
-child that reads the variable keeps its real trust. A start with no readable trust store is
-refused.
+| `capture.ca.mode` | required | Closed values: `extend`, `replace`. What the harness's own variable does with the file. |
 
 A CA variable name is one of:
 
-- a shared row: `SSL_CERT_FILE` (OpenSSL) or `REQUESTS_CA_BUNDLE` (Python `requests`). Every tool
-  child reads these, so they take `mode = "replace"`. A harness that honours one needs no CA
-  variable of its own. Apple's `/usr/bin/python3` links LibreSSL, which ignores `SSL_CERT_FILE`;
-  a Python harness from Homebrew, python.org or uv honours it.
 - the harness's own variable: upper case, ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`,
   `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or `_CA_FILE` (`NODE_EXTRA_CA_CERTS`,
   `CODEX_CA_CERTIFICATE`, `HERMES_CA_BUNDLE`). The name is connector data; no core change.
+- a shared row: `SSL_CERT_FILE` (OpenSSL) or `REQUESTS_CA_BUNDLE` (Python `requests`). Every tool
+  child reads these too.
+
+The launch points each name at a file made for the run:
+
+| Name | Mode | The file | The harness then trusts |
+|---|---|---|---|
+| own variable | `extend` | the recording proxy's CA alone | its own roots plus the proxy (`NODE_EXTRA_CA_CERTS`, `CODEX_CA_CERTIFICATE`) |
+| own variable | `replace` | the recording proxy's CA alone | the proxy only, so it fails closed (`HERMES_CA_BUNDLE`, D41) |
+| shared row | `extend` only | the system's trusted roots plus the proxy's CA | the real roots plus the proxy |
+
+A `replace` variable fails closed: if the harness skips `HTTPS_PROXY` and connects straight to its
+provider, the handshake fails, so no model call goes unrecorded. **A shared row gives that up.**
+Its file must hold the real roots, or every tool child's TLS would break, so a connection the
+harness makes past the proxy still verifies and is not recorded
+([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md#anchoring-and-the-agents-reach)). So a builder names a shared
+row only when the harness has no CA variable of its own. When the harness has a harness-specific
+variable that replaces its roots, name that one with `mode = "replace"`. A shared row is never
+named in a `replace` profile.
+
+The shared-row file is built when the run starts from the OS trust store (macOS: the System Roots
+keychain; Linux: the distribution bundle, such as `/etc/ssl/certs/ca-certificates.crt`). It holds
+certificates only, the proxy CA first, and is written with mode 0600 into the run's private `ca/`
+directory. A start with no readable trust store is refused. Apple's `/usr/bin/python3` links
+LibreSSL, which ignores `SSL_CERT_FILE`; a Python harness from Homebrew, python.org or uv honours
+it.
 
 Each name is also held to the shared environment-name rules (no provider, git, npm, OpenSSL or
 tracker namespace, no credential or proxy word). `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
@@ -458,7 +467,7 @@ In addition to the local rules above, all of these apply:
    with the run home and nested below `per_run_dir`.
 6. `capture.home.env` (when present), `capture.credential.env` and all `capture.ca.env` names are pairwise
    distinct case-insensitively. No `capture.env` key may duplicate one.
-7. `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` are named only with `capture.ca.mode = "replace"`.
+7. `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` are named only with `capture.ca.mode = "extend"`.
 8. Authentication and intercepted host sets are disjoint; every intercepted host has at least one
    scoped path.
 9. A native hint is allowed only on `append_only`; a prefix path cannot be `/`.
@@ -510,6 +519,10 @@ layout. The protocol tests require one pin per connector folder and one folder p
 a post-build tamper check, not protection from a malicious merge; review remains the trust
 control. Concurrent connector changes regenerate the file on the combined tree rather than
 hand-merging hashes.
+
+A `capture.providers` row lives in `providers.toml`, outside `connectors/<id>/`, so the directory
+digest does not cover it. The effective host set of a pinned connector is its digest plus the
+tracer build's provider table, which is compiled in and changes only in a reviewed core PR.
 
 Schema evolution and pin evolution are separate. A new optional field whose absence preserves
 current behaviour, a widened bound, a new closed value or a newly admitted cross-field pair may

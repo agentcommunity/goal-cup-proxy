@@ -1,11 +1,10 @@
-//! The certificate file a `capture.ca.mode = "replace"` variable is handed: the system's trusted
-//! roots plus the run's proxy CA, built for each run from the OS trust store.
+//! The certificate file a shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) is handed:
+//! the system's trusted roots plus the run's proxy CA, built for each run from the OS trust store.
 //!
-//! A replace-mode variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, or a harness's own bundle
-//! variable) replaces the roots of whatever reads it, the harness's tool children included. The
-//! proxy CA alone would break every TLS connection that does not go through the proxy. So the
-//! file starts with the proxy CA and then holds the roots the machine already trusts, read when
-//! the run starts:
+//! A shared variable replaces the roots of whatever reads it, the harness's tool children
+//! included. The proxy CA alone would break every TLS connection that does not go through the
+//! proxy. So the file starts with the proxy CA and then holds the roots the machine already
+//! trusts, read when the run starts:
 //!
 //! * macOS: the System Roots keychain, exported by `/usr/bin/security find-certificate -a -p`;
 //! * Linux: the first distribution bundle in [`LINUX_BUNDLES`] that holds a certificate.
@@ -13,13 +12,55 @@
 //! Only `CERTIFICATE` PEM blocks that parse as an X.509 trust anchor are kept, and each is
 //! encoded again from its DER, so a private key or any other block in the source never reaches
 //! the file. The file is written `create_new` with mode 0600 into the run's private `ca/`
-//! directory, next to the proxy CA. An extend-mode variable is handed the proxy CA alone and
-//! never needs this file.
+//! directory, next to the proxy CA.
+//!
+//! A harness's own CA variable, in either mode, is handed the proxy CA alone and never this file
+//! ([`handed_file`]). A replace-mode one so fails closed: a connection that skips the proxy does
+//! not verify (D41).
 
 use crate::CliError;
 use base64::Engine as _;
+use goalcup_protocol::capture_policy::SHARED_CA_ENV;
+use goalcup_protocol::harness::CaptureSpec;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+
+/// Which file the launch points a `capture.ca.env` variable at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandedFile {
+    /// The run's proxy CA alone: a harness's own variable, in either mode.
+    ProxyCa,
+    /// The system's roots plus the proxy CA ([`write_bundle`]): a [`SHARED_CA_ENV`] row.
+    SystemRootsAndProxyCa,
+}
+
+/// The file `name` is handed: the bundle for a [`SHARED_CA_ENV`] row, the proxy CA otherwise.
+pub fn handed_file(name: &str) -> HandedFile {
+    if SHARED_CA_ENV.contains(&name) {
+        HandedFile::SystemRootsAndProxyCa
+    } else {
+        HandedFile::ProxyCa
+    }
+}
+
+/// The bundle `goalcup start` writes into the run's `ca/` directory `dir`, only when the profile
+/// names a [`SHARED_CA_ENV`] row; `None` otherwise, and nothing is written or run.
+pub fn bundle_for(
+    profile: &CaptureSpec,
+    dir: &Path,
+    proxy_ca_der: &[u8],
+) -> Result<Option<PathBuf>, CliError> {
+    if profile
+        .ca
+        .env
+        .iter()
+        .any(|name| handed_file(name) == HandedFile::SystemRootsAndProxyCa)
+    {
+        write_bundle(dir, proxy_ca_der).map(Some)
+    } else {
+        Ok(None)
+    }
+}
 
 /// The bundle's file name in the run's `ca/` directory.
 pub const BUNDLE_FILE_NAME: &str = "goalcup-ca-bundle.pem";
@@ -138,8 +179,9 @@ pub fn bundle_pem(roots_source: &[u8], proxy_ca_der: &[u8]) -> Result<String, St
 pub fn write_bundle(dir: &Path, proxy_ca_der: &[u8]) -> Result<PathBuf, CliError> {
     let refused = |why: String| {
         CliError::Refused(format!(
-            "the harness's CA variable replaces its trusted roots, so the run hands it the \
-             system's roots plus the recording proxy's CA, and {why}. Nothing is launched."
+            "the harness trusts the proxy through a CA variable its tool children read too, so \
+             the run hands it the system's roots plus the recording proxy's CA, and {why}. \
+             Nothing is launched."
         ))
     };
     let pem = system_roots_source()

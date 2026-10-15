@@ -823,8 +823,9 @@ fn every_ca_variable_is_refused_as_a_capture_env_key_and_as_home_env() {
 }
 
 /// A harness's own CA variable is connector data held to one closed shape; the shared rows
-/// (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) take `replace`, which hands them the system roots plus
-/// the proxy CA; and a CA name is still held to the shared env-name rules.
+/// (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) take `extend`, since the launch hands them the system
+/// roots plus the proxy CA, so a `replace` profile, which fails closed, never names one; and a CA
+/// name is still held to the shared env-name rules.
 #[test]
 fn a_ca_variable_is_data_held_to_the_ca_shape_and_the_shared_rules() {
     use goalcup_protocol::capture_policy::{CaMode, ca_env_problem};
@@ -834,32 +835,37 @@ fn a_ca_variable_is_data_held_to_the_ca_shape_and_the_shared_rules() {
         ("NEWTOOL_CA_BUNDLE", "replace"),
         ("NODE_EXTRA_CA_CERTS", "replace"),
         ("HERMES_CA_BUNDLE", "extend"),
-        ("SSL_CERT_FILE", "replace"),
-        ("REQUESTS_CA_BUNDLE", "replace"),
+        ("SSL_CERT_FILE", "extend"),
+        ("REQUESTS_CA_BUNDLE", "extend"),
     ] {
         let mut t = claude();
         set(&mut t, &["capture", "ca"], "env", strings(&[name]));
         set(&mut t, &["capture", "ca"], "mode", mode);
         admitted(&t, PINNED);
     }
-    // Both shared rows together, with a harness's own variable as a second name.
-    let mut t = codex();
-    set(
-        &mut t,
-        &["capture", "ca"],
-        "env",
-        strings(&["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"]),
-    );
-    set(&mut t, &["capture", "ca"], "mode", "replace");
-    admitted(&t, PINNED);
-    // The shared rows replace every tool child's roots: `extend` would hand them the proxy CA
-    // alone.
-    for name in ["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"] {
+    // Both shared rows together, and a shared row beside a harness's own extending variable.
+    for names in [
+        ["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"],
+        ["SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"],
+    ] {
         let mut t = codex();
-        set(&mut t, &["capture", "ca"], "env", strings(&[name]));
+        set(&mut t, &["capture", "ca"], "env", strings(&names));
         set(&mut t, &["capture", "ca"], "mode", "extend");
-        refused(&t, PINNED, &["capture.ca.env", name, "mode = \"replace\""]);
-        assert!(ca_env_problem(name, CaMode::Replace).is_none(), "{name}");
+        admitted(&t, PINNED);
+    }
+    // A shared row is handed the system's roots too, so it cannot be a `replace` profile's
+    // name: that profile trusts the proxy alone and fails closed (D41).
+    for names in [
+        &["SSL_CERT_FILE"][..],
+        &["REQUESTS_CA_BUNDLE"],
+        &["HERMES_CA_BUNDLE", "SSL_CERT_FILE"],
+    ] {
+        let name = names.last().unwrap();
+        let mut t = codex();
+        set(&mut t, &["capture", "ca"], "env", strings(names));
+        set(&mut t, &["capture", "ca"], "mode", "replace");
+        refused(&t, PINNED, &["capture.ca.env", name, "mode = \"extend\""]);
+        assert!(ca_env_problem(name, CaMode::Extend).is_none(), "{name}");
     }
     // Not a CA name, or not upper case.
     for (name, why) in [

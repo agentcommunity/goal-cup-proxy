@@ -113,7 +113,8 @@
   ],
   "ca": [
     {
-      "file": "system_roots_and_proxy_ca",
+      "file": "proxy_ca",
+      "mode": "replace",
       "name": "HERMES_CA_BUNDLE",
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }

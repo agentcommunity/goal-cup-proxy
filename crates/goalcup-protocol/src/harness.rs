@@ -460,8 +460,11 @@ pub struct CaSpec {
     /// [`SHARED_CA_ENV`]: crate::capture_policy::SHARED_CA_ENV
     /// [`CA_ENV_SUFFIXES`]: crate::capture_policy::CA_ENV_SUFFIXES
     pub env: Vec<String>,
-    /// `extend`: each variable gets the proxy's CA alone. `replace`: each gets the system's
-    /// roots plus the proxy's CA.
+    /// `extend` or `replace` ([`CaMode`]). A harness's own variable is handed the proxy's CA
+    /// alone in either mode. A [`SHARED_CA_ENV`] row takes `extend` and is handed the system's
+    /// roots plus the proxy's CA, so a `replace` profile never names one and stays fail-closed.
+    ///
+    /// [`SHARED_CA_ENV`]: crate::capture_policy::SHARED_CA_ENV
     pub mode: CaMode,
 }
 

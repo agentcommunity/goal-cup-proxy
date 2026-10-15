@@ -166,6 +166,7 @@ pub fn chat_launch<'a>(
         config_home: &layout.harness_home,
         proxy_url: proxy,
         ca_certificate: &layout.ca,
+        ca_bundle: None,
         parent_env: parent,
     }
 }

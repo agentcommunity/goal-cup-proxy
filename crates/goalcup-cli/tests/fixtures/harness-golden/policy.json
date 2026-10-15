@@ -375,7 +375,7 @@
       "CURL_CA_BUNDLE",
       "NODE_TLS_REJECT_UNAUTHORIZED"
     ],
-    "shared_replace_only": [
+    "shared_extend_only": [
       "SSL_CERT_FILE",
       "REQUESTS_CA_BUNDLE"
     ]

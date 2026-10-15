@@ -3,6 +3,7 @@
   "ca": [
     {
       "file": "proxy_ca",
+      "mode": "extend",
       "name": "NODE_EXTRA_CA_CERTS",
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }

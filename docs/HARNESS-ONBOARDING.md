@@ -286,7 +286,7 @@ moves). Never spell around a rule.
 | 4 | Identity carrier | `none`, `preassigned`, `stdout_json` or `stderr_line` | core change |
 | 5 | Home variable | `home.env` is `<WORD>_HOME` or `<WORD>_CONFIG_DIR`, or is left out | core change |
 | 6 | XDG | the harness falls back to `$HOME` and needs no XDG variable | core change |
-| 7 | CA variable | the harness honours `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, or its own variable ending `_CA_CERTIFICATE`, `_CA_CERTS`, `_CA_CERT`, `_CA_BUNDLE` or `_CA_FILE` | core change |
+| 7 | CA variable | the harness honours its own variable ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or `_CA_FILE`, or else `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` | core change |
 | 8 | Native form | the own-session file is appended JSONL or rewritten whole | core change |
 | 9 | One native row | exactly one local own-session store | core change |
 | 10 | Executable | one entry-point file (a binary, or a script with a shebang), not an interpreter | fits |
@@ -329,11 +329,15 @@ daemon.
    "keychain_link"`), or uses `run_home = "shared"`.
 6. **XDG.** Every `XDG_*` name is refused in `capture.env` and as `home.env`. The launch
    environment starts empty, so the harness uses `$HOME`, the private run home.
-7. **CA variable.** `mode = "extend"` hands the variable the proxy CA alone (it adds to the
-   harness's roots). `mode = "replace"` hands it the system's roots plus the proxy CA, built for
-   each run from the OS trust store, so every child tool keeps its real trust. `SSL_CERT_FILE` and
-   `REQUESTS_CA_BUNDLE` take `replace`. `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
-   `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. See [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#credential-and-ca).
+7. **CA variable.** Prefer the harness's own variable. It is handed the proxy CA alone:
+   `mode = "extend"` when it adds to the harness's roots, `mode = "replace"` when it replaces
+   them. A replace-mode variable fails closed: a connection that skips the proxy does not
+   verify. Name `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` (`mode = "extend"`) only when the harness
+   has no variable of its own. Tool children read those too, so the run hands them the system's
+   roots plus the proxy CA, and a direct connection by the harness then succeeds unrecorded
+   ([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md#anchoring-and-the-agents-reach)). `SSL_CERT_DIR`,
+   `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. See
+   [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#credential-and-ca).
 8. **Native form.** `append_only` or `snapshot` only. A database store is refused.
 9. **One native row.** Schema 1 refuses zero native rows and more than one.
 10. **Executable.** There is no `sha256` (D53). The CLI resolves `program` on `PATH`, follows
@@ -406,7 +410,7 @@ What each manifest field must establish:
 |---|---|
 | `capture.args`, executable | headless argv or chat mode, goal placement, entry point, version |
 | `capture.home`, `env` | private HOME and config home, real state dirs, seed contents and modes |
-| `capture.credential`, `capture.ca` | variable names and process scope; no secret value; no app-wide trust |
+| `capture.credential`, `capture.ca` | variable names and process scope; no secret value; no app-wide trust; the CA variable and its mode cite a source or a measurement in the facts sheet, and an own-name variable is not one that tool children also read |
 | `capture.hosts`, `auth_hosts` | provider host, narrow evidence paths, protocol hint |
 | `capture.native` | one own-session store, its form, root, pattern and scope; no request dump or credential store |
 | `capture.identity` | the measured carrier, its grammar and fields, and its binding to that store |

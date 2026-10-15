@@ -101,11 +101,13 @@ skills_dir = "skills"
 
 [capture.ca]
 # One or two CA variables the harness reads (facts sheet section 6); no core change needed:
-# - its own variable, ending _CA_CERTIFICATE, _CA_CERTS, _CA_CERT, _CA_BUNDLE or _CA_FILE
-#   (NODE_EXTRA_CA_CERTS for Node and Bun);
-# - or SSL_CERT_FILE / REQUESTS_CA_BUNDLE (most Python and Rust harnesses), with mode "replace".
-# mode "extend": the variable ADDS to the harness's roots, and gets the proxy CA alone.
-# mode "replace": the variable REPLACES them, and gets the system roots plus the proxy CA.
+# - its own variable, ending _CA_CERTIFICATE, _CA_CERTIFICATES, _CA_CERT, _CA_CERTS, _CA_BUNDLE
+#   or _CA_FILE (NODE_EXTRA_CA_CERTS for Node and Bun). It gets the proxy CA alone.
+#   mode "extend": the variable ADDS to the harness's roots.
+#   mode "replace": the variable REPLACES them, so the harness trusts only the proxy (fails closed).
+# - only if it has none: SSL_CERT_FILE / REQUESTS_CA_BUNDLE, with mode "extend". Tool children read
+#   these too, so they get the system roots plus the proxy CA, and a connection the harness makes
+#   past the proxy is not recorded (docs/CHEAT-CHECKLIST.md). Prefer the harness's own variable.
 env = ["<CA_VARIABLE>"]
 mode = "<extend|replace>"
 

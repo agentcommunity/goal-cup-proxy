@@ -36,7 +36,8 @@ seed = [
 [capture.credential]
 env = "DEEPSEEK_API_KEY"
 
-# HERMES_CA_BUNDLE replaces Hermes's roots, so it is handed the system's roots plus the proxy CA.
+# HERMES_CA_BUNDLE replaces the roots of Hermes's provider clients with the proxy CA alone, which
+# fails closed (D41).
 [capture.ca]
 env = ["HERMES_CA_BUNDLE"]
 mode = "replace"

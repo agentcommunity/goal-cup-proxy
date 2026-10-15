@@ -40,16 +40,18 @@ pub(crate) const MAX_GOAL_FLAG_BYTES: usize = 32;
 // CA trust, credentials, tracker hosts
 // ---------------------------------------------------------------------------------------
 
-/// Which file a CA variable is handed: what the variable does with it decides the mode.
+/// Whether a CA variable extends the harness's roots or replaces them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CaMode {
-    /// The variable ADDS certificates to the program's own roots: it is handed the proxy's CA
-    /// alone.
+    /// Measured to add the proxy's CA to the harness's roots. A harness's own variable is
+    /// handed the proxy's CA alone. A [`SHARED_CA_ENV`] row is declared `extend` too: it
+    /// replaces the roots of whatever reads it, so it is handed the system's roots plus the
+    /// proxy's CA, and the resulting trust is the same as an extending variable's.
     Extend,
-    /// The variable REPLACES the program's roots: it is handed a file of the system's trusted
-    /// roots plus the proxy's CA, which the launch builds from the OS trust store for each run.
-    /// Whatever reads it keeps its real trust and also trusts the proxy.
+    /// Names a file that REPLACES the harness's provider-client roots with the proxy's CA.
+    /// That fails closed (the harness then trusts only the proxy, which verifies the real
+    /// upstream), but it is a different trust statement, so a manifest must declare it.
     Replace,
 }
 
@@ -59,9 +61,11 @@ impl CaMode {
 }
 
 /// The CA variables every tool child reads too (OpenSSL's, and Python `requests`'). They replace
-/// the roots of whatever reads them, so a profile names them only with `mode = "replace"`: the
-/// file they get holds the system's roots as well as the proxy's CA, and every tool keeps its
-/// real trust. A harness that honours one of them needs no CA variable of its own.
+/// the roots of whatever reads them, so the launch hands them a file of the system's roots plus
+/// the proxy's CA, and a profile names them only with `mode = "extend"` (the resulting trust is
+/// the real roots plus the proxy). That gives up failing closed: a connection the harness makes
+/// past the proxy still verifies, and nothing records it (CHEAT-CHECKLIST). A harness with a
+/// replace-mode variable of its own names that instead.
 pub const SHARED_CA_ENV: &[&str] = &["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"];
 
 /// How a harness's own CA variable ends (D43, closed). The name itself is connector data
@@ -104,10 +108,10 @@ pub fn ca_env_problem(name: &str, mode: CaMode) -> Option<&'static str> {
              `_CA_BUNDLE` or `_CA_FILE`",
         );
     }
-    if SHARED_CA_ENV.contains(&name) && mode != CaMode::Replace {
+    if SHARED_CA_ENV.contains(&name) && mode != CaMode::Extend {
         return Some(
-            "is read by every tool child and replaces its roots, so it takes `mode = \
-             \"replace\"`: the launch then hands it the system's roots plus the proxy CA",
+            "is read by every tool child, so the launch hands it the system's roots plus the \
+             proxy CA, and it takes `mode = \"extend\"`",
         );
     }
     env_name_denied(name, EnvContext::CaEnv)

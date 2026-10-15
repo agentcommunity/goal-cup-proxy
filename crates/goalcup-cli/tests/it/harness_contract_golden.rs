@@ -32,6 +32,7 @@
 
 use crate::common::m2_profile_support;
 
+use goalcup_cli::ca_bundle::{HandedFile, handed_file};
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::launch::{
     LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, build_capture_launch,
@@ -611,13 +612,12 @@ fn credential_json(p: &CaptureSpec) -> Value {
     })
 }
 
-/// Each CA variable the profile names, the file its mode hands it, and the value the plan gives
-/// it (the launch is built with the proxy CA's path; `goalcup start` passes the bundle's path
-/// for `replace`).
+/// Each CA variable the profile names, the profile's mode, the file the launch hands it, and the
+/// value the plan gives it (the proxy CA's path for a harness's own variable).
 fn ca_json(l: &s::Layout, p: &CaptureSpec, plan: &LaunchPlan) -> Value {
-    let file = match p.ca.mode {
-        CaMode::Extend => "proxy_ca",
-        CaMode::Replace => "system_roots_and_proxy_ca",
+    let mode = match p.ca.mode {
+        CaMode::Extend => "extend",
+        CaMode::Replace => "replace",
         _ => "unknown",
     };
     let rows: Vec<Value> =
@@ -626,7 +626,11 @@ fn ca_json(l: &s::Layout, p: &CaptureSpec, plan: &LaunchPlan) -> Value {
             .map(|name| {
                 json!({
                     "name": name,
-                    "file": file,
+                    "mode": mode,
+                    "file": match handed_file(name) {
+                        HandedFile::ProxyCa => "proxy_ca",
+                        HandedFile::SystemRootsAndProxyCa => "system_roots_and_proxy_ca",
+                    },
                     "value_in_plan": plan.env_set.get(name).map(|v| norm(l, v)),
                 })
             })
@@ -881,7 +885,7 @@ fn the_shared_capture_policy_is_pinned() {
                 .map(|name| json!({"name": name, "denied": env_key_denied(name, EnvContext::CaptureEnv)}))
                 .collect::<Vec<_>>(),
             "ca": {
-                "shared_replace_only": SHARED_CA_ENV,
+                "shared_extend_only": SHARED_CA_ENV,
                 "own_name_suffixes": CA_ENV_SUFFIXES,
                 "refused": TRUST_ONLY,
             },

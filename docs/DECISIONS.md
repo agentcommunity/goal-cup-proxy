@@ -184,8 +184,9 @@ cheapest-model clause is superseded by D52.
 
 ## D41. **(M2)** Hermes reference row: model, CA trust, key-fingerprint and key-fragment rules.
 
-- **CA trust.** `HERMES_CA_BUNDLE` replaces Hermes's roots. D43 generalises this to any connector;
-  since WP12 a replace-mode variable gets the system's roots plus the proxy CA (D43 ruling 3).
+- **CA trust.** `HERMES_CA_BUNDLE` replaces Hermes's roots with the tracer's proxy CA. That fails
+  closed: Hermes trusts only the proxy, and the proxy verifies the real upstream. `SSL_CERT_FILE`
+  stays refused. D43 generalises this to any connector.
 - **Key fingerprint.** The private `auth.json` is pre-seeded so that Hermes never seeds its
   credential pool from the env key or writes `secret_fingerprint`.
 - **Key fragments.** Before any Hermes run artifact is kept, a scan with the in-memory key (never
@@ -211,14 +212,17 @@ The contract is `connectors/<id>/harness.toml`, schema 1.
 2. Credentials are a closed list (`CREDENTIAL_ENV`): `DEEPSEEK_API_KEY`, `AMP_API_KEY` (D49). A
    credential needs a per-run config home and either `stderr_line` + `deferred` or
    `stdout_json` + `at_launch` identity (D50). `preassigned` and `none` stay refused.
-3. *(Amended by WP12.)* A CA variable's name is connector data, held to a closed shape: the
-   shared rows `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`, or a name ending `_CA_CERTIFICATE`,
-   `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or `_CA_FILE`, under the shared
-   env-name rules. The mode is closed: `extend` hands the variable the proxy CA alone; `replace`
-   hands it the system's roots plus the proxy CA, built for each run from the OS trust store, so
-   every tool child keeps its real trust. The shared rows take `replace`. `SSL_CERT_DIR`,
-   `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. A new mode or name shape is
-   a DECISIONS entry.
+3. *(Amended by WP12.)* A CA variable's name is connector data, held to a closed shape: a name
+   ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or
+   `_CA_FILE`, under the shared env-name rules, or one of the two shared rows `SSL_CERT_FILE` and
+   `REQUESTS_CA_BUNDLE`. A harness's own variable is handed the proxy CA alone, in either mode;
+   a replace-mode one means the harness trusts only the proxy, which fails closed (D41). The
+   shared rows are read by every tool child, so they are handed the system's roots plus the proxy
+   CA, built for each run from the OS trust store, and take `mode = "extend"` only. That gives up
+   failing closed for that harness (CHEAT-CHECKLIST), so a connector names a shared row only when
+   the harness has no CA variable of its own. `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
+   `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. A new mode, shared row or name shape is a
+   DECISIONS entry.
 4. The server keeps acceptable connector directory digests as data. The compiled pins in
    `pins/connector-dirs.txt` stay the local gate. A harness PR has no `.rs` file (D51).
 5. Stranger harness PRs are accepted once the conformance and pin tests run in CI, the

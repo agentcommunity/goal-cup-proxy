@@ -734,10 +734,13 @@ pub struct CaptureLaunch<'a> {
     /// `http://goalcup:<credential>@<127.0.0.1|[::1]|localhost>:<port>`, the proxy this launch
     /// records through ([`crate::proxy::connect::ProxyCredential::proxy_url`]'s shape).
     pub proxy_url: &'a str,
-    /// The file each of the profile's `ca.env` is pointed at: the proxy's per-launch CA
-    /// certificate for `mode = "extend"`, or the system roots plus it
-    /// ([`crate::ca_bundle::write_bundle`]) for `mode = "replace"`. The caller picks it.
+    /// The proxy's per-launch CA certificate, handed to each of the profile's own `ca.env`
+    /// variables, in either mode.
     pub ca_certificate: &'a Path,
+    /// The system's roots plus the proxy's CA ([`crate::ca_bundle::bundle_for`]), handed to
+    /// each [`SHARED_CA_ENV`](goalcup_protocol::capture_policy::SHARED_CA_ENV) row the profile
+    /// names. `None` when it names none; a launch that needs it and has none is refused.
+    pub ca_bundle: Option<&'a Path>,
     /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`] is read from it, and for a
     /// chat-mode connector also [`CHAT_PASSTHROUGH_ENV`] and `LC_*`.
     pub parent_env: &'a BTreeMap<String, String>,
@@ -758,6 +761,7 @@ impl fmt::Debug for CaptureLaunch<'_> {
                 &without_userinfo(self.proxy_url).unwrap_or_else(|| self.proxy_url.to_string()),
             )
             .field("ca_certificate", &self.ca_certificate)
+            .field("ca_bundle", &self.ca_bundle)
             .field("parent_env", &Keys(self.parent_env))
             .finish()
     }
@@ -815,9 +819,10 @@ struct Inputs<'a> {
     executable: &'a ResolvedExecutable,
     run_home: &'a Path,
     config_home: &'a Path,
-    /// The loopback proxy URL and the CA certificate handed to the harness; `None` for a launch
-    /// that records nothing and so has no proxy to name.
-    proxy: Option<(&'a str, &'a Path)>,
+    /// The loopback proxy URL, the proxy's CA certificate and the roots-plus-proxy bundle
+    /// handed to the harness; `None` for a launch that records nothing and so has no proxy to
+    /// name.
+    proxy: Option<(&'a str, &'a Path, Option<&'a Path>)>,
     parent_env: &'a BTreeMap<String, String>,
 }
 
@@ -828,7 +833,7 @@ impl<'a> Inputs<'a> {
             executable: launch.executable,
             run_home: launch.run_home,
             config_home: launch.config_home,
-            proxy: Some((launch.proxy_url, launch.ca_certificate)),
+            proxy: Some((launch.proxy_url, launch.ca_certificate, launch.ca_bundle)),
             parent_env: launch.parent_env,
         }
     }
@@ -882,10 +887,13 @@ fn build_launch(
     let run_home = absolute_utf8("per-run HOME", launch.run_home)?;
     let config_home = absolute_utf8("harness home", launch.config_home)?;
     let proxy = match launch.proxy {
-        Some((url, ca)) => {
+        Some((url, ca, bundle)) => {
             let ca_certificate = absolute_utf8("proxy CA certificate", ca)?;
+            let ca_bundle = bundle
+                .map(|b| absolute_utf8("system roots and proxy CA bundle", b))
+                .transpose()?;
             loopback_proxy_url(url)?;
-            Some((url, ca_certificate))
+            Some((url, ca_certificate, ca_bundle))
         }
         None => None,
     };
@@ -962,15 +970,28 @@ fn build_launch(
     if let Some(home_env) = &profile.home.env {
         env.insert(home_env.clone(), config_home.to_string());
     }
-    if let Some((proxy_url, ca_certificate)) = proxy {
+    if let Some((proxy_url, ca_certificate, ca_bundle)) = proxy {
         for key in ["HTTPS_PROXY", "https_proxy"] {
             env.insert(key.into(), proxy_url.to_string());
         }
         for key in ["NO_PROXY", "no_proxy"] {
             env.insert(key.into(), CAPTURE_NO_PROXY.into());
         }
+        // A harness's own variable trusts the proxy alone (a replace-mode one so fails closed,
+        // D41); a shared row, which tool children read too, gets the system's roots as well.
         for key in &profile.ca.env {
-            env.insert(key.clone(), ca_certificate.to_string());
+            let file = match crate::ca_bundle::handed_file(key) {
+                crate::ca_bundle::HandedFile::ProxyCa => ca_certificate,
+                crate::ca_bundle::HandedFile::SystemRootsAndProxyCa => {
+                    ca_bundle.ok_or_else(|| {
+                        CliError::Internal(format!(
+                            "`{id}` names `{key}`, which is handed the system roots plus the \
+                             proxy CA, and the launch has no such file"
+                        ))
+                    })?
+                }
+            };
+            env.insert(key.clone(), file.to_string());
         }
     }
 
