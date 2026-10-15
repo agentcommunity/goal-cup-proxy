@@ -68,7 +68,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D53 | Record the harness build in v5 (`Launch.harness_build`); v0.5.0 readers refuse such traces | in force (m2) once merged | [entry](#d53-m2-record-the-harness-build-in-v5-accepting-that-v050-readers-refuse-it) |
 | D54 | The protocol carries v5 only: pre-v5 versions, bodies and writers and the Git provenance types leave | in force (m2) once merged | [entry](#d54-m2-the-protocol-carries-v5-only) |
 | D55 | A capture chain may be split into part files named by their logical start offset; records and hashes are unchanged | in force (m2) once merged | [entry](#d55-m2-the-capture-chain-rotates-into-part-files) |
-| D56 | The seal of a clone records its commit and an uncommitted digest; the finish gets three minutes | in force (m2) once merged | [entry](#d56-m2-the-seal-of-a-clone-records-its-commit-and-an-uncommitted-digest-the-finish-gets-minutes) |
+| D56 | The seal of a clone records its commit and an uncommitted digest; the finish gets three minutes | in force (m2) once merged; amended 2026-10-15 (an unreadable clone seals, incomplete) | [entry](#d56-m2-the-seal-of-a-clone-records-its-commit-and-an-uncommitted-digest-the-finish-gets-minutes) |
 | D57 | Shipped connectors run the harness in chat mode; the participant types the prompt; the session files are every one new or written since the run started | in force (m2) once merged; amends D52 | [entry](#d57-m2-connectors-run-the-harness-in-chat-mode-and-record-every-session-file-since-the-start) |
 | D58 | `MAX_PRODUCERS` (distinct IDs per entry, ever) rises to 65 536; a new `MAX_LIVE_PRODUCERS` = 128 bounds live producers; pre-change readers flag traces past 128 | in force (m2) once merged | [entry](#d58-m2-a-week-of-stalls-never-exhausts-the-producer-ids) |
 | D59 | `capture.env` admits `NODE_USE_ENV_PROXY = "1"`; `run_home = "shared"` keeps the run `HOME` of a harness without a home variable, under the shared-home rules | in force (m2) once merged | [entry](#d59-m2-node_use_env_proxy-and-a-shared-run-home) |
@@ -1514,26 +1514,42 @@ empty.
 
 **The manifest.** `SealManifest` gains two optional fields, D53-style: absent, they are not
 written, so every manifest written before them keeps its bytes and its digest.
-- `git` (`WorkspaceGit`): `commit`, the hex id `HEAD` names (`None` for an unborn `HEAD`), and
-  `dirty_sha256`. With `git`, `files` is empty. The baseline and the seal of a clone root take
-  it; any other workspace is walked as before.
+- `git`: `commit`, the hex id `HEAD` names (`None` for an unborn `HEAD`), and `dirty_sha256`;
+  or, when Git could not read the clone, `{"unreadable": "<why>"}` (`GitState`, untagged, so a
+  read state keeps its bytes). With `git`, `files` is empty. The baseline and the seal of a clone
+  root take it; any other workspace is walked as before.
 - `home`, on the baseline only: name, size and SHA-256 of each file of the connector's config home
   before the run, without its native roots, symlinks not followed. A file over 64 MiB is not read:
   it has its size and the absent digest. The listing stops at 10 000 files: past that it lists the
   first 10 000 the walk meets, sorted, and marks nothing else.
 
-**A clone root is never walked.** When its Git state cannot be read (a call fails, `git` is
-missing, or the time runs out), the create is refused with "the Git work folder could not be read:
-<why>", and a finish is refused with `finish_deadline` at `workspace_walk`, which the CLI asks again
-with growing waits. Walking instead would let the agent choose a different seal by breaking Git.
+**A clone root is never walked, and always seals.** Whether the workspace is a clone is asked
+once, at the create; the seal follows the baseline (`baseline.json` says, read again when a daemon
+reopens the entry), so a `.git` the agent removed, moved or swapped for a link is "it has no .git
+directory", never a walk. When its Git state cannot be read (a call
+fails, `git` is missing, `.git` is broken, an output is over 64 MiB, `git ls-files --others` warns
+that it could not open a directory, or the time runs out), the
+baseline or the seal records `git: {"unreadable": "<why>"}` instead, with `files` empty: `<why>` is
+one sentence of at most 200 characters, with no path and no file content. The create is admitted
+and the finish seals at once. The verifier reports `baseline_git_unreadable` or
+`seal_git_unreadable`, makes the trace incomplete (exit 1, never invalid), and names the reason in
+the report's `git_unreadable` ("the workspace's Git state could not be read at the seal: <why>").
+A baseline with `git` beside a seal without it (an older daemon, or any path that walked a clone)
+is `seal_git_missing`, incomplete as well. An empty reason, or any field beside the two forms, is
+malformed.
+Walking instead would let the agent choose a different seal by breaking Git; refusing, as this
+decision first said, let an agent that broke its own `.git` block every seal while the CLI retried
+for an hour. Now the agent can only make its own trace incomplete. (Amended 2026-10-15; the first
+rule refused the create and answered the finish with `finish_deadline` at `workspace_walk`.)
 
 **The digest.** SHA-256 over `b"diff\0"` ‖ for each path, sorted bytewise, that is in `HEAD`'s
 tree or in the index and whose work-tree content differs from `HEAD` (compared by
 `git hash-object --no-filters` id, a committed link by its text, or absent from the work tree):
 `path ‖ 0x00 ‖ value ‖ b"\n"` ‖ `b"untracked\0"` ‖ for each
 `git ls-files -z --others --exclude-per-directory=.gitignore` path, sorted bytewise:
-`path ‖ 0x00 ‖ value ‖ b"\n"`. `value` is the hex SHA-256 of the content, `deleted`, or
-`size:<n>` for a file over 64 MiB; anything but a regular file has the seal walk's absent digest.
+`path ‖ 0x00 ‖ value ‖ b"\n"`. `value` is the hex SHA-256 of the content, `deleted`,
+`unreadable` for a tracked path that is there but cannot be looked at (a directory above it closed
+to the seal; it was recorded as `deleted` before 2026-10-15), or `size:<n>` for a file over 64 MiB; anything but a regular file has the seal walk's absent digest.
 An index gitlink that is not the commit's is `path ‖ 0x00 ‖ "gitlink:" ‖ <id> ‖ b"\n"` in the
 first part (a submodule's content belongs to another repository). An untracked directory
 `ls-files` collapses (a nested repository, `dir/`) is listed file by file below it, by the same

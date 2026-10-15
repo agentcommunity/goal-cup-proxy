@@ -35,7 +35,7 @@
 //! drain until the end of the drain share, stops the owner (native finish, remaining producers
 //! cut as losses, flush, sync), chains the proxy's counters as gaps, ends the registered process
 //! tree and records its actual outcome (termination time is outside the budget), seals the
-//! workspace (a clone's Git state, else the walk; D56), and calls `write_local_finish` once. The
+//! workspace (a clone's Git state or why it could not be read, else the walk; D56), and calls `write_local_finish` once. The
 //! drain share expiring is the existing cut-with-a-gap, never a refusal. A stage that waits on a permit, the
 //! entry's lock or the owner, or that is about to begin with less than [`FINISH_RESPONSE_MARGIN`]
 //! left, is refused with [`DaemonError::FinishDeadline`]: no terminal is written, the entry stays
@@ -163,7 +163,8 @@ use self::writer::*;
 const IDLE_WAIT: Duration = Duration::from_millis(25);
 
 /// What reading a clone's Git state may take at the baseline (D56): inside the CLI's 30 s
-/// create call. A clone not read in it is refused, never walked.
+/// create call. A clone not read in it is admitted with the reason in place of the state, never
+/// walked.
 const BASELINE_GIT_BUDGET: Duration = Duration::from_secs(20);
 
 /// One v5 capture entry of this daemon.
@@ -187,9 +188,11 @@ pub(crate) struct CaptureEntry {
     ingest: Option<Arc<IngestEntry>>,
     sink: Arc<OwnerSink>,
     writer: Arc<Mutex<ChainWriter>>,
-    /// The entry's workspace, fixed at creation: a finish reads it without the run lock, which
-    /// another finish may hold.
-    workspace: PathBuf,
+    /// The baseline recorded the workspace's Git state, read or not: the seal reads it again and
+    /// never walks (D56). Fixed at creation: a finish reads it without the run lock, which
+    /// another finish may hold. Taken from `baseline.json`, at the create and at a reopen alike; a
+    /// trace without a readable one asks the workspace.
+    clone: bool,
     /// Taken before `writer` whenever both are held.
     run: Mutex<CaptureRun>,
     owner: Arc<OwnerControl>,
@@ -427,11 +430,13 @@ impl Daemon {
             path: workspace.display().to_string(),
             source,
         })?;
-        let mut baseline =
-            workspace::seal_workspace(&workspace, entry_id, &now_rfc3339(), BASELINE_GIT_BUDGET)?
-                .map_err(|why| {
-                DaemonError::Refused(format!("the Git work folder could not be read: {why}"))
-            })?;
+        let mut baseline = workspace::seal_workspace(
+            &workspace,
+            workspace::is_clone_root(&workspace),
+            entry_id,
+            &now_rfc3339(),
+            BASELINE_GIT_BUDGET,
+        )?;
         baseline.home = listed_home(&manifest.capture, run_home, config_home);
         export.write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)?;
         export.sync_capture()?;
@@ -979,22 +984,23 @@ struct ChainFacts {
 /// manifest the terminal binds; its `sealed_at` is then the seal's own. A terminal chained
 /// without its `seal.json` (a crash between the two, or a full disk) stays a failed seal.
 fn bind_seal(export: &TraceExport, finish: &mut ChainedFinish, digest: &str) {
-    use std::io::Read;
-    const SEAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
-    let Ok(Some(file)) = export.read_fixed(FixedTraceDocument::Seal) else {
-        return;
-    };
-    let mut bytes = Vec::new();
-    if file.take(SEAL_MAX_BYTES).read_to_end(&mut bytes).is_err() {
-        return;
-    }
-    let Ok(manifest) = serde_json::from_slice::<SealManifest>(&bytes) else {
+    let Some(manifest) = read_manifest(export, FixedTraceDocument::Seal) else {
         return;
     };
     if manifest_sha256(&manifest).is_ok_and(|bound| bound == digest) {
         finish.sealed_at = manifest.sealed_at;
         finish.seal_written = true;
     }
+}
+
+/// `seal.json` or `baseline.json` as written, when it is there whole and parses.
+fn read_manifest(export: &TraceExport, document: FixedTraceDocument) -> Option<SealManifest> {
+    use std::io::Read;
+    const MANIFEST_MAX_BYTES: u64 = 16 * 1024 * 1024;
+    let file = export.read_fixed(document).ok()??;
+    let mut bytes = Vec::new();
+    file.take(MANIFEST_MAX_BYTES).read_to_end(&mut bytes).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 impl ChainFacts {
@@ -1096,8 +1102,11 @@ impl CaptureEntry {
             clock,
             ingest: None,
             sink: Arc::new(OwnerSink::default()),
+            clone: read_manifest(&writer.export, FixedTraceDocument::Baseline).map_or_else(
+                || workspace::is_clone_root(&entry.workspace),
+                |b| b.git.is_some(),
+            ),
             writer: Arc::new(Mutex::new(writer)),
-            workspace: entry.workspace.clone(),
             run: Mutex::new(CaptureRun { entry, goal }),
             owner: Arc::new(OwnerControl::default()),
             thread: Mutex::new(None),
