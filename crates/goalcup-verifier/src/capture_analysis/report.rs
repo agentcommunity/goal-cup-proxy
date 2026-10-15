@@ -413,6 +413,7 @@ mod tests {
     use crate::capture_analysis::api::{
         DecoderFailure, DecoderSummary, DecoderV1, ObservationTimeRange, SourceRef, StreamOpen,
     };
+    use crate::capture_analysis::native;
     use crate::capture_analysis::registry::Registered;
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
@@ -460,7 +461,7 @@ mod tests {
             (
                 NATIVE,
                 CaptureSource::Native,
-                Some(crate::capture_analysis::native::ROLLOUT_JSONL_HINT),
+                Some(<native::codex::Codex as native::NativeFormat>::HINT),
                 &rollout[..],
             ),
         ] {

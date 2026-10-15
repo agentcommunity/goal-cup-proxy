@@ -56,22 +56,22 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a refused launch prefix: it switches the harness to another model provider",
     ),
     (
-        "crates/goalcup-verifier/src/capture_analysis/native.rs",
+        "crates/goalcup-verifier/src/capture_analysis/native/codex.rs",
         "codex-jsonl",
         "the protocol_hint a connector declares for this native decoder",
     ),
     (
-        "crates/goalcup-verifier/src/capture_analysis/native.rs",
+        "crates/goalcup-verifier/src/capture_analysis/native/claude_code.rs",
         "claude-code-jsonl",
         "the protocol_hint a connector declares for this native decoder",
     ),
     (
-        "crates/goalcup-verifier/src/capture_analysis/native.rs",
+        "crates/goalcup-verifier/src/capture_analysis/native/codex.rs",
         "codex-native",
         "the decoder id a report prints",
     ),
     (
-        "crates/goalcup-verifier/src/capture_analysis/native.rs",
+        "crates/goalcup-verifier/src/capture_analysis/native/claude_code.rs",
         "claude-code-native",
         "the decoder id a report prints",
     ),

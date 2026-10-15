@@ -1,5 +1,5 @@
 //! Behavioral tests for the bounded native-transcript decoders
-//! (`crates/goalcup-verifier/src/capture_analysis/native.rs`).
+//! (`crates/goalcup-verifier/src/capture_analysis/native/`).
 //!
 //! Every fixture under `tests/fixtures/m2-native/` is a curated, already-redacted excerpt of
 //! a real, measured native transcript: `codex-native-excerpt.jsonl` from
