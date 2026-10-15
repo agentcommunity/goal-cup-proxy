@@ -19,7 +19,8 @@
 use super::api::{Disposition, Observation, ObservationSink, kinds};
 use super::reader::{CaptureIntegrityReport, scan_capture_trace};
 use super::registry::DecoderRegistry;
-use super::session::{DecodeOutcome, DecodeSession, DecoderOutcome};
+use super::session::{DecodeOutcome, DecodeSession, DecoderOutcome, Undecoded};
+use super::wire::cut;
 use crate::VerifyOptions;
 use goalcup_protocol::capture::CaptureRecord;
 use goalcup_protocol::capture_status::AnalysisState;
@@ -33,12 +34,17 @@ use std::path::Path;
 /// The research-report schema version governing every observation and summary line. Version 2
 /// adds `analysis.models` and `analysis.cross_leg` to the summary; observation lines are as in 1.
 /// Version 3 adds `delivery.records_after_deadline`, `delivery.last_seq_at_or_before_deadline`
-/// and `delivery.last_ack_at`, copied from the integrity report.
-const RESEARCH_SCHEMA_VERSION: u32 = 3;
+/// and `delivery.last_ack_at`, copied from the integrity report. Version 4 adds
+/// `analysis.undecoded` and `analysis.undecoded_omitted`, and drops each decoder entry's
+/// `measured` and `synthetic_only` (they stay on the registry entry) and the constant
+/// `options.dev_mode`.
+const RESEARCH_SCHEMA_VERSION: u32 = 4;
 /// The longest observation line written, newline included.
 const MAX_OBSERVATION_LINE_BYTES: usize = 2 * 1024 * 1024;
 /// The longest summary line written, newline included.
 const MAX_SUMMARY_BYTES: usize = 64 * 1024;
+/// The most of one capture-only stream's hint the summary shows: the hint grammar's bound.
+const MAX_SHOWN_HINT_BYTES: usize = 64;
 
 /// One report's exit code (0 complete, 1 incomplete or partial, 2 invalid evidence) and the
 /// summary line it wrote.
@@ -238,8 +244,6 @@ pub fn research_summary(
         "exit_code": exit_code,
         "verifier_version": crate::VERIFIER_VERSION,
         "options": {
-            // Schema 1 keeps this key; there is no development mode to record any more.
-            "dev_mode": false,
             "allow_descriptor_key": options.allow_descriptor_key,
             "extra_server_keys": options.extra_server_keys,
         },
@@ -281,6 +285,8 @@ pub fn research_summary(
             "models": models(decoders),
             "models_omitted": models_omitted(decoders),
             "cross_leg": cross_leg(outcome),
+            "undecoded": outcome.undecoded.iter().map(undecoded).collect::<Vec<_>>(),
+            "undecoded_omitted": outcome.undecoded_omitted,
         },
         "references": operations.references(),
         "references_omitted": operations.references_omitted(),
@@ -387,8 +393,18 @@ fn entry(decoder: &DecoderOutcome) -> Value {
         "failure": decoder.result.as_ref().err().map(|failed| {
             json!({"phase": failed.phase.as_str(), "error": failed.failure.reason})
         }),
-        "measured": decoder.measured_on,
-        "synthetic_only": decoder.synthetic_only,
+    })
+}
+
+/// One group of capture-only streams: recorded, read by no decoder. A hint is shown up to the
+/// hint grammar's 64 bytes, so 64 groups stay far inside the summary bound.
+fn undecoded(group: &Undecoded) -> Value {
+    json!({
+        "source": group.source,
+        "hint": group.protocol_hint.as_deref().map(|hint| cut(hint, MAX_SHOWN_HINT_BYTES)),
+        "streams": group.streams,
+        "bytes": group.bytes,
+        "bytes_incomplete": group.bytes_incomplete,
     })
 }
 

@@ -229,8 +229,6 @@ impl ObservationCounts {
 pub struct DecoderOutcome {
     pub id: &'static str,
     pub version: &'static str,
-    pub measured_on: &'static str,
-    pub synthetic_only: &'static [&'static str],
     /// `Err` when the decoder failed. Its earlier observations are still in the sink, and
     /// `observations` counts them. The summary's identity is the registry entry's.
     pub result: Result<DecoderSummary, DecoderFailed>,
@@ -284,8 +282,6 @@ pub(crate) fn is_wire(source: CaptureSource) -> bool {
 struct Slot {
     id: &'static str,
     version: &'static str,
-    measured_on: &'static str,
-    synthetic_only: &'static [&'static str],
     /// The instance that reads the trace. `None` once finished or failed.
     decoder: Option<Box<dyn DecoderV1>>,
     /// A second instance that is only ever asked `accepts`, so selection never touches state a
@@ -307,8 +303,6 @@ impl Slot {
         let mut slot = Self {
             id: entry.id(),
             version: entry.version(),
-            measured_on: entry.measured_on(),
-            synthetic_only: entry.synthetic_only(),
             decoder: None,
             selector: None,
             failed: None,
@@ -484,8 +478,6 @@ impl Slot {
         DecoderOutcome {
             id: self.id,
             version: self.version,
-            measured_on: self.measured_on,
-            synthetic_only: self.synthetic_only,
             result,
             observations: std::mem::take(&mut self.counts),
         }

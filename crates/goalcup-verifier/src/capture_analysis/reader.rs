@@ -79,7 +79,7 @@ pub const MAX_FINDING_CODES: usize = 128;
 const MAX_GOAL_STREAMS: usize = 128;
 
 /// Whole-trace evidence integrity. Serialized words are frozen by capture-integrity schemas 1 and 2
-/// and reused unchanged by research-report schema 1.
+/// and reused unchanged by the research report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

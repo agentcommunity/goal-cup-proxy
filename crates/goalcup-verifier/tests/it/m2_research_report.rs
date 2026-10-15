@@ -33,6 +33,7 @@ use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
 use goalcup_protocol::seal::{SealManifest, SealedFile};
 use goalcup_verifier::capture_analysis::reader::scan_capture_trace;
+use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
 use goalcup_verifier::capture_analysis::{anthropic, api::kinds, chat, openai};
 use goalcup_verifier::{ResearchResult, VerifyOptions, write_research_report};
 use serde_json::{Value, json};
@@ -811,7 +812,7 @@ fn mixed_observations_end_in_one_bound_summary() {
     assert_eq!(&result.summary, summary);
     assert_eq!(result.exit_code, 0, "{summary:#}");
     assert_eq!(summary["exit_code"], 0);
-    assert_eq!(summary["schema_version"], 3);
+    assert_eq!(summary["schema_version"], 4);
     assert_eq!(
         summary["verifier_version"],
         goalcup_verifier::VERIFIER_VERSION
@@ -858,7 +859,7 @@ fn mixed_observations_end_in_one_bound_summary() {
     assert_eq!(summary["run"]["launch"], json!(launch()));
     assert_eq!(
         summary["options"],
-        json!({"dev_mode": false, "allow_descriptor_key": false, "extra_server_keys": []})
+        json!({"allow_descriptor_key": false, "extra_server_keys": []})
     );
 
     // Each decoder: its declared identity and version, and counts that are its own lines.
@@ -891,6 +892,46 @@ fn mixed_observations_end_in_one_bound_summary() {
         assert_eq!(entry["over_budget"], 0);
     }
     assert_eq!(summary["analysis"]["state"], "available");
+    // Every stream of this trace has a decoder.
+    assert_eq!(summary["analysis"]["undecoded"], json!([]));
+    assert_eq!(summary["analysis"]["undecoded_omitted"], 0);
+}
+
+/// A stream no decoder accepts is recorded and not read, and the summary says so: its source,
+/// its hint, how many streams and how many source bytes. A decoder entry carries its counts,
+/// not its provenance prose, which stays on the registry entry.
+#[test]
+fn the_summary_lists_capture_only_streams_by_source_and_hint() {
+    let hint = "x-unknown-protocol/9";
+    let body = b"{\"ask\":\"something\"}";
+    let mut records = vec![connection(WIRE, CONN, connection_open(false))];
+    records
+        .extend(wire(WIRE, 1, CaptureSource::WireRequest, hint, CONN, 1).records(body, &[6], 100));
+    records
+        .extend(wire(WIRE, 3, CaptureSource::WireRequest, hint, CONN, 2).records(body, &[], 200));
+    // A hint past the grammar's 64 bytes is shown cut to 64, so the summary stays bounded.
+    let long = "y".repeat(1000);
+    records
+        .extend(wire(WIRE, 5, CaptureSource::WireRequest, &long, CONN, 3).records(body, &[], 300));
+    records.push(connection(WIRE, CONN, connection_close()));
+    let trace = make_report_trace(GOAL_TEXT, &epoch(WIRE, records), Some(confirmed()));
+    let (_, _, lines) = report_bytes(trace.path());
+    let summary = summary_of(&lines);
+    assert_eq!(summary["capture"]["integrity"], "valid", "{summary:#}");
+    assert_eq!(
+        summary["analysis"]["undecoded"],
+        json!([
+            {"source": "wire_request", "hint": hint, "streams": 2,
+                "bytes": 2 * body.len(), "bytes_incomplete": false},
+            {"source": "wire_request", "hint": &long[..64], "streams": 1,
+                "bytes": body.len(), "bytes_incomplete": false},
+        ])
+    );
+    assert_eq!(summary["analysis"]["undecoded_omitted"], 0);
+    for entry in summary["analysis"]["decoders"].as_array().unwrap() {
+        assert!(entry.get("measured").is_none(), "{entry}");
+        assert!(entry.get("synthetic_only").is_none(), "{entry}");
+    }
 }
 
 /// Contract S1: `--research-json` echoes the two new `Launch` fields, additively. Absent, they
@@ -926,7 +967,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(unversioned(&bytes))),
-        "b1fd6c2182a9746691784b3df17ec916b52ddd11543edd4adff91f3bc470dc00"
+        "f61dd716f6c7ca034d9eb4d6cdce6dff6fe65f028246555c52fa5eb166ed224c"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];
@@ -1376,7 +1417,6 @@ fn report_preserves_error_outcome_and_observation_intervals() {
     records.extend(anthropic_records(&sse, &[start.len() + 10]));
     let trace = make_report_trace(GOAL_TEXT, &records, Some(confirmed()));
     let (_, bytes, lines) = report_bytes(trace.path());
-    let summary = summary_of(&lines);
 
     // Each error: its two source parts and the exact interval of those parts, in the
     // producer's own clock; the response body's parts start at tick 300.
@@ -1423,15 +1463,19 @@ fn report_preserves_error_outcome_and_observation_intervals() {
             }
         }
     }
-    // The error forms are labelled synthetic-only, and nothing claims live validation.
+    // The error forms are labelled synthetic-only on their registry entries, and nothing
+    // claims live validation.
+    let registry = DecoderRegistry::builtin();
     for decoder in ["openai-responses", "anthropic-messages"] {
-        let entry = decoder_entry(summary, decoder);
-        assert!(!entry["measured"].as_str().unwrap().is_empty());
-        let synthetic = entry["synthetic_only"].as_array().unwrap();
+        let entry = registry
+            .entries()
+            .iter()
+            .find(|r| r.id() == decoder)
+            .unwrap();
+        assert!(!entry.measured_on().is_empty());
+        let synthetic = entry.synthetic_only();
         assert!(
-            synthetic
-                .iter()
-                .any(|form| form.as_str().unwrap().contains("error")),
+            synthetic.iter().any(|form| form.contains("error")),
             "{decoder}: {synthetic:?}"
         );
     }

@@ -12,8 +12,8 @@
 //! capture-only when the session records no accepting decoder; an isolated factory or `accepts`
 //! failure can also leave no selector. It is recorded, never read, and named in
 //! [`DecodeOutcome::undecoded`](super::session::DecodeOutcome::undecoded).
-//! An unsupported content type may instead be accepted and emitted as `unknown`.
-//! Research-report schema 1 does not yet serialize the capture-only inventory.
+//! An unsupported content type may instead be accepted and emitted as `unknown`. The research
+//! report lists the capture-only inventory under `analysis.undecoded`.
 
 use super::api::{DecoderV1, StreamOpen};
 use super::session::quiet;
@@ -197,7 +197,8 @@ impl DecoderRegistry {
             .collect()
     }
 
-    pub(super) fn entries(&self) -> &[Registered] {
+    /// Every registered decoder with what the registry knows of it, in registration order.
+    pub fn entries(&self) -> &[Registered] {
         &self.decoders
     }
 }
