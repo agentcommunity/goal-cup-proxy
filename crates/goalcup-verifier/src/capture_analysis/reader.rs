@@ -1593,13 +1593,12 @@ impl CaptureState {
                 {
                     return Err("record_field_invalid");
                 }
+                // The tool allowance is held to shape only, for every profile: both present,
+                // bounded text and SHA-256 hex, or both absent.
                 match (allowed_tool_rule, process_handoff_digest) {
                     (None, None) => {}
                     (Some(rule), Some(digest))
-                        if profile_id == "claude-code-cli"
-                            && goalcup_protocol::capture::is_claude_capture_allowed_tool_rule(
-                                rule,
-                            )
+                        if bounded_text(rule)
                             && Sha256Digest::try_from(digest.as_str()).is_ok() => {}
                     _ => return Err("record_field_invalid"),
                 }

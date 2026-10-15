@@ -1300,21 +1300,19 @@ fn local_terminal_preserves_monotonic_clock_identity() {
 }
 
 #[test]
-fn verifier_accepts_paired_claude_launch_provenance_and_refuses_unpaired_claims() {
+fn verifier_accepts_a_paired_tool_allowance_for_any_profile_and_refuses_an_unpaired_one() {
     let mut records = launched(complete_wire(None));
     let launch = records
         .iter_mut()
         .find(|record| matches!(record, CaptureRecord::Launch { .. }))
         .unwrap();
     if let CaptureRecord::Launch {
-        profile_id,
         allowed_tool_rule,
         process_handoff_digest,
         ..
     } = launch
     {
-        *profile_id = "claude-code-cli".into();
-        *allowed_tool_rule = Some("Bash(python3 demo.py *)".into());
+        *allowed_tool_rule = Some("Bash(*)".into());
         *process_handoff_digest = Some("d".repeat(64));
     }
     let (accepted, _) = scan(make_trace(&records, true).path());
