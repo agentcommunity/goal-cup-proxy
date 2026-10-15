@@ -49,10 +49,14 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// An unknown connector is now refused `preflight_failed`.
 /// V7 lets a capture create carry an upload server's `entry_id`, and adds `chain_head` and
 /// `trace_dir` to its answer (docs/UPLOAD-API.md).
-pub const CONTROL_API_VERSION: u32 = 7;
+/// V8 drops the V1 vocabulary nothing produced: `WorkspaceInfo`, `GET /v0/entries/current`,
+/// `StatusPayload.event` and `event_status_source`, the `ArmingState` values
+/// `start_signal_seen` and `refused`, and every `HealthState` but `online`, `sealed` and
+/// `sealing_recovery_needed`. The CLI and the daemon ship together, so a pair from two
+/// releases is refused rather than bridged.
+pub const CONTROL_API_VERSION: u32 = 8;
 
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
-pub const ROUTE_ENTRIES_CURRENT: &str = "/v0/entries/current";
 pub const ROUTE_HEALTH: &str = "/v0/health";
 /// `POST` a [`CaptureWorkspaceRequest`]: create a protocol-v5 local capture entry.
 pub const ROUTE_CAPTURE_WORKSPACES: &str = "/v0/capture-workspaces";
@@ -104,8 +108,8 @@ pub fn entry_route(entry_id: &str, suffix: &str) -> String {
 /// `true`. **Both call this function**, so the server and the client cannot drift into
 /// disagreeing about which routes need a token.
 ///
-/// `/v0/entries/current` is deliberately **not** public: reading one entry's signed status
-/// when you already know its id is accepted, enumeration is not.
+/// `/v0/entries` is deliberately **not** public: reading one entry's signed status when you
+/// already know its id is accepted, enumeration is not.
 ///
 /// A path carrying a `.` or `..` segment is never public. `/v0/entries/e1/status/../../seal`
 /// carries the public route's text and resolves, at every normalising client and proxy
@@ -180,94 +184,13 @@ fn percent_decode(seg: &str) -> Option<Vec<u8>> {
 
 // ------------------------------------------------------------------ responses
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceInfo {
-    pub entry_id: String,
-    /// The daemon-issued initial process generation.  It becomes usable only after `arm`;
-    /// carrying it at creation lets the CLI build one typed handoff without inventing a
-    /// nonce or querying mutable state between arm and spawn.
-    pub process_generation: u64,
-    /// The empty directory the participant works in. Outside any Git worktree.
-    ///
-    /// **The canonical spelling** — what `std::fs::canonicalize` returns for it (D16).
-    /// This is the ONE path this run is known by: the daemon stores it on the
-    /// registry row, renders every `{workspace}` and `{slug}` from it, compares every hook
-    /// post's `cwd` against it, and answers the same string later. A caller that caches this
-    /// value and hands it back — a seal's self-check — compares equal, which the requested
-    /// spelling did not under a workspace parent reached through a symlink.
-    pub workspace: String,
-    /// The spelling the participant ASKED for: `workspace_parent` joined with the entry
-    /// id, before it was resolved. Under a symlinked parent — the default shape on macOS,
-    /// where `/var` is a link to `/private/var` — it differs from [`Self::workspace`], and
-    /// otherwise it is the same string.
-    ///
-    /// **For display only.** Nothing compares it to anything: an older daemon answers no
-    /// such field, so `serde(default)` makes it the empty string there, and a caller that
-    /// routed on it would route on `""`. Show it when a participant needs to see the name
-    /// they typed; use [`Self::workspace`] for everything else.
-    #[serde(default)]
-    pub workspace_requested: String,
-    /// Buffer, logs, baselines, receiver state. Never an ancestor of the workspace.
-    pub artifact_root: String,
-    /// The dedicated harness home for this run's process-scoped pins (D5).
-    pub harness_home: String,
-    /// Hex Ed25519 verifying key for this run's signed status.
-    pub run_public_key: String,
-    pub status_url: String,
-    // TODO(status-cache removal): dead since PR #26 (no daemon writes the cache, nothing reads
-    // this path); kept for wire compatibility, drop with the next control API version.
-    pub status_cache_path: String,
-    /// One line of plain text the Claude status line `cat`s. Never holds a secret.
-    pub status_line_path: String,
-    /// The session id the launch recipe pins where the harness accepts one.
-    pub session_id: String,
-    pub created_at: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArmingState {
+    /// Created, and the harness not launched yet.
     Armed,
-    StartSignalSeen,
+    /// The harness was launched.
     Started,
-    /// The gate will never arm — a start signal that never arrived, a timeout, or an
-    /// occupied harness home. Only a pre-D48 (v0.5.0) daemon writes it. Last in the enum so
-    /// no existing wire value shifts meaning; a reader that does not know this variant
-    /// reports it as an unrecognised string rather than as a live state it can misjudge as
-    /// still pending.
-    ///
-    /// A machine reader must be able to tell "will never arm" from "still waiting to arm"
-    /// without parsing prose: `detail` carries the reason in words for a human reader, and
-    /// this variant carries the fact.
-    Refused,
-}
-
-/// Where the [`EventStatus`] in a status document came from.
-///
-/// The daemon has no way to KNOW the round's dates; it is told them, in its per-machine
-/// configuration's `[event]` section, or it is not. A document is signed either way, so this
-/// is what lets a reader tell "the organiser said the window closes then" from "this is the
-/// entry's own timeline standing in for one" — which is the difference between a number an
-/// agent may act on and a number the daemon made up.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EventStatusSource {
-    /// The dates were configured on the machine running the daemon.
-    Config,
-    /// No round was configured, so the fields carry the entry's own timeline. The default,
-    /// and the reading a document written by a build that predates this field gets.
-    #[default]
-    Fallback,
-}
-
-/// The competition-wide facts, signed with the entry so a reader asking the time gets a
-/// number it can trust.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EventStatus {
-    pub t0: String,
-    pub start_window_closes_at: String,
-    pub publication_closes_at: String,
-    pub rules_version: String,
 }
 
 /// What the daemon's own loop lost, per cadence, and what the last failure said.
@@ -363,15 +286,6 @@ pub struct StatusPayload {
     pub events_pending: u64,
     /// The health state in plain words, for the status page and the terminal (D25).
     pub detail: String,
-    pub event: EventStatus,
-    /// Whether [`StatusPayload::event`] was configured or is the entry's own timeline.
-    ///
-    /// `#[serde(default)]`, like the two counters below and for the same reason: the cache
-    /// directory outlives an upgrade, and a document a reader refuses is worse than one
-    /// whose provenance reads `fallback` — which is what a document written before this
-    /// field existed in fact carried.
-    #[serde(default)]
-    pub event_status_source: EventStatusSource,
     /// What the daemon's own four cadences lost while this entry was open.
     ///
     /// `#[serde(default)]` so a cached document written by a build that did not have this
@@ -450,7 +364,7 @@ pub struct StatusPayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedStatus {
     pub payload: StatusPayload,
-    /// Hex Ed25519 verifying key: the run key from `WorkspaceInfo.run_public_key`.
+    /// Hex Ed25519 verifying key: the run key from `CaptureWorkspaceInfo.run_public_key`.
     pub public_key: String,
     pub signature: String,
     /// When the daemon produced this document, RFC 3339 with a `Z`.
@@ -491,7 +405,7 @@ impl SignedStatus {
         Ok(s)
     }
 
-    /// Verify against the run key the **caller** pinned — `WorkspaceInfo.run_public_key`,
+    /// Verify against the run key the **caller** pinned — `CaptureWorkspaceInfo.run_public_key`,
     /// which the CLI holds from the entry record it pinned at creation.
     ///
     /// There is deliberately no `verify(&self)`. The status route is unauthenticated by
@@ -718,7 +632,7 @@ pub struct CaptureWorkspaceInfo {
     /// The fresh producer ID the proxy's first ingest epoch uses.
     pub producer_id: String,
     /// The run key every status document of this entry is signed with; the caller pins it
-    /// and verifies against it, as with [`WorkspaceInfo::run_public_key`].
+    /// and verifies against it with [`SignedStatus::verify_with`].
     pub run_public_key: String,
     /// The chain's head once the baseline is chained: the hash a start receipt signs.
     pub chain_head: String,
@@ -1057,8 +971,6 @@ pub trait DaemonClient {
     ) -> Result<(), ControlError>;
     /// `goalcup doctor` needs one call that answers "is the daemon there".
     fn health(&self) -> Result<DaemonHealth, ControlError>;
-    /// `goalcup status` with no entry argument.
-    fn current_entry(&self) -> Result<Option<String>, ControlError>;
     /// The participant wants the run to stop early; also the path `start` takes when the
     /// arming gate times out and the entry must not exist. A v5 capture entry is abandoned
     /// only before its launch and before a process is registered: that removes its

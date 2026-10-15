@@ -75,8 +75,6 @@
 
 use super::{CycleCounters, Daemon};
 
-use crate::config::EventConfig;
-
 use crate::ingest::{
     EntryGrant, EntrySnapshot, IngestClock, IngestEntry, IngestSecret, Offsets, ProducerLoss,
     ProducerOutcome, lock,
@@ -919,13 +917,12 @@ impl Daemon {
         entry_id: &str,
     ) -> Result<Option<SignedStatus>, DaemonError> {
         let cycles = self.cycle_errors();
-        let event = self.config().event.as_ref();
         let capture = self.captures().get(entry_id).cloned();
         if let Some(capture) = capture {
-            return capture.signed_status(cycles, event).map(Some);
+            return capture.signed_status(cycles).map(Some);
         }
         match self.sealed_capture(entry_id)? {
-            Some((row, sealed)) => sign_capture_status(&row, sealed, None, cycles, event).map(Some),
+            Some((row, sealed)) => sign_capture_status(&row, sealed, None, cycles).map(Some),
             None => Ok(None),
         }
     }
@@ -1069,7 +1066,6 @@ fn sign_capture_status(
     capture: M2Status,
     admission: Option<EntrySnapshot>,
     cycles: CycleErrors,
-    event: Option<&EventConfig>,
 ) -> Result<SignedStatus, DaemonError> {
     let mut payload = status::build_payload(&status::StatusInputs {
         entry,
@@ -1078,7 +1074,6 @@ fn sign_capture_status(
         } else {
             ArmingState::Armed
         },
-        event: status::event_status_for(entry, event),
         cycles,
         capture,
     });
@@ -1278,15 +1273,11 @@ impl CaptureEntry {
 
     /// Sign the status from the entry's state now. The receiver's own admission counts are
     /// read before any capture lock, which a sink call never waits on.
-    fn signed_status(
-        &self,
-        cycles: CycleErrors,
-        event: Option<&EventConfig>,
-    ) -> Result<SignedStatus, DaemonError> {
+    fn signed_status(&self, cycles: CycleErrors) -> Result<SignedStatus, DaemonError> {
         let admission = self.ingest.as_ref().map(|ingest| ingest.snapshot());
         let run = self.lock();
         let snapshot = self.snapshot(run.finished(), run.launched());
-        sign_capture_status(&run.entry, snapshot, admission, cycles, event)
+        sign_capture_status(&run.entry, snapshot, admission, cycles)
     }
 
     /// The capture projection of the entry now, given its committed finish, if any.

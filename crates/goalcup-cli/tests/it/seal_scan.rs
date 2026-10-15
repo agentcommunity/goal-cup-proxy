@@ -53,6 +53,9 @@ fn one_busy_seal_is_asked_again_and_a_standing_busy_is_rung_one_after_the_bounde
     let m = support::mock_sealable(&tmp, "claude-code-cli");
     let entry = m.info().entry_id;
     let cfg = support::cfg_with_entry(tmp.path(), &m.info());
+    // No status for the entry (H-15): the one case this command sends the bare seal.
+    let no_status = || ControlError::NotFound("no status for that entry".into());
+    m.fail_always("status", no_status());
 
     m.busy_once("seal");
     let err = seal_with(
@@ -80,6 +83,7 @@ fn one_busy_seal_is_asked_again_and_a_standing_busy_is_rung_one_after_the_bounde
     assert_eq!(err.exit_code(), 3);
 
     let m = support::mock_sealable(&tmp, "claude-code-cli");
+    m.fail_always("status", no_status());
     m.fail_always(
         "seal",
         ControlError::Busy("the pump is mid-cycle on this entry".to_string()),
@@ -181,6 +185,10 @@ fn a_torn_entry_is_refused_with_what_happened_and_nothing_is_sealed() {
     let m = support::mock_sealable(&tmp, "claude-code-cli");
     let entry = m.info().entry_id;
     let cfg = support::cfg_with_entry(tmp.path(), &m.info());
+    m.fail_always(
+        "status",
+        ControlError::Internal("the status read failed".into()),
+    );
     m.fail_always("seal", ControlError::Malformed("something else".into()));
     let error = seal_with(
         &m,

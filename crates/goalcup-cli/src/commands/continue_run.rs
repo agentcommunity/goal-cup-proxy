@@ -416,22 +416,21 @@ mod tests {
             harness_home: String::new(),
             session_id: String::new(),
             last_pid: None,
-            status_url: String::new(),
             created_at: String::new(),
             dev: true,
         }
     }
 
-    /// Only "the daemon has no such entry" and "the entry is not open" let go of an earlier
-    /// segment; a daemon that failed to answer, or answered what does not verify, is not a
+    /// Only "the daemon has no such entry" lets go of an earlier segment; an open one is
+    /// sealed, and a daemon that failed to answer, or answered what does not verify, is not a
     /// daemon that does not hold it.
     #[test]
     fn only_a_daemon_that_does_not_hold_the_segment_lets_it_close_from_its_tail() {
         let tmp = tempfile::tempdir().unwrap();
         let mock = MockDaemonClient::armed_ok(tmp.path(), "fake");
         let entry = entry_of(&mock);
-        // Not open there (no capture row): from the tail.
-        assert!(matches!(how_to_close(&mock, &entry), Ok(How::FromTail)));
+        // Open there (the capture status the daemon sends): seal it.
+        assert!(matches!(how_to_close(&mock, &entry), Ok(How::SealIt)));
         // Not known there: from the tail.
         mock.fail_always("status", ControlError::NotFound("no such entry".into()));
         assert!(matches!(how_to_close(&mock, &entry), Ok(How::FromTail)));

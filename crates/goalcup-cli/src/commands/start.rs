@@ -1761,7 +1761,6 @@ fn create_and_gate<'a>(
         harness_home: config_home.display().to_string(),
         session_id: session_id.clone(),
         last_pid: None,
-        status_url: String::new(),
         // No daemon stamp comes back for a capture entry, so this machine's clock orders it.
         created_at: crate::launch::launched_at_now(),
         dev: opts.dev,

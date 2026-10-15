@@ -224,8 +224,8 @@ fn ordinary_append_refuses_local_finish() {
 
 #[test]
 fn legacy_status_serialization_unchanged() {
-    // Frozen from the unmodified protocol crate: `control_shapes.rs`'s payload,
-    // serialized before `StatusPayload::capture` existed.
+    // `control_shapes.rs`'s payload, serialized before `StatusPayload::capture` existed, with
+    // the fields control API version 8 removed taken out of it.
     let fixture = std::fs::read(fixtures().join("m2-status/legacy-capture-none.json")).unwrap();
     let frozen = fixture.strip_suffix(b"\n").expect("one trailing newline");
     let payload: StatusPayload = serde_json::from_slice(frozen).unwrap();

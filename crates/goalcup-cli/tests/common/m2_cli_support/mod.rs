@@ -303,7 +303,6 @@ impl Rig {
             config_dir: root.join("cfg"),
             workspace_parent,
             control_addr: "127.0.0.1:0".parse().unwrap(),
-            event: None,
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1260,10 +1259,6 @@ impl DaemonClient for Hooked<'_> {
 
     fn health(&self) -> Result<control::DaemonHealth, ControlError> {
         self.inner.health()
-    }
-
-    fn current_entry(&self) -> Result<Option<String>, ControlError> {
-        self.inner.current_entry()
     }
 
     fn abandon(&self, entry_id: &str, reason: &str) -> Result<(), ControlError> {

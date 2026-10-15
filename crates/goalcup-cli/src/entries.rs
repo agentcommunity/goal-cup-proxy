@@ -4,8 +4,8 @@
 //! `goalcup start` is a process that exits. `goalcup status` and `goalcup seal` are
 //! fresh processes with no memory of it, and the one thing
 //! they cannot do without is the run public key the participant pinned from
-//! `WorkspaceInfo.run_public_key` at creation. Without this file that key lives only in the
-//! memory of a process that has already gone, and every later command would have to trust
+//! `CaptureWorkspaceInfo.run_public_key` at creation. Without this file that key lives only in
+//! the memory of a process that has already gone, and every later command would have to trust
 //! the key named **inside the document it is checking** — which is the one thing D25
 //! forbids. So the key is written down here, once, at the moment it was handed over, and a
 //! later command verifies against this record and never against `SignedStatus.public_key`.
@@ -21,12 +21,12 @@
 //!
 //! # It holds no secret, and is written like one
 //!
-//! There is no token and no grant in an [`EntryRecord`] — a status URL and a public key are
-//! not secrets, and `tests/it/start_launch.rs` greps the written bytes for the grant token
-//! to keep it that way. It still goes through [`crate::config::write_secret_file`] at
-//! `0600`, under a directory at `0700`: it names this participant's runs and where on their
-//! disk the work is, and the rule for a file this CLI writes into the tracker's own
-//! configuration directory is one rule, not one per sensitivity judgement.
+//! There is no token and no grant in an [`EntryRecord`] — a public key is not a secret, and
+//! `tests/it/start_launch.rs` greps the written bytes for the grant token to keep it that way.
+//! It still goes through [`crate::config::write_secret_file`] at `0600`, under a directory at
+//! `0700`: it names this participant's runs and where on their disk the work is, and the rule
+//! for a file this CLI writes into the tracker's own configuration directory is one rule, not
+//! one per sensitivity judgement.
 
 use crate::CliError;
 use crate::config::write_secret_file;
@@ -43,13 +43,13 @@ pub(crate) const ENTRIES_DIR_NAME: &str = "entries";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryRecord {
     pub entry_id: String,
-    /// The daemon-issued process generation of this entry, as `WorkspaceInfo` named it.
+    /// The daemon-issued process generation of this entry, as `CaptureWorkspaceInfo` named it.
     /// Missing pre-v1 cache records read as zero.
     #[serde(default)]
     pub process_generation: u64,
     pub connector_id: String,
-    /// Pinned at creation from `WorkspaceInfo.run_public_key`. Every later command verifies
-    /// against this, never against `SignedStatus.public_key`.
+    /// Pinned at creation from `CaptureWorkspaceInfo.run_public_key`. Every later command
+    /// verifies against this, never against `SignedStatus.public_key`.
     pub run_public_key: String,
     pub workspace: String,
     pub artifact_root: String,
@@ -60,9 +60,7 @@ pub struct EntryRecord {
     /// The pid of the `ProcessHandle` this CLI registered — written after `register_process`
     /// by `goalcup start`. `None` until something has been spawned.
     pub last_pid: Option<u32>,
-    pub status_url: String,
-    /// The daemon's stamp on `WorkspaceInfo.created_at`, carried across unchanged. This CLI
-    /// reads no clock for it: two records are ordered by the one clock that made them.
+    /// When `goalcup start` wrote the record. Two records are ordered by it.
     pub created_at: String,
     /// This run was started with `goalcup start --dev`.
     ///

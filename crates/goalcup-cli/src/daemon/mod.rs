@@ -69,9 +69,9 @@ use goalcup_protocol::control::{
     CONTROL_API_VERSION, CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest,
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
     ControlError, DaemonClient, DaemonHealth, EntrySummary, ErrorBody, FINISH_COMMIT_RESERVE,
-    ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH, SUFFIX_ABANDON,
-    SUFFIX_CAPTURE_GOAL, SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS,
-    SealResponse, SignedStatus, entry_route, is_public_route,
+    ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES, ROUTE_HEALTH, SUFFIX_ABANDON, SUFFIX_CAPTURE_GOAL,
+    SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS, SealResponse, SignedStatus,
+    entry_route, is_public_route,
 };
 use goalcup_protocol::process::ProcessRegistration;
 use std::path::Path;
@@ -213,8 +213,10 @@ impl HttpDaemonClient {
         if file.control_api_version != CONTROL_API_VERSION {
             return Err(CliError::Refused(format!(
                 "the daemon at {}/control.json speaks control API version {} and this \
-                 goalcup speaks {CONTROL_API_VERSION}. Upgrade whichever of the two is \
-                 older and start the daemon again.",
+                 goalcup speaks {CONTROL_API_VERSION}: the two come from different releases. \
+                 goalcup and goalcup-daemon ship together in one release: install one release \
+                 of both. A run that daemon still holds is finished with the release that \
+                 started it.",
                 cfg.display(),
                 file.control_api_version
             )));
@@ -647,11 +649,6 @@ impl DaemonClient for HttpDaemonClient {
     fn health(&self) -> Result<DaemonHealth, ControlError> {
         let answer = self.get(ROUTE_HEALTH)?;
         parsed(ROUTE_HEALTH, answer)
-    }
-
-    fn current_entry(&self) -> Result<Option<String>, ControlError> {
-        let answer = self.get(ROUTE_ENTRIES_CURRENT)?;
-        parsed(ROUTE_ENTRIES_CURRENT, answer)
     }
 
     /// The reason is the whole body: the daemon reads `{"reason": …}` and records it in the

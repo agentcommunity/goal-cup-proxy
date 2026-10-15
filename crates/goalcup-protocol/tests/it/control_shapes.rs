@@ -1,9 +1,8 @@
 use ed25519_dalek::SigningKey;
 use goalcup_protocol::control::{
     ArmingState, CONTROL_API_VERSION, ControlError, CycleErrors, DaemonHealth, EntrySummary,
-    EventStatus, EventStatusSource, ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH,
-    STALE_AFTER_SECONDS, SignedStatus, StatusPayload, WorkspaceFinalizationStatusV1, WorkspaceInfo,
-    entry_route, is_public_route,
+    ROUTE_ENTRIES, ROUTE_HEALTH, STALE_AFTER_SECONDS, SignedStatus, StatusPayload,
+    WorkspaceFinalizationStatusV1, entry_route, is_public_route,
 };
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::manifest::KillStrategy;
@@ -16,7 +15,7 @@ fn payload() -> StatusPayload {
         workspace: "/Users/team/goalcup/ws-0001".into(),
         session_id: Some("95addb64-9dac-4046-8ef6-8aa53fa0c7f1".into()),
         harness_version: Some("2.1.259".into()),
-        arming: ArmingState::StartSignalSeen,
+        arming: ArmingState::Started,
         health: HealthState::Online,
         started_at: Some("2026-09-04T09:00:00Z".into()),
         deadline_at: Some("2026-09-11T09:00:00Z".into()),
@@ -26,13 +25,6 @@ fn payload() -> StatusPayload {
         events_uploaded: 206,
         events_pending: 0,
         detail: "capturing".into(),
-        event: EventStatus {
-            t0: "2026-09-04T00:00:00Z".into(),
-            start_window_closes_at: "2026-09-05T00:00:00Z".into(),
-            publication_closes_at: "2026-09-12T00:00:00Z".into(),
-            rules_version: "2026-09-03".into(),
-        },
-        event_status_source: EventStatusSource::Config,
         cycles: CycleErrors::default(),
         polls_capped: 0,
         cursor_restore_failures: 0,
@@ -128,36 +120,6 @@ fn signed_status_adds_an_exact_optional_workspace_finalization_projection() {
 }
 
 #[test]
-fn workspace_info_uses_the_documented_field_names() {
-    let info = WorkspaceInfo {
-        entry_id: "entry-0001".into(),
-        process_generation: 1,
-        workspace: "/Users/team/goalcup/ws-0001".into(),
-        workspace_requested: "/Users/team/goalcup/ws-0001".into(),
-        artifact_root: "/Users/team/Library/Application Support/goalcup/runs/entry-0001".into(),
-        harness_home: "/Users/team/Library/Application Support/goalcup/homes/entry-0001".into(),
-        run_public_key: "ef".repeat(32),
-        status_url: "http://127.0.0.1:53310/v0/ui?entry=entry-0001".into(),
-        status_cache_path:
-            "/Users/team/Library/Application Support/goalcup/cache/status-entry-0001.json".into(),
-        status_line_path:
-            "/Users/team/Library/Application Support/goalcup/runs/entry-0001/status-line.txt".into(),
-        session_id: "95addb64-9dac-4046-8ef6-8aa53fa0c7f1".into(),
-        created_at: "2026-09-04T08:59:00Z".into(),
-    };
-    let back: WorkspaceInfo = serde_json::from_str(&serde_json::to_string(&info).unwrap()).unwrap();
-    assert_eq!(info, back);
-    // Control API v6 removed the V1 hook-install fields.
-    let v: serde_json::Value = serde_json::to_value(&info).unwrap();
-    for gone in ["server_port", "installed_files", "workspace_relative"] {
-        assert!(
-            v.get(gone).is_none(),
-            "WorkspaceInfo no longer carries {gone}"
-        );
-    }
-}
-
-#[test]
 fn signed_status_verifies_and_rejects_a_rewritten_deadline() {
     let key = SigningKey::from_bytes(&[9u8; 32]);
     let pinned = hex::encode(key.verifying_key().to_bytes());
@@ -183,7 +145,7 @@ fn a_status_verifies_only_against_the_run_key_the_caller_pins() {
     // The status route is unauthenticated by ruling, so a local process that binds the
     // control port first can serve a status signed with its own key. Checking the
     // document against the key the document itself names would report that forgery as
-    // trusted; the caller pins `WorkspaceInfo.run_public_key` instead.
+    // trusted; the caller pins `CaptureWorkspaceInfo.run_public_key` instead.
     let run = SigningKey::from_bytes(&[9u8; 32]);
     let impostor = SigningKey::from_bytes(&[10u8; 32]);
     let pinned = hex::encode(run.verifying_key().to_bytes());
@@ -225,17 +187,12 @@ fn one_staleness_threshold_and_the_one_unauthenticated_route() {
     assert!(signed.stale_seconds("2026-09-04T09:01:00Z").unwrap() < STALE_AFTER_SECONDS);
 
     // The loopback-only, read-only route. `entry_route` builds the per-entry status path;
-    // `/v0/entries/current` is NOT public.
+    // the entry list is NOT public.
     assert_eq!(
         entry_route("entry-0001", "status"),
         "/v0/entries/entry-0001/status"
     );
-    assert_eq!(ROUTE_ENTRIES_CURRENT, "/v0/entries/current");
-    assert_ne!(
-        ROUTE_ENTRIES_CURRENT,
-        entry_route("entry-0001", "status"),
-        "the per-entry status route is unauthenticated; `current` is not"
-    );
+    assert!(!is_public_route(ROUTE_ENTRIES));
 
     // The signed status carries nothing secret, which is what makes an unauthenticated
     // loopback route acceptable. These are the fields a token would otherwise ride in.
@@ -321,7 +278,7 @@ fn exactly_one_route_is_public_and_everything_else_is_authed() {
         "a query string is not part of the routing decision"
     );
 
-    for authed in [ROUTE_ENTRIES, ROUTE_ENTRIES_CURRENT, ROUTE_HEALTH] {
+    for authed in [ROUTE_ENTRIES, "/v0/entries/current", ROUTE_HEALTH] {
         assert!(
             !is_public_route(authed),
             "{authed} must carry the bearer token"
@@ -346,24 +303,13 @@ fn arming_state_and_error_codes_serialise_as_the_contract_spells_them() {
         "\"armed\""
     );
     assert_eq!(
-        serde_json::to_string(&ArmingState::StartSignalSeen).unwrap(),
-        "\"start_signal_seen\""
-    );
-    assert_eq!(
         serde_json::to_string(&ArmingState::Started).unwrap(),
         "\"started\""
     );
-    // The `Refused` variant (the gate will never arm) must carry
-    // the same wire discipline as its three siblings above — serialise as `"refused"`
-    // and round-trip back through `serde_json::from_str`.
-    assert_eq!(
-        serde_json::to_string(&ArmingState::Refused).unwrap(),
-        "\"refused\""
-    );
-    assert_eq!(
-        serde_json::from_str::<ArmingState>("\"refused\"").unwrap(),
-        ArmingState::Refused
-    );
+    // Control API v8 removed the two states nothing produced.
+    for gone in ["\"start_signal_seen\"", "\"refused\""] {
+        assert!(serde_json::from_str::<ArmingState>(gone).is_err(), "{gone}");
+    }
 
     // Control API v6 removed the V1 codes; a stale daemon's spelling is unrecognised.
     for gone in ["arming_timeout", "unsupported_connector"] {
@@ -438,7 +384,7 @@ fn the_remaining_types_round_trip() {
         connector_id: "opencode".into(),
         workspace: "/tmp/ws".into(),
         arming: ArmingState::Armed,
-        health: HealthState::ArmingPending,
+        health: HealthState::Online,
         started_at: None,
         deadline_at: None,
         sealed_at: None,
@@ -509,9 +455,9 @@ fn the_remaining_types_round_trip() {
         serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap()
     );
     assert_eq!(
-        CONTROL_API_VERSION, 7,
-        "v7 added the server-issued entry id and the chain head and trace directory a \
-         capture create answers; v6 removed the V1 hook-path fields and codes",
+        CONTROL_API_VERSION, 8,
+        "v8 removed the V1 vocabulary nothing produced; v7 added the server-issued entry id \
+         and the chain head and trace directory a capture create answers",
     );
 }
 

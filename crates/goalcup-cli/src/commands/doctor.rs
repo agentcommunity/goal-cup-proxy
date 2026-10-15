@@ -342,8 +342,8 @@ fn daemon_check(client: Option<&dyn DaemonClient>, cfg: &Path) -> Check {
                     file.daemon_version,
                     file.control_api_version
                 ),
-                "upgrade whichever of the daemon and the CLI is older, and start the daemon \
-                 again.",
+                "goalcup and goalcup-daemon ship together in one release: install one release of \
+                 both, and start the daemon again.",
             ),
             // The file is there, the version matches, and the caller still handed over no
             // client — which is a test driving this check, not a machine. A `Fail` would
@@ -449,9 +449,6 @@ mod tests {
         }
         fn health(&self) -> Result<DaemonHealth, ControlError> {
             Ok(self.0.clone())
-        }
-        fn current_entry(&self) -> Result<Option<String>, ControlError> {
-            Err(ControlError::Unsupported("test".to_string()))
         }
         fn abandon(&self, _: &str, _: &str) -> Result<(), ControlError> {
             Err(ControlError::Unsupported("test".to_string()))

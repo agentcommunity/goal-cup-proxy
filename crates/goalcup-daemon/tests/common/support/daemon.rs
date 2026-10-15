@@ -18,9 +18,6 @@ pub fn config_at(root: &Path) -> DaemonConfig {
         config_dir: root.join("config"),
         workspace_parent: root.join("workspaces"),
         control_addr: "127.0.0.1:0".parse().expect("a loopback address"),
-        // No round configured: the signed status carries the entry's own timeline and
-        // says so, through `event_status_source: "fallback"`.
-        event: None,
     }
 }
 

@@ -466,6 +466,54 @@ fn from_config_dir_refuses_a_v2_control_file_before_any_request() {
     );
 }
 
+/// The CLI and the daemon ship together in one release, so a pair from two releases is refused,
+/// one control API version apart in either direction: by the control file before any request,
+/// and on the wire by the version every answer carries.
+#[test]
+fn a_daemon_from_another_release_is_refused_with_a_clear_message() {
+    let ours = control::CONTROL_API_VERSION;
+    for theirs in [ours - 1, ours + 1] {
+        let cfg = support::empty_cfg();
+        std::fs::write(
+            cfg.join("control.json"),
+            format!(
+                r#"{{"control_api_version":{theirs},"daemon_version":"other","address":"127.0.0.1:1","port":1,"token":"other-token"}}"#
+            ),
+        )
+        .unwrap();
+        let error = HttpDaemonClient::from_config_dir(&cfg)
+            .expect_err("the current CLI must not pair with another release's daemon");
+        let said = error.to_string();
+        assert!(
+            said.contains(&format!("speaks control API version {theirs}"))
+                && said.contains(&format!("this goalcup speaks {ours}"))
+                && said.contains("install one release of both"),
+            "{theirs}: the refusal names both versions and the fix: {said}"
+        );
+        assert!(!said.contains("old daemon"), "{theirs}: {said}");
+        assert!(!said.contains("other-token"), "{theirs}: {said}");
+
+        // A daemon that answers with another version's header is not read as this one.
+        let srv = support::raw_response_daemon(
+            200,
+            vec![("x-goalcup-control-version".to_string(), theirs.to_string())],
+            format!(
+                r#"{{"control_api_version":{theirs},"daemon_version":"other","uptime_seconds":1,"entries_open":0}}"#
+            )
+            .into_bytes(),
+        );
+        let client = HttpDaemonClient::new(srv.base(), "t".into()).unwrap();
+        let failure = client
+            .health()
+            .expect_err("an answer from another control version is refused");
+        assert!(
+            matches!(failure, ControlError::Malformed(_)),
+            "{theirs}: {failure:?}"
+        );
+        assert!(failure.to_string().contains(&ours.to_string()), "{failure}");
+    }
+}
+
 /// The bearer is the one secret this client holds, and every refusal it raises is printed
 /// by `main.rs` and read by `goalcup doctor`.
 #[test]
@@ -601,26 +649,27 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
         Err(ControlError::NotFound(_))
     ));
 
-    // The daemon's own plain words reach the terminal, and the counters the page
-    // shows only in JSON are readable here.
-    assert!(!m.status_detail().is_empty());
-    m.set_cycle_error("upload", "the upload is behind");
+    // The default status is a capture's, as every document the daemon signs is, and it
+    // verifies against the run key the entry record pins.
     let signed = m.status(&info.entry_id).unwrap();
-    assert_eq!(signed.payload.cycles.upload, 1);
-    assert_eq!(
-        signed.payload.cycles.last.as_deref(),
-        Some("the upload is behind")
+    assert!(
+        signed.payload.capture.is_some(),
+        "the default is a capture status"
     );
+    assert_eq!(signed.payload.detail, m.status_detail());
+    assert!(signed.verify_with(&info.run_public_key).is_ok());
+
+    // A hook that edits the payload re-signs it.
+    let mut capture = signed.payload.capture.clone().unwrap();
+    capture.gap_count = 3;
+    m.set_capture_status(capture, "recording with losses", 2, 1);
+    let signed = m.status(&info.entry_id).unwrap();
+    assert_eq!(signed.payload.capture.as_ref().unwrap().gap_count, 3);
+    assert_eq!(signed.payload.detail, "recording with losses");
     assert!(
         signed.verify_with(&info.run_public_key).is_ok(),
         "a hook that edits the payload re-signs it"
     );
-
-    // The fourth arming state, which is not a timeout.
-    m.set_arming_refused("the tracker never saw your harness start in this folder");
-    let signed = m.status(&info.entry_id).unwrap();
-    assert_eq!(signed.payload.arming, control::ArmingState::Refused);
-    assert!(signed.payload.detail.contains("never saw"));
 
     // The one way to reach the "did not verify" path.
     m.tamper_status_payload();
@@ -687,7 +736,6 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
         m.health().unwrap().control_api_version,
         control::CONTROL_API_VERSION
     );
-    assert_eq!(m.current_entry().unwrap(), Some(info.entry_id.clone()));
     // Zero, and it was one before the seal above: `GET /v0/entries` is the daemon's LIVE map and
     // a sealed entry is evicted from it, while the signed status route keeps answering for
     // that entry out of the frozen cache — so the mock's `seal` evicts too. A mock that still

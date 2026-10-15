@@ -382,10 +382,8 @@ control_addr = "127.0.0.1:7787"                  # loopback only, or the daemon 
 ```
 
 The daemon refuses a key it does not know, so a `daemon.toml` that still sets a retired V1 key
-(`upload_url`, `server_public_key`, `receipt_binding` or a cadence such as `poll_interval_ms`) does not
-load: delete the line. An optional `[event]` section (`t0`, `start_window_closes_at`,
-`rules_version`, all three together) tells the daemon the round's dates; without it the signed status
-document reports `event_status_source: "fallback"`. A `config_dir` that differs from the CLI's makes the
+(`upload_url`, `server_public_key`, `receipt_binding`, a cadence such as `poll_interval_ms`, or an
+`[event]` section) does not load: delete it. The round's dates are the upload server's. A `config_dir` that differs from the CLI's makes the
 started daemon write `control.json` where the CLI is not looking, and `goalcup start` refuses, naming
 `daemon.log`.
 

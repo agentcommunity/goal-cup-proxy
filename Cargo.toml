@@ -69,12 +69,10 @@ tempfile = "3"
 ureq = { version = "2", default-features = false }
 # The entry registry.
 redb = "2"
-# `statvfs`, and nothing else: the free-space floor `Buffer::free_bytes` reports so the
-# daemon can reach `HealthState::DiskPressure` before an append fails with an opaque
-# database error (MF-10). std has no free-space call, and `df` would be a process spawn
-# on a health cadence.
+# The OS calls std does not have (free space, process and signal identity), made through
+# one shared version.
 libc = "0.2"
-# `OsRng` for the three per-run secrets in `RunKeys`.
+# `OsRng` for the run signing seed in `RunKeys` and the control and ingest secrets.
 rand = "0.8"
 # The redaction pattern set (`goalcup-daemon/src/redact.rs`). R10's set is regular
 # expressions and nothing else; `regex` is the only crate in this tree that compiles one,

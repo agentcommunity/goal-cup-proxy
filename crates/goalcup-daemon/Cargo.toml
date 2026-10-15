@@ -27,7 +27,7 @@ thiserror.workspace = true
 # The entry registry (`src/registry.rs`). Its own database, separate from every run's
 # evidence files, so a damaged run still leaves the daemon able to say what it was running.
 redb.workspace = true
-# `OsRng`, for the three per-run secrets `RunKeys::generate` mints.
+# `OsRng`, for the run signing seed `RunKeys::generate` mints and the control and ingest secrets.
 rand.workspace = true
 # `RunKeys` hands out an `ed25519_dalek::SigningKey` and the hex verifying key that
 # `SignedStatus::verify_with` is pinned against.
