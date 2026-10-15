@@ -27,7 +27,10 @@ libc.workspace = true
 #     `AckCheckpoint::verify` has something real to check. The library never signs; it only
 #     verifies, through `goalcup-protocol`, which owns the dependency.
 #   toml — the v5 corpus reads its expectations from `expected.toml`.
+#   goalcup-protocol with `test-hooks` — the V1 trace writers (`write_receipt`, `write_seal_for_protocol`
+#     and the cutoff and finalization pair) exist only under it, and these tests build fixture traces with them.
 [dev-dependencies]
+goalcup-protocol = { path = "../goalcup-protocol", features = ["test-hooks"] }
 tempfile.workspace = true
 toml.workspace = true
 ed25519-dalek.workspace = true
