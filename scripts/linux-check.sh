@@ -4,7 +4,9 @@
 # Needs: Docker that allows privileged containers (ext4 and XFS volumes are loop-mounted inside),
 # and `cargo fetch --locked` run on the host first, because the container builds with --offline
 # from the host's cargo registry. The first run downloads the rust:1.99 image, Debian packages and
-# the cargo-nextest binary; the build cache is the volume goalcup-linux-check-target.
+# the cargo-nextest binary; the build cache is a Docker volume of this checkout's own,
+# goalcup-linux-check-target-<cksum of the checkout's path>. Remove a removed worktree's volume by
+# hand (`docker volume ls`, `docker volume rm <name>`).
 # The script takes no lock itself: do not run it alongside other heavy test runs.
 # Usage: sh scripts/linux-check.sh      (LINUX_CHECK_HARNESSES=1 adds the harness smoke)
 # Last line: `linux-check: PASS` or `linux-check: FAIL <step>`.
@@ -16,7 +18,13 @@ cd "$(dirname "$0")/.." || exit 1
 img=goalcup-linux-check
 name=goalcup-linux-check-$$
 # Labels the containers of this checkout only, so the sweep never removes another checkout's.
-label=goalcup-linux-check=$(printf %s "$PWD" | cksum | cut -d' ' -f1)
+checkout=$(printf %s "$PWD" | cksum | cut -d' ' -f1)
+label=goalcup-linux-check=$checkout
+# A build cache per checkout. Cargo names a workspace crate's build by its path relative to the
+# workspace, so two checkouts sharing one cache build the same file names, and an older tree's
+# sources can take another tree's newer build as fresh (seen: a crate linked against another
+# checkout's goalcup-platform). A volume per checkout keeps each one's builds its own.
+volume=goalcup-linux-check-target-$checkout
 registry=$cargo_home/registry
 
 [ -d "$registry" ] || { echo "linux-check: FAIL registry (run cargo fetch --locked first)"; exit 1; }
@@ -43,12 +51,9 @@ cpus=$(docker info --format '{{.NCPU}}' 2>/dev/null)
 case $cpus in '' | *[!0-9]* | 0) cpus=6 ;; esac
 [ "$cpus" -le 6 ] || cpus=6
 # --init: something must reap orphans, as it does on a real host or WSL2.
-# The checkout is mounted at its own path: cargo keys a workspace crate's build by its path, so
-# two checkouts sharing the target volume each get their own crates and never one another's
-# (at one shared path, an older tree's sources could take a newer build of another tree).
-docker run -d --name "$name" --label "$label" --privileged --init --cpus="$cpus" -v "$PWD":"$PWD" \
-    -v "$registry":/usr/local/cargo/registry -v goalcup-linux-check-target:/target \
-    -w "$PWD" "$img" sleep infinity >/dev/null || { echo "linux-check: FAIL container"; exit 1; }
+docker run -d --name "$name" --label "$label" --privileged --init --cpus="$cpus" -v "$PWD":/src \
+    -v "$registry":/usr/local/cargo/registry -v "$volume":/target \
+    -w /src "$img" sleep infinity >/dev/null || { echo "linux-check: FAIL container"; exit 1; }
 docker exec "$name" sh -c 'set -e; chown dev /target; mkdir -p /mnt/ext4 /mnt/xfs
     truncate -s 8G /ext4.img; mkfs.ext4 -q -F /ext4.img; mount -o loop /ext4.img /mnt/ext4
     truncate -s 2G /xfs.img; mkfs.xfs -q -f /xfs.img; mount -o loop /xfs.img /mnt/xfs
@@ -74,6 +79,6 @@ step "daemon full" 'cargo nextest run --offline -p goalcup-daemon --test full'
 # rebuild puts the shipped binaries back in /target/debug after the test builds.
 if [ "${LINUX_CHECK_HARNESSES:-0}" = 1 ]; then
     step "harness smoke" 'cargo build --offline --locked --workspace &&
-        GOALCUP_CONNECTORS_DIR="$(pwd)/connectors" PATH=/target/debug:$PATH sh scripts/linux-harness-smoke.sh'
+        GOALCUP_CONNECTORS_DIR=/src/connectors PATH=/target/debug:$PATH sh scripts/linux-harness-smoke.sh'
 fi
 echo "linux-check: PASS"
