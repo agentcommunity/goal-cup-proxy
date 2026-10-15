@@ -21,7 +21,7 @@
 //! # A run on the server
 //!
 //! With a server (`goalcup login`) the order is: the prep checks (`goalcup prep` ran: its repo,
-//! work folder and GitHub token), the WSL2 check on the work folder, **the participant's
+//! work folder and GitHub token), the WSL checks on every folder the run writes to, **the participant's
 //! approval of this run in the browser** ([`crate::account::device`]), and only then anything
 //! local: the run directory, the clone of the participant's repository that is the run's
 //! workspace, the run opened on the server with the credential the approval returned
@@ -1157,6 +1157,31 @@ fn capture(
     out: &mut dyn std::io::Write,
 ) -> Result<StartOutcome, CliError> {
     let goal = goal_file.map(read_goal).transpose()?;
+    let beside = match goal_file {
+        Some(goal_file) => beside_goal(goal_file),
+        None => match &opts.run_folder {
+            Some(folder) => folder.clone(),
+            None => std::env::current_dir().map_err(|source| CliError::Io {
+                path: "the current directory".to_string(),
+                source,
+            })?,
+        },
+    };
+    // Under WSL: WSL1 cannot run this, and WSL2 cannot keep a run on a Windows drive. Judged
+    // before anything is created or removed, over every folder the run writes to.
+    let work_folder = match &opening {
+        Opening::Fresh => prepared_work_folder(cfg),
+        Opening::Continue(continuing) => {
+            continuing.record.workspace.parent().map(Path::to_path_buf)
+        }
+    };
+    refuse_wsl(
+        env,
+        cfg,
+        &beside,
+        work_folder.as_deref(),
+        "Nothing was created.",
+    )?;
     // A run past its deadline and a day has sent what it will: its reservation goes back.
     release_stale(cfg, &artifact_root(cfg), crate::run::now_unix());
     let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;
@@ -1187,16 +1212,6 @@ fn capture(
         )?,
         Some(_) => continue_fits(&c.loaded.manifest.id, profile.interactive)?,
     }
-    let beside = match goal_file {
-        Some(goal_file) => beside_goal(goal_file),
-        None => match &opts.run_folder {
-            Some(folder) => folder.clone(),
-            None => std::env::current_dir().map_err(|source| CliError::Io {
-                path: "the current directory".to_string(),
-                source,
-            })?,
-        },
-    };
     // With a server: the prep checks, before any other work and before the participant is asked
     // for anything. A continued run was prepared when it started.
     let serving = match &continuing {
@@ -2240,6 +2255,7 @@ fn run_harness<'a>(
             keeper.update(|state| state.stopped = Some(reason.to_string()));
             let label = if reason == crate::run::watch::DISK_STOP_REASON
                 || reason == crate::upload::uploader::REPLACED_REASON
+                || crate::upload::uploader::refused_run(reason)
             {
                 "stopped"
             } else {
@@ -3229,9 +3245,8 @@ fn finish(
 /// The upload server this run opens with: `None` with no `goalcup login`, and for a harness
 /// handed a provider key (`keyed`), whose run must pass the key scan at its end before
 /// anything leaves the machine. With a server, `goalcup prep` must have run: its repository,
-/// its work folder and the GitHub token are checked here, and the work folder must not be on a
-/// Windows drive under WSL2, all before the participant is asked for anything and before
-/// anything is created. A `--dev` run is uploaded like any other; the server refuses a
+/// its work folder and the GitHub token are checked here, all before the participant is asked for
+/// anything and before anything is created. A `--dev` run is uploaded like any other; the server refuses a
 /// connector it does not accept.
 fn uploading(
     cfg: &Path,
@@ -3280,7 +3295,6 @@ fn uploading(
     if !work_root.is_absolute() {
         return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
     }
-    refuse_windows_drive(&work_root, goalcup_platform::machine::is_wsl())?;
     refuse_goal_folder_inside_work_root(&work_root, beside)?;
     #[cfg(feature = "test-support")]
     let clone_source = env.get(TEST_CLONE_SOURCE).cloned();
@@ -3327,20 +3341,40 @@ pub(crate) fn run_folder_for_continue(
     Ok(beside)
 }
 
-/// WSL2 only: a work folder on a Windows drive (`/mnt/c/...`) is refused, because a clone there is
-/// slow and cannot keep file modes. The path as it exists is looked at, so a link cannot hide the
-/// drive. `wsl` is whether this machine is WSL2.
-fn refuse_windows_drive(work_root: &Path, wsl: bool) -> Result<(), CliError> {
-    let resolved = std::fs::canonicalize(work_root).unwrap_or_else(|_| work_root.to_path_buf());
-    if goalcup_platform::machine::on_windows_drive_with(&resolved, wsl) {
-        return Err(CliError::Refused(format!(
-            "the work folder {} is on a Windows drive, which WSL2 reads slowly and cannot keep \
-             file modes on. Choose a folder in the Linux home (for example under ~/goalcup) and \
-             run `goalcup prep` again. Nothing was created.",
-            work_root.display()
-        )));
+/// The work folder `goalcup prep` kept, when a server is set up (a run with none makes no clone).
+fn prepared_work_folder(cfg: &Path) -> Option<PathBuf> {
+    crate::server::read_server_config(cfg).ok().flatten()?;
+    let kept = crate::prep_file::read_prep_lenient(cfg).work_root;
+    (!kept.is_empty()).then(|| PathBuf::from(kept))
+}
+
+/// The WSL checks over every folder a run writes to: the work folder (when there is one), the
+/// folder the run's own directory is made in, the artifact root and the configuration folder.
+/// See [`crate::wsl_gate`]. `env` states the machine in a test build only.
+pub(crate) fn refuse_wsl(
+    env: &BTreeMap<String, String>,
+    cfg: &Path,
+    run_folder: &Path,
+    work_folder: Option<&Path>,
+    untouched: &str,
+) -> Result<(), CliError> {
+    #[cfg(feature = "test-support")]
+    let host = crate::wsl_gate::Host::from_env(env);
+    #[cfg(not(feature = "test-support"))]
+    let host = {
+        let _ = env;
+        crate::wsl_gate::Host::here()
+    };
+    let artifacts = artifact_root(cfg);
+    let mut folders = vec![
+        ("run folder", run_folder),
+        ("artifact root", artifacts.as_path()),
+        ("config folder", cfg),
+    ];
+    if let Some(work_folder) = work_folder {
+        folders.insert(0, ("work folder", work_folder));
     }
-    Ok(())
+    host.refuse(&folders, untouched)
 }
 
 /// The run directory is made beside the goal file (for a chat-mode run, in the folder `goalcup
@@ -3920,17 +3954,6 @@ mod tests {
         let reopened = crate::arming::interrupted();
         crate::arming::clear_interrupt();
         assert!(reopened, "the next start's window is open again");
-    }
-
-    /// A work folder on a Windows drive is refused under WSL2, and only there.
-    #[test]
-    fn a_work_folder_on_a_windows_drive_is_refused_under_wsl_only() {
-        let drive = Path::new("/mnt/c/Users/ada/work");
-        let refused = refuse_windows_drive(drive, true).expect_err("a Windows drive under WSL2");
-        assert_eq!(refused.exit_code(), 1);
-        assert!(refused.to_string().contains("Windows drive"), "{refused}");
-        assert!(refuse_windows_drive(drive, false).is_ok(), "not WSL2");
-        assert!(refuse_windows_drive(Path::new("/home/ada/work"), true).is_ok());
     }
 
     /// #11: two runs on one shared harness home. The second is refused plainly while the first

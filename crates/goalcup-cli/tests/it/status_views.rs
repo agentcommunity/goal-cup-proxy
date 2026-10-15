@@ -1018,6 +1018,45 @@ fn status_puts_every_problem_first() {
 }
 
 #[test]
+fn status_names_heartbeats_that_keep_failing() {
+    use goalcup_cli::run::{HEARTBEATS_FAILING_AFTER, HarnessState, HeartbeatState, RunState};
+    use goalcup_cli::run::{Recording, now_unix};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.updated_at = now_unix();
+    state.recording = Recording::Ok;
+    state.harness = HarnessState::Running;
+
+    // One short of the threshold is a blip, not a problem.
+    state.heartbeat = HeartbeatState {
+        failures: HEARTBEATS_FAILING_AFTER - 1,
+        last_failure: Some("the server answered HTTP 503".to_string()),
+    };
+    run_with_state(&cfg, &info.entry_id, state.clone());
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(!text.contains("PROBLEM"), "{text}");
+
+    state.heartbeat.failures = HEARTBEATS_FAILING_AFTER;
+    run_with_state(&cfg, &info.entry_id, state.clone());
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(
+        text.starts_with(
+            "PROBLEM: the last 3 heartbeats to the server failed: the server answered HTTP 503\n"
+        ),
+        "{text}"
+    );
+
+    // A run that is over has no heartbeats to worry about.
+    state.ended = true;
+    run_with_state(&cfg, &info.entry_id, state);
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(!text.contains("heartbeats"), "{text}");
+}
+
+#[test]
 fn status_with_no_problem_prints_no_problem_line() {
     use goalcup_cli::run::{HarnessState, Recording, RunState};
     let tmp = tempfile::tempdir().unwrap();
