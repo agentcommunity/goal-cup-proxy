@@ -122,11 +122,10 @@ pub struct VerifiedReceiptClock {
 pub enum CaptureTerminalKind {
     LocalFinish,
     SignedFinalization,
-    LegacySeal,
 }
 
 /// The verified terminal record of a trace. `LocalFinish` retains its full `CaptureTime`;
-/// signed and legacy terminals carry wall-clock evidence only, so `observed` is `None`.
+/// a signed finalization carries wall-clock evidence only, so `observed` is `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaptureTerminalFacts {
     pub seq: u64,
@@ -178,8 +177,8 @@ pub struct CaptureIntegrityReport {
     pub schema_version: u32,
     pub integrity: CaptureIntegrity,
     pub anchor: AnchorState,
-    /// A terminal record was validated and bound: a local finish or legacy seal to its
-    /// fixed `seal.json`, or a signed finalization to its verified receipt and cutoff.
+    /// A terminal record was validated and bound: a local finish to its fixed `seal.json`,
+    /// or a signed finalization to its verified receipt and cutoff.
     pub sealed: bool,
     /// Chain records (envelopes, baseline and terminal included) in the validated prefix.
     pub validated_records: u64,
@@ -1025,10 +1024,11 @@ impl<'k> Scan<'k> {
         }
     }
 
-    /// Bind the validated terminal to what it claims. A local finish or legacy seal binds
-    /// its fixed `seal.json`, with no receipt prerequisite. A signed finalization binds its
-    /// verified receipt and its cutoff. The two terminal modes
-    /// are never interchangeable.
+    /// Bind the validated terminal to what it claims. A local finish binds its fixed
+    /// `seal.json`, with no receipt prerequisite. A signed finalization binds its verified
+    /// receipt and its cutoff. The two terminal modes are never interchangeable. The V1 seal
+    /// terminal, which the phase replay still admits, ends no v5 capture chain: no v5 writer
+    /// produces one, so a v5 chain that ends in one is invalid.
     fn bind_terminal(&mut self, root: &TraceDir) -> io::Result<()> {
         // A pruned chain may have lost the link a receipt witnessed.
         if let Some(receipt) = &self.receipt
@@ -1046,10 +1046,12 @@ impl<'k> Scan<'k> {
             return Ok(());
         };
         let bound = match terminal.kind {
-            TerminalKind::LocalFinish | TerminalKind::LegacySeal => {
-                self.bind_fixed_manifest(root, &env)?
-            }
+            TerminalKind::LocalFinish => self.bind_fixed_manifest(root, &env)?,
             TerminalKind::FinalizationV1 => self.bind_signed_finalization(&env),
+            TerminalKind::LegacySeal => {
+                self.fail("chain_phase_invalid");
+                false
+            }
         };
         if bound {
             self.terminal_facts = terminal_facts(&env);
@@ -1243,18 +1245,6 @@ fn terminal_facts(env: &Envelope) -> Option<CaptureTerminalFacts> {
                 None,
             )
         }
-        EventBody::Seal {
-            manifest_sha256,
-            sealed_at,
-            ..
-        } => (
-            None,
-            sealed_at.clone(),
-            CaptureTerminalKind::LegacySeal,
-            None,
-            None,
-            Some(manifest_sha256.clone()),
-        ),
         _ => return None,
     };
     Some(CaptureTerminalFacts {
