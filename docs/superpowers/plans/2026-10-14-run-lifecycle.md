@@ -51,8 +51,8 @@
 | `goalcup-platform/src/disk.rs` | free bytes; a physically allocated reserve file | §5; reuses the tracecap allocators |
 | `goalcup-platform/src/awake.rs` | sleep lock for the life of a value | §4 |
 | `goalcup-platform/src/machine.rs` | WSL2, AC power, open a URL | prep, device flow |
-| `goalcup-protocol` `export.rs` (+ `tracecap`) | chain as rotating parts | §5 pruning (D56) |
-| `goalcup-daemon/src/workspace_git.rs` | commit + digest of uncommitted changes | §5 lighter seal (D54); replaces the walk for Git work folders |
+| `goalcup-protocol` `export.rs` (+ `tracecap`) | chain as rotating parts | §5 pruning (D55) |
+| `goalcup-daemon/src/workspace_git.rs` | commit + digest of uncommitted changes | §5 lighter seal (D56); replaces the walk for Git work folders |
 | `goalcup-cli/src/account/{mod,device,credential,github}.rs` | device flow, credential store, repo check + clone + git helper | replaces the pasted token |
 | `goalcup-cli/src/run/{mod,reserve,watch}.rs` | run record and `state.json`; reservation; the 30 s tick | §5, §6, `continue` |
 | `goalcup-cli/src/upload/{policy,prune}.rs` | backoff and stop rule (moved from `uploader.rs`); which parts may be deleted | §5 |
@@ -126,25 +126,25 @@ Cross-lane waits: T2 needs P1, R1. T3 needs R2. T4 needs P2, W1. T5 needs A1, A2
 - [ ] **Step 2–4:** `cargo nextest run --offline -p goalcup-daemon -E 'test(/holds_no_blocks|reserves_nothing/)'` FAIL → implement → PASS; gate PASS.
 - [ ] **Step 5:** `git commit -m "capture: quota-only chains; no per-entry preallocation (D40, H-11)"`
 
-### Task R2: The chain as rotating parts (D56)
+### Task R2: The chain as rotating parts (D55)
 
-**Files:** Modify `crates/goalcup-platform/src/tracecap.rs` (`open_part_for_create`, `open_part_for_resume`, `list_parts`, same `O_NOFOLLOW`/identity rules as `open_chain_for_create`), `crates/goalcup-protocol/src/export.rs`, `crates/goalcup-daemon/src/runtime/capture/writer.rs` (rotate after each successful `sync_capture`), `crates/goalcup-verifier/src/capture_analysis/reader.rs:217`, `docs/DECISIONS.md` (D56). Tests: `crates/goalcup-protocol/tests/it/roundtrip.rs`, `crates/goalcup-daemon/tests/it/capture_lifecycle.rs`, `crates/goalcup-verifier/tests/it/m2_capture_integrity.rs`.
+**Files:** Modify `crates/goalcup-platform/src/tracecap.rs` (`open_part_for_create`, `open_part_for_resume`, `list_parts`, same `O_NOFOLLOW`/identity rules as `open_chain_for_create`), `crates/goalcup-protocol/src/export.rs`, `crates/goalcup-daemon/src/runtime/capture/writer.rs` (rotate after each successful `sync_capture`), `crates/goalcup-verifier/src/capture_analysis/reader.rs:217`, `docs/DECISIONS.md` (D55). Tests: `crates/goalcup-protocol/tests/it/roundtrip.rs`, `crates/goalcup-daemon/tests/it/capture_lifecycle.rs`, `crates/goalcup-verifier/tests/it/m2_capture_integrity.rs`.
 
 **Interfaces:**
 - Produces (protocol `export`): `pub const PART_MAX_BYTES: u64 = 256 << 20; pub const PART_MAX_AGE: Duration = 30 min;` `pub fn part_file_name(start: u64) -> String` (`0` → `"chain.jsonl"`, else `format!("chain.{start:020}.jsonl")`); `pub fn parse_part_name(name: &str) -> Option<u64>`; `pub struct ChainPart { pub start: u64, pub len: u64, pub path: PathBuf }`; `pub fn chain_parts(trace_dir: &Path) -> io::Result<Vec<ChainPart>>` (sorted by `start`; `InvalidData` when `parts[i+1].start != parts[i].start + parts[i].len`); `TraceExport::rotate_if_due(&mut self, now: Instant) -> Result<bool, ExportError>` (only at a durable frontier: closes the part, opens `part_file_name(chain_bytes)`). Test builds set limits with `TraceExport::set_part_limits(bytes, age)` under `test-hooks`.
 - Resume: validates every surviving part in order and appends to the last. When the first part's `start > 0`, it begins at the first record with `next_seq = link.seq`, `head = link.prev` and `ChainPhaseReplay::after_pruned_prefix()` (capture format, baseline seen, phase open); `validated_bytes` and `chain_bytes` stay logical.
 - Verifier: reads parts as one chain. With part 0 missing it reports the finding `chain_pruned_locally` (incomplete, exit 1, "pruned on this machine: verify the server copy") and skips acks whose `seq` is before the first surviving record.
-- D56: "A capture chain may be split into part files named by their logical start offset; records and hashes are unchanged; the server stores one stream. Readers before this build read only single-file chains."
+- D55: "A capture chain may be split into part files named by their logical start offset; records and hashes are unchanged; the server stores one stream. Readers before this build read only single-file chains."
 
 - [ ] **Step 1: Failing tests:** `a_chain_rotates_at_the_part_size_after_a_sync`; `parts_concatenate_to_the_single_file_chain` (the same records written with and without rotation: concatenated bytes equal); `resume_reads_every_part_and_appends_to_the_last`; `resume_starts_from_the_first_surviving_part` (delete the first two parts: head and `next_seq` equal the full resume's); `a_gap_between_parts_is_corrupt`; daemon `a_restart_after_parts_were_deleted_keeps_appending`; verifier `a_rotated_chain_verifies_like_one_file`, `a_chain_missing_its_first_part_says_verify_the_server_copy`.
 - [ ] **Step 2:** `cargo nextest run --offline --workspace -E 'test(/rotat|parts|surviving_part|first_part/)'` → FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4:** Same → PASS; `sh scripts/linux-check.sh` once; gate PASS.
-- [ ] **Step 5:** `git commit -m "capture: the chain rotates into part files (D56)"`
+- [ ] **Step 5:** `git commit -m "capture: the chain rotates into part files (D55)"`
 
-### Task R3: Lighter seal and minutes for the finish (D54)
+### Task R3: Lighter seal and minutes for the finish (D56)
 
-**Files:** Create `crates/goalcup-daemon/src/workspace_git.rs`. Modify `crates/goalcup-protocol/src/seal.rs` (fields; correct the doc naming a nonexistent `attribution.rs`), `control.rs:802` (`LOCAL_CAPTURE_FINISH_BUDGET` 10 s → 180 s; `FINISH_COMMIT_RESERVE` stays 2 s), `crates/goalcup-daemon/src/workspace.rs:269-293` (R3 admission), `runtime/capture/mod.rs:409` and `finish.rs:405-420` (git first, walk otherwise; baseline `home`), `docs/DECISIONS.md` (D54). Tests: `crates/goalcup-daemon/tests/it/workspace_layout.rs`, `capture_lifecycle.rs`, `crates/goalcup-verifier/tests/it/v5_corpus.rs`.
+**Files:** Create `crates/goalcup-daemon/src/workspace_git.rs`. Modify `crates/goalcup-protocol/src/seal.rs` (fields; correct the doc naming a nonexistent `attribution.rs`), `control.rs:802` (`LOCAL_CAPTURE_FINISH_BUDGET` 10 s → 180 s; `FINISH_COMMIT_RESERVE` stays 2 s), `crates/goalcup-daemon/src/workspace.rs:269-293` (R3 admission), `runtime/capture/mod.rs:409` and `finish.rs:405-420` (git first, walk otherwise; baseline `home`), `docs/DECISIONS.md` (D56). Tests: `crates/goalcup-daemon/tests/it/workspace_layout.rs`, `capture_lifecycle.rs`, `crates/goalcup-verifier/tests/it/v5_corpus.rs`.
 
 **Interfaces:**
 - Produces: `seal::WorkspaceGit { pub commit: Option<String> /* 40 hex, None = unborn HEAD */, pub dirty_sha256: String /* 64 hex */ }`; `SealManifest.git: Option<WorkspaceGit>` and `SealManifest.home: Option<Vec<SealedFile>>`, both `#[serde(default, skip_serializing_if = "Option::is_none")]`. With `git`, `files` is empty. `home` appears on the baseline only: names, sizes and SHA-256 of the connector's config home, excluding every native root, bounded to 10 000 files.
@@ -153,21 +153,21 @@ Cross-lane waits: T2 needs P1, R1. T3 needs R2. T4 needs P2, W1. T5 needs A1, A2
 - R3 amended: a workspace that is the root of its own Git work tree (no work tree above it) is admitted non-empty; anything else keeps R3 unchanged.
 
 - [ ] **Step 1: Failing tests:** `a_fresh_clone_seals_no_commit_and_the_empty_digest` (digest = `sha256(b"diff\0untracked\0")`); `the_digest_moves_with_an_untracked_file_and_a_tracked_edit`; `an_agent_written_fsmonitor_is_never_run`; `a_clone_is_admitted_non_empty_and_not_walked` (baseline `files == []`, `git` set); `a_workspace_inside_another_work_tree_is_refused`; `a_non_git_workspace_still_walks`; `the_baseline_lists_the_harness_home_without_its_session_folder`; `a_finish_may_take_three_minutes` (`remaining_finish_ms: Some(170_000)` → 170 s); verifier `a_seal_with_git_verifies`; `a_manifest_without_the_new_fields_keeps_its_digest`.
-- [ ] **Step 2–4:** `cargo nextest run --offline --workspace -E 'test(/clone|digest|fsmonitor|work_tree|still_walks|harness_home|three_minutes|seal_with_git|keeps_its_digest/)'` FAIL → implement, write D54 → PASS; gate PASS.
-- [ ] **Step 5:** `git commit -m "seal: git commit and uncommitted digest; the finish gets minutes (D54)"`
+- [ ] **Step 2–4:** `cargo nextest run --offline --workspace -E 'test(/clone|digest|fsmonitor|work_tree|still_walks|harness_home|three_minutes|seal_with_git|keeps_its_digest/)'` FAIL → implement, write D56 → PASS; gate PASS.
+- [ ] **Step 5:** `git commit -m "seal: git commit and uncommitted digest; the finish gets minutes (D56)"`
 
-### Task R4: Chat-mode connectors as data; session files since the run started (D55)
+### Task R4: Chat-mode connectors as data; session files since the run started (D57)
 
-**Files:** Modify `crates/goalcup-protocol/src/harness.rs` (fields and rules; rule at `:1919` admits `none` on a shared home when `since_run_start`), `control.rs` (`CaptureWorkspaceRequest.native_since: Option<u64>`, skip-if-none), `crates/goalcup-daemon/src/native_capture.rs` (`NativeSourceSpec.modified_since`), `runtime/capture/{mod.rs,native_scope.rs}`, `docs/CONNECTOR-SCHEMA.md`, `docs/DECISIONS.md` (D55). Tests: `crates/goalcup-protocol/tests/it/harness_schema.rs`, `crates/goalcup-daemon/tests/it/capture_native.rs`.
+**Files:** Modify `crates/goalcup-protocol/src/harness.rs` (fields and rules; rule at `:1919` admits `none` on a shared home when `since_run_start`), `control.rs` (`CaptureWorkspaceRequest.native_since: Option<u64>`, skip-if-none), `crates/goalcup-daemon/src/native_capture.rs` (`NativeSourceSpec.modified_since`), `runtime/capture/{mod.rs,native_scope.rs}`, `docs/CONNECTOR-SCHEMA.md`, `docs/DECISIONS.md` (D57). Tests: `crates/goalcup-protocol/tests/it/harness_schema.rs`, `crates/goalcup-daemon/tests/it/capture_native.rs`.
 
 **Interfaces:**
 - Schema: `[capture] interactive = true|false` (default false). With it: no `goal_flag`, `args` need not end in `--`, no `credential`, identity `none`. `[capture] resume_args = [...]` (optional; appended after `args` on `continue`; D51 argv rules). `[[capture.native]] since_run_start = true|false`. `[capture.home] skills_dir = "<rel>"` (optional, relative to the config home).
 - Daemon: `modified_since: Option<SystemTime>` admits a path into the tracked set only once its mtime ≥ `modified_since`, checked before it counts against `max_files`; once admitted it stays. Every admitted file is recorded; none is refused and none is preferred.
-- D55: "Shipped connectors run the harness in its normal chat mode in the participant's terminal; the participant types the prompt; connectors set no model, approval, sandbox or permission option (amends D52); identity is every session file new or written since the run started, which is safe because runs on a shared home are serialized."
+- D57: "Shipped connectors run the harness in its normal chat mode in the participant's terminal; the participant types the prompt; connectors set no model, approval, sandbox or permission option (amends D52); identity is every session file new or written since the run started, which is safe because runs on a shared home are serialized."
 
 - [ ] **Step 1: Failing tests:** `an_interactive_profile_takes_no_goal_and_no_credential`; `none_on_a_shared_home_needs_since_run_start`; `resume_args_follow_the_argv_rules` (`--url` refused); `old_files_are_skipped_and_the_new_one_found_among_5000` (5 000 rollouts dated yesterday plus one new: exactly the new one); `two_new_session_files_are_both_recorded`; `an_old_file_written_during_the_run_is_recorded`.
 - [ ] **Step 2–4:** `cargo nextest run --offline --workspace -E 'test(/interactive_profile|since_run_start|resume_args_follow|among_5000|both_recorded|written_during/)'` FAIL → implement → PASS; gate PASS.
-- [ ] **Step 5:** `git commit -m "connectors: chat mode as data; record every session file since the start (D55)"`
+- [ ] **Step 5:** `git commit -m "connectors: chat mode as data; record every session file since the start (D57)"`
 
 ### Task R5: Fine-grained GitHub token redaction; drop the reserve alias
 
@@ -307,7 +307,7 @@ Cross-lane waits: T2 needs P1, R1. T3 needs R2. T4 needs P2, W1. T5 needs A1, A2
 - [ ] **Step 1: Measure by hand** (logged-in harnesses under `harnesses/`): when each harness creates its session file in chat mode; whether a typed message appears in it; what `resume --last` and `--continue` do in the tracer's home. Write the answers in `docs/harnesses/<id>.md`.
 - [ ] **Step 2: Failing tests:** `the_host_is_silent_and_survives_ctrl_c` (spawn `goalcup start` on a test pty, type `hello`, send SIGINT to the foreground group: the fake TUI records `hello`; between the launch line and the child's exit the pty shows only TUI bytes; the host seals after the TUI exits); `closing_the_window_still_seals_and_uploads_the_segment` (SIGHUP to the group: TUI exits, the host seals, sends the final heartbeat and uploads); `the_typed_prompt_is_recorded_from_the_session_file`; `heartbeats_flow_before_the_first_session_file_appears`; `a_goal_file_with_an_interactive_connector_is_refused`; `the_goal_cup_skill_is_in_the_harness_home_and_nothing_else_changed`.
 - [ ] **Step 3–5:** FAIL → implement, edit connectors, `sh scripts/pin-manifests.sh` → PASS; gate PASS. One 10-minute practice run per connector on this Mac against staging.
-- [ ] **Step 6:** `git commit -m "launch: the harness runs in chat mode in the participant's terminal (D55)"`
+- [ ] **Step 6:** `git commit -m "launch: the harness runs in chat mode in the participant's terminal (D57)"`
 
 ### Task T7: Segments: an exit keeps the run open; `goalcup continue`
 
@@ -364,7 +364,7 @@ Cross-lane waits: T2 needs P1, R1. T3 needs R2. T4 needs P2, W1. T5 needs A1, A2
 
 ## Self-review
 
-- **Spec coverage.** §2 accounts and replace → W2, T7; login per run → W1, A1, T5; harness freedom → T6, D55; platforms and WSL2 → P2, T5, T8; records only → T6 (no input, no relaunch); keep awake → P2, T4; disk → P1, R1, R2, T2, T3; timing → R3, T1; emails → W3, T4; deadline and final commit → existing path + W3; data → website brief. §3 prep → T8, A2; explainer and agent skill → D2; device flow → W1, A1, T5; chat-mode launch in the clone → T5, T6; push token to git only and redaction → A2, R5. §4 terminal → owner: none; closed window → T6 SIGHUP rule + T7; sleep → P2; harness exit → T7, W3. §5 → R1, R2, R3, T1, T2, T3. §6 → T4, W3. §7 → W1–W3. §8 → each task's tests + D1. §9 → T6 facts sheets.
+- **Spec coverage.** §2 accounts and replace → W2, T7; login per run → W1, A1, T5; harness freedom → T6, D57; platforms and WSL2 → P2, T5, T8; records only → T6 (no input, no relaunch); keep awake → P2, T4; disk → P1, R1, R2, T2, T3; timing → R3, T1; emails → W3, T4; deadline and final commit → existing path + W3; data → website brief. §3 prep → T8, A2; explainer and agent skill → D2; device flow → W1, A1, T5; chat-mode launch in the clone → T5, T6; push token to git only and redaction → A2, R5. §4 terminal → owner: none; closed window → T6 SIGHUP rule + T7; sleep → P2; harness exit → T7, W3. §5 → R1, R2, R3, T1, T2, T3. §6 → T4, W3. §7 → W1–W3. §8 → each task's tests + D1. §9 → T6 facts sheets.
 - **Owner overrides applied.** Rotating parts (R2, T3), no terminal host (none of pty, relay, attach), identity = every session file new or written since the run started (R4, T6). Module counts were not optimized.
 - **Types checked:** `ChainPart`, `chain_parts`, `part_file_name`, `WorkspaceGit`, `ReserveFile`, `RunReserve`, `DiskVerdict`, `RunRecord`, `RunState`, `Recording`, `RunCredential`, `Approved`, `Purpose`, `AckAges`, `CHAIN_QUOTA_BYTES`, `ends_at` are each defined once and used under the same names.
 - **Gaps accepted:** a torn tail ends a segment as incomplete rather than being repaired. `MAX_CONNECTION_FAILURES` now counts consecutive failures (T4).

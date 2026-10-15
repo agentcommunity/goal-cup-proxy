@@ -5,6 +5,16 @@ yet; it adds to [`docs/SERVER-DESIGN.md`](../../SERVER-DESIGN.md) and
 [`docs/HARNESS-SCALING.md`](../../HARNESS-SCALING.md), and where they disagree this document wins.
 Calls marked *(author's call)* were made by the author and are open to correction.
 
+> **Overridden in part.** The owner decisions in the
+> [plan](../plans/2026-10-14-run-lifecycle.md) (its header) came after this document and win where
+> they differ: there is no terminal host, no `goalcup attach` and no `tmux` requirement (§4: the
+> harness runs in the participant's own terminal; over SSH the guide says to start inside `tmux`); the tracer
+> seals and syncs for at most one hour after the stop, not until the deadline plus 24 hours (§5;
+> the server closes the run 24 hours after its end); idle emails go at 3 hours and again at 6 hours
+> (§2, §6); the reservation is a floor, not a cap (§5); and a run not sealed 24 hours after its end
+> is `incomplete`. The participant's path as built is
+> [PARTICIPANT-GUIDE](../../PARTICIPANT-GUIDE.md).
+
 ## 1. Why
 
 On 6 November 2026, 500 to 1,500 participants each start one coding agent and leave it for 168 hours.

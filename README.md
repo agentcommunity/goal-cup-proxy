@@ -9,16 +9,16 @@ it and re-seal, and it still verifies ([checklist](docs/CHEAT-CHECKLIST.md)).
 
 ## Install
 
-**With Homebrew** (macOS and Linux):
+**With Homebrew** (macOS and Linux), from the first binary release:
 
 ```sh
 brew install agentcommunity/tap/goalcup
 ```
 
-This installs the three binaries (`goalcup`, `goalcup-daemon`, `goalcup-verify`) and the pinned
-connectors they read. Releases and the tap are described in
-[packaging/README.md](packaging/README.md); until the first release is published, build from
-source.
+No binary release and no tap exist yet: until the first release is tagged and the
+`agentcommunity/homebrew-tap` repository is created, build from source. Once published, this
+installs the three binaries (`goalcup`, `goalcup-daemon`, `goalcup-verify`) and the pinned
+connectors they read ([packaging/README.md](packaging/README.md)).
 
 <a id="build"></a>**From source** (Rust 1.99 or later, [rustup](https://rustup.rs); on macOS the
 Xcode command line tools). From the repository root, build and put the three binaries on your
@@ -47,26 +47,30 @@ run, and the daemon exits once every run is sealed. The first `start` writes
 `$GOALCUP_CONFIG_DIR/daemon.toml`, which keeps traces in `~/goalcup-artifacts`; edit it to move
 them ([the daemon](#the-daemon)).
 
-Claude Code uses your normal Claude login. Codex signs in once to the tracker's own Codex home:
-`mkdir -p -m 700 "$GOALCUP_CONFIG_DIR/capture-homes/codex-cli"`, then
-`CODEX_HOME="$GOALCUP_CONFIG_DIR/capture-homes/codex-cli" codex login`.
+**Taking part in the Cup?** Follow [docs/PARTICIPANT-GUIDE.md](docs/PARTICIPANT-GUIDE.md):
+`goalcup login`, `goalcup prep`, a practice run with `goalcup start --harness <id> --practice`,
+then `goalcup start --harness <id>` in the start window. What you agree to:
+[docs/RULES.md](docs/RULES.md).
 
-Then run:
+**A local run** (no login, nothing uploaded). Both shipped harnesses run in chat mode: the harness
+opens in your terminal and you type the prompt there. Sign in to the tracker's own home for the
+harness once: `goalcup prep --harness claude-code-cli` opens it there (its other steps report
+`[todo]` without a login; that is fine for a local run). Then, from an empty folder outside any
+git repository:
 
 ```sh
-mkdir ~/goal-1 && echo "Build a to-do app in Python." > ~/goal-1/goal.txt
 goalcup doctor --harness claude-code-cli
-goalcup start --harness claude-code-cli --goal-file ~/goal-1/goal.txt
+goalcup start --harness claude-code-cli       # type your prompt in the harness; exit it to end
 goalcup-verify --capture-integrity <trace>    # copy the verify: line start printed
 ```
 
 `start` runs the agent until it exits, seals the run, and prints its `trace:` folder and the
-`verify:` line. Meanwhile, from another terminal with the same `GOALCUP_CONFIG_DIR`,
-`goalcup status` shows how it is doing and `goalcup seal` stops it early. Claude Code and Codex
-runs share one tracker home per harness, so a second `start` of the same harness while one is
-recording is refused; run them one at a time.
-Verify exit 0 means the record is complete and valid ([all exit codes](#run-a-capture)). What you
-agree to as a participant: [docs/RULES.md](docs/RULES.md).
+`verify:` line. A chat-mode harness refuses `--goal-file`; only a headless one (Hermes) takes it.
+Meanwhile, from another terminal with the same `GOALCUP_CONFIG_DIR`, `goalcup status` shows how
+it is doing and `goalcup seal` stops it early. Claude Code and Codex runs share one tracker home
+per harness, so a second `start` of the same harness while one is recording is refused; run them
+one at a time. Verify exit 0 means the record is complete and valid
+([all exit codes](#run-a-capture)).
 
 **Adding a harness?** Start at [skills/adding-a-capture-harness](skills/adding-a-capture-harness/SKILL.md).
 
@@ -106,11 +110,10 @@ other tools the tests need are in [the gate](#the-gate).
   (`crates/goalcup-cli/src/config.rs`). The quickstart sets `GOALCUP_CONFIG_DIR` and skips this.
 - **The Claude Code login.** Linux has no Keychain, and the Claude Code
   connector links only the macOS Keychains directory into the run. Its login is expected in its
-  config directory, so sign in once to the tracker's own:
-  `mkdir -p -m 700 "$GOALCUP_CONFIG_DIR/capture-homes/claude-code-cli"`, then
-  `CLAUDE_CONFIG_DIR="$GOALCUP_CONFIG_DIR/capture-homes/claude-code-cli" claude`.
+  config directory, so sign in once in the tracker's own: `goalcup prep --harness
+  claude-code-cli` opens Claude Code there for you to sign in.
   **This is not yet measured:** where Claude Code 2.1.283 keeps its login on Linux has not been
-  checked, and nor has the Codex login location (the Codex command above is unchanged).
+  checked, and nor has the Codex login location (Codex signs in through `goalcup prep` the same way).
 
 **Measured, in Docker** (rust:1.99, Linux 7.0.12, arm64): the full workspace builds and the fast
 gate passes; the reservation reserves on ext4 and XFS and refuses overlayfs, tmpfs and FUSE; the
@@ -278,9 +281,11 @@ only move tier.
 The reference behind the quickstart. Every flag is in `goalcup <command> --help`; the daemon's
 other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
 
-- **Where things go.** The run's folder (`workspace/`, the harness's fresh `HOME`) is created
-  beside the goal file, so keep the goal file in an empty folder outside any repository. The
-  sealed trace is under the daemon's `artifact_root`.
+- **Where things go.** The run's folder (the harness's `HOME`, and for a local run its
+  `workspace/`) is created in the folder you run `goalcup start` from, or beside the goal file for
+  a headless harness, so use an empty folder outside any repository. A run on the server works in
+  a clone of your repository instead (below). The sealed trace is under the daemon's
+  `artifact_root`.
 - **What the harness sees.** Its environment is built from nothing: of your shell's variables only
   `USER`, `LOGNAME`, `TMPDIR` and, for a keyed connector, its one API key reach it. An exported
   `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `*_PROXY` is dropped, not inherited. The tracker
@@ -324,16 +329,21 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   found again by `goalcup upload <entry>`, and never put in the agent's environment or on its
   command line, a trace or a log. The clone's remote holds no token: when the agent's `git push`
   asks for a password, git runs the hidden `goalcup git-credential`, which answers for your
-  repository alone. A run stays on the machine that started it. A harness given a provider key
+  repository alone. A practice run's clone has no such helper and cannot push, so the repository
+  stays empty until the competition run. `--test` opens an organizer test run, which only
+  organizer accounts can open. A run stays on the machine that started it. A harness given a provider key
   (Hermes) is never uploaded. The wire contract is [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
 - <a id="upload"></a>**Uploading.** While the run records, `goalcup start` sends the trace's
-  `chain.jsonl` to the server in compressed chunks: the first as soon as the agent launches,
-  then every hour, or sooner once 256 MiB of chain is waiting (a chunk is at most 32 MiB
-  compressed). Each chunk is acknowledged with a signature, and the acknowledgement is added to
+  chain (its part files, `chain.jsonl` and the parts after it) to the server in compressed
+  chunks: the first as soon as the agent launches, then every 30 minutes (the first interval is a
+  random share of that, so runs started together do not send together), or sooner once 256 MiB
+  of chain is waiting (a chunk is at most 32 MiB compressed). An acknowledged part is deleted
+  locally two hours later, or at once when the parts alone have outgrown the run's 3 GiB
+  reservation. Each chunk is acknowledged with a signature, and the acknowledgement is added to
   the trace's `acks.jsonl`, which `goalcup-verify` checks. Recording never waits on the network:
   when the server cannot be reached the upload waits (a minute, doubling to fifteen) and tries
-  again, and the run goes on. After the seal, `start` sends the rest and the seal for at most two
-  minutes; if that is not enough it says so, and `goalcup upload <entry>` finishes the job
+  again, and the run goes on. After the stop, `start` seals and sends the rest and the seal for at
+  most one hour (the wrap-up); if that is not enough it says so, and `goalcup upload <entry>` finishes the job
   (after a crash too). It asks the server where it got to and is safe to run again, though not
   while the run's own `start` is still uploading (it says so). Uploading stops, with the reason
   on stderr, when the server refuses the request itself (an ended credential, a closed run, a TLS
@@ -347,11 +357,16 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   there and then and seals the run. It then tells the server where the chain ends and which
   commit the workspace repository had checked out (the final heartbeat), and uploads the rest
   up to that end; `goalcup upload <entry>` finishes that later if the network was down. The
-  server accepts nothing past that end, and a run not sealed on the server 24 hours after its
-  deadline is abandoned. There is no late window.
+  server accepts nothing past that end. 24 hours after the run's end the server closes it:
+  `sealed` when its last segment is sealed there, else `incomplete`, judged on what arrived. No
+  upload is accepted after that. A run also ends early when a later competition start on the
+  same account replaces it (one main run per account; [UPLOAD-API](docs/UPLOAD-API.md)). The
+  server records the repository's commit at the deadline. There is no late window.
 - <a id="server"></a>**The server.** The upload Worker (Cloudflare Workers, R2, Supabase) is in
   [server/worker](server/worker/README.md), TypeScript, runnable on this machine with
-  `wrangler dev` (`cd server/worker && npm install && npm test`); nothing is deployed. The
+  `wrangler dev` (`cd server/worker && npm install && npm test`). Production runs at
+  `https://ingest.agentcommunity.org`, the default `goalcup login` uses; a staging Worker is
+  for tests only. The
   tracer's end-to-end upload tests run against it too:
   `cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only
   -E 'test(/upload_worker/)'` (needs Node 22.18+ and the `npm install`).
