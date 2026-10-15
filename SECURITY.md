@@ -12,7 +12,7 @@ tarballs are unsigned and not notarized ([packaging/README.md](packaging/README.
 
 Do not open a public issue.
 
-1. Email goalhack@agentcommunity.org.
+1. Email goalcup@agentcommunity.org.
 2. Or use GitHub private vulnerability reporting: the Security tab, "Report a vulnerability".
 
 Say what you ran, what you expected and what happened. Never attach a real trace, key or harness

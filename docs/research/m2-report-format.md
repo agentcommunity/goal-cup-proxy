@@ -67,7 +67,7 @@ The research-report kind vocabulary (schemas 1 and 2) is closed at these ten val
 | `exit_code` | The verifier/report exit code (below), not the harness run's exit code. |
 | `verifier_version` | The verifier build that wrote the report. |
 | `options` | The effective options: `dev_mode`, `allow_descriptor_key`, `extra_server_keys`. |
-| `key_source` | Which key checked the receipt and ACK signatures: `pinned`, `supplied` or `none`. This build pins no key, so it is never `pinned`. |
+| `key_source` | Which key checked the receipt and ACK signatures: `pinned`, `supplied` or `none`. This build pins the production ingest key, so a production trace gives `pinned`. A key from `--dev-key` gives `supplied`. |
 | `input` | The validated chain prefix the report covers: `validated_head` (the link hash of its last record), `validated_records`, `validated_bytes`. |
 | `run.launch` | The first `Launch` record as retained: profile, profile digest, harness version, recorder revision, continuation and the goal stream it names, and, when the daemon wrote them (contract S1), `run_public_key` and `connector_dir_sha256`. Both are additive and absent from a trace written before S1, so a consumer treats a missing key as unknown rather than as an error. `null` when there is none. |
 | `run.connector` | Present only when `run.launch.connector_dir_sha256` is present: `Pinned` when the launch profile and digest match this build's connector-directory pins, otherwise `Dev/unpinned`. This presentation does not change capture integrity. It is absent for an old/unbound launch or when there is no launch. |
