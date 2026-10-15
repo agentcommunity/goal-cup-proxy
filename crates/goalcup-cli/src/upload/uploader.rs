@@ -881,6 +881,16 @@ pub fn note_repo_head(spool_dir: &Path, record: &UploadRecord) {
     }
 }
 
+/// [`note_repo_head`], unless a commit was already noted for the entry. A `goalcup continue`
+/// notes the commit of every earlier segment it is about to send before the next segment's
+/// agent can change the workspace; a host that noted the commit as its segment ended has said
+/// it better than this can.
+pub fn note_repo_head_unless_noted(spool_dir: &Path, record: &UploadRecord) {
+    if noted_repo_head_in(spool_dir, &record.entry_id).is_none() {
+        note_repo_head(spool_dir, record);
+    }
+}
+
 /// The commit [`note_repo_head`] noted for the entry whose spool is `spool`, if any.
 fn noted_repo_head(spool: &Path, entry_id: &str) -> Option<String> {
     noted_repo_head_in(spool.parent()?, entry_id)
@@ -1620,6 +1630,40 @@ mod tests {
         let tail = finish_advice(Closing::FromTail, "e1");
         assert!(tail.contains("goalcup continue"), "{tail}");
         assert!(!tail.contains("goalcup upload"), "{tail}");
+    }
+
+    #[test]
+    fn a_commit_noted_as_a_segment_ended_is_not_replaced_by_a_later_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("work");
+        std::fs::create_dir_all(workspace.join(".git")).unwrap();
+        let head = |commit: &str| {
+            std::fs::write(workspace.join(".git/HEAD"), format!("{commit}\n")).unwrap();
+        };
+        let record = UploadRecord {
+            run_id: "r0123456789abcdef".into(),
+            entry_id: "e1".into(),
+            server_url: String::new(),
+            trace_dir: String::new(),
+            official_start: String::new(),
+            deadline_at: String::new(),
+            workspace: workspace.display().to_string(),
+        };
+        let (first, later) = ("a".repeat(40), "b".repeat(40));
+        head(&first);
+        note_repo_head_unless_noted(dir.path(), &record);
+        assert_eq!(noted_repo_head_in(dir.path(), "e1"), Some(first.clone()));
+        // The next segment's agent commits; the earlier segment's note stands.
+        head(&later);
+        note_repo_head_unless_noted(dir.path(), &record);
+        assert_eq!(noted_repo_head_in(dir.path(), "e1"), Some(first));
+        // An entry with no note takes the commit the workspace has.
+        let other = UploadRecord {
+            entry_id: "e2".into(),
+            ..record
+        };
+        note_repo_head_unless_noted(dir.path(), &other);
+        assert_eq!(noted_repo_head_in(dir.path(), "e2"), Some(later));
     }
 
     #[test]

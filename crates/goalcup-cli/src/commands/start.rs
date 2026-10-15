@@ -445,6 +445,9 @@ struct CaptureRun<'a> {
     /// Set when an abandon was refused, so some of what the start made is still there: the
     /// cleanup sentence ([`CLEANED_UP`]) is not true then, and is not said.
     uncleaned: &'a std::cell::Cell<bool>,
+    /// Set when the server said the run being continued is over (`410`): the earlier segments'
+    /// uploads are then waited for like a stop's, not for a refusal's twenty seconds.
+    over: &'a std::cell::Cell<bool>,
     /// The run this start continues, for `goalcup continue`; `None` for a new run.
     continuing: Option<&'a Continuing>,
 }
@@ -866,6 +869,7 @@ impl Forked<'_> {
     /// End a run whose harness never ran or was never told about: the entry is sealed within
     /// the one budget, and the run is marked unscanned. Returns the error that ended it.
     fn unlaunched(self, error: CliError, out: &mut dyn std::io::Write) -> CliError {
+        let keeps_reserve = self.keeps_reserve();
         // Whatever ended the launch, including a Ctrl-C, the seal below runs its full retries.
         crate::arming::close_window();
         if let Some(proxied) = self.proxied {
@@ -873,12 +877,22 @@ impl Forked<'_> {
         }
         note_unscanned(self.scanning, &self.run.dir, out);
         if let Some(reserve) = self.reserve {
-            let _ = reserve.release();
+            end_reserve(reserve, keeps_reserve);
         }
         if let Some(give_back) = self.give_back {
             give_back.give();
         }
         error
+    }
+
+    /// Whether the run's reserve file outlives a launch that failed: a segment that follows
+    /// others, or any segment of a server run that is not over, goes on to be continued, and its
+    /// one reservation is the run's, not the segment's. A new run that is given back to the
+    /// server is over, and takes its reserve with it.
+    fn keeps_reserve(&self) -> bool {
+        self.give_back.is_none()
+            && self.record.server_url.is_some()
+            && !deadline_passed(self.record.deadline_at.as_deref())
     }
 
     /// The root ruling under D40: the entry was sealed while its harness was being launched, so
@@ -891,8 +905,9 @@ impl Forked<'_> {
         out: &mut dyn std::io::Write,
     ) -> CliError {
         note_unscanned(self.scanning, &self.run.dir, out);
+        let keeps_reserve = self.keeps_reserve();
         if let Some(reserve) = self.reserve.take() {
-            let _ = reserve.release();
+            end_reserve(reserve, keeps_reserve);
         }
         let Forked {
             client,
@@ -930,6 +945,16 @@ impl Forked<'_> {
         // Worded from what was observed, never more: a native child that could not be checked is
         // not "nothing is running".
         CliError::Refused(end.refusal(&info.entry_id))
+    }
+}
+
+/// The end of a reserve this command holds when a launch failed: released, or dropped with the
+/// file kept (its lock goes with it) for the run's next segment.
+fn end_reserve(reserve: RunReserve, keep: bool) {
+    if keep {
+        drop(reserve);
+    } else {
+        let _ = reserve.release();
     }
 }
 
@@ -1051,12 +1076,16 @@ fn capture(
     let profile = &c.loaded.manifest.capture;
     // The earlier segments being closed: waited for, shortly, on any way out before the new
     // segment's own end (`DrainsOnDrop`).
-    let mut draining = DrainsOnDrop(Vec::new());
+    let over = std::cell::Cell::new(false);
+    let mut draining = DrainsOnDrop {
+        drains: Vec::new(),
+        over: None,
+    };
     let (continuing, held_home_lock) = match opening {
         Opening::Fresh => (None, None),
         Opening::Continue(mut continuing) => {
             let lock = continuing.home_lock.take();
-            draining.0 = std::mem::take(&mut continuing.draining);
+            draining.drains = std::mem::take(&mut continuing.draining);
             (Some(continuing), lock)
         }
     };
@@ -1095,6 +1124,7 @@ fn capture(
         Some(_) => None,
     };
     let uncleaned = std::cell::Cell::new(false);
+    draining.over = Some((&over, opts.upload_policy.wrap_up));
     let cx = CaptureRun {
         client,
         upload: None,
@@ -1105,6 +1135,7 @@ fn capture(
         connector: &c,
         profile,
         uncleaned: &uncleaned,
+        over: &over,
         continuing: continuing.as_deref(),
     };
     let mut prep = prepare(&cx, goal, out)?;
@@ -1142,7 +1173,11 @@ fn capture(
     // The lock on the shared harness home goes with the run from here, and is let go at its seal.
     forked.home_lock = prep.shared_home_lock.take();
     // The earlier segments of a continued run are closed and sent beside this one.
-    forked.drained = draining.0.iter().map(|drain| drain.handles()).collect();
+    forked.drained = draining
+        .drains
+        .iter()
+        .map(|drain| drain.handles())
+        .collect();
     // Right before the launch the machine is told to stay awake, and it stays so to the end of
     // the wrap-up. A lock that cannot be taken is no reason to refuse or stop a run: it is
     // kept as the reason in the run's state, and `goalcup status` says it.
@@ -1156,7 +1191,7 @@ fn capture(
     let finished = finish_and_scan(
         exited,
         prep.matcher.as_ref(),
-        std::mem::take(&mut draining.0),
+        std::mem::take(&mut draining.drains),
         out,
     );
     drop(awake);
@@ -1170,15 +1205,36 @@ const DRAIN_ON_REFUSAL: Duration = Duration::from_secs(20);
 /// start that ends before it has a segment of its own to wait through waits for them briefly
 /// here, so a refusal does not cut the close of the segment before it short; what is still unsent
 /// is `goalcup upload`'s.
-struct DrainsOnDrop(Vec<crate::upload::uploader::Draining>);
+struct DrainsOnDrop<'a> {
+    drains: Vec<crate::upload::uploader::Draining>,
+    /// Whether the server said the run is over, and the wrap-up an upload gets then. A run that
+    /// is over has no next segment to finish the earlier ones' uploads beside, and its earlier
+    /// segment is sent as a stop's is: up to the whole wrap-up, with its progress said.
+    over: Option<(&'a std::cell::Cell<bool>, Duration)>,
+}
 
-impl Drop for DrainsOnDrop {
+impl Drop for DrainsOnDrop<'_> {
     fn drop(&mut self) {
-        for drain in self.0.drain(..) {
+        let wrap_up = match self.over {
+            Some((over, wrap_up)) if over.get() && !self.drains.is_empty() => {
+                crate::host_log::say(&format!(
+                    "the run is over: waiting for the earlier segment's upload (up to {} \
+                     minutes).",
+                    wrap_up.as_secs().div_ceil(60)
+                ));
+                wrap_up
+            }
+            _ => DRAIN_ON_REFUSAL,
+        };
+        for drain in self.drains.drain(..) {
             let entry = drain.entry_id().to_string();
             let how_to_finish = drain.how_to_finish();
-            let report = drain.wait(WrapUp::after(DRAIN_ON_REFUSAL));
-            if !report.caught_up {
+            let report = drain.wait(WrapUp::after(wrap_up));
+            if report.caught_up {
+                crate::host_log::say(&format!(
+                    "uploaded: entry {entry}, an earlier segment of this run, acknowledged."
+                ));
+            } else {
                 crate::host_log::say(&format!(
                     "upload of entry {entry}, an earlier segment, is incomplete ({}). {}",
                     report.why.as_deref().unwrap_or("the upload did not finish"),
@@ -2742,6 +2798,10 @@ impl RunDir {
 
     /// Only ever before the spawn, when nothing but this command has written here. A clone
     /// outside the directory goes with it (and a failure to remove either is the error).
+    ///
+    /// A continued run's workspace ([`WorkspaceAt::Existing`]) is the run's clone, with the
+    /// participant's agent's work in it, and is never this directory's to remove: only the
+    /// segment's own folder goes.
     fn remove(&self) -> std::io::Result<()> {
         let clone = if self.separate_workspace {
             match std::fs::remove_dir_all(&self.workspace) {
@@ -3438,7 +3498,13 @@ impl Uploading {
                 previous_entry_id,
                 known_entries,
             } => {
-                return self.open_segment(&request, run_id, previous_entry_id, known_entries);
+                return self.open_segment(
+                    &request,
+                    run_id,
+                    previous_entry_id,
+                    known_entries,
+                    cx.over,
+                );
             }
         };
         request.repo_url = new.github.repo_url.clone();
@@ -3489,9 +3555,11 @@ impl Uploading {
         run_id: &str,
         previous_entry_id: &str,
         known_entries: &[String],
+        run_over: &std::cell::Cell<bool>,
     ) -> Result<OpenedRun, CliError> {
         use crate::upload::Continued;
         let over = || {
+            run_over.set(true);
             CliError::Refused(format!(
                 "run {run_id} is over: its deadline has passed, or a newer run on your account \
                  replaced it, so there is nothing left to continue. Nothing was started."
@@ -3671,6 +3739,53 @@ mod tests {
 
     /// The interrupt flag is process-global; the tests that move it take turns.
     static FLAG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A continued segment's run directory is unmade on a failed launch, and the run's clone,
+    /// which the participant's agent has worked in, is not.
+    #[test]
+    fn unmaking_a_continued_segment_leaves_the_runs_clone_with_its_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let clone = tmp.path().join("clone");
+        std::fs::create_dir_all(clone.join(".git")).unwrap();
+        std::fs::write(clone.join("hello.txt"), b"the agent's work").unwrap();
+        let beside = tmp.path().join("beside");
+        std::fs::create_dir_all(&beside).unwrap();
+        let env = BTreeMap::new();
+        let run =
+            RunDir::create(&beside, RunHome::Empty, &env, WorkspaceAt::Existing(&clone)).unwrap();
+        assert_eq!(run.workspace, clone);
+        run.remove().unwrap();
+        assert!(!run.dir.exists(), "the segment's own folder goes");
+        assert_eq!(
+            std::fs::read(clone.join("hello.txt")).unwrap(),
+            b"the agent's work"
+        );
+        assert!(clone.join(".git").is_dir());
+        // A fresh run's own clone is its to remove.
+        let fresh = RunDir::create(
+            &beside,
+            RunHome::Empty,
+            &env,
+            WorkspaceAt::Clone(tmp.path()),
+        )
+        .unwrap();
+        std::fs::create_dir_all(&fresh.workspace).unwrap();
+        fresh.remove().unwrap();
+        assert!(!fresh.workspace.exists());
+    }
+
+    /// The reserve of a run that goes on is dropped, not released, when a launch fails.
+    #[test]
+    fn a_failed_launch_keeps_the_runs_reserve_file_only_when_the_run_goes_on() {
+        let tmp = tempfile::tempdir().unwrap();
+        let policy = DiskPolicy::from_test_spec("4194304,0,50").unwrap();
+        let path = reserve_path(tmp.path(), "r1");
+        end_reserve(RunReserve::take(&path, &policy).unwrap(), true);
+        assert!(path.exists(), "kept for the run's next segment");
+        assert!(!crate::run::reserve::held_by_another(&path), "and unlocked");
+        end_reserve(RunReserve::take(&path, &policy).unwrap(), false);
+        assert!(!path.exists(), "released");
+    }
 
     /// #7: a Ctrl-C started this abandon; the daemon's ordinary `busy` must be ridden out, not
     /// surfaced at the first try, or the entry stays held with its reservation.

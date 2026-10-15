@@ -37,7 +37,9 @@ use crate::run::{HarnessState, RunRecord};
 use crate::upload::UploadRecord;
 use crate::upload::http::ServerClient;
 use crate::upload::policy::WrapUp;
-use crate::upload::uploader::{Closing, Policy, drain, is_sent, lock_entry, note_repo_head};
+use crate::upload::uploader::{
+    Closing, Policy, drain, is_sent, lock_entry, note_repo_head_unless_noted,
+};
 use goalcup_protocol::control::{ControlError, DaemonClient};
 use goalcup_protocol::process::termination_bound;
 use std::collections::BTreeMap;
@@ -332,9 +334,14 @@ fn close_previous(
 ) -> Result<Closing, CliError> {
     let entry_id = &segment.entry.entry_id;
     match segment.how {
-        How::Sealed => Ok(Closing::Sealed),
+        // Its host sealed it and noted the commit its workspace had then; one that did not (the
+        // host died after the seal, or `goalcup seal` sealed it) is noted now.
+        How::Sealed => {
+            note_repo_head_unless_noted(spool, &segment.upload);
+            Ok(Closing::Sealed)
+        }
         How::FromTail => {
-            note_repo_head(spool, &segment.upload);
+            note_repo_head_unless_noted(spool, &segment.upload);
             let _ = say(
                 out,
                 &format!(
@@ -345,7 +352,7 @@ fn close_previous(
             Ok(Closing::FromTail)
         }
         How::SealIt => {
-            note_repo_head(spool, &segment.upload);
+            note_repo_head_unless_noted(spool, &segment.upload);
             let allowance =
                 termination_bound(connector.loaded.manifest.termination().grace_seconds());
             let deadline = std::time::Instant::now() + crate::finish_budget();

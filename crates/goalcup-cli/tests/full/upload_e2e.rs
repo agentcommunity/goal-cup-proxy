@@ -1738,4 +1738,201 @@ mod segments {
         second.type_line("/exit");
         assert!(second.wait().success());
     }
+
+    /// Hold a continued launch at `point`, interrupt it there (a Ctrl-C), and let it go on: the
+    /// launch fails at its next look at the flag. Returns what `goalcup continue` said.
+    fn continue_interrupted_at(rig: &Rig, point: &str) -> String {
+        let pause = rig.root.join(format!("pause-{point}"));
+        std::fs::create_dir_all(&pause).unwrap();
+        std::fs::write(pause.join(format!("{point}.arm")), b"").unwrap();
+        let mut held = rig.continue_on_pty(
+            &[
+                DISK,
+                BEATING,
+                ("GOALCUP_TEST_PAUSE_DIR", pause.to_str().unwrap()),
+            ],
+            None,
+        );
+        wait_until("the launch to reach its pause", || {
+            pause.join(format!("{point}.reached")).exists()
+        });
+        held.signal_foreground(libc::SIGINT);
+        std::fs::write(pause.join(format!("{point}.go")), b"").unwrap();
+        let status = held.wait();
+        let said = held.shown();
+        assert_eq!(status.code(), Some(1), "{said}");
+        said
+    }
+
+    /// Every file of a clone, with its bytes, and its checked-out commit.
+    fn clone_contents(rig: &Rig) -> Vec<(PathBuf, Vec<u8>)> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+            let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().collect();
+            names.sort_by_key(|e| e.file_name());
+            for entry in names {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else {
+                    out.push((path.clone(), std::fs::read(&path).unwrap_or_default()));
+                }
+            }
+        }
+        let clones = rig.clones();
+        assert_eq!(clones.len(), 1, "{clones:?}");
+        let mut files = Vec::new();
+        walk(&clones[0], &mut files);
+        assert!(!files.is_empty(), "the clone has files");
+        files
+    }
+
+    /// Review round 2, findings 1 and 3. A continued launch that fails after the server made its
+    /// segment (here before the fork, and after it) leaves the run's clone with every file it
+    /// had, and the run's one reserve file where it was; the run then continues.
+    #[test]
+    fn a_continued_launch_that_fails_leaves_the_clone_and_the_reserve() {
+        use std::os::unix::fs::MetadataExt;
+        for point in ["capture-shared-home-pre-create", "capture-gate-forked"] {
+            let rig = Rig::chat();
+            let server = server(&rig, ServerOptions::default());
+            let mut first = rig.start_on_pty(&[DISK, BEATING]);
+            first.wait_shown("tui: ready");
+            kill_agent(&rig);
+            assert!(first.wait().success());
+            let run_id = the_run(&server);
+            let (files, reserves) = (clone_contents(&rig), reserve_files(&rig));
+            assert_eq!(reserves.len(), 1);
+            let identity = std::fs::metadata(&reserves[0]).map(|m| (m.dev(), m.ino()));
+
+            let said = continue_interrupted_at(&rig, point);
+            assert!(said.contains("interrupted"), "{point}: {said}");
+            assert_eq!(clone_contents(&rig), files, "{point}: the clone");
+            assert_eq!(reserve_files(&rig), reserves, "{point}: the reserve");
+            assert_eq!(
+                std::fs::metadata(&reserves[0])
+                    .map(|m| (m.dev(), m.ino()))
+                    .ok(),
+                identity.ok(),
+                "{point}: the same reserve file"
+            );
+            assert!(
+                !held_by_another(&reserves[0]),
+                "{point}: and nobody holds it"
+            );
+            assert_eq!(api_run(&rig, &server, &run_id)["status"], "open");
+
+            // The run was not damaged: it continues.
+            let mut again = rig.continue_on_pty(&[DISK, BEATING], None);
+            again.wait_shown("tui: ready");
+            again.type_line("/exit");
+            let status = again.wait();
+            let shown = again.shown();
+            assert!(status.success(), "{point}: {status:?}\n{shown}");
+            assert_eq!(reserve_files(&rig), reserves, "{point}");
+        }
+    }
+
+    /// Review round 2, finding 2. A segment sealed without its host noting the commit its
+    /// workspace had (here `goalcup seal`'s doing) has that commit noted by `continue` before the
+    /// next segment starts: its final heartbeat carries it, and the next segment's agent
+    /// committing afterwards does not change it.
+    #[test]
+    fn the_old_segments_final_heartbeat_carries_the_commit_it_ended_with() {
+        use goalcup_protocol::control::{CaptureSealRequest, DaemonClient};
+        let rig = Rig::chat();
+        let server = server(&rig, ServerOptions::default());
+        let (run_id, entry) = crashed_host(&rig, &server);
+        let workspace = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap().workspace;
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&workspace)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        // The first segment's agent had committed its work.
+        git(&["commit", "--allow-empty", "-m", "the first segment's work"]);
+        let sealed = rig
+            .client()
+            .seal_capture(
+                &entry,
+                &CaptureSealRequest {
+                    proxy: None,
+                    remaining_finish_ms: Some(10_000),
+                    native_scope: None,
+                },
+                std::time::Duration::from_secs(20),
+            )
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(sealed.entry_id, entry);
+        let ended_with =
+            goalcup_cli::upload::uploader::repo_head(&workspace).expect("the clone has a commit");
+
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        // The new segment's agent commits.
+        git(&["commit", "--allow-empty", "-m", "the next segment's work"]);
+        let later = goalcup_cli::upload::uploader::repo_head(&workspace).unwrap();
+        assert_ne!(later, ended_with);
+        wait_until("the earlier segment's end", || {
+            server.final_of(&entry).is_some()
+        });
+        assert_eq!(
+            server.final_of(&entry).unwrap().repo_head.as_deref(),
+            Some(ended_with.as_str()),
+            "the commit the workspace had when that segment ended"
+        );
+        second.type_line("/exit");
+        assert!(second.wait().success());
+        assert_eq!(
+            server.final_of(&entry).unwrap().repo_head.as_deref(),
+            Some(ended_with.as_str())
+        );
+    }
+
+    /// Review round 2, finding 4. A `continue` the server refuses because the run is over still
+    /// waits for the earlier segment's upload as a stop does (with its progress said), not for the
+    /// twenty seconds of other refusals, and says so.
+    #[test]
+    fn a_continue_refused_because_the_run_is_over_waits_for_the_earlier_upload() {
+        let rig = Rig::chat();
+        let server = server(
+            &rig,
+            ServerOptions {
+                run_seconds: Some(12),
+                ..ServerOptions::default()
+            },
+        );
+        let (run_id, entry) = crashed_host(&rig, &server);
+        let deadline = goalcup_protocol::control::parse_z(
+            goalcup_cli::run::read(&rig.cfg, &run_id)
+                .unwrap()
+                .deadline_at
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        wait_until("the run's deadline", || {
+            goalcup_cli::run::now_unix() > deadline
+        });
+        server.fail_next_chunks(2);
+        let mut over = rig.continue_on_pty(&[DISK, BEATING], None);
+        let status = over.wait();
+        let said = over.shown();
+        assert_eq!(status.code(), Some(1), "{said}");
+        assert!(said.contains("is over"), "{said}");
+        assert!(
+            said.contains("the run is over: waiting for the earlier segment's upload"),
+            "{said}"
+        );
+        assert!(
+            said.contains("an earlier segment of this run, acknowledged"),
+            "{said}"
+        );
+        assert_eq!(server.entry_ids(&run_id).len(), 1, "no segment was made");
+        assert_entry_sent(&rig, &server, &entry);
+    }
 }
