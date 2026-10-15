@@ -107,20 +107,18 @@ fn capture_reserve_bytes_is_no_longer_a_flag() {
 }
 
 /// A run whose reservation the volume cannot hold is refused before anything is created: the
-/// daemon is not asked, there is no run directory beside the goal file, no run record, and no
-/// reserve file.
+/// daemon is not asked, there is no run directory in the run's folder, no run record, and no
+/// reserve file. (A chat-mode run: no goal file, its folder is the one it is run from.)
 #[test]
 fn a_run_that_cannot_take_its_reserve_is_refused_before_anything_is_created() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("cfg");
     std::fs::create_dir(&cfg).unwrap();
-    let beside = tmp.path().join("goal-folder");
+    let beside = tmp.path().join("run-folder");
     std::fs::create_dir(&beside).unwrap();
-    let goal = beside.join("goal.txt");
-    std::fs::write(&goal, "write result.txt").unwrap();
     let m = support::mock_armed(&tmp, "codex-cli");
     let mut o = support::start_options("codex-cli");
-    o.goal_file = Some(goal);
+    o.run_folder = Some(beside.clone());
     // More than any volume has, and a margin on top.
     o.disk.reserve_bytes = 1 << 60;
     o.disk.start_margin = 1 << 30;
@@ -140,8 +138,8 @@ fn a_run_that_cannot_take_its_reserve_is_refused_before_anything_is_created() {
         "the daemon was asked: {:?}",
         m.calls()
     );
-    let beside_goal: Vec<_> = std::fs::read_dir(&beside).unwrap().flatten().collect();
-    assert_eq!(beside_goal.len(), 1, "only the goal file: {beside_goal:?}");
+    let made: Vec<_> = std::fs::read_dir(&beside).unwrap().flatten().collect();
+    assert!(made.is_empty(), "nothing in the run's folder: {made:?}");
     assert!(!cfg.join("runs").exists(), "no run record");
     let reserve = goalcup_cli::run::reserve::artifact_root(&cfg).join("reserve");
     assert!(!reserve.exists(), "no reserve file or folder");
@@ -327,7 +325,7 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
 /// and still seals and uploads when the window is closed.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod chat {
-    use crate::common::m2_cli_support::{CHAT_ID, Hooked, Launcher, OnPty, Rig};
+    use crate::common::m2_cli_support::{CHAT_HOME_ID, CHAT_ID, Hooked, Launcher, OnPty, Rig};
     use crate::common::upload_server::{ServerOptions, UploadServer};
     use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
     use std::collections::BTreeMap;
@@ -649,6 +647,160 @@ mod chat {
             log.contains("panicked") && log.contains("a test panic while the host is quiet"),
             "{log}"
         );
+    }
+
+    /// A chat-mode harness gets the participant's terminal and tools: their PATH (the fake
+    /// harness is a `#!/usr/bin/env node` script, and the `node` it finds is only on that PATH),
+    /// their TERM, COLORTERM, LANG and LC_*; the connector's own SHELL wins over theirs. It gets
+    /// none of their proxy, base-URL or credential variables, and none of the tracer's own: its
+    /// proxy is the run's loopback recorder.
+    #[test]
+    fn the_harness_gets_the_participants_terminal_and_tools_and_nothing_else() {
+        let rig = Rig::chat();
+        let participant_home = rig.root.join("participant-home");
+        std::fs::create_dir_all(&participant_home).unwrap();
+        let participant_home = participant_home.display().to_string();
+        let mut run = rig.start_on_pty(&[
+            ("HOME", participant_home.as_str()),
+            ("CODEX_HOME", "/participant/codex-home"),
+            ("NO_PROXY", "*"),
+            ("LC_API_TOKEN", "not-a-real-token-0123456789"),
+            DISK,
+            LOCAL_WRAP_UP,
+            ("TERM", "xterm-256color"),
+            ("COLORTERM", "truecolor"),
+            ("LANG", "en_US.UTF-8"),
+            ("LC_CTYPE", "en_US.UTF-8"),
+            ("SHELL", "/bin/bash"),
+            ("HTTPS_PROXY", "http://proxy.example:3128"),
+            ("https_proxy", "http://proxy.example:3128"),
+            ("ALL_PROXY", "socks5://proxy.example:1080"),
+            ("OPENAI_API_KEY", "sk-not-a-real-key-0123456789"),
+            ("ANTHROPIC_BASE_URL", "https://elsewhere.example"),
+            ("GITHUB_TOKEN", "ghp_not_a_real_token_0123456789"),
+        ]);
+        run.wait_shown("tui: ready");
+        run.type_line("/exit");
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+
+        let env: BTreeMap<String, String> = harness(&rig, "tui.env")
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        assert_eq!(env.get("PATH"), Some(&rig.path()), "{env:?}");
+        for (key, value) in [
+            ("TERM", "xterm-256color"),
+            ("COLORTERM", "truecolor"),
+            ("LANG", "en_US.UTF-8"),
+            ("LC_CTYPE", "en_US.UTF-8"),
+            ("SHELL", "/bin/zsh"),
+        ] {
+            assert_eq!(
+                env.get(key).map(String::as_str),
+                Some(value),
+                "{key}: {env:?}"
+            );
+        }
+        for key in ["HTTPS_PROXY", "https_proxy"] {
+            let proxy = env.get(key).expect("the run's own proxy");
+            assert!(
+                proxy.starts_with("http://goalcup:") && proxy.contains("@127.0.0.1:"),
+                "{key} is the loopback recorder, not the participant's: {proxy}"
+            );
+        }
+        // The launch's own values win over the participant's: the run's HOME, the connector's
+        // isolated home, and the loopback proxy's exemptions.
+        let home = env.get("HOME").expect("a HOME");
+        assert_ne!(home, &participant_home, "{env:?}");
+        assert!(
+            home.starts_with(&rig.root.join("runs").display().to_string()),
+            "{home}"
+        );
+        assert_eq!(
+            env.get("CODEX_HOME"),
+            Some(&rig.chat_home().display().to_string()),
+            "{env:?}"
+        );
+        for key in ["NO_PROXY", "no_proxy"] {
+            assert_eq!(
+                env.get(key).map(String::as_str),
+                Some(goalcup_cli::launch::CAPTURE_NO_PROXY),
+                "{key}: {env:?}"
+            );
+        }
+        for key in [
+            "ALL_PROXY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "GITHUB_TOKEN",
+            "LC_API_TOKEN",
+        ] {
+            assert!(!env.contains_key(key), "{key} reached the harness: {env:?}");
+        }
+        assert!(
+            !env.keys().any(|k| k.starts_with("GOALCUP_")),
+            "the tracer's own variables reached the harness: {env:?}"
+        );
+    }
+
+    /// A connector whose run `HOME` is kept across runs (D59, `run_home = "shared"`): the run's
+    /// `HOME` is `<cfg>/capture-homes/<id>.run-home`, a file the harness writes there is still
+    /// there for the run's next segment, and `goalcup continue` takes the same home (and its
+    /// lock) and restarts the harness in it.
+    #[test]
+    fn a_shared_run_home_is_kept_across_segments_and_continue_uses_it() {
+        let rig = Rig::chat_with_shared_run_home();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        let home = rig
+            .cfg
+            .join("capture-homes")
+            .join(format!("{CHAT_HOME_ID}.run-home"));
+
+        let mut first = OnPty::spawn(
+            rig.chat_command_for(CHAT_HOME_ID, &[DISK, BEATING], Launcher::Direct),
+            None,
+        );
+        first.wait_shown("tui: ready");
+        assert_eq!(harness(&rig, "tui.home"), home.display().to_string());
+        first.type_line("hello");
+        first.wait_shown("tui: noted hello");
+        first.type_line("/exit");
+        let status = first.wait();
+        assert!(status.success(), "{status:?}\n{}", first.shown());
+        assert_eq!(
+            std::fs::read_to_string(home.join("tui-runs.txt")).unwrap(),
+            "run\n"
+        );
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&home).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let entry = newest_entry(&rig);
+        let (_, records) = rig.read_trace(&entry);
+        assert!(native_bytes(&records).contains(r#""text":"hello""#));
+
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        assert_eq!(harness(&rig, "tui.home"), home.display().to_string());
+        assert_eq!(
+            std::fs::read_to_string(home.join("tui-runs.txt")).unwrap(),
+            "run\nrun\n",
+            "what the harness wrote in its HOME survived into the next segment"
+        );
+        let argv = harness(&rig, "tui.argv");
+        assert!(argv.ends_with("resume\n--last"), "{argv}");
+        second.type_line("again");
+        second.wait_shown("tui: noted again");
+        second.type_line("/exit");
+        let status = second.wait();
+        assert!(status.success(), "{status:?}\n{}", second.shown());
+        let run_id = &server.run_ids()[0];
+        assert_eq!(server.entry_ids(run_id).len(), 2, "two segments");
+        assert!(home.is_dir(), "the shared run home is never removed");
     }
 
     /// A chat-mode run needs its terminal for input and for output: from a pipe, or with its

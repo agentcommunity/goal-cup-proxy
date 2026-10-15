@@ -8,7 +8,7 @@ Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm
 
 ## 1. Run one prompt, headless
 
-D57 moves the shipped connectors to chat mode (section 10); until that lands, this is the recipe the connector runs.
+Since D57 the connector runs Codex in chat mode instead (section 10). This is the headless recipe it ran before; its measurements stand.
 
 The capture argv (code: [connectors/codex-cli/harness.toml](../../connectors/codex-cli/harness.toml)), with the goal appended as the single element after `--`:
 
@@ -54,7 +54,7 @@ Compressed rollouts: vendor docs (research file, from Codex source) say a backgr
 
 - **File type.** JSONL, one object per line, `{"timestamp", "ordinal"?, "type", "payload"}`. Append-only; the `ordinal` was gap-free per file and stayed contiguous across a kill and a resume (measured, spike 2, 0.153.0).
 - **One file per thread.** Normally one rollout file per thread. Vendor docs say a revert keeps the thread id and writes a new immutable file with a `_<rollout_id>` suffix, so watch the directory, not one file. A subagent thread is a separate rollout file; its first `session_meta` carries the parent link, and its second `session_meta` replays the parent's (measured).
-- **Id.** In chat mode (section 10) no id is read at launch: the run will record every rollout new or written since it started. A UUID-shaped thread id (a time-ordered form, for example `01a0e2ee-...`). It first appears on stdout as `thread.started` with `thread_id` when `--json` is set (measured; the new rollout file appeared 0.12 to 1.17 s after spawn), then as the file-name suffix and as `session_meta.payload.id` / `payload.session_id`. On a later record `payload.id` is an item id, not the thread id, so read `payload.session_id` (measured dogfood finding, 2026-09-07).
+- **Id.** In chat mode (section 10) no id is read at launch: the run records every rollout new or written since it started. A UUID-shaped thread id (a time-ordered form, for example `01a0e2ee-...`). It first appears on stdout as `thread.started` with `thread_id` when `--json` is set (measured; the new rollout file appeared 0.12 to 1.17 s after spawn), then as the file-name suffix and as `session_meta.payload.id` / `payload.session_id`. On a later record `payload.id` is an item id, not the thread id, so read `payload.session_id` (measured dogfood finding, 2026-09-07).
 - **Human input.** No `event_msg/user_message` record exists on 0.153.0 with paginated history; a typed prompt is a user-role message with the same shape as harness context (measured, spike 2). Do not use the pre-spike claim.
 - **Other records.** `turn_context` per turn (model, effort), `token_count` events whose `rate_limits` object carries account plan type, credit balance and quota (measured; Goal Cup redacts it), `response_item`, `compacted`.
 - **Prompt history.** `history.jsonl` holds `{session_id, ts, text}` per typed prompt and was the only place a hook-blocked 4,100-character prompt survived (measured).
@@ -107,14 +107,14 @@ Compressed rollouts: vendor docs (research file, from Codex source) say a backgr
 
 ## 10. Chat mode (measured 14 Oct 2026)
 
-D57 runs the shipped connectors in their normal chat mode in the participant's own terminal, and the participant types the prompt. `goalcup start` can host such a run (`[capture] interactive = true`); **this connector is still headless in this build** (section 1), because the daemon's and the protocol crate's own tests load the shipped connector and expect its headless recipe, and they are updated in their own lanes. Its chat-mode data, ready to land with them: `interactive = true`; the argv is the args alone, with no goal and no `exec`
+Since D57 the connector runs Codex in its normal chat mode in the participant's own terminal, and the participant types the prompt (code: [connectors/codex-cli/harness.toml](../../connectors/codex-cli/harness.toml), `interactive = true`). The argv is the args alone, with no goal and no `exec`:
 
 ```
 codex -c check_for_update_on_startup=false \
   -c projects={ "<workspace>" = { trust_level = "trusted" } } -C <workspace>
 ```
 
-identity `none`; native root `{config_home}/sessions`, pattern `*/*/*/rollout-*.jsonl`, `since_run_start = true` (every rollout new or written since the run started is recorded); `skills_dir = "skills"` (`goalcup start` puts the goal-cup skill in `$CODEX_HOME/skills/goal-cup/` before each launch).
+identity `none`; native root `{config_home}/sessions`, pattern `*/*/*/rollout-*.jsonl`, `since_run_start = true` (every rollout new or written since the run started is recorded); `skills_dir = "skills"` (`goalcup start` puts the goal-cup skill in `$CODEX_HOME/skills/goal-cup/` before each launch); `resume_args = ["resume", "--last"]`, what `goalcup continue` appends (**not measured yet**, see PENDING below).
 
 Measured on macOS arm64, Codex 0.153.0, 2026-10-14, by driving the TUI on a pseudo-terminal (120x40) in a fresh `git init` workspace, with `CODEX_HOME` the tracer's isolated home and an empty `HOME`. That home was **logged out** (an expired refresh token), so no model reply was seen:
 
@@ -127,6 +127,6 @@ Measured on macOS arm64, Codex 0.153.0, 2026-10-14, by driving the TUI on a pseu
 
 PENDING (need a logged-in home, which the owner must restore; nobody on our side logs in for a test):
 
-- Whether `codex <args> resume --last` in the tracer's home reopens the same rollout file or starts a new one (T7's `resume_args`).
+- Whether `codex <args> resume --last` in the tracer's home reopens the same rollout file or starts a new one. The connector ships `resume_args = ["resume", "--last"]` on the plan's word, not on a measurement.
 - A model reply in chat mode through the recording proxy.
-- One 10-minute practice run of this connector on this Mac against staging (staging is deployed on 19 Oct).
+- One 10-minute practice run of this connector on this Mac against staging.
