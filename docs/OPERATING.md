@@ -332,7 +332,10 @@ the root, or the PR template. Every run runs `test_ci_scope.py`, `test_check_lin
 Keep it small. Do not add branches, jobs, a build matrix, or the daemon and CLI suites: they spawn process
 trees that hang or kill a 2-core runner. Those suites run on Linux in Docker with `scripts/linux-check.sh`.
 `.github/workflows/linux-x86_64.yml` is manual only; it runs that script on an x86_64 runner with
-`LINUX_CHECK_HARNESSES=1`, which ends with `scripts/linux-harness-smoke.sh`. A green `ci` run proves
+`LINUX_CHECK_HARNESSES=1`, which ends with `scripts/linux-harness-smoke.sh`. That script drives each
+connector the way its manifest says: a headless connector gets `--goal-file`; a chat-mode connector
+(`[capture] interactive = true`, as `codex-cli` and `claude-code-cli` are) gets a terminal of its own,
+one typed prompt, then a hangup, and the run still seals. A green `ci` run proves
 nothing about macOS.
 
 ## Installing the participant binaries

@@ -15,7 +15,11 @@ How to read this sheet. "(live)" marks a fact measured in the logged-in macOS pr
 - **Fit for Goal Cup.** A wire-only capture of the local CLI is possible with Goal Cup's existing proxy design plus an Amp protocol decoder. A native leg in the Claude Code sense does not exist.
 - **Orbs.** A CLI on the participant's machine that starts an orb thread joins it as an observer and receives the same thread stream, so an orb thread can be recorded the same way (live, one run). See "Orbs" in section 7.
 
-## 1. Run one prompt, headless
+## 1. Run one prompt, in chat mode first
+
+Chat mode: not measured. The command that opens Amp's chat, how the participant types the prompt, how to quit and the flag that reopens the last thread are unknown (please confirm). All measurements below are of the execute form.
+
+Headless recipe (execute mode):
 
 ```
 amp --stream-json --execute=<goal>

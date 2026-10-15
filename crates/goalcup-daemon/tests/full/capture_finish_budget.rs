@@ -1,5 +1,5 @@
 //! H-10 slice 4a: the one local-finish budget of a v5 capture entry, through the real daemon and
-//! its control API (CONTRACTS.md, "Amendment 2026-10-02 (C6 local finish budget, H-10 4a)").
+//! its control API (CONTRACTS.md, "C6 local finish budget (H-10 4a)").
 //!
 //! Every request is built as raw JSON, so a row states the wire contract and not a Rust type:
 //! `remaining_finish_ms` is the caller's remaining budget, a refusal is the `finish_deadline`

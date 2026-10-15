@@ -480,7 +480,7 @@ fn metadata_write_failure_reports_accounting_unavailable() {
     // 0 means the command did what it was asked. `main.rs` drops the harness's own exit, and an
     // unsealable finish is a reported outcome (`SealWriteFailed`, `seal.rs`), not an error.
     // Capture failure is carried by the status (`Failed`, asserted above) and by the verifier's
-    // exit, asserted below (CONTRACTS.md: the 2026-09-29 local-finish amendment).
+    // exit, asserted below (`docs/CONTRACTS.md`, "C6. Local finish").
     assert_eq!(exit.code(), Some(0), "{}", start.output());
     // The CLI has one wording for `SealWriteFailed` (`seal.rs`, `finish_locally`), used whether
     // the terminal append or seal.json failed. Pinned only on the parts that matter here: no
