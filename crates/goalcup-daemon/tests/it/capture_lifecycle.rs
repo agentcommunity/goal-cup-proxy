@@ -3099,6 +3099,77 @@ async fn a_missing_run_start_uses_the_entry_create_time() {
     );
 }
 
+/// Stream-less `LimitExceeded` gaps: native entries the discovery bounds kept out (D57).
+fn native_losses(records: &[CaptureRecord]) -> usize {
+    records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record,
+                CaptureRecord::Gap {
+                    stream: None,
+                    reason: GapReason::LimitExceeded,
+                    ..
+                }
+            )
+        })
+        .count()
+}
+
+/// A symlink in the shared session store from before the run is no more this run's than an
+/// old session file: no gap, and the sealed chain holds no stream-less gap at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_old_symlink_in_the_session_root_is_no_loss() {
+    let (rig, config_home, _connectors) = chat_rig().await;
+    let day = config_home.join("sessions/2026/10/14");
+    std::fs::create_dir_all(&day).unwrap();
+    std::os::unix::fs::symlink(
+        rig.root.join("elsewhere.jsonl"),
+        day.join("rollout-old-link.jsonl"),
+    )
+    .unwrap();
+    into_the_next_second();
+    let info = rig.created("capture-dev").await;
+    std::fs::write(day.join("rollout-new.jsonl"), b"{\"new\":true}\n").unwrap();
+    rig.records_when(&info.entry_id, |records| !native_labels(records).is_empty())
+        .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let records = rig.records(&info.entry_id);
+    assert_eq!(
+        native_labels(&records),
+        ["rollout:2026/10/14/rollout-new.jsonl#g1"]
+    );
+    assert!(
+        !records
+            .iter()
+            .any(|record| matches!(record, CaptureRecord::Gap { stream: None, .. })),
+        "an old symlink is not a loss"
+    );
+}
+
+/// The counterpart: a symlink made during the run is a matched entry the tracer will not
+/// follow, recorded once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_symlink_in_the_session_root_is_one_loss() {
+    let (rig, config_home, _connectors) = chat_rig().await;
+    let day = config_home.join("sessions/2026/10/14");
+    std::fs::create_dir_all(&day).unwrap();
+    into_the_next_second();
+    let info = rig.created("capture-dev").await;
+    std::fs::write(day.join("rollout-new.jsonl"), b"{\"new\":true}\n").unwrap();
+    std::os::unix::fs::symlink(
+        rig.root.join("elsewhere.jsonl"),
+        day.join("rollout-link.jsonl"),
+    )
+    .unwrap();
+    rig.records_when(&info.entry_id, |records| native_losses(records) > 0)
+        .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    assert_eq!(native_losses(&rig.records(&info.entry_id)), 1);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reopened_entry_keeps_its_create_time_floor() {
     let (rig, _config_home, _connectors) = chat_rig().await;
