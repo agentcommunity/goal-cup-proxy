@@ -3022,10 +3022,12 @@ async fn a_continued_segment_takes_the_workspace_of_an_entry_that_failed_to_reop
     std::fs::remove_file(rig.trace_dir(&first.entry_id).join("chain.jsonl")).unwrap();
 
     let rig = rig.restart().await;
-    assert_ne!(
-        rig.daemon.cycle_errors().last,
-        None,
-        "the lost chain was not reopened"
+    // Relies on the chain having no rotated parts: removing `chain.jsonl` leaves nothing to resume.
+    let last = rig.daemon.cycle_errors().last;
+    assert!(
+        last.as_deref()
+            .is_some_and(|e| e.contains("was not reopened")),
+        "the lost chain was not reopened: {last:?}"
     );
     let second = rig.create("codex-cli", &ws, RESERVE).await;
     assert_eq!(second.status(), 200, "{}", second.body());

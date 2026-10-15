@@ -567,8 +567,8 @@ impl Registry {
 
     /// [`Registry::put`], except that an entry `lets_go` says is finished with its workspace no
     /// longer holds it. A run that is continued (`goalcup continue`) makes its next segment, a
-    /// new entry, in the workspace its last one had: the last one is sealed, or its chain is
-    /// torn and no daemon can open it, and routes nothing.
+    /// new entry, in the workspace its last one had: the last one is sealed, or this daemon
+    /// could not reopen it, and routes nothing.
     pub fn put_letting_go(
         &self,
         entry: &Entry,

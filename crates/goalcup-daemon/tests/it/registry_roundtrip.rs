@@ -479,8 +479,10 @@ fn an_entry_that_lets_go_of_its_workspace_does_not_hold_it() {
     // The second entry holds it now.
     let mut third = entry(tmp.path(), "e3");
     third.workspace = first.workspace.clone();
-    let err = r.put(&third).unwrap_err();
-    assert!(err.to_string().contains("e1") || err.to_string().contains("e2"));
+    let err = r
+        .put_letting_go(&third, &|s| s.entry_id == "e1")
+        .unwrap_err();
+    assert!(err.to_string().contains("e2"), "{err}");
 }
 
 /// The registry is the daemon's memory across a crash. Reopening the same file must give
