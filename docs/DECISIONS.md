@@ -1631,13 +1631,22 @@ the goal stream's bytes:
 
 **The walker's bound.** `NativeCaptureLimits::max_dir_entries` defaults to 8192 (it was 4096), so
 one directory of 5 000 old sessions is enumerated whole on every poll and the new one is found.
-Past the bound, discovery stops for that poll and sets `discovery_capped` in the adapter's
-in-memory report and finish report only: nothing is written to the trace, so a session file past
-the bound can be missed without a record saying so. An old file costs one `fstatat` per poll and
-nothing else.
+Past the bound, discovery stops for that poll and the next poll resumes past the entries already
+examined. An old file costs one `fstatat` per cycle. The resume costs reads, not a constant: a
+capped poll reads past the cycle's examined prefix again (dirent reads only, so O(store) per poll)
+and re-opens the directories before the resume point to descend them. A literal component takes no
+entries, so a refused literal entry counts again in each pass of a capped cycle. An entry deleted mid-cycle
+before the resume point shifts the entries after it forward, so as many of them wait one more
+cycle.
+
+**Amended (2026-10-15, lane R):** discovery rotates, so every entry is examined within
+`ceil(n / max_dir_entries)` polls, and a file kept out for good (past `max_files`, or refused) is
+a stream-less `Gap { LimitExceeded }` when first seen and when the count grows (at most one a
+minute, the rest at the finish), as is a finish whose discovery cycle ran out of budget. An entry
+from before the run start is never counted, refused or not.
 
 **Reconsider when** two runs share a config home at the same time; a shared home holds more than
-8 192 entries in one directory; or a harness writes a session file without changing either its
+8 192 entries in one directory (a new file then takes several polls to reach); or a harness writes a session file without changing either its
 modification or its change time.
 
 ---

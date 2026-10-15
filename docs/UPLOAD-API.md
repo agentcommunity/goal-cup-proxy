@@ -8,7 +8,7 @@ tracer (`crates/goalcup-cli/src/upload/`), the local stand-in server the tests r
 (`server/worker/`).
 
 A rule change touches all of them: the Worker (`server/worker/src/`), its local database
-(`db-local.ts`), the SQL proposal (`server/worker/sql/proposed-goalcup-functions.sql`) and the Rust
+(`db-local.ts`), the SQL (the website's migration, copied to `server/worker/sql/goal-cup-tracer-upload.sql`) and the Rust
 stand-in. Then run the suite that holds the Worker to the real contract:
 `cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only -E 'test(/upload_worker/)'`
 (it needs `npm ci` in `server/worker`; `sh scripts/gate.sh full` runs it too, and says so if that is
@@ -349,11 +349,13 @@ The previous entry is not sealed or closed by this; it may still upload its wrap
 
 ## What the server does on its own
 
-A cron runs every 5 minutes. It does three things, in this order, and a step that fails is logged
+A cron runs every 5 minutes. It does four things, in this order, and a step that fails is logged
 and does not stop the next: it closes runs that are over (so a run's status is final without any
-call naming it), it records the GitHub commit at each deadline, and it queues the run emails. A
-tracer sees none of this. The Worker never sends mail: it writes rows to an outbox, and the
-website's mailer sends the emails and marks the rows sent. (While the maintenance switch is on the
+call naming it), it records the GitHub commit at each deadline, it queues the run emails in an
+outbox, and it sends them. A tracer sees none of this. Each outbox row is sent once through Resend
+(`server/worker/src/mail.ts`); the database writes the email, picks the member's address and checks
+suppression. A staging Worker is never given an address by the database and sends every email to
+its test address. (While the maintenance switch is on the
 cron does nothing, since no tracer can send a heartbeat.)
 
 **The commit at the deadline.** For a competition run that reached its deadline (not a replaced run,

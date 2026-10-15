@@ -36,6 +36,7 @@ mod m2_ipc_compose;
 mod m2_proxy_integration;
 mod m2_tls_connect;
 mod m2_websocket_relay;
+mod prep;
 mod process_handoff;
 mod seal_scan;
 mod start_launch;

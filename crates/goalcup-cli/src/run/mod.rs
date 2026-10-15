@@ -508,7 +508,7 @@ pub fn read(cfg: &Path, run_id: &str) -> Result<RunRecord, CliError> {
 
 /// Every run record under `<cfg>/runs`, in no order. A directory without a readable record is
 /// skipped: it is not a run this build can say anything about.
-fn all(cfg: &Path) -> Vec<RunRecord> {
+pub(crate) fn all(cfg: &Path) -> Vec<RunRecord> {
     let Ok(dirs) = std::fs::read_dir(runs_dir(cfg)) else {
         return Vec::new();
     };

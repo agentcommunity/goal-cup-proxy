@@ -186,7 +186,7 @@ fn connector_reports(
 /// The harness executable `goalcup start` would run: found on `env`'s `PATH` and checked, by the
 /// same function `start` calls. Any build passes: it is recorded, not pinned (D53). A harness
 /// that is not installed, or not a regular file, is a `Fail`: `start` would refuse it.
-fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
+pub(crate) fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
     let program = &c.loaded.manifest.capture.executable.program;
     match crate::launch::capture_executable(c, &c.loaded.manifest.capture, env) {
         Ok(resolved) => Check::pass(

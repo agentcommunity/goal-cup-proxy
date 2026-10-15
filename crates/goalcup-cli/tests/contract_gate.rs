@@ -1,4 +1,4 @@
-//! The contract this crate is built against: the exit ladder, the eight-command tree, the
+//! The contract this crate is built against: the exit ladder, the nine-command tree, the
 //! tracker's own configuration directory, and the `control.json` the daemon writes.
 //!
 //! `assert_cmd` is unavailable offline, so the binary is the one cargo built for this test
@@ -577,12 +577,12 @@ fn doctor_json_is_one_parseable_document_on_stdout_through_the_binary() {
 
 // ------------------------------------------------------------------ the capture CLI (D48)
 //
-// The binary is the M2 capture CLI: eight commands, and the removed V1 ones refuse by name
+// The binary is the M2 capture CLI: nine commands, and the removed V1 ones refuse by name
 // instead of vanishing into a clap usage error.
 
 /// The commands `goalcup --help` lists, in order, and nothing else.
 #[test]
-fn goalcup_lists_the_eight_commands_and_nothing_else() {
+fn goalcup_lists_the_nine_commands_and_nothing_else() {
     for flag in ["-h", "--help"] {
         let out = goalcup().arg(flag).output().unwrap();
         assert!(out.status.success());
@@ -597,7 +597,8 @@ fn goalcup_lists_the_eight_commands_and_nothing_else() {
         assert_eq!(
             listed,
             [
-                "start", "continue", "status", "entries", "seal", "doctor", "login", "upload"
+                "start", "continue", "status", "entries", "seal", "doctor", "login", "prep",
+                "upload"
             ],
             "`goalcup {flag}` lists the capture commands and nothing else"
         );

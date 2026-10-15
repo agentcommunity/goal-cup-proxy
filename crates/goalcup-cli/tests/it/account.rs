@@ -6,7 +6,9 @@
 //! gitconfig of the test's own. Nothing here reads `$HOME`, `~/.gitconfig` or a real token.
 
 use goalcup_cli::CliError;
-use goalcup_cli::account::github::{GithubSetup, check, clone_from, credential_helper};
+use goalcup_cli::account::github::{
+    GithubSetup, check, clone_from, clone_readonly_from, credential_helper,
+};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -1116,4 +1118,59 @@ fn an_account_handle_that_is_blank_or_invisible_is_refused() {
             "{handle:?} was accepted"
         );
     }
+}
+
+/// A practice run never pushes: its clone has the empty reset and no goalcup helper, and git
+/// can get no login for the repository from anywhere, a helper of the participant's included.
+#[test]
+fn a_practice_clone_has_the_empty_reset_and_no_goalcup_helper() {
+    let rig = rig();
+    let dest = rig.root.join("practice-work");
+    clone_readonly_from(&rig.git, &rig.source, &setup(), &dest).unwrap();
+
+    assert_eq!(
+        git_out(&rig, &dest, &["remote", "get-url", "origin"]).trim(),
+        REPO_URL
+    );
+    let helpers = git_out(
+        &rig,
+        &dest,
+        &[
+            "config",
+            "--local",
+            "--get-all",
+            "credential.https://github.com.helper",
+        ],
+    );
+    assert_eq!(helpers.lines().collect::<Vec<_>>(), vec![""], "{helpers:?}");
+    let config = std::fs::read_to_string(dest.join(".git/config")).unwrap();
+    assert!(!config.contains("git-credential"), "{config}");
+    assert!(!config.contains("GOALCUP_CONFIG_DIR"), "{config}");
+
+    // What `git push` would ask for: a global helper that would leak is reset for this clone,
+    // and nothing else answers, so git has no password to send.
+    std::fs::write(
+        &rig.gitconfig,
+        "[credential]\n\thelper = \"!f() { echo username=leak; echo password=leaked; }; f\"\n",
+    )
+    .unwrap();
+    let mut asked = Command::new(&rig.git)
+        .args(["credential", "fill"])
+        .current_dir(&dest)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    asked
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"protocol=https\nhost=github.com\npath=acme/empty-repo.git\n\n")
+        .unwrap();
+    let out = asked.wait_with_output().unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "git found a login: {said}");
+    assert!(!said.contains("password"), "{said}");
 }
