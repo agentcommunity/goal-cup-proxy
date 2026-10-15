@@ -277,7 +277,7 @@ pub struct HarnessManifest {
 pub struct CaptureSpec {
     /// The measured headless argument template: ends in `--` (the goal follows as one
     /// argument) unless [`Self::goal_flag`] names the slot. With [`Self::interactive`] there
-    /// is no slot, and the arguments start the harness's chat.
+    /// is no slot, and the arguments (none at all is allowed) start the harness's chat.
     pub args: Vec<String>,
     /// The harness runs in its normal chat mode in the participant's terminal and the
     /// participant types the prompt (D57): no goal slot, no credential, identity `none`.
@@ -1136,10 +1136,14 @@ impl HarnessManifest {
 
     fn check_args_and_goal(&self, origin: Origin) -> Result<(), ProtocolError> {
         let c = &self.capture;
-        if c.args.is_empty() || c.args.len() > MAX_CAPTURE_ARGS {
+        // An interactive harness may open its chat with no argument at all (D57).
+        if (c.args.is_empty() && !c.interactive) || c.args.len() > MAX_CAPTURE_ARGS {
             return Err(refuse(
                 "capture.args",
-                format!("must hold 1 to {MAX_CAPTURE_ARGS} arguments"),
+                format!(
+                    "must hold 1 to {MAX_CAPTURE_ARGS} arguments (0 to {MAX_CAPTURE_ARGS} with \
+                     `interactive`)"
+                ),
             ));
         }
         for a in &c.args {

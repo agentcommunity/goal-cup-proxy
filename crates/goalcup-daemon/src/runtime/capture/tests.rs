@@ -1563,7 +1563,7 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
             &manifest.capture,
             Path::new("/run"),
             Path::new("/config"),
-            None,
+            0,
         )
         .unwrap();
         let source = plan.scoped.expect("the shipped source is scoped");
@@ -1576,7 +1576,7 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
         &workload.capture,
         Path::new("/run"),
         Path::new("/config"),
-        None,
+        0,
     )
     .unwrap();
     assert_eq!(plan.initial_binding, NativeBinding::NotRequired);
@@ -1585,7 +1585,7 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
 }
 
 #[test]
-fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
+fn a_since_run_start_source_filters_from_the_run_start() {
     let text = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors/codex-cli/harness.toml"),
     )
@@ -1595,21 +1595,12 @@ fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
         "form = \"append_only\"\nsince_run_start = true",
     );
     let manifest = HarnessManifest::from_toml_str(&text).unwrap();
-    let error = native_plan(
-        &manifest.capture,
-        Path::new("/run"),
-        Path::new("/config"),
-        None,
-    )
-    .err()
-    .expect("no run start, no plan");
-    assert!(error.to_string().contains("native_since"), "{error}");
     // A start no clock can hold is refused, not a panic.
     let error = native_plan(
         &manifest.capture,
         Path::new("/run"),
         Path::new("/config"),
-        Some(u64::MAX),
+        u64::MAX,
     )
     .err()
     .expect("an unrepresentable start, no plan");
@@ -1618,7 +1609,7 @@ fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
         &manifest.capture,
         Path::new("/run"),
         Path::new("/config"),
-        Some(1_760_000_000),
+        1_760_000_000,
     )
     .unwrap();
     assert_eq!(
@@ -1631,10 +1622,15 @@ fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
         &shipped.capture,
         Path::new("/run"),
         Path::new("/config"),
-        Some(1_760_000_000),
+        1_760_000_000,
     )
     .unwrap();
     assert_eq!(plan.scoped.unwrap().modified_since, None);
+    // With no run start in the request, the floor is the row's own create time.
+    assert_eq!(
+        create_time_floor("2025-10-09T08:53:20Z").unwrap(),
+        1_760_000_000
+    );
 }
 
 #[test]
@@ -1652,7 +1648,7 @@ fn unknown_valid_native_hint_is_copied_byte_for_byte() {
         &manifest.capture,
         Path::new("/run"),
         Path::new("/config"),
-        None,
+        0,
     )
     .unwrap();
     assert_eq!(

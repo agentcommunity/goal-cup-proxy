@@ -3084,3 +3084,34 @@ fn resume_args_follow_the_argv_rules() {
     set(&mut t, &["capture"], "resume_args", strings(&many));
     refused(&t, PINNED, &["capture.resume_args", "64"]);
 }
+
+#[test]
+fn an_interactive_profile_may_have_no_args() {
+    // The harness opens its chat with no argument at all.
+    let mut t = chat();
+    set(&mut t, &["capture"], "args", strings(&[]));
+    admitted(&t, PINNED);
+    // `resume_args` still counts toward the one bound.
+    let many: Vec<String> = (0..65).map(|n| format!("a{n}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    set(&mut t, &["capture"], "resume_args", strings(&many));
+    refused(&t, PINNED, &["capture.resume_args", "64"]);
+    // A headless profile still needs one argument.
+    let mut t = codex();
+    set(&mut t, &["capture"], "args", strings(&[]));
+    refused(&t, PINNED, &["capture.args", "1 to 64"]);
+}
+
+/// Lane T's chat-mode connectors (D57), frozen as drafted: both pass the validator as pinned.
+#[test]
+fn the_chat_mode_connector_drafts_validate() {
+    for id in ["codex-cli", "claude-code-cli"] {
+        let text = fixture_text(&format!("{id}.chat-mode"));
+        let m = HarnessManifest::from_toml_str(&text).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert_eq!(m.id, id);
+        m.validate(PINNED).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert!(m.capture.interactive, "{id}");
+        assert!(m.capture.native[0].since_run_start, "{id}");
+        assert_eq!(m.capture.home.skills_dir.as_deref(), Some("skills"), "{id}");
+    }
+}

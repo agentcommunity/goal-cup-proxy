@@ -1060,7 +1060,8 @@ async fn a_capture_create_refuses_a_run_start_in_the_future() {
         .as_secs();
     for (name, since) in [
         ("millis", now * 1000),
-        ("ahead", now + 301),
+        // Well past the 300 s skew: the daemon reads its clock after this test does.
+        ("ahead", now + 330),
         ("max", u64::MAX),
     ] {
         let mut request = capture_create_request(&h, name);

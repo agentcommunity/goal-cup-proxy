@@ -1,0 +1,73 @@
+# Claude Code 2.1.283, capture profile (T14; D38, D39, D57). Recipe: docs/qualification/m2/launch-recipes.md §8.
+schema_version = 1
+id = "claude-code-cli"
+
+[capture]
+auth_hosts = ["platform.claude.com"]
+# Chat mode (D57): Claude Code opens in the participant's terminal and the participant types the
+# prompt. No model, effort, permission or MCP option (owner direction, 2026-10-14; D57): the
+# harness's own defaults and the participant's own settings. A fresh workspace asks once whether
+# the participant trusts the folder (measured 14 Oct 2026, docs/harnesses/claude-code-cli.md).
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
+args = []
+
+[capture.executable]
+program = "claude"
+version_args = ["--version"]
+
+[capture.env]
+SHELL = "/bin/zsh"
+DISABLE_AUTOUPDATER = "1"
+# Documented for unattended sessions (Claude Code 2.1.186+, raised defaults 2.1.199+): a dropped
+# connection, timeout or server error is retried up to 300 times (about three hours of backoff)
+# instead of 10, and 429/529 capacity errors indefinitely, so a network outage of minutes does
+# not end the run. A spend-limit or exhausted-credit 429 still fails at once.
+CLAUDE_CODE_RETRY_WATCHDOG = "1"
+
+[capture.platform.linux-x86_64.env]
+SHELL = "/bin/bash"
+
+[capture.platform.linux-aarch64.env]
+SHELL = "/bin/bash"
+
+# D38: HOME holds only Library/Keychains; CLAUDE_CONFIG_DIR is the shared isolated dir.
+[capture.home]
+run_home = "keychain_link"
+config_home = "shared"
+env = "CLAUDE_CONFIG_DIR"
+real_dirs = ["{user_home}/.claude"]
+# The goal-cup skill is put in `<CLAUDE_CONFIG_DIR>/skills/goal-cup/` before each launch.
+skills_dir = "skills"
+
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+# D57: no session id is passed at launch. The run's sessions are every transcript new or written
+# since the run started (a `claude --continue` appends to an old one), which is safe because
+# runs on the shared home are serialized (D39).
+[capture.identity]
+source = "none"
+
+[[capture.native]]
+name = "main"
+root = "{config_home}/projects"
+pattern = "*/*.jsonl"
+form = "append_only"
+protocol_hint = "claude-code-jsonl"
+since_run_start = true
+
+[capture.termination]
+strategy = "process_group"
+grace_seconds = 10
+
+[redaction]
+extra_patterns = [
+  { kind = "anthropic_billing_header", regex = 'x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+' },
+]
+
+[[capture.hosts]]
+host = "api.anthropic.com"
+evidence_paths = ["/v1/messages"]
+protocol_hint = "anthropic-messages"
