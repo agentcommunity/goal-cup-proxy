@@ -5,8 +5,9 @@
 
 No database and no R2: a directory stands in for the bucket (`--store`), a JSON file for the chunk
 index (`--index`), and, for the credentialed paths, a fake `psql` and a fake `curl` on PATH. The
-trace that gets chunked is a real corpus case of the verifier, so the rebuilt directory can go
-through the real `goalcup-verify` when a debug build exists (GOALCUP_VERIFY names another binary).
+trace that gets chunked is a real corpus case of the verifier, and the rebuilt directory goes
+through the real `goalcup-verify`: built by `setUpModule` (GOALCUP_VERIFY names another binary), and
+a failure to have one fails the run. The acks of a multi-chunk case are signed in pure Python.
 """
 
 from __future__ import annotations
@@ -20,15 +21,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-try:
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-except ImportError:  # pragma: no cover
-    Ed25519PrivateKey = None
-
 SCRIPT = Path(__file__).with_name("fetch-run.sh")
 REPO = Path(__file__).resolve().parent.parent
 CORPUS = REPO / "crates/goalcup-verifier/tests/fixtures/v5-corpus"
-VERIFY = Path(os.environ.get("GOALCUP_VERIFY") or REPO / "target/debug/goalcup-verify")
+# The strongest test runs the real verifier. It is built here (a no-op when current) unless
+# GOALCUP_VERIFY names one, and a missing verifier fails the run; it never skips.
+VERIFY = Path(os.environ.get("GOALCUP_VERIFY") or Path(os.environ.get("CARGO_TARGET_DIR") or REPO / "target") / "debug/goalcup-verify")
 RUN = "r0123456789abcdef"
 ENTRY = "e0123456789abcdef"
 ENTRY_2 = "efedcba9876543210"
@@ -42,6 +40,10 @@ FAKE_PSQL = """#!/bin/sh
 # Records its arguments and the SQL it was fed, then answers with the index.
 echo "$*" >>"$FAKE_LOG.psql.args"
 cat >"$FAKE_LOG.psql.sql"
+# What psql would connect with: the service file and its mode, which only psql may read.
+cp "$PGSERVICEFILE" "$FAKE_LOG.psql.service"
+find "$PGSERVICEFILE" -perm 600 | grep -q . && echo private >"$FAKE_LOG.psql.mode"
+echo "$PGSERVICE" >"$FAKE_LOG.psql.name"
 cat "$FAKE_INDEX"
 """
 
@@ -69,6 +71,69 @@ if not os.path.isfile(src):
 with open(src, "rb") as s, open(cfg["output"][0], "wb") as o:
     o.write(s.read())
 """
+
+
+# Ed25519 (RFC 8032), so the test signs acks with the corpus's server key and needs no package.
+_P = 2**255 - 19
+_Q = 2**252 + 27742317777372353535851937790883648493
+_D = -121665 * pow(121666, -1, _P) % _P
+
+
+def _add(a, b):
+    A, B = (a[1] - a[0]) * (b[1] - b[0]) % _P, (a[1] + a[0]) * (b[1] + b[0]) % _P
+    C, D = 2 * a[3] * b[3] * _D % _P, 2 * a[2] * b[2] % _P
+    E, F, G, H = B - A, D - C, D + C, B + A
+    return (E * F % _P, G * H % _P, F * G % _P, E * H % _P)
+
+
+def _mul(n, point):
+    result, addend = (0, 1, 1, 0), point
+    while n:
+        if n & 1:
+            result = _add(result, addend)
+        addend = _add(addend, addend)
+        n >>= 1
+    return result
+
+
+def _compress(point) -> bytes:
+    zinv = pow(point[2], _P - 2, _P)
+    x, y = point[0] * zinv % _P, point[1] * zinv % _P
+    return (y | ((x & 1) << 255)).to_bytes(32, "little")
+
+
+def _base():
+    y = 4 * pow(5, -1, _P) % _P
+    x2 = (y * y - 1) * pow(_D * y * y + 1, -1, _P) % _P
+    x = pow(x2, (_P + 3) // 8, _P)
+    if (x * x - x2) % _P:
+        x = x * pow(2, (_P - 1) // 4, _P) % _P
+    if x & 1:
+        x = _P - x
+    return (x, y, 1, x * y % _P)
+
+
+def ed25519_sign(seed: bytes, message: bytes) -> bytes:
+    h = hashlib.sha512(seed).digest()
+    a = (int.from_bytes(h[:32], "little") & ((1 << 254) - 8)) | (1 << 254)
+    public = _compress(_mul(a, _base()))
+    r = int.from_bytes(hashlib.sha512(h[32:] + message).digest(), "little") % _Q
+    big_r = _compress(_mul(r, _base()))
+    k = int.from_bytes(hashlib.sha512(big_r + public + message).digest(), "little") % _Q
+    return big_r + ((r + k * a) % _Q).to_bytes(32, "little")
+
+
+def setUpModule() -> None:
+    if os.environ.get("GOALCUP_VERIFY"):
+        return
+    built = subprocess.run(
+        ["cargo", "build", "--offline", "-p", "goalcup-verifier", "--bin", "goalcup-verify"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    if built.returncode != 0:
+        raise RuntimeError("cannot build goalcup-verify, which these tests run:\n" + built.stderr[-2000:])
 
 
 def sha256(data: bytes) -> str:
@@ -133,7 +198,7 @@ class FetchRunTest(unittest.TestCase):
             if n == chunks - 1 and original:
                 ack = original[-1]  # the real one, at the chain's end
             elif sign:
-                ack["server_signature"] = Ed25519PrivateKey.from_private_bytes(DEV_SEED).sign(ack_signing_bytes(ack)).hex()
+                ack["server_signature"] = ed25519_sign(DEV_SEED, ack_signing_bytes(ack)).hex()
             rows.append(
                 {
                     "offset": offset,
@@ -161,6 +226,9 @@ class FetchRunTest(unittest.TestCase):
             "entry_id": entry,
             "segment": 0,
             "receipt": json.loads(receipt.read_text()) if receipt.exists() else None,
+            "upload_offset": offset,
+            "final_seq": rows[-1]["last_seq"],
+            "final_head": rows[-1]["head"],
             **doc,
             "chunks": rows,
         }
@@ -179,8 +247,7 @@ class FetchRunTest(unittest.TestCase):
         return self.run_script("--index", str(self.index_path), "--store", str(self.store), *extra, target, str(self.out))
 
     def verify(self, directory: Path, *args: str) -> subprocess.CompletedProcess:
-        if not VERIFY.exists():
-            self.skipTest("no goalcup-verify build (cargo build -p goalcup-verifier)")
+        self.assertTrue(VERIFY.exists(), f"no goalcup-verify at {VERIFY}")
         return subprocess.run(
             [str(VERIFY), "--capture-integrity", str(directory), *args], capture_output=True, text=True, timeout=60
         )
@@ -212,7 +279,6 @@ class FetchRunTest(unittest.TestCase):
         self.assertEqual(report.returncode, 0, report.stderr)
         self.assertEqual(json.loads(report.stdout)["integrity"], "valid")
 
-    @unittest.skipUnless(Ed25519PrivateKey, "the cryptography package signs the acks")
     def test_several_chunks_join_in_offset_order_and_still_verify(self) -> None:
         case = CORPUS / "signed-receipt-key-agrees"
         self.write_index(self.entry_index("signed-receipt-key-agrees", ENTRY, 3, sign=True))
@@ -273,6 +339,9 @@ class FetchRunTest(unittest.TestCase):
         index = self.entry_index("sealed-websocket", ENTRY, 1)
         index["chunks"][0]["length"] -= 1
         self.write_index(index)
+        self.refused(self.fetch(), "the server holds")  # the stated end no longer matches
+        index["upload_offset"] = None  # without it, the chunk itself still shows the lie
+        self.write_index(index)
         self.refused(self.fetch(), "the chunk holds")
 
     def test_a_gap_in_the_offsets_is_refused(self) -> None:
@@ -286,6 +355,55 @@ class FetchRunTest(unittest.TestCase):
         del index["chunks"][0]
         self.write_index(index)
         self.refused(self.fetch(), "the next chunk starts at byte")
+
+    def test_a_chunk_row_listed_twice_is_refused(self) -> None:
+        index = self.entry_index("sealed-websocket", ENTRY, 2)
+        index["chunks"].insert(1, dict(index["chunks"][0]))
+        self.write_index(index)
+        self.refused(self.fetch(), "the next chunk starts at byte")
+
+    def test_an_index_cut_short_of_what_the_server_holds_is_refused(self) -> None:
+        index = self.entry_index("sealed-websocket", ENTRY, 3)
+        del index["chunks"][-1]  # contiguous from 0, but short of upload_offset
+        self.write_index(index)
+        self.refused(self.fetch(), "the server holds")
+        index = self.entry_index("sealed-websocket", ENTRY, 3)
+        index["upload_offset"] = None  # an older saved index: the final heartbeat still checks the tail
+        del index["chunks"][-1]
+        self.write_index(index)
+        self.refused(self.fetch(), "stop before the end")
+
+    def test_a_chunk_that_skips_sequence_numbers_is_refused(self) -> None:
+        index = self.entry_index("sealed-websocket", ENTRY, 3)
+        index["chunks"][1]["first_seq"] += 1
+        self.write_index(index)
+        self.refused(self.fetch(), "starts at seq")
+
+    def test_an_outdir_with_a_quote_in_it_is_refused(self) -> None:
+        self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))
+        result = self.run_script("--index", str(self.index_path), "--store", str(self.store), ENTRY, str(self.root / 'o"ut'))
+        self.assertEqual(result.returncode, 2)
+
+    def test_a_term_signal_leaves_no_temporary_directory(self) -> None:
+        import signal
+        import time
+
+        self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))
+        (self.bin / "zstd").write_text("#!/bin/sh\nsleep 30\n")
+        (self.bin / "zstd").chmod(0o755)
+        full = {**os.environ, "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}"}
+        proc = subprocess.Popen(
+            ["sh", str(SCRIPT), "--index", str(self.index_path), "--store", str(self.store), ENTRY, str(self.out)],
+            env=full, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        for _ in range(100):  # wait until the temporary directory exists
+            if self.out.exists() and list(self.out.glob(".fetch-run.*")):
+                break
+            time.sleep(0.05)
+        time.sleep(0.5)
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=20)
+        self.assertEqual(list(self.out.iterdir()), [])
 
     def test_an_object_missing_from_the_bucket_is_refused(self) -> None:
         index = self.entry_index("sealed-websocket", ENTRY, 2)
@@ -360,7 +478,47 @@ class FetchRunTest(unittest.TestCase):
         self.assertNotIn(RUN, sql, "the id is passed as a psql variable, never spliced into the SQL")
         args = (self.root / "fake.psql.args").read_text()
         self.assertIn(f"id={RUN}", args)
+        self.assertNotIn("db-password", args, "the password is not on psql's command line")
+        self.assertNotIn("db.invalid", args)
+        # The connection reached psql in a private service file instead.
+        service = (self.root / "fake.psql.service").read_text()
+        self.assertEqual(
+            service.splitlines(),
+            [f"[{(self.root / 'fake.psql.name').read_text().strip()}]", "host=db.invalid", "user=reader",
+             "password=db-password-must-never-appear", "dbname=postgres"],
+        )
+        self.assertTrue((self.root / "fake.psql.mode").exists(), "the service file is mode 600")
+        self.assertFalse(list(self.out.glob(".fetch-run.*")), "and it is gone afterwards")
         self.assertTrue((self.out / ENTRY / "chain.jsonl").is_file())
+
+    def test_tracing_the_script_shows_no_secret(self) -> None:
+        self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))
+        result = subprocess.run(
+            ["sh", "-x", str(SCRIPT), RUN, str(self.out)],
+            env={**os.environ, **self.fakes(), "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}"},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        self.assertIn("+ ", result.stderr, "it really was traced")
+        for secret in (TOKEN, "db-password", "reader:"):
+            self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_a_missing_credential_fails_without_echoing_the_others(self) -> None:
+        env = {**self.fakes()}
+        del env["CLOUDFLARE_API_TOKEN"]
+        self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))
+        result = subprocess.run(
+            ["sh", "-x", str(SCRIPT), RUN, str(self.out)],
+            env={**os.environ, **env, "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}"},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("CLOUDFLARE_API_TOKEN", result.stderr)
+        self.assertNotIn("db-password", result.stderr)
 
     def test_r2_is_read_with_the_token_out_of_the_command_line_and_the_output(self) -> None:
         self.write_index(self.entry_index("sealed-websocket", ENTRY, 2))
@@ -374,6 +532,17 @@ class FetchRunTest(unittest.TestCase):
             self.assertNotIn(TOKEN, text)
             self.assertNotIn("db-password", text)
         self.assertEqual((self.out / ENTRY / "seal.json").read_bytes(), (CORPUS / "sealed-websocket/seal.json").read_bytes())
+        cfg = (self.root / "fake.curl.cfg").read_text()
+        self.assertIn("'fail'", cfg)
+        self.assertIn("'max-time': ['600']", cfg)
+        self.assertIn("'connect-timeout': ['15']", cfg)
+
+    def test_the_rebuilt_files_are_private_to_the_organizer(self) -> None:
+        self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))
+        self.assertEqual(self.fetch().returncode, 0)
+        trace = self.out / ENTRY
+        for path in (trace, *trace.iterdir()):
+            self.assertEqual(path.stat().st_mode & 0o077, 0, path)
 
     def test_a_staging_bucket_is_named_in_the_url(self) -> None:
         self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))

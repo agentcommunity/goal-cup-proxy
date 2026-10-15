@@ -476,7 +476,10 @@ It needs `zstd`, `python3`, `psql` and `curl`, and in the environment `DATABASE_
 `CLOUDFLARE_API_TOKEN`. Use read-only credentials: a Postgres role that can only `SELECT` from
 `goal_cup_tracer.entries` and `goal_cup_tracer.chunks` (and has `USAGE` on the schema, and `BYPASSRLS` or a
 policy), and an R2 token with object read access only. The script runs its one query inside `BEGIN READ ONLY`
-and only sends `GET` requests to R2. It prints no credential and puts none on a command line. `--bucket
+and only sends `GET` requests to R2. It prints no credential (not under `sh -x` either) and puts none on a
+command line: the database URL goes to psql in a mode-600 service file, the token to curl on its stdin. Files
+it writes are private to you (`umask 077`). It also checks the index reaches the end the server holds
+(`upload_offset`, and the final heartbeat's seq and head when one was sent). `--bucket
 goalcup-traces-staging` reads the staging bucket, and a staging or test trace also needs `--dev-key`.
 `--index FILE` and `--store DIR` replace the database and R2 with a saved index and a mirror of the bucket.
 `scripts/test_fetch_run.py` tests it against such a fake.
@@ -513,7 +516,10 @@ first missing or unproven piece (`chain_unsealed`, `seal_manifest_missing` and t
 `valid` one or an incomplete one that is only about coverage (`gap_recorded`, `producer_recovered`,
 `producer_unclosed`). `seq` is the position the bad record should have had, which is also
 `validated_records` when the chain starts at 0. It is `null` for a problem in a document (the receipt,
-`seal.json`, `baseline.json`) or in the chain as a whole. A batch is then
+`seal.json`, `baseline.json`), in the chain as a whole, or on the first record of a chain pruned locally (its
+position is only its own claim). "First" is the order the verifier looks, not the lowest seq: the receipt, then
+the records in seq order, then the documents. A bad receipt is therefore named even when a record also breaks;
+`findings` lists both. A batch is then
 `for d in runs/*; do goalcup-verify --capture-integrity "$d" | jq -c '{entry_id, profile_id, integrity, first_failure}'; done`.
 
 **Deadline facts.** The report (schema 2 and later) also has `records_after_deadline` and

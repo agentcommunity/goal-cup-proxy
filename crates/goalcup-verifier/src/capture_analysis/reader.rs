@@ -223,8 +223,8 @@ pub struct CaptureIntegrityReport {
     /// value as `verified_ack.acked_at`, repeated here beside the other deadline facts.
     #[serde(default)]
     pub last_ack_at: Option<String>,
-    /// The entry the validated prefix belongs to: the `entry_id` every validated record carries.
-    /// `None` when no record validated.
+    /// The entry the validated prefix belongs to: the `entry_id` every validated record carries,
+    /// read from the first record that passed every check. `None` when no record validated.
     #[serde(default)]
     pub entry_id: Option<String>,
     /// The `profile_id` (connector id) of the first validated `Launch` record. `None` when the
@@ -238,7 +238,10 @@ pub struct CaptureIntegrityReport {
     pub first_failure: Option<FirstFailure>,
 }
 
-/// The first problem the scan found. An `invalid` report names its first violation; an
+/// The first problem the scan found, in the order the scan looks: the receipt first (before the
+/// chain, so `seq` is `None`), then the chain record by record in seq order, then the documents
+/// and whole-chain facts (`seq` `None`). So a bad receipt hides a bad record at seq 5 here; both
+/// are still in `findings`. An `invalid` report names its first violation; an
 /// `incomplete` one names its first missing or unproven piece (`chain_unsealed`,
 /// `seal_manifest_missing`, `chain_pruned_locally` and the like). The scan stops at the first
 /// bad record, so the code is also the reason `validated_records` stops where it does.
@@ -246,6 +249,8 @@ pub struct CaptureIntegrityReport {
 pub struct FirstFailure {
     /// The chain position the scan was at. For a record that failed it is the seq that record
     /// should have had (so the seq of the first bad record, which is not in `validated_records`).
+    /// A chain that starts above byte 0 (pruned locally) has no trusted position for its first
+    /// record, so a failure on that record is `None` too.
     /// `None` for a problem in a document and not in the chain: the receipt, `baseline.json`,
     /// `seal.json`, or a fact only the whole chain shows (`launch_missing`, `chain_unsealed`).
     pub seq: Option<u64>,
@@ -543,8 +548,10 @@ struct Scan<'k> {
     /// The profile of the first validated Launch.
     profile_id: Option<String>,
     /// The chain position of the record being read, for `first_failure`. `None` outside the
-    /// chain pass, and for a pruned chain's first record until its header is read.
+    /// chain pass, and for a pruned chain's first record, whose position is only its own claim.
     at: Option<u64>,
+    /// The entry of the first record that passed every check, for the report's `entry_id`.
+    validated_entry: Option<String>,
     /// The first `fail` (an invalid verdict) and the first `short` (an incomplete one).
     first_invalid: Option<FirstFailure>,
     first_incomplete: Option<FirstFailure>,
@@ -584,6 +591,7 @@ impl<'k> Scan<'k> {
             last_seq_at_or_before_deadline: None,
             profile_id: None,
             at: None,
+            validated_entry: None,
             first_invalid: None,
             first_incomplete: None,
         }
@@ -745,9 +753,6 @@ impl<'k> Scan<'k> {
                     ),
                 ));
             }
-            if self.pruned && self.validated_records == 0 {
-                self.at = Some(header.seq);
-            }
             if let Err(error) = self
                 .replay
                 .check_version(header.seq, header.protocol_version)
@@ -842,6 +847,9 @@ impl<'k> Scan<'k> {
             self.validated_records += 1;
             self.validated_bytes += read as u64;
             self.head.clone_from(&env.link.hash);
+            if self.validated_entry.is_none() {
+                self.validated_entry = Some(env.entry_id.clone());
+            }
             if self.profile_id.is_none()
                 && let EventBody::Capture {
                     record: CaptureRecord::Launch { profile_id, .. },
@@ -1196,7 +1204,7 @@ impl<'k> Scan<'k> {
                 .last_seq_at_or_before_deadline
                 .filter(|_| deadline_facts),
             last_ack_at,
-            entry_id: self.entry_id,
+            entry_id: self.validated_entry,
             profile_id: self.profile_id,
             first_failure,
         }

@@ -29,9 +29,13 @@
 #                    of the database
 #     --store DIR    read each object from DIR/<r2 key> instead of R2 (a mirror of the bucket)
 # --bucket NAME is the R2 bucket (default goalcup-traces; staging is goalcup-traces-staging).
-# Credentials are read from the environment only. They are never printed or passed on a command
-# line, and the script only ever reads (a SELECT, and GET requests).
+# Credentials are read from the environment only. They are never printed (tracing is switched off
+# first, so `sh -x` shows none) or passed on a command line, and the script only ever reads (a
+# SELECT, and GET requests). The database connection reaches psql through a private service file.
 set -eu
+# Before any secret is read, and for good: `sh -x` must not echo a credential.
+set +x
+umask 077
 
 bucket=goalcup-traces index= store=
 while [ $# -gt 0 ]; do
@@ -39,7 +43,7 @@ while [ $# -gt 0 ]; do
     --bucket) bucket=${2:?--bucket needs a bucket name}; shift ;;
     --index) index=${2:?--index needs a file}; shift ;;
     --store) store=${2:?--store needs a directory}; shift ;;
-    -h | --help) sed -n '2,33p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,35p' "$0"; exit 0 ;;
     -*) echo "fetch-run: unknown option $1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -54,6 +58,10 @@ case $id in
   r[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f] | \
   e[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
   *) echo "fetch-run: $id is not a run id or an entry id (r or e, then 16 lowercase hex digits)" >&2; exit 2 ;;
+esac
+case $out in
+  *'"'* | *\\* | *'
+'*) echo "fetch-run: <outdir> must not contain a quote, a backslash or a newline" >&2; exit 2 ;;
 esac
 case $bucket in
   '' | *[!A-Za-z0-9._-]*) echo "fetch-run: bad bucket name" >&2; exit 2 ;;
@@ -73,16 +81,46 @@ if [ -z "$store" ]; then
 fi
 
 mkdir -p "$out"
-tmp=$(mktemp -d "$out/.fetch-run.XXXXXX") && trap 'rm -rf "$tmp"' EXIT
+tmp=$(mktemp -d "$out/.fetch-run.XXXXXX") || { echo "fetch-run: cannot make a temporary directory in $out" >&2; exit 1; }
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 1' HUP INT TERM
 
 # 1. The chunk index: one JSON array, an element per entry, each with its chunks in offset order.
 if [ -n "$index" ]; then
   cp "$index" "$tmp/index.json"
 else
-  psql "$DATABASE_URL" -X -q -At -v ON_ERROR_STOP=1 -v id="$id" >"$tmp/index.json" <<'SQL'
+  # The URL goes into a private service file, not onto psql's command line (where `ps` shows it).
+  FETCH_RUN_URL=$DATABASE_URL python3 - "$tmp/pg_service.conf" <<'PY'
+import os, shlex, sys, urllib.parse
+
+url = os.environ["FETCH_RUN_URL"]
+kept = ("sslmode", "sslrootcert", "sslcert", "sslkey", "connect_timeout", "application_name")
+pairs = {}
+if url.startswith(("postgres://", "postgresql://")):
+    u = urllib.parse.urlsplit(url)
+    for key, value in (("host", u.hostname), ("port", u.port), ("user", u.username),
+                       ("password", u.password), ("dbname", u.path.lstrip("/"))):
+        if value not in (None, ""):
+            pairs[key] = urllib.parse.unquote(str(value))
+    for key, value in urllib.parse.parse_qsl(u.query):
+        if key in kept:
+            pairs[key] = value
+else:  # a "host=... user=..." connection string
+    for word in shlex.split(url):
+        key, _, value = word.partition("=")
+        pairs[key] = value
+if any("\n" in v for v in pairs.values()):
+    sys.exit("fetch-run: DATABASE_URL has a newline in it")
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w") as f:
+    f.write("[fetchrun]\n" + "".join(f"{k}={v}\n" for k, v in pairs.items()))
+PY
+  PGSERVICEFILE="$tmp/pg_service.conf" PGSERVICE=fetchrun \
+    psql -X -q -At -v ON_ERROR_STOP=1 -v id="$id" >"$tmp/index.json" <<'SQL'
 BEGIN READ ONLY;
 SELECT coalesce(jsonb_agg(jsonb_build_object(
   'run_id', e.run_id, 'entry_id', e.id, 'segment', e.segment, 'receipt', e.receipt,
+  'upload_offset', e.upload_offset, 'final_seq', e.final_seq, 'final_head', e.final_head,
   'seal_key', e.seal_key, 'seal_sha256', e.seal_sha256,
   'baseline_key', e.baseline_key, 'baseline_sha256', e.baseline_sha256,
   'chunks', (SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -137,6 +175,7 @@ for e in entries:
             sys.exit(f"fetch-run: entry {entry} has a bad document key or digest in the index")
     plan.append(f"E {entry} {dash(seal_key)} {dash(e.get('seal_sha256'))} {dash(baseline_key)} {dash(e.get('baseline_sha256'))}")
     expected = 0
+    prev_last, prev_head, chunks_seen = -1, None, 0
     acks = []
     for c in chunks:
         offset, length = c.get("offset"), c.get("length")
@@ -152,9 +191,24 @@ for e in entries:
                 f"fetch-run: entry {entry}: the next chunk starts at byte {offset} but the one before ends at {expected} "
                 "(the index has a gap or an overlap); nothing was written"
             )
+        first, last = c.get("first_seq"), c.get("last_seq")
+        if not (isinstance(first, int) and isinstance(last, int) and first <= last):
+            sys.exit(f"fetch-run: entry {entry} has a chunk row without a usable first_seq and last_seq")
+        if first != (prev_last + 1 if chunks_seen else 0):
+            sys.exit(
+                f"fetch-run: entry {entry}: the chunk at byte {offset} starts at seq {first}, "
+                f"not at {prev_last + 1 if chunks_seen else 0}; nothing was written"
+            )
+        prev_last, prev_head, chunks_seen = last, c.get("head"), chunks_seen + 1
         expected = offset + length
         plan.append(f"C {entry} {offset} {length} {c['sha256']} {c['r2_key']}")
         acks.append(json.dumps(c["ack"], separators=(",", ":")))
+    # The index must reach the end the server holds, or a cut-off tail would pass as a whole run.
+    held = e.get("upload_offset")
+    if held is not None and held != expected:
+        sys.exit(f"fetch-run: entry {entry}: the chunks end at byte {expected} but the server holds {held}; nothing was written")
+    if e.get("final_seq") is not None and (prev_last != e["final_seq"] or prev_head != e.get("final_head")):
+        sys.exit(f"fetch-run: entry {entry}: the chunks stop before the end the final heartbeat committed; nothing was written")
     d = os.path.join(meta_dir, entry)
     os.makedirs(d)
     with open(os.path.join(d, "acks.jsonl"), "w") as f:
@@ -180,7 +234,7 @@ get_object() {
     {
       printf 'url = "%s"\noutput = "%s"\n' "$url" "$2"
       printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN"
-      printf 'fail\nsilent\nshow-error\n'
+      printf 'fail\nsilent\nshow-error\nconnect-timeout = 15\nmax-time = 600\n'
     } | curl -K - || { echo "fetch-run: could not read $1 from bucket $bucket" >&2; return 1; }
   fi
 }

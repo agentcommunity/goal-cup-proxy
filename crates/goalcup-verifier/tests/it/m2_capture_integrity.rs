@@ -1058,6 +1058,23 @@ fn the_report_names_the_run_and_its_first_failure() {
     // Same run, so the identity is still read from the validated prefix.
     assert_eq!(report.profile_id.as_deref(), Some("codex-cli"));
 
+    // The receipt is read before the chain, so a bad receipt is named first, with no position,
+    // though the chain also breaks at seq 3. Both codes are in `findings`.
+    let dir = make_trace(&launched(complete_wire(None)), true);
+    std::fs::write(dir.path().join(RECEIPT_FILE), b"{}").unwrap();
+    let mut lines = raw_lines(dir.path());
+    lines.remove(3);
+    write_lines(dir.path(), &lines);
+    let (report, _) = scan(dir.path());
+    assert_eq!(
+        report.first_failure,
+        Some(FirstFailure {
+            seq: None,
+            code: "receipt_malformed".to_string()
+        })
+    );
+    assert!(has(&report, "link_seq_mismatch"), "{:?}", report.findings);
+
     // No Launch in the prefix: the profile is absent, never guessed.
     let dir = make_trace(&complete_wire(None), true);
     let (report, _) = scan(dir.path());
