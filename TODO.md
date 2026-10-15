@@ -8,9 +8,10 @@ this file is updated if behaviour changed ([AGENTS.md](AGENTS.md)). Ticket IDs b
 
 | When | What |
 |---|---|
-| 23 to 24 Oct 2026 | First tagged release and the Homebrew tap ([packaging/README.md](packaging/README.md)) |
-| 26 Oct | Freeze: `sh scripts/gate.sh full` passes. Fixes only after this |
-| ~28 Oct | Dry run with two or three friendly teams. Fixes only |
+| ~23 Oct 2026 | First tagged release, so dry runs use a real build. More releases follow as needed |
+| From the first release | Dry runs whenever everything runs; 10-minute tests any time. No fixed dry-run date |
+| 4 Nov 00:00 | Feature stop: after this, fixes only |
+| 6 Nov 12:00 | Last release, including the last connectors (connector cut-off) |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. Each run then has 168 hours |
 
 Owner decisions of 16 Oct 2026:
@@ -19,10 +20,23 @@ Owner decisions of 16 Oct 2026:
 - The second-harness rule stays: harness A must not start harness B (D10).
 - Support contact: goalcup@agentcommunity.org.
 - Windows means WSL2 for the event ([README](README.md#windows-use-wsl2)). Native Windows later.
+- Security contact: goalcup@agentcommunity.org too.
+- Emails: no throughput work here. The website is building one central mail system (hundreds of
+  mails every 5 seconds); the Worker moves to it later.
+- The lead agent applies production database migrations and Worker deploys (additive only, existing
+  storage intact). The owner approves terminal prompts.
+- The program version comes from one place and updates everywhere automatically (WP2).
+- Install works on macOS, Linux and WSL2 with one command; Homebrew is not the main path (WP2).
+- Time: the server is the clock. Every heartbeat answer carries the time left; the tracer counts
+  down from that and never trusts the machine's own date (WP11).
+- A harness is a plug-in module: its folder carries every harness-specific setting, and tests and
+  release discover it. No harness name by hand anywhere else (WP5, WP12).
+- The larger clean-ups run now, by parallel agents on separate files, before the feature stop:
+  the first release has not made any compatibility promise yet.
 - Undecided: the demo and questionnaire deadline, either 24 hours after the run or a fixed date
   around 15 Nov. [owner to confirm]
 
-## Before the release (by 23 Oct), in order
+## Work to the feature stop (4 Nov), in order
 
 Review 12 (16 Oct) produced this list from six code reviews and three test reviews. Each item names
 its source report, e.g. [C4-F4]; the reports are kept outside the repo (maintainer's machine,
@@ -35,21 +49,21 @@ fast` before every commit.
   macOS and Linux, then Intel Mac, x86_64 Linux and WSL2, then the edge cases in
   [OPERATING](docs/OPERATING.md).
 
-### WP1: Event window, mail throughput, event switch (server). Land first.
-- The events row is 16 h early. `goalcup-cup-2026` opens 6 Nov 16:00 UTC. Add a new website migration (agentCommunity_PAGE `supabase/migrations/`) that sets opens `2026-11-07T00:00:00Z` and closes `2026-11-08T00:00:00Z` (staging=false), and sets the confirmed dry-run row too. Copy it into `server/worker/sql/goal-cup-tracer-upload.sql`. Fix the stale comment at `:1788-1789`. Drop `[CONFIRM]` at `server/worker/README.md:236-239`. [C6-01, docs]
-- Mail is too slow. `server/worker/src/mail.ts:18` `NOTICES_PER_TICK = 20` gives 240/h, so a burst of ~1,500 "started" mails takes ~6 h. Raise it so 1,500 clear in ≤90 min (≥85 per tick). Each notice costs 3 subrequests, so stay under the plan's per-invocation limit. Read `runsForTick` once in `runTick`, not three times (`src/notices.ts:43,79,128`). Cap `closeRuns` (`:42-48`) at ~200 per tick. Update `README.md:215-223`. [docs, C6-13]
-- The `EVENT_ID` switch: `wrangler.toml:37-40` still says `goalcup-dryrun-2026`. Write a dated runbook step: "~30 Oct: set `goalcup-cup-2026`, `npm test`, `npx wrangler deploy`, open one practice and one test run, check the R2 prefix `traces/goalcup-cup-2026/`." Mark it as a pre-approved freeze exception. [C6-02]
+### WP1: Event window and event switch (server). Land first.
+- The events row is 16 h early. `goalcup-cup-2026` opens 6 Nov 16:00 UTC. Add a new website migration (agentCommunity_PAGE `supabase/migrations/`) that sets opens `2026-11-07T00:00:00Z` and closes `2026-11-08T00:00:00Z` (staging=false), and opens the dry-run row from the first release to 6 Nov 00:00 UTC, so a dry run can start any day. Copy it into `server/worker/sql/goal-cup-tracer-upload.sql`. Fix the stale comment at `:1788-1789`. Drop `[CONFIRM]` at `server/worker/README.md:236-239`. [C6-01, docs]
+- The `EVENT_ID` switch: `wrangler.toml:37-40` still says `goalcup-dryrun-2026`. Write a dated runbook step: "~30 Oct: set `goalcup-cup-2026`, `npm test`, `npx wrangler deploy`, open one practice and one test run, check the R2 prefix `traces/goalcup-cup-2026/`." Do it on 6 Nov with the last release. [C6-02]
 - Turn on Workers Logs: `[observability] enabled = true` at top level and in `[env.staging]`, pinned in `test/config.test.ts`. [C6-04]
 - Why: the wrong window refuses real starts after 7 Nov 16:00 UTC. A missed switch writes cup runs outside the 180-day bucket lock.
-- Accept: `select id,start_window_opens,start_window_closes from goal_cup_tracer.events` shows the new values. `npm --prefix server/worker test` passes, with a test for the per-tick cap.
+- Accept: `select id,start_window_opens,start_window_closes from goal_cup_tracer.events` shows the new values. `npm --prefix server/worker test` passes.
 
 ### WP2: Release pipeline shakedown. Start 17 Oct; four runners are untested.
-- Version: workspace `Cargo.toml:13` says `0.1.0` while tag `v0.5.0` exists. Set `0.6.0`. It feeds `verifier_version`, `tracer_version` and `DAEMON_VERSION`. Also fix the stale `v0.5.1` at `:15` and "dev-only signer" at `:82`. [C5-F5, C6-05, C6-15, docs]
+- Version, one source: workspace `Cargo.toml:13` says `0.1.0` while tag `v0.5.0` exists. Make the workspace version the only place a version is written; every crate, binary, report field (`verifier_version`, `tracer_version`, `DAEMON_VERSION`), the Worker's expected tracer version if any, the install script and the release notes read it. `scripts/release.sh <x.y.z>` sets it, updates `Cargo.lock`, commits and tags; `release.yml` refuses a tag that differs from it. Start at `0.6.0`. Also fix the stale `v0.5.1` at `:15` and "dev-only signer" at `:82`. [C5-F5, C6-05, C6-15, docs]
 - Ship every connector. `scripts/package-release.sh:38` archives only codex-cli and claude-code-cli. Archive all of `connectors/`, then remove ids named on one line, `UNSHIPPED="hermes-cli"` (H-21). Fix the comment at `:11-13`, `packaging/README.md:28,38-39`, and SKILL step 12 ("ships once merged"). [C3-F2, C6-06]
-- Run `gh workflow run release.yml` by hand now. It publishes nothing. Fix what fails (`macos-15-intel`, `ubuntu-22.04-arm`, `third-party-licenses.py`). Create `agentcommunity/homebrew-tap` (`packaging/README.md:71-76`). [C6-05]
+- Run `gh workflow run release.yml` by hand now. It publishes nothing. Fix what fails (`macos-15-intel`, `ubuntu-22.04-arm`, `third-party-licenses.py`). [C6-05]
+- Install for every platform: an `install.sh` published with each release (`curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`). It picks the build for macOS arm64/x86_64 or Linux arm64/x86_64 (WSL2 is Linux), checks the SHA-256, and installs to `~/.local/bin`. A download by `curl` is not quarantined on macOS, so unsigned builds run. Drop the Homebrew tap from the plan (maybe later, Mac-only nicety). Native Windows later gets an `install.ps1`. Update README, PARTICIPANT-GUIDE and the setup skill.
 - Put the Worker tests in the gate: add `step npm --prefix server/worker test` in the `full` block of `scripts/gate.sh:89`, and assert it in `scripts/test_gate.py::test_full_runs_everything`. Keep it out of ci.yml, because CI stays lean. [C6-03, T3-F2]
 - `.github/CODEOWNERS`: add `/server/ @nembal`. In `ci.yml:8-10,28-30`, drop `v1/trunk`. [C6-11, C6-15]
-- Accept: the manual release run is green on all four targets. The tarball holds every non-excluded `connectors/*`. `python3 -m pytest scripts/test_gate.py` passes.
+- Accept: the manual release run is green on all four targets, and `install.sh` installs it on macOS and Linux. The tarball holds every non-excluded `connectors/*`. `python3 -m pytest scripts/test_gate.py` passes.
 
 ### WP3: Participant-facing CLI and daemon fixes
 - `goalcup status` with no id can mix two runs. `cli/src/commands/status.rs:154-158` takes the newest run, while `:221-224` pins the newest entry. Use `crate::run::of_entry(cfg, &record.entry_id)`. [C4-F4]
@@ -109,24 +123,50 @@ fast` before every commit.
 - SQL↔Worker parity test in `server/worker/test/supabase.test.ts`: every `#rpc` name and `p_` argument in `db-supabase.ts` exists in the SQL. [T3-F1]
 - Shared signing vectors: commit `server/worker/test/vectors/signing.json`. `protocol/tests/it/signing_vectors.rs` asserts the same hex, and `sign.test.ts` reads that file. [T3-F3]
 - In `verifier/tests/it/m2_capture_integrity.rs`, add the tamper-table test `line_level_tampering_names_its_finding`. Add a rotated-corpus test to `v5_corpus.rs`. [T3-F4, T3-F5]
-- Deadline facts: in `verifier/src/capture_analysis/reader.rs` `Scan`, record `records_after_deadline`, `last_seq_at_or_before_deadline` and `last_ack_at`, with a schema bump. This is a fact, not an exit change. It may slip past the freeze (the verifier is not on the participant path), but it must land before judging. [C5-F1]
+- Deadline facts: in `verifier/src/capture_analysis/reader.rs` `Scan`, record `records_after_deadline`, `last_seq_at_or_before_deadline` and `last_ack_at`, with a schema bump. This is a fact, not an exit change. It may slip past the feature stop (the verifier is not on the participant path), but it must land before judging. [C5-F1]
 - Add `findings: …` to the stderr summary (`bin/goalcup-verify.rs:109-113`; its pin is at `m2_capture_integrity.rs:2885`). Add a table of finding codes to OPERATING. [C5-F4, C5-F3b]
 - Accept: `npm --prefix server/worker test` passes, and so does `cargo nextest run --offline -p goalcup-verifier -p goalcup-protocol`.
 
-### WP10: Release cut (23–24 Oct)
-- Run `gate.sh full` once (including `upload_worker` and `npm test`), then `scripts/linux-check.sh`. Tag `v0.6.0` and run the release. Copy `goalcup.rb` into the tap.
-- Accept: `brew install agentcommunity/tap/goalcup && brew test goalcup` works on clean Apple Silicon and Intel Macs. `goalcup doctor --harness all` lists every shipped connector. The release notes list the pinned ids.
+### WP11: The server is the clock
+- Today: the server stamps `official_start` and `deadline_at` at open, and each heartbeat answer
+  says `stop` and repeats `deadline_at` (`server/worker/src/runs.ts:93-97`). Offline, the tracer
+  counts the run's length on a clock that keeps running while the machine sleeps
+  (`cli/src/upload/uploader.rs` `LocalDeadline`). The weak spot: a continued segment
+  (`LocalDeadline::until`) subtracts the machine's own date, which the participant can change.
+- Change: every heartbeat answer (and the open and continue answers) adds `seconds_left`, computed on
+  the server. On each answer the tracer resets its countdown to `seconds_left` on the continuous
+  clock. It never reads the machine's date for the deadline. During an outage it keeps counting
+  down from the last answer; when the server comes back its answer wins.
+- Accept: a stand-in test where the machine's date jumps a day back mid-run still stops on time;
+  a chat-mode run stops on the server's `stop` (WP4).
 
-## Freeze rule
+### WP12: A harness is one plug-in folder
+- Everything harness-specific lives in `connectors/<id>/`: launch, chat mode, env, CA variables,
+  redaction rules, provider hosts, native session files. Core reads it; core never names a harness.
+- Move the redaction rules and the CA-variable list from Rust tables into manifest data
+  (After-event items 3 and 4 below; signed daemon change, fine before the first release).
+- Tests and the release find connectors by reading `connectors/` (WP5); a per-connector contract
+  test runs for every folder (item 7 below).
+- Accept: a scratch connector folder for a fifth harness passes `check-connector.sh` and the contract
+  test, ships in the release tarball, with zero Rust edits.
 
-After 26 Oct, only fixes go in: dry-run bugs, flakes and docs. No refactors, features, or schema or connector-shape changes. Pre-approved exceptions: the events-row migration, the EVENT_ID switch with a Worker redeploy (~30 Oct), and a point release for a connector bug. Every change still passes `gate.sh fast`. Worker changes also pass `npm test`.
+### WP10: Release cut (first ~23 Oct, last 6 Nov 12:00 UTC)
+- Run `gate.sh full` once (including `upload_worker` and `npm test`), then `scripts/linux-check.sh`. Run `scripts/release.sh 0.6.0` and the release workflow.
+- Accept: `install.sh` works on clean Apple Silicon and Intel Macs and on Linux arm64/x86_64. `goalcup doctor --harness all` lists every shipped connector. The release notes list the pinned ids.
+
+## Feature stop
+
+Until 4 Nov 00:00 UTC anything on this list may land. From 4 Nov, only fixes: bugs from dry runs and
+10-minute tests, flakes and docs. Connectors may still land until the last release on 6 Nov 12:00
+UTC. Every change passes `gate.sh fast`; Worker changes also pass `npm test`; every release passes
+`gate.sh full` and `scripts/linux-check.sh`.
 
 ## Parked
 
 - Native Windows.
 - An admin page. For 7 Nov, organizers use the Supabase table view.
-- Signing and notarizing the macOS tarballs. Homebrew does not quarantine what it downloads, so the
-  brew path runs without them.
+- Signing and notarizing the macOS tarballs. A `curl` download is not quarantined, so the
+  install script runs them without it.
 - Full registration and team system.
 - New harnesses: builders bring them ([HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md)).
 - Speed up the two P1 redaction tests that each run over 30 s
@@ -134,7 +174,10 @@ After 26 Oct, only fixes go in: dry-run bugs, flakes and docs. No refactors, fea
   `capture_redaction_extra::seeded_random_chunking_matches_the_oracle_with_extra_patterns`). They
   floor the fast gate.
 
-## After the event (ordered)
+## Larger clean-ups (parallel agents, before the feature stop where safe)
+
+Run these in parallel worktrees, two writers never on the same files. Items 3 and 7 are WP12.
+Anything not done by 4 Nov moves to after the event.
 
 1. **Run lifecycle module.** Add a persisted `enum StopReason` that falls back to the old strings, and `run/lifecycle.rs` `phase()`, read by status, reserve and finish. Add `HarnessState::Exited.code`. Move `RunMode` to `run/`. Rename the wire field `reserve_bytes` to `chain_quota_bytes` with an alias. [C4-F1, F10, F11]
 2. **Split `start.rs` and `uploader.rs`.** `commands/start/` plus `crate::shared_home`, and `uploader.rs` in five parts, keeping `pub use`. After the move: an Undo guard, `StartCx`, `SealArgs`, `TestDoors` and shared helpers. [C4-F2, F3, F8, F9, F12]
@@ -164,18 +207,15 @@ These look odd but are right. Do not "fix" them.
 - The refusal order in `continue_run.rs`, seal never signalling, doctor tolerating a missing daemon, the `practice`/`test` bools, `GiveBack` with `pending-open.json`, and `LONGEST_RUN`. [C4]
 - The v5 corpus (add cases, never regenerate to pass), `chain_golden` reading the spike fixtures, the envelope-bytes pin, and the serde-wording pin. [T3]
 - The test layout: `it`/`full` binaries, nextest one-process-per-test, the self dev-dependency with a feature, the three process-global binaries, the child-half pattern, the kit cases, and independent m2 oracles. [T1, T2]
-- Lean `ci.yml`, the manual `linux-x86_64.yml`, the manual release run, the hand-updated tap, and `with-deepseek-key.sh`. [T1, C6]
+- Lean `ci.yml`, the manual `linux-x86_64.yml`, the manual release run, and `with-deepseek-key.sh`. [T1, C6]
 - Worker: the staging block repeats every var and sets `routes = []`, prod `TEST_EVENT_ID`, the two-layer test fence, `/v1/health` before maintenance, a retried chunk answered first, and `db-local.ts`. [C6]
 - The Rust upload stand-in until After-event step 8 decides. Negative-window sleeps (give them a helper, do not remove them). The 25 s SIGSTOP scenario. [T1, C6]
 - `--dev-key` alongside the one pinned key, and the report-file rules. Harness names in comments are examples only. [C5, C2, C4]
 
 ## Open owner questions
 
-1. What is the dry-run window? The row says 28 Oct 16:00 UTC + 24 h and is unconfirmed. It blocks the WP1 migration.
-2. Who applies the production DB migrations and Worker deploys during the freeze? Is the ~30 Oct EVENT_ID switch pre-approved?
-3. Which address is the security contact in `SECURITY.md`: goalcup@ or another? (WP8)
-4. What are the connector cut-off date and the shipped list for 0.6.0? Does hermes-cli stay unshipped (H-21)? (WP2, WP5)
-5. Who creates `agentcommunity/homebrew-tap`? It needs org rights. Is `0.6.0` the version? That is the default if there is no answer.
+1. The demo and questionnaire deadline: 24 hours after the run, or a fixed date around 15 Nov.
+2. Is hermes-cli (Hermes Agent) shipped to participants? It is in `connectors/` but held back (H-21).
 
 ## Known issues
 
