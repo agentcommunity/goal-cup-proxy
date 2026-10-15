@@ -120,7 +120,7 @@ impl Watching {
         if let Some(thread) = self.thread.take()
             && thread.join().is_err()
         {
-            eprintln!("goalcup: disk: the disk watch stopped unexpectedly");
+            crate::host_log::say("disk: the disk watch stopped unexpectedly");
         }
         let reserve = self.reserve.take()?;
         Arc::try_unwrap(reserve)
@@ -161,14 +161,14 @@ pub fn watch_beside(watch: Watch) -> Watching {
                             .map_or(0, |(_, offset)| offset.load(Ordering::SeqCst))
                     },
                     Instant::now(),
-                    &mut |line| eprintln!("goalcup: {line}"),
+                    &mut crate::host_log::say,
                 );
                 let stop_now = tick.step(
                     &mut *reserve.lock().unwrap_or_else(PoisonError::into_inner),
                     &policy,
                     on_disk,
                     failing,
-                    &mut |line| eprintln!("goalcup: {line}"),
+                    &mut crate::host_log::say,
                 );
                 if stop_now {
                     let _ = stop.send(DISK_STOP_REASON.to_string());
@@ -200,7 +200,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
     let thread = match thread {
         Ok(thread) => Some(thread),
         Err(error) => {
-            eprintln!("goalcup: disk: the disk watch could not start ({error})");
+            crate::host_log::say(&format!("disk: the disk watch could not start ({error})"));
             None
         }
     };

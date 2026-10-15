@@ -1,11 +1,22 @@
-//! `goalcup start --goal-file` — a protocol-v5 local capture run: the preflight, the daemon's
-//! capture, the launch through the recording proxy, and the local seal.
+//! `goalcup start` — a protocol-v5 capture run: the preflight, the daemon's capture, the launch
+//! through the recording proxy, and the seal.
 //!
-//! No grant, no arming. The harness is launched headless through the recording proxy, which
-//! runs inside this process, and the run ends with a local seal (see `capture` below for the
-//! order). A plain `goalcup start` without `--goal-file` was the V1 transcript path, which this
-//! tree no longer carries (D48); clap marks `--goal-file` required, and `started` refuses the
-//! rest.
+//! No grant, no arming. The harness is launched through the recording proxy, which runs inside
+//! this process, and the run ends with a seal (see `capture` below for the order). A headless
+//! connector takes `--goal-file`, whose text is the harness's one goal. A chat-mode connector
+//! (D57: `[capture] interactive = true`) takes none: the harness runs in its normal chat mode in
+//! the participant's own terminal and the participant types the prompt.
+//!
+//! # Chat mode: the terminal is the harness's
+//!
+//! From the launch line to the harness's exit `goalcup start` writes nothing to the terminal:
+//! every message goes to `<cfg>/runs/<run_id>/host.log` and the run's `state.json`
+//! ([`crate::host_log`]). It catches what the terminal sends the foreground group it shares with
+//! the harness (Ctrl-C, Ctrl-\, Ctrl-Z, a closed window) and lives on through each
+//! ([`goalcup_platform::terminal::Shield`]), so the run is sealed and uploaded however the
+//! harness ended. Once the harness has exited it speaks again, if the terminal is still there,
+//! and it keeps absorbing a hangup until the run's wrap-up is done: a window closed after the
+//! harness exited must not cut the seal or the upload short.
 //!
 //! # A run on the server
 //!
@@ -77,9 +88,14 @@ pub struct StartOptions {
     /// door ([`crate::preflight::DEV_DOOR`]), typed by a human and never set by a shipped
     /// code path.
     pub dev: bool,
-    /// `--goal-file`: a local protocol-v5 capture run, launched headless with this file's
-    /// text as its one goal. Required: `None` is refused.
+    /// `--goal-file`: this file's text is a headless connector's one goal. A headless connector
+    /// refuses `None`, and a chat-mode one (D57) refuses `Some`: its participant types the
+    /// prompt in the harness.
     pub goal_file: Option<PathBuf>,
+    /// Where a run with no goal file (a chat-mode connector, D57) makes its own folder: the
+    /// directory `goalcup start` was run from, which `main.rs` reads. `None` reads this
+    /// process's current directory. A run with a goal file makes it beside that file.
+    pub run_folder: Option<PathBuf>,
     /// The sizes of the run's disk reservation and how often it is watched. The shipped values
     /// ([`DiskPolicy::default`]); only a test build can name others.
     pub disk: DiskPolicy,
@@ -170,20 +186,20 @@ fn started(
     //    command can act on one.
     crate::arming::watch_for_interrupt();
 
-    if let Some(goal_file) = &opts.goal_file {
-        let roots = roots.unwrap_or_else(UpstreamRoots::webpki);
-        return capture(client, connectors, cfg, env, opts, goal_file, roots, out);
-    }
-
-    // D48: the plain `goalcup start` (no `--goal-file`) was the V1 transcript path, which this
-    // tree no longer carries. Clap marks `--goal-file` required, so this is a backstop a caller
-    // of `start_with` can still reach.
-    let _ = (client, connectors, cfg, env, out);
-    Err(CliError::Refused(
-        "`goalcup start` needs a goal file: \
-         `goalcup start --harness <id> --goal-file <file>`."
-            .to_string(),
-    ))
+    let roots = roots.unwrap_or_else(UpstreamRoots::webpki);
+    // Every line of the run goes through the one switch that keeps a chat-mode harness's
+    // terminal clear (`crate::host_log`); a headless run's output is unchanged by it.
+    let mut routed = crate::host_log::Routed::new(out);
+    capture(
+        client,
+        connectors,
+        cfg,
+        env,
+        opts,
+        opts.goal_file.as_deref(),
+        roots,
+        &mut routed,
+    )
 }
 
 /// One line, because a participant who pressed Ctrl-C is not reading a page.
@@ -317,7 +333,9 @@ struct CaptureRun<'a> {
     cfg: &'a Path,
     env: &'a BTreeMap<String, String>,
     opts: &'a StartOptions,
-    goal_file: &'a Path,
+    /// The folder the run's own folder is made in: the goal file's, or for a chat-mode run the
+    /// one `goalcup start` was run from.
+    beside: &'a Path,
     connector: &'a HarnessConnector,
     profile: &'a CaptureSpec,
     /// Set when an abandon was refused, so some of what the start made is still there: the
@@ -327,7 +345,8 @@ struct CaptureRun<'a> {
 
 /// Everything a capture run decides, and every refusal it makes, before anything is created.
 struct CapturePrep {
-    goal: Vec<u8>,
+    /// The goal file's bytes; `None` for a chat-mode run, whose participant types the prompt.
+    goal: Option<Vec<u8>>,
     /// The provider key, if the profile names one. Taken (and so dropped) once the tees hold what
     /// they need: nothing after that reads the key from here.
     secret: Option<crate::launch::ChildSecret>,
@@ -587,6 +606,39 @@ struct Forked<'a> {
     /// The watch tick, which has the reservation from the harness's release to just before the
     /// reservation is released.
     watching: Option<crate::run::watch::Watching>,
+    /// A chat-mode run's hold on the terminal, from just before the release to the end of the
+    /// run's wrap-up.
+    chat: Option<ChatTerminal>,
+}
+
+/// What a chat-mode run holds while the harness owns the terminal (D57): the terminal's signals
+/// absorbed, and the host quiet.
+struct ChatTerminal {
+    shield: goalcup_platform::terminal::Shield,
+    quiet: crate::host_log::Quiet,
+}
+
+impl ChatTerminal {
+    /// Taken just before the release, once the launch line is out.
+    fn take(run_dir: &Path) -> Result<ChatTerminal, CliError> {
+        let shield = goalcup_platform::terminal::Shield::take().map_err(|source| CliError::Io {
+            path: "the terminal's signals".to_string(),
+            source,
+        })?;
+        Ok(ChatTerminal {
+            shield,
+            quiet: crate::host_log::quiet(run_dir),
+        })
+    }
+
+    /// The harness has exited: Ctrl-C, Ctrl-\ and Ctrl-Z are this command's own again, and it
+    /// speaks again if the terminal is still there. A hangup stays absorbed until the wrap-up is
+    /// done ([`Drop`]), so a window closed now does not cut the seal or the upload short.
+    fn harness_exited(&mut self) {
+        self.shield
+            .release(&[libc::SIGINT, libc::SIGQUIT, libc::SIGTSTP]);
+        self.quiet.harness_exited();
+    }
 }
 
 /// What the uploader of a run opened on a server starts from.
@@ -645,6 +697,7 @@ impl Forked<'_> {
             info,
             proxied,
             give_back,
+            mut chat,
             ..
         } = self;
         // The harness is ended at once and nothing was uploaded: the run goes back.
@@ -652,6 +705,10 @@ impl Forked<'_> {
             give_back.give();
         }
         let end = crate::launch::end_released_child(child, handed);
+        // Ended: the terminal is this command's again.
+        if let Some(chat) = chat.as_mut() {
+            chat.harness_exited();
+        }
         let _ = say(out, &end.announcement(&info.entry_id));
         let deadline = std::time::Instant::now() + crate::finish_budget();
         if let Some(proxied) = proxied {
@@ -677,6 +734,8 @@ impl Forked<'_> {
 /// What the gate holds for the phases after the fork.
 struct Gate {
     plan: LaunchPlan,
+    /// A chat-mode launch (D57): the harness takes the terminal at its release.
+    chat: bool,
     /// What the harness reported for its `version_args`, or `unreported` (D53).
     harness_version: String,
     goal_stream: goalcup_protocol::capture::StreamKey,
@@ -778,21 +837,38 @@ fn capture(
     cfg: &Path,
     env: &BTreeMap<String, String>,
     opts: &StartOptions,
-    goal_file: &Path,
+    goal_file: Option<&Path>,
     roots: UpstreamRoots,
     out: &mut dyn std::io::Write,
 ) -> Result<StartOutcome, CliError> {
-    let goal = read_goal(goal_file)?;
+    let goal = goal_file.map(read_goal).transpose()?;
     // A run past its deadline and a day has sent what it will: its reservation goes back.
     release_stale(cfg, &artifact_root(cfg), crate::run::now_unix());
     let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;
     let profile = &c.loaded.manifest.capture;
+    // A chat-mode connector takes no goal file and a headless one needs one: refused before
+    // anything else is asked or made.
+    goal_file_fits(
+        &c.loaded.manifest.id,
+        profile.interactive,
+        goal_file.is_some(),
+    )?;
+    let beside = match goal_file {
+        Some(goal_file) => beside_goal(goal_file),
+        None => match &opts.run_folder {
+            Some(folder) => folder.clone(),
+            None => std::env::current_dir().map_err(|source| CliError::Io {
+                path: "the current directory".to_string(),
+                source,
+            })?,
+        },
+    };
     // With a server: the prep checks, before any other work and before the participant is asked
     // for anything.
     let serving = uploading(
         cfg,
         env,
-        goal_file,
+        &beside,
         opts.practice,
         profile.credential.is_some(),
         out,
@@ -804,7 +880,7 @@ fn capture(
         cfg,
         env,
         opts,
-        goal_file,
+        beside: &beside,
         connector: &c,
         profile,
         uncleaned: &uncleaned,
@@ -853,22 +929,100 @@ fn capture(
     finished
 }
 
+/// [`goal_file_fits`] for the connector `opts` names, loaded from `connectors`: what `main.rs`
+/// asks before it starts a daemon. `start_with` asks it again of the connector it loads.
+pub fn goal_file_fits_connector(connectors: &Path, opts: &StartOptions) -> Result<(), CliError> {
+    let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;
+    goal_file_fits(
+        &c.loaded.manifest.id,
+        c.loaded.manifest.capture.interactive,
+        opts.goal_file.is_some(),
+    )
+}
+
+/// A chat-mode connector (D57) with a goal file, or a headless one without, refused in one
+/// sentence that says what to type instead. Nothing is created before it.
+fn goal_file_fits(id: &str, interactive: bool, has_goal_file: bool) -> Result<(), CliError> {
+    match (interactive, has_goal_file) {
+        (true, true) => Err(CliError::Refused(format!(
+            "`{id}` runs in chat mode: the harness opens in this terminal and you type the \
+             prompt there, so it takes no `--goal-file`. Run `goalcup start --harness {id}`. \
+             Nothing was created."
+        ))),
+        (false, false) => Err(CliError::Refused(format!(
+            "`{id}` runs headless and needs a goal file: `goalcup start --harness {id} \
+             --goal-file <file>`. Nothing was created."
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// Make the folder each native source that reads from the run's start (D57) is rooted at, if it
+/// is not there yet (`<config_home>/sessions` before a fresh home's first session): empty, mode
+/// 0700, inside the harness's isolated home. The daemon opens such a root when it creates the
+/// entry and refuses one that does not exist; a source scoped by an `{id}` is made by the
+/// daemon itself, and nothing else is made here.
+fn make_native_roots(
+    profile: &CaptureSpec,
+    run_home: &Path,
+    config_home: &Path,
+) -> Result<(), CliError> {
+    for native in profile.native.iter().filter(|n| n.since_run_start) {
+        let root = &native.root;
+        let dir = if root == "{config_home}" {
+            config_home.to_path_buf()
+        } else if let Some(rest) = root.strip_prefix("{config_home}/") {
+            config_home.join(rest)
+        } else if root == "{run_home}" {
+            run_home.to_path_buf()
+        } else if let Some(rest) = root.strip_prefix("{run_home}/") {
+            run_home.join(rest)
+        } else {
+            // The daemon refuses any other root, and says so.
+            continue;
+        };
+        private_dir(&dir, true)?;
+    }
+    Ok(())
+}
+
+/// What a chat-mode run records as its goal. The v5 `Launch` record names the goal stream it
+/// was launched with and the daemon records a launch only after a goal, so a run whose harness
+/// was handed none records this fixed sentence instead: never sent to the harness, and never
+/// anything the participant typed (that is in the harness's session files).
+pub const CHAT_MODE_GOAL: &str = "chat mode (D57): the harness was given no goal; the \
+     participant typed the prompt in the harness's own terminal, and it is recorded in the \
+     harness's session files.";
+
+/// The launch line of a chat-mode run: the last thing `goalcup start` prints before the harness
+/// owns the terminal.
+fn chat_launch_line(id: &str, log: &Path) -> String {
+    format!(
+        "Recording in chat mode: {id} starts now in this terminal. Type your prompt; after it, \
+         type only \"keep going\". Until {id} exits goalcup prints nothing here: its messages go \
+         to {}, and `goalcup status` shows the run.",
+        log.display()
+    )
+}
+
 /// Phase one: every refusal that comes before anything is created.
 fn prepare(
     cx: &CaptureRun<'_>,
-    goal: Vec<u8>,
+    goal: Option<Vec<u8>>,
     out: &mut dyn std::io::Write,
 ) -> Result<CapturePrep, CliError> {
     // The launch plan checks again at its own boundary, but that boundary follows every
     // capture allocation. Reject unusable goal bytes here so no shared home, run directory,
     // seeded home, daemon entry or proxy can precede this preflight decision.
-    crate::launch::checked_goal(&goal)?;
+    if let Some(goal) = &goal {
+        crate::launch::checked_goal(goal)?;
+    }
     // The disk is judged before the server is asked for a run or anything is created.
     crate::run::reserve::check_room(&artifact_root(cx.cfg).join("reserve"), &cx.opts.disk)?;
     let CaptureRun {
         env,
         opts,
-        goal_file,
+        beside,
         connector: c,
         profile,
         ..
@@ -898,6 +1052,16 @@ fn prepare(
         Some(secret) => Some(FragmentMatcher::new(secret.expose())?),
         None => None,
     };
+    // A chat-mode harness reads this terminal: `goalcup start` must hold it in the foreground,
+    // or the harness's first read stops it (`SIGTTIN`) and the run records a frozen harness.
+    if profile.interactive && !goalcup_platform::terminal::is_foreground(libc::STDIN_FILENO) {
+        return Err(CliError::Refused(format!(
+            "`{}` runs in chat mode in this terminal, so `goalcup start` must run in the \
+             foreground of a terminal: its input is not one, or it was started in the \
+             background. Nothing was created.",
+            c.loaded.manifest.id
+        )));
+    }
     let executable = crate::launch::capture_executable(c, profile, env)?;
     // The provider hosts answer a TCP connect before anything is created (the proxy module's
     // preflight; it names a firewall holding this binary when they do not).
@@ -908,11 +1072,8 @@ fn prepare(
     // harness wrote, which can include a fragment of the provider key (D41).
     let per_run = profile.home.config_home == ConfigHome::PerRun;
     if per_run {
-        crate::per_run_home::refuse_inside_git_work_tree(&beside_goal(goal_file))?;
-        crate::per_run_home::refuse_synced_folder_under(
-            &beside_goal(goal_file),
-            env.get("HOME").map(Path::new),
-        )?;
+        crate::per_run_home::refuse_inside_git_work_tree(beside)?;
+        crate::per_run_home::refuse_synced_folder_under(beside, env.get("HOME").map(Path::new))?;
     }
     Ok(CapturePrep {
         goal,
@@ -983,7 +1144,7 @@ fn create_and_gate<'a>(
         cfg,
         env,
         opts,
-        goal_file,
+        beside,
         connector: c,
         profile,
         ..
@@ -995,7 +1156,7 @@ fn create_and_gate<'a>(
         .map(SharedCaptureHome::recheck)
         .transpose()?;
     let run = RunDir::create(
-        goal_file,
+        beside,
         profile.home.run_home,
         env,
         upload.map(|u| u.work_root.as_path()),
@@ -1043,6 +1204,9 @@ fn create_and_gate<'a>(
     }
 
     let session_id = fresh_uuid();
+    // The run's start: what its record keeps, and what a native source that reads from the run's
+    // start (D57) is read from. Sent for every entry, the same number for each.
+    let started_at_unix = crate::run::now_unix();
     // With a server, the run is opened there before the daemon creates anything: the
     // server issues the entry id every record carries.
     let opened = match upload {
@@ -1072,8 +1236,15 @@ fn create_and_gate<'a>(
         run_home: run.home.display().to_string(),
         config_home: config_home.display().to_string(),
         entry_id: opened.as_ref().map(|o| o.run.entry_id.clone()),
-        native_since: None,
+        native_since: Some(started_at_unix),
     };
+    // A source read from the run's start (D57) is opened by the daemon at the entry's creation,
+    // and a harness in chat mode makes its sessions folder only when the first prompt is sent.
+    if let Err(error) = make_native_roots(profile, &run.home, &config_home) {
+        let _ = run.remove();
+        give_back(&error);
+        return Err(error);
+    }
     let info = match retry_busy(|| client.create_capture_workspace(&request)) {
         Ok(info) => info,
         Err(e) => {
@@ -1110,7 +1281,7 @@ fn create_and_gate<'a>(
         practice: opts.practice,
         connector_id: c.loaded.manifest.id.clone(),
         workspace: run.workspace.clone(),
-        started_at_unix: crate::run::now_unix(),
+        started_at_unix,
         deadline_at: opened.as_ref().map(|o| o.run.deadline_at.clone()),
         entries: vec![EntryRef {
             entry_id: info.entry_id.clone(),
@@ -1136,6 +1307,10 @@ fn create_and_gate<'a>(
         raise_open_file_limit(out)?;
         let proxied = Proxied::start(&info, profile, &run, roots)?;
         admitted(client, &info)?;
+        // The goal-cup skill, in the harness's own skills folder (D57), replacing only its own.
+        if let Some(skills_dir) = &profile.home.skills_dir {
+            crate::skill::install(&config_home, skills_dir)?;
+        }
         let mut vars = goalcup_protocol::template::TemplateVars::new();
         vars.set("workspace", run.workspace.display().to_string());
         vars.set("session_id", session_id.clone());
@@ -1144,7 +1319,7 @@ fn create_and_gate<'a>(
             &vars,
             &run.workspace,
             &crate::launch::CaptureLaunch {
-                goal: &prep.goal,
+                goal: prep.goal.as_deref(),
                 executable: &prep.executable,
                 run_home: &run.home,
                 config_home: &config_home,
@@ -1157,8 +1332,12 @@ fn create_and_gate<'a>(
         // asked again; any other failure aborts the launch, because an answer that did not
         // arrive may have followed an accepted goal and a second would be a second
         // instruction.
+        // A chat-mode run's harness is given no goal, and records the fixed sentence that says so.
         let goal_request = CaptureGoalRequest {
-            bytes: prep.goal.clone(),
+            bytes: prep
+                .goal
+                .clone()
+                .unwrap_or_else(|| CHAT_MODE_GOAL.as_bytes().to_vec()),
         };
         let goal_stream = retry_busy(|| client.record_capture_goal(&info.entry_id, &goal_request))?;
         if crate::arming::interrupted() {
@@ -1220,8 +1399,10 @@ fn create_and_gate<'a>(
         record,
         reserve,
         watching: None,
+        chat: None,
     };
     let gate = Gate {
+        chat: profile.interactive,
         plan,
         harness_version,
         goal_stream,
@@ -1235,7 +1416,7 @@ fn create_and_gate<'a>(
 /// release it, and start the tees on its streams. Every way out is [`Forked::unlaunched`]: the
 /// child never ran, or it is registered and the seal answers for it.
 fn register_and_release<'a>(
-    forked: Forked<'a>,
+    mut forked: Forked<'a>,
     gate: Gate,
     prep: &mut CapturePrep,
     out: &mut dyn std::io::Write,
@@ -1243,6 +1424,7 @@ fn register_and_release<'a>(
     pause_at("capture-gate-forked");
     let Gate {
         plan,
+        chat,
         harness_version,
         goal_stream,
         gated,
@@ -1275,10 +1457,37 @@ fn register_and_release<'a>(
         gated.abort();
         return Err(forked.unlaunched(interrupted_before_launch(), out));
     }
+    // A chat-mode harness takes the terminal at its release: the launch line is the last thing
+    // this command prints there, and from here the terminal's signals are absorbed and every
+    // message goes to `host.log` until the harness exits.
+    if chat {
+        let run_dir = crate::run::run_dir(forked.cfg, &forked.record.run_id);
+        let line = chat_launch_line(
+            &forked.template.connector_id,
+            &run_dir.join(crate::host_log::HOST_LOG_NAME),
+        );
+        let _ = say(out, &line).and_then(|()| {
+            out.flush().map_err(|source| CliError::Io {
+                path: "stdout".to_string(),
+                source,
+            })
+        });
+        match ChatTerminal::take(&run_dir) {
+            Ok(terminal) => forked.chat = Some(terminal),
+            Err(e) => {
+                gated.abort();
+                return Err(forked.unlaunched(e, out));
+            }
+        }
+    }
     let mut spawned = match gated.release() {
         Ok(spawned) => spawned,
-        // No harness ran, so no `Launch` is written, and the entry is sealed.
-        Err(e) => return Err(forked.unlaunched(e, out)),
+        // No harness ran, so no `Launch` is written, and the entry is sealed; the terminal is
+        // this command's again, to say so.
+        Err(e) => {
+            forked.chat = None;
+            return Err(forked.unlaunched(e, out));
+        }
     };
     // The harness owns every Ctrl-C from here (it shares the terminal), and the launch record
     // and the seal below must not give up on their first `busy` because of one.
@@ -1424,10 +1633,13 @@ fn run_harness<'a>(
             ),
         );
     }
-    let _ = say(
-        out,
-        "Recording. The harness runs headless; this command ends with it.",
-    );
+    // A chat-mode run said its launch line before the release, and is quiet now.
+    if forked.chat.is_none() {
+        let _ = say(
+            out,
+            "Recording. The harness runs headless; this command ends with it.",
+        );
+    }
     // Launched: the run on the server is this participant's now, and is not given back.
     if let Some(give_back) = forked.give_back.take() {
         give_back.launched();
@@ -1532,8 +1744,8 @@ fn run_harness<'a>(
         };
         let line = format!("{label}: {reason}. The agent is stopped and the run sealed now.");
         // At once, on stderr: the seal below may be asked again for minutes, and the stdout report
-        // that follows it is printed only once it returns.
-        eprintln!("goalcup: {line}");
+        // that follows it is printed only once it returns. A chat-mode run's goes to its log.
+        crate::host_log::say(&line);
         let mut said = format!("{line}\n").into_bytes();
 
         let deadline = std::time::Instant::now() + crate::finish_budget();
@@ -1558,6 +1770,10 @@ fn run_harness<'a>(
         source,
     });
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    // The harness has exited: the terminal is this command's again, if it is still there.
+    if let Some(chat) = forked.chat.as_mut() {
+        chat.harness_exited();
+    }
     keeper.update(|state| {
         state.harness = crate::run::HarnessState::Exited {
             status: match &status {
@@ -1592,7 +1808,7 @@ fn run_harness<'a>(
             let _ = say(out, &line);
         }
         for line in swept.warnings() {
-            eprintln!("{line}");
+            crate::host_log::say_raw(&line);
         }
     }
     Ok(Exited {
@@ -1633,8 +1849,12 @@ fn finish_and_scan(
         run,
         proxied,
         watching,
+        chat,
         ..
     } = forked;
+    // A chat-mode run's hold on the terminal (its hangup absorbed, its log open) lasts to the end
+    // of this function: the seal and the upload's wrap-up below must outlive a closed window.
+    let _chat = chat;
     let deadline = std::time::Instant::now() + crate::finish_budget();
     // The run was ended by a stop (its deadline, the server, or a full disk) and not by the
     // harness leaving on its own.
@@ -1989,13 +2209,12 @@ struct RunDir {
 
 impl RunDir {
     fn create(
-        goal_file: &Path,
+        beside: &Path,
         home: RunHome,
         env: &BTreeMap<String, String>,
         work_root: Option<&Path>,
     ) -> Result<RunDir, CliError> {
-        let beside = beside_goal(goal_file);
-        let beside = std::fs::canonicalize(&beside).map_err(|source| CliError::Io {
+        let beside = std::fs::canonicalize(beside).map_err(|source| CliError::Io {
             path: beside.display().to_string(),
             source,
         })?;
@@ -2390,13 +2609,11 @@ fn finish(
     if let Ok(report) = &sealed
         && let Err(e) = crate::commands::seal::report_local_finish(entry_id, report, out)
     {
-        use std::io::Write as _;
-        let _ = writeln!(
-            std::io::stderr(),
-            "goalcup: entry {entry_id} is sealed, but its report could not be written to stdout \
-             ({e}). The trace is {}.",
+        crate::host_log::say(&format!(
+            "entry {entry_id} is sealed, but its report could not be written to stdout ({e}). \
+             The trace is {}.",
             report.trace_dir
-        );
+        ));
     }
     // Cut at the deadline, the sender ends its connection with the rest unwritten, as its own
     // bound would. When the seal returned after the deadline, it is cut at once.
@@ -2417,7 +2634,7 @@ fn finish(
 fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
-    goal_file: &Path,
+    beside: &Path,
     practice: bool,
     keyed: bool,
     out: &mut dyn std::io::Write,
@@ -2462,7 +2679,7 @@ fn uploading(
         return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
     }
     refuse_windows_drive(&work_root, goalcup_platform::machine::is_wsl())?;
-    refuse_goal_folder_inside_work_root(&work_root, goal_file)?;
+    refuse_goal_folder_inside_work_root(&work_root, beside)?;
     #[cfg(feature = "test-support")]
     let clone_source = env.get(TEST_CLONE_SOURCE).cloned();
     #[cfg(not(feature = "test-support"))]
@@ -2503,22 +2720,23 @@ fn refuse_windows_drive(work_root: &Path, wsl: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-/// The run directory is made beside the goal file and holds the harness's `HOME`; the clone is
-/// made in the work folder, under a name of its own. They cannot be the same folder, but a goal
-/// file in a folder *below* the work folder would put the run directory (and so the harness's
-/// home) inside some other clone, or inside an older run's folder. So: the goal file's folder
-/// may be the work folder itself, or anywhere outside it, and is refused anywhere inside it.
-fn refuse_goal_folder_inside_work_root(work_root: &Path, goal_file: &Path) -> Result<(), CliError> {
-    let beside = std::fs::canonicalize(beside_goal(goal_file));
+/// The run directory is made beside the goal file (for a chat-mode run, in the folder `goalcup
+/// start` is run from) and holds the harness's `HOME`; the clone is made in the work folder,
+/// under a name of its own. They cannot be the same folder, but a folder *below* the work folder
+/// would put the run directory (and so the harness's home) inside some other clone, or inside an
+/// older run's folder. So: `beside` may be the work folder itself, or anywhere outside it, and is
+/// refused anywhere inside it.
+fn refuse_goal_folder_inside_work_root(work_root: &Path, beside: &Path) -> Result<(), CliError> {
+    let beside = std::fs::canonicalize(beside);
     let root = std::fs::canonicalize(work_root).unwrap_or_else(|_| work_root.to_path_buf());
     if let Ok(beside) = beside
         && beside != root
         && beside.starts_with(&root)
     {
         return Err(CliError::Refused(format!(
-            "the goal file is in {}, which is inside the work folder {}. Put the goal file in \
-             the work folder itself or outside it, so a run's folder is never inside a clone. \
-             Nothing was created.",
+            "the run's folder would be made in {}, which is inside the work folder {}. Put the \
+             goal file in (or, in chat mode, run `goalcup start` from) the work folder itself or \
+             a folder outside it, so a run's folder is never inside a clone. Nothing was created.",
             beside.display(),
             work_root.display()
         )));
@@ -2777,7 +2995,7 @@ fn unmake(
     cause: &CliError,
     out: &mut dyn std::io::Write,
 ) -> bool {
-    let reason = format!("`goalcup start --goal-file` failed before the launch: {cause}");
+    let reason = format!("`goalcup start` failed before the launch: {cause}");
     let sentence = format!(
         "Entry {entry_id} is abandoned: nothing was launched, and its chain and this \
          machine's note of it are gone."

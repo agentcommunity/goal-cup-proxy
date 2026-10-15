@@ -1261,7 +1261,7 @@ fn run(
         shared,
         vitals,
     } = beside;
-    let mut say = |line: &str| eprintln!("goalcup: {line}");
+    let mut say = crate::host_log::say;
     let mut uploader: Option<Uploader> = None;
     let mut stopped: Option<String> = None;
     let mut failures = 0u32;

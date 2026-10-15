@@ -321,6 +321,7 @@ pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
         harness: id.to_string(),
         dev: false,
         goal_file: None,
+        run_folder: None,
         disk: disk_of(4 << 20),
         practice: false,
         open_url: never_open,

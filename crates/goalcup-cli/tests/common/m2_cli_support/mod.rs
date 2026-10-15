@@ -36,6 +36,10 @@ pub const FAKE_ID: &str = "m2-fake";
 /// under this id, with its program replaced by `fixtures/m2-fake-hermes.sh`.
 pub const HERMES_FAKE_ID: &str = "m2-fake-hermes";
 
+/// The chat-mode development connector (D57): `interactive = true`, identity `none`, a native
+/// source read from the run's start, and `fixtures/m2-fake-tui.sh` as its harness ([`Rig::chat`]).
+pub const CHAT_ID: &str = "m2-fake-tui";
+
 /// The repository `prepare_for` says the participant made, and the made-up token for it.
 pub const PREP_REPO: &str = "https://github.com/goal-cup/demo";
 pub const FAKE_GITHUB_TOKEN: &str = "github_pat_FAKE0123456789abcdefghijkl";
@@ -98,6 +102,63 @@ impl Rig {
     /// stdout and waits for its scope identity, as it does for the shipped Codex connector.
     pub fn codex_family() -> Rig {
         Rig::build(true, Some(2), Some("codex"), false, true)
+    }
+
+    /// A capture rig that also has the chat-mode connector [`CHAT_ID`], whose harness is
+    /// `fixtures/m2-fake-tui.sh` (on the same `PATH` as the headless fake).
+    pub fn chat() -> Rig {
+        let rig = Rig::build(true, Some(2), None, false, true);
+        write_chat_connector(&rig.connectors, &rig.root.join("bin"), &rig.out);
+        rig
+    }
+
+    /// The shared harness home every run of the chat connector uses (D39).
+    pub fn chat_home(&self) -> PathBuf {
+        self.cfg.join("capture-homes").join(CHAT_ID)
+    }
+
+    /// `start_with` options for a chat-mode run: no goal file, through `--dev`, with the run's
+    /// folder made where a goal file's would be.
+    pub fn chat_options(&self, reserve: u64) -> StartOptions {
+        let mut opts = super::support::start_options(CHAT_ID);
+        opts.disk = super::support::disk_of(reserve);
+        opts.dev = true;
+        let runs = self.root.join("runs");
+        std::fs::create_dir_all(&runs).unwrap();
+        opts.run_folder = Some(runs);
+        opts
+    }
+
+    /// `goalcup start --harness m2-fake-tui --dev` (the binary), on a terminal of its own: a new
+    /// session whose controlling terminal is a fresh pseudo-terminal, as a participant's shell
+    /// would start it. It runs in `<root>/runs`, so the run's folder is made there, against this
+    /// rig's daemon and connectors; `env` is added to its environment.
+    pub fn start_on_pty(&self, env: &[(&str, &str)]) -> OnPty {
+        let runs = self.root.join("runs");
+        std::fs::create_dir_all(&runs).unwrap();
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_goalcup"));
+        command
+            .args(["start", "--harness", CHAT_ID, "--dev"])
+            .current_dir(&runs)
+            .env_clear()
+            .env("PATH", self.path())
+            .env("GOALCUP_CONFIG_DIR", &self.cfg)
+            .env("GOALCUP_CONNECTORS_DIR", &self.capture_connectors)
+            .env("GOALCUP_TEST_NO_BROWSER", "1")
+            .env("GOALCUP_TEST_FINISH_BUDGET_MS", "10000")
+            .env("TERM", "dumb");
+        for key in ["USER", "LOGNAME", "TMPDIR", "HOME"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        for (key, value) in self.extra_env.lock().unwrap().iter() {
+            command.env(key, value);
+        }
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        OnPty::spawn(command)
     }
 
     /// The capture rig with **no daemon running**, for the binary to start one: its roots are
@@ -424,6 +485,18 @@ impl Rig {
 
 impl Drop for Rig {
     fn drop(&mut self) {
+        // A fake chat harness a failed test left behind waits on its terminal.
+        if let Some(tui) = self.harness_file("tui.pid")
+            && let Ok(pid) = tui.trim().parse::<u32>()
+            && self.harness_file("tui.end").is_none()
+            && goalcup_protocol::process::snapshot()
+                .is_ok_and(|table| table.iter().any(|r| r.pid == pid && r.comm.ends_with("sh")))
+        {
+            // SAFETY: two integers; the pid was just seen running the fake's shell.
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
         // A harness a failed test left behind waits on its one `sleep`; ending that ends it.
         if let Some(sleeper) = self.harness_file("sleeper")
             && let Ok(pid) = sleeper.trim().parse::<u32>()
@@ -578,6 +651,233 @@ fn write_hermes_connector(connectors: &Path, capture_connectors: &Path, exe: &Pa
         harness = harness.replacen(from, &to, 1);
     }
     std::fs::write(capture_dir.join("harness.toml"), harness).unwrap();
+}
+
+/// `connectors/m2-fake-tui/`: the chat-mode connector (D57), whose program `m2-fake-tui` is
+/// `fixtures/m2-fake-tui.sh` with the report directory written into it.
+fn write_chat_connector(connectors: &Path, bin: &Path, out: &Path) {
+    let out = out.display().to_string();
+    assert!(!out.contains('\''), "the test path must be shell-quotable");
+    let fake = std::fs::read_to_string(super::support::fixture("m2-fake-tui.sh")).unwrap();
+    let (shebang, body) = fake.split_once('\n').expect("the fake has a shebang");
+    let exe = bin.join(CHAT_ID);
+    std::fs::write(
+        &exe,
+        format!("{shebang}\nM2_FAKE_OUT='{out}'\nexport M2_FAKE_OUT\n{body}"),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dir = connectors.join(CHAT_ID);
+    std::fs::create_dir_all(&dir).unwrap();
+    let harness = format!(
+        r#"schema_version = 1
+id = "{CHAT_ID}"
+
+[capture]
+interactive = true
+auth_hosts = ["auth.openai.com"]
+continuation = "chat: the participant types the prompt and may type keep going"
+args = ["chat", "-C", "{{workspace}}"]
+
+[capture.executable]
+program = "{CHAT_ID}"
+
+[capture.home]
+run_home = "empty"
+config_home = "shared"
+env = "CODEX_HOME"
+real_dirs = ["{{user_home}}/.codex"]
+skills_dir = "skills"
+
+[capture.ca]
+env = ["CODEX_CA_CERTIFICATE"]
+mode = "extend"
+
+[capture.identity]
+source = "none"
+
+[[capture.native]]
+name = "session"
+root = "{{config_home}}/sessions"
+pattern = "*.jsonl"
+form = "append_only"
+since_run_start = true
+
+[capture.termination]
+strategy = "process_group"
+grace_seconds = 2
+
+[[capture.hosts]]
+host = "localhost"
+evidence_paths = ["{EVIDENCE_PATH}"]
+protocol_hint = "openai-responses"
+"#
+    );
+    std::fs::write(dir.join("harness.toml"), harness).unwrap();
+}
+
+/// `goalcup start` running on a pseudo-terminal of its own ([`Rig::start_on_pty`]): the test
+/// holds the terminal's master side, types into it, reads everything shown on it, and can close
+/// it as a participant closes their window.
+pub struct OnPty {
+    pub child: std::process::Child,
+    master: Option<std::os::fd::OwnedFd>,
+    shown: Arc<Mutex<Vec<u8>>>,
+}
+
+impl OnPty {
+    fn spawn(mut command: std::process::Command) -> OnPty {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::os::unix::process::CommandExt;
+        let (mut master, mut slave) = (-1, -1);
+        let mut size = libc::winsize {
+            ws_row: 24,
+            ws_col: 100,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: `openpty` writes the two descriptors it opens; the name pointer and the
+        // attributes are null (not wanted), and the window size is a live local.
+        let opened = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        };
+        assert_eq!(opened, 0, "openpty: {}", std::io::Error::last_os_error());
+        // SAFETY: both descriptors were just opened and are owned by nothing else.
+        let (master, slave) =
+            unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+        // The master must not leak into `goalcup` or the harness: only the test holds the window.
+        // SAFETY: `fcntl` on a live descriptor this function owns.
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) };
+        command
+            .stdin(slave.try_clone().unwrap())
+            .stdout(slave.try_clone().unwrap())
+            .stderr(slave.try_clone().unwrap());
+        // SAFETY: `setsid` and `ioctl` are async-signal-safe; the child makes itself the leader
+        // of a new session and takes its stdin, the slave, as its controlling terminal.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().unwrap();
+        drop(slave);
+        let shown = Arc::new(Mutex::new(Vec::new()));
+        let reader = master.try_clone().unwrap();
+        {
+            let shown = Arc::clone(&shown);
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut file = std::fs::File::from(reader);
+                let mut buf = [0u8; 4096];
+                // Ends at EOF, or EIO once every slave descriptor is closed.
+                while let Ok(n) = file.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    shown.lock().unwrap().extend_from_slice(&buf[..n]);
+                }
+            });
+        }
+        OnPty {
+            child,
+            master: Some(master),
+            shown,
+        }
+    }
+
+    /// Everything the terminal has shown so far.
+    pub fn shown(&self) -> String {
+        String::from_utf8_lossy(&self.shown.lock().unwrap()).into_owned()
+    }
+
+    /// Wait until the terminal has shown `text`.
+    pub fn wait_shown(&self, text: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while !self.shown().contains(text) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the terminal never showed {text:?}:\n{}",
+                self.shown()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    /// Type `line` and Enter.
+    pub fn type_line(&self, line: &str) {
+        use std::io::Write;
+        use std::os::fd::AsFd;
+        let fd = self.master.as_ref().expect("the window is open").as_fd();
+        let mut file = std::fs::File::from(fd.try_clone_to_owned().unwrap());
+        file.write_all(format!("{line}\r").as_bytes()).unwrap();
+    }
+
+    /// The terminal's foreground process group.
+    pub fn foreground_group(&self) -> i32 {
+        use std::os::fd::AsRawFd;
+        // SAFETY: `tcgetpgrp` on the live master descriptor this value owns.
+        unsafe {
+            libc::tcgetpgrp(
+                self.master
+                    .as_ref()
+                    .expect("the window is open")
+                    .as_raw_fd(),
+            )
+        }
+    }
+
+    /// Send `signal` to the terminal's foreground process group, as the terminal does for a
+    /// typed Ctrl-C or a closed window.
+    pub fn signal_foreground(&self, signal: i32) {
+        let group = self.foreground_group();
+        assert!(group > 1, "a foreground group: {group}");
+        // SAFETY: two integers; the group is this test's terminal's foreground group.
+        assert_eq!(unsafe { libc::kill(-group, signal) }, 0);
+    }
+
+    /// Close the window: the master side goes, so the terminal is gone for good.
+    pub fn close(&mut self) {
+        self.master = None;
+    }
+
+    /// Wait for `goalcup start` to exit, and answer its status.
+    pub fn wait(&mut self) -> std::process::ExitStatus {
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                // Let the reader take the last bytes the terminal shows.
+                std::thread::sleep(Duration::from_millis(100));
+                return status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = self.child.kill();
+                panic!("goalcup start never exited:\n{}", self.shown());
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
+impl Drop for OnPty {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------

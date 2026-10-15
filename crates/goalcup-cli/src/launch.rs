@@ -36,6 +36,34 @@
 //! Headless as it is, the capture child stays in the launcher's process group: the daemon
 //! never confirms a group ended (D30), and there a Ctrl-C typed at the terminal reaches it.
 //!
+//! # A chat-mode launch keeps the terminal (D57)
+//!
+//! A connector with `[capture] interactive = true` runs the harness in its normal chat mode in
+//! the participant's own terminal: [`build_capture_launch`] is given no goal and places none,
+//! and the plan is [`LaunchMode::Tui`]. Its child inherits this process's stdin, stdout and
+//! stderr (no `/dev/null`, no pipe: the participant types the prompt and reads the answer), and
+//! it stays in **this process's own process group**, which is the terminal's foreground group
+//! when `goalcup start` is run from a shell.
+//!
+//! The other way, a group of its own made the foreground group with `tcsetpgrp` and the
+//! foreground handed back after it exits, was considered and not taken, for what the
+//! termination strategies need:
+//!
+//! * `process_group` (Claude Code) signals a `pgid` only when the handle records one, and a
+//!   `Tui` handle records none ([`pgid_of`]), so the daemon ends the harness by the descendant
+//!   walk from its pid. The host's group is never signalled, and the host is never in the tree
+//!   below the harness, so the harness's termination can never reach the host.
+//! * `native_pid` (Codex) signals the native binary the wrapper started and its descendants;
+//!   which group they are in does not matter to it.
+//! * A group of its own would need `tcsetpgrp` before the harness's first read (a race with the
+//!   exec, or a second gate step) and again after it exits, from a host that by then may be in
+//!   the background of a terminal that is gone (`SIGTTOU`). Sharing the group needs neither.
+//!
+//! What sharing costs is that every signal the terminal sends the foreground group (Ctrl-C,
+//! Ctrl-\, Ctrl-Z, a closed window) reaches the host as well; `goalcup start` absorbs those
+//! while the harness runs (`goalcup_platform::terminal::Shield`) and says nothing on the
+//! terminal meanwhile (`crate::host_log`).
+//!
 //! # The three modes differ in exactly one place
 //!
 //! [`LaunchMode::Tui`] must **never** call `process_group(0)`. A TUI in a process group of
@@ -51,7 +79,8 @@
 //!
 //! [`LaunchMode::AttachOnly`] builds no plan at all. In V1, attach mode armed the folder and
 //! the participant opened a session in it; there was no argv, so the V1 `plan` refused it
-//! rather than inventing one. A capture plan is always [`LaunchMode::Server`].
+//! rather than inventing one. A headless capture plan is [`LaunchMode::Server`] and a chat-mode
+//! one (D57) is [`LaunchMode::Tui`].
 //!
 //! # `handle()` is separate from `spawn()`
 //!
@@ -152,8 +181,8 @@ pub struct LaunchPlan {
     pub cwd: PathBuf,
     pub mode: LaunchMode,
     pub kill: Kill,
-    /// Set by [`build_capture_launch`], the one builder left: a headless capture launch. The
-    /// V1 `plan`, removed by D48, left it `None`.
+    /// Set by [`build_capture_launch`] for a headless capture launch, whose goal is in the
+    /// argv. `None` for a chat-mode launch (D57), which has no goal and keeps the terminal.
     pub capture: Option<HeadlessCapture>,
 }
 
@@ -589,8 +618,9 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 pub struct CaptureLaunch<'a> {
     /// The initial goal, exactly as read. Appended as one argument after the template's
     /// closing `--`, or as the value of the profile's one `--flag=<goal>` element: no shell, no
-    /// quoting, no splitting.
-    pub goal: &'a [u8],
+    /// quoting, no splitting. `None` for a chat-mode profile (D57), where the participant types
+    /// the prompt; a headless profile refuses `None`, and a chat-mode one refuses a goal.
+    pub goal: Option<&'a [u8]>,
     pub executable: &'a ResolvedExecutable,
     /// The per-run `HOME`, created by the caller in the shape the profile's `home` names.
     pub run_home: &'a Path,
@@ -608,7 +638,10 @@ pub struct CaptureLaunch<'a> {
 impl fmt::Debug for CaptureLaunch<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CaptureLaunch")
-            .field("goal", &format_args!("<{} bytes>", self.goal.len()))
+            .field(
+                "goal",
+                &self.goal.map(|goal| format!("<{} bytes>", goal.len())),
+            )
             .field("executable", &self.executable)
             .field("run_home", &self.run_home)
             .field("config_home", &self.config_home)
@@ -655,7 +688,22 @@ pub fn build_capture_launch(
     let id = &c.loaded.manifest.id;
     let profile = &c.loaded.manifest.capture;
     let platform = PlatformKey::current();
-    let goal = checked_goal(launch.goal)?;
+    let goal = match (profile.interactive, launch.goal) {
+        (false, Some(goal)) => Some(checked_goal(goal)?),
+        (true, None) => None,
+        (false, None) => {
+            return Err(CliError::Refused(format!(
+                "`{id}` runs headless and needs a goal: `goalcup start --harness {id} \
+                 --goal-file <file>`. Nothing is launched."
+            )));
+        }
+        (true, Some(_)) => {
+            return Err(CliError::Refused(format!(
+                "`{id}` runs in chat mode: you type the prompt in the harness, so it takes no \
+                 goal. Nothing is launched."
+            )));
+        }
+    };
     for (what, value) in [
         ("workspace", Some(workspace.to_string_lossy())),
         (
@@ -690,18 +738,27 @@ pub fn build_capture_launch(
         }
         argv.push(arg);
     }
-    let ends_in_separator = argv.last().map(String::as_str) == Some("--");
-    if ends_in_separator == profile.goal_flag.is_some() {
-        return Err(CliError::Internal(format!(
-            "`{id}`'s capture args place the goal neither one way nor the other"
-        )));
-    }
-    let goal_prefix = profile.goal_flag.as_ref().map_or(0, |flag| flag.len() + 1);
-    match &profile.goal_flag {
-        Some(flag) => argv.push(format!("{flag}={goal}")),
-        None => argv.push(goal.to_string()),
-    }
-    let goal_index = argv.len() - 1;
+    // A chat-mode launch places no goal: its argv is the profile's args alone.
+    let capture = match goal {
+        None => None,
+        Some(goal) => {
+            let ends_in_separator = argv.last().map(String::as_str) == Some("--");
+            if ends_in_separator == profile.goal_flag.is_some() {
+                return Err(CliError::Internal(format!(
+                    "`{id}`'s capture args place the goal neither one way nor the other"
+                )));
+            }
+            let goal_prefix = profile.goal_flag.as_ref().map_or(0, |flag| flag.len() + 1);
+            match &profile.goal_flag {
+                Some(flag) => argv.push(format!("{flag}={goal}")),
+                None => argv.push(goal.to_string()),
+            }
+            Some(HeadlessCapture {
+                goal_index: argv.len() - 1,
+                goal_prefix,
+            })
+        }
+    };
 
     let mut env = BTreeMap::new();
     for (key, template) in profile.resolved_env(platform) {
@@ -746,16 +803,18 @@ pub fn build_capture_launch(
         env_remove: Vec::new(),
         env_base: BTreeMap::new(),
         cwd: workspace.to_path_buf(),
-        mode: LaunchMode::Server,
+        // A chat-mode harness keeps the terminal: see the module header.
+        mode: if capture.is_some() {
+            LaunchMode::Server
+        } else {
+            LaunchMode::Tui
+        },
         kill: Kill {
             strategy,
             native_binary: termination.native_binary,
             grace_seconds,
         },
-        capture: Some(HeadlessCapture {
-            goal_index,
-            goal_prefix,
-        }),
+        capture,
     };
     let credential = profile.credential.as_ref().map_or(0, |credential| {
         (credential.env.len() + 1 + MAX_CHILD_SECRET_BYTES + 1 + 8) as u64
@@ -876,7 +935,8 @@ pub(crate) fn exec_limit() -> u64 {
 ///
 /// A capture launch is not, although it is headless: a group handle is never confirmed ended
 /// (`docs/TERMINATION.md`, D30), so the daemon ends it by the descendant walk, and in the
-/// launcher's group a Ctrl-C typed at the terminal reaches it too.
+/// launcher's group a Ctrl-C typed at the terminal reaches it too. A chat-mode launch is a
+/// [`LaunchMode::Tui`] and is not either: it must stay in the terminal's foreground group.
 fn leads_its_group(p: &LaunchPlan) -> bool {
     owns_its_group(p.mode) && p.capture.is_none()
 }
@@ -889,7 +949,7 @@ fn owns_its_group(mode: LaunchMode) -> bool {
     match mode {
         LaunchMode::Tui => false,
         LaunchMode::Server => true,
-        // Unreachable: a capture plan is always `Server`, and the V1 `plan` refused this
+        // Unreachable: a capture plan is `Server` or `Tui`, and the V1 `plan` refused this
         // mode. Answered rather than panicked, because a `match` that cannot fail is worth
         // more than an arm that can.
         LaunchMode::AttachOnly => false,
@@ -1123,8 +1183,9 @@ fn build_command(p: &LaunchPlan, pipes: Pipes, secret: Option<&ChildSecret>) -> 
     if let Some(secret) = secret {
         command.env(secret.name(), secret.value_str());
     }
-    // A capture launch is headless and has no input channel: both measured harnesses append
-    // piped stdin to the goal, so the child never inherits ours.
+    // A headless capture launch has no input channel: both measured harnesses append piped
+    // stdin to the goal, so the child never inherits ours. A chat-mode launch (`capture` is
+    // `None`) inherits all three streams: the participant's terminal is its input.
     if p.capture.is_some() {
         command.stdin(std::process::Stdio::null());
     }

@@ -37,6 +37,8 @@ pub mod connector;
 pub mod daemon;
 pub mod entries;
 pub mod harness_version;
+/// Where `goalcup start` says things while a chat-mode harness owns the terminal (D57).
+pub mod host_log;
 pub mod key_scan;
 pub mod launch;
 pub mod per_run_home;
@@ -47,6 +49,8 @@ mod released_child;
 pub mod retry;
 pub mod run;
 pub mod server;
+/// The goal-cup skill a chat-mode harness finds in its home (D57).
+pub mod skill;
 pub mod subreaper;
 pub mod upload;
 
