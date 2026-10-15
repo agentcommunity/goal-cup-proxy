@@ -328,7 +328,9 @@ in. There is no grace period and no late window.
 - **The server says stop.** Every heartbeat answered at or after `ends_at` carries `stop: true` and
   the `reason`. The tracer stops recording at once. Without a network it stops on its own count:
   the `seconds_left` of the last answer it had (the open, the continue or a heartbeat), counted
-  from just before that call on a clock that keeps running while the machine sleeps. Each answer
+  from just before that call on a clock that keeps running while the machine sleeps (so it ends
+  early by the call's round trip, and never more than a second late: the server counts its clock in
+  whole seconds). Each answer
   sets the count again, and the server's answer wins. The machine's date is never read for it, so
   changing the date does not move the deadline. (A replaced run learns of it from its next
   heartbeat.) An answer from an older server has no `seconds_left`; the tracer then counts

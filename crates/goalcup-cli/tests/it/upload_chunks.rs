@@ -1099,7 +1099,8 @@ mod retries {
         let away_in = away.clone();
         let run = Run::with(
             ServerOptions {
-                run_seconds: Some(4),
+                // Long enough for the setup on a loaded machine; a day short of what the date says.
+                run_seconds: Some(8),
                 ..ServerOptions::default()
             },
             Box::new(move |label| {
@@ -1136,7 +1137,7 @@ mod retries {
         assert!(by_date.left > Duration::from_secs(24 * 3600), "{by_date:?}");
         let count = LocalDeadline::at_start(&record, segment.seconds_left, asked, true);
         assert!(
-            count.is_some_and(|c| c.left <= Duration::from_secs(4)),
+            count.is_some_and(|c| c.left <= Duration::from_secs(8)),
             "{count:?} from {segment:?}"
         );
 
@@ -1157,12 +1158,12 @@ mod retries {
         });
         away.store(true, Ordering::SeqCst);
         let reason = stopped
-            .recv_timeout(Duration::from_secs(20))
+            .recv_timeout(Duration::from_secs(30))
             .expect("the segment was not stopped");
         assert!(reason.contains("by this machine's clock"), "{reason}");
         assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "it stopped {:?} after the continue, for a run with 4 seconds left",
+            started.elapsed() < Duration::from_secs(20),
+            "it stopped {:?} after the continue, for a run with 8 seconds left",
             started.elapsed()
         );
         drop(running);

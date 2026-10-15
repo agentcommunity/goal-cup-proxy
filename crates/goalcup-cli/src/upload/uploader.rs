@@ -1166,7 +1166,8 @@ fn ordinary_beat(
             ));
         }
     };
-    // Taken before the call: the server's time left is counted from no later than it answered.
+    // Taken before the call, so the round trip makes the count end earlier, not later. (The
+    // server's whole seconds can still leave it up to a second late.)
     let asked = goalcup_protocol::clock::ContinuousOrigin::now();
     match heartbeat(server, record, false, None, Some(vitals), HEARTBEAT_TIMEOUT) {
         Beat::Answer(Ok(answer)) => {
@@ -1409,8 +1410,9 @@ impl Drop for Running {
 /// continued segment `deadline_at` less this machine's date ([`LocalDeadline::until`]).
 #[derive(Debug, Clone, Copy)]
 pub struct LocalDeadline {
-    /// When the count was last set: taken before the call whose answer set it, so the count
-    /// never ends later than the server's.
+    /// When the count was last set: taken before the call whose answer set it, so a slow or
+    /// retried answer makes the count end earlier. It is never more than a second late: the
+    /// server counts its own clock in whole seconds.
     pub from: goalcup_protocol::clock::ContinuousOrigin,
     /// What was left of the run at `from`.
     pub left: Duration,

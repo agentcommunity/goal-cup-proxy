@@ -95,7 +95,6 @@ struct Rig {
     server: UploadServer,
 }
 
-/// The keys of an object, in sorted order, however the JSON library orders them.
 /// A heartbeat answer without its `seconds_left`, and that number: the clock moves while a test
 /// runs, so a test that is not about the time left compares the rest exactly.
 fn split_left(answer: &Value) -> (Value, u64) {
@@ -109,6 +108,7 @@ fn split_left(answer: &Value) -> (Value, u64) {
     (rest, left)
 }
 
+/// The keys of an object, in sorted order, however the JSON library orders them.
 fn sorted_keys(value: &Value) -> Vec<String> {
     let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
     keys.sort();
