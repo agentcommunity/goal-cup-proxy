@@ -35,10 +35,10 @@ use std::process::ExitCode;
     after_help = AFTER_HELP,
     subcommand_required = true,
     arg_required_else_help = true,
-    // So the list under `Commands:` is exactly the eight sub-commands below. clap's built-in
-    // `help` sub-command would be an eighth line in it, indistinguishable to a reader — and to a
+    // So the list under `Commands:` is exactly the nine sub-commands below. clap's built-in
+    // `help` sub-command would be a tenth line in it, indistinguishable to a reader — and to a
     // test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
-    // the same help by the route the other seven already take.
+    // the same help by the route the other eight already take.
     disable_help_subcommand = true
 )]
 struct Args {
@@ -76,7 +76,7 @@ installed. No daemon running is not a failure: `goalcup start` starts one.
 Before a run, pass `--harness <id>` for the harness you will start: without it, a harness you \
 are not using can make this command exit 1.";
 
-/// The sub-commands: eight, and the hidden `git-credential` that a run's clone calls. `verify`
+/// The sub-commands: nine, and the hidden `git-credential` that a run's clone calls. `verify`
 /// is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
@@ -168,6 +168,36 @@ enum Command {
         #[arg(long, value_name = "URL")]
         server: Option<String>,
     },
+    /// Get this machine ready for your run, step by step, from install to a practice run.
+    ///
+    /// Six steps: you are logged in; a harness that runs in chat mode is chosen and installed;
+    /// you have opened it once here, signed in, and added your settings, MCP servers and skills;
+    /// your GitHub repository (new, empty, public) and a token for it are checked; this machine
+    /// has the power, the disk and the network a week-long run needs; and a practice run has
+    /// been recorded and uploaded. Each step prints `[ok]`, `[todo]` or `[fail]` and what to do.
+    /// Run it again as often as you like: what passed is not repeated. It never starts a run.
+    Prep {
+        /// The harness you will run, for example the one `goalcup doctor` shows installed.
+        /// Without it, the one you chose before, or the only one this build offers.
+        #[arg(long, value_name = "ID")]
+        harness: Option<String>,
+        /// The address of your new, empty, public GitHub repository,
+        /// `https://github.com/<owner>/<repo>`. You are asked for a token for it, and what you
+        /// type is not shown.
+        #[arg(long, value_name = "URL")]
+        repo: Option<String>,
+        /// The folder each run's clone is made in, as a full path. Default: `goalcup-work` in
+        /// your home folder. Under WSL2 it must not be on a Windows drive.
+        #[arg(long, value_name = "PATH")]
+        work_root: Option<std::path::PathBuf>,
+        /// Print the six steps as one JSON array (`step`, `state`, `human`, `say`), and nothing
+        /// else. It asks nothing and opens nothing.
+        #[arg(long)]
+        json: bool,
+        /// For connector developers: accept a connector directory this build does not pin.
+        #[arg(long)]
+        dev: bool,
+    },
     /// Finish uploading a run to the Goal Cup server, after `goalcup start` could not: the
     /// server was away, the laptop slept, or the process was killed. Safe to run again.
     Upload {
@@ -247,6 +277,19 @@ fn run(command: Command) -> Result<u8, CliError> {
             doctor(commands::doctor::DoctorOptions { json, harness })
         }
         Command::Login { server } => login(server).map(|()| 0),
+        Command::Prep {
+            harness,
+            repo,
+            work_root,
+            json,
+            dev,
+        } => prep(commands::prep::PrepOptions {
+            harness,
+            repo,
+            work_root,
+            json,
+            dev,
+        }),
         Command::GitCredential { operation } => {
             let cfg = goalcup_cli::config::config_dir()?;
             goalcup_cli::account::github::credential_helper(
@@ -319,6 +362,30 @@ fn login(server: Option<String>) -> Result<(), CliError> {
         &cfg,
         &browser_opener(),
         &mut std::io::stdout(),
+    )
+}
+
+/// `goalcup prep`, with what it reads from this machine resolved here, as `start` does. It
+/// starts no daemon: it records nothing.
+fn prep(opts: commands::prep::PrepOptions) -> Result<u8, CliError> {
+    let cfg = goalcup_cli::config::config_dir()?;
+    let connectors = goalcup_cli::config::connectors_dir()?;
+    let env = goalcup_cli::launch::process_env();
+    let mut out = std::io::stdout();
+    #[cfg(feature = "test-support")]
+    if let Ok(spec) = std::env::var(commands::prep::Injected::VAR) {
+        let door = commands::prep::Injected::parse(&spec).ok_or_else(|| {
+            CliError::Refused(format!("{} is malformed", commands::prep::Injected::VAR))
+        })?;
+        return commands::prep::prep_with(&door, &cfg, &connectors, &env, &opts, &mut out);
+    }
+    commands::prep::prep_with(
+        &commands::prep::Here,
+        &cfg,
+        &connectors,
+        &env,
+        &opts,
+        &mut out,
     )
 }
 

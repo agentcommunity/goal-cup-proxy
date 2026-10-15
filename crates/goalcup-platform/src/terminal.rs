@@ -153,6 +153,96 @@ impl Modes {
     }
 }
 
+/// The signals that end a command asking for a secret, and that [`EchoOff`] answers by putting
+/// the terminal back before it lets the signal do what it would have done.
+const ENDING: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+
+/// The modes [`EchoOff`] must restore, and where, for the signal handler to read: a pointer to
+/// the saved `termios` (null when no [`EchoOff`] is held) and its descriptor.
+static ECHO_SAVED: std::sync::atomic::AtomicPtr<libc::termios> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static ECHO_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// Put the terminal back, then let the signal do what it would have done: the handler was
+/// installed with `SA_RESETHAND | SA_NODEFER`, so the disposition is already the default and
+/// the signal raised again is delivered at once. Only async-signal-safe calls.
+extern "C" fn restore_then_reraise(signum: libc::c_int) {
+    let saved = ECHO_SAVED.load(Ordering::SeqCst);
+    if !saved.is_null() {
+        // SAFETY: `saved` points at the `Box` an `EchoOff` holds for as long as it is
+        // published here; `tcsetattr` only reads it.
+        unsafe {
+            libc::tcsetattr(ECHO_FD.load(Ordering::SeqCst), libc::TCSANOW, saved);
+        }
+    }
+    // SAFETY: `raise` takes an integer.
+    unsafe {
+        libc::raise(signum);
+    }
+}
+
+/// A terminal with its echo switched off, for reading a secret the participant pastes or
+/// types: what they enter is not shown. The echo is switched back on when this drops, and
+/// also when the process is ended by `SIGINT`, `SIGTERM` or `SIGHUP` meanwhile, so a parent
+/// that is not a shell is not left a terminal that shows nothing.
+pub struct EchoOff {
+    modes: Modes,
+    /// The copy of the saved modes the signal handler reads.
+    _published: Box<libc::termios>,
+    /// What each of [`ENDING`] was before.
+    earlier: Vec<(libc::c_int, libc::sigaction)>,
+}
+
+impl EchoOff {
+    /// Switch the echo of the terminal on `fd` off; `None` when `fd` is not a terminal (a pipe
+    /// shows nothing, so there is nothing to hide).
+    pub fn take(fd: libc::c_int) -> Option<EchoOff> {
+        let modes = Modes::save(fd)?;
+        let mut quiet = modes.saved;
+        quiet.c_lflag &= !libc::ECHO;
+        let mut published = Box::new(modes.saved);
+        // SAFETY: the struct `tcgetattr` filled, with one flag cleared, on the descriptor it was
+        // read from.
+        if unsafe { libc::tcsetattr(fd, libc::TCSAFLUSH, &quiet) } != 0 {
+            return None;
+        }
+        ECHO_FD.store(fd, Ordering::SeqCst);
+        ECHO_SAVED.store(&mut *published, Ordering::SeqCst);
+        let mut earlier = Vec::new();
+        for signal in ENDING {
+            // SAFETY: zeroed locals `sigaction` reads and writes; the handler is async-signal-
+            // safe. A signal the parent ignored (a command run under `nohup`) stays ignored.
+            unsafe {
+                let mut old: libc::sigaction = std::mem::zeroed();
+                libc::sigaction(signal, std::ptr::null(), &mut old);
+                if old.sa_sigaction == libc::SIG_IGN {
+                    continue;
+                }
+                let mut new: libc::sigaction = std::mem::zeroed();
+                new.sa_sigaction = restore_then_reraise as *const () as libc::sighandler_t;
+                libc::sigemptyset(&mut new.sa_mask);
+                new.sa_flags = libc::SA_RESETHAND | libc::SA_NODEFER;
+                if libc::sigaction(signal, &new, &mut old) == 0 {
+                    earlier.push((signal, old));
+                }
+            }
+        }
+        Some(EchoOff {
+            modes,
+            _published: published,
+            earlier,
+        })
+    }
+}
+
+impl Drop for EchoOff {
+    fn drop(&mut self) {
+        restore(&self.earlier);
+        ECHO_SAVED.store(std::ptr::null_mut(), Ordering::SeqCst);
+        let _ = self.modes.restore();
+    }
+}
+
 /// Wait for the child `pid` to exit, and continue it each time it stops (`WUNTRACED`).
 ///
 /// A harness that suspends itself (Ctrl-Z in its own key handling, `kill(0, SIGTSTP)`) would
@@ -235,6 +325,54 @@ mod tests {
         drop(shield);
         assert_eq!(current(libc::SIGHUP), libc::SIG_DFL);
         assert_eq!(current(libc::SIGTTOU), libc::SIG_DFL);
+    }
+
+    /// A descriptor that is not a terminal has no echo to switch off.
+    #[test]
+    fn echo_is_left_alone_on_a_descriptor_that_is_not_a_terminal() {
+        let file = std::fs::File::open("/dev/null").unwrap();
+        use std::os::fd::AsRawFd;
+        assert!(EchoOff::take(file.as_raw_fd()).is_none());
+    }
+
+    /// A process ended by a signal while it holds the echo off leaves the terminal as it found
+    /// it: the handler puts the modes back and the signal then ends the process as it would
+    /// have.
+    #[test]
+    fn a_signal_while_the_echo_is_off_puts_the_terminal_back() {
+        let (mut master, mut slave) = (-1, -1);
+        // SAFETY: `openpty` writes the two descriptors; the rest is null (not wanted).
+        let opened = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0);
+        let echo_on = |fd| Modes::save(fd).unwrap().saved.c_lflag & libc::ECHO != 0;
+        assert!(echo_on(slave));
+        let held = EchoOff::take(slave).expect("a terminal");
+        assert!(!echo_on(slave), "the echo is off while it is held");
+        // SAFETY: the child only raises a signal, which is async-signal-safe.
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            // SAFETY: as above; the handler restores the modes and re-raises.
+            unsafe {
+                libc::raise(libc::SIGTERM);
+                libc::_exit(0);
+            }
+        }
+        let mut status = 0;
+        // SAFETY: `waitpid` writes the one integer it is handed.
+        unsafe { libc::waitpid(child, &mut status, 0) };
+        assert!(libc::WIFSIGNALED(status), "the signal still ended it");
+        assert_eq!(libc::WTERMSIG(status), libc::SIGTERM);
+        assert!(echo_on(slave), "the handler put the echo back");
+        drop(held);
+        assert!(echo_on(slave));
     }
 
     /// A child that stops itself is continued, and its exit is still the status waited for.

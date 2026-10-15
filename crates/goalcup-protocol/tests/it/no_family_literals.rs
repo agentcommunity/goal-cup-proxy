@@ -26,6 +26,7 @@ fn capture_paths_contain_no_compiled_family_routing_literals() {
         root.join("crates/goalcup-cli/src/per_run_home.rs"),
         root.join("crates/goalcup-cli/src/commands/start.rs"),
         root.join("crates/goalcup-cli/src/commands/continue_run.rs"),
+        root.join("crates/goalcup-cli/src/commands/prep.rs"),
         root.join("crates/goalcup-cli/src/host_log.rs"),
         root.join("crates/goalcup-cli/src/skill.rs"),
         root.join("crates/goalcup-platform/src/terminal.rs"),
