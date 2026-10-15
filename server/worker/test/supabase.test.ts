@@ -4,6 +4,9 @@
 // to its function and parameter names.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 import type { ChunkRecord, EntryRow, NoticeArgs, OpenRunArgs, RunRow, TickRun } from "../src/db.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
@@ -369,4 +372,91 @@ test("a refused request logs PostgREST's code and message, not its details or hi
   assert.match(lines[0] ?? "", /HTTP 409: 23505 duplicate key$/);
   assert.match(lines[1] ?? "", /HTTP 500: \(no readable error\)$/);
   assert.ok(!lines.join("\n").includes("203.0.113.9") && !lines.join("\n").includes("macOS"), lines.join("\n"));
+});
+
+// ---- SQL parity: the names the Worker sends must exist in the migration ----------------------------
+// Production runs these functions; the behaviour suites run the local DB. Nothing else ties the two,
+// so read both source files and compare function names and parameter names.
+
+const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** Every `this.#rpc("<name>", { p_…: … })` call in db-supabase.ts, with the `p_` keys of its object. */
+function workerCalls(): Map<string, Set<string>> {
+  const src = readFileSync(join(SRC, "src", "db-supabase.ts"), "utf8");
+  const calls = new Map<string, Set<string>>();
+  for (const m of src.matchAll(/#rpc\("([a-z_]+)",\s*\{/g)) {
+    let depth = 1;
+    let i = (m.index ?? 0) + m[0].length;
+    const start = i;
+    for (; i < src.length && depth > 0; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}") depth--;
+    }
+    const keys = new Set([...src.slice(start, i - 1).matchAll(/\b(p_[a-z0-9_]+)\s*[:,}\n]/g)].map((k) => k[1] as string));
+    calls.set(m[1] as string, keys);
+  }
+  return calls;
+}
+
+interface SqlFn {
+  params: Set<string>;
+  required: Set<string>;
+}
+
+/** The last `CREATE [OR REPLACE] FUNCTION public.goal_cup_<name>(…)` for each public function: that one wins. */
+function sqlFunctions(): Map<string, SqlFn> {
+  const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+  const fns = new Map<string, SqlFn>();
+  for (const m of sql.matchAll(/CREATE (?:OR REPLACE )?FUNCTION public\.goal_cup_([a-z_]+)\(/g)) {
+    let depth = 1;
+    let i = (m.index ?? 0) + m[0].length;
+    const start = i;
+    for (; i < sql.length && depth > 0; i++) {
+      if (sql[i] === "(") depth++;
+      else if (sql[i] === ")") depth--;
+    }
+    const params = new Set<string>();
+    const required = new Set<string>();
+    let level = 0;
+    let piece = "";
+    const pieces: string[] = [];
+    for (const ch of sql.slice(start, i - 1)) {
+      if (ch === "(") level++;
+      if (ch === ")") level--;
+      if (ch === "," && level === 0) {
+        pieces.push(piece);
+        piece = "";
+      } else piece += ch;
+    }
+    pieces.push(piece);
+    for (const p of pieces) {
+      const name = /^\s*(p_[a-z0-9_]+)\s/.exec(p)?.[1];
+      if (!name) continue;
+      params.add(name);
+      if (!/\bDEFAULT\b/i.test(p)) required.add(name);
+    }
+    fns.set(m[1] as string, { params, required });
+  }
+  return fns;
+}
+
+test("every RPC the Worker calls exists in the SQL, with the same argument names", () => {
+  const calls = workerCalls();
+  const fns = sqlFunctions();
+  // The scan must see every call site, or a call could hide from the check.
+  const sites = readFileSync(join(SRC, "src", "db-supabase.ts"), "utf8").split('#rpc("').length - 1;
+  assert.equal(calls.size, sites, "the scan missed a #rpc call");
+  assert.ok(fns.size >= sites, `found only ${fns.size} SQL functions: the scan is broken`);
+  const problems: string[] = [];
+  for (const [name, args] of calls) {
+    const fn = fns.get(name);
+    if (!fn) {
+      problems.push(`${name}: no CREATE FUNCTION public.goal_cup_${name}( in the SQL`);
+      continue;
+    }
+    if (args.size === 0) problems.push(`${name}: no p_ argument was read from the Worker call: the scan is broken`);
+    for (const a of args) if (!fn.params.has(a)) problems.push(`${name}: the Worker sends ${a}; the SQL has no such parameter`);
+    for (const r of fn.required) if (!args.has(r)) problems.push(`${name}: the SQL requires ${r}; the Worker does not send it`);
+  }
+  assert.deepEqual(problems, []);
 });

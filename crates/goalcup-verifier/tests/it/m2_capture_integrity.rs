@@ -28,7 +28,6 @@ use goalcup_protocol::chain::Link;
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::export::{
     ACKS_FILE, BASELINE_FILE, CHAIN_FILE, RECEIPT_FILE, SEAL_FILE, TraceExport, manifest_sha256,
-    part_file_name,
 };
 use goalcup_protocol::provenance::{
     CaptureUnavailableV1, CutoffReachedV1, FinalizationV1, NoRepositoryReasonV1,
@@ -54,6 +53,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use support::records::key;
+use support::split_into_parts;
 
 const ENTRY: &str = "entry-m2-t18";
 /// Producer epochs: fresh 128-bit identifiers.
@@ -558,7 +558,7 @@ fn valid_unknown_protocol_keeps_integrity() {
     assert!(!report.coverage_incomplete);
     assert!(!report.torn_tail);
     assert_eq!(report.gap_count, 0);
-    assert_eq!(report.schema_version, 1);
+    assert_eq!(report.schema_version, 2);
 
     // Valid hashes: the validated prefix is the whole chain, as read back independently.
     let chain = chain_lines(dir.path());
@@ -834,6 +834,271 @@ fn hash_or_signature_tamper_fails() {
         report.findings
     );
     assert_eq!(report.verified_ack, None);
+}
+
+/// A signed-finalization trace like the receipt fixture above, but the receipt carries
+/// `receipt_deadline`, and the cutoff record (and the finalization chained to it) claims
+/// `cutoff_deadline` and `cutoff_receipt` instead of the receipt's own deadline and digest.
+/// With `ack_at`, the server also acknowledges the finalization at that time.
+fn signed_trace_with_cutoff(
+    receipt_deadline: &str,
+    cutoff_deadline: &str,
+    cutoff_receipt: Option<Sha256Digest>,
+    ack_at: Option<&str>,
+) -> tempfile::TempDir {
+    let key = server_key();
+    let dir = tempfile::tempdir().unwrap();
+    let mut export = capture_export(dir.path());
+    append(&mut export, &launch());
+    let (_, head) = export.head().unwrap();
+    let receipt = StartReceipt::sign(
+        StartReceiptClaims {
+            entry_id: ENTRY.to_string(),
+            connector_id: "codex-cli".to_string(),
+            workspace: "/ws".to_string(),
+            session_id: "session-t18".to_string(),
+            started_at: STARTED_AT.to_string(),
+            deadline_at: receipt_deadline.to_string(),
+            manifest_sha256: "11".repeat(32),
+            chain_head: head,
+            connector_dir_sha256: None,
+            run_public_key: None,
+            questionnaire_version: None,
+        },
+        &key,
+    )
+    .unwrap();
+    export.write_receipt(&receipt).unwrap();
+    for record in goal_stream().into_iter().chain(complete_wire(None)) {
+        append(&mut export, &record);
+    }
+    // The writer ties the finalization to the cutoff's receipt, so both name the same digest.
+    let digest = cutoff_receipt.unwrap_or_else(|| receipt.canonical_digest().unwrap());
+    export
+        .write_cutoff_for_protocol(
+            M2_PROTOCOL_VERSION,
+            ENTRY,
+            "2026-09-27T12:00:08Z",
+            CutoffReachedV1 {
+                receipt_sha256: digest.clone(),
+                deadline_at: utc(cutoff_deadline),
+                pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
+            },
+        )
+        .unwrap();
+    let last = export
+        .write_finalization_for_protocol(
+            M2_PROTOCOL_VERSION,
+            ENTRY,
+            "2026-09-27T12:00:09Z",
+            receipt_digest_finalization(&digest),
+        )
+        .unwrap();
+    if let Some(acked_at) = ack_at {
+        export
+            .append_ack_synced(&sign_ack(&key, &last, acked_at))
+            .unwrap();
+    }
+    drop(export);
+    dir
+}
+
+/// The chain's lines, each with its newline, read straight from the file.
+fn raw_lines(dir: &Path) -> Vec<Vec<u8>> {
+    std::fs::read(dir.join(CHAIN_FILE))
+        .unwrap()
+        .split_inclusive(|byte| *byte == b'\n')
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+fn write_lines(dir: &Path, lines: &[Vec<u8>]) {
+    std::fs::write(dir.join(CHAIN_FILE), lines.concat()).unwrap();
+}
+
+/// Whole-line tampering, one row per edit: each edit leaves every line a well-formed, canonical
+/// record, so only the chain's links and the phase rules can catch it. The scan must stop at the
+/// first bad line, exit 2, name that line's finding, and keep the lines before it.
+#[test]
+fn line_level_tampering_names_its_finding() {
+    // Where a line goes wrong, as the number of lines that must still validate.
+    type Tamper = fn(&Path) -> usize;
+    let rows: [(&str, Tamper, &str); 4] = [
+        (
+            "a dropped line leaves a hole in the sequence",
+            |dir| {
+                let mut lines = raw_lines(dir);
+                lines.remove(3);
+                write_lines(dir, &lines);
+                3
+            },
+            "link_seq_mismatch",
+        ),
+        (
+            "a duplicated line repeats a sequence number",
+            |dir| {
+                let mut lines = raw_lines(dir);
+                let copy = lines[4].clone();
+                lines.insert(5, copy);
+                write_lines(dir, &lines);
+                5
+            },
+            "link_seq_mismatch",
+        ),
+        (
+            "a line spliced in from another chain points at another head",
+            |dir| {
+                // Same entry and same length, but its request hint differs, so every link
+                // after the stream open has another hash.
+                let other = make_trace(&launched(complete_wire(Some("other-hint"))), true);
+                let theirs = raw_lines(other.path());
+                let mut lines = raw_lines(dir);
+                assert_eq!(lines.len(), theirs.len(), "the two chains line up");
+                let k = lines.len() - 3;
+                assert_ne!(lines[k], theirs[k], "the splice changes the line");
+                lines[k].clone_from(&theirs[k]);
+                write_lines(dir, &lines);
+                k
+            },
+            "link_prev_mismatch",
+        ),
+        (
+            "a correctly linked record after the terminal is out of phase",
+            |dir| {
+                let mut lines = raw_lines(dir);
+                let last: Envelope = serde_json::from_slice(lines.last().unwrap()).unwrap();
+                let mut env = v5(conn_open(OTHER, false));
+                env.link = Link {
+                    seq: last.link.seq + 1,
+                    prev: last.link.hash.clone(),
+                    hash: String::new(),
+                };
+                env.link.hash = env.expected_hash(&last.link.hash).unwrap();
+                let mut line = serde_json::to_vec(&env).unwrap();
+                line.push(b'\n');
+                let before = lines.len();
+                lines.push(line);
+                write_lines(dir, &lines);
+                before
+            },
+            "chain_phase_invalid",
+        ),
+    ];
+
+    for (name, tamper, code) in rows {
+        let dir = make_trace(&launched(complete_wire(None)), true);
+        let control = scan(dir.path()).0;
+        assert_eq!(control.exit_code(), 0, "{name}: control {control:#?}");
+        let keep = tamper(dir.path());
+        let (report, _) = scan(dir.path());
+        assert_eq!(report.exit_code(), 2, "{name}: {report:#?}");
+        // The scan stops at the bad line; whatever follows is only what the prefix lacks.
+        assert_eq!(
+            report.findings.first().map(String::as_str),
+            Some(code),
+            "{name}: {report:#?}"
+        );
+        assert_eq!(report.validated_records, keep as u64, "{name}: {report:#?}");
+    }
+}
+
+/// The cutoff record is what binds a signed finalization to the receipt's 168-hour deadline.
+/// A cutoff that names another deadline, or another receipt, is invalid evidence, and the
+/// matching control is clean.
+#[test]
+fn a_cutoff_that_does_not_match_its_receipt_names_its_finding() {
+    let options = supplied(&server_key());
+    let control = signed_trace_with_cutoff(DEADLINE_AT, DEADLINE_AT, None, None);
+    let (report, _) = scan_with(control.path(), &options);
+    assert_eq!(report.exit_code(), 0, "control: {report:#?}");
+    assert!(report.sealed);
+
+    let wrong_deadline = signed_trace_with_cutoff(DEADLINE_AT, "2026-09-27T12:31:00Z", None, None);
+    let (report, _) = scan_with(wrong_deadline.path(), &options);
+    assert_eq!(report.exit_code(), 2, "{report:#?}");
+    assert!(has(&report, "cutoff_deadline_mismatch"), "{report:#?}");
+    assert!(!has(&report, "cutoff_receipt_mismatch"), "{report:#?}");
+    assert!(!report.sealed, "{report:#?}");
+
+    let wrong_receipt = signed_trace_with_cutoff(
+        DEADLINE_AT,
+        DEADLINE_AT,
+        Some(Sha256Digest::try_from("ab".repeat(32)).unwrap()),
+        None,
+    );
+    let (report, _) = scan_with(wrong_receipt.path(), &options);
+    assert_eq!(report.exit_code(), 2, "{report:#?}");
+    assert!(has(&report, "cutoff_receipt_mismatch"), "{report:#?}");
+    assert!(!has(&report, "cutoff_deadline_mismatch"), "{report:#?}");
+}
+
+/// Where the counted prefix ends is a fact the report states, not a verdict: it never moves the
+/// exit. The chain's clocks here are the fixture's: the baseline at 12:00:00, every capture
+/// record at 12:00:01, the cutoff at 12:00:08 and the finalization at 12:00:09.
+#[test]
+fn the_report_states_where_the_deadline_falls_in_the_chain() {
+    let options = supplied(&server_key());
+    let early = "2026-09-27T12:00:01Z";
+    let acked = "2026-09-27T12:01:00Z";
+
+    // The boundary: the capture records are stamped 12:00:01, exactly the deadline's second, and
+    // count as at or before it. The cutoff (12:00:08) and the finalization (12:00:09) are after it.
+    let dir = signed_trace_with_cutoff(early, early, None, Some(acked));
+    let lines = chain_lines(dir.path()).len() as u64;
+    let (report, _) = scan_with(dir.path(), &options);
+    assert_eq!(
+        report.exit_code(),
+        0,
+        "facts do not change the exit: {report:#?}"
+    );
+    assert_eq!(report.records_after_deadline, Some(2), "{report:#?}");
+    assert_eq!(
+        report.last_seq_at_or_before_deadline,
+        Some(lines - 3),
+        "{report:#?}"
+    );
+    assert_eq!(report.last_ack_at.as_deref(), Some(acked), "{report:#?}");
+    assert_eq!(report.schema_version, 2);
+
+    // One second earlier is the other side of the boundary: only the baseline (12:00:00) is at or
+    // before the deadline, and every later record is after it.
+    let dir = signed_trace_with_cutoff("2026-09-27T12:00:00Z", "2026-09-27T12:00:00Z", None, None);
+    let (report, _) = scan_with(dir.path(), &options);
+    assert_eq!(
+        report.records_after_deadline,
+        Some(lines - 1),
+        "{report:#?}"
+    );
+    assert_eq!(
+        report.last_seq_at_or_before_deadline,
+        Some(0),
+        "{report:#?}"
+    );
+
+    // A deadline past the whole chain: nothing is after it, the last record is the finalization.
+    let dir = signed_trace_with_cutoff(DEADLINE_AT, DEADLINE_AT, None, None);
+    let (report, _) = scan_with(dir.path(), &options);
+    assert_eq!(report.records_after_deadline, Some(0), "{report:#?}");
+    assert_eq!(
+        report.last_seq_at_or_before_deadline,
+        Some(lines - 1),
+        "{report:#?}"
+    );
+    assert_eq!(report.last_ack_at, None);
+
+    // A deadline before the first record: nothing is at or before it.
+    let before_all = "2026-09-27T11:59:45Z";
+    let dir = signed_trace_with_cutoff(before_all, before_all, None, None);
+    let (report, _) = scan_with(dir.path(), &options);
+    assert_eq!(report.records_after_deadline, Some(lines), "{report:#?}");
+    assert_eq!(report.last_seq_at_or_before_deadline, None, "{report:#?}");
+
+    // Without a verified receipt there is no deadline to count against: absent, never zero.
+    let local = make_trace(&launched(complete_wire(None)), true);
+    let (report, _) = scan(local.path());
+    assert_eq!(report.records_after_deadline, None);
+    assert_eq!(report.last_seq_at_or_before_deadline, None);
+    assert_eq!(report.last_ack_at, None);
 }
 
 #[test]
@@ -1493,6 +1758,9 @@ fn producer_closed_attestation_does_not_claim_raw_sequence_reconstruction() {
         "verified_ack",
         "receipt_clock",
         "terminal",
+        "records_after_deadline",
+        "last_seq_at_or_before_deadline",
+        "last_ack_at",
     ];
     expected_keys.sort();
     let mut keys_sorted = keys.clone();
@@ -2772,7 +3040,7 @@ fn replaced_evidence_is_refused_not_followed() {
 #[test]
 fn exit_code_follows_canonical_precedence() {
     let base = CaptureIntegrityReport {
-        schema_version: 1,
+        schema_version: 2,
         integrity: CaptureIntegrity::Valid,
         anchor: AnchorState::LocalOnly,
         sealed: true,
@@ -2788,6 +3056,9 @@ fn exit_code_follows_canonical_precedence() {
         verified_ack: None,
         receipt_clock: None,
         terminal: None,
+        records_after_deadline: None,
+        last_seq_at_or_before_deadline: None,
+        last_ack_at: None,
     };
     let with = |edit: &dyn Fn(&mut CaptureIntegrityReport)| {
         let mut report = base.clone();
@@ -2816,7 +3087,7 @@ fn exit_code_follows_canonical_precedence() {
 }
 
 #[test]
-fn typed_reader_statuses_keep_the_schema_one_words_and_report_bytes() {
+fn typed_reader_statuses_keep_their_words_and_the_report_bytes() {
     assert_eq!(
         serde_json::to_string(&CaptureIntegrity::Valid).unwrap(),
         "\"valid\""
@@ -2840,7 +3111,7 @@ fn typed_reader_statuses_keep_the_schema_one_words_and_report_bytes() {
     assert_eq!(serde_json::to_string(&KeySource::None).unwrap(), "\"none\"");
 
     let report = CaptureIntegrityReport {
-        schema_version: 1,
+        schema_version: 2,
         integrity: CaptureIntegrity::Valid,
         anchor: AnchorState::LocalOnly,
         sealed: true,
@@ -2856,11 +3127,20 @@ fn typed_reader_statuses_keep_the_schema_one_words_and_report_bytes() {
         verified_ack: None,
         receipt_clock: None,
         terminal: None,
+        records_after_deadline: None,
+        last_seq_at_or_before_deadline: None,
+        last_ack_at: None,
     };
     assert_eq!(
         serde_json::to_string(&report).unwrap(),
-        r#"{"schema_version":1,"integrity":"valid","anchor":"local_only","sealed":true,"validated_records":1,"validated_bytes":2,"validated_head":"head","gap_count":0,"coverage_incomplete":false,"torn_tail":false,"key_source":"none","findings":[],"verified_ack":null,"receipt_clock":null,"terminal":null}"#
+        r#"{"schema_version":2,"integrity":"valid","anchor":"local_only","sealed":true,"validated_records":1,"validated_bytes":2,"validated_head":"head","gap_count":0,"coverage_incomplete":false,"torn_tail":false,"key_source":"none","findings":[],"verified_ack":null,"receipt_clock":null,"terminal":null,"records_after_deadline":null,"last_seq_at_or_before_deadline":null,"last_ack_at":null}"#
     );
+
+    // A schema-1 document, written before the deadline facts, still reads: they are absent.
+    let old = r#"{"schema_version":1,"integrity":"valid","anchor":"local_only","sealed":true,"validated_records":1,"validated_bytes":2,"validated_head":"head","gap_count":0,"coverage_incomplete":false,"torn_tail":false,"key_source":"none","findings":[],"verified_ack":null,"receipt_clock":null,"terminal":null}"#;
+    let parsed: CaptureIntegrityReport = serde_json::from_str(old).unwrap();
+    assert_eq!(parsed.schema_version, 1);
+    assert_eq!(parsed.records_after_deadline, None);
 }
 
 #[test]
@@ -2882,7 +3162,7 @@ fn cli_capture_integrity_mode() {
     );
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
-        "goalcup-verify: capture integrity valid (anchor local_only, exit 0)\n"
+        "goalcup-verify: capture integrity valid (anchor local_only, exit 0, findings: none)\n"
     );
 
     // A torn tail: the validated-prefix report still reaches stdout, with exit 2.
@@ -2897,6 +3177,9 @@ fn cli_capture_integrity_mode() {
     let torn: CaptureIntegrityReport = serde_json::from_slice(&output.stdout).unwrap();
     assert!(torn.torn_tail);
     assert!(torn.validated_records > 0);
+    // The stderr line names the findings, so a log line says why without the JSON.
+    let said = String::from_utf8(output.stderr).unwrap();
+    assert!(said.contains("exit 2, findings: torn_tail"), "{said}");
 
     // The development key option keeps its meaning and its disclosure.
     let key = server_key();
@@ -2994,26 +3277,6 @@ fn verifier_reads_a_recorded_harness_build_for_its_shape_only() {
 // ---------------------------------------------------------------------------------------
 // The chain as rotating parts (D55).
 // ---------------------------------------------------------------------------------------
-
-/// Split a closed single-file chain into part files before the given line indices: the names
-/// and bytes a rotating writer leaves, because rotation never changes a byte of the chain.
-fn split_into_parts(dir: &Path, cuts: &[usize]) -> Vec<PathBuf> {
-    let bytes = std::fs::read(dir.join(CHAIN_FILE)).unwrap();
-    let lines: Vec<&[u8]> = bytes.split_inclusive(|byte| *byte == b'\n').collect();
-    let mut bounds = vec![0];
-    bounds.extend_from_slice(cuts);
-    bounds.push(lines.len());
-    let mut start = 0u64;
-    let mut paths = Vec::new();
-    for pair in bounds.windows(2) {
-        let part = lines[pair[0]..pair[1]].concat();
-        let path = dir.join(part_file_name(start));
-        std::fs::write(&path, &part).unwrap();
-        start += part.len() as u64;
-        paths.push(path);
-    }
-    paths
-}
 
 #[test]
 fn a_rotated_chain_verifies_like_one_file() {

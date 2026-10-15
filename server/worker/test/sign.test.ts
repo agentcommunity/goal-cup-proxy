@@ -1,30 +1,27 @@
-// The Worker's signatures must match, byte for byte, the ones the Rust verifier's own code made.
-// The vectors come from the Rust tests' key: Ed25519 seed = 32 bytes of 0x07
-// (scratchpad/signing-vectors.txt, generated with crates/goalcup-protocol).
+// The Worker's signatures must match, byte for byte, the ones the Rust code makes. Both sides read
+// the same file, test/vectors/signing.json; crates/goalcup-protocol/tests/it/signing_vectors.rs
+// asserts the same hex. The key is the Rust tests' key: Ed25519 seed = 32 bytes of 0x07.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { Signer, ackSigningBytes, receiptSigningBytes, type ReceiptClaims } from "../src/sign.ts";
 import { fromHex, toHex } from "../src/util.ts";
 
-const SEED = "07".repeat(32);
-const PUBLIC_KEY = "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c";
-
-const RUST_RECEIPT_CLAIMS: ReceiptClaims = {
-  entry_id: "e0123456789abcdef",
-  connector_id: "codex-cli",
-  workspace: "/Users/p/goal-1/run-x/workspace — ünï",
-  session_id: "6f1c2d3e-0000-4000-8000-000000000001",
-  started_at: "2026-11-06T09:00:00Z",
-  deadline_at: "2026-11-13T09:00:00Z",
-  manifest_sha256: "a".repeat(64),
-  chain_head: "b".repeat(64),
-  connector_dir_sha256: "c".repeat(64),
+const VECTORS = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "vectors", "signing.json"), "utf8")) as {
+  seed_hex: string;
+  public_key: string;
+  receipt: { claims: ReceiptClaims; signature: string };
+  ack: { entry_id: string; seq: number; hash: string; acked_at: string; server_signature: string };
 };
-const RUST_RECEIPT_SIGNATURE =
-  "d3ffe33dbe7b663e63d246027245cc7540b458b1e33c9c888396b84745bc5bf2527621ea0068f7d015a8c22fe860590620735e1a5f8247c5c831e79bdc5c3f02";
-const RUST_ACK_SIGNATURE =
-  "5acf66735c55ef842f15a40f962e774eb26adb78d10d2c80942b06ea67b4eb7c6583b0bb7bc45ab169c6996e3b4f7cab19ccd17890a68cba1269c9dd980c440d";
+
+const SEED = VECTORS.seed_hex;
+const PUBLIC_KEY = VECTORS.public_key;
+const RUST_RECEIPT_CLAIMS: ReceiptClaims = VECTORS.receipt.claims;
+const RUST_RECEIPT_SIGNATURE = VECTORS.receipt.signature;
+const RUST_ACK_SIGNATURE = VECTORS.ack.server_signature;
 
 test("public key derived from the seed is the Rust one", async () => {
   const signer = await Signer.fromSeedHex(SEED);
@@ -41,14 +38,9 @@ test("start receipt reproduces the Rust signature byte for byte", async () => {
 
 test("acknowledgement reproduces the Rust signature byte for byte", async () => {
   const signer = await Signer.fromSeedHex(SEED);
-  const ack = await signer.signAck("e0123456789abcdef", 812, "d".repeat(64), "2026-11-06T10:00:00Z");
-  assert.deepEqual(ack, {
-    entry_id: "e0123456789abcdef",
-    seq: 812,
-    hash: "d".repeat(64),
-    acked_at: "2026-11-06T10:00:00Z",
-    server_signature: RUST_ACK_SIGNATURE,
-  });
+  const a = VECTORS.ack;
+  const ack = await signer.signAck(a.entry_id, a.seq, a.hash, a.acked_at);
+  assert.deepEqual(ack, { ...a, server_signature: RUST_ACK_SIGNATURE });
 });
 
 test("signing bytes: domain tag, compact JSON, field order", () => {

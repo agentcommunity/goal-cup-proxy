@@ -261,8 +261,10 @@ leaves its mark.
   key, whitespace or a carriage return), `recovery_names_non_wire_producer`, `seal_manifest_malformed`,
   `record_malformed`. The `Launch` check judges the validated prefix, so a trace that breaks before
   its `Launch` also lists `launch_missing`.
-- Reader facts a consumer may rely on: `verified_ack`, `receipt_clock` and `terminal`
+- Reader facts a consumer may rely on: `verified_ack`, `receipt_clock`, `last_ack_at` and `terminal`
   (`LocalFinish`, `SignedFinalization` or `LegacySeal`). A missing receipt or ACK is never invented.
+  `records_after_deadline` and `last_seq_at_or_before_deadline` use the participant's machine clock: a
+  hint, not proof.
   A complete local trace may exit 0 with anchor `LocalOnly` and delivery `LocalOnly`; that asserts
   neither signed eligibility nor absence of assistance.
 - Decoders are the verifier's `DecoderV1` API (`capture_analysis/api.rs`). A decoder sees the

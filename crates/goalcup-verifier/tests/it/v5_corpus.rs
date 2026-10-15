@@ -230,6 +230,70 @@ fn the_corpus_directory_and_the_table_agree() {
 }
 
 // ---------------------------------------------------------------------------------------
+// The chain as rotating parts (D55).
+// ---------------------------------------------------------------------------------------
+
+/// Part naming and reading are on-disk format, and the uploader depends on them. Every corpus
+/// trace, cut into parts the way a rotating writer leaves them, must read exactly as the one
+/// file does and as `expected.toml` says. Nothing here regenerates a byte of the corpus: the
+/// copy is split, the committed directory is not.
+#[test]
+fn every_corpus_trace_reads_the_same_when_rotated() {
+    let text = std::fs::read_to_string(corpus_dir().join("expected.toml")).unwrap();
+    let expected: Expected = toml::from_str(&text).unwrap();
+    let mut rotated_cases = 0;
+    for case in &expected.case {
+        if case.exit == 3 || case.path.starts_with("..") {
+            continue; // no v5 chain to split
+        }
+        let name = &case.name;
+        let whole = support::materialize_private(&corpus_dir().join(&case.path));
+        let parts = support::materialize_private(&corpus_dir().join(&case.path));
+        let lines = std::fs::read(parts.path().join(CHAIN_FILE))
+            .unwrap()
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count();
+        if lines < 3 {
+            continue;
+        }
+        let mut cuts = vec![1, lines / 2, lines - 1];
+        cuts.dedup();
+        let made = support::split_into_parts(parts.path(), &cuts);
+        assert_eq!(made.len(), cuts.len() + 1, "{name}: parts written");
+
+        let run = |root: &Path| {
+            let output = verify(case, &["--capture-integrity".as_ref(), root.as_os_str()]);
+            let report: Value = serde_json::from_slice(&output.stdout)
+                .unwrap_or_else(|e| panic!("{name}: stdout is not a report: {e}"));
+            (output.status.code(), report)
+        };
+        let (whole_exit, whole_report) = run(whole.path());
+        let (exit, report) = run(parts.path());
+        assert_eq!(exit, Some(case.exit), "{name}: rotated exit\n{report}");
+        assert_eq!(exit, whole_exit, "{name}: exit differs from one file");
+        assert_eq!(
+            report, whole_report,
+            "{name}: the report differs from one file"
+        );
+        let findings: Vec<&str> = report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|code| code.as_str().unwrap())
+            .collect();
+        assert_eq!(findings, case.findings, "{name}: rotated findings");
+        assert_eq!(
+            report["validated_head"].as_str(),
+            case.validated_head.as_deref(),
+            "{name}: rotated validated_head"
+        );
+        rotated_cases += 1;
+    }
+    assert!(rotated_cases >= 20, "only {rotated_cases} cases were split");
+}
+
+// ---------------------------------------------------------------------------------------
 // The seal of a clone (D56).
 // ---------------------------------------------------------------------------------------
 
