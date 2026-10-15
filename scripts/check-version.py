@@ -142,7 +142,8 @@ def check(root: Path) -> list[str]:
                 findings.append(f"Cargo.lock: {package} is {found}, the workspace is {version}")
 
     current = re.compile(
-        rf"\b{OWN}[ :=\"'`]{{1,4}}v?(?<![0-9.\-]){re.escape(version)}(?![0-9]|\.[0-9])", re.I
+        rf"\b(?:{OWN}[ :=\"'`]{{1,4}}|goalcup-)v?{re.escape(version)}(?![0-9]|\.[0-9])",
+        re.I,
     )
     for name in files:
         if not is_scanned(name) or not (root / name).is_file():

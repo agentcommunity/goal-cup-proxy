@@ -52,7 +52,7 @@ class ReleaseTests(unittest.TestCase):
         bindir = root / "bin"
         bindir.mkdir()
         gh = bindir / "gh"
-        gh.write_text(f'#!/bin/sh\necho "$*" >> "{self.gh_log}"\n')
+        gh.write_text(f'#!/bin/sh\necho "$*" >> "{self.gh_log}"\n[ -z "$GH_FAIL" ]\n')
         gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
         self.env = {**os.environ, **IDENTITY, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}
         self.git("init", "-q", "-b", "main")
@@ -138,6 +138,14 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.git("branch", "--list", "release/*"), "")
         self.assertEqual(self.git("status", "--porcelain"), "")
         self.assertEqual(self.git("branch", "--show-current").strip(), "main")
+
+    def test_a_failed_pull_request_leaves_the_owner_back_on_their_branch_with_the_next_step(self) -> None:
+        self.env["GH_FAIL"] = "1"
+        result = self.release("prepare", "0.7.0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("gh pr create --base main --head release/v0.7.0", result.stderr)
+        self.assertEqual(self.git("branch", "--show-current").strip(), "main")
+        self.assertEqual(self.git("status", "--porcelain"), "")
 
     # tag
 

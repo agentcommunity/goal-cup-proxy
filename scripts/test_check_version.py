@@ -74,6 +74,10 @@ class CheckVersionTests(unittest.TestCase):
         found = self.findings()
         self.assertTrue(any("tracer_version" in f for f in found), found)
 
+    def test_a_tarball_name_with_the_current_version_is_flagged(self) -> None:
+        self.write("docs/GUIDE.md", "Download goalcup-0.6.0-aarch64-apple-darwin.tar.gz.\n")
+        self.assertEqual(len(self.findings()), 1)
+
     def test_the_same_digits_outside_the_tracers_context_are_not_flagged(self) -> None:
         self.write("docs/GUIDE.md", "The fake harness `matrix-fake-tui 0.6.0` and Node v22.18.0.\n")
         self.write("crates/c/src/lib.rs", '// /opt/homebrew/Cellar/goalcup/0.6.0/bin/goalcup\n')

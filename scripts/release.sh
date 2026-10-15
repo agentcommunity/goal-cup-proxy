@@ -105,8 +105,11 @@ fi
 git switch -q -c "$branch"
 git add Cargo.toml Cargo.lock
 git commit -q -m "Release $new"
-git push -q -u origin "$branch"
-gh pr create --base main --head "$branch" --title "Release $new" \
-    --body "Sets the workspace version to $new. After it is merged: sh scripts/release.sh tag $new"
+if ! { git push -q -u origin "$branch" &&
+    gh pr create --base main --head "$branch" --title "Release $new" \
+        --body "Sets the workspace version to $new. After it is merged: sh scripts/release.sh tag $new"; }; then
+    git checkout -q "$start"
+    die "the release commit is on the local branch $branch (and on origin if the push worked). Finish by hand: git push -u origin $branch && gh pr create --base main --head $branch"
+fi
 git checkout -q "$start"
 echo "release: pull request opened for $branch. After it is merged: sh scripts/release.sh tag $new"
