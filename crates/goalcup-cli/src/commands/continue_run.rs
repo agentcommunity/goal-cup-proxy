@@ -27,7 +27,7 @@
 use crate::CliError;
 use crate::commands::start::{
     Continuing, SleepLockFn, StartOptions, continue_preflight, continue_segment,
-    lock_home_for_continue, run_folder_for_continue, still_recording,
+    lock_home_for_continue, refuse_wsl, run_folder_for_continue, still_recording,
 };
 use crate::connector::HarnessConnector;
 use crate::entries::{EntryRecord, read_entry};
@@ -145,6 +145,15 @@ pub fn continue_with(
     let connector =
         crate::connector::load_harness(connectors, &record.connector_id, previous_entry.dev)?;
     let folder = run_folder_for_continue(opts.run_folder.as_deref(), &record.workspace)?;
+    // WSL1 cannot run this, and WSL2 cannot keep a run on a Windows drive: judged here, over every
+    // folder the segment writes to, before the home is locked or anything is closed or changed.
+    refuse_wsl(
+        env,
+        cfg,
+        &folder,
+        record.workspace.parent(),
+        "Nothing was changed.",
+    )?;
 
     // 0. Every refusal that needs no server and changes nothing, before the home is locked and
     //    before any segment is sealed or sent.
