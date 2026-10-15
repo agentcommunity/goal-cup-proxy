@@ -1,8 +1,8 @@
 //! The stderr tee of a Hermes capture child (D40, D41).
 //!
 //! Hermes prints one line, `session_id: <id>`, on stderr after its turn: the identity of the one
-//! session file the daemon may read (`docs/qualification/m2-hermes-readiness.md`, "Session
-//! identity carrier"). This module reads that line from the child's real stderr, forwards every
+//! session file the daemon may read (`docs/harnesses/hermes-cli.md`, "Session
+//! format and identity"). This module reads that line from the child's real stderr, forwards every
 //! byte of both streams to the participant's terminal unchanged, and scans both streams for
 //! fragments of the provider key as they pass.
 //!

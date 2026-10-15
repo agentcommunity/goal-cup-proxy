@@ -24,13 +24,13 @@
 //! at launch binds its one scoped native source there, or a stream-less `SourceChanged` gap
 //! records its unavailability; a profile whose identity binding is deferred binds it at finish
 //! instead and records no gap at launch (CONTRACTS.md,
-//! "Amendment 2026-10-02 (C6 local finish budget, H-10 4a)" ¶9). Controlled-workload stores
+//! "C6 local finish budget (H-10 4a)" ¶9). Controlled-workload stores
 //! retain run-HOME capture. Records are durable from the next sync.
 //!
 //! # Local finish
 //!
 //! The v5 seal runs inside one local-finish budget (`LOCAL_CAPTURE_FINISH_BUDGET`, CONTRACTS.md
-//! "Amendment 2026-10-02 (C6 local finish budget, H-10 4a)"), split into a drain share and a
+//! "C6 local finish budget (H-10 4a)"), split into a drain share and a
 //! commit reserve ([`FINISH_COMMIT_RESERVE`]). It closes admission, lets live wire producers
 //! drain until the end of the drain share, stops the owner (native finish, remaining producers
 //! cut as losses, flush, sync), chains the proxy's counters as gaps, ends the registered process
@@ -48,7 +48,7 @@
 //! # Who decides what a `Recovery` supersedes
 //!
 //! Four layers each track which producers are wire, and they differ on purpose (CONTRACTS.md,
-//! H-16 ¶4). The receiver judges per connection, the sink entry-wide across wire, native and goal
+//! "Recovery supersession (CP-A4)" and "Proxy loss in the stream (H-16)"). The receiver judges per connection, the sink entry-wide across wire, native and goal
 //! producers, the writer chain validity under quota, and the reader is the authority. A
 //! predecessor is an *orphan* when the chain holds nothing under its name; a `Loss` chains only as
 //! a stream-less gap, so it names no producer.
@@ -196,8 +196,8 @@ pub(crate) struct CaptureEntry {
     owner: Arc<OwnerControl>,
     thread: Mutex<Option<JoinHandle<()>>>,
     /// Set by every finish attempt before it closes admission; nothing clears it. It is the
-    /// "a finish has begun" signal a late native-scope bind is refused on (CONTRACTS.md, H-10
-    /// 4a ¶9), and it is true for an attempt that expired as well as for one that sealed.
+    /// "a finish has begun" signal a late native-scope bind is refused on (CONTRACTS.md, C6 local
+    /// finish budget ¶9), and it is true for an attempt that expired as well as for one that sealed.
     finishing: AtomicBool,
     /// What an expired finish left for the next one to chain; see [`ExpiredFinish`].
     expired: Mutex<Option<ExpiredFinish>>,

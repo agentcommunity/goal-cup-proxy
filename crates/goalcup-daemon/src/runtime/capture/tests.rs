@@ -1297,7 +1297,7 @@ fn a_recorded_confirmed_outcome_is_reused_and_nothing_is_signalled_again() {
 
 #[test]
 fn an_inconclusive_recorded_outcome_is_never_reused() {
-    // CONTRACTS.md, C6 local finish budget amendment, ¶5: a parked, refused or
+    // CONTRACTS.md, C6 local finish budget ¶5: a parked, refused or
     // still-running harness may be running now, so the next finish asks again and binds
     // what it finds.
     assert_eq!(
@@ -1506,7 +1506,7 @@ fn owner_post_stop_drain_fits_commit_reserve() {
     // The freeze gate, enforced on the profile that ships: the owner's stop must leave the
     // commit reserve its room. Half the response margin is about 3.6x the measured 138 ms.
     // A debug build is about 25x slower and may refuse at `owner_drain` after a fully spent
-    // drain share (CONTRACTS.md, H-10 4a ¶10), so it keeps only the loose ceiling above.
+    // drain share (CONTRACTS.md, C6 local finish budget ¶10), so it keeps only the loose ceiling above.
     #[cfg(not(debug_assertions))]
     assert!(
         took < FINISH_RESPONSE_MARGIN / 2,

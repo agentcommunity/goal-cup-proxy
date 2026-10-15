@@ -1,6 +1,7 @@
 //! The per-line hash chain.
 //!
-//! The formula reproduces `spikes/stub-tailer.py`'s `Chain.emit` exactly:
+//! The formula reproduces the M0 stub tailer's `Chain.emit` (a spike script no longer in the
+//! tree) exactly:
 //! `hash = hex(sha256(prev_hex_ascii || payload_bytes))`, starting from 64 zero
 //! characters. Every M0 leg-1 capture was written this way, and every v5 chain links its
 //! envelopes' `chain_bytes` with the same [`link_hash`], so changing it invalidates both.

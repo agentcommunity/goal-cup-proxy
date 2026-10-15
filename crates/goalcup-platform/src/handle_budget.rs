@@ -1,4 +1,6 @@
-//! Shared native-handle accounting for bounded Git source capture.
+//! A shared limit on how many native file or directory handles one capture may hold open at
+//! once. A caller reserves a permit before it opens a handle and the permit frees its slot
+//! when dropped.
 
 use std::fmt;
 use std::sync::{
@@ -6,7 +8,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-/// Maximum simultaneously live source and scratch handles in one capture.
+/// Maximum simultaneously live source and scratch handles in one capture. The name is older
+/// than its use: the limit applies to any capture, not only to Git.
 pub const MAX_GIT_LIVE_HANDLES_V1: usize = 32;
 
 /// A shared fixed-capacity handle budget.

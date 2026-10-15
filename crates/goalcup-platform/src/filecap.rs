@@ -1,4 +1,5 @@
-//! The refusal and error types shared by `readcap` and `tracecap`'s handle-rooted file access.
+//! The refusal and error types for `readcap`'s handle-rooted file access. `tracecap` and
+//! `sourcecap` define their own error types.
 
 use std::fmt;
 use std::io;

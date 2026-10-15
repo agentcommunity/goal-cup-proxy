@@ -6,12 +6,13 @@
 //! would be running on a sealed entry. This command ends the child it just started, here, and
 //! says so.
 //!
-//! **This is the one place in this crate, besides `commands/start.rs`'s abandon path, that signals
-//! a process, and it is not a second terminator.** It acts only on this process's own unreaped
-//! `Child` (whose pid cannot have been recycled) and on that child's native descendant bound by
-//! its creation identity. It never touches an entry, a seal or a trace; `goalcup_daemon::terminate`
-//! remains the only terminator of a recorded run. `tests/it/process_handoff.rs`
-//! (`this_crate_never_terminates_anything`) exempts this file by name and no other new one.
+//! **This is not a second terminator.** It acts only on this process's own unreaped `Child`
+//! (whose pid cannot have been recycled) and on that child's native descendant bound by its
+//! creation identity. It never touches an entry, a seal or a trace; `goalcup_daemon::terminate`
+//! remains the only terminator of a recorded run. Other code in this crate also signals
+//! processes (the abandon path in `commands/start.rs`, the version probe, the Linux subreaper
+//! sweep); `tests/it/process_handoff.rs` (`this_crate_never_terminates_anything`) exempts each
+//! file by name and gives its reason.
 //!
 //! The CLI cannot link the daemon, so only protocol functions are used.
 
@@ -171,7 +172,7 @@ impl NativeTarget {
 /// What it does not claim: descendants other than the root and that native child are never
 /// signalled (the D30 residual). The native child's parentage is read in one `ps` snapshot and
 /// its creation identity a moment later; a pid reused between the two would be adopted under the
-/// newcomer's identity (stated in CONTRACTS.md, spawn gate amendment, ¶5(d)).
+/// newcomer's identity (stated in CONTRACTS.md, C6 capture spawn gate ¶5(d)).
 #[cfg(unix)]
 pub fn end_released_child(mut child: Child, handle: &ProcessHandle) -> ReleasedChildEnd {
     use goalcup_protocol::process::KILL_SWEEP_TIMEOUT_MS;

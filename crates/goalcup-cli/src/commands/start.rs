@@ -3271,7 +3271,7 @@ fn proxy_admission_line(
 /// harness has exited and immediately before the proxy's stop: nothing runs between the two. The
 /// proxy's stop gets its drain share (the budget less `FINISH_COMMIT_RESERVE`), the daemon's seal
 /// its own request's remainder, and the sender's drain and the scoped stdout what is left of the
-/// same deadline (CONTRACTS.md, "Amendment 2026-10-02 (C6 local finish budget, H-10 4a)").
+/// same deadline (CONTRACTS.md, "C6 local finish budget (H-10 4a)").
 ///
 /// A Hermes child's session identity is read between the two: after the proxy has stopped and
 /// before the seal is sent, by [`crate::capture_tee::marker_wait_end`]'s deadline, which leaves

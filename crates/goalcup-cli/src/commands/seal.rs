@@ -126,7 +126,7 @@ pub fn seal_with(
 /// --goal-file` hands it over when its harness exits, and this command has none.
 ///
 /// The finish runs inside `deadline`, the one local-finish budget its caller started
-/// (CONTRACTS.md, H-10 4a). Every attempt states what remains of it, and its transport timeout
+/// (CONTRACTS.md, C6 local finish budget). Every attempt states what remains of it, and its transport timeout
 /// is that plus `termination_allowance` (the harness's termination is outside the budget) plus
 /// the connect slack. A refusal or an ambiguous outcome is an exit-1 refusal with a fixed
 /// sentence; the daemon answers a repeated finish with the one it committed.
