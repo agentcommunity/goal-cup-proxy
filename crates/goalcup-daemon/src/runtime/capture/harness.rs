@@ -100,17 +100,23 @@ fn recorded_capture_harness_from_paths(
     }
     None
 }
+/// Load one connector folder. Every error names the folder (a connector id, not a secret),
+/// because one bad sibling refuses every start and an operator must see which one.
 fn load_child(path: &Path) -> Result<LoadedConnector, DaemonError> {
+    let name = path
+        .file_name()
+        .map_or_else(|| "?".into(), |name| name.to_string_lossy().into_owned());
     load_discovered_dir(path, Origin::Dev).map_err(|error| match error {
         ProtocolError::Field { ref field, .. } if field == "connector_folder" => {
-            DaemonError::Refused(format!("connector harness: {error}"))
+            DaemonError::Refused(format!("connector folder {name}: {error}"))
         }
         ProtocolError::Field { ref field, .. } if field != "connector_dir" => {
-            DaemonError::Config(format!("connector harness: {error}"))
+            DaemonError::Config(format!("connector folder {name}: {error}"))
         }
-        _ => DaemonError::Config(
-            "a connector harness directory is invalid; no bytes outside it were read".into(),
-        ),
+        _ => DaemonError::Config(format!(
+            "connector folder {name}: a connector harness directory is invalid; no bytes \
+             outside it were read"
+        )),
     })
 }
 

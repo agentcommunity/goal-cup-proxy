@@ -34,7 +34,10 @@ impl CycleCounters {
     /// One tick's pass failed, on this error.
     fn note(&self, error: &DaemonError) {
         self.tick.fetch_add(1, Ordering::Relaxed);
-        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(path_free(error));
+        let words = path_free(error);
+        // `daemon.log` is where the CLI sends an operator; `last` is overwritten by the next error.
+        eprintln!("goalcup-daemon: cycle error: {words}");
+        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(words);
     }
 
     /// The wire shape, as the status document carries it.

@@ -116,8 +116,7 @@ fn capture_words(snapshot: &M2Status) -> &'static str {
              has not been launched."
         }
         (_, CaptureState::Recording) => {
-            "Local capture is recording to this machine only: nothing is uploaded, and no \
-             server has signed a start or a deadline."
+            "Local capture is recording: the chain is written on this machine."
         }
         (_, CaptureState::Incomplete) => {
             "Local capture is recording with losses: some observations were not retained, and \

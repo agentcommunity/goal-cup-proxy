@@ -353,6 +353,12 @@ async fn a_connector_directory_holding_a_symlink_is_refused_at_create_before_any
         "the refusal says the connector directory could not be loaded: {}",
         body.error.message
     );
+    // One bad sibling blocks every start, so the refusal names the folder an operator must fix.
+    assert!(
+        body.error.message.contains("claude-code-cli"),
+        "the refusal names the connector folder: {}",
+        body.error.message
+    );
     assert!(
         !body.error.message.contains("alias.json")
             && !body.error.message.contains("project-settings"),

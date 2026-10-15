@@ -91,9 +91,9 @@ pub(super) struct DaemonInner {
 ///
 /// # The listener is loopback and nothing else
 ///
-/// `DaemonConfig::validate` refuses a non-loopback `control_addr`. Three control routes are
-/// unauthenticated (`control::is_public_route`) and what makes that safe is that the socket is not
-/// reachable off this machine.
+/// `DaemonConfig::validate` refuses a non-loopback `control_addr`. One control route, the
+/// per-entry status, is unauthenticated (`control::is_public_route`) and what makes that safe is
+/// that the socket is not reachable off this machine.
 pub struct Daemon {
     pub(super) inner: Arc<DaemonInner>,
 }
