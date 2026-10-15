@@ -52,6 +52,37 @@ pub mod upload;
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::control::ControlError;
 
+/// The one local-finish budget this process works within
+/// ([`goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET`]). Every shipped build has the
+/// protocol's; a test build can name a shorter one ([`set_finish_budget`]) so that a test of
+/// what a finish does when it is cut need not wait three minutes. The daemon grants the finish
+/// what the request states (clamped to its own budget), so a shorter budget here is a shorter
+/// finish there too.
+pub fn finish_budget() -> std::time::Duration {
+    #[cfg(feature = "test-support")]
+    {
+        let ms = FINISH_BUDGET_MS.load(std::sync::atomic::Ordering::SeqCst);
+        if ms != 0 {
+            return std::time::Duration::from_millis(ms);
+        }
+    }
+    goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET
+}
+
+#[cfg(feature = "test-support")]
+static FINISH_BUDGET_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// **Test-only.** Name the finish budget of this process (never more than the protocol's).
+#[doc(hidden)]
+#[cfg(feature = "test-support")]
+pub fn set_finish_budget(budget: std::time::Duration) {
+    let budget = budget.min(goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET);
+    FINISH_BUDGET_MS.store(
+        u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+}
+
 /// The version this build carries, printed by `goalcup --version`.
 pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -125,5 +156,15 @@ impl CliError {
                 | ControlError::Unsupported(_) => 3,
             },
         }
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod finish_budget_tests {
+    #[test]
+    fn a_test_budget_never_exceeds_the_protocols() {
+        let shipped = goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET;
+        super::set_finish_budget(shipped * 4);
+        assert_eq!(super::finish_budget(), shipped);
     }
 }

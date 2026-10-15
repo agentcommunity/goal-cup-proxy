@@ -1153,6 +1153,29 @@ async fn a_request_after_a_clean_upstream_close_is_not_a_loss() {
     assert!(!has(&streams(&frames), WIRE_REQUEST, 2));
 }
 
+/// Each request relayed on an intercepted connection is one model request, however many share
+/// the connection; a request for another host is not the captured host's.
+#[tokio::test]
+async fn two_requests_on_one_connection_count_two() {
+    let sink = RecordingSink::new();
+    let mut h = start(emitter_for(sink.clone()), policy(&[("/v1/", true, None)]));
+    assert_eq!(h.emitter.model_requests(), 0);
+    let ok = response("HTTP/1.1 200 OK", &["Content-Length: 0"], b"");
+    round_trip(&mut h, &request("GET", "/v1/models", &[], b""), &ok).await;
+    assert_eq!(h.emitter.model_requests(), 1);
+    // The second request is on the same connection, and one the policy does not capture: it is
+    // still a request of the captured host.
+    round_trip(&mut h, &request("GET", "/health", &[], b""), &ok).await;
+    assert_eq!(h.emitter.model_requests(), 2);
+    let counter = h.emitter.model_requests_counter();
+    close_both(h).await;
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        2,
+        "the shared counter keeps its value when the connection ends"
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // Upgrades.
 // ---------------------------------------------------------------------------------------

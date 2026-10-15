@@ -47,9 +47,13 @@
 //! after the previous attempt or epoch ended. A failure before any handshake byte was written
 //! retries the same ID; once a handshake may have reached the receiver the ID is spent, and a
 //! poll for it answers `RetryFresh` unless it was already answered `Ready`.
-//! [`MAX_CONNECTION_FAILURES`] failed attempts and unexpected socket losses per launch, or
-//! [`MAX_PRODUCERS`] spent IDs, disable the sink for good. `Ready` never resets that count and
-//! a new ID cannot evade it. A clean shutdown and a `QueueFull` latch are not failures.
+//! [`MAX_CONNECTION_FAILURES`] failed attempts and unexpected socket losses **in a row**, or
+//! [`MAX_PRODUCERS`] spent IDs per launch, disable the sink for good. An epoch that took items
+//! and stayed up for [`STABLE_EPOCH`] before it was lost ends the row (that loss is the first of
+//! the next), so a week of daemon stalls that each recover is not a reason to stop capturing;
+//! `Ready` alone does not, nor does a receiver that takes a frame and closes at once (one that
+//! refuses the credential), and a new ID cannot evade the count. A clean shutdown and a
+//! `QueueFull` latch are not failures.
 //! Nothing is ever replayed: a new epoch starts with an empty queue, so the emitter's
 //! `Recovery` right after `Ready` never meets queue pressure. If that epoch's socket is
 //! already known dead, the `Recovery` is refused (`IngestLost`), never answered `Queued` and
@@ -93,9 +97,15 @@ pub const RECONNECT_DELAYS: [Duration; 4] = [
     Duration::from_secs(10),
 ];
 
-/// Failed connection attempts plus unexpected socket losses one launch tolerates. The one
-/// that reaches this count disables the sink (`IngestLost`); nothing resets the count.
+/// Failed connection attempts plus unexpected socket losses in a row that one launch
+/// tolerates. The one that reaches this count disables the sink (`IngestLost`). A connection
+/// that worked (it took items and lived [`STABLE_EPOCH`]) ends the row: only a receiver that
+/// does not keep a connection, attempt after attempt, is given up on.
 pub const MAX_CONNECTION_FAILURES: u64 = 10;
+
+/// How long an epoch that took items must have stayed up before its loss starts a new row of
+/// failures instead of adding to the last one.
+pub const STABLE_EPOCH: Duration = Duration::from_secs(60);
 
 /// Bounds one attempt's TCP connect, and separately its handshake write.
 pub const CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -146,6 +156,7 @@ pub struct SinkConfig {
     producer: String,
     shutdown_deadline: Duration,
     reconnect_delays: [Duration; 4],
+    stable_after: Duration,
 }
 
 impl SinkConfig {
@@ -167,7 +178,16 @@ impl SinkConfig {
             producer,
             shutdown_deadline,
             reconnect_delays: RECONNECT_DELAYS,
+            stable_after: STABLE_EPOCH,
         }
+    }
+
+    /// **Test-only.** Replaces [`STABLE_EPOCH`] so tests need not wait a minute.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_stable_after(mut self, stable_after: Duration) -> Self {
+        self.stable_after = stable_after;
+        self
     }
 
     /// **Test-only.** Replaces the reconnect schedule (every entry nonzero) so tests can
@@ -194,6 +214,7 @@ impl fmt::Debug for SinkConfig {
             .field("producer", &self.producer)
             .field("shutdown_deadline", &self.shutdown_deadline)
             .field("reconnect_delays", &self.reconnect_delays)
+            .field("stable_after", &self.stable_after)
             .finish()
     }
 }
@@ -264,7 +285,8 @@ pub struct SenderStats {
     pub handshakes_sent: u64,
     /// Epochs whose handshake was written, so they accepted frames. Not a receiver answer.
     pub epochs_ready: u64,
-    /// Failed attempts plus unexpected socket losses (at most [`MAX_CONNECTION_FAILURES`]).
+    /// Failed attempts plus unexpected socket losses, all told. The sink is disabled when
+    /// [`MAX_CONNECTION_FAILURES`] of them come in a row (`State::consecutive_failures`).
     pub failures: u64,
     /// Answered-`Ready` epochs that ended in capture loss (`QueueFull`/`IngestLost`).
     /// Sticky: a later recovered epoch never lowers it.
@@ -392,6 +414,11 @@ struct State {
     /// Set by the writer when it ends the final epoch itself, or by the deadline.
     outcome: Option<SenderOutcome>,
     stats: SenderStats,
+    /// Failures since a connection last worked ([`STABLE_EPOCH`]).
+    consecutive_failures: u64,
+    /// The live epoch's start, and whether it has taken an item.
+    epoch_since: Option<Instant>,
+    epoch_wrote: bool,
 }
 
 impl State {
@@ -407,6 +434,9 @@ impl State {
             last_loss: None,
             outcome: None,
             stats: SenderStats::default(),
+            consecutive_failures: 0,
+            epoch_since: None,
+            epoch_wrote: false,
         }
     }
 
@@ -466,11 +496,12 @@ impl State {
         self.phase = Phase::Disabled(reason);
     }
 
-    /// Counts one failed attempt or unexpected socket loss; the last one allowed disables the
-    /// sink.
+    /// Counts one failed attempt or unexpected socket loss; the last one allowed in a row
+    /// disables the sink.
     fn count_failure(&mut self) -> bool {
         self.stats.failures += 1;
-        let exhausted = self.stats.failures >= MAX_CONNECTION_FAILURES;
+        self.consecutive_failures += 1;
+        let exhausted = self.consecutive_failures >= MAX_CONNECTION_FAILURES;
         if exhausted {
             self.latch_terminal(GapReason::IngestLost);
         }
@@ -673,6 +704,7 @@ pub fn connect_sink(config: SinkConfig) -> Result<Arc<IngestSink>, SinkConfigErr
         producer,
         shutdown_deadline,
         reconnect_delays,
+        stable_after,
     } = config;
     if !endpoint.ip().is_loopback() || endpoint.port() == 0 {
         return Err(SinkConfigError::NotLoopback);
@@ -703,6 +735,7 @@ pub fn connect_sink(config: SinkConfig) -> Result<Arc<IngestSink>, SinkConfigErr
         entry_id,
         secret,
         delays: reconnect_delays,
+        stable_after,
     };
     let task = runtime.spawn(writer.run());
     Ok(Arc::new(IngestSink {
@@ -846,6 +879,7 @@ struct Writer {
     entry_id: String,
     secret: IngestSecret,
     delays: [Duration; 4],
+    stable_after: Duration,
 }
 
 /// The writer's next step inside an epoch.
@@ -974,6 +1008,8 @@ impl Writer {
             next_seq: 0,
             last_seq: None,
         });
+        state.epoch_since = Some(Instant::now());
+        state.epoch_wrote = false;
         state.stats.epochs_ready += 1;
         Some(stream)
     }
@@ -1044,6 +1080,7 @@ impl Writer {
         state.sync_queued();
         state.stats.items_written += 1;
         state.stats.bytes_written += item.bytes.len() as u64;
+        state.epoch_wrote = true;
         if !item.close {
             return false;
         }
@@ -1107,7 +1144,17 @@ impl Writer {
         let Some(epoch) = state.epoch(producer) else {
             return;
         };
-        if epoch.claimed {
+        let claimed = epoch.claimed;
+        // An epoch that took items and stayed up was a connection that worked: the row of
+        // failures it ends starts again with this loss.
+        if state.epoch_wrote
+            && state
+                .epoch_since
+                .is_some_and(|since| since.elapsed() >= self.stable_after)
+        {
+            state.consecutive_failures = 0;
+        }
+        if claimed {
             state.latch_loss(GapReason::IngestLost);
         } else {
             // Never answered `Ready`: nothing was admitted, but the ID may be consumed.

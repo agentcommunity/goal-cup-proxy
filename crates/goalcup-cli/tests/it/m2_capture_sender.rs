@@ -22,7 +22,6 @@ use goalcup_protocol::capture::{
     MAX_SEGMENT_BYTES, StreamKey, SubmitResult, WireIdentity, encode_ingest_message,
 };
 use m2_sender_support::{Emulator, End, Policy, RefusingPort, ReservedPort, Verdict, from_hex};
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -1061,44 +1060,39 @@ async fn remote_eof_does_not_invent_rejection_reason() {
     }
 }
 
-/// Every epoch is answered `Ready`, takes a frame, and then loses its socket. The tenth
-/// failure disables the sink across all producer IDs; `Ready` never reset the count.
+/// Every epoch's handshake is written and then its socket is lost before it is handed a single
+/// item. The tenth failure in a row disables the sink across all producer IDs; a handshake
+/// alone (`Ready`) never reset the count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ready_then_remote_eof_cannot_reset_retry_budget() {
     let emulator = Emulator::start();
-    emulator.set_policy(Policy::CloseAfterItems(1));
+    emulator.set_policy(Policy::CloseAfterHandshake);
     let mut n = 0xd00u128;
     let sink = connect_sink(config(emulator.addr(), &id(n))).unwrap();
-    let mut readies = Vec::new();
+    let mut epochs = 0u64;
     let terminal = loop {
         let producer = id(n);
         match admit(&sink, &producer).await {
-            EpochAdmission::Ready => {
-                readies.push(producer.clone());
-                let failures = sink.stats().failures;
-                assert_eq!(
-                    sink.try_submit(frame(&producer, 0, 0, conn_open(&id(0xc7)))),
-                    SubmitResult::Queued
-                );
-                eventually("the endpoint's close", || sink.stats().failures > failures).await;
+            // The endpoint may close before the poll that would have said `Ready`: either way
+            // the epoch was one handshake and one loss.
+            EpochAdmission::Ready | EpochAdmission::RetryFresh => {
+                epochs += 1;
+                eventually("the endpoint's close", || sink.stats().failures >= epochs).await;
                 n += 1;
             }
-            EpochAdmission::RetryFresh => n += 1,
             EpochAdmission::Disabled(reason) => break reason,
             EpochAdmission::Pending => unreachable!(),
         }
     };
     assert_eq!(terminal, GapReason::IngestLost);
-    assert_eq!(readies.len() as u64, MAX_CONNECTION_FAILURES);
-    assert_eq!(readies.iter().collect::<BTreeSet<_>>().len(), readies.len());
     assert_eq!(
         sink.try_begin_epoch(&id(0xdff)),
         EpochAdmission::Disabled(GapReason::IngestLost)
     );
     let stats = sink.stats();
     assert_eq!(
-        (stats.epochs_ready, stats.failures, stats.losses),
-        (10, 10, 10)
+        (stats.epochs_ready, stats.failures, stats.items_written),
+        (10, 10, 0)
     );
     // The schedule held between attempts: 20, 40, 100, then 200 ms.
     let conns = emulator.conns();
@@ -1118,6 +1112,124 @@ async fn ready_then_remote_eof_cannot_reset_retry_budget() {
         emulator.accepted(),
         10,
         "no attempt after the budget ran out"
+    );
+}
+
+/// Every epoch takes one item and is closed at once. That is not a connection that worked
+/// (the epoch did not stay up `STABLE_EPOCH`): each still counts, and the tenth in a row
+/// disables the sink.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_epoch_that_takes_one_item_and_closes_at_once_still_runs_out_at_ten() {
+    let emulator = Emulator::start();
+    emulator.set_policy(Policy::CloseAfterItems(1));
+    let mut n = 0xf00u128;
+    let sink = connect_sink(config(emulator.addr(), &id(n))).unwrap();
+    let mut readies = 0u64;
+    let terminal = loop {
+        let producer = id(n);
+        match admit(&sink, &producer).await {
+            EpochAdmission::Ready => {
+                readies += 1;
+                let failures = sink.stats().failures;
+                assert_eq!(
+                    sink.try_submit(frame(&producer, 0, 0, conn_open(&id(0xc9)))),
+                    SubmitResult::Queued
+                );
+                eventually("the endpoint's close", || sink.stats().failures > failures).await;
+                n += 1;
+            }
+            EpochAdmission::RetryFresh => n += 1,
+            EpochAdmission::Disabled(reason) => break reason,
+            EpochAdmission::Pending => unreachable!(),
+        }
+    };
+    assert_eq!(terminal, GapReason::IngestLost);
+    let stats = sink.stats();
+    assert_eq!(readies, MAX_CONNECTION_FAILURES);
+    assert_eq!(
+        (stats.epochs_ready, stats.failures, stats.items_written),
+        (10, 10, 10),
+        "every epoch took its item"
+    );
+}
+
+/// Nine failures, one connection that takes an item, nine more failures: the count restarted
+/// at the hand-off, so capture is still on (a week of short stalls must not switch the wire
+/// leg off for good). Only the tenth in a row ends it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_successful_connection_resets_the_failure_count() {
+    let emulator = Emulator::start();
+    let mut n = 0xe00u128;
+    let sink = connect_sink(config(emulator.addr(), &id(n)).with_stable_after(ms(150))).unwrap();
+    // Drive epochs, each lost as soon as its handshake is read, until `failures` failures were
+    // counted. An epoch is one handshake and one loss, whether or not the poll that would have
+    // said `Ready` came before the loss.
+    async fn lose_until(sink: &IngestSink, n: &mut u128, failures: u64) -> Option<GapReason> {
+        let (base, mut epochs) = (sink.stats().failures, 0);
+        while sink.stats().failures < failures {
+            let producer = id(*n);
+            *n += 1;
+            match admit(sink, &producer).await {
+                EpochAdmission::Ready | EpochAdmission::RetryFresh => {
+                    epochs += 1;
+                    eventually("the endpoint's close", || {
+                        sink.stats().failures >= base + epochs
+                    })
+                    .await;
+                }
+                EpochAdmission::Disabled(reason) => return Some(reason),
+                EpochAdmission::Pending => unreachable!(),
+            }
+        }
+        None
+    }
+    emulator.set_policy(Policy::CloseAfterHandshake);
+    assert_eq!(lose_until(&sink, &mut n, 9).await, None);
+    assert_eq!(sink.stats().failures, 9);
+
+    // The connection that works: it takes an item, stays up, and then drops (one more failure,
+    // the first since the success).
+    emulator.set_policy(Policy::Serve);
+    let producer = id(n);
+    n += 1;
+    assert_eq!(admit(&sink, &producer).await, EpochAdmission::Ready);
+    assert_eq!(
+        sink.try_submit(frame(&producer, 0, 0, conn_open(&id(0xc8)))),
+        SubmitResult::Queued
+    );
+    eventually("the item", || sink.stats().items_written == 1).await;
+    tokio::time::sleep(ms(300)).await;
+    emulator.close_connection(emulator.accepted() - 1);
+    eventually("the drop", || sink.stats().failures == 10).await;
+
+    // Nine more failures since the success: the sink is still on, and a receiver that stays
+    // up is served.
+    emulator.set_policy(Policy::CloseAfterHandshake);
+    assert_eq!(lose_until(&sink, &mut n, 18).await, None);
+    emulator.set_policy(Policy::Serve);
+    let producer = id(n);
+    n += 1;
+    assert_eq!(
+        admit(&sink, &producer).await,
+        EpochAdmission::Ready,
+        "capture is still on after {} failures in all",
+        sink.stats().failures
+    );
+
+    // The tenth failure since the success is the tenth in a row, and it is over.
+    emulator.set_policy(Policy::CloseAfterHandshake);
+    emulator.close_connection(emulator.accepted() - 1);
+    eventually("the served connection's loss", || {
+        sink.stats().failures >= 19
+    })
+    .await;
+    let terminal = lose_until(&sink, &mut n, 100).await;
+    assert_eq!(terminal, Some(GapReason::IngestLost));
+    let stats = sink.stats();
+    assert!(
+        (19..=20).contains(&stats.failures),
+        "failures: {}",
+        stats.failures
     );
 }
 

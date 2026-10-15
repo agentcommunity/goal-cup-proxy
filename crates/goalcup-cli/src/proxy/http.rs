@@ -281,6 +281,7 @@ async fn relay_requests(
             return requests_opaque(shared, tx, src, dst).await;
         }
         exchange += 1;
+        shared.emitter.record_model_request();
         let at = src.at.clone();
         let capture = select(shared, &request, target.as_ref(), exchange);
         let request_ok = capture.as_ref().map(|c| c.request_ok.clone());

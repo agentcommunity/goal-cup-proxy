@@ -381,6 +381,82 @@ fn a_full_disk_with_no_upload_ends_the_run_through_the_one_stop_channel() {
     assert!(reserve_files(&rig).is_empty());
 }
 
+/// The run's `state.json` follows the run: the launch writes it, the tick fills in how the
+/// recording is, and the host's last word says it ended. A sleep lock that cannot be taken is
+/// said as a `PROBLEM:` line first of all by `goalcup status`, and never refuses or stops the
+/// run.
+#[test]
+fn a_sleep_lock_that_cannot_be_taken_is_a_problem_line_and_the_run_goes_on() {
+    use goalcup_cli::run::{HarnessState, Recording, read_state, run_dir};
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::new();
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let mut opts = rig.options(&goal, RESERVE);
+    opts.sleep_lock = |_| Err("no sleep inhibitor on this machine".to_string());
+    let (started, running, status) = std::thread::scope(|s| {
+        let start = rig.start(s, &client, opts, None);
+        rig.wait_for("sleeper");
+        let entry_id = client.created().entry_id;
+        let dir = run_dir(&rig.cfg, &entry_id);
+        // The tick asks the daemon at once and every tick after: the recording is known soon.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let running = loop {
+            let state = read_state(&dir);
+            if let Some(state) = state
+                && state.recording == Recording::Ok
+            {
+                break state;
+            }
+            assert!(Instant::now() < deadline, "no recording state in {dir:?}");
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        let mut status = Vec::new();
+        goalcup_cli::commands::status::status_with(
+            &http,
+            &rig.cfg,
+            Some(&entry_id),
+            false,
+            &goalcup_protocol::control::format_z(goalcup_cli::run::now_unix()),
+            &mut status,
+        )
+        .unwrap();
+        // Ending the run through the daemon ends the harness.
+        goalcup_cli::commands::seal::seal_with(
+            &http,
+            &rig.connectors,
+            &rig.cfg,
+            &entry_id,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        (joined(start), running, String::from_utf8(status).unwrap())
+    });
+    let (result, out) = started;
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert_eq!(running.harness, HarnessState::Running);
+    assert_eq!(
+        running.sleep_lock,
+        Err("no sleep inhibitor on this machine".to_string())
+    );
+    assert_eq!(
+        status.lines().next(),
+        Some("PROBLEM: the machine may sleep: no sleep inhibitor on this machine"),
+        "{status}"
+    );
+    assert_eq!(status.matches("PROBLEM:").count(), 1, "{status}");
+    // The host's last word: the agent's process is gone, the run is over.
+    let entry_id = client.created().entry_id;
+    let last = read_state(&run_dir(&rig.cfg, &entry_id)).expect("the final state");
+    assert!(last.ended, "{last:?}");
+    assert!(
+        matches!(last.harness, HarnessState::Exited { .. }),
+        "{last:?}"
+    );
+    assert!(reserve_files(&rig).is_empty());
+}
+
 #[test]
 fn a_stale_reserve_is_released_by_the_next_start() {
     let _lock = table_lock::TableLock::acquire();

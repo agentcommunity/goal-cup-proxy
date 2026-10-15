@@ -911,3 +911,164 @@ fn a_capture_reopened_under_its_live_run_seals_with_the_loss_chained() {
     assert_eq!(report.findings, vec!["gap_recorded".to_string()]);
     assert_eq!(report.exit_code(), 1);
 }
+
+// ------------------------------------------------------------------ the run's own problems
+
+/// The run record and state file `goalcup start` leaves under `cfg` for `entry_id`.
+fn run_with_state(cfg: &std::path::Path, entry_id: &str, state: goalcup_cli::run::RunState) {
+    use goalcup_cli::run::{EntryRef, RunRecord, StateKeeper, run_dir, write};
+    write(
+        cfg,
+        &RunRecord {
+            run_id: entry_id.to_string(),
+            server_url: None,
+            practice: false,
+            connector_id: "claude-code-cli".to_string(),
+            workspace: PathBuf::from("/w"),
+            started_at_unix: 1,
+            deadline_at: None,
+            entries: vec![EntryRef {
+                entry_id: entry_id.to_string(),
+                trace_dir: PathBuf::from("/t"),
+            }],
+        },
+    )
+    .unwrap();
+    StateKeeper::begin(&run_dir(cfg, entry_id), state);
+}
+
+fn status_text(
+    m: &goalcup_cli::daemon::MockDaemonClient,
+    cfg: &std::path::Path,
+    entry: &str,
+    json: bool,
+) -> String {
+    let mut out = Vec::new();
+    status_with(m, cfg, Some(entry), json, support::NOW, &mut out).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+#[test]
+fn status_puts_every_problem_first() {
+    use goalcup_cli::run::{DiskState, HarnessState, Recording, RunState, UploadState, now_unix};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let now = control::parse_z(support::NOW).unwrap();
+    let mut state = RunState::launched(
+        &info.entry_id,
+        Err("no sleep inhibitor on this machine".into()),
+    );
+    state.updated_at = now_unix();
+    state.recording = Recording::Gaps;
+    state.upload = UploadState {
+        last_ok_at: Some(now - 40 * 60),
+        problem: Some("the server answered 503".to_string()),
+        stopped: false,
+    };
+    state.disk = DiskState {
+        free_bytes: 3 << 30,
+        reserve_bytes: 1 << 30,
+        low: true,
+    };
+    state.harness = HarnessState::Exited {
+        status: "exit code 1".to_string(),
+    };
+    run_with_state(&cfg, &info.entry_id, state.clone());
+
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        &lines[..5],
+        [
+            "PROBLEM: recording has gaps",
+            "PROBLEM: last upload 40 min ago: the server answered 503",
+            "PROBLEM: disk: 3 GiB free beyond the reservation",
+            "PROBLEM: the machine may sleep: no sleep inhibitor on this machine",
+            "PROBLEM: the agent's process exited (exit code 1): run goalcup continue",
+        ]
+    );
+    assert_eq!(
+        lines.iter().filter(|l| l.starts_with("PROBLEM:")).count(),
+        5,
+        "{text}"
+    );
+    assert!(
+        text.contains(&m.status_detail()),
+        "the status itself follows the problems: {text}"
+    );
+
+    // A failed recording; and an upload that has not lasted half an hour is not yet a problem,
+    // unless it gave up.
+    state.recording = Recording::Failed;
+    state.upload.last_ok_at = Some(now - 60);
+    state.sleep_lock = Ok(());
+    state.disk.low = false;
+    state.harness = HarnessState::Running;
+    run_with_state(&cfg, &info.entry_id, state.clone());
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(text.starts_with("PROBLEM: recording failed\n"), "{text}");
+    assert_eq!(text.matches("PROBLEM:").count(), 1, "{text}");
+    state.upload.stopped = true;
+    run_with_state(&cfg, &info.entry_id, state);
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(
+        text.contains("PROBLEM: last upload 1 min ago: the server answered 503\n"),
+        "{text}"
+    );
+
+    // `--json` stays one document.
+    let json = status_text(&m, &cfg, &info.entry_id, true);
+    serde_json::from_str::<control::SignedStatus>(&json).expect("one document and nothing else");
+}
+
+#[test]
+fn status_with_no_problem_prints_no_problem_line() {
+    use goalcup_cli::run::{HarnessState, Recording, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+
+    // A run that has no state file yet says so in plain words, and that is not a problem.
+    {
+        use goalcup_cli::run::{EntryRef, RunRecord, write};
+        write(
+            &cfg,
+            &RunRecord {
+                run_id: info.entry_id.clone(),
+                server_url: None,
+                practice: false,
+                connector_id: "claude-code-cli".to_string(),
+                workspace: PathBuf::from("/w"),
+                started_at_unix: 1,
+                deadline_at: None,
+                entries: vec![EntryRef {
+                    entry_id: info.entry_id.clone(),
+                    trace_dir: PathBuf::from("/t"),
+                }],
+            },
+        )
+        .unwrap();
+    }
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(!text.contains("PROBLEM"), "{text}");
+    assert!(text.contains("no run state yet"), "{text}");
+
+    // A healthy run, an unknown recording (the daemon was slow to answer) and an upload that
+    // is failing for less than half an hour, an agent the host ended on purpose: no problem.
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.recording = Recording::Unknown;
+    state.upload.last_ok_at = Some(control::parse_z(support::NOW).unwrap() - 120);
+    state.upload.problem = Some("the server answered 503".to_string());
+    state.harness = HarnessState::Exited {
+        status: "signal 15".to_string(),
+    };
+    state.stopped = Some("the server says the run is over".to_string());
+    run_with_state(&cfg, &info.entry_id, state);
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(!text.contains("PROBLEM"), "{text}");
+    assert!(!text.contains("no run state yet"), "{text}");
+    assert!(text.contains(&m.status_detail()), "{text}");
+}

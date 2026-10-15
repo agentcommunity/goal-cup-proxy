@@ -46,8 +46,7 @@ use crate::upload::policy::{WrapUp, WrapUpSpec};
 use goalcup_protocol::capture::CaptureSink;
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest, CaptureWorkspaceInfo,
-    CaptureWorkspaceRequest, DaemonClient, FINISH_COMMIT_RESERVE, LOCAL_CAPTURE_FINISH_BUDGET,
-    ProxyCounters, SignedStatus,
+    CaptureWorkspaceRequest, DaemonClient, FINISH_COMMIT_RESERVE, ProxyCounters, SignedStatus,
 };
 use goalcup_protocol::harness::{CaptureSpec, ConfigHome, RunHome};
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration, termination_bound};
@@ -76,7 +75,14 @@ pub struct StartOptions {
     pub repo: Option<String>,
     /// When the run's chunks go and how failures wait ([`crate::upload::uploader::Policy`]).
     pub upload_policy: crate::upload::uploader::Policy,
+    /// How the machine is kept awake for the run's life: [`goalcup_platform::awake::hold`] in
+    /// every shipped build. A lock that cannot be taken never refuses or stops a run; it is
+    /// said by `goalcup status`.
+    pub sleep_lock: SleepLockFn,
 }
+
+/// Takes the sleep lock, given why ([`StartOptions::sleep_lock`]).
+pub type SleepLockFn = fn(&str) -> Result<goalcup_platform::awake::SleepLock, String>;
 
 /// What one `goalcup start` did.
 #[derive(Debug)]
@@ -624,7 +630,7 @@ impl Forked<'_> {
         }
         let end = crate::launch::end_released_child(child, handed);
         let _ = say(out, &end.announcement(&info.entry_id));
-        let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+        let deadline = std::time::Instant::now() + crate::finish_budget();
         if let Some(proxied) = proxied {
             let _ = finish(
                 client,
@@ -711,6 +717,18 @@ struct Exited<'a> {
     /// Linux: the refusal the command ends with, after the seal, when the sweep left a process
     /// running or could not read `/proc` after it had signalled one.
     left_running: Option<CliError>,
+    /// The run's state file.
+    keeper: crate::run::StateKeeper,
+}
+
+/// How the daemon says the recording is, read through a client made from `control.json` each
+/// time, so a restarted daemon is followed. `None` when it cannot say.
+fn ask_recording(cfg: &Path, entry_id: &str) -> Option<crate::run::Recording> {
+    let client = crate::daemon::HttpDaemonClient::from_config_dir(cfg).ok()?;
+    let status = retry_busy(|| client.status(entry_id)).ok()?;
+    Some(crate::run::Recording::of_capture(
+        status.payload.capture?.capture,
+    ))
 }
 
 /// A v5 local capture run.
@@ -759,9 +777,19 @@ fn capture(
     };
     let mut prep = prepare(&cx, goal, out)?;
     let (forked, gate) = create_and_gate(&cx, roots, &prep, out)?;
+    // Right before the launch the machine is told to stay awake, and it stays so to the end of
+    // the wrap-up. A lock that cannot be taken is no reason to refuse or stop a run: it is
+    // kept as the reason in the run's state, and `goalcup status` says it.
+    let (awake, sleep_lock) =
+        match (opts.sleep_lock)(&format!("goalcup run {}", forked.record.run_id)) {
+            Ok(lock) => (Some(lock), Ok(())),
+            Err(why) => (None, Err(why)),
+        };
     let released = register_and_release(forked, gate, &mut prep, out)?;
-    let exited = run_harness(&cx, prep.scope, released, out)?;
-    finish_and_scan(exited, prep.matcher.as_ref(), out)
+    let exited = run_harness(&cx, prep.scope, released, sleep_lock, out)?;
+    let finished = finish_and_scan(exited, prep.matcher.as_ref(), out);
+    drop(awake);
+    finished
 }
 
 /// Phase one: every refusal that comes before anything is created.
@@ -1242,6 +1270,7 @@ fn run_harness<'a>(
     cx: &CaptureRun<'_>,
     scope: LaunchScope,
     released: Released<'a>,
+    sleep_lock: Result<(), String>,
     out: &mut dyn std::io::Write,
 ) -> Result<Exited<'a>, CliError> {
     let Released {
@@ -1325,6 +1354,17 @@ fn run_harness<'a>(
             crate::upload::uploader::note_repo_head(&uploads_dir, record);
         }
     };
+    // The run's state file, which the watch tick keeps and this function changes at each
+    // transition of the agent; and what the threads of the run tell each other.
+    let keeper = crate::run::StateKeeper::begin(
+        &crate::run::run_dir(forked.cfg, &forked.record.run_id),
+        crate::run::RunState::launched(&entry_id, sleep_lock),
+    );
+    let vitals = match forked.proxied.as_ref() {
+        Some(proxied) => crate::run::Vitals::counting(proxied.proxy.model_requests()),
+        None => crate::run::Vitals::default(),
+    };
+
     // The run's one stop channel: the uploader's deadline or heartbeat stop and the watch's disk
     // stop both send on it, and the wait for the harness receives from it.
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<String>();
@@ -1339,6 +1379,7 @@ fn run_harness<'a>(
             spool,
             start.local_deadline,
             stop_tx.clone(),
+            vitals.clone(),
         ) {
             Ok(running) => Some(running),
             Err(e) => {
@@ -1371,6 +1412,14 @@ fn run_harness<'a>(
                 .map(|running| (running.entry_id().to_string(), running.acked_offset()))
                 .collect(),
             policy: cx.opts.disk,
+            beat: Some(crate::run::watch::Beat {
+                keeper: keeper.clone(),
+                vitals: vitals.clone(),
+                ask: {
+                    let (cfg, entry_id) = (cfg.to_path_buf(), entry_id.clone());
+                    Arc::new(move || ask_recording(&cfg, &entry_id))
+                },
+            }),
         })
     });
     let status = crate::upload::wait_stopping(&mut child, stop_rx, |reason| {
@@ -1382,7 +1431,10 @@ fn run_harness<'a>(
         // The one bound of the wrap-up, for the seal below and the upload's finish later.
         let wrap_up = wrap_spec.begin();
         *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
-        let label = if reason == crate::run::watch::DISK_STOP_REASON {
+        keeper.update(|state| state.stopped = Some(reason.to_string()));
+        let label = if reason == crate::run::watch::DISK_STOP_REASON
+            || reason == crate::upload::uploader::REPLACED_REASON
+        {
             "stopped"
         } else {
             "deadline"
@@ -1392,7 +1444,8 @@ fn run_harness<'a>(
         // that follows it is printed only once it returns.
         eprintln!("goalcup: {line}");
         let mut said = format!("{line}\n").into_bytes();
-        let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+
+        let deadline = std::time::Instant::now() + crate::finish_budget();
         // A seal that did not take (the daemon busy or restarting) is asked again through the
         // whole wrap-up: the harness must not run on past its deadline, and only the daemon's
         // seal ends it.
@@ -1414,6 +1467,14 @@ fn run_harness<'a>(
         source,
     });
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    keeper.update(|state| {
+        state.harness = crate::run::HarnessState::Exited {
+            status: match &status {
+                Ok(status) => describe_exit(status),
+                Err(error) => error.to_string(),
+            },
+        };
+    });
     // A run that ended on its own stopped just now.
     let wrap_up = stopped_wrap
         .into_inner()
@@ -1451,6 +1512,7 @@ fn run_harness<'a>(
         uploading,
         wrap_up,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
+        keeper,
     })
 }
 
@@ -1471,6 +1533,7 @@ fn finish_and_scan(
         uploading,
         wrap_up,
         left_running,
+        keeper,
     } = exited;
     let Forked {
         client,
@@ -1481,7 +1544,7 @@ fn finish_and_scan(
         watching,
         ..
     } = forked;
-    let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+    let deadline = std::time::Instant::now() + crate::finish_budget();
     // The run was ended by a stop (its deadline, the server, or a full disk) and not by the
     // harness leaving on its own.
     let stopped = finished_early.is_some();
@@ -1515,6 +1578,7 @@ fn finish_and_scan(
     // After the seal: the rest of the chain and the seal itself, within the finish budget.
     // A local run has nothing to upload, so its reservation is done with.
     let mut release = true;
+    let mut upload_report = None;
     if let Some(running) = uploading {
         let report = running.finish(wrap_up);
         // A run on a server keeps its reservation unless the run is over and the server holds all
@@ -1538,10 +1602,29 @@ fn finish_and_scan(
             ),
         };
         let _ = say(out, &line);
+        upload_report = Some(report);
     }
     // The tick ends here, just before the reservation goes (or is left to the next start): it
     // hands the reservation back even if it died on the way.
     let reserve = watching.and_then(crate::run::watch::Watching::end);
+    // The host's last word on the run's state, now that nothing else writes it: what became of
+    // the upload is what `goalcup status` tells from here on.
+    keeper.update(|state| {
+        state.ended = true;
+        if let Some(report) = &upload_report {
+            state.upload.stopped = false;
+            state.upload.problem = if report.caught_up && report.sealed {
+                None
+            } else {
+                Some(
+                    report
+                        .why
+                        .clone()
+                        .unwrap_or_else(|| "the seal was not sent".to_string()),
+                )
+            };
+        }
+    });
     if release && let Some(reserve) = reserve {
         let _ = reserve.release();
     }
@@ -1693,7 +1776,7 @@ fn finish_unlaunched(
     proxied: Proxied,
     out: &mut dyn std::io::Write,
 ) {
-    let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+    let deadline = std::time::Instant::now() + crate::finish_budget();
     let _ = finish(
         client,
         entry_id,
@@ -1748,7 +1831,7 @@ fn report_tee_finish(result: Option<std::io::Result<bool>>, out: &mut dyn std::i
                 &format!(
                     "Final harness output did not finish within the {}-second finish budget; its \
                      tail may be missing.",
-                    LOCAL_CAPTURE_FINISH_BUDGET.as_secs()
+                    crate::finish_budget().as_secs()
                 ),
             );
         }
@@ -1966,7 +2049,7 @@ impl Proxied {
                 info.entry_id.clone(),
                 IngestSecret::new(info.ingest_secret.clone()),
                 info.producer_id.clone(),
-                LOCAL_CAPTURE_FINISH_BUDGET,
+                crate::finish_budget(),
             ))
             .map_err(|e| refused("sender", &e))?
         };
@@ -1983,7 +2066,7 @@ impl Proxied {
             // The stop is the finish's first step and is measured from its own call, which is
             // the finish deadline's start, so its bound is the drain share: it ends by
             // `drain_end`, leaving the commit reserve to the daemon's seal.
-            shutdown_deadline: LOCAL_CAPTURE_FINISH_BUDGET - FINISH_COMMIT_RESERVE,
+            shutdown_deadline: crate::finish_budget() - FINISH_COMMIT_RESERVE,
             admission_timeout: DEFAULT_ADMISSION_TIMEOUT,
             connect_attempt_timeout: DEFAULT_CONNECT_ATTEMPT_TIMEOUT,
             max_connections: MAX_CONNECTION_TASKS as usize,
@@ -2121,7 +2204,7 @@ fn proxy_admission_line(
 /// proxy is stopped once, and each later ask has a whole local-finish budget of its own. A
 /// `WrapUp::one_attempt()` asks once.
 ///
-/// The one deadline of a capture run's finish is `LOCAL_CAPTURE_FINISH_BUDGET`, taken when the
+/// The one deadline of a capture run's finish is `finish_budget()` (`LOCAL_CAPTURE_FINISH_BUDGET`), taken when the
 /// harness has exited and immediately before the proxy's stop: nothing runs between the two. The
 /// proxy's stop gets its drain share (the budget less `FINISH_COMMIT_RESERVE`), the daemon's seal
 /// its own request's remainder, and the sender's drain and the scoped stdout what is left of the

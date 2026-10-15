@@ -110,6 +110,9 @@ impl Rig {
         hermes: bool,
         start_daemon: bool,
     ) -> Rig {
+        // These tests cut a finish that cannot complete; the shipped budget is three minutes
+        // (D56), a test's is ten seconds.
+        goalcup_cli::set_finish_budget(std::time::Duration::from_secs(10));
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let out = root.join("harness-out");
@@ -586,6 +589,9 @@ pub struct Book {
     pub sealed_seen: Vec<bool>,
     /// Put a file where the proxy's CA certificate goes, before the proxy starts.
     pub occupy_ca_file: bool,
+    /// Called as each capture seal begins, before the daemon is asked: what a test wants to
+    /// know "at the seal".
+    pub on_seal: Option<Box<dyn Fn() + Send>>,
     relay: Option<Relay>,
 }
 
@@ -644,11 +650,12 @@ impl<'a> Hooked<'a> {
     }
 
     /// A standalone seal of `entry_id` straight through the daemon, as `goalcup seal` would
-    /// send it: no proxy counters, the whole budget. It is not recorded as a call.
+    /// send it: no proxy counters, the whole budget (a test's, [`goalcup_cli::finish_budget`]).
+    /// It is not recorded as a call.
     fn seal_now(&self, entry_id: &str) {
         let request = CaptureSealRequest {
             proxy: None,
-            remaining_finish_ms: None,
+            remaining_finish_ms: u64::try_from(goalcup_cli::finish_budget().as_millis()).ok(),
             native_scope: None,
         };
         let report = self
@@ -806,6 +813,12 @@ impl DaemonClient for Hooked<'_> {
         read_timeout: Duration,
     ) -> Result<CaptureFinishReport, CaptureSealError> {
         self.note("seal_capture");
+        // Taken out and put back, so the hook runs outside the book's lock.
+        let on_seal = self.book().on_seal.take();
+        if let Some(on_seal) = on_seal {
+            on_seal();
+            self.book().on_seal = Some(on_seal);
+        }
         let fault = {
             let mut book = self.book();
             book.seals.push(request.clone());

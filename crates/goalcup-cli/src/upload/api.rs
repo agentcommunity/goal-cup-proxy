@@ -98,14 +98,25 @@ pub struct HeartbeatRequest {
     pub is_final: bool,
     /// The commit the workspace repository had checked out when the run ended.
     pub repo_head: Option<String>,
+    /// How the tracker sees its own recording: `ok`, `gaps`, `failed` or `unknown`. Left out
+    /// by a heartbeat that has nothing to say (`goalcup upload`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<String>,
+    /// Model requests seen so far, cumulative. Left out with `recording`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_requests: Option<u64>,
 }
 
 /// The answer to a heartbeat.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeartbeatAnswer {
-    /// The server's clock is at or past `deadline_at`: stop now.
+    /// The run is over: stop now.
     pub stop: bool,
     pub deadline_at: String,
+    /// Why `stop` is true when the deadline is not all of it: `deadline` or `replaced`. An
+    /// older server leaves it out.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// The answer to a stored chunk.

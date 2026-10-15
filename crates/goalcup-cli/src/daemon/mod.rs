@@ -486,10 +486,9 @@ pub fn seal_capture_following_restart(
         }
     }
     // What of the budget a daemon start may spend: everything but the commit share.
-    let remaining = request.remaining_finish_ms.map_or(
-        goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET,
-        Duration::from_millis,
-    );
+    let remaining = request
+        .remaining_finish_ms
+        .map_or(crate::finish_budget(), Duration::from_millis);
     let spare = remaining.saturating_sub(FINISH_COMMIT_RESERVE);
     if spare.is_zero() {
         return Err(failure);

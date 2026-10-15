@@ -28,7 +28,7 @@ use crate::retry::{BUSY_ATTEMPTS, retry_busy, retry_capture_seal, retry_capture_
 use crate::upload::policy::WrapUp;
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureSealError, CaptureSealRequest, ControlError, DaemonClient,
-    LOCAL_CAPTURE_FINISH_BUDGET, LocalSealOutcome, ProxyCounters,
+    LocalSealOutcome, ProxyCounters,
 };
 use goalcup_protocol::process::termination_bound;
 use goalcup_protocol::provenance::{TerminationFailureV1, TerminationOutcomeV1};
@@ -69,7 +69,7 @@ pub fn seal_with(
         .as_ref()
         .is_ok_and(|status| status.payload.capture.is_some())
     {
-        let deadline = std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET;
+        let deadline = std::time::Instant::now() + crate::finish_budget();
         let allowance =
             match crate::connector::load_harness(connectors, &record.connector_id, record.dev) {
                 Ok(connector) => {
@@ -201,7 +201,7 @@ pub(crate) fn seal_locally_until(
         let deadline = if asked == 1 {
             first_deadline
         } else {
-            std::time::Instant::now() + LOCAL_CAPTURE_FINISH_BUDGET
+            std::time::Instant::now() + crate::finish_budget()
         };
         let mut fresh = None;
         retry_capture_seal(deadline, |remaining| {
@@ -316,7 +316,7 @@ fn capture_finish_refusal(
             "Entry {entry_id} did not finish within its {}-second local budget (stopped before \
              {stage}). Nothing terminal was written and the entry is still open. Run `goalcup \
              seal {entry_id}` to finish it; its trace will read incomplete.",
-            LOCAL_CAPTURE_FINISH_BUDGET.as_secs()
+            crate::finish_budget().as_secs()
         )),
         // A transport failure or a read timeout after the request was written: the daemon may
         // still commit this finish, and a later seal answers a committed one unchanged.
@@ -337,7 +337,7 @@ fn capture_finish_refusal(
             "the tracker is still busy with entry {entry_id} while retrying (the {}-second \
              finish budget leaves no room for another attempt): {said}. The entry is held, not \
              broken. Run `goalcup seal {entry_id}` again.",
-            LOCAL_CAPTURE_FINISH_BUDGET.as_secs()
+            crate::finish_budget().as_secs()
         )),
         other => CliError::Control(other),
     }

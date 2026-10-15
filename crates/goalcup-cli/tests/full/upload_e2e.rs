@@ -647,6 +647,87 @@ fn a_revoked_token_or_a_diverged_chain_stops_the_upload() {
     );
 }
 
+// ------------------------------------------------------------------ the final heartbeat
+
+/// Make the workspace a Git repository with one commit, as an agent would, and answer the
+/// commit. A real one: the seal asks `git` about the workspace.
+fn commit_in(workspace: &std::path::Path) -> String {
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
+            .args(args)
+            .current_dir(workspace)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "the agent's commit"]);
+    git(&["rev-parse", "HEAD"]).trim().to_string()
+}
+
+/// Whether the agent left on its own or the run was stopped at its deadline, the upload's finish
+/// sends the final heartbeat, with the workspace's commit and what the heartbeats say, before it
+/// sends the server the seal; the stand-in refuses a seal that comes first.
+#[test]
+fn the_final_heartbeat_with_the_commit_reaches_the_server_before_the_server_seal() {
+    for stopped_by_the_deadline in [false, true] {
+        let rig = Rig::new();
+        let server = if stopped_by_the_deadline {
+            short_server(&rig.root.join("server"), 8, None)
+        } else {
+            server(&rig.root.join("server"))
+        };
+        log_in(&rig, &server.url(), TOKEN);
+        let goal = rig.goal(GOAL);
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = logged_in_options(&rig, &goal);
+        if stopped_by_the_deadline {
+            opts.upload_policy = beating_policy();
+        }
+        let (commit, result, out) = std::thread::scope(|s| {
+            let running = rig.start(s, &client, opts, None);
+            wait_until("the harness to start", || {
+                rig.harness_pid().is_some() || running.is_finished()
+            });
+            let workspace = std::path::PathBuf::from(&client.book().creates[0].workspace);
+            let commit = commit_in(&workspace);
+            if !stopped_by_the_deadline {
+                end_harness(&rig);
+            }
+            let (result, out) = running.join().unwrap();
+            (commit, result, out)
+        });
+        result.unwrap_or_else(|e| panic!("deadline: {stopped_by_the_deadline}: {e}\n{out}"));
+        let run_id = server.run_ids()[0].clone();
+        let committed = server.final_commit(&run_id).expect("a final heartbeat");
+        assert_eq!(
+            committed.repo_head.as_deref(),
+            Some(commit.as_str()),
+            "deadline: {stopped_by_the_deadline}"
+        );
+        let last_final = server
+            .heartbeats(&run_id)
+            .into_iter()
+            .rfind(|h| h.final_)
+            .expect("a final heartbeat");
+        assert!(
+            last_final.recording.is_some() && last_final.model_requests.is_some(),
+            "the final heartbeat says how the recording was and how many requests it saw"
+        );
+        let calls = server.calls();
+        let at = |what: &str| calls.iter().rposition(|c| c.contains(what));
+        let seal = at("/seal").unwrap_or_else(|| panic!("no seal in {calls:?}"));
+        let heartbeat = at("/heartbeat").expect("a heartbeat");
+        assert!(
+            heartbeat < seal,
+            "deadline: {stopped_by_the_deadline}: the last heartbeat came after the seal: {calls:?}"
+        );
+    }
+}
+
 // ------------------------------------------------------------------ the deadline
 
 /// A server whose runs last `seconds`.
@@ -684,8 +765,7 @@ fn the_server_stops_the_run_at_its_deadline() {
     let mut opts = logged_in_options(&rig, &goal);
     opts.upload_policy = beating_policy();
     let started = std::time::Instant::now();
-    let commit = "0123456789abcdef0123456789abcdef01234567";
-    let (result, out) = std::thread::scope(|s| {
+    let (commit, result, out) = std::thread::scope(|s| {
         let running = rig.start(s, &client, opts, None);
         // The agent commits in its workspace while the run records.
         wait_until("the harness to start", || {
@@ -696,12 +776,11 @@ fn the_server_stops_the_run_at_its_deadline() {
             panic!("start ended before the harness ran: {result:?}\n{out}");
         }
         let workspace = std::path::PathBuf::from(&client.book().creates[0].workspace);
-        let git = workspace.join(".git");
-        std::fs::create_dir_all(git.join("refs/heads")).unwrap();
-        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        std::fs::write(git.join("refs/heads/main"), format!("{commit}\n")).unwrap();
-        running.join().unwrap()
+        let commit = commit_in(&workspace);
+        let (result, out) = running.join().unwrap();
+        (commit, result, out)
     });
+    let commit = commit.as_str();
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     assert!(
         started.elapsed() < std::time::Duration::from_secs(30),

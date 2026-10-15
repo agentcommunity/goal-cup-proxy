@@ -158,6 +158,15 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // A test build can shorten the local-finish budget, so that a test of a finish that is cut
+    // need not wait three minutes. A shipped build has no such door.
+    #[cfg(feature = "test-support")]
+    if let Some(ms) = std::env::var("GOALCUP_TEST_FINISH_BUDGET_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+    {
+        goalcup_cli::set_finish_budget(std::time::Duration::from_millis(ms));
+    }
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(e) => {
@@ -197,6 +206,7 @@ fn run(command: Command) -> Result<u8, CliError> {
             disk: disk_policy()?,
             repo,
             upload_policy: upload_policy()?,
+            sleep_lock: goalcup_platform::awake::hold,
         })
         .map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),

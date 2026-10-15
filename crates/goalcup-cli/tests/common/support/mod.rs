@@ -319,6 +319,7 @@ pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
         disk: disk_of(4 << 20),
         repo: None,
         upload_policy: Default::default(),
+        sleep_lock: goalcup_platform::awake::hold,
     }
 }
 

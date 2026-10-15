@@ -79,6 +79,11 @@ pub fn status_with(
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
     let record = pinned(cfg, entry)?;
+    // First of everything, before the daemon is even asked: what is wrong with the run. A
+    // `--json` caller gets the document alone.
+    if !json {
+        put(out, &run_report(cfg, entry, &record, now))?;
+    }
     let document = retry_busy(|| client.status(&record.entry_id)).map_err(CliError::Control)?;
     if document.verify_with(&record.run_public_key).is_err() {
         // Something other than the daemon that opened this run may be answering on an
@@ -131,6 +136,29 @@ pub fn status_with(
         put(out, &render_status(&document, now))?;
     }
     Ok(())
+}
+
+/// What this machine knows of the run the entry belongs to (its `state.json`): one `PROBLEM:`
+/// line for each thing that is wrong, first of all, and nothing when nothing is. A run with no
+/// state yet is not a problem, and is said in plain words; a machine with no run record for
+/// the entry says nothing.
+fn run_report(cfg: &Path, entry: Option<&str>, record: &EntryRecord, now: &str) -> String {
+    let run = match entry {
+        None => crate::run::newest(cfg),
+        Some(_) => crate::run::of_entry(cfg, &record.entry_id),
+    };
+    let Ok(Some(run)) = run else {
+        return String::new();
+    };
+    let Some(state) = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id)) else {
+        return "run state: no run state yet\n".to_string();
+    };
+    let now = parse_z(now).unwrap_or_else(crate::run::now_unix);
+    state
+        .problems(now)
+        .iter()
+        .map(|problem| format!("PROBLEM: {}\n", plain(problem)))
+        .collect()
 }
 
 /// One headline on stdout, and the reason on rung 1.
