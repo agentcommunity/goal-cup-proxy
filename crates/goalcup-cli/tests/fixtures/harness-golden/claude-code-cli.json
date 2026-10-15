@@ -484,6 +484,7 @@
     "env": {
       "CLAUDE_CODE_RETRY_WATCHDOG": "1",
       "DISABLE_AUTOUPDATER": "1",
+      "NODE_USE_ENV_PROXY": "1",
       "SHELL": "/bin/zsh"
     },
     "executable": {
@@ -934,6 +935,7 @@
       "HTTPS_PROXY": "<PROXY_URL>",
       "LOGNAME": "participant",
       "NODE_EXTRA_CA_CERTS": "<TMP>/proxy-ca.pem",
+      "NODE_USE_ENV_PROXY": "1",
       "NO_PROXY": "127.0.0.1,localhost",
       "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
       "SHELL": "/bin/zsh",
@@ -981,6 +983,7 @@
         "HTTPS_PROXY",
         "LOGNAME",
         "NODE_EXTRA_CA_CERTS",
+        "NODE_USE_ENV_PROXY",
         "NO_PROXY",
         "PATH",
         "SHELL",

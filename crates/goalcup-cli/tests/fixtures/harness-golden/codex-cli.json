@@ -489,6 +489,7 @@
     "config_home": "shared",
     "continuation": "chat: the participant types the prompt and may type keep going",
     "env": {
+      "NODE_USE_ENV_PROXY": "1",
       "SHELL": "/bin/zsh"
     },
     "executable": {
@@ -947,6 +948,7 @@
       "HOME": "<TMP>/run-home",
       "HTTPS_PROXY": "<PROXY_URL>",
       "LOGNAME": "participant",
+      "NODE_USE_ENV_PROXY": "1",
       "NO_PROXY": "127.0.0.1,localhost",
       "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
       "SHELL": "/bin/zsh",
@@ -1007,6 +1009,7 @@
         "HOME",
         "HTTPS_PROXY",
         "LOGNAME",
+        "NODE_USE_ENV_PROXY",
         "NO_PROXY",
         "PATH",
         "SHELL",

@@ -26,6 +26,8 @@ version_args = ["--version"]
 
 [capture.env]
 SHELL = "/bin/zsh"
+# Node's built-in HTTP client honours HTTPS_PROXY (the run's loopback recorder) only with this (D59).
+NODE_USE_ENV_PROXY = "1"
 
 [capture.platform.linux-x86_64.env]
 SHELL = "/bin/bash"

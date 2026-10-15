@@ -21,6 +21,8 @@ version_args = ["--version"]
 
 [capture.env]
 SHELL = "/bin/zsh"
+# Node's built-in HTTP client honours HTTPS_PROXY (the run's loopback recorder) only with this (D59).
+NODE_USE_ENV_PROXY = "1"
 DISABLE_AUTOUPDATER = "1"
 # Documented for unattended sessions (Claude Code 2.1.186+, raised defaults 2.1.199+): a dropped
 # connection, timeout or server error is retried up to 300 times (about three hours of backoff)
