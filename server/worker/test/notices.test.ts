@@ -382,11 +382,17 @@ lifecycle("the end queues one ended notice with the commit", async (r) => {
 
 lifecycle("a repository GitHub does not have is a recorded absence, and the ended notice says so", async (r) => {
   for (const status of [404, 409]) {
-    stubGithub(() => new Response("{}", { status }));
+    const asked = stubGithub(() => new Response("{}", { status }));
     const run = await r.start(await r.cred(`m${status}`), `s${status}`);
     r.at(run.deadline_at);
     await r.tick();
     assert.equal(r.storedRun(run.run_id).final_commit, "none");
+    // The absence is final: later ticks never ask GitHub again, for this run or the one before it.
+    r.after(30 * MIN);
+    await r.tick();
+    r.after(2 * HOURS);
+    await r.tick();
+    assert.equal(asked.length, 1);
     assert.deepEqual(only(r, "ended").filter((n) => n.run_id === run.run_id).map((n) => n.payload.commit), [null]);
     r.at(t(0));
   }

@@ -1519,6 +1519,218 @@ async fn wire_native_and_goal_share_one_chain() {
     );
 }
 
+/// D53 follow-up: the launch reads the harness build (two files of up to 512 MiB) before it
+/// chains `Launch`, and the harness is already running. Its traffic is drained into the chain
+/// under its own producer while the read is held: more than the sink's whole queue
+/// (`MAX_CAPTURE_QUEUE_BYTES`) goes through, which traffic held until `Launch` could not do
+/// without a `QueueFull` loss. Only the status lags: it reads `Starting` until the launch is
+/// chained.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_harness_hash_loses_and_delays_no_traffic() {
+    use goalcup_protocol::capture::{MAX_CAPTURE_QUEUE_BYTES, MAX_SEGMENT_BYTES};
+    const FRAME: usize = MAX_SEGMENT_BYTES;
+    const BATCH: usize = 32;
+    let (rig, _native, _connectors) = native_rig().await;
+    let workspace = rig.workspace(&format!("slow-hash-{}", &fresh_id()[..12]));
+    let created = rig.create("capture-dev", &workspace, 64 << 20).await;
+    assert_eq!(created.status(), 200, "create: {}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
+    let harness = Child::sleeping();
+    let registration = harness.registration(info.process_generation);
+    assert_eq!(
+        rig.register(&info.entry_id, &registration).await.status(),
+        204
+    );
+    rig.daemon.hold_capture_harness_build(&info.entry_id, true);
+    // A failed assertion below must not leave the launch parked.
+    struct Release<'a>(&'a goalcup_daemon::runtime::Daemon, String);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.hold_capture_harness_build(&self.1, false);
+        }
+    }
+    let release = Release(&rig.daemon, info.entry_id.clone());
+
+    let launch_request = launch_request(&goal);
+    let launch = rig.launch(&info.entry_id, &launch_request);
+    tokio::pin!(launch);
+    let producer = info.producer_id.clone();
+    let chained = |records: &[CaptureRecord]| -> u64 {
+        records
+            .iter()
+            .filter_map(|record| match record {
+                CaptureRecord::Segment {
+                    stream, source_len, ..
+                } if stream.producer == producer => Some(*source_len),
+                _ => None,
+            })
+            .sum()
+    };
+    let line = b"the quick brown fox jumps over the lazy dog\n";
+    let payload: Vec<u8> = line.iter().copied().cycle().take(FRAME).collect();
+    let connection_id = fresh_id();
+    let traffic = async {
+        let wired = info.clone();
+        let id = connection_id.clone();
+        let mut wire = tokio::task::spawn_blocking(move || {
+            let mut wire = Wire::connect(&wired, &wired.producer_id);
+            wire.send(0, connection(&id, opened(false)));
+            wire.send(1, request_open(&id));
+            wire
+        })
+        .await
+        .unwrap();
+        let mut sent = 0u64;
+        // Each batch is chained before the next is sent, all while the launch is held.
+        while sent <= MAX_CAPTURE_QUEUE_BYTES as u64 + (FRAME * BATCH) as u64 {
+            let data = payload.clone();
+            let from = sent;
+            wire = tokio::task::spawn_blocking(move || {
+                for n in 0..BATCH as u64 {
+                    let offset = from + n * FRAME as u64;
+                    wire.send(
+                        1,
+                        FrameEvent::Bytes {
+                            offset,
+                            data: data.clone(),
+                        },
+                    );
+                }
+                wire
+            })
+            .await
+            .unwrap();
+            sent += (FRAME * BATCH) as u64;
+            rig.records_when(&info.entry_id, |records| chained(records) >= sent)
+                .await;
+        }
+        (wire, sent)
+    };
+    let (wire, sent) = tokio::select! {
+        answered = &mut launch => panic!("the launch answered while held: {}", answered.status()),
+        done = traffic => done,
+    };
+    assert!(sent > MAX_CAPTURE_QUEUE_BYTES as u64);
+
+    // Still held: the launch is not chained, and only the status says so.
+    let held = rig.records(&info.entry_id);
+    assert!(
+        !held
+            .iter()
+            .any(|r| matches!(r, CaptureRecord::Launch { .. }))
+    );
+    assert_eq!(chained(&held), sent);
+    let status = rig.status(&info.entry_id).await.payload;
+    let capture = status.capture.unwrap();
+    assert_eq!(
+        (capture.run, capture.capture, capture.gap_count),
+        (RunState::Starting, CaptureState::Starting, 0)
+    );
+    assert_eq!(status.admissions_refused, Some(0));
+    tokio::select! {
+        answered = &mut launch => panic!("the launch answered while held: {}", answered.status()),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(300)) => {}
+    }
+
+    drop(release);
+    let launched = launch.await;
+    assert_eq!(launched.status(), 204, "{}", launched.body());
+    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
+    assert_eq!(
+        (capture.run, capture.capture, capture.gap_count),
+        (RunState::Running, CaptureState::Recording, 0)
+    );
+
+    tokio::task::spawn_blocking(move || {
+        let mut wire = wire;
+        wire.send(
+            1,
+            FrameEvent::End {
+                reason: EndReason::Complete,
+            },
+        );
+        let close = ConnectionEvent::Close {
+            outcome: ConnectionOutcome::Complete,
+        };
+        wire.send(0, connection(&connection_id, close));
+        wire.close();
+    })
+    .await
+    .unwrap();
+    rig.records_when(&info.entry_id, |records| {
+        closed_by(records, &producer).is_some()
+    })
+    .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+
+    let records = rig.records(&info.entry_id);
+    assert!(
+        !records
+            .iter()
+            .any(|r| matches!(r, CaptureRecord::Gap { .. })),
+        "nothing was lost: {:#?}",
+        records
+            .iter()
+            .filter(|r| matches!(r, CaptureRecord::Gap { .. }))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(chained(&records), sent);
+    let launch_at = position(&records, |r| matches!(r, CaptureRecord::Launch { .. }));
+    let last_held = records
+        .iter()
+        .rposition(|r| {
+            matches!(r, CaptureRecord::Segment { stream, source_offset, .. }
+            if stream.producer == producer && *source_offset < sent)
+        })
+        .unwrap();
+    assert!(
+        last_held < launch_at,
+        "the held traffic is chained before the launch"
+    );
+    // Every wire record names the one producer that sent it.
+    let wire_records = records.iter().filter(|r| {
+        matches!(
+            r,
+            CaptureRecord::Connection { .. }
+                | CaptureRecord::Open {
+                    source: CaptureSource::WireRequest,
+                    ..
+                }
+        )
+    });
+    assert!(
+        wire_records
+            .into_iter()
+            .all(|r| names_producer(r, &producer))
+    );
+    let Some(CaptureRecord::Launch { harness_build, .. }) = records.get(launch_at) else {
+        unreachable!()
+    };
+    assert!(harness_build.is_some(), "the build is still recorded");
+
+    // End to end with the built `goalcup-verify` beside the test binaries, or the one
+    // `GOALCUP_VERIFY_BIN` names: the trace verifies.
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("goalcup-verify")))
+        .filter(|path| path.exists());
+    if let Some(bin) = std::env::var_os("GOALCUP_VERIFY_BIN").or(sibling.map(Into::into)) {
+        let out = std::process::Command::new(bin)
+            .arg("--capture-integrity")
+            .arg(rig.trace_dir(&info.entry_id))
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn producer_close_after_all_frames_is_clean() {
     let rig = Rig::start().await;

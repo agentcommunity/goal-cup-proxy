@@ -376,6 +376,14 @@ mod tests {
     }
 
     /// A child that stops itself is continued, and its exit is still the status waited for.
+    ///
+    /// The child stops with `SIGSTOP`, which no process can catch, block or ignore and which
+    /// stops it whatever its process group: the kernel discards `SIGTSTP` sent to a member of an
+    /// orphaned group, which is what a test runner with no controlling terminal (CI) gives every
+    /// test, so a `SIGTSTP` here would pass or fail by the runner. `SIGTSTP` from a harness under
+    /// a job-control shell is the chat-mode pty test's (`goalcup-cli`,
+    /// `a_harness_that_suspends_itself_is_continued_and_the_run_seals`). A stop that lands
+    /// before the wait begins is reported by it all the same, so nothing here is a race.
     #[test]
     #[allow(
         clippy::zombie_processes,
@@ -383,12 +391,13 @@ mod tests {
     )]
     fn a_child_that_stops_itself_is_continued_and_waited_for() {
         let child = std::process::Command::new("/bin/sh")
-            .args(["-c", "kill -TSTP $$; kill -TSTP $$; exit 7"])
+            .args(["-c", "kill -STOP $$; kill -STOP $$; exit 7"])
+            .stdin(std::process::Stdio::null())
             .spawn()
             .unwrap();
         let mut stops = Vec::new();
         let status = wait_resuming(child.id(), &mut |signal| stops.push(signal)).unwrap();
         assert_eq!(status.code(), Some(7));
-        assert_eq!(stops, [libc::SIGTSTP, libc::SIGTSTP]);
+        assert_eq!(stops, [libc::SIGSTOP, libc::SIGSTOP]);
     }
 }
