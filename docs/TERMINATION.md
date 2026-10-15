@@ -112,7 +112,7 @@ singleton path proves one process's death and cannot see a descendant reparented
 ## The launcher's ending of a child it just released (D40, outside this contract)
 
 `goalcup start` parks its capture child before `exec` until the daemon has durably
-registered it, then releases it (CONTRACTS.md, "Amendment 2026-10-02 (C6 capture spawn gate, H-10
+registered it, then releases it (CONTRACTS.md, "C6 capture spawn gate (H-10
 4b)"). A seal that lands between the registration and the release cannot signal a child that is
 still parked: the daemon's guard finds a command line that is not the harness's and binds
 `Unresolved(ProcessAuthorityUnavailable)`. The launcher, which sees the entry sealed right after
@@ -134,8 +134,8 @@ the one after the `Launch` error are both unreadable (a status that cannot be re
 child). The look after the `Launch` error can come after Codex's native-scope wait of up to
 120 s, and each read may take the 30 s `CALL_TIMEOUT`. Separately, if a parked child's
 acknowledgement arrives after the 5 s gate timeout and the child `exec`s before the gate closes,
-the launcher SIGKILLs it without grace: a harness that ran for milliseconds (CONTRACTS.md, gate
-amendment ¶5(f)).
+the launcher SIGKILLs it without grace: a harness that ran for milliseconds (CONTRACTS.md, "C6 capture spawn gate"
+¶5(f)).
 
 ## The invariant (quoted verbatim from `tests/it/terminate_sim.rs`; keep the two identical)
 

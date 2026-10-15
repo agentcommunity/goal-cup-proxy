@@ -448,8 +448,9 @@ stderr.
 | 2 | Invalid evidence, a torn tail included. |
 | 3 | No usable report: the trace could not be read, its chain is not v5, or the invocation was refused. |
 
-A receipt or acknowledgement signed by a key this build does not pin gives `receipt_key_not_accepted` or
-`ack_signature_unverified`. `--dev-key <hex>` (repeatable, 64 hex characters) accepts signatures under that
+This build pins the production ingest key. A production trace verifies without any option, and the report says
+`key_source: "pinned"`. A receipt or acknowledgement signed by a key this build does not pin (staging, a test
+signer) gives `receipt_key_not_accepted` or `ack_signature_unverified`. `--dev-key <hex>` (repeatable, 64 hex characters) accepts signatures under that
 key for one run, and the report records `key_source: "supplied"` so a development run is never mistaken for a
 production one.
 
