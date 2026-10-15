@@ -458,7 +458,17 @@ impl Daemon {
         });
         // No arming gate: the entry is created ready for its one daemon-launched process.
         entry.state = EntryState::Armed;
-        self.registry().put(&entry)?;
+        // One entry holds a workspace (D4), except that a capture entry that routes nothing
+        // lets it go: a sealed one, and one this daemon failed to reopen at start. An entry
+        // merely absent from the captures map is not that: a create in flight is stored before
+        // it is inserted. That is how a continued run makes its next segment in the workspace
+        // its last one had.
+        let reopen_failed = lock(&self.inner.reopen_failed).clone();
+        self.registry().put_letting_go(&entry, &|stored| {
+            stored.capture.as_ref().is_some_and(|row| {
+                row.sealed_status.is_some() || reopen_failed.contains(&stored.entry_id)
+            })
+        })?;
         let entry = self.registry().open_initial_process_handoff(entry_id)?;
         let process_generation = entry.process_handoff_generation();
 
@@ -756,6 +766,7 @@ impl Daemon {
         for row in rows.into_iter().filter(unsealed) {
             let entry_id = row.entry_id.clone();
             if let Err(error) = self.reopen_capture(row) {
+                lock(&self.inner.reopen_failed).insert(entry_id.clone());
                 self.inner.cycles.note(&DaemonError::Refused(format!(
                     "capture entry {entry_id} was not reopened: {}",
                     super::path_free(&error)
