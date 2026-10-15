@@ -677,28 +677,41 @@ fn shared_leaf(cfg: &Path, profile: &CaptureSpec, id: &str) -> Option<(PathBuf, 
     }
 }
 
-/// The harness home `goalcup prep` opens the harness in: the one every run of the connector
-/// shares, made if there is none, and the lock that keeps it from a run that is recording (and
-/// a run from it) while the participant is signed in there. `None` for a connector whose home
-/// is made fresh for each run: there is nothing to prepare. Judged as a run judges it.
+/// The folder of a connector's kept home, which `goalcup prep` opens the harness in so that a
+/// sign-in lands where the runs will look for it: its config home (D39) or its run `HOME`
+/// (D59). `None` for a connector whose homes are all made per run: nothing to prepare.
+pub(crate) fn prep_home_leaf(cfg: &Path, connector: &HarnessConnector) -> Option<PathBuf> {
+    shared_leaf(
+        cfg,
+        &connector.loaded.manifest.capture,
+        &connector.loaded.manifest.id,
+    )
+    .map(|(leaf, _)| leaf)
+}
+
+/// The kept home `goalcup prep` opens the harness in, claimed: its folder, and the lock that
+/// keeps a run from it (and it from a recording run) while the participant is signed in there.
+pub(crate) struct PrepHome {
+    /// `<cfg>/capture-homes/<id>` or `<cfg>/capture-homes/<id>.run-home`, checked.
+    pub(crate) dir: PathBuf,
+    /// `dir` is the run's `HOME` (D59, `run_home = "shared"`) and not its config home.
+    pub(crate) is_run_home: bool,
+    _lock: std::fs::File,
+}
+
+/// Claim the home `goalcup prep` opens the harness in ([`prep_home_leaf`]): the one every run of
+/// the connector shares, made if there is none, under the `<id>.lock` a run takes. `None` for a
+/// connector with no kept home. Judged as a run judges it.
 pub(crate) fn claim_home_for_prep(
     cfg: &Path,
     connector: &HarnessConnector,
-) -> Result<Option<(PathBuf, std::fs::File)>, CliError> {
-    if connector.loaded.manifest.capture.home.run_home == RunHome::Shared {
-        return Err(CliError::Refused(format!(
-            "`goalcup prep` does not support a shared run HOME yet (`{}` keeps one, D59); it \
-             comes with the next prep change. Nothing was changed.",
-            connector.loaded.manifest.id
-        )));
-    }
-    if connector.loaded.manifest.capture.home.config_home == ConfigHome::PerRun {
-        return Ok(None);
-    }
+) -> Result<Option<PrepHome>, CliError> {
     let id = &connector.loaded.manifest.id;
-    let config_home = cfg.join(CAPTURE_HOMES_DIR).join(id);
-    private_dir(config_home.parent().expect("a capture-home parent"), true)?;
-    let lock = match try_lock_shared_home(&config_home, id)? {
+    let Some((leaf, is_run_home)) = shared_leaf(cfg, &connector.loaded.manifest.capture, id) else {
+        return Ok(None);
+    };
+    private_dir(leaf.parent().expect("a capture-home parent"), true)?;
+    let lock = match try_lock_shared_home(&leaf, id)? {
         Ok(lock) => lock,
         Err(path) => {
             let holder = home_holder(&path);
@@ -714,8 +727,12 @@ pub(crate) fn claim_home_for_prep(
             }));
         }
     };
-    let home = ensure_shared_home(&config_home)?;
-    Ok(Some((home.recheck()?, lock)))
+    let home = ensure_shared_home(&leaf)?;
+    Ok(Some(PrepHome {
+        dir: home.recheck()?,
+        is_run_home,
+        _lock: lock,
+    }))
 }
 
 /// The shared harness home's folder (D39), made if there is none, and judged as every run

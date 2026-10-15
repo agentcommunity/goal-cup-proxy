@@ -7,7 +7,7 @@
 //! `GOALCUP_TEST_PREP` rather than read from the machine the test runs on, GitHub is a local
 //! fake, and a run on a terminal is a pseudo-terminal of the test's own.
 
-use crate::common::m2_cli_support::{CHAT_ID, OnPty, Rig};
+use crate::common::m2_cli_support::{CHAT_HOME_ID, CHAT_ID, Launcher, OnPty, Rig};
 use crate::common::upload_server::{ServerOptions, UploadServer};
 use goalcup_cli::account::github::GithubSetup;
 use goalcup_cli::prep_file::{PrepFile, prep_path, read_prep_lenient};
@@ -866,4 +866,302 @@ fn a_repository_that_is_not_empty_is_a_failure_on_every_prep_and_no_reason_for_a
     let shown = on_pty.shown();
     assert!(shown.contains("is not empty"), "{shown}");
     assert!(!shown.contains("not shown):"), "{shown}");
+}
+
+// ------------------------------------------------------------------ the participant's environment
+
+/// The harness as an npm one is: a `#!/usr/bin/env toynode` script, found on a PATH of the
+/// participant's own (the rig's directory is not on it). `toynode` is on that PATH, or not.
+/// Returns the PATH.
+fn npm_style_harness(rig: &Rig, with_interpreter: bool) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = rig.root.join("participant-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = std::fs::read_to_string(rig.root.join("bin").join(CHAT_ID)).unwrap();
+    let (_, body) = fake.split_once('\n').unwrap();
+    let harness = bin.join(CHAT_ID);
+    std::fs::write(&harness, format!("#!/usr/bin/env toynode\n{body}")).unwrap();
+    std::fs::set_permissions(&harness, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if with_interpreter {
+        let node = bin.join("toynode");
+        std::fs::write(&node, "#!/bin/sh\nexec /bin/sh \"$@\"\n").unwrap();
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    format!(
+        "{}:{}",
+        bin.display(),
+        crate::common::support::clean_env()["PATH"]
+    )
+}
+
+/// What a participant who has done everything but open the harness has: a login, the repository
+/// and a token that passes.
+fn all_but_the_harness(rig: &Rig) {
+    log_in(rig, "http://127.0.0.1:1");
+    GithubSetup::new(REPO, &token())
+        .unwrap()
+        .store(&rig.cfg)
+        .unwrap();
+}
+
+#[test]
+fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environment() {
+    let rig = Rig::chat();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+    let path = npm_style_harness(&rig, true);
+
+    let mut command = prep_command(&rig, &["--repo", REPO], &facts);
+    command
+        .env("PATH", &path)
+        .env("TERM", "xterm-256color")
+        .env("COLORTERM", "truecolor")
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        // Things a participant's shell may hold that the harness must not be handed: a proxy, a
+        // model base URL, a token. A prep launch records nothing and sets none of them.
+        .env("HTTPS_PROXY", "http://goalcup:secret@127.0.0.1:1")
+        .env("https_proxy", "http://goalcup:secret@127.0.0.1:1")
+        .env("NO_PROXY", "example.org")
+        .env("OPENAI_BASE_URL", "https://llm.example.org/v1")
+        .env("ANTHROPIC_BASE_URL", "https://llm.example.org")
+        .env("GITHUB_TOKEN", "ghp_participantsownshelltoken")
+        .env("LC_API_TOKEN", "lc-token-value");
+    let mut on_pty = OnPty::spawn(command, None);
+    // With the old fixed PATH the script's interpreter is not found and the harness never draws.
+    on_pty.wait_shown("tui: ready");
+    on_pty.type_line("/exit");
+    on_pty.wait();
+    let shown = on_pty.shown();
+    assert!(shown.contains("[ok] harness_home:"), "{shown}");
+    let env = rig
+        .harness_file("tui.env")
+        .expect("the harness reported its environment");
+    for want in [
+        format!("PATH={path}"),
+        "TERM=xterm-256color".to_string(),
+        "COLORTERM=truecolor".to_string(),
+        "LANG=C.UTF-8".to_string(),
+        "LC_ALL=C.UTF-8".to_string(),
+    ] {
+        assert!(env.lines().any(|l| l == want), "{want} is not in:\n{env}");
+    }
+    // Not a recorded launch, and not a leak: none of what the shell held reaches the harness,
+    // by name or by value.
+    for key in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "NO_PROXY",
+        "no_proxy",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "GITHUB_TOKEN",
+        "LC_API_TOKEN",
+        "CODEX_CA_CERTIFICATE",
+    ] {
+        assert!(
+            !env.lines().any(|l| l.starts_with(&format!("{key}="))),
+            "{key} reached the harness:\n{env}"
+        );
+    }
+    for value in [
+        "goalcup:secret",
+        "llm.example.org",
+        "ghp_participantsownshelltoken",
+        "lc-token-value",
+    ] {
+        assert!(!env.contains(value), "{value} reached the harness:\n{env}");
+    }
+    assert!(
+        !env.lines().any(|l| l.starts_with("GOALCUP_")),
+        "the tracer's own variables reached the harness:\n{env}"
+    );
+}
+
+#[test]
+fn the_harness_step_checks_the_interpreter_on_the_participants_path() {
+    let rig = Rig::chat();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+
+    let path = npm_style_harness(&rig, false);
+    let out = prep_command(&rig, &[], &facts)
+        .env("PATH", &path)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    let harness = line(&text, "harness");
+    assert!(
+        harness.starts_with("[fail] harness:")
+            && harness.contains("toynode")
+            && harness.contains("not on the PATH"),
+        "{text}"
+    );
+
+    let path = npm_style_harness(&rig, true);
+    let out = prep_command(&rig, &[], &facts)
+        .env("PATH", &path)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        line(&text, "harness").starts_with("[ok] harness:"),
+        "{text}"
+    );
+}
+
+// ------------------------------------------------------------------ a kept run HOME (D59)
+
+#[test]
+fn prep_logs_in_to_the_run_home_a_later_start_uses() {
+    use std::os::unix::fs::PermissionsExt;
+    let rig = Rig::chat_with_shared_run_home();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+    let home = rig
+        .cfg
+        .join("capture-homes")
+        .join(format!("{CHAT_HOME_ID}.run-home"));
+
+    // Not set up yet: the step names the run home, and a prep with no terminal opens nothing.
+    let (_, text) = prep(&rig, &["--harness", CHAT_HOME_ID, "--repo", REPO], &facts);
+    let step = line(&text, "harness_home");
+    assert!(
+        step.starts_with("[todo] harness_home:") && step.contains(".run-home"),
+        "{text}"
+    );
+
+    // On a terminal, the harness opens with its HOME the kept run home, and writes there.
+    let mut on_pty = OnPty::spawn(
+        prep_command(&rig, &["--harness", CHAT_HOME_ID, "--repo", REPO], &facts),
+        None,
+    );
+    on_pty.wait_shown("tui: ready");
+    on_pty.type_line("/exit");
+    on_pty.wait();
+    let shown = on_pty.shown();
+    assert!(shown.contains("[ok] harness_home:"), "{shown}");
+    assert_eq!(
+        std::fs::read_to_string(home.join("tui-runs.txt")).unwrap(),
+        "run\n"
+    );
+    assert_eq!(
+        std::fs::metadata(&home).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert!(
+        home.is_dir(),
+        "the kept home is not removed with the prep's scratch folder"
+    );
+    assert!(prep_file(&rig.cfg).home_ready);
+
+    // A later `goalcup start` of that connector runs in the same HOME, and sees what prep left.
+    let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+    rig.prepare_for(&server.url());
+    let mut start = OnPty::spawn(
+        rig.chat_command_for(
+            CHAT_HOME_ID,
+            &[
+                ("GOALCUP_TEST_DISK", "4194304,0,50"),
+                (
+                    "GOALCUP_TEST_UPLOAD_POLICY",
+                    "200,25,100,400,10000,268435456,3000,100",
+                ),
+            ],
+            Launcher::Direct,
+        ),
+        None,
+    );
+    start.wait_shown("tui: ready");
+    assert_eq!(
+        rig.harness_file("tui.home").unwrap().trim(),
+        home.display().to_string()
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("tui-runs.txt")).unwrap(),
+        "run\nrun\n",
+        "the run's HOME is the one prep set up"
+    );
+    start.type_line("/exit");
+    let status = start.wait();
+    assert!(status.success(), "{status:?}\n{}", start.shown());
+}
+
+// ------------------------------------------------------------------ a home someone else holds
+
+/// Take the flock `goalcup start` and `goalcup prep` take on `<cfg>/capture-homes/<id>.lock`,
+/// as another process: the lock is on this open file, so the prep (a process of its own) is
+/// refused. `holder`, when given, is the run id a recording run writes into the file.
+fn hold_home_lock(rig: &Rig, id: &str, holder: Option<&str>) -> std::fs::File {
+    use std::os::fd::AsRawFd;
+    let homes = rig.cfg.join("capture-homes");
+    std::fs::create_dir_all(&homes).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(homes.join(format!("{id}.lock")))
+        .unwrap();
+    if let Some(run) = holder {
+        std::fs::write(homes.join(format!("{id}.lock")), run).unwrap();
+    }
+    // SAFETY: `lock` owns a live descriptor; `flock` reads nothing else.
+    let taken = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(taken, 0, "{}", std::io::Error::last_os_error());
+    lock
+}
+
+#[test]
+fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    // The config home kept across runs (D39) and the run HOME kept across runs (D59), each
+    // held by a recording run that has said who it is, and by a holder that has not.
+    for (id, kind, holder) in [
+        (CHAT_ID, "config home", Some("r0123456789abcdef")),
+        (CHAT_ID, "config home", None),
+        (CHAT_HOME_ID, "run HOME", Some("r0123456789abcdef")),
+        (CHAT_HOME_ID, "run HOME", None),
+    ] {
+        let rig = Rig::chat_with_shared_run_home();
+        all_but_the_harness(&rig);
+        let _held = hold_home_lock(&rig, id, holder);
+
+        let mut on_pty = OnPty::spawn(
+            prep_command(&rig, &["--harness", id, "--repo", REPO], &facts),
+            None,
+        );
+        let status = on_pty.wait();
+        let shown = on_pty.shown();
+        let what = format!("{kind}, holder {holder:?}:\n{shown}");
+        assert_eq!(status.code(), Some(1), "{what}");
+        let home = line(&shown, "harness_home");
+        assert!(home.starts_with("[fail] harness_home:"), "{what}");
+        match holder {
+            Some(run) => assert!(home.contains(run), "the holder is named: {what}"),
+            None => assert!(home.contains("another `goalcup prep`"), "{what}"),
+        }
+        assert!(
+            home.contains(&format!("share one {id} home")) || home.contains(&format!("{id} run")),
+            "{what}"
+        );
+        // Nothing was opened, nothing was made in the held home, and nothing is recorded as
+        // set up.
+        assert!(
+            !rig.out.join("tui.pid").exists(),
+            "the harness started: {what}"
+        );
+        assert!(!prep_file(&rig.cfg).home_ready, "{what}");
+        let leaf = if id == CHAT_ID {
+            id.to_string()
+        } else {
+            format!("{id}.run-home")
+        };
+        assert!(!rig.cfg.join("capture-homes").join(leaf).exists(), "{what}");
+    }
 }
