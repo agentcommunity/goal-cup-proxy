@@ -222,7 +222,8 @@ The contract is `connectors/<id>/harness.toml`, schema 1.
    failing closed for that harness (CHEAT-CHECKLIST), so a connector names a shared row only when
    the harness has no CA variable of its own. `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
    `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. A new mode, shared row or name shape is a
-   DECISIONS entry.
+   DECISIONS entry. This narrows D41's 'SSL_CERT_FILE stays refused' to connectors that have a CA
+   variable of their own; D41's proxy-only trust for a replace-mode variable is unchanged.
 4. The server keeps acceptable connector directory digests as data. The compiled pins in
    `pins/connector-dirs.txt` stay the local gate. A harness PR has no `.rs` file (D51).
 5. Stranger harness PRs are accepted once the conformance and pin tests run in CI, the
