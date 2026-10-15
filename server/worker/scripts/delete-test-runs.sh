@@ -89,7 +89,7 @@ if [ "$yes" = yes ]; then
     enc=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$key")
     curl -fsS -X DELETE "$base/$bucket/objects/$enc" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" >/dev/null || failed=$((failed + 1))
   done <"$tmp/plan"
-  [ "$failed" -eq 0 ] || { echo "delete-test-runs: $failed object(s) not deleted; run it again" >&2; exit 1; }
+  [ "$failed" -eq 0 ] || { echo "delete-test-runs: $failed object(s) not deleted; run again without --older-than" >&2; exit 1; }
 else
   echo "Dry run: nothing changed. Run again with --yes to delete."
 fi

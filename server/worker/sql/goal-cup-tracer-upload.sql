@@ -1,19 +1,14 @@
--- COPY, for reference. The authority is the website repo (agentCommunity_PAGE):
---   supabase/migrations/20261015120000_goal_cup_tracer_upload.sql      (schema and functions)
---   supabase/migrations/20261015120100_goal_cup_tracer_staging_events.sql (the two staging events)
---   supabase/migrations/20261015130000_goal_cup_tracer_deployment_fence.sql (staging fenced from production)
---   supabase/migrations/20261015140000_goal_cup_tracer_member_binding.sql (credential bound to its member; no address for staging)
---   supabase/migrations/20261015150000_goal_cup_tracer_production.sql (production role, events, account erasure)
---   supabase/migrations/20261015160000_goal_cup_tracer_test_mode.sql (organizer test runs; delete_test_runs)
---   supabase/migrations/20261015170000_goal_cup_tracer_test_replaces_test.sql (a test run replaces the open test run)
---   supabase/migrations/20261016120000_goal_cup_tracer_event_windows.sql (the confirmed dry-run and cup start windows)
--- Applied to the Agent Community Supabase project on 2026-10-15 (20261016120000: applied before this
--- copy of it merged). It replaces the earlier proposal
--- (proposed-goalcup-functions.sql): tables in the private schema goal_cup_tracer, functions renamed
--- public.goal_cup_upload_* (src/db-supabase.ts adds the prefix), the website approval functions,
--- and the mailer pair goal_cup_upload_claim_notices / goal_cup_upload_finish_notice (src/mail.ts).
--- Change it there first, then copy it here.
+-- COPY, for reference. The authority is the website repo (agentCommunity_PAGE), supabase/migrations/.
+-- This file is every *goal_cup_tracer*.sql migration there, in name order, one after the other, each
+-- under a "-- ===== <file name> =====" line. Do not edit it by hand. After a website migration merges,
+-- run this from the root of the website checkout (at its main), with F set to this file, to rewrite it
+-- (the header above the REGEN-END line is kept, the rest is regenerated):
+--   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/migrations/*goal_cup_tracer*.sql; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
+-- Change a migration there first, then regenerate here. Applied to the Agent Community Supabase
+-- project on 2026-10-15 (20261016120000: applied before this copy of it merged).
+-- REGEN-END
 
+-- ======================== 20261015120000_goal_cup_tracer_upload.sql ========================
 -- Goal Cup tracer upload: the database half of the upload Worker (goal-cup-tracer, server/worker).
 --
 -- Adapted from goal-cup-tracer server/worker/sql/proposed-goalcup-functions.sql to this repo's
@@ -1029,8 +1024,19 @@ GRANT EXECUTE ON FUNCTION
   public.goal_cup_approve_device(uuid, text, boolean)
 TO service_role;
 
--- ======================== 20261015130000_goal_cup_tracer_deployment_fence.sql ========================
+-- ======================== 20261015120100_goal_cup_tracer_staging_events.sql ========================
+-- Goal Cup tracer staging events (staging = true). Inserts two new rows into the new table
+-- goal_cup_tracer.events (20261015120000_goal_cup_tracer_upload.sql); touches nothing else.
+-- The staging upload Worker (goalcup-ingest-staging) is deployed with
+--   EVENT_ID          = goalcup-dryrun-staging    (its "competition" runs: 168 h, start window below)
+--   PRACTICE_EVENT_ID = goalcup-practice-staging  (10-minute practice runs; no start window)
+INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, run_hours, staging)
+VALUES
+  ('goalcup-practice-staging', 'practice', '2026-10-15T00:00:00Z', '2027-01-31T00:00:00Z', 168, true),
+  ('goalcup-dryrun-staging',   'dry_run',  '2026-10-15T00:00:00Z', '2026-11-05T00:00:00Z', 168, true)
+ON CONFLICT (id) DO NOTHING;
 
+-- ======================== 20261015130000_goal_cup_tracer_deployment_fence.sql ========================
 -- Goal Cup tracer: fence staging from production (security review, 2026-10-15).
 --
 -- The staging upload Worker and the website share one database. Before this migration the staging
@@ -1636,7 +1642,6 @@ REVOKE ALL ON FUNCTION public.goal_cup_upload_approve_device(text, text, boolean
 GRANT EXECUTE ON FUNCTION public.goal_cup_upload_approve_device(text, text, boolean, text) TO goal_cup_ingest_staging;
 
 -- ======================== 20261015140000_goal_cup_tracer_member_binding.sql ========================
-
 -- Goal Cup tracer: bind a run credential to its member; staging never sees an address
 -- (review of goal-cup-tracer PR #127, 2026-10-15).
 --
@@ -1774,7 +1779,6 @@ BEGIN
 END $$;
 
 -- ======================== 20261015150000_goal_cup_tracer_production.sql ========================
-
 -- Goal Cup tracer: production upload Worker role, production events, account erasure.
 --
 -- Additive. A new role, new grants, three new event rows, one new function. Nothing existing is
@@ -1785,11 +1789,10 @@ END $$;
 --     goal_cup_ingest_staging, so this role is production behind the deployment fence. It may
 --     execute the Worker's goal_cup_upload_* functions and nothing else in the schema; it is never
 --     granted goal_cup_upload_approve_device (the staging test approval).
---   * Production events (staging = false). The dry-run and cup times below were placeholders;
---     20261016120000_goal_cup_tracer_event_windows.sql (end of this file) sets the confirmed ones:
+--   * Production events (staging = false). The times are placeholders until the owner confirms them:
 --       goalcup-practice     practice, always open (10-minute runs; Worker PRACTICE_RUN_MINUTES)
---       goalcup-dryrun-2026  dry run, now 2026-10-23 00:00 UTC to 2026-11-06 00:00 UTC
---       goalcup-cup-2026     competition, now 2026-11-07 00:00 UTC to 2026-11-08 00:00 UTC, 168-hour runs
+--       goalcup-dryrun-2026  dry run, start window 2026-10-28 16:00 UTC + 24 h   [CONFIRM]
+--       goalcup-cup-2026     competition, start window 2026-11-06 16:00 UTC + 24 h, 168-hour runs [CONFIRM]
 --     Changing a time later is an UPDATE of these rows only (a new migration).
 --   * goal_cup_erase_member(p_actor_id): called by the account deletion (DELETE /api/my-data). Deletes
 --     the member's contact data and keeps run evidence until the raw traces are deleted after appeals:
@@ -1869,7 +1872,6 @@ REVOKE ALL ON FUNCTION public.goal_cup_erase_member(uuid) FROM PUBLIC, anon, aut
 GRANT EXECUTE ON FUNCTION public.goal_cup_erase_member(uuid) TO service_role;
 
 -- ======================== 20261015160000_goal_cup_tracer_test_mode.sql ========================
-
 -- Goal Cup tracer: the TEST run mode (owner request, 2026-10-15).
 --
 -- Organizers' own test runs, easy to tell apart and to delete in one go.
