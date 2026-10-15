@@ -1189,12 +1189,14 @@ mod tests {
         };
 
         let mut below = after_loss(MAX_PRODUCERS - 1);
-        assert_eq!(below.begin(&id(10_000)), EpochAdmission::Pending);
-        assert!(matches!(&below.phase, Phase::Attempt { producer } if *producer == id(10_000)));
+        assert_eq!(below.begin(&id(MAX_PRODUCERS)), EpochAdmission::Pending);
+        assert!(
+            matches!(&below.phase, Phase::Attempt { producer } if *producer == id(MAX_PRODUCERS))
+        );
 
         let mut at = after_loss(MAX_PRODUCERS);
         assert_eq!(
-            at.begin(&id(10_000)),
+            at.begin(&id(MAX_PRODUCERS)),
             EpochAdmission::Disabled(GapReason::LimitExceeded)
         );
         assert!(matches!(
@@ -1203,7 +1205,7 @@ mod tests {
         ));
         // Latched: no later proposal starts an attempt either.
         assert_eq!(
-            at.begin(&id(10_001)),
+            at.begin(&id(MAX_PRODUCERS + 1)),
             EpochAdmission::Disabled(GapReason::LimitExceeded)
         );
     }

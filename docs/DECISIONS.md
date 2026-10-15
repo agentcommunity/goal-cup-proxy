@@ -70,6 +70,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D55 | A capture chain may be split into part files named by their logical start offset; records and hashes are unchanged | in force (m2) once merged | [entry](#d55-m2-the-capture-chain-rotates-into-part-files) |
 | D56 | The seal of a clone records its commit and an uncommitted digest; the finish gets three minutes | in force (m2) once merged | [entry](#d56-m2-the-seal-of-a-clone-records-its-commit-and-an-uncommitted-digest-the-finish-gets-minutes) |
 | D57 | Shipped connectors run the harness in chat mode; the participant types the prompt; the session files are every one new or written since the run started | in force (m2) once merged; amends D52 | [entry](#d57-m2-connectors-run-the-harness-in-chat-mode-and-record-every-session-file-since-the-start) |
+| D58 | `MAX_PRODUCERS` (distinct IDs per entry, ever) rises to 65 536; a new `MAX_LIVE_PRODUCERS` = 128 bounds live producers; pre-change readers flag traces past 128 | in force (m2) once merged | [entry](#d58-m2-a-week-of-stalls-never-exhausts-the-producer-ids) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1557,9 +1558,10 @@ filters (`an_agent_written_clean_filter_is_never_run` failed on it). Every call 
 deadline, prints at most 64 MiB, and is killed and reaped past the deadline.
 
 **Time.** `LOCAL_CAPTURE_FINISH_BUDGET` is 180 s (it was 10 s; amends D40 and the C6 budget in
-CONTRACTS.md); `FINISH_COMMIT_RESERVE` stays 2 s. The daemon's drain share now ends the reserve
-plus 30 s before the deadline, so a producer that never settles cannot starve the Git read: it
-gets at least 30 s, or all of a smaller budget, and it ends at the commit reserve. The baseline gives Git 20 s, inside the CLI's 30 s
+CONTRACTS.md); `FINISH_COMMIT_RESERVE` stays 2 s. When the workspace is a clone root, the daemon's drain
+share ends the reserve plus 30 s before the deadline, so a producer that never settles cannot
+starve the Git read: it gets at least 30 s, or all of a smaller budget, and it ends at the commit
+reserve. Any other workspace reads no Git, and its drain share ends at the reserve as before. The baseline gives Git 20 s, inside the CLI's 30 s
 create call.
 
 **Reconsider when** the server re-derives the uncommitted state from a pushed branch, or a
@@ -1577,8 +1579,9 @@ serialized.
 
 **The schema (connector schema 1, additive: every field defaults to today's behaviour).**
 - `[capture] interactive = true` (default `false`). The profile takes no `goal_flag`, its `args`
-  need not end in `--`, it takes no `[capture.credential]`, and its identity is `none`. With
-  `false` every headless rule is unchanged.
+  need not end in `--` and may be empty (0 to 64; a headless profile keeps 1 to 64), it takes no
+  `[capture.credential]`, and its identity is `none`. With `false` every headless rule is
+  unchanged.
 - `[capture] resume_args = [...]` (default `[]`): appended after `args` when a run is continued.
   Each argument passes the same D51 checks as `args` (one function serves both), and the two lists
   together hold at most 64 arguments. It may be set with or without `interactive`.
@@ -1596,12 +1599,32 @@ counts against `max_files`. The change time is there because an agent or harness
 modification time back (`touch -d`, `cp -p`, `tar x`) but cannot set the change time back: the
 rule errs toward recording more. Once admitted a file stays, and is read whole from offset 0, its
 lines from before the run included. Every admitted file is recorded; none is refused and none is
-preferred. A `since_run_start` source with no `native_since` in the request is refused at
-creation, before anything is allocated, rather than reading every old file. A `native_since` more
+preferred. A request with no `native_since` reads from the entry's own create time: whole Unix
+seconds, rounded down, taken once at create and kept as the registry row's `created_at`, so a
+reopened entry has the same floor as its create, not its reopen time (a reopened entry reads no
+native source today; for a create that named no `native_since`, the row is where any reader takes
+the floor from). This replaces the earlier refusal of such a request. When `native_since` is
+present it wins, and it is not kept: the row holds only the create time. A `native_since` more
 than 300 seconds ahead of the daemon's clock is refused as malformed (a start sent in
 milliseconds would otherwise admit nothing), and one no clock can represent is refused rather
 than overflowing. `native_since` is ignored for a source that does not declare
 `since_run_start`.
+
+**Roots under the config home are created.** A `{config_home}` native root that does not exist yet
+(`sessions` or `projects` on a fresh home) is created at entry create, before the native source
+opens it: the config home itself if it is missing too, then one component at a time beneath it,
+mode 0700, through the same no-follow directory capability the trace uses
+(`TraceDir::open_or_create_child_dir`). It runs after the workspace and machine-root checks and
+before any artifact is created, so a create those checks refuse makes no directory. A component
+that exists as a symlink or as anything but a directory refuses the create; nothing is made
+outside the config home (its parent must exist). A `{run_home}` root is not created this way.
+
+**The goal stream in chat mode.** The v5 `Launch` keeps its goal stream. In chat mode the goal
+stream holds a fixed marker; the participant's prompt is the first user message in the session
+file. When the connector is interactive, the launcher records this marker (`CHAT_MODE_GOAL`) as
+the goal stream's bytes:
+
+> chat mode (D57): the harness was given no goal; the participant typed the prompt in the harness's own terminal, and it is recorded in the harness's session files.
 
 **The walker's bound.** `NativeCaptureLimits::max_dir_entries` defaults to 8192 (it was 4096), so
 one directory of 5 000 old sessions is enumerated whole on every poll and the new one is found.
@@ -1613,6 +1636,58 @@ nothing else.
 **Reconsider when** two runs share a config home at the same time; a shared home holds more than
 8 192 entries in one directory; or a harness writes a session file without changing either its
 modification or its change time.
+
+---
+
+## D58. **(M2)** A week of stalls never exhausts the producer IDs.
+
+**Decision (2026-10-15, owner's rule that short stalls never end recording).** Every recovered wire
+epoch spends one fresh producer ID, and `MAX_PRODUCERS` counted every ID an entry ever used,
+completed epochs included. At 128, about 127 daemon stall-and-recover cycles in one launch switched
+the wire leg off for good. The constant is split, and no ID is ever reused (reuse would change what
+a v5 producer ID means):
+
+- `MAX_PRODUCERS` keeps its meaning, distinct producer IDs per entry ever, and rises to 65 536: one
+  recovery every 9.2 s for 168 hours. It bounds the receiver's ledger, the owner sink's producer
+  table and pending IDs, the chain writer's producer sets, the reader's producer summaries and
+  lineage set, and the proxy's spent-ID set and recovery budget.
+- `MAX_LIVE_PRODUCERS` = 128 bounds what scales with producers live at once. The receiver refuses
+  a handshake while 128 producers are unsettled (admitting, live or closing), so partly received
+  bodies stay at most `MAX_LIVE_PRODUCERS × MAX_INGEST_FRAME_BYTES` per entry. The owner sink
+  answers a fresh epoch `Pending` while live producers and queued closes or loss markers together
+  number 128, so the control reserve (`MAX_LIVE_PRODUCERS × CONTROL_ITEM_COST`) still holds every
+  terminal control.
+- Bounds that only reused the number keep 128: the reader's launch goal streams and completed goal
+  streams (`launch_limit_exceeded`, `goal_stream_limit_exceeded`) and the native adapter's own
+  `RetryFresh` budget. Their verdicts are unchanged.
+
+This removes one way a stall ends recording, not every one: the proxy's per-launch
+connection-failure budget (`MAX_CONNECTION_FAILURES`, `proxy/ingest.rs`) still ends the wire leg
+after 10 failed connections, which lane T's T4 makes count consecutive failures only.
+
+**Recovery lineage is linear.** A Recovery naming a predecessor the chain never recorded supersedes
+every wire producer of the entry. The reader's and session's lineage and the chain writer keep only
+wire producers no recovery has superseded (the writer also drops closed ones), so each producer is
+walked by at most one recovery. A superseded producer is never recovered again, so no verdict
+changes. A crafted trace of 32 768 such recoveries, exactly 65 536 producers, scans in about 2 s in
+the test profile; before, it ran past nextest's 180 s limit. The daemon's sink and receiver still
+make one pass over their producer tables per such recovery, at most 65 536 entries, during the run
+and never again at verification.
+
+**Memory at the new bound.** What an ended epoch leaves behind, measured for 65 536 32-character
+IDs: the receiver's ledger 172 B per ID, the sink's table 107 B, the owner's lost set 59 B, the
+writer's five sets 295 B, and receiver outcomes the owner has not yet taken 200 B. The daemon's
+worst case is 52 MiB per entry, 39.5 MiB once the outcomes are taken, which the owner does on
+every pass. The reader keeps 200 B per ID (12.5 MiB) and the decode session's lineage 118 B
+(7.4 MiB), about 20 MiB per verifier process; the proxy's spent set 59 B (3.7 MiB).
+
+**The trade, plainly.** No record changes. The reader's `producer_limit_exceeded` now fires above
+65 536 producers; a verifier built before this row flags a trace with more than 128 producers as
+invalid, as D53's v0.5.0 readers refuse `harness_build`. The tracer and the server ship their own
+verifier. `docs/CONTRACTS.md` still says 128: it is the historical record of the contract as
+frozen, and is left as written.
+
+**Reconsider when** a run needs more than 65 536 epochs.
 
 ---
 

@@ -18,7 +18,8 @@ use goalcup_daemon::ingest::{
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureMeta, CaptureSink, CaptureSource, CaptureTime, ConnectionEvent, EndReason,
     EpochAdmission, FrameEvent, GapReason, IngestMessage, MAX_HANDSHAKE_BYTES,
-    MAX_INGEST_FRAME_BYTES, MAX_OPEN_STREAMS, MAX_PRODUCERS, StreamKey, SubmitResult, WireIdentity,
+    MAX_INGEST_FRAME_BYTES, MAX_LIVE_PRODUCERS, MAX_OPEN_STREAMS, MAX_PRODUCERS, StreamKey,
+    SubmitResult, WireIdentity,
 };
 use serde_json::json;
 use std::collections::{BTreeMap, VecDeque};
@@ -2698,27 +2699,27 @@ async fn close_with_open_stream_is_incomplete() {
 
 #[tokio::test]
 async fn epoch_limit_refuses_recovery() {
+    const OWN: usize = 3;
     let rig = Rig::new();
     let sink = RecordingSink::new(1024);
     let t = token("epochs");
-    let entry = rig.authorize("e", &t, sink.clone());
+    let entry = rig.authorize_prior("e", &t, sink.clone(), MAX_PRODUCERS - OWN);
 
     // Every authenticated handshake consumes one of MAX_PRODUCERS, frames or not.
-    for n in 0..MAX_PRODUCERS as u32 {
-        let p = pid(n + 1);
-        let mut conn = rig.producer("e", &t, &p).await;
+    for n in 1..=OWN as u32 {
+        let mut conn = rig.producer("e", &t, &pid(n)).await;
         conn.shutdown().await.unwrap();
         let _ = loss(&entry).await;
     }
     assert_eq!(entry.snapshot().producers_consumed, MAX_PRODUCERS);
 
     // A fresh epoch naming the last one is refused at the handshake.
-    let last = pid(MAX_PRODUCERS as u32);
+    let last = pid(OWN as u32);
     let fresh = pid(1000);
     let mut conn = rig.producer("e", &t, &fresh).await;
     send_lossy(&mut conn, &item(&recovery(&fresh, 0, &last))).await;
     expect_closed(&mut conn).await;
-    assert_eq!(sink.begin_calls().len(), MAX_PRODUCERS);
+    assert_eq!(sink.begin_calls().len(), OWN);
     assert!(sink.items().is_empty());
 
     // Epochs consumed before this authorization count too.
@@ -2738,6 +2739,92 @@ async fn epoch_limit_refuses_recovery() {
         prior_producers: MAX_PRODUCERS + 1,
     });
     assert!(over.is_err());
+}
+
+/// Each daemon stall ends an epoch, and its recovery spends one fresh producer ID. Five
+/// hundred of them in one launch are all admitted (D58): short stalls never end recording.
+#[tokio::test]
+async fn five_hundred_stall_recover_cycles_keep_the_wire_leg() {
+    const CYCLES: u32 = 500;
+    let rig = Rig::new();
+    let sink = RecordingSink::new(CYCLES as usize);
+    let t = token("stalls");
+    let entry = rig.authorize("e", &t, sink.clone());
+    let mut previous: Option<String> = None;
+    for n in 1..=CYCLES {
+        let p = pid(n);
+        let first = match &previous {
+            Some(lost) => recovery(&p, 0, lost),
+            None => connection_open(&p, 0),
+        };
+        let mut conn = rig.producer("e", &t, &p).await;
+        send(&mut conn, &item(&first)).await;
+        if n % 10 == 0 {
+            // Some epochs drain cleanly; the next one starts without a Recovery.
+            send(&mut conn, &close(&p, Some(0))).await;
+            conn.shutdown().await.unwrap();
+            assert_eq!(clean_close(&entry).await.producer, p);
+            previous = None;
+        } else {
+            conn.shutdown().await.unwrap();
+            let lost = loss(&entry).await;
+            assert_loss(
+                &lost,
+                &p,
+                LossCause::Disconnected,
+                GapReason::IngestLost,
+                Some(0),
+            );
+            previous = Some(p);
+        }
+    }
+    let snapshot = entry.snapshot();
+    assert_eq!(snapshot.producers_consumed, CYCLES as usize);
+    assert_eq!(snapshot.admissions_refused, 0);
+    assert_eq!(snapshot.producers_unsettled, 0);
+    assert_eq!(sink.begin_calls().len(), CYCLES as usize);
+    assert_eq!(
+        sink.frames().len(),
+        CYCLES as usize,
+        "every epoch's first frame reached the sink"
+    );
+}
+
+/// The raised ID bound is not a concurrency bound: at most `MAX_LIVE_PRODUCERS` producers are
+/// unsettled at once, so partly received bodies stay bounded per entry (D58).
+#[tokio::test]
+async fn a_producer_past_max_live_producers_is_refused_until_one_settles() {
+    let rig = Rig::new();
+    let sink = RecordingSink::new(MAX_LIVE_PRODUCERS + 1);
+    let t = token("live");
+    let entry = rig.authorize("e", &t, sink.clone());
+    let mut live = Vec::new();
+    for n in 1..=MAX_LIVE_PRODUCERS as u32 {
+        let mut conn = rig.producer("e", &t, &pid(n)).await;
+        send(&mut conn, &item(&connection_open(&pid(n), 0))).await;
+        live.push(conn);
+    }
+    sink.wait_items(MAX_LIVE_PRODUCERS).await;
+    assert_eq!(entry.snapshot().producers_unsettled, MAX_LIVE_PRODUCERS);
+
+    let over = pid(MAX_LIVE_PRODUCERS as u32 + 1);
+    let mut conn = rig.producer("e", &t, &over).await;
+    expect_closed(&mut conn).await;
+    assert_eq!(
+        sink.begin_calls().len(),
+        MAX_LIVE_PRODUCERS,
+        "refused at the handshake"
+    );
+    assert!(!sink.begin_calls().contains(&over));
+
+    // One settles, and a fresh producer is admitted in its place.
+    live.remove(0).shutdown().await.unwrap();
+    let _ = loss(&entry).await;
+    let next = pid(MAX_LIVE_PRODUCERS as u32 + 2);
+    let mut conn = rig.producer("e", &t, &next).await;
+    send(&mut conn, &item(&connection_open(&next, 0))).await;
+    sink.wait_items(MAX_LIVE_PRODUCERS + 1).await;
+    assert_eq!(entry.snapshot().producers_unsettled, MAX_LIVE_PRODUCERS);
 }
 
 #[tokio::test]

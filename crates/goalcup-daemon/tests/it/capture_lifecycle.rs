@@ -6,8 +6,8 @@ use crate::common::capture_lifecycle_support;
 use crate::common::support;
 
 use capture_lifecycle_support::{
-    Child, RESERVE, Rig, Wire, controlled_native_rig, descriptors_on, dev_connectors, fresh_id,
-    launch_request, local_finishes, native_rig,
+    Child, RESERVE, Rig, Wire, chat_rig, controlled_native_rig, descriptors_on, dev_connectors,
+    fresh_id, launch_request, local_finishes, native_rig,
 };
 use goalcup_protocol::capture::{
     AnalysisState, AnchorState, CaptureMeta, CaptureRecord, CaptureSource, CaptureState,
@@ -2815,4 +2815,139 @@ async fn the_baseline_lists_the_harness_home_without_its_session_folder() {
         ]
     );
     assert_eq!(baseline.git, None, "a fresh workspace is no clone");
+}
+
+// ---------------------------------------------------------------------------------------------
+// D57 chat mode: the session files since the run started, and the roots that hold them.
+
+/// The labels of every native stream the chain opened.
+fn native_labels(records: &[CaptureRecord]) -> Vec<String> {
+    records
+        .iter()
+        .filter_map(|record| match record {
+            CaptureRecord::Open {
+                source: CaptureSource::Native,
+                metadata,
+                ..
+            } => Some(metadata.label.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Wait until the clock is past the next whole second, so that every file touched before this
+/// call is from an earlier second than anything after it (the floor compares whole seconds).
+fn into_the_next_second() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let next = std::time::Duration::from_secs(now.as_secs() + 1);
+    std::thread::sleep(next - now + std::time::Duration::from_millis(50));
+}
+
+/// The entry's row as the registry holds it, read while no daemon runs, then the daemon again.
+async fn reopened_row(rig: Rig, entry_id: &str) -> (Rig, goalcup_daemon::registry::Entry) {
+    let mut row = None;
+    let rig = rig
+        .restart_planting(|registry| row = registry.get(entry_id).unwrap())
+        .await
+        .expect("the daemon restarts");
+    (rig, row.expect("the row survives"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_run_start_uses_the_entry_create_time() {
+    let (rig, config_home, _connectors) = chat_rig().await;
+    let day = config_home.join("sessions/2026/10/14");
+    std::fs::create_dir_all(&day).unwrap();
+    let old = day.join("rollout-old.jsonl");
+    std::fs::write(&old, b"{\"old\":true}\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(86_400))
+        .unwrap();
+    into_the_next_second();
+    // No `native_since`: the floor is the entry's own create time.
+    let info = rig.created("capture-dev").await;
+    std::fs::write(day.join("rollout-new.jsonl"), b"{\"new\":true}\n").unwrap();
+    rig.records_when(&info.entry_id, |records| {
+        native_labels(records)
+            .iter()
+            .any(|label| label.contains("rollout-new"))
+    })
+    .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    assert_eq!(
+        native_labels(&rig.records(&info.entry_id)),
+        ["rollout:2026/10/14/rollout-new.jsonl#g1"],
+        "the old session is skipped and the new one recorded"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reopened_entry_keeps_its_create_time_floor() {
+    let (rig, _config_home, _connectors) = chat_rig().await;
+    let info = rig.created("capture-dev").await;
+    let (rig, created) = reopened_row(rig, &info.entry_id).await;
+    // Reopen again a second later: a floor taken at reopen would move, the create time does not.
+    into_the_next_second();
+    let (_rig, reopened) = reopened_row(rig, &info.entry_id).await;
+    assert_eq!(reopened.created_at, created.created_at);
+    let floor = goalcup_protocol::control::parse_z(&reopened.created_at).expect("RFC 3339");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!(
+        floor < now,
+        "the floor is the create time, not the reopen time"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_native_root_under_the_config_home_is_created() {
+    use std::os::unix::fs::PermissionsExt;
+    let (rig, config_home, _connectors) = chat_rig().await;
+    let sessions = config_home.join("sessions");
+    assert!(!sessions.exists(), "a fresh home has no session store yet");
+    let info = rig.created("capture-dev").await;
+    let made = std::fs::symlink_metadata(&sessions).expect("the root was created");
+    assert!(made.is_dir());
+    assert_eq!(made.permissions().mode() & 0o777, 0o700);
+    let day = sessions.join("2026/10/15");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::write(day.join("rollout-first.jsonl"), b"{\"first\":true}\n").unwrap();
+    rig.records_when(&info.entry_id, |records| !native_labels(records).is_empty())
+        .await;
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    assert_eq!(
+        native_labels(&rig.records(&info.entry_id)),
+        ["rollout:2026/10/15/rollout-first.jsonl#g1"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_symlinked_native_root_component_is_refused() {
+    let (rig, config_home, _connectors) = chat_rig().await;
+    let outside = rig.root.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, config_home.join("sessions")).unwrap();
+    let workspace = rig.workspace("symlinked-root");
+    let response = rig.create("capture-dev", &workspace, RESERVE).await;
+    assert_ne!(response.status(), 200, "{}", response.body());
+    assert!(
+        response.body().contains("native root"),
+        "{}",
+        response.body()
+    );
+    assert_eq!(
+        std::fs::read_dir(&outside).unwrap().count(),
+        0,
+        "nothing was created through the link"
+    );
+    assert!(!workspace.exists(), "a refused create leaves no workspace");
 }
