@@ -106,8 +106,14 @@ fn capture_integrity(trace: &Path, args: Args) -> std::process::ExitCode {
             let code = report.exit_code();
             let integrity = serde_json::to_value(report.integrity).unwrap_or_default();
             let anchor = serde_json::to_value(report.anchor).unwrap_or_default();
+            // The finding codes are the "why": a log line that hides them sends a reader to the JSON.
+            let findings = if report.findings.is_empty() {
+                "none".to_string()
+            } else {
+                report.findings.join(",")
+            };
             eprintln!(
-                "goalcup-verify: capture integrity {} (anchor {}, exit {code})",
+                "goalcup-verify: capture integrity {} (anchor {}, exit {code}, findings: {findings})",
                 integrity.as_str().unwrap_or("unknown"),
                 anchor.as_str().unwrap_or("unknown")
             );

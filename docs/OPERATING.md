@@ -469,3 +469,98 @@ installation.
 
 Run it in the same commit as any change under `connectors/`. `sh scripts/pin-manifests.sh && git diff
 --exit-code` proves the pins match. `--print` writes nothing and prints the directory rows.
+
+## Finding codes
+
+`goalcup-verify --capture-integrity` lists the codes it found in `findings`, in the order it found them, and
+the stderr summary repeats them as `findings: a,b,c` (`none` when there are none). The scan stops at the
+first invalid line, so the first code is the cause. Codes after it only say what the validated prefix lacks
+(for example `launch_missing` after a dropped line). `validated_records` and `validated_head` say where the
+good prefix ends. The report adds the deadline facts `records_after_deadline` and
+`last_seq_at_or_before_deadline`, which are facts and never change the exit, and `last_ack_at`.
+
+The **Exit** column is the exit a code gives alone: 2 invalid evidence, 1 incomplete (not proven, not
+forged), `-` a note that changes nothing by itself. Exit 2 beats exit 1. When a trace is invalid, compare it
+with the server copy; do not repair it. When it is incomplete, check whether the run simply did not finish.
+More than 128 distinct codes end with `findings_omitted:<n>`.
+
+**The chain and its links**
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `torn_tail` | 2 | The chain ends in a line with no newline. The prefix before it is reported. |
+| `envelope_too_large` | 2 | One line is longer than the line bound. |
+| `record_malformed` | 2 | A line is not a readable record. |
+| `record_not_canonical` | 2 | A line decodes, but is not the exact compact form of its record (extra key, spaces, CR). The hash covers none of those bytes. |
+| `protocol_version_unsupported` | 2 | A record names a protocol version this build does not know. |
+| `capture_envelope_invalid` | 2 | A line breaks the v5 envelope rule: a retired pre-v5 version, redaction on the envelope, or a first record that is not the baseline. |
+| `link_seq_mismatch` | 2 | A line's `seq` is not the one after the line before. A line was dropped, repeated or moved. |
+| `link_prev_mismatch` | 2 | A line's `prev` is not the hash of the line before. A line came from another chain, or one was removed. |
+| `link_hash_mismatch` | 2 | A line's hash is not the hash of its content. The line was edited. |
+| `chain_phase_invalid` | 2 | A record is out of order: after the terminal, a second baseline, or a signed terminal with no cutoff. |
+| `entry_id_mismatch` | 2 | A line names another entry than the first line. |
+| `chain_part_missing` | 2 | A part file is missing between two others, or part names do not join up. |
+| `chain_pruned_locally` | 1 | The first parts of the chain were removed on this machine. Verify the server copy. |
+| `chain_unsealed` | 1 | The chain has no terminal record. The run did not finish, or the machine died first. |
+
+**Receipt, cutoff and acknowledgements**
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `receipt_too_large`, `receipt_malformed` | 2 | `receipt.json` is too big, or does not parse (this includes a bad run key). |
+| `receipt_key_not_accepted` | 2 | The receipt names a server key this build does not pin. Use `--dev-key` only for a test server. |
+| `receipt_signature_invalid` | 2 | The signature does not verify under the key. |
+| `receipt_clock_invalid` | 2 | `started_at` or `deadline_at` is not a time, or the start is after the deadline. |
+| `receipt_entry_mismatch` | 2 | The receipt is for another entry. |
+| `receipt_chain_head_unbound` | 2 | The receipt's `chain_head` is not a link of this chain. |
+| `signed_terminal_receipt_missing` | 1 | The chain ends with a signed finalization, but no `receipt.json` was kept. |
+| `cutoff_receipt_mismatch` | 2 | The cutoff record names another receipt than the one kept. |
+| `cutoff_deadline_mismatch` | 2 | The cutoff record names another `deadline_at` than the receipt. This binds the stop to the 168-hour deadline. |
+| `ack_too_large`, `ack_torn_tail`, `ack_malformed` | 2 | A line of `acks.jsonl` is too long, has no newline, or does not parse. |
+| `ack_time_invalid` | 2 | An `acked_at` is not a time. |
+| `ack_not_monotonic` | 2 | Acknowledgements go back in `seq` or in time. |
+| `ack_entry_mismatch` | 2 | An acknowledgement is for another entry. |
+| `ack_hash_mismatch` | 2 | The acknowledged hash is not the chain's hash at that `seq`. The chain changed after the server saw it. |
+| `ack_signature_invalid` | 2 | The signature does not verify under the key that anchored the trace. |
+| `ack_signature_unverified` | 2 | No accepted key verifies the signature. |
+| `ack_beyond_chain` | 2 | An acknowledgement is for a `seq` the chain does not hold. The chain was cut short. |
+| `server_key_unpinned` | - | A supplied `--dev-key` verified the trace. `key_source` is `supplied`. |
+
+**Baseline, seal and launch**
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `baseline_manifest_missing` | 1 | `baseline.json` is absent or empty. |
+| `baseline_manifest_malformed`, `baseline_manifest_too_large` | 2 | `baseline.json` does not parse, or is too big. |
+| `baseline_manifest_mismatch` | 2 | `baseline.json` does not match the digest, file count or entry in the baseline record. |
+| `seal_manifest_missing` | 1 | `seal.json` is absent or empty (a crash between the terminal record and the file). |
+| `seal_manifest_malformed`, `seal_manifest_too_large` | 2 | `seal.json` does not parse, or is too big. |
+| `seal_manifest_mismatch` | 2 | `seal.json` does not match the terminal record. |
+| `baseline_git_unreadable`, `seal_git_unreadable` | 1 | Git could not be read in the workspace at that point. The report's `git_unreadable` says why. |
+| `seal_git_missing` | 1 | The baseline recorded Git state, but the seal did not. |
+| `launch_missing` | 1 | The chain has no `Launch` record. |
+| `launch_goal_unbound` | 1 | A `Launch` names a goal stream that did not end `Complete`. |
+
+**Coverage notes** (each one makes the exit 1 through `coverage_incomplete`, but is not damage)
+
+| Code | Exit | Meaning |
+|---|---|---|
+| `gap_recorded` | 1 | The tracer recorded a gap (lost bytes or an unavailable source). Gaps stay recorded. |
+| `producer_recovered` | 1 | A producer was replaced after a loss. |
+| `producer_unclosed` | 1 | A producer never closed. Its tail is unknown. |
+| `recovery_names_unrecorded_producer` | - | A recovery named a producer that left no record. The recovery already gives exit 1. |
+
+**Record rules** (all exit 2: a record breaks a rule of its own)
+
+| Code | Meaning |
+|---|---|
+| `record_field_invalid` | A field fails its format or bound: an id, a time, a text, a `Launch` field. |
+| `producer_limit_exceeded`, `launch_limit_exceeded`, `goal_stream_limit_exceeded`, `open_stream_limit_exceeded`, `connection_limit_exceeded` | A per-entry bound is passed. |
+| `record_after_producer_closed`, `record_from_lost_producer` | A record comes from a producer that closed, or that a recovery replaced. |
+| `producer_closed_twice`, `producer_closed_with_open_streams`, `producer_closed_final_seq_inconsistent` | A close is repeated, leaves streams open, or claims a final `seq` below the records kept. |
+| `recovery_producer_not_fresh`, `recovery_names_non_wire_producer`, `recovery_after_producer_closed`, `producer_recovered_twice` | A recovery breaks the rule that it replaces one unclosed wire producer, once. |
+| `connection_reobserved_outside_recovery`, `connection_already_open`, `connection_not_open` | A connection opens twice, is seen again outside a recovery, or is used or closed when not open. |
+| `stream_id_not_increasing`, `stream_not_open`, `gap_on_unknown_stream` | A stream id goes back, a record names a stream not open, or a gap names a stream never opened. |
+| `segment_time_reversed`, `segment_part_out_of_order`, `segment_range_invalid` | A segment's times, part number or byte range cannot be right. |
+| `segment_source_overlap`, `segment_source_unexplained_hole` | A segment overlaps the last one, or skips bytes with no gap recorded. |
+| `segment_data_too_large`, `segment_data_not_base64`, `segment_audit_out_of_range`, `segment_length_mismatch` | A segment's data is too big, is not base64, has a redaction span outside its range, or has the wrong length. |

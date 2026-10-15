@@ -61,8 +61,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
-/// The capture-integrity report document schema version.
-pub(crate) const CAPTURE_INTEGRITY_SCHEMA_VERSION: u32 = 1;
+/// The capture-integrity report document schema version. 2 added the deadline facts
+/// (`records_after_deadline`, `last_seq_at_or_before_deadline`, `last_ack_at`); schema 1
+/// documents still parse, those fields reading as absent.
+pub(crate) const CAPTURE_INTEGRITY_SCHEMA_VERSION: u32 = 2;
 
 /// The most characters of a recorded Git reason the report repeats.
 const GIT_UNREADABLE_CHARS: usize = 200;
@@ -185,6 +187,23 @@ pub struct CaptureIntegrityReport {
     pub verified_ack: Option<VerifiedAckPosition>,
     pub receipt_clock: Option<VerifiedReceiptClock>,
     pub terminal: Option<CaptureTerminalFacts>,
+    /// Deadline facts. The 168-hour stop is the server's `deadline_at`, and a judge needs to see
+    /// where the counted prefix ends. They are facts and never change the exit: the clock below is
+    /// the participant's machine, and the signed ACK time is the stronger evidence.
+    ///
+    /// Validated chain records whose `recorded_at` (the daemon's wall clock, whole seconds) is
+    /// after the verified receipt's `deadline_at`. The terminal records are among them: a run that
+    /// stopped at its deadline writes its cutoff and finalization after it. `None` without a
+    /// verified receipt clock, never a guess.
+    #[serde(default)]
+    pub records_after_deadline: Option<u64>,
+    /// The highest seq whose `recorded_at` is at or before `deadline_at`. `None` without a
+    /// verified receipt clock, or when no record is that early.
+    #[serde(default)]
+    pub last_seq_at_or_before_deadline: Option<u64>,
+    /// The `acked_at` of the last verified acknowledgement: the server's time, signed.
+    #[serde(default)]
+    pub last_ack_at: Option<String>,
 }
 
 impl CaptureIntegrityReport {
@@ -469,6 +488,10 @@ struct Scan<'k> {
     git_unreadable: Vec<String>,
     /// The bound baseline recorded a clone's Git state, read or not.
     baseline_git: bool,
+    /// The receipt's `deadline_at` in whole seconds, once its clocks read as ordered.
+    deadline_secs: Option<u64>,
+    records_after_deadline: u64,
+    last_seq_at_or_before_deadline: Option<u64>,
 }
 
 impl<'k> Scan<'k> {
@@ -500,6 +523,9 @@ impl<'k> Scan<'k> {
             terminal_facts: None,
             git_unreadable: Vec::new(),
             baseline_git: false,
+            deadline_secs: None,
+            records_after_deadline: 0,
+            last_seq_at_or_before_deadline: None,
         }
     }
 
@@ -574,6 +600,8 @@ impl<'k> Scan<'k> {
             );
         if !clocks {
             self.fail("receipt_clock_invalid");
+        } else {
+            self.deadline_secs = parse_z(&claims.deadline_at);
         }
         self.receipt = Some(VerifiedReceipt {
             receipt,
@@ -729,6 +757,13 @@ impl<'k> Scan<'k> {
             self.validated_records += 1;
             self.validated_bytes += read as u64;
             self.head.clone_from(&env.link.hash);
+            if let (Some(deadline), Some(stamped)) = (self.deadline_secs, env.recorded_at_secs()) {
+                if stamped > deadline {
+                    self.records_after_deadline += 1;
+                } else {
+                    self.last_seq_at_or_before_deadline = Some(seq);
+                }
+            }
             if let Some(receipt) = &mut self.receipt
                 && receipt.receipt.claims.chain_head == env.link.hash
             {
@@ -1034,6 +1069,9 @@ impl<'k> Scan<'k> {
         } else {
             CaptureIntegrity::Valid
         };
+        // The deadline counts mean something only against a receipt that verified and bound.
+        let deadline_facts = receipt_clock.is_some();
+        let last_ack_at = self.verified_ack.as_ref().map(|ack| ack.acked_at.clone());
         CaptureIntegrityReport {
             schema_version: CAPTURE_INTEGRITY_SCHEMA_VERSION,
             integrity,
@@ -1055,6 +1093,11 @@ impl<'k> Scan<'k> {
             verified_ack: self.verified_ack,
             receipt_clock,
             terminal: self.terminal_facts,
+            records_after_deadline: deadline_facts.then_some(self.records_after_deadline),
+            last_seq_at_or_before_deadline: self
+                .last_seq_at_or_before_deadline
+                .filter(|_| deadline_facts),
+            last_ack_at,
         }
     }
 }

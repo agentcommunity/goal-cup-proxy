@@ -59,3 +59,25 @@ pub fn materialize_private(source: &std::path::Path) -> tempfile::TempDir {
     make_private(dir.path());
     dir
 }
+
+/// Split a closed single-file chain into part files before the given line indices: the names
+/// and bytes a rotating writer leaves, because rotation never changes a byte of the chain.
+/// The first part keeps the name `chain.jsonl`; the others are named by their logical offset.
+pub fn split_into_parts(dir: &std::path::Path, cuts: &[usize]) -> Vec<std::path::PathBuf> {
+    use goalcup_protocol::export::{CHAIN_FILE, part_file_name};
+    let bytes = std::fs::read(dir.join(CHAIN_FILE)).unwrap();
+    let lines: Vec<&[u8]> = bytes.split_inclusive(|byte| *byte == b'\n').collect();
+    let mut bounds = vec![0];
+    bounds.extend_from_slice(cuts);
+    bounds.push(lines.len());
+    let mut start = 0u64;
+    let mut paths = Vec::new();
+    for pair in bounds.windows(2) {
+        let part = lines[pair[0]..pair[1]].concat();
+        let path = dir.join(part_file_name(start));
+        std::fs::write(&path, &part).unwrap();
+        start += part.len() as u64;
+        paths.push(path);
+    }
+    paths
+}
