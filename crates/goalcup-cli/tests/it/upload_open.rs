@@ -987,6 +987,11 @@ mod server_runs {
         goalcup_cli::upload::give_back_pending(&back, cfg.path());
         assert_eq!(waiting.asked(&format!("POST /v1/runs/{run_id}/abandon")), 1);
         assert!(!goalcup_cli::upload::pending_path(cfg.path()).exists());
+        assert!(
+            !goalcup_cli::account::credential::credential_path(&dir).exists(),
+            "the kept credential goes once the run is given back"
+        );
+        assert!(!dir.exists(), "and so does the run's directory");
 
         // The server answers (it holds no such run: gone is settled): note and credential go.
         let cfg = tempfile::tempdir().unwrap();

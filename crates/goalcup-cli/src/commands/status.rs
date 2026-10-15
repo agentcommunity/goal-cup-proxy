@@ -162,11 +162,17 @@ fn run_report(cfg: &Path, entry: Option<&str>, record: &EntryRecord, now: &str) 
     let now = parse_z(now).unwrap_or_else(crate::run::now_unix);
     // `goalcup continue` is advised only for a run it can restart.
     let advice = crate::run::advice(cfg, &run, &state, now);
-    state
+    let problems = state
         .problems(now, advice)
         .iter()
         .map(|problem| format!("PROBLEM: {}\n", plain(problem)))
-        .collect()
+        .collect::<String>();
+    // A normal end of a run that cannot be continued is said plainly, after any problem.
+    let finished = state
+        .finished(advice)
+        .map(|line| format!("{}\n", plain(&line)))
+        .unwrap_or_default();
+    problems + &finished
 }
 
 /// One headline on stdout, and the reason on rung 1.

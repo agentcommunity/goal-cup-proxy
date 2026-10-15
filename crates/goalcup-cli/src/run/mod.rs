@@ -226,14 +226,23 @@ pub fn is_over(record: &RunRecord, state: Option<&RunState>, now: u64) -> bool {
     deadline_passed || state.is_some_and(RunState::stopped_for_its_end)
 }
 
+/// Whether `goalcup continue` can restart the run: it is on a server, its connector is a
+/// chat-mode one (`continuable`), it is not `over`, and this machine holds the run's credential.
+/// The one answer the host, `goalcup status` and the reserve's release all use.
+pub fn can_continue(cfg: &Path, record: &RunRecord, continuable: bool, over: bool) -> bool {
+    !over
+        && record.server_url.is_some()
+        && continuable
+        && crate::account::credential::credential_path(&run_dir(cfg, &record.run_id)).exists()
+}
+
 /// What `goalcup status` may say about `goalcup continue` for `record`, whose state is `state`.
 pub fn advice(cfg: &Path, record: &RunRecord, state: &RunState, now: u64) -> Advice {
-    if is_over(record, Some(state), now) {
-        return Advice::Over;
-    }
-    let credential = crate::account::credential::credential_path(&run_dir(cfg, &record.run_id));
-    if record.server_url.is_some() && state.continuable && credential.exists() {
+    let over = is_over(record, Some(state), now);
+    if can_continue(cfg, record, state.continuable, over) {
         Advice::Continue
+    } else if over {
+        Advice::Over
     } else {
         Advice::Cannot
     }
@@ -263,6 +272,18 @@ impl RunState {
         self.stopped
             .as_deref()
             .is_some_and(|why| why != watch::DISK_STOP_REASON)
+    }
+
+    /// The agent's process exited with status 0.
+    fn exited_cleanly(&self) -> bool {
+        matches!(&self.harness, HarnessState::Exited { status } if status == "exit code 0")
+    }
+
+    /// The plain line for a run whose agent finished normally and which `goalcup continue` cannot
+    /// restart: a normal end, not a problem.
+    pub fn finished(&self, advice: Advice) -> Option<String> {
+        (self.exited_cleanly() && !self.stopped_for_its_end() && advice != Advice::Continue)
+            .then(|| format!("the agent finished; {}", advice.clause()))
     }
 
     /// Everything wrong with the run at `now` (unix seconds), one sentence each, worst first.
@@ -321,6 +342,8 @@ impl RunState {
         // problem; one that left while the run is open, or that a full disk stopped, is.
         if let HarnessState::Exited { status } = &self.harness
             && !self.stopped_for_its_end()
+            // A clean exit of a run that cannot be continued is a normal end ([`Self::finished`]).
+            && !(self.exited_cleanly() && advice != Advice::Continue)
         {
             let then = match advice {
                 Advice::Continue => ": ",
@@ -892,12 +915,19 @@ mod tests {
         local.server_url = None;
         assert_eq!(advice(cfg.path(), &local, &state, now), Advice::Cannot);
 
-        // No credential on this machine.
+        // `can_continue` is the one answer: server run, chat-mode, not over, credential here.
+        assert!(can_continue(cfg.path(), &run, true, false));
+        assert!(!can_continue(cfg.path(), &run, false, false), "headless");
+        assert!(!can_continue(cfg.path(), &run, true, true), "over");
+        assert!(!can_continue(cfg.path(), &local, true, false), "no server");
+
+        // No credential on this machine: all three places that ask say no.
         std::fs::remove_file(crate::account::credential::credential_path(&run_dir(
             cfg.path(),
             &run.run_id,
         )))
         .unwrap();
+        assert!(!can_continue(cfg.path(), &run, true, false));
         assert_eq!(advice(cfg.path(), &run, &state, now), Advice::Cannot);
 
         // No line ever tells a run that cannot be continued to continue it.
@@ -912,6 +942,43 @@ mod tests {
                 "{lines:?}"
             );
         }
+    }
+
+    /// A normal end of a run that cannot be continued is a plain line, not a problem; a
+    /// non-zero exit is still one.
+    #[test]
+    fn a_clean_exit_of_a_run_that_cannot_be_continued_is_not_a_problem() {
+        let mut state = RunState::launched("e1", Ok(()));
+        state.harness = HarnessState::Exited {
+            status: "exit code 0".to_string(),
+        };
+        let now = state.updated_at;
+        for advice in [Advice::Cannot, Advice::Over] {
+            assert!(state.problems(now, advice).is_empty(), "{advice:?}");
+        }
+        assert_eq!(
+            state.finished(Advice::Cannot).as_deref(),
+            Some("the agent finished; this run cannot be continued")
+        );
+        assert_eq!(
+            state.finished(Advice::Over).as_deref(),
+            Some("the agent finished; the run is over")
+        );
+        // A run `continue` can restart: the participant is still told, as a problem.
+        assert_eq!(
+            state.problems(now, Advice::Continue),
+            ["the agent's process exited (exit code 0): run goalcup continue"]
+        );
+        assert_eq!(state.finished(Advice::Continue), None);
+        // A non-zero exit is a problem whatever the advice.
+        state.harness = HarnessState::Exited {
+            status: "exit code 1".to_string(),
+        };
+        assert_eq!(
+            state.problems(now, Advice::Cannot),
+            ["the agent's process exited (exit code 1); this run cannot be continued"]
+        );
+        assert_eq!(state.finished(Advice::Cannot), None);
     }
 
     #[test]

@@ -1028,7 +1028,8 @@ fn end_reserve(reserve: RunReserve, keep: bool) {
 fn release_and_say(reserve: RunReserve) {
     if let Err(error) = reserve.release() {
         crate::host_log::say(&format!(
-            "the run's disk reservation could not be released ({error}); it keeps its space              until a later goalcup command removes it"
+            "the run's disk reservation could not be released ({error}); it keeps its space \
+             until a later goalcup command removes it"
         ));
     }
 }
@@ -2419,7 +2420,7 @@ fn finish_and_scan(
     let over = !on_server || ended_by_stop || deadline_passed(record.deadline_at.as_deref());
     // `goalcup continue` can restart the run: a run on a server with a chat-mode connector that
     // is not over. Only such a run keeps its reserve past this host.
-    let run_goes_on = on_server && continuable && !over;
+    let run_goes_on = crate::run::can_continue(cfg, &record, continuable, over);
     // The entry is sealed and the run goes on: the reserve is handed over before anything else
     // is let go. This host's watch stops managing it and its lock is dropped, the file kept, so
     // that a `goalcup continue` takes the same file at once instead of finding it held for as

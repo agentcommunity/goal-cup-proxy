@@ -1073,6 +1073,37 @@ fn status_advises_continue_only_when_continue_can_restart_the_run() {
     let exited = |why: &str| format!("PROBLEM: the agent's process exited (exit code 1){why}\n");
     let said = |cfg: &std::path::Path| status_text(&m, cfg, &info.entry_id, false);
 
+    // A headless connector whose agent finished normally (status 0): a plain line, no PROBLEM.
+    let mut finished = state.clone();
+    finished.harness = HarnessState::Exited {
+        status: "exit code 0".to_string(),
+    };
+    run_with_state_on(&cfg, &info.entry_id, finished.clone(), server, ahead);
+    let text = said(&cfg);
+    assert!(
+        text.starts_with("the agent finished; this run cannot be continued\n"),
+        "{text}"
+    );
+    assert!(!text.contains("PROBLEM"), "{text}");
+    // The same normal end of a local run.
+    run_with_state_on(&cfg, &info.entry_id, finished.clone(), None, None);
+    let text = said(&cfg);
+    assert!(
+        text.starts_with("the agent finished; this run cannot be continued\n"),
+        "{text}"
+    );
+    assert!(!text.contains("PROBLEM"), "{text}");
+    // A chat-mode run `continue` can restart is still told so, as a problem.
+    finished.continuable = true;
+    run_with_state_on(&cfg, &info.entry_id, finished, server, ahead);
+    let text = said(&cfg);
+    assert!(
+        text.starts_with(
+            "PROBLEM: the agent's process exited (exit code 0): run goalcup continue\n"
+        ),
+        "{text}"
+    );
+
     // A headless connector, run open on the server: not continuable.
     state.continuable = false;
     run_with_state_on(&cfg, &info.entry_id, state.clone(), server, ahead);

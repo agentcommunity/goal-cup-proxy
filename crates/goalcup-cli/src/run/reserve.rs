@@ -440,12 +440,13 @@ pub fn run_is_done(cfg: &Path, record: &super::RunRecord, server_ended: bool, no
     if super::is_over(record, state.as_ref(), now) {
         return true;
     }
-    let continuable = state.as_ref().is_some_and(|state| {
-        state.continuable
-            && crate::account::credential::credential_path(&super::run_dir(cfg, &record.run_id))
-                .exists()
-    });
-    if continuable {
+    // Not over (settled above): the same answer the host and `goalcup status` give.
+    if super::can_continue(
+        cfg,
+        record,
+        state.as_ref().is_some_and(|s| s.continuable),
+        false,
+    ) {
         return false;
     }
     let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
@@ -807,6 +808,9 @@ mod tests {
         credential(cfg.path(), "r-chat");
         // Headless, everything sent: nothing will use the reserve again.
         server_run(cfg.path(), "r-sent", later, false, &["e2"], &["e2"]);
+        // Chat-mode, but this machine holds no credential for it: `continue` is refused, so
+        // once everything is sent nothing will use the reserve.
+        server_run(cfg.path(), "r-nocred", later, true, &["e7"], &["e7"]);
         // Headless, the upload fell short: the reserve stays until the run is over.
         server_run(cfg.path(), "r-unsent", later, false, &["e3"], &[]);
         // Headless, two segments, one still unsent.
@@ -818,13 +822,20 @@ mod tests {
         let mut state = super::super::read_state(&dir).unwrap();
         state.stopped = Some("a newer run on your account replaced this one".into());
         super::super::StateKeeper::begin(&dir, state);
-        for id in ["r-chat", "r-sent", "r-unsent", "r-half", "r-replaced"] {
+        for id in [
+            "r-chat",
+            "r-sent",
+            "r-unsent",
+            "r-half",
+            "r-replaced",
+            "r-nocred",
+        ] {
             drop(RunReserve::take(&reserve_path(root.path(), id), &small()).unwrap());
         }
-        assert_eq!(release_stale(cfg.path(), root.path(), now), 2);
+        assert_eq!(release_stale(cfg.path(), root.path(), now), 3);
         let left = |id: &str| reserve_path(root.path(), id).exists();
         assert!(left("r-chat") && left("r-unsent") && left("r-half"));
-        assert!(!left("r-sent") && !left("r-replaced"));
+        assert!(!left("r-sent") && !left("r-replaced") && !left("r-nocred"));
         // The deadline ends the rest.
         assert_eq!(release_stale(cfg.path(), root.path(), later), 3);
     }
@@ -940,15 +951,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = reserve_path(dir.path(), "r1");
         drop(RunReserve::take(&path, &small()).unwrap());
+        // Other tests and builds use this volume at the same time: the margin leaves 64 MiB of
+        // room for what they take between this look and the next, and the new reserve asks for
+        // twice that, so it is refused whatever they take.
+        let slack = 64 * MIB;
         let free = free_bytes(dir.path()).unwrap();
         let tight = DiskPolicy {
-            start_margin: free,
+            start_margin: free.saturating_sub(slack),
             ..small()
         };
         // Nothing to allocate: only the margin is asked of the volume, and it is there.
         assert!(RunReserve::take(&path, &tight).is_ok());
         let other = reserve_path(dir.path(), "r2");
-        assert!(RunReserve::take(&other, &tight).is_err());
+        let large = DiskPolicy {
+            reserve_bytes: 2 * slack,
+            ..tight
+        };
+        assert!(RunReserve::take(&other, &large).is_err());
+        assert!(!other.exists());
     }
 
     #[test]
