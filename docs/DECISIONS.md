@@ -259,9 +259,9 @@ is allowed and not checked.
 
 The V1 transcript-and-hook product path, its `v1-compat` feature, its upload, receipt and sign-in
 code, `goalcup-devserver` and the V1 `manifest.toml` are deleted. Git history keeps them. The
-daemon refuses a registry whose V1 row still owes work. The daemon config still parses
-`upload_url`, `server_public_key` and `receipt_binding` because `DaemonConfig` refuses unknown
-fields. They drive nothing.
+daemon refuses a registry whose V1 row still owes work. The daemon config first kept parsing
+`upload_url`, `server_public_key` and `receipt_binding`, and they drove nothing. Those keys and
+the V1 cadence keys were deleted before release, and `DaemonConfig` refuses them as unknown fields.
 
 ## D49. **(M2)** Admit `AMP_API_KEY` as a child credential.
 

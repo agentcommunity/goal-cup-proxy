@@ -886,7 +886,7 @@ async fn the_public_status_route_answers_a_signed_document_carrying_no_secret() 
 async fn a_refused_control_file_write_leaves_the_control_port_closed() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let root = std::fs::canonicalize(dir.path()).expect("the tempdir canonicalises");
-    let mut config = support::config_at(&root, "http://127.0.0.1:1");
+    let mut config = support::config_at(&root);
 
     // A port of this test's own choosing, so the assertion afterwards can name it: with
     // `127.0.0.1:0` the OS picks one and a failed `start` never reports which.
@@ -1227,7 +1227,7 @@ async fn task_21_s_routes_need_the_bearer_and_answer_404_for_an_entry_that_is_no
 async fn a_stale_control_temp_from_a_dead_daemon_does_not_block_the_next_start() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let root = std::fs::canonicalize(dir.path()).expect("the tempdir canonicalises");
-    let config = support::config_at(&root, "http://127.0.0.1:1");
+    let config = support::config_at(&root);
     std::fs::create_dir_all(&config.config_dir).expect("the config dir");
     let stale = config.config_dir.join(format!(
         "{}.{}.tmp",
@@ -1254,7 +1254,7 @@ async fn a_stale_control_temp_from_a_dead_daemon_does_not_block_the_next_start()
 async fn a_refused_control_file_write_leaves_the_control_listener_closed() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let root = std::fs::canonicalize(dir.path()).expect("the tempdir canonicalises");
-    let mut config = support::config_at(&root, "http://127.0.0.1:1");
+    let mut config = support::config_at(&root);
 
     // A port of this test's own choosing, so the assertion below can name it: with
     // `127.0.0.1:0` the OS picks and a failed `start` never reports which.

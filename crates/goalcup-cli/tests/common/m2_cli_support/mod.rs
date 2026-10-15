@@ -307,9 +307,6 @@ impl Rig {
             config_dir: root.join("cfg"),
             workspace_parent,
             control_addr: "127.0.0.1:0".parse().unwrap(),
-            upload_url: format!("http://{}", upload_trap.local_addr().unwrap()),
-            server_public_key: super::support::TEST_SERVER_PUBLIC_KEY_HEX.to_string(),
-            receipt_binding: goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
             event: None,
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()

@@ -706,10 +706,6 @@ fn local_daemon(
         config_dir: root.join("daemon-config"),
         workspace_parent: root.join("workspaces"),
         control_addr: "127.0.0.1:0".parse().unwrap(),
-        // A placeholder no call reaches: a local capture asks no server anything.
-        upload_url: "http://127.0.0.1:9".to_string(),
-        server_public_key: support::TEST_SERVER_PUBLIC_KEY_HEX.to_string(),
-        receipt_binding: goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
         event: None,
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()

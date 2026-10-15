@@ -253,8 +253,7 @@ fn parse(text: &str) -> Response {
 /// empty afterwards — neither can be written against a harness that arrives with a started
 /// entry already in it.
 ///
-/// The `TempDir` and the upload target are held so the tree and the port outlive the
-/// daemon.
+/// The `TempDir` is held so the tree outlives the daemon.
 pub struct EmptyControlHarness {
     pub daemon: Daemon,
     pub client: ControlClient,
@@ -263,7 +262,6 @@ pub struct EmptyControlHarness {
     pub control_token: String,
     /// The canonical root every path in this harness hangs off.
     pub root: PathBuf,
-    _upload: Option<std::net::TcpListener>,
     _dir: tempfile::TempDir,
 }
 
@@ -289,23 +287,12 @@ pub async fn empty_control_harness() -> EmptyControlHarness {
 pub async fn empty_control_harness_with(
     edit: impl FnOnce(&mut DaemonConfig),
 ) -> EmptyControlHarness {
-    let (upload, upload_url) = super::upload_target();
-    let mut h = empty_control_harness_on(&upload_url, edit).await;
-    h._upload = Some(upload);
-    h
-}
-
-/// [`empty_control_harness_with`] with the `upload_url` the caller chose.
-pub async fn empty_control_harness_on(
-    upload_url: &str,
-    edit: impl FnOnce(&mut DaemonConfig),
-) -> EmptyControlHarness {
     let dir = tempfile::tempdir().expect("a temporary directory");
     // Canonical from the start, for the reason `started_entry_with_work` gives: on macOS a
     // tempdir is handed out as `/var/folders/…` while the harness records
     // `/private/var/folders/…`, and the partitioner compares the two byte for byte.
     let root = std::fs::canonicalize(dir.path()).expect("the tempdir canonicalises");
-    let mut config = super::config_at(&root, upload_url);
+    let mut config = super::config_at(&root);
     edit(&mut config);
     let daemon = Daemon::start(config.clone())
         .await
@@ -320,7 +307,6 @@ pub async fn empty_control_harness_on(
         config,
         root,
         daemon,
-        _upload: None,
         _dir: dir,
     }
 }
@@ -405,7 +391,6 @@ pub async fn restart_empty_control_planting(
         daemon,
         config,
         root,
-        _upload,
         _dir,
         ..
     } = h;
@@ -426,7 +411,6 @@ pub async fn restart_empty_control_planting(
         config,
         root,
         daemon,
-        _upload,
         _dir,
     })
 }

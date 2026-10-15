@@ -18,7 +18,6 @@
 //! `RunKeys` redacts its own `Debug`, the way `control::WorkspaceInfo` already does, so
 //! the same secret cannot reach a log through an error message either.
 
-use crate::config::ReceiptBindingPolicy;
 use crate::{DaemonError, now_rfc3339};
 use goalcup_platform::tracecap::ArtifactRoot;
 use goalcup_protocol::chain::GENESIS;
@@ -244,12 +243,6 @@ pub struct Entry {
     /// run. So "a stored receipt is a verified receipt" is a property of the type, not a
     /// convention each caller has to remember.
     receipt: Option<StartReceipt>,
-    /// The receipt contract selected when this entry was created.
-    ///
-    /// Private and preserved by every generic replacement/update so ambient configuration
-    /// cannot upgrade, downgrade, or retarget an existing run. Old rows are legacy.
-    #[serde(default)]
-    receipt_binding: ReceiptBindingPolicy,
     /// `None` until the first envelope is appended.
     pub chain_seq: Option<u64>,
     /// The genesis link until the first append.
@@ -345,8 +338,6 @@ impl Entry {
     ///
     /// `receipt` cannot be given a value here: it is `None` and only the registry's checked
     /// receipt writers can change that.
-    // The persisted receipt policy is intentionally explicit at every birth site; hiding
-    // it in a default would let a new production constructor silently create legacy rows.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         entry_id: &str,
@@ -355,7 +346,6 @@ impl Entry {
         artifact_dir: PathBuf,
         manifest_sha256: &str,
         harness_version: &str,
-        receipt_binding: ReceiptBindingPolicy,
         expected_process_handoff: ExpectedProcessHandoff,
         keys: RunKeys,
     ) -> Entry {
@@ -375,7 +365,6 @@ impl Entry {
             state: EntryState::Created,
             health: HealthState::Online,
             receipt: None,
-            receipt_binding,
             chain_seq: None,
             chain_head: GENESIS.to_string(),
             last_ack_seq: None,
@@ -395,11 +384,6 @@ impl Entry {
             created_at: now_rfc3339(),
             keys,
         }
-    }
-
-    /// The immutable receipt policy captured for this entry.
-    pub fn receipt_binding(&self) -> &ReceiptBindingPolicy {
-        &self.receipt_binding
     }
 
     /// The handoff expectation fixed when the workspace was created (or the conservative
@@ -584,7 +568,6 @@ impl Registry {
                 let stored: Entry = serde_json::from_slice(bytes.value())?;
                 if id.value() == entry.entry_id {
                     to_write.receipt = stored.receipt;
-                    to_write.receipt_binding = stored.receipt_binding;
                     to_write.expected_process_handoff = stored.expected_process_handoff;
                     to_write.process_handoff_generation = stored.process_handoff_generation;
                     to_write.process_handoff_phase = stored.process_handoff_phase;
@@ -709,7 +692,6 @@ impl Registry {
     {
         self.modify(entry_id, |e| {
             let verified = e.receipt.clone();
-            let receipt_binding = e.receipt_binding.clone();
             let expected_process_handoff = e.expected_process_handoff;
             let process_handoff_generation = e.process_handoff_generation;
             let process_handoff_phase = e.process_handoff_phase;
@@ -720,7 +702,6 @@ impl Registry {
             let last_process = e.last_process.clone();
             f(e);
             e.receipt = verified;
-            e.receipt_binding = receipt_binding;
             e.expected_process_handoff = expected_process_handoff;
             e.process_handoff_generation = process_handoff_generation;
             e.process_handoff_phase = process_handoff_phase;

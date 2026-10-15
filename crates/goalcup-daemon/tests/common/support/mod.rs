@@ -1,8 +1,7 @@
 //! Fixtures shared by the integration tests in this crate; it is compiled into every test
 //! binary that declares `mod support`.
 //!
-//! What is here directly: a registry with one entry, a loopback upload
-//! target and a daemon config file. The bigger harnesses are the submodules:
+//! What is here directly: a registry with one entry and a daemon config file. The bigger harnesses are the submodules:
 //! [`daemon`] (the process-level object), [`control`] (its control listener and a client) and
 //! [`status`] (a status document and the reader that checks its signature).
 
@@ -28,11 +27,6 @@ pub use status::*;
 
 use goalcup_daemon::registry::{Entry, ExpectedProcessHandoff, Registry, RunKeys};
 
-/// A test-only server public key: the Ed25519 verifying key of the test seed `[0x42; 32]`.
-/// The verifier trusts no key, this one included; it only has to be a well-formed key.
-pub const TEST_SERVER_PUBLIC_KEY_HEX: &str =
-    "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12";
-
 /// One entry, put into `registry` and returned as it was stored.
 pub fn entry_in(
     registry: &Registry,
@@ -48,24 +42,11 @@ pub fn entry_in(
         root.join("artifacts").join(id),
         &"ab".repeat(32),
         "0.0.0-test",
-        goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
         ExpectedProcessHandoff::NotRequired,
         RunKeys::generate(),
     );
     registry.put(&entry).expect("the entry is stored");
     entry
-}
-
-/// An upload URL on a loopback port the OS chose, with a listener held open behind it so
-/// nothing else can take the port while the test runs. Nothing connects: this tree has no
-/// uploader (D48), and `DaemonConfig` still parses the V1 `upload_url`.
-pub fn upload_target() -> (std::net::TcpListener, String) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-    let url = format!(
-        "http://{}",
-        listener.local_addr().expect("the bound address")
-    );
-    (listener, url)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -98,14 +79,11 @@ pub fn write_config_with(
          connectors_dir = {connectors:?}\n\
          config_dir = {config:?}\n\
          workspace_parent = {workspaces:?}\n\
-         control_addr = \"127.0.0.1:0\"\n\
-         upload_url = \"http://127.0.0.1:7788\"\n\
-         server_public_key = \"{key}\"\n",
+         control_addr = \"127.0.0.1:0\"\n",
         holder = root.join("holder"),
         connectors = connectors,
         config = root.join("config"),
         workspaces = root.join("workspaces"),
-        key = TEST_SERVER_PUBLIC_KEY_HEX,
     );
     let path = root.join("goalcup.toml");
     write(&path, edit(text).as_bytes());

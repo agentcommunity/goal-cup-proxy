@@ -1,7 +1,7 @@
-//! The daemon's config file: the measured defaults, the two fields it refuses by name, and
-//! the three refusals `validate()` makes.
+//! The daemon's config file: the measured defaults, the fields it refuses by name, and
+//! the refusals `validate()` makes.
 
-use goalcup_daemon::config::{DaemonConfig, ReceiptBindingPolicy};
+use goalcup_daemon::config::DaemonConfig;
 
 fn base(extra: &str) -> String {
     format!(
@@ -11,54 +11,9 @@ connectors_dir = "/tmp/gc/connectors"
 config_dir = "/tmp/gc/config"
 workspace_parent = "/tmp/gc/workspaces"
 control_addr = "127.0.0.1:7788"
-upload_url = "http://127.0.0.1:9000"
-server_public_key = "{}"
 {extra}
-"#,
-        "ab".repeat(32)
+"#
     )
-}
-
-#[test]
-fn local_capture_config_needs_no_service_pair() {
-    let local = base("")
-        .lines()
-        .filter(|line| !line.starts_with("upload_url") && !line.starts_with("server_public_key"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for text in [
-        local.clone(),
-        format!("{local}\nupload_url = \"\"\nserver_public_key = \"\"\n"),
-    ] {
-        let config = DaemonConfig::from_toml_str(&text).expect("a local config parses");
-        config.validate().expect("local capture needs no service");
-        assert!(config.upload_url.is_empty());
-        assert!(config.server_public_key.is_empty());
-    }
-}
-
-#[test]
-fn a_service_pair_must_be_supplied_together() {
-    let local = base("")
-        .lines()
-        .filter(|line| !line.starts_with("upload_url") && !line.starts_with("server_public_key"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for field in [
-        "upload_url = \"http://127.0.0.1:9000\"".to_string(),
-        format!("server_public_key = \"{}\"", "ab".repeat(32)),
-    ] {
-        let config = DaemonConfig::from_toml_str(&format!("{local}\n{field}\n"))
-            .expect("a partial pair parses before validation");
-        let error = config
-            .validate()
-            .expect_err("a partial pair refuses")
-            .to_string();
-        assert!(
-            error.contains("upload_url") && error.contains("server_public_key"),
-            "{error}"
-        );
-    }
 }
 
 #[test]
@@ -68,9 +23,16 @@ fn the_cut_fields_are_gone() {
     // A config that sets either of these fields must not silently load,
     // and the refusal must name the field: "invalid config" sends a participant looking
     // at the wrong line of a file whose every other line is fine.
+    // The first two were cut with the V1 transports; the rest are the V1 service, receipt and
+    // cadence keys the daemon used to accept and ignore.
     for cut in [
         "unix_socket = \"/tmp/gc.sock\"",
         "foreign_scan_interval_ms = 30000",
+        "upload_url = \"http://127.0.0.1:9000\"",
+        "server_public_key = \"abababab\"",
+        "receipt_binding = { mode = \"legacy\" }",
+        "poll_interval_ms = 0",
+        "disk_reserve_bytes = 0",
     ] {
         let field = cut.split(' ').next().unwrap();
         let e = DaemonConfig::from_toml_str(&base(cut))
@@ -78,53 +40,6 @@ fn the_cut_fields_are_gone() {
             .to_string();
         assert!(e.contains(field), "the refusal must name {field}: {e}");
     }
-}
-
-#[test]
-fn a_valid_new_event_receipt_binding_section_loads_and_validates() {
-    let config = DaemonConfig::from_toml_str(&base(
-        r#"
-[receipt_binding]
-mode = "new_event"
-questionnaire_version = "2026.09-v1"
-"#,
-    ))
-    .expect("the closed new-event receipt policy parses");
-    config.validate().expect("the configured version is valid");
-    assert_eq!(
-        config.receipt_binding,
-        ReceiptBindingPolicy::NewEvent {
-            questionnaire_version: "2026.09-v1".to_string()
-        }
-    );
-}
-
-#[test]
-fn receipt_binding_defaults_legacy_and_refuses_partial_or_invalid_modes() {
-    let legacy = DaemonConfig::from_toml_str(&base("")).expect("old config parses");
-    assert_eq!(legacy.receipt_binding, ReceiptBindingPolicy::Legacy);
-
-    for invalid in [
-        "[receipt_binding]\nmode = \"legacy\"\nquestionnaire_version = \"2026.09-v1\"\n",
-        "[receipt_binding]\nmode = \"new_event\"\n",
-        "[receipt_binding]\nmode = \"future\"\n",
-    ] {
-        DaemonConfig::from_toml_str(&base(invalid))
-            .expect_err("the closed receipt policy must refuse this shape");
-    }
-
-    let invalid = DaemonConfig::from_toml_str(&base(
-        "[receipt_binding]\nmode = \"new_event\"\nquestionnaire_version = \"contains spaces\"\n",
-    ))
-    .expect("shape parses before semantic validation");
-    let error = invalid
-        .validate()
-        .expect_err("the shared questionnaire grammar is enforced")
-        .to_string();
-    assert!(
-        error.contains("receipt_binding.questionnaire_version"),
-        "{error}"
-    );
 }
 
 #[test]
@@ -137,16 +52,7 @@ fn a_non_loopback_control_address_is_refused() {
 }
 
 #[test]
-fn a_bad_server_key_and_a_workspace_parent_beside_the_artifact_root_are_both_refused() {
-    let bad_key = DaemonConfig::from_toml_str(&base("").replace(&"ab".repeat(32), "nope")).unwrap();
-    assert!(
-        bad_key
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("server_public_key"),
-        "a malformed key is still refused, as it was when the key was read"
-    );
+fn a_workspace_parent_beside_the_artifact_root_is_refused() {
     // Agents enumerate the parent directory on their first tool call.
     let adjacent =
         DaemonConfig::from_toml_str(&base("").replace("/tmp/gc/workspaces", "/tmp/gc")).unwrap();
@@ -248,40 +154,6 @@ fn a_relative_root_is_refused_by_name() {
             .to_string();
         assert!(e.contains(field), "the refusal must name {field}: {e}");
         assert!(e.contains("absolute"), "{e}");
-    }
-}
-
-/// The V1 cadences and thresholds are accepted for old configs and read by nothing, so no
-/// value of theirs is refused: a `daemon.toml` that set any of them, zero included, loads.
-#[test]
-fn the_v1_fields_nothing_reads_load_with_any_value() {
-    let old = base(
-        "poll_interval_ms = 0\nupload_interval_ms = 0\nupload_chunk_max = 0\n\
-         status_interval_ms = 0\nstall_after_seconds = 0.0\nsilence_window_seconds = 0.0\n\
-         ack_lag_seconds = 0.0\narming_timeout_seconds = 0\nheartbeat_seconds = 0\n\
-         clock_skew_seconds = 0.0\ndisk_reserve_bytes = 0\n",
-    );
-    DaemonConfig::from_toml_str(&old)
-        .expect("an old config parses")
-        .validate()
-        .expect("nothing reads these fields, so no value of theirs is refused");
-}
-
-/// Nothing reads `upload_url`, but a config refused for a non-http one before is still
-/// refused, so the set of configs that load does not move.
-#[test]
-fn an_upload_url_that_is_not_http_is_refused_by_name() {
-    for bad in ["file:///tmp/gc/uploads", "127.0.0.1:9000", ""] {
-        let c =
-            DaemonConfig::from_toml_str(&base("").replace("http://127.0.0.1:9000", bad)).unwrap();
-        let e = c
-            .validate()
-            .expect_err("a non-http upload_url must be refused")
-            .to_string();
-        assert!(
-            e.contains("upload_url"),
-            "the refusal must name upload_url: {e}"
-        );
     }
 }
 

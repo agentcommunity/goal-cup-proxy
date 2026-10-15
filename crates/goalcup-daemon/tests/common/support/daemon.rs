@@ -11,16 +11,13 @@ use std::path::{Path, PathBuf};
 /// `workspace_parent` and `artifact_root` are disjoint trees, which `DaemonConfig::validate`
 /// enforces and `Daemon::start` therefore does too: an agent enumerates its workspace's
 /// parent directory on its first tool call.
-pub fn config_at(root: &Path, upload_url: &str) -> DaemonConfig {
+pub fn config_at(root: &Path) -> DaemonConfig {
     DaemonConfig {
         artifact_root: root.join("holder"),
         connectors_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors"),
         config_dir: root.join("config"),
         workspace_parent: root.join("workspaces"),
         control_addr: "127.0.0.1:0".parse().expect("a loopback address"),
-        upload_url: upload_url.to_string(),
-        server_public_key: super::TEST_SERVER_PUBLIC_KEY_HEX.to_string(),
-        receipt_binding: goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
         // No round configured: the signed status carries the entry's own timeline and
         // says so, through `event_status_source: "fallback"`.
         event: None,

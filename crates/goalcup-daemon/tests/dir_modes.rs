@@ -35,7 +35,7 @@ fn mode(path: &Path) -> u32 {
 #[tokio::test]
 async fn fresh_artifact_and_config_roots_are_0700() {
     let temp = tempfile::tempdir().expect("a disposable daemon prefix");
-    let config = support::config_at(temp.path(), "http://127.0.0.1:1");
+    let config = support::config_at(temp.path());
     assert!(!config.artifact_root.exists());
     assert!(!config.config_dir.exists());
 
@@ -54,7 +54,7 @@ fn a_fresh_config_root_is_normalized_after_a_restrictive_umask() {
     let artifact_root = temp.path().join("holder");
     let config_root = temp.path().join("config");
     make_private(&artifact_root);
-    let config_path = write_nonplaceholder_config(temp.path());
+    let config_path = support::write_config_with(temp.path(), |text| text);
 
     // 0100 strips owner execute from mkdir's requested 0700 while leaving enough access to
     // retain a no-follow directory descriptor.  The descriptor fchmod must restore exact 0700.
@@ -75,7 +75,7 @@ fn a_fresh_artifact_root_is_normalized_after_a_restrictive_umask() {
     let artifact_root = temp.path().join("holder");
     let config_root = temp.path().join("config");
     make_private(&config_root);
-    let config_path = write_nonplaceholder_config(temp.path());
+    let config_path = support::write_config_with(temp.path(), |text| text);
 
     // Keep the artifact role independent: skipping only its post-create normalization must
     // leave 0600 here and fail this assertion even if config_dir's implementation is correct.
@@ -95,7 +95,7 @@ fn an_owner_denying_umask_fails_safely_without_path_normalization() {
     let temp = tempfile::tempdir().expect("a disposable daemon prefix");
     let artifact_root = temp.path().join("holder");
     let config_root = temp.path().join("config");
-    let config_path = write_nonplaceholder_config(temp.path());
+    let config_path = support::write_config_with(temp.path(), |text| text);
 
     // 0777 creates the leaf with mode 000, so macOS cannot acquire even the no-follow
     // directory descriptor needed by fchmod.  Startup must fail instead of falling back to a
@@ -123,7 +123,7 @@ async fn a_created_root_replaced_by_a_symlink_cannot_chmod_its_outside_target() 
     let temp = tempfile::tempdir().expect("a disposable daemon prefix");
     let outside = temp.path().join("outside");
     make_public(&outside);
-    let config = support::config_at(temp.path(), "http://127.0.0.1:1");
+    let config = support::config_at(temp.path());
     goalcup_daemon::runtime::Daemon::replace_new_configured_root_with_symlink_for_test(
         &config.artifact_root,
         &outside,
@@ -159,7 +159,7 @@ async fn a_created_root_replaced_by_a_symlink_cannot_chmod_its_outside_target() 
 #[test]
 fn an_existing_public_artifact_root_warns_once_and_still_starts() {
     let temp = tempfile::tempdir().expect("a disposable daemon prefix");
-    let config_path = write_nonplaceholder_config(temp.path());
+    let config_path = support::write_config_with(temp.path(), |text| text);
     let artifact_root = temp.path().join("holder");
     let config_root = temp.path().join("config");
     make_public(&artifact_root);
@@ -175,7 +175,7 @@ fn an_existing_public_artifact_root_warns_once_and_still_starts() {
 #[test]
 fn an_existing_public_config_root_warns_once_and_still_starts() {
     let temp = tempfile::tempdir().expect("a disposable daemon prefix");
-    let config_path = write_nonplaceholder_config(temp.path());
+    let config_path = support::write_config_with(temp.path(), |text| text);
     let artifact_root = temp.path().join("holder");
     let config_root = temp.path().join("config");
     make_public(&config_root);
@@ -198,21 +198,6 @@ fn make_private(path: &Path) {
     std::fs::create_dir(path).unwrap_or_else(|error| panic!("create {}: {error}", path.display()));
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(PRIVATE_ROOT_MODE))
         .unwrap_or_else(|error| panic!("chmod {}: {error}", path.display()));
-}
-
-fn write_nonplaceholder_config(root: &Path) -> std::path::PathBuf {
-    support::write_config_with(root, |text| {
-        text.lines()
-            .map(|line| {
-                if line.starts_with("server_public_key =") {
-                    format!("server_public_key = \"{}\"", "ab".repeat(32))
-                } else {
-                    line.to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    })
 }
 
 fn assert_one_warning(stderr: &str, role: &str, path: &Path, observed_mode: &str) {

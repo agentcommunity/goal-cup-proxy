@@ -116,11 +116,6 @@ async fn local_capture_create_needs_no_server_config() {
 
     let trace = rig.trace_dir(&info.entry_id);
     assert!(!trace.join("receipt.json").exists(), "no receipt exists");
-    assert_eq!(
-        rig.upload_dials(),
-        0,
-        "nothing ever connects to the configured upload URL"
-    );
 }
 
 /// The blocks `chain.jsonl` holds beyond its logical end. A chain is a quota, not a
@@ -2065,7 +2060,6 @@ async fn local_finish_without_service_is_complete() {
     let trace = rig.trace_dir(&info.entry_id);
     assert!(trace.join("seal.json").exists());
     assert!(!trace.join("receipt.json").exists());
-    assert_eq!(rig.upload_dials(), 0, "no server is ever asked");
     let status = rig.status(&info.entry_id).await;
     status.verify_with(&info.run_public_key).unwrap();
     let capture = status.payload.capture.unwrap();

@@ -25,7 +25,6 @@ pub fn started_entry() -> Entry {
         std::path::PathBuf::from("/tmp/goalcup/artifacts/entry-0001"),
         &"ab".repeat(32),
         "2.1.259",
-        goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
         goalcup_daemon::registry::ExpectedProcessHandoff::NotRequired,
         RunKeys::generate(),
     );

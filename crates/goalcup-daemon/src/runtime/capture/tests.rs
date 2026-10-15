@@ -38,7 +38,6 @@ fn entry(dir: &Path) -> Entry {
         dir.to_path_buf(),
         "digest",
         "",
-        ReceiptBindingPolicy::Legacy,
         ExpectedProcessHandoff::Required,
         RunKeys::generate(),
     )

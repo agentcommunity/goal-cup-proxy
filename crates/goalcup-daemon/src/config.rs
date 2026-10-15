@@ -1,23 +1,16 @@
 //! The daemon's per-machine configuration file.
 //!
 //! This is the only thing the daemon invents that is not already in `goalcup-protocol`.
-//! Everything below is a path root, the control address, the round's dates, or a V1 field
-//! accepted only so an old `daemon.toml` still loads; nothing here is a rule, and nothing
-//! here is read by the verifier.
+//! Everything below is a path root, the control address, or the round's dates; nothing here
+//! is a rule, and nothing here is read by the verifier.
 
 use crate::DaemonError;
-use crate::submission_types::CaptureResourceLimitsV1;
-use goalcup_protocol::submission::{
-    EffectiveSubmissionLimitsV1, LimitProfileV1, SubmissionProfileV1,
-};
-use serde::de::IgnoredAny;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 /// Read through [`DaemonConfigFile`], whose `deny_unknown_fields` is the whole mechanism behind
-/// the cut-field assertions in `tests/it/config_load.rs` (`the_cut_fields_are_gone` refuses
-/// them; `the_v1_fields_nothing_reads_load_with_any_value` accepts the retired ones): without
+/// the cut-field assertions in `tests/it/config_load.rs` (`the_cut_fields_are_gone`): without
 /// it, a config still setting `unix_socket` or `foreign_scan_interval_ms` would load and be
 /// silently ignored — the participant would believe a transport was configured and a
 /// scan scheduled, and neither would exist.
@@ -36,22 +29,6 @@ pub struct DaemonConfig {
     pub workspace_parent: PathBuf,
     /// The control API's listen address. `validate()` refuses anything but loopback.
     pub control_addr: SocketAddr,
-    /// Accepted for old configs; nothing reads it, and nothing connects to it (D48 removed
-    /// the uploader). `validate()` still refuses one set without `server_public_key`, and
-    /// one that is not an `http` or `https` URL.
-    #[serde(default)]
-    pub upload_url: String,
-    /// Accepted for old configs; nothing reads it (the daemon verifies no receipt or
-    /// acknowledgement). `validate()` still refuses one set without `upload_url`, and one
-    /// that is not 64 hex characters.
-    #[serde(default)]
-    pub server_public_key: String,
-
-    /// Accepted for old configs, and still validated; nothing reads it: every new entry is
-    /// created `ReceiptBindingPolicy::Legacy` (`runtime::capture`).
-    #[serde(default)]
-    pub receipt_binding: ReceiptBindingPolicy,
-
     /// The round's own dates, when this machine has been told them.
     ///
     /// Absent is the normal case and the default. What it costs is on [`EventConfig`]: with
@@ -65,43 +42,12 @@ pub struct DaemonConfig {
 /// The file's own keys, each one named so that no other key loads.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code)] // the retired keys are named to be accepted, never read
 struct DaemonConfigFile {
     artifact_root: PathBuf,
     connectors_dir: PathBuf,
     config_dir: PathBuf,
     workspace_parent: PathBuf,
     control_addr: SocketAddr,
-    #[serde(default)]
-    upload_url: String,
-    #[serde(default)]
-    server_public_key: String,
-    #[serde(default)]
-    receipt_binding: ReceiptBindingPolicy,
-    // The V1 cadences and thresholds: accepted with any value and dropped. Removing one would
-    // make a `daemon.toml` that still sets it a load error.
-    #[serde(default)]
-    poll_interval_ms: IgnoredAny,
-    #[serde(default)]
-    upload_interval_ms: IgnoredAny,
-    #[serde(default)]
-    upload_chunk_max: IgnoredAny,
-    #[serde(default)]
-    status_interval_ms: IgnoredAny,
-    #[serde(default)]
-    stall_after_seconds: IgnoredAny,
-    #[serde(default)]
-    silence_window_seconds: IgnoredAny,
-    #[serde(default)]
-    ack_lag_seconds: IgnoredAny,
-    #[serde(default)]
-    arming_timeout_seconds: IgnoredAny,
-    #[serde(default)]
-    heartbeat_seconds: IgnoredAny,
-    #[serde(default)]
-    clock_skew_seconds: IgnoredAny,
-    #[serde(default)]
-    disk_reserve_bytes: IgnoredAny,
     #[serde(default)]
     event: Option<EventConfig>,
 }
@@ -114,9 +60,6 @@ impl From<DaemonConfigFile> for DaemonConfig {
             config_dir: f.config_dir,
             workspace_parent: f.workspace_parent,
             control_addr: f.control_addr,
-            upload_url: f.upload_url,
-            server_public_key: f.server_public_key,
-            receipt_binding: f.receipt_binding,
             event: f.event,
         }
     }
@@ -151,128 +94,6 @@ pub struct EventConfig {
     pub rules_version: String,
 }
 
-/// Which optional provenance bindings a newly-created entry requires on its start receipt.
-///
-/// This selects a receipt contract only. It does not activate cutoff, publication, or a
-/// questionnaire presentation service.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ReceiptBindingPolicy {
-    #[default]
-    Legacy,
-    NewEvent {
-        questionnaire_version: String,
-    },
-    /// An explicitly configured V4 run. No default selects this arm: all receipt,
-    /// submission, and resource inputs must be present before an entry can latch them.
-    WorkspaceSubmission {
-        questionnaire_version: String,
-        submission_profile: SubmissionProfileV1,
-        limit_profile: LimitProfileV1,
-        effective_limits: EffectiveSubmissionLimitsV1,
-        capture_limits: CaptureResourceLimitsV1,
-    },
-}
-
-impl<'de> Deserialize<'de> for ReceiptBindingPolicy {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-        enum ClosedPolicy {
-            // A struct variant rather than a unit variant: serde ignores extra map fields
-            // on an internally tagged unit variant even under `deny_unknown_fields`.
-            Legacy {},
-            NewEvent {
-                questionnaire_version: String,
-            },
-            WorkspaceSubmission {
-                questionnaire_version: String,
-                submission_profile: SubmissionProfileV1,
-                limit_profile: LimitProfileV1,
-                effective_limits: EffectiveSubmissionLimitsV1,
-                capture_limits: CaptureResourceLimitsV1,
-            },
-        }
-        Ok(match ClosedPolicy::deserialize(deserializer)? {
-            ClosedPolicy::Legacy {} => Self::Legacy,
-            ClosedPolicy::NewEvent {
-                questionnaire_version,
-            } => Self::NewEvent {
-                questionnaire_version,
-            },
-            ClosedPolicy::WorkspaceSubmission {
-                questionnaire_version,
-                submission_profile,
-                limit_profile,
-                effective_limits,
-                capture_limits,
-            } => Self::WorkspaceSubmission {
-                questionnaire_version,
-                submission_profile,
-                limit_profile,
-                effective_limits,
-                capture_limits,
-            },
-        })
-    }
-}
-
-impl ReceiptBindingPolicy {
-    fn validate_config(&self) -> Result<(), DaemonError> {
-        if let Self::NewEvent {
-            questionnaire_version,
-        }
-        | Self::WorkspaceSubmission {
-            questionnaire_version,
-            ..
-        } = self
-        {
-            goalcup_protocol::provenance::validate_questionnaire_version(questionnaire_version)
-                .map_err(|_| {
-                    DaemonError::Config(
-                        "receipt_binding.questionnaire_version is not a valid bounded version"
-                            .to_string(),
-                    )
-                })?;
-        }
-        if let Self::WorkspaceSubmission {
-            limit_profile,
-            effective_limits,
-            capture_limits,
-            ..
-        } = self
-        {
-            if limit_profile.id.is_empty()
-                || limit_profile.id.len() > 256
-                || limit_profile.id.bytes().any(|byte| byte.is_ascii_control())
-            {
-                return Err(DaemonError::Config(
-                    "receipt_binding.limit_profile.id must be bounded non-control text".to_string(),
-                ));
-            }
-            for (name, value) in [
-                ("object_count", effective_limits.object_count),
-                ("total_bytes", effective_limits.total_bytes),
-                ("pre_cutoff_drain", effective_limits.pre_cutoff_drain),
-                ("process_walk", effective_limits.process_walk),
-            ] {
-                if value == 0 {
-                    return Err(DaemonError::Config(format!(
-                        "receipt_binding.effective_limits.{name} must be greater than zero"
-                    )));
-                }
-            }
-            capture_limits.validate_for_config().map_err(|reason| {
-                DaemonError::Config(format!("receipt_binding.capture_limits {reason}"))
-            })?;
-        }
-        Ok(())
-    }
-}
-
 impl EventConfig {
     /// The two dates, in seconds, or the reason they cannot be read.
     ///
@@ -297,11 +118,6 @@ impl EventConfig {
 }
 
 impl DaemonConfig {
-    /// Whether both V1 service fields are set. Only `validate` asks.
-    pub(crate) fn has_service(&self) -> bool {
-        !self.upload_url.is_empty() && !self.server_public_key.is_empty()
-    }
-
     /// Parse without touching the filesystem. `validate()` is a separate call, so a
     /// caller can load a config in order to report what is wrong with it.
     pub fn from_toml_str(s: &str) -> Result<DaemonConfig, DaemonError> {
@@ -325,39 +141,17 @@ impl DaemonConfig {
     ///   design (`is_public_route`), and what makes that safe is that the socket is not
     ///   reachable off the machine. Stated here as a refusal so it is an enforced
     ///   property rather than a hope.
-    /// - **The two V1 service fields together or not at all**, the key as 64 hex characters
-    ///   and the URL as `http` or `https`. Nothing reads either field; these refusals are
-    ///   kept so a config that loaded before still loads, and one refused before still is.
     /// - **A workspace parent that is not entangled with the artifact root**. Agents
     ///   enumerate the workspace's parent directory on their first tool call, so
     ///   a `workspace_parent` that contains — or sits inside — the artifact root puts the
     ///   run's own evidence in the agent's field of view.
     pub fn validate(&self) -> Result<(), DaemonError> {
-        self.receipt_binding.validate_config()?;
         if !self.control_addr.ip().is_loopback() {
             return Err(DaemonError::Config(format!(
                 "control_addr {} is not loopback: the control API's unauthenticated \
                  status route is safe only because the socket is not reachable off this machine",
                 self.control_addr
             )));
-        }
-
-        if self.upload_url.is_empty() != self.server_public_key.is_empty() {
-            return Err(DaemonError::Config(
-                "upload_url and server_public_key must be supplied together, or both omitted \
-                 for local v5 capture"
-                    .to_string(),
-            ));
-        }
-        if self.has_service() {
-            let key = &self.server_public_key;
-            if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err(DaemonError::Config(format!(
-                    "server_public_key must be 64 hex characters (an Ed25519 public key), and this \
-                     one is {} character(s)",
-                    key.len()
-                )));
-            }
         }
 
         for (name, p) in [
@@ -386,15 +180,6 @@ impl DaemonConfig {
             )));
         }
 
-        if self.has_service()
-            && !self.upload_url.starts_with("http://")
-            && !self.upload_url.starts_with("https://")
-        {
-            return Err(DaemonError::Config(format!(
-                "upload_url must be an http or https URL, and it is {:?}",
-                self.upload_url
-            )));
-        }
         // The round's dates, when this machine has been told them. Both readable, and in
         // the one order that means anything: a start window that closed before the round
         // opened is a window no entry could have started in, and the daemon would sign that
@@ -525,128 +310,4 @@ fn resolved_as_far_as_possible(p: &Path) -> PathBuf {
     }
     // Nothing on this path exists. The lexical comparison is all there is.
     lexically_normalized(p)
-}
-
-#[cfg(test)]
-mod workspace_submission_tests {
-    use super::ReceiptBindingPolicy;
-    use crate::submission_types::CaptureResourceLimitsV1;
-    use goalcup_protocol::submission::{
-        EffectiveSubmissionLimitsV1, LimitProfileV1, SubmissionProfileV1,
-    };
-
-    #[test]
-    fn v4_requires_an_explicit_complete_profile_and_limits() {
-        let policy: ReceiptBindingPolicy = toml::from_str(
-            r#"
-                mode = "workspace_submission"
-                questionnaire_version = "goal-cup-2026-v1"
-                submission_profile = "workspace_snapshot_v1"
-
-                [limit_profile]
-                id = "goal-cup-v1-local"
-
-                [effective_limits]
-                object_count = 4096
-                total_bytes = 1073741824
-                pre_cutoff_drain = 5000
-                process_walk = 64
-
-                [capture_limits]
-                version = 1
-                namespace_nodes = 8192
-                inventory_bytes = 8388608
-                manifest_bytes = 8388608
-            "#,
-        )
-        .expect("an explicit V4 policy parses");
-        assert_eq!(
-            policy,
-            ReceiptBindingPolicy::WorkspaceSubmission {
-                questionnaire_version: "goal-cup-2026-v1".to_string(),
-                submission_profile: SubmissionProfileV1::WorkspaceSnapshotV1,
-                limit_profile: LimitProfileV1 {
-                    id: "goal-cup-v1-local".to_string(),
-                },
-                effective_limits: EffectiveSubmissionLimitsV1 {
-                    object_count: 4096,
-                    total_bytes: 1_073_741_824,
-                    pre_cutoff_drain: 5000,
-                    process_walk: 64,
-                },
-                capture_limits: CaptureResourceLimitsV1 {
-                    version: 1,
-                    namespace_nodes: 8192,
-                    inventory_bytes: 8_388_608,
-                    manifest_bytes: 8_388_608,
-                },
-            }
-        );
-
-        for missing in [
-            "submission_profile = \"workspace_snapshot_v1\"",
-            "[limit_profile]\nid = \"goal-cup-v1-local\"",
-            "[effective_limits]",
-            "process_walk = 64",
-            "[capture_limits]",
-            "manifest_bytes = 8388608",
-        ] {
-            let incomplete = r#"
-mode = "workspace_submission"
-questionnaire_version = "goal-cup-2026-v1"
-submission_profile = "workspace_snapshot_v1"
-[limit_profile]
-id = "goal-cup-v1-local"
-[effective_limits]
-object_count = 4096
-total_bytes = 1073741824
-pre_cutoff_drain = 5000
-process_walk = 64
-[capture_limits]
-version = 1
-namespace_nodes = 8192
-inventory_bytes = 8388608
-manifest_bytes = 8388608
-            "#
-            .replace(missing, "");
-            assert!(
-                toml::from_str::<ReceiptBindingPolicy>(&incomplete).is_err(),
-                "missing {missing:?} must not fall back to an implicit qualifying value",
-            );
-        }
-
-        for (field, invalid) in [
-            ("version = 1", "version = 2"),
-            ("namespace_nodes = 8192", "namespace_nodes = 0"),
-            ("namespace_nodes = 8192", "namespace_nodes = 1000001"),
-            ("inventory_bytes = 8388608", "inventory_bytes = 67108865"),
-            ("manifest_bytes = 8388608", "manifest_bytes = 67108865"),
-        ] {
-            let invalid: ReceiptBindingPolicy = toml::from_str(
-                &r#"
-mode = "workspace_submission"
-questionnaire_version = "goal-cup-2026-v1"
-submission_profile = "workspace_snapshot_v1"
-[limit_profile]
-id = "goal-cup-v1-local"
-[effective_limits]
-object_count = 4096
-total_bytes = 1073741824
-pre_cutoff_drain = 5000
-process_walk = 64
-[capture_limits]
-version = 1
-namespace_nodes = 8192
-inventory_bytes = 8388608
-manifest_bytes = 8388608
-            "#
-                .replace(field, invalid),
-            )
-            .expect("the shape parses before semantic validation");
-            assert!(
-                invalid.validate_config().is_err(),
-                "invalid capture resource limit {invalid:?} must refuse before entry creation",
-            );
-        }
-    }
 }
