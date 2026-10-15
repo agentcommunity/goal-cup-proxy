@@ -5,7 +5,6 @@
 //! the two lookups D4 and D24 need (by
 //! workspace, by token) and the removal a failed start needs.
 
-use goalcup_daemon::config::ReceiptBindingPolicy;
 use goalcup_daemon::registry::{
     Entry, EntryState, ExpectedProcessHandoff, ProcessHandoffPhase, Registry, RunKeys,
 };
@@ -20,20 +19,14 @@ fn entry(tmp: &std::path::Path, id: &str) -> Entry {
         tmp.join("art").join(id),
         &"ab".repeat(32),
         "2.1.259",
-        goalcup_daemon::config::ReceiptBindingPolicy::Legacy,
         ExpectedProcessHandoff::NotRequired,
         RunKeys::from_seed([2u8; 32]),
     )
 }
 
-fn bound_entry(tmp: &std::path::Path, id: &str, version: &str) -> Entry {
-    bound_entry_with_handoff(tmp, id, version, ExpectedProcessHandoff::NotRequired)
-}
-
 fn bound_entry_with_handoff(
     tmp: &std::path::Path,
     id: &str,
-    version: &str,
     expected_process_handoff: ExpectedProcessHandoff,
 ) -> Entry {
     let mut entry = Entry::new(
@@ -43,9 +36,6 @@ fn bound_entry_with_handoff(
         tmp.join("art").join(id),
         &"ab".repeat(32),
         "2.1.259",
-        ReceiptBindingPolicy::NewEvent {
-            questionnaire_version: version.to_string(),
-        },
         expected_process_handoff,
         RunKeys::from_seed([2u8; 32]),
     );
@@ -120,12 +110,7 @@ fn legacy_process_registration_keeps_its_v1_digest_and_exact_replay_identity() {
 
     let tmp = tempfile::tempdir().unwrap();
     let registry = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    let mut row = bound_entry_with_handoff(
-        tmp.path(),
-        "launch",
-        "2026.09-v1",
-        ExpectedProcessHandoff::Required,
-    );
+    let mut row = bound_entry_with_handoff(tmp.path(), "launch", ExpectedProcessHandoff::Required);
     row.state = EntryState::Armed;
     registry.put(&row).unwrap();
     registry.open_initial_process_handoff("launch").unwrap();
@@ -157,12 +142,7 @@ fn legacy_process_registration_keeps_its_v1_digest_and_exact_replay_identity() {
 fn process_handoff_requires_an_open_generation_and_exact_replays_are_idempotent() {
     let tmp = tempfile::tempdir().unwrap();
     let registry = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    let mut row = bound_entry_with_handoff(
-        tmp.path(),
-        "launch",
-        "2026.09-v1",
-        ExpectedProcessHandoff::Required,
-    );
+    let mut row = bound_entry_with_handoff(tmp.path(), "launch", ExpectedProcessHandoff::Required);
     registry.put(&row).unwrap();
 
     registry
@@ -246,53 +226,6 @@ fn an_entry_round_trips_through_the_registry() {
 }
 
 #[test]
-fn receipt_policy_is_legacy_for_old_rows_and_immutable_across_replacement_and_restart() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("registry.redb");
-
-    // JSON written before the field existed still means Legacy.
-    let current = entry(tmp.path(), "old");
-    let mut json = serde_json::to_value(&current).unwrap();
-    json.as_object_mut().unwrap().remove("receipt_binding");
-    let old: Entry = serde_json::from_value(json).unwrap();
-    assert_eq!(old.receipt_binding(), &ReceiptBindingPolicy::Legacy);
-
-    {
-        let registry = Registry::open(&path).unwrap();
-        let original = bound_entry(tmp.path(), "e1", "2026.09-v1");
-        registry.put(&original).unwrap();
-
-        let mut stale = entry(tmp.path(), "e1");
-        stale.state = EntryState::Armed;
-        registry.put(&stale).unwrap();
-        assert_eq!(
-            registry.get("e1").unwrap().unwrap().receipt_binding(),
-            original.receipt_binding(),
-            "put cannot downgrade or retarget the stored policy"
-        );
-
-        registry
-            .update("e1", |value| {
-                *value = entry(tmp.path(), "e1");
-            })
-            .unwrap();
-        assert_eq!(
-            registry.get("e1").unwrap().unwrap().receipt_binding(),
-            original.receipt_binding(),
-            "update cannot change the private policy"
-        );
-    }
-
-    let reopened = Registry::open(&path).unwrap();
-    assert_eq!(
-        reopened.get("e1").unwrap().unwrap().receipt_binding(),
-        &ReceiptBindingPolicy::NewEvent {
-            questionnaire_version: "2026.09-v1".to_string()
-        }
-    );
-}
-
-#[test]
 fn expected_process_handoff_defaults_for_old_rows_and_round_trips_for_new_ones() {
     let current = entry(tempfile::tempdir().unwrap().path(), "e1");
     let mut old_json = serde_json::to_value(&current).unwrap();
@@ -326,12 +259,7 @@ fn expected_process_handoff_defaults_for_old_rows_and_round_trips_for_new_ones()
         ExpectedProcessHandoff::Required,
         ExpectedProcessHandoff::NotRequired,
     ] {
-        let row = bound_entry_with_handoff(
-            tempfile::tempdir().unwrap().path(),
-            "e1",
-            "2026.09-v1",
-            expected,
-        );
+        let row = bound_entry_with_handoff(tempfile::tempdir().unwrap().path(), "e1", expected);
         let reread: Entry = serde_json::from_value(serde_json::to_value(&row).unwrap()).unwrap();
         assert_eq!(reread.expected_process_handoff(), expected);
     }
@@ -377,12 +305,8 @@ fn generic_writes_cannot_clear_terminal_drain_validation_failure() {
 fn generic_writes_cannot_desynchronize_the_registered_termination_handle() {
     let tmp = tempfile::tempdir().unwrap();
     let registry = Registry::open(&tmp.path().join("registry.redb")).unwrap();
-    let mut original = bound_entry_with_handoff(
-        tmp.path(),
-        "launch",
-        "2026.09-v1",
-        ExpectedProcessHandoff::Required,
-    );
+    let mut original =
+        bound_entry_with_handoff(tmp.path(), "launch", ExpectedProcessHandoff::Required);
     original.state = EntryState::Armed;
     registry.put(&original).unwrap();
     let accepted = register_initial(&registry, "launch");
@@ -621,6 +545,7 @@ fn a_row_carrying_keys_this_build_no_longer_reads_still_loads() {
         "started_at": "2026-09-01T00:00:01Z",
         "deadline_at": "2026-09-08T00:00:01Z",
         "receipt": null,
+        "receipt_binding": {"mode": "new_event", "questionnaire_version": "2026.09-v1"},
         "chain_seq": 3,
         "chain_head": "0000000000000000000000000000000000000000000000000000000000000000",
         "last_ack_seq": 3,

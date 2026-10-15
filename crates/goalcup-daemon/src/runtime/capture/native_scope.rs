@@ -14,9 +14,6 @@ pub(super) struct NativePlan {
     pub(super) initial_binding: NativeBinding,
     /// The schema-declared source when its path has no `{id}`; empty when `scoped` is set.
     pub(super) controlled: Vec<NativeSourceSpec>,
-    /// Stores the profile names that this entry does not read; each is marked by a gap at the
-    /// launch.
-    pub(super) unread_stores: usize,
 }
 
 /// `since` is the run's start in Unix seconds, from which a `since_run_start` source reads
@@ -89,14 +86,12 @@ pub(super) fn native_plan(
             scoped: Some(source),
             initial_binding,
             controlled: Vec::new(),
-            unread_stores: 0,
         })
     } else {
         Ok(NativePlan {
             scoped: None,
             initial_binding: NativeBinding::NotRequired,
             controlled: vec![source],
-            unread_stores: 0,
         })
     }
 }

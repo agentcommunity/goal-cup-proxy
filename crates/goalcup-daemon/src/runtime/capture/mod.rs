@@ -75,7 +75,7 @@
 
 use super::{CycleCounters, Daemon};
 
-use crate::config::{EventConfig, ReceiptBindingPolicy};
+use crate::config::EventConfig;
 
 use crate::ingest::{
     EntryGrant, EntrySnapshot, IngestClock, IngestEntry, IngestSecret, Offsets, ProducerLoss,
@@ -175,8 +175,6 @@ pub(crate) struct CaptureEntry {
     extra_patterns: Vec<RedactionPattern>,
     /// The schema-1 termination binary a registered harness handle may name.
     pub(super) native_binary: Option<String>,
-    /// The profile's stores this entry does not read, each marked by a gap at the launch.
-    unread_stores: usize,
     /// Schema-declared scoped source, enabled once its session identity is bound: at launch or
     /// at finish according to `capture.identity.binding`.
     scoped_native: Option<NativeSourceSpec>,
@@ -457,7 +455,6 @@ impl Daemon {
             artifact_dir.to_path_buf(),
             &digests.profile_sha256,
             "",
-            ReceiptBindingPolicy::Legacy,
             ExpectedProcessHandoff::Required,
             keys,
         );
@@ -509,7 +506,6 @@ impl Daemon {
         capture.cycles = self.inner.cycles.clone();
         capture.scoped_native = plan.scoped;
         *lock(&capture.native_binding) = plan.initial_binding;
-        capture.unread_stores = plan.unread_stores;
         let native = if plan.controlled.is_empty() {
             None
         } else {
@@ -1100,7 +1096,6 @@ impl CaptureEntry {
             authority,
             extra_patterns: Vec::new(),
             native_binary: None,
-            unread_stores: 0,
             scoped_native: None,
             native_binding: Mutex::new(NativeBinding::NotRequired),
             clock,
@@ -1273,11 +1268,6 @@ impl CaptureEntry {
         writer.require(record, &now)?;
         run.goal = Goal::Launched(request.goal_stream.clone());
         self.bind_launch_scope(request.native_scope.as_deref(), &mut writer, &now);
-        // The harness now writes stores this entry does not read: each is a native source the
-        // run goes without, and a gap says so.
-        for _ in 0..self.unread_stores {
-            writer.streamless_gap(GapReason::SourceChanged, &now);
-        }
         Ok(())
     }
 

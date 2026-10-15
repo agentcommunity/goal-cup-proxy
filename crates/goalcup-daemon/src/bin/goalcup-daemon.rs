@@ -67,7 +67,7 @@ const IDLE_GRACE: Duration = Duration::from_secs(30);
 #[derive(Parser, Debug)]
 #[command(
     name = "goalcup-daemon",
-    version = goalcup_daemon::DAEMON_VERSION_TEXT,
+    version = goalcup_daemon::DAEMON_VERSION,
     about = "The /goal Cup capture daemon. Runs in the foreground; `goalcup` starts it for a run."
 )]
 struct Args {

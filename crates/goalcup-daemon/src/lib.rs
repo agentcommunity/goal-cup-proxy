@@ -33,8 +33,6 @@ pub mod registry;
 pub mod runtime;
 /// Building and signing the status document (D25).
 pub mod status;
-mod submission_types;
-pub use submission_types::CaptureResourceLimitsV1;
 /// Terminating the harness process tree at seal (D22).
 ///
 /// Unix only, like `goalcup_protocol::process`, which owns the discovery half. A module
@@ -47,9 +45,6 @@ pub mod workspace_git;
 
 /// This build's version, as the daemon reports it: health, `control.json` and status documents.
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// What `goalcup-daemon --version` prints.
-pub const DAEMON_VERSION_TEXT: &str = env!("CARGO_PKG_VERSION");
 
 /// Wall-clock seconds since the epoch, fractional. Used for intervals and for the
 /// daemon's own bookkeeping; anything that reaches a chained envelope goes through

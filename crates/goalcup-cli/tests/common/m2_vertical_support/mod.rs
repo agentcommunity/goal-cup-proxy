@@ -138,15 +138,11 @@ impl Vertical {
             &daemon_toml,
             format!(
                 "artifact_root = \"{}\"\nconnectors_dir = \"{}\"\nconfig_dir = \"{}\"\n\
-                 workspace_parent = \"{}\"\ncontrol_addr = \"127.0.0.1:0\"\n\
-                 upload_url = \"http://{}\"\nserver_public_key = \"{}\"\n\
-                 upload_interval_ms = 100\nstatus_interval_ms = 1000\n",
+                 workspace_parent = \"{}\"\ncontrol_addr = \"127.0.0.1:0\"\n",
                 artifacts.display(),
                 connectors.display(),
                 cfg.display(),
                 workspaces.display(),
-                upload_trap.local_addr().unwrap(),
-                super::support::TEST_SERVER_PUBLIC_KEY_HEX,
             ),
         )
         .unwrap();

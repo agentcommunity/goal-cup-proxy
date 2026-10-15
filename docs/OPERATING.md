@@ -377,8 +377,9 @@ workspace_parent = "/Users/you/goalcup-runs"     # never nested with artifact_ro
 control_addr = "127.0.0.1:7787"                  # loopback only, or the daemon refuses to start
 ```
 
-`upload_url`, `server_public_key` and `receipt_binding` are still accepted and validated so old
-configurations load; nothing reads them. An optional `[event]` section (`t0`, `start_window_closes_at`,
+The daemon refuses a key it does not know, so a `daemon.toml` that still sets a retired V1 key
+(`upload_url`, `server_public_key`, `receipt_binding` or a cadence such as `poll_interval_ms`) does not
+load: delete the line. An optional `[event]` section (`t0`, `start_window_closes_at`,
 `rules_version`, all three together) tells the daemon the round's dates; without it the signed status
 document reports `event_status_source: "fallback"`. A `config_dir` that differs from the CLI's makes the
 started daemon write `control.json` where the CLI is not looking, and `goalcup start` refuses, naming

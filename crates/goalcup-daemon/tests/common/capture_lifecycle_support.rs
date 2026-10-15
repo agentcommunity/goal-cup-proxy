@@ -1,12 +1,8 @@
 //! A real daemon with no receipt service behind it, the v5 capture control calls, and
 //! readers for what a capture entry leaves on disk.
-//!
-//! The configured upload URL names a loopback listener that is bound and never accepted on:
-//! [`Rig::upload_dials`] counts every connection made to it, so "needs no server" is an
-//! observation rather than the absence of a stub.
 
 use super::support::control::{
-    EmptyControlHarness, Response, empty_control_harness_on, restart_empty_control,
+    EmptyControlHarness, Response, empty_control_harness_with, restart_empty_control,
 };
 use super::table_lock::TableLock;
 use goalcup_daemon::config::DaemonConfig;
@@ -28,10 +24,9 @@ use std::path::{Path, PathBuf};
 /// A small chain quota: 4 MiB, the 1 MiB terminal allowance included.
 pub const RESERVE: u64 = 4 * 1024 * 1024;
 
-/// An empty daemon whose upload URL is the trap.
+/// An empty daemon.
 pub struct Rig {
     h: EmptyControlHarness,
-    upload_trap: std::net::TcpListener,
     /// The connectors directory of [`Rig::start_headless`], kept alive with the rig.
     _headless: Option<tempfile::TempDir>,
 }
@@ -51,18 +46,8 @@ impl Rig {
 
     /// [`Rig::start`] with one edit to the configuration before the daemon starts.
     pub async fn start_with(edit: impl FnOnce(&mut DaemonConfig)) -> Rig {
-        let upload_trap = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-        upload_trap
-            .set_nonblocking(true)
-            .expect("a non-blocking trap");
-        let upload_url = format!("http://{}", upload_trap.local_addr().unwrap());
-        // Nothing but the trap listens at the upload URL.
-        let h = empty_control_harness_on(&upload_url, edit).await;
-        Rig {
-            h,
-            upload_trap,
-            _headless: None,
-        }
+        let h = empty_control_harness_with(edit).await;
+        Rig { h, _headless: None }
     }
 
     /// [`Rig::start`] over the frozen headless Codex and Claude connectors (ids
@@ -104,7 +89,6 @@ impl Rig {
     pub async fn restart(self) -> Rig {
         Rig {
             h: restart_empty_control(self.h).await,
-            upload_trap: self.upload_trap,
             _headless: self._headless,
         }
     }
@@ -118,7 +102,6 @@ impl Rig {
         let h = super::support::control::restart_empty_control_planting(self.h, plant).await?;
         Ok(Rig {
             h,
-            upload_trap: self.upload_trap,
             _headless: self._headless,
         })
     }
@@ -310,15 +293,6 @@ impl Rig {
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-    }
-
-    /// Connections made to the configured upload URL since the rig started.
-    pub fn upload_dials(&self) -> usize {
-        let mut dials = 0;
-        while self.upload_trap.accept().is_ok() {
-            dials += 1;
-        }
-        dials
     }
 }
 
