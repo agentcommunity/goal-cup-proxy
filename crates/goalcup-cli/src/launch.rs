@@ -20,7 +20,11 @@
 //!   over it, rendered;
 //! * the allowlist [`CAPTURE_IDENTITY_ENV`] (`USER`, `LOGNAME`, `TMPDIR`), carried across
 //!   from the tracker's environment and nothing else from it;
-//! * `HOME` (the per-run home), `PATH` ([`CAPTURE_PATH`]) and the profile's home variable;
+//! * the run's `HOME` (per run, or the connector's shared run home, D59), `PATH`
+//!   ([`CAPTURE_PATH`], or for a chat-mode connector the participant's own: [`harness_path`])
+//!   and the profile's home variable;
+//! * for a chat-mode connector only, the participant's terminal environment
+//!   ([`CHAT_PASSTHROUGH_ENV`] and `LC_*`), under the connector's own values;
 //! * the passive **loopback** recording proxy through process-scoped `HTTPS_PROXY`/
 //!   `https_proxy` — the M2 reservation AGENTS.md names, and the only proxy a launch may name,
 //!   checked by `loopback_proxy_url` — with `NO_PROXY`/`no_proxy` ([`CAPTURE_NO_PROXY`]) and
@@ -28,10 +32,12 @@
 //!
 //! **D1: the tracker never sets a model base URL.** Nothing on that list can be one except
 //! the profile's `capture.env`, and `goalcup_protocol::capture_policy` refuses a profile that
-//! names a `*_BASE_URL`, `*_API_URL` or `*ENDPOINT` variable, a `*_PROXY` or bare `PROXY`, or
-//! any other `*_URL` there, before a plan is ever built. The participant's shell cannot add
-//! one either, because nothing outside the allowlist is inherited: an allowlist leaves no
-//! `*_URL` the participant exported to strip.
+//! names a `*_BASE_URL`, `*_API_URL` or `*ENDPOINT` variable, a `*_PROXY` or bare `PROXY`
+//! (other than `NODE_USE_ENV_PROXY = "1"`, which names no endpoint, D59), or any other `*_URL`
+//! there, before a plan is ever built. The participant's shell cannot add
+//! one either, because nothing outside the allowlist is inherited (a chat-mode connector's
+//! pass-through is an allowlist too): an allowlist leaves no `*_URL` the participant exported
+//! to strip.
 //!
 //! Headless as it is, the capture child stays in the launcher's process group: the daemon
 //! never confirms a group ended (D30), and there a Ctrl-C typed at the terminal reaches it.
@@ -381,6 +387,50 @@ pub const CAPTURE_NO_PROXY: &str = "127.0.0.1,localhost";
 /// (the allowlist; `HOME`, `PATH` and `SHELL` are set, not carried).
 pub(crate) const CAPTURE_IDENTITY_ENV: [&str; 3] = ["USER", "LOGNAME", "TMPDIR"];
 
+/// What a chat-mode launch (D57) also carries across from the participant's environment, beside
+/// [`CAPTURE_IDENTITY_ENV`]: the harness runs in their terminal with their tools, so it gets
+/// their `PATH` (an npm harness is a `#!/usr/bin/env node` script, and the agent runs Homebrew,
+/// cargo and the rest), their terminal type and colours, their language, and their shell. Every
+/// `LC_*` variable is carried too. Nothing else: no proxy, no base URL, no credential, none of the
+/// tracer's own secrets. A connector's `[capture.env]` still wins (its `SHELL`, for one), and
+/// the launch's own pins (`HOME`, the home variable, the loopback proxy, the CA) win over both.
+/// A headless launch carries none of these.
+pub const CHAT_PASSTHROUGH_ENV: [&str; 5] = ["PATH", "TERM", "COLORTERM", "LANG", "SHELL"];
+
+/// The `PATH` the harness is given: the participant's own for a chat-mode connector (D57), when
+/// they have one, and [`CAPTURE_PATH`] otherwise.
+pub fn harness_path(profile: &CaptureSpec, parent_env: &BTreeMap<String, String>) -> String {
+    match parent_env.get("PATH") {
+        Some(path) if profile.interactive && !path.is_empty() => path.clone(),
+        _ => CAPTURE_PATH.to_string(),
+    }
+}
+
+/// The participant's variables a chat-mode launch carries across ([`CHAT_PASSTHROUGH_ENV`] and
+/// every `LC_*` the schema would admit as a name); empty for a headless launch.
+fn chat_passthrough(
+    profile: &CaptureSpec,
+    parent_env: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    if !profile.interactive {
+        return BTreeMap::new();
+    }
+    parent_env
+        .iter()
+        .filter(|(key, value)| {
+            !value.contains('\0')
+                && (CHAT_PASSTHROUGH_ENV.contains(&key.as_str())
+                    || (key.starts_with("LC_")
+                        && goalcup_protocol::capture_policy::env_key_denied(
+                            key,
+                            goalcup_protocol::capture_policy::EnvContext::CaptureEnv,
+                        )
+                        .is_none()))
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
 /// The longest provider key a capture launch hands a child.
 pub(crate) const MAX_CHILD_SECRET_BYTES: usize = 256;
 
@@ -497,6 +547,9 @@ fn child_secret_named(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedExecutable {
     path: String,
+    /// The `PATH` the harness is given ([`harness_path`]), when the resolution knew it: what its
+    /// own `#!/usr/bin/env <interpreter>` line and its version probe look things up on.
+    search_path: Option<String>,
 }
 
 impl ResolvedExecutable {
@@ -504,12 +557,23 @@ impl ResolvedExecutable {
     pub fn path(&self) -> &str {
         &self.path
     }
+
+    /// The `PATH` the harness is given, or [`CAPTURE_PATH`] when the resolution did not say.
+    pub fn search_path(&self) -> &str {
+        self.search_path.as_deref().unwrap_or(CAPTURE_PATH)
+    }
 }
 
-/// The connector's program as the `PATH` in `env` finds it, followed to the file an updater's
-/// link names. That file is the one the launch runs. It is checked, never started here:
-/// `goalcup start` and `goalcup doctor` both ask this one question.
-pub(crate) fn capture_executable(
+/// The connector's program as the participant's `PATH` (in `env`) finds it, followed to the file
+/// an updater's link names, and checked to start on the `PATH` the harness is given
+/// ([`harness_path`]): a script whose first line is `#!/usr/bin/env <interpreter>` (the npm
+/// harnesses: Codex CLI, Claude Code) needs that interpreter on that `PATH`. The file is the one
+/// the launch runs. It is checked, never started here: `goalcup start`, `goalcup doctor` and
+/// `goalcup prep` all ask this one question, so a harness doctor passes is one start launches.
+///
+/// Only the first line of the file is read, for its interpreter; its build is not hashed here
+/// (D53).
+pub fn capture_executable(
     c: &HarnessConnector,
     profile: &CaptureSpec,
     env: &BTreeMap<String, String>,
@@ -526,7 +590,47 @@ pub(crate) fn capture_executable(
         path: found.display().to_string(),
         source,
     })?;
-    resolve_harness_executable(&file)
+    let mut resolved = resolve_harness_executable(&file)?;
+    let search_path = harness_path(profile, env);
+    if let Some(interpreter) = env_interpreter(&file)
+        && crate::preflight::resolve_on_path(
+            &interpreter,
+            &BTreeMap::from([("PATH".to_string(), search_path.clone())]),
+        )
+        .is_none()
+    {
+        return Err(CliError::Refused(format!(
+            "`{program}` ({}) is a `{interpreter}` script, and `{interpreter}` is not on the PATH \
+             the harness is given ({search_path}). Nothing is launched.",
+            file.display()
+        )));
+    }
+    resolved.search_path = Some(search_path);
+    Ok(resolved)
+}
+
+/// The interpreter a `#!/usr/bin/env <name>` first line names (options such as `-S` skipped),
+/// or `None` for anything else: a binary, a script with an absolute interpreter, a file that
+/// cannot be read. At most 256 bytes are read.
+///
+/// The check fails open by design: a first line with no newline within 256 bytes, or a file
+/// that cannot be opened or read here, names no interpreter, and the launch itself says what is
+/// wrong with such a file.
+fn env_interpreter(file: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut head = [0u8; 256];
+    let n = open_no_follow(file).ok()?.read(&mut head).ok()?;
+    let line = head[..n].strip_prefix(b"#!")?;
+    let line = &line[..line.iter().position(|b| *b == b'\n')?];
+    let line = std::str::from_utf8(line).ok()?;
+    let mut words = line.split_whitespace();
+    if !words.next()?.ends_with("/env") {
+        return None;
+    }
+    words
+        .find(|word| !word.starts_with('-') && !word.contains('='))
+        .filter(|name| !name.contains('/'))
+        .map(str::to_string)
 }
 
 /// Check the regular file at `path` and keep its canonical path.
@@ -577,6 +681,7 @@ pub fn resolve_harness_executable(path: &Path) -> Result<ResolvedExecutable, Cli
     require_regular_file_no_follow(&canonical, given)?;
     Ok(ResolvedExecutable {
         path: text.to_string(),
+        search_path: None,
     })
 }
 
@@ -631,7 +736,8 @@ pub struct CaptureLaunch<'a> {
     pub proxy_url: &'a str,
     /// The proxy's per-launch CA certificate, handed to each of the profile's `ca_env`.
     pub ca_certificate: &'a Path,
-    /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`] is read from it.
+    /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`] is read from it, and for a
+    /// chat-mode connector also [`CHAT_PASSTHROUGH_ENV`] and `LC_*`.
     pub parent_env: &'a BTreeMap<String, String>,
 }
 
@@ -832,7 +938,9 @@ fn build_launch(
         }
     };
 
-    let mut env = BTreeMap::new();
+    // A chat-mode harness gets the participant's terminal environment first; the connector's
+    // own values and the launch's pins below win over it.
+    let mut env = chat_passthrough(profile, launch.parent_env);
     for (key, template) in profile.resolved_env(platform) {
         env.insert(key, render(&template, v)?);
     }
@@ -842,7 +950,7 @@ fn build_launch(
         }
     }
     env.insert("HOME".into(), run_home.to_string());
-    env.insert("PATH".into(), CAPTURE_PATH.into());
+    env.insert("PATH".into(), harness_path(profile, launch.parent_env));
     // A harness without a home variable keeps its state under the private `HOME` above.
     if let Some(home_env) = &profile.home.env {
         env.insert(home_env.clone(), config_home.to_string());

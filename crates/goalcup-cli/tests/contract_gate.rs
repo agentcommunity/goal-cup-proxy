@@ -614,7 +614,7 @@ fn goalcup_lists_the_nine_commands_and_nothing_else() {
 /// `goalcup start` names its goal: the V1 path's flags are not in `--help`, and leaving
 /// `--goal-file` out is a usage error that says so.
 #[test]
-fn goalcup_start_requires_a_goal_file_and_offers_no_v1_flags() {
+fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_flags() {
     let out = goalcup().args(["start", "--help"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).unwrap();
@@ -637,14 +637,15 @@ fn goalcup_start_requires_a_goal_file_and_offers_no_v1_flags() {
             "`goalcup start --help` must not offer {flag}: {text}"
         );
     }
-    // A headless harness without its goal file is refused before a daemon is started or
-    // anything is made, in a configuration directory of the test's own all the same. The
-    // connectors are found beside the binary only in a target directory inside the checkout;
-    // say where they are, as the Linux check's relocated target needs.
+    // A headless harness without its goal file, and a chat-mode one (D57) with one, are refused
+    // before a daemon is started or anything is made (a configuration directory of the test's
+    // own all the same).
     let cfg = tempfile::tempdir().unwrap();
     let out = goalcup()
-        .args(["start", "--harness", "codex-cli"])
+        .args(["start", "--harness", "hermes-cli"])
         .env("GOALCUP_CONFIG_DIR", cfg.path())
+        // The connectors are found beside the binary only in a target directory inside the
+        // checkout; say where they are, as the Linux check's relocated target needs.
         .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
         .output()
         .unwrap();
@@ -654,6 +655,17 @@ fn goalcup_start_requires_a_goal_file_and_offers_no_v1_flags() {
         said.contains("--goal-file"),
         "and names the missing flag: {said}"
     );
+    let out = goalcup()
+        .args(["start", "--harness", "codex-cli", "--goal-file", "g.txt"])
+        .env("GOALCUP_CONFIG_DIR", cfg.path())
+        // The connectors are found beside the binary only in a target directory inside the
+        // checkout; say where they are, as the Linux check's relocated target needs.
+        .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "a refusal is rung 1");
+    let said = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(said.contains("chat mode"), "{said}");
     assert_eq!(
         std::fs::read_dir(cfg.path()).unwrap().count(),
         0,

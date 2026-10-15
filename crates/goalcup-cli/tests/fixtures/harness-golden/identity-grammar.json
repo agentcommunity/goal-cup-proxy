@@ -1,7 +1,8 @@
 {
-  "claude_preassigned": {
-    "flag": "--session-id",
-    "value_is_the_launch_session_id": true
+  "claude_chat": {
+    "argv": [],
+    "identity": "none",
+    "names_the_launch_session_id": false
   },
   "codex_stdout_tee": {
     "after_noise": {

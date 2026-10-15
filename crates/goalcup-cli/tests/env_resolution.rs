@@ -157,7 +157,7 @@ fn a_capture_launch_takes_nothing_hostile_from_the_real_environment() {
         &c,
         &s::vars(&l),
         &l.workspace,
-        &s::launch(&l, b"goal", &resolved, &proxy, &parent),
+        &s::chat_launch(&l, &resolved, &proxy, &parent),
     );
     let still: Vec<Option<String>> = hostile.iter().map(|(k, _)| std::env::var(k).ok()).collect();
     for restore in restores.into_iter().rev() {

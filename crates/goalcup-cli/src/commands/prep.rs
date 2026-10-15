@@ -214,6 +214,7 @@ impl Doors for Here {
         let run = crate::commands::start::RunDir::create(
             &beside,
             profile.home.run_home,
+            None,
             env,
             WorkspaceAt::InRunDir,
         )?;

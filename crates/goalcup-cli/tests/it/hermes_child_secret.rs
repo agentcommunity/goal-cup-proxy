@@ -197,8 +197,10 @@ fn hostile_goals_stay_one_goal_flag_element_and_the_key_is_in_no_plan_surface() 
 
 /// The hermes plan is a plain capture plan in every other respect: the goal flag changes only
 /// where the goal sits, and a profile with no flag is unchanged (Codex and Claude end in `--`).
+/// The other shipped profiles run in chat mode (D57): no goal is placed, no secret is handed,
+/// and the argv is their rendered args alone.
 #[test]
-fn the_other_shipped_profiles_still_place_the_goal_after_a_separator() {
+fn the_other_shipped_profiles_place_no_goal() {
     for id in ["codex-cli", "claude-code-cli"] {
         let l = s::Layout::new();
         let exe = s::fake_harness(&l.bin);
@@ -210,11 +212,11 @@ fn the_other_shipped_profiles_still_place_the_goal_after_a_separator() {
             &c,
             &s::vars(&l),
             &l.workspace,
-            &s::launch(&l, b"hello", &resolved, &proxy, &parent),
+            &s::chat_launch(&l, &resolved, &proxy, &parent),
         )
         .unwrap();
-        assert_eq!(plan.argv[plan.argv.len() - 2], "--", "{id}");
-        assert_eq!(plan.argv.last().unwrap(), "hello", "{id}");
-        assert_eq!(plan.capture.unwrap().goal_prefix, 0, "{id}");
+        assert!(!plan.argv.iter().any(|a| a == "--" || a == "hello"), "{id}");
+        assert_eq!(plan.capture, None, "{id}");
+        assert!(c.loaded.manifest.capture.credential.is_none(), "{id}");
     }
 }

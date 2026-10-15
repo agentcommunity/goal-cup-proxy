@@ -184,15 +184,19 @@ fn connector_reports(
 }
 
 /// The harness executable `goalcup start` would run: found on `env`'s `PATH` and checked, by the
-/// same function `start` calls. Any build passes: it is recorded, not pinned (D53). A harness
-/// that is not installed, or not a regular file, is a `Fail`: `start` would refuse it.
+/// same function `start` calls, so it also checks that a `#!/usr/bin/env <interpreter>` harness
+/// (an npm one) finds its interpreter on the PATH the harness is given (the participant's own,
+/// for a chat-mode connector). Any build passes: it is recorded, not pinned (D53). A harness
+/// that is not installed, not a regular file, or missing its interpreter is a `Fail`: `start`
+/// would refuse it.
 pub(crate) fn executable_check(c: &HarnessConnector, env: &BTreeMap<String, String>) -> Check {
     let program = &c.loaded.manifest.capture.executable.program;
     match crate::launch::capture_executable(c, &c.loaded.manifest.capture, env) {
         Ok(resolved) => Check::pass(
             "harness_executable",
             format!(
-                "`{program}` resolves to `{}`; the build that runs is recorded, not pinned.",
+                "`{program}` resolves to `{}` and starts on the PATH the harness is given; the \
+                 build that runs is recorded, not pinned.",
                 resolved.path()
             ),
         ),

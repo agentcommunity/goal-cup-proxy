@@ -8,6 +8,8 @@ Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm
 
 ## 1. Run one prompt, headless
 
+Since D57 the connector runs Claude Code in chat mode instead (section 10). This is the headless recipe it ran before; its measurements stand.
+
 The capture argv (code: [connectors/claude-code-cli/harness.toml](../../connectors/claude-code-cli/harness.toml)), goal appended as the single element after `--`:
 
 ```
@@ -104,7 +106,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 
 ## 10. Chat mode (measured 14 Oct 2026)
 
-D57 runs the shipped connectors in their normal chat mode in the participant's terminal, and the participant types the prompt. `goalcup start` can host such a run (`[capture] interactive = true`); **this connector is still headless in this build (section 1):** its chat-mode recipe has no arguments at all (`args = []`, `claude` alone), and the connector schema refuses an empty `capture.args` ("must hold 1 to 64 arguments"); the daemon's and the protocol crate's own tests also load the shipped connector and expect its headless recipe. Its chat-mode data (`interactive = true`, `args = []`, identity `none`, native root `{config_home}/projects` with pattern `*/*.jsonl` and `since_run_start = true`, `skills_dir = "skills"`, `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_RETRY_WATCHDOG` kept) waits for the schema to admit no arguments in an `interactive` profile and for those tests.
+Since D57 the connector runs Claude Code in its normal chat mode in the participant's terminal, and the participant types the prompt (code: [connectors/claude-code-cli/harness.toml](../../connectors/claude-code-cli/harness.toml)): `interactive = true`, `args = []` (`claude` alone), identity `none`, native root `{config_home}/projects` with pattern `*/*.jsonl` and `since_run_start = true`, `skills_dir = "skills"` (the goal-cup skill goes in `$CLAUDE_CONFIG_DIR/skills/goal-cup/`), `resume_args = ["--continue"]` (what `goalcup continue` appends; measured below to append to the same session file). `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_RETRY_WATCHDOG` are kept. Section 1 is the headless recipe it ran before.
 
 Measured on macOS arm64, Claude Code 2.1.283, 2026-10-14, by driving the TUI on a pseudo-terminal (120x40) in a fresh `git init` workspace, with `CLAUDE_CONFIG_DIR` the tracer's isolated home and a `HOME` holding only `Library/Keychains`. That home was **logged out** (the assistant answered "Not logged in · Please run /login"), so no model reply was seen:
 
@@ -118,4 +120,4 @@ Measured on macOS arm64, Claude Code 2.1.283, 2026-10-14, by driving the TUI on 
 PENDING (need a logged-in home, which the owner must restore; nobody on our side logs in for a test):
 
 - A model reply in chat mode through the recording proxy.
-- One 10-minute practice run of this connector on this Mac against staging (staging is deployed on 19 Oct), once the connector is in chat mode.
+- One 10-minute practice run of this connector on this Mac against staging.
