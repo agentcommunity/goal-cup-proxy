@@ -13,15 +13,19 @@ pub use daemon::Daemon;
 
 use crate::DaemonError;
 use goalcup_protocol::control::CycleErrors;
+use std::io::Write as _;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// What the daemon's own loop lost, counted rather than logged.
+/// What the daemon's own loop lost, counted, and written once to stderr.
 ///
 /// [`Daemon::run_forever`] cannot exit on a transient — a daemon that did would take the
-/// capture with it — and this crate has no logger, deliberately: a component that can
+/// capture with it — and this crate has no request logger, deliberately: a component that can
 /// write a request to a log cannot promise it never wrote a bearer token. So failures are
 /// counted here and the last message rides out on the signed status document, path-free.
+/// The same path-free words are also written to stderr (`daemon.log`) when they differ from
+/// the last ones written, so a failure that repeats every poll costs one line. Nothing from
+/// a request is ever logged.
 /// The wire document also carries `upload`, `status`, `deadline` and `last_pass_at`; their
 /// V1 cadences were removed (D48), so [`Self::snapshot`] writes them as zero and `None`.
 #[derive(Debug, Default)]
@@ -33,11 +37,23 @@ pub(crate) struct CycleCounters {
 impl CycleCounters {
     /// One tick's pass failed, on this error.
     fn note(&self, error: &DaemonError) {
-        self.tick.fetch_add(1, Ordering::Relaxed);
         let words = path_free(error);
-        // `daemon.log` is where the CLI sends an operator; `last` is overwritten by the next error.
-        eprintln!("goalcup-daemon: cycle error: {words}");
-        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(words);
+        // `daemon.log` is where the CLI sends an operator; `last` is overwritten by the next
+        // error. A write that fails (a full disk) must not panic the thread that noted it.
+        if self.record(words.clone()) {
+            let _ = writeln!(std::io::stderr(), "goalcup-daemon: cycle error: {words}");
+        }
+    }
+
+    /// Count one failure and keep its words. `true` when the words differ from the last
+    /// ones kept, which is when they are worth a log line: a pass that fails the same way
+    /// on every poll is counted every time and written once.
+    fn record(&self, words: String) -> bool {
+        self.tick.fetch_add(1, Ordering::Relaxed);
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = last.as_deref() != Some(words.as_str());
+        *last = Some(words);
+        changed
     }
 
     /// The wire shape, as the status document carries it.
@@ -79,4 +95,23 @@ fn path_free(error: &DaemonError) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod cycle_counter_tests {
+    use super::*;
+
+    #[test]
+    fn a_repeating_failure_is_counted_every_time_and_logged_once() {
+        let cycles = CycleCounters::default();
+        assert!(
+            cycles.record("abandon failed".into()),
+            "the first is logged"
+        );
+        assert!(!cycles.record("abandon failed".into()), "a repeat is not");
+        assert!(cycles.record("reopen failed".into()), "a change is");
+        let counted = cycles.snapshot();
+        assert_eq!(counted.tick, 3, "every failure is still counted");
+        assert_eq!(counted.last.as_deref(), Some("reopen failed"));
+    }
 }

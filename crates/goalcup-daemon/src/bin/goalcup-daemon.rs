@@ -14,14 +14,15 @@
 //!   anything for [`IDLE_GRACE`]: it withdraws its `control.json`, stops like a signal stops
 //!   it, and exits 0. `DaemonConfig` refuses unknown fields, and a run-scoped lifetime is
 //!   about who started this process, not about the machine.
-//! * **No logging.** This crate has no logger, deliberately: the control listener handles
+//! * **No request logging.** This crate has no request logger, deliberately: the control listener handles
 //!   the CLI's bearer token, and a component that can write a request to a log cannot
 //!   promise it never wrote one. What the daemon loses is counted on the signed status
 //!   document (`StatusPayload::cycles`), which is a participant-readable surface rather
 //!   than a file nobody rotates. So `stdout` here carries the two startup facts and
 //!   nothing else, and
-//!   `stderr` carries a refusal the process is about to exit on, plus one warning for each
-//!   existing configured root whose group or other permission bits are set.
+//!   `stderr` carries a refusal the process is about to exit on, one warning for each
+//!   existing configured root whose group or other permission bits are set, and each cycle
+//!   error (the same path-free words the status document carries) once per change.
 //! * **A signal seals nothing, and it does not merely drop either.** SIGTERM and SIGINT
 //!   end the process through [`Daemon::stop`] (the listener down, every in-flight seal
 //!   awaited, every redb file lock released), but they do not end the entry. A capture entry

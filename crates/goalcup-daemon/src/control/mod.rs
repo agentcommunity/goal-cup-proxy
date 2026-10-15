@@ -46,8 +46,8 @@
 //!
 //! Before the public/bearer split, `authenticate` refuses any request whose `Host`
 //! is not exactly one of the listener's own addresses — `127.0.0.1:<port>`, `localhost:<port>`
-//! or `[::1]:<port>`, with the port the OS bound. The two public routes are readable by a
-//! browser without a token, and DNS rebinding is how a web page the browser believes belongs
+//! or `[::1]:<port>`, with the port the OS bound. The one public route (the per-entry status)
+//! is readable by a browser without a token, and DNS rebinding is how a web page the browser believes belongs
 //! to `evil.example` reaches a loopback socket: it sends `Host: evil.example:<port>` and reads
 //! the answer same-origin. The refusal is `401 unauthorized` with a fixed body (it quotes no
 //! header it was sent), so no contract code is added and `CONTROL_API_VERSION` does not move;
