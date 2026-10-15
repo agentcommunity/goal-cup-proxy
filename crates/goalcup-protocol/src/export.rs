@@ -17,11 +17,12 @@
 //! `Envelope::chain_bytes` with its own 0-based counter; `seq` is inside the chain bytes, so
 //! the base is part of what is hashed.
 //!
-//! **Some writers here have no production caller, on purpose.** The capture runtime writes
+//! **Some writers here are test-only builders, on purpose.** The capture runtime writes
 //! a trace with `write_baseline_for_protocol`, `append_chain` and `write_local_finish`.
 //! The V1 writers — `write_cutoff_for_protocol`, `write_finalization_for_protocol`,
-//! `write_receipt` and `write_seal_for_protocol` — lost their daemon caller in D48. They stay because the
-//! verifier's v5 tests build signed and sealed fixture traces with them.
+//! `write_receipt` and `write_seal_for_protocol` — lost their daemon caller in D48. They are
+//! compiled only under `test` or the `test-hooks` feature, because the protocol and verifier
+//! tests build signed and sealed fixture traces with them; a production build does not carry them.
 
 use crate::ProtocolError;
 use crate::ack::AckCheckpoint;
@@ -32,10 +33,10 @@ use crate::capture::{
 };
 use crate::chain::{GENESIS, Link, link_hash};
 use crate::envelope::{Envelope, EventBody};
-use crate::provenance::{
-    CutoffReachedV1, FinalizationV1, ProvenanceError, Rfc3339Utc, Sha256Digest,
-    TerminationOutcomeV1,
-};
+#[cfg(any(test, feature = "test-hooks"))]
+use crate::provenance::{CutoffReachedV1, FinalizationV1};
+use crate::provenance::{ProvenanceError, Rfc3339Utc, Sha256Digest, TerminationOutcomeV1};
+#[cfg(any(test, feature = "test-hooks"))]
 use crate::receipt::StartReceipt;
 use crate::seal::SealManifest;
 use goalcup_platform::tracecap::{
@@ -1229,6 +1230,7 @@ impl TraceExport {
         }
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     /// Append the once-only cutoff boundary. The version is admitted before anything is
     /// hashed or written: only v5 is.
     pub fn write_cutoff_for_protocol(
@@ -1273,6 +1275,7 @@ impl TraceExport {
         Ok(link)
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     /// Append the single terminal result bound to the preceding cutoff, its version admitted
     /// before hashing or writing exactly as for [`Self::write_cutoff_for_protocol`]. It must
     /// name the cutoff's entry and receipt, and only one is ever chained.
@@ -1543,6 +1546,7 @@ impl TraceExport {
         Ok((path, link))
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn write_receipt(&self, r: &StartReceipt) -> Result<PathBuf, ExportError> {
         self.write_fixed(FixedTraceDocument::Receipt, &to_json("receipt", r)?)
     }
@@ -1614,6 +1618,7 @@ impl TraceExport {
         Ok((path, link))
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
     /// Chain the seal, THEN write it. Appends one `EventBody::Seal` envelope carrying
     /// `manifest_sha256(m)`, `m.sealed_at` and `m.files.len()` — `source` is `"daemon"`,
     /// `recorded_at` is `m.sealed_at` — and only then writes `seal.json`. `&mut self`
