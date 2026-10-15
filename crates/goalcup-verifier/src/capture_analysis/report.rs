@@ -32,7 +32,9 @@ use std::path::Path;
 
 /// The research-report schema version governing every observation and summary line. Version 2
 /// adds `analysis.models` and `analysis.cross_leg` to the summary; observation lines are as in 1.
-const RESEARCH_SCHEMA_VERSION: u32 = 2;
+/// Version 3 adds `delivery.records_after_deadline`, `delivery.last_seq_at_or_before_deadline`
+/// and `delivery.last_ack_at`, copied from the integrity report.
+const RESEARCH_SCHEMA_VERSION: u32 = 3;
 /// The longest observation line written, newline included.
 const MAX_OBSERVATION_LINE_BYTES: usize = 2 * 1024 * 1024;
 /// The longest summary line written, newline included.
@@ -262,6 +264,11 @@ pub fn research_summary(
             "state": delivery,
             "verified_ack": integrity.verified_ack,
             "receipt_clock": integrity.receipt_clock,
+            // The reader's deadline facts, unchanged. The two counts use the participant's
+            // machine clock and are a hint; `last_ack_at` is the server's signed time.
+            "records_after_deadline": integrity.records_after_deadline,
+            "last_seq_at_or_before_deadline": integrity.last_seq_at_or_before_deadline,
+            "last_ack_at": integrity.last_ack_at,
         },
         "assistance": {
             "explicit_records": explicit,

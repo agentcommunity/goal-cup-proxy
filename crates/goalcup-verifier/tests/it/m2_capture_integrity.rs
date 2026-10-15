@@ -43,8 +43,9 @@ use goalcup_verifier::capture_analysis::api::{
     DecoderFailure, DecoderSummary, DecoderV1, Disposition, Observation, StreamOpen,
 };
 use goalcup_verifier::capture_analysis::reader::{
-    CaptureIntegrity, CaptureIntegrityReport, CaptureTerminalFacts, CaptureTerminalKind, KeySource,
-    VerifiedAckPosition, VerifiedReceiptClock, capture_integrity_document, scan_capture_trace,
+    CaptureIntegrity, CaptureIntegrityReport, CaptureTerminalFacts, CaptureTerminalKind,
+    FirstFailure, KeySource, VerifiedAckPosition, VerifiedReceiptClock, capture_integrity_document,
+    scan_capture_trace,
 };
 use goalcup_verifier::capture_analysis::registry::{DecoderRegistry, Registered};
 use goalcup_verifier::capture_analysis::session::decode_records;
@@ -558,7 +559,7 @@ fn valid_unknown_protocol_keeps_integrity() {
     assert!(!report.coverage_incomplete);
     assert!(!report.torn_tail);
     assert_eq!(report.gap_count, 0);
-    assert_eq!(report.schema_version, 2);
+    assert_eq!(report.schema_version, 3);
 
     // Valid hashes: the validated prefix is the whole chain, as read back independently.
     let chain = chain_lines(dir.path());
@@ -999,7 +1000,69 @@ fn line_level_tampering_names_its_finding() {
             "{name}: {report:#?}"
         );
         assert_eq!(report.validated_records, keep as u64, "{name}: {report:#?}");
+        // The report says where: the seq the bad line should have had.
+        assert_eq!(
+            report.first_failure,
+            Some(FirstFailure {
+                seq: Some(keep as u64),
+                code: code.to_string()
+            }),
+            "{name}: {report:#?}"
+        );
     }
+}
+
+/// A batch joins reports to the server's rows by entry and profile, and a judge reads the first
+/// failure off the report. A valid report names no failure; an incomplete one names its first
+/// missing piece, with no chain position when the piece is a document; a torn tail names the
+/// position it stopped at.
+#[test]
+fn the_report_names_the_run_and_its_first_failure() {
+    let dir = make_trace(&launched(complete_wire(None)), true);
+    let (report, _) = scan(dir.path());
+    assert_eq!(report.exit_code(), 0, "{report:#?}");
+    assert_eq!(
+        report.entry_id.as_deref(),
+        Some(chain_lines(dir.path())[0].entry_id.as_str())
+    );
+    assert_eq!(report.profile_id.as_deref(), Some("codex-cli"));
+    assert_eq!(report.first_failure, None);
+
+    // The seal document is missing: incomplete, and the chain itself has no bad position.
+    std::fs::remove_file(dir.path().join(SEAL_FILE)).unwrap();
+    let (report, _) = scan(dir.path());
+    assert_eq!(report.integrity, CaptureIntegrity::Incomplete);
+    assert_eq!(
+        report.first_failure,
+        Some(FirstFailure {
+            seq: None,
+            code: "seal_manifest_missing".to_string()
+        })
+    );
+
+    // A torn tail stops at the seq the torn line would have had.
+    let dir = make_trace(&launched(complete_wire(None)), false);
+    let records = chain_lines(dir.path()).len() as u64;
+    append_bytes(
+        &dir.path().join(CHAIN_FILE),
+        b"{\"protocol_version\":5,\"sou",
+    );
+    let (report, _) = scan(dir.path());
+    assert_eq!(
+        report.first_failure,
+        Some(FirstFailure {
+            seq: Some(records),
+            code: "torn_tail".to_string()
+        })
+    );
+    // Same run, so the identity is still read from the validated prefix.
+    assert_eq!(report.profile_id.as_deref(), Some("codex-cli"));
+
+    // No Launch in the prefix: the profile is absent, never guessed.
+    let dir = make_trace(&complete_wire(None), true);
+    let (report, _) = scan(dir.path());
+    assert_eq!(report.profile_id, None);
+    assert!(report.entry_id.is_some());
 }
 
 /// The cutoff record is what binds a signed finalization to the receipt's 168-hour deadline.
@@ -1058,7 +1121,7 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
         "{report:#?}"
     );
     assert_eq!(report.last_ack_at.as_deref(), Some(acked), "{report:#?}");
-    assert_eq!(report.schema_version, 2);
+    assert_eq!(report.schema_version, 3);
 
     // One second earlier is the other side of the boundary: only the baseline (12:00:00) is at or
     // before the deadline, and every later record is after it.
@@ -1761,6 +1824,9 @@ fn producer_closed_attestation_does_not_claim_raw_sequence_reconstruction() {
         "records_after_deadline",
         "last_seq_at_or_before_deadline",
         "last_ack_at",
+        "entry_id",
+        "profile_id",
+        "first_failure",
     ];
     expected_keys.sort();
     let mut keys_sorted = keys.clone();
@@ -3040,7 +3106,7 @@ fn replaced_evidence_is_refused_not_followed() {
 #[test]
 fn exit_code_follows_canonical_precedence() {
     let base = CaptureIntegrityReport {
-        schema_version: 2,
+        schema_version: 3,
         integrity: CaptureIntegrity::Valid,
         anchor: AnchorState::LocalOnly,
         sealed: true,
@@ -3059,6 +3125,9 @@ fn exit_code_follows_canonical_precedence() {
         records_after_deadline: None,
         last_seq_at_or_before_deadline: None,
         last_ack_at: None,
+        entry_id: None,
+        profile_id: None,
+        first_failure: None,
     };
     let with = |edit: &dyn Fn(&mut CaptureIntegrityReport)| {
         let mut report = base.clone();
@@ -3111,7 +3180,7 @@ fn typed_reader_statuses_keep_their_words_and_the_report_bytes() {
     assert_eq!(serde_json::to_string(&KeySource::None).unwrap(), "\"none\"");
 
     let report = CaptureIntegrityReport {
-        schema_version: 2,
+        schema_version: 3,
         integrity: CaptureIntegrity::Valid,
         anchor: AnchorState::LocalOnly,
         sealed: true,
@@ -3130,11 +3199,19 @@ fn typed_reader_statuses_keep_their_words_and_the_report_bytes() {
         records_after_deadline: None,
         last_seq_at_or_before_deadline: None,
         last_ack_at: None,
+        entry_id: None,
+        profile_id: None,
+        first_failure: None,
     };
     assert_eq!(
         serde_json::to_string(&report).unwrap(),
-        r#"{"schema_version":2,"integrity":"valid","anchor":"local_only","sealed":true,"validated_records":1,"validated_bytes":2,"validated_head":"head","gap_count":0,"coverage_incomplete":false,"torn_tail":false,"key_source":"none","findings":[],"verified_ack":null,"receipt_clock":null,"terminal":null,"records_after_deadline":null,"last_seq_at_or_before_deadline":null,"last_ack_at":null}"#
+        r#"{"schema_version":3,"integrity":"valid","anchor":"local_only","sealed":true,"validated_records":1,"validated_bytes":2,"validated_head":"head","gap_count":0,"coverage_incomplete":false,"torn_tail":false,"key_source":"none","findings":[],"verified_ack":null,"receipt_clock":null,"terminal":null,"records_after_deadline":null,"last_seq_at_or_before_deadline":null,"last_ack_at":null,"entry_id":null,"profile_id":null,"first_failure":null}"#
     );
+
+    // A schema-2 document, written before the identity and `first_failure`, still reads.
+    let two = r#"{"schema_version":2,"integrity":"valid","anchor":"local_only","sealed":true,"validated_records":1,"validated_bytes":2,"validated_head":"head","gap_count":0,"coverage_incomplete":false,"torn_tail":false,"key_source":"none","findings":[],"verified_ack":null,"receipt_clock":null,"terminal":null,"records_after_deadline":null,"last_seq_at_or_before_deadline":null,"last_ack_at":null}"#;
+    let parsed: CaptureIntegrityReport = serde_json::from_str(two).unwrap();
+    assert_eq!((parsed.entry_id, parsed.first_failure), (None, None));
 
     // A schema-1 document, written before the deadline facts, still reads: they are absent.
     let old = r#"{"schema_version":1,"integrity":"valid","anchor":"local_only","sealed":true,"validated_records":1,"validated_bytes":2,"validated_head":"head","gap_count":0,"coverage_incomplete":false,"torn_tail":false,"key_source":"none","findings":[],"verified_ack":null,"receipt_clock":null,"terminal":null}"#;
