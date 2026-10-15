@@ -41,7 +41,7 @@ use crate::connector::{HarnessConnector, harness_dirs};
 use crate::prep_file::{PrepFile, read_prep_lenient, write_prep};
 use crate::run::reserve::{LOW_DISK_BYTES, RUN_RESERVE_BYTES, START_MARGIN, artifact_root, human};
 use crate::wsl_gate::Host;
-use goalcup_protocol::harness::{ConfigHome, Origin};
+use goalcup_protocol::harness::Origin;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -201,20 +201,22 @@ impl Doors for Here {
     ) -> Result<bool, CliError> {
         use crate::commands::start::{WorkspaceAt, claim_home_for_prep};
         let profile = &connector.loaded.manifest.capture;
-        // The home every run of this connector uses, held so no run is recording in it while
-        // the participant is signed in there.
-        let Some((config_home, _lock)) = claim_home_for_prep(cfg, connector)? else {
+        // The home every run of this connector keeps (its config home, D39, or its run
+        // `HOME`, D59), held so no run is recording in it while the participant is signed in
+        // there.
+        let Some(home) = claim_home_for_prep(cfg, connector)? else {
             return Ok(true);
         };
         let executable = crate::launch::capture_executable(connector, profile, env)?;
-        // The `HOME` a run's harness gets is made fresh for it; so is this one, and removed
-        // after. Nothing the participant sets up lives there: it lives in the harness home.
+        // A `HOME` that is made fresh for each run is made fresh for this, and removed after:
+        // nothing the participant sets up lives there, it lives in the harness home. A kept run
+        // `HOME` is the home itself, used as it is and never removed.
         let beside = cfg.join("prep-launch");
         crate::config::create_private_dir(&beside)?;
         let run = crate::commands::start::RunDir::create(
             &beside,
             profile.home.run_home,
-            None,
+            home.is_run_home.then_some(home.dir.as_path()),
             env,
             WorkspaceAt::InRunDir,
         )?;
@@ -224,7 +226,13 @@ impl Doors for Here {
                 &crate::launch::PrepLaunch {
                     executable: &executable,
                     run_home: &run.home,
-                    config_home: &config_home,
+                    // With a kept run `HOME` the harness has no home variable: its state is
+                    // under `HOME`, and the config home is the same folder.
+                    config_home: if home.is_run_home {
+                        &run.home
+                    } else {
+                        &home.dir
+                    },
                     parent_env: env,
                 },
                 &run.workspace,
@@ -546,7 +554,9 @@ fn home_step(
 ) -> Result<Step, CliError> {
     let id = &connector.loaded.manifest.id;
     let human = |state, say: String| step(STEP_HARNESS_HOME, state, true, say);
-    if connector.loaded.manifest.capture.home.config_home == ConfigHome::PerRun {
+    // The home the runs keep: its config home (D39) or its run `HOME` (D59). A connector whose
+    // homes are all made fresh for each run has none to set up.
+    let Some(home) = crate::commands::start::prep_home_leaf(cfg, connector) else {
         return Ok(step(
             STEP_HARNESS_HOME,
             State::Ok,
@@ -555,8 +565,7 @@ fn home_step(
                 "{id} is given a fresh home for each run from the connector's own files: nothing to set up"
             ),
         ));
-    }
-    let home = cfg.join("capture-homes").join(id);
+    };
     // The person's word counts only while the home they set up is still there.
     if file.home_ready && home.is_dir() {
         return Ok(step(
