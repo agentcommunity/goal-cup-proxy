@@ -1892,3 +1892,73 @@ fn a_native_file_past_max_files_is_one_streamless_gap_until_the_count_grows() {
         "the tracked files are captured as before"
     );
 }
+
+#[test]
+fn a_producer_lost_to_a_failed_flush_notes_its_cause() {
+    let dir = tempfile::tempdir().unwrap();
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let broken = Arc::new(AtomicBool::new(false));
+    let good = clock();
+    let flag = broken.clone();
+    let cycles = Arc::new(CycleCounters::default());
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        Arc::new(move || {
+            let mut now = good();
+            if flag.load(Ordering::Acquire) {
+                now.wall = "not a time".to_string();
+            }
+            now
+        }),
+        &[],
+        None,
+        None,
+    )
+    .noting_to(cycles.clone());
+    let p = id(1);
+    assert_eq!(sink.try_begin_epoch(&p), EpochAdmission::Ready);
+    assert_eq!(sink.try_submit(open(&p, 0, 1)), SubmitResult::Queued);
+    owner.drain_all();
+    broken.store(true, Ordering::Release);
+    owner.flush_all();
+    broken.store(false, Ordering::Release);
+    let counted = cycles.snapshot();
+    assert_eq!(counted.tick, 1);
+    let last = counted.last.unwrap();
+    assert!(last.contains("a capture producer was lost"), "{last}");
+    assert!(last.contains("flush time is not a capture time"), "{last}");
+    assert_eq!(
+        gaps(&records(dir.path()), GapReason::ProducerLost),
+        1,
+        "the loss is still chained, as before"
+    );
+}
+
+#[test]
+fn a_scope_the_collector_refuses_notes_its_cause() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let mut capture = CaptureEntry::new(
+        entry(dir.path()),
+        Goal::Open,
+        chain(dir.path(), 64 << 20),
+        clock(),
+    );
+    capture.scoped_native = Some(NativeSourceSpec {
+        name: "store".into(),
+        root: home.path().to_path_buf(),
+        pattern: "{id}.jsonl".into(),
+        form: NativeStoreForm::AppendOnly,
+        hint: None,
+        scope_id: None,
+        modified_since: None,
+    });
+    let mut binding = NativeBinding::Deferred;
+    assert!(!capture.bind_scope(&mut binding, "../escape"));
+    assert_eq!(binding, NativeBinding::Deferred, "nothing else changed");
+    let counted = capture.cycles.snapshot();
+    assert_eq!(counted.tick, 1);
+    assert!(counted.last.unwrap().contains("a scope id is 1-128 ASCII"));
+}

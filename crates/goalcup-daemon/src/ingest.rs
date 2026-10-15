@@ -608,6 +608,9 @@ impl IngestListener {
         *lock(&self.shared.deadline) = Some(deadline);
         self.shared.shutdown.send_replace(true);
         match self.accept.take() {
+            // The listener holds no diagnostics channel and `Daemon::stop` keeps no status
+            // after it: a join error is the accept task's panic, which the panic hook has
+            // already put on stderr, and the report has no field for a cause.
             Some(task) => task.await.unwrap_or_default(),
             None => ShutdownReport::default(),
         }
