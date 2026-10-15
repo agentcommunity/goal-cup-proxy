@@ -1041,6 +1041,41 @@ fn shell_is_admitted_only_as_a_known_shell() {
 }
 
 #[test]
+fn node_use_env_proxy_is_admitted_only_as_1() {
+    // D59: it names no endpoint; it makes a Node harness honour the proxy the launch pins.
+    let mut t = codex();
+    set(&mut t, &["capture", "env"], "NODE_USE_ENV_PROXY", "1");
+    admitted(&t, PINNED);
+    for bad in ["0", "true", "", " 1", "1 ", "yes"] {
+        let mut t = codex();
+        set(&mut t, &["capture", "env"], "NODE_USE_ENV_PROXY", bad);
+        refused(
+            &t,
+            PINNED,
+            &["capture.env", "NODE_USE_ENV_PROXY is admitted only as `1`"],
+        );
+    }
+    // Every other proxy name keeps its refusal, whatever the value.
+    for name in ["HTTPS_PROXY", "NODE_PROXY", "NO_PROXY", "NODE_USE_PROXY"] {
+        let mut t = codex();
+        set(&mut t, &["capture", "env"], name, "1");
+        refused(&t, PINNED, &["capture.env", name, "is a proxy variable"]);
+    }
+    // Admitted in `capture.env` only: it is no config home.
+    let mut t = codex();
+    set(&mut t, &["capture", "home"], "env", "NODE_USE_ENV_PROXY");
+    refused(
+        &t,
+        PINNED,
+        &[
+            "capture.home.env",
+            "NODE_USE_ENV_PROXY",
+            "is a proxy variable",
+        ],
+    );
+}
+
+#[test]
 fn every_shipped_env_value_passes_the_value_rule() {
     for (k, v) in [
         ("SHELL", "/bin/zsh"),
@@ -2794,6 +2829,69 @@ fn home_env_is_optional_and_then_the_harness_lives_in_the_run_home() {
             ],
         );
     }
+}
+
+/// D59: `run_home = "shared"`, the run `HOME` of a harness with no home variable kept across
+/// runs, held to the rules of a shared config home.
+fn on_a_shared_run_home(mut t: Table) -> Table {
+    set(&mut t, &["capture", "home"], "run_home", "shared");
+    t
+}
+
+#[test]
+fn a_shared_run_home_is_for_a_harness_without_a_home_variable() {
+    let t = on_a_shared_run_home(without_home_env());
+    admitted(&t, PINNED);
+    assert_eq!(parsed(&t).capture.home.run_home.as_str(), "shared");
+    // With `home.env` the harness has a config home to share; two persistent homes are refused.
+    for config_home in ["shared", "per_run"] {
+        let mut t = on_a_shared_run_home(codex());
+        set(&mut t, &["capture", "home"], "config_home", config_home);
+        refused(
+            &t,
+            PINNED,
+            &["capture.home.run_home", "`shared`", "capture.home.env"],
+        );
+    }
+    // A credential needs a per-run `HOME`: the key-fragment scan covers the run directory only.
+    admitted(&with_credential(without_home_env(), true), PINNED);
+    refused(
+        &with_credential(on_a_shared_run_home(without_home_env()), true),
+        PINNED,
+        &["capture.credential", "run_home"],
+    );
+}
+
+#[test]
+fn none_on_a_shared_run_home_needs_since_run_start() {
+    // `chat` with its sessions under the run `HOME` instead of a home variable's directory.
+    let in_run_home = || {
+        let mut t = chat();
+        let home = tbl(&mut t, &["capture", "home"]);
+        home.remove("env");
+        home.remove("skills_dir");
+        home.insert("config_home".into(), Value::String("per_run".into()));
+        set(
+            &mut t,
+            &["capture", "native"],
+            "root",
+            "{run_home}/.chat/sessions",
+        );
+        t
+    };
+    admitted(&in_run_home(), PINNED);
+    let mut t = on_a_shared_run_home(in_run_home());
+    admitted(&t, PINNED);
+    tbl(&mut t, &["capture", "native"]).remove("since_run_start");
+    refused(
+        &t,
+        PINNED,
+        &["capture.native.root", "must be per run", "since_run_start"],
+    );
+    // A per-run `HOME` needs no filter.
+    let mut t = in_run_home();
+    tbl(&mut t, &["capture", "native"]).remove("since_run_start");
+    admitted(&t, PINNED);
 }
 
 /// A capture launch sets `NO_PROXY=127.0.0.1,localhost`, so a loopback model host would validate

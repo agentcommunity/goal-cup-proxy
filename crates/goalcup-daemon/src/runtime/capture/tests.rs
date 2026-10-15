@@ -1665,6 +1665,28 @@ fn unknown_valid_native_hint_is_copied_byte_for_byte() {
 }
 
 #[test]
+fn a_shared_run_home_is_held_to_the_config_home_isolation() {
+    use goalcup_protocol::harness::RunHome;
+    let temp = tempfile::tempdir().unwrap();
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("a test HOME"));
+    let real_dirs = ["{user_home}/.example".to_string()];
+    // D59: a run `HOME` kept across runs is never the participant's own, nor a real harness home.
+    for refused in [home.clone(), home.join(".example/sessions")] {
+        assert!(matches!(
+            isolated_run_home(RunHome::Shared, &refused, &real_dirs),
+            Err(DaemonError::Refused(_))
+        ));
+    }
+    let isolated = temp.path().join("capture-homes/example");
+    assert!(isolated_run_home(RunHome::Shared, &isolated, &real_dirs).is_ok());
+    // A per-run `HOME` is the launcher's, fresh inside the run directory: not judged here.
+    assert_eq!(
+        isolated_run_home(RunHome::Empty, &home, &real_dirs).unwrap(),
+        home
+    );
+}
+
+#[test]
 fn a_nonshipped_real_dir_is_part_of_the_config_home_refusal() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("participant-home");
