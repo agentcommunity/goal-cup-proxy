@@ -11,7 +11,7 @@
 -- ======================== 20261015120000_goal_cup_tracer_upload.sql ========================
 -- Goal Cup tracer upload: the database half of the upload Worker (goal-cup-tracer, server/worker).
 --
--- Adapted from goal-cup-tracer server/worker/sql/proposed-goalcup-functions.sql to this repo's
+-- Adapted from an earlier proposal in the goal-cup-tracer repo (since removed) to this repo's
 -- conventions. Additive only: a new private schema, new tables, new functions, one new role.
 -- Nothing existing is altered, and no existing row is read for writing.
 --
