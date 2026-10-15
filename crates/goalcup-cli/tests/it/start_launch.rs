@@ -549,7 +549,14 @@ mod chat {
     #[test]
     fn the_harness_gets_the_participants_terminal_and_tools_and_nothing_else() {
         let rig = Rig::chat();
+        let participant_home = rig.root.join("participant-home");
+        std::fs::create_dir_all(&participant_home).unwrap();
+        let participant_home = participant_home.display().to_string();
         let mut run = rig.start_on_pty(&[
+            ("HOME", participant_home.as_str()),
+            ("CODEX_HOME", "/participant/codex-home"),
+            ("NO_PROXY", "*"),
+            ("LC_API_TOKEN", "not-a-real-token-0123456789"),
             DISK,
             LOCAL_WRAP_UP,
             ("TERM", "xterm-256color"),
@@ -595,11 +602,32 @@ mod chat {
                 "{key} is the loopback recorder, not the participant's: {proxy}"
             );
         }
+        // The launch's own values win over the participant's: the run's HOME, the connector's
+        // isolated home, and the loopback proxy's exemptions.
+        let home = env.get("HOME").expect("a HOME");
+        assert_ne!(home, &participant_home, "{env:?}");
+        assert!(
+            home.starts_with(&rig.root.join("runs").display().to_string()),
+            "{home}"
+        );
+        assert_eq!(
+            env.get("CODEX_HOME"),
+            Some(&rig.chat_home().display().to_string()),
+            "{env:?}"
+        );
+        for key in ["NO_PROXY", "no_proxy"] {
+            assert_eq!(
+                env.get(key).map(String::as_str),
+                Some(goalcup_cli::launch::CAPTURE_NO_PROXY),
+                "{key}: {env:?}"
+            );
+        }
         for key in [
             "ALL_PROXY",
             "OPENAI_API_KEY",
             "ANTHROPIC_BASE_URL",
             "GITHUB_TOKEN",
+            "LC_API_TOKEN",
         ] {
             assert!(!env.contains_key(key), "{key} reached the harness: {env:?}");
         }

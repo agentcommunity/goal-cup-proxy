@@ -997,18 +997,28 @@ fn chat_case(id: &str) {
         Some("en_US.UTF-8"),
         "{id}"
     );
+    let entry = world.entry_id();
+    let workspace = goalcup_cli::entries::read_entry(&world.cfg, &entry)
+        .expect("the run's entry record")
+        .workspace;
     let argv = report("argv");
     match id {
         "codex-cli" => {
             let argv: Vec<&str> = argv.lines().collect();
             assert_eq!(argv.len(), 6, "{argv:?}");
             assert_eq!(argv[..3], ["-c", "check_for_update_on_startup=false", "-c"]);
+            // The trust override names the run's workspace, and so does `-C`.
+            assert_eq!(
+                argv[3],
+                format!("projects={{ \"{workspace}\" = {{ trust_level = \"trusted\" }} }}"),
+                "{argv:?}"
+            );
             assert_eq!(argv[4], "-C", "{argv:?}");
+            assert_eq!(argv[5], workspace, "{argv:?}");
         }
         _ => assert_eq!(argv.trim(), "", "{id} is `claude` alone"),
     }
 
-    let entry = world.entry_id();
     let chain = world.chain(&entry);
     let launch = chain.records().find_map(|record| match record {
         CaptureRecord::Launch {

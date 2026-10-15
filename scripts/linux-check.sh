@@ -6,7 +6,9 @@
 # from the host's cargo registry. The first run downloads the rust:1.99 image, Debian packages and
 # the cargo-nextest binary; the build cache is a Docker volume of this checkout's own,
 # goalcup-linux-check-target-<cksum of the checkout's path>. Remove a removed worktree's volume by
-# hand (`docker volume ls`, `docker volume rm <name>`).
+# hand (`docker volume ls`, `docker volume rm <name>`). The old shared volume of every checkout,
+# goalcup-linux-check-target, is no longer used and can be removed:
+# `docker volume rm goalcup-linux-check-target`.
 # The script takes no lock itself: do not run it alongside other heavy test runs.
 # Usage: sh scripts/linux-check.sh      (LINUX_CHECK_HARNESSES=1 adds the harness smoke)
 # Last line: `linux-check: PASS` or `linux-check: FAIL <step>`.

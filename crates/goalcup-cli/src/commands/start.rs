@@ -684,6 +684,13 @@ pub(crate) fn claim_home_for_prep(
     cfg: &Path,
     connector: &HarnessConnector,
 ) -> Result<Option<(PathBuf, std::fs::File)>, CliError> {
+    if connector.loaded.manifest.capture.home.run_home == RunHome::Shared {
+        return Err(CliError::Refused(format!(
+            "`goalcup prep` does not support a shared run HOME yet (`{}` keeps one, D59); it \
+             comes with the next prep change. Nothing was changed.",
+            connector.loaded.manifest.id
+        )));
+    }
     if connector.loaded.manifest.capture.home.config_home == ConfigHome::PerRun {
         return Ok(None);
     }

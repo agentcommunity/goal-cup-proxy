@@ -612,6 +612,10 @@ pub fn capture_executable(
 /// The interpreter a `#!/usr/bin/env <name>` first line names (options such as `-S` skipped),
 /// or `None` for anything else: a binary, a script with an absolute interpreter, a file that
 /// cannot be read. At most 256 bytes are read.
+///
+/// The check fails open by design: a first line with no newline within 256 bytes, or a file
+/// that cannot be opened or read here, names no interpreter, and the launch itself says what is
+/// wrong with such a file.
 fn env_interpreter(file: &Path) -> Option<String> {
     use std::io::Read;
     let mut head = [0u8; 256];

@@ -11,8 +11,9 @@
 //! environment is built from nothing, as the capture launch's is: `PATH` (the one the harness is
 //! given, [`ResolvedExecutable::search_path`]: [`crate::launch::CAPTURE_PATH`], or for a
 //! chat-mode connector the participant's own, so an npm harness finds `node`) and `HOME` (the
-//! run's private home), and nothing else from the participant's environment. Its stdin is `/dev/null`, its stderr is discarded, and it leads a
-//! process group of its own so a timeout ends whatever it started.
+//! run's private home), and nothing else from the participant's environment. Its stdin is
+//! `/dev/null`, its stderr is discarded, and it leads a process group of its own so a timeout
+//! ends whatever it started.
 
 use crate::launch::{CAPTURE_PATH, ResolvedExecutable};
 use std::io::Read;
