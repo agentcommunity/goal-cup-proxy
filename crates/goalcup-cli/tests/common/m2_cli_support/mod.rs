@@ -116,6 +116,13 @@ impl Rig {
         rig
     }
 
+    /// [`Rig::chat`] with the shared-run-home connector [`CHAT_HOME_ID`] beside [`CHAT_ID`].
+    pub fn chat_with_shared_run_home() -> Rig {
+        let rig = Rig::chat();
+        write_shared_run_home_connector(&rig.connectors);
+        rig
+    }
+
     /// The shared harness home every run of the chat connector uses (D39).
     pub fn chat_home(&self) -> PathBuf {
         self.cfg.join("capture-homes").join(CHAT_ID)
@@ -802,9 +809,14 @@ protocol_hint = "openai-responses"
 "#
     );
     std::fs::write(dir.join("harness.toml"), &harness).unwrap();
+}
 
-    // The same harness with its run `HOME` kept across runs (D59): no home variable (so its
-    // config home is per run), and its sessions under that `HOME`.
+/// [`CHAT_HOME_ID`]: the chat connector's harness with its run `HOME` kept across runs (D59): no
+/// home variable (so its config home is per run), and its sessions under that `HOME`. Written
+/// beside [`CHAT_ID`] only by [`Rig::chat_with_shared_run_home`], so a rig with one chat-mode
+/// connector stays one (`goalcup prep` picks a lone one).
+fn write_shared_run_home_connector(connectors: &Path) {
+    let harness = std::fs::read_to_string(connectors.join(CHAT_ID).join("harness.toml")).unwrap();
     let dir = connectors.join(CHAT_HOME_ID);
     std::fs::create_dir_all(&dir).unwrap();
     let mut shared = harness.replacen(

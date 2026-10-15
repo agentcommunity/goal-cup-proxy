@@ -615,7 +615,7 @@ mod chat {
     /// lock) and restarts the harness in it.
     #[test]
     fn a_shared_run_home_is_kept_across_segments_and_continue_uses_it() {
-        let rig = Rig::chat();
+        let rig = Rig::chat_with_shared_run_home();
         let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
         rig.prepare_for(&server.url());
         let home = rig
