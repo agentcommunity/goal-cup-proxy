@@ -6,6 +6,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod connector_samples;
 mod m2_anthropic_decoder;
 #[cfg(unix)]
 mod m2_capture_integrity;

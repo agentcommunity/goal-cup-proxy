@@ -1,0 +1,24 @@
+{
+  "expect": {
+    "decoders": {
+      "codex-native": {
+        "incomplete": false,
+        "kinds": {
+          "model": 2,
+          "outcome": 1,
+          "tool_call": 1,
+          "tool_result": 1,
+          "unknown": 5,
+          "usage": 4
+        },
+        "observations": 14,
+        "unknown_records": 5
+      }
+    },
+    "undecoded": []
+  },
+  "native": {
+    "file": "../../m2-native/codex-native-excerpt.jsonl",
+    "hint": "codex-jsonl"
+  }
+}

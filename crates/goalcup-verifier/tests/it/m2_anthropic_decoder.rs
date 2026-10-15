@@ -278,18 +278,7 @@ fn text_message(id: &str, text: &str) -> String {
 // ---------------------------------------------------------------------------------------
 
 fn fixture_records() -> Vec<CaptureRecord> {
-    FIXTURE
-        .lines()
-        .map(|line| {
-            let mut value: Value = serde_json::from_str(line).unwrap();
-            let object = value.as_object_mut().unwrap();
-            if let Some(text) = object.remove("text") {
-                let bytes = text.as_str().unwrap().as_bytes();
-                object.insert("data_b64".into(), json!(STANDARD.encode(bytes)));
-            }
-            serde_json::from_value(value).unwrap()
-        })
-        .collect()
+    crate::common::records::from_text_lines(FIXTURE)
 }
 
 struct Part {

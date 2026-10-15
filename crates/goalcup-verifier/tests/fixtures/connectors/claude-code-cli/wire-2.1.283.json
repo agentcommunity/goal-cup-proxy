@@ -1,0 +1,22 @@
+{
+  "expect": {
+    "decoders": {
+      "anthropic-messages": {
+        "incomplete": false,
+        "kinds": {
+          "model": 4,
+          "model_request": 2,
+          "model_response": 2,
+          "outcome": 2,
+          "tool_call": 2,
+          "tool_result": 2,
+          "usage": 4
+        },
+        "observations": 18,
+        "unknown_records": 0
+      }
+    },
+    "undecoded": []
+  },
+  "records": "../../m2-anthropic/claude-code-2.1.283-e01.jsonl"
+}
