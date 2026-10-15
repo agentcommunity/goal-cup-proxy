@@ -240,6 +240,47 @@ fn open_lockable(path: &Path, create: bool) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
+/// Open `path` for locking, and say whether this call made it. A reserve that was already there
+/// is a continued run's, reused, and must outlive a failure to hold it.
+fn open_or_create_lockable(path: &Path) -> std::io::Result<(std::fs::File, bool)> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let made = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path);
+    match made {
+        Ok(file) => Ok((file, true)),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            open_lockable(path, false).map(|file| (file, false))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether `path` still names the very file `locked` has open: the lock was taken on it, not on
+/// a file another process has since unlinked.
+fn names_the_file(locked: &std::fs::File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (locked.metadata(), std::fs::symlink_metadata(path)) {
+        (Ok(open), Ok(named)) => open.dev() == named.dev() && open.ino() == named.ino(),
+        _ => false,
+    }
+}
+
+/// Whether some process holds the reserve at `path` locked right now. A reserve that is not
+/// there, or that nobody holds, is not held. Nothing is created, changed or kept locked: a
+/// `goalcup continue` asks this before it sends anything, so that it is not refused for the
+/// reserve after the server has made the run's next segment.
+pub fn held_by_another(path: &Path) -> bool {
+    let Ok(file) = open_lockable(path, false) else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
 /// Refuse, before anything is created, a volume that cannot hold the reserve and the start
 /// margin. `dir` need not exist yet: the nearest directory above it that does is measured.
 pub fn check_room(dir: &Path, policy: &DiskPolicy) -> Result<(), CliError> {
@@ -248,12 +289,18 @@ pub fn check_room(dir: &Path, policy: &DiskPolicy) -> Result<(), CliError> {
 
 /// The volume's free bytes under `dir`, when they are enough to start; else the refusal.
 fn room(dir: &Path, policy: &DiskPolicy) -> Result<u64, CliError> {
+    room_for(dir, policy, policy.reserve_bytes)
+}
+
+/// [`room`] for a reserve that still has to allocate `needed` bytes: a continued run's reserve
+/// file keeps the blocks it has, so only the missing ones must be free.
+fn room_for(dir: &Path, policy: &DiskPolicy, needed: u64) -> Result<u64, CliError> {
     let near = dir.ancestors().find(|above| above.is_dir()).unwrap_or(dir);
     let free = free_bytes(near).map_err(|source| CliError::Io {
         path: near.display().to_string(),
         source,
     })?;
-    if free < policy.reserve_bytes.saturating_add(policy.start_margin) {
+    if free < needed.saturating_add(policy.start_margin) {
         return Err(refusal(dir, policy, free));
     }
     Ok(free)
@@ -273,7 +320,14 @@ fn refusal(dir: &Path, policy: &DiskPolicy, free: u64) -> CliError {
 impl RunReserve {
     /// Hold `policy.reserve_bytes` at `path`, or refuse: the volume must have that much free
     /// plus `policy.start_margin`. Nothing is left behind on a refusal.
+    ///
+    /// A reserve file that is already there is a continued run's: it is reused, keeps the blocks
+    /// it has (only the missing ones must be free), and is never removed by a failure to hold
+    /// it. Another process's [`release_stale`] may unlink the path between the open and the
+    /// lock; the lock is only good if the path still names the file that was locked, so a lock
+    /// on an unlinked file is dropped and the take is tried once more.
     pub fn take(path: &Path, policy: &DiskPolicy) -> Result<RunReserve, CliError> {
+        use std::os::unix::fs::MetadataExt;
         let dir = path.parent().ok_or_else(|| {
             CliError::Internal(format!(
                 "the reserve path {} has no directory",
@@ -281,39 +335,60 @@ impl RunReserve {
             ))
         })?;
         crate::config::create_private_dir(dir)?;
-        let free = room(dir, policy)?;
         let io = |source| CliError::Io {
             path: path.display().to_string(),
             source,
         };
-        // The file exists and is locked before any block is allocated, so a start looking for
-        // stale reserves never sees this one unlocked.
-        let lock = open_lockable(path, true).map_err(io)?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => {
-                return Err(CliError::Refused(format!(
-                    "another goalcup is holding the reservation {}.",
-                    path.display()
-                )));
-            }
-            Err(std::fs::TryLockError::Error(source)) => return Err(io(source)),
-        }
-        match ReserveFile::hold(path, policy.reserve_bytes) {
-            Ok(file) => Ok(RunReserve {
-                file,
-                dir: dir.to_path_buf(),
-                _lock: lock,
-            }),
-            Err(source) => {
-                let _ = std::fs::remove_file(path);
-                if source.kind() == std::io::ErrorKind::StorageFull {
-                    Err(refusal(dir, policy, free))
-                } else {
-                    Err(io(source))
+        for _ in 0..2 {
+            // The file exists and is locked before any block is allocated, so a start looking
+            // for stale reserves never sees this one unlocked.
+            let (lock, created) = open_or_create_lockable(path).map_err(io)?;
+            match lock.try_lock() {
+                Ok(()) => {}
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    return Err(CliError::Refused(format!(
+                        "another goalcup is holding the reservation {}.",
+                        path.display()
+                    )));
                 }
+                Err(std::fs::TryLockError::Error(source)) => return Err(io(source)),
             }
+            if !names_the_file(&lock, path) {
+                continue;
+            }
+            let have = lock.metadata().map_or(0, |meta| meta.blocks() * 512);
+            let free = match room_for(dir, policy, policy.reserve_bytes.saturating_sub(have)) {
+                Ok(free) => free,
+                Err(refused) => {
+                    if created {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    return Err(refused);
+                }
+            };
+            return match ReserveFile::hold(path, policy.reserve_bytes) {
+                Ok(file) => Ok(RunReserve {
+                    file,
+                    dir: dir.to_path_buf(),
+                    _lock: lock,
+                }),
+                Err(source) => {
+                    if created {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    if source.kind() == std::io::ErrorKind::StorageFull {
+                        Err(refusal(dir, policy, free))
+                    } else {
+                        Err(io(source))
+                    }
+                }
+            };
         }
+        Err(CliError::Refused(format!(
+            "the reservation {} was removed by another goalcup while this one was taking it. \
+             Try again.",
+            path.display()
+        )))
     }
 
     /// Bytes the reserve physically holds now.
@@ -604,5 +679,78 @@ mod tests {
         // Once their holders are done, the next start takes them too.
         drop((live, starting));
         assert_eq!(release_stale(cfg.path(), root.path(), 1), 2);
+    }
+
+    #[test]
+    fn a_reserve_that_is_there_survives_a_failed_hold() {
+        // A continued run takes its reserve file again. When the volume cannot hold what it
+        // asks, the file the run already had stays where it is.
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_path(dir.path(), "r1");
+        drop(RunReserve::take(&path, &small()).unwrap());
+        let before = std::fs::metadata(&path).unwrap();
+        let too_much = DiskPolicy {
+            reserve_bytes: 1 << 60,
+            ..small()
+        };
+        let refused = RunReserve::take(&path, &too_much).unwrap_err();
+        assert!(refused.to_string().contains("this run needs"), "{refused}");
+        let after = std::fs::metadata(&path).expect("the reserve file is still there");
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(before.ino(), after.ino());
+        // And a reserve that was not there before is not left behind by the same refusal.
+        let fresh = reserve_path(dir.path(), "r2");
+        RunReserve::take(&fresh, &too_much).unwrap_err();
+        assert!(!fresh.exists());
+    }
+
+    #[test]
+    fn a_reserve_takes_only_the_blocks_it_is_missing() {
+        // The volume has to hold the reserve plus the margin, less what the file already holds:
+        // a margin larger than the free space refuses a new reserve, not a reused full one.
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_path(dir.path(), "r1");
+        drop(RunReserve::take(&path, &small()).unwrap());
+        let free = free_bytes(dir.path()).unwrap();
+        let tight = DiskPolicy {
+            start_margin: free,
+            ..small()
+        };
+        // Nothing to allocate: only the margin is asked of the volume, and it is there.
+        assert!(RunReserve::take(&path, &tight).is_ok());
+        let other = reserve_path(dir.path(), "r2");
+        assert!(RunReserve::take(&other, &tight).is_err());
+    }
+
+    #[test]
+    fn a_reserve_is_held_while_a_lock_on_it_lives_and_a_missing_one_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = reserve_path(dir.path(), "r1");
+        assert!(!held_by_another(&path), "no file, nothing held");
+        let held = RunReserve::take(&path, &small()).unwrap();
+        assert!(held_by_another(&path));
+        // Dropped without a release (the hand-over): the file stays and the lock goes.
+        drop(held);
+        assert!(path.exists());
+        assert!(!held_by_another(&path));
+        // And the probe took nothing: the reserve can be taken at once.
+        drop(RunReserve::take(&path, &small()).unwrap());
+    }
+
+    #[test]
+    fn a_lock_is_only_good_on_the_file_the_path_still_names() {
+        // Another process's `release_stale` unlinks the path between the open and the lock: the
+        // lock is then on a file nothing names, and `take` must not trust it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reserve");
+        let (locked, created) = open_or_create_lockable(&path).unwrap();
+        assert!(created);
+        assert!(names_the_file(&locked, &path));
+        let (_, created) = open_or_create_lockable(&path).unwrap();
+        assert!(!created, "an existing file is opened, not made");
+        std::fs::remove_file(&path).unwrap();
+        assert!(!names_the_file(&locked, &path), "unlinked");
+        std::fs::write(&path, b"another file").unwrap();
+        assert!(!names_the_file(&locked, &path), "replaced by another file");
     }
 }

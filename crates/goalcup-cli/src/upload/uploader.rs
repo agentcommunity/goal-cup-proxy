@@ -373,6 +373,15 @@ pub struct Uploader {
     acked_offset: std::sync::Arc<AtomicU64>,
     /// Beside a recording run only: what the run tells its heartbeats.
     vitals: Option<Vitals>,
+    /// A segment closed from its tail (no seal): [`Uploader::finish`] still commits its end in
+    /// a final heartbeat, and sends the chain up to it, but has no seal to send.
+    close_unsealed: bool,
+}
+
+/// `GET /v1/runs/{run}?entry_id={entry}`: where the server is for the entry this record names,
+/// which is not the run's latest once the run has had a segment after it.
+fn position_path(record: &UploadRecord) -> String {
+    format!("/v1/runs/{}?entry_id={}", record.run_id, record.entry_id)
 }
 
 impl Uploader {
@@ -386,8 +395,7 @@ impl Uploader {
         policy: Policy,
         spool_dir: &Path,
     ) -> Result<Uploader, ServerError> {
-        let position: RunPosition =
-            server.json("GET", &format!("/v1/runs/{}", record.run_id), None::<&()>)?;
+        let position: RunPosition = server.json("GET", &position_path(&record), None::<&()>)?;
         let spool = spool_dir.join(format!("{}.chunk.zst", record.entry_id));
         // A spool a killed upload left behind is never sent: chunks are rebuilt from the chain.
         let _ = std::fs::remove_file(&spool);
@@ -403,6 +411,7 @@ impl Uploader {
             last_ok: std::sync::Arc::new(AtomicU64::new(crate::run::now_unix())),
             acked_offset: std::sync::Arc::new(AtomicU64::new(0)),
             vitals: None,
+            close_unsealed: false,
         };
         uploader.adopt_server_ack(&position);
         uploader.adopt_verified_offset(&position);
@@ -418,6 +427,15 @@ impl Uploader {
     /// This upload worked just now.
     fn mark_ok(&self) {
         self.last_ok.store(crate::run::now_unix(), Ordering::SeqCst);
+    }
+
+    /// Note that everything of this entry that will ever be sent has been: a later
+    /// `goalcup continue` does not close and send it again.
+    fn note_sent(&self) {
+        if let Some(dir) = self.spool.parent() {
+            let _ =
+                crate::config::write_secret_file(&sent_path(dir, &self.record.entry_id), b"sent\n");
+        }
     }
 
     /// Hand the run's two shared counters to this uploader, replacing its own.
@@ -555,11 +573,9 @@ impl Uploader {
     /// Read the server's position again after a `409`. A position behind ours is taken as
     /// given (the chunk builder re-checks every link); one past what is on disk waits.
     fn reread(&mut self) -> Result<(), ServerError> {
-        let position: RunPosition = self.server.json(
-            "GET",
-            &format!("/v1/runs/{}", self.record.run_id),
-            None::<&()>,
-        )?;
+        let position: RunPosition =
+            self.server
+                .json("GET", &position_path(&self.record), None::<&()>)?;
         self.adopt_server_ack(&position);
         let moved = Position::from(&position);
         if moved == self.pos {
@@ -834,6 +850,17 @@ fn regular_file_text(path: &Path, max: u64) -> Option<String> {
     (text.len() as u64 <= max).then_some(text)
 }
 
+/// `<cfg>/uploads/<entry>.sent`: written when the entry's upload is complete (the whole chain
+/// and its seal; for a segment closed from its tail, the chain up to its committed end).
+fn sent_path(spool_dir: &Path, entry_id: &str) -> PathBuf {
+    spool_dir.join(format!("{entry_id}.sent"))
+}
+
+/// Whether the entry's upload finished: nothing of it is left to close or send.
+pub fn is_sent(spool_dir: &Path, entry_id: &str) -> bool {
+    sent_path(spool_dir, entry_id).is_file()
+}
+
 /// `<cfg>/uploads/<entry>.repo-head`: the commit noted when the run stopped.
 fn repo_head_path(spool_dir: &Path, entry_id: &str) -> PathBuf {
     spool_dir.join(format!("{entry_id}.repo-head"))
@@ -851,6 +878,16 @@ pub fn note_repo_head(spool_dir: &Path, record: &UploadRecord) {
             &repo_head_path(spool_dir, &record.entry_id),
             commit.as_bytes(),
         );
+    }
+}
+
+/// [`note_repo_head`], unless a commit was already noted for the entry. A `goalcup continue`
+/// notes the commit of every earlier segment it is about to send before the next segment's
+/// agent can change the workspace; a host that noted the commit as its segment ended has said
+/// it better than this can.
+pub fn note_repo_head_unless_noted(spool_dir: &Path, record: &UploadRecord) {
+    if noted_repo_head_in(spool_dir, &record.entry_id).is_none() {
+        note_repo_head(spool_dir, record);
     }
 }
 
@@ -1020,8 +1057,9 @@ impl Uploader {
     pub fn finish(&mut self, until: Option<WrapUp>, say: &mut dyn FnMut(&str)) -> Report {
         let documents = self.seal_documents();
         // A sealed run commits its end first: after the deadline, the server accepts nothing
-        // past it, and nothing at all until it is committed.
-        if documents.is_some()
+        // past it, and nothing at all until it is committed. So does a segment closed from its
+        // tail, which has the end to commit and no seal to send.
+        if (documents.is_some() || self.close_unsealed)
             && let Err(why) = self.commit_end(until, say)
         {
             return Report::not(why, self.pos.offset);
@@ -1057,6 +1095,11 @@ impl Uploader {
             offset: self.pos.offset,
         };
         let Some(documents) = documents else {
+            // A segment closed from its tail has no seal to send: it is done when its chain,
+            // up to its committed end, is.
+            if self.close_unsealed {
+                self.note_sent();
+            }
             return caught_up(false, None);
         };
         let mut failures = 0;
@@ -1068,6 +1111,7 @@ impl Uploader {
             match self.seal(&documents, timeout) {
                 Ok(()) => {
                     self.mark_ok();
+                    self.note_sent();
                     return caught_up(true, None);
                 }
                 Err(error) if !error.ends_upload() => {
@@ -1122,6 +1166,17 @@ impl LocalDeadline {
         Some(LocalDeadline {
             opened,
             length: Duration::from_secs(deadline.checked_sub(start)?),
+        })
+    }
+
+    /// What is left of a run that is already under way: its `deadline_at` less this machine's
+    /// clock now (nothing if it has passed), counted from now on the continuous clock. For a
+    /// segment that follows others, which did not open the run.
+    pub fn until(deadline_at: &str) -> Option<LocalDeadline> {
+        let deadline = goalcup_protocol::control::parse_z(deadline_at)?;
+        Some(LocalDeadline {
+            opened: goalcup_protocol::clock::ContinuousOrigin::now(),
+            length: Duration::from_secs(deadline.saturating_sub(crate::run::now_unix())),
         })
     }
 
@@ -1229,6 +1284,168 @@ impl Running {
     pub fn finish(self, wrap_up: WrapUp) -> Report {
         let _ = self.finish.send(wrap_up);
         let last_word = WrapUp::after(wrap_up.remaining() + FINISH_GRACE);
+        loop {
+            let left = last_word.remaining();
+            if left.is_zero() {
+                return Report::not("the upload did not finish in time", 0);
+            }
+            match self.report.recv_timeout(left.min(FINISH_SLICE)) {
+                Ok(report) => return report,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Report::not("the upload thread ended without a report", 0);
+                }
+            }
+        }
+    }
+}
+
+/// How the end of an entry that is no longer recording is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closing {
+    /// The entry is sealed locally: its end, the rest of its chain, then the seal.
+    Sealed,
+    /// The entry could not be sealed (the host died, the machine rebooted, the chain's tail is
+    /// torn): its end is the last whole record of its chain, committed in a final heartbeat, and
+    /// the chain is sent up to it. No seal goes; the segment is incomplete, and says so.
+    FromTail,
+}
+
+/// An entry that is no longer recording, being closed and sent on a thread of its own
+/// ([`drain`]), beside the segment that came after it.
+pub struct Draining {
+    entry_id: String,
+    closing: Closing,
+    last_ok: std::sync::Arc<AtomicU64>,
+    acked_offset: std::sync::Arc<AtomicU64>,
+    report: std::sync::mpsc::Receiver<Report>,
+}
+
+/// Close `record`'s entry on the server on a thread of its own: its final heartbeat, the rest of
+/// its chain and (when it is [`Closing::Sealed`]) its seal, asking again after every failure
+/// that does not end the upload, until `wrap_up` has run out. It holds the entry's upload lock
+/// ([`lock_entry`]) until it is done, so a refusal here means another goalcup uploads the entry.
+pub fn drain(
+    server: ServerClient,
+    record: UploadRecord,
+    receipt_key: String,
+    policy: Policy,
+    spool_dir: PathBuf,
+    closing: Closing,
+    wrap_up: WrapUp,
+) -> Result<Draining, CliError> {
+    let lock = lock_entry(&spool_dir, &record.entry_id)?;
+    let entry_id = record.entry_id.clone();
+    let (reported, report) = std::sync::mpsc::channel::<Report>();
+    let last_ok = std::sync::Arc::new(AtomicU64::new(crate::run::now_unix()));
+    let acked_offset = std::sync::Arc::new(AtomicU64::new(0));
+    let shared = (last_ok.clone(), acked_offset.clone());
+    std::thread::Builder::new()
+        .name("goalcup-drain".into())
+        .spawn(move || {
+            let _lock = lock;
+            let mut say = crate::host_log::say;
+            let mut failures = 0u32;
+            let ended = loop {
+                match Uploader::resume(
+                    server.clone(),
+                    record.clone(),
+                    receipt_key.clone(),
+                    policy,
+                    &spool_dir,
+                ) {
+                    Ok(mut up) => {
+                        up.share(&shared.0, &shared.1);
+                        up.close_unsealed = closing == Closing::FromTail;
+                        break up.finish(Some(wrap_up), &mut say);
+                    }
+                    Err(error) if !error.ends_upload() => {
+                        failures += 1;
+                        let wait = backoff(
+                            &policy,
+                            failures,
+                            error.retry_after().map(Duration::from_secs),
+                        );
+                        if past(Some(wrap_up), wait) {
+                            break Report::not(ran_out(Some(&error.to_string())), 0);
+                        }
+                        say(&format!(
+                            "upload of entry {}: {error}; trying again in {}s",
+                            record.entry_id,
+                            wait.as_secs().max(1)
+                        ));
+                        std::thread::sleep(wait);
+                    }
+                    Err(error) => break Report::not(error.to_string(), 0),
+                }
+            };
+            let _ = reported.send(ended);
+        })
+        .map_err(|source| CliError::Io {
+            path: "the upload thread".to_string(),
+            source,
+        })?;
+    Ok(Draining {
+        entry_id,
+        closing,
+        last_ok,
+        acked_offset,
+        report,
+    })
+}
+
+/// What to do about an earlier segment's unfinished upload. One sealed by its host is finished
+/// by `goalcup upload`; one closed from its tail has an end `goalcup upload` cannot commit, and
+/// the next `goalcup continue` closes and sends it again.
+pub fn finish_advice(closing: Closing, entry_id: &str) -> String {
+    match closing {
+        Closing::Sealed => format!("Run `goalcup upload {entry_id}` to finish sending it."),
+        Closing::FromTail => {
+            "Run `goalcup continue` (it finishes the earlier segment's upload).".to_string()
+        }
+    }
+}
+
+/// What the disk watch reads of an entry that is being drained: the same two counters as of a
+/// recording entry's upload ([`Running::last_ok`], [`Running::acked_offset`]).
+#[derive(Debug, Clone)]
+pub struct DrainHandles {
+    pub entry_id: String,
+    pub last_ok: std::sync::Arc<AtomicU64>,
+    pub acked_offset: std::sync::Arc<AtomicU64>,
+}
+
+impl Draining {
+    /// The entry this thread sends.
+    pub fn entry_id(&self) -> &str {
+        &self.entry_id
+    }
+
+    /// How the entry was closed: a segment closed from its tail cannot be finished by
+    /// `goalcup upload`, only by a `goalcup continue`.
+    pub fn closing(&self) -> Closing {
+        self.closing
+    }
+
+    /// What to tell the participant to do about this entry's upload when it did not finish.
+    pub fn how_to_finish(&self) -> String {
+        finish_advice(self.closing, &self.entry_id)
+    }
+
+    /// The counters the disk watch reads, for the watch to cover this entry too.
+    pub fn handles(&self) -> DrainHandles {
+        DrainHandles {
+            entry_id: self.entry_id.clone(),
+            last_ok: self.last_ok.clone(),
+            acked_offset: self.acked_offset.clone(),
+        }
+    }
+
+    /// Wait for the thread's report for as long as `until` leaves (and a short grace). The
+    /// thread has a wrap-up of its own and stops by it; a report that is not there by then is
+    /// "did not finish", and what is unsent is `goalcup upload`'s.
+    pub fn wait(self, until: WrapUp) -> Report {
+        let last_word = WrapUp::after(until.remaining() + FINISH_GRACE);
         loop {
             let left = last_word.remaining();
             if left.is_zero() {
@@ -1397,5 +1614,64 @@ fn run(
                 return up.finish(Some(wrap_up), &mut say);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A segment closed from its tail cannot be finished by `goalcup upload`; the advice for
+    /// it is `goalcup continue`, which closes and sends it again.
+    #[test]
+    fn a_tail_closed_segment_is_finished_by_continue_not_upload() {
+        let sealed = finish_advice(Closing::Sealed, "e1");
+        assert!(sealed.contains("goalcup upload e1"), "{sealed}");
+        let tail = finish_advice(Closing::FromTail, "e1");
+        assert!(tail.contains("goalcup continue"), "{tail}");
+        assert!(!tail.contains("goalcup upload"), "{tail}");
+    }
+
+    #[test]
+    fn a_commit_noted_as_a_segment_ended_is_not_replaced_by_a_later_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("work");
+        std::fs::create_dir_all(workspace.join(".git")).unwrap();
+        let head = |commit: &str| {
+            std::fs::write(workspace.join(".git/HEAD"), format!("{commit}\n")).unwrap();
+        };
+        let record = UploadRecord {
+            run_id: "r0123456789abcdef".into(),
+            entry_id: "e1".into(),
+            server_url: String::new(),
+            trace_dir: String::new(),
+            official_start: String::new(),
+            deadline_at: String::new(),
+            workspace: workspace.display().to_string(),
+        };
+        let (first, later) = ("a".repeat(40), "b".repeat(40));
+        head(&first);
+        note_repo_head_unless_noted(dir.path(), &record);
+        assert_eq!(noted_repo_head_in(dir.path(), "e1"), Some(first.clone()));
+        // The next segment's agent commits; the earlier segment's note stands.
+        head(&later);
+        note_repo_head_unless_noted(dir.path(), &record);
+        assert_eq!(noted_repo_head_in(dir.path(), "e1"), Some(first));
+        // An entry with no note takes the commit the workspace has.
+        let other = UploadRecord {
+            entry_id: "e2".into(),
+            ..record
+        };
+        note_repo_head_unless_noted(dir.path(), &other);
+        assert_eq!(noted_repo_head_in(dir.path(), "e2"), Some(later));
+    }
+
+    #[test]
+    fn a_sent_entry_is_noted_and_only_that_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_sent(dir.path(), "e1"));
+        std::fs::write(sent_path(dir.path(), "e1"), b"sent\n").unwrap();
+        assert!(is_sent(dir.path(), "e1"));
+        assert!(!is_sent(dir.path(), "e2"));
     }
 }
