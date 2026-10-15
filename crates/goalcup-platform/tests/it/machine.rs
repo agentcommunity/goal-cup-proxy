@@ -36,7 +36,8 @@ const WSL1_RELEASE: &str = "4.4.0-19041-Microsoft\n";
 const WSL1_VERSION: &str = "Linux version 4.4.0-19041-Microsoft (Microsoft@Microsoft.com) \
     (gcc version 5.4.0 (GCC) ) #1237-Microsoft Sat Sep 11 14:32:00 PST 2021\n";
 const NATIVE_RELEASE: &str = "6.8.0-45-generic\n";
-const NATIVE_VERSION: &str = "Linux version 6.8.0-45-generic (buildd@lcy02) (x86_64-linux-gnu-gcc-13) #45-Ubuntu SMP\n";
+const NATIVE_VERSION: &str =
+    "Linux version 6.8.0-45-generic (buildd@lcy02) (x86_64-linux-gnu-gcc-13) #45-Ubuntu SMP\n";
 
 #[test]
 fn wsl_version_tells_wsl2_from_wsl1() {
@@ -59,7 +60,9 @@ fn windows_host_filesystems_are_named_by_type_and_by_magic() {
     for name in ["9p", "drvfs", "virtiofs", "cifs", "smb3", "ntfs3", "9P"] {
         assert!(windows_host_fstype(name), "{name}");
     }
-    for name in ["ext4", "xfs", "btrfs", "overlay", "tmpfs", "zfs", "fuse", "vfat", ""] {
+    for name in [
+        "ext4", "xfs", "btrfs", "overlay", "tmpfs", "zfs", "fuse", "vfat", "",
+    ] {
         assert!(!windows_host_fstype(name), "{name}");
     }
     assert_eq!(windows_host_magic(0x0102_1997), Some("9p"));
@@ -124,11 +127,24 @@ fn the_wsl_checks_refuse_wsl1_and_every_folder_on_a_windows_host_filesystem() {
     );
     // WSL2: each Windows-host folder is named with its type; the Linux ones are not.
     let two = wsl_check_with(Some(2), &folders, &types).unwrap_err();
-    assert!(two.contains("work folder /mnt/c/Users/me/work") && two.contains("(9p)"), "{two}");
-    assert!(two.contains("artifact root /mnt/d/artifacts") && two.contains("(drvfs)"), "{two}");
-    assert!(!two.contains("run folder") && !two.contains("config folder"), "{two}");
+    assert!(
+        two.contains("work folder /mnt/c/Users/me/work") && two.contains("(9p)"),
+        "{two}"
+    );
+    assert!(
+        two.contains("artifact root /mnt/d/artifacts") && two.contains("(drvfs)"),
+        "{two}"
+    );
+    assert!(
+        !two.contains("run folder") && !two.contains("config folder"),
+        "{two}"
+    );
     assert_eq!(
-        wsl_check_with(Some(2), &[("run folder", run), ("config folder", config)], &types),
+        wsl_check_with(
+            Some(2),
+            &[("run folder", run), ("config folder", config)],
+            &types
+        ),
         Ok(())
     );
     // A folder whose filesystem cannot be told is not refused.

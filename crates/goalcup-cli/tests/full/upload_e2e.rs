@@ -1608,9 +1608,18 @@ mod segments {
         for (wsl, expected) in [
             ("wsl=1".to_string(), "WSL1 cannot run Goal Cup".to_string()),
             (format!("wsl=2,fs={work}=9p"), "work folder".to_string()),
-            (format!("wsl=2,fs={}=drvfs", rig.cfg.display()), "config folder".to_string()),
-            (format!("wsl=2,fs={artifacts}=virtiofs"), "artifact root".to_string()),
-            (format!("wsl=2,fs={}=9p", rig.root.join("runs").display()), "run folder".to_string()),
+            (
+                format!("wsl=2,fs={}=drvfs", rig.cfg.display()),
+                "config folder".to_string(),
+            ),
+            (
+                format!("wsl=2,fs={artifacts}=virtiofs"),
+                "artifact root".to_string(),
+            ),
+            (
+                format!("wsl=2,fs={}=9p", rig.root.join("runs").display()),
+                "run folder".to_string(),
+            ),
         ] {
             let output = rig
                 .continue_command(&[DISK, BEATING], None)
@@ -1621,9 +1630,16 @@ mod segments {
             assert_eq!(output.status.code(), Some(1), "{wsl}: {said}");
             assert!(said.contains(&expected), "{wsl}: {said}");
             assert!(said.contains("Nothing was changed."), "{wsl}: {said}");
-            assert!(!rig.read_trace(&entry).0.sealed, "{wsl}: a segment was sealed");
+            assert!(
+                !rig.read_trace(&entry).0.sealed,
+                "{wsl}: a segment was sealed"
+            );
             assert_eq!(uploads_dir_names(&rig), kept, "{wsl}");
-            assert_eq!(server.calls(), calls, "{wsl}: the server was asked something");
+            assert_eq!(
+                server.calls(),
+                calls,
+                "{wsl}: the server was asked something"
+            );
             assert_eq!(server.entry_ids(&run_id).len(), 1, "{wsl}");
         }
     }

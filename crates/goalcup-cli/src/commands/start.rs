@@ -1145,9 +1145,17 @@ fn capture(
     // before anything is created or removed, over every folder the run writes to.
     let work_folder = match &opening {
         Opening::Fresh => prepared_work_folder(cfg),
-        Opening::Continue(continuing) => continuing.record.workspace.parent().map(Path::to_path_buf),
+        Opening::Continue(continuing) => {
+            continuing.record.workspace.parent().map(Path::to_path_buf)
+        }
     };
-    refuse_wsl(env, cfg, &beside, work_folder.as_deref(), "Nothing was created.")?;
+    refuse_wsl(
+        env,
+        cfg,
+        &beside,
+        work_folder.as_deref(),
+        "Nothing was created.",
+    )?;
     // A run past its deadline and a day has sent what it will: its reservation goes back.
     release_stale(cfg, &artifact_root(cfg), crate::run::now_unix());
     let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;

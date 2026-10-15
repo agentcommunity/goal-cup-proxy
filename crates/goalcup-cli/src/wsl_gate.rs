@@ -59,7 +59,11 @@ impl Host {
     /// The refusal for `goalcup start` and `goalcup continue`: the folders a run writes to, all
     /// judged before anything is created or changed. `untouched` closes the sentence
     /// (`Nothing was created.`).
-    pub fn refuse(&self, folders: &[(&str, &Path)], untouched: &str) -> Result<(), crate::CliError> {
+    pub fn refuse(
+        &self,
+        folders: &[(&str, &Path)],
+        untouched: &str,
+    ) -> Result<(), crate::CliError> {
         self.check(folders)
             .map_err(|why| crate::CliError::Refused(format!("{why}. {untouched}")))
     }
@@ -141,7 +145,10 @@ mod tests {
         let one = stated(Some(1), &[]).check(&folders).unwrap_err();
         assert!(one.contains("convert this distribution to WSL2"), "{one}");
         let none = stated(None, &[("/home", "9p")]);
-        assert!(none.check(&folders).is_ok(), "not WSL: nothing is looked at");
+        assert!(
+            none.check(&folders).is_ok(),
+            "not WSL: nothing is looked at"
+        );
         assert!(!none.is_wsl());
     }
 
@@ -151,7 +158,10 @@ mod tests {
         let mut host = stated(None, &[]);
         assert!(host.state("wsl", "2") && host.state("fs", "/mnt/c=9p"));
         assert_eq!(host.version(), Some(2));
-        assert!(host.check(&[("work folder", Path::new("/mnt/c/x"))]).is_err());
+        assert!(
+            host.check(&[("work folder", Path::new("/mnt/c/x"))])
+                .is_err()
+        );
         assert!(!host.state("wsl", "3") && !host.state("fs", "mnt=9p") && !host.state("x", "1"));
     }
 }

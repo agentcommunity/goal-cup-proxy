@@ -190,7 +190,9 @@ fn unescape_mountinfo(raw: &str) -> String {
 pub fn windows_host_filesystem(path: &Path) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
-        let existing = path.ancestors().find_map(|a| std::fs::canonicalize(a).ok())?;
+        let existing = path
+            .ancestors()
+            .find_map(|a| std::fs::canonicalize(a).ok())?;
         let by_name = std::fs::read_to_string("/proc/self/mountinfo")
             .ok()
             .and_then(|text| mountinfo_fstype(&text, &existing))

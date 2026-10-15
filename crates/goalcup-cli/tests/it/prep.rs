@@ -431,7 +431,12 @@ fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
     // at an odd place is refused, and a Linux mount under `/mnt/c` is not.
     let wsl = facts(
         &github.base,
-        &["wsl=2", "fs=/odd/place=9p", "fs=/mnt/c/linux=ext4", "fs=/mnt/c=drvfs"],
+        &[
+            "wsl=2",
+            "fs=/odd/place=9p",
+            "fs=/mnt/c/linux=ext4",
+            "fs=/mnt/c=drvfs",
+        ],
     );
     let on_drive = "/odd/place/goalcup-work";
 

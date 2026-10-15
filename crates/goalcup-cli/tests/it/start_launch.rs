@@ -194,7 +194,11 @@ fn start_on_wsl(wsl: &str, with_work_folder: Option<&str>) -> String {
     .expect_err("a WSL machine this run cannot use");
     assert_eq!(err.exit_code(), 1, "{err}");
     assert!(err.to_string().ends_with("Nothing was created."), "{err}");
-    assert!(m.calls().is_empty(), "the daemon was asked: {:?}", m.calls());
+    assert!(
+        m.calls().is_empty(),
+        "the daemon was asked: {:?}",
+        m.calls()
+    );
     let made: Vec<_> = std::fs::read_dir(&beside).unwrap().flatten().collect();
     assert_eq!(made.len(), 1, "only the goal file: {made:?}");
     assert!(!cfg.join("runs").exists(), "no run record");
@@ -218,12 +222,21 @@ fn start_refuses_wsl1_before_anything_is_created() {
 #[test]
 fn start_refuses_each_run_folder_on_a_windows_host_filesystem_under_wsl2() {
     let said = start_on_wsl("wsl=2,fs={beside}=9p", None);
-    assert!(said.contains("run folder") && said.contains("(9p)"), "{said}");
+    assert!(
+        said.contains("run folder") && said.contains("(9p)"),
+        "{said}"
+    );
     let said = start_on_wsl("wsl=2,fs={cfg}=drvfs", None);
-    assert!(said.contains("config folder") && said.contains("(drvfs)"), "{said}");
+    assert!(
+        said.contains("config folder") && said.contains("(drvfs)"),
+        "{said}"
+    );
     // The artifact root is beside the configuration folder, not inside it.
     let said = start_on_wsl("wsl=2,fs={cfg}-artifacts=virtiofs", None);
-    assert!(said.contains("artifact root") && said.contains("(virtiofs)"), "{said}");
+    assert!(
+        said.contains("artifact root") && said.contains("(virtiofs)"),
+        "{said}"
+    );
     assert!(!said.contains("config folder"), "{said}");
     // The work folder `goalcup prep` kept (a run on the server has one).
     let said = start_on_wsl("wsl=2,fs=/odd/place=9p", Some("/odd/place/work"));
