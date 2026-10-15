@@ -1742,3 +1742,71 @@ fn a_nonshipped_real_dir_is_part_of_the_config_home_refusal() {
         Err(DaemonError::Refused(_))
     ));
 }
+
+// ------------------------------------------- D57: native discovery losses reach the chain
+
+fn streamless(records: &[CaptureRecord], reason: GapReason) -> usize {
+    records
+        .iter()
+        .filter(|r| matches!(r, CaptureRecord::Gap { stream: None, reason: g, .. } if *g == reason))
+        .count()
+}
+
+#[test]
+fn a_native_file_past_max_files_is_one_streamless_gap_until_the_count_grows() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(home.path().join(format!("{name}.jsonl")), b"x\n").unwrap();
+    }
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let native = NativeCapture::new(
+        NativeCaptureConfig {
+            sources: vec![NativeSourceSpec {
+                name: "store".into(),
+                root: home.path().to_path_buf(),
+                pattern: "*.jsonl".into(),
+                form: NativeStoreForm::AppendOnly,
+                hint: None,
+                scope_id: None,
+                modified_since: None,
+            }],
+            limits: NativeCaptureLimits {
+                max_files: 2,
+                ..NativeCaptureLimits::default()
+            },
+        },
+        sink.clone(),
+        Box::new(SystemNativeClock::new()),
+    )
+    .unwrap();
+    let mut owner = Owner::new(sink, writer.clone(), clock(), &[], None, Some(native));
+    for _ in 0..5 {
+        owner.poll_native();
+    }
+    owner.drain_all();
+    assert_eq!(
+        streamless(&records(dir.path()), GapReason::LimitExceeded),
+        1,
+        "one loss, however many polls see it"
+    );
+
+    // A second file past the bound grows the count: recorded, at the latest by the finish.
+    std::fs::write(home.path().join("d.jsonl"), b"x\n").unwrap();
+    owner.poll_native();
+    let control = OwnerControl::default();
+    control.stop.store(true, Ordering::Release);
+    owner.run(&control);
+    assert!(control.drained.load(Ordering::Acquire));
+    let chain = records(dir.path());
+    assert_eq!(streamless(&chain, GapReason::LimitExceeded), 2);
+    assert_eq!(
+        chain
+            .iter()
+            .filter(|r| matches!(r, CaptureRecord::Open { .. }))
+            .count(),
+        2,
+        "the tracked files are captured as before"
+    );
+}
