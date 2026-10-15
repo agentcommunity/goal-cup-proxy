@@ -1,6 +1,6 @@
 # Operating the tracker
 
-Updated: 2026-10-12
+Updated: 2026-10-15
 
 How do I build, configure and run the binaries in full detail: the daemon config, the CLI flags
 and exit codes, the verifier, the committed traces,
@@ -15,6 +15,7 @@ install, one capture run) is in [../README.md](../README.md).
 - [Running a capture with the CLI](#running-a-capture-with-the-cli)
 - [Running the verifier](#running-the-verifier)
 - [Pinning connectors](#pinning-connectors)
+- [The matrix and the edge cases](#the-matrix-and-the-edge-cases): `scripts/matrix.sh`, the server-copy check, and the by-hand cases
 
 ## Current M2 operating boundary
 
@@ -386,3 +387,284 @@ same commit as any change under `connectors/`;
 `sh scripts/pin-manifests.sh --print` writes nothing and prints the directory rows — the mode
 `crates/goalcup-protocol/tests/it/connector_pins.rs` reads to prove the shell and
 `goalcup_protocol::connector_dir::connector_dir_sha256` hash the same stream.
+
+## The matrix and the edge cases
+
+Does a run of this connector, on this machine, against this server, record, stop on the server's
+deadline, seal and upload a copy the server agrees with? `scripts/matrix.sh` answers that for one
+connector in one command and prints one row. The by-hand cases below answer the same question for
+the things that go wrong in a week: a lost network, a sleeping laptop, a dead agent, a full disk, a
+reboot, a closed window.
+
+### `scripts/matrix.sh`
+
+```
+scripts/matrix.sh <connector> <server-url> [--keep] [--log FILE] [--timeout SECONDS]
+scripts/matrix.sh --check-copy <config-dir> [run-id]
+```
+
+It makes a temporary configuration directory, work folder and `HOME`, runs `goalcup login` and
+`goalcup start --practice` in them (the chat-mode harness under a pseudo-terminal that the script
+types one prompt into), waits for the tracer's own stop at the server's practice deadline (10
+minutes on staging and production, `PRACTICE_RUN_MINUTES` on a Worker you run), and deletes the
+temporary directory. It writes the details to a log
+(`$TMPDIR/goalcup-matrix-<connector>-<time>.log`, or `--log`) and prints the log path and exactly
+one row:
+
+```
+<connector> <os>-<arch> <harness_version> PASS|FAIL <date>
+```
+
+`<os>` is `macos`, `linux` or `wsl2`; `<arch>` is `arm64` or `x86_64`; `<harness_version>` is the
+line the harness reported to the tracker (`unreported` when it did not), spaces replaced by `_`.
+A FAIL names its first reason on stderr and in the log. PASS means all of these held:
+
+1. both approvals (the login, then the run) were given, the run opened, and the harness was up;
+2. the run ended at its deadline: the tracer printed its `deadline:` line, and the upload line
+   `uploaded: … and the seal`;
+3. `goalcup-verify --capture-integrity <trace>` exited 0 with `integrity: valid` and `anchor:
+   signed` (the server's acknowledgement of the last record verified);
+4. the server's copy agrees with the local chain (next section).
+
+**The server copy.** The upload API has no call that returns the stored chain, so the script does
+not download it. It asks `GET /v1/runs/{id}?entry_id=…` with the run's own credential (the file the
+tracker saved, handed to `curl` as a header on its standard input) and requires the server's answer
+to equal the local chain the verifier has just checked end to end: `offset` equal to the bytes of
+`chain.jsonl`, `next_seq` to the record count, `head` and the last acknowledgement's `hash` to the
+verifier's `validated_head`, the committed end (`final`) to the last record, `status: sealed` and
+`stop: true`. The server stores a chunk only if its SHA-256 matches the one the tracker sent, only
+at the offset, previous hash and sequence it holds, and signs an acknowledgement of the chunk's last
+record, which the verifier checks. So equal positions mean the server holds a chain the tracker
+sent, in order, up to the record the local chain ends with. What this does not prove is the stored
+bytes themselves; the server's verify job over the reassembled copy does that, and until it runs
+there is nothing to download to check them (SERVER-DESIGN, section 4).
+
+A server whose signing key this build does not pin (a local Worker, staging) fails the first
+`goalcup-verify` with exit 2 and `receipt_key_not_accepted`. The script then runs it again with
+`--dev-key` set to `MATRIX_SERVER_KEY`, else the public key in the run's own receipt, and logs
+that the verification borrowed its trust from this invocation (`key_source: "supplied"`).
+
+**Rules the script keeps.** The approval key comes from a file,
+`GOALCUP_TEST_APPROVAL_KEY_FILE=<path>` (the path is not secret; the script checks it is a regular
+file it can read, then takes the variable out of its environment, so `goalcup`, the daemon and the
+harness never inherit where the file is), and the member from `GOALCUP_TEST_MEMBER_ID`. The script
+reads that file only at the moment it approves, piping it straight into `curl`'s standard input as a
+header (`{ printf 'Authorization: Bearer '; tr -d '\n' < "$KEYFILE"; printf '\n'; } | curl -H @-
+…`). So the key is never in an environment variable, an argument, a log, a here-document or a temp
+file, and no process of the run can read it from `ps eww <pid>` or `/proc/<pid>/environ`. That is
+why the key is not accepted in the environment (`GOALCUP_TEST_APPROVAL_KEY` is refused): unsetting a
+variable does not scrub the shell's own environment block. The script has no `set -x` or verbose
+`curl`. It approves at most one device code per phase (the first one `goalcup` prints for the login,
+the first for the run), and stops looking for codes once the harness is up, so nothing a harness
+prints can be approved. With no key file, it prints the approval address and code that `goalcup`
+printed, and waits while you approve in a browser as a member. It never reads or writes the real
+goalcup configuration directory, `~/.codex`, `~/.claude` or `~/.hermes`. It refuses
+`https://ingest.agentcommunity.org` unless given `--allow-production`, and nothing here ever passes
+it. Plain `http` is accepted only to `localhost`, `127.0.0.1` or `[::1]` exactly, with an optional
+port and path.
+
+**Targets.**
+
+- **A local Worker** (nothing to ask anyone): `cd server/worker && npm ci && cp .dev.vars.example
+  .dev.vars`, then start `wrangler dev` with a short practice run, for example
+  `node node_modules/wrangler/bin/wrangler.js dev --env-file .dev.vars --var DB_BACKEND:local --var
+  PRACTICE_RUN_MINUTES:2 --port 8787` (`npm run dev` is the same without the short run), and in
+  another terminal make a key file from the dev values and run the script, then delete it:
+  `sed -n 's/^TEST_APPROVAL_KEY=//p' server/worker/.dev.vars > "$KF" && chmod 600 "$KF"` (with `KF`
+  a file in a fresh `mktemp -d` directory), then
+  `GOALCUP_TEST_APPROVAL_KEY_FILE="$KF" sh scripts/matrix.sh m2-fake-tui http://localhost:8787`,
+  then `rm -f "$KF"`. Stop the Worker by its process id when done.
+- **Staging** (`https://goalcup-ingest-staging.b-9a5.workers.dev`): needs a file holding staging's
+  test approval key and a member id it may approve as:
+  `GOALCUP_TEST_APPROVAL_KEY_FILE=<path to the key file> GOALCUP_TEST_MEMBER_ID=<member id> sh
+  scripts/matrix.sh <connector> <staging url>`. Never `cat` the file or print its value, and never
+  put the value in the environment or on a command line. A Docker run (the way to run Linux on a
+  Mac) mounts the file read-only, `-v <path to the key file>:/run/key:ro`, and sets
+  `GOALCUP_TEST_APPROVAL_KEY_FILE=/run/key` inside; it never passes the key with `-e`. The run lasts
+  the 10 practice minutes plus the clone and the upload, about 12 minutes. On a Mac with a per-app
+  firewall such as Little Snitch, the freshly built `goalcup` is held until someone allows that
+  exact path (`target/<profile>/goalcup`): the row is then a FAIL whose reason is `goalcup login
+  exited 1: … could not be reached … connection timed out`, while `curl` to the same address works.
+  Allow the binary and run it again.
+- **Production**: never. The script refuses it.
+
+**Connectors.** `m2-fake-tui` is a connector the script writes for itself around the test suite's
+fake terminal UI (`crates/goalcup-cli/tests/fixtures/m2-fake-tui.sh`), admitted with `--dev`: no
+harness, no model and no login, so a PASS proves the tracker, the daemon, the pseudo-terminal
+handling, the server and the verifier, and nothing about any real harness. A shipped connector
+id (`codex-cli`, `claude-code-cli`) runs that harness for real and needs it installed and logged in
+inside a prepared configuration directory of its own: `GOALCUP_CONFIG_DIR=<dir> goalcup prep`
+(never the default directory), then `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh codex-cli <url>`.
+The script types `MATRIX_PROMPT` once, `MATRIX_PROMPT_DELAY` seconds (30) after the tracker says the
+harness is up; a real harness's start-up differs, so the first real-harness rows are watched. In
+real-harness mode a PASS does not prove the prompt was typed: only the fake shows what it received
+(the script requires its `tui: noted` line), so look at the session in the kept directory (`--keep`)
+or the research report. Only the fake has been run through the script so far (below).
+
+**Other environment.** `MATRIX_REPO_URL` (default the public empty repository
+`https://github.com/agentcommunity/goalcup-matrix-empty`: the practice clone needs network access to
+GitHub, and a practice clone is anonymous and installs no push helper, so the script's `github.json`
+holds a well-formed fake token that is never sent anywhere), `MATRIX_BIN_DIR`, `--keep` (leave the
+temporary directory, which holds the trace, for inspection), `--timeout` (1800 s). It needs `curl`
+7.55 or later, `python3` and `script(1)`; on Linux it runs the harness as `script -qec`
+(util-linux), on macOS as `script -q /dev/null`.
+
+**`--check-copy`.** For a run you made by hand, `sh scripts/matrix.sh --check-copy <config-dir>
+[run-id]` verifies every entry (segment) of the run locally and compares each with the server's
+position for that entry (`?entry_id=`), using the run's credential from the configuration
+directory. It starts, approves and changes nothing, and it works on any run in a configuration
+directory you give it, including a run still recording. Entries still uploading may differ until
+they catch up: run it again. A segment the tracker had to close from the tail of its chain (after a
+reboot or a kill) verifies with exit 1, incomplete coverage, and that is reported on its line, not
+hidden; the server's copy must still equal the local chain.
+
+### The edge cases, by hand
+
+Each case is a run you start yourself and break on purpose. Unless the case says otherwise:
+
+- **Run.** Practice runs last 10 minutes, which is enough for the quick cases (marked below).
+  The long ones need an organizer test run, `goalcup start --harness <id> --test --dev` with the
+  `--dev` only for an unpinned connector, which is a full 168-hour run, opened only by the test
+  operators the server lists, and deleted from the server afterwards with
+  `server/worker/scripts/delete-test-runs.sh`. Use the staging server for these
+  (`goalcup login --server https://goalcup-ingest-staging.b-9a5.workers.dev`), in a configuration
+  directory of its own (`GOALCUP_CONFIG_DIR`), after `goalcup prep`, never on production.
+- **Watch it from a second terminal** with the same `GOALCUP_CONFIG_DIR`: `goalcup status` (the
+  run's state, with a `PROBLEM:` line for anything the participant must act on) and `goalcup
+  entries`. The chat window itself prints nothing until the harness exits.
+- **Check the server copy** after the case, once any upload has caught up:
+  `sh scripts/matrix.sh --check-copy "$GOALCUP_CONFIG_DIR"`. It exits 0 and prints
+  `check-copy <os>-<arch> <run id> PASS <date>` when every entry matches. FAIL names the entry and
+  the field that differs (the log has the server's answers).
+- **Real harness.** A case marked *real harness* means the fake cannot show it (it makes no model
+  calls and writes no native session format the verifier decodes). Run those with a logged-in
+  Codex or Claude Code. The fake (`m2-fake-tui`, through a `--dev` start on a prepared directory
+  with the connector directory in `GOALCUP_CONNECTORS_DIR`) is enough where marked *fake ok*.
+- **Pass and fail.** A case passes when the tracer did what its "Expect" says and the check above
+  exits 0. Anything else is a failure; file it with the exact `goalcup status` text, the log, and
+  the run id against the lane that owns the part that misbehaved (the CLI, the daemon, the Worker).
+
+**1. Thirty minutes offline** (*fake ok* for the upload and heartbeat part; *real harness* for the
+provider-outage lines). Setup: an organizer test run, harness started, prompt typed. Run: turn the
+network off for 35 minutes (macOS: `networksetup -setairportpower en0 off`, or unplug; Linux:
+`nmcli networking off` or `sudo ip link set <interface> down`), then back on. Expect: recording
+continues and the chat window shows nothing new. After 15 minutes `goalcup status` shows `PROBLEM:
+the last N heartbeats to the server failed: …`; after 30 minutes without an acknowledged upload,
+`PROBLEM: last upload N min ago: …`. A real harness's provider connections that fail coalesce into
+outage windows that the finish reports as `upstream_outages=N` on the `proxy admission:` line
+and one `proxy upstream outage:` line each. Back online, the uploader retries (60 s backoff,
+doubling to 15 minutes, with jitter) and catches up; both `PROBLEM` lines go away. Server copy:
+while offline, `GET` shows the server behind the local chain, which is the expected state; after
+catch-up `--check-copy` passes. Fail if the run stops or the tracer exits, recording reports gaps
+that the offline period does not explain, or the server is still behind 25 minutes after the network
+returned.
+
+**2. Laptop sleep** (*fake ok*). Setup: an organizer test run. Run: put the machine to sleep for
+30 minutes (macOS: `pmset sleepnow` or close the lid; Linux: `systemctl suspend`) and wake it.
+Expect: the tracker holds a sleep lock while it records (`goalcup status` says `PROBLEM: the machine
+may sleep: …` if it could not), but a lid closed on battery still sleeps the machine. After wake the
+harness continues, heartbeats resume within 5 minutes, the uploader catches up, and the deadline is
+counted on a clock that keeps running during sleep (a run whose deadline passed while asleep stops
+at wake with the `deadline:` line). Server copy: `--check-copy` passes. Fail if the tracer exits or
+hangs, `goalcup status` calls the recording healthy while the verifier reports a gap that `goalcup
+status` does not mention, or the server stays behind.
+
+**3. Agent killed, then `continue`** (*fake ok*; quick: a practice run works if you continue within
+its 10 minutes). Run: from a second terminal kill the harness process, not `goalcup`
+(`pgrep -f <program>`, `kill -9 <pid>`). Expect: `goalcup start` prints `harness exited: ended by
+signal 9.`, then `The agent's process ended (…). Your run stays open until <deadline>; run
+`goalcup continue` to restart it.`, keeps uploading the segment until it is caught up, and exits 0;
+`goalcup status` shows `PROBLEM: the agent's process exited (…): run goalcup continue`. Then
+`goalcup continue` from the folder you started in: no approval is asked, the harness reopens its
+last session, `goalcup entries` lists a second entry, and the run's deadline did not move. Server
+copy: `--check-copy` shows two entries, both matching, the first with its committed end (`final`).
+Fail if `continue` asks for approval, the deadline moves, or either entry's server position differs.
+
+**4. Disk nearly full** (*fake ok*; needs a small volume and the case 1 outage). The run's chain
+and its disk reserve stay at 3 GiB together and give space back when something else fills the disk;
+the run stops cleanly only when the disk is nearly full, the reserve has nothing left to give, and
+no upload has been acknowledged for 30 minutes. Setup: a volume of about 5 GiB for the configuration
+directory and its sibling `-artifacts` and `-runs` directories (a start needs 1 GiB beyond the 3 GiB
+reserve): macOS `hdiutil create -size 5g -fs APFS -volname gcsmall /tmp/gcsmall.dmg` and `hdiutil
+attach` it; Linux `truncate -s 5G /tmp/gc.img && mkfs.ext4 -F /tmp/gc.img` and a loop mount (ext4
+and XFS only: the reservation refuses other file systems). Put `GOALCUP_CONFIG_DIR` on it. Run:
+start an organizer test run, take the network down, and fill the volume with a junk file down to
+under 256 MB free (`dd if=/dev/zero of=<volume>/junk bs=1m` on macOS, `bs=1M` on Linux). Expect:
+first `PROBLEM: disk: N free beyond the reservation`; after 30 minutes offline, the run stops itself
+with the reason "the disk is nearly full and uploads are failing"; the harness is ended and the
+segment sealed locally, and the run stays open (a full disk ends a segment, not the run): `goalcup
+status` says `run goalcup continue`. Delete the junk file, restore the network, `goalcup continue`.
+Server copy: `--check-copy` passes for both entries once the uploads finish. Fail if the chain is
+torn (`goalcup-verify` exit 2), the run does not stop and recording fails instead, or the full
+volume is left holding a half-written record.
+
+**5. Reboot, then `continue`** (*fake ok*). Run: during an organizer test run, restart the machine
+(a hard power-off is the harsher case; do both on separate runs). Expect: nothing runs after the
+reboot. `goalcup continue` from the run folder's parent closes the segment the dead daemon left from
+the tail of its chain (an unfinished capture gets one `IngestLost` gap and no repair of a torn
+tail), sends what it can, asks the server for the next segment and reopens the harness. The first
+segment's `goalcup-verify --capture-integrity` exits 1 (incomplete coverage; a hard power-off may
+leave a torn tail, which is exit 2 and must be named as such); the second is clean. Server copy:
+`--check-copy` shows the first entry with its committed end, matching the closed chain, and the
+second matching. Fail if `continue` is refused with the run still open and the deadline ahead, or
+the first entry's server position is not the closed chain's.
+
+**6. Tokens run out** (*real harness*). Run: start a run with an account whose model quota is spent
+(or switch the harness's model to one the account may not use), and type the prompt. Expect: the
+harness reports its own error and sits idle; the tracker keeps recording and heartbeating without a
+`PROBLEM` line (an idle agent is not a tracker fault), and the run goes on to its deadline.
+Heartbeats report `model_requests` that stops growing; on the server, for a competition run, that
+produces the `idle_3h` and `idle_6h` notices (never for a practice or test run). Typing `keep going`
+once the quota is back is allowed and is labelled a resume. Server copy: `--check-copy` passes. Fail
+if the tracker stops, treats the idle agent as a recording failure, or sends the harness anything.
+
+**7. Window closed, then `continue`** (*fake ok*; a practice run works). Run: start inside a
+terminal window, then close the window with the harness running. Expect: the shell hangs up, the
+kernel hangs up the foreground group, the harness and `goalcup start` end; nothing is left running
+(`pgrep -f goalcup` shows no `goalcup start`). From a new window: `goalcup status` names the exited
+agent and `run goalcup continue`; `goalcup continue` opens the next segment as in case 3. Server
+copy: `--check-copy` passes for both entries. Fail if a process of the old run survives, or the
+first segment cannot be sealed or sent.
+
+**8. A human message other than `keep going`** (*real harness*, since only a decoded native session
+shows who typed what). Run: a practice or test run; after the prompt, type another instruction to
+the harness (`please also add tests`), then `keep going`. Expect: the tracker prints nothing and
+blocks nothing (it never relays, edits or blocks input). After the run, `goalcup-verify
+--research-json <trace> --output /tmp/report.ndjson` writes a report whose summary line has
+`assistance.evidence: observed` and `positive_native_markers` of at least 1, which counts the extra
+message as an intervention. A message the decoder cannot attribute is shown as unexplained, not
+dropped. Server copy: `--check-copy` passes. Fail if the message is missing from the trace, the
+report says `none_observed`, or the tracker interfered.
+
+**9. The deadline stop** (*fake ok*; this is what the matrix script does). Run: `sh
+scripts/matrix.sh m2-fake-tui <server>`. Expect: the tracer stops the harness at the deadline by the
+machine's clock (`deadline: the run's time is up…`), seals, sends the final heartbeat, uploads the
+rest and the seal (`uploaded: … and the seal.`), and prints `harness termination: Confirmed`.
+Server: `status: sealed`, `stop: true`, `final` equal to the last record. Pass: the row says PASS.
+For a real harness use `MATRIX_CONFIG_DIR`.
+
+**10. A second start replaces the first** (*fake ok*). A competition start by an account replaces
+its other open competition run; a practice start replaces nothing. Run: with two configuration
+directories (`GOALCUP_CONFIG_DIR=a`, `b`, two terminals) logged in as the same member on a server
+with an open competition event (staging's dry-run event; the runs are 168 hours, so end the second
+with `goalcup seal` when done), start a competition run in `a`, then one in `b`. Expect: `b` opens a
+new run; within one heartbeat (5 minutes) `a` prints `a newer run on your account replaced this
+one`, stops its agent, seals and sends its final heartbeat; `GET` for the first run carries
+`ends_at` equal to the second run's `official_start`, and a chunk past the first run's committed end
+is refused with `410`. Server copy: `--check-copy a` and `--check-copy b` pass (the first run is
+over, the second open). Negative check: two practice starts replace nothing. Fail if the first run
+keeps recording past 5 minutes after the second opened, or both stay open.
+
+**The long runs.** Two 8-hour runs, one on macOS and one on Linux, on staging with a real harness
+and an organizer test run: start it, leave it, and at the end `goalcup seal`, then `--check-copy`.
+File what `goalcup status` showed at any point against the lane that owns it.
+
+### Recorded rows
+
+One row per matrix run, newest last. A row from the fake connector proves the tracker, server and
+verifier on that platform and says nothing about a harness.
+
+| Row | Server | Notes |
+|---|---|---|
+| `m2-fake-tui linux-arm64 matrix-fake-tui_1.0.0 PASS 2026-10-15` | staging | **Fake harness.** In Docker on an arm64 Mac (privileged, TMPDIR on a loop-mounted ext4 volume, the workspace built in the container). Key file mounted read-only (`-v <file>:/run/key:ro`, `GOALCUP_TEST_APPROVAL_KEY_FILE=/run/key`, no `-e`). Run `r4719972f99da95a4`, 10-minute practice run. Server copy: `sealed`, `stop`, offset 8090 = local `chain.jsonl` bytes, `next_seq` 12 = 12 records, `head` and last acknowledgement = the verifier's `validated_head`, `final` = record 11 (same shape as the first staging run, `rcdb57542b0748b97`, made before the key moved to a file); `goalcup-verify` exit 0 under the receipt's key (`key_source: supplied`), anchor signed. |
+| `m2-fake-tui macos-arm64 matrix-fake-tui_1.0.0 PASS 2026-10-15` | local Worker (`wrangler dev`, 2-minute practice run) | **Fake harness.** Same checks, same result shape (offset 8086, 12 records). Not run on staging from macOS yet: Little Snitch holds the new `goalcup` build's connections until its path is allowed (see Targets above). |
