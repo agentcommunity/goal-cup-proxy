@@ -241,8 +241,12 @@ The Worker's tests call `worker.scheduled` on a moved clock (`test/helpers/inpro
   the upload functions only, never the test approval); Resend key `goalcup-ingest-production`
   (sending access, member.agentcommunity.org); `RECEIPT_SIGNING_KEY` from a seed made offline,
   whose public key is pinned in `goalcup-verifier` (`SERVER_PUBLIC_KEYS`).
-- Rate limits `RL_DEVICE_START` (20/min) and `RL_DEVICE_TOKEN` (120/min) per hashed client address
-  (namespaces 4101-4102; the website owns 4001-4019).
+- Rate limits on the device flow: 30 starts and 300 polls a minute per hashed client address (an
+  IPv6 client by its /64), counted by the `DeviceLimiter` Durable Object (`DEVICE_LIMITER`,
+  `DEVICE_START_PER_MINUTE`, `DEVICE_TOKEN_PER_MINUTE`). Without the binding a deployment answers
+  every device call `500 misconfigured`. It replaced the `[[ratelimits]]` binding (namespaces
+  4101-4104, no longer used) on 2026-10-15: that binding was attached but its counters stayed per
+  machine, so no burst ever got a 429.
 
 Deploy again: `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy` (top level, no `--env`).
 
@@ -257,7 +261,8 @@ them into an environment. `test/config.test.ts` reads the file and fails if the 
 environment, so `[env.staging]` sets `routes = []`: without it a staging deploy moves
 `ingest.agentcommunity.org` to the staging Worker (this happened on 2026-10-15, 10:54-11:03 UTC, and
 was undone by pointing the custom domain back at `goalcup-ingest`). The config test checks it.
-Staging has its own rate-limit namespaces (4103-4104) with low limits.
+Staging binds its own `DEVICE_LIMITER` (wrangler does not copy Durable Object bindings into an
+environment) with low limits (5 starts, 10 polls a minute), so a burst there shows the 429.
 
 ### Staging, as deployed (2026-10-15)
 

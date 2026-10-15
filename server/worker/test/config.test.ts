@@ -227,3 +227,13 @@ test("the 5-minute cron runs in production and in staging; staging is a Worker o
   assert.notEqual(tables["env.staging.vars"]!.PRACTICE_EVENT_ID, tables.vars!.PRACTICE_EVENT_ID);
   assert.notEqual(tables["env.staging.r2_buckets"]!.bucket_name, tables.r2_buckets!.bucket_name);
 });
+
+test("production and staging both bind the device limiter; staging's limits are low enough to see a 429", () => {
+  const tables = wranglerTables();
+  assert.equal(tables["durable_objects.bindings"]!.name, "DEVICE_LIMITER");
+  assert.equal(tables["env.staging.durable_objects.bindings"]!.name, "DEVICE_LIMITER"); // not inherited by an environment
+  assert.equal(tables.migrations!.new_sqlite_classes, '["DeviceLimiter"]');
+  assert.ok(!/^\s*\[\[(env\.staging\.)?ratelimits\]\]/m.test(WRANGLER)); // the binding that never tripped is gone
+  assert.ok(Number(tables.vars!.DEVICE_TOKEN_PER_MINUTE) >= 120); // one tracer polls 12 times a minute
+  assert.ok(Number(tables["env.staging.vars"]!.DEVICE_START_PER_MINUTE) <= 10);
+});

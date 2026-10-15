@@ -87,6 +87,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
   return matched.handler(ctx, auth, request);
 }
 
+// The Durable Object class behind DEVICE_LIMITER (wrangler.toml); wrangler finds it by this export.
+export { DeviceLimiter } from "./ratelimit.ts";
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {

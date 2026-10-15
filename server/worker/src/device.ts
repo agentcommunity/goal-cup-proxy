@@ -46,7 +46,7 @@ export function normalizeUserCode(input: string): string | null {
 // ---- POST /v1/device ----------------------------------------------------------------------
 
 export async function createDevice(ctx: Ctx, request: Request): Promise<Response> {
-  await rateLimit(ctx.env.RL_DEVICE_START, request, "start");
+  await rateLimit(ctx.env, request, "start");
   const b = await readJson(request, BODY_MAX);
   const purpose = enumField<DevicePurpose>(b, "purpose", ["login", "run"]);
   const mode = enumField<RunMode>(b, "mode", ["competition", "practice", "test"]);
@@ -95,7 +95,7 @@ function enumField<T extends string>(o: Record<string, unknown>, name: string, a
 // ---- POST /v1/device/token ----------------------------------------------------------------
 
 export async function pollDevice(ctx: Ctx, request: Request): Promise<Response> {
-  await rateLimit(ctx.env.RL_DEVICE_TOKEN, request, "token");
+  await rateLimit(ctx.env, request, "token");
   const b = await readJson(request, BODY_MAX);
   const deviceSha = await sha256Hex(hexField(b, "device_code"));
   const poll = await ctx.db.pollDevice(deviceSha, formatTime(ctx.now()));

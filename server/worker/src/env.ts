@@ -38,9 +38,15 @@ export interface Env {
   /** "on" marks a staging deployment (the only non-local place TEST_APPROVAL_KEY may be set). */
   STAGING?: string;
 
-  /** Rate Limiting bindings for POST /v1/device and /v1/device/token (src/ratelimit.ts); unbound: no limit. */
-  RL_DEVICE_START?: RateLimit;
-  RL_DEVICE_TOKEN?: RateLimit;
+  /**
+   * Durable Object namespace (class DeviceLimiter) that rate-limits POST /v1/device and
+   * /v1/device/token per client address (src/ratelimit.ts). Unbound: no limit with
+   * DB_BACKEND=local; every device call answers 500 misconfigured on the Supabase backend.
+   */
+  DEVICE_LIMITER?: DurableObjectNamespace;
+  /** Calls a minute per client address (default 30 starts, 300 polls). */
+  DEVICE_START_PER_MINUTE?: string;
+  DEVICE_TOKEN_PER_MINUTE?: string;
 
   /** "on" answers every call 503 + Retry-After. */
   MAINTENANCE?: string;

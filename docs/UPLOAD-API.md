@@ -76,9 +76,10 @@ any case, with or without the dash. `interval` is the seconds between polls, `ex
 seconds a request lives, counted from its creation, whatever its state. The tracer shows the
 participant `verification_uri_complete` and opens it when it can.
 
-Both device calls are rate-limited per client address (production: 20 starts and 120 polls a
-minute); over the limit is `429 rate_limited` with `Retry-After: 60`. One tracer's normal use
-(one start, a poll every 5 seconds) stays far below it.
+Both device calls are rate-limited per client address, an IPv6 client by its /64 (production: 30
+starts and 300 polls a minute); over the limit is `429 rate_limited` with `Retry-After` set to the
+seconds left in the minute (1-60). One tracer's normal use (one start, a poll every 5 seconds)
+stays far below it.
 
 **Test runs (`"mode": "test"`).** An organizer's own test run. Only accounts on the server's
 allowlist of test operators can approve one or open one (anyone else: the website refuses the
