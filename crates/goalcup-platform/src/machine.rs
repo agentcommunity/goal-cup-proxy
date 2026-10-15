@@ -64,7 +64,7 @@ pub fn is_wsl() -> bool {
 /// The WSL test over a kernel release string.
 #[doc(hidden)]
 pub fn is_wsl_from(osrelease: &str) -> bool {
-    osrelease.to_ascii_lowercase().contains("microsoft")
+    wsl_version_from(osrelease, "").is_some()
 }
 
 /// Which Windows Subsystem for Linux this is: `Some(1)`, `Some(2)`, or `None` on a machine that
@@ -77,26 +77,42 @@ pub fn wsl_version() -> Option<u8> {
 /// The WSL version named by the kernel release (`/proc/sys/kernel/osrelease`) and the kernel
 /// version line (`/proc/version`); either may be empty.
 ///
-/// Both versions say "microsoft". WSL2 kernels say `microsoft-standard-WSL2` (the earliest 4.19
-/// builds say `microsoft-standard`); WSL1's kernel is the fixed `4.4.0-<build>-Microsoft`. A
-/// Microsoft kernel that is neither is a custom WSL2 kernel, since WSL1 has no other release.
+/// Only the kernel *release* is read, in the release file and in the `Linux version <release>`
+/// part of the version line: the rest of that line names whoever built the kernel, and an address
+/// such as `builder@microsoft.com` is not WSL. Both versions carry `-microsoft` in the release.
+/// WSL2 kernels say `microsoft-standard-WSL2` (the earliest 4.19 builds say `microsoft-standard`);
+/// WSL1's kernel is the fixed `4.4.0-<build>-Microsoft`. A Microsoft kernel that is neither is a
+/// custom WSL2 kernel, since WSL1 has no other release.
 #[doc(hidden)]
 pub fn wsl_version_from(osrelease: &str, version: &str) -> Option<u8> {
-    let release = osrelease.trim().to_ascii_lowercase();
-    let line = version.trim().to_ascii_lowercase();
-    if !release.contains("microsoft") && !line.contains("microsoft") {
+    let releases = [
+        osrelease.trim().to_ascii_lowercase(),
+        release_of_version_line(version),
+    ];
+    let named = |r: &String| r.contains("-microsoft") || r.contains("wsl2");
+    if !releases.iter().any(named) {
         return None;
     }
-    if [&release, &line]
+    if releases
         .iter()
-        .any(|s| s.contains("wsl2") || s.contains("microsoft-standard"))
+        .any(|r| r.contains("wsl2") || r.contains("microsoft-standard"))
     {
         return Some(2);
     }
-    if release.starts_with("4.4.") || line.starts_with("linux version 4.4.") {
+    if releases.iter().any(|r| r.starts_with("4.4.")) {
         return Some(1);
     }
     Some(2)
+}
+
+/// The release token of a `/proc/version` line (`Linux version <release> (...)`), lowercased;
+/// empty when the line is not in that form.
+fn release_of_version_line(line: &str) -> String {
+    let line = line.trim().to_ascii_lowercase();
+    line.strip_prefix("linux version ")
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Whether a filesystem type name (the type column of `/proc/self/mountinfo`) is a Windows-host
@@ -178,25 +194,58 @@ fn unescape_mountinfo(raw: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// The nearest part of `path` that exists, by its real path: a relative path is joined onto the
+/// current directory first, and a link met on the way is followed even when it is dangling (a
+/// link to a folder not made yet), so a link cannot hide where a new folder would land.
+fn nearest_existing(path: &Path) -> Option<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    nearest_existing_from(&absolute, 0)
+}
+
+fn nearest_existing_from(path: &Path, links_followed: u32) -> Option<PathBuf> {
+    for ancestor in path.ancestors() {
+        if let Ok(real) = std::fs::canonicalize(ancestor) {
+            return Some(real);
+        }
+        if links_followed < 40
+            && let Ok(target) = std::fs::read_link(ancestor)
+        {
+            let target = ancestor.parent()?.join(target);
+            return nearest_existing_from(&target, links_followed + 1);
+        }
+    }
+    None
+}
+
+/// [`windows_host_filesystem`] over the text of `/proc/self/mountinfo` given, and the mount table
+/// alone (no `statfs`): the name of the Windows-host filesystem type holding `path`, or `None`.
+#[doc(hidden)]
+pub fn windows_host_filesystem_with(path: &Path, mountinfo: &str) -> Option<String> {
+    let existing = nearest_existing(path)?;
+    mountinfo_fstype(mountinfo, &existing).filter(|name| windows_host_fstype(name))
+}
+
 /// The name of the Windows-host filesystem `path` is on, or `None` when it is on a Linux one (or
 /// the filesystem cannot be told). Linux only; elsewhere always `None`.
 ///
-/// `path` need not exist yet: the nearest existing ancestor is looked at, by its real path, so a
-/// link cannot hide a Windows drive. Two readings are combined, because neither is enough alone:
-/// `statfs` gives the filesystem's magic number, which names 9p (the mount WSL2 makes of a
-/// Windows drive, which `statfs` cannot tell from any other 9p) but sees a FUSE mount only as
-/// FUSE; `/proc/self/mountinfo` gives the type name (`drvfs`, `9p` or `virtiofs`) of the mount
-/// holding the path.
+/// `path` need not exist yet: the nearest existing ancestor is looked at, by its real path
+/// (a relative path is taken from the current directory, and a link, even a dangling one, is
+/// followed), so a link cannot hide a Windows drive. Two readings are combined, because neither is
+/// enough alone: `statfs` gives the filesystem's magic number, which names 9p (the mount WSL2
+/// makes of a Windows drive, which `statfs` cannot tell from any other 9p) but sees a FUSE mount
+/// only as FUSE; `/proc/self/mountinfo` gives the type name (`drvfs`, `9p` or `virtiofs`) of the
+/// mount holding the path.
 pub fn windows_host_filesystem(path: &Path) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
-        let existing = path
-            .ancestors()
-            .find_map(|a| std::fs::canonicalize(a).ok())?;
+        let existing = nearest_existing(path)?;
         let by_name = std::fs::read_to_string("/proc/self/mountinfo")
             .ok()
-            .and_then(|text| mountinfo_fstype(&text, &existing))
-            .filter(|name| windows_host_fstype(name));
+            .and_then(|text| windows_host_filesystem_with(&existing, &text));
         let by_magic = statfs_type(&existing).and_then(windows_host_magic);
         by_name.or_else(|| by_magic.map(str::to_string))
     }

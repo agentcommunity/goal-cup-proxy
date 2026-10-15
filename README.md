@@ -164,19 +164,21 @@ What the tracker checks on WSL (and only there; macOS and other Linux are not lo
 
 - **The version.** WSL1 is refused by `goalcup prep`, `start` and `continue` with one sentence
   ("WSL1 cannot run Goal Cup: convert this distribution to WSL2 with `wsl --set-version <distro>
-  2`"). The version is read from `/proc/sys/kernel/osrelease` and `/proc/version`: the fixed WSL1
+  2`"). The version is read from the kernel release in `/proc/sys/kernel/osrelease` and in `/proc/version` (a builder's address in that line does not count): the fixed WSL1
   kernel `4.4.0-<build>-Microsoft` is WSL1, every other Microsoft kernel is WSL2.
-- **The filesystem type, not the path.** On WSL2 these four folders are each refused when they
-  are on a Windows-host filesystem: the work folder (`goalcup prep --work-root`, and for a
-  continued run the folder its clone is in), the folder the run's own directory is made in (beside
-  the goal file, or the folder `goalcup start`/`continue` is run from), `artifact_root`, and the
-  configuration folder (which holds `<cfg>/runs`). The type is read from the folder, or its
-  nearest existing parent, after following links: `statfs` must not report a 9p, CIFS/SMB or NTFS
+- **The filesystem type, not the path.** On WSL2 these folders are each refused when they are on
+  a Windows-host filesystem: the work folder (`goalcup prep --work-root`, and for a continued run
+  the folder its clone is in), `artifact_root`, the configuration folder (which holds
+  `<cfg>/runs`), and, at `start` and `continue`, the folder the run's own directory is made in
+  (beside the goal file, or the folder `goalcup start`/`continue` is run from). `prep` checks the
+  first three: the run folder does not exist at prep time. The type is read from the folder, or
+  its nearest existing parent, after making a relative path absolute and following links (even a
+  link to a folder that is not made yet): `statfs` must not report a 9p, CIFS/SMB or NTFS
   filesystem, and the type of the mount holding it in `/proc/self/mountinfo` must not be `9p`,
-  `drvfs`, `virtiofs`, `cifs`, `smb3` or an NTFS driver. (`statfs` alone cannot tell a Windows
-  drive from another 9p share, nor see `virtiofs` behind FUSE; the mount table can.) `prep`
-  reports a refused folder in its `machine` step; `start` and `continue` refuse before anything
-  is created or closed.
+  `drvfs`, `virtiofs`, `cifs`, `smb3`, `smbfs`, `ntfs`, `ntfs3` or `fuse.ntfs-3g`. (`statfs`
+  alone cannot tell a Windows drive from another 9p share, nor see `virtiofs` behind FUSE; the
+  mount table can.) `prep` reports a refused folder in its `machine` step; `start` and `continue`
+  refuse before anything is created or closed.
 - The sleep lock is not taken under WSL: Windows decides when the machine sleeps, and `prep` tells
   you to set sleep to Never for the week of your run.
 

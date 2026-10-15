@@ -1,9 +1,9 @@
 use goalcup_platform::machine::{
     ac_from_pmset, container_from_systemd, facts, is_wsl_from, mountinfo_fstype, url_allowed,
-    windows_host_filesystem, windows_host_fstype, windows_host_magic, wsl_check_with,
-    wsl_version_from,
+    windows_host_filesystem, windows_host_filesystem_with, windows_host_fstype, windows_host_magic,
+    wsl_check_with, wsl_version_from,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn wsl_detection_reads_osrelease() {
@@ -52,6 +52,13 @@ fn wsl_version_tells_wsl2_from_wsl1() {
     // A custom kernel built for WSL2 under another name is still not WSL1's 4.4.0.
     assert_eq!(wsl_version_from("6.6.36.3-Microsoft-custom", ""), Some(2));
     assert_eq!(wsl_version_from(NATIVE_RELEASE, NATIVE_VERSION), None);
+    // A kernel built by someone at microsoft.com is not WSL: only the release is read.
+    let builder = "Linux version 6.8.0-45-generic (builder@microsoft.com) (gcc 13.2) #45-Ubuntu\n";
+    assert_eq!(wsl_version_from(NATIVE_RELEASE, builder), None);
+    assert_eq!(wsl_version_from("", builder), None);
+    assert_eq!(wsl_version_from("", "Microsoft"), None);
+    assert!(!is_wsl_from("Linux version 6.8.0 (builder@microsoft.com)"));
+    assert!(is_wsl_from("5.15.167.4-microsoft-standard-WSL2"));
     assert_eq!(wsl_version_from("", ""), None);
 }
 
@@ -272,4 +279,67 @@ fn only_https_urls_reach_the_opener() {
     assert!(!url_allowed("https://a b"));
     assert!(!url_allowed("https://a\nb"));
     assert!(!url_allowed(""));
+}
+
+/// One mount-table line for a mount of `fstype` at `point`.
+fn mount_line(point: &Path, fstype: &str) -> String {
+    format!("40 30 0:38 / {} rw - {fstype} src rw\n", point.display())
+}
+
+#[test]
+fn a_dangling_link_is_followed_to_the_mount_its_target_would_be_on() {
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let top = std::env::temp_dir().join(format!("goalcup-wsl-links-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&top);
+    std::fs::create_dir_all(&top).unwrap();
+    let scratch = Scratch(top);
+    let top = std::fs::canonicalize(&scratch.0).unwrap();
+    let real = top.join("drive");
+    std::fs::create_dir(&real).unwrap();
+    let elsewhere = top.join("home");
+    std::fs::create_dir(&elsewhere).unwrap();
+    // `link` points at a child of the real folder that does not exist (yet).
+    let link = elsewhere.join("link");
+    std::os::unix::fs::symlink(real.join("missing"), &link).unwrap();
+    // A link to a link, relative, to the same place.
+    let relative = elsewhere.join("relative");
+    std::os::unix::fs::symlink("link", &relative).unwrap();
+
+    let table = format!(
+        "{}{}",
+        mount_line(Path::new("/"), "ext4"),
+        mount_line(&real, "9p")
+    );
+    let on = |p: &Path| windows_host_filesystem_with(p, &table);
+    assert_eq!(on(&link.join("work/clone")).as_deref(), Some("9p"));
+    assert_eq!(on(&relative.join("work")).as_deref(), Some("9p"));
+    assert_eq!(on(&real.join("not/made")).as_deref(), Some("9p"));
+    // The folder holding the link is not the drive.
+    assert_eq!(on(&elsewhere.join("plain/work")), None);
+    // A link in a loop ends in the nearest real folder rather than looping.
+    let one = elsewhere.join("one");
+    let two = elsewhere.join("two");
+    std::os::unix::fs::symlink(&two, &one).unwrap();
+    std::os::unix::fs::symlink(&one, &two).unwrap();
+    assert_eq!(on(&one.join("x")), None);
+}
+
+#[test]
+fn a_relative_path_is_taken_from_the_current_directory() {
+    let here = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+    let table = mount_line(&here, "drvfs");
+    assert_eq!(
+        windows_host_filesystem_with(Path::new("not/made/yet"), &table).as_deref(),
+        Some("drvfs")
+    );
+    let elsewhere = mount_line(Path::new("/definitely/not/here"), "drvfs");
+    assert_eq!(
+        windows_host_filesystem_with(Path::new("not/made/yet"), &elsewhere),
+        None
+    );
 }
