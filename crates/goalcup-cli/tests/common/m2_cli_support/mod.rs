@@ -792,7 +792,9 @@ impl OnPty {
                 &mut slave,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &mut size,
+                // A raw pointer cast to the parameter's own type: the window size is
+                // `*const winsize` in Linux's libc and `*mut winsize` in macOS's.
+                &raw mut size as _,
             )
         };
         assert_eq!(opened, 0, "openpty: {}", std::io::Error::last_os_error());
