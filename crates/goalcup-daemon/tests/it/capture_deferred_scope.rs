@@ -114,7 +114,7 @@ fn retained(records: &[CaptureRecord], of: &goalcup_protocol::capture::StreamKey
 /// A Hermes launch with no scope records no gap; the run is still Recording.
 #[tokio::test]
 async fn a_deferred_launch_appends_no_gap() {
-    let rig = Rig::start().await;
+    let rig = Rig::start_headless().await;
     let info = hermes_launched(&rig).await;
     let records = rig.records(&info.entry_id);
     assert_eq!(
@@ -127,7 +127,7 @@ async fn a_deferred_launch_appends_no_gap() {
     assert_eq!(capture.capture, CaptureState::Recording);
 
     // A Codex launch with no scope still does: its scope was due at the launch.
-    let codex = rig.created("codex-cli").await;
+    let codex = rig.created("headless-codex-cli").await;
     let goal = rig.goal_accepted(&codex.entry_id, b"say hi").await;
     let mut request = launch_request(&goal);
     request.native_scope = None;
@@ -215,8 +215,8 @@ async fn a_finish_without_a_usable_scope_records_exactly_one_gap() {
 /// A scope on any other profile's finish is ignored. Codex's scope was due at its launch.
 #[tokio::test]
 async fn a_scope_on_another_profiles_finish_is_ignored() {
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     let goal = rig.goal_accepted(&info.entry_id, b"say hi").await;
     let mut request = launch_request(&goal);
     request.native_scope = None;

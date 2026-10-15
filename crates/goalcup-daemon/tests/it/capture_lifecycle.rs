@@ -449,8 +449,8 @@ fn gaps_after_launch(records: &[CaptureRecord]) -> Vec<GapReason> {
 /// V1 supplemental stores add no gaps. A controlled family retains run-HOME capture.
 #[tokio::test]
 async fn a_launch_marks_each_store_it_does_not_read() {
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
     let mut request = launch_request(&goal);
     request.native_scope = None;
@@ -481,19 +481,19 @@ async fn native_scope_excludes_other_runs_files() {
     use base64::Engine as _;
     for (profile, directory, own_name, other_name) in [
         (
-            "codex-cli",
+            "headless-codex-cli",
             "sessions/2026/09/30",
             "rollout-now-test-session.jsonl",
             "rollout-now-foreign.jsonl",
         ),
         (
-            "claude-code-cli",
+            "headless-claude-code-cli",
             "projects/workspace",
             "test-session.jsonl",
             "foreign.jsonl",
         ),
     ] {
-        let rig = Rig::start().await;
+        let rig = Rig::start_headless().await;
         let native = rig.root.join("config-home").join(directory);
         std::fs::create_dir_all(&native).unwrap();
         std::fs::write(native.join(own_name), b"own session\n").unwrap();
@@ -686,8 +686,8 @@ async fn refused_native_roots_child_half() {
 #[tokio::test]
 async fn native_scope_unavailable_records_named_gap() {
     for scope in [None, Some("../foreign"), Some(""), Some("bad.scope")] {
-        for profile in ["codex-cli", "claude-code-cli"] {
-            let rig = Rig::start().await;
+        for profile in ["headless-codex-cli", "headless-claude-code-cli"] {
+            let rig = Rig::start_headless().await;
             let info = rig.created(profile).await;
             let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
             let mut request = launch_request(&goal);
@@ -705,11 +705,11 @@ async fn native_scope_unavailable_records_named_gap() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scoped_native_source_never_opened_is_a_gap() {
     for vanished in [false, true] {
-        let rig = Rig::start().await;
+        let rig = Rig::start_headless().await;
         let source = rig
             .root
             .join("config-home/sessions/2026/09/30/rollout-now-test-session.jsonl");
-        let info = rig.created("codex-cli").await;
+        let info = rig.created("headless-codex-cli").await;
         let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
         assert_eq!(
             rig.launch(&info.entry_id, &launch_request(&goal))
@@ -730,8 +730,8 @@ async fn scoped_native_source_never_opened_is_a_gap() {
         assert_eq!(local_finishes(&records), 1);
     }
     // A fixed source root that disappears after create cannot be constructed at Launch.
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     std::fs::remove_dir(rig.root.join("config-home/sessions")).unwrap();
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
     rig.launch(&info.entry_id, &launch_request(&goal)).await;
@@ -864,8 +864,8 @@ async fn both_shipped_manifests_compile_at_preflight() {
 
 #[tokio::test]
 async fn a_restart_never_rebuilds_a_capture_row_as_a_legacy_runtime() {
-    let rig = Rig::start().await;
-    let info = rig.created("codex-cli").await;
+    let rig = Rig::start_headless().await;
+    let info = rig.created("headless-codex-cli").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
     let mut launch = launch_request(&goal);
     // This fixture isolates reopen behavior: no native producer is bound.
@@ -2950,4 +2950,85 @@ async fn a_symlinked_native_root_component_is_refused() {
         "nothing was created through the link"
     );
     assert!(!workspace.exists(), "a refused create leaves no workspace");
+}
+
+/// A continued run makes its next segment in the workspace its last entry had (D4): the last
+/// entry is sealed, so it no longer holds the workspace. An entry still open does.
+#[tokio::test]
+async fn a_continued_segment_takes_the_workspace_of_its_sealed_entry() {
+    let rig = Rig::start().await;
+    // A clone root, so the next create is admitted whatever the last entry left in it (R3).
+    let ws = rig.workspace("continued");
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let init = goalcup_daemon::workspace_git::command(&ws, &home)
+        .expect("git on PATH")
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init");
+
+    let first: CaptureWorkspaceInfo = {
+        let created = rig.create("codex-cli", &ws, RESERVE).await;
+        assert_eq!(created.status(), 200, "{}", created.body());
+        created.json().unwrap()
+    };
+    // Open and unsealed, it holds the workspace.
+    let held = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(held.status(), 409, "{}", held.body());
+    assert!(
+        held.body().contains("one workspace holds one entry"),
+        "{}",
+        held.body()
+    );
+
+    let sealed = rig.seal(&first.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let second = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(second.status(), 200, "{}", second.body());
+    let second: CaptureWorkspaceInfo = second.json().unwrap();
+    assert_ne!(second.entry_id, first.entry_id);
+
+    // The new segment holds it in turn.
+    let held = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(held.status(), 409, "{}", held.body());
+    assert!(
+        held.body().contains("one workspace holds one entry"),
+        "{}",
+        held.body()
+    );
+}
+
+/// An entry this daemon could not reopen routes nothing, so it lets go of its workspace too: a
+/// run whose chain was lost can still be continued where it ran.
+#[tokio::test]
+async fn a_continued_segment_takes_the_workspace_of_an_entry_that_failed_to_reopen() {
+    let rig = Rig::start().await;
+    let ws = rig.workspace("lost");
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let init = goalcup_daemon::workspace_git::command(&ws, &home)
+        .expect("git on PATH")
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init");
+
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let first: CaptureWorkspaceInfo = created.json().unwrap();
+    std::fs::remove_file(rig.trace_dir(&first.entry_id).join("chain.jsonl")).unwrap();
+
+    let rig = rig.restart().await;
+    // Relies on the chain having no rotated parts: removing `chain.jsonl` leaves nothing to resume.
+    let last = rig.daemon.cycle_errors().last;
+    assert!(
+        last.as_deref()
+            .is_some_and(|e| e.contains("was not reopened")),
+        "the lost chain was not reopened: {last:?}"
+    );
+    let second = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(second.status(), 200, "{}", second.body());
 }
