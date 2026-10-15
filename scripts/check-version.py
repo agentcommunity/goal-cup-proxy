@@ -11,10 +11,13 @@ This check reads the tracked files of a git checkout and reports:
   1. the workspace version is not a plain x.y.z;
   2. a crate manifest does not say `version.workspace = true`, or carries its own version;
   3. Cargo.lock holds a goalcup-* package at another version than the workspace's;
-  4. the current version is written, as a whole token, in a doc, script, workflow, packaging file
-     or non-test source;
-  5. a release tag such as v1.2.3 is written in a doc, script, workflow or packaging file (any
-     version, not only the current one), except the entries of ALLOWED below;
+  4. the current version is written in the tracer's own context (`goalcup 0.6.0`, `release
+     0.6.0`, `version = "0.6.0"`) in a doc, script, workflow, packaging file or non-test source.
+     The same digits elsewhere (a fake harness's `1.0.0`, a Homebrew keg path) are not the
+     tracer's version and are not flagged;
+  5. a release tag such as v1.2.3 is written in a doc, script, workflow or packaging file on a
+     line that talks about a tag, a release, goalcup or the tracer (any version, not only the
+     current one), except the entries of ALLOWED below;
   6. a doc or source gives `tracer_version`, `daemon_version` or `verifier_version`, or the output
      of `goalcup --version`, a literal version.
 
@@ -74,6 +77,9 @@ TEXT_SUFFIXES = {".md", ".rs", ".py", ".sh", ".toml", ".yml", ".yaml", ".ts", ".
 SEMVER = r"\d+\.\d+\.\d+"
 # A made-up marker such as 0.0.0-mock is not a release version.
 END = r"(?![0-9A-Za-z\-])"
+# Words that make a version number the tracer's own: `goalcup 0.6.0`, `release: 0.6.0`.
+OWN = r"(?:goalcup(?:-daemon|-verify|-cli)?|tracer|release|version)"
+TAG_LINE = re.compile(r"\b(?:tag|tags|release|releases|goalcup|tracer)\b", re.I)
 TAG = re.compile(rf"(?<![A-Za-z0-9_.\-]){'v'}{SEMVER}(?![0-9]|\.[0-9])")
 # `tracer_version": "1.2.3"`, `tracer_version: "1.2.3"`, `daemon_version = 1.2.3`.
 VERSION_FIELD = re.compile(rf"\b(?:tracer|daemon|verifier)_version\W{{1,6}}{SEMVER}{END}")
@@ -135,7 +141,9 @@ def check(root: Path) -> list[str]:
             if found != version:
                 findings.append(f"Cargo.lock: {package} is {found}, the workspace is {version}")
 
-    current = re.compile(rf"(?<![0-9.\-]){re.escape(version)}(?![0-9]|\.[0-9])")
+    current = re.compile(
+        rf"\b{OWN}[ :=\"'`]{{1,4}}v?(?<![0-9.\-]){re.escape(version)}(?![0-9]|\.[0-9])", re.I
+    )
     for name in files:
         if not is_scanned(name) or not (root / name).is_file():
             continue
@@ -148,7 +156,8 @@ def check(root: Path) -> list[str]:
             where = f"{name}:{number}"
             if current.search(line):
                 findings.append(f"{where}: writes the current version {version}")
-            for tag in [] if name.startswith(SOURCE_PREFIXES) else TAG.findall(line):
+            about_a_tag = TAG_LINE.search(line) and not name.startswith(SOURCE_PREFIXES)
+            for tag in TAG.findall(line) if about_a_tag else []:
                 findings.append(f"{where}: writes the release tag {tag}")
             for hit in VERSION_FIELD.findall(line) + BINARY_VERSION.findall(line):
                 findings.append(f"{where}: writes a tracer version ({hit})")

@@ -63,7 +63,7 @@ class CheckVersionTests(unittest.TestCase):
         self.assertTrue(any(f.startswith("docs/GUIDE.md:1:") for f in found), found)
 
     def test_an_old_release_tag_in_a_doc_is_flagged_but_the_allowed_one_is_not(self) -> None:
-        self.write("docs/GUIDE.md", "Use v0.3.1.\n")
+        self.write("docs/GUIDE.md", "Use the v0.3.1 release.\n")
         self.write("docs/CONTRACTS.md", "The freeze took effect at the `v0.5.0` tag.\n")
         found = self.findings()
         self.assertEqual(len(found), 1, found)
@@ -73,6 +73,11 @@ class CheckVersionTests(unittest.TestCase):
         self.write("crates/c/src/lib.rs", 'let v = Req { tracer_version: "0.2.0" };\n')
         found = self.findings()
         self.assertTrue(any("tracer_version" in f for f in found), found)
+
+    def test_the_same_digits_outside_the_tracers_context_are_not_flagged(self) -> None:
+        self.write("docs/GUIDE.md", "The fake harness `matrix-fake-tui 0.6.0` and Node v22.18.0.\n")
+        self.write("crates/c/src/lib.rs", '// /opt/homebrew/Cellar/goalcup/0.6.0/bin/goalcup\n')
+        self.assertEqual(self.findings(), [])
 
     def test_tests_fixtures_and_marker_versions_are_not_scanned(self) -> None:
         self.write("crates/c/tests/it/a.rs", 'tracer_version: "0.1.0"; // 0.6.0\n')

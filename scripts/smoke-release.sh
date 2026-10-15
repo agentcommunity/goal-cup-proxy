@@ -4,8 +4,8 @@
 #   sh scripts/smoke-release.sh <tarball> <version>
 #
 # Unpacks it, checks that all three binaries print <version>, and checks through
-# `goalcup doctor --json` what the Homebrew formula's test checks: the unpacked goalcup finds
-# the connectors it ships, and every one's pin passes. doctor exits 1 when no harness is
+# `goalcup doctor --json` that the unpacked goalcup finds the connectors it ships, and every
+# one's pin passes. doctor exits 1 when no harness is
 # installed, so only its report is judged. It also checks that the tarball holds every folder of
 # the repository's connectors/ (the checkout this script is in), so a harness that was merged
 # but not packaged fails the release. It runs with an environment built from nothing, so

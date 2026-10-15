@@ -1,6 +1,6 @@
 # Release: build the three binaries for four targets, package each as a tarball, smoke-test each
 # tarball and packaging/install.sh on its own architecture, and attach the tarballs, SHA256SUMS,
-# install.sh and the rendered Homebrew formula to a GitHub release.
+# install.sh to a GitHub release.
 #
 # - A `v*` tag push builds and publishes the release for that tag. The tag must equal
 #   `v` plus the workspace version in Cargo.toml, because the binaries print that version and
@@ -102,18 +102,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: checksums, installer and formula
+      - name: checksums and installer
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 4
           (cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
           cp packaging/install.sh dist/install.sh
-          python3 scripts/render-formula.py --version "$version" --sums dist/SHA256SUMS \
-            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME" \
-            > dist/goalcup.rb
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag
           --title "$GITHUB_REF_NAME" --generate-notes
-          dist/*.tar.gz dist/SHA256SUMS dist/install.sh dist/goalcup.rb
+          dist/*.tar.gz dist/SHA256SUMS dist/install.sh

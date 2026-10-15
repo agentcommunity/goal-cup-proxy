@@ -59,10 +59,14 @@ detect_target() {
     esac
 }
 
-# fetch <url> <file>: curl, else wget. Fails on an HTTP error.
+# fetch <url> <file>: curl, else wget. Fails on an HTTP error. An https:// address is fetched
+# over TLS 1.2 or later only, and a redirect may not leave https.
 fetch() {
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 3 -o "$2" "$1" || die "could not download $1"
+        case "$1" in
+        https://*) curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$2" "$1" || die "could not download $1" ;;
+        *) curl -fsSL --retry 3 -o "$2" "$1" || die "could not download $1" ;;
+        esac
     elif command -v wget >/dev/null 2>&1; then
         wget -q -O "$2" "$1" || die "could not download $1"
     else
@@ -118,7 +122,8 @@ main() {
     fi
 
     work=$(mktemp -d)
-    trap 'rm -rf "$work"' EXIT HUP INT TERM
+    trap 'rm -rf "$work"' EXIT
+    trap 'exit 130' HUP INT TERM
 
     say "Looking for the $target build ..."
     fetch "$base/SHA256SUMS" "$work/SHA256SUMS"
@@ -138,6 +143,19 @@ main() {
     root="$work/$name"
     [ -x "$root/bin/goalcup" ] && [ -d "$root/share/goalcup/connectors" ] ||
         die "$file does not hold bin/goalcup and share/goalcup/connectors; nothing was installed"
+
+    # Run each new binary where it was unpacked, before anything in the prefix is touched. A
+    # build this machine cannot run (a glibc older than the one it was built against, a 32-bit
+    # userland) must leave an existing install as it was, and must not report success.
+    for binary in goalcup goalcup-daemon goalcup-verify; do
+        if ! out=$("$root/bin/$binary" --version 2>&1); then
+            hint=""
+            if [ "$(uname -s)" = Linux ]; then
+                hint="; the Linux builds need glibc 2.35 or later (this system: $(ldd --version 2>&1 | head -n 1))"
+            fi
+            die "$binary from $file does not run on this machine$hint. Its output: $out. Nothing was installed."
+        fi
+    done
 
     mkdir -p "$prefix/bin" "$prefix/share"
     # The connectors first and whole: each pin covers every byte of its folder, so the folder is
@@ -159,6 +177,12 @@ main() {
     done
 
     say "Installed $("$prefix/bin/goalcup" --version) into $prefix"
+    found=$(command -v goalcup 2>/dev/null || true)
+    if [ -n "$found" ] && [ "$found" != "$prefix/bin/goalcup" ]; then
+        say ""
+        say "Note: your PATH finds $found first, not the one just installed. Remove it or put"
+        say "$prefix/bin before it on PATH."
+    fi
     case ":${PATH:-}:" in
     *":$prefix/bin:"*) ;;
     *)

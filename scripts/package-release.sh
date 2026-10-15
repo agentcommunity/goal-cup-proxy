@@ -5,7 +5,7 @@
 #   sh scripts/package-release.sh <target> <version> <outdir>
 #
 # Writes <outdir>/goalcup-<version>-<target>.tar.gz, laid out as an install prefix, so the
-# unpacked directory runs as it is and Homebrew installs it file for file:
+# unpacked directory runs as it is and packaging/install.sh copies it file for file:
 #
 #   bin/goalcup bin/goalcup-daemon bin/goalcup-verify
 #   share/goalcup/connectors/   goalcup finds it as <exe dir>/../share/goalcup/connectors;

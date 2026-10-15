@@ -36,15 +36,25 @@ def this_target() -> str:
     return f"{arch}-unknown-linux-gnu"
 
 
-def make_release(root: Path, connectors: dict[str, str], version: str = VERSION) -> Path:
-    """Write <root>/release/{SHA256SUMS,goalcup-<version>-<target>.tar.gz}; return the directory."""
+def make_release(
+    root: Path,
+    connectors: dict[str, str],
+    version: str = VERSION,
+    broken: str | None = None,
+) -> Path:
+    """Write <root>/release/{SHA256SUMS,goalcup-<version>-<target>.tar.gz}; return the directory.
+
+    `broken` names a binary that fails to run, as a build for a newer glibc does."""
     target = this_target()
     name = f"goalcup-{version}-{target}"
     stage = root / "stage" / name
     for binary in ("goalcup", "goalcup-daemon", "goalcup-verify"):
         path = stage / "bin" / binary
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f'#!/bin/sh\necho "{binary} {version}"\n')
+        if binary == broken:
+            path.write_text("#!/bin/sh\necho 'GLIBC_2.34 not found' >&2\nexit 1\n")
+        else:
+            path.write_text(f'#!/bin/sh\necho "{binary} {version}"\n')
         path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     for connector, content in connectors.items():
         folder = stage / "share" / "goalcup" / "connectors" / connector
@@ -136,18 +146,59 @@ class InstallTests(unittest.TestCase):
         self.assertIn(f"{prefix}/bin is not on your PATH", result.stdout)
         self.assertEqual(list(self.home.iterdir()), [])
 
-    def test_unsupported_system_is_refused_before_any_download(self) -> None:
-        # A fake `uname` reports FreeBSD; GOALCUP_RELEASE_BASE points at nothing.
-        fake = self.root / "bin"
-        fake.mkdir()
+    def fake_tools(self, uname_os: str, uname_arch: str, **tools: str) -> str:
+        """A PATH whose `uname` (and any other tool named in `tools`) answers as given."""
+        fake = self.root / "fake-bin"
+        fake.mkdir(exist_ok=True)
         uname = fake / "uname"
-        uname.write_text('#!/bin/sh\n[ "$1" = -s ] && echo FreeBSD || echo amd64\n')
+        uname.write_text(f'#!/bin/sh\n[ "$1" = -s ] && echo {uname_os} || echo {uname_arch}\n')
         uname.chmod(0o755)
-        result = self.install(
-            self.root / "missing", PATH=f"{fake}{os.pathsep}{os.environ['PATH']}"
-        )
+        for name, output in tools.items():
+            tool = fake / name
+            tool.write_text(f"#!/bin/sh\necho '{output}'\n")
+            tool.chmod(0o755)
+        return f"{fake}{os.pathsep}{os.environ['PATH']}"
+
+    def test_unsupported_system_is_refused_before_any_download(self) -> None:
+        result = self.install(self.root / "missing", PATH=self.fake_tools("FreeBSD", "amd64"))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("no build for 'FreeBSD'", result.stderr)
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_musl_linux_is_refused_before_any_download(self) -> None:
+        path = self.fake_tools("Linux", "x86_64", ldd="musl libc (x86_64)")
+        result = self.install(self.root / "missing", PATH=path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("musl", result.stderr)
+
+    def test_an_intel_shell_on_apple_silicon_gets_the_arm_build(self) -> None:
+        # Under Rosetta uname says x86_64 but sysctl says the CPU is arm64.
+        path = self.fake_tools("Darwin", "x86_64", sysctl="1")
+        release = make_release(self.root, {"codex-cli": "a"})
+        (release / "SHA256SUMS").write_text("0" * 64 + "  goalcup-9.8.7-x86_64-apple-darwin.tar.gz\n")
+        result = self.install(release, PATH=path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("aarch64-apple-darwin", result.stderr)
+
+    def test_a_binary_that_does_not_run_installs_nothing(self) -> None:
+        release = make_release(self.root, {"codex-cli": "a"}, broken="goalcup")
+        result = self.install(release)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Installed", result.stdout)
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_a_broken_upgrade_leaves_the_old_install_as_it_was(self) -> None:
+        self.install(make_release(self.root, {"codex-cli": "old"}))
+        second = Path(tempfile.mkdtemp(dir=self.root))
+        broken = make_release(second, {"codex-cli": "new"}, version="9.8.8", broken="goalcup-daemon")
+        result = self.install(broken)
+        self.assertNotEqual(result.returncode, 0)
+        for binary in ("goalcup", "goalcup-daemon", "goalcup-verify"):
+            out = subprocess.run(
+                [str(self.home / ".local/bin" / binary), "--version"], capture_output=True, text=True
+            ).stdout
+            self.assertEqual(out.strip(), f"{binary} {VERSION}")
+        connectors = self.home / ".local/share/goalcup/connectors/codex-cli/harness.toml"
+        self.assertEqual(connectors.read_text(), "old")
 
 
 if __name__ == "__main__":

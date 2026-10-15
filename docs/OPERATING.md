@@ -47,7 +47,7 @@ All times UTC.
 
 | Date | What |
 |---|---|
-| 23–24 Oct | First release (`scripts/release.sh`, then the tag) |
+| 23–24 Oct | First release (`scripts/release.sh prepare`, merge, `scripts/release.sh tag`) |
 | 26 Oct | Freeze |
 | about 28 Oct | Dry run (production, `goalcup-dryrun-2026`) |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. |

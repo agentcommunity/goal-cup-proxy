@@ -10,7 +10,9 @@ curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/dow
 
 [install.sh](install.sh) is plain POSIX `sh` and needs no `sudo`. It picks the build for macOS
 arm64 or x86_64, or Linux arm64 or x86_64 (WSL2 is Linux), downloads the release's `SHA256SUMS`
-and the tarball, refuses the install on a checksum mismatch, and installs into `~/.local`: the
+and the tarball, refuses the install on a checksum mismatch, runs each new binary from the temporary folder (a
+build the machine cannot run, such as one that needs a newer glibc, stops the install with the
+old one untouched), and installs into `~/.local`: the
 binaries in `bin/`, the connectors in `share/goalcup/`. It edits no shell profile. Options:
 `--version <x.y.z>` (after `sh -s --`) installs that release instead of the latest, and `--prefix
 <dir>` installs elsewhere. Native Windows gets an `install.ps1` later. The checksum catches a
@@ -18,8 +20,7 @@ damaged or truncated download; it comes from the same release as the tarball, so
 signature.
 
 The binaries are unsigned and not notarized. A download by `curl` is not quarantined on macOS, so
-Gatekeeper does not stop them. There is no Homebrew tap; the formula template below is kept for a
-possible Mac-only tap later and is not published.
+Gatekeeper does not stop them. There is no Homebrew tap.
 
 ## What a release holds
 
@@ -28,7 +29,6 @@ possible Mac-only tap later and is not published.
 | `goalcup-<version>-<target>.tar.gz` | One per target: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` |
 | `SHA256SUMS` | `sha256sum` of each tarball |
 | `install.sh` | The installer, copied from [install.sh](install.sh) |
-| `goalcup.rb` | A Homebrew formula for this release, rendered from [homebrew/goalcup.rb](homebrew/goalcup.rb). Unused while there is no tap. |
 
 Each tarball unpacks to one directory laid out as an install prefix, so it also runs where it is
 unpacked, with no installer:
@@ -69,52 +69,21 @@ crate inherits it, and the binaries and the report fields (`tracer_version`, `da
 `verifier_version`) read it at build time. Docs say "the latest release" and never write it;
 `scripts/check-version.py`, run by both gate tiers, fails on any other copy.
 
-1. On a clean `main` with the changes merged, run `sh scripts/gate.sh full`.
-2. Run `sh scripts/release.sh <x.y.z>`. It sets the version, updates `Cargo.lock`, commits "Release
-   <x.y.z>" and tags `v<x.y.z>`. It pushes nothing.
-3. Push the commit and the tag:
+`main` is protected, so `scripts/release.sh` never pushes it: the version bump is a pull request,
+and the release is a tag on what that pull request merged.
 
-   ```sh
-   git push origin main v<x.y.z>
-   ```
+1. Run `sh scripts/gate.sh full` on the commit you mean to release.
+2. `sh scripts/release.sh prepare <x.y.z>` branches `release/v<x.y.z>` from `origin/main`, sets the
+   version, updates `Cargo.lock`, runs the version check, commits, pushes the branch and opens a
+   pull request. If `origin/main` already has `<x.y.z>` (the case for the first release, 0.6.0),
+   it says so and does nothing. Merge the pull request.
+3. `sh scripts/release.sh tag <x.y.z>` fetches, checks that `origin/main` has `<x.y.z>` in its
+   `Cargo.toml`, tags `origin/main`'s commit (never a local branch) and pushes only the tag.
+4. The tag starts the workflow. It refuses a tag that differs from `Cargo.toml`, builds the four
+   targets and creates the GitHub release with every asset.
 
-4. The workflow refuses a tag that differs from `Cargo.toml`. It builds the four targets and
-   creates the GitHub release with every asset. To try the build without releasing, start the
-   workflow by hand (`gh workflow run release.yml --ref <branch>`, or Actions, `release`, Run
-   workflow): it uploads the tarballs as run artifacts and publishes nothing, because the publish
-   job runs on a tag push only. Download them with `gh run download <run-id>`; to try the
-   installer on them, put the tarballs and a `SHA256SUMS` (`shasum -a 256 *.tar.gz`) in one folder
-   and run `GOALCUP_RELEASE_BASE=file://<folder> sh packaging/install.sh`.
-
-## Trying the formula without publishing (unused while there is no tap)
-
-Package for this machine, render the formula against the local tarball, and install it from a
-throwaway local tap (Homebrew refuses a formula file outside a tap). `render-formula.py` wants a
-digest for all four targets; Homebrew fetches only this machine's, so the other three get a
-placeholder:
-
-```sh
-export PATH="$HOME/.cargo/bin:$PATH"
-export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1
-target=aarch64-apple-darwin    # x86_64-apple-darwin on an Intel Mac
-version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-cargo build --release --locked --offline --target $target \
-  -p goalcup-cli -p goalcup-daemon -p goalcup-verifier
-CARGO_NET_OFFLINE=true sh scripts/package-release.sh $target "$version" dist
-(cd dist && shasum -a 256 *.tar.gz > SHA256SUMS)
-for other in x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
-  [ $other = $target ] || printf '%064d  goalcup-%s-%s.tar.gz\n' 0 "$version" $other >> dist/SHA256SUMS
-done
-brew tap-new --no-git local/goalcup-test
-python3 scripts/render-formula.py --version "$version" --sums dist/SHA256SUMS \
-  --base-url "file://$PWD/dist" \
-  > "$(brew --repository local/goalcup-test)/Formula/goalcup.rb"
-brew install local/goalcup-test/goalcup
-brew test local/goalcup-test/goalcup
-brew audit --formula local/goalcup-test/goalcup
-brew uninstall local/goalcup-test/goalcup && brew untap local/goalcup-test && rm -rf dist
-```
-
-`brew test` runs `goalcup --version` and `goalcup-verify --version`, and checks through
-`goalcup doctor --json` that the installed `goalcup` finds the connectors and that each one's pin
-passes.
+To try the build without releasing, start the workflow by hand (`gh workflow run release.yml --ref
+<branch>`, or Actions, `release`, Run workflow). It uploads the tarballs as run artifacts and
+publishes nothing, because the publish job runs on a tag push only. Download them with `gh run
+download <run-id>`. To try the installer on them, put the tarballs and a `SHA256SUMS` (`shasum -a
+256 *.tar.gz`) in one folder and run `GOALCUP_RELEASE_BASE=file://<folder> sh packaging/install.sh`.

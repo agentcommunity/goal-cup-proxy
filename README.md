@@ -151,6 +151,16 @@ the manual `linux-x86_64` workflow runs it on x86_64. CI (`check`, `.github/work
 small Linux smoke that skips the daemon and CLI suites. It is not the gate.
 More: [docs/OPERATING.md](docs/OPERATING.md#building-and-verifying).
 
+## Releasing
+
+The workspace `version` in `Cargo.toml` is the only place a version is written; the gate fails on
+any other copy. `main` is protected, so a release is two steps that never push `main`:
+`sh scripts/release.sh prepare <x.y.z>` opens a pull request that bumps the version (it does
+nothing if `origin/main` already has it), and, once that is merged, `sh scripts/release.sh tag
+<x.y.z>` tags `origin/main` and pushes only the tag. The tag starts the release workflow, which
+refuses a tag that differs from `Cargo.toml`. Details and how to try the build by hand:
+[packaging/README.md](packaging/README.md#cutting-a-release).
+
 ### The promises
 
 A test that guards one of these is never deleted. It may move tier.

@@ -83,7 +83,10 @@ class GateTests(unittest.TestCase):
         result = self.run_gate("fast")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
-        self.assertEqual(calls[calls.index("cargo build --offline --workspace") - 1], VERSION_CHECK)
+        self.assertEqual(calls[0], VERSION_CHECK)
+        build = calls.index("cargo build --offline --workspace")
+        tests = [i for i, c in enumerate(calls) if c.startswith(("cargo nextest run", "cargo test"))]
+        self.assertTrue(tests and build < min(tests), calls)
 
     def test_fast_excludes_full(self) -> None:
         self.run_gate("fast")
