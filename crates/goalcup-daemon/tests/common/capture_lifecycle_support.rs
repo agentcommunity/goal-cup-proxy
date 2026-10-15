@@ -481,14 +481,21 @@ pub async fn controlled_native_rig() -> (Rig, PathBuf, tempfile::TempDir) {
 /// identity `none`, and a `{config_home}/sessions` source read from the run's start. The config
 /// home exists and is empty; the returned path is it.
 pub async fn chat_rig() -> (Rig, PathBuf, tempfile::TempDir) {
+    chat_rig_with(|harness| harness).await
+}
+
+/// [`chat_rig`] with `edit` applied to the connector's `harness.toml`.
+pub async fn chat_rig_with(
+    edit: impl FnOnce(String) -> String,
+) -> (Rig, PathBuf, tempfile::TempDir) {
     let connectors = tempfile::tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../goalcup-protocol/tests/fixtures/harness/codex-cli.chat-mode.toml");
-    let harness = std::fs::read_to_string(source).unwrap().replacen(
+    let harness = edit(std::fs::read_to_string(source).unwrap().replacen(
         "id = \"codex-cli\"",
         "id = \"capture-dev\"",
         1,
-    );
+    ));
     let connector = connectors.path().join("capture-dev");
     std::fs::create_dir_all(&connector).unwrap();
     std::fs::write(connector.join("harness.toml"), harness).unwrap();

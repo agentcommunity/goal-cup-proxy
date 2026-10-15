@@ -71,6 +71,7 @@ m2: it does not prove the entry survives where it names the hook leg.
 | D56 | The seal of a clone records its commit and an uncommitted digest; the finish gets three minutes | in force (m2) once merged | [entry](#d56-m2-the-seal-of-a-clone-records-its-commit-and-an-uncommitted-digest-the-finish-gets-minutes) |
 | D57 | Shipped connectors run the harness in chat mode; the participant types the prompt; the session files are every one new or written since the run started | in force (m2) once merged; amends D52 | [entry](#d57-m2-connectors-run-the-harness-in-chat-mode-and-record-every-session-file-since-the-start) |
 | D58 | `MAX_PRODUCERS` (distinct IDs per entry, ever) rises to 65 536; a new `MAX_LIVE_PRODUCERS` = 128 bounds live producers; pre-change readers flag traces past 128 | in force (m2) once merged | [entry](#d58-m2-a-week-of-stalls-never-exhausts-the-producer-ids) |
+| D59 | `capture.env` admits `NODE_USE_ENV_PROXY = "1"`; `run_home = "shared"` keeps the run `HOME` of a harness without a home variable, under the shared-home rules | in force (m2) once merged | [entry](#d59-m2-node_use_env_proxy-and-a-shared-run-home) |
 
 The "Later list" at the end is V1/V1.1 scope; it is not re-decided on m2.
 
@@ -1690,6 +1691,48 @@ verifier. `docs/CONTRACTS.md` still says 128: it is the historical record of the
 frozen, and is left as written.
 
 **Reconsider when** a run needs more than 65 536 epochs.
+
+---
+
+## D59. **(M2)** `NODE_USE_ENV_PROXY` and a shared run home.
+
+**Decision (2026-10-15, coordinator request; additive to connector schema 1).**
+
+**`NODE_USE_ENV_PROXY = "1"`.** A Node harness ignores the process-scoped `HTTPS_PROXY` the
+capture launch pins unless `NODE_USE_ENV_PROXY=1` is set. `capture.env` admits that one name, and
+only with the value `1`. It names no endpoint and moves no base URL (D1): it makes the harness
+use the proxy the launch already sets. Every other `*_PROXY` name, and this one with any other
+value or as `capture.home.env`, keeps its refusal.
+
+**`[capture.home] run_home = "shared"`.** A harness whose config location has no one-word
+`*_HOME` or `*_CONFIG_DIR` variable cannot use `home.env`, so it keeps its state under the
+private run `HOME`, which is fresh each run: a login made before the run is lost. The new third
+value of `run_home` (beside `empty` and `keychain_link`, whose meaning is unchanged) makes that
+`HOME` one empty directory per connector, created by the tracker and kept across runs. It is held
+to the rules of a shared config home, not to new ones:
+- runs on it are serialized (D39's lock);
+- the daemon refuses it at the participant's `HOME` or under any loaded connector's `real_dirs`,
+  the check it makes of a config home, and refuses it anywhere but directly under
+  `<config_dir>/capture-homes`, where the launcher keeps every shared home (the daemon does not
+  ask this of a config home, whose fixtures sit elsewhere; a run home is new, so it can);
+- the baseline lists it (D56), with the same 10 000-file bound, no-follow walk and 64 MiB
+  size-only rule, without its `{run_home}` native roots: it is the home kept across runs, and
+  the per-run config home beside it is then empty and not listed;
+- a `{run_home}` native root with identity `none` needs `since_run_start = true` (D57), as a
+  `{config_home}` root on a shared config home does;
+- a missing `{run_home}` native root is created at entry create, the run `HOME` itself too if it
+  is missing, exactly as D57 creates a `{config_home}` root;
+- a credential is refused, as on a shared config home: the key-fragment scan covers the run
+  directory only (D41).
+
+It is refused together with `capture.home.env`. A harness with a home variable shares its config
+home instead, and two persistent homes would leave unclear which one holds the login. A root
+under a per-run `HOME` is still not created. Shipped connectors and their pins are unchanged. A
+launcher that does not know the value refuses it at start ("a run-home mode this goalcup does
+not support"), so a connector using it waits for the launcher that creates the shared run home.
+
+**Reconsider when** a harness needs its login kept and also has a home variable, or needs the
+keychain link and a kept `HOME` together.
 
 ---
 
