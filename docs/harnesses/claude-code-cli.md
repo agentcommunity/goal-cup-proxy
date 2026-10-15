@@ -1,16 +1,14 @@
 # Claude Code CLI harness facts
 
 Connector id: `claude-code-cli` · Facts for version: `2.1.283` · Written by: Goal Cup team · Last checked: 2026-10-13
-Public disclosure: yes. Everything here comes from the public connector, the public decision log and Goal Cup's own measurements on macOS and, for Linux with no login, in Docker (arm64) and on a GitHub-hosted runner (x86_64); no account data, tokens or personal paths are included.
+Public disclosure: yes. Everything here comes from the public connector and Goal Cup's own measurements on macOS and, for Linux with no login, in Docker (arm64) and on a GitHub-hosted runner (x86_64); no account data, tokens or personal paths are included.
 Status: shipped connector
 
 Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64; Claude Code 2.1.283 unless another version is named); "vendor docs" means a quote that Goal Cup's research file took from Anthropic's Claude Code documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. Linux was measured only on arm64 under Docker Desktop (Debian 13 container, Linux 7.0.12, 2026-10-13, Claude Code 2.1.283, no login, so no model call); the Linux x86_64 binary was run with no login on a GitHub-hosted `ubuntu-24.04` runner (2026-10-13); a logged-in Linux run was not measured on either architecture. Windows was not measured. Cells for what is still unmeasured say "unknown" or "not measured".
 
 ## 1. Run one prompt, headless
 
-Since D57 the connector runs Claude Code in chat mode instead (section 10). This is the headless recipe it ran before; its measurements stand.
-
-The capture argv (code: [connectors/claude-code-cli/harness.toml](../../connectors/claude-code-cli/harness.toml)), goal appended as the single element after `--`:
+The connector runs Claude Code in chat mode (section 10). This section records the headless recipe (`claude -p`), which the connector does not use; its measurements stand. The headless argv, with the goal as the single element after `--`:
 
 ```
 claude -p --permission-mode bypassPermissions \
@@ -22,21 +20,21 @@ claude -p --permission-mode bypassPermissions \
 - A write that needs approval is denied automatically and listed in the result's `permission_denials` (measured).
 - `--session-id` must be a valid UUID and pins the id, the transcript file name, record contents and hook payloads (measured; vendor docs).
 - Do not pass `--no-session-persistence` (it suppresses the transcript). `--bare` skips hooks and CLAUDE.md but does not use the subscription login (vendor docs).
-- On transport failure Claude retries with backoff, up to 10 times by default on 2.1.283 (measured: retries 1 to 7 of 10 seen, backoff 0.6 s to 38 s). The connector sets `CLAUDE_CODE_RETRY_WATCHDOG=1`, which vendor docs say raises this for unattended sessions (code comment; not measured by Goal Cup).
+- On transport failure Claude retries with backoff, up to 10 times by default on 2.1.283 (measured: retries 1 to 7 of 10 seen, backoff 0.6 s to 38 s). The connector sets `CLAUDE_CODE_RETRY_WATCHDOG=1`, which vendor docs say raises this for unattended sessions (not measured by Goal Cup).
 - A 64 KiB goal as one argv element was safe on macOS (measured). Other OS limits: unknown.
 
-## 2. Install and pin a version
+## 2. Install and record a version
 
-- Installed form on macOS: `~/.local/bin/claude` is a symlink to `~/.local/share/claude/versions/2.1.283`, a single native executable (measured). Other installs' updaters move the symlink (2.1.281 to 2.1.283 in three days, measured), so Goal Cup execs the versioned file and records its digest; no build is pinned (D53).
+- Installed form on macOS: `~/.local/bin/claude` is a symlink to `~/.local/share/claude/versions/2.1.283`, a single native executable (measured). Other installs' updaters move the symlink (2.1.281 to 2.1.283 in three days, measured). `goalcup start` runs the file `claude` resolves to and the daemon records its digests; no build is pinned (D53).
 - Print the version: `claude --version`. The connector's `version_args = ["--version"]` asks it once per run and records the line as `Launch.harness_version` (D53); no version is pinned.
 - Install an exact version: unknown (not recorded by Goal Cup).
 - Stop self-update: `DISABLE_AUTOUPDATER=1` (code: connector env).
 - Version lock: while a run is going Claude creates and removes `~/.local/state/claude/locks/2.1.283.lock`; `XDG_STATE_HOME` redirects it (measured).
-- Linux packages (measured: tarballs fetched with `npm pack` and hashed, 2026-10-13): `@anthropic-ai/claude-code-linux-x64@2.1.283` and `@anthropic-ai/claude-code-linux-arm64@2.1.283`, each holding the native executable at `package/claude`. The packages without a `-musl` suffix are the ones measured (assumed glibc builds; linkage not checked); the `-musl` packages were not measured. Measured SHA-256 of that file per architecture (the connector pinned these until D53; it now pins no build): x86_64 `1859583c...804ae2`, arm64 `346d294f...15e697`. The arm64 hash was re-measured on a Mac with `shasum -a 256` and in the container with `sha256sum`; the x86_64 hash was re-checked with `sha256sum` on an x86_64 runner before it ran. `claude --version` on Linux prints `2.1.283 (Claude Code)` and exits 0 (measured, Docker `rust:1.99` image on arm64, `--network none`, empty temporary `HOME` and `CLAUDE_CONFIG_DIR`, 2026-10-13). Linux install locations of the native installer: unknown (not tried).
-- Linux, no login (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login): `goalcup doctor` passes the executable check on the then-pinned arm64 binary, reached through a symlink on `PATH` (the file behind the link is what is hashed). Claude returns `{"is_error":true,"result":"Not logged in · Please run /login","terminal_reason":"api_error"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in about 49 ms, and exits 1; the proxy saw one intercepted connection, closed `interrupted`, with no wire stream. The run seals (`AlreadyStopped`) and `goalcup-verify --capture-integrity` exits 0.
+- Linux packages (measured: tarballs fetched with `npm pack` and hashed, 2026-10-13): `@anthropic-ai/claude-code-linux-x64@2.1.283` and `@anthropic-ai/claude-code-linux-arm64@2.1.283`, each holding the native executable at `package/claude`. The packages without a `-musl` suffix are the ones measured (assumed glibc builds; linkage not checked); the `-musl` packages were not measured. Measured SHA-256 of that file: x86_64 `1859583c...804ae2`, arm64 `346d294f...15e697`. `claude --version` on Linux prints `2.1.283 (Claude Code)` and exits 0 (measured, Docker `rust:1.99` image on arm64, `--network none`, empty temporary `HOME` and `CLAUDE_CONFIG_DIR`, 2026-10-13). Linux install locations of the native installer: unknown (not tried).
+- Linux, no login (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login): `goalcup doctor` passes the executable check on the arm64 binary, reached through a symlink on `PATH`. Claude returns `{"is_error":true,"result":"Not logged in · Please run /login","terminal_reason":"api_error"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in about 49 ms, and exits 1; the proxy saw one intercepted connection, closed `interrupted`, with no wire stream. The run seals (`AlreadyStopped`) and `goalcup-verify --capture-integrity` exits 0.
 - Linux x86_64, no login (measured, GitHub-hosted `ubuntu-24.04` runner, 4 vCPU, ext4, 2026-10-13, [run 38448817041](https://github.com/agentcommunity/goal-cup-tracer/actions/runs/38448817041), `scripts/linux-harness-smoke.sh`): `claude --version` prints `2.1.283 (Claude Code)`, `goalcup doctor` passes, Claude returns `{"is_error":true,"result":"Not logged in · Please run /login"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in 126 ms and exits 1, `goalcup start` prints `proxy admission: accepted=5 intercepted=5`, the run seals `AlreadyStopped`, `goalcup-verify --capture-integrity` exits 0, and no `claude` process is left.
-- macOS Intel (hashed from the npm tarball, 2026-10-14; not run): `@anthropic-ai/claude-code-darwin-x64@2.1.283` holds `package/claude`. The same method on `-darwin-arm64` reproduces the former base pin.
-- Windows install locations: unknown. A SHA-256 matches one platform and one architecture only, which is why builds are recorded rather than pinned (D53) (design note in goal-cup-tracer history, `docs/research/platform-portability.md`, seam 7).
+- macOS Intel (from the npm tarball, 2026-10-14; not run): `@anthropic-ai/claude-code-darwin-x64@2.1.283` holds `package/claude`.
+- Windows install locations: unknown. A SHA-256 matches one platform and one architecture only, which is why builds are recorded rather than pinned (D53).
 
 ## 3. Where it keeps things, per OS
 
@@ -63,7 +61,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 
 - **Subscription login (used by Goal Cup).** claude.ai OAuth. `claude auth status` reported `loggedIn true`, `authMethod claude.ai`, subscription `max` (measured).
 - **API key paths.** `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`. Goal Cup never passes them (code). Amp removes these from Claude's environment in its Claude Code mode (Amp docs, via Goal Cup's Amp record).
-- **Where credentials are stored.** macOS: the login Keychain, shared across config directories (code comment; consistent with a measurement: `loggedIn` was false with an empty `HOME` and true again once `HOME` held only a `Library/Keychains` link to the real keychain directory). Account metadata (`oauthAccount`, `userID`) sits in `.claude.json` (code: connector seeds these keys). Linux: unknown (measured on arm64 with no login: the no-login error names no path, and the run `HOME`'s dangling `Library/Keychains` symlink, from the connector's `keychain_link` home, drew no complaint); Goal Cup's design note believes a credentials file under the config dir, not measured. Windows: unknown.
+- **Where credentials are stored.** macOS: the login Keychain, shared across config directories (consistent with a measurement: `loggedIn` was false with an empty `HOME` and true again once `HOME` held only a `Library/Keychains` link to the real keychain directory). Account metadata (`oauthAccount`, `userID`) sits in `.claude.json` (code: connector seeds these keys). Linux: unknown (measured on arm64 with no login: the no-login error names no path, and the run `HOME`'s dangling `Library/Keychains` symlink, from the connector's `keychain_link` home, drew no complaint); A credentials file under the config dir is possible; not measured. Windows: unknown.
 - **Auth needs `USER`.** `loggedIn` was false when `USER` was absent from the environment; setting only `LOGNAME` did not help (measured).
 - **Files derived from the key.** None known.
 
@@ -71,7 +69,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 
 - **Model host.** `api.anthropic.com`, `POST /v1/messages`, HTTP/1.1, 200 `text/event-stream` (measured, 2.1.283, 2026-09-28 wire capture). Request 2 was a threaded continuation.
 - **Auth host.** `platform.claude.com` (code: `auth_hosts`).
-- **Connectors and sync.** At each launch Claude starts the account's claude.ai connectors and account-synced plugin MCP servers unless `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1` and `--strict-mcp-config` are set (measured; which one suffices alone was not isolated). The capture launch sets none of them since 2026-10-14 (owner direction: no MCP limit), so their traffic is tunnelled and not recorded. Earlier measured runs used all three, with `--model haiku --effort low --permission-mode acceptEdits`; the default-model, bypassed-permission launch is not yet measured. Hosts: unknown. Plugins and skills are refreshed from the account at each launch (measured).
+- **Connectors and sync.** At each launch Claude starts the account's claude.ai connectors and account-synced plugin MCP servers unless `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1` and `--strict-mcp-config` are set (measured; which one suffices alone was not isolated). The connector sets none of them, so their traffic is tunnelled and not recorded. Measured runs that set all three used `--model haiku --effort low --permission-mode acceptEdits`; the connector's own launch is not measured. Hosts: unknown. Plugins and skills are refreshed from the account at each launch (measured).
 - **Telemetry.** OpenTelemetry export is opt-in via `CLAUDE_CODE_ENABLE_TELEMETRY=1` and `OTEL_*` (vendor docs). Any default telemetry hosts: unknown.
 - **Update host.** unknown (the updater is disabled with `DISABLE_AUTOUPDATER=1`).
 - **Proxy.** `HTTPS_PROXY` is honoured; a loopback forward proxy captured the exchange above (measured, 2.1.283). Transport is plain HTTP/1.1 with server-sent events; no WebSocket seen.
@@ -102,11 +100,11 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - The MCP cache path is `$HOME/Library/Caches/claude-cli-nodejs`; `XDG_CACHE_HOME` is not consulted (read from the bundle, not separately measured).
 - Whether another install's updater could prune 2.1.283 while an unlocked run uses it: not measured.
 - Open: every "unknown" still above for Linux and Windows (a logged-in run, the config-dir default); the Linux credential store; the managed-settings paths; the update and connector hosts; how to install an exact version.
-- Compiled from records dated 2026-09-03 to 2026-10-07 and the public connector; none of the runs were repeated for this sheet. The Linux facts come from the 2026-10-13 arm64 Docker run (PR #55) and the x86_64 runner smoke (PR #81).
+- The Linux facts come from the 2026-10-13 arm64 Docker run and the x86_64 runner smoke.
 
 ## 10. Chat mode (measured 14 Oct 2026)
 
-Since D57 the connector runs Claude Code in its normal chat mode in the participant's terminal, and the participant types the prompt (code: [connectors/claude-code-cli/harness.toml](../../connectors/claude-code-cli/harness.toml)): `interactive = true`, `args = []` (`claude` alone), identity `none`, native root `{config_home}/projects` with pattern `*/*.jsonl` and `since_run_start = true`, `skills_dir = "skills"` (the goal-cup skill goes in `$CLAUDE_CONFIG_DIR/skills/goal-cup/`), `resume_args = ["--continue"]` (what `goalcup continue` appends; measured below to append to the same session file). `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_RETRY_WATCHDOG` are kept. Section 1 is the headless recipe it ran before.
+The connector runs Claude Code in its normal chat mode in the participant's terminal, and the participant types the prompt (code: [connectors/claude-code-cli/harness.toml](../../connectors/claude-code-cli/harness.toml)): `interactive = true`, `args = []` (`claude` alone), identity `none`, native root `{config_home}/projects` with pattern `*/*.jsonl` and `since_run_start = true`, `skills_dir = "skills"` (the goal-cup skill goes in `$CLAUDE_CONFIG_DIR/skills/goal-cup/`), `resume_args = ["--continue"]` (what `goalcup continue` appends; measured below to append to the same session file). `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_RETRY_WATCHDOG` are kept.
 
 Measured on macOS arm64, Claude Code 2.1.283, 2026-10-14, by driving the TUI on a pseudo-terminal (120x40) in a fresh `git init` workspace, with `CLAUDE_CONFIG_DIR` the tracer's isolated home and a `HOME` holding only `Library/Keychains`. That home was **logged out** (the assistant answered "Not logged in · Please run /login"), so no model reply was seen:
 

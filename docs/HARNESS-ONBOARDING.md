@@ -1,183 +1,402 @@
-# Bring your harness to Goal Cup
+# Add a harness
 
-For a team that builds a coding agent and wants it in Goal Cup. Read this in five minutes; hand
-the detailed checklist to your own coding agent. Updated: 2026-10-14.
+The one guide for adding a coding-agent harness to the tracer. It is for a harness team and for
+the coding agent that team uses. Every step has a command, its expected output and a stop rule.
+Three other documents complete it:
 
-## What Goal Cup is
+- [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md): every `harness.toml` field and the rule that refuses it.
+- [docs/harnesses](harnesses/README.md): one facts sheet per harness.
+- [writing-a-decoder](../skills/adding-a-capture-harness/writing-a-decoder.md): a separate
+  verifier change. A connector needs no decoder.
 
-Goal Cup is an agent hackathon with one rule: one person gives one coding agent one prompt,
-then leaves it alone for 168 hours. Judges score the product the agent ships. The organizers
-need to know afterwards that no human helped, so every participant runs an open-source
-**tracer** on their own Mac.
+## What the tracer does
 
-The tracer starts your harness on the participant's goal and records two things while it runs:
+The tracer starts one harness for a participant and records two things:
 
-- the session files your harness writes for that run (its own transcript), and
-- its model traffic, through a local proxy set (`HTTPS_PROXY`) for that one process only. The
-  proxy's certificate is trusted by that process only, through your harness's own CA variable
+- the session file the harness writes for that run (its own transcript);
+- its model traffic, through a local proxy set by `HTTPS_PROXY` for that one process only. The
+  proxy certificate is trusted by that process only, through the harness's own CA variable
   (for example `NODE_EXTRA_CA_CERTS`).
 
-When the run ends, the tracer seals both into one hash-linked trace, which the organizers check
-offline with `goalcup-verify --capture-integrity <trace>`. Traces are never published.
+At the end the tracer seals both into one hash-linked trace. `goalcup-verify --capture-integrity
+<trace>` checks it.
 
-What the tracer never does:
+The tracer never sets a model base URL, never writes app-wide config (`~/.claude`, `~/.codex`,
+`~/.hermes`), and never prompts the agent. Each run has its own private `HOME`. An API key goes to
+the harness process only, and the tracer checks that no part of it reaches the trace. Sign-in
+hosts are tunnelled and not recorded.
 
-- It never changes your harness's model base URL or any endpoint setting.
-- It never writes app-wide config (`~/.claude`, `~/.codex`, your harness's own dot-folder).
-- It gives every run its own private home folder, so the run does not touch the user's normal
-  setup. An API key is handed to your process only, and the tracer checks that no piece of it
-  reaches the trace. Sign-in hosts are passed through without being recorded.
+A harness is data. A contribution has no `.rs` file:
+
+- `connectors/<id>/harness.toml` and its seed files (`files/**`);
+- one line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
+- the regenerated golden files and one harness-kit case;
+- the facts sheet `docs/harnesses/<id>.md`.
+
+Arguments, the goal flag, the model name and `capture.env` are data. Generic rules shared by all
+connectors check them. Four lists stay in core code, because each is a security boundary: the
+credential variable names, the CA variables, the redaction regexes, and the identity carriers and
+native forms. A new entry in one of them is a separate core change (see
+[Do I need a core change?](#do-i-need-a-core-change)).
 
 <a id="row-0"></a>
 
-## Check first: harnesses the tracer cannot capture yet
+## Check first: what the tracer cannot capture
 
-Read this in minute one.
+Read this before you build anything. If your harness matches an item under "Cannot be captured",
+stop and send the facts sheet alone (status `facts only`). A facts sheet is a complete
+contribution.
 
-**Stop here** if your harness matches one of these: no connector can work until the tracer
-itself changes, so send the facts sheet alone (below).
+Cannot be captured:
 
-- **No local session file.** The tracer records the transcript file your harness writes on disk
-  for the run. Sessions kept only on your server have no fit.
-- **A database session store.** The file must be appended JSONL or rewritten whole each turn.
-  SQLite, LevelDB and other database stores are refused.
-- **HTTP/2-only or gRPC model traffic.** The recording proxy speaks HTTP/1.1 (and WebSocket
-  upgrades). A client that also offers HTTP/1.1 is fine; an `h2`-only client cannot connect.
-- **A local or loopback model** (Ollama, LM Studio, anything on `localhost`). The proxy never
-  sees loopback traffic, so a connector naming a loopback or single-label host is refused.
-- **A desktop or IDE app.** The tracer starts one CLI from argv: in chat mode in the
-  participant's own terminal (D57), or headless with one goal. A desktop or IDE app has no fit.
+| Item | Why | What it would take |
+|---|---|---|
+| No local session file (sessions kept on a server) | Schema 1 needs exactly one native row | A wire-only claim level |
+| A database session store (SQLite, LevelDB) | `native.form` is `append_only` or `snapshot` only | A read-only snapshot native form |
+| HTTP/2-only or gRPC model traffic | The proxy speaks HTTP/1.1 and WebSocket upgrades; an `h2`-only client cannot connect | An `h2` proxy path and a decoder for its framing |
+| A local or loopback model | The proxy never sees loopback traffic. A connector that names a loopback or single-label host is refused | A loopback relay the tracer records |
+| A desktop or IDE app | The tracer starts one CLI from argv | Not planned |
 
-**Known gaps**: the connector works, but the record is partial. Say so in the facts sheet.
+Known gaps. The connector works, but the record is partial. Write each one in the facts sheet:
 
-- **Subagents with their own transcript files.** Exactly one session file pattern is recorded;
-  separate subagent files are seen only as model traffic.
-- **A binary that updates itself** with no flag or variable to turn that off. The tracer hashes
-  the build that ran (the daemon hashes the binary at the launch, D53; the CLI reads none of its
-  bytes); an update during the run goes unrecorded.
-- **More than 16 model hosts, or a wildcard host.** Traffic to a host the connector does not
-  list passes through unrecorded.
-
-## What we ask of you
-
-1. **A connector PR.** A connector is a small folder, `connectors/<id>/`, with one data file,
-   `harness.toml`, and any seed files it needs. It tells the tracer how to start your harness (in
-   chat mode, or headless), where its session file lands, and which hosts carry model traffic. No
-   Rust code: your arguments, model name and environment variables are data, checked by rules that
-   apply to every connector. A few things stay closed lists in the tracer's code, because each is a
-   security decision: the name of an API-key variable the tracer hands your process, a
-   CA-certificate variable and a redaction pattern; new session-id carriers and session-file forms
-   are core changes too. If you need a new one, the decision table says so at step 3 and we add it
-   first.
-2. **A public facts sheet**, `docs/harnesses/<id>.md`: where your harness keeps sessions,
-   config and logins on macOS, Linux and Windows, how it authenticates and what it talks to.
-   [Why it exists](harnesses/README.md).
-
-If your harness does not fit the tracer yet (for example, sessions live only on your server),
-send the facts sheet alone. It tells us exactly what to build, and it is a complete
-contribution on its own.
+- Subagents with their own transcript files. Exactly one session-file pattern is recorded.
+  Separate subagent files are seen only as model traffic.
+- A binary that updates itself with no flag or variable to stop that. The daemon hashes the build
+  at launch. An update during the run is not recorded.
+- More than 16 model hosts, or a wildcard host. Traffic to a host the connector does not list
+  passes through unrecorded.
 
 ## What you need
 
-- A Mac with Apple silicon for the kit's real-harness step, which runs on macOS only. The event
-  also runs on Linux and WSL2, and the kit's synthetic captures run on Linux in Docker
-  ([README, Linux](../README.md#linux)).
-- Rust through [rustup](https://rustup.rs) (1.99 or later), the Xcode command line tools, and
-  `python3` (the one macOS ships is fine). If Homebrew also installed Rust, make sure
-  `which cargo` shows `~/.cargo/bin/cargo`.
-- A network connection for the first build only, and about 3 GB of disk for `target/`.
-- Your harness installed (note the version you measured), and a GitHub account.
+- A Mac (Apple silicon or Intel), or Linux. The harness-kit step runs on macOS only. On other
+  systems say in the PR that you did not run it.
+- Rust from [rustup](https://rustup.rs) (1.99 or later), the Xcode command line tools and
+  `python3`. If Homebrew also installed Rust, `which cargo` must print `~/.cargo/bin/cargo`.
+- A network for the first build only, and about 3 GB of disk for `target/`.
+- The harness installed (note the version you measure) and a GitHub account.
 
-<a id="1-capability-worksheet"></a>
+## Stop rules
+
+- **Cannot be captured**: stop at step 0. Contribute the facts sheet alone.
+- **Needs a core change**: stop at step 3. Open an issue that names the table row and links the
+  facts sheet. Write no connector. The sheet with `Status: facts only` is the PR.
+- **Unknown fact** in transport, session storage, isolation or auth, or session identity: write
+  "unknown", set `Status: facts only`, and stop.
+- **A key or token in a file, argv, log, facts sheet, PR or chat**: never. Never open or print a
+  key file. The kit uses an invented key.
+- **Real `HOME` touched**: stop and report it. Every probe uses a private `HOME`.
 
 ## Steps
 
-The [skill](../skills/adding-a-capture-harness/SKILL.md) is the full checklist, written so your
-coding agent can follow it step by step, with the expected output of every command. In short:
+`<id>` is the connector id: lowercase, `^[a-z][a-z0-9-]{1,47}$`, usually `<name>-cli`. `<program>`
+is the harness executable. Run every command from the repository root.
 
-1. **Get the code and build it.** Fork
-   [goal-cup-tracer](https://github.com/agentcommunity/goal-cup-tracer) on GitHub, then:
+0. **Can it be captured?** Read [Check first](#row-0). Stop on any item under "Cannot be
+   captured".
+1. **Set up.** Fork the repository and branch as in [CONTRIBUTING](../CONTRIBUTING.md), and read
+   [AGENTS.md](../AGENTS.md) once. Then, online, once per checkout:
    ```sh
-   git clone https://github.com/<you>/goal-cup-tracer.git && cd goal-cup-tracer
    cargo nextest --version || cargo install cargo-nextest --locked
    cargo fetch --locked
    cargo build
    ```
-   This is the only step that needs the network; the checks afterwards run offline.
-2. **Write the facts sheet.** Copy the template and fill it from your docs and from a run with
-   a throwaway `HOME`. Write "unknown" rather than guess.
-   [codex-cli.md](harnesses/codex-cli.md) is a filled example.
+   Expect `Finished` and exit 0. After this the gate runs cargo with `--offline`. Warm timings:
+   `check-connector.sh` about 1 to 1.5 minutes, `gate.sh fast` about 2.5 minutes. Keep one cargo
+   target directory per checkout.
+2. **Fill the facts sheet.** Measure with a private `HOME` and a harness home under a temp
+   directory, against the exact installed version.
    ```sh
-   mkdir -p docs/harnesses
    cp skills/adding-a-capture-harness/templates/harness-facts.md docs/harnesses/<id>.md
    ```
-3. **Check the fit.** Walk the [decision table](../skills/adding-a-capture-harness/decision-table.md).
-   If a row says "core PR", stop and open an issue with your facts sheet: we change the tracer
-   first. Amp is the worked example there. (The [check-first list](#row-0) above is row 0.) Two early surprises: the session id must reach the
-   tracer as an id flag, a JSON line on stdout or a fixed-prefix line on stderr (plain text on
-   stdout is not enough), and a Python harness that trusts only `SSL_CERT_FILE` or
-   `REQUESTS_CA_BUNDLE` needs its own CA variable added first.
-4. **Write the connector.** Copy
-   `skills/adding-a-capture-harness/templates/connector-harness.toml` to
-   `connectors/<id>/harness.toml` and fill it in; `connectors/hermes-cli/` is the closest
-   example. Builds are recorded, not pinned (D53): name the program, and if it prints its
-   version on one line, the arguments that ask for it (`version_args = ["--version"]`). The
-   tracer records the build's digests and that line in every trace.
-5. **Add a test case.** Copy `skills/adding-a-capture-harness/templates/kit-case/` to
-   `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`. It is a small Python stand-in that
-   behaves like your harness, so the tracer can be tested without a network or a key.
-6. **Regenerate the generated files.** `sh scripts/pin-manifests.sh` records the connector's
-   hash; the skill gives the one command that refreshes the test snapshots ("goldens").
-7. **Check it and open the PR** (next two sections).
+   Keep every heading and its order. Give every fact a source (a docs link, or "measured on
+   version X") or write "unknown". Write no secret, token or personal path (`$HOME`, not
+   `/Users/name`). The worked example is [codex-cli.md](harnesses/codex-cli.md); the rules and the
+   `Status:` values are in [docs/harnesses](harnesses/README.md). The sections map to the
+   connector:
 
-## Check it locally
+   | Facts sheet section | Lands in `harness.toml` |
+   |---|---|
+   | 1. Run one prompt | `[capture].args`, `goal_flag` or a trailing `--`, `interactive`, `continuation` |
+   | 2. Install and version | `[capture.executable]` |
+   | 3. Where it keeps things | `[capture.home]`, `[[capture.native]].root` |
+   | 4. Session format and identity | `[[capture.native]]` `pattern` and `form`, `[capture.identity]` |
+   | 5. Auth | `[capture.credential]`, `auth_hosts`, `[capture.home]` `run_home` |
+   | 6. Network | `[[capture.hosts]]`, `[capture.ca]` |
+   | 7. Process model | `[capture.termination]`, `[capture.argv_guard]` |
+   | 8. Things Goal Cup cannot isolate | nothing; it stays in the sheet |
 
-```sh
-sh scripts/check-connector.sh <id>
-sh scripts/gate.sh fast
-```
+   Stop on an unknown in section 4, 5 or 6, or in the macOS column of section 3.
+3. **Do I need a core change?** Walk every row of [the table below](#do-i-need-a-core-change).
+   Stop on any "core change" row.
+4. **Record how to get the version.** Builds are recorded, not pinned (D53): the tracer hashes
+   what `program` resolves to and records the digests. Find the file the CLI will run and the
+   version command:
+   ```sh
+   python3 -c 'import os,shutil,sys; print(os.path.realpath(shutil.which(sys.argv[1])))' <program>
+   <program> --version
+   ```
+   Expect one absolute path, then the version on the first line of stdout. Put the arguments in
+   `[capture.executable] version_args` (`["--version"]`) and the path and version in section 2 of
+   the sheet. If there is no version command, or it needs a network or a login, leave
+   `version_args` out; the trace then says `unreported`. Never write `version` or `sha256`: the
+   loader refuses both.
+5. **Write the connector.**
+   ```sh
+   mkdir -p connectors/<id>
+   cp skills/adding-a-capture-harness/templates/connector-harness.toml connectors/<id>/harness.toml
+   ```
+   Replace every `<PLACEHOLDER>` and delete unused options. Choose how the goal arrives:
+   - **Chat mode** (`interactive = true`): the harness opens in the participant's terminal and the
+     participant types the prompt. No goal slot, no credential, identity `none`. Claude Code and
+     Codex use it.
+   - **Headless**: the goal is the last argument after `--`, or `goal_flag` carries it as
+     `--flag=<goal>`. Hermes uses it.
 
-The first runs every connector check: files, pin, schema, test snapshots, and the test kit with
-your stand-in. On a Mac its last line reads `check-connector: <id>: 6 passed, 0 failed, 0 skipped`.
-The second is the build, format, lint and test gate every change passes; its last line reads
-`gate fast: PASS in <N>s`. On a warm build expect about a minute for the first and two to
-three for the second. If the kit fails, the summary says only `FAIL kit`; the skill explains
-how to read the test output above it.
+   The closest complete example is [connectors/hermes-cli](../connectors/hermes-cli/harness.toml)
+   (headless, with a credential) or `connectors/codex-cli` (chat mode). Seeds go in
+   `connectors/<id>/files/` and `capture.home.seed` must name each one; the loader refuses any other
+   file in the folder. Field rules: [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md). Check that no
+   placeholder is left outside comments:
+   ```sh
+   grep -nE '^[^#]*<[^>]+>' connectors/<id>/harness.toml
+   ```
+   Expect no output.
+6. **Regenerate the pin.** `sh scripts/pin-manifests.sh`. Expect no output and exit 0. Then
+   `git diff --stat -- crates/*/pins` must show `crates/goalcup-protocol/pins/connector-dirs.txt`
+   with one line added for `<id>`, and nothing else. Run it again after every edit under
+   `connectors/<id>/`. Never edit a pin by hand.
+7. **Regenerate the goldens.**
+   ```sh
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test full harness_contract_golden::
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test full harness_contract_golden::
+   git status --short crates/goalcup-cli/tests/fixtures/harness-golden
+   ```
+   Expect both `test result: ok.`, a new `<id>.json` and `<id>.daemon.json`, and a changed
+   `enumeration.json` (and `redaction-extra-patterns.json` if the connector declares extra
+   patterns). A changed golden that does not mention
+   `<id>` did not change because of your connector: run `git checkout -- <file>` and name it in the
+   PR. Set the variable per command, never `export` it.
+8. **Add the kit case.**
+   ```sh
+   k=crates/goalcup-cli/tests/fixtures/harness-kit/<id>
+   mkdir -p $k && cp skills/adding-a-capture-harness/templates/kit-case/* $k/
+   ```
+   Follow the comments in the three files. The case mirrors the connector's home, identity and
+   native shape with a Python stand-in. It uses id `kit-<id>` and copies any seeds into
+   `$k/files/`. Read the closest baseline case beside it: `controlled-workload`,
+   `synthetic-preassigned`, `synthetic-stderr-token`, `synthetic-keyed-stderr`,
+   `synthetic-stdout-json` or `synthetic-keyed-stdout-json`. A keyed case names `credential_env`
+   in `expect.toml` and copies the connector's `[capture.credential]`; the kit gives the stand-in
+   an invented key and checks that no fragment of it leaks. `native_path` is relative to the native
+   root; `native_decoy_path` is a suffix under the run directory and includes the root's last
+   directory. Check:
+   ```sh
+   grep -nE '^[^#]*<[^>]+>' $k/harness.toml $k/expect.toml
+   grep -hE '^(BODY|wire_request) = b?"' $k/stand-in.py $k/expect.toml | cut -d\" -f2 | uniq -c
+   ```
+   Expect no output from the first. Expect one line from the second: `2`, then the body. In
+   `stand-in.py` only the EDIT block must be free of `<`.
+9. **Run the connector check.** `sh scripts/check-connector.sh <id>`. It runs files, pins, schema,
+   both goldens and the kit. Expect the last line `check-connector: <id>: 6 passed, 0 failed, 0
+   skipped`. A kit failure prints only `FAIL kit` in the summary. Read the Rust assertion above
+   it: `left` is what the kit captured and `right` is what `expect.toml` predicts. Fix the
+   `expect.toml` field that the `right` side came from. Off macOS the kit cannot run: say so in the
+   PR and do not claim a pass.
+10. **Run the gate.** `sh scripts/gate.sh fast`. Expect the last line `gate fast: PASS in <N>s`.
+11. **Review your own diff** against the [reviewer checklist](#reviewing-a-connector-pr).
+    Optional, on your own account (a trial, not a judged entry): run `cargo build` (the pins are
+    compiled in), then one short run with `target/debug/goalcup start --harness <id>`, and check it
+    with `target/debug/goalcup-verify --capture-integrity <trace>`. A pinned id needs no `--dev`.
+    Put nothing from a real trace in the PR. It holds your transcript.
+12. **Open the PR** (next section).
 
-A passing kit proves the tracer starts, isolates and records something shaped like your
-harness. It does not prove your real harness works under the tracer. To try that on your own
-account (a trial on a self-built tracer, not a judged entry): run `sh scripts/pin-manifests.sh`
-and `cargo build` (the pins are compiled in, so repeat both after every connector edit), run one
-short goal as in the [README quickstart](../README.md#quickstart) with `target/debug/goalcup`
-and `--harness <id>`, and check it with
-`target/debug/goalcup-verify --capture-integrity <trace>`. No `--dev` flag is needed: `--dev` is
-only for a connector folder whose id this build does not pin. Never put anything from a real
-trace in the PR; it holds your transcript.
+Fast loop while fixing schema errors: `cargo test -p goalcup-protocol --test it --
+harness_conformance:: connector_pins::`.
+
+<a id="what-goes-in-the-pr"></a>
 
 ## What goes in the PR
 
-- `connectors/<id>/harness.toml` and any seed files under `connectors/<id>/files/`;
+Exactly these, which `git status --short` must confirm:
+
+- `connectors/<id>/` (the `harness.toml` and `files/**` seeds);
 - the one new line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
-- the regenerated snapshots under `crates/goalcup-cli/tests/fixtures/harness-golden/`;
-- the test case under `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`;
+- the golden JSON from step 7;
+- the kit case from step 8;
 - `docs/harnesses/<id>.md`.
 
-In the description, paste the last lines of both checks, and say which parts an agent wrote and
-that a person on your team read the whole diff. No keys, tokens or real transcripts anywhere. A
-maintainer replies within 7 days and runs the checks again on a Mac.
+In the description paste the last line of steps 9 and 10, name anything restored or not run, say
+which parts an agent wrote, and say that a person read the whole diff. Claim only what passed. The
+kit shows that the tracer works with a stand-in shaped like the harness. It does not show that
+the real harness ran. A maintainer replies within 7 days and runs the checks again on a Mac.
 
-## What is not ready yet
+## When something fails
 
-- **No installer.** The tracer is source only; participants build it with cargo.
-- **No server.** Traces stay on the participant's machine; upload to the organizers is
-  planned, not built.
-- **macOS only for a real capture.** Linux is measured in Docker with synthetic captures only,
-  and Windows is not measured, which is why the facts sheet asks for their paths now.
-- **The capture limits** in the [check-first list](#row-0) above.
+| Symptom | Where to look |
+|---|---|
+| A field or value is refused | [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md), then step 3 |
+| `declares id ..., which is not the folder name` | `id` must equal the folder name |
+| The pin test fails after an edit | Run step 6 again and commit what it writes |
+| A golden mismatch | Step 7, then read the JSON diff |
+| A kit case is refused for a pinned id | The kit id must be `kit-<id>`, not `<id>` |
+| `stand-in.py: replace the placeholder in <NAME>` | The EDIT block in `stand-in.py` |
+
+<a id="do-i-need-a-core-change"></a>
+
+## Do I need a core change?
+
+Each row is a closed rule in
+[`capture_policy.rs`](../crates/goalcup-protocol/src/capture_policy.rs) or
+[`harness.rs`](../crates/goalcup-protocol/src/harness.rs) (`check_cross_field`). Field limits are
+in [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md). Check [row 0](#row-0) first.
+
+"Core change" means stop. Open an issue that names the row and links your facts sheet. Write no
+connector until a maintainer lands the change (with a [DECISIONS](DECISIONS.md) entry when policy
+moves). Never spell around a rule.
+
+| # | Rule | Data-only fits when | Otherwise |
+|---|---|---|---|
+| 1 | Credential name | no key variable, `DEEPSEEK_API_KEY`, or `AMP_API_KEY` | core change |
+| 2 | Credential with identity | per-run config home, and identity `stderr_line` + `deferred` or `stdout_json` + `at_launch` | core change |
+| 3 | Credential in the kit | none, or the case names it in `credential_env` | core change |
+| 4 | Identity carrier | `none`, `preassigned`, `stdout_json` or `stderr_line` | core change |
+| 5 | Home variable | `home.env` is `<WORD>_HOME` or `<WORD>_CONFIG_DIR`, or is left out | core change |
+| 6 | XDG | the harness falls back to `$HOME` and needs no XDG variable | core change |
+| 7 | CA variable | the harness honours `CODEX_CA_CERTIFICATE`, `NODE_EXTRA_CA_CERTS` or `HERMES_CA_BUNDLE` | core change |
+| 8 | Native form | the own-session file is appended JSONL or rewritten whole | core change |
+| 9 | One native row | exactly one local own-session store | core change |
+| 10 | Executable | one entry-point file (a binary, or a script with a shebang), not an interpreter | fits |
+| 11 | Endpoint names | you set no endpoint variable at all | issue, not blocking |
+| 12 | Other refusals | no refused env name, argv path or custom regex is needed | core change |
+| 13 | Argv and env | always, when no generic rule refuses them | refused by row 12 |
+
+The security lists (rows 1, 7 and the redaction regex in row 12) are closed on purpose. A
+credential name decides which secret the tracer copies from the participant's shell. A CA variable
+is a trust statement about the participant's machine. A redaction regex runs inside the signed
+daemon.
+
+1. **Credential name.** Subscription or login auth needs no `[capture.credential]` table.
+2. **Credential with identity.** One stdout reader feeds both the key-fragment scan and the
+   `stdout_json` identity matcher. A credential with `preassigned` or `none` identity is refused.
+3. **Credential in the kit.** The case names the variable in `expect.toml` as `credential_env`. Copy
+   the connector's `[capture.credential]` into the case, and write the marker as
+   `synthetic-keyed-stderr/stand-in.py` does.
+4. **Identity carrier.** Four ways exist, each with its binding:
+   - `none` (no binding): no id; the native root is private to the run, or the native row sets
+     `since_run_start`.
+   - `preassigned` + `at_launch`: the harness accepts an id flag. The tracer mints the id and puts
+     it in `args` as `{session_id}`.
+   - `stdout_json` + `at_launch`: the harness prints a JSON line on stdout, before any model text,
+     with a field that marks it (`match_field`, `match_value`) and one that holds the id
+     (`id_field`).
+   - `stderr_line` + `deferred`: the harness prints a stderr line that is exactly `<prefix><id>`.
+     The id is a `token` (`[A-Za-z0-9_-]{1,128}`) or `timestamp-hex`.
+
+   A session id in plain text on stdout (`session: abc`) is not supported. Map it to one of the four
+   if the harness can: an id flag, a JSON event mode, the same line on stderr, or no id when the
+   session files land under the per-run home anyway.
+5. **Home variable.** `^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$`. Other tools' variables (`CARGO_HOME`,
+   `NPM_*`) are refused. A harness with no such variable leaves `home.env` out. It then keeps its
+   state under the private run `HOME`, so its native `root` is `{run_home}/...`, `config_home` is
+   `per_run`, and it takes no seeds or `dirs`. A login in that home lasts one run, so such a harness
+   needs a credential (row 1), keeps its login in the macOS Keychain (`run_home =
+   "keychain_link"`), or uses `run_home = "shared"`.
+6. **XDG.** Every `XDG_*` name is refused in `capture.env` and as `home.env`. The launch
+   environment starts empty, so the harness uses `$HOME`, the private run home.
+7. **CA variable.** `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` are
+   refused because they change trust for every child tool. A Python harness that honours only
+   those needs a core change for its own CA variable. Say so early, in section 6 of the sheet.
+8. **Native form.** `append_only` or `snapshot` only. A database store is refused.
+9. **One native row.** Schema 1 refuses zero native rows and more than one.
+10. **Executable.** There is no `sha256` (D53). The CLI resolves `program` on `PATH`, follows
+    symlinks, and runs the regular file at the end. Any build runs. A pinned `program` cannot be an
+    interpreter (`python3`, `node`, `sh`, `env`). A shebang script is fine.
+11. **Endpoint names.** Names ending `_URL`, `_BASE`, `_HOST`, `_HOSTNAME`, `_ADDR`, `_ADDRESS`,
+    `_SERVER`, `_ORIGIN` or `_REGISTRY`, or containing `ENDPOINT`, are refused, and so is any value
+    with `://`. An endpoint variable with another name is not refused by name. Never set it, record
+    it in the sheet and open an issue.
+12. **Other refusals.** Examples: `NO_PAGER` (the `PAGER` suffix rule), a variable that loads code
+    (`PYTHONBREAKPOINT`), an absolute path in `args`, an argument that turns certificate
+    verification off or names a command, hook or server, a `goal_flag` with the word `exec`,
+    `file`, `run` or `config` (`--execute` is fine), a host that is `localhost`, `*.localhost`,
+    single-label or numeric, and a redaction regex that is not one of the four core recognizers. In
+    `capture.env`: any `*_HOME`, `*_CONFIG_DIR` or `*_CONFIG_HOME` name (the harness's own goes in
+    `capture.home.env`) and any name under the connector's `reserved_env_prefixes`.
+13. **Argv and env.** No list of reviewed arguments or variables exists. A refused value is
+    refused with the rule's reason at step 9. What no rule can see is the reviewer's job: a dropped
+    safety flag, or a value that turns self-update back on. Write in the sheet why each flag and
+    variable is there. How much the harness may do (model, sandbox, permissions) is the
+    participant's choice. A connector does not limit it.
+
+<a id="reviewing-a-connector-pr"></a>
+
+## Reviewing a connector PR
+
+A connector is trusted executable surface. The pin catches a change to the directory after a build.
+It does not make a careless seed safe. A code owner reads every field and every seed.
+`harness_conformance` refuses many invalid values, but validation is not review.
+
+1. **Seeds.** Read every `files/**` file as code. Check commands, hooks, plugins, helpers, URLs,
+   endpoint settings, MCP servers, profiles and permissions. Nothing may redirect the model
+   endpoint or run outside the run.
+2. **`capture.args`.** No endpoint, settings indirection, native-store switch-off or absolute
+   path. If argv is pre-scanned, `argv_guard` must cover every option the harness acts on, with
+   abbreviations.
+3. **`capture.env`.** Justify every value. `SHELL` is only `/bin/zsh`, `/bin/bash` or `/bin/sh`. No
+   flag that capture needs may be dropped: one session file kept, self-update off
+   (`DISABLE_AUTOUPDATER = "0"` turns it back on). No argument or variable may name a command, a
+   hook, an MCP server, a host or a file outside the run. Look for telemetry exporters and code
+   loaders.
+4. **`capture.executable`.** `program` is the harness entry point, not an interpreter or a moving
+   updater wrapper. `version_args` only asks for the version.
+5. **Hosts.** Only the provider, the narrowest evidence paths and a real protocol hint. No
+   registry or unrelated host. Auth hosts are sign-in and refresh tunnels and cannot supply model
+   evidence. The protocol hint is declared, never inferred.
+6. **Native capture.** The root is inside the run or config home. `{id}` scopes a shared store. The
+   pattern cannot match request dumps, future credential stores, seed files or key-fragment logs.
+7. **Redaction.** Plan, billing, quota and key fields seen in fixtures are covered by the admitted
+   recognizers. Committed fixtures went through `spikes/redact.py` and were read by eye. They hold
+   no real prompt, trace or key.
+8. **Home and secrets.** A private `HOME` every time. `shared` is justified and serialized.
+   Per-run seeds hold no credential, URL or user data, and use safe modes. An API key stays
+   child-only and out of homes, logs, records and evidence.
+9. **Identity.** The source matches the measured carrier. The `stderr_line` grammar is exact.
+   `stdout_json` start fields come before model text, and model text inside events is escaped.
+10. **Pin, goldens, kit.** Re-run `sh scripts/pin-manifests.sh` and confirm one pin-line diff.
+    Confirm the golden diff only adds the new connector. Run the kit after a workspace build. A
+    policy row or a decoder belongs in its own PR.
+
+What each manifest field must establish:
+
+| Field | The reviewer must establish |
+|---|---|
+| `capture.args`, executable | headless argv or chat mode, goal placement, entry point, version |
+| `capture.home`, `env` | private HOME and config home, real state dirs, seed contents and modes |
+| `capture.credential`, `capture.ca` | variable names and process scope; no secret value; no app-wide trust |
+| `capture.hosts`, `auth_hosts` | provider host, narrow evidence paths, protocol hint |
+| `capture.native` | one own-session store, its form, root, pattern and scope; no request dump or credential store |
+| `capture.identity` | the measured carrier, its grammar and fields, and its binding to that store |
+| `redaction.extra_patterns` | plan, billing, quota and key-fragment coverage |
+
+## Claims
+
+| Finding | Permitted conclusion |
+|---|---|
+| Unknown transport, storage, isolation, auth or identity | Blocked. Keep "unknown" and stop |
+| No request or response recorded | Not qualified. Check admission, host, path and auth tunnel |
+| HTTP/2, unsupported body, or missing native source | Report unsupported or partial. Keep the bytes and gaps |
+| Bytes recorded, semantics unknown | Capture-only for the stated coverage. No decoder claim |
+| Gap, stale recorder or unknown accounting | Report incomplete. Never call it clean |
+| Task fails while the recorder passes, or the reverse | Report each outcome separately |
+
+A passing kit is **synthetic tested** only. A maintainer may run one short real run with their own
+subscription or key, with a private launch directory and the reviewed connector. A contributor never
+opens a key file. For a key-bearing run, a clean key-fragment scan is mandatory before the evidence
+is accepted. That run is evidence for that build of the harness, not a release or a general
+qualification.
 
 ## Reach us
 
-Open an issue on [goal-cup-tracer](https://github.com/agentcommunity/goal-cup-tracer/issues)
-for anything public, including "this step did not work". For anything private, or a security
-problem, email goalhack@agentcommunity.org ([SECURITY](../SECURITY.md)). The maintainer is
-Balazs Nemethi.
+Open an issue on [goal-cup-tracer](https://github.com/agentcommunity/goal-cup-tracer/issues) for
+anything public, including "this step did not work". For anything private, or a security problem,
+email goalcup@agentcommunity.org ([SECURITY](../SECURITY.md)). The maintainer is Balazs Nemethi.

@@ -1,8 +1,8 @@
 # Connector schema 1
 
 What may `connectors/<id>/harness.toml` contain? This is the public field and validation
-reference for harness authors and reviewers.
-Updated: 2026-10-15.
+reference for harness authors and reviewers. The procedure for adding a harness is
+[HARNESS-ONBOARDING](HARNESS-ONBOARDING.md).
 
 The executable authority is
 [`harness.rs`](../crates/goalcup-protocol/src/harness.rs). Its
@@ -57,6 +57,7 @@ optional field or table is absent.
 | `capture.continuation` | required | Non-blank, one line, 1–512 bytes; declarative provenance for unattended continuation. |
 | `capture.auth_hosts` | optional, default `[]` | At most 16 unique lowercase DNS hosts; always opaque tunnels. |
 | `capture.env` | optional, default `{}` | At most 32 string-to-string entries; the child-only process environment additions. |
+| `capture.reserved_env_prefixes` | optional, default `[]` | At most 4 names of the form `^[A-Z][A-Z0-9_]{0,30}_$`; `capture.env` may set no name under them. See the environment policy below. |
 | `capture.executable` | required table | The executable name on `PATH`, and how to ask it its version. |
 | `capture.platform` | optional, default `{}` | Per-platform env entries; see below. |
 | `capture.home` | required table | Run `HOME`, isolated harness home and any seeds. |
@@ -469,79 +470,16 @@ schema 2, migration of every harness manifest and regenerated directory pins. Ti
 policy row is not a schema bump, but it needs a DECISIONS entry and migrates every connector it
 would reject in the same PR.
 
-## Full checked example
+## Examples
 
-This is the complete tracked
-[`hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml), not a permissive sketch. The
-focused `harness_conformance` and `connector_pins` tests load these bytes as `Origin::Pinned`,
-validate every field and compare the whole connector directory with its compiled pin.
+Read the shipped connectors. Conformance tests load each as `Origin::Pinned` and compare its
+directory with its pin.
 
-```toml
-# Hermes Agent 0.19.0, capture only (D40, D41). Provenance: docs/qualification/m2-hermes-readiness.md.
-schema_version = 1
-id = "hermes-cli"
-
-[capture]
-# hermes chat -Q --provider deepseek --query=<goal>
-args = ["chat", "-Q", "--provider", "deepseek"]
-goal_flag = "--query"
-continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
-
-[capture.executable]
-program = "hermes"
-
-[capture.env]
-TERMINAL_HOME_MODE = "profile"
-
-[capture.home]
-run_home = "empty"
-config_home = "per_run"
-env = "HERMES_HOME"
-per_run_dir = "hermes"
-dirs = ["home"]
-real_dirs = ["{user_home}/.hermes"]
-seed = [
-  { file = "config.yaml" },
-  { file = "auth.json" },
-  { file = ".update_check" },
-]
-
-[capture.credential]
-env = "DEEPSEEK_API_KEY"
-
-[capture.ca]
-env = ["HERMES_CA_BUNDLE"]
-mode = "replace"
-
-[capture.identity]
-source = "stderr_line"
-binding = "deferred"
-prefix = "session_id: "
-grammar = "timestamp-hex"
-
-# Only the run's own snapshot; never a request_dump_* file (D41). No native decoder yet.
-[[capture.native]]
-name = "session"
-root = "{config_home}/sessions"
-pattern = "session_{id}.json"
-form = "snapshot"
-
-# Hermes scans raw argv for -p/--profile, --tui, --cli and -h before argparse, which abbreviates.
-[capture.argv_guard]
-long = ["profile", "tui", "cli", "help"]
-short = ["p", "h"]
-short_with_value = ["p", "z", "m", "t", "r", "s", "q", "c"]
-long_abbreviations = true
-
-[capture.termination]
-strategy = "process_group"
-grace_seconds = 10
-
-[[capture.hosts]]
-host = "api.deepseek.com"
-evidence_paths = ["/v1/chat/completions"]
-protocol_hint = "openai-chat-completions"
-```
-
-The canonical file remains the source: if its measured recipe changes, update this checked example
-in the same documentation change rather than treating the copy as another connector definition.
+- [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): headless, with a
+  credential, `stderr_line` identity, a `snapshot` native source, an argv guard and a reserved
+  prefix.
+- [`connectors/codex-cli/harness.toml`](../connectors/codex-cli/harness.toml): chat mode
+  (`interactive`), shared config home, `since_run_start`, `native_pid` termination, extra
+  redaction patterns and per-platform env.
+- [`connectors/claude-code-cli/harness.toml`](../connectors/claude-code-cli/harness.toml): chat
+  mode with a `keychain_link` run home.

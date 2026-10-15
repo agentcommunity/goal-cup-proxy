@@ -1,7 +1,6 @@
 <!-- What does this change, and why? One concern per PR. -->
 
-<!-- Required checks and review rules: docs/REPOSITORY-GOVERNANCE.md.
-     The fork-to-PR steps and the gate: CONTRIBUTING.md. -->
+<!-- Required checks, review rules, the fork-to-PR steps and the gate: CONTRIBUTING.md. -->
 
 ## Every PR
 
@@ -22,14 +21,14 @@
 Follow `skills/adding-a-capture-harness` and `docs/HARNESS-ONBOARDING.md`. The schema reference is
 `docs/CONNECTOR-SCHEMA.md`; the surrounding M2 contract is
 `docs/CONTRACTS.md#harness-contract-v1`. A code owner reviews against the numbered list (items 1
-to 10) in `docs/CONNECTOR-CONTRIBUTING.md#reviewing-a-connector-pr`; each box below is the
+to 10) in `docs/HARNESS-ONBOARDING.md#reviewing-a-connector-pr`; each box below is the
 author's half of that list, so say where the reviewer can check it.
 
 - [ ] Facts sheet `docs/harnesses/<id>.md` filled from the skill's template ("unknown" where
       unknown), with the exact harness version, executable hash and the harness's argv pre-scan
       source (or "none") (item 2).
 - [ ] I ran `sh scripts/pin-manifests.sh` in the same commit and the conformance tests as in
-      `docs/CONNECTOR-CONTRIBUTING.md#add-or-change-a-connector`. The pin diff is one line of
+      `docs/HARNESS-ONBOARDING.md#steps`. The pin diff is one line of
       `crates/goalcup-protocol/pins/connector-dirs.txt` (item 10).
 - [ ] If two harness PRs conflict on the pins, I re-ran the pin script on the merged tree instead
       of hand-merging the generated data.
@@ -39,9 +38,8 @@ author's half of that list, so say where the reviewer can check it.
       CA or credential variable is justified in this description, with no model base URL or
       redirect (items 1 to 9).
 - [ ] Kit case under `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` (the connector id) and the output of
-      `cargo test -p goalcup-cli --test full harness_contract_kit::` after `cargo build`, run on macOS
-      (on Linux it compiles to zero tests; say so if you could not run it). Fixtures went through
-      `spikes/redact.py` (items 7 and 10).
+      `cargo test -p goalcup-cli --test full harness_contract_kit::` after `cargo build`. Fixtures
+      went through `spikes/redact.py` (items 7 and 10).
 - [ ] The diff touches only `connectors/<id>/`, the pin line above, the goldens, the kit case
       `<case>` and `docs/harnesses/<id>.md`; no `.rs` file is changed and no policy row or decoder
       is added (item 10).

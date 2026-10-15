@@ -253,7 +253,7 @@ and the served `model` field of each response chunk.
 
 Update the harness's facts sheet (`docs/harnesses/<id>.md`, section 9) to name the decoder,
 the decoder list in the research report format (`docs/research/m2-report-format.md`), and add a
-`docs/GLOSSARY.md` entry for any new term.
+`docs/ARCHITECTURE.md` glossary entry for any new term.
 
 ## Rulings that closed old questions
 

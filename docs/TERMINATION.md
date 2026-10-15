@@ -1,8 +1,8 @@
 # Termination: the contract
 
 What `crates/goalcup-daemon/src/terminate/` promises at seal, and what it does not. Read this
-instead of the module. The daemon kills, not the CLI (D22); `Confirmed` is bounded to the owned
-set (D30). Code: `terminate_with` in `mod.rs`; guard, ordering and fail-closed reports in
+before the module. The daemon ends the harness, not the CLI (D22). `Confirmed` is bounded to the
+owned set (D30). Code: `terminate_with` in `mod.rs`; guard, ordering and fail-closed reports in
 `authority.rs`; the macOS singleton path in `darwin.rs`; the capture finish in
 `runtime/termination.rs`.
 
@@ -74,22 +74,20 @@ dies at once ends at the first clear poll; a member ignoring SIGTERM costs the f
 
 ## The residual windows, per platform (stated, not solved)
 
-**Both.** A process that had already left the root's ppid walk when the call began is outside
-the owned set and never claimed (D30). A group handle is never confirmed. Closed by the fix wave
-(scenarios green in `tests/it/terminate_sim.rs`): F7 (the orphaned ignorer is SIGKILLed by identity and
-named), F8 (an orphan alive holds the phase-A gate; `Closed` adopts from live members, the root's
-own exit included), F9 and the root unwitnessed in phase A (both below).
+**Both.** A process that had already left the root's ppid walk when the call began is outside the
+owned set and is never claimed (D30). A group handle is never confirmed. Tests in
+`tests/it/terminate_sim.rs` cover an orphaned process that ignores SIGTERM (SIGKILLed by identity
+and named), an orphan alive that holds the phase-A gate, and `Closed` adoption from live members.
 
-**Hermes** (M6, connector `hermes-cli`). Hermes starts its tool processes with
-`start_new_session=True` (`tools/environments/local.py:1388`, hermes-agent 0.19.0), so each is a
+**Hermes** (connector `hermes-cli`). Hermes starts its tool processes with
+`start_new_session=True` (`tools/environments/local.py`, hermes-agent 0.19.0), so each is a
 session leader of its own. A tool process the run left behind is outside the root's ppid walk once
 its parent is gone, and is the D30 residual above: `Confirmed` covers the owned set only and never
-claims it. The connector's `[kill]` section says the same in a comment.
+claims it. The connector's `[capture.termination]` is `process_group`.
 
 **Linux** (pidfd-bound signals, no fork witness). A child forked and orphaned inside one poll
 interval — forker forks and exits between two snapshots — is in no snapshot under a live
-parent and no ppid walk can see it; the M0 §2.5 respawn, when the handler forks and exits
-within 50 ms, is this. The property runner allows exactly this set (`same_poll_orphans`).
+parent and no ppid walk can see it; a handler that forks and exits within 50 ms is this. The property runner allows exactly this set (`same_poll_orphans`).
 Linux's `W` is wider than that name: without a fork witness it covers any orphan the ppid walk
 cannot see, as ruled in "RULED: on Linux, `Confirmed` excludes fork-and-leave wrappers" below.
 `W` is the daemon's and the launcher's sweep described there does not narrow it: the sweep ends
@@ -113,7 +111,7 @@ singleton path proves one process's death and cannot see a descendant reparented
 
 ## The launcher's ending of a child it just released (D40, outside this contract)
 
-`goalcup start --goal-file` parks its capture child before `exec` until the daemon has durably
+`goalcup start` parks its capture child before `exec` until the daemon has durably
 registered it, then releases it (CONTRACTS.md, "Amendment 2026-10-02 (C6 capture spawn gate, H-10
 4b)"). A seal that lands between the registration and the release cannot signal a child that is
 still parked: the daemon's guard finds a command line that is not the harness's and binds
@@ -159,48 +157,33 @@ I6  every process dies within k polls of its first SIGTERM and nothing forks ⟹
     R.observed_gone.
 ```
 
-The runner is un-ignored: with F7, F8 and F9 closed it passes 5000 cases by default and 50 000
-with `GOALCUP_SIM_CASES=50000 GOALCUP_SIM_ALL=1` reporting no seeds.
-
-**Provenance note (2026-09-19):** the 5000-case default run is covered by the committed gate
-log (`docs/qualification/2026-09-17-gate.md`, in git history at `6494030`). The 50 000-case figure is **not backed by any
-committed artifact** in this repository — it is a remembered result. Either re-run it at the pin
-and file the output beside the gate log, or drop the number. Do not cite it as evidence until
-one of those happens.
+The property runner passes 5000 cases by default. Set `GOALCUP_SIM_CASES` (and `GOALCUP_SIM_ALL=1`)
+for more.
 
 ## RULED: on Linux, `Confirmed` excludes fork-and-leave wrappers
 
-Owner ruling (1), 2026-10-13: say plainly that on Linux `observed_gone`, `all_gone` and
-`Confirmed` exclude every orphan the ppid walk cannot see. Linux has no fork witness, so such a
-process is in no snapshot under a live parent. Three shapes are known: a same-poll orphan, a
-fork-and-leave child (forked before the root exits and never waited for), and a member's fork
-after the root has died. A report over a tree holding one can come back `observed_gone` with
-`all_gone: true`, and `Confirmed` can stand, while the orphan is still running. `W` for Linux is
-therefore that whole set, not only the same-poll orphan named above; `I1` holds against that
-widened `W`. The ruling widens the stated limitation and changes no code.
+On Linux, `observed_gone`, `all_gone` and `Confirmed` exclude every orphan the ppid walk cannot see.
+Linux has no fork witness, so such a process is in no snapshot under a live parent. Three shapes
+are known: a same-poll orphan, a fork-and-leave child (forked before the root exits and never
+waited for), and a member's fork after the root has died. A report over a tree that holds one can
+come back `observed_gone` with `all_gone: true`, and `Confirmed` can stand, while the orphan is
+still running. `W` for Linux is therefore that whole set, not only the same-poll orphan, and `I1`
+holds against that widened `W`. The ruling widens the stated limitation and changes no code.
 
-What each run measured:
-
-- `docs/qualification/2026-09-16-review.md` (in git history at `6494030`): 5/5 reproductions of
-  an orphan invisible to the walk, and its section "seal.rs gate" recording that `Confirmed`
-  *would be returned*.
-- `docs/qualification/2026-09-18-f0-linux-residual.md` (also at `6494030`): the same residual,
-  found again while the CI death was being diagnosed.
-- 2026-10-13, in Docker: `a_report_does_not_claim_the_harness_gone_while_a_post_root_death_orphan_lives`
-  runs `wrapper-root-dies-first.sh`, where a member forks an orphan about 400 ms after the root
-  has died. On Linux the report said `all_gone: true` with the orphan alive. That test is
-  `ignore`d on Linux, with this section as its reason, and still runs and passes on macOS.
+Measured: five of five reproductions of an orphan invisible to the walk, and, in Docker,
+`a_report_does_not_claim_the_harness_gone_while_a_post_root_death_orphan_lives`
+(`wrapper-root-dies-first.sh`: a member forks an orphan about 400 ms after the root has died). On
+Linux the report said `all_gone: true` with the orphan alive. That test is `ignore`d on Linux, with
+this section as its reason. It still runs and passes on macOS.
 
 "Same-poll orphan" understates the reach of the window. `fork()` immediately followed by
 `exit()` is two syscalls apart with nothing enforcing a gap, so a wrapper of the shape "hand off
-to a child and leave" has landed in it in every reproduction so far. This repository already has
-a name and a fixture for that shape, "the ordinary shape — a launcher whose session is a child".
+to a child and leave" has landed in it in every reproduction so far. The test fixtures call that shape "the ordinary shape: a launcher whose session is a child".
 
-**The launcher sweeps them on Linux.** The fix the ruling asked for before the 168-hour dry run
-is a child subreaper (`PR_SET_CHILD_SUBREAPER`) that is an ancestor of the harness. The daemon is
-not that process: it is detached into its own session and is not an ancestor of the harness, so
-it would never see a harness orphan. The launcher (`goalcup start`) is, and on Linux it now is a
-child subreaper (`crates/goalcup-cli/src/subreaper.rs`):
+**The launcher sweeps them on Linux.** The remedy is a child subreaper (`PR_SET_CHILD_SUBREAPER`)
+that is an ancestor of the harness. The daemon is not that process: it runs in its own session and
+is not an ancestor of the harness, so it never sees a harness orphan. The launcher (`goalcup start`)
+is an ancestor, and on Linux it is a child subreaper (`crates/goalcup-cli/src/subreaper.rs`):
 
 - It sets `PR_SET_CHILD_SUBREAPER` before the gated spawn, so a process the harness forks and
   leaves is reparented to the launcher, not to init. If `prctl` fails it says so once on stderr
@@ -254,6 +237,3 @@ The residuals, stated plainly:
 The daemon test stays `ignore`d on Linux, with its reason now pointing here: it calls the daemon's
 `terminate()` in-process with no launcher above the tree, so the daemon alone still cannot see the
 orphan. The CLI-level test above is what proves the sweep.
-
-**This is not a V1 blocker.** Linux is not a V1 row; V1 claims one macOS target, where the
-kqueue witness closes this.

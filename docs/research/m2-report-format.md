@@ -63,7 +63,7 @@ The research-report kind vocabulary (schemas 1 and 2) is closed at these ten val
 
 | Field | Meaning |
 |---|---|
-| `type`, `schema_version` | `"summary"`, `2`. Schema 2 (2026-10-14) adds `analysis.models`, `analysis.models_omitted` and `analysis.cross_leg`; every schema-1 key keeps its meaning and observation lines are unchanged. |
+| `type`, `schema_version` | `"summary"`, `2`. Schema 2 added `analysis.models`, `analysis.models_omitted` and `analysis.cross_leg` to schema 1; every schema-1 key keeps its meaning and observation lines are unchanged. |
 | `exit_code` | The verifier/report exit code (below), not the harness run's exit code. |
 | `verifier_version` | The verifier build that wrote the report. |
 | `options` | The effective options: `dev_mode`, `allow_descriptor_key`, `extra_server_keys`. |
@@ -112,8 +112,7 @@ requires a research-report schema bump or an explicit projection layer; Rust's
 A capture-only stream alone is not a failure. It exists when the session records no accepting
 decoder for the full `StreamOpen`; an isolated factory or `accepts` failure can also leave no
 selector. The registry supplies candidates and each decoder decides which fields matter. An
-unsupported content type may instead be accepted and emitted as `unknown`. Research-report
-schema 1 does not serialize the bounded
+unsupported content type may instead be accepted and emitted as `unknown`. The report does not serialize the bounded
 `DecodeOutcome::undecoded` details.
 `available` says at least one decoded observation was written and no decoder degraded, not that
 every stream had a decoder: a stream no decoder accepts appears only in `record_counts`.
@@ -206,5 +205,4 @@ composes `decode_records` (observations to an `ObservationSink`, here `JsonLines
 same records. The decode outcome also lists the capture-only streams
 (`undecoded`: source, hint, stream count, bytes), which the summary line does not print: a stream
 no decoder accepts still appears only in `record_counts`, so a reader cannot tell "no decoder"
-from "a decoder found nothing" except through those counts. Printing `undecoded` is the first
-candidate for summary `schema_version` 2.
+from "a decoder found nothing" except through those counts.
