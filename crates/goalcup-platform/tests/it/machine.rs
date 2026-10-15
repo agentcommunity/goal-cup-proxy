@@ -1,5 +1,7 @@
 use goalcup_platform::machine::{
-    ac_from_pmset, container_from_systemd, facts, is_wsl_from, on_windows_drive_with, url_allowed,
+    ac_from_pmset, container_from_systemd, facts, is_wsl_from, mountinfo_fstype, url_allowed,
+    windows_host_filesystem, windows_host_fstype, windows_host_magic, wsl_check_with,
+    wsl_version_from,
 };
 use std::path::Path;
 
@@ -25,14 +27,128 @@ fn ac_power_parses_pmset() {
     assert_eq!(ac_from_pmset("No batteries available"), None);
 }
 
+// Strings as the kernels print them.
+const WSL2_RELEASE: &str = "5.15.167.4-microsoft-standard-WSL2\n";
+const WSL2_VERSION: &str = "Linux version 5.15.167.4-microsoft-standard-WSL2 (root@f9c826d3017f) \
+    (gcc (GCC) 11.2.0, GNU ld (GNU Binutils) 2.37) #1 SMP Thu Jan 11 04:09:03 UTC 2024\n";
+const WSL2_EARLY_RELEASE: &str = "4.19.128-microsoft-standard\n";
+const WSL1_RELEASE: &str = "4.4.0-19041-Microsoft\n";
+const WSL1_VERSION: &str = "Linux version 4.4.0-19041-Microsoft (Microsoft@Microsoft.com) \
+    (gcc version 5.4.0 (GCC) ) #1237-Microsoft Sat Sep 11 14:32:00 PST 2021\n";
+const NATIVE_RELEASE: &str = "6.8.0-45-generic\n";
+const NATIVE_VERSION: &str = "Linux version 6.8.0-45-generic (buildd@lcy02) (x86_64-linux-gnu-gcc-13) #45-Ubuntu SMP\n";
+
 #[test]
-fn only_mnt_letter_paths_are_windows_drives() {
-    assert!(on_windows_drive_with(Path::new("/mnt/c/x"), true));
-    assert!(on_windows_drive_with(Path::new("/mnt/d"), true));
-    assert!(!on_windows_drive_with(Path::new("/mnt/data"), true));
-    assert!(!on_windows_drive_with(Path::new("/mnt"), true));
-    assert!(!on_windows_drive_with(Path::new("/home/c/x"), true));
-    assert!(!on_windows_drive_with(Path::new("/mnt/c/x"), false));
+fn wsl_version_tells_wsl2_from_wsl1() {
+    assert_eq!(wsl_version_from(WSL2_RELEASE, WSL2_VERSION), Some(2));
+    assert_eq!(wsl_version_from(WSL2_RELEASE, ""), Some(2));
+    assert_eq!(wsl_version_from("", WSL2_VERSION), Some(2));
+    // The first WSL2 kernels carried no "WSL2" suffix.
+    assert_eq!(wsl_version_from(WSL2_EARLY_RELEASE, ""), Some(2));
+    assert_eq!(wsl_version_from(WSL1_RELEASE, WSL1_VERSION), Some(1));
+    assert_eq!(wsl_version_from(WSL1_RELEASE, ""), Some(1));
+    assert_eq!(wsl_version_from("", WSL1_VERSION), Some(1));
+    // A custom kernel built for WSL2 under another name is still not WSL1's 4.4.0.
+    assert_eq!(wsl_version_from("6.6.36.3-Microsoft-custom", ""), Some(2));
+    assert_eq!(wsl_version_from(NATIVE_RELEASE, NATIVE_VERSION), None);
+    assert_eq!(wsl_version_from("", ""), None);
+}
+
+#[test]
+fn windows_host_filesystems_are_named_by_type_and_by_magic() {
+    for name in ["9p", "drvfs", "virtiofs", "cifs", "smb3", "ntfs3", "9P"] {
+        assert!(windows_host_fstype(name), "{name}");
+    }
+    for name in ["ext4", "xfs", "btrfs", "overlay", "tmpfs", "zfs", "fuse", "vfat", ""] {
+        assert!(!windows_host_fstype(name), "{name}");
+    }
+    assert_eq!(windows_host_magic(0x0102_1997), Some("9p"));
+    assert_eq!(windows_host_magic(0xFF53_4D42), Some("cifs"));
+    // ext4, xfs, tmpfs, overlayfs, fuse.
+    for magic in [0xEF53, 0x5846_5342, 0x0102_1994, 0x794C_7630, 0x6573_5546] {
+        assert_eq!(windows_host_magic(magic), None, "{magic:#x}");
+    }
+}
+
+const MOUNTINFO: &str = "\
+22 28 0:21 / /sys rw,nosuid,nodev,noexec,relatime shared:7 - sysfs sysfs rw
+30 1 8:16 / / rw,relatime shared:1 - ext4 /dev/sdb rw,discard,errors=remount-ro,data=ordered
+31 30 0:27 / /mnt/wsl rw,relatime shared:2 - tmpfs tmpfs rw
+40 30 0:38 / /mnt/c rw,noatime,dirsync shared:3 - 9p C:\\134 rw,dirsync,aname=drvfs;path=C:\\;uid=1000
+41 30 0:39 / /mnt/d rw,noatime shared:4 - drvfs D: rw,uid=1000
+42 30 0:40 / /mnt/e rw,noatime shared:5 - virtiofs E:\\134 rw
+43 30 0:41 / /mnt/my\\040drive rw,noatime shared:6 - 9p F:\\134 rw,aname=drvfs
+44 40 0:42 / /mnt/c/linuxdir rw,relatime shared:8 - ext4 /dev/sdc rw
+";
+
+#[test]
+fn mountinfo_names_the_filesystem_of_the_longest_mount_point() {
+    let at = |p: &str| mountinfo_fstype(MOUNTINFO, Path::new(p));
+    assert_eq!(at("/home/me/work").as_deref(), Some("ext4"));
+    assert_eq!(at("/").as_deref(), Some("ext4"));
+    assert_eq!(at("/mnt/c").as_deref(), Some("9p"));
+    assert_eq!(at("/mnt/c/Users/me/work").as_deref(), Some("9p"));
+    assert_eq!(at("/mnt/d/x").as_deref(), Some("drvfs"));
+    assert_eq!(at("/mnt/e/x").as_deref(), Some("virtiofs"));
+    // A mount point is a whole path component, not a string prefix.
+    assert_eq!(at("/mnt/cache/x").as_deref(), Some("ext4"));
+    assert_eq!(at("/mnt/wsl/x").as_deref(), Some("tmpfs"));
+    // A Linux mount inside a Windows drive is Linux; an escaped space is read back.
+    assert_eq!(at("/mnt/c/linuxdir/work").as_deref(), Some("ext4"));
+    assert_eq!(at("/mnt/my drive/x").as_deref(), Some("9p"));
+    assert_eq!(mountinfo_fstype("", Path::new("/x")), None);
+    assert_eq!(mountinfo_fstype("garbage line\n", Path::new("/x")), None);
+}
+
+#[test]
+fn the_wsl_checks_refuse_wsl1_and_every_folder_on_a_windows_host_filesystem() {
+    let work = Path::new("/mnt/c/Users/me/work");
+    let run = Path::new("/home/me/runs");
+    let artifacts = Path::new("/mnt/d/artifacts");
+    let config = Path::new("/home/me/.config/goalcup");
+    let folders = [
+        ("work folder", work),
+        ("run folder", run),
+        ("artifact root", artifacts),
+        ("config folder", config),
+    ];
+    let types = |p: &Path| mountinfo_fstype(MOUNTINFO, p);
+
+    // Not WSL: nothing is looked at, even a folder on /mnt/c.
+    assert_eq!(wsl_check_with(None, &folders, &types), Ok(()));
+    // WSL1 is refused, with the way out, whatever the folders are.
+    let one = wsl_check_with(Some(1), &[("run folder", run)], &types).unwrap_err();
+    assert!(
+        one.starts_with("WSL1 cannot run Goal Cup") && one.contains("wsl --set-version <distro> 2"),
+        "{one}"
+    );
+    // WSL2: each Windows-host folder is named with its type; the Linux ones are not.
+    let two = wsl_check_with(Some(2), &folders, &types).unwrap_err();
+    assert!(two.contains("work folder /mnt/c/Users/me/work") && two.contains("(9p)"), "{two}");
+    assert!(two.contains("artifact root /mnt/d/artifacts") && two.contains("(drvfs)"), "{two}");
+    assert!(!two.contains("run folder") && !two.contains("config folder"), "{two}");
+    assert_eq!(
+        wsl_check_with(Some(2), &[("run folder", run), ("config folder", config)], &types),
+        Ok(())
+    );
+    // A folder whose filesystem cannot be told is not refused.
+    assert_eq!(wsl_check_with(Some(2), &folders, &|_: &Path| None), Ok(()));
+}
+
+#[test]
+fn a_folder_on_this_machines_filesystem_is_not_a_windows_host_one() {
+    let tmp = std::env::temp_dir();
+    assert_eq!(windows_host_filesystem(&tmp), None);
+    // A folder not made yet is judged by the nearest one that exists.
+    assert_eq!(windows_host_filesystem(&tmp.join("not/made/yet")), None);
+    #[cfg(target_os = "linux")]
+    {
+        // The real mountinfo is readable and names the filesystem holding the temp folder.
+        let text = std::fs::read_to_string("/proc/self/mountinfo").unwrap();
+        let real = std::fs::canonicalize(&tmp).unwrap();
+        let name = mountinfo_fstype(&text, &real).expect("a mount covers the temp folder");
+        assert!(!windows_host_fstype(&name), "{name}");
+    }
 }
 
 fn host_name() -> Option<String> {

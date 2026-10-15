@@ -5,7 +5,7 @@
 
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt as _;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,7 @@ pub struct MachineFacts {
     pub disk_total_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_free_bytes: Option<u64>,
+    /// True only on WSL2 (WSL1 cannot run the tracker, so a run never reports it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wsl: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -49,21 +50,217 @@ pub fn facts(artifact_root: &Path) -> MachineFacts {
         memory_bytes: memory_bytes(),
         disk_total_bytes: disk.map(|d| d.0),
         disk_free_bytes: disk.map(|d| d.1),
-        wsl: Some(is_wsl()),
+        wsl: Some(wsl_version() == Some(2)),
         container: in_container(),
         ac_power: on_ac_power(),
     }
 }
 
-/// Whether this is Linux running under the Windows Subsystem for Linux.
+/// Whether this is Linux running under the Windows Subsystem for Linux, of either version.
 pub fn is_wsl() -> bool {
-    std::fs::read_to_string("/proc/sys/kernel/osrelease").is_ok_and(|s| is_wsl_from(&s))
+    wsl_version().is_some()
 }
 
 /// The WSL test over a kernel release string.
 #[doc(hidden)]
 pub fn is_wsl_from(osrelease: &str) -> bool {
     osrelease.to_ascii_lowercase().contains("microsoft")
+}
+
+/// Which Windows Subsystem for Linux this is: `Some(1)`, `Some(2)`, or `None` on a machine that
+/// is not WSL. Read from `/proc/sys/kernel/osrelease` and `/proc/version`.
+pub fn wsl_version() -> Option<u8> {
+    let read = |path: &str| std::fs::read_to_string(path).unwrap_or_default();
+    wsl_version_from(&read("/proc/sys/kernel/osrelease"), &read("/proc/version"))
+}
+
+/// The WSL version named by the kernel release (`/proc/sys/kernel/osrelease`) and the kernel
+/// version line (`/proc/version`); either may be empty.
+///
+/// Both versions say "microsoft". WSL2 kernels say `microsoft-standard-WSL2` (the earliest 4.19
+/// builds say `microsoft-standard`); WSL1's kernel is the fixed `4.4.0-<build>-Microsoft`. A
+/// Microsoft kernel that is neither is a custom WSL2 kernel, since WSL1 has no other release.
+#[doc(hidden)]
+pub fn wsl_version_from(osrelease: &str, version: &str) -> Option<u8> {
+    let release = osrelease.trim().to_ascii_lowercase();
+    let line = version.trim().to_ascii_lowercase();
+    if !release.contains("microsoft") && !line.contains("microsoft") {
+        return None;
+    }
+    if [&release, &line]
+        .iter()
+        .any(|s| s.contains("wsl2") || s.contains("microsoft-standard"))
+    {
+        return Some(2);
+    }
+    if release.starts_with("4.4.") || line.starts_with("linux version 4.4.") {
+        return Some(1);
+    }
+    Some(2)
+}
+
+/// Whether a filesystem type name (the type column of `/proc/self/mountinfo`) is a Windows-host
+/// share: the Windows drives (`drvfs`, or `9p` on current WSL2 kernels, or `virtiofs` where WSL
+/// is set up with it) and network shares (`cifs`, `smb3`) and NTFS volumes.
+#[doc(hidden)]
+pub fn windows_host_fstype(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "9p" | "drvfs" | "virtiofs" | "cifs" | "smb3" | "smbfs" | "ntfs" | "ntfs3" | "fuse.ntfs-3g"
+    )
+}
+
+/// The filesystem type name `statfs` reports as `f_type`, for the magic numbers that name a
+/// Windows-host share: `V9FS_MAGIC` (the 9p mount WSL2 uses for a Windows drive), `CIFS_MAGIC`,
+/// `SMB2_MAGIC` and `NTFS_SB_MAGIC`.
+#[doc(hidden)]
+pub fn windows_host_magic(f_type: u64) -> Option<&'static str> {
+    match f_type {
+        0x0102_1997 => Some("9p"),
+        0xFF53_4D42 => Some("cifs"),
+        0xFE53_4D42 => Some("smb3"),
+        0x5346_544E => Some("ntfs"),
+        _ => None,
+    }
+}
+
+/// The filesystem type of the mount that holds `path`, from the text of
+/// `/proc/self/mountinfo`: the mount whose mount point is the longest prefix of `path` (the later
+/// line, when two share one, because it is mounted on top). `None` when no line covers `path`.
+#[doc(hidden)]
+pub fn mountinfo_fstype(mountinfo: &str, path: &Path) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for line in mountinfo.lines() {
+        let fields: Vec<&str> = line.split(' ').collect();
+        let Some(dash) = fields.iter().position(|f| *f == "-") else {
+            continue;
+        };
+        if dash < 6 {
+            continue;
+        }
+        let Some(fstype) = fields.get(dash + 1) else {
+            continue;
+        };
+        let point = PathBuf::from(unescape_mountinfo(fields[4]));
+        if !path.starts_with(&point) {
+            continue;
+        }
+        let len = point.components().count();
+        if best.as_ref().is_none_or(|(l, _)| len >= *l) {
+            best = Some((len, (*fstype).to_string()));
+        }
+    }
+    best.map(|(_, fstype)| fstype)
+}
+
+/// `/proc/self/mountinfo` writes a space, tab, newline or backslash in a path as `\040`, `\011`,
+/// `\012` or `\134`.
+fn unescape_mountinfo(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let octal = (bytes[i] == b'\\' && i + 4 <= bytes.len())
+            .then(|| std::str::from_utf8(&bytes[i + 1..i + 4]).ok())
+            .flatten()
+            .and_then(|digits| u8::from_str_radix(digits, 8).ok());
+        match octal {
+            Some(byte) => {
+                out.push(byte);
+                i += 4;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The name of the Windows-host filesystem `path` is on, or `None` when it is on a Linux one (or
+/// the filesystem cannot be told). Linux only; elsewhere always `None`.
+///
+/// `path` need not exist yet: the nearest existing ancestor is looked at, by its real path, so a
+/// link cannot hide a Windows drive. Two readings are combined, because neither is enough alone:
+/// `statfs` gives the filesystem's magic number, which names 9p (the mount WSL2 makes of a
+/// Windows drive, which `statfs` cannot tell from any other 9p) but sees a FUSE mount only as
+/// FUSE; `/proc/self/mountinfo` gives the type name (`drvfs`, `9p` or `virtiofs`) of the mount
+/// holding the path.
+pub fn windows_host_filesystem(path: &Path) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let existing = path.ancestors().find_map(|a| std::fs::canonicalize(a).ok())?;
+        let by_name = std::fs::read_to_string("/proc/self/mountinfo")
+            .ok()
+            .and_then(|text| mountinfo_fstype(&text, &existing))
+            .filter(|name| windows_host_fstype(name));
+        let by_magic = statfs_type(&existing).and_then(windows_host_magic);
+        by_name.or_else(|| by_magic.map(str::to_string))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn statfs_type(path: &Path) -> Option<u64> {
+    let c = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: `c` is NUL-terminated and `stat` is a writable statfs for the call.
+    if unsafe { libc::statfs(c.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: statfs returned 0, so it filled the struct.
+    let stat = unsafe { stat.assume_init() };
+    // `f_type` is signed or unsigned and 32 or 64 bits wide by target; the magic numbers fit 32.
+    Some(u64::from(stat.f_type as u32))
+}
+
+/// The refusal for a machine that WSL cannot run the tracker on.
+const WSL1_REFUSAL: &str = "WSL1 cannot run Goal Cup: convert this distribution to WSL2 with \
+                            `wsl --set-version <distro> 2`";
+
+/// The WSL checks over named folders: `Ok` when `version` is not WSL, or is WSL2 and no folder
+/// is on a Windows-host filesystem (`filesystem_of` names the filesystem a folder is on); an
+/// `Err` of one or two sentences otherwise (WSL1 is refused whatever the folders are). Each
+/// folder is `(what it is, path)`.
+#[doc(hidden)]
+pub fn wsl_check_with(
+    version: Option<u8>,
+    folders: &[(&str, &Path)],
+    filesystem_of: &dyn Fn(&Path) -> Option<String>,
+) -> Result<(), String> {
+    match version {
+        None => Ok(()),
+        Some(1) => Err(WSL1_REFUSAL.to_string()),
+        Some(_) => {
+            let refused: Vec<String> = folders
+                .iter()
+                .filter_map(|(what, path)| {
+                    let name = filesystem_of(path).filter(|name| windows_host_fstype(name))?;
+                    Some(format!(
+                        "the {what} {} is on a Windows-host filesystem ({name}), which WSL2 \
+                         reads slowly and cannot keep file modes on; use a folder in the Linux \
+                         home (for example under ~)",
+                        path.display()
+                    ))
+                })
+                .collect();
+            if refused.is_empty() {
+                Ok(())
+            } else {
+                Err(refused.join(". "))
+            }
+        }
+    }
+}
+
+/// [`wsl_check_with`] on this machine: its WSL version, and the filesystems it reads.
+pub fn wsl_check(folders: &[(&str, &Path)]) -> Result<(), String> {
+    wsl_check_with(wsl_version(), folders, &windows_host_filesystem)
 }
 
 /// Whether the machine runs on mains power; `None` when that cannot be told (a desktop with
@@ -114,36 +311,6 @@ fn ac_from_sysfs(dir: &Path) -> Option<bool> {
         }
     }
     answer
-}
-
-/// Whether `p` lives on a Windows drive mounted into WSL (`/mnt/<letter>/...`).
-///
-/// Only the path as given is inspected; callers must canonicalize it first so a symlink or `..`
-/// cannot hide a drive.
-pub fn on_windows_drive(p: &Path) -> bool {
-    on_windows_drive_with(p, is_wsl())
-}
-
-/// [`on_windows_drive`] with the WSL answer supplied.
-#[doc(hidden)]
-pub fn on_windows_drive_with(p: &Path, wsl: bool) -> bool {
-    if !wsl {
-        return false;
-    }
-    let mut parts = p.components();
-    if parts.next() != Some(Component::RootDir) {
-        return false;
-    }
-    if parts.next().map(Component::as_os_str) != Some("mnt".as_ref()) {
-        return false;
-    }
-    match parts.next() {
-        Some(Component::Normal(drive)) => {
-            let b = drive.as_bytes();
-            b.len() == 1 && b[0].is_ascii_alphabetic()
-        }
-        _ => false,
-    }
 }
 
 /// Whether `url` may be handed to an opener: it must start with `https://`, and hold no

@@ -14,8 +14,9 @@
 //! 4. **GitHub**: the repository from `--repo` is public, empty and pushable with the stored
 //!    token ([`crate::account::github::check`]); with a terminal, the token is read unshown.
 //! 5. **machine**: mains power, free space for a run's reservation, the server's and the
-//!    provider's hosts reachable, `git` on `PATH`, a work folder that is not on a Windows drive
-//!    under WSL2, and a sleep lock the machine can take.
+//!    provider's hosts reachable, `git` on `PATH`, under WSL the WSL2 version and a work folder,
+//!    artifact root and configuration folder that are not on a Windows-host filesystem, and a
+//!    sleep lock the machine can take.
 //! 6. **practice**: a practice run of this harness whose every entry was sealed and uploaded.
 //!    Prep never starts a run: it says `goalcup start --practice` and stops.
 //!
@@ -38,6 +39,7 @@ use crate::CliError;
 use crate::account::github::{self, GithubSetup};
 use crate::connector::{HarnessConnector, harness_dirs};
 use crate::prep_file::{PrepFile, read_prep_lenient, write_prep};
+use crate::wsl_gate::Host;
 use crate::run::reserve::{LOW_DISK_BYTES, RUN_RESERVE_BYTES, START_MARGIN, artifact_root, human};
 use goalcup_protocol::harness::{ConfigHome, Origin};
 use serde::Serialize;
@@ -121,7 +123,8 @@ pub trait Doors {
     fn on_ac_power(&self) -> Option<bool>;
     /// Free bytes on the volume holding the existing directory `dir`.
     fn free_bytes(&self, dir: &Path) -> std::io::Result<u64>;
-    fn is_wsl(&self) -> bool;
+    /// What the machine says about WSL: its version, and the filesystem of each folder.
+    fn wsl(&self) -> Host;
     /// Every `(host, port)` answers a TCP connect; else the first that does not, in a phrase.
     fn hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String>;
     /// Whether the machine can be kept awake (the lock is taken and let go at once).
@@ -156,8 +159,8 @@ impl Doors for Here {
         goalcup_platform::disk::free_bytes(dir)
     }
 
-    fn is_wsl(&self) -> bool {
-        goalcup_platform::machine::is_wsl()
+    fn wsl(&self) -> Host {
+        Host::here()
     }
 
     fn hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String> {
@@ -810,19 +813,23 @@ fn machine_step(
         );
     }
 
-    let wsl = doors.is_wsl();
-    let resolved = std::fs::canonicalize(work_root).unwrap_or_else(|_| work_root.to_path_buf());
-    let on_windows_drive = goalcup_platform::machine::on_windows_drive_with(&resolved, wsl);
-    if on_windows_drive {
-        note(
-            State::Fail,
-            format!(
-                "the work folder {} is on a Windows drive, which WSL2 reads slowly and cannot \
-                 keep file modes on. Choose a folder in the Linux home: `goalcup prep \
-                 --work-root ~/{DEFAULT_WORK_ROOT_NAME}` typed as a full path",
-                work_root.display()
-            ),
-        );
+    // Under WSL: WSL1 cannot run this, and a Windows-host filesystem is refused for the work
+    // folder, the artifact root and the configuration folder. The work folder is judged alone,
+    // because only a refused one must not be kept.
+    let host = doors.wsl();
+    let wsl = host.is_wsl();
+    let work_check = host.check(&[("work folder", work_root)]);
+    if let Err(why) = &work_check {
+        note(State::Fail, why.clone());
+    }
+    if host.version() != Some(1) {
+        let artifacts = artifact_root(cfg);
+        if let Err(why) = host.check(&[
+            ("artifact root", artifacts.as_path()),
+            ("config folder", cfg),
+        ]) {
+            note(State::Fail, why);
+        }
     }
 
     match doors.sleep_lock() {
@@ -849,7 +856,7 @@ fn machine_step(
     };
     Machine {
         step: step(STEP_MACHINE, worst, false, say),
-        work_root_ok: !on_windows_drive,
+        work_root_ok: work_check.is_ok(),
     }
 }
 
@@ -947,14 +954,15 @@ fn put(out: &mut dyn Write, text: &str) -> Result<(), CliError> {
 // ------------------------------------------------------------------ the test door
 
 /// The machine's facts as a test states them, in `GOALCUP_TEST_PREP`: comma-separated
-/// `ac=on|battery|unknown`, `free=<bytes>`, `wsl=1`, `hosts=ok|<phrase>`, `awake=ok|<phrase>` and
+/// `ac=on|battery|unknown`, `free=<bytes>`, `wsl=0|1|2`, `fs=<path prefix>=<filesystem type>`
+/// (repeatable), `hosts=ok|<phrase>`, `awake=ok|<phrase>` and
 /// `github=<api base>`; everything it does not name is this machine's. A shipped build has no
 /// such door.
 #[cfg(feature = "test-support")]
 pub struct Injected {
     ac: Option<Option<bool>>,
     free: Option<u64>,
-    wsl: Option<bool>,
+    host: Host,
     hosts: Option<Result<(), String>>,
     awake: Option<Result<(), String>>,
     github: Option<String>,
@@ -969,7 +977,7 @@ impl Injected {
         let mut door = Injected {
             ac: None,
             free: None,
-            wsl: None,
+            host: Host::here(),
             hosts: None,
             awake: None,
             github: None,
@@ -989,7 +997,11 @@ impl Injected {
                     })
                 }
                 "free" => door.free = Some(value.parse().ok()?),
-                "wsl" => door.wsl = Some(value == "1"),
+                "wsl" | "fs" => {
+                    if !door.host.state(key, value) {
+                        return None;
+                    }
+                }
                 "hosts" => door.hosts = Some(answer(value)),
                 "awake" => door.awake = Some(answer(value)),
                 "github" => door.github = Some(value.to_string()),
@@ -1017,8 +1029,8 @@ impl Doors for Injected {
         }
     }
 
-    fn is_wsl(&self) -> bool {
-        self.wsl.unwrap_or_else(|| Here.is_wsl())
+    fn wsl(&self) -> Host {
+        self.host.clone()
     }
 
     fn hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String> {

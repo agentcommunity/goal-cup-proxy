@@ -30,6 +30,8 @@ fn capture_paths_contain_no_compiled_family_routing_literals() {
         root.join("crates/goalcup-cli/src/host_log.rs"),
         root.join("crates/goalcup-cli/src/skill.rs"),
         root.join("crates/goalcup-platform/src/terminal.rs"),
+        root.join("crates/goalcup-platform/src/machine.rs"),
+        root.join("crates/goalcup-cli/src/wsl_gate.rs"),
         root.join("crates/goalcup-cli/src/prep_file.rs"),
         root.join("crates/goalcup-cli/src/run/mod.rs"),
         root.join("crates/goalcup-cli/src/run/reserve.rs"),
