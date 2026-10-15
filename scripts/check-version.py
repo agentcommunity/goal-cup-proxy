@@ -65,8 +65,10 @@ SOURCE_PREFIXES = ("crates/", "server/worker/src/")
 # Excluded from the scan even under a scanned prefix.
 EXCLUDED_PREFIXES = ("docs/harnesses/", "docs/research/")
 EXCLUDED_PARTS = ("/tests/", "/fixtures/")
-# This script and its test must name versions to look for them.
-EXCLUDED_FILES = {"scripts/check-version.py", "scripts/test_check_version.py"}
+# This script names versions to look for them. Script tests (scripts/test_*.py) build made-up
+# releases, like the tests under crates/.
+EXCLUDED_FILES = {"scripts/check-version.py"}
+EXCLUDED_NAME = re.compile(r"scripts/test_[^/]+\.py")
 TEXT_SUFFIXES = {".md", ".rs", ".py", ".sh", ".toml", ".yml", ".yaml", ".ts", ".rb", ".txt"}
 
 SEMVER = r"\d+\.\d+\.\d+"
@@ -98,7 +100,9 @@ def workspace_version(root: Path) -> str | None:
 
 
 def is_scanned(name: str) -> bool:
-    if name in EXCLUDED_FILES or name.startswith(EXCLUDED_PREFIXES):
+    if name in EXCLUDED_FILES or EXCLUDED_NAME.fullmatch(name):
+        return False
+    if name.startswith(EXCLUDED_PREFIXES):
         return False
     if any(part in "/" + name for part in EXCLUDED_PARTS):
         return False
