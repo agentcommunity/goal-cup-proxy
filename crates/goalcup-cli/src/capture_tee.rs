@@ -1,16 +1,18 @@
-//! The stderr tee of a Hermes capture child (D40, D41).
+//! The stderr tee of a `stderr_line` capture child (D40, D41).
 //!
-//! Hermes prints one line, `session_id: <id>`, on stderr after its turn: the identity of the one
-//! session file the daemon may read (`docs/harnesses/hermes-cli.md`, "Session
-//! format and identity"). This module reads that line from the child's real stderr, forwards every
-//! byte of both streams to the participant's terminal unchanged, and scans both streams for
-//! fragments of the provider key as they pass.
+//! A `stderr_line` harness prints one line, its manifest's `prefix` and then an id, on stderr
+//! after its turn: the identity of the one session file the daemon may read. Hermes, for
+//! example, prints `session_id: <id>` (`docs/harnesses/hermes-cli.md`, "Session format and
+//! identity"). This module reads that line from the child's real stderr, forwards every byte of
+//! both streams to the participant's terminal unchanged, and scans both streams for fragments of
+//! the provider key as they pass.
 //!
 //! # What is read, and how strictly
 //!
 //! Only **stderr** is read for the identity. A line counts when it is complete (ended by `\n`,
-//! with no `\r`), at most [`LINE_LIMIT`] bytes, and exactly
-//! `session_id: ` + eight digits, `_`, six digits, `_`, six lower-case hexadecimal digits. Any
+//! with no `\r`), at most [`LINE_LIMIT`] bytes, and exactly the rule's prefix and one id of its
+//! grammar (`timestamp-hex`: eight digits, `_`, six digits, `_`, six lower-case hexadecimal
+//! digits; `token`: 1 to 128 of `[A-Za-z0-9_-]`). Any
 //! other line is ignored, and an overlong one is skipped to its newline without being held. The
 //! same ID twice is one marker; two different IDs are [`ScopeMarker::Conflicting`], and the
 //! conflict is final. A marker on stdout is never read: stdout carries the model's answer, which
@@ -169,25 +171,8 @@ impl CaptureStderr {
 }
 
 /// Tee one stream: forward it to `writer`, scan it with `matcher`, and read the session marker
-/// from it. This is the stderr half of [`tee_marked_capture`], public so the grammar can be
-/// tested on any byte source.
-pub fn tee_marked(
-    reader: impl Read + Send + 'static,
-    writer: impl Write + Send + 'static,
-    matcher: Option<FragmentMatcher>,
-) -> std::io::Result<CaptureStderr> {
-    tee_marked_with_rule(
-        reader,
-        writer,
-        matcher,
-        StderrLineRule {
-            prefix: "session_id: ".into(),
-            grammar: IdGrammar::TimestampHex,
-        },
-    )
-}
-
-/// [`tee_marked`] using the identity prefix and grammar declared by the harness manifest.
+/// the manifest's `rule` declares (its prefix and grammar) from it. This is the stderr half of
+/// [`tee_marked_capture_with_rule`], public so the grammar can be tested on any byte source.
 pub fn tee_marked_with_rule(
     reader: impl Read + Send + 'static,
     writer: impl Write + Send + 'static,
@@ -214,27 +199,12 @@ pub fn tee_marked_with_rule(
     Ok(CaptureStderr { shared, hit })
 }
 
-/// Take both pipes off a released Hermes child and tee them: stdout to this process's stdout and
+/// Take both pipes off a released keyed child and tee them: stdout to this process's stdout and
 /// stderr to its stderr, byte for byte, each scanned for fragments of `secret` (a matcher of its
-/// own per stream), stderr also read for the session marker.
+/// own per stream), stderr also read for the session marker `rule` declares, if any.
 ///
 /// Started on a child the gate has already released (D40), never a spawner. A tee that cannot
 /// start ends the child it could not forward, which is registered, so the seal answers for it.
-pub fn tee_marked_capture(
-    spawned: &mut Spawned,
-    secret: Option<&ChildSecret>,
-) -> Result<CaptureStderr, CliError> {
-    tee_marked_capture_with_rule(
-        spawned,
-        secret,
-        Some(StderrLineRule {
-            prefix: "session_id: ".into(),
-            grammar: IdGrammar::TimestampHex,
-        }),
-    )
-}
-
-/// Tee and key-scan both piped streams, optionally reading a manifest identity rule on stderr.
 pub fn tee_marked_capture_with_rule(
     spawned: &mut Spawned,
     secret: Option<&ChildSecret>,
@@ -313,27 +283,6 @@ pub fn tee_stderr_capture_with_rule(
         .map_err(|error| fail(spawned, error.to_string()))
 }
 
-/// [`tee_marked_capture`] with the two destinations named, so a test can read what was forwarded.
-pub fn tee_marked_capture_to(
-    spawned: &mut Spawned,
-    secret: Option<&ChildSecret>,
-    stdout_to: impl Write + Send + 'static,
-    stderr_to: impl Write + Send + 'static,
-) -> Result<CaptureStderr, CliError> {
-    tee_marked_capture_to_with_rule(
-        spawned,
-        secret,
-        stdout_to,
-        stderr_to,
-        None,
-        Some(StderrLineRule {
-            prefix: "session_id: ".into(),
-            grammar: IdGrammar::TimestampHex,
-        }),
-    )
-    .map(|(_, tee)| tee)
-}
-
 fn tee_marked_capture_to_with_rule(
     spawned: &mut Spawned,
     secret: Option<&ChildSecret>,
@@ -342,9 +291,10 @@ fn tee_marked_capture_to_with_rule(
     stdout_rule: Option<StdoutJsonRule>,
     rule: Option<StderrLineRule>,
 ) -> Result<(Option<ScopeReceiver>, CaptureStderr), CliError> {
-    // A second, deliberate `Child::kill` on a child the gate released, beside `tee_scoped_capture`'s:
-    // a tee that cannot forward ends the registered child it could not forward, and the seal that
-    // follows answers for it (the termination sweep matches strings, so this is named here).
+    // A second, deliberate `Child::kill` on a child the gate released, beside
+    // `tee_scoped_capture_with_rule`'s: a tee that cannot forward ends the registered child it
+    // could not forward, and the seal that follows answers for it (the termination sweep
+    // matches strings, so this is named here).
     let fail = |spawned: &mut Spawned, what: &str, error: String| {
         let _ = spawned.child.kill();
         let _ = spawned.child.wait();

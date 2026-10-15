@@ -5,8 +5,8 @@
 //!
 //! Every wait is bounded; every child the fake harness becomes is ended by its own owner.
 //!
-//! Two test binaries pull this file in (`m2_cli_lifecycle` and `m2_hermes_lifecycle`) and neither
-//! uses all of it.
+//! Several test binaries pull this file in (`m2_cli_lifecycle`, and `full` for
+//! `keyed_lifecycle` and the upload suites) and none uses all of it.
 
 #![allow(dead_code)]
 
@@ -32,9 +32,10 @@ use tokio::io::AsyncWriteExt;
 /// The development connector every test launches.
 pub const FAKE_ID: &str = "m2-fake";
 
-/// The Hermes-shaped development connector: the shipped `hermes-cli` manifest and seed files
-/// under this id, with its program replaced by `fixtures/m2-fake-hermes.sh`.
-pub const HERMES_FAKE_ID: &str = "m2-fake-hermes";
+/// The keyed development connector: the fixture connector `tests/fixtures/connectors/keyed-per-run`
+/// (manifest and seed files) under this id, with its program replaced by
+/// `fixtures/m2-fake-keyed.sh`.
+pub const KEYED_FAKE_ID: &str = "m2-fake-keyed";
 
 /// The chat-mode development connector (D57): `interactive = true`, identity `none`, a native
 /// source read from the run's start, and `fixtures/m2-fake-tui.sh` as its harness ([`Rig::chat`]).
@@ -65,7 +66,7 @@ pub struct Rig {
     pub runtime: tokio::runtime::Runtime,
     pub daemon: Option<goalcup_daemon::runtime::Daemon>,
     pub config: goalcup_daemon::config::DaemonConfig,
-    /// Added to the environment `goalcup start` is given (the Hermes provider key, in a test).
+    /// Added to the environment `goalcup start` is given (the provider key, in a keyed test).
     pub extra_env: Mutex<std::collections::BTreeMap<String, String>>,
     _tmp: tempfile::TempDir,
 }
@@ -75,41 +76,34 @@ impl Rig {
         Rig::with_capture(true)
     }
 
-    /// A capture rig whose connector is the Hermes-shaped `m2-fake-hermes` (see
-    /// [`HERMES_FAKE_ID`]): a per-run home, a goal flag, a child-only credential and a harness
-    /// that prints its session identity on stderr.
-    pub fn hermes() -> Rig {
-        Rig::build(true, Some(2), None, true, true)
-    }
-
-    /// [`Rig::hermes`] under the old family-oriented helper signature. Schema 1 has no family:
-    /// the harness manifest proves that every credential-bearing connector is scanned.
-    pub fn hermes_in_family(family: &str) -> Rig {
-        let _ = family;
-        Rig::build(true, Some(2), None, true, true)
+    /// A capture rig whose connector is the keyed `m2-fake-keyed` (see [`KEYED_FAKE_ID`]): a
+    /// per-run home, a goal flag, a child-only credential and a harness that prints its session
+    /// identity on stderr.
+    pub fn keyed() -> Rig {
+        Rig::build(true, Some(2), false, true, true)
     }
 
     /// A rig whose connector has no `[capture]` section when `capture` is false.
     pub fn with_capture(capture: bool) -> Rig {
-        Rig::build(capture, None, None, false, true)
+        Rig::build(capture, None, false, false, true)
     }
 
     /// A capture rig whose connector gives a harness `grace_seconds` between SIGTERM and
     /// SIGKILL (the shipped connector's 10 s is too long for a test that ends a stubborn one).
     pub fn with_grace(grace_seconds: u64) -> Rig {
-        Rig::build(true, Some(grace_seconds), None, false, true)
+        Rig::build(true, Some(grace_seconds), false, false, true)
     }
 
-    /// A capture rig whose connector says `family = "codex"`, so the launcher tees the child's
-    /// stdout and waits for its scope identity, as it does for the shipped Codex connector.
-    pub fn codex_family() -> Rig {
-        Rig::build(true, Some(2), Some("codex"), false, true)
+    /// A capture rig whose connector reads its identity from stdout (`stdout_json`, bound at
+    /// launch), so the launcher tees the child's stdout and waits for its scope identity.
+    pub fn stdout_identity() -> Rig {
+        Rig::build(true, Some(2), true, false, true)
     }
 
     /// A capture rig that also has the chat-mode connector [`CHAT_ID`], whose harness is
     /// `fixtures/m2-fake-tui.sh` (on the same `PATH` as the headless fake).
     pub fn chat() -> Rig {
-        let rig = Rig::build(true, Some(2), None, false, true);
+        let rig = Rig::build(true, Some(2), false, false, true);
         write_chat_connector(&rig.connectors, &rig.root.join("bin"), &rig.out);
         rig
     }
@@ -246,14 +240,14 @@ impl Rig {
     /// the ones the default `<cfg>/daemon.toml` names (`<cfg>-artifacts`, `<cfg>-runs`), which
     /// `goalcup start` writes on first use, so [`Rig::trace`] finds what that daemon wrote.
     pub fn run_scoped() -> Rig {
-        Rig::build(true, Some(2), None, false, false)
+        Rig::build(true, Some(2), false, false, false)
     }
 
     fn build(
         capture: bool,
         grace: Option<u64>,
-        family: Option<&str>,
-        hermes: bool,
+        stdout_identity: bool,
+        keyed: bool,
         start_daemon: bool,
     ) -> Rig {
         // These tests cut a finish that cannot complete; the shipped budget is three minutes
@@ -265,8 +259,8 @@ impl Rig {
         std::fs::create_dir(&out).unwrap();
         let exe = root.join("bin").join("m2-fake-harness");
         std::fs::create_dir(root.join("bin")).unwrap();
-        let fixture = if hermes {
-            "m2-fake-hermes.sh"
+        let fixture = if keyed {
+            "m2-fake-keyed.sh"
         } else {
             "m2-fake-harness.sh"
         };
@@ -279,8 +273,8 @@ impl Rig {
         // refusal is that no schema-1 harness declares the requested id, not an I/O failure
         // because the test forgot to make the root it passed in.
         std::fs::create_dir_all(&capture_connectors).unwrap();
-        if hermes {
-            write_hermes_connector(&connectors, &capture_connectors, &exe, &out);
+        if keyed {
+            write_keyed_connector(&connectors, &capture_connectors, &exe, &out);
         } else {
             write_connector(
                 &connectors,
@@ -289,7 +283,7 @@ impl Rig {
                 &out,
                 capture,
                 grace,
-                family,
+                stdout_identity,
             );
         }
         let (artifact_root, workspace_parent) = if start_daemon {
@@ -351,10 +345,10 @@ impl Rig {
         opts
     }
 
-    /// [`Rig::options`] for the Hermes-shaped connector.
-    pub fn hermes_options(&self, goal: &Path, reserve: u64) -> StartOptions {
+    /// [`Rig::options`] for the keyed connector ([`Rig::keyed`]).
+    pub fn keyed_options(&self, goal: &Path, reserve: u64) -> StartOptions {
         let mut opts = self.options(goal, reserve);
-        opts.harness = HERMES_FAKE_ID.to_string();
+        opts.harness = KEYED_FAKE_ID.to_string();
         opts
     }
 
@@ -592,7 +586,7 @@ fn write_connector(
     out: &Path,
     capture: bool,
     grace: Option<u64>,
-    family: Option<&str>,
+    stdout_identity: bool,
 ) {
     let out_text = out.display().to_string();
     assert!(
@@ -611,7 +605,7 @@ fn write_connector(
     if capture {
         let capture_dir = capture_connectors.join(FAKE_ID);
         std::fs::create_dir_all(&capture_dir).unwrap();
-        let identity = if family == Some("codex") {
+        let identity = if stdout_identity {
             r#"source = "stdout_json"
 binding = "at_launch"
 match_field = "type"
@@ -620,7 +614,7 @@ id_field = "thread_id""#
         } else {
             "source = \"none\""
         };
-        let native_pattern = if family == Some("codex") {
+        let native_pattern = if stdout_identity {
             "native/*-{id}.jsonl"
         } else {
             "native/*.jsonl"
@@ -671,12 +665,12 @@ protocol_hint = "openai-responses"
     }
 }
 
-/// The shipped `hermes-cli` connector rendered into the shared schema-1 test root, with its id
-/// and program replaced. The fake's report directory is injected into its private
-/// script, not the manifest. A new id is unpinned and admitted only through `--dev`.
-fn write_hermes_connector(connectors: &Path, capture_connectors: &Path, exe: &Path, out: &Path) {
+/// The keyed fixture connector (`tests/fixtures/connectors/keyed-per-run`) rendered into the
+/// shared schema-1 test root, with its id and program replaced. The fake's report directory is
+/// injected into its private script, not the manifest. A new id is unpinned and admitted only
+/// through `--dev`.
+fn write_keyed_connector(connectors: &Path, capture_connectors: &Path, exe: &Path, out: &Path) {
     assert_eq!(connectors, capture_connectors, "the schema root is shared");
-    let shipped = super::support::connectors_dir().join("hermes-cli");
     let out = out.display().to_string();
     assert!(!out.contains('\''), "the test path must be shell-quotable");
     let fake = std::fs::read_to_string(exe).unwrap();
@@ -686,41 +680,31 @@ fn write_hermes_connector(connectors: &Path, capture_connectors: &Path, exe: &Pa
         format!("{shebang}\nM2_FAKE_OUT='{out}'\nexport M2_FAKE_OUT\n{body}"),
     )
     .unwrap();
-    let capture_dir = capture_connectors.join(HERMES_FAKE_ID);
-    std::fs::create_dir_all(capture_dir.join("files")).unwrap();
-    for name in ["config.yaml", "auth.json", ".update_check"] {
-        std::fs::copy(
-            shipped.join("files").join(name),
-            capture_dir.join("files").join(name),
-        )
-        .unwrap();
-    }
-    let mut harness = std::fs::read_to_string(shipped.join("harness.toml")).unwrap();
+    let dir = super::support::copy_fixture_connector(
+        "keyed-per-run",
+        capture_connectors,
+        KEYED_FAKE_ID,
+        KEYED_FAKE_ID,
+    );
+    let path = dir.join("harness.toml");
+    let harness = std::fs::read_to_string(&path).unwrap();
+    let mut harness = harness;
+    // `goalcup start` probes every provider host that is not loopback before it creates
+    // anything; a test never reaches the network, and the fake never calls its provider.
     for (from, to) in [
-        ("id = \"hermes-cli\"", format!("id = \"{HERMES_FAKE_ID}\"")),
         (
-            "program = \"hermes\"",
-            "program = \"m2-fake-harness\"".to_string(),
+            "program = \"keyed-harness\"",
+            "program = \"m2-fake-harness\"",
         ),
-        // `goalcup start` probes every provider host that is not loopback before it creates
-        // anything; a test never reaches the network, and the fake never calls its provider.
-        // So the shared `deepseek` row becomes the same row on a loopback name.
-        ("providers = [\"deepseek\"]\n", String::new()),
+        (
+            "host = \"api.keyed.example\"",
+            "host = \"api.keyed.localhost\"",
+        ),
     ] {
-        assert!(
-            harness.contains(from),
-            "the shipped harness has no `{from}`"
-        );
-        harness = harness.replacen(from, &to, 1);
+        assert!(harness.contains(from), "the fixture has no `{from}`");
+        harness = harness.replacen(from, to, 1);
     }
-    let deepseek = &goalcup_protocol::harness::provider_hosts().unwrap()["deepseek"];
-    harness.push_str(&format!(
-        "\n[[capture.hosts]]\nhost = \"api.deepseek.localhost\"\nevidence_paths = {:?}\n\
-         protocol_hint = {:?}\n",
-        deepseek.evidence_paths,
-        deepseek.protocol_hint.as_deref().unwrap(),
-    ));
-    std::fs::write(capture_dir.join("harness.toml"), harness).unwrap();
+    std::fs::write(&path, harness).unwrap();
 }
 
 /// `connectors/m2-fake-tui/`: the chat-mode connector (D57), whose program `m2-fake-tui` is

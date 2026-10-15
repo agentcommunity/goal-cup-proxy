@@ -24,6 +24,8 @@ pub mod m2_tls_support;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod m2_vertical_support;
 pub mod m2_ws_support;
+#[cfg(unix)]
+pub mod real_home_guard;
 pub mod secret_support;
 pub mod support;
 pub mod upload_server;

@@ -605,7 +605,7 @@ fn an_extra_rule_naming_a_non_ascii_field_or_header_is_refused() {
 fn the_codex_harness_strips_the_credit_balance_it_names() {
     let m = connector("codex-cli");
     assert!(
-        m.iter().any(|p| p.kind == "codex_credits_remaining"),
+        m.iter().any(|p| p.kind() == "codex_credits_remaining"),
         "harness.toml declares the rule a participant can read"
     );
     let mut r = Redactor::for_patterns("codex-cli", &m).unwrap();

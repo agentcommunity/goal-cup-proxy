@@ -1,15 +1,16 @@
-//! The stderr tee that carries Hermes' own session identity.
+//! The stderr tee that carries a `stderr_line` harness's session identity.
 //!
-//! Hermes prints one `session_id: <id>` line on stderr after its turn. The tee forwards every
-//! byte of both streams unchanged, scans them for the key's fragments, and reads that one line
-//! under a strict grammar. Everything here uses in-memory readers, a socket pair, or a
+//! The harness prints one `session_id: <id>` line on stderr after its turn (the rule here is
+//! `support::stderr_marker_rule`). The tee forwards every byte of both streams unchanged, scans
+//! them for the key's fragments, and reads that one line under a strict grammar. Everything here uses in-memory readers, a socket pair, or a
 //! `/bin/sh` child; the synthetic key is `secret_support::KEY`.
 
 use crate::common::secret_support;
+use crate::common::support;
 use goalcup_cli::capture_tee::{NATIVE_FINISH_MIN, marker_wait_end};
 use goalcup_cli::key_scan::FragmentMatcher;
 use goalcup_cli::launch::{
-    ScopeMarker, Spawned, StderrLineRule, tee_marked, tee_marked_capture, tee_marked_with_rule,
+    ScopeMarker, Spawned, StderrLineRule, tee_marked_capture_with_rule, tee_marked_with_rule,
 };
 use goalcup_protocol::control::FINISH_COMMIT_RESERVE;
 use goalcup_protocol::harness::IdGrammar;
@@ -80,7 +81,13 @@ impl Write for Closed {
 }
 
 fn marker(chunks: &[&[u8]]) -> ScopeMarker {
-    let tee = tee_marked(Chunks::new(chunks), Sink::default(), None).unwrap();
+    let tee = tee_marked_with_rule(
+        Chunks::new(chunks),
+        Sink::default(),
+        None,
+        support::stderr_marker_rule(),
+    )
+    .unwrap();
     assert!(
         tee.finish(Instant::now() + PATIENCE).unwrap(),
         "the stream ended"
@@ -293,7 +300,13 @@ fn bytes_are_forwarded_verbatim() {
     for size in [1usize, 7, 4096, 65_536] {
         let chunks: Vec<&[u8]> = payload.chunks(size).collect();
         let sink = Sink::default();
-        let tee = tee_marked(Chunks::new(&chunks), sink.clone(), None).unwrap();
+        let tee = tee_marked_with_rule(
+            Chunks::new(&chunks),
+            sink.clone(),
+            None,
+            support::stderr_marker_rule(),
+        )
+        .unwrap();
         assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
         assert_eq!(*sink.0.lock().unwrap(), payload, "chunk size {size}");
     }
@@ -303,7 +316,13 @@ fn bytes_are_forwarded_verbatim() {
 /// the tee still completes.
 #[test]
 fn a_closed_destination_does_not_stop_the_reading() {
-    let tee = tee_marked(Chunks::new(&[b"noise\n", &line(ID)]), Closed, None).unwrap();
+    let tee = tee_marked_with_rule(
+        Chunks::new(&[b"noise\n", &line(ID)]),
+        Closed,
+        None,
+        support::stderr_marker_rule(),
+    )
+    .unwrap();
     assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
     assert_eq!(
         tee.marker_until(Instant::now()),
@@ -316,7 +335,8 @@ fn a_closed_destination_does_not_stop_the_reading() {
 #[test]
 fn the_wait_decides_from_the_lines_seen_when_stderr_is_held_open() {
     let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
-    let tee = tee_marked(reader, Sink::default(), None).unwrap();
+    let tee =
+        tee_marked_with_rule(reader, Sink::default(), None, support::stderr_marker_rule()).unwrap();
     writer.write_all(b"progress\n").unwrap();
     writer.write_all(&line(ID)).unwrap();
     writer.flush().unwrap();
@@ -344,7 +364,13 @@ fn the_wait_decides_from_the_lines_seen_when_stderr_is_held_open() {
 /// The wait returns as soon as the stream ends: a harness that closed stderr is not waited for.
 #[test]
 fn the_wait_ends_at_eof_not_at_its_deadline() {
-    let tee = tee_marked(Chunks::new(&[&line(ID)]), Sink::default(), None).unwrap();
+    let tee = tee_marked_with_rule(
+        Chunks::new(&[&line(ID)]),
+        Sink::default(),
+        None,
+        support::stderr_marker_rule(),
+    )
+    .unwrap();
     let started = Instant::now();
     let decided = tee.marker_until(started + Duration::from_secs(30));
     assert_eq!(decided, ScopeMarker::One(ID.to_string()));
@@ -363,15 +389,22 @@ fn the_tee_reports_a_key_fragment_split_across_reads() {
     for cut in [1usize, 5, 12, 30] {
         let (a, b) = masked.as_bytes().split_at(cut);
         let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-        let tee = tee_marked(Chunks::new(&[a, b]), Sink::default(), Some(matcher)).unwrap();
+        let tee = tee_marked_with_rule(
+            Chunks::new(&[a, b]),
+            Sink::default(),
+            Some(matcher),
+            support::stderr_marker_rule(),
+        )
+        .unwrap();
         assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
         assert!(tee.key_hit(), "cut at {cut}");
     }
     let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-    let tee = tee_marked(
+    let tee = tee_marked_with_rule(
         Chunks::new(&[b"nothing to see\n", &line(ID)]),
         Sink::default(),
         Some(matcher),
+        support::stderr_marker_rule(),
     )
     .unwrap();
     assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
@@ -384,7 +417,7 @@ fn a_marker_on_stdout_is_never_used() {
     let secret = {
         let mut env = std::collections::BTreeMap::new();
         env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
-        let profile = hermes_profile();
+        let profile = keyed_profile();
         goalcup_cli::launch::child_secret_for_harness(&profile, &env)
             .unwrap()
             .unwrap()
@@ -401,7 +434,12 @@ fn a_marker_on_stdout_is_never_used() {
         child,
         program: "/bin/sh".to_string(),
     };
-    let tee = tee_marked_capture(&mut spawned, Some(&secret)).unwrap();
+    let tee = tee_marked_capture_with_rule(
+        &mut spawned,
+        Some(&secret),
+        Some(support::stderr_marker_rule()),
+    )
+    .unwrap();
     let status = spawned.child.wait().unwrap();
     assert!(status.success());
     assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
@@ -416,7 +454,7 @@ fn the_capture_tee_reads_a_real_childs_stderr_and_scans_both_streams() {
     let secret = {
         let mut env = std::collections::BTreeMap::new();
         env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
-        goalcup_cli::launch::child_secret_for_harness(&hermes_profile(), &env)
+        goalcup_cli::launch::child_secret_for_harness(&keyed_profile(), &env)
             .unwrap()
             .unwrap()
     };
@@ -434,7 +472,12 @@ fn the_capture_tee_reads_a_real_childs_stderr_and_scans_both_streams() {
         child,
         program: "/bin/sh".to_string(),
     };
-    let tee = tee_marked_capture(&mut spawned, Some(&secret)).unwrap();
+    let tee = tee_marked_capture_with_rule(
+        &mut spawned,
+        Some(&secret),
+        Some(support::stderr_marker_rule()),
+    )
+    .unwrap();
     spawned.child.wait().unwrap();
     assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
     assert_eq!(
@@ -444,10 +487,10 @@ fn the_capture_tee_reads_a_real_childs_stderr_and_scans_both_streams() {
     assert!(tee.key_hit(), "the fragment on stdout is a live hit");
 }
 
-fn hermes_profile() -> goalcup_protocol::harness::CaptureSpec {
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
-    goalcup_cli::connector::load_harness(&dir, "hermes-cli", false)
-        .unwrap()
+/// A keyed profile (the `keyed-per-run` fixture connector), whose credential is
+/// `DEEPSEEK_API_KEY`.
+fn keyed_profile() -> goalcup_protocol::harness::CaptureSpec {
+    support::fixture_connector("keyed-per-run")
         .loaded
         .manifest
         .capture
@@ -471,7 +514,8 @@ fn the_marker_wait_ends_before_the_drain_share_does() {
 
     // A held-open stderr with a marker already seen is answered at that end, not at EOF.
     let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
-    let tee = tee_marked(reader, Sink::default(), None).unwrap();
+    let tee =
+        tee_marked_with_rule(reader, Sink::default(), None, support::stderr_marker_rule()).unwrap();
     writer.write_all(&line(ID)).unwrap();
     let begun = Instant::now();
     let decided = tee.marker_until(marker_wait_end(
@@ -521,7 +565,13 @@ fn a_matching_tee_still_forwards_clean_output_verbatim() {
         let chunks: Vec<&[u8]> = payload.chunks(size).collect();
         let sink = Sink::default();
         let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-        let tee = tee_marked(Chunks::new(&chunks), sink.clone(), Some(matcher)).unwrap();
+        let tee = tee_marked_with_rule(
+            Chunks::new(&chunks),
+            sink.clone(),
+            Some(matcher),
+            support::stderr_marker_rule(),
+        )
+        .unwrap();
         assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
         assert!(!tee.key_hit(), "chunk size {size}");
         assert_eq!(*sink.0.lock().unwrap(), payload, "chunk size {size}");
@@ -545,7 +595,13 @@ fn a_fragment_is_withheld_however_the_reads_cut_it() {
             let chunks: Vec<&[u8]> = text.as_bytes().chunks(size).collect();
             let sink = Sink::default();
             let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-            let tee = tee_marked(Chunks::new(&chunks), sink.clone(), Some(matcher)).unwrap();
+            let tee = tee_marked_with_rule(
+                Chunks::new(&chunks),
+                sink.clone(),
+                Some(matcher),
+                support::stderr_marker_rule(),
+            )
+            .unwrap();
             assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
             let sent = sink.0.lock().unwrap().clone();
             assert_no_form(&format!("`{form}` cut every {size}"), &sent);
@@ -566,11 +622,11 @@ fn a_fragment_is_withheld_however_the_reads_cut_it() {
 /// destination, and the marker on stderr is still read.
 #[test]
 fn a_real_childs_two_streams_are_withheld_before_they_reach_the_terminal() {
-    use goalcup_cli::launch::{child_secret_for_harness, tee_marked_capture_to};
+    use goalcup_cli::launch::{child_secret_for_harness, tee_marked_capture_with_identity_to};
     let secret = {
         let mut env = std::collections::BTreeMap::new();
         env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
-        child_secret_for_harness(&hermes_profile(), &env)
+        child_secret_for_harness(&keyed_profile(), &env)
             .unwrap()
             .unwrap()
     };
@@ -594,7 +650,15 @@ fn a_real_childs_two_streams_are_withheld_before_they_reach_the_terminal() {
         program: "/bin/sh".to_string(),
     };
     let (out, err) = (Sink::default(), Sink::default());
-    let tee = tee_marked_capture_to(&mut spawned, Some(&secret), out.clone(), err.clone()).unwrap();
+    let (_, tee) = tee_marked_capture_with_identity_to(
+        &mut spawned,
+        Some(&secret),
+        None,
+        Some(support::stderr_marker_rule()),
+        out.clone(),
+        err.clone(),
+    )
+    .unwrap();
     spawned.child.wait().unwrap();
     assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
     assert!(tee.key_hit());
@@ -691,7 +755,7 @@ fn a_real_childs_key_bearing_stderr_marker_binds_nothing() {
     let secret = {
         let mut env = std::collections::BTreeMap::new();
         env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
-        child_secret_for_harness(&hermes_profile(), &env)
+        child_secret_for_harness(&keyed_profile(), &env)
             .unwrap()
             .unwrap()
     };

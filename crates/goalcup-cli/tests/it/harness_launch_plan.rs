@@ -1,8 +1,11 @@
-//! Pure decisions derived from harness-contract schema 1.
+//! Pure decisions derived from harness-contract schema 1, on the fixture connectors
+//! (`tests/fixtures/connectors/`): the keyed headless shape and the chat-mode shared-home shape.
+//! What every shipped connector is held to is the connector contract, `it/connector_contract.rs`.
 
+use crate::common::support;
 use goalcup_cli::launch::{LaunchScope, StderrUse, StdoutUse, StreamPlan, harness_arg_refusal};
 use goalcup_cli::preflight::{Level, harness_pin_gate};
-use goalcup_protocol::harness::{HarnessManifest, IdentitySource, Origin, load_dir};
+use goalcup_protocol::harness::{HarnessManifest, Origin, load_dir};
 use goalcup_protocol::pins::shipped_connector_ids;
 use goalcup_protocol::template::TemplateVars;
 use std::collections::BTreeMap;
@@ -12,57 +15,27 @@ fn connectors() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors")
 }
 
-fn load(id: &str) -> goalcup_protocol::harness::LoadedConnector {
-    load_dir(&connectors().join(id), Origin::Pinned).expect("the shipped harness loads")
+/// A fixture connector, loaded from its folder.
+fn fixture(id: &str) -> goalcup_protocol::harness::LoadedConnector {
+    load_dir(&support::fixture_connectors_dir().join(id), Origin::Pinned)
+        .expect("the fixture connector loads")
 }
 
-/// Every shipped connector's stream and identity plans follow from its manifest by one rule.
-/// A key scan runs exactly when a credential is passed, and reads both streams. A chat-mode connector (D57) leaves the
-/// terminal to the harness: both streams inherited, and no identity at launch, because its
-/// sessions are the files its native source finds.
-#[test]
-fn every_shipped_connector_has_the_stream_and_identity_plan_its_manifest_asks_for() {
-    let mut chat = 0;
-    for id in shipped_connector_ids() {
-        let loaded = load(&id);
-        let capture = &loaded.manifest.capture;
-        let plan = StreamPlan::for_spec(capture).unwrap_or_else(|e| panic!("{id}: {e}"));
-        let scope = LaunchScope::for_spec(capture).unwrap_or_else(|e| panic!("{id}: {e}"));
-        assert_eq!(plan.scan_for_key, capture.credential.is_some(), "{id}");
-        if plan.scan_for_key {
-            // The scan reads both streams, so neither may go straight to the terminal.
-            assert_ne!(plan.stdout, StdoutUse::Inherit, "{id}");
-            assert_ne!(plan.stderr, StderrUse::Inherit, "{id}");
-            if capture.identity.source != IdentitySource::StdoutJson {
-                assert_eq!(plan.stdout, StdoutUse::Forward, "{id}");
-            }
-        }
-        // When the session is bound follows from the identity carrier alone.
-        let bound = match capture.identity.source {
-            IdentitySource::None => LaunchScope::None,
-            IdentitySource::Preassigned => LaunchScope::Preassigned,
-            IdentitySource::StdoutJson => LaunchScope::FromStdout,
-            IdentitySource::StderrLine => LaunchScope::AtFinish,
-            other => panic!("{id}: an identity source this test does not know: {other:?}"),
-        };
-        assert_eq!(scope, bound, "{id}");
-        if capture.interactive {
-            chat += 1;
-            assert_eq!(plan.stdout, StdoutUse::Inherit, "{id}");
-            assert_eq!(plan.stderr, StderrUse::Inherit, "{id}");
-            assert_eq!(scope, LaunchScope::None, "{id}");
-        }
-    }
-    assert!(
-        chat > 0,
-        "the product is chat mode: at least one shipped connector is"
-    );
+/// The first shipped connector: the subject of a rule about pinned bytes, which only a shipped
+/// connector has.
+fn a_shipped_id() -> String {
+    shipped_connector_ids()[0].clone()
 }
 
-/// A shipped manifest with its identity table replaced, parsed without validating: what the
+/// A fixture manifest with its identity table replaced, parsed without validating: what the
 /// launcher copies from a headless profile that names these rules.
 fn with_identity(id: &str, identity: &str) -> HarnessManifest {
-    let text = std::fs::read_to_string(connectors().join(id).join("harness.toml")).unwrap();
+    let text = std::fs::read_to_string(
+        support::fixture_connectors_dir()
+            .join(id)
+            .join("harness.toml"),
+    )
+    .unwrap();
     let from = "[capture.identity]\nsource = \"none\"";
     assert!(text.contains(from), "{id}");
     HarnessManifest::from_toml_str(&text.replace(from, &format!("[capture.identity]\n{identity}")))
@@ -72,7 +45,7 @@ fn with_identity(id: &str, identity: &str) -> HarnessManifest {
 #[test]
 fn preassigned_scope_does_not_change_when_a_credential_is_present() {
     let manifest = with_identity(
-        "claude-code-cli",
+        "chat-shared-home",
         "source = \"preassigned\"\nbinding = \"at_launch\"",
     );
     assert_eq!(
@@ -80,7 +53,7 @@ fn preassigned_scope_does_not_change_when_a_credential_is_present() {
         LaunchScope::Preassigned
     );
     let mut capture = manifest.capture.clone();
-    capture.credential = load("hermes-cli").manifest.capture.credential.clone();
+    capture.credential = fixture("keyed-per-run").manifest.capture.credential.clone();
     assert!(capture.credential.is_some());
     assert_eq!(
         LaunchScope::for_spec(&capture).unwrap(),
@@ -94,15 +67,15 @@ fn preassigned_scope_does_not_change_when_a_credential_is_present() {
 
 #[test]
 fn identity_rules_are_copied_from_the_manifest() {
-    let codex = with_identity(
-        "codex-cli",
+    let json = with_identity(
+        "chat-shared-home",
         "source = \"stdout_json\"\nbinding = \"at_launch\"\nmatch_field = \"type\"\n\
          match_value = \"thread.started\"\nid_field = \"thread_id\"",
     );
     let StreamPlan {
         stdout: StdoutUse::IdentityJson(rule),
         ..
-    } = StreamPlan::for_spec(&codex.capture).unwrap()
+    } = StreamPlan::for_spec(&json.capture).unwrap()
     else {
         panic!("a stdout_json profile must use its stdout JSON identity rule")
     };
@@ -110,17 +83,17 @@ fn identity_rules_are_copied_from_the_manifest() {
     assert_eq!(rule.match_value, "thread.started");
     assert_eq!(rule.id_field, "thread_id");
     assert_eq!(
-        LaunchScope::for_spec(&codex.capture).unwrap(),
+        LaunchScope::for_spec(&json.capture).unwrap(),
         LaunchScope::FromStdout
     );
 
-    let hermes = load("hermes-cli");
+    let keyed = fixture("keyed-per-run");
     let StreamPlan {
         stderr: StderrUse::IdentityLine(rule),
         ..
-    } = StreamPlan::for_spec(&hermes.manifest.capture).unwrap()
+    } = StreamPlan::for_spec(&keyed.manifest.capture).unwrap()
     else {
-        panic!("Hermes must use its stderr identity rule")
+        panic!("a stderr_line profile must use its stderr identity rule")
     };
     assert_eq!(rule.prefix, "session_id: ");
     assert_eq!(rule.grammar.as_str(), "timestamp-hex");
@@ -128,11 +101,11 @@ fn identity_rules_are_copied_from_the_manifest() {
 
 #[test]
 fn argv_guard_comes_from_the_harness_manifest() {
-    let hermes = load("hermes-cli");
-    for arg in ["--profile", "--pro", "--tui", "--cli", "-p", "-h"] {
+    let keyed = fixture("keyed-per-run");
+    for arg in ["--profile", "--pro", "--tui", "--he", "-p", "-h", "-Qp"] {
         assert!(
-            harness_arg_refusal(&hermes.manifest.capture, arg).is_some(),
-            "Hermes must refuse {arg}"
+            harness_arg_refusal(&keyed.manifest.capture, arg).is_some(),
+            "the guard must refuse {arg}"
         );
     }
     for arg in [
@@ -140,25 +113,23 @@ fn argv_guard_comes_from_the_harness_manifest() {
         "--model",
         "--query=hello",
         "--unknown",
+        "--cli",
         "-x",
+        "-mp",
         "plain",
     ] {
         assert_eq!(
-            harness_arg_refusal(&hermes.manifest.capture, arg),
+            harness_arg_refusal(&keyed.manifest.capture, arg),
             None,
-            "Hermes must allow {arg}"
+            "the guard must allow {arg}"
         );
     }
 }
 
+/// The chat-mode fixture connector (program `example-cli`) under `id`, in `root/dir_name`.
 fn write_unpinned(root: &Path, dir_name: &str, id: &str) -> PathBuf {
-    let dir = root.join(dir_name);
-    std::fs::create_dir_all(&dir).unwrap();
-    let source = std::fs::read_to_string(connectors().join("claude-code-cli/harness.toml"))
-        .unwrap()
-        .replacen("id = \"claude-code-cli\"", &format!("id = \"{id}\""), 1);
-    std::fs::write(dir.join("harness.toml"), source).unwrap();
-    dir
+    std::fs::create_dir_all(root).unwrap();
+    support::copy_fixture_connector("chat-shared-home", root, dir_name, id)
 }
 
 fn copy_tree(from: &Path, to: &Path) {
@@ -195,10 +166,8 @@ fn unpinned_harness_uses_the_one_dev_door() {
 #[test]
 fn a_mixed_pinned_and_development_root_loads_each_by_its_captured_identity() {
     let tmp = tempfile::tempdir().unwrap();
-    copy_tree(
-        &connectors().join("claude-code-cli"),
-        &tmp.path().join("claude-code-cli"),
-    );
+    let id = a_shipped_id();
+    copy_tree(&connectors().join(&id), &tmp.path().join(&id));
     write_unpinned(tmp.path(), "z-development", "example-cli");
 
     let loaded = goalcup_cli::connector::load_harness(tmp.path(), "example-cli", true).unwrap();
@@ -210,15 +179,13 @@ fn a_mixed_pinned_and_development_root_loads_each_by_its_captured_identity() {
 #[test]
 fn a_byte_identical_shipped_connector_under_an_alias_is_refused_at_cli_discovery() {
     let tmp = tempfile::tempdir().unwrap();
-    copy_tree(
-        &connectors().join("claude-code-cli"),
-        &tmp.path().join("alias"),
-    );
+    let id = a_shipped_id();
+    copy_tree(&connectors().join(&id), &tmp.path().join("alias"));
 
-    let error = goalcup_cli::connector::load_harness(tmp.path(), "claude-code-cli", false)
+    let error = goalcup_cli::connector::load_harness(tmp.path(), &id, false)
         .expect_err("shipped bytes have one admitted folder");
     assert_eq!(error.exit_code(), 1, "{error}");
-    assert!(error.to_string().contains("claude-code-cli"), "{error}");
+    assert!(error.to_string().contains(&id), "{error}");
     assert!(error.to_string().contains("folder"), "{error}");
 }
 
@@ -227,15 +194,16 @@ fn altered_pinned_id_is_never_relaxed_by_dev() {
     let tmp = tempfile::tempdir().unwrap();
     let copied = tmp.path().join("renamed");
     std::fs::create_dir_all(&copied).unwrap();
+    let id = a_shipped_id();
     std::fs::copy(
-        connectors().join("claude-code-cli/harness.toml"),
+        connectors().join(&id).join("harness.toml"),
         copied.join("harness.toml"),
     )
     .unwrap();
-    let error = goalcup_cli::connector::load_harness(tmp.path(), "claude-code-cli", true)
+    let error = goalcup_cli::connector::load_harness(tmp.path(), &id, true)
         .expect_err("a pinned id under an alias is refused before dev preflight");
     assert_eq!(error.exit_code(), 1, "{error}");
-    assert!(error.to_string().contains("claude-code-cli"), "{error}");
+    assert!(error.to_string().contains(&id), "{error}");
     assert!(error.to_string().contains("folder"), "{error}");
 }
 
@@ -304,8 +272,7 @@ fn launch_uses_the_harness_bytes_captured_at_load_time() {
     let exe = root.join("example-cli");
     std::fs::write(&exe, b"example executable\n").unwrap();
     let path = dir.join("harness.toml");
-    let before = without_platform(&std::fs::read_to_string(&path).unwrap())
-        .replace("program = \"claude\"", "program = \"example-cli\"");
+    let before = without_platform(&std::fs::read_to_string(&path).unwrap());
     std::fs::write(&path, &before).unwrap();
     let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
     let resolved = resolve_harness_executable(&exe).unwrap();
@@ -378,8 +345,7 @@ fn the_env_follows_the_running_platform() {
     let exe = root.join("example-cli");
     std::fs::write(&exe, b"any build\n").unwrap();
     let path = dir.join("harness.toml");
-    let text = without_platform(&std::fs::read_to_string(&path).unwrap())
-        .replace("program = \"claude\"", "program = \"example-cli\"");
+    let text = without_platform(&std::fs::read_to_string(&path).unwrap());
     std::fs::write(
         &path,
         format!(
@@ -489,41 +455,6 @@ fn handed_ca_files(
     (files, proxy.certificate_der().to_vec(), bundle.is_some())
 }
 
-/// Which file `goalcup start` hands each CA variable (D41, WP12): a harness's own variable, in
-/// either mode, gets a file holding the proxy CA and nothing else, so a replace-mode harness
-/// fails closed on a connection that skips the proxy; no shipped connector names a shared row,
-/// so no roots file is written for one.
-#[test]
-fn every_shipped_connector_hands_its_own_ca_variable_the_proxy_ca_alone() {
-    use goalcup_protocol::capture_policy::{CaMode, SHARED_CA_ENV};
-
-    let mut replace = 0;
-    for id in shipped_connector_ids() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(tmp.path()).unwrap();
-        let connector =
-            goalcup_cli::connector::load_harness(&connectors(), &id, false).expect("shipped");
-        if connector.loaded.manifest.capture.ca.mode == CaMode::Replace {
-            replace += 1;
-        }
-        let (files, proxy, bundle) = handed_ca_files(&connector, &root);
-        assert!(!files.is_empty(), "{id}");
-        assert!(!bundle, "{id}: no shared row, so no roots file");
-        for (name, certs) in files {
-            assert!(!SHARED_CA_ENV.contains(&name.as_str()), "{id}: {name}");
-            assert_eq!(
-                certs,
-                std::slice::from_ref(&proxy),
-                "{id}: {name} trusts the proxy CA alone"
-            );
-        }
-    }
-    assert!(
-        replace > 0,
-        "a shipped connector keeps the fail-closed replace mode"
-    );
-}
-
 /// A connector that trusts the proxy through `SSL_CERT_FILE` needs no CA variable of its own and
 /// no Rust row (WP12): `goalcup start` hands that shared row the proxy CA first and then the
 /// system's roots, and in the same profile still hands the harness's own variable the proxy CA
@@ -535,7 +466,7 @@ fn a_shared_ca_row_gets_the_roots_and_an_own_variable_beside_it_does_not() {
     let dir = write_unpinned(&root, "example", "example-cli");
     let path = dir.join("harness.toml");
     let text = without_platform(&std::fs::read_to_string(&path).unwrap())
-        .replace("program = \"claude\"", "program = \"harness\"")
+        .replace("program = \"example-cli\"", "program = \"harness\"")
         .replace(
             "env = [\"NODE_EXTRA_CA_CERTS\"]\nmode = \"extend\"",
             "env = [\"SSL_CERT_FILE\", \"NODE_EXTRA_CA_CERTS\"]\nmode = \"extend\"",
@@ -607,14 +538,13 @@ fn a_harness_without_a_home_variable_gets_only_the_private_home() {
     std::fs::write(&exe, b"example executable\n").unwrap();
     let path = dir.join("harness.toml");
     let text = without_platform(&std::fs::read_to_string(&path).unwrap())
-        .replace("program = \"claude\"", "program = \"example-cli\"")
-        .replace("env = \"CLAUDE_CONFIG_DIR\"\n", "")
+        .replace("env = \"CHAT_CONFIG_DIR\"\n", "")
         .replace("config_home = \"shared\"", "config_home = \"per_run\"")
         .replace(
             "root = \"{config_home}/projects\"",
-            "root = \"{run_home}/.claude/projects\"",
+            "root = \"{run_home}/.chat/projects\"",
         );
-    assert!(!text.contains("CLAUDE_CONFIG_DIR"));
+    assert!(!text.contains("CHAT_CONFIG_DIR"));
     std::fs::write(&path, &text).unwrap();
     let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
     assert_eq!(connector.loaded.manifest.capture.home.env, None);
@@ -648,7 +578,7 @@ fn a_harness_without_a_home_variable_gets_only_the_private_home() {
         },
     )
     .unwrap();
-    assert!(!plan.env_set.contains_key("CLAUDE_CONFIG_DIR"));
+    assert!(!plan.env_set.contains_key("CHAT_CONFIG_DIR"));
     let config_home = config_home.display().to_string();
     assert!(
         plan.env_set.values().all(|v| *v != config_home),
@@ -659,75 +589,6 @@ fn a_harness_without_a_home_variable_gets_only_the_private_home() {
         plan.env_set.get("HOME").map(String::as_str),
         Some(run_home.display().to_string().as_str())
     );
-}
-
-/// A chat-mode plan (D57) places no goal and keeps the terminal: its argv is the connector's
-/// rendered args alone, it is a `Tui` launch (never a group of its own, so the harness stays in
-/// the terminal's foreground group), and a goal is refused, as a headless plan refuses none.
-#[test]
-fn an_interactive_plan_places_no_goal_and_keeps_the_terminal() {
-    use goalcup_cli::launch::{CaptureLaunch, build_capture_launch, resolve_harness_executable};
-    use goalcup_protocol::manifest::LaunchMode;
-
-    let tmp = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(tmp.path()).unwrap();
-    let exe = root.join("harness");
-    std::fs::write(&exe, b"any build\n").unwrap();
-    let resolved = resolve_harness_executable(&exe).unwrap();
-    let workspace = root.join("workspace");
-    let run_home = root.join("run-home");
-    let config_home = root.join("config-home");
-    for dir in [&workspace, &run_home, &config_home] {
-        std::fs::create_dir(dir).unwrap();
-    }
-    let ca = root.join("ca.pem");
-    std::fs::write(&ca, b"test CA\n").unwrap();
-    let mut vars = TemplateVars::new();
-    vars.set("workspace", workspace.display().to_string());
-    vars.set("session_id", "00000000-0000-4000-8000-000000000001");
-    let parent = BTreeMap::new();
-    let launch = |goal| CaptureLaunch {
-        goal,
-        executable: &resolved,
-        run_home: &run_home,
-        config_home: &config_home,
-        proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
-        ca_certificate: &ca,
-        ca_bundle: None,
-        parent_env: &parent,
-    };
-    let mut chat = 0;
-    for id in shipped_connector_ids() {
-        let connector =
-            goalcup_cli::connector::load_harness(&connectors(), &id, false).expect("shipped");
-        let capture = &connector.loaded.manifest.capture;
-        if !capture.interactive {
-            // A headless connector refuses a launch with no goal.
-            let refused = build_capture_launch(&connector, &vars, &workspace, &launch(None))
-                .expect_err("no goal for a headless connector");
-            assert!(refused.to_string().contains("headless"), "{id}: {refused}");
-            continue;
-        }
-        chat += 1;
-        let argv: Vec<String> = capture
-            .args
-            .iter()
-            .map(|a| goalcup_protocol::template::render(a, &vars).unwrap())
-            .collect();
-        let plan = build_capture_launch(&connector, &vars, &workspace, &launch(None))
-            .unwrap_or_else(|e| panic!("{id}: {e}"));
-        assert_eq!(plan.argv, argv, "{id}: the rendered args alone");
-        assert_eq!(plan.capture, None, "{id}: no goal slot");
-        assert_eq!(
-            plan.mode,
-            LaunchMode::Tui,
-            "{id}: the terminal's foreground group"
-        );
-        let refused = build_capture_launch(&connector, &vars, &workspace, &launch(Some(b"goal")))
-            .expect_err("a goal for a chat-mode connector");
-        assert!(refused.to_string().contains("chat mode"), "{id}: {refused}");
-    }
-    assert!(chat > 0, "at least one shipped connector is chat mode");
 }
 
 /// The one check `goalcup start`, `goalcup doctor` and `goalcup prep` share: a chat-mode
@@ -743,16 +604,11 @@ fn a_node_script_harness_resolves_only_with_node_on_the_path_it_is_given() {
     let root = std::fs::canonicalize(tmp.path()).unwrap();
     let dir = write_unpinned(&root, "example", "example-cli");
     let path = dir.join("harness.toml");
-    let text = std::fs::read_to_string(&path)
-        .unwrap()
-        .replace("program = \"claude\"", "program = \"example-cli\"");
+    let text = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, text).unwrap();
     let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
     let profile = &connector.loaded.manifest.capture;
-    assert!(
-        profile.interactive,
-        "the shipped Claude Code recipe is chat mode"
-    );
+    assert!(profile.interactive, "the fixture is chat mode");
 
     let bin = root.join("bin");
     std::fs::create_dir(&bin).unwrap();

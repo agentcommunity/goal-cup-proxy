@@ -11,13 +11,14 @@
 //! holds a freshly written script open is how a "text file busy" is made.
 
 use crate::common::secret_support;
+use crate::common::support;
 use crate::common::table_lock::TableLock;
 
 use goalcup_cli::CliError;
 use goalcup_cli::launch::{
     GOAL_ARG_MARKER, GatedSpawn, HeadlessCapture, LaunchPlan, Pipes, ReleasedChildEnd, Spawned,
     StdoutJsonRule, end_released_child, gated_handle, launched_at_now, spawn_gated,
-    stdout_tee_with_rule, tee_marked_capture, tee_scoped_capture,
+    stdout_tee_with_rule, tee_marked_capture_with_rule, tee_scoped_capture_with_rule,
 };
 use goalcup_protocol::manifest::{Kill, KillStrategy, LaunchMode};
 use goalcup_protocol::process::{ProcessHandle, is_alive, process_start_identity};
@@ -355,9 +356,10 @@ fn a_tee_on_a_child_without_its_pipe_refuses_and_ends_the_child() {
         let pid = gated.pid;
         let mut spawned = gated.release().unwrap();
         let refused = if scoped {
-            tee_scoped_capture(&mut spawned).err()
+            tee_scoped_capture_with_rule(&mut spawned, support::stdout_event_rule()).err()
         } else {
-            tee_marked_capture(&mut spawned, None).err()
+            tee_marked_capture_with_rule(&mut spawned, None, Some(support::stderr_marker_rule()))
+                .err()
         };
         let error = refused.expect("a tee without its pipe refuses");
         assert!(
@@ -375,7 +377,7 @@ fn a_tee_on_a_child_without_its_pipe_refuses_and_ends_the_child() {
 fn a_child_secret_is_in_the_childs_environment_only() {
     let w = World::new();
     let key = KEY;
-    let secret = hermes_secret(key);
+    let secret = keyed_secret(key);
     let script = "if [ -n \"${DEEPSEEK_API_KEY+x}\" ]; then echo \"present ${#DEEPSEEK_API_KEY}\" > \"$OUT/seen\"; \
                   else echo absent > \"$OUT/seen\"; fi\n\
                   /usr/bin/env > \"$OUT/env-names\"\n";
@@ -404,11 +406,9 @@ fn a_child_secret_is_in_the_childs_environment_only() {
     );
 }
 
-/// A `ChildSecret` from the shipped Hermes profile, with this synthetic value.
-fn hermes_secret(value: &str) -> goalcup_cli::launch::ChildSecret {
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
-    let profile = goalcup_cli::connector::load_harness(&dir, "hermes-cli", false)
-        .unwrap()
+/// A `ChildSecret` from the keyed fixture profile (`keyed-per-run`), with this synthetic value.
+fn keyed_secret(value: &str) -> goalcup_cli::launch::ChildSecret {
+    let profile = support::fixture_connector("keyed-per-run")
         .loaded
         .manifest
         .capture;

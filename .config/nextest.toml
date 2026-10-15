@@ -38,7 +38,7 @@ test-group = 'serial'
 filter = '''
 package(goalcup-cli) & (
     (binary(it) & test(/^(capture_gate|process_handoff|preflight_doctor)::/))
-    | (binary(full) & test(/^(launcher_sweep|capture_crash_campaign|capture_failure_campaign|m2_hermes_lifecycle|m2_synthetic_vertical)::/))
+    | (binary(full) & test(/^(launcher_sweep|capture_crash_campaign|capture_failure_campaign|keyed_lifecycle|m2_synthetic_vertical)::/))
     | binary(m2_cli_lifecycle)
 )
 '''

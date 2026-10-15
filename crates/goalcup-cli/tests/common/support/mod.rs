@@ -81,6 +81,57 @@ pub fn connector(id: &str) -> goalcup_cli::connector::HarnessConnector {
     }
 }
 
+/// The fixture connectors, one per launch shape: `tests/fixtures/connectors/<id>/`. An engine
+/// test loads one of these, never a shipped connector, so a shipped manifest edit changes no
+/// engine test. `keyed-per-run` is the keyed, headless, per-run-home shape; `chat-shared-home`
+/// is the chat-mode, shared-home shape. No build pins them: they load through `--dev`.
+pub fn fixture_connectors_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/connectors")
+}
+
+/// The fixture connector `id`, loaded the way `goalcup start --dev` loads it.
+pub fn fixture_connector(id: &str) -> goalcup_cli::connector::HarnessConnector {
+    match goalcup_cli::connector::load_harness(&fixture_connectors_dir(), id, true) {
+        Ok(c) => c,
+        Err(e) => panic!("the fixture connector {id}: {e}"),
+    }
+}
+
+/// `tests/fixtures/connectors/<id>/` copied to `<root>/<folder>/` under the declared id `as_id`,
+/// so a test can edit a copy. Returns the copy's folder.
+pub fn copy_fixture_connector(id: &str, root: &Path, folder: &str, as_id: &str) -> PathBuf {
+    let dir = root.join(folder);
+    copy_tree(&fixture_connectors_dir().join(id), &dir);
+    let path = dir.join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let declared = format!("id = \"{id}\"");
+    assert!(text.contains(&declared), "{id}: no `{declared}`");
+    std::fs::write(
+        &path,
+        text.replacen(&declared, &format!("id = \"{as_id}\""), 1),
+    )
+    .unwrap();
+    dir
+}
+
+/// A `stdout_json` identity rule: the first stdout line whose `type` is `thread.started`
+/// names the session in its `thread_id` (the shape a JSON-event harness prints).
+pub fn stdout_event_rule() -> goalcup_cli::launch::StdoutJsonRule {
+    goalcup_cli::launch::StdoutJsonRule {
+        match_field: "type".into(),
+        match_value: "thread.started".into(),
+        id_field: "thread_id".into(),
+    }
+}
+
+/// A `stderr_line` identity rule: one stderr line `session_id: <timestamp-hex id>`.
+pub fn stderr_marker_rule() -> goalcup_cli::launch::StderrLineRule {
+    goalcup_cli::launch::StderrLineRule {
+        prefix: "session_id: ".into(),
+        grammar: goalcup_protocol::harness::IdGrammar::TimestampHex,
+    }
+}
+
 /// `connectors/<id>/` copied to `<tmp>/<id>/`, whole — the `harness.toml` and any `files/`
 /// beside it — so a test can edit a copy without touching the pinned original.
 pub fn copy_connector(tmp: &tempfile::TempDir, id: &str) {
@@ -138,7 +189,7 @@ pub fn connectors_dir_with_edited_harness(id: &str) -> PathBuf {
 
 /// `from` copied to `to`, recursively, creating what it needs. File modes come along, which
 /// is what keeps an executable shim executable.
-fn copy_tree(from: &Path, to: &Path) {
+pub fn copy_tree(from: &Path, to: &Path) {
     if let Err(e) = std::fs::create_dir_all(to) {
         panic!("{}: {e}", to.display());
     }

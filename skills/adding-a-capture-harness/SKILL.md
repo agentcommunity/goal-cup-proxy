@@ -21,7 +21,9 @@ in order.
      complete example is [connectors/codex-cli](../../connectors/codex-cli/harness.toml).
    - Headless only: [templates/kit-case/](templates/kit-case/) to
      `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/`. A chat-mode connector needs no kit
-     case: the kit runs every pinned chat-mode connector from its `harness.toml`.
+     case. Write no test: the connector contract runs every connector folder from its
+     `harness.toml` (`crates/goalcup-cli/tests/it/connector_contract.rs` and
+     `tests/full/connector_contract.rs`).
 5. Run `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast`, on macOS or Linux. Off
    macOS only the daemon's live goldens are skipped; say so in the PR.
 

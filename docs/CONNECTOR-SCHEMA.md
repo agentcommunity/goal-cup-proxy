@@ -422,7 +422,7 @@ regex. The recorder derives the regex and its bounded streaming recognizer from 
 | `kind` | Required. `^[a-z][a-z0-9_]{0,47}$`. Every marker and audit span of the rule names it. |
 | `json_field` | The JSON field whose value is removed. 1–64 bytes of `[A-Za-z0-9_-]`. Needs `value`. |
 | `value` | `object`, `string` or `scalar`: the value form of `json_field`. |
-| `header_prefix` | The start of a header name; the whole header line is removed. `^[a-z][a-z0-9-]{0,63}$`. Alone. |
+| `header_prefix` | Lowercase `PREFIX…: value` text, wherever it is recorded. `^[a-z][a-z0-9-]{0,63}$`. Alone. |
 
 A row has either `json_field` with `value`, or `header_prefix` alone. A row with a `regex`, with
 both forms or with neither is refused when the file is parsed. The regex each form stands for
@@ -433,7 +433,18 @@ both forms or with neither is refused when the file is parsed. The regex each fo
 | `json_field = "F", value = "object"` | `"F"\s*:\s*(\{(?:[^{}]\|\{(?:[^{}]\|\{[^{}]*\})*\})*\})` | the object, nested at most three deep |
 | `json_field = "F", value = "string"` | `"F"\s*:\s*"([^"\\]+)"` | the string's interior |
 | `json_field = "F", value = "scalar"` | `"F"\s*:\s*("[^"\\]*"\|[^,}\s]+)` | a string, else a bare token such as a number |
-| `header_prefix = "P"` | `P[a-z0-9-]+:\s*[^\r\n"]+` | the whole header line |
+| `header_prefix = "P"` | `P[a-z0-9-]+:\s*[^\r\n"]+` | the whole `name: value` text |
+
+`header_prefix` is not a header filter: no HTTP header is ever recorded. It matches the text
+`PREFIX…: value` anywhere in a recorded body or file, not only at the start of a line or a word,
+and only in lowercase: `X-Vendor-Billing: …` is not matched, and no error says so. The match
+ends at a CR, an LF or a `"`. A short prefix over-matches: `x-` also strips `max-age: 3600`.
+
+What a form does not remove: `string` leaves a value with a backslash escape raw; `object` leaves
+a value nested four deep raw, and stops early at a brace inside a string; a quoted `scalar` that
+holds both an escape and a space is cut at the space; and no form matches a field inside a
+JSON-encoded string (`\"plan_type\"`). Pick the form with these limits in view, and check the
+harness's real bytes against it.
 
 A JSON-field marker keeps the record JSON: the key and colon stay, and a value that was not a
 string gets a quoted marker. A new form is a core PR: it needs a recognizer in the daemon's

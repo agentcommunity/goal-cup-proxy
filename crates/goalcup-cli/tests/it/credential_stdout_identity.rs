@@ -79,34 +79,21 @@ impl Sink {
     }
 }
 
-/// The shipped Codex profile made headless again (`stdout_json` identity, a goal after `--`, the
-/// rollout scoped by its id) with a credential and a per-run home: the combination this change
-/// admits. The shipped profile itself runs in chat mode (D57), which takes no credential.
+/// The keyed fixture connector (`tests/fixtures/connectors/keyed-per-run`: a credential, a
+/// per-run home, a goal flag) with its identity read from a stdout JSON event instead of a stderr
+/// line: the combination this change admits.
 fn keyed_stdout_json_profile() -> CaptureSpec {
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
-    let text = std::fs::read_to_string(dir.join("codex-cli/harness.toml")).unwrap();
-    let mut keyed = text.clone();
-    for (from, to) in [
-        ("interactive = true\n", ""),
-        (
-            "  \"-C\", \"{workspace}\",\n]",
-            "  \"-C\", \"{workspace}\",\n  \"--\",\n]",
-        ),
-        ("config_home = \"shared\"", "config_home = \"per_run\""),
-        (
-            "[capture.identity]\nsource = \"none\"",
-            "[capture.credential]\nenv = \"DEEPSEEK_API_KEY\"\n\n[capture.identity]\n\
-             source = \"stdout_json\"\nbinding = \"at_launch\"\nmatch_field = \"type\"\n\
-             match_value = \"thread.started\"\nid_field = \"thread_id\"",
-        ),
-        (
-            "pattern = \"*/*/*/rollout-*.jsonl\"",
-            "pattern = \"*/*/*/rollout-*-{id}.jsonl\"",
-        ),
-    ] {
-        assert!(keyed.contains(from), "the shipped text has no {from:?}");
-        keyed = keyed.replacen(from, to, 1);
-    }
+    let path = crate::common::support::fixture_connectors_dir().join("keyed-per-run/harness.toml");
+    let text = std::fs::read_to_string(path).unwrap();
+    let from = "[capture.identity]\nsource = \"stderr_line\"\nbinding = \"deferred\"\n\
+                prefix = \"session_id: \"\ngrammar = \"timestamp-hex\"";
+    assert!(text.contains(from), "the fixture has no {from:?}");
+    let keyed = text.replacen(
+        from,
+        "[capture.identity]\nsource = \"stdout_json\"\nbinding = \"at_launch\"\n\
+         match_field = \"type\"\nmatch_value = \"thread.started\"\nid_field = \"thread_id\"",
+        1,
+    );
     let manifest = goalcup_protocol::harness::HarnessManifest::from_toml_str(&keyed).unwrap();
     manifest
         .validate(Origin::Pinned)
@@ -140,7 +127,8 @@ fn run(branch: &str) -> Run {
         matches!(plan.stdout, StdoutUse::IdentityJson(_)),
         "stdout is the identity reader"
     );
-    // The shipped profile's rule is Codex's; this child speaks the shape Amp documents.
+    // The profile's rule is `type`/`thread_id`; this child speaks another event shape, so the
+    // rule the tee is given is what decides.
     let rule = StdoutJsonRule {
         match_field: "subtype".into(),
         match_value: "init".into(),

@@ -784,13 +784,13 @@ mod server_runs {
     /// A harness handed a provider key never uploads, so `--test` with it is refused too.
     #[test]
     fn test_with_a_keyed_harness_is_refused_in_its_own_words() {
-        let rig = Rig::hermes();
+        let rig = Rig::keyed();
         let server = server(&rig);
         rig.prepare_for(&server.url());
         let goal = rig.goal(GOAL);
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
-        let mut opts = rig.hermes_options(&goal, RESERVE);
+        let mut opts = rig.keyed_options(&goal, RESERVE);
         opts.mode = RunMode::Test;
         let (result, out) =
             std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
@@ -888,13 +888,13 @@ mod server_runs {
     /// sentence of its own, before anything is created.
     #[test]
     fn practice_with_a_keyed_harness_is_refused_in_its_own_words() {
-        let rig = Rig::hermes();
+        let rig = Rig::keyed();
         let server = server(&rig);
         rig.prepare_for(&server.url());
         let goal = rig.goal(GOAL);
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
-        let mut opts = rig.hermes_options(&goal, RESERVE);
+        let mut opts = rig.keyed_options(&goal, RESERVE);
         opts.mode = RunMode::Practice;
         let (result, out) =
             std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());

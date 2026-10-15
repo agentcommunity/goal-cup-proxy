@@ -593,12 +593,12 @@ impl Policy {
     /// the protocol crate added later) is refused, never streamed with a guessed hold.
     fn with_extra(extra: &[ExtraPattern]) -> Result<Policy, DaemonError> {
         let refuse = |p: &ExtraPattern, why: &str| {
-            DaemonError::Config(format!("capture redaction pattern {:?}: {why}", p.kind))
+            DaemonError::Config(format!("capture redaction pattern {:?}: {why}", p.kind()))
         };
         let mut rules = Vec::with_capacity(extra.len());
         for p in extra {
             let pattern = compile_extra(p).map_err(|reason| refuse(p, &reason))?;
-            let (form, span_group) = match &p.rule {
+            let (form, span_group) = match p.rule() {
                 RedactionRule::JsonField { field, value } => {
                     let value = match value {
                         harness::FieldValue::Object => FieldValue::Object,
@@ -3153,7 +3153,7 @@ mod tests {
                 Some(Form::HeaderPrefix { prefix }) => {
                     (String::from_utf8_lossy(prefix).into_owned(), 0)
                 }
-                _ => panic!("{} has no connector recognizer", p.kind),
+                _ => panic!("{} has no connector recognizer", p.kind()),
             };
             assert!(p.regex().starts_with(&form), "{form} leads {}", p.regex());
             assert_eq!(policy.extra[lit - SHAPES.len()].pattern.span_group, group);
@@ -3161,7 +3161,7 @@ mod tests {
         let shipped = shipped_extra_patterns();
         for value in ["object", "string", "scalar"] {
             assert!(
-                shipped.iter().any(|p| matches!(&p.rule,
+                shipped.iter().any(|p| matches!(p.rule(),
                     RedactionRule::JsonField { value: v, .. } if v.as_str() == value)),
                 "no shipped rule uses the {value} form"
             );
@@ -3169,7 +3169,7 @@ mod tests {
         assert!(
             shipped
                 .iter()
-                .any(|p| matches!(p.rule, RedactionRule::HeaderPrefix(_))),
+                .any(|p| matches!(p.rule(), RedactionRule::HeaderPrefix(_))),
             "no shipped rule uses the header form"
         );
     }
