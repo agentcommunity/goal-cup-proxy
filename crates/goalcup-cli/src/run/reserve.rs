@@ -296,7 +296,7 @@ fn room(dir: &Path, policy: &DiskPolicy) -> Result<u64, CliError> {
 /// file keeps the blocks it has, so only the missing ones must be free.
 fn room_for(dir: &Path, policy: &DiskPolicy, needed: u64) -> Result<u64, CliError> {
     let near = dir.ancestors().find(|above| above.is_dir()).unwrap_or(dir);
-    let free = free_bytes(near).map_err(|source| CliError::Io {
+    let free = free_under(near).map_err(|source| CliError::Io {
         path: near.display().to_string(),
         source,
     })?;
@@ -304,6 +304,21 @@ fn room_for(dir: &Path, policy: &DiskPolicy, needed: u64) -> Result<u64, CliErro
         return Err(refusal(dir, policy, free));
     }
     Ok(free)
+}
+
+/// The volume's free bytes under `near`. A unit test can pin the reading on its own thread
+/// ([`FREE_READING`]), so what it asserts does not move with other processes' disk use.
+fn free_under(near: &Path) -> std::io::Result<u64> {
+    #[cfg(test)]
+    if let Some(pinned) = FREE_READING.with(std::cell::Cell::get) {
+        return Ok(pinned);
+    }
+    free_bytes(near)
+}
+
+#[cfg(test)]
+thread_local! {
+    static FREE_READING: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 fn refusal(dir: &Path, policy: &DiskPolicy, free: u64) -> CliError {
@@ -953,24 +968,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = reserve_path(dir.path(), "r1");
         drop(RunReserve::take(&path, &small()).unwrap());
-        // Other tests and builds use this volume at the same time: the margin leaves 64 MiB of
-        // room for what they take between this look and the next, and the new reserve asks for
-        // twice that, so it is refused whatever they take.
-        let slack = 64 * MIB;
-        let free = free_bytes(dir.path()).unwrap();
+        // The volume's free space is pinned, so no other process's writes can move it between
+        // the reading and the take.
+        let free = 100 * MIB;
+        FREE_READING.with(|pinned| pinned.set(Some(free)));
         let tight = DiskPolicy {
-            start_margin: free.saturating_sub(slack),
+            start_margin: free,
             ..small()
         };
         // Nothing to allocate: only the margin is asked of the volume, and it is there.
-        assert!(RunReserve::take(&path, &tight).is_ok());
+        let reused = RunReserve::take(&path, &tight);
+        // A new reserve would also need its own bytes, and the volume does not have them.
         let other = reserve_path(dir.path(), "r2");
-        let large = DiskPolicy {
-            reserve_bytes: 2 * slack,
-            ..tight
-        };
-        assert!(RunReserve::take(&other, &large).is_err());
-        assert!(!other.exists());
+        let fresh = RunReserve::take(&other, &tight);
+        FREE_READING.with(|pinned| pinned.set(None));
+        assert!(reused.is_ok());
+        assert!(fresh.is_err());
+        assert!(
+            !other.exists(),
+            "a refused new reserve leaves nothing behind"
+        );
     }
 
     #[test]

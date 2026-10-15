@@ -95,31 +95,41 @@ fn without_version_args_the_harness_is_not_asked() {
 
 #[test]
 fn a_probe_that_outlives_its_timeout_is_killed_and_unreported() {
-    let (_tmp, root, home) = scratch();
+    let (_tmp, root, _home) = scratch();
     let exe = stub(
         &root,
         "toy",
-        r#"echo $$ > "$HOME/pid"
+        r#"echo $$ > "$HOME/pid.tmp" && mv "$HOME/pid.tmp" "$HOME/pid"
 echo "toy 1.2.3"
 exec /bin/sleep 30"#,
     );
-    let started = Instant::now();
-    let version =
-        reported_version_within(&exe, &args(&["--version"]), &home, Duration::from_secs(2));
-    assert_eq!(version, UNREPORTED);
-    assert!(
-        started.elapsed() < Duration::from_secs(10),
-        "{:?}",
-        started.elapsed()
-    );
-    let pid: i32 = std::fs::read_to_string(home.join("pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    // SAFETY: signal 0 only asks whether the pid exists.
-    let alive = unsafe { libc::kill(pid, 0) } == 0;
-    assert!(!alive, "the timed-out probe was killed and reaped");
+    // Under machine load the shell can be starved past the timeout before it writes its pid; a
+    // probe killed that early proves nothing about the kill, so such an attempt is run again in a
+    // fresh home. The pid file is written atomically, so one that exists is whole.
+    let mut checked = false;
+    for attempt in 0..10 {
+        let home = root.join(format!("home-{attempt}"));
+        std::fs::create_dir(&home).unwrap();
+        let started = Instant::now();
+        let version =
+            reported_version_within(&exe, &args(&["--version"]), &home, Duration::from_secs(3));
+        assert_eq!(version, UNREPORTED);
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "{:?}",
+            started.elapsed()
+        );
+        let Ok(text) = std::fs::read_to_string(home.join("pid")) else {
+            continue;
+        };
+        let pid: i32 = text.trim().parse().unwrap();
+        // SAFETY: signal 0 only asks whether the pid exists.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(!alive, "the timed-out probe was killed and reaped");
+        checked = true;
+        break;
+    }
+    assert!(checked, "the probe never got as far as writing its pid");
 }
 
 #[test]
