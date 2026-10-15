@@ -39,6 +39,20 @@ pub struct EntryRef {
     pub trace_dir: PathBuf,
 }
 
+impl RunRecord {
+    /// The mode the run was started in.
+    pub fn mode(&self) -> crate::account::device::RunMode {
+        use crate::account::device::RunMode;
+        if self.test {
+            RunMode::Test
+        } else if self.practice {
+            RunMode::Practice
+        } else {
+            RunMode::Competition
+        }
+    }
+}
+
 /// What this machine knows of a run: `<cfg>/runs/<run_id>/run.json`.
 ///
 /// Only what is known when the run starts is here; later steps add what they bring (the run
@@ -51,6 +65,10 @@ pub struct RunRecord {
     pub server_url: Option<String>,
     /// A practice run (not a competition entry). No run is a practice run yet.
     pub practice: bool,
+    /// An organizer test run (`goalcup start --test`). Absent from a `run.json` written before
+    /// the flag existed, which reads as `false`.
+    #[serde(default)]
+    pub test: bool,
     pub connector_id: String,
     pub workspace: PathBuf,
     /// When `goalcup start` made the run, on this machine's clock.
@@ -615,6 +633,7 @@ mod tests {
             run_id: run_id.to_string(),
             server_url: None,
             practice: false,
+            test: false,
             connector_id: "c".to_string(),
             workspace: PathBuf::from("/w"),
             started_at_unix: started,

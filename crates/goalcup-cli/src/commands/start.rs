@@ -117,10 +117,11 @@ pub struct StartOptions {
     /// The sizes of the run's disk reservation and how often it is watched. The shipped values
     /// ([`DiskPolicy::default`]); only a test build can name others.
     pub disk: DiskPolicy,
-    /// `--practice`: a practice run, which the server keeps apart from the competition and
-    /// which never replaces the account's competition run. Only meaningful for a run on a
-    /// server.
-    pub practice: bool,
+    /// `--practice` / `--test`: a practice run, which the server keeps apart from the
+    /// competition and which never replaces the account's competition run, or an organizer
+    /// test run, which is a competition run in every way this build can see. Only meaningful
+    /// for a run on a server.
+    pub mode: crate::account::device::RunMode,
     /// Opens the approval address in the participant's browser, and says whether a program
     /// started: [`goalcup_platform::machine::open_url`] in every shipped build.
     pub open_url: OpenUrlFn,
@@ -1193,7 +1194,7 @@ fn capture(
             cfg,
             env,
             &beside,
-            opts.practice,
+            opts.mode,
             profile.credential.is_some(),
             out,
         )?,
@@ -1685,7 +1686,8 @@ fn create_and_gate<'a>(
                 .as_ref()
                 .map_or_else(|| info.entry_id.clone(), |o| o.run.run_id.clone()),
             server_url: upload.map(|u| u.server.base().to_string()),
-            practice: opts.practice,
+            practice: opts.mode.is_practice(),
+            test: opts.mode == crate::account::device::RunMode::Test,
             connector_id: c.loaded.manifest.id.clone(),
             workspace: run.workspace.clone(),
             started_at_unix,
@@ -3200,10 +3202,11 @@ fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
     beside: &Path,
-    practice: bool,
+    mode: crate::account::device::RunMode,
     keyed: bool,
     out: &mut dyn std::io::Write,
 ) -> Result<Option<Serving>, CliError> {
+    let practice = mode.is_practice();
     // A practice run is a run on the server: without one there is nothing to practise on.
     let needs_server = || {
         CliError::Refused(
@@ -3385,9 +3388,7 @@ impl Serving {
         let anonymous = crate::upload::http::ServerClient::anonymous(&self.url);
         let approved = crate::account::device::approve(
             &anonymous,
-            crate::account::device::Purpose::Run {
-                practice: opts.practice,
-            },
+            crate::account::device::Purpose::Run { mode: opts.mode },
             connector_id,
             &opts.open_url,
             out,
@@ -3409,7 +3410,7 @@ impl Serving {
                 cfg: self.cfg,
                 github: self.github,
                 work_root: self.work_root,
-                practice: opts.practice,
+                practice: opts.mode.is_practice(),
                 clone_source: self.clone_source,
             })),
         })

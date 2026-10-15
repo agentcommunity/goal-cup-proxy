@@ -651,7 +651,7 @@ fn the_setup_is_stored_for_the_owner_alone_and_checked_on_the_way_in_and_out() {
 
 use crate::common::upload_server::{Approval, ServerOptions, UploadServer};
 use goalcup_cli::account::credential::{self, RunCredential};
-use goalcup_cli::account::device::{Approved, Purpose, approve};
+use goalcup_cli::account::device::{Approved, Purpose, RunMode, approve};
 use goalcup_cli::commands::login::{self, LoginArgs};
 use goalcup_cli::server::{ServerConfig, read_server_config};
 use goalcup_cli::upload::http::{ServerClient, ServerError};
@@ -773,7 +773,9 @@ fn only_the_user_code_is_printed() {
     let mut out = Vec::new();
     let approved = approve(
         &ServerClient::anonymous(&server.url()),
-        Purpose::Run { practice: true },
+        Purpose::Run {
+            mode: RunMode::Practice,
+        },
         "codex-cli",
         &open,
         &mut out,
@@ -808,7 +810,9 @@ fn a_browser_that_will_not_open_is_asked_for_by_hand() {
     let mut out = Vec::new();
     approve(
         &ServerClient::anonymous(&server.url()),
-        Purpose::Run { practice: false },
+        Purpose::Run {
+            mode: RunMode::Competition,
+        },
         "codex-cli",
         &|_: &str| false,
         &mut out,
@@ -917,7 +921,9 @@ fn a_run_approval_is_stored_and_loaded_back() {
     let anonymous = ServerClient::anonymous(&server.url());
     let Approved::Run(credential) = approve(
         &anonymous,
-        Purpose::Run { practice: true },
+        Purpose::Run {
+            mode: RunMode::Practice,
+        },
         "codex-cli",
         &browser_opens,
         &mut Vec::new(),

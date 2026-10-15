@@ -923,6 +923,7 @@ fn run_with_state(cfg: &std::path::Path, entry_id: &str, state: goalcup_cli::run
             run_id: entry_id.to_string(),
             server_url: None,
             practice: false,
+            test: false,
             connector_id: "claude-code-cli".to_string(),
             workspace: PathBuf::from("/w"),
             started_at_unix: 1,
@@ -1079,6 +1080,7 @@ fn status_with_no_problem_prints_no_problem_line() {
                 run_id: info.entry_id.clone(),
                 server_url: None,
                 practice: false,
+                test: false,
                 connector_id: "claude-code-cli".to_string(),
                 workspace: PathBuf::from("/w"),
                 started_at_unix: 1,
@@ -1110,4 +1112,63 @@ fn status_with_no_problem_prints_no_problem_line() {
     assert!(!text.contains("PROBLEM"), "{text}");
     assert!(!text.contains("no run state yet"), "{text}");
     assert!(text.contains(&m.status_detail()), "{text}");
+}
+
+/// An organizer test run says so first, before the daemon is asked and before any problem line.
+#[test]
+fn status_of_a_test_run_says_test_run_first() {
+    use goalcup_cli::run::{RunState, read, write};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    run_with_state(
+        &cfg,
+        &info.entry_id,
+        RunState::launched(&info.entry_id, Ok(())),
+    );
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(!text.contains("TEST RUN"), "{text}");
+
+    let mut record = read(&cfg, &info.entry_id).unwrap();
+    record.test = true;
+    write(&cfg, &record).unwrap();
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(text.starts_with("TEST RUN"), "{text}");
+    // Still the same status below it.
+    assert!(text.contains(&m.status_detail()), "{text}");
+    // `--json` stays the daemon's document alone.
+    let json = status_text(&m, &cfg, &info.entry_id, true);
+    assert!(!json.contains("TEST RUN"), "{json}");
+}
+
+/// A `run.json` written before `--test` existed has no `test` field and still reads, as a run
+/// that is not a test run.
+#[test]
+fn a_run_json_without_the_test_field_still_reads() {
+    use goalcup_cli::run::{read, run_dir, write};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    run_with_state(
+        &cfg,
+        &info.entry_id,
+        goalcup_cli::run::RunState::launched(&info.entry_id, Ok(())),
+    );
+    let mut record = read(&cfg, &info.entry_id).unwrap();
+    record.test = true;
+    write(&cfg, &record).unwrap();
+    let file = run_dir(&cfg, &info.entry_id).join("run.json");
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(json["test"], true, "{json}");
+    json.as_object_mut().unwrap().remove("test").unwrap();
+    std::fs::write(&file, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
+    let old = read(&cfg, &info.entry_id).unwrap();
+    assert!(!old.test && !old.practice, "{old:?}");
+    assert_eq!(
+        old.mode(),
+        goalcup_cli::account::device::RunMode::Competition
+    );
 }

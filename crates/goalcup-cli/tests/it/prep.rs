@@ -192,6 +192,7 @@ fn practice_run(rig: &Rig, run_id: &str, entries: &[(&str, bool)]) {
         run_id: run_id.to_string(),
         server_url: Some("http://127.0.0.1:1".to_string()),
         practice: true,
+        test: false,
         connector_id: CHAT_ID.to_string(),
         workspace: rig.root.join("work").join(run_id),
         started_at_unix: 1_700_000_000,
