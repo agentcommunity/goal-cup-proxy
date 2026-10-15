@@ -1,33 +1,9 @@
-# Spike 7 fixtures — Hermes Agent 0.19.0, launch mode, 2026-09-03
+# Fixtures — Hermes Agent 0.19.0, launch mode, 2026-09-03
 
 Source run: `spikes/hermes/out/run-20260903T122253Z` (git-ignored).
 Workspace: `/Users/team/goalcup-spikes/ws-hermes-20260903T122253Z`.
 Provider `openai-codex` (ChatGPT subscription), `api_mode=codex_responses`,
 models `gpt-5.6-sol` → `gpt-5.6-luna` (mid-session `/model` switch).
-
-Everything here went through `spikes/redact.py` and then an eye review.
-**Every file produced 0 pattern redactions** — the empty
-`*.redactions.jsonl` logs next to each output are the proof, not an omission.
-That is expected: this provider's OAuth token never appears in a hook payload
-(Hermes builds the client from `auth.json`, and `pre_api_request.request`
-carries only `method` + `body`, never headers with credentials). It was
-verified by hand afterwards: zero matches for `Authorization`, `Bearer`,
-`access_token`, `refresh_token`, `chatgpt_account_id`, `id_token`, `cookie`;
-the only `api_key` hits are a log line reading
-`check_fn check_web_api_key returned False`, and the only `sk-` hits are
-fragments of the path `.../ta` + `sk-0.log`.
-
-## Structural scrubs applied
-
-| What | Decision |
-|---|---|
-| `SOUL.md` | **Kept verbatim.** It is Hermes' stock default persona, created by Hermes itself on first run; it contains nothing personal. It is part of the system-prompt bytes, so the fixture set needs it. |
-| `system-prompt-root-session.txt` | **Kept verbatim.** `sessions.system_prompt` for the root session, 10,287 bytes. Checked for identity: no name, no email, no account id, no host-specific skill list (the isolated `$HERMES_HOME/skills/` was empty, unlike OpenCode's spike-5 finding). The only absolute paths are the workspace and `$HERMES_HOME`, which every other spike's fixtures also carry. |
-| `hooks-leg2.jsonl` | **Full stream, unfiltered**, all 112 posts from both processes. Includes the provider's `reasoning` items with `encrypted_content` blobs — those are the provider's own opaque reasoning envelopes, not credentials, and dropping them would misrepresent what `request_messages` actually contains. |
-| `leg1-capture.jsonl` | **Full tailer output**, all 531 records including the 477 `log` records, so the running SHA-256 chain in the file verifies end to end. Verify with: chain starts at 64 zeros, each record's `prev` == the previous record's `hash`. |
-| `probe-oneshot` hook stream | **Omitted.** Byte-identical in shape to `probe-z-hooks.jsonl` (same 8 posts, same order); `-z` and `--oneshot` are one argparse argument. `probes-summary.txt` carries its counts. |
-| `probe-safe-mode` hook stream | **Omitted because it is empty** — zero posts is the finding. `probes-summary.txt` records `hook posts: 0` next to the new `sessions` row. |
-| store copy / `auth.json` / `.env` / OAuth files | **Never copied anywhere.** `collect.sh` deletes them from its own copy; `snapshot.sh` only ever hashes non-secret files. Nothing credential-bearing exists under `out/` to redact. |
 
 ## Files
 
@@ -52,3 +28,12 @@ fragments of the path `.../ta` + `sk-0.log`.
 | `b38cbc6657f570bac653b95592fe5274b0591fd1e3200fc868342f7081c72b1c` | 14,499 | `CHECK.txt` | the assertion output this REPORT is written from |
 
 Total: 2.3 MB.
+
+## Redaction
+
+Every file went through `spikes/redact.py` and an eye review. Every pattern log is empty: this
+provider's OAuth token never appears in a hook payload. `SOUL.md` (Hermes's stock persona) and
+`system-prompt-root-session.txt` are kept verbatim; they hold nothing personal. `hooks-leg2.jsonl`
+is the full stream, and `leg1-capture.jsonl` is the full tailer output, so its hash chain verifies
+end to end (it starts at 64 zeros and each `prev` equals the previous `hash`). The store copy,
+`auth.json`, `.env` and OAuth files were never copied.
