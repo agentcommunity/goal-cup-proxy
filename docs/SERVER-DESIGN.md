@@ -1,5 +1,17 @@
 # Goal Cup server: upload, storage and live numbers
 
+> **Where this differs, the run lifecycle wins.** The
+> [run-lifecycle design](superpowers/specs/2026-10-14-run-lifecycle-design.md) and the owner
+> decisions at the top of its [plan](superpowers/plans/2026-10-14-run-lifecycle.md) came after
+> this document and win wherever they differ; the wire contract as built is
+> [UPLOAD-API](UPLOAD-API.md). Known differences: login is a browser-approved device flow with a
+> credential for each run, not a pasted token (§3.2); chunks go every 30 minutes, not hourly
+> (§3.4, §13); a run with no final seal 24 hours after its end is closed as `incomplete`, not
+> `abandoned` (§3.5, §7); the tracer never relaunches the agent or sends it "keep going" (§3.5);
+> one main run per account, where a new start replaces the earlier run (§3.3); the tracer seals and
+> uploads for at most one hour after the stop; and the platforms are macOS, Linux and WSL2, not
+> Macs alone (§1).
+
 **Status:** working design, merged so the build can start.
 
 Design for the server side of the tracer, for the event going live on **6 November 2026**. Written

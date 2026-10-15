@@ -45,30 +45,30 @@ itself changes, so send the facts sheet alone (below).
   upgrades). A client that also offers HTTP/1.1 is fine; an `h2`-only client cannot connect.
 - **A local or loopback model** (Ollama, LM Studio, anything on `localhost`). The proxy never
   sees loopback traffic, so a connector naming a loopback or single-label host is refused.
-- **A desktop or IDE app.** The tracer starts one CLI from argv for one headless goal, with no
-  terminal and stdin closed. A desktop app, or a CLI that needs a terminal UI, has no fit.
+- **A desktop or IDE app.** The tracer starts one CLI from argv: in chat mode in the
+  participant's own terminal (D57), or headless with one goal. A desktop or IDE app has no fit.
 
 **Known gaps**: the connector works, but the record is partial. Say so in the facts sheet.
 
 - **Subagents with their own transcript files.** Exactly one session file pattern is recorded;
   separate subagent files are seen only as model traffic.
 - **A binary that updates itself** with no flag or variable to turn that off. The tracer hashes
-  the binary before it runs and again just before the goal is released, and records the build
-  that ran; an update during the run goes unrecorded.
+  the build that ran (the daemon hashes the binary at the launch, D53; the CLI reads none of its
+  bytes); an update during the run goes unrecorded.
 - **More than 16 model hosts, or a wildcard host.** Traffic to a host the connector does not
   list passes through unrecorded.
 
 ## What we ask of you
 
 1. **A connector PR.** A connector is a small folder, `connectors/<id>/`, with one data file,
-   `harness.toml`, and any seed files it needs. It tells the tracer how to start your harness
-   headless, where its session file lands, and which hosts carry model traffic. No Rust code:
-   your arguments, model name and environment variables are data, checked by rules that apply to
-   every connector. A few things stay closed lists in the tracer's code, because each is a
+   `harness.toml`, and any seed files it needs. It tells the tracer how to start your harness (in
+   chat mode, or headless), where its session file lands, and which hosts carry model traffic. No
+   Rust code: your arguments, model name and environment variables are data, checked by rules that
+   apply to every connector. A few things stay closed lists in the tracer's code, because each is a
    security decision: the name of an API-key variable the tracer hands your process, a
-   CA-certificate variable and a redaction pattern; new session-id carriers and session-file
-   forms are core changes too. If you need a new one, the decision table says so at step 3 and
-   we add it first.
+   CA-certificate variable and a redaction pattern; new session-id carriers and session-file forms
+   are core changes too. If you need a new one, the decision table says so at step 3 and we add it
+   first.
 2. **A public facts sheet**, `docs/harnesses/<id>.md`: where your harness keeps sessions,
    config and logins on macOS, Linux and Windows, how it authenticates and what it talks to.
    [Why it exists](harnesses/README.md).
@@ -79,8 +79,9 @@ contribution on its own.
 
 ## What you need
 
-- A Mac with Apple silicon. The test kit's synthetic captures also run on Linux, in Docker, but a
-  real harness capture is measured on macOS only ([README, Linux](../README.md#linux)).
+- A Mac with Apple silicon for the kit's real-harness step, which runs on macOS only. The event
+  also runs on Linux and WSL2, and the kit's synthetic captures run on Linux in Docker
+  ([README, Linux](../README.md#linux)).
 - Rust through [rustup](https://rustup.rs) (1.99 or later), the Xcode command line tools, and
   `python3` (the one macOS ships is fine). If Homebrew also installed Rust, make sure
   `which cargo` shows `~/.cargo/bin/cargo`.
