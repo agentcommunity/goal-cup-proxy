@@ -19,7 +19,8 @@
 # SIGINT, SIGQUIT and SIGHUP are trapped. A non-interactive shell cannot trap a signal that was
 # ignored when it started, so a launcher that handed it SIG_IGN would leave it running here, and
 # the test that sends the signal would time out. Each ends it, unless the test wrote
-# $M2_FAKE_OUT/tui.endure: then it prints `tui: endured <sig>` and reads on.
+# $M2_FAKE_OUT/tui.endure: then it prints `tui: endured <sig>` and reads on, and prints
+# `tui: waiting` once ready and after each.
 out="$M2_FAKE_OUT"
 # A connector with a shared run home (D59) has no home variable: its home is HOME.
 home="${CODEX_HOME:-$HOME}"
@@ -44,6 +45,7 @@ on_signal() {
     endured=1
     echo "tui: endured $1"
     echo "$1" >> "$out/tui.endured"
+    echo "tui: waiting"
     return
   fi
   [ "$1" = int ] && echo "tui: interrupted"
@@ -55,6 +57,9 @@ trap 'on_signal quit 131' QUIT
 trap 'on_signal hup 129' HUP
 echo "tui: ready"
 echo ready > "$out/tui.ready"
+# In endure mode it says when it is waiting for the next signal (here, and when a handler is
+# done), so a test sends one only once the last is fully dealt with.
+[ -f "$out/tui.endure" ] && echo "tui: waiting"
 session=""
 while :; do
   if ! IFS= read -r line; then
