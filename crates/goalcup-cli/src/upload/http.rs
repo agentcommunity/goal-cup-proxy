@@ -7,7 +7,6 @@
 
 use super::api::ErrorBody;
 use crate::account::credential::RunCredential;
-use crate::server::ServerConfig;
 use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
@@ -110,11 +109,6 @@ impl std::fmt::Debug for ServerClient {
 }
 
 impl ServerClient {
-    /// A client for `config`, trusting the public web roots.
-    pub fn new(config: &ServerConfig) -> ServerClient {
-        ServerClient::bearer(&config.url, &config.token)
-    }
-
     /// A client for `url` that sends no `Authorization` header at all: the device flow's two
     /// calls are made before there is a credential.
     pub fn anonymous(url: &str) -> ServerClient {
@@ -139,14 +133,14 @@ impl ServerClient {
     /// shipped build has no such door.
     #[cfg(feature = "test-support")]
     pub fn with_roots(
-        config: &ServerConfig,
+        url: &str,
         roots: impl IntoIterator<Item = rustls::pki_types::CertificateDer<'static>>,
     ) -> ServerClient {
         let mut store = rustls::RootCertStore::empty();
         for root in roots {
             let _ = store.add(root);
         }
-        ServerClient::with_store(&config.url, &config.token, store)
+        ServerClient::with_store(url, "", store)
     }
 
     fn with_store(base: &str, token: &str, store: rustls::RootCertStore) -> ServerClient {

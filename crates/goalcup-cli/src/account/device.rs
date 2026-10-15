@@ -17,8 +17,12 @@
 //!
 //! Nothing is created on this machine before [`approve`] returns an approval: the caller
 //! writes its files only from the `Ok` it gets. Denied, expired, out of time, or a server that
-//! cannot be reached: each is a refusal that says nothing was created. Ctrl-C needs no code of
-//! its own: the default SIGINT ends the process, and there is nothing yet to clean up.
+//! cannot be reached: each is a refusal that says nothing was created. Ctrl-C needs
+//! little: `goalcup login` takes the default SIGINT, which ends the process with nothing to clean
+//! up, and `goalcup start`, which catches Ctrl-C into a flag (`arming`), is answered by the poll
+//! loop looking at that flag. The flag is seen between requests, not during one: a Ctrl-C that
+//! arrives while a request is in flight is acted on when it returns, which can take up to the
+//! call timeout (60 s) if the server has stopped answering.
 
 use crate::CliError;
 use crate::account::credential::RunCredential;
@@ -185,6 +189,11 @@ pub fn approve(
             .clamp(MIN_INTERVAL_SECS, MAX_INTERVAL_SECS),
     );
     loop {
+        // `goalcup start` catches Ctrl-C into a flag (`arming`); `goalcup login` does not, and
+        // its default Ctrl-C ends the process. Either way nothing was created.
+        if crate::arming::interrupted() {
+            return Err(interrupted());
+        }
         let polled: Result<Polled, ServerError> = server.json(
             "POST",
             "/v1/device/token",
@@ -228,6 +237,13 @@ pub fn approve(
     }
 }
 
+fn interrupted() -> CliError {
+    CliError::Refused(
+        "interrupted while waiting for approval. Nothing was created, and no run was opened."
+            .into(),
+    )
+}
+
 fn expired() -> CliError {
     CliError::Refused(
         "the approval code expired before it was approved. Nothing was created; run the \
@@ -236,9 +252,18 @@ fn expired() -> CliError {
     )
 }
 
-/// Wait `d`. A function of its own so the one place this module sleeps is one line.
+/// Wait `d`, in short steps, ending early when a Ctrl-C was caught meanwhile. A function of its
+/// own so the one place this module sleeps is one place.
 fn sleep(d: Duration) {
-    std::thread::sleep(d);
+    const STEP: Duration = Duration::from_millis(100);
+    let until = Instant::now() + d;
+    loop {
+        let now = Instant::now();
+        if now >= until || crate::arming::interrupted() {
+            return;
+        }
+        std::thread::sleep(STEP.min(until - now));
+    }
 }
 
 fn bad_answer(what: &str) -> CliError {

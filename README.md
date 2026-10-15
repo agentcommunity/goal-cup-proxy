@@ -282,20 +282,27 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   `daemon.toml` you wrote for an earlier build belongs at `$GOALCUP_CONFIG_DIR/daemon.toml`;
   otherwise the first `start` writes a default with other roots. The configuration's keys are in
   [OPERATING](docs/OPERATING.md#running-the-daemon).
-- <a id="login"></a>**Connecting to the Goal Cup server.** `goalcup login --server <URL>` asks
-  for the token the Goal Cup site gives you (paste it; it is not shown) and stores the address
-  and token in `$GOALCUP_CONFIG_DIR/server.json`, readable by your user alone. The token is
-  never printed, never put in the agent's environment or on its command line, and never written
-  into a trace; the agent runs as you, so it could still read the file, and you can revoke the
-  token on the site ([checklist](docs/CHEAT-CHECKLIST.md)). A `server.json` other users can
-  read is refused. Run it again to replace the token; delete the file to go back to local-only
-  runs. Once logged in, `goalcup start` needs `--repo https://github.com/<owner>/<repo>` (the
-  public repository the agent pushes to) and opens the run on the server before anything is
-  created: the server issues the entry id, the official start and the deadline, and signs a start
-  receipt that is kept as the trace's `receipt.json` (and in `$GOALCUP_CONFIG_DIR/uploads/`). If
-  the server refuses or cannot be reached, nothing starts and the message says why. A harness
-  given a provider key (Hermes) is never uploaded. The wire contract is
-  [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
+- <a id="login"></a>**Connecting to the Goal Cup server.** `goalcup login [--server <URL>]` shows
+  an address and a short code, opens your browser at the address, and waits while you check the
+  code and approve on the Goal Cup site. Nothing secret is typed or stored: the server's address
+  and your account's name go in `$GOALCUP_CONFIG_DIR/server.json`, readable by your user alone
+  (an older `server.json` that holds a pasted token is still read; the token is ignored).
+  Delete the file to go back to local-only runs. Once logged in, and after `goalcup prep` has
+  stored your empty public GitHub repository, your work folder and a token that can push to that
+  repository, `goalcup start` asks you to approve **each run** in the browser (`--practice` for
+  a practice run) before it creates anything: a Ctrl-C, a denial, an expired code or a server
+  that cannot be reached ends the start with one sentence and leaves no run, entry, clone or credential (the recording daemon may already be running). Then it
+  clones your repository into `<work folder>/goalcup-<id>`, which is the agent's workspace, and
+  opens the run on the server, with the machine's facts (system, architecture, CPUs, memory,
+  disk, WSL2, container, AC power; no names or serial numbers): the server issues the entry id,
+  the official start and the deadline, and signs a start receipt that is kept as the trace's
+  `receipt.json` (and in `$GOALCUP_CONFIG_DIR/uploads/`). The approval returns a credential for
+  that run alone; it is kept at `$GOALCUP_CONFIG_DIR/runs/<run id>/credential` (mode 0600),
+  found again by `goalcup upload <entry>`, and never put in the agent's environment or on its
+  command line, a trace or a log. The clone's remote holds no token: when the agent's `git push`
+  asks for a password, git runs the hidden `goalcup git-credential`, which answers for your
+  repository alone. A run stays on the machine that started it. A harness given a provider key
+  (Hermes) is never uploaded. The wire contract is [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
 - <a id="upload"></a>**Uploading.** While the run records, `goalcup start` sends the trace's
   `chain.jsonl` to the server in compressed chunks: the first as soon as the agent launches,
   then every hour, or sooner once 256 MiB of chain is waiting (a chunk is at most 32 MiB
@@ -306,7 +313,7 @@ other config keys are in [OPERATING](docs/OPERATING.md#running-the-daemon).
   minutes; if that is not enough it says so, and `goalcup upload <entry>` finishes the job
   (after a crash too). It asks the server where it got to and is safe to run again, though not
   while the run's own `start` is still uploading (it says so). Uploading stops, with the reason
-  on stderr, when the server refuses the request itself (a revoked token, a closed run, a TLS
+  on stderr, when the server refuses the request itself (an ended credential, a closed run, a TLS
   certificate it cannot trust) or the local chain no longer continues the server's copy; the
   run is still complete on this machine.
 - <a id="deadline"></a>**The deadline.** A run on the server lasts until its `deadline_at` (168

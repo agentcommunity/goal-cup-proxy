@@ -306,6 +306,11 @@ pub fn disk_of(quota: u64) -> goalcup_cli::run::reserve::DiskPolicy {
     }
 }
 
+/// The opener every test start is given: no browser is ever started by a test.
+pub fn never_open(_url: &str) -> bool {
+    false
+}
+
 /// What one `goalcup start` was asked to do, with the flag a test must never leave on.
 ///
 /// `dev` is `false`, so the default options are a judged run's — a test that wants the door
@@ -317,7 +322,8 @@ pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
         dev: false,
         goal_file: None,
         disk: disk_of(4 << 20),
-        repo: None,
+        practice: false,
+        open_url: never_open,
         upload_policy: Default::default(),
         sleep_lock: goalcup_platform::awake::hold,
     }

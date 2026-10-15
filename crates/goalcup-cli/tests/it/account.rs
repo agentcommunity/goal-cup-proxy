@@ -742,7 +742,6 @@ fn login_stores_the_handle_and_no_secret() {
     let stored = read_server_config(&cfg).unwrap().unwrap();
     assert_eq!(stored.account.as_deref(), Some("member-1"));
     assert_eq!(stored.url, server.url());
-    assert!(stored.token.is_empty());
     let printed = String::from_utf8(out).unwrap();
     assert!(printed.contains("Logged in as member-1"), "{printed}");
 
@@ -1026,7 +1025,6 @@ fn the_server_file_keeps_an_account_and_no_token() {
     let config = ServerConfig {
         url: "https://ingest.example.org".into(),
         account: Some("ada".into()),
-        token: String::new(),
     };
     let path = goalcup_cli::server::write_server_config(tmp.path(), &config).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();

@@ -41,6 +41,7 @@ pub mod key_scan;
 pub mod launch;
 pub mod per_run_home;
 pub mod preflight;
+pub mod prep_file;
 pub mod proxy;
 mod released_child;
 pub mod retry;

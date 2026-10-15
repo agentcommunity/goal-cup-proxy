@@ -1,11 +1,24 @@
 //! `goalcup start --goal-file` — a protocol-v5 local capture run: the preflight, the daemon's
 //! capture, the launch through the recording proxy, and the local seal.
 //!
-//! No grant, no arming, no server. The harness is launched headless through the recording
-//! proxy, which runs inside this process, and the run ends with a local seal (see `capture`
-//! below for the order). A plain `goalcup start` without `--goal-file` was the V1 transcript
-//! path, which this tree no longer carries (D48); clap marks `--goal-file` required, and
-//! `started` refuses the rest.
+//! No grant, no arming. The harness is launched headless through the recording proxy, which
+//! runs inside this process, and the run ends with a local seal (see `capture` below for the
+//! order). A plain `goalcup start` without `--goal-file` was the V1 transcript path, which this
+//! tree no longer carries (D48); clap marks `--goal-file` required, and `started` refuses the
+//! rest.
+//!
+//! # A run on the server
+//!
+//! With a server (`goalcup login`) the order is: the prep checks (`goalcup prep` ran: its repo,
+//! work folder and GitHub token), the WSL2 check on the work folder, **the participant's
+//! approval of this run in the browser** ([`crate::account::device`]), and only then anything
+//! local: the run directory, the clone of the participant's repository that is the run's
+//! workspace, the run opened on the server with the credential the approval returned
+//! (`POST /v1/runs`, with the machine's facts), and that credential kept in the run's own
+//! directory (`<cfg>/runs/<run_id>/credential`). The credential is never in the harness's
+//! environment or arguments; the harness's git asks `goalcup git-credential` for the GitHub
+//! token. A Ctrl-C, a denial, an expired code or a server that is away during the approval ends
+//! the start with one sentence, with nothing created and no run open.
 //!
 //! # The abandon window
 //!
@@ -70,9 +83,13 @@ pub struct StartOptions {
     /// The sizes of the run's disk reservation and how often it is watched. The shipped values
     /// ([`DiskPolicy::default`]); only a test build can name others.
     pub disk: DiskPolicy,
-    /// `--repo`: the public GitHub repository the agent pushes to. Required when the tracker
-    /// uploads to a server (`goalcup login`), which records its final commit at the deadline.
-    pub repo: Option<String>,
+    /// `--practice`: a practice run, which the server keeps apart from the competition and
+    /// which never replaces the account's competition run. Only meaningful for a run on a
+    /// server.
+    pub practice: bool,
+    /// Opens the approval address in the participant's browser, and says whether a program
+    /// started: [`goalcup_platform::machine::open_url`] in every shipped build.
+    pub open_url: OpenUrlFn,
     /// When the run's chunks go and how failures wait ([`crate::upload::uploader::Policy`]).
     pub upload_policy: crate::upload::uploader::Policy,
     /// How the machine is kept awake for the run's life: [`goalcup_platform::awake::hold`] in
@@ -80,6 +97,9 @@ pub struct StartOptions {
     /// said by `goalcup status`.
     pub sleep_lock: SleepLockFn,
 }
+
+/// Opens an address in the browser ([`StartOptions::open_url`]).
+pub type OpenUrlFn = fn(&str) -> bool;
 
 /// Takes the sleep lock, given why ([`StartOptions::sleep_lock`]).
 pub type SleepLockFn = fn(&str) -> Result<goalcup_platform::awake::SleepLock, String>;
@@ -300,6 +320,9 @@ struct CaptureRun<'a> {
     goal_file: &'a Path,
     connector: &'a HarnessConnector,
     profile: &'a CaptureSpec,
+    /// Set when an abandon was refused, so some of what the start made is still there: the
+    /// cleanup sentence ([`CLEANED_UP`]) is not true then, and is not said.
+    uncleaned: &'a std::cell::Cell<bool>,
 }
 
 /// Everything a capture run decides, and every refusal it makes, before anything is created.
@@ -764,19 +787,57 @@ fn capture(
     release_stale(cfg, &artifact_root(cfg), crate::run::now_unix());
     let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;
     let profile = &c.loaded.manifest.capture;
-    let upload = uploading(cfg, opts, profile.credential.is_some(), out)?;
+    // With a server: the prep checks, before any other work and before the participant is asked
+    // for anything.
+    let serving = uploading(
+        cfg,
+        env,
+        goal_file,
+        opts.practice,
+        profile.credential.is_some(),
+        out,
+    )?;
+    let uncleaned = std::cell::Cell::new(false);
     let cx = CaptureRun {
         client,
-        upload: upload.as_ref(),
+        upload: None,
         cfg,
         env,
         opts,
         goal_file,
         connector: &c,
         profile,
+        uncleaned: &uncleaned,
     };
     let mut prep = prepare(&cx, goal, out)?;
-    let (forked, gate) = create_and_gate(&cx, roots, &prep, out)?;
+    // Every refusal that needs no approval has been made: now the participant approves this
+    // run in the browser. Nothing is created until they have.
+    let upload = match serving {
+        Some(serving) => Some(serving.approved(opts, &c.loaded.manifest.id, out)?),
+        None => None,
+    };
+    if crate::arming::interrupted() {
+        return Err(interrupted_refusal());
+    }
+    let cx = CaptureRun {
+        upload: upload.as_ref(),
+        ..cx
+    };
+    // The shared harness home is claimed only now: it creates a folder and holds a lock. Every
+    // failure from here to the fork (the home, the run directory and the clone, the open on the
+    // server, the entry, the launch) is one phase, and ends with one sentence about what was
+    // removed.
+    let started =
+        claim_shared_home(&cx, &mut prep).and_then(|()| create_and_gate(&cx, roots, &prep, out));
+    let (forked, gate) = match started {
+        Ok(started) => started,
+        Err(error) => {
+            if upload.is_some() && !uncleaned.get() {
+                let _ = say(out, CLEANED_UP);
+            }
+            return Err(error);
+        }
+    };
     // Right before the launch the machine is told to stay awake, and it stays so to the end of
     // the wrap-up. A lock that cannot be taken is no reason to refuse or stop a run: it is
     // kept as the reason in the run's state, and `goalcup status` says it.
@@ -805,7 +866,6 @@ fn prepare(
     // The disk is judged before the server is asked for a run or anything is created.
     crate::run::reserve::check_room(&artifact_root(cx.cfg).join("reserve"), &cx.opts.disk)?;
     let CaptureRun {
-        cfg,
         env,
         opts,
         goal_file,
@@ -854,35 +914,6 @@ fn prepare(
             env.get("HOME").map(Path::new),
         )?;
     }
-    let mut shared_home_lock = None;
-    let shared_home = if per_run {
-        None
-    } else {
-        let config_home = cfg.join(CAPTURE_HOMES_DIR).join(&c.loaded.manifest.id);
-        private_dir(config_home.parent().expect("a capture-home parent"), true)?;
-        shared_home_lock = Some(lock_shared_home(&config_home, &c.loaded.manifest.id)?);
-        match std::fs::symlink_metadata(&config_home) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match private_dir(&config_home, false) {
-                    // A concurrent `goalcup start` made it between the look and the create;
-                    // `SharedCaptureHome::load` below judges that directory like any other.
-                    Err(CliError::Io { source, .. })
-                        if source.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    made => made?,
-                }
-            }
-            Err(_) => {
-                return Err(shared_home_refusal(
-                    &config_home,
-                    "its exact leaf cannot be inspected",
-                ));
-            }
-        }
-        // SAFETY: reading the effective uid has no preconditions or memory effects.
-        let owner = unsafe { libc::geteuid() };
-        Some(SharedCaptureHome::load(&config_home, owner)?)
-    };
     Ok(CapturePrep {
         goal,
         secret,
@@ -890,9 +921,51 @@ fn prepare(
         scope,
         matcher,
         executable,
-        shared_home,
-        _shared_home_lock: shared_home_lock,
+        shared_home: None,
+        _shared_home_lock: None,
     })
+}
+
+/// The harness home every run of a connector shares (D39), taken for this run: its folder made
+/// if there is none, and the lock that keeps a second run off it. A connector whose home is made
+/// per run has none to take. This creates things on disk, so a run on a server takes it only
+/// after the participant has approved the run.
+fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), CliError> {
+    let CaptureRun {
+        cfg,
+        connector: c,
+        profile,
+        ..
+    } = *cx;
+    if profile.home.config_home == ConfigHome::PerRun {
+        return Ok(());
+    }
+    let config_home = cfg.join(CAPTURE_HOMES_DIR).join(&c.loaded.manifest.id);
+    private_dir(config_home.parent().expect("a capture-home parent"), true)?;
+    let lock = lock_shared_home(&config_home, &c.loaded.manifest.id)?;
+    match std::fs::symlink_metadata(&config_home) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match private_dir(&config_home, false) {
+                // A concurrent `goalcup start` made it between the look and the create;
+                // `SharedCaptureHome::load` below judges that directory like any other.
+                Err(CliError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+                made => made?,
+            }
+        }
+        Err(_) => {
+            return Err(shared_home_refusal(
+                &config_home,
+                "its exact leaf cannot be inspected",
+            ));
+        }
+    }
+    // SAFETY: reading the effective uid has no preconditions or memory effects.
+    let owner = unsafe { libc::geteuid() };
+    prep.shared_home = Some(SharedCaptureHome::load(&config_home, owner)?);
+    prep._shared_home_lock = Some(lock);
+    Ok(())
 }
 
 /// Phase two, the abandon window: the run directory, the entry, the proxy, the recorded goal and
@@ -921,7 +994,19 @@ fn create_and_gate<'a>(
         .as_ref()
         .map(SharedCaptureHome::recheck)
         .transpose()?;
-    let run = RunDir::create(goal_file, profile.home.run_home, env)?;
+    let run = RunDir::create(
+        goal_file,
+        profile.home.run_home,
+        env,
+        upload.map(|u| u.work_root.as_path()),
+    )?;
+    // The workspace of a run on a server is a fresh clone of the participant's repository.
+    if let Some(upload) = upload
+        && let Err(error) = upload.clone_workspace(&run.workspace)
+    {
+        let _ = run.remove();
+        return Err(error);
+    }
     let config_home = match shared_home {
         Some(home) => home,
         // Seeded from the connector's own files, which the manifest gate has pinned.
@@ -1022,7 +1107,7 @@ fn create_and_gate<'a>(
             .as_ref()
             .map_or_else(|| info.entry_id.clone(), |o| o.run.run_id.clone()),
         server_url: upload.map(|u| u.server.base().to_string()),
-        practice: false,
+        practice: opts.practice,
         connector_id: c.loaded.manifest.id.clone(),
         workspace: run.workspace.clone(),
         started_at_unix: crate::run::now_unix(),
@@ -1099,10 +1184,16 @@ fn create_and_gate<'a>(
             if let Some(held) = reserve.take() {
                 let _ = held.release();
             }
-            if unmake(client, cfg, &info.entry_id, &run, &error, out) {
-                crate::run::remove(cfg, &record.run_id);
+            let unmade = unmake(client, cfg, &info.entry_id, &run, &error, out);
+            if !unmade {
+                cx.uncleaned.set(true);
             }
+            // The run is given back first, and its credential outlives the give-back while the
+            // server may still hold the run open: the next start's `give_back_pending` asks with it.
             give_back(&error);
+            if unmade {
+                remove_run_keeping_pending_credential(cfg, &record.run_id);
+            }
             return Err(error);
         }
     };
@@ -1881,9 +1972,17 @@ fn beside_goal(goal_file: &Path) -> PathBuf {
 
 /// This run's own directory, made beside the goal file: `workspace/` (the daemon makes it),
 /// `home/` (the harness's `HOME`) and `ca/` (the proxy's CA certificate).
+///
+/// A run on a server has its workspace elsewhere: a clone of the participant's repository in
+/// their work folder, `<work_root>/goalcup-<16 hex digits>`, **a random name of its own**, never
+/// this directory's (the goal file's folder may be the work folder, and the two must not meet).
+/// It is named before the server has issued the run id (the server and the daemon are told the
+/// path), so the id cannot be in it.
 struct RunDir {
     dir: PathBuf,
     workspace: PathBuf,
+    /// The workspace is outside `dir`, so [`RunDir::remove`] must remove it too.
+    separate_workspace: bool,
     home: PathBuf,
     ca: PathBuf,
 }
@@ -1893,16 +1992,23 @@ impl RunDir {
         goal_file: &Path,
         home: RunHome,
         env: &BTreeMap<String, String>,
+        work_root: Option<&Path>,
     ) -> Result<RunDir, CliError> {
         let beside = beside_goal(goal_file);
         let beside = std::fs::canonicalize(&beside).map_err(|source| CliError::Io {
             path: beside.display().to_string(),
             source,
         })?;
-        let dir = beside.join(format!("goalcup-{:016x}", rand::random::<u64>()));
+        let name = format!("goalcup-{:016x}", rand::random::<u64>());
+        let dir = beside.join(&name);
         private_dir(&dir, false)?;
+        let workspace = match work_root {
+            Some(root) => root.join(format!("goalcup-{:016x}", rand::random::<u64>())),
+            None => dir.join("workspace"),
+        };
         let run = RunDir {
-            workspace: dir.join("workspace"),
+            workspace,
+            separate_workspace: work_root.is_some(),
             home: dir.join("home"),
             ca: dir.join("ca"),
             dir,
@@ -1930,9 +2036,18 @@ impl RunDir {
         Ok(run)
     }
 
-    /// Only ever before the spawn, when nothing but this command has written here.
+    /// Only ever before the spawn, when nothing but this command has written here. A clone
+    /// outside the directory goes with it (and a failure to remove either is the error).
     fn remove(&self) -> std::io::Result<()> {
-        std::fs::remove_dir_all(&self.dir)
+        let clone = if self.separate_workspace {
+            match std::fs::remove_dir_all(&self.workspace) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
+        } else {
+            Ok(())
+        };
+        std::fs::remove_dir_all(&self.dir).and(clone)
     }
 }
 
@@ -2294,43 +2409,197 @@ fn finish(
 
 /// The upload server this run opens with: `None` with no `goalcup login`, and for a harness
 /// handed a provider key (`keyed`), whose run must pass the key scan at its end before
-/// anything leaves the machine. With a server, `--repo` is required, checked here before
+/// anything leaves the machine. With a server, `goalcup prep` must have run: its repository,
+/// its work folder and the GitHub token are checked here, and the work folder must not be on a
+/// Windows drive under WSL2, all before the participant is asked for anything and before
 /// anything is created. A `--dev` run is uploaded like any other; the server refuses a
 /// connector it does not accept.
 fn uploading(
     cfg: &Path,
-    opts: &StartOptions,
+    env: &BTreeMap<String, String>,
+    goal_file: &Path,
+    practice: bool,
     keyed: bool,
     out: &mut dyn std::io::Write,
-) -> Result<Option<Uploading>, CliError> {
+) -> Result<Option<Serving>, CliError> {
+    // A practice run is a run on the server: without one there is nothing to practise on.
+    let needs_server = || {
+        CliError::Refused(
+            "`--practice` needs `goalcup login` and `goalcup prep` first. Nothing was created."
+                .to_string(),
+        )
+    };
     let Some(server) = crate::server::read_server_config(cfg)? else {
-        return Ok(None);
+        return if practice {
+            Err(needs_server())
+        } else {
+            Ok(None)
+        };
     };
     if keyed {
+        if practice {
+            return Err(CliError::Refused(
+                "`--practice` cannot be used with this harness: a harness handed a provider key \
+                 is never uploaded, so it cannot make a practice run. Nothing was created."
+                    .to_string(),
+            ));
+        }
         say(
             out,
             "A run of a harness given a provider key is not uploaded: it stays on this machine.",
         )?;
         return Ok(None);
     }
-    let Some(repo) = opts.repo.as_deref() else {
-        return Err(CliError::Refused(format!(
-            "this tracker uploads to {} (`goalcup login`), so `goalcup start` needs --repo \
-             https://github.com/<owner>/<repo>: the public repository your agent pushes to. \
-             Nothing was created.",
-            server.url
-        )));
+    // Each of these is the one sentence `run goalcup prep first`.
+    let prepared = crate::prep_file::read_prep(cfg)?;
+    let github = crate::account::github::GithubSetup::load(cfg)
+        .map_err(|_| CliError::Refused(crate::prep_file::PREP_FIRST.to_string()))?;
+    if same_repo(&prepared.repo_url) != same_repo(&github.repo_url) {
+        return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
+    }
+    let work_root = PathBuf::from(&prepared.work_root);
+    if !work_root.is_absolute() {
+        return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
+    }
+    refuse_windows_drive(&work_root, goalcup_platform::machine::is_wsl())?;
+    refuse_goal_folder_inside_work_root(&work_root, goal_file)?;
+    #[cfg(feature = "test-support")]
+    let clone_source = env.get(TEST_CLONE_SOURCE).cloned();
+    #[cfg(not(feature = "test-support"))]
+    let clone_source = {
+        let _ = env;
+        None
     };
-    Ok(Some(Uploading {
-        server: crate::upload::http::ServerClient::new(&server),
-        repo_url: crate::upload::checked_repo_url(repo)?,
+    Ok(Some(Serving {
+        url: server.url,
+        cfg: std::fs::canonicalize(cfg).unwrap_or_else(|_| cfg.to_path_buf()),
+        github,
+        work_root,
+        clone_source,
     }))
 }
 
-/// A run's upload server, for `goalcup start`.
+/// What a start that fails after the approval says once it has removed what it made (said once,
+/// by `capture`, for every failure of that phase): the run directory beside the goal file, the
+/// clone, and the run's credential directory. It does not
+/// remove the work folder itself (the participant's folder, left in place once created) or the
+/// shared harness-home folder of a connector under `<cfg>/capture-homes/` (one per connector,
+/// persistent, and reused by every run of it).
+const CLEANED_UP: &str = "Nothing was started, and what this start made was removed.";
+
+/// WSL2 only: a work folder on a Windows drive (`/mnt/c/...`) is refused, because a clone there is
+/// slow and cannot keep file modes. The path as it exists is looked at, so a link cannot hide the
+/// drive. `wsl` is whether this machine is WSL2.
+fn refuse_windows_drive(work_root: &Path, wsl: bool) -> Result<(), CliError> {
+    let resolved = std::fs::canonicalize(work_root).unwrap_or_else(|_| work_root.to_path_buf());
+    if goalcup_platform::machine::on_windows_drive_with(&resolved, wsl) {
+        return Err(CliError::Refused(format!(
+            "the work folder {} is on a Windows drive, which WSL2 reads slowly and cannot keep \
+             file modes on. Choose a folder in the Linux home (for example under ~/goalcup) and \
+             run `goalcup prep` again. Nothing was created.",
+            work_root.display()
+        )));
+    }
+    Ok(())
+}
+
+/// The run directory is made beside the goal file and holds the harness's `HOME`; the clone is
+/// made in the work folder, under a name of its own. They cannot be the same folder, but a goal
+/// file in a folder *below* the work folder would put the run directory (and so the harness's
+/// home) inside some other clone, or inside an older run's folder. So: the goal file's folder
+/// may be the work folder itself, or anywhere outside it, and is refused anywhere inside it.
+fn refuse_goal_folder_inside_work_root(work_root: &Path, goal_file: &Path) -> Result<(), CliError> {
+    let beside = std::fs::canonicalize(beside_goal(goal_file));
+    let root = std::fs::canonicalize(work_root).unwrap_or_else(|_| work_root.to_path_buf());
+    if let Ok(beside) = beside
+        && beside != root
+        && beside.starts_with(&root)
+    {
+        return Err(CliError::Refused(format!(
+            "the goal file is in {}, which is inside the work folder {}. Put the goal file in \
+             the work folder itself or outside it, so a run's folder is never inside a clone. \
+             Nothing was created.",
+            beside.display(),
+            work_root.display()
+        )));
+    }
+    Ok(())
+}
+
+/// A repository address in the one spelling the two files are compared in.
+fn same_repo(url: &str) -> String {
+    let url = url.trim().trim_end_matches('/');
+    url.strip_suffix(".git").unwrap_or(url).to_ascii_lowercase()
+}
+
+/// A test build's one door to the clone: a repository on this machine that stands in for the
+/// participant's repository on GitHub (`account::github::clone_from`). A shipped build compiles
+/// none of this.
+#[cfg(feature = "test-support")]
+pub const TEST_CLONE_SOURCE: &str = "GOALCUP_TEST_CLONE_SOURCE";
+
+/// A run on a server that has passed every check that needs no approval.
+struct Serving {
+    url: String,
+    /// The configuration directory, absolute: the clone's credential helper names it.
+    cfg: PathBuf,
+    github: crate::account::github::GithubSetup,
+    work_root: PathBuf,
+    /// A test's local repository to clone instead of GitHub; always `None` in a shipped build.
+    clone_source: Option<String>,
+}
+
+impl Serving {
+    /// Ask the participant to approve this run in the browser, and wait for them. Nothing has
+    /// been created before this, and a denial, an expired code, a Ctrl-C or a server that
+    /// cannot be reached leaves it so (the refusal says so).
+    fn approved(
+        self,
+        opts: &StartOptions,
+        connector_id: &str,
+        out: &mut dyn std::io::Write,
+    ) -> Result<Uploading, CliError> {
+        let anonymous = crate::upload::http::ServerClient::anonymous(&self.url);
+        let approved = crate::account::device::approve(
+            &anonymous,
+            crate::account::device::Purpose::Run {
+                practice: opts.practice,
+            },
+            connector_id,
+            &opts.open_url,
+            out,
+        )?;
+        let credential = match approved {
+            crate::account::device::Approved::Run(credential) => credential,
+            crate::account::device::Approved::Login { .. } => {
+                return Err(CliError::Internal(
+                    "the server approved a login when a run was asked for. Nothing was \
+                     created; run the command again, and report it if it keeps happening."
+                        .into(),
+                ));
+            }
+        };
+        Ok(Uploading {
+            server: crate::upload::http::ServerClient::with_credential(&self.url, &credential),
+            credential,
+            cfg: self.cfg,
+            github: self.github,
+            work_root: self.work_root,
+            clone_source: self.clone_source,
+        })
+    }
+}
+
+/// A run's upload server, for `goalcup start`: the client that carries this run's credential,
+/// and what the workspace is cloned from.
 struct Uploading {
     server: crate::upload::http::ServerClient,
-    repo_url: String,
+    credential: crate::account::credential::RunCredential,
+    cfg: PathBuf,
+    github: crate::account::github::GithubSetup,
+    work_root: PathBuf,
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
+    clone_source: Option<String>,
 }
 
 /// The run as the server opened it, what it was asked, and the give-back until the launch.
@@ -2344,6 +2613,34 @@ struct OpenedRun {
 }
 
 impl Uploading {
+    /// Clone the participant's repository into `dest`, which is this run's workspace. The
+    /// clone holds no token: its remote is the plain repository address, and its git asks
+    /// `goalcup git-credential` for one when it pushes (`account::github`).
+    fn clone_workspace(&self, dest: &Path) -> Result<(), CliError> {
+        std::fs::create_dir_all(&self.work_root).map_err(|source| CliError::Io {
+            path: self.work_root.display().to_string(),
+            source,
+        })?;
+        let exe = std::env::current_exe().map_err(|source| CliError::Io {
+            path: "the goalcup executable".to_string(),
+            source,
+        })?;
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        let cfg = &self.cfg;
+        #[cfg(feature = "test-support")]
+        if let Some(source) = &self.clone_source {
+            return crate::account::github::clone_from(
+                Path::new("git"),
+                source,
+                &self.github,
+                dest,
+                &exe,
+                cfg,
+            );
+        }
+        crate::account::github::clone_into(&self.github, dest, &exe, cfg)
+    }
+
     /// Open the run on the server, before the daemon creates anything.
     fn open(
         &self,
@@ -2361,15 +2658,25 @@ impl Uploading {
             session_id: session_id.to_string(),
             harness_version: harness_version.to_string(),
             tracer_version: crate::CLI_VERSION.to_string(),
-            repo_url: self.repo_url.clone(),
+            repo_url: self.github.repo_url.clone(),
+            machine: Some(goalcup_platform::machine::facts(&artifact_root(cx.cfg))),
         };
-        crate::upload::give_back_pending(&self.server, cx.cfg);
+        crate::upload::give_back_pending(self.server.base(), cx.cfg);
         // Taken before the first ask: a repeat after a lost reply answers the first
         // `official_start`, and the run's own clock must never start later than the server's.
         let opened_at = goalcup_protocol::clock::ContinuousOrigin::now();
         let run = crate::upload::open_run(&self.server, &request)?;
-        let give_back = crate::upload::GiveBack::opened(&self.server, cx.cfg, &run);
-        match give_back {
+        // The run is bound to the credential now, and the credential is kept in the run's own
+        // directory, where `goalcup upload` and `continue` find it from the entry. Both the
+        // note of the open and the credential are written before anything else can fail.
+        let kept = crate::upload::GiveBack::opened(&self.server, cx.cfg, &run).and_then(|give| {
+            crate::account::credential::store(
+                &crate::run::run_dir(cx.cfg, &run.run_id),
+                &self.credential,
+            )
+            .map(|()| give)
+        });
+        match kept {
             Ok(give_back) => Ok(OpenedRun {
                 run,
                 request,
@@ -2382,6 +2689,8 @@ impl Uploading {
                     &run.run_id,
                     "goalcup start failed before the launch",
                 );
+                let _ = std::fs::remove_file(crate::upload::pending_path(cx.cfg));
+                crate::run::remove(cx.cfg, &run.run_id);
                 Err(error)
             }
         }
@@ -2426,6 +2735,34 @@ impl Uploading {
             ),
         )?;
         Ok((record, receipt.public_key))
+    }
+}
+
+/// Remove this machine's directory for a run that never launched. When the note of the open
+/// still names the run (the server was away when it was given back), the credential stays: it is
+/// the only thing that can give that run back later.
+fn remove_run_keeping_pending_credential(cfg: &Path, run_id: &str) {
+    let pending = std::fs::read(crate::upload::pending_path(cfg))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<crate::upload::PendingOpen>(&bytes).ok())
+        .is_some_and(|note| note.run_id == run_id);
+    if !pending {
+        crate::run::remove(cfg, run_id);
+        return;
+    }
+    let dir = crate::run::run_dir(cfg, run_id);
+    let keep = crate::account::credential::CREDENTIAL_FILE_NAME;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if entry.file_name() != keep {
+                let path = entry.path();
+                let _ = if path.is_dir() {
+                    std::fs::remove_dir_all(path)
+                } else {
+                    std::fs::remove_file(path)
+                };
+            }
+        }
     }
 }
 
@@ -2500,6 +2837,17 @@ mod tests {
         let reopened = crate::arming::interrupted();
         crate::arming::clear_interrupt();
         assert!(reopened, "the next start's window is open again");
+    }
+
+    /// A work folder on a Windows drive is refused under WSL2, and only there.
+    #[test]
+    fn a_work_folder_on_a_windows_drive_is_refused_under_wsl_only() {
+        let drive = Path::new("/mnt/c/Users/ada/work");
+        let refused = refuse_windows_drive(drive, true).expect_err("a Windows drive under WSL2");
+        assert_eq!(refused.exit_code(), 1);
+        assert!(refused.to_string().contains("Windows drive"), "{refused}");
+        assert!(refuse_windows_drive(drive, false).is_ok(), "not WSL2");
+        assert!(refuse_windows_drive(Path::new("/home/ada/work"), true).is_ok());
     }
 
     /// #11: two runs on one shared harness home. The second is refused plainly while the first

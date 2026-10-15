@@ -12,7 +12,8 @@ use crate::upload::http::ServerClient;
 use crate::upload::uploader::{Policy, Uploader};
 use std::path::Path;
 
-/// The testable half: `entry_id` uploaded to the server `goalcup login` stored.
+/// The testable half: `entry_id` uploaded to the server it was opened on, with its run's own
+/// credential.
 pub fn upload_with(
     cfg: &Path,
     entry_id: &str,
@@ -26,19 +27,20 @@ pub fn upload_with(
             crate::upload::record_path(cfg, entry_id).display()
         ))
     })?;
-    let config = crate::server::read_server_config(cfg)?.ok_or_else(|| {
+    // The run holds the credential its approval returned, in its own directory: found from the
+    // entry, so the participant need not be logged in to, or name, anything.
+    let not_here = || {
         CliError::Refused(format!(
-            "this tracker is not logged in. Run `goalcup login --server {}` first.",
-            record.server_url
+            "this run was not started on this machine: entry {entry_id} has no saved \
+             credential here, and only the machine that started a run can upload it."
         ))
-    })?;
-    if config.url != record.server_url {
-        return Err(CliError::Refused(format!(
-            "entry {entry_id} was opened on {}, and this tracker is logged in to {}. Log in to \
-             {} to upload it.",
-            record.server_url, config.url, record.server_url
-        )));
+    };
+    let run = crate::run::of_entry(cfg, entry_id)?.ok_or_else(not_here)?;
+    let run_dir = crate::run::run_dir(cfg, &run.run_id);
+    if !crate::account::credential::credential_path(&run_dir).exists() {
+        return Err(not_here());
     }
+    let credential = crate::account::credential::load(&run_dir)?;
     let receipt_path = crate::upload::receipt_path(cfg, entry_id);
     let receipt: goalcup_protocol::receipt::StartReceipt = serde_json::from_slice(
         &std::fs::read(&receipt_path).map_err(|source| CliError::Io {
@@ -46,7 +48,7 @@ pub fn upload_with(
             source,
         })?,
     )?;
-    let server = ServerClient::new(&config);
+    let server = ServerClient::with_credential(&record.server_url, &credential);
     let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
     // One uploader per entry: refused while the run's own `goalcup start` still uploads it.
     let _lock = crate::upload::uploader::lock_entry(&spool, entry_id)?;

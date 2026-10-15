@@ -5,7 +5,9 @@
 //!
 //! What a run with a server does, in `goalcup start`'s order:
 //!
-//! 1. [`open_run`] before anything is created: the server issues the `entry_id`, stamps
+//! 0. The participant approves the run in the browser (`account::device`); the credential that
+//!    comes back is this run's alone, and every call below carries it.
+//! 1. [`open_run`] before the daemon creates anything: the server issues the `entry_id`, stamps
 //!    `official_start` and sets `deadline_at`. A refusal, or no answer, stops the start.
 //! 2. The daemon creates the entry under that `entry_id` and chains its baseline.
 //! 3. [`fetch_receipt`] with the baseline's link hash: the server signs a start receipt over
@@ -14,7 +16,8 @@
 //!
 //! A failure between 1 and the launch gives the run back ([`GiveBack`]), so the account is not
 //! left holding an open run with nothing in it. A start killed in that window cannot, so it
-//! leaves `<cfg>/uploads/pending-open.json`, and the next start gives that run back first.
+//! leaves `<cfg>/uploads/pending-open.json`, and the next start gives that run back first, with
+//! the credential the killed start saved in that run's directory.
 
 pub mod api;
 pub mod http;
@@ -77,31 +80,6 @@ pub fn read_record(cfg: &Path, entry_id: &str) -> Result<Option<UploadRecord>, C
     }
 }
 
-/// `url` checked: `https://github.com/<owner>/<repo>`, the shape the server accepts. A
-/// trailing `/` or `.git` is dropped.
-pub fn checked_repo_url(url: &str) -> Result<String, CliError> {
-    let trimmed = url.trim_end_matches('/');
-    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-    let ok = trimmed
-        .strip_prefix("https://github.com/")
-        .and_then(|rest| rest.split_once('/'))
-        .is_some_and(|(owner, repo)| {
-            let name = |s: &str, extra: &[u8]| {
-                !s.is_empty()
-                    && s.bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || extra.contains(&b))
-            };
-            name(owner, b"") && name(repo, b"._") && repo != "." && repo != ".."
-        });
-    if !ok {
-        return Err(CliError::Refused(format!(
-            "--repo {url:?} is not a GitHub repository address. Give the public repository \
-             your agent pushes to, as https://github.com/<owner>/<repo>. Nothing was created."
-        )));
-    }
-    Ok(trimmed.to_string())
-}
-
 /// `call`, asked again up to [`START_ATTEMPTS`] times while the answer is retryable. A start
 /// is a person waiting at a terminal, so this does not back off for minutes: a server that
 /// stays away refuses the start, and the participant can try again.
@@ -121,7 +99,8 @@ fn with_retries<T>(mut call: impl FnMut() -> Result<T, ServerError>) -> Result<T
 fn refused(what: &str, server: &ServerClient, error: ServerError) -> CliError {
     let hint = match &error {
         ServerError::Status { status: 401, .. } => {
-            " Your token was not accepted: run `goalcup login` again with a token from the site."
+            " This run's credential was not accepted: run the command again to approve the run \
+             again."
         }
         ServerError::Status { status: 409, .. } => {
             " The server says this account already has an open run: a run that is still going \
@@ -321,6 +300,7 @@ impl GiveBack {
         let _ = std::fs::remove_file(receipt_path(&self.cfg, &self.entry_id));
         if settled(&given) {
             let _ = std::fs::remove_file(pending_path(&self.cfg));
+            forget_credential(&self.cfg, &self.run_id);
         }
     }
 
@@ -340,10 +320,24 @@ fn settled(answer: &Result<(), ServerError>) -> bool {
     }
 }
 
-/// Give back a run an earlier start opened on `server` and never launched, if this machine
-/// noted one. Best effort, and silent: if the server cannot be asked now, the note stays for
-/// the next start.
-pub fn give_back_pending(server: &ServerClient, cfg: &Path) {
+/// Remove the credential a given-back run saved, and its directory if nothing else is in it.
+/// A run that was given back will not be uploaded to, so its credential is of no use.
+fn forget_credential(cfg: &Path, run_id: &str) {
+    if !is_run_id(run_id) {
+        return;
+    }
+    let dir = crate::run::run_dir(cfg, run_id);
+    let _ = std::fs::remove_file(crate::account::credential::credential_path(&dir));
+    let _ = std::fs::remove_dir(&dir);
+}
+
+/// Give back a run an earlier start opened on `server_url` and never launched, if this machine
+/// noted one. The credential that start saved in the run's directory is what asks. Best effort,
+/// and silent: if the server cannot be asked now, the note stays for the next start; a note
+/// with no credential beside it cannot be acted on and is dropped (the server ends such a run
+/// at its deadline, or when the account starts another). A note for another server, or whose
+/// credential has ended, is dropped with its credential.
+pub fn give_back_pending(server_url: &str, cfg: &Path) {
     let path = pending_path(cfg);
     let Ok(bytes) = std::fs::read(&path) else {
         return;
@@ -352,17 +346,40 @@ pub fn give_back_pending(server: &ServerClient, cfg: &Path) {
         let _ = std::fs::remove_file(&path);
         return;
     };
-    if pending.server_url != server.base() || !is_run_id(&pending.run_id) {
+    if !is_run_id(&pending.run_id) {
         let _ = std::fs::remove_file(&path);
         return;
     }
+    if pending.server_url != server_url.trim_end_matches('/') {
+        // Another server: this one cannot give that run back, and the credential kept for it
+        // is of no use to anyone.
+        let _ = std::fs::remove_file(&path);
+        forget_credential(cfg, &pending.run_id);
+        return;
+    }
+    let dir = crate::run::run_dir(cfg, &pending.run_id);
+    let Ok(credential) = crate::account::credential::load(&dir) else {
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    // The server refuses a credential after its end; asking again every start would never
+    // succeed, so the note and the credential go.
+    if goalcup_protocol::control::parse_z(&credential.expires_at)
+        .is_some_and(|ends| ends <= crate::run::now_unix())
+    {
+        let _ = std::fs::remove_file(&path);
+        forget_credential(cfg, &pending.run_id);
+        return;
+    }
+    let server = ServerClient::with_credential(server_url, &credential);
     let given = abandon_run(
-        server,
+        &server,
         &pending.run_id,
         "an earlier goalcup start ended before the launch",
     );
     if settled(&given) {
         let _ = std::fs::remove_file(&path);
+        forget_credential(cfg, &pending.run_id);
     }
 }
 
